@@ -1,4 +1,9 @@
-use std::{ffi::c_void, str::FromStr, sync::Arc};
+use std::{
+    ffi::c_void,
+    str::FromStr,
+    sync::{Arc, Mutex},
+    thread,
+};
 
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
@@ -6,7 +11,7 @@ use cudarc::{
         CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceSlice,
         LaunchAsync, LaunchConfig,
     },
-    nccl::{Comm, Id},
+    nccl::{sys::ncclComm, Comm, Id},
     nvrtc::compile_ptx,
 };
 use once_cell::sync::Lazy;
@@ -104,7 +109,7 @@ pub struct IrisCodeDB {
     devs: Vec<Arc<CudaDevice>>,
     kernels: Vec<CudaFunction>,
     streams: Vec<CudaStream>,
-    comms: Vec<Comm>,
+    comms: Vec<Arc<Comm>>,
     db1: Vec<CudaSlice<u8>>,
     db0: Vec<CudaSlice<u8>>,
     db1_sums: Vec<CudaSlice<u32>>,
@@ -125,24 +130,27 @@ impl IrisCodeDB {
         let limbs = 2;
         let ptx = compile_ptx(PTX_SRC).unwrap();
 
-        // Start all devices
-        let (devs, (blass, (kernels, streams))): (
-            Vec<Arc<CudaDevice>>,
-            (Vec<CudaBlas>, (Vec<CudaFunction>, Vec<CudaStream>)),
-        ) = (0..n_devices)
-            .map(|i| {
-                let dev = CudaDevice::new(i).unwrap();
-                let blas = CudaBlas::new(dev.clone()).unwrap();
-                let stream = dev.fork_default_stream().unwrap();
-                unsafe {
-                    blas.set_stream(Some(&stream)).unwrap();
-                }
-                dev.load_ptx(ptx.clone(), FUNCTION_NAME, &[FUNCTION_NAME])
-                    .unwrap();
-                let function = dev.get_func(FUNCTION_NAME, FUNCTION_NAME).unwrap();
-                (dev, (blas, (function, stream)))
-            })
-            .unzip();
+        let mut devs = Vec::new();
+        let mut blass = Vec::new();
+        let mut kernels = Vec::new();
+        let mut streams = Vec::new();
+
+        for i in 0..n_devices {
+            let dev = CudaDevice::new(i).unwrap();
+            let blas = CudaBlas::new(dev.clone()).unwrap();
+            let stream = dev.fork_default_stream().unwrap();
+            unsafe {
+                blas.set_stream(Some(&stream)).unwrap();
+            }
+            dev.load_ptx(ptx.clone(), FUNCTION_NAME, &[FUNCTION_NAME])
+                .unwrap();
+            let function = dev.get_func(FUNCTION_NAME, FUNCTION_NAME).unwrap();
+
+            streams.push(stream);
+            blass.push(blas);
+            devs.push(dev);
+            kernels.push(function);
+        }
 
         let mut a1_host = db_entries
             .iter()
@@ -194,40 +202,29 @@ impl IrisCodeDB {
             .map(|(idx, chunk)| devs[idx].htod_sync_copy(&chunk).unwrap())
             .collect::<Vec<_>>();
 
-        let (query1_sums, query0_sums): (Vec<CudaSlice<i32>>, Vec<CudaSlice<i32>>) = (0
-            ..n_devices)
-            .map(|idx| {
-                (
-                    devs[idx].alloc_zeros(QUERY_LENGTH).unwrap(),
-                    devs[idx].alloc_zeros(QUERY_LENGTH).unwrap(),
-                )
-            })
-            .unzip();
-
         let ones = vec![1u8; IRIS_CODE_LENGTH];
         let ones = (0..n_devices)
             .map(|idx| devs[idx].htod_sync_copy(&ones).unwrap())
             .collect::<Vec<_>>();
 
         //TODO: depending on the batch size, intermediate_results can get quite big, we can perform the gemm in chunks to limit this
-        let (intermediate_results, (results, results_peers)): (
-            Vec<CudaSlice<i32>>,
-            (Vec<CudaSlice<u8>>, Vec<Vec<CudaSlice<u8>>>),
-        ) = (0..n_devices)
-            .map(|idx| {
-                let results_len = chunk_size * IRIS_CODE_LENGTH;
-                (
-                    devs[idx].alloc_zeros(results_len * 4).unwrap(),
-                    (
-                        devs[idx].alloc_zeros(results_len * 2).unwrap(),
-                        vec![
-                            devs[idx].alloc_zeros(results_len * 2).unwrap(),
-                            devs[idx].alloc_zeros(results_len * 2).unwrap(),
-                        ],
-                    ),
-                )
-            })
-            .unzip();
+        let mut intermediate_results = vec![];
+        let mut results = vec![];
+        let mut results_peers = vec![];
+        let mut query1_sums = vec![];
+        let mut query0_sums = vec![];
+        let results_len = chunk_size * IRIS_CODE_LENGTH;
+
+        for idx in 0..n_devices {
+            intermediate_results.push(devs[idx].alloc_zeros(results_len * 4).unwrap());
+            results.push(devs[idx].alloc_zeros(results_len * 2).unwrap());
+            results_peers.push(vec![
+                devs[idx].alloc_zeros(results_len * 2).unwrap(),
+                devs[idx].alloc_zeros(results_len * 2).unwrap(),
+            ]);
+            query1_sums.push(devs[idx].alloc_zeros(QUERY_LENGTH).unwrap());
+            query0_sums.push(devs[idx].alloc_zeros(QUERY_LENGTH).unwrap());
+        }
 
         let mut comms = vec![];
         if peer_url.is_some() {
@@ -244,7 +241,9 @@ impl IrisCodeDB {
                     IdWrapper::from_str(&res.text().unwrap()).unwrap().0
                 };
 
-                comms.push(Comm::from_rank(devs[i].clone(), peer_id, 2, id).unwrap());
+                comms.push(Arc::new(
+                    Comm::from_rank(devs[i].clone(), peer_id, 2, id).unwrap(),
+                ));
             }
         }
 
@@ -392,6 +391,7 @@ impl IrisCodeDB {
 
     pub fn exchange_results(&mut self) {
         for (idx, comm) in self.comms.iter().enumerate() {
+            // TODO: do this in parallel for all devices
             let mut peer_ptr = 0;
             for peer in 0..3 {
                 if peer != self.peer_id {
@@ -406,8 +406,8 @@ impl IrisCodeDB {
 
     pub fn fetch_results(&self, results: &mut [u16], device_id: usize) {
         unsafe {
-            let res_trans = self.results[device_id]
-                .transmute(self.db_length * QUERY_LENGTH / self.n_devices);
+            let res_trans =
+                self.results[device_id].transmute(self.db_length * QUERY_LENGTH / self.n_devices);
             self.devs[device_id]
                 .dtoh_sync_copy_into(&res_trans.unwrap(), results)
                 .unwrap();
@@ -459,11 +459,11 @@ mod tests {
         let mut engine = IrisCodeDB::init(0, &db, None);
         let preprocessed_query = engine.preprocess_query(&query);
         engine.dot(&preprocessed_query);
-        
+
         let a_nda = random_ndarray::<u64>(db, DB_SIZE, WIDTH);
         let b_nda = random_ndarray::<u64>(query, QUERY_SIZE, WIDTH);
         let c_nda = a_nda.dot(&b_nda.t());
-        
+
         let mut vec_column_major: Vec<u16> = Vec::new();
         for col in 0..c_nda.ncols() {
             for row in c_nda.column(col) {
@@ -475,8 +475,8 @@ mod tests {
             engine.fetch_results(&mut gpu_result, i);
             for j in 0..QUERY_SIZE {
                 assert_eq!(
-                    vec_column_major[(j*DB_SIZE)+i*125..(j*DB_SIZE)+(i+1)*125],
-                    gpu_result[j*125..(j+1)*125],
+                    vec_column_major[(j * DB_SIZE) + i * 125..(j * DB_SIZE) + (i + 1) * 125],
+                    gpu_result[j * 125..(j + 1) * 125],
                     "GPU result does not match CPU implementation"
                 );
             }
