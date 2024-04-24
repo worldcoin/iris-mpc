@@ -1,14 +1,15 @@
-use std::{ffi::c_void, sync::Arc, time::Instant};
+use std::{
+    ffi::c_void,
+    sync::Arc,
+};
 
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
-        result, sys::lib, CudaDevice, CudaFunction, CudaSlice, DevicePtr, DevicePtrMut,
-        LaunchAsync, LaunchConfig,
+        CudaDevice, CudaFunction, CudaSlice, DevicePtr, DevicePtrMut,
     },
     nvrtc::compile_ptx,
 };
-use num_traits::FromPrimitive;
 use rayon::prelude::*;
 
 pub(crate) const P: u16 = (1 << 14) - 3;
@@ -18,7 +19,7 @@ const QUERY_LENGTH: usize = 31 * 10;
 const FUNCTION_NAME: &str = "matmul_f14";
 
 pub fn gemm(
-    handle: &sys::cublasHandle_t,
+    handle: &CudaBlas,
     a: &CudaSlice<u8>,
     b: &CudaSlice<u8>,
     c: &mut CudaSlice<i32>,
@@ -33,7 +34,7 @@ pub fn gemm(
 ) {
     unsafe {
         gemm_ex(
-            handle.clone(),
+            handle.handle().clone(),
             sys::cublasOperation_t::CUBLAS_OP_T,
             sys::cublasOperation_t::CUBLAS_OP_N,
             m as i32,
@@ -87,6 +88,10 @@ impl IrisDB {
                 .map(|i| {
                     let dev = CudaDevice::new(i).unwrap();
                     let blas = CudaBlas::new(dev.clone()).unwrap();
+                    let stream = dev.fork_default_stream().unwrap();
+                    unsafe {
+                        blas.set_stream(Some(&stream)).unwrap();
+                    }
                     dev.load_ptx(ptx.clone(), FUNCTION_NAME, &[FUNCTION_NAME])
                         .unwrap();
                     let function = dev.get_func(FUNCTION_NAME, FUNCTION_NAME).unwrap();
@@ -207,7 +212,72 @@ impl IrisDB {
     }
 
     pub fn dot(&mut self, preprocessed_query: &Vec<Vec<u8>>, results_host: *mut u16) {
-        // TODO
-    }
+        let b_dev: Vec<Vec<CudaSlice<u8>>> = (0..CudaDevice::count().unwrap() as usize)
+            .map(|idx| {
+                preprocessed_query
+                    .iter()
+                    .map(|b| self.devs[idx].htod_sync_copy(b).unwrap())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
 
+        for idx in 0..self.devs.len() {
+            // TODO: check this is actually async
+
+            // Calculate sums to correct output
+            gemm(
+                &self.blass[idx],
+                &b_dev[idx][1],
+                &self.ones[idx],
+                &mut self.query1_sums[idx],
+                0,
+                0,
+                0,
+                QUERY_LENGTH,
+                1,
+                IRIS_CODE_LENGTH,
+                1,
+                0,
+            );
+
+            gemm(
+                &self.blass[idx],
+                &b_dev[idx][1],
+                &self.ones[idx],
+                &mut self.query1_sums[idx],
+                0,
+                0,
+                0,
+                QUERY_LENGTH,
+                1,
+                IRIS_CODE_LENGTH,
+                1,
+                0,
+            );
+
+            for (i, d) in [&self.db0[idx], &self.db1[idx]].iter().enumerate() {
+                for (j, q) in b_dev[idx].iter().enumerate() {
+                    gemm(
+                        &self.blass[idx],
+                        d,
+                        q,
+                        &mut self.intermediate_results[idx],
+                        0,
+                        0,
+                        (self.db_length * QUERY_LENGTH * 4 * (i*2+j)) as u64,
+                        self.db_length,
+                        QUERY_LENGTH,
+                        IRIS_CODE_LENGTH,
+                        1,
+                        0,
+                    );
+                }
+            }
+
+            // TODO: reduce
+
+            // TODO: nccl broadcast
+
+        }
+    }
 }
