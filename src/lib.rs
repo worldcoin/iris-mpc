@@ -59,6 +59,7 @@ pub fn gemm(
 
 pub struct IrisDB {
     db_length: usize,
+    limbs: usize,
     blass: Vec<CudaBlas>,
     devs: Vec<Arc<CudaDevice>>,
     kernels: Vec<CudaFunction>,
@@ -77,6 +78,7 @@ impl IrisDB {
     pub fn init(db_entries: &[u16]) -> Self {
         // TOOD: replace with a MAX_DB_SIZE to allow for insertions
         let db_length = db_entries.len() / IRIS_CODE_LENGTH;
+        let limbs = 2;
         let ptx = compile_ptx(PTX_SRC).unwrap();
 
         // Start all devices
@@ -172,6 +174,7 @@ impl IrisDB {
 
         Self {
             db_length,
+            limbs,
             blass,
             devs,
             kernels,
@@ -186,4 +189,25 @@ impl IrisDB {
             results,
         }
     }
+
+    pub fn preprocess_query(&self, query: &[u16]) -> Vec<Vec<u8>> {
+        let mut result = vec![];
+        for _ in 0..self.limbs {
+            result.push(vec![0u8; query.len()]);
+        }
+
+        for (idx, &entry) in query.iter().enumerate() {
+            for i in 0..self.limbs {
+                let tmp = (entry as u32 >> (i * 8)) as u8;
+                result[i][idx] = (tmp as i32 - 128) as u8;
+            }
+        }
+
+        result.to_vec()
+    }
+
+    pub fn dot(&mut self, preprocessed_query: &Vec<Vec<u8>>, results_host: *mut u16) {
+        // TODO
+    }
+
 }
