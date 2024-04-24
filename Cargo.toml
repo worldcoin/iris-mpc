@@ -1,0 +1,20 @@
+[package]
+name = "gpu-iris-mpc"
+version = "0.1.0"
+edition = "2021"
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+atomic_float = "0.1"
+axum = "0.7.5"
+cudarc = { git = "https://github.com/coreylowman/cudarc.git", features = ["cuda-12010"] }
+eyre = "0.6.12"
+hex = "0.4.3"
+ndarray = "0.15.3"
+num-traits = "0.2"
+once_cell = "1.19.0"
+rand = "0.8.5"
+rayon = "1.5.1"
+reqwest = { version = "0.12.4", features = ["blocking"] }
+serde = "1.0.198"
+tokio = { version = "1", features = ["full", "rt-multi-thread"] }
