@@ -52,9 +52,8 @@ mod shamir_db_test {
         let mut rng = rand::thread_rng();
 
         let lagrange = [
-            Shamir::my_lagrange_coeff_d2(PartyID::ID0) as u32,
-            Shamir::my_lagrange_coeff_d2(PartyID::ID1) as u32,
-            Shamir::my_lagrange_coeff_d2(PartyID::ID2) as u32,
+            Shamir::my_lagrange_coeff_d1(PartyID::ID0, PartyID::ID1) as u32,
+            Shamir::my_lagrange_coeff_d1(PartyID::ID1, PartyID::ID0) as u32,
         ];
 
         for _ in 0..TESTRUNS {
@@ -67,17 +66,17 @@ mod shamir_db_test {
 
             for i in 0..DB_SIZE {
                 for bitindex in 0..IrisCodeArray::IRIS_CODE_SIZE {
-                    // mask comparison
+                    // mask comparison (only 2 parties required for reconstruction)
                     let mask = db.db[i].mask.get_bit(bitindex);
-                    let rec_mask = ((0..3).fold(0u32, |acc, j| {
+                    let rec_mask = ((0..2).fold(0u32, |acc, j| {
                         acc + (shamir_db[j].db[i].mask[bitindex] as u32 * lagrange[j]) % P32
                     }) % P32) as u16;
                     assert!(rec_mask == 0 || rec_mask == 1);
                     assert_eq!(rec_mask, mask as u16);
 
-                    // code comparison
+                    // code comparison (only 2 parties required for reconstruction)
                     let code = db.db[i].code.get_bit(bitindex);
-                    let rec_code = ((0..3).fold(0u32, |acc, j| {
+                    let rec_code = ((0..2).fold(0u32, |acc, j| {
                         acc + (shamir_db[j].db[i].code[bitindex] as u32 * lagrange[j]) % P32
                     }) % P32) as u16;
                     assert!(rec_code == 0 || rec_code == 1 || rec_code == P - 1);

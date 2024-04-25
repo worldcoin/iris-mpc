@@ -50,6 +50,19 @@ impl Shamir {
         shares
     }
 
+    #[cfg(test)]
+    pub fn my_lagrange_coeff_d1(id: PartyID, other: PartyID) -> u16 {
+        let mut den = 1;
+        let i = (usize::from(id) + 1) as u32;
+        let j = (usize::from(other) + 1) as u32;
+
+        let num = j;
+        den *= (j + P32 - i) % P32;
+        den %= P32;
+
+        ((num * Self::mod_inverse(den as u16) as u32) % P32) as u16
+    }
+
     pub fn my_lagrange_coeff_d2(id: PartyID) -> u16 {
         let mut num = 1;
         let mut den = 1;
@@ -87,13 +100,54 @@ mod shamir_test {
                 ((shares1[2] as u32 * shares2[2] as u32) % P32) as u16,
             ]; // Degree-2 shares
 
-            let lagrange0 = Shamir::my_lagrange_coeff_d2(PartyID::ID0);
-            let lagrange1 = Shamir::my_lagrange_coeff_d2(PartyID::ID1);
-            let lagrange2 = Shamir::my_lagrange_coeff_d2(PartyID::ID2);
-            let lagrange = [lagrange0, lagrange1, lagrange2];
+            // Reconstruct d1 shares with all combinations
+            let lagrange_d1 = [
+                Shamir::my_lagrange_coeff_d1(PartyID::ID0, PartyID::ID1) as u32,
+                Shamir::my_lagrange_coeff_d1(PartyID::ID1, PartyID::ID0) as u32,
+            ];
+            let s1 = (((shares1[0] as u32 * lagrange_d1[0]) % P32
+                + (shares1[1] as u32 * lagrange_d1[1]) % P32)
+                % P32) as u16;
+            assert_eq!(s1, secret1);
+            let s2 = (((shares2[0] as u32 * lagrange_d1[0]) % P32
+                + (shares2[1] as u32 * lagrange_d1[1]) % P32)
+                % P32) as u16;
+            assert_eq!(s2, secret2);
+
+            let lagrange_d1 = [
+                Shamir::my_lagrange_coeff_d1(PartyID::ID0, PartyID::ID2) as u32,
+                Shamir::my_lagrange_coeff_d1(PartyID::ID2, PartyID::ID0) as u32,
+            ];
+            let s1 = (((shares1[0] as u32 * lagrange_d1[0]) % P32
+                + (shares1[2] as u32 * lagrange_d1[1]) % P32)
+                % P32) as u16;
+            assert_eq!(s1, secret1);
+            let s2 = (((shares2[0] as u32 * lagrange_d1[0]) % P32
+                + (shares2[2] as u32 * lagrange_d1[1]) % P32)
+                % P32) as u16;
+            assert_eq!(s2, secret2);
+
+            let lagrange_d1 = [
+                Shamir::my_lagrange_coeff_d1(PartyID::ID1, PartyID::ID2) as u32,
+                Shamir::my_lagrange_coeff_d1(PartyID::ID2, PartyID::ID1) as u32,
+            ];
+            let s1 = (((shares1[1] as u32 * lagrange_d1[0]) % P32
+                + (shares1[2] as u32 * lagrange_d1[1]) % P32)
+                % P32) as u16;
+            assert_eq!(s1, secret1);
+            let s2 = (((shares2[1] as u32 * lagrange_d1[0]) % P32
+                + (shares2[2] as u32 * lagrange_d1[1]) % P32)
+                % P32) as u16;
+            assert_eq!(s2, secret2);
+
+            let lagrange_d2 = [
+                Shamir::my_lagrange_coeff_d2(PartyID::ID0) as u32,
+                Shamir::my_lagrange_coeff_d2(PartyID::ID1) as u32,
+                Shamir::my_lagrange_coeff_d2(PartyID::ID2) as u32,
+            ];
 
             let reconstructed = ((0..3).fold(0u32, |acc, i| {
-                acc + (mul_shares[i] as u32 * lagrange[i] as u32) % P32
+                acc + (mul_shares[i] as u32 * lagrange_d2[i]) % P32
             }) % P32) as u16;
 
             assert_eq!(mul, reconstructed);
