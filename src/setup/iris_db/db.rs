@@ -30,4 +30,31 @@ impl IrisDB {
         }
         Self { db }
     }
+
+    pub fn iris_in_db(&self, iris: &IrisCode) -> bool {
+        self.db.iter().any(|x| iris.is_close(x))
+    }
+}
+
+#[cfg(test)]
+mod iris_test {
+    use super::*;
+
+    const TESTRUNS: usize = 5;
+    const DB_SIZE: usize = 100;
+
+    #[test]
+    fn iris_in_db_test() {
+        let mut rng = rand::thread_rng();
+        let db = IrisDB::new_random_rng(DB_SIZE, &mut rng);
+        for _ in 0..TESTRUNS {
+            let iris = IrisCode::random_rng(&mut rng);
+            assert_eq!(db.iris_in_db(&iris), db.db.iter().any(|x| iris.is_close(x)));
+            let index = rng.gen_range(0..DB_SIZE);
+            let iris = db.db[index].get_similar_iris(&mut rng);
+            let in_db = db.iris_in_db(&iris);
+            assert!(in_db);
+            assert_eq!(in_db, db.db.iter().any(|x| iris.is_close(x)));
+        }
+    }
 }
