@@ -287,15 +287,6 @@ impl IrisCodeDB {
     }
 
     pub fn dot(&mut self, preprocessed_query: &Vec<Vec<u8>>) {
-        // let b_dev: Vec<Vec<CudaSlice<u8>>> = (0..CudaDevice::count().unwrap() as usize)
-        //     .map(|idx| {
-        //         preprocessed_query
-        //             .iter()
-        //             .map(|b| self.devs[idx].htod_sync_copy(b).unwrap())
-        //             .collect::<Vec<_>>()
-        //     })
-        //     .collect::<Vec<_>>();
-
         let num_elements = self.db_length * QUERY_LENGTH;
         let threads_per_block = 256;
         let blocks_per_grid = (num_elements + threads_per_block - 1) / threads_per_block;
@@ -471,15 +462,15 @@ mod tests {
             }
         }
 
-        for i in 0..8 {
-            engine.fetch_results(&mut gpu_result, i);
-            for j in 0..QUERY_SIZE {
-                assert_eq!(
-                    vec_column_major[(j * DB_SIZE) + i * 125..(j * DB_SIZE) + (i + 1) * 125],
-                    gpu_result[j * 125..(j + 1) * 125],
-                    "GPU result does not match CPU implementation"
-                );
-            }
+        for device_idx in 0..engine.n_devices{
+            engine.fetch_results(&mut gpu_result, device_idx);
+            let selected_elements: Vec<u16> = vec_column_major
+                .chunks(DB_SIZE)
+                .flat_map(|chunk| chunk.iter().skip(DB_SIZE / 8 * device_idx).take(DB_SIZE / 8))
+                .cloned()
+                .collect();
+
+            assert_eq!(selected_elements, gpu_result);
         }
     }
 }
