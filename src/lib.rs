@@ -104,6 +104,7 @@ pub fn gemm(
 
 pub struct IrisCodeDB {
     peer_id: usize,
+    lagrange_coeff: u16,
     db_length: usize,
     limbs: usize,
     n_devices: usize,
@@ -125,7 +126,12 @@ pub struct IrisCodeDB {
 }
 
 impl IrisCodeDB {
-    pub fn init(peer_id: usize, db_entries: &[u16], peer_url: Option<String>) -> Self {
+    pub fn init(
+        peer_id: usize,
+        lagrange_coeff: u16,
+        db_entries: &[u16],
+        peer_url: Option<String>,
+    ) -> Self {
         // TODO: replace with a MAX_DB_SIZE to allow for insertions
         let db_length = db_entries.len() / IRIS_CODE_LENGTH;
         let n_devices = CudaDevice::count().unwrap() as usize;
@@ -251,6 +257,7 @@ impl IrisCodeDB {
 
         Self {
             peer_id,
+            lagrange_coeff,
             db_length,
             limbs,
             n_devices,
@@ -374,7 +381,8 @@ impl IrisCodeDB {
                             self.db_length as u64 / 8,
                             (self.db_length / 8 * QUERY_LENGTH) as u64,
                             IRIS_CODE_LENGTH as u64,
-                            P,
+                            P as u64,
+                            self.lagrange_coeff as u64,
                         ),
                     )
                     .unwrap();
@@ -407,6 +415,7 @@ impl IrisCodeDB {
             self.devs[device_id]
                 .dtoh_sync_copy_into(&res_trans.unwrap(), results)
                 .unwrap();
+            self.devs[device_id].synchronize().unwrap();
         }
     }
 }
@@ -417,7 +426,10 @@ mod tests {
     use num_traits::FromPrimitive;
     use rand::{rngs::StdRng, Rng, SeedableRng};
 
-    use crate::{IrisCodeDB, P};
+    use crate::{
+        setup::{id::PartyID, shamir::Shamir},
+        IrisCodeDB, P,
+    };
     const WIDTH: usize = 12_800;
     const QUERY_SIZE: usize = 310;
     const DB_SIZE: usize = 1000;
@@ -446,13 +458,12 @@ mod tests {
     }
 
     #[test]
-    /// p16 x p16 → p16
-    fn check_p16() {
+    fn check_matmul_p16() {
         let db = random_vec(DB_SIZE, WIDTH, P as u32);
         let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
         let mut gpu_result = vec![0u16; DB_SIZE * QUERY_SIZE / 8];
 
-        let mut engine = IrisCodeDB::init(0, &db, None);
+        let mut engine = IrisCodeDB::init(0, 1, &db, None);
         let preprocessed_query = engine.preprocess_query(&query);
         engine.dot(&preprocessed_query);
 
@@ -467,15 +478,81 @@ mod tests {
             }
         }
 
-        for device_idx in 0..engine.n_devices{
+        for device_idx in 0..engine.n_devices {
             engine.fetch_results(&mut gpu_result, device_idx);
             let selected_elements: Vec<u16> = vec_column_major
                 .chunks(DB_SIZE)
-                .flat_map(|chunk| chunk.iter().skip(DB_SIZE / 8 * device_idx).take(DB_SIZE / 8))
+                .flat_map(|chunk| {
+                    chunk
+                        .iter()
+                        .skip(DB_SIZE / 8 * device_idx)
+                        .take(DB_SIZE / 8)
+                })
                 .cloned()
                 .collect();
 
             assert_eq!(selected_elements, gpu_result);
+        }
+    }
+
+    #[test]
+    fn check_shared_matmul() {
+        let mut rng = rand::thread_rng();
+        let db = random_vec(DB_SIZE, WIDTH, P as u32);
+        let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
+        let mut gpu_result = vec![
+            vec![0u16; DB_SIZE * QUERY_SIZE / 8],
+            vec![0u16; DB_SIZE * QUERY_SIZE / 8],
+            vec![0u16; DB_SIZE * QUERY_SIZE / 8],
+        ];
+
+        // Calculate non-shared
+        let a_nda = random_ndarray::<u64>(db.clone(), DB_SIZE, WIDTH);
+        let b_nda = random_ndarray::<u64>(query.clone(), QUERY_SIZE, WIDTH);
+        let c_nda = a_nda.dot(&b_nda.t());
+
+        let mut vec_column_major: Vec<u16> = Vec::new();
+        for col in 0..c_nda.ncols() {
+            for row in c_nda.column(col) {
+                vec_column_major.push((*row % (P as u64)) as u16);
+            }
+        }
+
+        let mut dbs = vec![vec![], vec![], vec![]];
+        let mut querys = vec![vec![], vec![], vec![]];
+
+        // Calculate shared
+        for i in 0..db.len() {
+            let shares = Shamir::share_d1(db[i], &mut rng);
+            dbs[0].push(shares[0]);
+            dbs[1].push(shares[1]);
+            dbs[2].push(shares[2]);
+        }
+
+        for i in 0..query.len() {
+            let shares = Shamir::share_d1(query[i], &mut rng);
+            querys[0].push(shares[0]);
+            querys[1].push(shares[1]);
+            querys[2].push(shares[2]);
+        }
+
+        for i in 0..3 {
+            let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(i as u8).unwrap());
+
+            let mut engine = IrisCodeDB::init(i, l_coeff, &dbs[i], None);
+            let preprocessed_query = engine.preprocess_query(&querys[i]);
+            engine.dot(&preprocessed_query);
+
+            engine.fetch_results(&mut gpu_result[i], 0);
+        }
+
+        // TODO: we should check for all devices
+        for i in 0..DB_SIZE / 8 {
+            assert_eq!(
+                (gpu_result[0][i] as u32 + gpu_result[1][i] as u32 + gpu_result[2][i] as u32)
+                    % P as u32,
+                vec_column_major[i] as u32
+            );
         }
     }
 }
