@@ -1,3 +1,5 @@
+pub mod setup;
+
 use std::{
     ffi::c_void,
     str::FromStr,

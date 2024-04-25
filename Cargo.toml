@@ -7,6 +7,7 @@ edition = "2021"
 [dependencies]
 atomic_float = "0.1"
 axum = "0.7.5"
+bytemuck = "1.15"
 cudarc = { git = "https://github.com/coreylowman/cudarc.git", features = ["cuda-12010"] }
 eyre = "0.6.12"
 hex = "0.4.3"
@@ -18,3 +19,4 @@ rayon = "1.5.1"
 reqwest = { version = "0.12.4", features = ["blocking"] }
 serde = "1.0.198"
 tokio = { version = "1", features = ["full", "rt-multi-thread"] }
+thiserror = "1.0"
