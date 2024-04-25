@@ -1,19 +1,15 @@
 pub mod setup;
 
-use std::{
-    ffi::c_void,
-    str::FromStr,
-    sync::{Arc, Mutex},
-    thread,
-};
+use std::{ffi::c_void, str::FromStr, sync::Arc};
 
+use axum::{extract::Path, routing::get, Router};
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
-        CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceSlice,
-        LaunchAsync, LaunchConfig,
+        CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, LaunchAsync,
+        LaunchConfig,
     },
-    nccl::{sys::ncclComm, Comm, Id},
+    nccl::{Comm, Id},
     nvrtc::compile_ptx,
 };
 use once_cell::sync::Lazy;
@@ -28,7 +24,7 @@ static COMM_ID: Lazy<Vec<Id>> = Lazy::new(|| {
 pub(crate) const P: u16 = ((1u32 << 16) - 17) as u16;
 const PTX_SRC: &str = include_str!("matmul.cu");
 const IRIS_CODE_LENGTH: usize = 12800;
-const QUERY_LENGTH: usize = 31 * 10;
+const QUERY_LENGTH: usize = 310;
 const FUNCTION_NAME: &str = "matmul_f16";
 
 struct IdWrapper(Id);
@@ -102,6 +98,11 @@ pub fn gemm(
     }
 }
 
+async fn http_root(Path(device_id): Path<String>) -> String {
+    let device_id: usize = device_id.parse().unwrap();
+    IdWrapper(COMM_ID[device_id]).to_string()
+}
+
 pub struct IrisCodeDB {
     peer_id: usize,
     lagrange_coeff: u16,
@@ -130,7 +131,8 @@ impl IrisCodeDB {
         peer_id: usize,
         lagrange_coeff: u16,
         db_entries: &[u16],
-        peer_url: Option<String>,
+        peer_url: Option<&String>,
+        is_local: bool,
     ) -> Self {
         // TODO: replace with a MAX_DB_SIZE to allow for insertions
         let db_length = db_entries.len() / IRIS_CODE_LENGTH;
@@ -232,6 +234,16 @@ impl IrisCodeDB {
             ]);
             query1_sums.push(devs[idx].alloc_zeros(QUERY_LENGTH).unwrap());
             query0_sums.push(devs[idx].alloc_zeros(QUERY_LENGTH).unwrap());
+        }
+
+        // Start HTTP server to exchange NCCL commIds
+        if !is_local && peer_id == 0 {
+            tokio::spawn(async move {
+                println!("starting server...");
+                let app = Router::new().route("/:device_id", get(http_root));
+                let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+                axum::serve(listener, app).await.unwrap();
+            });
         }
 
         let mut comms = vec![];
@@ -390,17 +402,39 @@ impl IrisCodeDB {
         }
     }
 
+    /// Broadcasts the results to all other peers.
+    /// Calls are async to host, but sync to device.
     pub fn exchange_results(&mut self) {
-        // TODO: check, no parallelization should be needed, they are all on independent streams.
         for (idx, comm) in self.comms.iter().enumerate() {
-            let mut peer_ptr = 0;
-            for peer in 0..3 {
-                if peer != self.peer_id {
-                    comm.send(&self.results[idx], peer as i32).unwrap();
-                    comm.recv(&mut self.results_peers[idx][peer_ptr], peer as i32)
+            match self.peer_id {
+                0 => {
+                    comm.send(&self.results[idx], 1 as i32).unwrap();
+                    comm.recv(&mut self.results_peers[idx][0], 1 as i32)
                         .unwrap();
-                    peer_ptr += 1;
+
+                    comm.send(&self.results[idx], 2 as i32).unwrap();
+                    comm.recv(&mut self.results_peers[idx][1], 2 as i32)
+                        .unwrap();
                 }
+                1 => {
+                    comm.recv(&mut self.results_peers[idx][0], 0 as i32)
+                        .unwrap();
+                    comm.send(&self.results[idx], 0 as i32).unwrap();
+
+                    comm.send(&self.results[idx], 2 as i32).unwrap();
+                    comm.recv(&mut self.results_peers[idx][1], 2 as i32)
+                        .unwrap();
+                }
+                2 => {
+                    comm.recv(&mut self.results_peers[idx][0], 0 as i32)
+                        .unwrap();
+                    comm.send(&self.results[idx], 0 as i32).unwrap();
+
+                    comm.recv(&mut self.results_peers[idx][1], 1 as i32)
+                        .unwrap();
+                    comm.send(&self.results[idx], 1 as i32).unwrap();
+                }
+                _ => unimplemented!(),
             }
         }
         for dev in &self.devs {
@@ -463,7 +497,7 @@ mod tests {
         let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
         let mut gpu_result = vec![0u16; DB_SIZE * QUERY_SIZE / 8];
 
-        let mut engine = IrisCodeDB::init(0, 1, &db, None);
+        let mut engine = IrisCodeDB::init(0, 1, &db, None, true);
         let preprocessed_query = engine.preprocess_query(&query);
         engine.dot(&preprocessed_query);
 
@@ -539,7 +573,7 @@ mod tests {
         for i in 0..3 {
             let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(i as u8).unwrap());
 
-            let mut engine = IrisCodeDB::init(i, l_coeff, &dbs[i], None);
+            let mut engine = IrisCodeDB::init(i, l_coeff, &dbs[i], None, true);
             let preprocessed_query = engine.preprocess_query(&querys[i]);
             engine.dot(&preprocessed_query);
 
