@@ -381,17 +381,20 @@ impl IrisCodeDB {
     }
 
     pub fn exchange_results(&mut self) {
+        // TODO: check, no parallelization should be needed, they are all on independent streams.
         for (idx, comm) in self.comms.iter().enumerate() {
-            // TODO: do this in parallel for all devices
             let mut peer_ptr = 0;
             for peer in 0..3 {
                 if peer != self.peer_id {
                     comm.send(&self.results[idx], peer as i32).unwrap();
                     comm.recv(&mut self.results_peers[idx][peer_ptr], peer as i32)
-                        .unwrap(); // TODO: connection is duplex AFAIK, we should do this in parallel
+                        .unwrap();
                     peer_ptr += 1;
                 }
             }
+        }
+        for dev in &self.devs {
+            dev.synchronize().unwrap();
         }
     }
 
