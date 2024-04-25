@@ -118,7 +118,7 @@ namespace aes
 #define getSBoxInvert(num) (rsbox[(num)])
 
   // This function produces Nb(Nr+1) round keys. The round keys are used in each round to decrypt the states.
-  void KeyExpansion(uint8_t *RoundKey, const uint8_t *Key)
+  __device__ void KeyExpansion(uint8_t *RoundKey, const uint8_t *Key)
   {
     unsigned int i, j, k;
     uint8_t tempa[4]; // Used for the column/row operations
@@ -193,7 +193,7 @@ namespace aes
 
   // This function adds the round key to state.
   // The round key is added to the state by an XOR function.
-  void AddRoundKey(uint8_t round, state_t *state, const uint8_t *RoundKey)
+  __device__ void AddRoundKey(uint8_t round, state_t *state, const uint8_t *RoundKey)
   {
     uint8_t i, j;
     for (i = 0; i < 4; ++i)
@@ -207,7 +207,7 @@ namespace aes
 
   // The SubBytes Function Substitutes the values in the
   // state matrix with values in an S-box.
-  void SubBytes(state_t *state)
+  __device__ void SubBytes(state_t *state)
   {
     uint8_t i, j;
     for (i = 0; i < 4; ++i)
@@ -222,7 +222,7 @@ namespace aes
   // The ShiftRows() function shifts the rows in the state to the left.
   // Each row is shifted with different offset.
   // Offset = Row number. So the first row is not shifted.
-  void ShiftRows(state_t *state)
+  __device__ void ShiftRows(state_t *state)
   {
     uint8_t temp;
 
@@ -250,13 +250,13 @@ namespace aes
     (*state)[1][3] = temp;
   }
 
-  uint8_t xtime(uint8_t x)
+  __device__ uint8_t xtime(uint8_t x)
   {
     return ((x << 1) ^ (((x >> 7) & 1) * 0x1b));
   }
 
   // MixColumns function mixes the columns of the state matrix
-  void MixColumns(state_t *state)
+  __device__ void MixColumns(state_t *state)
   {
     uint8_t i;
     uint8_t Tmp, Tm, t;
@@ -279,7 +279,7 @@ namespace aes
     }
   }
 
-  uint8_t Multiply(uint8_t x, uint8_t y)
+  __device__ uint8_t Multiply(uint8_t x, uint8_t y)
   {
     return (((y & 1) * x) ^
             ((y >> 1 & 1) * xtime(x)) ^
@@ -291,7 +291,7 @@ namespace aes
   // MixColumns function mixes the columns of the state matrix.
   // The method used to multiply may be difficult to understand for the inexperienced.
   // Please use the references to gain more information.
-  void InvMixColumns(state_t *state)
+  __device__ void InvMixColumns(state_t *state)
   {
     int i;
     uint8_t a, b, c, d;
@@ -311,7 +311,7 @@ namespace aes
 
   // The SubBytes Function Substitutes the values in the
   // state matrix with values in an S-box.
-  void InvSubBytes(state_t *state)
+  __device__ void InvSubBytes(state_t *state)
   {
     uint8_t i, j;
     for (i = 0; i < 4; ++i)
@@ -323,7 +323,7 @@ namespace aes
     }
   }
 
-  void InvShiftRows(state_t *state)
+  __device__ void InvShiftRows(state_t *state)
   {
     uint8_t temp;
 
@@ -351,7 +351,7 @@ namespace aes
     (*state)[3][3] = temp;
   }
 
-  void encrypt(uint8_t *state, const uint8_t *key)
+  __device__ void encrypt(uint8_t *state, const uint8_t *key)
   {
     uint8_t RoundKey[176];
     KeyExpansion(RoundKey, key);
@@ -380,7 +380,7 @@ namespace aes
     AddRoundKey(Nr, (state_t *)state, RoundKey);
   }
 
-  void decrypt(uint8_t *state, const uint8_t *key)
+  __device__ void decrypt(uint8_t *state, const uint8_t *key)
   {
     uint8_t RoundKey[176];
     KeyExpansion(RoundKey, key);
@@ -410,8 +410,8 @@ namespace aes
 }
 
 template <typename input_index_calc_t>
-static void copy_input_to_block(int64_t idx, uint8_t *block, int block_size,
-                                void *input_ptr, int64_t input_numel, int input_type_size, input_index_calc_t input_index_calc)
+__device__ static void copy_input_to_block(int64_t idx, uint8_t *block, int block_size,
+                                           void *input_ptr, int64_t input_numel, int input_type_size, input_index_calc_t input_index_calc)
 {
   for (auto i = 0; i < block_size / input_type_size; ++i)
   {
@@ -427,8 +427,8 @@ static void copy_input_to_block(int64_t idx, uint8_t *block, int block_size,
 }
 
 template <typename output_index_calc_t>
-static void copy_block_to_output(int64_t idx, uint8_t *block, int output_elem_per_block,
-                                 void *output_ptr, int64_t output_numel, int output_type_size, output_index_calc_t output_index_calc)
+__device__ static void copy_block_to_output(int64_t idx, uint8_t *block, int output_elem_per_block,
+                                            void *output_ptr, int64_t output_numel, int output_type_size, output_index_calc_t output_index_calc)
 {
   for (auto i = 0; i < output_elem_per_block; ++i)
   {
@@ -444,7 +444,7 @@ static void copy_block_to_output(int64_t idx, uint8_t *block, int output_elem_pe
 }
 
 template <typename output_index_calc_t>
-static void block_cipher_kernel_cuda(
+__device__ static void block_cipher_kernel_cuda(
     const uint8_t *key_bytes,
     int output_elem_per_block, void *output_ptr, int64_t output_numel,
     int output_type_size, output_index_calc_t output_index_calc)
