@@ -8,12 +8,10 @@
  * PYTORCH_LICENSE file in the current directory of this source tree.
  */
 
-#include <cstdint>
-#include <mutex>
-
 // #include <c10/cuda/CUDAStream.h>
 
-#define UNROLL_IF_CUDA #pragma unroll
+#define uint8_t unsigned char
+#define int64_t long long
 
 namespace aes
 {
