@@ -5,7 +5,7 @@ use cudarc::{
     nvrtc::compile_ptx,
 };
 
-struct AesCudaRng {
+pub struct AesCudaRng {
     devs: Vec<Arc<CudaDevice>>,
     kernels: Vec<CudaFunction>,
     streams: Vec<CudaStream>,
@@ -17,7 +17,7 @@ const AES_FUNCTION_NAME: &str = "aes_128_rng";
 const NUM_ELEMENTS: usize = 1024 * 1024 * 1024;
 
 impl AesCudaRng {
-    fn init() -> Self {
+    pub fn init() -> Self {
         let n_devices = CudaDevice::count().unwrap() as usize;
         let mut devs = Vec::new();
         let mut kernels = Vec::new();
@@ -47,7 +47,7 @@ impl AesCudaRng {
         }
     }
 
-    fn rng(&self) -> Vec<u8> {
+    pub fn rng(&self) -> Vec<u8> {
         let num_elements = NUM_ELEMENTS;
         let threads_per_block = 256;
         let blocks_per_grid = (num_elements + threads_per_block - 1) / threads_per_block;

@@ -5,24 +5,26 @@ use cudarc::{
     nvrtc::compile_ptx,
 };
 
-struct ChaChaCudaRng {
+pub struct ChaChaCudaRng {
+    buf_size: usize,
     devs: Vec<Arc<CudaDevice>>,
     kernels: Vec<CudaFunction>,
-    streams: Vec<CudaStream>,
     rng_chunks: Vec<CudaSlice<u32>>,
+    output_buffer: Vec<u32>,
 }
 
 const CHACHA_PTX_SRC: &str = include_str!("chacha.cu");
 const CHACHA_FUNCTION_NAME: &str = "chacha12";
-const NUM_ELEMENTS: usize = 1024 * 1024 * 1024 / 4;
 
 impl ChaChaCudaRng {
-    fn init() -> Self {
+    // takes number of u32 elements to produce
+    pub fn init(buf_size: usize) -> Self {
         let n_devices = CudaDevice::count().unwrap() as usize;
         let mut devs = Vec::new();
         let mut kernels = Vec::new();
-        let mut streams = Vec::new();
         let ptx = compile_ptx(CHACHA_PTX_SRC).unwrap();
+
+        assert!(buf_size % 64 == 0, "buf_size must be a multiple of 64 atm");
 
         for i in 0..n_devices {
             let dev = CudaDevice::new(i).unwrap();
@@ -33,24 +35,24 @@ impl ChaChaCudaRng {
                 .get_func(CHACHA_FUNCTION_NAME, CHACHA_FUNCTION_NAME)
                 .unwrap();
 
-            streams.push(stream);
             devs.push(dev);
             kernels.push(function);
         }
 
-        let buf = vec![0u32; NUM_ELEMENTS];
+        let buf = vec![0u32; buf_size];
         let rng_chunks = vec![devs[0].htod_sync_copy(&buf).unwrap()]; // just do on device 0 for now
 
         Self {
+            buf_size,
             devs,
             kernels,
-            streams,
             rng_chunks,
+            output_buffer: buf,
         }
     }
 
-    fn rng(&mut self) -> Vec<u32> {
-        let num_ks_calls = NUM_ELEMENTS / 64;
+    pub fn fill_rng(&mut self) {
+        let num_ks_calls = self.buf_size / 64;
         let threads_per_block = 256; // todo sync with kernel
         let blocks_per_grid = (num_ks_calls + threads_per_block - 1) / threads_per_block;
         let cfg = LaunchConfig {
@@ -66,10 +68,32 @@ impl ChaChaCudaRng {
                 .launch(cfg, (&mut self.rng_chunks[0], &state_slice))
                 .unwrap();
         }
-        println!("launch done");
 
-        let rng_result = self.devs[0].dtoh_sync_copy(&self.rng_chunks[0]).unwrap();
-        rng_result
+        self.devs[0]
+            .dtoh_sync_copy_into(&self.rng_chunks[0], &mut self.output_buffer)
+            .unwrap();
+    }
+
+    pub fn fill_rng_no_host_copy(&mut self) {
+        let num_ks_calls = self.buf_size / 64;
+        let threads_per_block = 256; // todo sync with kernel
+        let blocks_per_grid = (num_ks_calls + threads_per_block - 1) / threads_per_block;
+        let cfg = LaunchConfig {
+            block_dim: (threads_per_block as u32, 1, 1),
+            grid_dim: (blocks_per_grid as u32, 1, 1),
+            shared_mem_bytes: 0, // do we need this since we use __shared__ in kernel?
+        };
+        let ctx = ChaChaCtx::init([0u32; 8], 0, [0u32; 3]); // todo keep internal state
+        let state_slice = self.devs[0].htod_sync_copy(&ctx.state).unwrap();
+        unsafe {
+            self.kernels[0]
+                .clone()
+                .launch(cfg, (&mut self.rng_chunks[0], &state_slice))
+                .unwrap();
+        }
+    }
+    pub fn data(&self) -> &[u32] {
+        &self.output_buffer
     }
 }
 
@@ -112,9 +136,8 @@ mod tests {
 
     #[test]
     fn test_chacha_rng() {
-        let mut rng = ChaChaCudaRng::init();
-        let rng_result = rng.rng();
-        dbg!(&rng_result[0..100]);
-        assert_eq!(rng_result.len(), NUM_ELEMENTS);
+        let mut rng = ChaChaCudaRng::init(1024 * 1024);
+        rng.fill_rng();
+        dbg!(&rng.data()[0..100]);
     }
 }
