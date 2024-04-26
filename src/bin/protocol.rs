@@ -9,6 +9,7 @@ use gpu_iris_mpc::{
     IrisCodeDB,
 };
 use rayon::iter::ParallelDrainFull;
+use tokio::time;
 
 const DB_SIZE: usize = 10_000;
 const QUERIES: usize = 31;
@@ -35,6 +36,8 @@ async fn main() -> eyre::Result<()> {
 
     let mut engine = IrisCodeDB::init(party_id, l_coeff, &codes_db, url.clone(), false);
 
+    time::sleep(time::Duration::from_secs(10)).await;
+
     println!("Engine ready!");
 
     let random_query = ShamirIris::share_iris(&IrisCode::random_rng(&mut rng), &mut rng);
@@ -47,8 +50,6 @@ async fn main() -> eyre::Result<()> {
         queries[1].push(tmp[1].code.to_vec());
         queries[2].push(tmp[2].code.to_vec());
     }
-
-    engine.exchange_results();
 
     println!("Starting query...");
 
@@ -63,7 +64,6 @@ async fn main() -> eyre::Result<()> {
     engine.exchange_results();
 
     println!("Results exchanged.");
-
     println!("Time elapsed: {:?}", now.elapsed());
 
     Ok(())
