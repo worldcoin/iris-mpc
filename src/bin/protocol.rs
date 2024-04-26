@@ -48,6 +48,8 @@ async fn main() -> eyre::Result<()> {
         queries[2].push(tmp[2].code.to_vec());
     }
 
+    engine.exchange_results();
+
     println!("Starting query...");
 
     let now = Instant::now();
