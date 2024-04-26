@@ -1,4 +1,5 @@
 pub mod setup;
+pub mod threshold;
 
 use std::{
     ffi::c_void,
