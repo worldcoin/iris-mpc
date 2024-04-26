@@ -135,7 +135,7 @@ impl IrisCodeDB {
     ) -> Self {
         // TODO: replace with a MAX_DB_SIZE to allow for insertions
         let db_length = db_entries.len() / IRIS_CODE_LENGTH;
-        let n_devices = 1; //CudaDevice::count().unwrap() as usize;
+        let n_devices = CudaDevice::count().unwrap() as usize;
         let limbs = 2;
         let ptx = compile_ptx(PTX_SRC).unwrap();
 
@@ -495,9 +495,9 @@ mod tests {
     };
     const WIDTH: usize = 12_800;
     const QUERY_SIZE: usize = 31;
-    const DB_SIZE: usize = 1000;
+    const DB_SIZE: usize = 8*256;
     const RNG_SEED: u64 = 1337;
-    const N_DEVICES: usize = 1;
+    const N_DEVICES: usize = 8;
 
     /// Helpers
     fn random_ndarray<T>(array: Vec<u16>, n: usize, m: usize) -> Array2<T>
