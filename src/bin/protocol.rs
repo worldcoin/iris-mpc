@@ -66,5 +66,8 @@ async fn main() -> eyre::Result<()> {
     println!("Results exchanged.");
     println!("Time elapsed: {:?}", now.elapsed());
 
+    time::sleep(time::Duration::from_secs(10)).await;
+
+    
     Ok(())
 }
