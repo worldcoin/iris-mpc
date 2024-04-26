@@ -6,10 +6,11 @@ use cudarc::{
 };
 
 pub struct AesCudaRng {
+    buf_size: usize,
     devs: Vec<Arc<CudaDevice>>,
     kernels: Vec<CudaFunction>,
-    streams: Vec<CudaStream>,
     rng_chunks: Vec<CudaSlice<u8>>,
+    output_buf: Vec<u8>,
 }
 
 const AES_PTX_SRC: &str = include_str!("aes.cu");
@@ -17,37 +18,68 @@ const AES_FUNCTION_NAME: &str = "aes_128_rng";
 const NUM_ELEMENTS: usize = 1024 * 1024 * 1024;
 
 impl AesCudaRng {
-    pub fn init() -> Self {
+    // buf size in u8
+    pub fn init(buf_size: usize) -> Self {
         let n_devices = CudaDevice::count().unwrap() as usize;
         let mut devs = Vec::new();
         let mut kernels = Vec::new();
-        let mut streams = Vec::new();
         let ptx = compile_ptx(AES_PTX_SRC).unwrap();
 
         for i in 0..n_devices {
             let dev = CudaDevice::new(i).unwrap();
-            let stream = dev.fork_default_stream().unwrap();
             dev.load_ptx(ptx.clone(), AES_FUNCTION_NAME, &[AES_FUNCTION_NAME])
                 .unwrap();
             let function = dev.get_func(AES_FUNCTION_NAME, AES_FUNCTION_NAME).unwrap();
 
-            streams.push(stream);
             devs.push(dev);
             kernels.push(function);
         }
 
-        let buf = vec![0u8; NUM_ELEMENTS];
+        assert!(buf_size % 16 == 0, "buf_size must be a multiple of 16 atm");
+
+        let buf = vec![0u8; buf_size];
         let rng_chunks = vec![devs[0].htod_sync_copy(&buf).unwrap()]; // just do on device 0 for now
 
         Self {
+            buf_size,
             devs,
             kernels,
-            streams,
             rng_chunks,
+            output_buf: buf,
         }
     }
 
-    pub fn rng(&self) -> Vec<u8> {
+    pub fn fill_rng(&mut self) {
+        let num_elements = self.buf_size;
+        let threads_per_block = 256;
+        let blocks_per_grid = (num_elements + threads_per_block - 1) / threads_per_block;
+        let cfg = LaunchConfig {
+            block_dim: (threads_per_block as u32, 1, 1),
+            grid_dim: (blocks_per_grid as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        let key_bytes = [0u8; 16];
+        let key_slice = self.devs[0].htod_sync_copy(&key_bytes[..]).unwrap();
+        unsafe {
+            self.kernels[0]
+                .clone()
+                .launch(
+                    cfg,
+                    (
+                        &key_slice,
+                        16,
+                        &self.rng_chunks[0],
+                        num_elements,
+                        mem::size_of::<u8>(),
+                    ),
+                )
+                .unwrap();
+        }
+        self.devs[0]
+            .dtoh_sync_copy_into(&self.rng_chunks[0], &mut self.output_buf[..])
+            .unwrap();
+    }
+    pub fn fill_rng_no_host_copy(&mut self) {
         let num_elements = NUM_ELEMENTS;
         let threads_per_block = 256;
         let blocks_per_grid = (num_elements + threads_per_block - 1) / threads_per_block;
@@ -73,8 +105,10 @@ impl AesCudaRng {
                 )
                 .unwrap();
         }
-        let rng_result = self.devs[0].dtoh_sync_copy(&self.rng_chunks[0]).unwrap();
-        rng_result
+    }
+
+    pub fn data(&self) -> &[u8] {
+        &self.output_buf
     }
 }
 
@@ -84,9 +118,8 @@ mod tests {
 
     #[test]
     fn test_aes_rng() {
-        let rng = AesCudaRng::init();
-        let rng_result = rng.rng();
-        dbg!(&rng_result[0..100]);
-        assert_eq!(rng_result.len(), NUM_ELEMENTS);
+        let mut rng = AesCudaRng::init(1024 * 1024);
+        rng.fill_rng();
+        dbg!(&rng.data()[0..100]);
     }
 }
