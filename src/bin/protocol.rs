@@ -59,6 +59,8 @@ async fn main() -> eyre::Result<()> {
         engine.preprocess_query(&queries[0].clone().into_iter().flatten().collect::<Vec<_>>());
     engine.dot(&query);
 
+    time::sleep(time::Duration::from_secs(5)).await;
+
     println!("Calculation done.");
 
     engine.exchange_results();
@@ -68,6 +70,6 @@ async fn main() -> eyre::Result<()> {
 
     time::sleep(time::Duration::from_secs(10)).await;
 
-    
+
     Ok(())
 }

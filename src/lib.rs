@@ -8,7 +8,7 @@ use cudarc::{
     driver::{
         result, sys::lib, CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceSlice, LaunchAsync, LaunchConfig
     },
-    nccl::{Comm, Id},
+    nccl::{self, Comm, Id},
     nvrtc::compile_ptx,
 };
 use once_cell::sync::Lazy;
@@ -147,15 +147,15 @@ impl IrisCodeDB {
         for i in 0..n_devices {
             let dev = CudaDevice::new(i).unwrap();
             let blas = CudaBlas::new(dev.clone()).unwrap();
-            let stream = dev.fork_default_stream().unwrap();
-            unsafe {
-                blas.set_stream(Some(&stream)).unwrap();
-            }
+            // let stream = dev.cu_stream();
+            // unsafe {
+            //     blas.set_stream(Some(&stream)).unwrap();
+            // }
             dev.load_ptx(ptx.clone(), FUNCTION_NAME, &[FUNCTION_NAME])
                 .unwrap();
             let function = dev.get_func(FUNCTION_NAME, FUNCTION_NAME).unwrap();
 
-            streams.push(stream);
+            // streams.push(stream);
             blass.push(blas);
             devs.push(dev);
             kernels.push(function);
@@ -398,11 +398,11 @@ impl IrisCodeDB {
             }
         }
 
-        for stream in &self.streams {
-            unsafe {
-                result::stream::synchronize(stream.stream).unwrap();
-            }
-        }
+        // for stream in &self.streams {
+        //     unsafe {
+        //         result::stream::synchronize(stream.stream).unwrap();
+        //     }
+        // }
     }
 
     /// Broadcasts the results to all other peers.
@@ -412,6 +412,7 @@ impl IrisCodeDB {
             match self.peer_id {
                 0 => {
                     comm.send(&self.results[idx], 1 as i32).unwrap();
+
                     // comm.recv(&mut self.results_peers[idx][0], 1 as i32)
                     //     .unwrap();
 
@@ -440,14 +441,11 @@ impl IrisCodeDB {
                 _ => unimplemented!(),
             }
         }
-        for dev in &self.devs {
-            dev.synchronize().unwrap();
-        }
     }
 
-    pub fn fetch_results(&self, results: &mut [u16], device_id: usize) {
+        pub fn fetch_results(&self, results: &mut [u16], device_id: usize) {
         unsafe {
-            result::stream::synchronize(self.streams[device_id].stream).unwrap();
+            // result::stream::synchronize(self.streams[device_id].stream).unwrap();
             
             let res_trans =
                 self.results[device_id].transmute(self.db_length * QUERY_LENGTH / self.n_devices);
