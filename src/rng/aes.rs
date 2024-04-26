@@ -61,8 +61,7 @@ impl AesCudaRng {
         unsafe {
             self.kernels[0]
                 .clone()
-                .launch_on_stream(
-                    &self.streams[0],
+                .launch(
                     cfg,
                     (
                         &key_slice,
@@ -74,7 +73,6 @@ impl AesCudaRng {
                 )
                 .unwrap();
         }
-        let buf = vec![0u8; NUM_ELEMENTS];
         let rng_result = self.devs[0].dtoh_sync_copy(&self.rng_chunks[0]).unwrap();
         rng_result
     }

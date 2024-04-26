@@ -12,6 +12,8 @@
 
 #define uint8_t unsigned char
 #define int64_t long long
+#define size_t unsigned long long
+#define uint32_t unsigned int
 
 namespace aes
 {
@@ -418,7 +420,7 @@ __device__ static void copy_input_to_block(int64_t idx, uint8_t *block, int bloc
     const auto linear_index = idx * (block_size / input_type_size) + i;
     if (linear_index < input_numel)
     {
-      std::memcpy(
+      memcpy(
           block + i * input_type_size,
           &(reinterpret_cast<uint8_t *>(input_ptr)[input_index_calc(linear_index)]),
           input_type_size);
@@ -435,7 +437,7 @@ __device__ static void copy_block_to_output(int64_t idx, uint8_t *block, int out
     const auto linear_index = idx * output_elem_per_block + i;
     if (linear_index < output_numel)
     {
-      std::memcpy(
+      memcpy(
           &(reinterpret_cast<uint8_t *>(output_ptr)[output_index_calc(linear_index)]),
           block + i * output_type_size,
           output_type_size);
@@ -451,14 +453,14 @@ __device__ static void block_cipher_kernel_cuda(
 {
   const auto idx = blockIdx.x * blockDim.x + threadIdx.x;
   uint8_t block[aes::block_t_size];
-  std::memset(&block, 0, block_size); // is it ok to use zeros as padding?
+  memset(&block, 0, aes::block_t_size); // is it ok to use zeros as padding?
   // if (input_ptr != nullptr)
   // {
   //   copy_input_to_block(idx, block, aes::block_t_size, input_ptr, input_numel, input_type_size, input_index_calc);
   // }
 
   uint8_t idx_block[aes::block_t_size];
-  std::memset(&idx_block, 0, aes::block_t_size);
+  memset(&idx_block, 0, aes::block_t_size);
   *(reinterpret_cast<int64_t *>(idx_block)) = idx;
   aes::encrypt(idx_block, key_bytes);
   for (size_t i = 0; i < aes::block_t_size; i++)
