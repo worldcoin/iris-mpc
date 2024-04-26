@@ -1,7 +1,7 @@
 use std::{mem, sync::Arc};
 
 use cudarc::{
-    driver::{CudaDevice, CudaFunction, CudaSlice, CudaStream, LaunchAsync, LaunchConfig},
+    driver::{CudaDevice, CudaFunction, CudaSlice, LaunchAsync, LaunchConfig},
     nvrtc::compile_ptx,
 };
 
@@ -15,7 +15,6 @@ pub struct AesCudaRng {
 
 const AES_PTX_SRC: &str = include_str!("aes.cu");
 const AES_FUNCTION_NAME: &str = "aes_128_rng";
-const NUM_ELEMENTS: usize = 1024 * 1024 * 1024;
 
 impl AesCudaRng {
     // buf size in u8

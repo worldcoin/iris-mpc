@@ -19,12 +19,28 @@
     arr[b] ^= arr[c];                 \
     arr[b] = ROTL32(arr[b], 7);
 
+// asm quarterround from <https://www.cloud-conf.net/ispa2021/proc/pdfs/ISPA-BDCloud-SocialCom-SustainCom2021-3mkuIWCJVSdKJpBYM7KEKW/264600b171/264600b171.pdf>
+// actually seems to be noticably slower then the naive above at least on the 1070 I tested on
+// #define QUARTERROUND(arr, a, b, c, d)                            \
+//     asm("add.u32 %0, %0, %1; \n\t"                               \
+//         "xor.b32 %3, %3, %0; \n\t"                               \
+//         "shf.l.clamp.b32 %3, %3, %3, %4; \n\t"                   \
+//         "add.u32 %2, %2, %3; \n\t"                               \
+//         "xor.b32 %1, %1, %2; \n\t"                               \
+//         "shf.l.clamp.b32 %1, %1, %1, %5; \n\t"                   \
+//         "add.u32 %0, %0, %1; \n\t"                               \
+//         "xor.b32 %3, %3, %0; \n\t"                               \
+//         "shf.l.clamp.b32 %3, %3, %3, %6; \n\t"                   \
+//         "add.u32 %2, %2, %3; \n\t"                               \
+//         "xor.b32 %1, %1, %2; \n\t"                               \
+//         "shf.l.clamp.b32 %1, %1, %1, %7; \n\t"                   \
+//         : "+r"(arr[a]), "+r"(arr[b]), "+r"(arr[c]), "+r"(arr[d]) \
+//         : "r"(16), "r"(12), "r"(8), "r"(7))
+
 /**
  * the chacha12_block function
  */
-extern "C" __global__ void chacha12(
-    uint32_t *d_ciphertext,
-    uint32_t *d_state)
+extern "C" __global__ void chacha12(uint32_t *d_ciphertext, uint32_t *d_state)
 {
     extern __shared__ uint32_t total[16 + (THREADS_PER_BLOCK * 16)];
     uint32_t *state = &total[0];

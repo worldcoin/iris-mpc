@@ -1,7 +1,7 @@
-use std::{mem, sync::Arc};
+use std::sync::Arc;
 
 use cudarc::{
-    driver::{CudaDevice, CudaFunction, CudaSlice, CudaStream, LaunchAsync, LaunchConfig},
+    driver::{CudaDevice, CudaFunction, CudaSlice, LaunchAsync, LaunchConfig},
     nvrtc::compile_ptx,
 };
 
@@ -109,6 +109,8 @@ impl ChaChaCtx {
         Self { state }
     }
 
+    // TODO: use later to set counter instead of always 0
+    #[allow(dead_code)]
     fn set_counter(&mut self, counter: u32) {
         self.state[12] = counter;
     }
