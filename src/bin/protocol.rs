@@ -1,4 +1,4 @@
-use std::env;
+use std::{env, thread, time::Instant};
 
 use gpu_iris_mpc::{
     setup::{
@@ -8,8 +8,10 @@ use gpu_iris_mpc::{
     },
     IrisCodeDB,
 };
+use rayon::iter::ParallelDrainFull;
 
-const DB_SIZE: usize = 1000;
+const DB_SIZE: usize = 10_000;
+const QUERIES: usize = 31;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
@@ -29,11 +31,38 @@ async fn main() -> eyre::Result<()> {
         .flat_map(|entry| entry.code)
         .collect::<Vec<_>>();
 
+    println!("Starting engine...");
+
     let mut engine = IrisCodeDB::init(party_id, l_coeff, &codes_db, url.clone(), false);
 
+    println!("Engine ready!");
 
-    let xx = ShamirIris::share_iris(&IrisCode::random_rng(&mut rng), &mut rng);
+    let random_query = ShamirIris::share_iris(&IrisCode::random_rng(&mut rng), &mut rng);
+    let mut queries = vec![vec![], vec![], vec![]];
 
+    for i in 0..QUERIES {
+        // TODO: rotate
+        let tmp: [ShamirIris; 3] = random_query.clone();
+        queries[0].push(tmp[0].code.to_vec());
+        queries[1].push(tmp[1].code.to_vec());
+        queries[2].push(tmp[2].code.to_vec());
+    }
+
+    println!("Starting query...");
+
+    let now = Instant::now();
+
+    let query =
+        engine.preprocess_query(&queries[0].clone().into_iter().flatten().collect::<Vec<_>>());
+    engine.dot(&query);
+
+    println!("Calculation done.");
+
+    engine.exchange_results();
+
+    println!("Results exchanged.");
+
+    println!("Time elapsed: {:?}", now.elapsed());
 
     Ok(())
 }

@@ -225,7 +225,7 @@ impl IrisCodeDB {
         let results_len = chunk_size * QUERY_LENGTH;
 
         for idx in 0..n_devices {
-            intermediate_results.push(devs[idx].alloc_zeros(results_len * 4).unwrap()); // TODO: ???
+            intermediate_results.push(devs[idx].alloc_zeros(results_len * 4).unwrap());
             results.push(devs[idx].alloc_zeros(results_len * 2).unwrap());
             results_peers.push(vec![
                 devs[idx].alloc_zeros(results_len * 2).unwrap(),
@@ -238,7 +238,7 @@ impl IrisCodeDB {
         // Start HTTP server to exchange NCCL commIds
         if !is_local && peer_id == 0 {
             tokio::spawn(async move {
-                println!("starting server...");
+                println!("Starting server...");
                 let app = Router::new().route("/:device_id", get(http_root));
                 let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
                 axum::serve(listener, app).await.unwrap();
@@ -246,7 +246,7 @@ impl IrisCodeDB {
         }
 
         let mut comms = vec![];
-        if peer_url.is_some() {
+        if !is_local {
             for i in 0..n_devices {
                 let id = if peer_id == 0 {
                     COMM_ID[i]
@@ -317,16 +317,12 @@ impl IrisCodeDB {
         };
 
         for idx in 0..self.devs.len() {
-            // TODO: check this is actually async
-
             let query1 = self.devs[idx]
                 .htod_sync_copy(&preprocessed_query[1])
                 .unwrap();
             let query0 = self.devs[idx]
                 .htod_sync_copy(&preprocessed_query[0])
                 .unwrap();
-
-            // self.devs[idx].synchronize();
 
             // Calculate sums to correct output
             gemm(
@@ -400,10 +396,6 @@ impl IrisCodeDB {
                     )
                     .unwrap();
             }
-
-            unsafe {
-                result::stream::synchronize(self.streams[idx].stream).unwrap();
-            }
         }
 
         for stream in &self.streams {
@@ -475,10 +467,6 @@ impl IrisCodeDB {
             //     .result().unwrap();
 
             // self.streams[device_id].wait_for_default();
-
-
-            
-            // self.devs[device_id].synchronize().unwrap();
         }
     }
 }
