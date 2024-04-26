@@ -377,8 +377,8 @@ impl IrisCodeDB {
             unsafe {
                 self.kernels[idx]
                     .clone()
-                    .launch_on_stream(
-                        &self.streams[idx],
+                    .launch(
+                        // &self.streams[idx],
                         cfg,
                         (
                             &self.intermediate_results[idx],
@@ -443,12 +443,37 @@ impl IrisCodeDB {
         }
     }
 
-        pub fn fetch_results(&self, results: &mut [u16], device_id: usize) {
+    pub fn fetch_results(&self, results: &mut [u16], device_id: usize) {
         unsafe {
             // result::stream::synchronize(self.streams[device_id].stream).unwrap();
             
             let res_trans =
                 self.results[device_id].transmute(self.db_length * QUERY_LENGTH / self.n_devices);
+
+            self.devs[device_id]
+                .dtoh_sync_copy_into(&res_trans.unwrap(), results)
+                .unwrap();
+
+            // TODO: pin memory and use async
+            // lib()
+            //     .cuMemcpyDtoHAsync_v2(
+            //         results.as_mut_ptr() as *mut c_void,
+            //         *self.results[device_id].device_ptr(),
+            //         self.db_length * QUERY_LENGTH / self.n_devices * 2,
+            //         self.streams[device_id].stream,
+            //     )
+            //     .result().unwrap();
+
+            // self.streams[device_id].wait_for_default();
+        }
+    }
+
+    pub fn fetch_results_peer(&self, results: &mut [u16], device_id: usize, peer_id: usize) {
+        unsafe {
+            // result::stream::synchronize(self.streams[device_id].stream).unwrap();
+            
+            let res_trans =
+                self.results_peers[device_id][peer_id].transmute(self.db_length * QUERY_LENGTH / self.n_devices);
 
             self.devs[device_id]
                 .dtoh_sync_copy_into(&res_trans.unwrap(), results)
