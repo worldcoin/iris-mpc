@@ -12,8 +12,8 @@ struct AesCudaRng {
     rng_chunks: Vec<CudaSlice<u8>>,
 }
 
-const PTX_SRC: &str = include_str!("block_cipher.cu");
-const FUNCTION_NAME: &str = "aes_128_rng";
+const AES_PTX_SRC: &str = include_str!("aes.cu");
+const AES_FUNCTION_NAME: &str = "aes_128_rng";
 const NUM_ELEMENTS: usize = 1024 * 1024 * 1024;
 
 impl AesCudaRng {
@@ -22,14 +22,14 @@ impl AesCudaRng {
         let mut devs = Vec::new();
         let mut kernels = Vec::new();
         let mut streams = Vec::new();
-        let ptx = compile_ptx(PTX_SRC).unwrap();
+        let ptx = compile_ptx(AES_PTX_SRC).unwrap();
 
         for i in 0..n_devices {
             let dev = CudaDevice::new(i).unwrap();
             let stream = dev.fork_default_stream().unwrap();
-            dev.load_ptx(ptx.clone(), FUNCTION_NAME, &[FUNCTION_NAME])
+            dev.load_ptx(ptx.clone(), AES_FUNCTION_NAME, &[AES_FUNCTION_NAME])
                 .unwrap();
-            let function = dev.get_func(FUNCTION_NAME, FUNCTION_NAME).unwrap();
+            let function = dev.get_func(AES_FUNCTION_NAME, AES_FUNCTION_NAME).unwrap();
 
             streams.push(stream);
             devs.push(dev);
