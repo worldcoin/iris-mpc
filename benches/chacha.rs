@@ -65,6 +65,6 @@ pub fn criterion_benchmark_aes(c: &mut Criterion) {
 criterion_group!(
     name = rng_benches;
     config = Criterion::default();
-    targets = criterion_benchmark_chacha12
+    targets = criterion_benchmark_chacha12, criterion_benchmark_aes
 );
 criterion_main!(rng_benches);
