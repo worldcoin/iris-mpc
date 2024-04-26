@@ -32,9 +32,7 @@ async fn main() -> eyre::Result<()> {
     let mut engine = IrisCodeDB::init(party_id, l_coeff, &codes_db, url.clone(), false);
 
 
-    ShamirIris::share_iris(&IrisCode::random_rng(&mut rng), &mut rng);
-
-
+    let xx = ShamirIris::share_iris(&IrisCode::random_rng(&mut rng), &mut rng);
 
 
     Ok(())

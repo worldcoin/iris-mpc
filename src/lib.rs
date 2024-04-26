@@ -6,8 +6,7 @@ use axum::{extract::Path, routing::get, Router};
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
-        CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, LaunchAsync,
-        LaunchConfig,
+        result, sys::lib, CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceSlice, LaunchAsync, LaunchConfig
     },
     nccl::{Comm, Id},
     nvrtc::compile_ptx,
@@ -23,8 +22,8 @@ static COMM_ID: Lazy<Vec<Id>> = Lazy::new(|| {
 
 pub(crate) const P: u16 = ((1u32 << 16) - 17) as u16;
 const PTX_SRC: &str = include_str!("matmul.cu");
-const IRIS_CODE_LENGTH: usize = 12800;
-const QUERY_LENGTH: usize = 310;
+const IRIS_CODE_LENGTH: usize = 12_800;
+const QUERY_LENGTH: usize = 31;
 const FUNCTION_NAME: &str = "matmul_f16";
 
 struct IdWrapper(Id);
@@ -136,7 +135,7 @@ impl IrisCodeDB {
     ) -> Self {
         // TODO: replace with a MAX_DB_SIZE to allow for insertions
         let db_length = db_entries.len() / IRIS_CODE_LENGTH;
-        let n_devices = CudaDevice::count().unwrap() as usize;
+        let n_devices = 1; //CudaDevice::count().unwrap() as usize;
         let limbs = 2;
         let ptx = compile_ptx(PTX_SRC).unwrap();
 
@@ -188,7 +187,7 @@ impl IrisCodeDB {
             .for_each(|x| *x = (*x as i32 - 128) as u8);
 
         // Split up db and load to all devices
-        let chunk_size = db_length.div_ceil(n_devices);
+        let chunk_size = db_length / n_devices;
 
         let db1_sums = a1_sums
             .chunks(chunk_size)
@@ -223,10 +222,10 @@ impl IrisCodeDB {
         let mut results_peers = vec![];
         let mut query1_sums = vec![];
         let mut query0_sums = vec![];
-        let results_len = chunk_size * IRIS_CODE_LENGTH;
+        let results_len = chunk_size * QUERY_LENGTH;
 
         for idx in 0..n_devices {
-            intermediate_results.push(devs[idx].alloc_zeros(results_len * 4).unwrap());
+            intermediate_results.push(devs[idx].alloc_zeros(results_len * 4).unwrap()); // TODO: ???
             results.push(devs[idx].alloc_zeros(results_len * 2).unwrap());
             results_peers.push(vec![
                 devs[idx].alloc_zeros(results_len * 2).unwrap(),
@@ -308,9 +307,9 @@ impl IrisCodeDB {
     }
 
     pub fn dot(&mut self, preprocessed_query: &Vec<Vec<u8>>) {
-        let num_elements = self.db_length * QUERY_LENGTH;
+        let num_elements = self.db_length / self.n_devices * QUERY_LENGTH;
         let threads_per_block = 256;
-        let blocks_per_grid = (num_elements + threads_per_block - 1) / threads_per_block;
+        let blocks_per_grid = num_elements.div_ceil(threads_per_block);
         let cfg = LaunchConfig {
             block_dim: (threads_per_block as u32, 1, 1),
             grid_dim: (blocks_per_grid as u32, 1, 1),
@@ -326,6 +325,8 @@ impl IrisCodeDB {
             let query0 = self.devs[idx]
                 .htod_sync_copy(&preprocessed_query[0])
                 .unwrap();
+
+            // self.devs[idx].synchronize();
 
             // Calculate sums to correct output
             gemm(
@@ -367,8 +368,8 @@ impl IrisCodeDB {
                         &mut self.intermediate_results[idx],
                         0,
                         0,
-                        (self.db_length / 8 * QUERY_LENGTH * 4 * (i * 2 + j)) as u64,
-                        self.db_length / 8,
+                        (self.db_length / self.n_devices * QUERY_LENGTH * 4 * (i * 2 + j)) as u64,
+                        self.db_length / self.n_devices,
                         QUERY_LENGTH,
                         IRIS_CODE_LENGTH,
                         1,
@@ -390,14 +391,24 @@ impl IrisCodeDB {
                             &self.db1_sums[idx],
                             &self.query0_sums[idx],
                             &self.query1_sums[idx],
-                            self.db_length as u64 / 8,
-                            (self.db_length / 8 * QUERY_LENGTH) as u64,
+                            self.db_length as u64 / self.n_devices as u64,
+                            (self.db_length / self.n_devices * QUERY_LENGTH) as u64,
                             IRIS_CODE_LENGTH as u64,
                             P as u64,
                             self.lagrange_coeff as u64,
                         ),
                     )
                     .unwrap();
+            }
+
+            unsafe {
+                result::stream::synchronize(self.streams[idx].stream).unwrap();
+            }
+        }
+
+        for stream in &self.streams {
+            unsafe {
+                result::stream::synchronize(stream.stream).unwrap();
             }
         }
     }
@@ -444,12 +455,30 @@ impl IrisCodeDB {
 
     pub fn fetch_results(&self, results: &mut [u16], device_id: usize) {
         unsafe {
+            result::stream::synchronize(self.streams[device_id].stream).unwrap();
+            
             let res_trans =
                 self.results[device_id].transmute(self.db_length * QUERY_LENGTH / self.n_devices);
+
             self.devs[device_id]
                 .dtoh_sync_copy_into(&res_trans.unwrap(), results)
                 .unwrap();
-            self.devs[device_id].synchronize().unwrap();
+
+            // TODO: pin memory and use async
+            // lib()
+            //     .cuMemcpyDtoHAsync_v2(
+            //         results.as_mut_ptr() as *mut c_void,
+            //         *self.results[device_id].device_ptr(),
+            //         self.db_length * QUERY_LENGTH / self.n_devices * 2,
+            //         self.streams[device_id].stream,
+            //     )
+            //     .result().unwrap();
+
+            // self.streams[device_id].wait_for_default();
+
+
+            
+            // self.devs[device_id].synchronize().unwrap();
         }
     }
 }
@@ -465,9 +494,10 @@ mod tests {
         IrisCodeDB, P,
     };
     const WIDTH: usize = 12_800;
-    const QUERY_SIZE: usize = 310;
+    const QUERY_SIZE: usize = 31;
     const DB_SIZE: usize = 1000;
     const RNG_SEED: u64 = 1337;
+    const N_DEVICES: usize = 1;
 
     /// Helpers
     fn random_ndarray<T>(array: Vec<u16>, n: usize, m: usize) -> Array2<T>
@@ -495,7 +525,7 @@ mod tests {
     fn check_matmul_p16() {
         let db = random_vec(DB_SIZE, WIDTH, P as u32);
         let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
-        let mut gpu_result = vec![0u16; DB_SIZE * QUERY_SIZE / 8];
+        let mut gpu_result = vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE];
 
         let mut engine = IrisCodeDB::init(0, 1, &db, None, true);
         let preprocessed_query = engine.preprocess_query(&query);
@@ -512,15 +542,15 @@ mod tests {
             }
         }
 
-        for device_idx in 0..engine.n_devices {
+        for device_idx in 0..N_DEVICES {
             engine.fetch_results(&mut gpu_result, device_idx);
             let selected_elements: Vec<u16> = vec_column_major
                 .chunks(DB_SIZE)
                 .flat_map(|chunk| {
                     chunk
                         .iter()
-                        .skip(DB_SIZE / 8 * device_idx)
-                        .take(DB_SIZE / 8)
+                        .skip(DB_SIZE / N_DEVICES * device_idx)
+                        .take(DB_SIZE / N_DEVICES)
                 })
                 .cloned()
                 .collect();
@@ -531,13 +561,13 @@ mod tests {
 
     #[test]
     fn check_shared_matmul() {
-        let mut rng = rand::thread_rng();
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let db = random_vec(DB_SIZE, WIDTH, P as u32);
         let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
         let mut gpu_result = vec![
-            vec![0u16; DB_SIZE * QUERY_SIZE / 8],
-            vec![0u16; DB_SIZE * QUERY_SIZE / 8],
-            vec![0u16; DB_SIZE * QUERY_SIZE / 8],
+            vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
+            vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
+            vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
         ];
 
         // Calculate non-shared
@@ -573,7 +603,7 @@ mod tests {
         for i in 0..3 {
             let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(i as u8).unwrap());
 
-            let mut engine = IrisCodeDB::init(i, l_coeff, &dbs[i], None, true);
+            let mut engine = IrisCodeDB::init(0, l_coeff, &dbs[i], None, true);
             let preprocessed_query = engine.preprocess_query(&querys[i]);
             engine.dot(&preprocessed_query);
 
@@ -581,7 +611,7 @@ mod tests {
         }
 
         // TODO: we should check for all devices
-        for i in 0..DB_SIZE / 8 {
+        for i in 0..DB_SIZE / N_DEVICES {
             assert_eq!(
                 (gpu_result[0][i] as u32 + gpu_result[1][i] as u32 + gpu_result[2][i] as u32)
                     % P as u32,
