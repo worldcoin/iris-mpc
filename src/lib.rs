@@ -24,7 +24,7 @@ static COMM_ID: Lazy<Vec<Id>> = Lazy::new(|| {
 pub(crate) const P: u16 = ((1u32 << 16) - 17) as u16;
 const PTX_SRC: &str = include_str!("matmul.cu");
 const IRIS_CODE_LENGTH: usize = 12_800;
-const QUERY_LENGTH: usize = 31;
+const QUERY_LENGTH: usize = 32;
 const FUNCTION_NAME: &str = "matmul_f16";
 
 struct IdWrapper(Id);
@@ -122,7 +122,8 @@ pub struct IrisCodeDB {
     query0_sums: Vec<CudaSlice<i32>>,
     ones: Vec<CudaSlice<u8>>,
     intermediate_results: Vec<CudaSlice<i32>>,
-    results: Vec<CudaSlice<u8>>,
+    results1: CudaSlice<u8>,
+    results2: CudaSlice<u8>,
     results_peers: Vec<CudaSlice<u8>>,
 }
 
@@ -136,7 +137,7 @@ impl IrisCodeDB {
     ) -> Self {
         // TODO: replace with a MAX_DB_SIZE to allow for insertions
         let db_length = db_entries.len() / IRIS_CODE_LENGTH;
-        let n_devices = CudaDevice::count().unwrap() as usize;
+        let n_devices = 1; //CudaDevice::count().unwrap() as usize;
         let limbs = 2;
         let ptx = compile_ptx(PTX_SRC).unwrap();
 
@@ -145,7 +146,7 @@ impl IrisCodeDB {
         let mut kernels = Vec::new();
         let mut streams = Vec::new();
 
-        for i in 0..n_devices {
+        for i in 0..2 {
             let dev = CudaDevice::new(i).unwrap();
             let blas = CudaBlas::new(dev.clone()).unwrap();
             // let stream = dev.fork_default_stream().unwrap();
@@ -219,15 +220,18 @@ impl IrisCodeDB {
 
         //TODO: depending on the batch size, intermediate_results can get quite big, we can perform the gemm in chunks to limit this
         let mut intermediate_results = vec![];
-        let mut results = vec![];
+        // let mut results = vec![];
         let mut results_peers = vec![];
         let mut query1_sums = vec![];
         let mut query0_sums = vec![];
         let results_len = chunk_size * QUERY_LENGTH;
 
-        for idx in 0..n_devices {
+        let results1 = devs[0].alloc_zeros(results_len * 2).unwrap();
+        let results2 = devs[1].alloc_zeros(results_len * 2).unwrap();
+
+        for idx in 0..2 {
             intermediate_results.push(devs[idx].alloc_zeros(results_len * 4).unwrap());
-            results.push(devs[idx].alloc_zeros(results_len * 2).unwrap());
+            // results.push(devs[idx].alloc_zeros(results_len * 2).unwrap());
             results_peers.push(devs[idx].alloc_zeros(results_len * 2).unwrap());
             query1_sums.push(devs[idx].alloc_zeros(QUERY_LENGTH).unwrap());
             query0_sums.push(devs[idx].alloc_zeros(QUERY_LENGTH).unwrap());
@@ -245,7 +249,7 @@ impl IrisCodeDB {
 
         let mut comms = vec![];
         if !is_local {
-            for i in 0..n_devices {
+            for i in 0..1 {
                 let id = if peer_id == 0 {
                     COMM_ID[i]
                 } else {
@@ -283,7 +287,8 @@ impl IrisCodeDB {
             query0_sums,
             intermediate_results,
             ones,
-            results,
+            results1,
+            results2,
             results_peers,
         }
     }
@@ -314,7 +319,7 @@ impl IrisCodeDB {
             shared_mem_bytes: 0,
         };
 
-        for idx in 0..self.devs.len() {
+        for idx in 0..self.n_devices {
             let query1 = self.devs[idx]
                 .htod_sync_copy(&preprocessed_query[1])
                 .unwrap();
@@ -380,7 +385,7 @@ impl IrisCodeDB {
                         cfg,
                         (
                             &self.intermediate_results[idx],
-                            &mut self.results[idx],
+                            &mut self.results1,
                             &self.db0_sums[idx],
                             &self.db1_sums[idx],
                             &self.query0_sums[idx],
@@ -407,7 +412,7 @@ impl IrisCodeDB {
         for idx in 0..1 {
             match self.peer_id {
                 0 => {
-                    self.comms[idx].send(&self.results[idx], 1 as i32).unwrap();
+                    self.comms[idx].send(&mut self.results1, 1 as i32).unwrap();
 
                     self.devs[idx].synchronize().unwrap();
 
@@ -481,7 +486,7 @@ impl IrisCodeDB {
             // result::stream::synchronize(self.devs[device_id].cu_stream().clone()).unwrap();
 
             let res_trans =
-                self.results[device_id].transmute(self.db_length * QUERY_LENGTH / self.n_devices);
+                self.results1.transmute(self.db_length * QUERY_LENGTH / self.n_devices);
 
             self.devs[device_id]
                 .dtoh_sync_copy_into(&res_trans.unwrap(), results)
@@ -505,9 +510,9 @@ impl IrisCodeDB {
 
     pub fn fetch_results_peer(&self, results: &mut [u16], device_id: usize, peer_id: usize) {
         unsafe {
-            result::stream::synchronize(*self.devs[device_id].cu_stream()).unwrap();
+            // result::stream::synchronize(*self.devs[device_id].cu_stream()).unwrap();
 
-            let res_trans = self.results_peers[device_id]
+            let res_trans = self.results1
                 .transmute(self.db_length * QUERY_LENGTH / self.n_devices);
 
             self.devs[device_id]

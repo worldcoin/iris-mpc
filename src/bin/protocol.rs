@@ -1,5 +1,6 @@
 use std::{env, thread, time::Instant};
 
+use cudarc::driver::CudaDevice;
 use gpu_iris_mpc::{
     setup::{
         id::PartyID,
@@ -12,7 +13,7 @@ use rayon::iter::ParallelDrainFull;
 use tokio::time;
 
 const DB_SIZE: usize = 10_000;
-const QUERIES: usize = 31;
+const QUERIES: usize = 32;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
@@ -20,6 +21,7 @@ async fn main() -> eyre::Result<()> {
     let args = env::args().collect::<Vec<_>>();
     let party_id: usize = args[1].parse().unwrap();
     let url = args.get(2);
+    let n_devices = CudaDevice::count().unwrap() as usize;
 
     let db = IrisDB::new_random_rng(DB_SIZE, &mut rng);
     let shamir_db = ShamirIrisDB::share_db(&db, &mut rng);
@@ -57,13 +59,13 @@ async fn main() -> eyre::Result<()> {
 
     let query =
         engine.preprocess_query(&queries[0].clone().into_iter().flatten().collect::<Vec<_>>());
-    engine.dot(&query);
+    // engine.dot(&query);
 
     time::sleep(time::Duration::from_secs(2)).await;
 
     println!("Calculation done.");
 
-    let mut gpu_result = vec![0u16; DB_SIZE / 8 * QUERIES];
+    let mut gpu_result = vec![0u16; DB_SIZE / 1 * QUERIES];
 
     engine.fetch_results(&mut gpu_result, 0);
 
@@ -74,11 +76,11 @@ async fn main() -> eyre::Result<()> {
     println!("Results exchanged.");
     println!("Time elapsed: {:?}", now.elapsed());
 
-    let mut gpu_result2 = vec![0u16; DB_SIZE / 8 * QUERIES];
+    // let mut gpu_result2 = vec![0u16; DB_SIZE / 1 * QUERIES];
 
-    engine.fetch_results(&mut gpu_result2, 0);
+    // engine.fetch_results_peer(&mut gpu_result2, 0, 0);
 
-    println!("REMOTE RESULT: {:?}", gpu_result2[0]);
+    // println!("REMOTE RESULT: {:?}", gpu_result2[0]);
 
     // time::sleep(time::Duration::from_secs(2)).await;
 
