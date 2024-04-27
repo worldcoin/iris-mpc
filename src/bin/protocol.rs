@@ -63,24 +63,32 @@ async fn main() -> eyre::Result<()> {
 
     println!("Calculation done.");
 
+    let mut gpu_result = vec![0u16; DB_SIZE / 8 * QUERIES];
+
+    engine.fetch_results(&mut gpu_result, 0);
+
+    println!("LOCAL RESULT: {:?}", gpu_result[0]);
+
     engine.exchange_results();
 
     println!("Results exchanged.");
     println!("Time elapsed: {:?}", now.elapsed());
 
-    let mut gpu_result = vec![0u16; DB_SIZE / 8 * QUERIES];
+    let mut gpu_result2 = vec![0u16; DB_SIZE / 8 * QUERIES];
 
-    engine.fetch_results_peer(&mut gpu_result, 0, 0);
+    engine.fetch_results(&mut gpu_result2, 0);
 
-    println!("{:?}", gpu_result);
+    println!("REMOTE RESULT: {:?}", gpu_result2[0]);
+
+    // time::sleep(time::Duration::from_secs(2)).await;
+
+    // let mut gpu_result = vec![0u16; DB_SIZE / 8 * QUERIES];
+
+    // engine.fetch_results_peer(&mut gpu_result, 0, 0);
+
+    // println!("{:?}", gpu_result);
 
     time::sleep(time::Duration::from_secs(5)).await;
-
-    let mut gpu_result = vec![0u16; DB_SIZE / 8 * QUERIES];
-
-    engine.fetch_results(&mut gpu_result, 0);
-
-    println!("{:?}", gpu_result);
 
 
     Ok(())

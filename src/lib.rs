@@ -396,36 +396,36 @@ impl IrisCodeDB {
             }
         }
 
-        // for stream in &self.streams {
-        //     unsafe {
-        //         result::stream::synchronize(stream.stream).unwrap();
-        //     }
-        // }
+        for idx in 0..self.n_devices{
+            self.devs[idx].synchronize().unwrap();
+        }
     }
 
     /// Broadcasts the results to all other peers.
     /// Calls are async to host, but sync to device.
     pub fn exchange_results(&mut self) {
         for idx in 0..1 {
-            // unsafe {
-            //     result::stream::synchronize(self.streams[idx].stream).unwrap();
-            // }
-            // self.devs[idx].synchronize().unwrap();
             match self.peer_id {
                 0 => {
-                    // self.comms[idx].send(&self.results[idx], 1 as i32).unwrap();
+                    self.comms[idx].send(&self.results[idx], 1 as i32).unwrap();
 
-                    unsafe {
-                        nccl::result::send(
-                            *self.results[idx].device_ptr() as *mut _,
-                            self.results[idx].len(),
-                            nccl::sys::ncclDataType_t::ncclUint8,
-                            1,
-                            self.comms[idx].comm,
-                            *self.devs[idx].cu_stream() as *mut _,
-                        )
-                        .unwrap();
-                    }
+                    self.devs[idx].synchronize().unwrap();
+
+                    // unsafe {
+                    //     nccl::result::send(
+                    //         *self.results[idx].device_ptr() as *mut _,
+                    //         100,
+                    //         nccl::sys::ncclDataType_t::ncclUint8,
+                    //         1,
+                    //         self.comms[idx].comm,
+                    //         *self.devs[idx].cu_stream() as *mut _,
+                    //     )
+                    //     .unwrap();
+                    // }
+
+                    // unsafe {
+                    //     result::stream::synchronize(*self.devs[idx].cu_stream()).unwrap();
+                    // }
 
                     // comm.recv(&mut self.results_peers[idx][0], 1 as i32)
                     //     .unwrap();
@@ -435,20 +435,26 @@ impl IrisCodeDB {
                     //     .unwrap();
                 }
                 1 => {
-                    // self.comms[idx].recv(&mut self.results_peers[idx], 0 as i32)
-                    //     .unwrap();
-
-                    unsafe {
-                        nccl::result::recv(
-                            *self.results_peers[idx].device_ptr() as *mut _,
-                            self.results[idx].len(),
-                            nccl::sys::ncclDataType_t::ncclUint8,
-                            0,
-                            self.comms[idx].comm,
-                            *self.devs[idx].cu_stream() as *mut _,
-                        )
+                    self.comms[idx].recv(&mut self.results_peers[idx], 0 as i32)
                         .unwrap();
-                    }
+
+                    self.devs[idx].synchronize().unwrap();
+
+                    // unsafe {
+                    //     nccl::result::recv(
+                    //         *self.results_peers[idx].device_ptr() as *mut _,
+                    //         self.results[idx].len(),
+                    //         nccl::sys::ncclDataType_t::ncclUint8,
+                    //         0,
+                    //         self.comms[idx].comm,
+                    //         *self.devs[idx].cu_stream() as *mut _,
+                    //     )
+                    //     .unwrap();
+                    // }
+
+                    // unsafe {
+                    //     result::stream::synchronize(*self.devs[idx].cu_stream()).unwrap();
+                    // }
 
                     // comm.send(&self.results[idx], 0 as i32).unwrap();
 
@@ -474,22 +480,24 @@ impl IrisCodeDB {
         unsafe {
             // result::stream::synchronize(self.devs[device_id].cu_stream().clone()).unwrap();
 
-            // let res_trans =
-            //     self.results[device_id].transmute(self.db_length * QUERY_LENGTH / self.n_devices);
+            let res_trans =
+                self.results[device_id].transmute(self.db_length * QUERY_LENGTH / self.n_devices);
 
-            // self.devs[device_id]
-            //     .dtoh_sync_copy_into(&res_trans.unwrap(), results)
-            //     .unwrap();
+            self.devs[device_id]
+                .dtoh_sync_copy_into(&res_trans.unwrap(), results)
+                .unwrap();
+
+            // result::stream::synchronize(self.devs[device_id].cu_stream().clone()).unwrap();
 
             // TODO: pin memory and use async
-            lib()
-                .cuMemcpyDtoHAsync_v2(
-                    results.as_mut_ptr() as *mut c_void,
-                    *self.results[device_id].device_ptr(),
-                    self.results[device_id].len(),
-                    *self.devs[device_id].cu_stream() as *mut _,
-                )
-                .result().unwrap();
+            // lib()
+            //     .cuMemcpyDtoHAsync_v2(
+            //         results.as_mut_ptr() as *mut c_void,
+            //         *self.results[device_id].device_ptr(),
+            //         100,
+            //         *self.devs[device_id].cu_stream() as *mut _,
+            //     )
+            //     .result().unwrap();
 
             // self.streams[device_id].wait_for_default();
         }
@@ -497,7 +505,7 @@ impl IrisCodeDB {
 
     pub fn fetch_results_peer(&self, results: &mut [u16], device_id: usize, peer_id: usize) {
         unsafe {
-            // result::stream::synchronize(self.streams[device_id].stream).unwrap();
+            result::stream::synchronize(*self.devs[device_id].cu_stream()).unwrap();
 
             let res_trans = self.results_peers[device_id]
                 .transmute(self.db_length * QUERY_LENGTH / self.n_devices);
@@ -507,16 +515,18 @@ impl IrisCodeDB {
                 .unwrap();
 
             // TODO: pin memory and use async
-            lib()
-                .cuMemcpyDtoHAsync_v2(
-                    results.as_mut_ptr() as *mut c_void,
-                    *self.results_peers[device_id].device_ptr(),
-                    self.results_peers[device_id].len(),
-                    *self.devs[device_id].cu_stream() as *mut _,
-                )
-                .result().unwrap();
+            // lib()
+            //     .cuMemcpyDtoHAsync_v2(
+            //         results.as_mut_ptr() as *mut c_void,
+            //         *self.results_peers[device_id].device_ptr(),
+            //         self.results_peers[device_id].len(),
+            //         *self.devs[device_id].cu_stream() as *mut _,
+            //     )
+            //     .result().unwrap();
 
-            result::stream::synchronize(*self.devs[device_id].cu_stream()).unwrap();
+            // result::stream::synchronize(*self.devs[device_id].cu_stream()).unwrap();
+
+
 
             // self.streams[device_id].wait_for_default();
         }
