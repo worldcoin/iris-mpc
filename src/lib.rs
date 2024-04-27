@@ -122,7 +122,7 @@ pub struct IrisCodeDB {
     ones: Vec<CudaSlice<u8>>,
     intermediate_results: Vec<CudaSlice<i32>>,
     results: Vec<CudaSlice<u8>>,
-    results_peers: Vec<Vec<CudaSlice<u8>>>,
+    results_peers: Vec<CudaSlice<u8>>,
 }
 
 impl IrisCodeDB {
@@ -147,15 +147,15 @@ impl IrisCodeDB {
         for i in 0..n_devices {
             let dev = CudaDevice::new(i).unwrap();
             let blas = CudaBlas::new(dev.clone()).unwrap();
-            // let stream = dev.cu_stream();
-            // unsafe {
-            //     blas.set_stream(Some(&stream)).unwrap();
-            // }
+            let stream = dev.fork_default_stream().unwrap();
+            unsafe {
+                blas.set_stream(Some(&stream)).unwrap();
+            }
             dev.load_ptx(ptx.clone(), FUNCTION_NAME, &[FUNCTION_NAME])
                 .unwrap();
             let function = dev.get_func(FUNCTION_NAME, FUNCTION_NAME).unwrap();
 
-            // streams.push(stream);
+            streams.push(stream);
             blass.push(blas);
             devs.push(dev);
             kernels.push(function);
@@ -227,10 +227,9 @@ impl IrisCodeDB {
         for idx in 0..n_devices {
             intermediate_results.push(devs[idx].alloc_zeros(results_len * 4).unwrap());
             results.push(devs[idx].alloc_zeros(results_len * 2).unwrap());
-            results_peers.push(vec![
+            results_peers.push(
                 devs[idx].alloc_zeros(results_len * 2).unwrap(),
-                devs[idx].alloc_zeros(results_len * 2).unwrap(),
-            ]);
+            );
             query1_sums.push(devs[idx].alloc_zeros(QUERY_LENGTH).unwrap());
             query0_sums.push(devs[idx].alloc_zeros(QUERY_LENGTH).unwrap());
         }
@@ -408,10 +407,21 @@ impl IrisCodeDB {
     /// Broadcasts the results to all other peers.
     /// Calls are async to host, but sync to device.
     pub fn exchange_results(&mut self) {
-        for (idx, comm) in self.comms.iter().enumerate() {
+        for idx in 0..self.n_devices {
             match self.peer_id {
                 0 => {
-                    comm.send(&self.results[idx], 1 as i32).unwrap();
+                    // comm.send(&self.results.clone()[idx], 1 as i32).unwrap();
+
+                    unsafe {
+                        nccl::result::send(
+                            *self.results[idx].device_ptr() as *mut _,
+                            self.results[idx].len(),
+                            nccl::sys::ncclDataType_t::ncclUint8,
+                            1,
+                            self.comms[idx].comm,
+                            self.streams[idx].stream as *mut _,
+                        ).unwrap();
+                    }
 
                     // comm.recv(&mut self.results_peers[idx][0], 1 as i32)
                     //     .unwrap();
@@ -421,23 +431,35 @@ impl IrisCodeDB {
                     //     .unwrap();
                 }
                 1 => {
-                    comm.recv(&mut self.results_peers[idx][0], 0 as i32)
-                        .unwrap();
+                    // comm.recv(&mut self.results_peers.clone()[idx], 0 as i32)
+                    //     .unwrap();
+
+                    unsafe {
+                        nccl::result::recv(
+                                *self.results_peers[idx].device_ptr() as *mut _,
+                                self.results_peers[idx].len(),
+                                nccl::sys::ncclDataType_t::ncclUint8,
+                                0,
+                                self.comms[idx].comm,
+                                self.streams[idx].stream as *mut _,
+                            ).unwrap();
+                    }
+
                     // comm.send(&self.results[idx], 0 as i32).unwrap();
 
                     // comm.send(&self.results[idx], 2 as i32).unwrap();
                     // comm.recv(&mut self.results_peers[idx][1], 2 as i32)
                     //     .unwrap();
                 }
-                2 => {
-                    comm.recv(&mut self.results_peers[idx][0], 0 as i32)
-                        .unwrap();
-                    comm.send(&self.results[idx], 0 as i32).unwrap();
+                // 2 => {
+                //     comm.recv(&mut self.results_peers[idx][0], 0 as i32)
+                //         .unwrap();
+                //     comm.send(&self.results[idx], 0 as i32).unwrap();
 
-                    comm.recv(&mut self.results_peers[idx][1], 1 as i32)
-                        .unwrap();
-                    comm.send(&self.results[idx], 1 as i32).unwrap();
-                }
+                //     comm.recv(&mut self.results_peers[idx][1], 1 as i32)
+                //         .unwrap();
+                //     comm.send(&self.results[idx], 1 as i32).unwrap();
+                // }
                 _ => unimplemented!(),
             }
         }
@@ -445,7 +467,7 @@ impl IrisCodeDB {
 
     pub fn fetch_results(&self, results: &mut [u16], device_id: usize) {
         unsafe {
-            // result::stream::synchronize(self.streams[device_id].stream).unwrap();
+            result::stream::synchronize(self.devs[device_id].cu_stream().clone()).unwrap();
             
             let res_trans =
                 self.results[device_id].transmute(self.db_length * QUERY_LENGTH / self.n_devices);
@@ -473,7 +495,7 @@ impl IrisCodeDB {
             // result::stream::synchronize(self.streams[device_id].stream).unwrap();
             
             let res_trans =
-                self.results_peers[device_id][peer_id].transmute(self.db_length * QUERY_LENGTH / self.n_devices);
+                self.results_peers[device_id].transmute(self.db_length * QUERY_LENGTH / self.n_devices);
 
             self.devs[device_id]
                 .dtoh_sync_copy_into(&res_trans.unwrap(), results)

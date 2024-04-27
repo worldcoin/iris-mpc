@@ -8,7 +8,7 @@ edition = "2021"
 atomic_float = "0.1"
 axum = "0.7.5"
 bytemuck = "1.15"
-cudarc = { git = "https://github.com/coreylowman/cudarc.git", features = ["cuda-12010"] }
+cudarc = { git = "https://github.com/philsippl/cudarc.git", rev="827bfdf", features = ["cuda-12010"] }
 eyre = "0.6.12"
 hex = "0.4.3"
 ndarray = "0.15.3"
