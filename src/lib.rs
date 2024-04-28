@@ -600,7 +600,7 @@ mod tests {
     };
     const WIDTH: usize = 12_800;
     const QUERY_SIZE: usize = 31;
-    const DB_SIZE: usize = 8 * 256;
+    const DB_SIZE: usize = 8*256;
     const RNG_SEED: u64 = 1337;
     const N_DEVICES: usize = 8;
 
