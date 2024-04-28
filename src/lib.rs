@@ -1,6 +1,6 @@
 pub mod setup;
 
-use std::{ffi::c_void, str::FromStr, sync::Arc};
+use std::{ffi::c_void, str::FromStr, sync::Arc, thread, time::Duration};
 
 use axum::{extract::Path, routing::get, Router};
 use cudarc::{
@@ -330,7 +330,7 @@ impl ShareDB {
             if peer_id == 0 {
                 let ids = ids.clone();
                 tokio::spawn(async move {
-                    println!("Starting server...");
+                    println!("Starting server on port {}...", server_port.unwrap());
                     let app =
                         Router::new().route("/:device_id", get(move |req| http_root(ids, req)));
                     let listener =
@@ -345,6 +345,9 @@ impl ShareDB {
                 let id = if peer_id == 0 {
                     ids[i]
                 } else {
+                    // If not the server, give it a few secs to start
+                    thread::sleep(Duration::from_secs(5));
+
                     let res = reqwest::blocking::get(format!(
                         "http://{}:{}/{}",
                         peer_url.clone().unwrap(),
