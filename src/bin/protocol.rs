@@ -115,9 +115,19 @@ async fn main() -> eyre::Result<()> {
 
     println!("Result: {:?}", tmp[0..10].to_vec());
 
-    // let mut gpu_result = vec![0u16; local_db_size * QUERIES];
-    // engine.fetch_results_peer(&mut gpu_result, 0, 0);
-    // println!("REMOTE RESULT: {:?}", gpu_result[0]);
+    let mut gpu_result = vec![0u16; local_db_size * QUERIES];
+
+    codes_engine.fetch_results(&mut gpu_result, 0);
+    println!("CODES REMOTE RESULT: {:?}", gpu_result[0]);
+
+    codes_engine.fetch_results_peer(&mut gpu_result, 0, 0);
+    println!("CODES REMOTE RESULT: {:?}", gpu_result[0]);
+
+    masks_engine.fetch_results(&mut gpu_result, 0);
+    println!("MASKS REMOTE RESULT: {:?}", gpu_result[0]);
+
+    masks_engine.fetch_results_peer(&mut gpu_result, 0, 0);
+    println!("MASKS REMOTE RESULT: {:?}", gpu_result[0]);
 
     time::sleep(time::Duration::from_secs(5)).await;
     Ok(())
