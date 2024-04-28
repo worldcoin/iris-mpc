@@ -59,7 +59,7 @@ async fn main() -> eyre::Result<()> {
 
     let query =
         engine.preprocess_query(&queries[0].clone().into_iter().flatten().collect::<Vec<_>>());
-    // engine.dot(&query);
+    engine.dot(&query);
 
     time::sleep(time::Duration::from_secs(2)).await;
 
