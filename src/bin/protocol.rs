@@ -12,8 +12,8 @@ use gpu_iris_mpc::{
 };
 use tokio::time;
 
-const DB_SIZE: usize = 10_000;
-const QUERIES: usize = 32;
+const DB_SIZE: usize = 100_000;
+const QUERIES: usize = 320;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {

@@ -24,7 +24,7 @@ static COMM_ID: Lazy<Vec<Id>> = Lazy::new(|| {
 pub(crate) const P: u16 = ((1u32 << 16) - 17) as u16;
 const PTX_SRC: &str = include_str!("matmul.cu");
 const IRIS_CODE_LENGTH: usize = 12_800;
-const QUERY_LENGTH: usize = 32;
+const QUERY_LENGTH: usize = 320;
 const FUNCTION_NAME: &str = "matmul_f16";
 
 struct IdWrapper(Id);
