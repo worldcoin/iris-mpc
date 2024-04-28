@@ -6,8 +6,7 @@ use axum::{extract::Path, routing::get, Router};
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
-        CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, LaunchAsync,
-        LaunchConfig,
+        CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, LaunchAsync, LaunchConfig
     },
     nccl::{Comm, Id},
     nvrtc::compile_ptx,
@@ -98,33 +97,45 @@ async fn http_root(ids: Vec<Id>, Path(device_id): Path<String>) -> String {
 }
 
 pub struct DistanceComparator {
+    devs: Vec<Arc<CudaDevice>>,
     kernels: Vec<CudaFunction>,
+    results: Vec<CudaSlice<f32>>,
     db_length: usize,
     n_devices: usize,
 }
 
 impl DistanceComparator {
-    pub fn init(devs: Vec<Arc<CudaDevice>>, db_length: usize) -> Self {
+    pub fn init(n_devices: usize, db_length: usize) -> Self {
         let ptx = compile_ptx(PTX_SRC).unwrap();
         let mut kernels = Vec::new();
+        let mut devs = Vec::new();
+        let mut results = Vec::new();
 
-        for dev in devs.clone() {
+        for i in 0..n_devices {
+            let dev = CudaDevice::new(i).unwrap();
             dev.load_ptx(ptx.clone(), DIST_FUNCTION_NAME, &[DIST_FUNCTION_NAME])
                 .unwrap();
             let function = dev
                 .get_func(DIST_FUNCTION_NAME, DIST_FUNCTION_NAME)
                 .unwrap();
+
+            let result = dev.alloc_zeros(db_length / n_devices * QUERY_LENGTH).unwrap();
+
             kernels.push(function);
+            devs.push(dev);
+            results.push(result);
         }
 
         Self {
+            devs,
             kernels,
+            results,
             db_length,
-            n_devices: devs.len(),
+            n_devices,
         }
     }
 
-    pub fn reconstruct_distance(
+    pub fn reconstruct(
         &self,
         codes_result1: &Vec<CudaSlice<u8>>,
         codes_result2: &Vec<CudaSlice<u8>>,
@@ -132,7 +143,7 @@ impl DistanceComparator {
         masks_result1: &Vec<CudaSlice<u8>>,
         masks_result2: &Vec<CudaSlice<u8>>,
         masks_result3: &Vec<CudaSlice<u8>>,
-    ) {
+    ) -> Vec<f32> {
         let num_elements = self.db_length / self.n_devices * QUERY_LENGTH;
         let threads_per_block = 256;
         let blocks_per_grid = num_elements.div_ceil(threads_per_block);
@@ -142,7 +153,7 @@ impl DistanceComparator {
             shared_mem_bytes: 0,
         };
 
-        for i in 0..codes_result1.len() {
+        for i in 0..self.n_devices {
             unsafe {
                 self.kernels[i].clone().launch(
                     cfg,
@@ -158,6 +169,13 @@ impl DistanceComparator {
                 ).unwrap();
             }
         }
+
+        // for i in 0..self.n_devices {
+        // }
+
+        // DUMMY
+        self.devs[0].dtoh_sync_copy(&self.results[0]).unwrap()
+
     }
 }
 
@@ -180,8 +198,8 @@ pub struct ShareDB {
     query0_sums: Vec<CudaSlice<i32>>,
     ones: Vec<CudaSlice<u8>>,
     intermediate_results: Vec<CudaSlice<i32>>,
-    results: Vec<CudaSlice<u8>>,
-    results_peers: Vec<Vec<CudaSlice<u8>>>,
+    pub results: Vec<CudaSlice<u8>>,
+    pub results_peers: Vec<Vec<CudaSlice<u8>>>,
 }
 
 impl ShareDB {
@@ -320,7 +338,7 @@ impl ShareDB {
                 // Bind to thread (important!)
                 devs[i].bind_to_thread().unwrap();
                 comms.push(Arc::new(
-                    Comm::from_rank(devs[i].clone(), peer_id, 2, id).unwrap(),
+                    Comm::from_rank(devs[i].clone(), peer_id, 3, id).unwrap(),
                 ));
             }
             // Start HTTP server to exchange NCCL commIds

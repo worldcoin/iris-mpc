@@ -7,12 +7,12 @@ use gpu_iris_mpc::{
         iris_db::{db::IrisDB, iris::IrisCode, shamir_db::ShamirIrisDB, shamir_iris::ShamirIris},
         shamir::Shamir,
     },
-    ShareDB,
+    DistanceComparator, ShareDB,
 };
 use rand::{rngs::StdRng, SeedableRng};
 use tokio::time;
 
-const DB_SIZE: usize = 100_000;
+const DB_SIZE: usize = 10_000;
 const QUERIES: usize = 31;
 const RNG_SEED: u64 = 1337;
 
@@ -29,7 +29,7 @@ async fn main() -> eyre::Result<()> {
     let db = IrisDB::new_random_seed(DB_SIZE, RNG_SEED);
     let shamir_db = ShamirIrisDB::share_db_seed(&db, RNG_SEED);
     let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(party_id as u8).unwrap());
-    
+
     println!("Random shared DB generated!");
 
     // Import masks to GPU DB
@@ -47,8 +47,11 @@ async fn main() -> eyre::Result<()> {
 
     println!("Starting engines...");
 
-    let mut codes_engine = ShareDB::init(party_id, l_coeff, &codes_db, url.clone(), false, Some(3000));
-    let mut masks_engine = ShareDB::init(party_id, l_coeff, &masks_db, url.clone(), false, Some(3001));
+    let mut codes_engine =
+        ShareDB::init(party_id, l_coeff, &codes_db, url.clone(), false, Some(3000));
+    let mut masks_engine =
+        ShareDB::init(party_id, l_coeff, &masks_db, url.clone(), false, Some(3001));
+    let distance_comparator = DistanceComparator::init(n_devices, DB_SIZE);
 
     println!("Engines ready!");
 
@@ -70,14 +73,24 @@ async fn main() -> eyre::Result<()> {
     }
 
     println!("Starting query...");
-    let code_query =
-        codes_engine.preprocess_query(&code_queries[party_id].clone().into_iter().flatten().collect::<Vec<_>>());
-    let mask_query =
-        masks_engine.preprocess_query(&mask_queries[party_id].clone().into_iter().flatten().collect::<Vec<_>>());
+    let code_query = codes_engine.preprocess_query(
+        &code_queries[party_id]
+            .clone()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>(),
+    );
+    let mask_query = masks_engine.preprocess_query(
+        &mask_queries[party_id]
+            .clone()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>(),
+    );
 
     for i in 0..10 {
         let now = Instant::now();
-    
+
         codes_engine.dot(&code_query);
         println!("Dot codes took: {:?}", now.elapsed());
 
@@ -89,12 +102,21 @@ async fn main() -> eyre::Result<()> {
 
         masks_engine.exchange_results();
         println!("Exchange masks took: {:?}", now.elapsed());
-    
+
         println!("Total time: {:?}", now.elapsed());
     }
 
-    
-    
+    let tmp = distance_comparator.reconstruct(
+        &codes_engine.results,
+        &codes_engine.results_peers[0],
+        &codes_engine.results_peers[1],
+        &masks_engine.results,
+        &masks_engine.results_peers[0],
+        &masks_engine.results_peers[1],
+    );
+
+    println!("Result: {:?}", tmp[0..10].to_vec());
+
     // let mut gpu_result = vec![0u16; local_db_size * QUERIES];
     // engine.fetch_results_peer(&mut gpu_result, 0, 0);
     // println!("REMOTE RESULT: {:?}", gpu_result[0]);
