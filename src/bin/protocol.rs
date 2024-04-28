@@ -132,7 +132,7 @@ async fn main() -> eyre::Result<()> {
     masks_engine.fetch_results_peer(&mut gpu_result2, 0, 0);
     masks_engine.fetch_results_peer(&mut gpu_result3, 0, 1);
 
-    for i in 0..20 {
+    for i in 0..100 {
         let tmp = gpu_result1[i] as u32 + gpu_result2[i] as u32 + gpu_result3[i] as u32;
         println!("Result: {:?}", tmp % P as u32);
     }
