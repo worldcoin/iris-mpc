@@ -33,26 +33,26 @@ async fn main() -> eyre::Result<()> {
     println!("Random shared DB generated!");
 
     // Import masks to GPU DB
-    // let codes_db = shamir_db[party_id]
-    //     .db
-    //     .iter()
-    //     .flat_map(|entry| entry.code)
-    //     .collect::<Vec<_>>();
+    let codes_db = shamir_db[party_id]
+        .db
+        .iter()
+        .flat_map(|entry| entry.code)
+        .collect::<Vec<_>>();
 
-    let mut codes_db: Vec<u16> = Vec::new();
-    let mut masks_db: Vec<u16> = Vec::new();
-    for col in 0..12800 {
-        for row in 0..shamir_db[party_id].db.len() {
-            codes_db.push(shamir_db[party_id].db[row].code[col]);
-            masks_db.push(shamir_db[party_id].db[row].mask[col]);
-        }
-    }
+    // let mut codes_db: Vec<u16> = Vec::new();
+    // let mut masks_db: Vec<u16> = Vec::new();
+    // for col in 0..12800 {
+    //     for row in 0..shamir_db[party_id].db.len() {
+    //         codes_db.push(shamir_db[party_id].db[row].code[col]);
+    //         masks_db.push(shamir_db[party_id].db[row].mask[col]);
+    //     }
+    // }
 
-    // let masks_db = shamir_db[party_id]
-    //     .db
-    //     .iter()
-    //     .flat_map(|entry| entry.mask)
-    //     .collect::<Vec<_>>();
+    let masks_db = shamir_db[party_id]
+        .db
+        .iter()
+        .flat_map(|entry| entry.mask)
+        .collect::<Vec<_>>();
 
     println!("Starting engines...");
 
@@ -76,9 +76,9 @@ async fn main() -> eyre::Result<()> {
         code_queries[1].push(tmp[1].code.to_vec());
         code_queries[2].push(tmp[2].code.to_vec());
 
-        mask_queries[0].push(tmp[0].code.to_vec());
-        mask_queries[1].push(tmp[1].code.to_vec());
-        mask_queries[2].push(tmp[2].code.to_vec());
+        mask_queries[0].push(tmp[0].mask.to_vec());
+        mask_queries[1].push(tmp[1].mask.to_vec());
+        mask_queries[2].push(tmp[2].mask.to_vec());
     }
 
     println!("Starting query...");
