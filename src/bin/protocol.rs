@@ -10,14 +10,16 @@ use gpu_iris_mpc::{
     },
     IrisCodeDB,
 };
+use rand::{rngs::StdRng, SeedableRng};
 use tokio::time;
 
-const DB_SIZE: usize = 100_000;
+const DB_SIZE: usize = 1_000_000;
 const QUERIES: usize = 320;
+const RNG_SEED: u64 = 1337;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
-    let mut rng = rand::thread_rng();
+    let mut rng = StdRng::seed_from_u64(RNG_SEED);
     let args = env::args().collect::<Vec<_>>();
     let party_id: usize = args[1].parse().unwrap();
     let url = args.get(2);

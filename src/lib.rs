@@ -163,20 +163,20 @@ impl IrisCodeDB {
         }
 
         let mut a1_host = db_entries
-            .iter()
+            .par_iter()
             .map(|&x: &u16| (x >> 8) as u8)
             .collect::<Vec<_>>();
-        let mut a0_host = db_entries.iter().map(|&x| x as u8).collect::<Vec<_>>();
+        let mut a0_host = db_entries.par_iter().map(|&x| x as u8).collect::<Vec<_>>();
 
         // TODO: maybe use gemm here already to speed up loading (we'll need to correct the results as well)
         let a1_sums: Vec<u32> = a1_host
             .par_chunks(IRIS_CODE_LENGTH)
-            .map(|row| row.iter().map(|&x| x as u32).sum::<u32>())
+            .map(|row| row.par_iter().map(|&x| x as u32).sum::<u32>())
             .collect();
 
         let a0_sums: Vec<u32> = a0_host
             .par_chunks(IRIS_CODE_LENGTH)
-            .map(|row| row.iter().map(|&x| x as u32).sum::<u32>())
+            .map(|row| row.par_iter().map(|&x| x as u32).sum::<u32>())
             .collect();
 
         a1_host
