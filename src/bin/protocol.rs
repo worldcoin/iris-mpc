@@ -33,11 +33,11 @@ async fn main() -> eyre::Result<()> {
     println!("Random shared DB generated!");
 
     // Import masks to GPU DB
-    // let codes_db = shamir_db[party_id]
-    //     .db
-    //     .iter()
-    //     .flat_map(|entry| entry.code)
-    //     .collect::<Vec<_>>();
+    let codes_db = shamir_db[party_id]
+        .db
+        .iter()
+        .flat_map(|entry| entry.code)
+        .collect::<Vec<_>>();
 
     // let mut codes_db: Vec<u16> = Vec::new();
     // let mut masks_db: Vec<u16> = Vec::new();
@@ -48,11 +48,11 @@ async fn main() -> eyre::Result<()> {
     //     }
     // }
 
-    // let masks_db = shamir_db[party_id]
-    //     .db
-    //     .iter()
-    //     .flat_map(|entry| entry.mask)
-    //     .collect::<Vec<_>>();
+    let masks_db = shamir_db[party_id]
+        .db
+        .iter()
+        .flat_map(|entry| entry.mask)
+        .collect::<Vec<_>>();
 
     println!("Starting engines...");
 
