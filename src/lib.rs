@@ -6,9 +6,10 @@ use axum::{extract::Path, routing::get, Router};
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
-        result, sys::lib, CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr, DevicePtrMut, DeviceSlice, LaunchAsync, LaunchConfig
+        CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, LaunchAsync,
+        LaunchConfig,
     },
-    nccl::{self, group_end, group_start, Comm, Id},
+    nccl::{Comm, Id},
     nvrtc::compile_ptx,
 };
 use once_cell::sync::Lazy;
@@ -262,6 +263,7 @@ impl IrisCodeDB {
                     IdWrapper::from_str(&res.text().unwrap()).unwrap().0
                 };
 
+                devs[i].bind_to_thread().unwrap();
                 comms.push(Arc::new(
                     Comm::from_rank(devs[i].clone(), peer_id, 2, id).unwrap(),
                 ));
@@ -408,31 +410,27 @@ impl IrisCodeDB {
     /// Broadcasts the results to all other peers.
     /// Calls are async to host, but sync to device.
     pub fn exchange_results(&mut self) {
-        for idx in 0..1 {
+        for idx in 0..self.n_devices {
             match self.peer_id {
                 0 => {
-                    self.devs[idx].bind_to_thread().unwrap();
                     self.comms[idx]
                         .send(&mut self.results[idx], 1 as i32)
                         .unwrap();
-                    self.devs[idx].synchronize().unwrap();
-                    
-                    // self.comms[idx]
-                    //     .recv(&mut self.results_peers[idx][0], 1 as i32)
-                    //     .unwrap();
+
+                    self.comms[idx]
+                        .recv(&mut self.results_peers[idx][0], 1 as i32)
+                        .unwrap();
 
                     // comm.send(&self.results[idx], 2 as i32).unwrap();
                     // comm.recv(&mut self.results_peers[idx][1], 2 as i32)
                     //     .unwrap();
                 }
                 1 => {
-                    self.devs[idx].bind_to_thread().unwrap();
                     self.comms[idx]
                         .recv(&mut self.results_peers[idx][0], 0 as i32)
                         .unwrap();
-                    self.devs[idx].synchronize().unwrap();
-                    
-                    // self.comms[idx].send(&self.results[idx], 0 as i32).unwrap();
+
+                    self.comms[idx].send(&self.results[idx], 0 as i32).unwrap();
 
                     // comm.send(&self.results[idx], 2 as i32).unwrap();
                     // comm.recv(&mut self.results_peers[idx][1], 2 as i32)
@@ -477,9 +475,8 @@ impl IrisCodeDB {
 
     pub fn fetch_results_peer(&self, results: &mut [u16], device_id: usize, peer_id: usize) {
         unsafe {
-
-            let res_trans =
-                self.results_peers[device_id][peer_id].transmute(self.db_length * QUERY_LENGTH / self.n_devices);
+            let res_trans = self.results_peers[device_id][peer_id]
+                .transmute(self.db_length * QUERY_LENGTH / self.n_devices);
 
             self.devs[device_id]
                 .dtoh_sync_copy_into(&res_trans.unwrap(), results)
