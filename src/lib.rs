@@ -485,7 +485,7 @@ impl IrisCodeDB {
         }
     }
 
-    pub fn fetch_results(&self, results: &mut [u16], device_id: usize) {
+    pub fn fetch_results(&self, results: *mut c_void, device_id: usize) {
         unsafe {
             // let res_trans =
             //     self.results[device_id].transmute(self.db_length * QUERY_LENGTH / self.n_devices);
@@ -497,7 +497,7 @@ impl IrisCodeDB {
             // TODO: pin memory and use async
             lib()
                 .cuMemcpyDtoHAsync_v2(
-                    results.as_mut_ptr() as *mut c_void,
+                    results,
                     *self.results[device_id].device_ptr(),
                     self.results[device_id].len(),
                     self.streams[device_id].stream,
@@ -509,7 +509,7 @@ impl IrisCodeDB {
         }
     }
 
-    pub fn fetch_results_peer(&self, results: &mut [u16], device_id: usize, peer_id: usize) {
+    pub fn fetch_results_peer(&self, results: *mut c_void, device_id: usize, peer_id: usize) {
         unsafe {
 
             // let res_trans =
@@ -521,7 +521,7 @@ impl IrisCodeDB {
 
             lib()
                 .cuMemcpyDtoHAsync_v2(
-                    results.as_mut_ptr() as *mut c_void,
+                    results,
                     *self.results_peers[device_id][peer_id].device_ptr(),
                     self.results_peers[device_id][peer_id].len(),
                     self.streams[device_id].stream,
