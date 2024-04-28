@@ -68,9 +68,11 @@ async fn main() -> eyre::Result<()> {
         let now = Instant::now();
     
         engine.dot(&query);
+        println!("Dot took: {:?}", now.elapsed());
+
         engine.exchange_results();
     
-        println!("Time elapsed: {:?}", now.elapsed());
+        println!("Total time: {:?}", now.elapsed());
     }
     
     let mut gpu_result = vec![0u16; local_db_size * QUERIES];
