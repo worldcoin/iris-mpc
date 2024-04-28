@@ -147,15 +147,15 @@ impl IrisCodeDB {
         for i in 0..n_devices {
             let dev = CudaDevice::new(i).unwrap();
             let blas = CudaBlas::new(dev.clone()).unwrap();
-            let stream = dev.fork_default_stream().unwrap();
-            unsafe {
-                blas.set_stream(Some(&stream)).unwrap();
-            }
+            // let stream = dev.fork_default_stream().unwrap();
+            // unsafe {
+            //     blas.set_stream(Some(&stream)).unwrap();
+            // }
             dev.load_ptx(ptx.clone(), FUNCTION_NAME, &[FUNCTION_NAME])
                 .unwrap();
             let function = dev.get_func(FUNCTION_NAME, FUNCTION_NAME).unwrap();
 
-            streams.push(stream);
+            // streams.push(stream);
             blass.push(blas);
             devs.push(dev);
             kernels.push(function);
@@ -379,8 +379,8 @@ impl IrisCodeDB {
             unsafe {
                 self.kernels[idx]
                     .clone()
-                    .launch_on_stream(
-                        &self.streams[idx],
+                    .launch(
+                        // &self.streams[idx],
                         cfg,
                         (
                             &self.intermediate_results[idx],
@@ -411,60 +411,22 @@ impl IrisCodeDB {
         for idx in 0..1 {
             match self.peer_id {
                 0 => {
-                    // self.comms[idx]
-                    //     .send(&mut self.results[idx], 1 as i32)
-                    //     .unwrap();
-                    // self.comms[idx]
-                    //     .recv(&mut self.results_peers[idx][0], 1 as i32)
-                    //     .unwrap();
-
-                    // self.devs[idx].synchronize().unwrap();
-
-                    unsafe {
-                        nccl::result::send(
-                            *self.results[idx].device_ptr() as *mut _,
-                            self.results[idx].len(),
-                            nccl::sys::ncclDataType_t::ncclUint8,
-                            1,
-                            self.comms[idx].comm,
-                            self.streams[idx].stream as *mut _,
-                        )
+                    self.comms[idx]
+                        .send(&mut self.results[idx], 1 as i32)
                         .unwrap();
-                    }
-
-                    // unsafe {
-                    //     result::stream::synchronize(*self.devs[idx].cu_stream()).unwrap();
-                    // }
+                    self.comms[idx]
+                        .recv(&mut self.results_peers[idx][0], 1 as i32)
+                        .unwrap();
 
                     // comm.send(&self.results[idx], 2 as i32).unwrap();
                     // comm.recv(&mut self.results_peers[idx][1], 2 as i32)
                     //     .unwrap();
                 }
                 1 => {
-                    // self.comms[idx]
-                    //     .recv(&mut self.results_peers[idx][0], 0 as i32)
-                    //     .unwrap();
-                    // self.comms[idx].send(&self.results[idx], 0 as i32).unwrap();
-
-                    // self.devs[idx].synchronize().unwrap();
-
-                    unsafe {
-                        nccl::result::recv(
-                            *self.results_peers[idx][0].device_ptr() as *mut _,
-                            self.results_peers[idx][0].len(),
-                            nccl::sys::ncclDataType_t::ncclUint8,
-                            0,
-                            self.comms[idx].comm,
-                            self.streams[idx].stream as *mut _,
-                        )
+                    self.comms[idx]
+                        .recv(&mut self.results_peers[idx][0], 0 as i32)
                         .unwrap();
-                    }
-
-                    // unsafe {
-                    //     result::stream::synchronize(*self.devs[idx].cu_stream()).unwrap();
-                    // }
-
-                    // comm.send(&self.results[idx], 0 as i32).unwrap();
+                    self.comms[idx].send(&self.results[idx], 0 as i32).unwrap();
 
                     // comm.send(&self.results[idx], 2 as i32).unwrap();
                     // comm.recv(&mut self.results_peers[idx][1], 2 as i32)
