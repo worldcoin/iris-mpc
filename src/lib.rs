@@ -318,7 +318,7 @@ impl IrisCodeDB {
             shared_mem_bytes: 0,
         };
 
-        for idx in 0..self.n_devices {
+        for idx in 0..1 {
             let query1 = self.devs[idx]
                 .htod_sync_copy(&preprocessed_query[1])
                 .unwrap();
@@ -411,6 +411,7 @@ impl IrisCodeDB {
         for idx in 0..1 {
             match self.peer_id {
                 0 => {
+                    self.devs[idx].bind_to_thread().unwrap();
                     self.comms[idx]
                         .send(&mut self.results[idx], 1 as i32)
                         .unwrap();
@@ -423,6 +424,7 @@ impl IrisCodeDB {
                     //     .unwrap();
                 }
                 1 => {
+                    self.devs[idx].bind_to_thread().unwrap();
                     self.comms[idx]
                         .recv(&mut self.results_peers[idx][0], 0 as i32)
                         .unwrap();
