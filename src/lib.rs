@@ -12,20 +12,14 @@ use cudarc::{
     nccl::{Comm, Id},
     nvrtc::compile_ptx,
 };
-use once_cell::sync::Lazy;
 use rayon::prelude::*;
 
-static COMM_ID: Lazy<Vec<Id>> = Lazy::new(|| {
-    (0..CudaDevice::count().unwrap())
-        .map(|_| Id::new().unwrap())
-        .collect::<Vec<_>>()
-});
-
 pub(crate) const P: u16 = ((1u32 << 16) - 17) as u16;
-const PTX_SRC: &str = include_str!("matmul.cu");
+const PTX_SRC: &str = include_str!("kernel.cu");
 const IRIS_CODE_LENGTH: usize = 12_800;
 const QUERY_LENGTH: usize = 320;
-const FUNCTION_NAME: &str = "matmul_f16";
+const MATMUL_FUNCTION_NAME: &str = "matmul";
+const DIST_FUNCTION_NAME: &str = "reconstructDistance";
 
 struct IdWrapper(Id);
 
@@ -98,12 +92,76 @@ pub fn gemm(
     }
 }
 
-async fn http_root(Path(device_id): Path<String>) -> String {
+async fn http_root(ids: Vec<Id>, Path(device_id): Path<String>) -> String {
     let device_id: usize = device_id.parse().unwrap();
-    IdWrapper(COMM_ID[device_id]).to_string()
+    IdWrapper(ids[device_id]).to_string()
 }
 
-pub struct IrisCodeDB {
+pub struct DistanceComparator {
+    kernels: Vec<CudaFunction>,
+    db_length: usize,
+    n_devices: usize,
+}
+
+impl DistanceComparator {
+    pub fn init(devs: Vec<Arc<CudaDevice>>, db_length: usize) -> Self {
+        let ptx = compile_ptx(PTX_SRC).unwrap();
+        let mut kernels = Vec::new();
+
+        for dev in devs.clone() {
+            dev.load_ptx(ptx.clone(), DIST_FUNCTION_NAME, &[DIST_FUNCTION_NAME])
+                .unwrap();
+            let function = dev
+                .get_func(DIST_FUNCTION_NAME, DIST_FUNCTION_NAME)
+                .unwrap();
+            kernels.push(function);
+        }
+
+        Self {
+            kernels,
+            db_length,
+            n_devices: devs.len(),
+        }
+    }
+
+    pub fn reconstruct_distance(
+        &self,
+        codes_result1: &Vec<CudaSlice<u8>>,
+        codes_result2: &Vec<CudaSlice<u8>>,
+        codes_result3: &Vec<CudaSlice<u8>>,
+        masks_result1: &Vec<CudaSlice<u8>>,
+        masks_result2: &Vec<CudaSlice<u8>>,
+        masks_result3: &Vec<CudaSlice<u8>>,
+    ) {
+        let num_elements = self.db_length / self.n_devices * QUERY_LENGTH;
+        let threads_per_block = 256;
+        let blocks_per_grid = num_elements.div_ceil(threads_per_block);
+        let cfg = LaunchConfig {
+            block_dim: (threads_per_block as u32, 1, 1),
+            grid_dim: (blocks_per_grid as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        for i in 0..codes_result1.len() {
+            unsafe {
+                self.kernels[i].clone().launch(
+                    cfg,
+                    (
+                        &codes_result1[i],
+                        &codes_result2[i],
+                        &codes_result3[i],
+                        &masks_result1[i],
+                        &masks_result2[i],
+                        &masks_result3[i],
+                        P,
+                    ),
+                ).unwrap();
+            }
+        }
+    }
+}
+
+pub struct ShareDB {
     peer_id: usize,
     lagrange_coeff: u16,
     db_length: usize,
@@ -126,13 +184,14 @@ pub struct IrisCodeDB {
     results_peers: Vec<Vec<CudaSlice<u8>>>,
 }
 
-impl IrisCodeDB {
+impl ShareDB {
     pub fn init(
         peer_id: usize,
         lagrange_coeff: u16,
         db_entries: &[u16],
         peer_url: Option<&String>,
         is_local: bool,
+        server_port: Option<u16>,
     ) -> Self {
         // TODO: replace with a MAX_DB_SIZE to allow for insertions
         let db_length = db_entries.len() / IRIS_CODE_LENGTH;
@@ -152,9 +211,11 @@ impl IrisCodeDB {
             // unsafe {
             //     blas.set_stream(Some(&stream)).unwrap();
             // }
-            dev.load_ptx(ptx.clone(), FUNCTION_NAME, &[FUNCTION_NAME])
+            dev.load_ptx(ptx.clone(), MATMUL_FUNCTION_NAME, &[MATMUL_FUNCTION_NAME])
                 .unwrap();
-            let function = dev.get_func(FUNCTION_NAME, FUNCTION_NAME).unwrap();
+            let function = dev
+                .get_func(MATMUL_FUNCTION_NAME, MATMUL_FUNCTION_NAME)
+                .unwrap();
 
             // streams.push(stream);
             blass.push(blas);
@@ -238,35 +299,42 @@ impl IrisCodeDB {
             }
         }
 
-        // Start HTTP server to exchange NCCL commIds
-        if !is_local && peer_id == 0 {
-            tokio::spawn(async move {
-                println!("Starting server...");
-                let app = Router::new().route("/:device_id", get(http_root));
-                let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-                axum::serve(listener, app).await.unwrap();
-            });
-        }
-
         let mut comms = vec![];
         if !is_local {
+            let mut ids = vec![];
             for i in 0..n_devices {
                 let id = if peer_id == 0 {
-                    COMM_ID[i]
+                    Id::new().unwrap()
                 } else {
                     let res = reqwest::blocking::get(format!(
-                        "http://{}/{}",
+                        "http://{}:{:?}/{}",
                         peer_url.clone().unwrap(),
+                        server_port,
                         i
                     ))
                     .unwrap();
                     IdWrapper::from_str(&res.text().unwrap()).unwrap().0
                 };
+                ids.push(id);
 
+                // Bind to thread (important!)
                 devs[i].bind_to_thread().unwrap();
                 comms.push(Arc::new(
                     Comm::from_rank(devs[i].clone(), peer_id, 2, id).unwrap(),
                 ));
+            }
+            // Start HTTP server to exchange NCCL commIds
+            if peer_id == 0 {
+                tokio::spawn(async move {
+                    println!("Starting server...");
+                    let app =
+                        Router::new().route("/:device_id", get(move |req| http_root(ids, req)));
+                    let listener =
+                        tokio::net::TcpListener::bind(format!("0.0.0.0:{:?}", server_port))
+                            .await
+                            .unwrap();
+                    axum::serve(listener, app).await.unwrap();
+                });
             }
         }
 
@@ -320,7 +388,7 @@ impl IrisCodeDB {
             shared_mem_bytes: 0,
         };
 
-        for idx in 0..1 {
+        for idx in 0..self.n_devices {
             let query1 = self.devs[idx]
                 .htod_sync_copy(&preprocessed_query[1])
                 .unwrap();
@@ -421,9 +489,10 @@ impl IrisCodeDB {
                         .recv(&mut self.results_peers[idx][0], 1 as i32)
                         .unwrap();
 
-                    // comm.send(&self.results[idx], 2 as i32).unwrap();
-                    // comm.recv(&mut self.results_peers[idx][1], 2 as i32)
-                    //     .unwrap();
+                    self.comms[idx].send(&self.results[idx], 2 as i32).unwrap();
+                    self.comms[idx]
+                        .recv(&mut self.results_peers[idx][1], 2 as i32)
+                        .unwrap();
                 }
                 1 => {
                     self.comms[idx]
@@ -432,19 +501,22 @@ impl IrisCodeDB {
 
                     self.comms[idx].send(&self.results[idx], 0 as i32).unwrap();
 
-                    // comm.send(&self.results[idx], 2 as i32).unwrap();
-                    // comm.recv(&mut self.results_peers[idx][1], 2 as i32)
-                    //     .unwrap();
+                    self.comms[idx].send(&self.results[idx], 2 as i32).unwrap();
+                    self.comms[idx]
+                        .recv(&mut self.results_peers[idx][1], 2 as i32)
+                        .unwrap();
                 }
-                // 2 => {
-                //     comm.recv(&mut self.results_peers[idx][0], 0 as i32)
-                //         .unwrap();
-                //     comm.send(&self.results[idx], 0 as i32).unwrap();
+                2 => {
+                    self.comms[idx]
+                        .recv(&mut self.results_peers[idx][0], 0 as i32)
+                        .unwrap();
+                    self.comms[idx].send(&self.results[idx], 0 as i32).unwrap();
 
-                //     comm.recv(&mut self.results_peers[idx][1], 1 as i32)
-                //         .unwrap();
-                //     comm.send(&self.results[idx], 1 as i32).unwrap();
-                // }
+                    self.comms[idx]
+                        .recv(&mut self.results_peers[idx][1], 1 as i32)
+                        .unwrap();
+                    self.comms[idx].send(&self.results[idx], 1 as i32).unwrap();
+                }
                 _ => unimplemented!(),
             }
         }
@@ -496,7 +568,7 @@ mod tests {
 
     use crate::{
         setup::{id::PartyID, shamir::Shamir},
-        IrisCodeDB, P,
+        ShareDB, P,
     };
     const WIDTH: usize = 12_800;
     const QUERY_SIZE: usize = 31;
@@ -532,7 +604,7 @@ mod tests {
         let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
         let mut gpu_result = vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE];
 
-        let mut engine = IrisCodeDB::init(0, 1, &db, None, true);
+        let mut engine = ShareDB::init(0, 1, &db, None, true, None);
         let preprocessed_query = engine.preprocess_query(&query);
         engine.dot(&preprocessed_query);
 
@@ -608,7 +680,7 @@ mod tests {
         for i in 0..3 {
             let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(i as u8).unwrap());
 
-            let mut engine = IrisCodeDB::init(0, l_coeff, &dbs[i], None, true);
+            let mut engine = ShareDB::init(0, l_coeff, &dbs[i], None, true, None);
             let preprocessed_query = engine.preprocess_query(&querys[i]);
             engine.dot(&preprocessed_query);
 
