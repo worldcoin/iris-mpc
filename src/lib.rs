@@ -136,7 +136,7 @@ impl IrisCodeDB {
     ) -> Self {
         // TODO: replace with a MAX_DB_SIZE to allow for insertions
         let db_length = db_entries.len() / IRIS_CODE_LENGTH;
-        let n_devices = 1; //CudaDevice::count().unwrap() as usize;
+        let n_devices = CudaDevice::count().unwrap() as usize;
         let limbs = 2;
         let ptx = compile_ptx(PTX_SRC).unwrap();
 
@@ -156,7 +156,7 @@ impl IrisCodeDB {
                 .unwrap();
             let function = dev.get_func(FUNCTION_NAME, FUNCTION_NAME).unwrap();
 
-            // streams.push(stream);
+            streams.push(stream);
             blass.push(blas);
             devs.push(dev);
             kernels.push(function);
