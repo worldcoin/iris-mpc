@@ -148,10 +148,10 @@ impl IrisCodeDB {
         for i in 0..n_devices {
             let dev = CudaDevice::new(i).unwrap();
             let blas = CudaBlas::new(dev.clone()).unwrap();
-            // let stream = dev.fork_default_stream().unwrap();
-            // unsafe {
-            //     blas.set_stream(Some(&stream)).unwrap();
-            // }
+            let stream = dev.fork_default_stream().unwrap();
+            unsafe {
+                blas.set_stream(Some(&stream)).unwrap();
+            }
             dev.load_ptx(ptx.clone(), FUNCTION_NAME, &[FUNCTION_NAME])
                 .unwrap();
             let function = dev.get_func(FUNCTION_NAME, FUNCTION_NAME).unwrap();
@@ -380,8 +380,8 @@ impl IrisCodeDB {
             unsafe {
                 self.kernels[idx]
                     .clone()
-                    .launch(
-                        // &self.streams[idx],
+                    .launch_on_stream(
+                        &self.streams[idx],
                         cfg,
                         (
                             &self.intermediate_results[idx],
@@ -412,26 +412,26 @@ impl IrisCodeDB {
         for idx in 0..1 {
             match self.peer_id {
                 0 => {
-                    self.comms[idx]
-                        .send(&mut self.results[idx], 1 as i32)
-                        .unwrap();
-                    self.comms[idx]
-                        .recv(&mut self.results_peers[idx][0], 1 as i32)
-                        .unwrap();
+                    // self.comms[idx]
+                    //     .send(&mut self.results[idx], 1 as i32)
+                    //     .unwrap();
+                    // self.comms[idx]
+                    //     .recv(&mut self.results_peers[idx][0], 1 as i32)
+                    //     .unwrap();
 
                     // self.devs[idx].synchronize().unwrap();
 
-                    // unsafe {
-                    //     nccl::result::send(
-                    //         *self.results[idx].device_ptr() as *mut _,
-                    //         100,
-                    //         nccl::sys::ncclDataType_t::ncclUint8,
-                    //         1,
-                    //         self.comms[idx].comm,
-                    //         *self.devs[idx].cu_stream() as *mut _,
-                    //     )
-                    //     .unwrap();
-                    // }
+                    unsafe {
+                        nccl::result::send(
+                            *self.results[idx].device_ptr() as *mut _,
+                            self.results[idx].len(),
+                            nccl::sys::ncclDataType_t::ncclUint8,
+                            1,
+                            self.comms[idx].comm,
+                            self.streams[idx].stream as *mut _,
+                        )
+                        .unwrap();
+                    }
 
                     // unsafe {
                     //     result::stream::synchronize(*self.devs[idx].cu_stream()).unwrap();
@@ -442,24 +442,24 @@ impl IrisCodeDB {
                     //     .unwrap();
                 }
                 1 => {
-                    self.comms[idx]
-                        .recv(&mut self.results_peers[idx][0], 0 as i32)
-                        .unwrap();
-                    self.comms[idx].send(&self.results[idx], 0 as i32).unwrap();
+                    // self.comms[idx]
+                    //     .recv(&mut self.results_peers[idx][0], 0 as i32)
+                    //     .unwrap();
+                    // self.comms[idx].send(&self.results[idx], 0 as i32).unwrap();
 
                     // self.devs[idx].synchronize().unwrap();
 
-                    // unsafe {
-                    //     nccl::result::recv(
-                    //         *self.results_peers[idx].device_ptr() as *mut _,
-                    //         self.results[idx].len(),
-                    //         nccl::sys::ncclDataType_t::ncclUint8,
-                    //         0,
-                    //         self.comms[idx].comm,
-                    //         *self.devs[idx].cu_stream() as *mut _,
-                    //     )
-                    //     .unwrap();
-                    // }
+                    unsafe {
+                        nccl::result::recv(
+                            *self.results_peers[idx][0].device_ptr() as *mut _,
+                            self.results_peers[idx][0].len(),
+                            nccl::sys::ncclDataType_t::ncclUint8,
+                            0,
+                            self.comms[idx].comm,
+                            self.streams[idx].stream as *mut _,
+                        )
+                        .unwrap();
+                    }
 
                     // unsafe {
                     //     result::stream::synchronize(*self.devs[idx].cu_stream()).unwrap();
@@ -487,26 +487,24 @@ impl IrisCodeDB {
 
     pub fn fetch_results(&self, results: &mut [u16], device_id: usize) {
         unsafe {
-            let res_trans =
-                self.results[device_id].transmute(self.db_length * QUERY_LENGTH / self.n_devices);
+            // let res_trans =
+            //     self.results[device_id].transmute(self.db_length * QUERY_LENGTH / self.n_devices);
 
-            self.devs[device_id]
-                .dtoh_sync_copy_into(&res_trans.unwrap(), results)
-                .unwrap();
-
-            // result::stream::synchronize(self.devs[device_id].cu_stream().clone()).unwrap();
+            // self.devs[device_id]
+            //     .dtoh_sync_copy_into(&res_trans.unwrap(), results)
+            //     .unwrap();
 
             // TODO: pin memory and use async
-            // lib()
-            //     .cuMemcpyDtoHAsync_v2(
-            //         results.as_mut_ptr() as *mut c_void,
-            //         *self.results[device_id].device_ptr(),
-            //         self.results.len(),
-            //         *self.devs[device_id].cu_stream() as *mut _,
-            //     )
-            //     .result().unwrap();
+            lib()
+                .cuMemcpyDtoHAsync_v2(
+                    results.as_mut_ptr() as *mut c_void,
+                    *self.results[device_id].device_ptr(),
+                    self.results.len(),
+                    *self.devs[device_id].cu_stream() as *mut _,
+                )
+                .result().unwrap();
 
-            // result::stream::synchronize(*self.devs[device_id].cu_stream()).unwrap();
+            result::stream::synchronize(self.streams[device_id].stream).unwrap();
             // self.streams[device_id].wait_for_default();
         }
     }
@@ -514,23 +512,23 @@ impl IrisCodeDB {
     pub fn fetch_results_peer(&self, results: &mut [u16], device_id: usize, peer_id: usize) {
         unsafe {
 
-            let res_trans =
-                self.results_peers[device_id][peer_id].transmute(self.db_length * QUERY_LENGTH / self.n_devices);
+            // let res_trans =
+            //     self.results_peers[device_id][peer_id].transmute(self.db_length * QUERY_LENGTH / self.n_devices);
 
-            self.devs[device_id]
-                .dtoh_sync_copy_into(&res_trans.unwrap(), results)
-                .unwrap();
+            // self.devs[device_id]
+            //     .dtoh_sync_copy_into(&res_trans.unwrap(), results)
+            //     .unwrap();
 
-            // lib()
-            //     .cuMemcpyDtoHAsync_v2(
-            //         results.as_mut_ptr() as *mut c_void,
-            //         *self.results_peers[device_id][peer_id].device_ptr(),
-            //         self.results_peers[device_id].len(),
-            //         *self.devs[device_id].cu_stream() as *mut _,
-            //     )
-            //     .result().unwrap();
+            lib()
+                .cuMemcpyDtoHAsync_v2(
+                    results.as_mut_ptr() as *mut c_void,
+                    *self.results_peers[device_id][peer_id].device_ptr(),
+                    self.results_peers[device_id].len(),
+                    *self.devs[device_id].cu_stream() as *mut _,
+                )
+                .result().unwrap();
 
-            // result::stream::synchronize(*self.devs[device_id].cu_stream()).unwrap();
+            result::stream::synchronize(self.streams[device_id].stream).unwrap();
         }
     }
 }
