@@ -33,26 +33,26 @@ async fn main() -> eyre::Result<()> {
     println!("Random shared DB generated!");
 
     // Import masks to GPU DB
-    let codes_db = shamir_db[party_id]
-        .db
-        .iter()
-        .flat_map(|entry| entry.code)
-        .collect::<Vec<_>>();
+    // let codes_db = shamir_db[party_id]
+    //     .db
+    //     .iter()
+    //     .flat_map(|entry| entry.code)
+    //     .collect::<Vec<_>>();
 
-    // let mut codes_db: Vec<u16> = Vec::new();
-    // let mut masks_db: Vec<u16> = Vec::new();
-    // for col in 0..12800 {
-    //     for row in 0..shamir_db[party_id].db.len() {
-    //         codes_db.push(shamir_db[party_id].db[row].code[col]);
-    //         masks_db.push(shamir_db[party_id].db[row].mask[col]);
-    //     }
-    // }
+    let mut codes_db: Vec<u16> = Vec::new();
+    let mut masks_db: Vec<u16> = Vec::new();
+    for col in 0..12800 {
+        for row in 0..shamir_db[party_id].db.len() {
+            codes_db.push(shamir_db[party_id].db[row].code[col]);
+            masks_db.push(shamir_db[party_id].db[row].mask[col]);
+        }
+    }
 
-    let masks_db = shamir_db[party_id]
-        .db
-        .iter()
-        .flat_map(|entry| entry.mask)
-        .collect::<Vec<_>>();
+    // let masks_db = shamir_db[party_id]
+    //     .db
+    //     .iter()
+    //     .flat_map(|entry| entry.mask)
+    //     .collect::<Vec<_>>();
 
     println!("Starting engines...");
 
@@ -81,20 +81,21 @@ async fn main() -> eyre::Result<()> {
         mask_queries[2].push(tmp[2].mask.to_vec());
     }
 
+    let mut code_queries_x: Vec<u16> = Vec::new();
+    let mut mask_queries_x: Vec<u16> = Vec::new();
+    for col in 0..12800 {
+        for row in 0..QUERIES {
+            code_queries_x.push(code_queries[party_id][row][col]);
+            mask_queries_x.push(mask_queries[party_id][row][col]);
+        }
+    }
+
     println!("Starting query...");
     let code_query = codes_engine.preprocess_query(
-        &code_queries[party_id]
-            .clone()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>(),
+       &code_queries_x,
     );
     let mask_query = masks_engine.preprocess_query(
-        &mask_queries[party_id]
-            .clone()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>(),
+        &mask_queries_x,
     );
 
     for i in 0..10 {
