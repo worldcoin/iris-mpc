@@ -1,6 +1,8 @@
-extern "C" __global__ void matmul(int* c,  unsigned short* output, unsigned int* a0Sums, unsigned int* a1Sums, int* b0Sums, int* b1Sums, size_t numRows, size_t numElements, size_t numCols, long long p, long long lCoeff) {
+extern "C" __global__ void matmul(int *c, unsigned short *output, unsigned int *a0Sums, unsigned int *a1Sums, int *b0Sums, int *b1Sums, size_t numRows, size_t numElements, size_t numCols, long long p, long long lCoeff)
+{
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < numElements) {
+    if (idx < numElements)
+    {
         unsigned int a0s = a0Sums[idx % numRows];
         unsigned int a1s = a1Sums[idx % numRows];
 
@@ -18,9 +20,11 @@ extern "C" __global__ void matmul(int* c,  unsigned short* output, unsigned int*
     }
 }
 
-extern "C" __global__ void reconstructDistance(unsigned short* codes_result1, unsigned short* codes_result2, unsigned short* codes_result3, unsigned short* masks_result1, unsigned short* masks_result2, unsigned short* masks_result3, unsigned float* output, unsigned short p, size_t numElements) {
+extern "C" __global__ void reconstructDistance(unsigned short *codes_result1, unsigned short *codes_result2, unsigned short *codes_result3, unsigned short *masks_result1, unsigned short *masks_result2, unsigned short *masks_result3, float *output, unsigned short p, size_t numElements)
+{
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < numElements) {
+    if (idx < numElements)
+    {
         unsigned short nom = ((unsigned int)codes_result1[idx] + (unsigned int)codes_result2[idx] + (unsigned int)codes_result3[idx]) % (unsigned int)p;
         unsigned short den = ((unsigned int)masks_result1[idx] + (unsigned int)masks_result2[idx] + (unsigned int)masks_result3[idx]) % (unsigned int)p;
         output[idx] = (float)nom / (float)den;
