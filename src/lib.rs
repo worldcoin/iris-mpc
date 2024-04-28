@@ -8,7 +8,7 @@ use cudarc::{
     driver::{
         result, sys::lib, CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr, DevicePtrMut, DeviceSlice, LaunchAsync, LaunchConfig
     },
-    nccl::{self, Comm, Id},
+    nccl::{self, group_end, group_start, Comm, Id},
     nvrtc::compile_ptx,
 };
 use once_cell::sync::Lazy;
@@ -415,6 +415,7 @@ impl IrisCodeDB {
                     self.comms[idx]
                         .send(&mut self.results[idx], 1 as i32)
                         .unwrap();
+                    
                     // self.comms[idx]
                     //     .recv(&mut self.results_peers[idx][0], 1 as i32)
                     //     .unwrap();

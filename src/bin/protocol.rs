@@ -72,7 +72,7 @@ async fn main() -> eyre::Result<()> {
 
     println!("LOCAL RESULT: {:?}", gpu_result[0]);
 
-    engine.exchange_results();
+    // engine.exchange_results();
 
     println!("Results exchanged.");
     println!("Time elapsed: {:?}", now.elapsed());
