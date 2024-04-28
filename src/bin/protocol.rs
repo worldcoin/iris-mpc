@@ -128,9 +128,9 @@ async fn main() -> eyre::Result<()> {
     let mut gpu_result2 = vec![0u16; local_db_size * QUERIES];
     let mut gpu_result3 = vec![0u16; local_db_size * QUERIES];
 
-    masks_engine.fetch_results(&mut gpu_result1, 0);
-    masks_engine.fetch_results_peer(&mut gpu_result2, 0, 0);
-    masks_engine.fetch_results_peer(&mut gpu_result3, 0, 1);
+    codes_engine.fetch_results(&mut gpu_result1, 0);
+    codes_engine.fetch_results_peer(&mut gpu_result2, 0, 0);
+    codes_engine.fetch_results_peer(&mut gpu_result3, 0, 1);
 
     for i in 0..100 {
         let tmp = gpu_result1[i] as u32 + gpu_result2[i] as u32 + gpu_result3[i] as u32;
