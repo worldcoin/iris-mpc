@@ -448,6 +448,9 @@ impl IrisCodeDB {
                 _ => unimplemented!(),
             }
         }
+        for idx in 0..self.n_devices {
+            self.devs[idx].synchronize().unwrap();
+        }
     }
 
     pub fn fetch_results(&self, results: &mut [u16], device_id: usize) {
