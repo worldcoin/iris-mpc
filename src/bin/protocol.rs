@@ -68,15 +68,7 @@ async fn main() -> eyre::Result<()> {
 
     let mut gpu_result = vec![0u16; DB_SIZE / 8 * QUERIES];
 
-    let mut gpu_result: *mut c_void = std::ptr::null_mut();
-    unsafe {
-        let _ = lib().cuMemAllocHost_v2(&mut gpu_result, DB_SIZE / 8 * QUERIES);
-    }
-
-    engine.fetch_results(gpu_result, 0);
-
-    let gpu_result: &[u16] =
-            unsafe { slice::from_raw_parts(gpu_result as *mut u16, DB_SIZE / 8 * QUERIES) };
+    engine.fetch_results(&mut gpu_result, 0);
 
     println!("LOCAL RESULT: {:?}", gpu_result[0]);
 
@@ -85,28 +77,11 @@ async fn main() -> eyre::Result<()> {
     println!("Results exchanged.");
     println!("Time elapsed: {:?}", now.elapsed());
 
-    let mut gpu_result2: *mut c_void = std::ptr::null_mut();
-    unsafe {
-        let _ = lib().cuMemAllocHost_v2(&mut gpu_result2, DB_SIZE / 8 * QUERIES);
-    }
+    engine.fetch_results_peer(&mut gpu_result, 0, 0);
 
-    engine.fetch_results_peer(gpu_result2, 0, 0);
-
-    let gpu_result2: &[u16] =
-            unsafe { slice::from_raw_parts(gpu_result2 as *mut u16, DB_SIZE / 8 * QUERIES) };
-
-    println!("REMOTE RESULT: {:?}", gpu_result2[0]);
-
-    // time::sleep(time::Duration::from_secs(2)).await;
-
-    // let mut gpu_result = vec![0u16; DB_SIZE / 8 * QUERIES];
-
-    // engine.fetch_results_peer(&mut gpu_result, 0, 0);
-
-    // println!("{:?}", gpu_result);
+    println!("REMOTE RESULT: {:?}", gpu_result[0]);
 
     time::sleep(time::Duration::from_secs(5)).await;
-
 
     Ok(())
 }
