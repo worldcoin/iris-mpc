@@ -56,11 +56,11 @@ async fn main() -> eyre::Result<()> {
 
     println!("Starting engines...");
 
-    // let mut codes_engine =
-    //     ShareDB::init(party_id, l_coeff, &codes_db, url.clone(), false, Some(3000));
+    let mut codes_engine =
+        ShareDB::init(party_id, l_coeff, &codes_db, url.clone(), false, Some(3000));
     let mut masks_engine =
         ShareDB::init(party_id, l_coeff, &masks_db, url.clone(), false, Some(3001));
-    // let mut distance_comparator = DistanceComparator::init(n_devices, DB_SIZE);
+    let mut distance_comparator = DistanceComparator::init(n_devices, DB_SIZE);
 
     println!("Engines ready!");
 
@@ -82,13 +82,13 @@ async fn main() -> eyre::Result<()> {
     }
 
     println!("Starting query...");
-    // let code_query = codes_engine.preprocess_query(
-    //     &code_queries[party_id]
-    //         .clone()
-    //         .into_iter()
-    //         .flatten()
-    //         .collect::<Vec<_>>(),
-    // );
+    let code_query = codes_engine.preprocess_query(
+        &code_queries[party_id]
+            .clone()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>(),
+    );
     let mask_query = masks_engine.preprocess_query(
         &mask_queries[party_id]
             .clone()
@@ -100,11 +100,11 @@ async fn main() -> eyre::Result<()> {
     for i in 0..10 {
         let now = Instant::now();
 
-        // codes_engine.dot(&code_query);
-        // println!("Dot codes took: {:?}", now.elapsed());
+        codes_engine.dot(&code_query);
+        println!("Dot codes took: {:?}", now.elapsed());
 
-        // codes_engine.exchange_results();
-        // println!("Exchange codes took: {:?}", now.elapsed());
+        codes_engine.exchange_results();
+        println!("Exchange codes took: {:?}", now.elapsed());
 
         masks_engine.dot(&mask_query);
         println!("Dot masks took: {:?}", now.elapsed());
@@ -115,14 +115,14 @@ async fn main() -> eyre::Result<()> {
         println!("Total time: {:?}", now.elapsed());
     }
 
-    // let tmp = distance_comparator.reconstruct(
-    //     &codes_engine.results,
-    //     &codes_engine.results_peers,
-    //     &masks_engine.results,
-    //     &masks_engine.results_peers,
-    // );
+    let tmp = distance_comparator.reconstruct(
+        &codes_engine.results,
+        &codes_engine.results_peers,
+        &masks_engine.results,
+        &masks_engine.results_peers,
+    );
 
-    // println!("Result: {:?}", tmp[0..10].to_vec());
+    println!("Result: {:?}", tmp[0..10].to_vec());
 
     let mut gpu_result1 = vec![0u16; local_db_size * QUERIES];
     let mut gpu_result2 = vec![0u16; local_db_size * QUERIES];
