@@ -10,7 +10,6 @@ use gpu_iris_mpc::{
     },
     IrisCodeDB,
 };
-use rayon::iter::ParallelDrainFull;
 use tokio::time;
 
 const DB_SIZE: usize = 10_000;
@@ -23,12 +22,15 @@ async fn main() -> eyre::Result<()> {
     let party_id: usize = args[1].parse().unwrap();
     let url = args.get(2);
     let n_devices = CudaDevice::count().unwrap() as usize;
+    let local_db_size = DB_SIZE / n_devices;
 
+    // Init DB
     let db = IrisDB::new_random_rng(DB_SIZE, &mut rng);
     let shamir_db = ShamirIrisDB::share_db(&db, &mut rng);
 
     let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(party_id as u8).unwrap());
 
+    // Import masks to GPU DB
     let codes_db = shamir_db[party_id]
         .db
         .iter()
@@ -39,10 +41,9 @@ async fn main() -> eyre::Result<()> {
 
     let mut engine = IrisCodeDB::init(party_id, l_coeff, &codes_db, url.clone(), false);
 
-    time::sleep(time::Duration::from_secs(2)).await;
-
     println!("Engine ready!");
 
+    // Prepare query
     let random_query = ShamirIris::share_iris(&IrisCode::random_rng(&mut rng), &mut rng);
     let mut queries = vec![vec![], vec![], vec![]];
 
@@ -55,33 +56,20 @@ async fn main() -> eyre::Result<()> {
     }
 
     println!("Starting query...");
+    let query =
+        engine.preprocess_query(&queries[0].clone().into_iter().flatten().collect::<Vec<_>>());
 
     let now = Instant::now();
 
-    let query =
-        engine.preprocess_query(&queries[0].clone().into_iter().flatten().collect::<Vec<_>>());
     engine.dot(&query);
-
-    time::sleep(time::Duration::from_secs(2)).await;
-
-    println!("Calculation done.");
-
-    let mut gpu_result = vec![0u16; DB_SIZE / 8 * QUERIES];
-
-    engine.fetch_results(&mut gpu_result, 0);
-
-    println!("LOCAL RESULT: {:?}", gpu_result[0]);
-
     engine.exchange_results();
 
-    println!("Results exchanged.");
     println!("Time elapsed: {:?}", now.elapsed());
-
+    
+    let mut gpu_result = vec![0u16; local_db_size * QUERIES];
     engine.fetch_results_peer(&mut gpu_result, 0, 0);
-
     println!("REMOTE RESULT: {:?}", gpu_result[0]);
 
     time::sleep(time::Duration::from_secs(5)).await;
-
     Ok(())
 }

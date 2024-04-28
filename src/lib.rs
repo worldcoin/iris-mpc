@@ -459,7 +459,7 @@ impl IrisCodeDB {
                 .dtoh_sync_copy_into(&res_trans.unwrap(), results)
                 .unwrap();
 
-            // TODO: pin memory and use async
+            // TODO: async transfer
             // lib()
             //     .cuMemcpyDtoHAsync_v2(
             //         results,
@@ -481,17 +481,6 @@ impl IrisCodeDB {
             self.devs[device_id]
                 .dtoh_sync_copy_into(&res_trans.unwrap(), results)
                 .unwrap();
-
-            // lib()
-            //     .cuMemcpyDtoHAsync_v2(
-            //         results,
-            //         *self.results_peers[device_id][peer_id].device_ptr(),
-            //         self.results_peers[device_id][peer_id].len(),
-            //         self.streams[device_id].stream,
-            //     )
-            //     .result().unwrap();
-
-            // result::stream::synchronize(self.streams[device_id].stream).unwrap();
         }
     }
 }
