@@ -326,9 +326,9 @@ impl ShareDB {
                     Id::new().unwrap()
                 } else {
                     let res = reqwest::blocking::get(format!(
-                        "http://{}:{:?}/{}",
+                        "http://{}:{}/{}",
                         peer_url.clone().unwrap(),
-                        server_port,
+                        server_port.unwrap(),
                         i
                     ))
                     .unwrap();
@@ -349,7 +349,7 @@ impl ShareDB {
                     let app =
                         Router::new().route("/:device_id", get(move |req| http_root(ids, req)));
                     let listener =
-                        tokio::net::TcpListener::bind(format!("0.0.0.0:{:?}", server_port))
+                        tokio::net::TcpListener::bind(format!("0.0.0.0:{}", server_port.unwrap()))
                             .await
                             .unwrap();
                     axum::serve(listener, app).await.unwrap();
