@@ -137,7 +137,7 @@ impl DistanceComparator {
     }
 
     pub fn reconstruct(
-        &self,
+        &mut self,
         codes_result1: &Vec<CudaSlice<u8>>,
         codes_result2: &Vec<CudaSlice<u8>>,
         codes_result3: &Vec<CudaSlice<u8>>,
@@ -165,6 +165,7 @@ impl DistanceComparator {
                         &masks_result1[i],
                         &masks_result2[i],
                         &masks_result3[i],
+                        &mut self.results[i],
                         P,
                         (self.db_length / self.n_devices * QUERY_LENGTH) as u64,
                     ),

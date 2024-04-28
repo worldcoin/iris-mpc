@@ -51,7 +51,7 @@ async fn main() -> eyre::Result<()> {
         ShareDB::init(party_id, l_coeff, &codes_db, url.clone(), false, Some(3000));
     let mut masks_engine =
         ShareDB::init(party_id, l_coeff, &masks_db, url.clone(), false, Some(3001));
-    let distance_comparator = DistanceComparator::init(n_devices, DB_SIZE);
+    let mut distance_comparator = DistanceComparator::init(n_devices, DB_SIZE);
 
     println!("Engines ready!");
 
