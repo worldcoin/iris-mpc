@@ -138,12 +138,10 @@ impl DistanceComparator {
 
     pub fn reconstruct(
         &mut self,
-        codes_result1: &Vec<CudaSlice<u8>>,
-        codes_result2: &Vec<CudaSlice<u8>>,
-        codes_result3: &Vec<CudaSlice<u8>>,
-        masks_result1: &Vec<CudaSlice<u8>>,
-        masks_result2: &Vec<CudaSlice<u8>>,
-        masks_result3: &Vec<CudaSlice<u8>>,
+        codes_result: &Vec<CudaSlice<u8>>,
+        codes_result_peers: &Vec<Vec<CudaSlice<u8>>>,
+        masks_result: &Vec<CudaSlice<u8>>,
+        masks_result_peers: &Vec<Vec<CudaSlice<u8>>>,
     ) -> Vec<f32> {
         let num_elements = self.db_length / self.n_devices * QUERY_LENGTH;
         let threads_per_block = 256;
@@ -159,12 +157,12 @@ impl DistanceComparator {
                 self.kernels[i].clone().launch(
                     cfg,
                     (
-                        &codes_result1[i],
-                        &codes_result2[i],
-                        &codes_result3[i],
-                        &masks_result1[i],
-                        &masks_result2[i],
-                        &masks_result3[i],
+                        &codes_result[i],
+                        &codes_result_peers[i][0],
+                        &codes_result_peers[i][1],
+                        &masks_result[i],
+                        &masks_result_peers[i][0],
+                        &masks_result_peers[i][1],
                         &mut self.results[i],
                         P,
                         (self.db_length / self.n_devices * QUERY_LENGTH) as u64,

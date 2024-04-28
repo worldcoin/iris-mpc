@@ -108,11 +108,9 @@ async fn main() -> eyre::Result<()> {
 
     let tmp = distance_comparator.reconstruct(
         &codes_engine.results,
-        &codes_engine.results_peers[0],
-        &codes_engine.results_peers[1],
+        &codes_engine.results_peers,
         &masks_engine.results,
-        &masks_engine.results_peers[0],
-        &masks_engine.results_peers[1],
+        &masks_engine.results_peers,
     );
 
     println!("Result: {:?}", tmp[0..10].to_vec());
