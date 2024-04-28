@@ -12,6 +12,7 @@ use cudarc::{
     nvrtc::compile_ptx,
 };
 use rayon::prelude::*;
+use setup::id;
 
 pub(crate) const P: u16 = ((1u32 << 16) - 17) as u16;
 const PTX_SRC: &str = include_str!("kernel.cu");
@@ -321,9 +322,28 @@ impl ShareDB {
         let mut comms = vec![];
         if !is_local {
             let mut ids = vec![];
+            for _ in 0..n_devices {
+                ids.push(Id::new().unwrap());
+            }
+
+            // Start HTTP server to exchange NCCL commIds
+            if peer_id == 0 {
+                let ids = ids.clone();
+                tokio::spawn(async move {
+                    println!("Starting server...");
+                    let app =
+                        Router::new().route("/:device_id", get(move |req| http_root(ids, req)));
+                    let listener =
+                        tokio::net::TcpListener::bind(format!("0.0.0.0:{}", server_port.unwrap()))
+                            .await
+                            .unwrap();
+                    axum::serve(listener, app).await.unwrap();
+                });
+            }
+
             for i in 0..n_devices {
                 let id = if peer_id == 0 {
-                    Id::new().unwrap()
+                    ids[i]
                 } else {
                     let res = reqwest::blocking::get(format!(
                         "http://{}:{}/{}",
@@ -341,19 +361,6 @@ impl ShareDB {
                 comms.push(Arc::new(
                     Comm::from_rank(devs[i].clone(), peer_id, 3, id).unwrap(),
                 ));
-            }
-            // Start HTTP server to exchange NCCL commIds
-            if peer_id == 0 {
-                tokio::spawn(async move {
-                    println!("Starting server...");
-                    let app =
-                        Router::new().route("/:device_id", get(move |req| http_root(ids, req)));
-                    let listener =
-                        tokio::net::TcpListener::bind(format!("0.0.0.0:{}", server_port.unwrap()))
-                            .await
-                            .unwrap();
-                    axum::serve(listener, app).await.unwrap();
-                });
             }
         }
 
