@@ -76,11 +76,11 @@ async fn main() -> eyre::Result<()> {
     println!("Results exchanged.");
     println!("Time elapsed: {:?}", now.elapsed());
 
-    // let mut gpu_result2 = vec![0u16; DB_SIZE / 1 * QUERIES];
+    let mut gpu_result2 = vec![0u16; DB_SIZE / 1 * QUERIES];
 
-    // engine.fetch_results_peer(&mut gpu_result2, 0, 0);
+    engine.fetch_results_peer(&mut gpu_result2, 0, 0);
 
-    // println!("REMOTE RESULT: {:?}", gpu_result2[0]);
+    println!("REMOTE RESULT: {:?}", gpu_result2[0]);
 
     // time::sleep(time::Duration::from_secs(2)).await;
 
