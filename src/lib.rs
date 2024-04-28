@@ -499,7 +499,7 @@ impl IrisCodeDB {
                 .cuMemcpyDtoHAsync_v2(
                     results.as_mut_ptr() as *mut c_void,
                     *self.results[device_id].device_ptr(),
-                    self.results.len(),
+                    self.results[device_id].len(),
                     *self.devs[device_id].cu_stream() as *mut _,
                 )
                 .result().unwrap();
@@ -523,7 +523,7 @@ impl IrisCodeDB {
                 .cuMemcpyDtoHAsync_v2(
                     results.as_mut_ptr() as *mut c_void,
                     *self.results_peers[device_id][peer_id].device_ptr(),
-                    self.results_peers[device_id].len(),
+                    self.results_peers[device_id][peer_id].len(),
                     *self.devs[device_id].cu_stream() as *mut _,
                 )
                 .result().unwrap();
