@@ -414,9 +414,9 @@ impl IrisCodeDB {
                     self.comms[idx]
                         .send(&mut self.results[idx], 1 as i32)
                         .unwrap();
-                    self.comms[idx]
-                        .recv(&mut self.results_peers[idx][0], 1 as i32)
-                        .unwrap();
+                    // self.comms[idx]
+                    //     .recv(&mut self.results_peers[idx][0], 1 as i32)
+                    //     .unwrap();
 
                     // comm.send(&self.results[idx], 2 as i32).unwrap();
                     // comm.recv(&mut self.results_peers[idx][1], 2 as i32)
@@ -426,7 +426,7 @@ impl IrisCodeDB {
                     self.comms[idx]
                         .recv(&mut self.results_peers[idx][0], 0 as i32)
                         .unwrap();
-                    self.comms[idx].send(&self.results[idx], 0 as i32).unwrap();
+                    // self.comms[idx].send(&self.results[idx], 0 as i32).unwrap();
 
                     // comm.send(&self.results[idx], 2 as i32).unwrap();
                     // comm.recv(&mut self.results_peers[idx][1], 2 as i32)
