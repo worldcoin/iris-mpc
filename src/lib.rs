@@ -165,6 +165,7 @@ impl DistanceComparator {
                         &masks_result2[i],
                         &masks_result3[i],
                         P,
+                        (self.db_length / self.n_devices * QUERY_LENGTH) as u64,
                     ),
                 ).unwrap();
             }
