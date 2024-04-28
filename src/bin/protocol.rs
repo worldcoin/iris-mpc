@@ -64,12 +64,14 @@ async fn main() -> eyre::Result<()> {
     let query =
         engine.preprocess_query(&queries[0].clone().into_iter().flatten().collect::<Vec<_>>());
 
-    let now = Instant::now();
-
-    engine.dot(&query);
-    engine.exchange_results();
-
-    println!("Time elapsed: {:?}", now.elapsed());
+    for i in 0..10 {
+        let now = Instant::now();
+    
+        engine.dot(&query);
+        engine.exchange_results();
+    
+        println!("Time elapsed: {:?}", now.elapsed());
+    }
     
     let mut gpu_result = vec![0u16; local_db_size * QUERIES];
     engine.fetch_results_peer(&mut gpu_result, 0, 0);
