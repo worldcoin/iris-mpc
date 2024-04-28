@@ -487,31 +487,50 @@ impl IrisCodeDB {
 
     pub fn fetch_results(&self, results: &mut [u16], device_id: usize) {
         unsafe {
-            lib()
-                .cuMemcpyDtoHAsync_v2(
-                    results.as_mut_ptr() as *mut c_void,
-                    *self.results[device_id].device_ptr(),
-                    self.results.len(),
-                    *self.devs[device_id].cu_stream() as *mut _,
-                )
-                .result().unwrap();
+            let res_trans =
+                self.results[device_id].transmute(self.db_length * QUERY_LENGTH / self.n_devices);
 
-            result::stream::synchronize(*self.devs[device_id].cu_stream()).unwrap();
+            self.devs[device_id]
+                .dtoh_sync_copy_into(&res_trans.unwrap(), results)
+                .unwrap();
+
+            // result::stream::synchronize(self.devs[device_id].cu_stream().clone()).unwrap();
+
+            // TODO: pin memory and use async
+            // lib()
+            //     .cuMemcpyDtoHAsync_v2(
+            //         results.as_mut_ptr() as *mut c_void,
+            //         *self.results[device_id].device_ptr(),
+            //         self.results.len(),
+            //         *self.devs[device_id].cu_stream() as *mut _,
+            //     )
+            //     .result().unwrap();
+
+            // result::stream::synchronize(*self.devs[device_id].cu_stream()).unwrap();
+            // self.streams[device_id].wait_for_default();
         }
     }
 
     pub fn fetch_results_peer(&self, results: &mut [u16], device_id: usize, peer_id: usize) {
         unsafe {
-            lib()
-                .cuMemcpyDtoHAsync_v2(
-                    results.as_mut_ptr() as *mut c_void,
-                    *self.results_peers[device_id][peer_id].device_ptr(),
-                    self.results_peers[device_id].len(),
-                    *self.devs[device_id].cu_stream() as *mut _,
-                )
-                .result().unwrap();
 
-            result::stream::synchronize(*self.devs[device_id].cu_stream()).unwrap();
+            let res_trans =
+                self.results_peers[device_id][peer_id].transmute(self.db_length * QUERY_LENGTH / self.n_devices);
+
+            self.devs[device_id]
+                .dtoh_sync_copy_into(&res_trans.unwrap(), results)
+                .unwrap();
+
+            // lib()
+            //     .cuMemcpyDtoHAsync_v2(
+            //         results.as_mut_ptr() as *mut c_void,
+            //         *self.results_peers[device_id][peer_id].device_ptr(),
+            //         self.results_peers[device_id].len(),
+            //         *self.devs[device_id].cu_stream() as *mut _,
+            //     )
+            //     .result().unwrap();
+
+            // result::stream::synchronize(*self.devs[device_id].cu_stream()).unwrap();
         }
     }
 }
