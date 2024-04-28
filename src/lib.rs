@@ -6,8 +6,7 @@ use axum::{extract::Path, routing::get, Router};
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
-        result, sys::lib, CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut,
-        DeviceSlice, LaunchAsync, LaunchConfig,
+        result, sys::lib, CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr, DevicePtrMut, DeviceSlice, LaunchAsync, LaunchConfig
     },
     nccl::{self, Comm, Id},
     nvrtc::compile_ptx,
@@ -487,8 +486,8 @@ impl IrisCodeDB {
 
     pub fn fetch_results(&self, results: *mut c_void, device_id: usize) {
         unsafe {
-            // let res_trans =
-            //     self.results[device_id].transmute(self.db_length * QUERY_LENGTH / self.n_devices);
+            // let res_trans: CudaView<u16> =
+            //     self.results[device_id].transmute(self.db_length * QUERY_LENGTH / self.n_devices).unwrap();
 
             // self.devs[device_id]
             //     .dtoh_sync_copy_into(&res_trans.unwrap(), results)
