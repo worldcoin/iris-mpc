@@ -39,14 +39,14 @@ async fn main() -> eyre::Result<()> {
     //     .flat_map(|entry| entry.code)
     //     .collect::<Vec<_>>();
 
-    let mut codes_db: Vec<u16> = Vec::new();
-    let mut masks_db: Vec<u16> = Vec::new();
-    for col in 0..12800 {
-        for row in 0..shamir_db[party_id].db.len() {
-            codes_db.push(shamir_db[party_id].db[row].code[col]);
-            masks_db.push(shamir_db[party_id].db[row].mask[col]);
-        }
-    }
+    // let mut codes_db: Vec<u16> = Vec::new();
+    // let mut masks_db: Vec<u16> = Vec::new();
+    // for col in 0..12800 {
+    //     for row in 0..shamir_db[party_id].db.len() {
+    //         codes_db.push(shamir_db[party_id].db[row].code[col]);
+    //         masks_db.push(shamir_db[party_id].db[row].mask[col]);
+    //     }
+    // }
 
     // let masks_db = shamir_db[party_id]
     //     .db
