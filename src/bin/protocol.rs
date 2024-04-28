@@ -56,10 +56,10 @@ async fn main() -> eyre::Result<()> {
 
     println!("Starting engines...");
 
-    let mut codes_engine =
-        ShareDB::init(party_id, l_coeff, &codes_db, url.clone(), false, Some(3000));
-    // let mut masks_engine =
-    //     ShareDB::init(party_id, l_coeff, &masks_db, url.clone(), false, Some(3001));
+    // let mut codes_engine =
+    //     ShareDB::init(party_id, l_coeff, &codes_db, url.clone(), false, Some(3000));
+    let mut masks_engine =
+        ShareDB::init(party_id, l_coeff, &masks_db, url.clone(), false, Some(3001));
     // let mut distance_comparator = DistanceComparator::init(n_devices, DB_SIZE);
 
     println!("Engines ready!");
@@ -82,35 +82,35 @@ async fn main() -> eyre::Result<()> {
     }
 
     println!("Starting query...");
-    let code_query = codes_engine.preprocess_query(
-        &code_queries[party_id]
-            .clone()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>(),
-    );
-    // let mask_query = masks_engine.preprocess_query(
-    //     &mask_queries[party_id]
+    // let code_query = codes_engine.preprocess_query(
+    //     &code_queries[party_id]
     //         .clone()
     //         .into_iter()
     //         .flatten()
     //         .collect::<Vec<_>>(),
     // );
+    let mask_query = masks_engine.preprocess_query(
+        &mask_queries[party_id]
+            .clone()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>(),
+    );
 
     for i in 0..10 {
         let now = Instant::now();
 
-        codes_engine.dot(&code_query);
-        println!("Dot codes took: {:?}", now.elapsed());
+        // codes_engine.dot(&code_query);
+        // println!("Dot codes took: {:?}", now.elapsed());
 
-        codes_engine.exchange_results();
-        println!("Exchange codes took: {:?}", now.elapsed());
+        // codes_engine.exchange_results();
+        // println!("Exchange codes took: {:?}", now.elapsed());
 
-        // masks_engine.dot(&mask_query);
-        // println!("Dot masks took: {:?}", now.elapsed());
+        masks_engine.dot(&mask_query);
+        println!("Dot masks took: {:?}", now.elapsed());
 
-        // masks_engine.exchange_results();
-        // println!("Exchange masks took: {:?}", now.elapsed());
+        masks_engine.exchange_results();
+        println!("Exchange masks took: {:?}", now.elapsed());
 
         println!("Total time: {:?}", now.elapsed());
     }
@@ -128,9 +128,9 @@ async fn main() -> eyre::Result<()> {
     let mut gpu_result2 = vec![0u16; local_db_size * QUERIES];
     let mut gpu_result3 = vec![0u16; local_db_size * QUERIES];
 
-    codes_engine.fetch_results(&mut gpu_result1, 0);
-    codes_engine.fetch_results_peer(&mut gpu_result2, 0, 0);
-    codes_engine.fetch_results_peer(&mut gpu_result3, 0, 1);
+    masks_engine.fetch_results(&mut gpu_result1, 0);
+    masks_engine.fetch_results_peer(&mut gpu_result2, 0, 0);
+    masks_engine.fetch_results_peer(&mut gpu_result3, 0, 1);
 
     for i in 0..20 {
         let tmp = gpu_result1[i] as u32 + gpu_result2[i] as u32 + gpu_result3[i] as u32;
