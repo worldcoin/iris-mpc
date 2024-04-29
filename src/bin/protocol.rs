@@ -39,14 +39,6 @@ async fn main() -> eyre::Result<()> {
         .flat_map(|entry| entry.code)
         .collect::<Vec<_>>();
 
-    // let xx = Shamir::share_d1(1, &mut rng);
-    let mut codes_db = vec![];
-    for i in 0..DB_SIZE {
-        for j in 0..12800 {
-            codes_db.push(shamir_db[party_id].db[i].code[j]);
-        }
-    }
-
     // let masks_db = shamir_db[party_id]
     //     .db
     //     .iter()
@@ -89,11 +81,11 @@ async fn main() -> eyre::Result<()> {
     //     }
     // }
 
-    let xx2 = Shamir::share_d1(1, &mut rng);
+    let xx2 = &shamir_db[party_id].db[0];
     let mut queries_x = vec![];
     for i in 0..QUERIES {
         for j in 0..12800 {
-            queries_x.push(xx2[party_id]);
+            queries_x.push(xx2.code[j]);
         }
     }
 
