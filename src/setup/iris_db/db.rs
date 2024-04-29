@@ -1,5 +1,6 @@
 use super::iris::IrisCode;
-use rand::Rng;
+use rand::{rngs::StdRng, Rng, SeedableRng};
+use rayon::prelude::*;
 
 #[derive(Default)]
 pub struct IrisDB {
@@ -28,6 +29,19 @@ impl IrisDB {
         for _ in 0..size {
             db.push(IrisCode::random_rng(rng));
         }
+
+        Self { db }
+    }
+
+    pub fn new_random_seed(size: usize, rng_seed: u64) -> Self {
+        let db = (0..size)
+            .into_par_iter()
+            .map(|_| {
+                let mut rng = StdRng::seed_from_u64(rng_seed);
+                IrisCode::random_rng(&mut rng)
+            })
+            .collect::<Vec<_>>();
+
         Self { db }
     }
 
