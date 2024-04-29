@@ -103,17 +103,18 @@ async fn main() -> eyre::Result<()> {
         masks_engine.exchange_results();
         println!("Exchange masks took: {:?}", now.elapsed());
 
+        let tmp = distance_comparator.reconstruct(
+            &codes_engine.results,
+            &codes_engine.results_peers,
+            &masks_engine.results,
+            &masks_engine.results_peers,
+        );
+
         println!("Total time: {:?}", now.elapsed());
+        println!("Result: {:?}", tmp[0..10].to_vec());
     }
 
-    let tmp = distance_comparator.reconstruct(
-        &codes_engine.results,
-        &codes_engine.results_peers,
-        &masks_engine.results,
-        &masks_engine.results_peers,
-    );
 
-    println!("Result: {:?}", tmp[0..10].to_vec());
 
     // let mut gpu_result1 = vec![0u16; local_db_size * QUERIES];
     // let mut gpu_result2 = vec![0u16; local_db_size * QUERIES];
