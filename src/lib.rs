@@ -142,7 +142,7 @@ impl DistanceComparator {
         codes_result_peers: &Vec<Vec<CudaSlice<u8>>>,
         masks_result: &Vec<CudaSlice<u8>>,
         masks_result_peers: &Vec<Vec<CudaSlice<u8>>>,
-    ) -> Vec<f32> {
+    ) {
         let num_elements = self.db_length / self.n_devices * QUERY_LENGTH;
         let threads_per_block = 256;
         let blocks_per_grid = num_elements.div_ceil(threads_per_block);
@@ -171,11 +171,9 @@ impl DistanceComparator {
             }
         }
 
-        // for i in 0..self.n_devices {
-        // }
-
-        // DUMMY
-        self.devs[0].dtoh_sync_copy(&self.results[0]).unwrap()
+        for i in 0..self.n_devices {
+            self.devs[i].synchronize().unwrap();
+        }
 
     }
 }
