@@ -59,7 +59,7 @@ impl ToString for IdWrapper {
     }
 }
 
-const DUMMY_DATA_LEN: usize = 20 * (1 << 30);
+const DUMMY_DATA_LEN: usize = 10 * (1 << 30);
 
 async fn root(Path(device_id): Path<String>) -> String {
     let device_id: usize = device_id.parse().unwrap();
@@ -84,7 +84,9 @@ async fn main() -> eyre::Result<()> {
 
     let mut devs = vec![];
     let mut comms = vec![];
-    let mut slices = vec![];
+    let mut slices1 = vec![];
+    let mut slices2 = vec![];
+    let mut slices3 = vec![];
 
     for i in 0..n_devices {
         let id = if party_id == 0 {
@@ -95,7 +97,9 @@ async fn main() -> eyre::Result<()> {
         };
 
         let dev = CudaDevice::new(i).unwrap();
-        let slice: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
+        let slice1: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
+        let slice2: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
+        let slice3: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
 
         println!("starting device {i}...");
 
@@ -103,7 +107,9 @@ async fn main() -> eyre::Result<()> {
 
         devs.push(dev);
         comms.push(comm);
-        slices.push(slice);
+        slices1.push(slice1);
+        slices2.push(slice2);
+        slices3.push(slice3);
     }
 
     for _ in 0..10 {
@@ -113,25 +119,25 @@ async fn main() -> eyre::Result<()> {
             devs[i].bind_to_thread().unwrap();
             match party_id {
                 0 => {
-                    comms[i].send(&slices[i], 1).unwrap();
-                    comms[i].recv(&mut slices[i], 1).unwrap();
+                    comms[i].send(&slices1[i], 1).unwrap();
+                    comms[i].recv(&mut slices2[i], 1).unwrap();
 
-                    comms[i].send(&slices[i], 2).unwrap();
-                    comms[i].recv(&mut slices[i], 2).unwrap();
+                    comms[i].send(&slices1[i], 2).unwrap();
+                    comms[i].recv(&mut slices3[i], 2).unwrap();
                 }
                 1 => {
-                    comms[i].recv(&mut slices[i], 0).unwrap();
-                    comms[i].send(&slices[i], 0).unwrap();
+                    comms[i].recv(&mut slices2[i], 0).unwrap();
+                    comms[i].send(&slices1[i], 0).unwrap();
 
-                    comms[i].send(&slices[i], 2).unwrap();
-                    comms[i].recv(&mut slices[i], 2).unwrap();
+                    comms[i].send(&slices1[i], 2).unwrap();
+                    comms[i].recv(&mut slices3[i], 2).unwrap();
                 }
                 2 => {
-                    comms[i].recv(&mut slices[i], 0).unwrap();
-                    comms[i].send(&slices[i], 0).unwrap();
+                    comms[i].recv(&mut slices2[i], 0).unwrap();
+                    comms[i].send(&slices1[i], 0).unwrap();
 
-                    comms[i].recv(&mut slices[i], 2).unwrap();
-                    comms[i].send(&slices[i], 2).unwrap();
+                    comms[i].recv(&mut slices3[i], 2).unwrap();
+                    comms[i].send(&slices1[i], 2).unwrap();
                 }
                 _ => unimplemented!()
             }
