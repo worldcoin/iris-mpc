@@ -1,6 +1,26 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use gpu_iris_mpc::rng::{aes::AesCudaRng, chacha::ChaChaCudaRng, chacha_two};
+use gpu_iris_mpc::rng::{aes::AesCudaRng, chacha::ChaChaCudaRng, chacha_field, chacha_two};
 
+pub fn criterion_benchmark_chacha12_field_runner(c: &mut Criterion, buf_size: usize) {
+    let mut chacha = chacha_field::ChaChaCudaRng::init(buf_size);
+    let mut group = c.benchmark_group(format!(
+        "ChaCha12 Field (buf_size = {} kEl)",
+        chacha.num_valid() / 1000
+    ));
+    group.throughput(criterion::Throughput::Elements((chacha.num_valid()) as u64));
+    group.bench_function("with copy to host", move |b| {
+        b.iter(|| {
+            chacha.fill_rng();
+        })
+    });
+    let mut chacha = chacha_field::ChaChaCudaRng::init(buf_size);
+    group.bench_function("without copy to host", move |b| {
+        b.iter(|| {
+            chacha.fill_rng_no_host_copy();
+        })
+    });
+    group.finish();
+}
 pub fn criterion_benchmark_chacha12_two_runner(c: &mut Criterion, buf_size: usize) {
     let mut group = c.benchmark_group(format!(
         "ChaCha12 TWO (buf_size = {}MB)",
@@ -92,6 +112,13 @@ pub fn criterion_benchmark_chacha12(c: &mut Criterion) {
     }
 }
 
+pub fn criterion_benchmark_chacha12_field(c: &mut Criterion) {
+    for log_buf_size in 20..=30 {
+        let buf_size = 1usize << log_buf_size;
+        criterion_benchmark_chacha12_field_runner(c, buf_size);
+    }
+}
+
 pub fn criterion_benchmark_chacha12_two(c: &mut Criterion) {
     for log_buf_size in 20..=30 {
         let buf_size = (1usize << log_buf_size) / 4;
@@ -108,6 +135,6 @@ pub fn criterion_benchmark_aes(c: &mut Criterion) {
 criterion_group!(
     name = rng_benches;
     config = Criterion::default();
-    targets = criterion_benchmark_chacha12, criterion_benchmark_chacha12_two, criterion_benchmark_aes
+    targets = criterion_benchmark_chacha12, criterion_benchmark_chacha12_two, criterion_benchmark_chacha12_field, criterion_benchmark_aes
 );
 criterion_main!(rng_benches);
