@@ -71,7 +71,7 @@ async fn main() -> eyre::Result<()> {
     let args = env::args().collect::<Vec<_>>();
     let n_devices = CudaDevice::count().unwrap() as usize;
     let party_id: usize = args[1].parse().unwrap();
-    let peer_party: i32 = (party_id as i32 + 1) % 2;
+    let peer_party: i32 = (party_id as i32 + 1) % 3;
 
     if party_id == 0 {
         tokio::spawn(async move {
@@ -111,10 +111,29 @@ async fn main() -> eyre::Result<()> {
 
         for i in 0..n_devices {
             devs[i].bind_to_thread().unwrap();
-            if party_id == 0 {
-                comms[i].send(&slices[i], peer_party).unwrap();
-            } else {
-                comms[i].recv(&mut slices[i], peer_party).unwrap();
+            match party_id {
+                0 => {
+                    comms[i].send(&slices[i], 1).unwrap();
+                    comms[i].recv(&mut slices[i], 1).unwrap();
+
+                    comms[i].send(&slices[i], 2).unwrap();
+                    comms[i].recv(&mut slices[i], 2).unwrap();
+                }
+                1 => {
+                    comms[i].recv(&mut slices[i], 0).unwrap();
+                    comms[i].send(&slices[i], 0).unwrap();
+
+                    comms[i].send(&slices[i], 2).unwrap();
+                    comms[i].recv(&mut slices[i], 2).unwrap();
+                }
+                2 => {
+                    comms[i].recv(&mut slices[i], 0).unwrap();
+                    comms[i].send(&slices[i], 0).unwrap();
+
+                    comms[i].recv(&mut slices[i], 2).unwrap();
+                    comms[i].send(&slices[i], 2).unwrap();
+                }
+                _ => unimplemented!()
             }
         }
 
@@ -122,7 +141,7 @@ async fn main() -> eyre::Result<()> {
             devs[i].synchronize().unwrap();
         }
 
-        if party_id == 1 {
+        if party_id != 0 {
             let elapsed = now.elapsed();
             let throughput =
                 (DUMMY_DATA_LEN as f64 * 8f64) / (elapsed.as_millis() as f64) / 1_000_000_000f64
