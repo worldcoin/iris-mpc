@@ -40,12 +40,12 @@ async fn main() -> eyre::Result<()> {
         .collect::<Vec<_>>();
 
     // let xx = Shamir::share_d1(1, &mut rng);
-    // let mut codes_db = vec![];
-    // for i in 0..DB_SIZE {
-    //     for j in 0..12800 {
-    //         codes_db.push(xx[party_id]);
-    //     }
-    // }
+    let mut codes_db = vec![];
+    for i in 0..DB_SIZE {
+        for j in 0..12800 {
+            codes_db.push(shamir_db[party_id].db[i].code[j]);
+        }
+    }
 
     // let masks_db = shamir_db[party_id]
     //     .db
