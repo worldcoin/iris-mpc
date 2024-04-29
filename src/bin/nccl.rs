@@ -155,6 +155,13 @@ async fn main() -> eyre::Result<()> {
                 throughput * 8f64
             );
         }
+
+        let res1 = devs[0].dtoh_sync_copy(&slices1[0]).unwrap();
+        let res2 = devs[0].dtoh_sync_copy(&slices2[0]).unwrap();
+        let res3 = devs[0].dtoh_sync_copy(&slices3[0]).unwrap();
+
+        println!("{} {} {}", res1[0], res2[0], res3[0]);
+
     }
 
     Ok(())
