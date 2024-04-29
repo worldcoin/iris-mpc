@@ -120,23 +120,23 @@ async fn main() -> eyre::Result<()> {
             match party_id {
                 0 => {
                     comms[i].send(&slices1[i], 1).unwrap();
-                    comms[i].recv(&mut slices2[i], 1).unwrap();
+                    comms[i].recv(&mut slices3[i], 2).unwrap();
 
                     comms[i].send(&slices1[i], 2).unwrap();
-                    comms[i].recv(&mut slices3[i], 2).unwrap();
+                    comms[i].recv(&mut slices2[i], 1).unwrap();
                 }
                 1 => {
                     comms[i].recv(&mut slices2[i], 0).unwrap();
-                    comms[i].send(&slices1[i], 0).unwrap();
-
                     comms[i].send(&slices1[i], 2).unwrap();
+                    
                     comms[i].recv(&mut slices3[i], 2).unwrap();
+                    comms[i].send(&slices1[i], 0).unwrap();
                 }
                 2 => {
-                    comms[i].recv(&mut slices2[i], 0).unwrap();
-                    comms[i].send(&slices1[i], 0).unwrap();
-
                     comms[i].recv(&mut slices3[i], 1).unwrap();
+                    comms[i].send(&slices1[i], 0).unwrap();
+                    
+                    comms[i].recv(&mut slices2[i], 0).unwrap();
                     comms[i].send(&slices1[i], 1).unwrap();
                 }
                 _ => unimplemented!()
