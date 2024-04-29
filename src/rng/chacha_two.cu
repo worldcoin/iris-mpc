@@ -26,6 +26,7 @@
  */
 
 #define uint32_t unsigned int
+#define uint64_t unsigned long long
 
 #define THREADS_PER_BLOCK 256 // needs to be kept in sync with the kernel launch
 
@@ -97,9 +98,16 @@ extern "C" __global__ void chacha12_two(uint32_t *d_ciphertext, uint32_t *d_stat
 
     // Adjust counter relative to the iteration idx
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    // the 32-bit counter part is in state[12], we add our local counter = idx here
-    thread_state1[12] += idx;
-    thread_state1[16 + 12] += idx;
+    // the 64-bit counter part is in state[12] and state[13], we add our local counter = idx here
+    uint64_t counter = thread_state1[12] | (thread_state2[13] << 32);
+    counter += idx;
+    thread_state1[12] = counter & 0xFFFFFFFF;
+    thread_state1[13] = counter >> 32;
+    counter = thread_state1[28] | (thread_state2[29] << 32);
+    counter += idx;
+    thread_state1[28] = counter & 0xFFFFFFFF;
+    thread_state1[29] = counter >> 32;
+
     // 6 double rounds (8 quarter rounds)
     for (int i = 0; i < 6; i++)
     {
@@ -196,8 +204,11 @@ extern "C" __global__ void chacha12_two_seq(uint32_t *d_ciphertext, uint32_t *d_
 
     // Adjust counter relative to the iteration idx
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    // the 32-bit counter part is in state[12], we add our local counter = idx here
-    thread_state[12] += idx;
+    // the 64-bit counter part is in state[12] and state[13], we add our local counter = idx here
+    uint64_t counter = state[12] | (state[13] << 32);
+    counter += idx;
+    thread_state[12] = counter & 0xFFFFFFFF;
+    thread_state[13] = counter >> 32;
 
     // 6 double rounds (8 quarter rounds)
     for (int i = 0; i < 6; i++)
@@ -235,8 +246,11 @@ extern "C" __global__ void chacha12_two_seq(uint32_t *d_ciphertext, uint32_t *d_
     for (int i = 0; i < 16; i++)
         thread_state[i] = state[i + 16];
 
-    // the 32-bit counter part is in state[12], we add our local counter = idx here
-    thread_state[12] += idx;
+    // the 64-bit counter part is in state[12] and state[13], we add our local counter = idx here
+    counter = state[12] | (state[13] << 32);
+    counter += idx;
+    thread_state[12] = counter & 0xFFFFFFFF;
+    thread_state[13] = counter >> 32;
 
     // 6 double rounds (8 quarter rounds)
     for (int i = 0; i < 6; i++)
