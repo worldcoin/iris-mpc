@@ -26,26 +26,26 @@ async fn main() -> eyre::Result<()> {
     let local_db_size = DB_SIZE / n_devices;
 
     // Init DB
-    // let db = IrisDB::new_random_rng(DB_SIZE, &mut rng);
-    // let shamir_db = ShamirIrisDB::share_db(&db,  &mut rng);
+    let db = IrisDB::new_random_rng(DB_SIZE, &mut rng);
+    let shamir_db = ShamirIrisDB::share_db(&db,  &mut rng);
     let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(party_id as u8).unwrap());
 
     println!("Random shared DB generated!");
 
     // Import masks to GPU DB
-    // let codes_db = shamir_db[party_id]
-    //     .db
-    //     .iter()
-    //     .flat_map(|entry| entry.code)
-    //     .collect::<Vec<_>>();
+    let codes_db = shamir_db[party_id]
+        .db
+        .iter()
+        .flat_map(|entry| entry.code)
+        .collect::<Vec<_>>();
 
-    let xx = Shamir::share_d1(1, &mut rng);
-    let mut codes_db = vec![];
-    for i in 0..DB_SIZE {
-        for j in 0..12800 {
-            codes_db.push(xx[party_id]);
-        }
-    }
+    // let xx = Shamir::share_d1(1, &mut rng);
+    // let mut codes_db = vec![];
+    // for i in 0..DB_SIZE {
+    //     for j in 0..12800 {
+    //         codes_db.push(xx[party_id]);
+    //     }
+    // }
 
     // let masks_db = shamir_db[party_id]
     //     .db
