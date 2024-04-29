@@ -26,77 +26,84 @@ async fn main() -> eyre::Result<()> {
     let local_db_size = DB_SIZE / n_devices;
 
     // Init DB
-    let db = IrisDB::new_random_rng(DB_SIZE, &mut rng);
-    let shamir_db = ShamirIrisDB::share_db(&db,  &mut rng);
+    // let db = IrisDB::new_random_rng(DB_SIZE, &mut rng);
+    // let shamir_db = ShamirIrisDB::share_db(&db,  &mut rng);
     let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(party_id as u8).unwrap());
 
     println!("Random shared DB generated!");
 
     // Import masks to GPU DB
-    let codes_db = shamir_db[party_id]
-        .db
-        .iter()
-        .flat_map(|entry| entry.code)
-        .collect::<Vec<_>>();
+    // let codes_db = shamir_db[party_id]
+    //     .db
+    //     .iter()
+    //     .flat_map(|entry| entry.code)
+    //     .collect::<Vec<_>>();
 
-    // let mut codes_db: Vec<u16> = Vec::new();
-    // let mut masks_db: Vec<u16> = Vec::new();
-    // for col in 0..12800 {
-    //     for row in 0..shamir_db[party_id].db.len() {
-    //         codes_db.push(shamir_db[party_id].db[row].code[col]);
-    //         masks_db.push(shamir_db[party_id].db[row].mask[col]);
-    //     }
-    // }
+    let xx = Shamir::share_d1(1, &mut rng);
+    let mut codes_db = vec![];
+    for i in 0..DB_SIZE {
+        for j in 0..12800 {
+            codes_db.push(xx[party_id]);
+        }
+    }
 
-    let masks_db = shamir_db[party_id]
-        .db
-        .iter()
-        .flat_map(|entry| entry.mask)
-        .collect::<Vec<_>>();
+    // let masks_db = shamir_db[party_id]
+    //     .db
+    //     .iter()
+    //     .flat_map(|entry| entry.mask)
+    //     .collect::<Vec<_>>();
 
     println!("Starting engines...");
 
     let mut codes_engine =
         ShareDB::init(party_id, l_coeff, &codes_db, url.clone(), false, Some(3000));
-    let mut masks_engine =
-        ShareDB::init(party_id, l_coeff, &masks_db, url.clone(), false, Some(3001));
-    let mut distance_comparator = DistanceComparator::init(n_devices, DB_SIZE);
+    // let mut masks_engine =
+    //     ShareDB::init(party_id, l_coeff, &masks_db, url.clone(), false, Some(3001));
+    // let mut distance_comparator = DistanceComparator::init(n_devices, DB_SIZE);
 
     println!("Engines ready!");
 
     // Prepare queries
-    let random_query = ShamirIris::share_iris(&IrisCode::random_rng(&mut rng), &mut rng);
-    let mut code_queries = vec![vec![], vec![], vec![]];
-    let mut mask_queries = vec![vec![], vec![], vec![]];
+    // let random_query = ShamirIris::share_iris(&IrisCode::random_rng(&mut rng), &mut rng);
+    // let mut code_queries = vec![vec![], vec![], vec![]];
+    // let mut mask_queries = vec![vec![], vec![], vec![]];
 
+    // for i in 0..QUERIES {
+    //     // TODO: rotate
+    //     let tmp: [ShamirIris; 3] = random_query.clone();
+    //     code_queries[0].push(tmp[0].code.to_vec());
+    //     code_queries[1].push(tmp[1].code.to_vec());
+    //     code_queries[2].push(tmp[2].code.to_vec());
+
+    //     mask_queries[0].push(tmp[0].mask.to_vec());
+    //     mask_queries[1].push(tmp[1].mask.to_vec());
+    //     mask_queries[2].push(tmp[2].mask.to_vec());
+    // }
+
+    // let mut code_queries_x: Vec<u16> = Vec::new();
+    // let mut mask_queries_x: Vec<u16> = Vec::new();
+    // for col in 0..12800 {
+    //     for row in 0..QUERIES {
+    //         code_queries_x.push(code_queries[party_id][row][col]);
+    //         mask_queries_x.push(mask_queries[party_id][row][col]);
+    //     }
+    // }
+
+    let xx2 = Shamir::share_d1(1, &mut rng);
+    let mut queries_x = vec![];
     for i in 0..QUERIES {
-        // TODO: rotate
-        let tmp: [ShamirIris; 3] = random_query.clone();
-        code_queries[0].push(tmp[0].code.to_vec());
-        code_queries[1].push(tmp[1].code.to_vec());
-        code_queries[2].push(tmp[2].code.to_vec());
-
-        mask_queries[0].push(tmp[0].mask.to_vec());
-        mask_queries[1].push(tmp[1].mask.to_vec());
-        mask_queries[2].push(tmp[2].mask.to_vec());
-    }
-
-    let mut code_queries_x: Vec<u16> = Vec::new();
-    let mut mask_queries_x: Vec<u16> = Vec::new();
-    for col in 0..12800 {
-        for row in 0..QUERIES {
-            code_queries_x.push(code_queries[party_id][row][col]);
-            mask_queries_x.push(mask_queries[party_id][row][col]);
+        for j in 0..12800 {
+            queries_x.push(xx2[party_id]);
         }
     }
 
     println!("Starting query...");
     let code_query = codes_engine.preprocess_query(
-       &code_queries_x,
+       &queries_x,
     );
-    let mask_query = masks_engine.preprocess_query(
-        &mask_queries_x,
-    );
+    // let mask_query = masks_engine.preprocess_query(
+    //     &mask_queries_x,
+    // );
 
     for i in 0..10 {
         let now = Instant::now();
@@ -107,23 +114,23 @@ async fn main() -> eyre::Result<()> {
         codes_engine.exchange_results();
         println!("Exchange codes took: {:?}", now.elapsed());
 
-        masks_engine.dot(&mask_query);
-        println!("Dot masks took: {:?}", now.elapsed());
+        // masks_engine.dot(&mask_query);
+        // println!("Dot masks took: {:?}", now.elapsed());
 
-        masks_engine.exchange_results();
-        println!("Exchange masks took: {:?}", now.elapsed());
+        // masks_engine.exchange_results();
+        // println!("Exchange masks took: {:?}", now.elapsed());
 
         println!("Total time: {:?}", now.elapsed());
     }
 
-    let tmp = distance_comparator.reconstruct(
-        &codes_engine.results,
-        &codes_engine.results_peers,
-        &masks_engine.results,
-        &masks_engine.results_peers,
-    );
+    // let tmp = distance_comparator.reconstruct(
+    //     &codes_engine.results,
+    //     &codes_engine.results_peers,
+    //     &masks_engine.results,
+    //     &masks_engine.results_peers,
+    // );
 
-    println!("Result: {:?}", tmp[0..10].to_vec());
+    // println!("Result: {:?}", tmp[0..10].to_vec());
 
     let mut gpu_result1 = vec![0u16; local_db_size * QUERIES];
     let mut gpu_result2 = vec![0u16; local_db_size * QUERIES];

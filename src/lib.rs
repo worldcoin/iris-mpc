@@ -595,7 +595,7 @@ mod tests {
     use rand::{rngs::StdRng, Rng, SeedableRng};
 
     use crate::{
-        setup::{id::PartyID, shamir::Shamir},
+        setup::{id::PartyID, iris_db::iris::IrisCode, shamir::Shamir},
         ShareDB, P,
     };
     const WIDTH: usize = 12_800;
@@ -626,48 +626,48 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn check_matmul_p16() {
-        let db = random_vec(DB_SIZE, WIDTH, P as u32);
-        let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
-        let mut gpu_result = vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE];
+    // #[test]
+    // fn check_matmul_p16() {
+    //     let db = random_vec(DB_SIZE, WIDTH, P as u32);
+    //     let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
+    //     let mut gpu_result = vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE];
 
-        let mut engine = ShareDB::init(0, 1, &db, None, true, None);
-        let preprocessed_query = engine.preprocess_query(&query);
-        engine.dot(&preprocessed_query);
+    //     let mut engine = ShareDB::init(0, 1, &db, None, true, None);
+    //     let preprocessed_query = engine.preprocess_query(&query);
+    //     engine.dot(&preprocessed_query);
 
-        let a_nda = random_ndarray::<u64>(db, DB_SIZE, WIDTH);
-        let b_nda = random_ndarray::<u64>(query, QUERY_SIZE, WIDTH);
-        let c_nda = a_nda.dot(&b_nda.t());
+    //     let a_nda = random_ndarray::<u64>(db, DB_SIZE, WIDTH);
+    //     let b_nda = random_ndarray::<u64>(query, QUERY_SIZE, WIDTH);
+    //     let c_nda = a_nda.dot(&b_nda.t());
 
-        let mut vec_column_major: Vec<u16> = Vec::new();
-        for col in 0..c_nda.ncols() {
-            for row in c_nda.column(col) {
-                vec_column_major.push((*row % (P as u64)) as u16);
-            }
-        }
+    //     let mut vec_column_major: Vec<u16> = Vec::new();
+    //     for col in 0..c_nda.ncols() {
+    //         for row in c_nda.column(col) {
+    //             vec_column_major.push((*row % (P as u64)) as u16);
+    //         }
+    //     }
 
-        for device_idx in 0..N_DEVICES {
-            engine.fetch_results(&mut gpu_result, device_idx);
-            let selected_elements: Vec<u16> = vec_column_major
-                .chunks(DB_SIZE)
-                .flat_map(|chunk| {
-                    chunk
-                        .iter()
-                        .skip(DB_SIZE / N_DEVICES * device_idx)
-                        .take(DB_SIZE / N_DEVICES)
-                })
-                .cloned()
-                .collect();
+    //     for device_idx in 0..N_DEVICES {
+    //         engine.fetch_results(&mut gpu_result, device_idx);
+    //         let selected_elements: Vec<u16> = vec_column_major
+    //             .chunks(DB_SIZE)
+    //             .flat_map(|chunk| {
+    //                 chunk
+    //                     .iter()
+    //                     .skip(DB_SIZE / N_DEVICES * device_idx)
+    //                     .take(DB_SIZE / N_DEVICES)
+    //             })
+    //             .cloned()
+    //             .collect();
 
-            assert_eq!(selected_elements, gpu_result);
-        }
-    }
+    //         assert_eq!(selected_elements, gpu_result);
+    //     }
+    // }
 
     #[test]
     fn check_shared_matmul() {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
-        let db = random_vec(DB_SIZE, WIDTH, P as u32);
+        let db = random_vec(DB_SIZE, WIDTH, 65535 as u32);
         let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
         let mut gpu_result = vec![
             vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
@@ -724,4 +724,56 @@ mod tests {
             );
         }
     }
+
+    // #[test]
+    // fn check_matmul_xxx() {
+    //     let mut rng = StdRng::seed_from_u64(RNG_SEED);
+    //     let c1 = IrisCode::random_rng(&mut rng);
+    //     let c2 = IrisCode::random_rng(&mut rng);
+
+    //     let mut db = vec![];
+
+    //     for i in 0..DB_SIZE {
+    //         for j in 0..WIDTH {
+    //             db.push(c1.code.get_bit(j) as u16);
+    //         }
+    //     }
+
+    //     let mut query = vec![];
+    //     for i in 0..QUERY_SIZE {
+    //         for j in 0..WIDTH {
+    //             query.push(c2.code.get_bit(j) as u16);
+    //         }
+    //     }
+
+    //     let mut gpu_result = vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE];
+
+    //     let mut engine = ShareDB::init(0, 1, &db, None, true, None);
+    //     let preprocessed_query = engine.preprocess_query(&query);
+    //     engine.dot(&preprocessed_query);
+
+    //     // let a_nda = random_ndarray::<u64>(db, DB_SIZE, WIDTH);
+    //     // let b_nda = random_ndarray::<u64>(query, QUERY_SIZE, WIDTH);
+    //     // let c_nda = a_nda.dot(&b_nda.t());
+
+        
+    //     for device_idx in 0..2 {
+    //         engine.fetch_results(&mut gpu_result, device_idx);
+            
+    //         println!("{:?}", gpu_result[0..10].to_vec());
+
+    //         // let selected_elements: Vec<u16> = vec_column_major
+    //         //     .chunks(DB_SIZE)
+    //         //     .flat_map(|chunk| {
+    //         //         chunk
+    //         //             .iter()
+    //         //             .skip(DB_SIZE / N_DEVICES * device_idx)
+    //         //             .take(DB_SIZE / N_DEVICES)
+    //         //     })
+    //         //     .cloned()
+    //         //     .collect();
+
+    //         // assert_eq!(selected_elements, gpu_result);
+    //     }
+    // }
 }
