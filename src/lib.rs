@@ -141,9 +141,7 @@ impl DistanceComparator {
 
     pub fn reconstruct(
         &mut self,
-        codes_result: &Vec<CudaSlice<u8>>,
         codes_result_peers: &Vec<Vec<CudaSlice<u8>>>,
-        masks_result: &Vec<CudaSlice<u8>>,
         masks_result_peers: &Vec<Vec<CudaSlice<u8>>>,
     ) {
         let num_elements = self.db_length / self.n_devices * QUERY_LENGTH;
@@ -162,12 +160,12 @@ impl DistanceComparator {
                     .launch(
                         cfg,
                         (
-                            &codes_result[i],
                             &codes_result_peers[i][0],
                             &codes_result_peers[i][1],
-                            &masks_result[i],
+                            &codes_result_peers[i][2],
                             &masks_result_peers[i][0],
                             &masks_result_peers[i][1],
+                            &masks_result_peers[i][2],
                             &mut self.results[i],
                             P,
                             (self.db_length / self.n_devices * QUERY_LENGTH) as u64,
@@ -521,17 +519,17 @@ impl ShareDB {
                 &Some(&self.results[idx]),
                 &mut self.results_peers[idx][0],
                 0,
-            );
+            ).unwrap();
             self.comms[idx].broadcast(
                 &Some(&self.results[idx]),
                 &mut self.results_peers[idx][1],
                 1,
-            );
+            ).unwrap();
             self.comms[idx].broadcast(
                 &Some(&self.results[idx]),
                 &mut self.results_peers[idx][2],
                 2,
-            );
+            ).unwrap();
         }
         for idx in 0..self.n_devices {
             self.devs[idx].synchronize().unwrap();

@@ -12,7 +12,7 @@ use gpu_iris_mpc::{
 use rand::{rngs::StdRng, SeedableRng};
 use tokio::time;
 
-const DB_SIZE: usize = 8*125_000;
+const DB_SIZE: usize = 8*10_000;
 const QUERIES: usize = 930;
 const RNG_SEED: u64 = 1337;
 
@@ -104,16 +104,14 @@ async fn main() -> eyre::Result<()> {
         println!("Exchange masks took: {:?}", now.elapsed());
 
         distance_comparator.reconstruct(
-            &codes_engine.results,
             &codes_engine.results_peers,
-            &masks_engine.results,
             &masks_engine.results_peers,
         );
 
         println!("Total time: {:?}", now.elapsed());
 
         let dists = distance_comparator.fetch_results(0);
-        println!("{:?}", dists);
+        println!("{:?}", dists[0..10].to_vec());
     }
 
     // let mut gpu_result1 = vec![0u16; local_db_size * QUERIES];
