@@ -114,7 +114,11 @@ async fn main() -> eyre::Result<()> {
             if party_id == 0 {
                 comms[i].send(&slices[i], peer_party).unwrap();
                 comms[i].recv(&mut slices[i], peer_party).unwrap();
+                comms[i].send(&slices[i], peer_party).unwrap();
+                comms[i].recv(&mut slices[i], peer_party).unwrap();
             } else {
+                comms[i].recv(&mut slices[i], peer_party).unwrap();
+                comms[i].send(&slices[i], peer_party).unwrap();
                 comms[i].recv(&mut slices[i], peer_party).unwrap();
                 comms[i].send(&slices[i], peer_party).unwrap();
             }
