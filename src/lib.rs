@@ -17,7 +17,7 @@ use setup::id;
 pub(crate) const P: u16 = ((1u32 << 16) - 17) as u16;
 const PTX_SRC: &str = include_str!("kernel.cu");
 const IRIS_CODE_LENGTH: usize = 12_800;
-const QUERY_LENGTH: usize = 310;
+const QUERY_LENGTH: usize = 930;
 const MATMUL_FUNCTION_NAME: &str = "matmul";
 const DIST_FUNCTION_NAME: &str = "reconstructDistance";
 

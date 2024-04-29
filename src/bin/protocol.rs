@@ -13,7 +13,7 @@ use rand::{rngs::StdRng, SeedableRng};
 use tokio::time;
 
 const DB_SIZE: usize = 8*125_000;
-const QUERIES: usize = 310;
+const QUERIES: usize = 930;
 const RNG_SEED: u64 = 1337;
 
 #[tokio::main]
