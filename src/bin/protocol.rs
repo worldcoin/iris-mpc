@@ -12,8 +12,8 @@ use gpu_iris_mpc::{
 use rand::{rngs::StdRng, SeedableRng};
 use tokio::time;
 
-const DB_SIZE: usize = 8*256;
-const QUERIES: usize = 31;
+const DB_SIZE: usize = 8*100_000;
+const QUERIES: usize = 310;
 const RNG_SEED: u64 = 1337;
 
 #[tokio::main]
@@ -26,8 +26,8 @@ async fn main() -> eyre::Result<()> {
     let local_db_size = DB_SIZE / n_devices;
 
     // Init DB
-    let db = IrisDB::new_random_rng(DB_SIZE, &mut rng);
-    let shamir_db = ShamirIrisDB::share_db(&db,  &mut rng);
+    let db = IrisDB::new_random_seed(DB_SIZE, RNG_SEED);
+    let shamir_db = ShamirIrisDB::share_db_seed(&db, RNG_SEED);
     let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(party_id as u8).unwrap());
 
     println!("Random shared DB generated!");
