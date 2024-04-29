@@ -121,39 +121,19 @@ async fn main() -> eyre::Result<()> {
         for i in 0..n_devices {
             devs[i].bind_to_thread().unwrap();
 
-            let send_slice1 = if party_id==0 { Some(&slices[i]) } else { None };
-            let send_slice2 = if party_id==1 { Some(&slices[i]) } else { None };
-            let send_slice3 = if party_id==2 { Some(&slices[i]) } else { None };
-
-            comms[i].broadcast(&send_slice1, &mut slices1[i], 0);
-            comms[i].broadcast(&send_slice2, &mut slices2[i], 1);
-            comms[i].broadcast(&send_slice3, &mut slices3[i], 2);
+            comms[i].broadcast(&Some(&slices[i]), &mut slices1[i], 0);
+            comms[i].broadcast(&Some(&slices[i]), &mut slices2[i], 1);
+            comms[i].broadcast(&Some(&slices[i]), &mut slices3[i], 2);
 
 
             // match party_id {
             //     0 => {
-            //         comms[i].broadcast(&Some(slices1[i].clone()), &mut slices1[i], 0);
-
-            //         // comms[i].send(&slices1[i], 1).unwrap();
-            //         // comms[i].recv(&mut slices3[i], 2).unwrap();
-
-            //         // comms[i].send(&slices1[i], 2).unwrap();
-            //         // comms[i].recv(&mut slices2[i], 1).unwrap();
             //     }
             //     1 => {
-            //         comms[i].broadcast(&Some(slices1[i].clone()), &mut slices2[i], 0);
-            //         // comms[i].recv(&mut slices2[i], 0).unwrap();
-            //         // comms[i].send(&slices1[i], 2).unwrap();
-                    
-            //         // comms[i].recv(&mut slices3[i], 2).unwrap();
-            //         // comms[i].send(&slices1[i], 0).unwrap();
+                  
             //     }
             //     2 => {
-            //         comms[i].recv(&mut slices3[i], 1).unwrap();
-            //         comms[i].send(&slices1[i], 0).unwrap();
                     
-            //         comms[i].recv(&mut slices2[i], 0).unwrap();
-            //         comms[i].send(&slices1[i], 1).unwrap();
             //     }
             //     _ => unimplemented!()
             // }

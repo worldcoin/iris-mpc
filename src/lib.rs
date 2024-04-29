@@ -6,7 +6,8 @@ use axum::{extract::Path, routing::get, Router};
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
-        CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, LaunchAsync, LaunchConfig
+        CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, LaunchAsync,
+        LaunchConfig,
     },
     nccl::{Comm, Id},
     nvrtc::compile_ptx,
@@ -120,7 +121,9 @@ impl DistanceComparator {
                 .get_func(DIST_FUNCTION_NAME, DIST_FUNCTION_NAME)
                 .unwrap();
 
-            let result = dev.alloc_zeros(db_length / n_devices * QUERY_LENGTH).unwrap();
+            let result = dev
+                .alloc_zeros(db_length / n_devices * QUERY_LENGTH)
+                .unwrap();
 
             kernels.push(function);
             devs.push(dev);
@@ -154,27 +157,35 @@ impl DistanceComparator {
 
         for i in 0..self.n_devices {
             unsafe {
-                self.kernels[i].clone().launch(
-                    cfg,
-                    (
-                        &codes_result[i],
-                        &codes_result_peers[i][0],
-                        &codes_result_peers[i][1],
-                        &masks_result[i],
-                        &masks_result_peers[i][0],
-                        &masks_result_peers[i][1],
-                        &mut self.results[i],
-                        P,
-                        (self.db_length / self.n_devices * QUERY_LENGTH) as u64,
-                    ),
-                ).unwrap();
+                self.kernels[i]
+                    .clone()
+                    .launch(
+                        cfg,
+                        (
+                            &codes_result[i],
+                            &codes_result_peers[i][0],
+                            &codes_result_peers[i][1],
+                            &masks_result[i],
+                            &masks_result_peers[i][0],
+                            &masks_result_peers[i][1],
+                            &mut self.results[i],
+                            P,
+                            (self.db_length / self.n_devices * QUERY_LENGTH) as u64,
+                        ),
+                    )
+                    .unwrap();
             }
         }
 
         for i in 0..self.n_devices {
             self.devs[i].synchronize().unwrap();
         }
+    }
 
+    pub fn fetch_results(&self, device_id: usize) -> Vec<f32> {
+        self.devs[device_id]
+            .dtoh_sync_copy(&self.results[device_id])
+            .unwrap()
     }
 }
 
@@ -308,6 +319,7 @@ impl ShareDB {
                 intermediate_results.push(devs[idx].alloc(results_len * 4).unwrap());
                 results.push(devs[idx].alloc(results_len * 2).unwrap());
                 results_peers.push(vec![
+                    devs[idx].alloc(results_len * 2).unwrap(),
                     devs[idx].alloc(results_len * 2).unwrap(),
                     devs[idx].alloc(results_len * 2).unwrap(),
                 ]);
@@ -505,46 +517,21 @@ impl ShareDB {
     /// Calls are async to host, but sync to device.
     pub fn exchange_results(&mut self) {
         for idx in 0..self.n_devices {
-            match self.peer_id {
-                0 => {
-                    self.comms[idx]
-                        .send(&mut self.results[idx], 1 as i32)
-                        .unwrap();
-
-                    self.comms[idx]
-                        .recv(&mut self.results_peers[idx][0], 1 as i32)
-                        .unwrap();
-
-                    self.comms[idx].send(&self.results[idx], 2 as i32).unwrap();
-                    self.comms[idx]
-                        .recv(&mut self.results_peers[idx][1], 2 as i32)
-                        .unwrap();
-                }
-                1 => {
-                    self.comms[idx]
-                        .recv(&mut self.results_peers[idx][0], 0 as i32)
-                        .unwrap();
-
-                    self.comms[idx].send(&self.results[idx], 0 as i32).unwrap();
-
-                    self.comms[idx].send(&self.results[idx], 2 as i32).unwrap();
-                    self.comms[idx]
-                        .recv(&mut self.results_peers[idx][1], 2 as i32)
-                        .unwrap();
-                }
-                2 => {
-                    self.comms[idx]
-                        .recv(&mut self.results_peers[idx][0], 0 as i32)
-                        .unwrap();
-                    self.comms[idx].send(&self.results[idx], 0 as i32).unwrap();
-
-                    self.comms[idx]
-                        .recv(&mut self.results_peers[idx][1], 1 as i32)
-                        .unwrap();
-                    self.comms[idx].send(&self.results[idx], 1 as i32).unwrap();
-                }
-                _ => unimplemented!(),
-            }
+            self.comms[idx].broadcast(
+                &Some(&self.results[idx]),
+                &mut self.results_peers[idx][0],
+                0,
+            );
+            self.comms[idx].broadcast(
+                &Some(&self.results[idx]),
+                &mut self.results_peers[idx][1],
+                1,
+            );
+            self.comms[idx].broadcast(
+                &Some(&self.results[idx]),
+                &mut self.results_peers[idx][2],
+                2,
+            );
         }
         for idx in 0..self.n_devices {
             self.devs[idx].synchronize().unwrap();
@@ -598,7 +585,7 @@ mod tests {
     };
     const WIDTH: usize = 12_800;
     const QUERY_SIZE: usize = 31;
-    const DB_SIZE: usize = 8*256;
+    const DB_SIZE: usize = 8 * 256;
     const RNG_SEED: u64 = 1337;
     const N_DEVICES: usize = 8;
 
@@ -754,10 +741,9 @@ mod tests {
     //     // let b_nda = random_ndarray::<u64>(query, QUERY_SIZE, WIDTH);
     //     // let c_nda = a_nda.dot(&b_nda.t());
 
-        
     //     for device_idx in 0..2 {
     //         engine.fetch_results(&mut gpu_result, device_idx);
-            
+
     //         println!("{:?}", gpu_result[0..10].to_vec());
 
     //         // let selected_elements: Vec<u16> = vec_column_major
