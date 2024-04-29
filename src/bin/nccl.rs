@@ -99,7 +99,7 @@ async fn main() -> eyre::Result<()> {
 
         println!("starting device {i}...");
 
-        let comm = Comm::from_rank(dev.clone(), party_id, 2, id).unwrap();
+        let comm = Comm::from_rank(dev.clone(), party_id, 3, id).unwrap();
 
         devs.push(dev);
         comms.push(comm);
