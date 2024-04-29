@@ -1,6 +1,12 @@
-use std::sync::Arc;
+use axum::{routing::get, Router};
+use cudarc::{
+    driver::{CudaDevice, CudaFunction, CudaSlice, CudaView, LaunchAsync, LaunchConfig},
+    nccl::{Comm, Id},
+    nvrtc,
+};
+use std::{rc::Rc, str::FromStr, sync::Arc, thread, time::Duration};
 
-use cudarc::driver::{CudaDevice, CudaFunction, CudaSlice, CudaView};
+use crate::{http_root, threshold::cuda::PTX_SRC, IdWrapper};
 
 pub struct ChunkShare<T> {
     pub a: CudaSlice<T>,
@@ -42,22 +48,139 @@ impl<'a, T> ChunkShareView<'a, T> {
 }
 
 pub struct Circuits {
+    peer_id: usize,
+    next_id: usize,
+    cfg: LaunchConfig,
     chunk_size: usize,
-    and_kernel: CudaFunction,
-    my_id: usize,
     n_devices: usize,
     devs: Vec<Arc<CudaDevice>>,
+    comms: Vec<Rc<Comm>>,
+    and_kernel: Vec<CudaFunction>,
+    xor_kernel: Vec<CudaFunction>,
+    xor_assign_kernel: Vec<CudaFunction>,
 }
 
 impl Circuits {
-    pub fn new(my_id: usize, chunk_size: usize) -> Self {
+    const MOD_NAME: &'static str = "TComp";
+
+    pub fn new(
+        peer_id: usize,
+        chunk_size: usize,
+        peer_url: Option<&String>,
+        is_local: bool,
+        server_port: Option<u16>,
+    ) -> Self {
         let n_devices = CudaDevice::count().unwrap() as usize;
-        todo!("instantiate")
-        // Circuits {
-        //     chunk_size,
-        //     my_id,
-        //     n_devices,
-        // }
+
+        // TODO check this
+        let cfg = Self::launch_config_from_elements_and_threads(chunk_size as u32, 1024);
+
+        let mut devs = Vec::with_capacity(n_devices);
+        let mut and_kernel = Vec::with_capacity(n_devices);
+        let mut xor_kernel = Vec::with_capacity(n_devices);
+        let mut xor_assign_kernel = Vec::with_capacity(n_devices);
+
+        let ptx = nvrtc::compile_ptx(PTX_SRC).unwrap();
+        for i in 0..n_devices {
+            let dev = CudaDevice::new(i).unwrap();
+            let stream = dev.fork_default_stream().unwrap();
+
+            dev.load_ptx(
+                ptx.clone(),
+                Self::MOD_NAME,
+                &["shared_xor, shared_xor_assign, shared_and_pre"],
+            )
+            .unwrap();
+            let and = dev.get_func(Self::MOD_NAME, "shared_and_pre").unwrap();
+            let xor = dev.get_func(Self::MOD_NAME, "shared_xor").unwrap();
+            let xor_assign = dev.get_func(Self::MOD_NAME, "shared_xor_assign").unwrap();
+
+            devs.push(dev);
+            and_kernel.push(and);
+            xor_kernel.push(xor);
+            xor_assign_kernel.push(xor_assign);
+        }
+
+        let mut comms = Vec::with_capacity(n_devices);
+        if !is_local {
+            let mut ids = Vec::with_capacity(n_devices);
+            for _ in 0..n_devices {
+                ids.push(Id::new().unwrap());
+            }
+
+            // Start HTTP server to exchange NCCL commIds
+            if peer_id == 0 {
+                let ids = ids.clone();
+                tokio::spawn(async move {
+                    println!("Starting server on port {}...", server_port.unwrap());
+                    let app =
+                        Router::new().route("/:device_id", get(move |req| http_root(ids, req)));
+                    let listener =
+                        tokio::net::TcpListener::bind(format!("0.0.0.0:{}", server_port.unwrap()))
+                            .await
+                            .unwrap();
+                    axum::serve(listener, app).await.unwrap();
+                });
+            }
+
+            for i in 0..n_devices {
+                let id = if peer_id == 0 {
+                    ids[i]
+                } else {
+                    // If not the server, give it a few secs to start
+                    thread::sleep(Duration::from_secs(5));
+
+                    let res = reqwest::blocking::get(format!(
+                        "http://{}:{}/{}",
+                        peer_url.clone().unwrap(),
+                        server_port.unwrap(),
+                        i
+                    ))
+                    .unwrap();
+                    IdWrapper::from_str(&res.text().unwrap()).unwrap().0
+                };
+                ids.push(id);
+
+                // Bind to thread (important!)
+                devs[i].bind_to_thread().unwrap();
+                comms.push(Rc::new(
+                    Comm::from_rank(devs[i].clone(), peer_id, 3, id).unwrap(),
+                ));
+            }
+        }
+
+        Circuits {
+            peer_id,
+            next_id: (peer_id + 1) % 3,
+            cfg,
+            chunk_size,
+            n_devices,
+            devs,
+            comms,
+            and_kernel,
+            xor_kernel,
+            xor_assign_kernel,
+        }
+    }
+
+    fn launch_config_from_elements_and_threads(n: u32, t: u32) -> LaunchConfig {
+        let num_blocks = (n + t - 1) / t;
+        LaunchConfig {
+            grid_dim: (num_blocks, 1, 1),
+            block_dim: (t, 1, 1),
+            shared_mem_bytes: 0,
+        }
+    }
+
+    fn send<T>(&mut self, send: &CudaSlice<T>, receive: &mut CudaSlice<T>, idx: usize)
+    where
+        T: cudarc::nccl::NcclType,
+    {
+        self.comms[idx].send(send, self.next_id as i32).unwrap();
+
+        self.comms[idx].recv(receive, self.next_id as i32).unwrap();
+
+        self.devs[idx].synchronize().unwrap();
     }
 
     fn and_many(
@@ -65,11 +188,21 @@ impl Circuits {
         x1: &ChunkShareView<u64>,
         x2: &ChunkShareView<u64>,
         res: &mut ChunkShareView<u64>,
+        rand: &CudaView<u64>,
+        idx: usize,
     ) {
+        unsafe {
+            self.and_kernel[idx]
+                .launch(
+                    self.cfg.to_owned(),
+                    (&res.a, &x1.a, &x1.b, &x2.a, &x2.b, &rand, self.chunk_size),
+                )
+                .unwrap();
+        }
         todo!("Start kernel and communicate result")
     }
 
-    fn xor_assign_many(&self, x1: &mut ChunkShareView<u64>, x2: &ChunkShareView<u64>) {
+    fn xor_assign_many(&self, x1: &mut ChunkShareView<u64>, x2: &ChunkShareView<u64>, idx: usize) {
         todo!("Start kernel")
     }
 
@@ -78,6 +211,7 @@ impl Circuits {
         x1: &ChunkShareView<u64>,
         x2: &ChunkShareView<u64>,
         res: &mut ChunkShareView<u64>,
+        idx: usize,
     ) {
         todo!("Start kernel")
     }
