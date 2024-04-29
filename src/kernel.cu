@@ -27,6 +27,6 @@ extern "C" __global__ void reconstructDistance(unsigned short *codes_result1, un
     {
         short nom = ((unsigned int)codes_result1[idx] + (unsigned int)codes_result2[idx] + (unsigned int)codes_result3[idx]) % (unsigned int)p;
         short den = ((unsigned int)masks_result1[idx] + (unsigned int)masks_result2[idx] + (unsigned int)masks_result3[idx]) % (unsigned int)p;
-        output[idx] = ((float)nom / (float)den - 1) * (-1/2);
+        output[idx] = (((float)nom / (float)den)-1.0f) * (-0.5f);
     }
 }
