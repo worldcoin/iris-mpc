@@ -119,8 +119,8 @@ async fn main() -> eyre::Result<()> {
             devs[i].bind_to_thread().unwrap();
 
             comms[i].broadcast(&Some(slices1[i].clone()), &mut slices1[i], 0);
-            comms[i].broadcast(&Some(slices2[i].clone()), &mut slices2[i], 0);
-            comms[i].broadcast(&Some(slices3[i].clone()), &mut slices3[i], 0);
+            comms[i].broadcast(&Some(slices2[i].clone()), &mut slices2[i], 1);
+            comms[i].broadcast(&Some(slices3[i].clone()), &mut slices3[i], 2);
 
 
             // match party_id {
