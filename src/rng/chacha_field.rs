@@ -83,7 +83,7 @@ impl ChaChaCudaRng {
     }
 
     pub fn fill_rng_no_host_copy(&mut self) {
-        let num_ks_calls = self.buf_size / 16;
+        let num_ks_calls = self.buf_size / 32; // one call to KS produces 32 u16s
         let threads_per_block = 256; // todo sync with kernel
         let blocks_per_grid = (num_ks_calls + threads_per_block - 1) / threads_per_block;
         let cfg = LaunchConfig {
@@ -137,7 +137,7 @@ mod tests {
     const P: u16 = 65519;
     #[test]
     fn test_chacha_rng() {
-        let mut rng = ChaChaCudaRng::init(1024 * 1024);
+        let mut rng = ChaChaCudaRng::init(1024 * 1024 * 32);
         rng.fill_rng();
         assert!(rng.data().iter().all(|&x| x < P));
     }
