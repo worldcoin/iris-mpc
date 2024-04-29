@@ -217,7 +217,6 @@ impl Circuits {
                 .unwrap();
         }
         self.send_receive_view(&res.a, &mut res.b, idx);
-        todo!("communicate result")
     }
 
     fn xor_assign_many(&self, x1: &mut ChunkShareView<u64>, x2: &ChunkShareView<u64>, idx: usize) {
