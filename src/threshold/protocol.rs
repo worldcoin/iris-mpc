@@ -172,7 +172,14 @@ impl Circuits {
         }
     }
 
-    fn send<T>(&mut self, send: &CudaSlice<T>, receive: &mut CudaSlice<T>, idx: usize)
+    fn send_receive_view<T>(&mut self, send: &CudaView<T>, receive: &mut CudaView<T>, idx: usize)
+    where
+        T: cudarc::nccl::NcclType,
+    {
+        todo!("implement in comm (requires modifying cudarc)")
+    }
+
+    fn send_receive<T>(&mut self, send: &CudaSlice<T>, receive: &mut CudaSlice<T>, idx: usize)
     where
         T: cudarc::nccl::NcclType,
     {
@@ -183,27 +190,46 @@ impl Circuits {
         self.devs[idx].synchronize().unwrap();
     }
 
+    // TODO include randomness
     fn and_many(
-        &self,
+        &mut self,
         x1: &ChunkShareView<u64>,
         x2: &ChunkShareView<u64>,
         res: &mut ChunkShareView<u64>,
-        rand: &CudaView<u64>,
+        // rand: &CudaView<u64>,
         idx: usize,
     ) {
         unsafe {
             self.and_kernel[idx]
+                .clone()
                 .launch(
                     self.cfg.to_owned(),
-                    (&res.a, &x1.a, &x1.b, &x2.a, &x2.b, &rand, self.chunk_size),
+                    (
+                        &res.a,
+                        &x1.a,
+                        &x1.b,
+                        &x2.a,
+                        &x2.b,
+                        // rand,
+                        self.chunk_size,
+                    ),
                 )
                 .unwrap();
         }
-        todo!("Start kernel and communicate result")
+        self.send_receive_view(&res.a, &mut res.b, idx);
+        todo!("communicate result")
     }
 
     fn xor_assign_many(&self, x1: &mut ChunkShareView<u64>, x2: &ChunkShareView<u64>, idx: usize) {
-        todo!("Start kernel")
+        unsafe {
+            self.xor_assign_kernel[idx]
+                .clone()
+                .launch(
+                    self.cfg.to_owned(),
+                    (&x1.a, &x1.b, &x2.a, &x2.b, self.chunk_size),
+                )
+                .unwrap();
+        }
     }
 
     fn xor_many(
@@ -213,7 +239,15 @@ impl Circuits {
         res: &mut ChunkShareView<u64>,
         idx: usize,
     ) {
-        todo!("Start kernel")
+        unsafe {
+            self.xor_kernel[idx]
+                .clone()
+                .launch(
+                    self.cfg.to_owned(),
+                    (&res.a, &res.b, &x1.a, &x1.b, &x2.a, &x2.b, self.chunk_size),
+                )
+                .unwrap();
+        }
     }
 
     fn allocate_buffer<T>(&self, size: usize) -> Vec<ChunkShare<T>>
@@ -231,7 +265,7 @@ impl Circuits {
     }
 
     pub fn binary_add_two(
-        &self,
+        &mut self,
         x1: Vec<ChunkShare<u64>>,
         x2: Vec<ChunkShare<u64>>,
         bits: usize,
@@ -250,22 +284,28 @@ impl Circuits {
         let mut b = x2;
 
         // first half adder
-        for ((aa, bb), (ss, cc)) in a.iter().zip(b.iter()).zip(s.iter_mut().zip(c.iter_mut())) {
+        for (idx, ((aa, bb), (ss, cc))) in a
+            .iter()
+            .zip(b.iter())
+            .zip(s.iter_mut().zip(c.iter_mut()))
+            .enumerate()
+        {
             let a0 = aa.get_offset(0, self.chunk_size);
             let b0 = bb.get_offset(0, self.chunk_size);
             let mut s0 = ss.get_offset(0, self.chunk_size);
             let mut c_ = cc.as_view();
-            self.and_many(&a0, &b0, &mut c_);
-            self.xor_many(&a0, &b0, &mut s0);
+            self.and_many(&a0, &b0, &mut c_, idx);
+            self.xor_many(&a0, &b0, &mut s0, idx);
         }
 
         // Full adders: 1->k
         for k in 1..bits {
-            for (((aa, bb), (ss, cc)), tmp_cc) in a
+            for (idx, (((aa, bb), (ss, cc)), tmp_cc)) in a
                 .iter_mut()
                 .zip(b.iter_mut())
                 .zip(s.iter_mut().zip(c.iter_mut()))
                 .zip(tmp_c.iter_mut())
+                .enumerate()
             {
                 let mut ak = aa.get_offset(k, self.chunk_size);
                 let mut bk = bb.get_offset(k, self.chunk_size);
@@ -273,11 +313,11 @@ impl Circuits {
                 let mut c_ = cc.as_view();
                 let mut tmp_cc_ = tmp_cc.as_view();
 
-                self.xor_assign_many(&mut ak, &c_);
-                self.xor_many(&ak, &bk, &mut sk);
-                self.xor_assign_many(&mut bk, &c_);
-                self.and_many(&ak, &bk, &mut tmp_cc_);
-                self.xor_assign_many(&mut c_, &tmp_cc_);
+                self.xor_assign_many(&mut ak, &c_, idx);
+                self.xor_many(&ak, &bk, &mut sk, idx);
+                self.xor_assign_many(&mut bk, &c_, idx);
+                self.and_many(&ak, &bk, &mut tmp_cc_, idx);
+                self.xor_assign_many(&mut c_, &tmp_cc_, idx);
             }
         }
 
