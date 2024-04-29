@@ -125,7 +125,7 @@ async fn main() -> eyre::Result<()> {
         if party_id == 1 {
             let elapsed = now.elapsed();
             let throughput =
-                (DUMMY_DATA_LEN as f64) / (elapsed.as_millis() as f64) / 1_000_000_000f64
+                (DUMMY_DATA_LEN as f64 * 8f64) / (elapsed.as_millis() as f64) / 1_000_000_000f64
                     * 1_000f64;
             println!(
                 "received in {:?} [{:.2} GB/s] [{:.2} Gbps]",
