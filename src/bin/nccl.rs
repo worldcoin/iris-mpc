@@ -117,30 +117,39 @@ async fn main() -> eyre::Result<()> {
 
         for i in 0..n_devices {
             devs[i].bind_to_thread().unwrap();
-            match party_id {
-                0 => {
-                    comms[i].send(&slices1[i], 1).unwrap();
-                    comms[i].send(&slices1[i], 2).unwrap();
 
-                    comms[i].recv(&mut slices3[i], 2).unwrap();
-                    comms[i].recv(&mut slices2[i], 1).unwrap();
-                }
-                1 => {
-                    comms[i].send(&slices1[i], 2).unwrap();
-                    comms[i].send(&slices1[i], 0).unwrap();
+            comms[i].broadcast(&Some(slices1[i].clone()), &mut slices1[i], 0);
+            comms[i].broadcast(&Some(slices2[i].clone()), &mut slices2[i], 0);
+            comms[i].broadcast(&Some(slices3[i].clone()), &mut slices3[i], 0);
 
-                    comms[i].recv(&mut slices2[i], 0).unwrap();
-                    comms[i].recv(&mut slices3[i], 2).unwrap();
-                }
-                2 => {
-                    comms[i].send(&slices1[i], 0).unwrap();
-                    comms[i].send(&slices1[i], 1).unwrap();
 
-                    comms[i].recv(&mut slices3[i], 1).unwrap();
-                    comms[i].recv(&mut slices2[i], 0).unwrap();
-                }
-                _ => unimplemented!()
-            }
+            // match party_id {
+            //     0 => {
+            //         comms[i].broadcast(&Some(slices1[i].clone()), &mut slices1[i], 0);
+
+            //         // comms[i].send(&slices1[i], 1).unwrap();
+            //         // comms[i].recv(&mut slices3[i], 2).unwrap();
+
+            //         // comms[i].send(&slices1[i], 2).unwrap();
+            //         // comms[i].recv(&mut slices2[i], 1).unwrap();
+            //     }
+            //     1 => {
+            //         comms[i].broadcast(&Some(slices1[i].clone()), &mut slices2[i], 0);
+            //         // comms[i].recv(&mut slices2[i], 0).unwrap();
+            //         // comms[i].send(&slices1[i], 2).unwrap();
+                    
+            //         // comms[i].recv(&mut slices3[i], 2).unwrap();
+            //         // comms[i].send(&slices1[i], 0).unwrap();
+            //     }
+            //     2 => {
+            //         comms[i].recv(&mut slices3[i], 1).unwrap();
+            //         comms[i].send(&slices1[i], 0).unwrap();
+                    
+            //         comms[i].recv(&mut slices2[i], 0).unwrap();
+            //         comms[i].send(&slices1[i], 1).unwrap();
+            //     }
+            //     _ => unimplemented!()
+            // }
         }
 
         for i in 0..n_devices {
