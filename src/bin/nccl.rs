@@ -106,31 +106,34 @@ async fn main() -> eyre::Result<()> {
         slices.push(slice);
     }
 
-    let now = Instant::now();
+    for _ in 0..10 {
+        let now = Instant::now();
 
-    for i in 0..n_devices {
-        devs[i].bind_to_thread().unwrap();
-        if party_id == 0 {
-            comms[i].send(&slices[i], peer_party).unwrap();
-        } else {
-            comms[i].recv(&mut slices[i], peer_party).unwrap();
+        for i in 0..n_devices {
+            devs[i].bind_to_thread().unwrap();
+            if party_id == 0 {
+                comms[i].send(&slices[i], peer_party).unwrap();
+            } else {
+                comms[i].recv(&mut slices[i], peer_party).unwrap();
+            }
         }
-    }
 
-    for i in 0..n_devices {
-        devs[i].synchronize().unwrap();
-    }
+        for i in 0..n_devices {
+            devs[i].synchronize().unwrap();
+        }
 
-    if party_id == 1 {
-        let elapsed = now.elapsed();
-        let throughput =
-            (DUMMY_DATA_LEN as f64) / (elapsed.as_millis() as f64) / 1_000_000_000f64 * 1_000f64;
-        println!(
-            "received in {:?} [{:.2} GB/s] [{:.2} Gbps]",
-            elapsed,
-            throughput,
-            throughput * 8f64
-        );
+        if party_id == 1 {
+            let elapsed = now.elapsed();
+            let throughput =
+                (DUMMY_DATA_LEN as f64) / (elapsed.as_millis() as f64) / 1_000_000_000f64
+                    * 1_000f64;
+            println!(
+                "received in {:?} [{:.2} GB/s] [{:.2} Gbps]",
+                elapsed,
+                throughput,
+                throughput * 8f64
+            );
+        }
     }
 
     Ok(())
