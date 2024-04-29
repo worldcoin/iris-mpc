@@ -59,7 +59,7 @@ impl ToString for IdWrapper {
     }
 }
 
-const DUMMY_DATA_LEN: usize = 35 * (1 << 30);
+const DUMMY_DATA_LEN: usize = 20 * (1 << 30);
 
 async fn root(Path(device_id): Path<String>) -> String {
     let device_id: usize = device_id.parse().unwrap();
@@ -71,7 +71,7 @@ async fn main() -> eyre::Result<()> {
     let args = env::args().collect::<Vec<_>>();
     let n_devices = CudaDevice::count().unwrap() as usize;
     let party_id: usize = args[1].parse().unwrap();
-    let total_throughput = Arc::new(AtomicF64::new(0.0));
+    let peer_party: i32 = (party_id as i32 + 1) % 2;
 
     if party_id == 0 {
         tokio::spawn(async move {
@@ -82,70 +82,56 @@ async fn main() -> eyre::Result<()> {
         });
     };
 
-    let barrier = Arc::new(Barrier::new(n_devices));
-    let mut handles: Vec<JoinHandle<()>> = vec![];
+    let mut devs = vec![];
+    let mut comms = vec![];
+    let mut slices = vec![];
 
     for i in 0..n_devices {
-        let total_throughput_clone = Arc::clone(&total_throughput);
-        let c = barrier.clone();
-        let handle = thread::spawn(move || {
-            let args = env::args().collect::<Vec<_>>();
+        let id = if party_id == 0 {
+            COMM_ID[i]
+        } else {
+            let res = reqwest::blocking::get(format!("http://{}/{}", args[2], i)).unwrap();
+            IdWrapper::from_str(&res.text().unwrap()).unwrap().0
+        };
 
-            let id = if party_id == 0 {
-                COMM_ID[i]
-            } else {
-                let res = reqwest::blocking::get(format!("http://{}/{}", args[2], i)).unwrap();
-                IdWrapper::from_str(&res.text().unwrap()).unwrap().0
-            };
+        let dev = CudaDevice::new(i).unwrap();
+        let slice: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
 
-            let dev = CudaDevice::new(i).unwrap();
-            let mut slice: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
+        println!("starting device {i}...");
 
-            println!("starting device {i}...");
+        let comm = Comm::from_rank(dev.clone(), party_id, 2, id).unwrap();
 
-            let comm = Comm::from_rank(dev.clone(), party_id, 2, id).unwrap();
-
-            c.wait();
-
-            let peer_party: i32 = (party_id as i32 + 1) % 2;
-
-            if party_id == 0 {
-                println!(
-                    "sending from {} to {} (device {})....",
-                    party_id, peer_party, i
-                );
-                comm.send(&slice, peer_party).unwrap();
-                dev.synchronize().unwrap();
-            } else {
-                let now = Instant::now();
-                comm.recv(&mut slice, peer_party).unwrap();
-                dev.synchronize().unwrap();
-                let elapsed = now.elapsed();
-                let throughput =
-                    (DUMMY_DATA_LEN as f64) / (elapsed.as_millis() as f64) / 1_000_000_000f64
-                        * 1_000f64;
-                println!(
-                    "received in {:?} [{:.2} GB/s] [{:.2} Gbps]",
-                    elapsed,
-                    throughput,
-                    throughput * 8f64
-                );
-
-                total_throughput_clone.fetch_add(throughput * 8f64, SeqCst);
-            }
-        });
-
-        handles.push(handle);
+        devs.push(dev);
+        comms.push(comm);
+        slices.push(slice);
     }
 
-    for handle in handles {
-        handle.join();
+    let now = Instant::now();
+
+    for i in 0..n_devices {
+        devs[i].bind_to_thread().unwrap();
+        if party_id == 0 {
+            comms[i].send(&slices[i], peer_party).unwrap();
+        } else {
+            comms[i].recv(&mut slices[i], peer_party).unwrap();
+        }
     }
 
-    println!(
-        "Total throughput: {:.2} Gbps",
-        total_throughput.load(Acquire)
-    );
+    for i in 0..n_devices {
+        devs[i].synchronize().unwrap();
+    }
+
+    if party_id == 1 {
+        let elapsed = now.elapsed();
+        let throughput =
+            (DUMMY_DATA_LEN as f64) / (elapsed.as_millis() as f64) / 1_000_000_000f64 * 1_000f64;
+        println!(
+            "received in {:?} [{:.2} GB/s] [{:.2} Gbps]",
+            elapsed,
+            throughput,
+            throughput * 8f64
+        );
+    }
 
     Ok(())
 }
