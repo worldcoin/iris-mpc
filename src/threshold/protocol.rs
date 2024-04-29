@@ -274,7 +274,7 @@ impl Circuits {
 
         // TODO the buffers should probably already be allocated
         // Result with additional bit for overflow
-        let mut s = self.allocate_buffer::<u64>((self.chunk_size + 1) * bits);
+        let mut s = self.allocate_buffer::<u64>(self.chunk_size * (bits + 1));
         let mut c = self.allocate_buffer::<u64>(self.chunk_size);
         let mut tmp_c = self.allocate_buffer::<u64>(self.chunk_size);
 
@@ -293,6 +293,7 @@ impl Circuits {
             let b0 = bb.get_offset(0, self.chunk_size);
             let mut s0 = ss.get_offset(0, self.chunk_size);
             let mut c_ = cc.as_view();
+
             self.and_many(&a0, &b0, &mut c_, idx);
             self.xor_many(&a0, &b0, &mut s0, idx);
         }
