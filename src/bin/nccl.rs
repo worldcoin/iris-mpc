@@ -59,7 +59,7 @@ impl ToString for IdWrapper {
     }
 }
 
-const DUMMY_DATA_LEN: usize = 10 * (1 << 30);
+const DUMMY_DATA_LEN: usize = 5 * (1 << 30);
 
 async fn root(Path(device_id): Path<String>) -> String {
     let device_id: usize = device_id.parse().unwrap();
@@ -84,6 +84,7 @@ async fn main() -> eyre::Result<()> {
 
     let mut devs = vec![];
     let mut comms = vec![];
+    let mut slices = vec![];
     let mut slices1 = vec![];
     let mut slices2 = vec![];
     let mut slices3 = vec![];
@@ -97,6 +98,7 @@ async fn main() -> eyre::Result<()> {
         };
 
         let dev = CudaDevice::new(i).unwrap();
+        let slice: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
         let slice1: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
         let slice2: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
         let slice3: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
@@ -107,6 +109,7 @@ async fn main() -> eyre::Result<()> {
 
         devs.push(dev);
         comms.push(comm);
+        slices.push(slice);
         slices1.push(slice1);
         slices2.push(slice2);
         slices3.push(slice3);
@@ -118,9 +121,13 @@ async fn main() -> eyre::Result<()> {
         for i in 0..n_devices {
             devs[i].bind_to_thread().unwrap();
 
-            comms[i].broadcast(&Some(slices1[i].clone()), &mut slices1[i], 0);
-            comms[i].broadcast(&Some(slices2[i].clone()), &mut slices2[i], 1);
-            comms[i].broadcast(&Some(slices3[i].clone()), &mut slices3[i], 2);
+            let send_slice1 = if party_id==0 { Some(&slices[i]) } else { None };
+            let send_slice2 = if party_id==1 { Some(&slices[i]) } else { None };
+            let send_slice3 = if party_id==2 { Some(&slices[i]) } else { None };
+
+            comms[i].broadcast(&send_slice1, &mut slices1[i], 0);
+            comms[i].broadcast(&send_slice2, &mut slices2[i], 1);
+            comms[i].broadcast(&send_slice3, &mut slices3[i], 2);
 
 
             // match party_id {

@@ -202,7 +202,7 @@ checksum = "248e3bacc7dc6baa3b21e405ee045c3047101a49145e7e9eca583ab4c2ca5345"
 [[package]]
 name = "cudarc"
 version = "0.10.0"
-source = "git+https://github.com/philsippl/cudarc.git?rev=827bfdf#827bfdf697e71e8854da17859bf0b1b2695e3592"
+source = "git+https://github.com/philsippl/cudarc.git?rev=46bf544#46bf54428afdbd34e3f5670412664827f99d14c2"
 dependencies = [
  "libloading",
 ]
