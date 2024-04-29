@@ -12,7 +12,7 @@ use gpu_iris_mpc::{
 use rand::{rngs::StdRng, SeedableRng};
 use tokio::time;
 
-const DB_SIZE: usize = 8*100_000;
+const DB_SIZE: usize = 8*125_000;
 const QUERIES: usize = 310;
 const RNG_SEED: u64 = 1337;
 
