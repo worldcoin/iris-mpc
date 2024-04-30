@@ -2,8 +2,8 @@
 //! This script establishes a pairwise connection via NCCL between all devices of two hosts.
 //! Each device pair gets its separate NCCL comm channel, with the host device being rank 0.
 //! It also starts a HTTP server on the host on port 3000 to exchange the NCCL COMM_IDs.
-//! Host: cargo run --release --bin nccl 0
-//! Node: cargo run --release --bin nccl 1 HOST_IP:3000
+//! Host: NCCL_DEBUG=INFO cargo run --release --bin nccl 0
+//! Node: NCCL_DEBUG=INFO cargo run --release --bin nccl {1,2} HOST_IP:3000
 
 use std::{
     env,
@@ -55,14 +55,14 @@ impl ToString for IdWrapper {
     }
 }
 
-const DUMMY_DATA_LEN: usize = 35 * (1 << 30);
+const DUMMY_DATA_LEN: usize = 5 * (1 << 30);
 
 async fn root(Path(device_id): Path<String>) -> String {
     let device_id: usize = device_id.parse().unwrap();
     IdWrapper(COMM_ID[device_id]).to_string()
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 12)]
 async fn main() -> eyre::Result<()> {
     let args = env::args().collect::<Vec<_>>();
     let n_devices = CudaDevice::count().unwrap() as usize;
@@ -78,8 +78,11 @@ async fn main() -> eyre::Result<()> {
     };
 
     let mut devs = vec![];
-    let mut slices = vec![];
     let mut comms = vec![];
+    let mut slices = vec![];
+    let mut slices1 = vec![];
+    let mut slices2 = vec![];
+    let mut slices3 = vec![];
 
     for i in 0..n_devices {
         let id = if party_id == 0 {
@@ -91,43 +94,51 @@ async fn main() -> eyre::Result<()> {
 
         let dev = CudaDevice::new(i).unwrap();
         let slice: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
+        let slice1: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
+        let slice2: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
+        let slice3: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
 
         println!("starting device {i}...");
 
-        let comm = Comm::from_rank(dev.clone(), party_id, 2, id).unwrap();
+        let comm = Comm::from_rank(dev.clone(), party_id, 3, id).unwrap();
 
         devs.push(dev);
-        slices.push(slice);
         comms.push(comm);
+        slices.push(slice);
+        slices1.push(slice1);
+        slices2.push(slice2);
+        slices3.push(slice3);
     }
 
-    let now = Instant::now();
-    for i in 0..n_devices {
-        let peer_party: i32 = (party_id as i32 + 1) % 2;
-        if party_id == 0 {
+    for _ in 0..10 {
+        let now = Instant::now();
+
+        for i in 0..n_devices {
+            devs[i].bind_to_thread().unwrap();
+
+            comms[i].broadcast(&Some(&slices[i]), &mut slices1[i], 0).unwrap();
+            comms[i].broadcast(&Some(&slices[i]), &mut slices2[i], 1).unwrap();
+            comms[i].broadcast(&Some(&slices[i]), &mut slices3[i], 2).unwrap();
+        }
+
+        for i in 0..n_devices {
+            devs[i].synchronize().unwrap();
+        }
+
+        if party_id != 0 {
+            let elapsed = now.elapsed();
+            // Throughput multiplied by 4 because every device sends *and* receives the buffer to/from two peers.
+            let throughput =
+                (DUMMY_DATA_LEN as f64 * n_devices as f64 * 4f64) / (elapsed.as_millis() as f64) / 1_000_000_000f64
+                    * 1_000f64;
             println!(
-                "sending from {} to {} (device {})....",
-                party_id, peer_party, i
+                "received in {:?} [{:.2} GB/s] [{:.2} Gbps]",
+                elapsed,
+                throughput,
+                throughput * 8f64
             );
-            comms[i].send(&slices[i], peer_party).unwrap();
-        } else {
-            comms[i].recv(&mut slices[i], peer_party).unwrap();
         }
     }
-
-    for i in 0..n_devices {
-        devs[i].synchronize().unwrap();
-    }
-
-    let elapsed = now.elapsed();
-    let throughput =
-        (DUMMY_DATA_LEN as f64 * n_devices as f64) / (elapsed.as_millis() as f64) / 1_000_000_000f64 * 1_000f64;
-    println!(
-        "received in {:?} [{:.2} GB/s] [{:.2} Gbps]",
-        elapsed,
-        throughput,
-        throughput * 8f64
-    );
 
     Ok(())
 }

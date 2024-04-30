@@ -7,6 +7,15 @@ pub struct ShamirIris {
     pub mask: [u16; IrisCodeArray::IRIS_CODE_SIZE],
 }
 
+impl Clone for ShamirIris {
+    fn clone(&self) -> Self {
+        Self {
+            code: self.code,
+            mask: self.mask,
+        }
+    }
+}
+
 impl Default for ShamirIris {
     fn default() -> Self {
         Self {
