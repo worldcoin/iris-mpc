@@ -6,10 +6,9 @@ use gpu_iris_mpc::{
         id::PartyID,
         iris_db::{db::IrisDB, iris::IrisCode, shamir_db::ShamirIrisDB, shamir_iris::ShamirIris},
         shamir::Shamir,
-    },
-    DistanceComparator, ShareDB,
+    }, DistanceComparator, ShareDB
 };
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use tokio::time;
 
 const DB_SIZE: usize = 8*125_000;
@@ -18,11 +17,24 @@ const RNG_SEED: u64 = 1337;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
+    // TODO
     let mut rng = StdRng::seed_from_u64(42);
+    let seed0 = rng.gen::<[u32; 8]>(); 
+    let seed1 = rng.gen::<[u32; 8]>();
+    let seed2 = rng.gen::<[u32; 8]>();
+    
     let args = env::args().collect::<Vec<_>>();
     let party_id: usize = args[1].parse().unwrap();
     let url = args.get(2);
     let n_devices = CudaDevice::count().unwrap() as usize;
+
+    // Init RNGs
+    let chacha_seeds = match party_id {
+        0 => (seed0, seed2),
+        1 => (seed1, seed0),
+        2 => (seed2, seed1),
+        _ => unimplemented!()
+    };
 
     // Init DB
     let db = IrisDB::new_random_seed(DB_SIZE, RNG_SEED);
@@ -47,9 +59,9 @@ async fn main() -> eyre::Result<()> {
     println!("Starting engines...");
 
     let mut codes_engine =
-        ShareDB::init(party_id, l_coeff, &codes_db, QUERIES, url.clone(), false, Some(3000));
+        ShareDB::init(party_id, l_coeff, &codes_db, QUERIES, Some(chacha_seeds), url.clone(), Some(true), Some(3000));
     let mut masks_engine =
-        ShareDB::init(party_id, l_coeff, &masks_db, QUERIES, url.clone(), false, Some(3001));
+        ShareDB::init(party_id, l_coeff, &masks_db, QUERIES, Some(chacha_seeds), url.clone(), Some(true), Some(3001));
     let mut distance_comparator = DistanceComparator::init(n_devices, DB_SIZE, QUERIES);
 
     println!("Engines ready!");
@@ -87,7 +99,7 @@ async fn main() -> eyre::Result<()> {
             .collect::<Vec<_>>(),
     );
 
-    for i in 0..10 {
+    for _ in 0..10 {
         let now = Instant::now();
 
         codes_engine.dot(&code_query);
