@@ -2,7 +2,7 @@ use std::{env, time::Instant};
 
 use cudarc::driver::CudaDevice;
 use gpu_iris_mpc::{
-    rng::chacha_field::ChaChaCudaFeRng, setup::{
+    setup::{
         id::PartyID,
         iris_db::{db::IrisDB, iris::IrisCode, shamir_db::ShamirIrisDB, shamir_iris::ShamirIris},
         shamir::Shamir,
@@ -27,7 +27,6 @@ async fn main() -> eyre::Result<()> {
     let party_id: usize = args[1].parse().unwrap();
     let url = args.get(2);
     let n_devices = CudaDevice::count().unwrap() as usize;
-    let rng_buf_size: usize = (DB_SIZE / n_devices * QUERIES).div_ceil(1000) * 1000;
 
     // Init RNGs
     let chacha_seeds = match party_id {
@@ -100,7 +99,7 @@ async fn main() -> eyre::Result<()> {
             .collect::<Vec<_>>(),
     );
 
-    for i in 0..10 {
+    for _ in 0..10 {
         let now = Instant::now();
 
         codes_engine.dot(&code_query);
