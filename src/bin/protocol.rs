@@ -5,25 +5,37 @@ use gpu_iris_mpc::{
     setup::{
         id::PartyID,
         iris_db::{db::IrisDB, iris::IrisCode, shamir_db::ShamirIrisDB, shamir_iris::ShamirIris},
-        shamir::{Shamir, P},
+        shamir::Shamir,
     },
     DistanceComparator, ShareDB,
 };
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use tokio::time;
 
-const DB_SIZE: usize = 8*125_000;
+const DB_SIZE: usize = 8 * 125_000;
 const QUERIES: usize = 930;
 const RNG_SEED: u64 = 1337;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
-    let mut rng = StdRng::seed_from_u64(RNG_SEED);
+    // TODO
+    let mut rng = StdRng::seed_from_u64(42);
+    let seed0 = rng.gen::<[u32; 8]>();
+    let seed1 = rng.gen::<[u32; 8]>();
+    let seed2 = rng.gen::<[u32; 8]>();
+
     let args = env::args().collect::<Vec<_>>();
     let party_id: usize = args[1].parse().unwrap();
     let url = args.get(2);
     let n_devices = CudaDevice::count().unwrap() as usize;
-    let local_db_size = DB_SIZE / n_devices;
+
+    // Init RNGs
+    let chacha_seeds = match party_id {
+        0 => (seed0, seed2),
+        1 => (seed1, seed0),
+        2 => (seed2, seed1),
+        _ => unimplemented!(),
+    };
 
     // Init DB
     let db = IrisDB::new_random_seed(DB_SIZE, RNG_SEED);
@@ -47,11 +59,27 @@ async fn main() -> eyre::Result<()> {
 
     println!("Starting engines...");
 
-    let mut codes_engine =
-        ShareDB::init(party_id, l_coeff, &codes_db, url.clone(), false, Some(3000));
-    let mut masks_engine =
-        ShareDB::init(party_id, l_coeff, &masks_db, url.clone(), false, Some(3001));
-    let mut distance_comparator = DistanceComparator::init(n_devices, DB_SIZE);
+    let mut codes_engine = ShareDB::init(
+        party_id,
+        l_coeff,
+        &codes_db,
+        QUERIES,
+        Some(chacha_seeds),
+        url.clone(),
+        Some(true),
+        Some(3000),
+    );
+    let mut masks_engine = ShareDB::init(
+        party_id,
+        l_coeff,
+        &masks_db,
+        QUERIES,
+        Some(chacha_seeds),
+        url.clone(),
+        Some(true),
+        Some(3001),
+    );
+    let mut distance_comparator = DistanceComparator::init(n_devices, DB_SIZE, QUERIES);
 
     println!("Engines ready!");
 
@@ -88,7 +116,7 @@ async fn main() -> eyre::Result<()> {
             .collect::<Vec<_>>(),
     );
 
-    for i in 0..10 {
+    for _ in 0..10 {
         let now = Instant::now();
 
         codes_engine.dot(&code_query);
@@ -103,34 +131,13 @@ async fn main() -> eyre::Result<()> {
         masks_engine.exchange_results();
         println!("Exchange masks took: {:?}", now.elapsed());
 
-        distance_comparator.reconstruct(
-            &codes_engine.results,
-            &codes_engine.results_peers,
-            &masks_engine.results,
-            &masks_engine.results_peers,
-        );
+        distance_comparator.reconstruct(&codes_engine.results_peers, &masks_engine.results_peers);
 
         println!("Total time: {:?}", now.elapsed());
     }
 
-    // let mut gpu_result1 = vec![0u16; local_db_size * QUERIES];
-    // let mut gpu_result2 = vec![0u16; local_db_size * QUERIES];
-    // let mut gpu_result3 = vec![0u16; local_db_size * QUERIES];
-
-    // codes_engine.fetch_results(&mut gpu_result1, 0);
-    // codes_engine.fetch_results_peer(&mut gpu_result2, 0, 0);
-    // codes_engine.fetch_results_peer(&mut gpu_result3, 0, 1);
-
-    // for i in 0..100 {
-    //     let tmp = gpu_result1[i] as u32 + gpu_result2[i] as u32 + gpu_result3[i] as u32;
-    //     println!("Result: {:?}", tmp % P as u32);
-    // }
-
-    // masks_engine.fetch_results(&mut gpu_result, 0);
-    // println!("MASKS REMOTE RESULT: {:?}", gpu_result[0]);
-
-    // masks_engine.fetch_results_peer(&mut gpu_result, 0, 0);
-    // println!("MASKS REMOTE RESULT: {:?}", gpu_result[0]);
+    let dists = distance_comparator.fetch_results(0);
+    println!("{:?}", dists[0..10].to_vec());
 
     time::sleep(time::Duration::from_secs(5)).await;
     Ok(())

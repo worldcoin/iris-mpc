@@ -1,6 +1,6 @@
 use super::{db::IrisDB, shamir_iris::ShamirIris};
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 #[derive(Default)]
 pub struct ShamirIrisDB {
