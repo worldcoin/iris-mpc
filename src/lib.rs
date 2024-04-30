@@ -1,3 +1,4 @@
+pub mod rng;
 pub mod setup;
 
 use std::{ffi::c_void, str::FromStr, sync::Arc, thread, time::Duration};

@@ -5,6 +5,7 @@ aws \
  --count 2 \
  --key-name ps-test-p5 \
  --image-id ami-0393966b92beee2d9 \
+ --enclave-options 'Enabled=true' \
  --block-device-mapping 'DeviceName=/dev/sda1,Ebs={VolumeSize=150,DeleteOnTermination=true,VolumeType=gp2}' \
  --network-interfaces "NetworkCardIndex=0,DeviceIndex=0,Groups=sg-0895525324d0e6621,SubnetId=subnet-079d5d5d6356dec10,InterfaceType=efa" \
                       "NetworkCardIndex=1,DeviceIndex=1,Groups=sg-0895525324d0e6621,SubnetId=subnet-079d5d5d6356dec10,InterfaceType=efa" \
