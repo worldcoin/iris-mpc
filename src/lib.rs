@@ -1,3 +1,4 @@
+pub mod rng;
 pub mod setup;
 
 use std::{
