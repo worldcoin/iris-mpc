@@ -85,7 +85,7 @@ impl Kernels {
         let xor = dev.get_func(Self::MOD_NAME, "shared_xor").unwrap();
         let xor_assign = dev.get_func(Self::MOD_NAME, "shared_xor_assign").unwrap();
         let not_inplace = dev.get_func(Self::MOD_NAME, "shared_not_inplace").unwrap();
-        let not = dev.get_func(Self::MOD_NAME, "shared_not_inplace").unwrap();
+        let not = dev.get_func(Self::MOD_NAME, "shared_not").unwrap();
 
         Kernels {
             and,
@@ -113,11 +113,17 @@ impl Circuits {
 
     pub fn new(
         peer_id: usize,
-        chunk_size: usize,
+        input_size: usize,
         peer_url: Option<&String>,
         is_local: bool,
         server_port: Option<u16>,
     ) -> Self {
+        // TODO check this
+        // For the transpose, inputs should be multiple of 64 bits
+        debug_assert!(input_size % 64 == 0);
+        // Chunk size is the number of u64 elements per bit in the binary circuits
+        let chunk_size = input_size / 64;
+
         debug_assert_eq!(Self::ceil_log2(P2K as usize), Self::BITS);
         let n_devices = CudaDevice::count().unwrap() as usize;
 
@@ -503,6 +509,12 @@ impl Circuits {
         y
     }
 
+    // input should be of size: n_devices * input_size
+    fn lift_p2k(&mut self, shares: Vec<ChunkShare<u16>>) -> Vec<ChunkShare<u64>> {
+        debug_assert_eq!(self.n_devices, shares.len());
+        todo!()
+    }
+
     // K is 18 in our case
     // requires 66 * n_devices * chunk_size random u64 elements
     fn binary_add_3_get_msb_twice<const K: usize>(
@@ -642,6 +654,12 @@ impl Circuits {
 
         // TODO no truncation and convert to bits yet!
         (ca, cb)
+    }
+
+    fn extract_msb_mod(&mut self, x: Vec<ChunkShare<u64>>) -> Vec<ChunkShare<u64>> {
+        debug_assert_eq!(self.n_devices, x.len());
+
+        todo!()
     }
 
     // requires 36 * n_devices * chunk_size random u64 elements
@@ -801,13 +819,20 @@ impl Circuits {
         // Result is in res_msb, which is the first bit of the input
     }
 
+    fn lift_mul_sub(&mut self, mask_lifted: &mut [ChunkShare<u64>], code: Vec<ChunkShare<u16>>) {
+        // do lift code to y, and mask*a - y in one kernel
+        todo!("implement")
+    }
+
+    // input should be of size: n_devices * input_size
     pub fn compare_threshold_masked_many_fp(
         &mut self,
         code_dots: Vec<ChunkShare<u16>>,
         mask_dots: Vec<ChunkShare<u16>>,
     ) -> Vec<ChunkShare<u64>> {
-        // lift masks to x
-        // do lift code to y, and x*a - y in one kernel
-        todo!("implement")
+        let mut x = self.lift_p2k(mask_dots);
+        self.lift_mul_sub(&mut x, code_dots);
+        self.extract_msb_mod(x)
+        // TODO the or tree is still missing as well
     }
 }
