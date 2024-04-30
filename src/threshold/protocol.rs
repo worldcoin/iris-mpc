@@ -2,8 +2,11 @@ use super::cuda::kernel::B_BITS;
 use crate::{http_root, setup::shamir::P, threshold::cuda::PTX_SRC, IdWrapper};
 use axum::{routing::get, Router};
 use cudarc::{
-    driver::{CudaDevice, CudaFunction, CudaSlice, CudaView, LaunchAsync, LaunchConfig},
-    nccl::{Comm, Id},
+    driver::{
+        CudaDevice, CudaFunction, CudaSlice, CudaView, DevicePtr, DeviceSlice, LaunchAsync,
+        LaunchConfig,
+    },
+    nccl::{result, Comm, Id},
     nvrtc::{self, Ptx},
 };
 use itertools::izip;
@@ -214,16 +217,39 @@ impl Circuits {
     where
         T: cudarc::nccl::NcclType,
     {
-        // self.comms[idx].send(send, self.next_id as i32).unwrap();
-        todo!("implement in comm (requires modifying cudarc)");
+        // Copied from cudarc nccl implementation
+        unsafe {
+            result::send(
+                *send.device_ptr() as *mut _,
+                send.len(),
+                T::as_nccl_type(),
+                idx as i32,
+                self.comms[idx].comm,
+                *self.comms[idx].device.cu_stream() as *mut _,
+            )
+        }
+        .unwrap();
+
+        self.devs[idx].synchronize().unwrap();
     }
 
     fn receive_view<T>(&mut self, receive: &mut CudaView<T>, idx: usize)
     where
         T: cudarc::nccl::NcclType,
     {
-        // self.comms[idx].recv(receive, self.next_id as i32).unwrap();
-        todo!("implement in comm (requires modifying cudarc)");
+        // Copied from cudarc nccl implementation
+        unsafe {
+            result::recv(
+                *receive.device_ptr() as *mut _,
+                receive.len(),
+                T::as_nccl_type(),
+                idx as i32,
+                self.comms[idx].comm,
+                *self.comms[idx].device.cu_stream() as *mut _,
+            )
+        }
+        .unwrap();
+
         self.devs[idx].synchronize().unwrap();
     }
 
