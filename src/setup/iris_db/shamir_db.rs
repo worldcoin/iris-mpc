@@ -1,6 +1,6 @@
 use super::{db::IrisDB, shamir_iris::ShamirIris};
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 #[derive(Default)]
 pub struct ShamirIrisDB {
@@ -36,12 +36,15 @@ impl ShamirIrisDB {
     }
 
     pub fn share_db_seed(db: &IrisDB, rng_seed: u64) -> [Self; 3] {
-        let (db1, (db2, db3)): (Vec<_>, (Vec<_>, Vec<_>)) = db.db.par_iter().map(|iris| {
-            let mut rng = StdRng::seed_from_u64(rng_seed);
-            let [shares1, shares2, shares3] = ShamirIris::share_iris(iris, &mut rng);
-            (shares1, (shares2, shares3))
-        }).unzip();
-
+        let (db1, (db2, db3)): (Vec<_>, (Vec<_>, Vec<_>)) = db
+            .db
+            .par_iter()
+            .map(|iris| {
+                let mut rng = StdRng::seed_from_u64(rng_seed);
+                let [shares1, shares2, shares3] = ShamirIris::share_iris(iris, &mut rng);
+                (shares1, (shares2, shares3))
+            })
+            .unzip();
 
         [Self { db: db1 }, Self { db: db2 }, Self { db: db3 }]
     }

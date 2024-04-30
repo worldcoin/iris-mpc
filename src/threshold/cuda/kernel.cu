@@ -13,6 +13,16 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 template <typename T>
+__global__ void not_inplace_inner(T *lhs) {
+    *res = ~(*res);
+}
+
+template <typename T>
+__global__ void not_inner(T*res, T *lhs) {
+    *res = ~(*lhs);
+}
+
+template <typename T>
 __global__ void xor_inner(T *res, T *lhs, T *rhs) {
     *res = *lhs ^ *rhs;
 }
@@ -204,16 +214,26 @@ __global__ void u64_transpose_pack_u64(U64* out_a, U64* out_b, U64 *in_a, U64 *i
     }
 }
 
-__global__ void compare_threshold_masked_many_fp(TYPE *res_a, TYPE *res_b, U16 *dot_a, U16 *dot_b, U16 *mask_a, U16 *mask_b, int n) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) {
-        // TODO implement
-    }
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 // Test kernels
 ////////////////////////////////////////////////////////////////////////////////
+
+extern "C" __global__ void shared_not_inplace(TYPE *lhs_a, TYPE *lhs_b) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        not_inplace_inner<TYPE>(&lhs_a[i]);
+        not_inplace_inner<TYPE>(&lhs_b[i]);
+    }
+}
+
+extern "C" __global__ void shared_not(TYPE *res_a, TYPE *res_b, TYPE *lhs_a, TYPE *lhs_b) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        not_inner<TYPE>(&res_a[i], &lhs_a[i]);
+        not_inner<TYPE>(&res_b[i], &lhs_b[i]);
+    }
+}
+
 
 extern "C" __global__ void shared_xor(TYPE *res_a, TYPE *res_b, TYPE *lhs_a, TYPE *lhs_b, TYPE *rhs_a, TYPE *rhs_b, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
