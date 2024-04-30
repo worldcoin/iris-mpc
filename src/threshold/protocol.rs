@@ -504,6 +504,7 @@ impl Circuits {
     }
 
     // K is 18 in our case
+    // requires 66 * n_devices * chunk_size random u64 elements
     fn binary_add_3_get_msb_twice<const K: usize>(
         &mut self,
         xa_1: Vec<ChunkShare<u64>>,
@@ -643,6 +644,7 @@ impl Circuits {
         (ca, cb)
     }
 
+    // requires 36 * n_devices * chunk_size random u64 elements
     fn binary_add_two(
         &mut self,
         x1: Vec<ChunkShare<u64>>,
@@ -703,6 +705,7 @@ impl Circuits {
     }
 
     // The result will be located in the first bit of x
+    // requires 18 * n_devices * chunk_size random u64 elements
     fn extraxt_msb_mod_p2k_of_sum(&mut self, x: &mut [ChunkShare<u64>]) {
         debug_assert_eq!(self.n_devices, x.len());
 
