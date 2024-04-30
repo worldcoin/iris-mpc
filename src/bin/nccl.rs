@@ -2,25 +2,21 @@
 //! This script establishes a pairwise connection via NCCL between all devices of two hosts.
 //! Each device pair gets its separate NCCL comm channel, with the host device being rank 0.
 //! It also starts a HTTP server on the host on port 3000 to exchange the NCCL COMM_IDs.
-//! Host: cargo run --release --bin nccl 0
-//! Node: cargo run --release --bin nccl 1 HOST_IP:3000
+//! Host: NCCL_DEBUG=INFO cargo run --release --bin nccl 0
+//! Node: NCCL_DEBUG=INFO cargo run --release --bin nccl {1,2} HOST_IP:3000
 
 use std::{
     env,
     str::FromStr,
-    sync::{Arc, Barrier},
-    thread::{self, JoinHandle},
     time::Instant,
 };
 
-use atomic_float::AtomicF64;
 use axum::{extract::Path, routing::get, Router};
 use cudarc::{
     driver::{CudaDevice, CudaSlice},
     nccl::{Comm, Id},
 };
 use once_cell::sync::Lazy;
-use std::sync::atomic::Ordering::{Acquire, SeqCst};
 
 static COMM_ID: Lazy<Vec<Id>> = Lazy::new(|| {
     (0..CudaDevice::count().unwrap())
@@ -71,7 +67,6 @@ async fn main() -> eyre::Result<()> {
     let args = env::args().collect::<Vec<_>>();
     let n_devices = CudaDevice::count().unwrap() as usize;
     let party_id: usize = args[1].parse().unwrap();
-    let peer_party: i32 = (party_id as i32 + 1) % 3;
 
     if party_id == 0 {
         tokio::spawn(async move {
@@ -121,22 +116,9 @@ async fn main() -> eyre::Result<()> {
         for i in 0..n_devices {
             devs[i].bind_to_thread().unwrap();
 
-            comms[i].broadcast(&Some(&slices[i]), &mut slices1[i], 0);
-            comms[i].broadcast(&Some(&slices[i]), &mut slices2[i], 1);
-            comms[i].broadcast(&Some(&slices[i]), &mut slices3[i], 2);
-
-
-            // match party_id {
-            //     0 => {
-            //     }
-            //     1 => {
-                  
-            //     }
-            //     2 => {
-                    
-            //     }
-            //     _ => unimplemented!()
-            // }
+            comms[i].broadcast(&Some(&slices[i]), &mut slices1[i], 0).unwrap();
+            comms[i].broadcast(&Some(&slices[i]), &mut slices2[i], 1).unwrap();
+            comms[i].broadcast(&Some(&slices[i]), &mut slices3[i], 2).unwrap();
         }
 
         for i in 0..n_devices {
@@ -145,8 +127,9 @@ async fn main() -> eyre::Result<()> {
 
         if party_id != 0 {
             let elapsed = now.elapsed();
+            // Throughput multiplied by 4 because every device sends *and* receives the buffer to/from two peers.
             let throughput =
-                (DUMMY_DATA_LEN as f64 * 8f64) / (elapsed.as_millis() as f64) / 1_000_000_000f64
+                (DUMMY_DATA_LEN as f64 * n_devices as f64 * 4f64) / (elapsed.as_millis() as f64) / 1_000_000_000f64
                     * 1_000f64;
             println!(
                 "received in {:?} [{:.2} GB/s] [{:.2} Gbps]",
@@ -155,13 +138,6 @@ async fn main() -> eyre::Result<()> {
                 throughput * 8f64
             );
         }
-
-        let res1 = devs[0].dtoh_sync_copy(&slices1[0]).unwrap();
-        let res2 = devs[0].dtoh_sync_copy(&slices2[0]).unwrap();
-        let res3 = devs[0].dtoh_sync_copy(&slices3[0]).unwrap();
-
-        println!("{} {} {}", res1[0], res2[0], res3[0]);
-
     }
 
     Ok(())
