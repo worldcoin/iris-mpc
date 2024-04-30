@@ -6,6 +6,7 @@ use cudarc::{
     nccl::{Comm, Id},
     nvrtc::{self, Ptx},
 };
+use itertools::izip;
 use std::{rc::Rc, str::FromStr, sync::Arc, thread, time::Duration};
 
 pub(crate) const P2K: u64 = (P as u64) << B_BITS;
@@ -45,6 +46,13 @@ impl<'a, T> ChunkShareView<'a, T> {
         ChunkShareView {
             a: self.a.slice(i * chunk_size..(i + 1) * chunk_size),
             b: self.b.slice(i * chunk_size..(i + 1) * chunk_size),
+        }
+    }
+
+    pub fn get_range(&self, start: usize, end: usize) -> ChunkShareView<T> {
+        ChunkShareView {
+            a: self.a.slice(start..end),
+            b: self.b.slice(start..end),
         }
     }
 }
@@ -156,7 +164,7 @@ impl Circuits {
 
                     let res = reqwest::blocking::get(format!(
                         "http://{}:{}/{}",
-                        peer_url.clone().unwrap(),
+                        peer_url.unwrap(),
                         server_port.unwrap(),
                         i
                     ))
@@ -198,18 +206,106 @@ impl Circuits {
     where
         T: cudarc::nccl::NcclType,
     {
-        todo!("implement in comm (requires modifying cudarc)")
+        self.send_view(send, idx);
+        self.receive_view(receive, idx);
+    }
+
+    fn send_view<T>(&mut self, send: &CudaView<T>, idx: usize)
+    where
+        T: cudarc::nccl::NcclType,
+    {
+        // self.comms[idx].send(send, self.next_id as i32).unwrap();
+        todo!("implement in comm (requires modifying cudarc)");
+    }
+
+    fn receive_view<T>(&mut self, receive: &mut CudaView<T>, idx: usize)
+    where
+        T: cudarc::nccl::NcclType,
+    {
+        // self.comms[idx].recv(receive, self.next_id as i32).unwrap();
+        todo!("implement in comm (requires modifying cudarc)");
+        self.devs[idx].synchronize().unwrap();
     }
 
     fn send_receive<T>(&mut self, send: &CudaSlice<T>, receive: &mut CudaSlice<T>, idx: usize)
     where
         T: cudarc::nccl::NcclType,
     {
+        self.send(send, idx);
+        self.receive(receive, idx);
+    }
+
+    fn send<T>(&mut self, send: &CudaSlice<T>, idx: usize)
+    where
+        T: cudarc::nccl::NcclType,
+    {
         self.comms[idx].send(send, self.next_id as i32).unwrap();
+    }
 
+    fn receive<T>(&mut self, receive: &mut CudaSlice<T>, idx: usize)
+    where
+        T: cudarc::nccl::NcclType,
+    {
         self.comms[idx].recv(receive, self.next_id as i32).unwrap();
-
         self.devs[idx].synchronize().unwrap();
+    }
+
+    // TODO include randomness
+    fn packed_and_many_send(
+        &mut self,
+        x1: &ChunkShareView<u64>,
+        x2: &ChunkShareView<u64>,
+        res: &mut ChunkShareView<u64>,
+        // rand: &CudaView<u64>,
+        bits: usize,
+        idx: usize,
+    ) {
+        unsafe {
+            self.kernels[idx]
+                .and
+                .clone()
+                .launch(
+                    self.cfg.to_owned(),
+                    (
+                        &res.a,
+                        &x1.a,
+                        &x1.b,
+                        &x2.a,
+                        &x2.b,
+                        // rand,
+                        self.chunk_size * bits,
+                    ),
+                )
+                .unwrap();
+        }
+
+        // TODO check if this is the best we can do
+        for i in 0..bits {
+            let send = res.a.slice(i * self.chunk_size..(i + 1) * self.chunk_size);
+            self.send_view(&send, idx);
+        }
+    }
+
+    fn packed_and_many_receive(&mut self, res: &mut ChunkShareView<u64>, bits: usize, idx: usize) {
+        // TODO check if this is the best we can do
+        for i in 0..bits {
+            let mut rcv = res.b.slice(i * self.chunk_size..(i + 1) * self.chunk_size);
+            self.receive_view(&mut rcv, idx);
+        }
+    }
+
+    // TODO include randomness
+    fn packed_and_many(
+        &mut self,
+        x1: &ChunkShareView<u64>,
+        x2: &ChunkShareView<u64>,
+        res: &mut ChunkShareView<u64>,
+        // rand: &CudaView<u64>,
+        bits: usize,
+        idx: usize,
+    ) {
+        self.packed_and_many_send(x1, x2, res, bits, idx);
+        self.packed_and_many_receive(res, bits, idx);
     }
 
     // TODO include randomness
@@ -250,6 +346,52 @@ impl Circuits {
                 .launch(
                     self.cfg.to_owned(),
                     (&x1.a, &x1.b, &x2.a, &x2.b, self.chunk_size),
+                )
+                .unwrap();
+        }
+    }
+
+    fn packed_xor_assign_many(
+        &self,
+        x1: &mut ChunkShareView<u64>,
+        x2: &ChunkShareView<u64>,
+        bits: usize,
+        idx: usize,
+    ) {
+        unsafe {
+            self.kernels[idx]
+                .xor_assign
+                .clone()
+                .launch(
+                    self.cfg.to_owned(),
+                    (&x1.a, &x1.b, &x2.a, &x2.b, self.chunk_size * bits),
+                )
+                .unwrap();
+        }
+    }
+    fn packed_xor_many(
+        &self,
+        x1: &ChunkShareView<u64>,
+        x2: &ChunkShareView<u64>,
+        res: &mut ChunkShareView<u64>,
+        bits: usize,
+        idx: usize,
+    ) {
+        unsafe {
+            self.kernels[idx]
+                .xor
+                .clone()
+                .launch(
+                    self.cfg.to_owned(),
+                    (
+                        &res.a,
+                        &res.b,
+                        &x1.a,
+                        &x1.b,
+                        &x2.a,
+                        &x2.b,
+                        self.chunk_size * bits,
+                    ),
                 )
                 .unwrap();
         }
@@ -318,6 +460,80 @@ impl Circuits {
         y
     }
 
+    // K is 18 in our case
+    fn binary_add_3_get_msb_twice<const K: usize>(
+        &mut self,
+        xa_1: Vec<ChunkShare<u64>>,
+        xa_2: Vec<ChunkShare<u64>>,
+        xa_3: Vec<ChunkShare<u64>>,
+        xb_1: Vec<ChunkShare<u64>>,
+        xb_2: Vec<ChunkShare<u64>>,
+        xb_3: Vec<ChunkShare<u64>>,
+    ) {
+        debug_assert_eq!(self.n_devices, xa_1.len());
+        debug_assert_eq!(self.n_devices, xa_2.len());
+        debug_assert_eq!(self.n_devices, xa_3.len());
+        debug_assert_eq!(self.n_devices, xb_1.len());
+        debug_assert_eq!(self.n_devices, xb_2.len());
+        debug_assert_eq!(self.n_devices, xb_3.len());
+
+        // TODO the buffers should probably already be allocated
+        let mut s1 = self.allocate_buffer::<u64>(self.chunk_size * K);
+        let mut s2 = self.allocate_buffer::<u64>(self.chunk_size * K);
+        let mut c1 = self.allocate_buffer::<u64>(self.chunk_size * (K - 1));
+        let mut c2 = self.allocate_buffer::<u64>(self.chunk_size * (K - 1));
+
+        for (idx, (x1, x2, x3, y1, y2, y3, s1, s2, c1, c2)) in
+            izip!(&xa_1, &xa_2, &xa_3, &xb_1, &xb_2, &xb_3, &mut s1, &mut s2, &mut c1, &mut c2)
+                .enumerate()
+        {
+            // First full adder to get 2 * c1 and s1
+            let x1 = x1.as_view();
+            let x3 = x3.as_view();
+            let mut x2x3 = x2.as_view();
+            self.packed_xor_assign_many(&mut x2x3, &x3, K, idx);
+            self.packed_xor_many(&x1, &x2x3, &mut s1.as_view(), K, idx);
+            // 2 * c1 (No pop since we start at index 0 and the functions only compute whats required)
+            let mut x1x3 = x1;
+            self.packed_xor_assign_many(&mut x1x3, &x3, K - 1, idx);
+            let mut c1 = c1.as_view();
+            self.packed_and_many_send(&x1x3, &x2x3, &mut c1, K - 1, idx);
+
+            // Second full adder to get 2 * c2 and s2
+            let y1 = y1.as_view();
+            let y3 = y3.as_view();
+            let mut y2y3 = y2.as_view();
+            self.packed_xor_assign_many(&mut y2y3, &y3, K, idx);
+            self.packed_xor_many(&y1, &y2y3, &mut s2.as_view(), K, idx);
+            // 2 * c2 (No pop since we start at index 0 and the functions only compute whats required)
+            let mut y1y3 = y1;
+            self.packed_xor_assign_many(&mut y1y3, &y3, K - 1, idx);
+            let mut c2 = c2.as_view();
+            self.packed_and_many_send(&y1y3, &y2y3, &mut c2, K - 1, idx);
+        }
+
+        // Receive full adders
+        for (idx, (c1, c2, x3, y3)) in izip!(&mut c1, &mut c2, &xa_3, &xb_3).enumerate() {
+            let mut c1 = c1.as_view();
+            self.packed_and_many_receive(&mut c1, K - 1, idx);
+            self.packed_xor_assign_many(&mut c1, &x3.as_view(), K - 1, idx);
+
+            let mut c2 = c2.as_view();
+            self.packed_and_many_receive(&mut c2, K - 1, idx);
+            self.packed_xor_assign_many(&mut c2, &y3.as_view(), K - 1, idx);
+        }
+
+        // Add 2c + s via a ripple carry adder
+        // LSB of c is 0
+        // First round: half adder can be skipped due to LSB of c being 0
+        let mut a1 = s1;
+        let mut b1 = c1;
+        let mut a2 = s2;
+        let mut b2 = c2;
+
+        todo!()
+    }
+
     fn binary_add_two(
         &mut self,
         x1: Vec<ChunkShare<u64>>,
@@ -337,12 +553,7 @@ impl Circuits {
         let mut b = x2;
 
         // first half adder
-        for (idx, ((aa, bb), (ss, cc))) in a
-            .iter()
-            .zip(b.iter())
-            .zip(s.iter_mut().zip(c.iter_mut()))
-            .enumerate()
-        {
+        for (idx, (aa, bb, ss, cc)) in izip!(&a, &mut b, &s, &c).enumerate() {
             let a0 = aa.get_offset(0, self.chunk_size);
             let b0 = bb.get_offset(0, self.chunk_size);
             let mut s0 = ss.get_offset(0, self.chunk_size);
@@ -354,12 +565,8 @@ impl Circuits {
 
         // Full adders: 1->k
         for k in 1..Self::BITS {
-            for (idx, (((aa, bb), (ss, cc)), tmp_cc)) in a
-                .iter_mut()
-                .zip(b.iter_mut())
-                .zip(s.iter_mut().zip(c.iter_mut()))
-                .zip(tmp_c.iter_mut())
-                .enumerate()
+            for (idx, (aa, bb, ss, cc, tmp_cc)) in
+                izip!(&mut a, &mut b, &mut s, &mut c, &mut tmp_c).enumerate()
             {
                 let mut ak = aa.get_offset(k, self.chunk_size);
                 let mut bk = bb.get_offset(k, self.chunk_size);
@@ -376,7 +583,7 @@ impl Circuits {
         }
 
         // Copy the last carry to the last bit of s
-        for (cc, ss) in c.iter().zip(s.iter_mut()) {
+        for (cc, ss) in izip!(&c, &s) {
             let c_ = cc.as_view();
             let mut s_ = ss.get_offset(Self::BITS, self.chunk_size);
             s_.a = c_.a;
@@ -430,11 +637,8 @@ impl Circuits {
             // Normal sub_adder only calculating the carry
             let p_bit = ((P2K >> k) & 1) == 1;
 
-            for (idx, ((x, cc), (tmp_cc, tmp_not_))) in x
-                .iter()
-                .zip(c.iter_mut())
-                .zip(tmp_c.iter_mut().zip(tmp_not.iter_mut()))
-                .enumerate()
+            for (idx, (x, cc, tmp_cc, tmp_not_)) in
+                izip!(x.iter(), &mut c, &mut tmp_c, &mut tmp_not).enumerate()
             {
                 let mut xk = x.get_offset(k, self.chunk_size);
                 if p_bit {
@@ -453,11 +657,8 @@ impl Circuits {
         {
             debug_assert!(((P2K >> (Self::BITS - 1)) & 1) == 1);
         }
-        for (idx, ((not_msb, cc), (tmp_cc, tmp_not_))) in not_msb
-            .iter_mut()
-            .zip(c.iter_mut())
-            .zip(tmp_c.iter_mut().zip(tmp_not.iter_mut()))
-            .enumerate()
+        for (idx, (not_msb, cc, tmp_cc, tmp_not_)) in
+            izip!(&mut not_msb, &mut c, &mut tmp_c, &mut tmp_not).enumerate()
         {
             self.not_many(cc, tmp_not_, idx);
             self.and_many(not_msb, tmp_not_, tmp_cc, idx);
@@ -471,12 +672,7 @@ impl Circuits {
         {
             debug_assert!(((P2K >> Self::BITS) & 1) == 0);
         }
-        let mut ov = c;
-        for (idx, (xx, (ov, res_msb))) in x
-            .iter()
-            .zip(ov.iter_mut().zip(res_msb.iter_mut()))
-            .enumerate()
-        {
+        for (idx, (xx, ov, res_msb)) in izip!(x.iter(), &mut c, &mut res_msb).enumerate() {
             let xmsb = xx.get_offset(Self::BITS - 1, self.chunk_size);
             let xb = xx.get_offset(Self::BITS, self.chunk_size);
             self.xor_assign_many(ov, &xb, idx);
