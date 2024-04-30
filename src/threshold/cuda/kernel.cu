@@ -7,6 +7,8 @@
 #define B_BITS 20
 #define B (1 << B_BITS)
 #define A ((U64)((1. - 2. * MATCH_THRESHOLD_RATIO) * (double)B))
+#define P ((1 << 16) - 17)
+#define P2K = (P << B_BITS)
 
 ////////////////////////////////////////////////////////////////////////////////
 // Basic Blocks (not parallelized)
@@ -276,4 +278,22 @@ extern "C" __global__ void shared_u32_transpose_pack_u64(U64* out_a, U64* out_b,
 
 extern "C" __global__ void shared_u64_transpose_pack_u64(U64* out_a, U64* out_b, U64 *in_a, U64 *in_b, int in_len, int out_len) {
     u64_transpose_pack_u64(out_a, out_b, in_a, in_b, in_len, out_len);
+}
+
+extern "C" __global__ void shared_lift_mul_sub(U64* mask_a, U64* mask_b, U16* code_a, U16* code_b, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        U64 a, b;
+        mul_lift_b(&a, &code_a[i]);
+        mask_a[i] *= A;
+        mask_a[i] += P2K;
+        mask_a[i] -= a;
+        mask_a[i] %= P2K;
+
+        mul_lift_b(&b, &code_b[i]);
+        mask_b[i] *= A;
+        mask_b[i] += P2K;
+        mask_b[i] -= b;
+        mask_b[i] %= P2K;
+    }
 }

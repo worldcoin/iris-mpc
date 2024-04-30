@@ -66,6 +66,7 @@ struct Kernels {
     pub(crate) xor_assign: CudaFunction,
     pub(crate) not_inplace: CudaFunction,
     pub(crate) not: CudaFunction,
+    pub(crate) lift_mul_sub: CudaFunction,
 }
 
 impl Kernels {
@@ -78,6 +79,7 @@ impl Kernels {
             &[
                 "shared_xor, shared_xor_assign, shared_and_pre, shared_not_inplace",
                 "shared_not",
+                "shared_lift_mul_sub",
             ],
         )
         .unwrap();
@@ -86,6 +88,7 @@ impl Kernels {
         let xor_assign = dev.get_func(Self::MOD_NAME, "shared_xor_assign").unwrap();
         let not_inplace = dev.get_func(Self::MOD_NAME, "shared_not_inplace").unwrap();
         let not = dev.get_func(Self::MOD_NAME, "shared_not").unwrap();
+        let lift_mul_sub = dev.get_func(Self::MOD_NAME, "shared_lift_mul_sub").unwrap();
 
         Kernels {
             and,
@@ -93,6 +96,7 @@ impl Kernels {
             xor_assign,
             not_inplace,
             not,
+            lift_mul_sub,
         }
     }
 }
@@ -820,8 +824,22 @@ impl Circuits {
     }
 
     fn lift_mul_sub(&mut self, mask_lifted: &mut [ChunkShare<u64>], code: Vec<ChunkShare<u16>>) {
-        // do lift code to y, and mask*a - y in one kernel
-        todo!("implement")
+        debug_assert_eq!(self.n_devices, mask_lifted.len());
+        debug_assert_eq!(self.n_devices, code.len());
+
+        // TODO check the config
+        for (idx, (m, c)) in izip!(mask_lifted.iter_mut(), code.iter()).enumerate() {
+            unsafe {
+                self.kernels[idx]
+                    .lift_mul_sub
+                    .clone()
+                    .launch(
+                        self.cfg.to_owned(),
+                        (&m.a, &m.b, &c.a, &c.b, self.chunk_size * 64),
+                    )
+                    .unwrap();
+            }
+        }
     }
 
     // input should be of size: n_devices * input_size
@@ -830,6 +848,9 @@ impl Circuits {
         code_dots: Vec<ChunkShare<u16>>,
         mask_dots: Vec<ChunkShare<u16>>,
     ) -> Vec<ChunkShare<u64>> {
+        debug_assert_eq!(self.n_devices, code_dots.len());
+        debug_assert_eq!(self.n_devices, mask_dots.len());
+
         let mut x = self.lift_p2k(mask_dots);
         self.lift_mul_sub(&mut x, code_dots);
         self.extract_msb_mod(x)
