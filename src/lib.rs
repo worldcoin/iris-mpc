@@ -14,10 +14,12 @@ use cudarc::{
     nvrtc::compile_ptx,
 };
 use rayon::prelude::*;
+use rng::chacha_field::ChaChaCudaFeRng;
 
 pub(crate) const P: u16 = ((1u32 << 16) - 17) as u16;
 const PTX_SRC: &str = include_str!("kernel.cu");
 const IRIS_CODE_LENGTH: usize = 12_800;
+const CHACHA_BUFFER_SIZE: usize = 1000;
 const MATMUL_FUNCTION_NAME: &str = "matmul";
 const DIST_FUNCTION_NAME: &str = "reconstructDistance";
 
@@ -168,7 +170,6 @@ impl DistanceComparator {
                             &masks_result_peers[i][1],
                             &masks_result_peers[i][2],
                             &mut self.results[i],
-                            P,
                             (self.db_length / self.n_devices * self.query_length) as u64,
                         ),
                     )
@@ -190,6 +191,7 @@ impl DistanceComparator {
 
 pub struct ShareDB {
     peer_id: usize,
+    is_remote: bool,
     lagrange_coeff: u16,
     db_length: usize,
     query_length: usize,
@@ -198,6 +200,7 @@ pub struct ShareDB {
     blass: Vec<CudaBlas>,
     devs: Vec<Arc<CudaDevice>>,
     kernels: Vec<CudaFunction>,
+    rngs: Vec<(ChaChaCudaFeRng, ChaChaCudaFeRng)>,
     streams: Vec<CudaStream>,
     comms: Vec<Arc<Comm>>,
     db1: Vec<CudaSlice<u8>>,
@@ -218,8 +221,9 @@ impl ShareDB {
         lagrange_coeff: u16,
         db_entries: &[u16],
         query_length: usize,
+        chacha_seeds: Option<([u32; 8], [u32; 8])>,
         peer_url: Option<&String>,
-        is_local: bool,
+        is_remote: Option<bool>,
         server_port: Option<u16>,
     ) -> Self {
         // TODO: replace with a MAX_DB_SIZE to allow for insertions
@@ -227,6 +231,7 @@ impl ShareDB {
         let n_devices = CudaDevice::count().unwrap() as usize;
         let limbs = 2;
         let ptx = compile_ptx(PTX_SRC).unwrap();
+        let is_remote = is_remote.unwrap_or(false);
 
         let mut devs = Vec::new();
         let mut blass = Vec::new();
@@ -329,8 +334,21 @@ impl ShareDB {
             }
         }
 
+        // Init RNGs
+        let rng_buf_size: usize = (db_length / n_devices * query_length)
+            .div_ceil(CHACHA_BUFFER_SIZE)
+            * CHACHA_BUFFER_SIZE;
+        let mut rngs = vec![];
+        for idx in 0..n_devices {
+            let (seed0, seed1) = chacha_seeds.unwrap();
+            let chacha1 = ChaChaCudaFeRng::init(rng_buf_size, devs[idx].clone(), seed0);
+            let chacha2 = ChaChaCudaFeRng::init(rng_buf_size, devs[idx].clone(), seed1);
+            rngs.push((chacha1, chacha2));
+        }
+
+        // Init NCCL comms
         let mut comms = vec![];
-        if !is_local {
+        if is_remote {
             let mut ids = vec![];
             for _ in 0..n_devices {
                 ids.push(Id::new().unwrap());
@@ -378,6 +396,7 @@ impl ShareDB {
         }
 
         Self {
+            is_remote,
             peer_id,
             lagrange_coeff,
             db_length,
@@ -387,6 +406,7 @@ impl ShareDB {
             blass,
             devs,
             kernels,
+            rngs,
             streams,
             comms,
             db1,
@@ -436,6 +456,12 @@ impl ShareDB {
                 .htod_sync_copy(&preprocessed_query[0])
                 .unwrap();
 
+            // Prepare randomness to mask results
+            // if self.is_remote {
+            //     self.rngs[idx].0.fill_rng_no_host_copy();
+            //     self.rngs[idx].1.fill_rng_no_host_copy();
+            // }
+
             // Calculate sums to correct output
             gemm(
                 &self.blass[idx],
@@ -476,7 +502,8 @@ impl ShareDB {
                         &mut self.intermediate_results[idx],
                         0,
                         0,
-                        (self.db_length / self.n_devices * self.query_length * 4 * (i * 2 + j)) as u64,
+                        (self.db_length / self.n_devices * self.query_length * 4 * (i * 2 + j))
+                            as u64,
                         self.db_length / self.n_devices,
                         self.query_length,
                         IRIS_CODE_LENGTH,
@@ -502,8 +529,9 @@ impl ShareDB {
                             self.db_length as u64 / self.n_devices as u64,
                             (self.db_length / self.n_devices * self.query_length) as u64,
                             IRIS_CODE_LENGTH as u64,
-                            P as u64,
                             self.lagrange_coeff as u64,
+                            self.rngs[idx].0.cuda_slice(),
+                            self.rngs[idx].1.cuda_slice(),
                         ),
                     )
                     .unwrap();
@@ -515,25 +543,33 @@ impl ShareDB {
         }
     }
 
+    pub fn randomize_results(&mut self) {}
+
     /// Broadcasts the results to all other peers.
     /// Calls are async to host, but sync to device.
     pub fn exchange_results(&mut self) {
         for idx in 0..self.n_devices {
-            self.comms[idx].broadcast(
-                &Some(&self.results[idx]),
-                &mut self.results_peers[idx][0],
-                0,
-            ).unwrap();
-            self.comms[idx].broadcast(
-                &Some(&self.results[idx]),
-                &mut self.results_peers[idx][1],
-                1,
-            ).unwrap();
-            self.comms[idx].broadcast(
-                &Some(&self.results[idx]),
-                &mut self.results_peers[idx][2],
-                2,
-            ).unwrap();
+            self.comms[idx]
+                .broadcast(
+                    &Some(&self.results[idx]),
+                    &mut self.results_peers[idx][0],
+                    0,
+                )
+                .unwrap();
+            self.comms[idx]
+                .broadcast(
+                    &Some(&self.results[idx]),
+                    &mut self.results_peers[idx][1],
+                    1,
+                )
+                .unwrap();
+            self.comms[idx]
+                .broadcast(
+                    &Some(&self.results[idx]),
+                    &mut self.results_peers[idx][2],
+                    2,
+                )
+                .unwrap();
         }
         for idx in 0..self.n_devices {
             self.devs[idx].synchronize().unwrap();
@@ -542,8 +578,8 @@ impl ShareDB {
 
     pub fn fetch_results(&self, results: &mut [u16], device_id: usize) {
         unsafe {
-            let res_trans =
-                self.results[device_id].transmute(self.db_length * self.query_length / self.n_devices);
+            let res_trans = self.results[device_id]
+                .transmute(self.db_length * self.query_length / self.n_devices);
 
             self.devs[device_id]
                 .dtoh_sync_copy_into(&res_trans.unwrap(), results)
@@ -619,7 +655,7 @@ mod tests {
         let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
         let mut gpu_result = vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE];
 
-        let mut engine = ShareDB::init(0, 1, &db, QUERY_SIZE, None, true, None);
+        let mut engine = ShareDB::init(0, 1, &db, QUERY_SIZE, Some(([0u32; 8], [0u32; 8])), None, None, None);
         let preprocessed_query = engine.preprocess_query(&query);
         engine.dot(&preprocessed_query);
 
@@ -695,7 +731,7 @@ mod tests {
         for i in 0..3 {
             let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(i as u8).unwrap());
 
-            let mut engine = ShareDB::init(0, l_coeff, &dbs[i], QUERY_SIZE, None, true, None);
+            let mut engine = ShareDB::init(0, l_coeff, &dbs[i], QUERY_SIZE, Some(([0u32; 8], [0u32; 8])), None, None, None);
             let preprocessed_query = engine.preprocess_query(&querys[i]);
             engine.dot(&preprocessed_query);
 
