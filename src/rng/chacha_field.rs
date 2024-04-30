@@ -143,6 +143,10 @@ impl ChaChaCudaFeRng {
     pub fn get_mut_chacha(&mut self) -> &mut ChaChaCtx {
         &mut self.chacha_ctx
     }
+
+    pub fn cuda_slice(&self) -> &CudaSlice<u32> {
+        &self.rng_chunk
+    }
 }
 
 #[cfg(test)]
