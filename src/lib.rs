@@ -341,8 +341,10 @@ impl ShareDB {
         let mut rngs = vec![];
         for idx in 0..n_devices {
             let (seed0, seed1) = chacha_seeds.unwrap();
-            let chacha1 = ChaChaCudaFeRng::init(rng_buf_size, devs[idx].clone(), seed0);
-            let chacha2 = ChaChaCudaFeRng::init(rng_buf_size, devs[idx].clone(), seed1);
+            let mut chacha1 = ChaChaCudaFeRng::init(rng_buf_size, devs[idx].clone(), seed0);
+            chacha1.get_mut_chacha().set_nonce(idx as u64);
+            let mut chacha2 = ChaChaCudaFeRng::init(rng_buf_size, devs[idx].clone(), seed1);
+            chacha2.get_mut_chacha().set_nonce(idx as u64);
             rngs.push((chacha1, chacha2));
         }
 
