@@ -335,7 +335,7 @@ impl Circuits {
     }
 
     // TODO include randomness
-    fn and_many(
+    fn and_many_send(
         &mut self,
         x1: &ChunkShareView<u64>,
         x2: &ChunkShareView<u64>,
@@ -361,7 +361,24 @@ impl Circuits {
                 )
                 .unwrap();
         }
-        self.send_receive_view(&res.a, &mut res.b, idx);
+        self.send_view(&res.a, idx);
+    }
+
+    fn and_many_receive(&mut self, res: &mut ChunkShareView<u64>, idx: usize) {
+        self.receive_view(&mut res.b, idx);
+    }
+
+    // TODO include randomness
+    fn and_many(
+        &mut self,
+        x1: &ChunkShareView<u64>,
+        x2: &ChunkShareView<u64>,
+        res: &mut ChunkShareView<u64>,
+        // rand: &CudaView<u64>,
+        idx: usize,
+    ) {
+        self.and_many_send(x1, x2, res, idx);
+        self.and_many_receive(res, idx);
     }
 
     fn xor_assign_many(&self, x1: &mut ChunkShareView<u64>, x2: &ChunkShareView<u64>, idx: usize) {
@@ -495,7 +512,7 @@ impl Circuits {
         xb_1: Vec<ChunkShare<u64>>,
         xb_2: Vec<ChunkShare<u64>>,
         xb_3: Vec<ChunkShare<u64>>,
-    ) {
+    ) -> (Vec<ChunkShare<u64>>, Vec<ChunkShare<u64>>) {
         debug_assert_eq!(self.n_devices, xa_1.len());
         debug_assert_eq!(self.n_devices, xa_2.len());
         debug_assert_eq!(self.n_devices, xa_3.len());
@@ -508,6 +525,8 @@ impl Circuits {
         let mut s2 = self.allocate_buffer::<u64>(self.chunk_size * K);
         let mut c1 = self.allocate_buffer::<u64>(self.chunk_size * (K - 1));
         let mut c2 = self.allocate_buffer::<u64>(self.chunk_size * (K - 1));
+        let mut ca = self.allocate_buffer::<u64>(self.chunk_size);
+        let mut cb = self.allocate_buffer::<u64>(self.chunk_size);
 
         for (idx, (x1, x2, x3, y1, y2, y3, s1, s2, c1, c2)) in
             izip!(&xa_1, &xa_2, &xa_3, &xb_1, &xb_2, &xb_3, &mut s1, &mut s2, &mut c1, &mut c2)
@@ -557,7 +576,71 @@ impl Circuits {
         let mut a2 = s2;
         let mut b2 = c2;
 
-        todo!()
+        // First full adder (carry is 0)
+        for (idx, (a1, b1, a2, b2, ca, cb)) in
+            izip!(&a1, &b1, &a2, &b2, &mut ca, &mut cb).enumerate()
+        {
+            let a1 = a1.get_offset(1, self.chunk_size);
+            let b1 = b1.get_offset(0, self.chunk_size);
+            self.and_many_send(&a1, &b1, &mut ca.as_view(), idx);
+            let a2 = a2.get_offset(1, self.chunk_size);
+            let b2 = b2.get_offset(0, self.chunk_size);
+            self.and_many_send(&a2, &b2, &mut cb.as_view(), idx);
+        }
+        for (idx, (ca, cb)) in izip!(&mut ca, &mut cb).enumerate() {
+            self.and_many_receive(&mut ca.as_view(), idx);
+            self.and_many_receive(&mut cb.as_view(), idx);
+        }
+
+        for k in 1..K - 2 {
+            for (idx, (a1, b1, a2, b2, ca, cb)) in
+                izip!(&mut a1, &mut b1, &mut a2, &mut b2, &mut ca, &mut cb).enumerate()
+            {
+                // Unused space used for temparary storage
+                let mut tmp_ca = a1.get_offset(0, self.chunk_size);
+                let mut tmp_cb = a2.get_offset(0, self.chunk_size);
+
+                let mut a1 = a1.get_offset(k + 1, self.chunk_size);
+                let mut a2 = a2.get_offset(k + 1, self.chunk_size);
+                let mut b1 = b1.get_offset(k, self.chunk_size);
+                let mut b2 = b2.get_offset(k, self.chunk_size);
+
+                let ca = ca.as_view();
+                let cb = cb.as_view();
+
+                self.xor_assign_many(&mut a1, &ca, idx);
+                self.xor_assign_many(&mut b1, &ca, idx);
+                self.and_many_send(&a1, &b1, &mut tmp_ca, idx);
+                self.xor_assign_many(&mut a2, &cb, idx);
+                self.xor_assign_many(&mut b2, &cb, idx);
+                self.and_many_send(&a2, &b2, &mut tmp_cb, idx);
+            }
+            for (idx, (a1, a2, ca, cb)) in izip!(&a1, &a1, &mut ca, &mut cb).enumerate() {
+                // Unused space used for temparary storage
+                let mut tmp_ca = a1.get_offset(0, self.chunk_size);
+                let mut tmp_cb = a2.get_offset(0, self.chunk_size);
+                self.and_many_receive(&mut tmp_ca, idx);
+                self.xor_assign_many(&mut ca.as_view(), &tmp_ca, idx);
+                self.and_many_receive(&mut tmp_cb, idx);
+                self.xor_assign_many(&mut cb.as_view(), &tmp_cb, idx);
+            }
+        }
+
+        // Final outputs
+        for (idx, (a1, a2, b1, b2, ca, cb)) in
+            izip!(&a1, &a2, &b1, &b2, &mut ca, &mut cb).enumerate()
+        {
+            let mut ca = ca.as_view();
+            self.xor_assign_many(&mut ca, &a1.get_offset(K - 1, self.chunk_size), idx);
+            self.xor_assign_many(&mut ca, &b1.get_offset(K - 2, self.chunk_size), idx);
+
+            let mut cb = cb.as_view();
+            self.xor_assign_many(&mut cb, &a2.get_offset(K - 1, self.chunk_size), idx);
+            self.xor_assign_many(&mut cb, &b2.get_offset(K - 2, self.chunk_size), idx);
+        }
+
+        // TODO no truncation and convert to bits yet!
+        (ca, cb)
     }
 
     fn binary_add_two(
