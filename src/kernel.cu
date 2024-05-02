@@ -23,13 +23,25 @@ extern "C" __global__ void matmul(int *c, unsigned short *output, unsigned int *
     }
 }
 
-extern "C" __global__ void reconstructDistance(unsigned short *codes_result1, unsigned short *codes_result2, unsigned short *codes_result3, unsigned short *masks_result1, unsigned short *masks_result2, unsigned short *masks_result3, double *output, size_t numElements)
+extern "C" __global__ void reconstructAndCompare(unsigned short *codes_result1, unsigned short *codes_result2, unsigned short *codes_result3, unsigned short *masks_result1, unsigned short *masks_result2, unsigned short *masks_result3, bool *output, double match_ratio, size_t numElements)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
     {
         short nom = ((unsigned int)codes_result1[idx] + (unsigned int)codes_result2[idx] + (unsigned int)codes_result3[idx]) % (unsigned int)P;
         short den = ((unsigned int)masks_result1[idx] + (unsigned int)masks_result2[idx] + (unsigned int)masks_result3[idx]) % (unsigned int)P;
-        output[idx] = (((double)nom / (double)den)-1.0) * (-0.5);
+        output[idx] = nom > (1 - 2 * match_ratio) * den;        
+    }
+}
+
+extern "C" __global__ void reconstructDebug(unsigned short *codes_result1, unsigned short *codes_result2, unsigned short *codes_result3, unsigned short *masks_result1, unsigned short *masks_result2, unsigned short *masks_result3, unsigned short *output1, unsigned short *output2, size_t numElements)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < numElements)
+    {
+        short nom = ((unsigned int)codes_result1[idx] + (unsigned int)codes_result2[idx] + (unsigned int)codes_result3[idx]) % (unsigned int)P;
+        short den = ((unsigned int)masks_result1[idx] + (unsigned int)masks_result2[idx] + (unsigned int)masks_result3[idx]) % (unsigned int)P;
+        output1[idx] = nom;
+        output2[idx] = den;
     }
 }

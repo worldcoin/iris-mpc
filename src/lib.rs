@@ -20,8 +20,9 @@ pub(crate) const P: u16 = 65519;
 const PTX_SRC: &str = include_str!("kernel.cu");
 const IRIS_CODE_LENGTH: usize = 12_800;
 const CHACHA_BUFFER_SIZE: usize = 1000;
+const MATCH_RATIO: f64 = 0.375;
 const MATMUL_FUNCTION_NAME: &str = "matmul";
-const DIST_FUNCTION_NAME: &str = "reconstructDistance";
+const DIST_FUNCTION_NAME: &str = "reconstructAndCompare";
 
 struct IdWrapper(Id);
 
@@ -102,7 +103,7 @@ async fn http_root(ids: Vec<Id>, Path(device_id): Path<String>) -> String {
 pub struct DistanceComparator {
     devs: Vec<Arc<CudaDevice>>,
     kernels: Vec<CudaFunction>,
-    results: Vec<CudaSlice<f64>>,
+    results: Vec<CudaSlice<bool>>,
     db_length: usize,
     query_length: usize,
     n_devices: usize,
@@ -142,7 +143,7 @@ impl DistanceComparator {
         }
     }
 
-    pub fn reconstruct(
+    pub fn reconstruct_and_compare(
         &mut self,
         codes_result_peers: &Vec<Vec<CudaSlice<u8>>>,
         masks_result_peers: &Vec<Vec<CudaSlice<u8>>>,
@@ -170,6 +171,7 @@ impl DistanceComparator {
                             &masks_result_peers[i][1],
                             &masks_result_peers[i][2],
                             &mut self.results[i],
+                            MATCH_RATIO,
                             (self.db_length / self.n_devices * self.query_length) as u64,
                         ),
                     )
@@ -182,7 +184,67 @@ impl DistanceComparator {
         }
     }
 
-    pub fn fetch_results(&self, device_id: usize) -> Vec<f64> {
+    pub fn reconstruct_distances_debug(
+        &mut self,
+        codes_result_peers: &Vec<Vec<CudaSlice<u8>>>,
+        masks_result_peers: &Vec<Vec<CudaSlice<u8>>>,
+    ) -> Vec<(bool, bool)> {
+        const DEBUG_FUNCTION: &str = "reconstructDebug";
+        let num_elements = self.db_length / self.n_devices * self.query_length;
+        let threads_per_block = 256;
+        let blocks_per_grid = num_elements.div_ceil(threads_per_block);
+        let cfg = LaunchConfig {
+            block_dim: (threads_per_block as u32, 1, 1),
+            grid_dim: (blocks_per_grid as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        let mut total_results_nom = vec![];
+        let mut total_results_den = vec![];
+
+        for i in 0..self.n_devices {
+            let dev = CudaDevice::new(i).unwrap();
+            let mut result_nom: CudaSlice<bool> = dev
+                .alloc_zeros(self.db_length / self.n_devices * self.query_length)
+                .unwrap();
+            let mut result_den: CudaSlice<bool> = dev
+                .alloc_zeros(self.db_length / self.n_devices * self.query_length)
+                .unwrap();
+            let ptx = compile_ptx(PTX_SRC).unwrap();
+            dev.load_ptx(ptx.clone(), DEBUG_FUNCTION, &[DEBUG_FUNCTION])
+                .unwrap();
+            let function = dev
+                .get_func(DEBUG_FUNCTION, DEBUG_FUNCTION)
+                .unwrap();
+
+            unsafe {
+                function
+                    .clone()
+                    .launch(
+                        cfg,
+                        (
+                            &codes_result_peers[i][0],
+                            &codes_result_peers[i][1],
+                            &codes_result_peers[i][2],
+                            &masks_result_peers[i][0],
+                            &masks_result_peers[i][1],
+                            &masks_result_peers[i][2],
+                            &mut result_nom,
+                            &mut result_den,
+                            (self.db_length / self.n_devices * self.query_length) as u64,
+                        ),
+                    )
+                    .unwrap();
+            }
+
+            total_results_nom.extend(dev.dtoh_sync_copy(&result_nom).unwrap());
+            total_results_den.extend(dev.dtoh_sync_copy(&result_den).unwrap());
+        }
+
+        total_results_nom.into_iter().zip(total_results_den).collect::<Vec<_>>()
+    }
+
+    pub fn fetch_results(&self, device_id: usize) -> Vec<bool> {
         self.devs[device_id]
             .dtoh_sync_copy(&self.results[device_id])
             .unwrap()

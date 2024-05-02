@@ -53,7 +53,7 @@ impl IrisDB {
         self.db.iter().any(|x| iris.is_close(x))
     }
 
-    pub fn calculate_distances(&self, iris: &IrisCode) -> Vec<f64> {
+    pub fn calculate_distances(&self, iris: &IrisCode) -> Vec<(usize, usize)> {
         self.db
             .iter()
             .map(|other_code| iris.get_distance(other_code))

@@ -115,7 +115,7 @@ async fn main() -> eyre::Result<()> {
         masks_engine.exchange_results();
         println!("Exchange masks took: {:?}", now.elapsed());
 
-        distance_comparator.reconstruct(
+        distance_comparator.reconstruct_and_compare(
             &codes_engine.results_peers,
             &masks_engine.results_peers,
         );
@@ -123,8 +123,12 @@ async fn main() -> eyre::Result<()> {
         println!("Total time: {:?}", now.elapsed());
     }
 
+    let dists  = distance_comparator.reconstruct_distances_debug(
+        &codes_engine.results_peers,
+        &masks_engine.results_peers,
+    );
+
     let reference_dists = db.calculate_distances(&query_template);
-    let dists = distance_comparator.fetch_results(0);
     println!("{:?}", dists[0..100].to_vec());
     println!("{:?}", reference_dists[0..100].to_vec());
 
