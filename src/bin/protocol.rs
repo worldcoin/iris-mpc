@@ -123,13 +123,14 @@ async fn main() -> eyre::Result<()> {
         println!("Total time: {:?}", now.elapsed());
     }
 
-    let dists  = distance_comparator.reconstruct_distances_debug(
+    let (dists, noms_dens)  = distance_comparator.reconstruct_distances_debug(
         &codes_engine.results_peers,
         &masks_engine.results_peers,
     );
 
     let reference_dists = db.calculate_distances(&query_template);
     println!("{:?}", dists[0..100].to_vec());
+    println!("{:?}", noms_dens[0..100].to_vec());
     println!("{:?}", reference_dists[0..100].to_vec());
 
     time::sleep(time::Duration::from_secs(5)).await;
