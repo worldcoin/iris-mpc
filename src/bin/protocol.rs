@@ -13,7 +13,7 @@ use tokio::time;
 
 const DB_SIZE: usize = 8*500;
 const QUERIES: usize = 31;
-const RNG_SEED: u64 = 1337;
+const RNG_SEED: u64 = 42;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {

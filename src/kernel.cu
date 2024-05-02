@@ -28,7 +28,7 @@ extern "C" __global__ void reconstructDistance(unsigned short *codes_result1, un
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
     {
-        short nom = ((long long)codes_result1[idx] + (long long)codes_result2[idx] + (long long)codes_result3[idx]) % (long long)P;
+        short nom = ((unsigned int)codes_result1[idx] + (unsigned int)codes_result2[idx] + (unsigned int)codes_result3[idx]) % (unsigned int)P;
         // short den = ((unsigned int)masks_result1[idx] + (unsigned int)masks_result2[idx] + (unsigned int)masks_result3[idx]) % (unsigned int)P;
         // output[idx] = (((double)nom / (double)den)-1.0f) * (-0.5f);
         output[idx] = nom;
