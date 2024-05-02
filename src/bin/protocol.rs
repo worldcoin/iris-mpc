@@ -1,6 +1,7 @@
 use std::{env, time::Instant};
 
 use cudarc::driver::CudaDevice;
+use float_eq::assert_float_eq;
 use gpu_iris_mpc::{
     setup::{
         id::PartyID,
@@ -123,15 +124,16 @@ async fn main() -> eyre::Result<()> {
         println!("Total time: {:?}", now.elapsed());
     }
 
-    let (dists, noms_dens)  = distance_comparator.reconstruct_distances_debug(
+    let (dists, _)  = distance_comparator.reconstruct_distances_debug(
         &codes_engine.results_peers,
         &masks_engine.results_peers,
     );
 
     let reference_dists = db.calculate_distances(&query_template);
-    println!("{:?}", dists[0..100].to_vec());
-    println!("{:?}", noms_dens[0..100].to_vec());
-    println!("{:?}", reference_dists[0..100].to_vec());
+
+    for i in 0..reference_dists.len() {
+        assert_float_eq!(dists[i], reference_dists[i], ulps <= 1);
+    }
 
     time::sleep(time::Duration::from_secs(5)).await;
     Ok(())
