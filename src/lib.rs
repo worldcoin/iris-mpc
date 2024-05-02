@@ -188,7 +188,7 @@ impl DistanceComparator {
         &mut self,
         codes_result_peers: &Vec<Vec<CudaSlice<u8>>>,
         masks_result_peers: &Vec<Vec<CudaSlice<u8>>>,
-    ) -> Vec<(u16, u16)> {
+    ) -> Vec<f64> {
         const DEBUG_FUNCTION: &str = "reconstructDebug";
         let num_elements = self.db_length / self.n_devices * self.query_length;
         let threads_per_block = 256;
@@ -199,15 +199,11 @@ impl DistanceComparator {
             shared_mem_bytes: 0,
         };
 
-        let mut total_results_nom = vec![];
-        let mut total_results_den = vec![];
+        let mut total_results = vec![];
 
         for i in 0..self.n_devices {
             let dev = CudaDevice::new(i).unwrap();
-            let mut result_nom: CudaSlice<u16> = dev
-                .alloc_zeros(self.db_length / self.n_devices * self.query_length)
-                .unwrap();
-            let mut result_den: CudaSlice<u16> = dev
+            let mut result: CudaSlice<f64> = dev
                 .alloc_zeros(self.db_length / self.n_devices * self.query_length)
                 .unwrap();
             let ptx = compile_ptx(PTX_SRC).unwrap();
@@ -229,19 +225,17 @@ impl DistanceComparator {
                             &masks_result_peers[i][0],
                             &masks_result_peers[i][1],
                             &masks_result_peers[i][2],
-                            &mut result_nom,
-                            &mut result_den,
+                            &mut result,
                             (self.db_length / self.n_devices * self.query_length) as u64,
                         ),
                     )
                     .unwrap();
             }
 
-            total_results_nom.extend(dev.dtoh_sync_copy(&result_nom).unwrap());
-            total_results_den.extend(dev.dtoh_sync_copy(&result_den).unwrap());
+            total_results.extend(dev.dtoh_sync_copy(&result).unwrap());
         }
 
-        total_results_nom.into_iter().zip(total_results_den).collect::<Vec<_>>()
+        total_results
     }
 
     pub fn fetch_results(&self, device_id: usize) -> Vec<bool> {

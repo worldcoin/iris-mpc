@@ -34,14 +34,13 @@ extern "C" __global__ void reconstructAndCompare(unsigned short *codes_result1, 
     }
 }
 
-extern "C" __global__ void reconstructDebug(unsigned short *codes_result1, unsigned short *codes_result2, unsigned short *codes_result3, unsigned short *masks_result1, unsigned short *masks_result2, unsigned short *masks_result3, unsigned short *output1, unsigned short *output2, size_t numElements)
+extern "C" __global__ void reconstructDebug(unsigned short *codes_result1, unsigned short *codes_result2, unsigned short *codes_result3, unsigned short *masks_result1, unsigned short *masks_result2, unsigned short *masks_result3, double *output, size_t numElements)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
     {
         short nom = ((unsigned int)codes_result1[idx] + (unsigned int)codes_result2[idx] + (unsigned int)codes_result3[idx]) % (unsigned int)P;
         short den = ((unsigned int)masks_result1[idx] + (unsigned int)masks_result2[idx] + (unsigned int)masks_result3[idx]) % (unsigned int)P;
-        output1[idx] = nom;
-        output2[idx] = den;
+        output[idx] = (((float)nom / (float)den) - 1.0) / 2.0;
     }
 }

@@ -138,18 +138,17 @@ impl IrisCode {
         code
     }
 
-    pub fn get_distance(&self, other: &Self) -> (usize, usize) {
+    pub fn get_distance(&self, other: &Self) -> f64 {
         let combined_mask = self.mask & other.mask;
         let combined_mask_len = combined_mask.count_ones();
 
         let combined_code = (self.code ^ other.code) & combined_mask;
         let code_distance = combined_code.count_ones();
-        (code_distance, combined_mask_len)
+        code_distance as f64 / combined_mask_len as f64
     }
 
     pub fn is_close(&self, other: &Self) -> bool {
-        let (nom, den) = self.get_distance(other);
-        (nom as f64) < (den as f64 * MATCH_THRESHOLD_RATIO)
+        self.get_distance(other) < MATCH_THRESHOLD_RATIO
     }
 
     pub fn get_similar_iris<R: Rng>(&self, rng: &mut R) -> IrisCode {
