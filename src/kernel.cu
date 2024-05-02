@@ -30,7 +30,7 @@ extern "C" __global__ void reconstructAndCompare(unsigned short *codes_result1, 
     {
         short nom = ((unsigned int)codes_result1[idx] + (unsigned int)codes_result2[idx] + (unsigned int)codes_result3[idx]) % (unsigned int)P;
         short den = ((unsigned int)masks_result1[idx] + (unsigned int)masks_result2[idx] + (unsigned int)masks_result3[idx]) % (unsigned int)P;
-        output[idx] = nom > (1 - 2 * match_ratio) * den;        
+        output[idx] = nom > (1 - 2 * match_ratio) * den;
     }
 }
 
@@ -41,6 +41,6 @@ extern "C" __global__ void reconstructDebug(unsigned short *codes_result1, unsig
     {
         short nom = ((unsigned int)codes_result1[idx] + (unsigned int)codes_result2[idx] + (unsigned int)codes_result3[idx]) % (unsigned int)P;
         short den = ((unsigned int)masks_result1[idx] + (unsigned int)masks_result2[idx] + (unsigned int)masks_result3[idx]) % (unsigned int)P;
-        output[idx] = (((float)nom / (float)den) - 1.0) / 2.0;
+        output[idx] = (((float)nom / (float)den) - 1.0) / (-2.0);
     }
 }
