@@ -123,16 +123,10 @@ async fn main() -> eyre::Result<()> {
         println!("Total time: {:?}", now.elapsed());
     }
 
-    let mut results = vec![0u16;DB_SIZE * QUERIES / n_devices];
-    codes_engine.fetch_results(&mut results, 0);
-
-    println!("{:?}", results[0..10].to_vec());
-
-
     let reference_dists = db.calculate_distances(&query_template);
     let dists = distance_comparator.fetch_results(0);
-    println!("{:?}", dists[0..10].to_vec());
-    println!("{:?}", reference_dists[0..10].to_vec());
+    println!("{:?}", dists[0..100].to_vec());
+    println!("{:?}", reference_dists[0..100].to_vec());
 
     time::sleep(time::Duration::from_secs(5)).await;
     Ok(())

@@ -17,7 +17,7 @@ extern "C" __global__ void matmul(int *c, unsigned short *output, unsigned int *
         long long c01 = c[idx + numElements] + ((a0s + b1s) << 7) - (numCols * 16384);
         long long c10 = c[idx + numElements * 2] + ((a1s + b0s) << 7) - (numCols * 16384);
         long long c11 = c[idx + numElements * 3] + ((a1s + b1s) << 7) - (numCols * 16384);
-        unsigned short result = (((c00 + ((c01 + c10) << 8) + (c11 << 16))) * lCoeff) % P;
+        output[idx] = ((unsigned int)P + (unsigned int)result + (unsigned int)rngMasks0[idx] - (unsigned int)rngMasks1[idx]) % (unsigned int)P;
 
         output[idx] = ((unsigned int)result) % (unsigned int)P;
     }
