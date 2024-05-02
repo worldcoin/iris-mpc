@@ -41,6 +41,6 @@ extern "C" __global__ void reconstructDebug(unsigned short *codes_result1, unsig
     {
         short nom = ((unsigned int)codes_result1[idx] + (unsigned int)codes_result2[idx] + (unsigned int)codes_result3[idx]) % (unsigned int)P;
         short den = ((unsigned int)masks_result1[idx] + (unsigned int)masks_result2[idx] + (unsigned int)masks_result3[idx]) % (unsigned int)P;
-        output[idx] = -0.5 - (double)nom/(2*(double)den);
+        output[idx] = 0.5 - (double)nom/(2*(double)den);
     }
 }
