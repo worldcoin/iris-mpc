@@ -16,7 +16,7 @@ use cudarc::{
 use rayon::prelude::*;
 use rng::chacha_field::ChaChaCudaFeRng;
 
-pub(crate) const P: u16 = ((1u32 << 16) - 17) as u16;
+pub(crate) const P: u16 = 65519;
 const PTX_SRC: &str = include_str!("kernel.cu");
 const IRIS_CODE_LENGTH: usize = 12_800;
 const CHACHA_BUFFER_SIZE: usize = 1000;
@@ -692,7 +692,7 @@ mod tests {
     #[test]
     fn check_shared_matmul() {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
-        let db = random_vec(DB_SIZE, WIDTH, 65535 as u32);
+        let db = random_vec(DB_SIZE, WIDTH, P as u32);
         let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
         let mut gpu_result = vec![
             vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
