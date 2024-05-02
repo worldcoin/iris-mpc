@@ -102,7 +102,7 @@ async fn http_root(ids: Vec<Id>, Path(device_id): Path<String>) -> String {
 pub struct DistanceComparator {
     devs: Vec<Arc<CudaDevice>>,
     kernels: Vec<CudaFunction>,
-    results: Vec<CudaSlice<u16>>,
+    results: Vec<CudaSlice<f64>>,
     db_length: usize,
     query_length: usize,
     n_devices: usize,
@@ -182,7 +182,7 @@ impl DistanceComparator {
         }
     }
 
-    pub fn fetch_results(&self, device_id: usize) -> Vec<u16> {
+    pub fn fetch_results(&self, device_id: usize) -> Vec<f64> {
         self.devs[device_id]
             .dtoh_sync_copy(&self.results[device_id])
             .unwrap()

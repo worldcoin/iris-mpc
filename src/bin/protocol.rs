@@ -67,7 +67,7 @@ async fn main() -> eyre::Result<()> {
     println!("Engines ready!");
 
     // Prepare queries
-    let query_template = db.db[0].clone();
+    let query_template = db.db[0].get_similar_iris(&mut rng);
     let random_query = ShamirIris::share_iris(&query_template, &mut rng);
     let mut code_queries = vec![vec![], vec![], vec![]];
     let mut mask_queries = vec![vec![], vec![], vec![]];
