@@ -4,7 +4,7 @@ use cudarc::driver::CudaDevice;
 use gpu_iris_mpc::{
     setup::{
         id::PartyID,
-        iris_db::{db::IrisDB, iris::IrisCode, shamir_db::ShamirIrisDB, shamir_iris::ShamirIris},
+        iris_db::{db::IrisDB, shamir_db::ShamirIrisDB, shamir_iris::ShamirIris},
         shamir::Shamir,
     }, DistanceComparator, ShareDB
 };

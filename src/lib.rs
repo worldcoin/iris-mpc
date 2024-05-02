@@ -188,7 +188,7 @@ impl DistanceComparator {
         &mut self,
         codes_result_peers: &Vec<Vec<CudaSlice<u8>>>,
         masks_result_peers: &Vec<Vec<CudaSlice<u8>>>,
-    ) -> Vec<(bool, bool)> {
+    ) -> Vec<(u16, u16)> {
         const DEBUG_FUNCTION: &str = "reconstructDebug";
         let num_elements = self.db_length / self.n_devices * self.query_length;
         let threads_per_block = 256;
@@ -204,10 +204,10 @@ impl DistanceComparator {
 
         for i in 0..self.n_devices {
             let dev = CudaDevice::new(i).unwrap();
-            let mut result_nom: CudaSlice<bool> = dev
+            let mut result_nom: CudaSlice<u16> = dev
                 .alloc_zeros(self.db_length / self.n_devices * self.query_length)
                 .unwrap();
-            let mut result_den: CudaSlice<bool> = dev
+            let mut result_den: CudaSlice<u16> = dev
                 .alloc_zeros(self.db_length / self.n_devices * self.query_length)
                 .unwrap();
             let ptx = compile_ptx(PTX_SRC).unwrap();
