@@ -44,11 +44,11 @@ async fn main() -> eyre::Result<()> {
     println!("Random shared DB generated!");
 
     // Import masks to GPU DB
-    let codes_db = shamir_db[party_id]
-        .db
-        .iter()
-        .flat_map(|entry| entry.code)
-        .collect::<Vec<_>>();
+    // let codes_db = shamir_db[party_id]
+    //     .db
+    //     .iter()
+    //     .flat_map(|entry| entry.code)
+    //     .collect::<Vec<_>>();
 
     let masks_db = shamir_db[party_id]
         .db
@@ -112,8 +112,8 @@ async fn main() -> eyre::Result<()> {
         masks_engine.dot(&mask_query);
         println!("Dot masks took: {:?}", now.elapsed());
 
-        masks_engine.exchange_results();
-        println!("Exchange masks took: {:?}", now.elapsed());
+        // masks_engine.exchange_results();
+        // println!("Exchange masks took: {:?}", now.elapsed());
 
         // distance_comparator.reconstruct(
         //     &codes_engine.results_peers,
