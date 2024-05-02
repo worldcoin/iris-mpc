@@ -19,7 +19,7 @@ extern "C" __global__ void matmul(int *c, unsigned short *output, unsigned int *
         long long c11 = c[idx + numElements * 3] + ((a1s + b1s) << 7) - (numCols * 16384);
         unsigned short result = (((c00 + ((c01 + c10) << 8) + (c11 << 16))) * lCoeff) % P;
 
-        output[idx] = ((unsigned int)P + (unsigned int)result) % (unsigned int)P;
+        output[idx] = ((unsigned int)result) % (unsigned int)P;
     }
 }
 
@@ -31,6 +31,6 @@ extern "C" __global__ void reconstructDistance(unsigned short *codes_result1, un
         short nom = ((unsigned int)codes_result1[idx] + (unsigned int)codes_result2[idx] + (unsigned int)codes_result3[idx]) % (unsigned int)P;
         short den = ((unsigned int)masks_result1[idx] + (unsigned int)masks_result2[idx] + (unsigned int)masks_result3[idx]) % (unsigned int)P;
         // output[idx] = (((double)nom / (double)den)-1.0f) * (-0.5f);
-        output[idx] = den;
+        output[idx] = nom;
     }
 }
