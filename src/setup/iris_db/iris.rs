@@ -129,11 +129,11 @@ impl IrisCode {
             mask: IrisCodeArray::ONES,
         };
 
-        // // remove about 10% of the mask bits
-        // for _ in 0..Self::IRIS_CODE_SIZE / 10 {
-        //     let i = rng.gen_range(0..Self::IRIS_CODE_SIZE);
-        //     code.mask.set_bit(i, false);
-        // }
+        // remove about 10% of the mask bits
+        for _ in 0..Self::IRIS_CODE_SIZE / 10 {
+            let i = rng.gen_range(0..Self::IRIS_CODE_SIZE);
+            code.mask.set_bit(i, false);
+        }
 
         code
     }
