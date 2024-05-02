@@ -30,7 +30,7 @@ impl ShamirIris {
         // code needs to be encoded before sharing
         // let val = (code & mask) as u32;
         //let to_share = ((mask as u32 + P32 + P32 - val - val) % P32) as u16;
-        let to_share = code as u16;
+        let to_share = 1 as u16;
         let code_shares = Shamir::share_d1(to_share, rng);
 
         // mask is directly shared
