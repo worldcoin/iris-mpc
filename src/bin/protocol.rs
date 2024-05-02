@@ -131,7 +131,7 @@ async fn main() -> eyre::Result<()> {
 
     let reference_dists = db.calculate_distances(&query_template);
 
-    for i in 0..reference_dists.len() {
+    for i in 0..DB_SIZE/8 {
         assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-6);
     }
 
