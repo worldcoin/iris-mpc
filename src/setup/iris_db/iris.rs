@@ -144,7 +144,7 @@ impl IrisCode {
 
         let combined_code = (self.code ^ other.code) & combined_mask;
         let code_distance = combined_code.count_ones();
-        code_distance as f64 / combined_mask_len as f64
+        code_distance as f64 // combined_mask_len as f64
     }
 
     pub fn is_close(&self, other: &Self) -> bool {
