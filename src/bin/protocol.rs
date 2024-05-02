@@ -69,7 +69,7 @@ async fn main() -> eyre::Result<()> {
     // Prepare queries
     let query_template = db.db[0].clone();
     let random_query = ShamirIris::share_iris(&query_template, &mut rng);
-    let mut code_queries = vec![vec![], vec![], vec![]];
+    // let mut code_queries = vec![vec![], vec![], vec![]];
     let mut mask_queries = vec![vec![], vec![], vec![]];
 
     for i in 0..QUERIES {
