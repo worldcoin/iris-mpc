@@ -18,7 +18,7 @@ const RNG_SEED: u64 = 1337;
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     // TODO
-    let mut rng = StdRng::seed_from_u64(42);
+    let mut rng = StdRng::seed_from_u64(RNG_SEED);
     let seed0 = rng.gen::<[u32; 8]>(); 
     let seed1 = rng.gen::<[u32; 8]>();
     let seed2 = rng.gen::<[u32; 8]>();
@@ -37,8 +37,8 @@ async fn main() -> eyre::Result<()> {
     };
 
     // Init DB
-    let db = IrisDB::new_random_seed(DB_SIZE, RNG_SEED);
-    let shamir_db = ShamirIrisDB::share_db_seed(&db, RNG_SEED);
+    let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
+    let shamir_db = ShamirIrisDB::share_db_par(&db, &mut rng);
     let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(party_id as u8).unwrap());
 
     println!("Random shared DB generated!");
@@ -67,7 +67,8 @@ async fn main() -> eyre::Result<()> {
     println!("Engines ready!");
 
     // Prepare queries
-    let random_query = ShamirIris::share_iris(&IrisCode::random_rng(&mut rng), &mut rng);
+    let query_template = IrisCode::random_rng(&mut rng);
+    let random_query = ShamirIris::share_iris(&query_template, &mut rng);
     let mut code_queries = vec![vec![], vec![], vec![]];
     let mut mask_queries = vec![vec![], vec![], vec![]];
 
@@ -122,8 +123,10 @@ async fn main() -> eyre::Result<()> {
         println!("Total time: {:?}", now.elapsed());
     }
 
+    let reference_dists = db.calculate_distances(&query_template);
     let dists = distance_comparator.fetch_results(0);
     println!("{:?}", dists[0..10].to_vec());
+    println!("{:?}", reference_dists[0..10].to_vec());
 
     time::sleep(time::Duration::from_secs(5)).await;
     Ok(())

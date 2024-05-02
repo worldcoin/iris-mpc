@@ -33,11 +33,15 @@ impl IrisDB {
         Self { db }
     }
 
-    pub fn new_random_seed(size: usize, rng_seed: u64) -> Self {
+    /// Only use for testing
+    pub fn new_random_par<R: Rng>(size: usize, rng: &mut R) -> Self {
+        // Fork out the rngs to be able to use them concurrently
+        let rng_seeds = (0..size).map(|_| rng.gen()).collect::<Vec<_>>();
+
         let db = (0..size)
             .into_par_iter()
-            .map(|_| {
-                let mut rng = StdRng::seed_from_u64(rng_seed);
+            .map(|i| {
+                let mut rng = StdRng::from_seed(rng_seeds[i]);
                 IrisCode::random_rng(&mut rng)
             })
             .collect::<Vec<_>>();
@@ -47,6 +51,13 @@ impl IrisDB {
 
     pub fn iris_in_db(&self, iris: &IrisCode) -> bool {
         self.db.iter().any(|x| iris.is_close(x))
+    }
+
+    pub fn calculate_distances(&self, iris: &IrisCode) -> Vec<f64> {
+        self.db
+            .iter()
+            .map(|other_code| iris.get_distance(other_code))
+            .collect::<Vec<_>>()
     }
 }
 
