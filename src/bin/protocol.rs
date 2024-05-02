@@ -50,19 +50,19 @@ async fn main() -> eyre::Result<()> {
         .flat_map(|entry| entry.code)
         .collect::<Vec<_>>();
 
-    // let masks_db = shamir_db[party_id]
-    //     .db
-    //     .iter()
-    //     .flat_map(|entry| entry.mask)
-    //     .collect::<Vec<_>>();
+    let masks_db = shamir_db[party_id]
+        .db
+        .iter()
+        .flat_map(|entry| entry.mask)
+        .collect::<Vec<_>>();
 
     println!("Starting engines...");
 
     let mut codes_engine =
         ShareDB::init(party_id, l_coeff, &codes_db, QUERIES, Some(chacha_seeds), url.clone(), Some(true), Some(3000));
-    // let mut masks_engine =
-    //     ShareDB::init(party_id, l_coeff, &masks_db, QUERIES, Some(chacha_seeds), url.clone(), Some(true), Some(3001));
-    // let mut distance_comparator = DistanceComparator::init(n_devices, DB_SIZE, QUERIES);
+    let mut masks_engine =
+        ShareDB::init(party_id, l_coeff, &masks_db, QUERIES, Some(chacha_seeds), url.clone(), Some(true), Some(3001));
+    let mut distance_comparator = DistanceComparator::init(n_devices, DB_SIZE, QUERIES);
 
     println!("Engines ready!");
 
@@ -70,7 +70,7 @@ async fn main() -> eyre::Result<()> {
     let query_template = db.db[0].clone();
     let random_query = ShamirIris::share_iris(&query_template, &mut rng);
     let mut code_queries = vec![vec![], vec![], vec![]];
-    // let mut mask_queries = vec![vec![], vec![], vec![]];
+    let mut mask_queries = vec![vec![], vec![], vec![]];
 
     for i in 0..QUERIES {
         // TODO: rotate
@@ -79,9 +79,9 @@ async fn main() -> eyre::Result<()> {
         code_queries[1].push(tmp[1].code.to_vec());
         code_queries[2].push(tmp[2].code.to_vec());
 
-        // mask_queries[0].push(tmp[0].mask.to_vec());
-        // mask_queries[1].push(tmp[1].mask.to_vec());
-        // mask_queries[2].push(tmp[2].mask.to_vec());
+        mask_queries[0].push(tmp[0].mask.to_vec());
+        mask_queries[1].push(tmp[1].mask.to_vec());
+        mask_queries[2].push(tmp[2].mask.to_vec());
     }
 
     println!("Starting query...");
@@ -92,13 +92,13 @@ async fn main() -> eyre::Result<()> {
             .flatten()
             .collect::<Vec<_>>(),
     );
-    // let mask_query = masks_engine.preprocess_query(
-    //     &mask_queries[party_id]
-    //         .clone()
-    //         .into_iter()
-    //         .flatten()
-    //         .collect::<Vec<_>>(),
-    // );
+    let mask_query = masks_engine.preprocess_query(
+        &mask_queries[party_id]
+            .clone()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>(),
+    );
 
     for _ in 0..10 {
         let now = Instant::now();
@@ -106,19 +106,19 @@ async fn main() -> eyre::Result<()> {
         codes_engine.dot(&code_query);
         println!("Dot codes took: {:?}", now.elapsed());
 
-        // codes_engine.exchange_results();
-        // println!("Exchange codes took: {:?}", now.elapsed());
+        codes_engine.exchange_results();
+        println!("Exchange codes took: {:?}", now.elapsed());
 
-        // masks_engine.dot(&mask_query);
-        // println!("Dot masks took: {:?}", now.elapsed());
+        masks_engine.dot(&mask_query);
+        println!("Dot masks took: {:?}", now.elapsed());
 
-        // masks_engine.exchange_results();
-        // println!("Exchange masks took: {:?}", now.elapsed());
+        masks_engine.exchange_results();
+        println!("Exchange masks took: {:?}", now.elapsed());
 
-        // distance_comparator.reconstruct(
-        //     &codes_engine.results_peers,
-        //     &masks_engine.results_peers,
-        // );
+        distance_comparator.reconstruct(
+            &codes_engine.results_peers,
+            &masks_engine.results_peers,
+        );
 
         println!("Total time: {:?}", now.elapsed());
     }
@@ -129,10 +129,10 @@ async fn main() -> eyre::Result<()> {
     println!("{:?}", results[0..10].to_vec());
 
 
-    // let reference_dists = db.calculate_distances(&query_template);
-    // let dists = distance_comparator.fetch_results(0);
-    // println!("{:?}", dists[0..10].to_vec());
-    // println!("{:?}", reference_dists[0..10].to_vec());
+    let reference_dists = db.calculate_distances(&query_template);
+    let dists = distance_comparator.fetch_results(0);
+    println!("{:?}", dists[0..10].to_vec());
+    println!("{:?}", reference_dists[0..10].to_vec());
 
     time::sleep(time::Duration::from_secs(5)).await;
     Ok(())
