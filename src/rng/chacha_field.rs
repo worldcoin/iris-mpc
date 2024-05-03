@@ -95,12 +95,12 @@ impl ChaChaCudaFeRng {
             shared_mem_bytes: 0, // do we need this since we use __shared__ in kernel?
         };
         let state_slice = dev.htod_sync_copy(&self.chacha_ctx.state).unwrap();
-        unsafe {
-            self.kernels[0]
-                .clone()
-                .launch(cfg, (&mut self.rng_chunk, &state_slice))
-                .unwrap();
-        }
+        // unsafe {
+        //     self.kernels[0]
+        //         .clone()
+        //         .launch(cfg, (&mut self.rng_chunk, &state_slice))
+        //         .unwrap();
+        // }
         // increment the state counter of the ChaChaRng with the number of produced blocks
         // let mut counter = self.chacha_ctx.get_counter();
         // counter += self.buf_size as u64 / 32; // one call to KS produces 32 u16s
