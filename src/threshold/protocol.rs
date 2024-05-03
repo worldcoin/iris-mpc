@@ -296,6 +296,9 @@ impl Circuits {
         bits: usize,
         idx: usize,
     ) {
+        // TODO this is just a placeholder
+        let rand = self.devs[idx].alloc_zeros::<u64>(self.chunk_size).unwrap();
+
         unsafe {
             self.kernels[idx]
                 .and
@@ -308,7 +311,7 @@ impl Circuits {
                         &x1.b,
                         &x2.a,
                         &x2.b,
-                        // rand,
+                        &rand,
                         self.chunk_size * bits,
                     ),
                 )
@@ -353,21 +356,16 @@ impl Circuits {
         // rand: &CudaView<u64>,
         idx: usize,
     ) {
+        // TODO this is just a placeholder
+        let rand = self.devs[idx].alloc_zeros::<u64>(self.chunk_size).unwrap();
+
         unsafe {
             self.kernels[idx]
                 .and
                 .clone()
                 .launch(
                     self.cfg.to_owned(),
-                    (
-                        &res.a,
-                        &x1.a,
-                        &x1.b,
-                        &x2.a,
-                        &x2.b,
-                        // rand,
-                        self.chunk_size,
-                    ),
+                    (&res.a, &x1.a, &x1.b, &x2.a, &x2.b, &rand, self.chunk_size),
                 )
                 .unwrap();
         }
@@ -823,11 +821,16 @@ impl Circuits {
         // Result is in res_msb, which is the first bit of the input
     }
 
-    fn lift_mul_sub(&mut self, mask_lifted: &mut [ChunkShare<u64>], code: Vec<ChunkShare<u16>>) {
+    fn lift_mul_sub_split(
+        &mut self,
+        mask_lifted: &mut [ChunkShare<u64>],
+        code: Vec<ChunkShare<u16>>,
+    ) {
         debug_assert_eq!(self.n_devices, mask_lifted.len());
         debug_assert_eq!(self.n_devices, code.len());
 
         // TODO check the config
+        // TODO WIP: have to adapt to include split in the kernel as well
         for (idx, (m, c)) in izip!(mask_lifted.iter_mut(), code.iter()).enumerate() {
             unsafe {
                 self.kernels[idx]
@@ -852,7 +855,7 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, mask_dots.len());
 
         let mut x = self.lift_p2k(mask_dots);
-        self.lift_mul_sub(&mut x, code_dots);
+        self.lift_mul_sub_split(&mut x, code_dots);
         self.extract_msb_mod(x)
         // TODO the or tree is still missing as well
     }

@@ -216,6 +216,38 @@ __global__ void u64_transpose_pack_u64(U64* out_a, U64* out_b, U64 *in_a, U64 *i
     }
 }
 
+__global__ void lift_mul_sub(U64* mask, U64* code) {
+    U64 a;
+    mul_lift_b(&a, &code[i]);
+    mask[i] *= A;
+    mask[i] += P2K;
+    mask[i] -= a;
+    mask[i] %= P2K;
+}
+
+__global__ void split_msb_fp(U64* x_a, U64* x_b, U64* x01, U64* x2_a, U64* x2_b, U64* rand, int id) {
+    // I don't add the bitmod to the randomness, since the bits gets removed later anyways
+
+    switch (id) {
+        case 0:
+            *x01 = *rand;
+            *x2_a = 0;
+            *x2_b = x_b;
+            break;
+        case 1:
+            *x01 = *rand ^ (x_a + x_b) % P;
+            *x2_a = 0;
+            *x2_b = 0;
+            break;
+        case 2:
+            *x01 = *rand;
+            *x2_a = x_a;
+            *x2_b = 0;
+            break;
+    }
+
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // Test kernels
 ////////////////////////////////////////////////////////////////////////////////
@@ -280,20 +312,12 @@ extern "C" __global__ void shared_u64_transpose_pack_u64(U64* out_a, U64* out_b,
     u64_transpose_pack_u64(out_a, out_b, in_a, in_b, in_len, out_len);
 }
 
-extern "C" __global__ void shared_lift_mul_sub(U64* mask_a, U64* mask_b, U16* code_a, U16* code_b, int n) {
+extern "C" __global__ void shared_lift_mul_sub_split(U64* x01, U64* x2_a, U64* x2_b, U64* mask_a, U64* mask_b, U16* code_a, U16* code_b, U64* rand, int n, int id) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
-        U64 a, b;
-        mul_lift_b(&a, &code_a[i]);
-        mask_a[i] *= A;
-        mask_a[i] += P2K;
-        mask_a[i] -= a;
-        mask_a[i] %= P2K;
+        lift_mul_sub(&mask_a[i], &code_a[i]);
+        lift_mul_sub(&mask_b[i], &code_b[i]);
 
-        mul_lift_b(&b, &code_b[i]);
-        mask_b[i] *= A;
-        mask_b[i] += P2K;
-        mask_b[i] -= b;
-        mask_b[i] %= P2K;
+        split_msb_fp(&mask_a[i], &mask_b[i], &x01[i], &x2_a[i], &x2_b[i], &rand[i], id);
     }
 }
