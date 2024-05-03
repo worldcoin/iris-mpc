@@ -69,7 +69,7 @@
 /**
  * the chacha12_block function
  */
-extern "C" __global__ void chacha12(uint32_t *d_ciphertext, uint32_t *d_state)
+extern "C" __global__ void chacha12(uint32_t *d_ciphertext, uint32_t *d_state, size_t len)
 {
     // 16 bytes of state per thread + first 16 bytes hold a copy of the global state, which speeds up the subsequent reads
     // (we would need 2 reads from global state, which is slower than 1 global read + 1 shared write and 2 shared reads)
@@ -135,7 +135,9 @@ extern "C" __global__ void chacha12(uint32_t *d_ciphertext, uint32_t *d_state)
     uint32_t *stream_ptr = &d_ciphertext[idx * 16];
     for (int i = 0; i < 16; i++)
     {
-        stream_ptr[i] = thread_state[i];
+        if (idx < len) {
+            stream_ptr[i] = thread_state[i];
+        }
     }
 }
 

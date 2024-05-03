@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use cudarc::{
-    driver::{CudaDevice, CudaFunction, CudaSlice, LaunchAsync, LaunchConfig},
+    driver::{CudaDevice, CudaFunction, CudaSlice, DeviceSlice, LaunchAsync, LaunchConfig},
     nvrtc::compile_ptx,
 };
 
@@ -95,12 +95,13 @@ impl ChaChaCudaFeRng {
             shared_mem_bytes: 0, // do we need this since we use __shared__ in kernel?
         };
         let state_slice = dev.htod_sync_copy(&self.chacha_ctx.state).unwrap();
-        // unsafe {
-        //     self.kernels[0]
-        //         .clone()
-        //         .launch(cfg, (&mut self.rng_chunk, &state_slice))
-        //         .unwrap();
-        // }
+        let len = self.rng_chunk.len() as u64;
+        unsafe {
+            self.kernels[0]
+                .clone()
+                .launch(cfg, (&mut self.rng_chunk, &state_slice, len))
+                .unwrap();
+        }
         // increment the state counter of the ChaChaRng with the number of produced blocks
         // let mut counter = self.chacha_ctx.get_counter();
         // counter += self.buf_size as u64 / 32; // one call to KS produces 32 u16s
