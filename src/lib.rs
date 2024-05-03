@@ -531,10 +531,10 @@ impl ShareDB {
                 .unwrap();
 
             // Prepare randomness to mask results
-            // if self.is_remote {
-            //     self.rngs[idx].0.fill_rng_no_host_copy(&self.devs[idx]);
-            //     self.rngs[idx].1.fill_rng_no_host_copy(&self.devs[idx]);
-            // }
+            if self.is_remote {
+                self.rngs[idx].0.fill_rng_no_host_copy(&self.devs[idx]);
+                self.rngs[idx].1.fill_rng_no_host_copy(&self.devs[idx]);
+            }
 
             // Calculate sums to correct output
             gemm(
@@ -610,12 +610,6 @@ impl ShareDB {
                     )
                     .unwrap();
             }
-
-            let xx0 = self.devs[idx].dtoh_sync_copy(self.rngs[idx].0.cuda_slice()).unwrap();
-            let xx1 = self.devs[idx].dtoh_sync_copy(self.rngs[idx].1.cuda_slice()).unwrap();
-
-            println!("{:?} {:?}", xx0[0..10].to_vec(), xx1[0..10].to_vec());
-
         }
 
         for idx in 0..self.n_devices {

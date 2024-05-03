@@ -102,33 +102,33 @@ impl ChaChaCudaFeRng {
                 .unwrap();
         }
         // increment the state counter of the ChaChaRng with the number of produced blocks
-        let mut counter = self.chacha_ctx.get_counter();
-        counter += self.buf_size as u64 / 32; // one call to KS produces 32 u16s
-        self.chacha_ctx.set_counter(counter);
+        // let mut counter = self.chacha_ctx.get_counter();
+        // counter += self.buf_size as u64 / 32; // one call to KS produces 32 u16s
+        // self.chacha_ctx.set_counter(counter);
 
-        // slice is now filled with u32s, we need to fix the contained u16 to be valid field elements
-        let num_fix_calls = self.valid_buffer_size / 1000;
-        let threads_per_block = 256; // this should be fine to be whatever
-        let blocks_per_grid = (num_fix_calls + threads_per_block - 1) / threads_per_block;
-        let cfg = LaunchConfig {
-            block_dim: (threads_per_block as u32, 1, 1),
-            grid_dim: (blocks_per_grid as u32, 1, 1),
-            shared_mem_bytes: 0, // do we need this since we use __shared__ in kernel?
-        };
-        unsafe {
-            self.kernels[1]
-                .clone()
-                .launch(
-                    cfg,
-                    (
-                        &mut self.rng_chunk,
-                        u32::try_from(self.valid_buffer_size).unwrap(),
-                    ),
-                )
-                .unwrap();
-        }
-        // do we need this synchronize?
-        dev.synchronize().unwrap();
+        // // slice is now filled with u32s, we need to fix the contained u16 to be valid field elements
+        // let num_fix_calls = self.valid_buffer_size / 1000;
+        // let threads_per_block = 256; // this should be fine to be whatever
+        // let blocks_per_grid = (num_fix_calls + threads_per_block - 1) / threads_per_block;
+        // let cfg = LaunchConfig {
+        //     block_dim: (threads_per_block as u32, 1, 1),
+        //     grid_dim: (blocks_per_grid as u32, 1, 1),
+        //     shared_mem_bytes: 0, // do we need this since we use __shared__ in kernel?
+        // };
+        // unsafe {
+        //     self.kernels[1]
+        //         .clone()
+        //         .launch(
+        //             cfg,
+        //             (
+        //                 &mut self.rng_chunk,
+        //                 u32::try_from(self.valid_buffer_size).unwrap(),
+        //             ),
+        //         )
+        //         .unwrap();
+        // }
+        // // do we need this synchronize?
+        // dev.synchronize().unwrap();
     }
     pub fn data(&self) -> &[u16] {
         &bytemuck::cast_slice(self.output_buffer.as_slice())[0..self.valid_buffer_size]
