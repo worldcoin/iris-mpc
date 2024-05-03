@@ -1,3 +1,9 @@
+///! End-to-end example implementation of the MPC v1.5 protocol
+///! This requires three individual nodes. It can be run like this:
+///! Node 0: cargo run --release --bin protocol 0
+///! Node 1: cargo run --release --bin protocol 1 [NODE_0_IP]
+///! Node 2: cargo run --release --bin protocol 2 [NODE_0_IP]
+
 use std::{env, time::Instant};
 
 use cudarc::driver::CudaDevice;
@@ -7,23 +13,24 @@ use gpu_iris_mpc::{
         id::PartyID,
         iris_db::{db::IrisDB, shamir_db::ShamirIrisDB, shamir_iris::ShamirIris},
         shamir::Shamir,
-    }, DistanceComparator, ShareDB
+    },
+    DistanceComparator, ShareDB,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tokio::time;
 
-const DB_SIZE: usize = 8*500;
-const QUERIES: usize = 31;
+const DB_SIZE: usize = 8 * 125_000;
+const QUERIES: usize = 930;
 const RNG_SEED: u64 = 42;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     // TODO
     let mut rng = StdRng::seed_from_u64(RNG_SEED);
-    let seed0 = rng.gen::<[u32; 8]>(); 
+    let seed0 = rng.gen::<[u32; 8]>();
     let seed1 = rng.gen::<[u32; 8]>();
     let seed2 = rng.gen::<[u32; 8]>();
-    
+
     let args = env::args().collect::<Vec<_>>();
     let party_id: usize = args[1].parse().unwrap();
     let url = args.get(2);
@@ -34,7 +41,7 @@ async fn main() -> eyre::Result<()> {
         0 => (seed0, seed2),
         1 => (seed1, seed0),
         2 => (seed2, seed1),
-        _ => unimplemented!()
+        _ => unimplemented!(),
     };
 
     // Init DB
@@ -59,10 +66,26 @@ async fn main() -> eyre::Result<()> {
 
     println!("Starting engines...");
 
-    let mut codes_engine =
-        ShareDB::init(party_id, l_coeff, &codes_db, QUERIES, Some(chacha_seeds), url.clone(), Some(true), Some(3000));
-    let mut masks_engine =
-        ShareDB::init(party_id, l_coeff, &masks_db, QUERIES, Some(chacha_seeds), url.clone(), Some(true), Some(3001));
+    let mut codes_engine = ShareDB::init(
+        party_id,
+        l_coeff,
+        &codes_db,
+        QUERIES,
+        chacha_seeds,
+        url.clone(),
+        Some(true),
+        Some(3000),
+    );
+    let mut masks_engine = ShareDB::init(
+        party_id,
+        l_coeff,
+        &masks_db,
+        QUERIES,
+        chacha_seeds,
+        url.clone(),
+        Some(true),
+        Some(3001),
+    );
     let mut distance_comparator = DistanceComparator::init(n_devices, DB_SIZE, QUERIES);
 
     println!("Engines ready!");
@@ -116,22 +139,19 @@ async fn main() -> eyre::Result<()> {
         masks_engine.exchange_results();
         println!("Exchange masks took: {:?}", now.elapsed());
 
-        distance_comparator.reconstruct_and_compare(
-            &codes_engine.results_peers,
-            &masks_engine.results_peers,
-        );
+        distance_comparator
+            .reconstruct_and_compare(&codes_engine.results_peers, &masks_engine.results_peers);
 
         println!("Total time: {:?}", now.elapsed());
     }
 
-    let (dists, _)  = distance_comparator.reconstruct_distances_debug(
-        &codes_engine.results_peers,
-        &masks_engine.results_peers,
-    );
+    // Sanity check: compare results against reference (debug only)
+    let (dists, _) = distance_comparator
+        .reconstruct_distances_debug(&codes_engine.results_peers, &masks_engine.results_peers);
 
     let reference_dists = db.calculate_distances(&query_template);
 
-    for i in 0..DB_SIZE/8 {
+    for i in 0..DB_SIZE / n_devices {
         assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-6);
     }
 
