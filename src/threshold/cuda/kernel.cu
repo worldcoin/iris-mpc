@@ -225,24 +225,23 @@ __global__ void lift_mul_sub(U64* mask, U64* code) {
     mask[i] %= P2K;
 }
 
-__global__ void split_msb_fp(U64* x_a, U64* x_b, U64* x01, U64* x2_a, U64* x2_b, U64* rand, int id) {
+// Puts the results into x_a, x_b and x01
+__global__ void split_msb_fp(U64* x_a, U64* x_b, U64* x01, U64* rand, int id) {
     // I don't add the bitmod to the randomness, since the bits gets removed later anyways
 
     switch (id) {
         case 0:
             *x01 = *rand;
-            *x2_a = 0;
-            *x2_b = x_b;
+            *x_a = 0;
             break;
         case 1:
             *x01 = *rand ^ (x_a + x_b) % P;
-            *x2_a = 0;
-            *x2_b = 0;
+            *x_a = 0;
+            *x_b = 0;
             break;
         case 2:
             *x01 = *rand;
-            *x2_a = x_a;
-            *x2_b = 0;
+            *x_b = 0;
             break;
     }
 
@@ -312,7 +311,8 @@ extern "C" __global__ void shared_u64_transpose_pack_u64(U64* out_a, U64* out_b,
     u64_transpose_pack_u64(out_a, out_b, in_a, in_b, in_len, out_len);
 }
 
-extern "C" __global__ void shared_lift_mul_sub_split(U64* x01, U64* x2_a, U64* x2_b, U64* mask_a, U64* mask_b, U16* code_a, U16* code_b, U64* rand, int n, int id) {
+// Puts the results into x_a, x_b and x01
+extern "C" __global__ void shared_lift_mul_sub_split(U64* x01, U64* mask_a, U64* mask_b, U16* code_a, U16* code_b, U64* rand, int n, int id) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
         lift_mul_sub(&mask_a[i], &code_a[i]);

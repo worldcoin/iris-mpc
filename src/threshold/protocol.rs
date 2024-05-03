@@ -487,6 +487,18 @@ impl Circuits {
         }
     }
 
+    fn allocate_single_buffer<T>(&self, size: usize) -> Vec<CudaSlice<T>>
+    where
+        T: cudarc::driver::ValidAsZeroBits + cudarc::driver::DeviceRepr,
+    {
+        let mut res = Vec::with_capacity(self.n_devices);
+
+        for dev in self.devs.iter() {
+            res.push(dev.alloc_zeros::<T>(size).unwrap());
+        }
+        res
+    }
+
     fn allocate_buffer<T>(&self, size: usize) -> Vec<ChunkShare<T>>
     where
         T: cudarc::driver::ValidAsZeroBits + cudarc::driver::DeviceRepr,
@@ -658,8 +670,13 @@ impl Circuits {
         (ca, cb)
     }
 
-    fn extract_msb_mod(&mut self, x: Vec<ChunkShare<u64>>) -> Vec<ChunkShare<u64>> {
-        debug_assert_eq!(self.n_devices, x.len());
+    fn extract_msb_sum_mod(
+        &mut self,
+        x01: Vec<CudaSlice<u64>>,
+        x2: Vec<ChunkShare<u64>>,
+    ) -> Vec<ChunkShare<u64>> {
+        debug_assert_eq!(self.n_devices, x01.len());
+        debug_assert_eq!(self.n_devices, x2.len());
 
         todo!()
     }
@@ -821,28 +838,48 @@ impl Circuits {
         // Result is in res_msb, which is the first bit of the input
     }
 
+    // Puts the result (x2) into mask_lifted and returns x01
+    // requires 64 * n_devices * chunk_size random u64 elements
+    // TODO include randomness
     fn lift_mul_sub_split(
         &mut self,
         mask_lifted: &mut [ChunkShare<u64>],
         code: Vec<ChunkShare<u16>>,
-    ) {
+    ) -> Vec<CudaSlice<u64>> {
         debug_assert_eq!(self.n_devices, mask_lifted.len());
         debug_assert_eq!(self.n_devices, code.len());
 
+        let mut x01 = self.allocate_single_buffer(self.chunk_size * 64);
+
         // TODO check the config
         // TODO WIP: have to adapt to include split in the kernel as well
-        for (idx, (m, c)) in izip!(mask_lifted.iter_mut(), code.iter()).enumerate() {
+        for (idx, (m, c, x01)) in izip!(mask_lifted, &code, &mut x01).enumerate() {
+            // TODO this is just a placeholder
+            let rand = self.devs[idx]
+                .alloc_zeros::<u64>(self.chunk_size * 64)
+                .unwrap();
             unsafe {
                 self.kernels[idx]
                     .lift_mul_sub
                     .clone()
                     .launch(
                         self.cfg.to_owned(),
-                        (&m.a, &m.b, &c.a, &c.b, self.chunk_size * 64),
+                        (
+                            x01,
+                            &m.a,
+                            &m.b,
+                            &c.a,
+                            &c.b,
+                            &rand,
+                            self.chunk_size as u32 * 64,
+                            self.peer_id as u32,
+                        ),
                     )
                     .unwrap();
             }
         }
+
+        x01
     }
 
     // input should be of size: n_devices * input_size
@@ -854,9 +891,9 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, code_dots.len());
         debug_assert_eq!(self.n_devices, mask_dots.len());
 
-        let mut x = self.lift_p2k(mask_dots);
-        self.lift_mul_sub_split(&mut x, code_dots);
-        self.extract_msb_mod(x)
+        let mut x2 = self.lift_p2k(mask_dots);
+        let x01 = self.lift_mul_sub_split(&mut x2, code_dots);
+        self.extract_msb_sum_mod(x01, x2)
         // TODO the or tree is still missing as well
     }
 }
