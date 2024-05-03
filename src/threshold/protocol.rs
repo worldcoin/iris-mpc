@@ -66,7 +66,8 @@ struct Kernels {
     pub(crate) xor_assign: CudaFunction,
     pub(crate) not_inplace: CudaFunction,
     pub(crate) not: CudaFunction,
-    pub(crate) lift_mul_sub: CudaFunction,
+    pub(crate) lift_mul_sub_split: CudaFunction,
+    pub(crate) transpose_64x64: CudaFunction,
 }
 
 impl Kernels {
@@ -79,7 +80,8 @@ impl Kernels {
             &[
                 "shared_xor, shared_xor_assign, shared_and_pre, shared_not_inplace",
                 "shared_not",
-                "shared_lift_mul_sub",
+                "shared_lift_mul_sub_split",
+                "shared_u64_transpose_pack_u64",
             ],
         )
         .unwrap();
@@ -88,7 +90,12 @@ impl Kernels {
         let xor_assign = dev.get_func(Self::MOD_NAME, "shared_xor_assign").unwrap();
         let not_inplace = dev.get_func(Self::MOD_NAME, "shared_not_inplace").unwrap();
         let not = dev.get_func(Self::MOD_NAME, "shared_not").unwrap();
-        let lift_mul_sub = dev.get_func(Self::MOD_NAME, "shared_lift_mul_sub").unwrap();
+        let lift_mul_sub_split = dev
+            .get_func(Self::MOD_NAME, "shared_lift_mul_sub_split")
+            .unwrap();
+        let transpose_64x64 = dev
+            .get_func(Self::MOD_NAME, "shared_u64_transpose_pack_u64")
+            .unwrap();
 
         Kernels {
             and,
@@ -96,7 +103,8 @@ impl Kernels {
             xor_assign,
             not_inplace,
             not,
-            lift_mul_sub,
+            lift_mul_sub_split,
+            transpose_64x64,
         }
     }
 }
@@ -670,15 +678,65 @@ impl Circuits {
         (ca, cb)
     }
 
+    fn transpose_pack_u64_with_len(
+        &mut self,
+        inp: Vec<ChunkShare<u64>>,
+        bitlen: usize,
+    ) -> Vec<ChunkShare<u64>> {
+        debug_assert_eq!(self.n_devices, inp.len());
+
+        // TODO the buffers should probably already be allocated
+        let mut res = self.allocate_buffer::<u64>(self.chunk_size * bitlen);
+
+        for (idx, (inp, outp)) in izip!(inp, &mut res).enumerate() {
+            unsafe {
+                self.kernels[idx]
+                    .transpose_64x64
+                    .clone()
+                    .launch(
+                        self.cfg.to_owned(),
+                        (
+                            &mut outp.a,
+                            &mut outp.b,
+                            &inp.a,
+                            &inp.b,
+                            self.chunk_size * 64,
+                            bitlen,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+
+        res
+    }
+
     fn extract_msb_sum_mod(
         &mut self,
-        x01: Vec<CudaSlice<u64>>,
+        x01_send: Vec<CudaSlice<u64>>,
         x2: Vec<ChunkShare<u64>>,
     ) -> Vec<ChunkShare<u64>> {
-        debug_assert_eq!(self.n_devices, x01.len());
+        debug_assert_eq!(self.n_devices, x01_send.len());
         debug_assert_eq!(self.n_devices, x2.len());
 
-        todo!()
+        let x01_rec = self.allocate_single_buffer(self.chunk_size * 64);
+        let mut x01 = Vec::with_capacity(self.n_devices);
+
+        // First thing: Reshare x01
+        for (idx, (x01_send, mut x01_rec)) in izip!(x01_send, x01_rec).enumerate() {
+            self.send_receive(&x01_send, &mut x01_rec, idx);
+            x01.push(ChunkShare::new(x01_send, x01_rec));
+        }
+
+        // Transpose
+        let x01 = self.transpose_pack_u64_with_len(x01, Self::BITS);
+        let x2 = self.transpose_pack_u64_with_len(x2, Self::BITS);
+
+        let mut sum = self.binary_add_two(x01, x2);
+        self.extraxt_msb_mod_p2k_of_sum(&mut sum);
+
+        // Result is in the first bit of the input
+        sum
     }
 
     // requires 36 * n_devices * chunk_size random u64 elements
@@ -860,7 +918,7 @@ impl Circuits {
                 .unwrap();
             unsafe {
                 self.kernels[idx]
-                    .lift_mul_sub
+                    .lift_mul_sub_split
                     .clone()
                     .launch(
                         self.cfg.to_owned(),
@@ -883,6 +941,7 @@ impl Circuits {
     }
 
     // input should be of size: n_devices * input_size
+    // Result is in res_msb, which is the first bit of the input
     pub fn compare_threshold_masked_many_fp(
         &mut self,
         code_dots: Vec<ChunkShare<u16>>,
@@ -893,7 +952,10 @@ impl Circuits {
 
         let mut x2 = self.lift_p2k(mask_dots);
         let x01 = self.lift_mul_sub_split(&mut x2, code_dots);
-        self.extract_msb_sum_mod(x01, x2)
+        let result = self.extract_msb_sum_mod(x01, x2);
+        // Result is in the first bit of the input
+
         // TODO the or tree is still missing as well
+        result
     }
 }
