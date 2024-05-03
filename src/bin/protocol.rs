@@ -124,7 +124,7 @@ async fn main() -> eyre::Result<()> {
             .collect::<Vec<_>>(),
     );
 
-    for _ in 0..10 {
+    for _ in 0..1 {
         let now = Instant::now();
 
         codes_engine.dot(&code_query);
