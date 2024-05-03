@@ -730,124 +730,124 @@ mod tests {
     }
 
     /// Test to verify the matmul operation for random matrices in the field
-    // #[test]
-    // fn check_matmul_p16() {
-    //     let db = random_vec(DB_SIZE, WIDTH, P as u32);
-    //     let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
-    //     let mut gpu_result = vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE];
+    #[test]
+    fn check_matmul_p16() {
+        let db = random_vec(DB_SIZE, WIDTH, P as u32);
+        let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
+        let mut gpu_result = vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE];
 
-    //     let mut engine = ShareDB::init(
-    //         0,
-    //         1,
-    //         &db,
-    //         QUERY_SIZE,
-    //         ([0u32; 8], [0u32; 8]),
-    //         None,
-    //         None,
-    //         None,
-    //     );
-    //     let preprocessed_query = engine.preprocess_query(&query);
-    //     engine.dot(&preprocessed_query);
+        let mut engine = ShareDB::init(
+            0,
+            1,
+            &db,
+            QUERY_SIZE,
+            ([0u32; 8], [0u32; 8]),
+            None,
+            None,
+            None,
+        );
+        let preprocessed_query = engine.preprocess_query(&query);
+        engine.dot(&preprocessed_query);
 
-    //     let a_nda = random_ndarray::<u64>(db, DB_SIZE, WIDTH);
-    //     let b_nda = random_ndarray::<u64>(query, QUERY_SIZE, WIDTH);
-    //     let c_nda = a_nda.dot(&b_nda.t());
+        let a_nda = random_ndarray::<u64>(db, DB_SIZE, WIDTH);
+        let b_nda = random_ndarray::<u64>(query, QUERY_SIZE, WIDTH);
+        let c_nda = a_nda.dot(&b_nda.t());
 
-    //     let mut vec_column_major: Vec<u16> = Vec::new();
-    //     for col in 0..c_nda.ncols() {
-    //         for row in c_nda.column(col) {
-    //             vec_column_major.push((*row % (P as u64)) as u16);
-    //         }
-    //     }
+        let mut vec_column_major: Vec<u16> = Vec::new();
+        for col in 0..c_nda.ncols() {
+            for row in c_nda.column(col) {
+                vec_column_major.push((*row % (P as u64)) as u16);
+            }
+        }
 
-    //     for device_idx in 0..N_DEVICES {
-    //         engine.fetch_results(&mut gpu_result, device_idx);
-    //         let selected_elements: Vec<u16> = vec_column_major
-    //             .chunks(DB_SIZE)
-    //             .flat_map(|chunk| {
-    //                 chunk
-    //                     .iter()
-    //                     .skip(DB_SIZE / N_DEVICES * device_idx)
-    //                     .take(DB_SIZE / N_DEVICES)
-    //             })
-    //             .cloned()
-    //             .collect();
+        for device_idx in 0..N_DEVICES {
+            engine.fetch_results(&mut gpu_result, device_idx);
+            let selected_elements: Vec<u16> = vec_column_major
+                .chunks(DB_SIZE)
+                .flat_map(|chunk| {
+                    chunk
+                        .iter()
+                        .skip(DB_SIZE / N_DEVICES * device_idx)
+                        .take(DB_SIZE / N_DEVICES)
+                })
+                .cloned()
+                .collect();
 
-    //         assert_eq!(selected_elements, gpu_result);
-    //     }
-    // }
+            assert_eq!(selected_elements, gpu_result);
+        }
+    }
 
-    // /// Checks that the result of a matmul of the original data equals the 
-    // /// reconstructed result of individual matmuls on the shamir shares.
-    // #[test]
-    // fn check_shared_matmul() {
-    //     let mut rng = StdRng::seed_from_u64(RNG_SEED);
-    //     let db = random_vec(DB_SIZE, WIDTH, P as u32);
-    //     let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
-    //     let mut gpu_result = vec![
-    //         vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
-    //         vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
-    //         vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
-    //     ];
+    /// Checks that the result of a matmul of the original data equals the 
+    /// reconstructed result of individual matmuls on the shamir shares.
+    #[test]
+    fn check_shared_matmul() {
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+        let db = random_vec(DB_SIZE, WIDTH, P as u32);
+        let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
+        let mut gpu_result = vec![
+            vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
+            vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
+            vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
+        ];
 
-    //     // Calculate non-shared
-    //     let a_nda = random_ndarray::<u64>(db.clone(), DB_SIZE, WIDTH);
-    //     let b_nda = random_ndarray::<u64>(query.clone(), QUERY_SIZE, WIDTH);
-    //     let c_nda = a_nda.dot(&b_nda.t());
+        // Calculate non-shared
+        let a_nda = random_ndarray::<u64>(db.clone(), DB_SIZE, WIDTH);
+        let b_nda = random_ndarray::<u64>(query.clone(), QUERY_SIZE, WIDTH);
+        let c_nda = a_nda.dot(&b_nda.t());
 
-    //     let mut vec_column_major: Vec<u16> = Vec::new();
-    //     for col in 0..c_nda.ncols() {
-    //         for row in c_nda.column(col) {
-    //             vec_column_major.push((*row % (P as u64)) as u16);
-    //         }
-    //     }
+        let mut vec_column_major: Vec<u16> = Vec::new();
+        for col in 0..c_nda.ncols() {
+            for row in c_nda.column(col) {
+                vec_column_major.push((*row % (P as u64)) as u16);
+            }
+        }
 
-    //     let mut dbs = vec![vec![], vec![], vec![]];
-    //     let mut querys = vec![vec![], vec![], vec![]];
+        let mut dbs = vec![vec![], vec![], vec![]];
+        let mut querys = vec![vec![], vec![], vec![]];
 
-    //     // Calculate shared
-    //     for i in 0..db.len() {
-    //         let shares = Shamir::share_d1(db[i], &mut rng);
-    //         dbs[0].push(shares[0]);
-    //         dbs[1].push(shares[1]);
-    //         dbs[2].push(shares[2]);
-    //     }
+        // Calculate shared
+        for i in 0..db.len() {
+            let shares = Shamir::share_d1(db[i], &mut rng);
+            dbs[0].push(shares[0]);
+            dbs[1].push(shares[1]);
+            dbs[2].push(shares[2]);
+        }
 
-    //     for i in 0..query.len() {
-    //         let shares = Shamir::share_d1(query[i], &mut rng);
-    //         querys[0].push(shares[0]);
-    //         querys[1].push(shares[1]);
-    //         querys[2].push(shares[2]);
-    //     }
+        for i in 0..query.len() {
+            let shares = Shamir::share_d1(query[i], &mut rng);
+            querys[0].push(shares[0]);
+            querys[1].push(shares[1]);
+            querys[2].push(shares[2]);
+        }
 
-    //     for i in 0..3 {
-    //         let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(i as u8).unwrap());
+        for i in 0..3 {
+            let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(i as u8).unwrap());
 
-    //         let mut engine = ShareDB::init(
-    //             0,
-    //             l_coeff,
-    //             &dbs[i],
-    //             QUERY_SIZE,
-    //             ([0u32; 8], [0u32; 8]),
-    //             None,
-    //             None,
-    //             None,
-    //         );
-    //         let preprocessed_query = engine.preprocess_query(&querys[i]);
-    //         engine.dot(&preprocessed_query);
+            let mut engine = ShareDB::init(
+                0,
+                l_coeff,
+                &dbs[i],
+                QUERY_SIZE,
+                ([0u32; 8], [0u32; 8]),
+                None,
+                None,
+                None,
+            );
+            let preprocessed_query = engine.preprocess_query(&querys[i]);
+            engine.dot(&preprocessed_query);
 
-    //         engine.fetch_results(&mut gpu_result[i], 0);
-    //     }
+            engine.fetch_results(&mut gpu_result[i], 0);
+        }
 
-    //     // TODO: we should check for all devices
-    //     for i in 0..DB_SIZE / N_DEVICES {
-    //         assert_eq!(
-    //             (gpu_result[0][i] as u32 + gpu_result[1][i] as u32 + gpu_result[2][i] as u32)
-    //                 % P as u32,
-    //             vec_column_major[i] as u32
-    //         );
-    //     }
-    // }
+        // TODO: we should check for all devices
+        for i in 0..DB_SIZE / N_DEVICES {
+            assert_eq!(
+                (gpu_result[0][i] as u32 + gpu_result[1][i] as u32 + gpu_result[2][i] as u32)
+                    % P as u32,
+                vec_column_major[i] as u32
+            );
+        }
+    }
 
     /// Calculates the distances between a query and a shamir secret shared db and 
     /// checks the result against reference plain implementation.
