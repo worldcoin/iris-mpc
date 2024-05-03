@@ -610,6 +610,12 @@ impl ShareDB {
                     )
                     .unwrap();
             }
+
+            let xx0 = self.devs[idx].dtoh_sync_copy(self.rngs[idx].0.cuda_slice()).unwrap();
+            let xx1 = self.devs[idx].dtoh_sync_copy(self.rngs[idx].1.cuda_slice()).unwrap();
+
+            println!("{:?} {:?}", xx0[0..10].to_vec(), xx1[0..10].to_vec());
+
         }
 
         for idx in 0..self.n_devices {
