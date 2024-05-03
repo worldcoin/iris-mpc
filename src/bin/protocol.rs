@@ -151,15 +151,16 @@ async fn main() -> eyre::Result<()> {
     masks_engine.fetch_results(&mut results_masks, 0);
 
     // Sanity check: compare results against reference (debug only)
-    let (dists, noms_dens) = distance_comparator
+    let (dists, _) = distance_comparator
         .reconstruct_distances_debug(&codes_engine.results_peers, &masks_engine.results_peers);
 
     let reference_dists = db.calculate_distances(&query_template);
 
-    for i in 0..10 {
-        println!("{} {:?} {} {} {}", dists[i], noms_dens[i], reference_dists[i], results_codes[i], results_masks[i]);
-        // assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-6);
+    for i in 0..DB_SIZE / n_devices {
+        assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-6);
     }
+
+    println!("Distances match the reference!");
 
     time::sleep(time::Duration::from_secs(5)).await;
     Ok(())
