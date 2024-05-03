@@ -60,6 +60,18 @@ impl<'a, T> ChunkShareView<'a, T> {
     }
 }
 
+impl<T> Clone for ChunkShare<T>
+where
+    T: cudarc::driver::DeviceRepr,
+{
+    fn clone(&self) -> Self {
+        ChunkShare {
+            a: self.a.clone(),
+            b: self.b.clone(),
+        }
+    }
+}
+
 struct Kernels {
     pub(crate) and: CudaFunction,
     pub(crate) xor: CudaFunction,
@@ -223,15 +235,7 @@ impl Circuits {
         }
     }
 
-    fn send_receive_view<T>(&mut self, send: &CudaView<T>, receive: &mut CudaView<T>, idx: usize)
-    where
-        T: cudarc::nccl::NcclType,
-    {
-        self.send_view(send, idx);
-        self.receive_view(receive, idx);
-    }
-
-    fn send_view<T>(&mut self, send: &CudaView<T>, idx: usize)
+    pub fn send_view<T>(&mut self, send: &CudaView<T>, idx: usize)
     where
         T: cudarc::nccl::NcclType,
     {
@@ -251,7 +255,7 @@ impl Circuits {
         self.devs[idx].synchronize().unwrap();
     }
 
-    fn receive_view<T>(&mut self, receive: &mut CudaView<T>, idx: usize)
+    pub fn receive_view<T>(&mut self, receive: &mut CudaView<T>, idx: usize)
     where
         T: cudarc::nccl::NcclType,
     {
@@ -269,14 +273,6 @@ impl Circuits {
         .unwrap();
 
         self.devs[idx].synchronize().unwrap();
-    }
-
-    fn send_receive<T>(&mut self, send: &CudaSlice<T>, receive: &mut CudaSlice<T>, idx: usize)
-    where
-        T: cudarc::nccl::NcclType,
-    {
-        self.send(send, idx);
-        self.receive(receive, idx);
     }
 
     fn send<T>(&mut self, send: &CudaSlice<T>, idx: usize)
@@ -397,7 +393,12 @@ impl Circuits {
         self.and_many_receive(res, idx);
     }
 
-    fn xor_assign_many(&self, x1: &mut ChunkShareView<u64>, x2: &ChunkShareView<u64>, idx: usize) {
+    pub fn xor_assign_many(
+        &self,
+        x1: &mut ChunkShareView<u64>,
+        x2: &ChunkShareView<u64>,
+        idx: usize,
+    ) {
         unsafe {
             self.kernels[idx]
                 .xor_assign
@@ -711,7 +712,7 @@ impl Circuits {
         res
     }
 
-    fn extract_msb_sum_mod(
+    pub fn extract_msb_sum_mod(
         &mut self,
         x01_send: Vec<CudaSlice<u64>>,
         x2: Vec<ChunkShare<u64>>,
@@ -723,8 +724,11 @@ impl Circuits {
         let mut x01 = Vec::with_capacity(self.n_devices);
 
         // First thing: Reshare x01
+        for (idx, x01_send) in x01_send.iter().enumerate() {
+            self.send(x01_send, idx)
+        }
         for (idx, (x01_send, mut x01_rec)) in izip!(x01_send, x01_rec).enumerate() {
-            self.send_receive(&x01_send, &mut x01_rec, idx);
+            self.receive(&mut x01_rec, idx);
             x01.push(ChunkShare::new(x01_send, x01_rec));
         }
 
@@ -899,7 +903,7 @@ impl Circuits {
     // Puts the result (x2) into mask_lifted and returns x01
     // requires 64 * n_devices * chunk_size random u64 elements
     // TODO include randomness
-    fn lift_mul_sub_split(
+    pub fn lift_mul_sub_split(
         &mut self,
         mask_lifted: &mut [ChunkShare<u64>],
         code: Vec<ChunkShare<u16>>,

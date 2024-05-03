@@ -11,7 +11,8 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{env, sync::Arc};
 use tokio::time::{self, Instant};
 
-const INPUTS_PER_GPU_SIZE: usize = 125_000;
+const INPUTS_PER_GPU_SIZE: usize = 125_056;
+const CHUNK_SIZE: usize = INPUTS_PER_GPU_SIZE / 64;
 const B_BITS: u64 = 20;
 const P2K: u64 = (P as u64) << B_BITS;
 
@@ -71,18 +72,69 @@ fn to_gpu(a: &[u16], b: &[u16], devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<u
     result
 }
 
-fn real_result_msb(input: Vec<u16>) -> Vec<bool> {
+fn pack(bits: Vec<bool>) -> Vec<u64> {
+    assert!(bits.len() % 64 == 0);
+    let mut res = Vec::with_capacity(bits.len() / 64);
+    for bits in bits.chunks(64) {
+        let mut r = 0;
+        for (i, bit) in bits.iter().enumerate() {
+            r |= u64::from(*bit) << i;
+        }
+        res.push(r);
+    }
+    res
+}
+
+fn real_result_msb(input: Vec<u16>) -> Vec<u64> {
     let mut res = Vec::with_capacity(input.len());
     for inp in input {
         let r = P2K - ((inp as u64) << B_BITS);
         let msb = r >> (B_BITS + 16) & 1 == 1;
         res.push(msb)
     }
-    res
+    pack(res)
 }
 
+fn open(party: &mut Circuits, x: Vec<ChunkShare<u64>>) -> Vec<u64> {
+    let n_devices = x.len();
+    let mut a = Vec::with_capacity(n_devices);
+    let mut b = Vec::with_capacity(n_devices);
+    let mut c = Vec::with_capacity(n_devices);
+
+    for (idx, res) in x.iter().enumerate() {
+        // Result is in bit 0
+        let res = res.get_offset(0, CHUNK_SIZE);
+        party.send_view(&res.b, idx);
+        a.push(res.a);
+        b.push(res.b);
+    }
+    for (idx, res) in x.iter().enumerate() {
+        let mut res = res.get_offset(1, CHUNK_SIZE);
+        party.receive_view(&mut res.a, idx);
+        c.push(res.a);
+    }
+
+    let mut result = Vec::with_capacity(n_devices * CHUNK_SIZE);
+    let devices = party.get_devices();
+    for (dev, a, b, c) in izip!(devices, a, b, c) {
+        let mut a = dev.dtoh_sync_copy(&a).unwrap();
+        let b = dev.dtoh_sync_copy(&b).unwrap();
+        let c = dev.dtoh_sync_copy(&c).unwrap();
+        for (a, b, c) in izip!(a.iter_mut(), b, c) {
+            *a ^= b ^ c;
+        }
+        result.extend(a);
+    }
+    result
+}
+
+#[allow(clippy::assertions_on_constants)]
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
+    assert!(
+        INPUTS_PER_GPU_SIZE % 64 == 0,
+        "Inputs per GPU size must be a multiple of 64"
+    );
     // TODO
     let mut rng = StdRng::seed_from_u64(42);
 
@@ -98,22 +150,33 @@ async fn main() -> eyre::Result<()> {
     println!("Random shared inputs generated!");
 
     // Get Circuit Party
-    let party = Circuits::new(party_id, INPUTS_PER_GPU_SIZE, url, Some(3000));
+    let mut party = Circuits::new(party_id, INPUTS_PER_GPU_SIZE, url, Some(3000));
     let devices = party.get_devices();
 
     // Import to GPU
     let code_gpu = to_gpu(&code_share_a, &code_share_b, &devices);
-
-    // Simulate Masks to be zero for this test
-    let mask_gpu = party.allocate_buffer::<u64>(INPUTS_PER_GPU_SIZE);
     println!("Data is on GPUs!");
     println!("Starting tests...");
 
     for _ in 0..10 {
+        // Simulate Masks to be zero for this test
+        let mut x2 = party.allocate_buffer::<u64>(INPUTS_PER_GPU_SIZE);
+        let code_gpu = code_gpu.clone();
+
         let now = Instant::now();
-        // TODO calculate and open here
-        println!("Total time: {:?}", now.elapsed());
-        // TODO compare to real result
+        let x01 = party.lift_mul_sub_split(&mut x2, code_gpu);
+        let result = party.extract_msb_sum_mod(x01, x2);
+        println!("Compute time: {:?}", now.elapsed());
+
+        let now = Instant::now();
+        let result = open(&mut party, result);
+        println!("Open and transfer to CPU time: {:?}", now.elapsed());
+
+        if result == real_result {
+            println!("Test passed!");
+        } else {
+            println!("Test failed!");
+        }
     }
 
     time::sleep(time::Duration::from_secs(5)).await;
