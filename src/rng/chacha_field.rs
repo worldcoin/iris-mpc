@@ -12,8 +12,6 @@ pub struct ChaChaCudaFeRng {
     buf_size: usize,
     // the amount of valid values in the buffer
     valid_buffer_size: usize,
-    /// the device to use
-    dev: &Arc<CudaDevice>,
     /// compiled and loaded kernels for our 2 functions
     kernels: Vec<CudaFunction>,
     /// a reference to the current chunk of the rng output in the cuda device
@@ -72,7 +70,6 @@ impl ChaChaCudaFeRng {
         Self {
             buf_size,
             valid_buffer_size,
-            dev,
             kernels,
             rng_chunk,
             output_buffer: buf,
@@ -80,15 +77,15 @@ impl ChaChaCudaFeRng {
         }
     }
 
-    pub fn fill_rng(&mut self) {
-        self.fill_rng_no_host_copy();
+    pub fn fill_rng(&mut self, dev: &Arc<CudaDevice>) {
+        self.fill_rng_no_host_copy(dev);
 
-        self.dev
+        dev
             .dtoh_sync_copy_into(&self.rng_chunk, &mut self.output_buffer)
             .unwrap();
     }
 
-    pub fn fill_rng_no_host_copy(&mut self) {
+    pub fn fill_rng_no_host_copy(&mut self, dev: &Arc<CudaDevice>) {
         let num_ks_calls = self.buf_size / 32; // one call to KS produces 32 u16s
         let threads_per_block = 256; // todo sync with kernel
         let blocks_per_grid = (num_ks_calls + threads_per_block - 1) / threads_per_block;
@@ -97,7 +94,7 @@ impl ChaChaCudaFeRng {
             grid_dim: (blocks_per_grid as u32, 1, 1),
             shared_mem_bytes: 0, // do we need this since we use __shared__ in kernel?
         };
-        let state_slice = self.dev.htod_sync_copy(&self.chacha_ctx.state).unwrap();
+        let state_slice = dev.htod_sync_copy(&self.chacha_ctx.state).unwrap();
         unsafe {
             self.kernels[0]
                 .clone()
@@ -131,7 +128,7 @@ impl ChaChaCudaFeRng {
                 .unwrap();
         }
         // do we need this synchronize?
-        self.dev.synchronize().unwrap();
+        dev.synchronize().unwrap();
     }
     pub fn data(&self) -> &[u16] {
         &bytemuck::cast_slice(self.output_buffer.as_slice())[0..self.valid_buffer_size]
@@ -157,12 +154,13 @@ mod tests {
     const P: u16 = 65519;
     #[test]
     fn test_chacha_rng() {
+        let dev = CudaDevice::new(0).unwrap();
         let mut rng =
-            ChaChaCudaFeRng::init(1000 * 1000 * 50, CudaDevice::new(0).unwrap(), [0u32; 8]);
-        rng.fill_rng();
+            ChaChaCudaFeRng::init(1000 * 1000 * 50, &dev, [0u32; 8]);
+        rng.fill_rng(&dev);
         assert!(rng.data().iter().all(|&x| x < P));
         let data = rng.data().to_vec();
-        rng.fill_rng();
+        rng.fill_rng(&dev);
         assert!(rng.data().iter().all(|&x| x < P));
         assert!(&data[..] != rng.data());
     }
