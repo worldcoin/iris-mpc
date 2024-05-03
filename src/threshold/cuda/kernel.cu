@@ -7,8 +7,8 @@
 #define B_BITS 20
 #define B (1 << B_BITS)
 #define A ((U64)((1. - 2. * MATCH_THRESHOLD_RATIO) * (double)B))
-#define P ((1 << 16) - 17)
-#define P2K = (P << B_BITS)
+#define P ((1ULL << 16) - 17)
+#define P2K (P << B_BITS)
 
 ////////////////////////////////////////////////////////////////////////////////
 // Basic Blocks (not parallelized)
@@ -16,7 +16,7 @@
 
 template <typename T>
 __global__ void not_inplace_inner(T *lhs) {
-    *res = ~(*res);
+    *lhs = ~(*lhs);
 }
 
 template <typename T>
@@ -216,31 +216,31 @@ __global__ void u64_transpose_pack_u64(U64* out_a, U64* out_b, U64 *in_a, U64 *i
     }
 }
 
-__global__ void lift_mul_sub(U64* mask, U64* code) {
+__global__ void lift_mul_sub(U64* mask, U16* code) {
     U64 a;
-    mul_lift_b(&a, &code[i]);
-    mask[i] *= A;
-    mask[i] += P2K;
-    mask[i] -= a;
-    mask[i] %= P2K;
+    mul_lift_b(&a, code);
+    *mask *= A;
+    *mask += P2K;
+    *mask -= a;
+    *mask %= P2K;
 }
 
 // Puts the results into x_a, x_b and x01
-__global__ void split_msb_fp(U64* x_a, U64* x_b, U64* x01, U64* rand, int id) {
+__global__ void split_msb_fp(U64* x_a, U64* x_b, U64* x01, U64* r, int id) {
     // I don't add the bitmod to the randomness, since the bits gets removed later anyways
 
     switch (id) {
         case 0:
-            *x01 = *rand;
+            *x01 = *r;
             *x_a = 0;
             break;
         case 1:
-            *x01 = *rand ^ (x_a + x_b) % P;
+            *x01 = *r ^ ((*x_a + *x_b) % P);
             *x_a = 0;
             *x_b = 0;
             break;
         case 2:
-            *x01 = *rand;
+            *x01 = *r;
             *x_b = 0;
             break;
     }
@@ -251,7 +251,7 @@ __global__ void split_msb_fp(U64* x_a, U64* x_b, U64* x01, U64* rand, int id) {
 // Test kernels
 ////////////////////////////////////////////////////////////////////////////////
 
-extern "C" __global__ void shared_not_inplace(TYPE *lhs_a, TYPE *lhs_b) {
+extern "C" __global__ void shared_not_inplace(TYPE *lhs_a, TYPE *lhs_b, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
         not_inplace_inner<TYPE>(&lhs_a[i]);
@@ -259,7 +259,7 @@ extern "C" __global__ void shared_not_inplace(TYPE *lhs_a, TYPE *lhs_b) {
     }
 }
 
-extern "C" __global__ void shared_not(TYPE *res_a, TYPE *res_b, TYPE *lhs_a, TYPE *lhs_b) {
+extern "C" __global__ void shared_not(TYPE *res_a, TYPE *res_b, TYPE *lhs_a, TYPE *lhs_b, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
         not_inner<TYPE>(&res_a[i], &lhs_a[i]);
@@ -312,12 +312,12 @@ extern "C" __global__ void shared_u64_transpose_pack_u64(U64* out_a, U64* out_b,
 }
 
 // Puts the results into x_a, x_b and x01
-extern "C" __global__ void shared_lift_mul_sub_split(U64* x01, U64* mask_a, U64* mask_b, U16* code_a, U16* code_b, U64* rand, int n, int id) {
+extern "C" __global__ void shared_lift_mul_sub_split(U64* x01, U64* mask_a, U64* mask_b, U16* code_a, U16* code_b, U64* r, int n, int id) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
         lift_mul_sub(&mask_a[i], &code_a[i]);
         lift_mul_sub(&mask_b[i], &code_b[i]);
 
-        split_msb_fp(&mask_a[i], &mask_b[i], &x01[i], &x2_a[i], &x2_b[i], &rand[i], id);
+        split_msb_fp(&mask_a[i], &mask_b[i], &x01[i], &r[i], id);
     }
 }

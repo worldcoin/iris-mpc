@@ -90,7 +90,10 @@ impl Kernels {
             ptx.clone(),
             Self::MOD_NAME,
             &[
-                "shared_xor, shared_xor_assign, shared_and_pre, shared_not_inplace",
+                "shared_xor",
+                "shared_xor_assign",
+                "shared_and_pre",
+                "shared_not_inplace",
                 "shared_not",
                 "shared_lift_mul_sub_split",
                 "shared_u64_transpose_pack_u64",
