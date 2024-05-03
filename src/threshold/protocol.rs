@@ -125,9 +125,8 @@ impl Circuits {
 
     pub fn new(
         peer_id: usize,
-        input_size: usize,
+        input_size: usize, // per GPU
         peer_url: Option<&String>,
-        is_local: bool,
         server_port: Option<u16>,
     ) -> Self {
         // TODO check this
@@ -155,51 +154,48 @@ impl Circuits {
         }
 
         let mut comms = Vec::with_capacity(n_devices);
-        if !is_local {
-            let mut ids = Vec::with_capacity(n_devices);
-            for _ in 0..n_devices {
-                ids.push(Id::new().unwrap());
-            }
+        let mut ids = Vec::with_capacity(n_devices);
+        for _ in 0..n_devices {
+            ids.push(Id::new().unwrap());
+        }
 
-            // Start HTTP server to exchange NCCL commIds
-            if peer_id == 0 {
-                let ids = ids.clone();
-                tokio::spawn(async move {
-                    println!("Starting server on port {}...", server_port.unwrap());
-                    let app =
-                        Router::new().route("/:device_id", get(move |req| http_root(ids, req)));
-                    let listener =
-                        tokio::net::TcpListener::bind(format!("0.0.0.0:{}", server_port.unwrap()))
-                            .await
-                            .unwrap();
-                    axum::serve(listener, app).await.unwrap();
-                });
-            }
+        // Start HTTP server to exchange NCCL commIds
+        if peer_id == 0 {
+            let ids = ids.clone();
+            tokio::spawn(async move {
+                println!("Starting server on port {}...", server_port.unwrap());
+                let app = Router::new().route("/:device_id", get(move |req| http_root(ids, req)));
+                let listener =
+                    tokio::net::TcpListener::bind(format!("0.0.0.0:{}", server_port.unwrap()))
+                        .await
+                        .unwrap();
+                axum::serve(listener, app).await.unwrap();
+            });
+        }
 
-            for i in 0..n_devices {
-                let id = if peer_id == 0 {
-                    ids[i]
-                } else {
-                    // If not the server, give it a few secs to start
-                    thread::sleep(Duration::from_secs(5));
+        for i in 0..n_devices {
+            let id = if peer_id == 0 {
+                ids[i]
+            } else {
+                // If not the server, give it a few secs to start
+                thread::sleep(Duration::from_secs(5));
 
-                    let res = reqwest::blocking::get(format!(
-                        "http://{}:{}/{}",
-                        peer_url.unwrap(),
-                        server_port.unwrap(),
-                        i
-                    ))
-                    .unwrap();
-                    IdWrapper::from_str(&res.text().unwrap()).unwrap().0
-                };
-                ids.push(id);
+                let res = reqwest::blocking::get(format!(
+                    "http://{}:{}/{}",
+                    peer_url.unwrap(),
+                    server_port.unwrap(),
+                    i
+                ))
+                .unwrap();
+                IdWrapper::from_str(&res.text().unwrap()).unwrap().0
+            };
+            ids.push(id);
 
-                // Bind to thread (important!)
-                devs[i].bind_to_thread().unwrap();
-                comms.push(Rc::new(
-                    Comm::from_rank(devs[i].clone(), peer_id, 3, id).unwrap(),
-                ));
-            }
+            // Bind to thread (important!)
+            devs[i].bind_to_thread().unwrap();
+            comms.push(Rc::new(
+                Comm::from_rank(devs[i].clone(), peer_id, 3, id).unwrap(),
+            ));
         }
 
         Circuits {
@@ -212,6 +208,10 @@ impl Circuits {
             comms,
             kernels,
         }
+    }
+
+    pub fn get_devices(&self) -> Vec<Arc<CudaDevice>> {
+        self.devs.clone()
     }
 
     fn launch_config_from_elements_and_threads(n: u32, t: u32) -> LaunchConfig {
@@ -507,7 +507,7 @@ impl Circuits {
         res
     }
 
-    fn allocate_buffer<T>(&self, size: usize) -> Vec<ChunkShare<T>>
+    pub fn allocate_buffer<T>(&self, size: usize) -> Vec<ChunkShare<T>>
     where
         T: cudarc::driver::ValidAsZeroBits + cudarc::driver::DeviceRepr,
     {
