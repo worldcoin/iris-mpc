@@ -413,9 +413,9 @@ impl ShareDB {
         let mut rngs = vec![];
         for idx in 0..n_devices {
             let (seed0, seed1) = chacha_seeds;
-            let mut chacha1 = ChaChaCudaFeRng::init(rng_buf_size, devs[idx].clone(), seed0);
+            let mut chacha1 = ChaChaCudaFeRng::init(rng_buf_size, &devs[idx], seed0);
             chacha1.get_mut_chacha().set_nonce(idx as u64);
-            let mut chacha2 = ChaChaCudaFeRng::init(rng_buf_size, devs[idx].clone(), seed1);
+            let mut chacha2 = ChaChaCudaFeRng::init(rng_buf_size, &devs[idx], seed1);
             chacha2.get_mut_chacha().set_nonce(idx as u64);
             rngs.push((chacha1, chacha2));
         }
@@ -531,10 +531,10 @@ impl ShareDB {
                 .unwrap();
 
             // Prepare randomness to mask results
-            // if self.is_remote {
-            //     self.rngs[idx].0.fill_rng_no_host_copy();
-            //     self.rngs[idx].1.fill_rng_no_host_copy();
-            // }
+            if self.is_remote {
+                self.rngs[idx].0.fill_rng_no_host_copy();
+                self.rngs[idx].1.fill_rng_no_host_copy();
+            }
 
             // Calculate sums to correct output
             gemm(

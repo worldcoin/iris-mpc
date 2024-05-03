@@ -13,7 +13,7 @@ pub struct ChaChaCudaFeRng {
     // the amount of valid values in the buffer
     valid_buffer_size: usize,
     /// the device to use
-    dev: Arc<CudaDevice>,
+    dev: &Arc<CudaDevice>,
     /// compiled and loaded kernels for our 2 functions
     kernels: Vec<CudaFunction>,
     /// a reference to the current chunk of the rng output in the cuda device
@@ -38,7 +38,7 @@ impl ChaChaCudaFeRng {
     /// `buf_size`: takes number of u16 elements to produce per call to rng(), needs to be a multiple of 1000
     /// `dev`: the cuda device to run the RNG on
     /// `key`: the seed to use for the RNG
-    pub fn init(buf_size: usize, dev: Arc<CudaDevice>, seed: [u32; 8]) -> Self {
+    pub fn init(buf_size: usize, dev: &Arc<CudaDevice>, seed: [u32; 8]) -> Self {
         let mut kernels = Vec::new();
         let ptx = compile_ptx(CHACHA_PTX_SRC).unwrap();
 
