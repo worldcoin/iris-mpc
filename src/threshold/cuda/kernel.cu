@@ -321,3 +321,47 @@ extern "C" __global__ void shared_lift_mul_sub_split(U64* x01, U64* mask_a, U64*
         split_msb_fp(&mask_a[i], &mask_b[i], &x01[i], &r[i], id);
     }
 }
+
+extern "C" __global__ void split1(U16* inp_a, U16* inp_b,
+        U64* xa_a, U64* xa_b,
+        U32* xp_a, U32* xp_b,
+        U32* xpp_a, U32* xpp_b,
+        U64* xp1_a, U64* xp1_b,
+        U64* xp2_a, U64* xp2_b,
+        U64* xp3_a, U64* xp3_b,
+        U64* xpp1_a, U64* xpp1_b,
+        U64* xpp2_a, U64* xpp2_b,
+        U64* xpp3_a, U64* xpp3_b,
+        int n, int id) {
+    assert(n % 64 == 0);
+    if (i < n) {
+        xa_a[i] = (U64)(inp_a[i]);
+        xa_b[i] = (U64)(inp_b[i]);
+
+        switch (id) {
+            case 0:
+                U64 subbed_p = ((U64)(inp_a[i]) + P2K - P) % P2K;
+                U64 subbed_pp = ((U64)(inp_a[i]) + P2K - 2 * P) % P2K;
+                xp_a[i] = (U32)(subbed_p);
+                xpp_a[i] = (U32)(subbed_pp);
+                xp_b[i] = (U32)(inp_b[i]);
+                xpp_b[i] = (U32)(inp_b[i]);
+                break;
+            case 1:
+                U64 subbed_p = ((U64)(inp_b[i]) + P2K - P) % P2K;
+                U64 subbed_pp = ((U64)(inp_b[i]) + P2K - 2 * P) % P2K;
+                xp_a[i] = (U32)(inp_a[i]);
+                xpp_a[i] = (U32)(inp_a[i]);
+                xp_b[i] = (U32)(subbed_p);
+                xpp_b[i] = (U32)(subbed_pp);
+                break;
+            case 2:
+                xp_a[i] = (U32)(inp_a[i]);
+                xpp_a[i] = (U32)(inp_a[i]);
+                xp_b[i] = (U32)(inp_b[i]);
+                xpp_b[i] = (U32)(inp_b[i]);
+                break;
+        }
+    }
+    // TODO synch and do transpose
+}
