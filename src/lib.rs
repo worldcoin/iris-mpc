@@ -16,12 +16,13 @@ use cudarc::{
 use rayon::prelude::*;
 use rng::chacha_field::ChaChaCudaFeRng;
 
-pub(crate) const P: u16 = ((1u32 << 16) - 17) as u16;
+pub(crate) const P: u16 = 65519;
 const PTX_SRC: &str = include_str!("kernel.cu");
 const IRIS_CODE_LENGTH: usize = 12_800;
 const CHACHA_BUFFER_SIZE: usize = 1000;
+const MATCH_RATIO: f64 = 0.375;
 const MATMUL_FUNCTION_NAME: &str = "matmul";
-const DIST_FUNCTION_NAME: &str = "reconstructDistance";
+const DIST_FUNCTION_NAME: &str = "reconstructAndCompare";
 
 struct IdWrapper(Id);
 
@@ -102,7 +103,7 @@ async fn http_root(ids: Vec<Id>, Path(device_id): Path<String>) -> String {
 pub struct DistanceComparator {
     devs: Vec<Arc<CudaDevice>>,
     kernels: Vec<CudaFunction>,
-    results: Vec<CudaSlice<f32>>,
+    results: Vec<CudaSlice<bool>>,
     db_length: usize,
     query_length: usize,
     n_devices: usize,
@@ -142,7 +143,7 @@ impl DistanceComparator {
         }
     }
 
-    pub fn reconstruct(
+    pub fn reconstruct_and_compare(
         &mut self,
         codes_result_peers: &Vec<Vec<CudaSlice<u8>>>,
         masks_result_peers: &Vec<Vec<CudaSlice<u8>>>,
@@ -170,6 +171,7 @@ impl DistanceComparator {
                             &masks_result_peers[i][1],
                             &masks_result_peers[i][2],
                             &mut self.results[i],
+                            MATCH_RATIO,
                             (self.db_length / self.n_devices * self.query_length) as u64,
                         ),
                     )
@@ -182,7 +184,77 @@ impl DistanceComparator {
         }
     }
 
-    pub fn fetch_results(&self, device_id: usize) -> Vec<f32> {
+    pub fn reconstruct_distances_debug(
+        &mut self,
+        codes_result_peers: &Vec<Vec<CudaSlice<u8>>>,
+        masks_result_peers: &Vec<Vec<CudaSlice<u8>>>,
+    ) -> (Vec<f64>, Vec<(u16, u16)>) {
+        const DEBUG_FUNCTION: &str = "reconstructDebug";
+        let num_elements = self.db_length / self.n_devices * self.query_length;
+        let threads_per_block = 256;
+        let blocks_per_grid = num_elements.div_ceil(threads_per_block);
+        let cfg = LaunchConfig {
+            block_dim: (threads_per_block as u32, 1, 1),
+            grid_dim: (blocks_per_grid as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        let mut total_results_dists = vec![];
+        let mut total_results_noms = vec![];
+        let mut total_results_dens = vec![];
+
+        for i in 0..self.n_devices {
+            let dev = CudaDevice::new(i).unwrap();
+            let mut result: CudaSlice<f64> = dev
+                .alloc_zeros(self.db_length / self.n_devices * self.query_length)
+                .unwrap();
+            let mut result_noms: CudaSlice<u16> = dev
+                .alloc_zeros(self.db_length / self.n_devices * self.query_length)
+                .unwrap();
+            let mut result_dens: CudaSlice<u16> = dev
+                .alloc_zeros(self.db_length / self.n_devices * self.query_length)
+                .unwrap();
+            let ptx = compile_ptx(PTX_SRC).unwrap();
+            dev.load_ptx(ptx.clone(), DEBUG_FUNCTION, &[DEBUG_FUNCTION])
+                .unwrap();
+            let function = dev.get_func(DEBUG_FUNCTION, DEBUG_FUNCTION).unwrap();
+
+            unsafe {
+                function
+                    .clone()
+                    .launch(
+                        cfg,
+                        (
+                            &codes_result_peers[i][0],
+                            &codes_result_peers[i][1],
+                            &codes_result_peers[i][2],
+                            &masks_result_peers[i][0],
+                            &masks_result_peers[i][1],
+                            &masks_result_peers[i][2],
+                            &mut result,
+                            &mut result_noms,
+                            &mut result_dens,
+                            (self.db_length / self.n_devices * self.query_length) as u64,
+                        ),
+                    )
+                    .unwrap();
+            }
+
+            total_results_dists.extend(dev.dtoh_sync_copy(&result).unwrap());
+            total_results_noms.extend(dev.dtoh_sync_copy(&result_noms).unwrap());
+            total_results_dens.extend(dev.dtoh_sync_copy(&result_dens).unwrap());
+        }
+
+        (
+            total_results_dists,
+            total_results_noms
+                .into_iter()
+                .zip(total_results_dens)
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    pub fn fetch_results(&self, device_id: usize) -> Vec<bool> {
         self.devs[device_id]
             .dtoh_sync_copy(&self.results[device_id])
             .unwrap()
@@ -221,7 +293,7 @@ impl ShareDB {
         lagrange_coeff: u16,
         db_entries: &[u16],
         query_length: usize,
-        chacha_seeds: Option<([u32; 8], [u32; 8])>,
+        chacha_seeds: ([u32; 8], [u32; 8]),
         peer_url: Option<&String>,
         is_remote: Option<bool>,
         server_port: Option<u16>,
@@ -340,7 +412,7 @@ impl ShareDB {
             * CHACHA_BUFFER_SIZE;
         let mut rngs = vec![];
         for idx in 0..n_devices {
-            let (seed0, seed1) = chacha_seeds.unwrap();
+            let (seed0, seed1) = chacha_seeds;
             let mut chacha1 = ChaChaCudaFeRng::init(rng_buf_size, devs[idx].clone(), seed0);
             chacha1.get_mut_chacha().set_nonce(idx as u64);
             let mut chacha2 = ChaChaCudaFeRng::init(rng_buf_size, devs[idx].clone(), seed1);
@@ -615,21 +687,26 @@ impl ShareDB {
 
 #[cfg(test)]
 mod tests {
+    use float_eq::assert_float_eq;
     use ndarray::Array2;
     use num_traits::FromPrimitive;
     use rand::{rngs::StdRng, Rng, SeedableRng};
 
     use crate::{
-        setup::{id::PartyID, shamir::Shamir},
+        setup::{
+            id::PartyID,
+            iris_db::{db::IrisDB, shamir_db::ShamirIrisDB, shamir_iris::ShamirIris},
+            shamir::Shamir,
+        },
         ShareDB, P,
     };
     const WIDTH: usize = 12_800;
     const QUERY_SIZE: usize = 31;
-    const DB_SIZE: usize = 8 * 256;
-    const RNG_SEED: u64 = 1337;
+    const DB_SIZE: usize = 8 * 1000;
+    const RNG_SEED: u64 = 42;
     const N_DEVICES: usize = 8;
 
-    /// Helpers
+    /// Helper to generate random ndarray
     fn random_ndarray<T>(array: Vec<u16>, n: usize, m: usize) -> Array2<T>
     where
         T: FromPrimitive,
@@ -644,6 +721,7 @@ mod tests {
         .unwrap()
     }
 
+    /// Helper to generate random vec
     fn random_vec(n: usize, m: usize, max_value: u32) -> Vec<u16> {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
         (0..n * m)
@@ -651,13 +729,23 @@ mod tests {
             .collect()
     }
 
+    /// Test to verify the matmul operation for random matrices in the field
     #[test]
     fn check_matmul_p16() {
         let db = random_vec(DB_SIZE, WIDTH, P as u32);
         let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
         let mut gpu_result = vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE];
 
-        let mut engine = ShareDB::init(0, 1, &db, QUERY_SIZE, Some(([0u32; 8], [0u32; 8])), None, None, None);
+        let mut engine = ShareDB::init(
+            0,
+            1,
+            &db,
+            QUERY_SIZE,
+            ([0u32; 8], [0u32; 8]),
+            None,
+            None,
+            None,
+        );
         let preprocessed_query = engine.preprocess_query(&query);
         engine.dot(&preprocessed_query);
 
@@ -689,10 +777,12 @@ mod tests {
         }
     }
 
+    /// Checks that the result of a matmul of the original data equals the 
+    /// reconstructed result of individual matmuls on the shamir shares.
     #[test]
     fn check_shared_matmul() {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
-        let db = random_vec(DB_SIZE, WIDTH, 65535 as u32);
+        let db = random_vec(DB_SIZE, WIDTH, P as u32);
         let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
         let mut gpu_result = vec![
             vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
@@ -733,7 +823,16 @@ mod tests {
         for i in 0..3 {
             let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(i as u8).unwrap());
 
-            let mut engine = ShareDB::init(0, l_coeff, &dbs[i], QUERY_SIZE, Some(([0u32; 8], [0u32; 8])), None, None, None);
+            let mut engine = ShareDB::init(
+                0,
+                l_coeff,
+                &dbs[i],
+                QUERY_SIZE,
+                ([0u32; 8], [0u32; 8]),
+                None,
+                None,
+                None,
+            );
             let preprocessed_query = engine.preprocess_query(&querys[i]);
             engine.dot(&preprocessed_query);
 
@@ -747,6 +846,143 @@ mod tests {
                     % P as u32,
                 vec_column_major[i] as u32
             );
+        }
+    }
+
+    /// Calculates the distances between a query and a shamir secret shared db and 
+    /// checks the result against reference plain implementation.
+    #[test]
+    fn check_shared_distances() {
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+        let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
+        let shamir_db = ShamirIrisDB::share_db_par(&db, &mut rng);
+
+        // Prepare query
+        let query_template = db.db[0].get_similar_iris(&mut rng);
+        let random_query = ShamirIris::share_iris(&query_template, &mut rng);
+        let mut code_queries = vec![vec![], vec![], vec![]];
+        let mut mask_queries = vec![vec![], vec![], vec![]];
+
+        for i in 0..QUERY_SIZE {
+            // TODO: rotate
+            let tmp: [ShamirIris; 3] = random_query.clone();
+            code_queries[0].push(tmp[0].code.to_vec());
+            code_queries[1].push(tmp[1].code.to_vec());
+            code_queries[2].push(tmp[2].code.to_vec());
+
+            mask_queries[0].push(tmp[0].mask.to_vec());
+            mask_queries[1].push(tmp[1].mask.to_vec());
+            mask_queries[2].push(tmp[2].mask.to_vec());
+        }
+
+        let mut results_codes = vec![
+            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
+            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
+            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
+        ];
+
+        let mut results_masks = vec![
+            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
+            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
+            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
+        ];
+
+        for party_id in 0..3 {
+            let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(party_id as u8).unwrap());
+
+            let codes_db = shamir_db[party_id]
+                .db
+                .iter()
+                .flat_map(|entry| entry.code)
+                .collect::<Vec<_>>();
+
+            let masks_db = shamir_db[party_id]
+                .db
+                .iter()
+                .flat_map(|entry| entry.mask)
+                .collect::<Vec<_>>();
+
+            let mut codes_engine = ShareDB::init(
+                party_id,
+                l_coeff,
+                &codes_db,
+                QUERY_SIZE,
+                ([0u32; 8], [0u32; 8]),
+                None,
+                None,
+                None,
+            );
+            let mut masks_engine = ShareDB::init(
+                party_id,
+                l_coeff,
+                &masks_db,
+                QUERY_SIZE,
+                ([0u32; 8], [0u32; 8]),
+                None,
+                None,
+                None,
+            );
+
+            let code_query = codes_engine.preprocess_query(
+                &code_queries[party_id]
+                    .clone()
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>(),
+            );
+            let mask_query = masks_engine.preprocess_query(
+                &mask_queries[party_id]
+                    .clone()
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>(),
+            );
+
+            codes_engine.dot(&code_query);
+            masks_engine.dot(&mask_query);
+
+            // TODO: fetch results also for other devices
+            codes_engine.fetch_results(&mut results_codes[party_id], 0);
+            masks_engine.fetch_results(&mut results_masks[party_id], 0);
+        }
+
+        // Reconstruct the results
+        let mut reconstructed_codes = vec![];
+        let mut reconstructed_masks = vec![];
+
+        for i in 0..results_codes[0].len() {
+            let code = (results_codes[0][i] as u32
+                + results_codes[1][i] as u32
+                + results_codes[2][i] as u32)
+                % P as u32;
+            let mask = (results_masks[0][i] as u32
+                + results_masks[1][i] as u32
+                + results_masks[2][i] as u32)
+                % P as u32;
+
+            reconstructed_codes.push(code);
+            reconstructed_masks.push(mask);
+            println!("{} {}", code, mask);
+        }
+
+        // Calculate the distance in plain
+        let dists = reconstructed_codes
+            .into_iter()
+            .zip(reconstructed_masks)
+            .map(|(code, mask)| {
+                const OFFSET: u32 = 32759;
+                let offset_nom = (code as u32 + OFFSET) % (P as u32);
+                0.5f64 - offset_nom as f64 / (2f64 * mask as f64)
+                    + OFFSET as f64 / (2f64 * mask as f64)
+            })
+            .collect::<Vec<_>>();
+
+        // Compare against plain reference implementation
+        let reference_dists = db.calculate_distances(&query_template);
+
+        // TODO: check for all devices and the whole query
+        for i in 0..DB_SIZE / N_DEVICES {
+            assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-6);
         }
     }
 }

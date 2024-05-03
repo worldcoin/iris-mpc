@@ -23,13 +23,27 @@ extern "C" __global__ void matmul(int *c, unsigned short *output, unsigned int *
     }
 }
 
-extern "C" __global__ void reconstructDistance(unsigned short *codes_result1, unsigned short *codes_result2, unsigned short *codes_result3, unsigned short *masks_result1, unsigned short *masks_result2, unsigned short *masks_result3, float *output, size_t numElements)
+extern "C" __global__ void reconstructAndCompare(unsigned short *codes_result1, unsigned short *codes_result2, unsigned short *codes_result3, unsigned short *masks_result1, unsigned short *masks_result2, unsigned short *masks_result3, bool *output, double match_ratio, size_t numElements)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
     {
         short nom = ((unsigned int)codes_result1[idx] + (unsigned int)codes_result2[idx] + (unsigned int)codes_result3[idx]) % (unsigned int)P;
         short den = ((unsigned int)masks_result1[idx] + (unsigned int)masks_result2[idx] + (unsigned int)masks_result3[idx]) % (unsigned int)P;
-        output[idx] = (((float)nom / (float)den)-1.0f) * (-0.5f);
+        output[idx] = nom > (1 - 2 * match_ratio) * den;
+    }
+}
+
+extern "C" __global__ void reconstructDebug(unsigned short *codes_result1, unsigned short *codes_result2, unsigned short *codes_result3, unsigned short *masks_result1, unsigned short *masks_result2, unsigned short *masks_result3, double *output1, unsigned short *output2, unsigned short *output3, size_t numElements)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < numElements)
+    {
+        unsigned short nom = ((unsigned int)codes_result1[idx] + (unsigned int)codes_result2[idx] + (unsigned int)codes_result3[idx]) % (unsigned int)P;
+        unsigned short den = ((unsigned int)masks_result1[idx] + (unsigned int)masks_result2[idx] + (unsigned int)masks_result3[idx]) % (unsigned int)P;
+        output2[idx] = nom;
+        nom = ((unsigned int)nom + 32759) % (unsigned int)P;
+        output1[idx] = 0.5 - (double)nom / (2.0 * (double)den) + (32759.0/(2 * (double)den));
+        output3[idx] = den;
     }
 }
