@@ -9,7 +9,7 @@ use rand::{
 };
 use std::sync::Arc;
 
-use super::cuda::PTX_SRC;
+use super::super::cuda::PTX_SRC;
 
 fn random_vec<T, R: Rng>(n: usize, rng: &mut R) -> Vec<T>
 where
