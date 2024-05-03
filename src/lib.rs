@@ -536,6 +536,8 @@ impl ShareDB {
                 self.rngs[idx].1.fill_rng_no_host_copy(&self.devs[idx]);
             }
 
+            thread::sleep(Duration::from_secs(5));
+
             // Calculate sums to correct output
             gemm(
                 &self.blass[idx],
