@@ -531,10 +531,10 @@ impl ShareDB {
                 .unwrap();
 
             // Prepare randomness to mask results
-            if self.is_remote {
-                self.rngs[idx].0.fill_rng_no_host_copy(&self.devs[idx]);
-                self.rngs[idx].1.fill_rng_no_host_copy(&self.devs[idx]);
-            }
+            // if self.is_remote {
+            //     self.rngs[idx].0.fill_rng_no_host_copy(&self.devs[idx]);
+            //     self.rngs[idx].1.fill_rng_no_host_copy(&self.devs[idx]);
+            // }
 
             // Calculate sums to correct output
             gemm(
