@@ -146,12 +146,13 @@ async fn main() -> eyre::Result<()> {
     }
 
     // Sanity check: compare results against reference (debug only)
-    let (dists, _) = distance_comparator
+    let (dists, noms_dens) = distance_comparator
         .reconstruct_distances_debug(&codes_engine.results_peers, &masks_engine.results_peers);
 
     let reference_dists = db.calculate_distances(&query_template);
 
     for i in 0..DB_SIZE / n_devices {
+        println!("{} {:?} {}", dists[i], noms_dens[i], reference_dists[i]);
         assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-6);
     }
 
