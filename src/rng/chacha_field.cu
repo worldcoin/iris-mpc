@@ -135,7 +135,7 @@ extern "C" __global__ void chacha12(uint32_t *d_ciphertext, uint32_t *d_state, s
     uint32_t *stream_ptr = &d_ciphertext[idx * 16];
     for (int i = 0; i < 16; i++)
     {
-        if (idx < len) {
+        if (idx * 16 + i < len) {
             stream_ptr[i] = thread_state[i];
         }
     }
