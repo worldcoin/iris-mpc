@@ -328,6 +328,8 @@ extern "C" __global__ void shared_split1(U16* inp_a, U16* inp_b,
         U32* xpp_a, U32* xpp_b,
         int n, int id) {
     assert(n % 64 == 0);
+
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
         xa_a[i] = (U64)(inp_a[i]);
         xa_b[i] = (U64)(inp_b[i]);
@@ -342,8 +344,8 @@ extern "C" __global__ void shared_split1(U16* inp_a, U16* inp_b,
                 xpp_b[i] = (U32)(inp_b[i]);
                 break;
             case 1:
-                U64 subbed_p = ((U64)(inp_b[i]) + P2K - P) % P2K;
-                U64 subbed_pp = ((U64)(inp_b[i]) + P2K - 2 * P) % P2K;
+                subbed_p = ((U64)(inp_b[i]) + P2K - P) % P2K;
+                subbed_pp = ((U64)(inp_b[i]) + P2K - 2 * P) % P2K;
                 xp_a[i] = (U32)(inp_a[i]);
                 xpp_a[i] = (U32)(inp_a[i]);
                 xp_b[i] = (U32)(subbed_p);
@@ -365,6 +367,8 @@ extern "C" __global__ void shared_split2(
     U64* xp2_a, U64* xp2_b,
     U64* xp3_a, U64* xp3_b,
     int n, int id) {
+
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
         switch (id) {
             case 0:
