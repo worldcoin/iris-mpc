@@ -322,16 +322,10 @@ extern "C" __global__ void shared_lift_mul_sub_split(U64* x01, U64* mask_a, U64*
     }
 }
 
-extern "C" __global__ void split1(U16* inp_a, U16* inp_b,
+extern "C" __global__ void shared_split1(U16* inp_a, U16* inp_b,
         U64* xa_a, U64* xa_b,
         U32* xp_a, U32* xp_b,
         U32* xpp_a, U32* xpp_b,
-        U64* xp1_a, U64* xp1_b,
-        U64* xp2_a, U64* xp2_b,
-        U64* xp3_a, U64* xp3_b,
-        U64* xpp1_a, U64* xpp1_b,
-        U64* xpp2_a, U64* xpp2_b,
-        U64* xpp3_a, U64* xpp3_b,
         int n, int id) {
     assert(n % 64 == 0);
     if (i < n) {
@@ -363,5 +357,28 @@ extern "C" __global__ void split1(U16* inp_a, U16* inp_b,
                 break;
         }
     }
-    // TODO synch and do transpose
+}
+
+extern "C" __global__ void shared_split2(
+    U64* xp_a, U64* xp_b,
+    U64* xp1_a, U64* xp1_b,
+    U64* xp2_a, U64* xp2_b,
+    U64* xp3_a, U64* xp3_b,
+    int n, int id) {
+    if (i < n) {
+        switch (id) {
+            case 0:
+                xp1_a[i] = xp_a[i];
+                xp3_b[i] = xp_b[i];
+                break;
+            case 1:
+                xp2_a[i] = xp_a[i];
+                xp1_b[i] = xp_b[i];
+                break;
+            case 2:
+                xp3_a[i] = xp_a[i];
+                xp2_b[i] = xp_b[i];
+                break;
+        }
+    }
 }

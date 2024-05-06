@@ -80,6 +80,9 @@ struct Kernels {
     pub(crate) not: CudaFunction,
     pub(crate) lift_mul_sub_split: CudaFunction,
     pub(crate) transpose_64x64: CudaFunction,
+    pub(crate) transpose_32x64: CudaFunction,
+    pub(crate) split1: CudaFunction,
+    pub(crate) split2: CudaFunction,
 }
 
 impl Kernels {
@@ -97,6 +100,9 @@ impl Kernels {
                 "shared_not",
                 "shared_lift_mul_sub_split",
                 "shared_u64_transpose_pack_u64",
+                "shared_u32_transpose_pack_u64",
+                "shared_split1",
+                "shared_split2",
             ],
         )
         .unwrap();
@@ -111,6 +117,11 @@ impl Kernels {
         let transpose_64x64 = dev
             .get_func(Self::MOD_NAME, "shared_u64_transpose_pack_u64")
             .unwrap();
+        let transpose_32x64 = dev
+            .get_func(Self::MOD_NAME, "shared_u32_transpose_pack_u64")
+            .unwrap();
+        let split1 = dev.get_func(Self::MOD_NAME, "shared_split1").unwrap();
+        let split2 = dev.get_func(Self::MOD_NAME, "shared_split2").unwrap();
 
         Kernels {
             and,
@@ -120,6 +131,9 @@ impl Kernels {
             not,
             lift_mul_sub_split,
             transpose_64x64,
+            transpose_32x64,
+            split1,
+            split2,
         }
     }
 }
@@ -128,6 +142,7 @@ pub struct Circuits {
     peer_id: usize,
     next_id: usize,
     cfg: LaunchConfig,
+    cfg_inp: LaunchConfig,
     chunk_size: usize,
     n_devices: usize,
     devs: Vec<Arc<CudaDevice>>,
@@ -155,6 +170,7 @@ impl Circuits {
 
         // TODO check this
         let cfg = Self::launch_config_from_elements_and_threads(chunk_size as u32, 1024);
+        let cfg_inp = Self::launch_config_from_elements_and_threads(chunk_size as u32 * 64, 1024);
 
         let mut devs = Vec::with_capacity(n_devices);
         let mut kernels = Vec::with_capacity(n_devices);
@@ -217,6 +233,7 @@ impl Circuits {
             peer_id,
             next_id: (peer_id + 1) % 3,
             cfg,
+            cfg_inp,
             chunk_size,
             n_devices,
             devs,
@@ -535,9 +552,94 @@ impl Circuits {
         y
     }
 
+    fn split1(
+        &self,
+        inp: Vec<ChunkShare<u16>>,
+        xa: &mut [ChunkShare<u64>],
+        xp: &mut [ChunkShare<u32>],
+        xpp: &mut [ChunkShare<u32>],
+    ) {
+        for (idx, (inp, xa, xp, xpp)) in izip!(inp, xa, xp, xpp).enumerate() {
+            unsafe {
+                self.kernels[idx]
+                    .split1
+                    .clone()
+                    .launch(
+                        self.cfg_inp.to_owned(),
+                        (
+                            &inp.a,
+                            &inp.b,
+                            &xa.a,
+                            &xa.b,
+                            &xp.a,
+                            &xp.b,
+                            &xpp.a,
+                            &xpp.b,
+                            self.chunk_size * 64,
+                            self.peer_id as u32,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
+    fn split2(
+        &self,
+        xp: Vec<ChunkShare<u64>>,
+        xp1: &mut [ChunkShare<u64>],
+        xp2: &mut [ChunkShare<u64>],
+        xp3: &mut [ChunkShare<u64>],
+    ) {
+        for (idx, (xp, xp1, xp2, xp3)) in izip!(xp, xp1, xp2, xp3).enumerate() {
+            unsafe {
+                self.kernels[idx]
+                    .split2
+                    .clone()
+                    .launch(
+                        self.cfg.to_owned(),
+                        (
+                            &xp.a,
+                            &xp.b,
+                            &xp1.a,
+                            &xp1.b,
+                            &xp2.a,
+                            &xp2.b,
+                            &xp3.a,
+                            &xp3.b,
+                            self.chunk_size,
+                            self.peer_id as u32,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
     // input should be of size: n_devices * input_size
     fn lift_p2k(&mut self, shares: Vec<ChunkShare<u16>>) -> Vec<ChunkShare<u64>> {
         debug_assert_eq!(self.n_devices, shares.len());
+
+        // TODO the buffers should probably already be allocated
+        let mut xa = self.allocate_buffer::<u64>(self.chunk_size * 64);
+        let mut xp = self.allocate_buffer::<u32>(self.chunk_size * 64);
+        let mut xpp = self.allocate_buffer::<u32>(self.chunk_size * 64);
+        let mut xp1 = self.allocate_buffer::<u64>(self.chunk_size);
+        let mut xp2 = self.allocate_buffer::<u64>(self.chunk_size);
+        let mut xp3 = self.allocate_buffer::<u64>(self.chunk_size);
+        let mut xpp1 = self.allocate_buffer::<u64>(self.chunk_size);
+        let mut xpp2 = self.allocate_buffer::<u64>(self.chunk_size);
+        let mut xpp3 = self.allocate_buffer::<u64>(self.chunk_size);
+
+        self.split1(shares, &mut xa, &mut xp, &mut xpp);
+        let xp = self.transpose_pack_u32_with_len(xp, 18);
+        let xpp = self.transpose_pack_u32_with_len(xpp, 18);
+
+        self.split2(xp, &mut xp1, &mut xp2, &mut xp3);
+        self.split2(xpp, &mut xpp1, &mut xpp2, &mut xpp3);
+
+        let (o1, o2) = self.binary_add_3_get_msb_twice::<18>(xp1, xp2, xp3, xpp1, xpp2, xpp3);
+
         todo!()
     }
 
@@ -680,6 +782,39 @@ impl Circuits {
 
         // TODO no truncation and convert to bits yet!
         (ca, cb)
+    }
+
+    fn transpose_pack_u32_with_len(
+        &mut self,
+        inp: Vec<ChunkShare<u32>>,
+        bitlen: usize,
+    ) -> Vec<ChunkShare<u64>> {
+        debug_assert_eq!(self.n_devices, inp.len());
+
+        // TODO the buffers should probably already be allocated
+        let mut res = self.allocate_buffer::<u64>(self.chunk_size * bitlen);
+
+        for (idx, (inp, outp)) in izip!(inp, &mut res).enumerate() {
+            unsafe {
+                self.kernels[idx]
+                    .transpose_32x64
+                    .clone()
+                    .launch(
+                        self.cfg.to_owned(),
+                        (
+                            &mut outp.a,
+                            &mut outp.b,
+                            &inp.a,
+                            &inp.b,
+                            self.chunk_size * 64,
+                            bitlen,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+
+        res
     }
 
     fn transpose_pack_u64_with_len(
@@ -928,7 +1063,7 @@ impl Circuits {
                     .lift_mul_sub_split
                     .clone()
                     .launch(
-                        self.cfg.to_owned(),
+                        self.cfg_inp.to_owned(),
                         (
                             x01,
                             &m.a,
