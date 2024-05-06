@@ -1,16 +1,16 @@
 pub mod rng;
 pub mod setup;
 
-use std::{ffi::c_void, str::FromStr, sync::Arc, thread, time::Duration};
+use std::{ffi::c_void, ptr, str::FromStr, sync::Arc, thread, time::Duration};
 
 use axum::{extract::Path, routing::get, Router};
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
-        CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, LaunchAsync,
-        LaunchConfig,
+        CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceSlice,
+        LaunchAsync, LaunchConfig,
     },
-    nccl::{Comm, Id},
+    nccl::{result, Comm, Id, NcclType},
     nvrtc::compile_ptx,
 };
 use rayon::prelude::*;
@@ -95,6 +95,30 @@ pub fn gemm(
     }
 }
 
+fn broadcast_stream<T: NcclType>(
+    sendbuff: &Option<&CudaSlice<T>>,
+    recvbuff: &mut CudaSlice<T>,
+    root: i32,
+    comm: &Comm,
+    stream: &CudaStream,
+) -> Result<result::NcclStatus, result::NcclError> {
+    unsafe {
+        let send_ptr = match sendbuff {
+            Some(buffer) => *buffer.device_ptr() as *const _,
+            None => ptr::null(),
+        };
+        result::broadcast(
+            send_ptr,
+            *recvbuff.device_ptr() as *mut c_void,
+            recvbuff.len(),
+            T::as_nccl_type(),
+            root,
+            comm.comm,
+            stream.stream as *mut _,
+        )
+    }
+}
+
 async fn http_root(ids: Vec<Id>, Path(device_id): Path<String>) -> String {
     let device_id: usize = device_id.parse().unwrap();
     IdWrapper(ids[device_id]).to_string()
@@ -147,6 +171,7 @@ impl DistanceComparator {
         &mut self,
         codes_result_peers: &Vec<Vec<CudaSlice<u8>>>,
         masks_result_peers: &Vec<Vec<CudaSlice<u8>>>,
+        streams: &Vec<CudaStream>
     ) {
         let num_elements = self.db_length / self.n_devices * self.query_length;
         let threads_per_block = 256;
@@ -161,7 +186,8 @@ impl DistanceComparator {
             unsafe {
                 self.kernels[i]
                     .clone()
-                    .launch(
+                    .launch_on_stream(
+                        &streams[i],
                         cfg,
                         (
                             &codes_result_peers[i][0],
@@ -177,10 +203,6 @@ impl DistanceComparator {
                     )
                     .unwrap();
             }
-        }
-
-        for i in 0..self.n_devices {
-            self.devs[i].synchronize().unwrap();
         }
     }
 
@@ -269,11 +291,11 @@ pub struct ShareDB {
     query_length: usize,
     limbs: usize,
     n_devices: usize,
-    blass: Vec<CudaBlas>,
+    // blass: Vec<CudaBlas>,
     devs: Vec<Arc<CudaDevice>>,
     kernels: Vec<CudaFunction>,
     rngs: Vec<(ChaChaCudaFeRng, ChaChaCudaFeRng)>,
-    streams: Vec<CudaStream>,
+    // streams: Vec<CudaStream>,
     comms: Vec<Arc<Comm>>,
     db1: Vec<CudaSlice<u8>>,
     db0: Vec<CudaSlice<u8>>,
@@ -306,13 +328,13 @@ impl ShareDB {
         let is_remote = is_remote.unwrap_or(false);
 
         let mut devs = Vec::new();
-        let mut blass = Vec::new();
+        // let mut blass = Vec::new();
         let mut kernels = Vec::new();
-        let mut streams = Vec::new();
+        // let mut streams = Vec::new();
 
         for i in 0..n_devices {
             let dev = CudaDevice::new(i).unwrap();
-            let blas = CudaBlas::new(dev.clone()).unwrap();
+            // let blas = CudaBlas::new(dev.clone()).unwrap();
             // let stream = dev.fork_default_stream().unwrap();
             // unsafe {
             //     blas.set_stream(Some(&stream)).unwrap();
@@ -324,7 +346,7 @@ impl ShareDB {
                 .unwrap();
 
             // streams.push(stream);
-            blass.push(blas);
+            // blass.push(blas);
             devs.push(dev);
             kernels.push(function);
         }
@@ -477,11 +499,11 @@ impl ShareDB {
             query_length,
             limbs,
             n_devices,
-            blass,
+            // blass,
             devs,
             kernels,
             rngs,
-            streams,
+            // streams,
             comms,
             db1,
             db0,
@@ -512,7 +534,14 @@ impl ShareDB {
         result.to_vec()
     }
 
-    pub fn dot(&mut self, preprocessed_query: &Vec<Vec<u8>>) {
+    pub fn fork_streams(&self) -> Vec<CudaStream> {
+        self.devs
+            .iter()
+            .map(|dev| dev.fork_default_stream().unwrap())
+            .collect::<Vec<_>>()
+    }
+
+    pub fn dot(&mut self, preprocessed_query: &Vec<Vec<u8>>, streams: &Vec<CudaStream>) {
         let num_elements = self.db_length / self.n_devices * self.query_length;
         let threads_per_block = 256;
         let blocks_per_grid = num_elements.div_ceil(threads_per_block);
@@ -523,6 +552,13 @@ impl ShareDB {
         };
 
         for idx in 0..self.n_devices {
+            let blas = CudaBlas::new(self.devs[idx].clone()).unwrap();
+            let stream = self.devs[idx].fork_default_stream().unwrap();
+            unsafe {
+                blas.set_stream(Some(&stream)).unwrap();
+            }
+
+            // TODO: streams
             let query1 = self.devs[idx]
                 .htod_sync_copy(&preprocessed_query[1])
                 .unwrap();
@@ -532,13 +568,13 @@ impl ShareDB {
 
             // Prepare randomness to mask results
             if self.is_remote {
-                self.rngs[idx].0.fill_rng_no_host_copy();
-                self.rngs[idx].1.fill_rng_no_host_copy();
+                self.rngs[idx].0.fill_rng_no_host_copy(&streams[idx]);
+                self.rngs[idx].1.fill_rng_no_host_copy(&streams[idx]);
             }
 
             // Calculate sums to correct output
             gemm(
-                &self.blass[idx],
+                &blas,
                 &query1,
                 &self.ones[idx],
                 &mut self.query1_sums[idx],
@@ -553,7 +589,7 @@ impl ShareDB {
             );
 
             gemm(
-                &self.blass[idx],
+                &blas,
                 &query0,
                 &self.ones[idx],
                 &mut self.query0_sums[idx],
@@ -570,7 +606,7 @@ impl ShareDB {
             for (i, d) in [&self.db0[idx], &self.db1[idx]].iter().enumerate() {
                 for (j, q) in [&query0, &query1].iter().enumerate() {
                     gemm(
-                        &self.blass[idx],
+                        &blas,
                         d,
                         q,
                         &mut self.intermediate_results[idx],
@@ -590,8 +626,8 @@ impl ShareDB {
             unsafe {
                 self.kernels[idx]
                     .clone()
-                    .launch(
-                        // &self.streams[idx],
+                    .launch_on_stream(
+                        &streams[idx],
                         cfg,
                         (
                             &self.intermediate_results[idx],
@@ -611,42 +647,21 @@ impl ShareDB {
                     .unwrap();
             }
         }
-
-        for idx in 0..self.n_devices {
-            self.devs[idx].synchronize().unwrap();
-        }
     }
-
-    pub fn randomize_results(&mut self) {}
 
     /// Broadcasts the results to all other peers.
     /// Calls are async to host, but sync to device.
-    pub fn exchange_results(&mut self) {
+    pub fn exchange_results(&mut self, streams: &Vec<CudaStream>) {
         for idx in 0..self.n_devices {
-            self.comms[idx]
-                .broadcast(
+            for i in 0..3 {
+                broadcast_stream(
                     &Some(&self.results[idx]),
-                    &mut self.results_peers[idx][0],
-                    0,
-                )
-                .unwrap();
-            self.comms[idx]
-                .broadcast(
-                    &Some(&self.results[idx]),
-                    &mut self.results_peers[idx][1],
-                    1,
-                )
-                .unwrap();
-            self.comms[idx]
-                .broadcast(
-                    &Some(&self.results[idx]),
-                    &mut self.results_peers[idx][2],
-                    2,
-                )
-                .unwrap();
-        }
-        for idx in 0..self.n_devices {
-            self.devs[idx].synchronize().unwrap();
+                    &mut self.results_peers[idx][i],
+                    i as i32,
+                    &self.comms[idx],
+                    &streams[idx],
+                ).unwrap();
+            }
         }
     }
 
@@ -683,6 +698,7 @@ impl ShareDB {
                 .unwrap();
         }
     }
+
 }
 
 #[cfg(test)]
@@ -777,7 +793,7 @@ mod tests {
         }
     }
 
-    /// Checks that the result of a matmul of the original data equals the 
+    /// Checks that the result of a matmul of the original data equals the
     /// reconstructed result of individual matmuls on the shamir shares.
     #[test]
     fn check_shared_matmul() {
@@ -849,7 +865,7 @@ mod tests {
         }
     }
 
-    /// Calculates the distances between a query and a shamir secret shared db and 
+    /// Calculates the distances between a query and a shamir secret shared db and
     /// checks the result against reference plain implementation.
     #[test]
     fn check_shared_distances() {

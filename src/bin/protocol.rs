@@ -6,7 +6,7 @@
 
 use std::{env, time::Instant};
 
-use cudarc::driver::CudaDevice;
+use cudarc::driver::{result::stream::synchronize, CudaDevice};
 use float_eq::assert_float_eq;
 use gpu_iris_mpc::{
     setup::{
@@ -127,28 +127,32 @@ async fn main() -> eyre::Result<()> {
     for _ in 0..1 {
         let now = Instant::now();
 
-        codes_engine.dot(&code_query);
+        // share one set of streams for both engines
+        let streams = codes_engine.fork_streams();
+
+        codes_engine.dot(&code_query, &streams);
         println!("Dot codes took: {:?}", now.elapsed());
 
-        codes_engine.exchange_results();
+        codes_engine.exchange_results(&streams);
         println!("Exchange codes took: {:?}", now.elapsed());
 
-        masks_engine.dot(&mask_query);
+        masks_engine.dot(&mask_query, &streams);
         println!("Dot masks took: {:?}", now.elapsed());
 
-        masks_engine.exchange_results();
+        masks_engine.exchange_results(&streams);
         println!("Exchange masks took: {:?}", now.elapsed());
 
         distance_comparator
-            .reconstruct_and_compare(&codes_engine.results_peers, &masks_engine.results_peers);
+            .reconstruct_and_compare(&codes_engine.results_peers, &masks_engine.results_peers, &streams);
 
+        // wait for streams
+        // TODO: move outside
+        for stream in streams {
+            unsafe {synchronize(stream.stream).unwrap()};
+        }
+            
         println!("Total time: {:?}", now.elapsed());
     }
-
-    let mut results_codes = vec![0u16; DB_SIZE / n_devices * QUERIES];
-    codes_engine.fetch_results(&mut results_codes, 0);
-    let mut results_masks = vec![0u16; DB_SIZE / n_devices * QUERIES];
-    masks_engine.fetch_results(&mut results_masks, 0);
 
     // Sanity check: compare results against reference (debug only)
     let (dists, _) = distance_comparator
