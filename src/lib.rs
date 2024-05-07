@@ -559,17 +559,9 @@ impl ShareDB {
 
         for idx in 0..self.n_devices {
             let blas = CudaBlas::new(self.devs[idx].clone()).unwrap();
-            let stream = self.devs[idx].fork_default_stream().unwrap();
             unsafe {
-                blas.set_stream(Some(&stream)).unwrap();
+                blas.set_stream(Some(&streams[idx])).unwrap();
             }
-
-            // let query1 = self.devs[idx]
-            //     .htod_sync_copy(&preprocessed_query[1])
-            //     .unwrap();
-            // let query0 = self.devs[idx]
-            //     .htod_sync_copy(&preprocessed_query[0])
-            //     .unwrap();
 
             // TODO: helper
             self.devs[idx].bind_to_thread().unwrap();
@@ -579,7 +571,7 @@ impl ShareDB {
                     .unwrap()
             };
             unsafe {
-                memcpy_htod_async(*query1.device_ptr(), &preprocessed_query[1], stream.stream).unwrap();
+                memcpy_htod_async(*query1.device_ptr(), &preprocessed_query[1], streams[idx].stream).unwrap();
             }
 
             let query0: CudaSlice<u8> = unsafe {
@@ -588,7 +580,7 @@ impl ShareDB {
                     .unwrap()
             };
             unsafe {
-                memcpy_htod_async(*query0.device_ptr(), &preprocessed_query[0], stream.stream).unwrap();
+                memcpy_htod_async(*query0.device_ptr(), &preprocessed_query[0], streams[idx].stream).unwrap();
             }
 
             // Prepare randomness to mask results
@@ -803,236 +795,236 @@ mod tests {
             }
         }
 
-        // for device_idx in 0..N_DEVICES {
-            engine.fetch_results(&mut gpu_result, 0);
+        for device_idx in 0..N_DEVICES {
+            engine.fetch_results(&mut gpu_result, device_idx);
             let selected_elements: Vec<u16> = vec_column_major
                 .chunks(DB_SIZE)
                 .flat_map(|chunk| {
                     chunk
                         .iter()
-                        .skip(DB_SIZE / N_DEVICES * 0)
+                        .skip(DB_SIZE / N_DEVICES * device_idx)
                         .take(DB_SIZE / N_DEVICES)
                 })
                 .cloned()
                 .collect();
 
-            assert_eq!(selected_elements[0..10], gpu_result[0..10]);
-        // }
+            assert_eq!(selected_elements, gpu_result);
+        }
     }
 
-    // /// Checks that the result of a matmul of the original data equals the
-    // /// reconstructed result of individual matmuls on the shamir shares.
-    // #[test]
-    // fn check_shared_matmul() {
-    //     let mut rng = StdRng::seed_from_u64(RNG_SEED);
-    //     let db = random_vec(DB_SIZE, WIDTH, P as u32);
-    //     let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
-    //     let mut gpu_result = vec![
-    //         vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
-    //         vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
-    //         vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
-    //     ];
+    /// Checks that the result of a matmul of the original data equals the
+    /// reconstructed result of individual matmuls on the shamir shares.
+    #[test]
+    fn check_shared_matmul() {
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+        let db = random_vec(DB_SIZE, WIDTH, P as u32);
+        let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
+        let mut gpu_result = vec![
+            vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
+            vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
+            vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
+        ];
 
-    //     // Calculate non-shared
-    //     let a_nda = random_ndarray::<u64>(db.clone(), DB_SIZE, WIDTH);
-    //     let b_nda = random_ndarray::<u64>(query.clone(), QUERY_SIZE, WIDTH);
-    //     let c_nda = a_nda.dot(&b_nda.t());
+        // Calculate non-shared
+        let a_nda = random_ndarray::<u64>(db.clone(), DB_SIZE, WIDTH);
+        let b_nda = random_ndarray::<u64>(query.clone(), QUERY_SIZE, WIDTH);
+        let c_nda = a_nda.dot(&b_nda.t());
 
-    //     let mut vec_column_major: Vec<u16> = Vec::new();
-    //     for col in 0..c_nda.ncols() {
-    //         for row in c_nda.column(col) {
-    //             vec_column_major.push((*row % (P as u64)) as u16);
-    //         }
-    //     }
+        let mut vec_column_major: Vec<u16> = Vec::new();
+        for col in 0..c_nda.ncols() {
+            for row in c_nda.column(col) {
+                vec_column_major.push((*row % (P as u64)) as u16);
+            }
+        }
 
-    //     let mut dbs = vec![vec![], vec![], vec![]];
-    //     let mut querys = vec![vec![], vec![], vec![]];
+        let mut dbs = vec![vec![], vec![], vec![]];
+        let mut querys = vec![vec![], vec![], vec![]];
 
-    //     // Calculate shared
-    //     for i in 0..db.len() {
-    //         let shares = Shamir::share_d1(db[i], &mut rng);
-    //         dbs[0].push(shares[0]);
-    //         dbs[1].push(shares[1]);
-    //         dbs[2].push(shares[2]);
-    //     }
+        // Calculate shared
+        for i in 0..db.len() {
+            let shares = Shamir::share_d1(db[i], &mut rng);
+            dbs[0].push(shares[0]);
+            dbs[1].push(shares[1]);
+            dbs[2].push(shares[2]);
+        }
 
-    //     for i in 0..query.len() {
-    //         let shares = Shamir::share_d1(query[i], &mut rng);
-    //         querys[0].push(shares[0]);
-    //         querys[1].push(shares[1]);
-    //         querys[2].push(shares[2]);
-    //     }
+        for i in 0..query.len() {
+            let shares = Shamir::share_d1(query[i], &mut rng);
+            querys[0].push(shares[0]);
+            querys[1].push(shares[1]);
+            querys[2].push(shares[2]);
+        }
 
-    //     for i in 0..3 {
-    //         let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(i as u8).unwrap());
+        for i in 0..3 {
+            let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(i as u8).unwrap());
 
-    //         let mut engine = ShareDB::init(
-    //             0,
-    //             l_coeff,
-    //             &dbs[i],
-    //             QUERY_SIZE,
-    //             ([0u32; 8], [0u32; 8]),
-    //             None,
-    //             None,
-    //             None,
-    //         );
-    //         let preprocessed_query = engine.preprocess_query(&querys[i]);
-    //         let streams = engine.fork_streams();
-    //         engine.dot(&preprocessed_query, &streams);
-    //         engine.await_streams(&streams);
-    //         engine.fetch_results(&mut gpu_result[i], 0);
-    //     }
+            let mut engine = ShareDB::init(
+                0,
+                l_coeff,
+                &dbs[i],
+                QUERY_SIZE,
+                ([0u32; 8], [0u32; 8]),
+                None,
+                None,
+                None,
+            );
+            let preprocessed_query = engine.preprocess_query(&querys[i]);
+            let streams = engine.fork_streams();
+            engine.dot(&preprocessed_query, &streams);
+            engine.await_streams(&streams);
+            engine.fetch_results(&mut gpu_result[i], 0);
+        }
 
-    //     // TODO: we should check for all devices
-    //     for i in 0..DB_SIZE / N_DEVICES {
-    //         assert_eq!(
-    //             (gpu_result[0][i] as u32 + gpu_result[1][i] as u32 + gpu_result[2][i] as u32)
-    //                 % P as u32,
-    //             vec_column_major[i] as u32
-    //         );
-    //     }
-    // }
+        // TODO: we should check for all devices
+        for i in 0..DB_SIZE / N_DEVICES {
+            assert_eq!(
+                (gpu_result[0][i] as u32 + gpu_result[1][i] as u32 + gpu_result[2][i] as u32)
+                    % P as u32,
+                vec_column_major[i] as u32
+            );
+        }
+    }
 
-    // /// Calculates the distances between a query and a shamir secret shared db and
-    // /// checks the result against reference plain implementation.
-    // #[test]
-    // fn check_shared_distances() {
-    //     let mut rng = StdRng::seed_from_u64(RNG_SEED);
-    //     let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
-    //     let shamir_db = ShamirIrisDB::share_db_par(&db, &mut rng);
+    /// Calculates the distances between a query and a shamir secret shared db and
+    /// checks the result against reference plain implementation.
+    #[test]
+    fn check_shared_distances() {
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+        let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
+        let shamir_db = ShamirIrisDB::share_db_par(&db, &mut rng);
 
-    //     // Prepare query
-    //     let query_template = db.db[0].get_similar_iris(&mut rng);
-    //     let random_query = ShamirIris::share_iris(&query_template, &mut rng);
-    //     let mut code_queries = vec![vec![], vec![], vec![]];
-    //     let mut mask_queries = vec![vec![], vec![], vec![]];
+        // Prepare query
+        let query_template = db.db[0].get_similar_iris(&mut rng);
+        let random_query = ShamirIris::share_iris(&query_template, &mut rng);
+        let mut code_queries = vec![vec![], vec![], vec![]];
+        let mut mask_queries = vec![vec![], vec![], vec![]];
 
-    //     for i in 0..QUERY_SIZE {
-    //         // TODO: rotate
-    //         let tmp: [ShamirIris; 3] = random_query.clone();
-    //         code_queries[0].push(tmp[0].code.to_vec());
-    //         code_queries[1].push(tmp[1].code.to_vec());
-    //         code_queries[2].push(tmp[2].code.to_vec());
+        for i in 0..QUERY_SIZE {
+            // TODO: rotate
+            let tmp: [ShamirIris; 3] = random_query.clone();
+            code_queries[0].push(tmp[0].code.to_vec());
+            code_queries[1].push(tmp[1].code.to_vec());
+            code_queries[2].push(tmp[2].code.to_vec());
 
-    //         mask_queries[0].push(tmp[0].mask.to_vec());
-    //         mask_queries[1].push(tmp[1].mask.to_vec());
-    //         mask_queries[2].push(tmp[2].mask.to_vec());
-    //     }
+            mask_queries[0].push(tmp[0].mask.to_vec());
+            mask_queries[1].push(tmp[1].mask.to_vec());
+            mask_queries[2].push(tmp[2].mask.to_vec());
+        }
 
-    //     let mut results_codes = vec![
-    //         vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
-    //         vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
-    //         vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
-    //     ];
+        let mut results_codes = vec![
+            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
+            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
+            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
+        ];
 
-    //     let mut results_masks = vec![
-    //         vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
-    //         vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
-    //         vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
-    //     ];
+        let mut results_masks = vec![
+            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
+            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
+            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
+        ];
 
-    //     for party_id in 0..3 {
-    //         let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(party_id as u8).unwrap());
+        for party_id in 0..3 {
+            let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(party_id as u8).unwrap());
 
-    //         let codes_db = shamir_db[party_id]
-    //             .db
-    //             .iter()
-    //             .flat_map(|entry| entry.code)
-    //             .collect::<Vec<_>>();
+            let codes_db = shamir_db[party_id]
+                .db
+                .iter()
+                .flat_map(|entry| entry.code)
+                .collect::<Vec<_>>();
 
-    //         let masks_db = shamir_db[party_id]
-    //             .db
-    //             .iter()
-    //             .flat_map(|entry| entry.mask)
-    //             .collect::<Vec<_>>();
+            let masks_db = shamir_db[party_id]
+                .db
+                .iter()
+                .flat_map(|entry| entry.mask)
+                .collect::<Vec<_>>();
 
-    //         let mut codes_engine = ShareDB::init(
-    //             party_id,
-    //             l_coeff,
-    //             &codes_db,
-    //             QUERY_SIZE,
-    //             ([0u32; 8], [0u32; 8]),
-    //             None,
-    //             None,
-    //             None,
-    //         );
-    //         let mut masks_engine = ShareDB::init(
-    //             party_id,
-    //             l_coeff,
-    //             &masks_db,
-    //             QUERY_SIZE,
-    //             ([0u32; 8], [0u32; 8]),
-    //             None,
-    //             None,
-    //             None,
-    //         );
+            let mut codes_engine = ShareDB::init(
+                party_id,
+                l_coeff,
+                &codes_db,
+                QUERY_SIZE,
+                ([0u32; 8], [0u32; 8]),
+                None,
+                None,
+                None,
+            );
+            let mut masks_engine = ShareDB::init(
+                party_id,
+                l_coeff,
+                &masks_db,
+                QUERY_SIZE,
+                ([0u32; 8], [0u32; 8]),
+                None,
+                None,
+                None,
+            );
 
-    //         let code_query = codes_engine.preprocess_query(
-    //             &code_queries[party_id]
-    //                 .clone()
-    //                 .into_iter()
-    //                 .flatten()
-    //                 .collect::<Vec<_>>(),
-    //         );
-    //         let mask_query = masks_engine.preprocess_query(
-    //             &mask_queries[party_id]
-    //                 .clone()
-    //                 .into_iter()
-    //                 .flatten()
-    //                 .collect::<Vec<_>>(),
-    //         );
+            let code_query = codes_engine.preprocess_query(
+                &code_queries[party_id]
+                    .clone()
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>(),
+            );
+            let mask_query = masks_engine.preprocess_query(
+                &mask_queries[party_id]
+                    .clone()
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>(),
+            );
 
-    //         let codes_streams = codes_engine.fork_streams();
-    //         let masks_streams = masks_engine.fork_streams();
+            let codes_streams = codes_engine.fork_streams();
+            let masks_streams = masks_engine.fork_streams();
 
-    //         codes_engine.dot(&code_query, &codes_streams);
-    //         masks_engine.dot(&mask_query, &masks_streams);
+            codes_engine.dot(&code_query, &codes_streams);
+            masks_engine.dot(&mask_query, &masks_streams);
 
-    //         codes_engine.await_streams(&codes_streams);
-    //         masks_engine.await_streams(&masks_streams);
+            codes_engine.await_streams(&codes_streams);
+            masks_engine.await_streams(&masks_streams);
 
-    //         // TODO: fetch results also for other devices
-    //         codes_engine.fetch_results(&mut results_codes[party_id], 0);
-    //         masks_engine.fetch_results(&mut results_masks[party_id], 0);
-    //     }
+            // TODO: fetch results also for other devices
+            codes_engine.fetch_results(&mut results_codes[party_id], 0);
+            masks_engine.fetch_results(&mut results_masks[party_id], 0);
+        }
 
-    //     // Reconstruct the results
-    //     let mut reconstructed_codes = vec![];
-    //     let mut reconstructed_masks = vec![];
+        // Reconstruct the results
+        let mut reconstructed_codes = vec![];
+        let mut reconstructed_masks = vec![];
 
-    //     for i in 0..results_codes[0].len() {
-    //         let code = (results_codes[0][i] as u32
-    //             + results_codes[1][i] as u32
-    //             + results_codes[2][i] as u32)
-    //             % P as u32;
-    //         let mask = (results_masks[0][i] as u32
-    //             + results_masks[1][i] as u32
-    //             + results_masks[2][i] as u32)
-    //             % P as u32;
+        for i in 0..results_codes[0].len() {
+            let code = (results_codes[0][i] as u32
+                + results_codes[1][i] as u32
+                + results_codes[2][i] as u32)
+                % P as u32;
+            let mask = (results_masks[0][i] as u32
+                + results_masks[1][i] as u32
+                + results_masks[2][i] as u32)
+                % P as u32;
 
-    //         reconstructed_codes.push(code);
-    //         reconstructed_masks.push(mask);
-    //         println!("{} {}", code, mask);
-    //     }
+            reconstructed_codes.push(code);
+            reconstructed_masks.push(mask);
+            println!("{} {}", code, mask);
+        }
 
-    //     // Calculate the distance in plain
-    //     let dists = reconstructed_codes
-    //         .into_iter()
-    //         .zip(reconstructed_masks)
-    //         .map(|(code, mask)| {
-    //             const OFFSET: u32 = 32759;
-    //             let offset_nom = (code as u32 + OFFSET) % (P as u32);
-    //             0.5f64 - offset_nom as f64 / (2f64 * mask as f64)
-    //                 + OFFSET as f64 / (2f64 * mask as f64)
-    //         })
-    //         .collect::<Vec<_>>();
+        // Calculate the distance in plain
+        let dists = reconstructed_codes
+            .into_iter()
+            .zip(reconstructed_masks)
+            .map(|(code, mask)| {
+                const OFFSET: u32 = 32759;
+                let offset_nom = (code as u32 + OFFSET) % (P as u32);
+                0.5f64 - offset_nom as f64 / (2f64 * mask as f64)
+                    + OFFSET as f64 / (2f64 * mask as f64)
+            })
+            .collect::<Vec<_>>();
 
-    //     // Compare against plain reference implementation
-    //     let reference_dists = db.calculate_distances(&query_template);
+        // Compare against plain reference implementation
+        let reference_dists = db.calculate_distances(&query_template);
 
-    //     // TODO: check for all devices and the whole query
-    //     for i in 0..DB_SIZE / N_DEVICES {
-    //         assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-6);
-    //     }
-    // }
+        // TODO: check for all devices and the whole query
+        for i in 0..DB_SIZE / N_DEVICES {
+            assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-6);
+        }
+    }
 }
