@@ -244,6 +244,13 @@ impl Circuits {
         }
     }
 
+    pub fn next_id(&self) -> usize {
+        self.next_id
+    }
+    pub fn prev_id(&self) -> usize {
+        self.prev_id
+    }
+
     pub fn get_devices(&self) -> Vec<Arc<CudaDevice>> {
         self.devs.clone()
     }
@@ -257,7 +264,7 @@ impl Circuits {
         }
     }
 
-    pub fn send_view<T>(&mut self, send: &CudaView<T>, idx: usize)
+    pub fn send_view<T>(&mut self, send: &CudaView<T>, peer_id: usize, idx: usize)
     where
         T: cudarc::nccl::NcclType,
     {
@@ -267,7 +274,7 @@ impl Circuits {
                 *send.device_ptr() as *mut _,
                 send.len(),
                 T::as_nccl_type(),
-                idx as i32,
+                peer_id as i32,
                 self.comms[idx].comm,
                 *self.comms[idx].device.cu_stream() as *mut _,
             )
@@ -277,7 +284,7 @@ impl Circuits {
         self.devs[idx].synchronize().unwrap();
     }
 
-    pub fn receive_view<T>(&mut self, receive: &mut CudaView<T>, idx: usize)
+    pub fn receive_view<T>(&mut self, receive: &mut CudaView<T>, peer_id: usize, idx: usize)
     where
         T: cudarc::nccl::NcclType,
     {
@@ -287,7 +294,7 @@ impl Circuits {
                 *receive.device_ptr() as *mut _,
                 receive.len(),
                 T::as_nccl_type(),
-                idx as i32,
+                peer_id as i32,
                 self.comms[idx].comm,
                 *self.comms[idx].device.cu_stream() as *mut _,
             )
@@ -347,7 +354,7 @@ impl Circuits {
         // TODO check if this is the best we can do
         for i in 0..bits {
             let send = res.a.slice(i * self.chunk_size..(i + 1) * self.chunk_size);
-            self.send_view(&send, idx);
+            self.send_view(&send, self.next_id, idx);
         }
     }
 
@@ -355,7 +362,7 @@ impl Circuits {
         // TODO check if this is the best we can do
         for i in 0..bits {
             let mut rcv = res.b.slice(i * self.chunk_size..(i + 1) * self.chunk_size);
-            self.receive_view(&mut rcv, idx);
+            self.receive_view(&mut rcv, self.prev_id, idx);
         }
     }
 
@@ -395,11 +402,14 @@ impl Circuits {
                 )
                 .unwrap();
         }
-        self.send_view(&res.a, idx);
+        // TODO: Split this up nicer so we are not having the corresponding end in another function...
+        result::group_start().unwrap();
+        self.send_view(&res.a, self.next_id, idx);
     }
 
     fn and_many_receive(&mut self, res: &mut ChunkShareView<u64>, idx: usize) {
-        self.receive_view(&mut res.b, idx);
+        self.receive_view(&mut res.b, self.prev_id, idx);
+        result::group_end().unwrap();
     }
 
     // TODO include randomness
@@ -863,14 +873,13 @@ impl Circuits {
         let x01_rec = self.allocate_single_buffer(self.chunk_size * 64);
         let mut x01 = Vec::with_capacity(self.n_devices);
 
+        result::group_start().unwrap();
         for (idx, (x01_send, mut x01_rec)) in izip!(x01_send, x01_rec).enumerate() {
-            result::group_start().unwrap();
             self.send(&x01_send, idx);
             self.receive(&mut x01_rec, idx);
-            result::group_end().unwrap();
             x01.push(ChunkShare::new(x01_send, x01_rec));
         }
-        println!("Done all send/recv");
+        result::group_end().unwrap();
 
         // Transpose
         let x01 = self.transpose_pack_u64_with_len(x01, Self::BITS);

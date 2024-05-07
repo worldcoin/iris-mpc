@@ -101,18 +101,20 @@ fn open(party: &mut Circuits, x: Vec<ChunkShare<u64>>) -> Vec<u64> {
     let mut b = Vec::with_capacity(n_devices);
     let mut c = Vec::with_capacity(n_devices);
 
+    cudarc::nccl::result::group_start().unwrap();
     for (idx, res) in x.iter().enumerate() {
         // Result is in bit 0
         let res = res.get_offset(0, CHUNK_SIZE);
-        party.send_view(&res.b, idx);
+        party.send_view(&res.b, party.next_id(), idx);
         a.push(res.a);
         b.push(res.b);
     }
     for (idx, res) in x.iter().enumerate() {
         let mut res = res.get_offset(1, CHUNK_SIZE);
-        party.receive_view(&mut res.a, idx);
+        party.receive_view(&mut res.a, party.prev_id(), idx);
         c.push(res.a);
     }
+    cudarc::nccl::result::group_end().unwrap();
 
     let mut result = Vec::with_capacity(n_devices * CHUNK_SIZE);
     let devices = party.get_devices();
