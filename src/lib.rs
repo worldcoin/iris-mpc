@@ -7,8 +7,13 @@ use axum::{extract::Path, routing::get, Router};
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
-        result::{memcpy_htod_async, stream::synchronize}, CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr,
-        DevicePtrMut, DeviceSlice, LaunchAsync, LaunchConfig,
+        result::{
+            event, memcpy_htod_async,
+            stream::{self, synchronize, wait_event},
+        },
+        sys::CUevent,
+        CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceSlice,
+        LaunchAsync, LaunchConfig,
     },
     nccl::{result, Comm, Id, NcclType},
     nvrtc::compile_ptx,
@@ -547,16 +552,28 @@ impl ShareDB {
             .for_each(|s| unsafe { synchronize(s.stream).unwrap() });
     }
 
-    pub fn dot(&mut self, preprocessed_query: &Vec<Vec<u8>>, streams: &Vec<CudaStream>) {
-        let num_elements = self.db_length / self.n_devices * self.query_length;
-        let threads_per_block = 256;
-        let blocks_per_grid = num_elements.div_ceil(threads_per_block);
-        let cfg = LaunchConfig {
-            block_dim: (threads_per_block as u32, 1, 1),
-            grid_dim: (blocks_per_grid as u32, 1, 1),
-            shared_mem_bytes: 0,
-        };
+    pub fn record_event(&self, streams: &Vec<CudaStream>, event: CUevent) {
+        for stream in streams {
+            unsafe {
+                event::record(event, stream.stream).unwrap();
+            };
+        }
+    }
 
+    pub fn await_event(&self, streams: &Vec<CudaStream>, event: CUevent) {
+        for stream in streams {
+            unsafe {
+                wait_event(
+                    stream.stream,
+                    event,
+                    cudarc::driver::sys::CUevent_wait_flags::CU_EVENT_WAIT_DEFAULT,
+                )
+                .unwrap();
+            };
+        }
+    }
+
+    pub fn dot(&mut self, preprocessed_query: &Vec<Vec<u8>>, streams: &Vec<CudaStream>) {
         for idx in 0..self.n_devices {
             let blas = CudaBlas::new(self.devs[idx].clone()).unwrap();
             unsafe {
@@ -571,7 +588,12 @@ impl ShareDB {
                     .unwrap()
             };
             unsafe {
-                memcpy_htod_async(*query1.device_ptr(), &preprocessed_query[1], streams[idx].stream).unwrap();
+                memcpy_htod_async(
+                    *query1.device_ptr(),
+                    &preprocessed_query[1],
+                    streams[idx].stream,
+                )
+                .unwrap();
             }
 
             let query0: CudaSlice<u8> = unsafe {
@@ -580,7 +602,12 @@ impl ShareDB {
                     .unwrap()
             };
             unsafe {
-                memcpy_htod_async(*query0.device_ptr(), &preprocessed_query[0], streams[idx].stream).unwrap();
+                memcpy_htod_async(
+                    *query0.device_ptr(),
+                    &preprocessed_query[0],
+                    streams[idx].stream,
+                )
+                .unwrap();
             }
 
             // Prepare randomness to mask results
@@ -639,7 +666,20 @@ impl ShareDB {
                     );
                 }
             }
+        }
+    }
 
+    pub fn dot_reduce(&mut self, streams: &Vec<CudaStream>) {
+        let num_elements = self.db_length / self.n_devices * self.query_length;
+        let threads_per_block = 256;
+        let blocks_per_grid = num_elements.div_ceil(threads_per_block);
+        let cfg = LaunchConfig {
+            block_dim: (threads_per_block as u32, 1, 1),
+            grid_dim: (blocks_per_grid as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        for idx in 0..self.n_devices {
             unsafe {
                 self.kernels[idx]
                     .clone()
@@ -782,6 +822,7 @@ mod tests {
         let preprocessed_query = engine.preprocess_query(&query);
         let streams = engine.fork_streams();
         engine.dot(&preprocessed_query, &streams);
+        engine.dot_reduce(&streams);
         engine.await_streams(&streams);
 
         let a_nda = random_ndarray::<u64>(db, DB_SIZE, WIDTH);
@@ -871,6 +912,7 @@ mod tests {
             let preprocessed_query = engine.preprocess_query(&querys[i]);
             let streams = engine.fork_streams();
             engine.dot(&preprocessed_query, &streams);
+            engine.dot_reduce(&streams);
             engine.await_streams(&streams);
             engine.fetch_results(&mut gpu_result[i], 0);
         }
@@ -979,6 +1021,9 @@ mod tests {
 
             codes_engine.dot(&code_query, &codes_streams);
             masks_engine.dot(&mask_query, &masks_streams);
+
+            codes_engine.dot_reduce(&codes_streams);
+            masks_engine.dot_reduce(&masks_streams);
 
             codes_engine.await_streams(&codes_streams);
             masks_engine.await_streams(&masks_streams);

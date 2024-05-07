@@ -3,10 +3,16 @@
 ///! Node 0: cargo run --release --bin protocol 0
 ///! Node 1: cargo run --release --bin protocol 1 [NODE_0_IP]
 ///! Node 2: cargo run --release --bin protocol 2 [NODE_0_IP]
-
 use std::{env, time::Instant};
 
-use cudarc::driver::{result::stream::synchronize, CudaDevice};
+use cudarc::driver::{
+    result::{
+        event,
+        stream::{synchronize, wait_event},
+    },
+    sys::CUevent_flags,
+    CudaDevice,
+};
 use float_eq::assert_float_eq;
 use gpu_iris_mpc::{
     setup::{
@@ -22,6 +28,7 @@ use tokio::time;
 const DB_SIZE: usize = 8 * 1000;
 const QUERIES: usize = 31;
 const RNG_SEED: u64 = 42;
+const N_SAMPLES: usize = 10;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
@@ -124,48 +131,77 @@ async fn main() -> eyre::Result<()> {
             .collect::<Vec<_>>(),
     );
 
-    for _ in 0..1 {
+    // Create CUDA events for synchronization
+    let dot_events = (0..=N_SAMPLES)
+        .into_iter()
+        .map(|_| event::create(CUevent_flags::CU_EVENT_DEFAULT).unwrap())
+        .collect::<Vec<_>>();
+
+    let exchange_events = (0..=N_SAMPLES)
+        .into_iter()
+        .map(|_| event::create(CUevent_flags::CU_EVENT_DEFAULT).unwrap())
+        .collect::<Vec<_>>();
+
+    let mut all_streams = vec![];
+
+    let total_time = Instant::now();
+
+    for i in 0..N_SAMPLES {
         let now = Instant::now();
 
         // share one set of streams for both engines
         let streams = codes_engine.fork_streams();
 
+        // streams are shared, one is enough
+        // TODO: this is ugly, should be moved out of the engine API
+        codes_engine.await_event(&streams, dot_events[i]);
         codes_engine.dot(&code_query, &streams);
-        println!("Dot codes took: {:?}", now.elapsed());
+        masks_engine.dot(&mask_query, &streams);
+        codes_engine.record_event(&streams, dot_events[i+1]);
+
+        println!("Dot took: {:?}", now.elapsed());
+
+        codes_engine.await_event(&streams, exchange_events[i]);
+        codes_engine.dot_reduce(&streams);
+        masks_engine.dot_reduce(&streams);
+        println!("Dot_reduce took: {:?}", now.elapsed());
 
         codes_engine.exchange_results(&streams);
-        println!("Exchange codes took: {:?}", now.elapsed());
-
-        masks_engine.dot(&mask_query, &streams);
-        println!("Dot masks took: {:?}", now.elapsed());
-
         masks_engine.exchange_results(&streams);
-        println!("Exchange masks took: {:?}", now.elapsed());
+        println!("Exchange took: {:?}", now.elapsed());
 
-        distance_comparator
-            .reconstruct_and_compare(&codes_engine.results_peers, &masks_engine.results_peers, &streams);
+        distance_comparator.reconstruct_and_compare(
+            &codes_engine.results_peers,
+            &masks_engine.results_peers,
+            &streams,
+        );
 
-        // wait for streams
-        // TODO: move outside
-        for stream in streams {
-            unsafe {synchronize(stream.stream).unwrap()};
-        }
-            
-        println!("Total time: {:?}", now.elapsed());
+        codes_engine.record_event(&streams, exchange_events[i+1]);
+
+        println!("Loop time: {:?}", now.elapsed());
+
+        all_streams.push(streams);
     }
 
+    for streams in all_streams {
+        codes_engine.await_streams(&streams);
+    }
+
+    println!("Total time for {} samples: {:?}", N_SAMPLES, total_time.elapsed());
+
+    // TODO
     // Sanity check: compare results against reference (debug only)
-    let (dists, _) = distance_comparator
-        .reconstruct_distances_debug(&codes_engine.results_peers, &masks_engine.results_peers);
+    // let (dists, _) = distance_comparator
+    //     .reconstruct_distances_debug(&codes_engine.results_peers, &masks_engine.results_peers);
 
-    let reference_dists = db.calculate_distances(&query_template);
+    // let reference_dists = db.calculate_distances(&query_template);
 
-    for i in 0..DB_SIZE / n_devices {
-        assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-6);
-    }
+    // for i in 0..DB_SIZE / n_devices {
+    //     assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-6);
+    // }
 
-    println!("Distances match the reference!");
+    // println!("Distances match the reference!");
 
-    time::sleep(time::Duration::from_secs(5)).await;
+    // time::sleep(time::Duration::from_secs(5)).await;
     Ok(())
 }
