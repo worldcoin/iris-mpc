@@ -109,3 +109,5 @@
 //     let _slice1 = chacha1_p0_0.cuda_slice();
 //     let _slice2 = chacha2_p0_0.cuda_slice();
 // }
+
+fn main(){}
