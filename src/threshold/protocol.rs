@@ -141,6 +141,7 @@ impl Kernels {
 pub struct Circuits {
     peer_id: usize,
     next_id: usize,
+    prev_id: usize,
     cfg: LaunchConfig,
     cfg_inp: LaunchConfig,
     chunk_size: usize,
@@ -232,6 +233,7 @@ impl Circuits {
         Circuits {
             peer_id,
             next_id: (peer_id + 1) % 3,
+            prev_id: (peer_id + 2) % 3,
             cfg,
             cfg_inp,
             chunk_size,
@@ -306,7 +308,7 @@ impl Circuits {
     where
         T: cudarc::nccl::NcclType,
     {
-        self.comms[idx].recv(receive, self.next_id as i32).unwrap();
+        self.comms[idx].recv(receive, self.prev_id as i32).unwrap();
         // self.devs[idx].synchronize().unwrap();
     }
 
