@@ -197,17 +197,17 @@ async fn main() -> eyre::Result<()> {
 
     // TODO
     // Sanity check: compare results against reference (debug only)
-    // let (dists, _) = distance_comparator
-    //     .reconstruct_distances_debug(&codes_engine.results_peers, &masks_engine.results_peers);
+    let (dists, _) = distance_comparator
+        .reconstruct_distances_debug(&codes_engine.results_peers, &masks_engine.results_peers);
 
-    // let reference_dists = db.calculate_distances(&query_template);
+    let reference_dists = db.calculate_distances(&query_template);
 
-    // for i in 0..DB_SIZE / n_devices {
-    //     assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-6);
-    // }
+    for i in 0..DB_SIZE / n_devices {
+        assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-6);
+    }
 
-    // println!("Distances match the reference!");
+    println!("Distances match the reference!");
 
-    // time::sleep(time::Duration::from_secs(5)).await;
+    time::sleep(time::Duration::from_secs(5)).await;
     Ok(())
 }
