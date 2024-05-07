@@ -523,7 +523,7 @@ impl Circuits {
             self.kernels[idx]
                 .not_inplace
                 .clone()
-                .launch(self.cfg.to_owned(), (&x.a, &x.b))
+                .launch(self.cfg.to_owned(), (&x.a, &x.b, x.a.len()))
                 .unwrap();
         }
     }
