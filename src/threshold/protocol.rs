@@ -502,7 +502,15 @@ impl Circuits {
                 .clone()
                 .launch(
                     self.cfg.to_owned(),
-                    (&res.a, &res.b, &x1.a, &x1.b, &x2.a, &x2.b, self.chunk_size),
+                    (
+                        &res.a,
+                        &res.b,
+                        &x1.a,
+                        &x1.b,
+                        &x2.a,
+                        &x2.b,
+                        self.chunk_size as i32,
+                    ),
                 )
                 .unwrap();
         }
@@ -513,7 +521,10 @@ impl Circuits {
             self.kernels[idx]
                 .not
                 .clone()
-                .launch(self.cfg.to_owned(), (&res.a, &res.b, &x.a, &x.b))
+                .launch(
+                    self.cfg.to_owned(),
+                    (&res.a, &res.b, &x.a, &x.b, self.chunk_size as i32),
+                )
                 .unwrap();
         }
     }
@@ -523,7 +534,7 @@ impl Circuits {
             self.kernels[idx]
                 .not_inplace
                 .clone()
-                .launch(self.cfg.to_owned(), (&x.a, &x.b, x.a.len()))
+                .launch(self.cfg.to_owned(), (&x.a, &x.b, self.chunk_size as i32))
                 .unwrap();
         }
     }
