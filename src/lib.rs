@@ -11,7 +11,7 @@ use cudarc::{
             event, memcpy_htod_async,
             stream::{self, synchronize, wait_event},
         },
-        sys::CUevent,
+        sys::{CUevent, CUevent_flags},
         CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceSlice,
         LaunchAsync, LaunchConfig,
     },
@@ -552,22 +552,31 @@ impl ShareDB {
             .for_each(|s| unsafe { synchronize(s.stream).unwrap() });
     }
 
-    pub fn record_event(&self, streams: &Vec<CudaStream>, event: CUevent) {
+    pub fn create_events(&self) -> Vec<CUevent> {
+        let mut events = vec![];
+        for idx in 0..self.n_devices {
+            self.devs[idx].bind_to_thread().unwrap();
+            events.push(event::create(CUevent_flags::CU_EVENT_DEFAULT).unwrap());
+        }
+        events
+    }
+
+    pub fn record_event(&self, streams: &Vec<CudaStream>, events: &Vec<CUevent>) {
         for idx in 0..self.n_devices {
             unsafe {
                 self.devs[idx].bind_to_thread().unwrap();
-                event::record(event, streams[idx].stream).unwrap();
+                event::record(events[idx], streams[idx].stream).unwrap();
             };
         }
     }
 
-    pub fn await_event(&self, streams: &Vec<CudaStream>, event: CUevent) {
+    pub fn await_event(&self, streams: &Vec<CudaStream>, events: &Vec<CUevent>) {
         for idx in 0..self.n_devices {
             unsafe {
                 self.devs[idx].bind_to_thread().unwrap();
                 wait_event(
                     streams[idx].stream,
-                    event,
+                    events[idx],
                     cudarc::driver::sys::CUevent_wait_flags::CU_EVENT_WAIT_DEFAULT,
                 )
                 .unwrap();

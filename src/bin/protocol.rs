@@ -134,12 +134,12 @@ async fn main() -> eyre::Result<()> {
     // Create CUDA events for synchronization
     let dot_events = (0..=N_SAMPLES)
         .into_iter()
-        .map(|_| event::create(CUevent_flags::CU_EVENT_DEFAULT).unwrap())
+        .map(|_| codes_engine.create_events())
         .collect::<Vec<_>>();
 
     let exchange_events = (0..=N_SAMPLES)
         .into_iter()
-        .map(|_| event::create(CUevent_flags::CU_EVENT_DEFAULT).unwrap())
+        .map(|_| codes_engine.create_events())
         .collect::<Vec<_>>();
 
     let mut all_streams = vec![];
@@ -154,20 +154,20 @@ async fn main() -> eyre::Result<()> {
 
         // unblock the first set of streams
         if i == 0 {
-            codes_engine.record_event(&streams, dot_events[0]);
-            codes_engine.record_event(&streams, exchange_events[0]);
+            codes_engine.record_event(&streams, &dot_events[0]);
+            codes_engine.record_event(&streams, &exchange_events[0]);
         }
 
         // streams are shared, one is enough
         // TODO: this is ugly, should be moved out of the engine API
-        codes_engine.await_event(&streams, dot_events[i]);
+        codes_engine.await_event(&streams, &dot_events[i]);
         codes_engine.dot(&code_query, &streams);
         masks_engine.dot(&mask_query, &streams);
-        codes_engine.record_event(&streams, dot_events[i+1]);
+        codes_engine.record_event(&streams, &dot_events[i+1]);
 
         println!("Dot took: {:?}", now.elapsed());
 
-        codes_engine.await_event(&streams, exchange_events[i]);
+        codes_engine.await_event(&streams, &exchange_events[i]);
         codes_engine.dot_reduce(&streams);
         masks_engine.dot_reduce(&streams);
         println!("Dot_reduce took: {:?}", now.elapsed());
@@ -182,7 +182,7 @@ async fn main() -> eyre::Result<()> {
             &streams,
         );
 
-        codes_engine.record_event(&streams, exchange_events[i+1]);
+        codes_engine.record_event(&streams, &exchange_events[i+1]);
 
         println!("Loop time: {:?}", now.elapsed());
 
