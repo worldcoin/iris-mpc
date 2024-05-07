@@ -296,7 +296,7 @@ pub struct ShareDB {
     query_length: usize,
     limbs: usize,
     n_devices: usize,
-    // blass: Vec<CudaBlas>,
+    blass: Vec<CudaBlas>,
     devs: Vec<Arc<CudaDevice>>,
     kernels: Vec<CudaFunction>,
     rngs: Vec<(ChaChaCudaFeRng, ChaChaCudaFeRng)>,
@@ -504,7 +504,7 @@ impl ShareDB {
             query_length,
             limbs,
             n_devices,
-            // blass,
+            blass: vec![],
             devs,
             kernels,
             rngs,
@@ -585,6 +585,7 @@ impl ShareDB {
     }
 
     pub fn dot(&mut self, preprocessed_query: &Vec<Vec<u8>>, streams: &Vec<CudaStream>) {
+        let mut blass = vec![];
         for idx in 0..self.n_devices {
             let now = Instant::now();
             let blas = CudaBlas::new(self.devs[idx].clone()).unwrap();
@@ -689,7 +690,10 @@ impl ShareDB {
                     println!("another gemm took: {:?}", now.elapsed());
                 }
             }
+            blass.push(blas);
         }
+        // TODO: hack to not drop
+        self.blass.extend(blass);
     }
 
     pub fn dot_reduce(&mut self, streams: &Vec<CudaStream>) {
