@@ -1,7 +1,7 @@
 pub mod rng;
 pub mod setup;
 
-use std::{ffi::c_void, ptr, str::FromStr, sync::Arc, thread, time::Duration};
+use std::{ffi::c_void, ptr, str::FromStr, sync::Arc, thread, time::{Duration, Instant}};
 
 use axum::{extract::Path, routing::get, Router};
 use cudarc::{
@@ -586,10 +586,12 @@ impl ShareDB {
 
     pub fn dot(&mut self, preprocessed_query: &Vec<Vec<u8>>, streams: &Vec<CudaStream>) {
         for idx in 0..self.n_devices {
+            let now = Instant::now();
             let blas = CudaBlas::new(self.devs[idx].clone()).unwrap();
             unsafe {
                 blas.set_stream(Some(&streams[idx])).unwrap();
             }
+            println!("cudablas took: {:?}", now.elapsed());
 
             // TODO: helper
             self.devs[idx].bind_to_thread().unwrap();
@@ -621,11 +623,15 @@ impl ShareDB {
                 .unwrap();
             }
 
+            println!("alloc took: {:?}", now.elapsed());
+
             // Prepare randomness to mask results
             if self.is_remote {
                 self.rngs[idx].0.fill_rng_no_host_copy(&streams[idx]);
                 self.rngs[idx].1.fill_rng_no_host_copy(&streams[idx]);
             }
+
+            println!("rng took: {:?}", now.elapsed());
 
             // Calculate sums to correct output
             gemm(
