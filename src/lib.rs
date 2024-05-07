@@ -553,18 +553,20 @@ impl ShareDB {
     }
 
     pub fn record_event(&self, streams: &Vec<CudaStream>, event: CUevent) {
-        for stream in streams {
+        for idx in 0..self.n_devices {
             unsafe {
-                event::record(event, stream.stream).unwrap();
+                self.devs[idx].bind_to_thread().unwrap();
+                event::record(event, streams[idx].stream).unwrap();
             };
         }
     }
 
     pub fn await_event(&self, streams: &Vec<CudaStream>, event: CUevent) {
-        for stream in streams {
+        for idx in 0..self.n_devices {
             unsafe {
+                self.devs[idx].bind_to_thread().unwrap();
                 wait_event(
-                    stream.stream,
+                    streams[idx].stream,
                     event,
                     cudarc::driver::sys::CUevent_wait_flags::CU_EVENT_WAIT_DEFAULT,
                 )
