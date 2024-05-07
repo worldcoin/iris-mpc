@@ -874,7 +874,7 @@ impl Circuits {
             println!("Done recv x01 from dev {}", idx);
             x01.push(ChunkShare::new(x01_send, x01_rec));
         }
-        result::group_start().unwrap();
+        result::group_end().unwrap();
         println!("Done all send/recv");
 
         // Transpose
