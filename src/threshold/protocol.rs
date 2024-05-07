@@ -307,7 +307,7 @@ impl Circuits {
         T: cudarc::nccl::NcclType,
     {
         self.comms[idx].recv(receive, self.next_id as i32).unwrap();
-        self.devs[idx].synchronize().unwrap();
+        // self.devs[idx].synchronize().unwrap();
     }
 
     // TODO include randomness
