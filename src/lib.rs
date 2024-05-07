@@ -649,6 +649,8 @@ impl ShareDB {
                 0,
             );
 
+            println!("first gemm took: {:?}", now.elapsed());
+
             gemm(
                 &blas,
                 &query0,
@@ -663,6 +665,8 @@ impl ShareDB {
                 1,
                 0,
             );
+
+            println!("second gemm took: {:?}", now.elapsed());
 
             for (i, d) in [&self.db0[idx], &self.db1[idx]].iter().enumerate() {
                 for (j, q) in [&query0, &query1].iter().enumerate() {
@@ -681,6 +685,8 @@ impl ShareDB {
                         1,
                         0,
                     );
+
+                    println!("another gemm took: {:?}", now.elapsed());
                 }
             }
         }
