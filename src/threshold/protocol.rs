@@ -861,20 +861,13 @@ impl Circuits {
         let x01_rec = self.allocate_single_buffer(self.chunk_size * 64);
         let mut x01 = Vec::with_capacity(self.n_devices);
 
-        // First thing: Reshare x01
-        result::group_start().unwrap();
-        for (idx, x01_send) in x01_send.iter().enumerate() {
-            println!("Sending x01 from dev {}", idx);
-            self.send(x01_send, idx);
-            println!("Sent x01 from dev {}", idx);
-        }
         for (idx, (x01_send, mut x01_rec)) in izip!(x01_send, x01_rec).enumerate() {
-            println!("Receiving x01 from dev {}", idx);
+            result::group_start().unwrap();
+            self.send(&x01_send, idx);
             self.receive(&mut x01_rec, idx);
-            println!("Done recv x01 from dev {}", idx);
+            result::group_end().unwrap();
             x01.push(ChunkShare::new(x01_send, x01_rec));
         }
-        result::group_end().unwrap();
         println!("Done all send/recv");
 
         // Transpose
