@@ -807,6 +807,7 @@ impl Circuits {
         (ca, cb)
     }
 
+    // FIXME: launch configs for transposes are probably super wrong...
     fn transpose_pack_u32_with_len(
         &mut self,
         inp: Vec<ChunkShare<u32>>,
