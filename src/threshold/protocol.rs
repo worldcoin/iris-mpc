@@ -863,10 +863,14 @@ impl Circuits {
 
         // First thing: Reshare x01
         for (idx, x01_send) in x01_send.iter().enumerate() {
-            self.send(x01_send, idx)
+            println!("Sending x01 from dev {}", idx);
+            self.send(x01_send, idx);
+            println!("Sent x01 from dev {}", idx);
         }
         for (idx, (x01_send, mut x01_rec)) in izip!(x01_send, x01_rec).enumerate() {
+            println!("Receiving x01 from dev {}", idx);
             self.receive(&mut x01_rec, idx);
+            println!("Done recv x01 from dev {}", idx);
             x01.push(ChunkShare::new(x01_send, x01_rec));
         }
 
