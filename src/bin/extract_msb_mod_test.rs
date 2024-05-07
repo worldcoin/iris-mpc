@@ -165,8 +165,9 @@ async fn main() -> eyre::Result<()> {
 
         let now = Instant::now();
         let x01 = party.lift_mul_sub_split(&mut x2, code_gpu);
+        println!("lift time: {:?}", now.elapsed());
         let result = party.extract_msb_sum_mod(x01, x2);
-        println!("Compute time: {:?}", now.elapsed());
+        println!("extract time: {:?}", now.elapsed());
 
         let now = Instant::now();
         let result = open(&mut party, result);
