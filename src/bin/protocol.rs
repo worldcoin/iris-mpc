@@ -152,6 +152,12 @@ async fn main() -> eyre::Result<()> {
         // share one set of streams for both engines
         let streams = codes_engine.fork_streams();
 
+        // unblock the first set of streams
+        if i == 0 {
+            codes_engine.record_event(&streams, dot_events[0]);
+            codes_engine.record_event(&streams, exchange_events[0]);
+        }
+
         // streams are shared, one is enough
         // TODO: this is ugly, should be moved out of the engine API
         codes_engine.await_event(&streams, dot_events[i]);
