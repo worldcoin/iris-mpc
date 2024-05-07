@@ -862,6 +862,7 @@ impl Circuits {
         let mut x01 = Vec::with_capacity(self.n_devices);
 
         // First thing: Reshare x01
+        result::group_start().unwrap();
         for (idx, x01_send) in x01_send.iter().enumerate() {
             println!("Sending x01 from dev {}", idx);
             self.send(x01_send, idx);
@@ -873,6 +874,8 @@ impl Circuits {
             println!("Done recv x01 from dev {}", idx);
             x01.push(ChunkShare::new(x01_send, x01_rec));
         }
+        result::group_start().unwrap();
+        println!("Done all send/recv");
 
         // Transpose
         let x01 = self.transpose_pack_u64_with_len(x01, Self::BITS);
