@@ -129,6 +129,7 @@ fn open(party: &mut Circuits, x: Vec<ChunkShare<u64>>) -> Vec<u64> {
         }
         result.extend(a);
     }
+    assert_eq!(result.len(), n_devices * CHUNK_SIZE);
     result
 }
 
