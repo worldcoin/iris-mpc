@@ -10,7 +10,7 @@ use cudarc::{
     nvrtc::{self, Ptx},
 };
 use itertools::izip;
-use std::{rc::Rc, str::FromStr, sync::Arc, thread, time::Duration};
+use std::{ffi::c_char, rc::Rc, str::FromStr, sync::Arc, thread, time::Duration};
 
 pub(crate) const P2K: u64 = (P as u64) << B_BITS;
 
@@ -398,21 +398,21 @@ impl Circuits {
     }
 
     // TODO include randomness
-    fn and_many(
-        &mut self,
-        x1: &ChunkShareView<u64>,
-        x2: &ChunkShareView<u64>,
-        res: &mut ChunkShareView<u64>,
-        // rand: &CudaView<u64>,
-        idx: usize,
-    ) {
-        self.and_many_pre(x1, x2, res, idx);
+    // fn and_many(
+    //     &mut self,
+    //     x1: &ChunkShareView<u64>,
+    //     x2: &ChunkShareView<u64>,
+    //     res: &mut ChunkShareView<u64>,
+    //     // rand: &CudaView<u64>,
+    //     idx: usize,
+    // ) {
+    //     self.and_many_pre(x1, x2, res, idx);
 
-        result::group_start().unwrap();
-        self.send_view(&res.a, self.next_id, idx);
-        self.receive_view(&mut res.b, self.prev_id, idx);
-        result::group_end().unwrap();
-    }
+    //     result::group_start().unwrap();
+    //     self.send_view(&res.a, self.next_id, idx);
+    //     self.receive_view(&mut res.b, self.prev_id, idx);
+    //     result::group_end().unwrap();
+    // }
 
     pub fn xor_assign_many(
         &self,
@@ -774,8 +774,8 @@ impl Circuits {
                 let mut b1 = b1.get_offset(k, self.chunk_size);
                 let mut b2 = b2.get_offset(k, self.chunk_size);
 
-                let mut ca = ca.as_view();
-                let mut cb = cb.as_view();
+                let ca = ca.as_view();
+                let cb = cb.as_view();
 
                 self.xor_assign_many(&mut a1, &ca, idx);
                 self.xor_assign_many(&mut b1, &ca, idx);
@@ -949,28 +949,49 @@ impl Circuits {
             let a0 = aa.get_offset(0, self.chunk_size);
             let b0 = bb.get_offset(0, self.chunk_size);
             let mut s0 = ss.get_offset(0, self.chunk_size);
-            let mut c_ = cc.as_view();
 
-            self.and_many(&a0, &b0, &mut c_, idx);
             self.xor_many(&a0, &b0, &mut s0, idx);
+            self.and_many_pre(&a0, &b0, &mut cc.as_view(), idx);
         }
+
+        // Send/Receive
+        result::group_start().unwrap();
+        for (idx, cc) in c.iter().enumerate() {
+            self.send_view(&cc.as_view().a, self.next_id, idx);
+        }
+        for (idx, cc) in c.iter_mut().enumerate() {
+            self.receive_view(&mut cc.as_view().b, self.prev_id, idx);
+        }
+        result::group_end().unwrap();
 
         // Full adders: 1->k
         for k in 1..Self::BITS {
             for (idx, (aa, bb, ss, cc, tmp_cc)) in
-                izip!(&mut a, &mut b, &mut s, &mut c, &mut tmp_c).enumerate()
+                izip!(&mut a, &mut b, &mut s, &mut c, &tmp_c).enumerate()
             {
                 let mut ak = aa.get_offset(k, self.chunk_size);
                 let mut bk = bb.get_offset(k, self.chunk_size);
                 let mut sk = ss.get_offset(k, self.chunk_size);
-                let mut c_ = cc.as_view();
-                let mut tmp_cc_ = tmp_cc.as_view();
+                let c_ = cc.as_view();
 
                 self.xor_assign_many(&mut ak, &c_, idx);
                 self.xor_many(&ak, &bk, &mut sk, idx);
                 self.xor_assign_many(&mut bk, &c_, idx);
-                self.and_many(&ak, &bk, &mut tmp_cc_, idx);
-                self.xor_assign_many(&mut c_, &tmp_cc_, idx);
+                self.and_many_pre(&ak, &bk, &mut tmp_cc.as_view(), idx);
+            }
+
+            // Send/Receive
+            result::group_start().unwrap();
+            for (idx, tmp_cc) in tmp_c.iter().enumerate() {
+                self.send_view(&tmp_cc.as_view().a, self.next_id, idx);
+            }
+            for (idx, tmp_cc) in tmp_c.iter_mut().enumerate() {
+                self.receive_view(&mut tmp_cc.as_view().b, self.prev_id, idx);
+            }
+            result::group_end().unwrap();
+
+            for (idx, (c, tmp_cc)) in izip!(&c, &tmp_c).enumerate() {
+                self.xor_assign_many(&mut c.as_view(), &tmp_cc.as_view(), idx);
             }
         }
 
@@ -1037,11 +1058,22 @@ impl Circuits {
                 if p_bit {
                     self.not_many(cc, tmp_not_, idx);
                     self.not_inplace_many(&mut xk, idx);
-                    self.and_many(&xk, tmp_not_, tmp_cc, idx);
+                    self.and_many_pre(&xk, tmp_not_, tmp_cc, idx);
                 } else {
-                    self.and_many(&xk, cc, tmp_cc, idx);
+                    self.and_many_pre(&xk, cc, tmp_cc, idx);
                 }
-                self.xor_assign_many(cc, tmp_cc, idx);
+            }
+            // Send/Receive
+            result::group_start().unwrap();
+            for (idx, tmp_cc) in tmp_c.iter().enumerate() {
+                self.send_view(&tmp_cc.a, self.next_id, idx);
+            }
+            for (idx, tmp_cc) in tmp_c.iter_mut().enumerate() {
+                self.receive_view(&mut tmp_cc.b, self.prev_id, idx);
+            }
+            result::group_end().unwrap();
+            for (idx, (c, tmp_cc)) in izip!(&mut c, &tmp_c).enumerate() {
+                self.xor_assign_many(c, tmp_cc, idx);
             }
         }
 
@@ -1054,7 +1086,19 @@ impl Circuits {
             izip!(&mut not_msb, &mut c, &mut tmp_c, &mut tmp_not).enumerate()
         {
             self.not_many(cc, tmp_not_, idx);
-            self.and_many(not_msb, tmp_not_, tmp_cc, idx);
+            self.and_many_pre(not_msb, tmp_not_, tmp_cc, idx);
+        }
+        // Send/Receive
+        result::group_start().unwrap();
+        for (idx, tmp_cc) in tmp_c.iter().enumerate() {
+            self.send_view(&tmp_cc.a, self.next_id, idx);
+        }
+        for (idx, tmp_cc) in tmp_c.iter_mut().enumerate() {
+            self.receive_view(&mut tmp_cc.b, self.prev_id, idx);
+        }
+        result::group_end().unwrap();
+
+        for (idx, (cc, tmp_cc, not_msb)) in izip!(&mut c, &tmp_c, &mut not_msb).enumerate() {
             self.xor_assign_many(cc, tmp_cc, idx);
             self.xor_assign_many(not_msb, cc, idx)
         }
@@ -1075,7 +1119,22 @@ impl Circuits {
             let mut and = xb;
             let mut xor = xmsb;
             self.xor_assign_many(&mut xor, res_msb, idx);
-            self.and_many(&xor, ov, &mut and, idx);
+            self.and_many_pre(&xor, ov, &mut and, idx);
+        }
+        // Send/Receive
+        result::group_start().unwrap();
+        for (idx, xx) in x.iter().enumerate() {
+            let and = xx.get_offset(Self::BITS, self.chunk_size);
+            self.send_view(&and.a, self.next_id, idx);
+        }
+        for (idx, xx) in x.iter().enumerate() {
+            let mut and = xx.get_offset(Self::BITS, self.chunk_size);
+            self.receive_view(&mut and.b, self.prev_id, idx);
+        }
+        result::group_end().unwrap();
+
+        for (idx, (xx, res_msb)) in izip!(x.iter(), &mut res_msb).enumerate() {
+            let and = xx.get_offset(Self::BITS, self.chunk_size);
             self.xor_assign_many(res_msb, &and, idx);
         }
 
