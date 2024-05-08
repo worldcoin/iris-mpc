@@ -92,7 +92,9 @@ fn real_result_msb(input: Vec<u16>) -> Vec<u64> {
         let msb = r >> (B_BITS + 16 - 1) & 1 == 1;
         res.push(msb)
     }
-    pack(res)
+    let res = pack(res);
+    println!("Real result len: {:?}", res.len());
+    res
 }
 
 fn open(party: &mut Circuits, x: Vec<ChunkShare<u64>>) -> Vec<u64> {
