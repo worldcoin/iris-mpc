@@ -72,15 +72,17 @@ fn to_gpu(a: &[u16], b: &[u16], devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<u
     result
 }
 
-fn pack(bits: Vec<bool>) -> Vec<u64> {
-    assert!(bits.len() % 64 == 0);
-    let mut res = Vec::with_capacity(bits.len() / 64);
-    for bits in bits.chunks(64) {
-        let mut r = 0;
-        for (i, bit) in bits.iter().enumerate() {
-            r |= u64::from(*bit) << i;
+fn pack_with_device_padding(bits: Vec<bool>) -> Vec<u64> {
+    assert!(bits.len() % CHUNK_SIZE == 0);
+    let mut res = vec![];
+    for devices in bits.chunks_exact(CHUNK_SIZE) {
+        for bits in devices.chunks(64) {
+            let mut r = 0;
+            for (i, bit) in bits.iter().enumerate() {
+                r |= u64::from(*bit) << i;
+            }
+            res.push(r);
         }
-        res.push(r);
     }
     res
 }
@@ -92,9 +94,7 @@ fn real_result_msb(input: Vec<u16>) -> Vec<u64> {
         let msb = r >> (B_BITS + 16 - 1) & 1 == 1;
         res.push(msb)
     }
-    let res = pack(res);
-    println!("Real result len: {:?}", res.len());
-    res
+    pack_with_device_padding(res)
 }
 
 fn open(party: &mut Circuits, x: Vec<ChunkShare<u64>>) -> Vec<u64> {
