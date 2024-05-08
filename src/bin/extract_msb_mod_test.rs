@@ -89,7 +89,6 @@ fn real_result_msb(input: Vec<u16>) -> Vec<u64> {
     let mut res = Vec::with_capacity(input.len());
     for inp in input {
         let r = P2K - ((inp as u64) << B_BITS);
-        // TODO: This -1 below is correct, right?
         let msb = r >> (B_BITS + 16 - 1) & 1 == 1;
         res.push(msb)
     }

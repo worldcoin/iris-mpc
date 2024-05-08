@@ -144,6 +144,7 @@ pub struct Circuits {
     prev_id: usize,
     cfg: LaunchConfig,
     cfg_inp: LaunchConfig,
+    cfg_transpose: LaunchConfig,
     chunk_size: usize,
     n_devices: usize,
     devs: Vec<Arc<CudaDevice>>,
@@ -172,6 +173,8 @@ impl Circuits {
         // TODO check this
         let cfg = Self::launch_config_from_elements_and_threads(chunk_size as u32, 1024);
         let cfg_inp = Self::launch_config_from_elements_and_threads(chunk_size as u32 * 64, 1024);
+        let cfg_transpose =
+            Self::launch_config_from_elements_and_threads(chunk_size as u32 * 2, 1024);
 
         let mut devs = Vec::with_capacity(n_devices);
         let mut kernels = Vec::with_capacity(n_devices);
@@ -236,6 +239,7 @@ impl Circuits {
             prev_id: (peer_id + 2) % 3,
             cfg,
             cfg_inp,
+            cfg_transpose,
             chunk_size,
             n_devices,
             devs,
@@ -807,7 +811,6 @@ impl Circuits {
         (ca, cb)
     }
 
-    // FIXME: launch configs for transposes are probably super wrong...
     fn transpose_pack_u32_with_len(
         &mut self,
         inp: Vec<ChunkShare<u32>>,
@@ -824,7 +827,7 @@ impl Circuits {
                     .transpose_32x64
                     .clone()
                     .launch(
-                        self.cfg.to_owned(),
+                        self.cfg_transpose.to_owned(),
                         (
                             &mut outp.a,
                             &mut outp.b,
@@ -857,7 +860,7 @@ impl Circuits {
                     .transpose_64x64
                     .clone()
                     .launch(
-                        self.cfg.to_owned(),
+                        self.cfg_transpose.to_owned(),
                         (
                             &mut outp.a,
                             &mut outp.b,
