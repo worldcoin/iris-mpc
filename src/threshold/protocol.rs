@@ -10,7 +10,7 @@ use cudarc::{
     nvrtc::{self, Ptx},
 };
 use itertools::izip;
-use std::{ffi::c_char, rc::Rc, str::FromStr, sync::Arc, thread, time::Duration};
+use std::{rc::Rc, str::FromStr, sync::Arc, thread, time::Duration};
 
 pub(crate) const P2K: u64 = (P as u64) << B_BITS;
 
