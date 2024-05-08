@@ -1024,7 +1024,7 @@ impl Circuits {
     }
 
     // The result will be located in the first bit of x
-    // requires 18 * n_devices * chunk_size random u64 elements
+    // requires 16 * n_devices * chunk_size random u64 elements
     fn extraxt_msb_mod_p2k_of_sum(&mut self, x: &mut [ChunkShare<u64>]) {
         debug_assert_eq!(self.n_devices, x.len());
 
