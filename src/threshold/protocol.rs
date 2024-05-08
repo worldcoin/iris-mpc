@@ -397,23 +397,6 @@ impl Circuits {
         }
     }
 
-    // TODO include randomness
-    // fn and_many(
-    //     &mut self,
-    //     x1: &ChunkShareView<u64>,
-    //     x2: &ChunkShareView<u64>,
-    //     res: &mut ChunkShareView<u64>,
-    //     // rand: &CudaView<u64>,
-    //     idx: usize,
-    // ) {
-    //     self.and_many_pre(x1, x2, res, idx);
-
-    //     result::group_start().unwrap();
-    //     self.send_view(&res.a, self.next_id, idx);
-    //     self.receive_view(&mut res.b, self.prev_id, idx);
-    //     result::group_end().unwrap();
-    // }
-
     pub fn xor_assign_many(
         &self,
         x1: &mut ChunkShareView<u64>,
