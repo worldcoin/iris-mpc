@@ -333,7 +333,9 @@ impl Circuits {
         idx: usize,
     ) {
         // TODO this is just a placeholder
-        let rand = self.devs[idx].alloc_zeros::<u64>(self.chunk_size).unwrap();
+        let rand = self.devs[idx]
+            .alloc_zeros::<u64>(self.chunk_size * bits)
+            .unwrap();
 
         // TODO also precompute?
         let cfg = Self::launch_config_from_elements_and_threads(
