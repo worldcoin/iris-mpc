@@ -321,6 +321,7 @@ impl Circuits {
     {
         self.comms[idx].recv(receive, peer_id as i32).unwrap();
     }
+
     // TODO include randomness
     fn packed_and_many_pre(
         &mut self,
@@ -334,13 +335,18 @@ impl Circuits {
         // TODO this is just a placeholder
         let rand = self.devs[idx].alloc_zeros::<u64>(self.chunk_size).unwrap();
 
-        // TODO: Launch config is wrong
+        // TODO also precompute?
+        let cfg = Self::launch_config_from_elements_and_threads(
+            self.chunk_size as u32 * bits as u32,
+            1024,
+        );
+
         unsafe {
             self.kernels[idx]
                 .and
                 .clone()
                 .launch(
-                    self.cfg.to_owned(),
+                    cfg,
                     (
                         &res.a,
                         &x1.a,
@@ -448,12 +454,18 @@ impl Circuits {
         bits: usize,
         idx: usize,
     ) {
+        // TODO also precompute?
+        let cfg = Self::launch_config_from_elements_and_threads(
+            self.chunk_size as u32 * bits as u32,
+            1024,
+        );
+
         unsafe {
             self.kernels[idx]
                 .xor_assign
                 .clone()
                 .launch(
-                    self.cfg.to_owned(),
+                    cfg.to_owned(),
                     (&x1.a, &x1.b, &x2.a, &x2.b, self.chunk_size * bits),
                 )
                 .unwrap();
@@ -467,12 +479,18 @@ impl Circuits {
         bits: usize,
         idx: usize,
     ) {
+        // TODO also precompute?
+        let cfg = Self::launch_config_from_elements_and_threads(
+            self.chunk_size as u32 * bits as u32,
+            1024,
+        );
+
         unsafe {
             self.kernels[idx]
                 .xor
                 .clone()
                 .launch(
-                    self.cfg.to_owned(),
+                    cfg.to_owned(),
                     (
                         &res.a,
                         &res.b,
