@@ -153,7 +153,7 @@ pub struct Circuits {
 }
 
 impl Circuits {
-    const BITS: usize = 36;
+    const BITS: usize = 16 + B_BITS as usize;
 
     pub fn new(
         peer_id: usize,
@@ -320,7 +320,6 @@ impl Circuits {
         T: cudarc::nccl::NcclType,
     {
         self.comms[idx].recv(receive, self.prev_id as i32).unwrap();
-        // self.devs[idx].synchronize().unwrap();
     }
 
     // TODO include randomness
