@@ -175,10 +175,16 @@ async fn main() -> eyre::Result<()> {
         let result = open(&mut party, result);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
 
-        if result == real_result {
+        let mut correct = true;
+        for (i, (r, r_)) in izip!(&result, &real_result).enumerate() {
+            if r != r_ {
+                correct = false;
+                println!("Test failed on index: {}: {} != {}", i, r, r_);
+                break;
+            }
+        }
+        if correct {
             println!("Test passed!");
-        } else {
-            println!("Test failed!");
         }
     }
 
