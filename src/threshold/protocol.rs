@@ -334,6 +334,7 @@ impl Circuits {
         // TODO this is just a placeholder
         let rand = self.devs[idx].alloc_zeros::<u64>(self.chunk_size).unwrap();
 
+        // TODO: Launch config is wrong
         unsafe {
             self.kernels[idx]
                 .and
@@ -707,17 +708,23 @@ impl Circuits {
             self.packed_xor_assign_many(&mut y1y3, &y3, K - 1, idx);
             let mut c2 = c2.as_view();
             self.packed_and_many_pre(&y1y3, &y2y3, &mut c2, K - 1, idx);
+        }
 
-            // Send/Receive full adders
-            result::group_start().unwrap();
-            self.packed_and_many_send(&c1, K - 1, idx);
-            self.packed_and_many_send(&c2, K - 1, idx);
-            self.packed_and_many_receive(&mut c1, K - 1, idx);
-            self.packed_and_many_receive(&mut c2, K - 1, idx);
-            result::group_end().unwrap();
+        // Send/Receive full adders
+        result::group_start().unwrap();
+        for (idx, (c1, c2)) in izip!(&c1, &c2).enumerate() {
+            self.packed_and_many_send(&c1.as_view(), K - 1, idx);
+            self.packed_and_many_send(&c2.as_view(), K - 1, idx);
+        }
+        for (idx, (c1, c2)) in izip!(&mut c1, &mut c2).enumerate() {
+            self.packed_and_many_receive(&mut c1.as_view(), K - 1, idx);
+            self.packed_and_many_receive(&mut c2.as_view(), K - 1, idx);
+        }
+        result::group_end().unwrap();
 
-            self.packed_xor_assign_many(&mut c1, &x3, K - 1, idx);
-            self.packed_xor_assign_many(&mut c2, &y3, K - 1, idx);
+        for (idx, (c1, c2, x3, y3)) in izip!(&mut c1, &mut c2, &xa_3, &xb_3).enumerate() {
+            self.packed_xor_assign_many(&mut c1.as_view(), &x3.as_view(), K - 1, idx);
+            self.packed_xor_assign_many(&mut c2.as_view(), &y3.as_view(), K - 1, idx);
         }
 
         // Add 2c + s via a ripple carry adder
@@ -740,15 +747,19 @@ impl Circuits {
             let a2 = a2.get_offset(1, self.chunk_size);
             let b2 = b2.get_offset(0, self.chunk_size);
             self.and_many_pre(&a2, &b2, &mut cb, idx);
-
-            // Send/Receive
-            result::group_start().unwrap();
-            self.send_view(&ca.a, self.next_id, idx);
-            self.send_view(&cb.a, self.next_id, idx);
-            self.receive_view(&mut ca.b, self.prev_id, idx);
-            self.receive_view(&mut cb.b, self.prev_id, idx);
-            result::group_end().unwrap();
         }
+
+        // Send/Receive
+        result::group_start().unwrap();
+        for (idx, (ca, cb)) in izip!(&ca, &cb).enumerate() {
+            self.send_view(&ca.as_view().a, self.next_id, idx);
+            self.send_view(&cb.as_view().a, self.next_id, idx);
+        }
+        for (idx, (ca, cb)) in izip!(&mut ca, &mut cb).enumerate() {
+            self.receive_view(&mut ca.as_view().b, self.prev_id, idx);
+            self.receive_view(&mut cb.as_view().b, self.prev_id, idx);
+        }
+        result::group_end().unwrap();
 
         for k in 1..K - 2 {
             for (idx, (a1, b1, a2, b2, ca, cb)) in
@@ -772,17 +783,32 @@ impl Circuits {
                 self.xor_assign_many(&mut a2, &cb, idx);
                 self.xor_assign_many(&mut b2, &cb, idx);
                 self.and_many_pre(&a2, &b2, &mut tmp_cb, idx);
+            }
 
-                // Send/Receive
-                result::group_start().unwrap();
+            // Send/Receive
+            result::group_start().unwrap();
+            for (idx, (a1, a2)) in izip!(&a1, &a2).enumerate() {
+                // Unused space used for temparary storage
+                let tmp_ca = a1.get_offset(0, self.chunk_size);
+                let tmp_cb = a2.get_offset(0, self.chunk_size);
                 self.send_view(&tmp_ca.a, self.next_id, idx);
                 self.send_view(&tmp_cb.a, self.next_id, idx);
+            }
+            for (idx, (a1, a2)) in izip!(&mut a1, &mut a2).enumerate() {
+                // Unused space used for temparary storage
+                let mut tmp_ca = a1.get_offset(0, self.chunk_size);
+                let mut tmp_cb = a2.get_offset(0, self.chunk_size);
                 self.receive_view(&mut tmp_ca.b, self.prev_id, idx);
                 self.receive_view(&mut tmp_cb.b, self.prev_id, idx);
-                result::group_end().unwrap();
+            }
+            result::group_end().unwrap();
 
-                self.xor_assign_many(&mut ca, &tmp_ca, idx);
-                self.xor_assign_many(&mut cb, &tmp_cb, idx);
+            for (idx, (ca, cb, a1, a2)) in izip!(&mut ca, &mut cb, &a1, &a2).enumerate() {
+                // Unused space used for temparary storage
+                let tmp_ca = a1.get_offset(0, self.chunk_size);
+                let tmp_cb = a2.get_offset(0, self.chunk_size);
+                self.xor_assign_many(&mut ca.as_view(), &tmp_ca, idx);
+                self.xor_assign_many(&mut cb.as_view(), &tmp_cb, idx);
             }
         }
 
@@ -1069,8 +1095,6 @@ impl Circuits {
 
         let mut x01 = self.allocate_single_buffer(self.chunk_size * 64);
 
-        // TODO check the config
-        // TODO WIP: have to adapt to include split in the kernel as well
         for (idx, (m, c, x01)) in izip!(mask_lifted, &code, &mut x01).enumerate() {
             // TODO this is just a placeholder
             let rand = self.devs[idx]

@@ -327,7 +327,7 @@ extern "C" __global__ void shared_u64_transpose_pack_u64(U64 *out_a, U64 *out_b,
   u64_transpose_pack_u64(out_a, out_b, in_a, in_b, in_len, out_len);
 }
 
-// Puts the results into x_a, x_b and x01
+// Puts the results into mask_a, mask_b and x01
 extern "C" __global__ void shared_lift_mul_sub_split(U64 *x01, U64 *mask_a,
                                                      U64 *mask_b, U16 *code_a,
                                                      U16 *code_b, U64 *r, int n,
