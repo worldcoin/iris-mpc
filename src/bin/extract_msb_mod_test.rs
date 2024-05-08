@@ -73,9 +73,9 @@ fn to_gpu(a: &[u16], b: &[u16], devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<u
 }
 
 fn pack_with_device_padding(bits: Vec<bool>) -> Vec<u64> {
-    assert!(bits.len() % CHUNK_SIZE == 0);
+    assert!(bits.len() % (CHUNK_SIZE * 64) == 0);
     let mut res = vec![];
-    for devices in bits.chunks_exact(CHUNK_SIZE) {
+    for devices in bits.chunks_exact(CHUNK_SIZE * 64) {
         for bits in devices.chunks(64) {
             let mut r = 0;
             for (i, bit) in bits.iter().enumerate() {

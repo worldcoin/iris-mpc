@@ -213,7 +213,7 @@ impl Circuits {
                 ids[i]
             } else {
                 // If not the server, give it a few secs to start
-                thread::sleep(Duration::from_secs(5));
+                thread::sleep(Duration::from_secs(1));
 
                 let res = reqwest::blocking::get(format!(
                     "http://{}:{}/{}",
@@ -900,11 +900,8 @@ impl Circuits {
         let x01 = self.transpose_pack_u64_with_len(x01, Self::BITS);
         let x2 = self.transpose_pack_u64_with_len(x2, Self::BITS);
 
-        println!("before sum");
         let mut sum = self.binary_add_two(x01, x2);
-        println!("after sum");
         self.extraxt_msb_mod_p2k_of_sum(&mut sum);
-        println!("after extract");
 
         // Result is in the first bit of the input
         sum
