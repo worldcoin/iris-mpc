@@ -15,12 +15,11 @@ use cudarc::driver::{
 };
 use float_eq::assert_float_eq;
 use gpu_iris_mpc::{
-    setup::{
+    device_manager::DeviceManager, setup::{
         id::PartyID,
         iris_db::{db::IrisDB, shamir_db::ShamirIrisDB, shamir_iris::ShamirIris},
         shamir::Shamir,
-    },
-    DistanceComparator, ShareDB,
+    }, DistanceComparator, ShareDB
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tokio::time;
@@ -73,8 +72,11 @@ async fn main() -> eyre::Result<()> {
 
     println!("Starting engines...");
 
+    let device_manager = DeviceManager::init();
+
     let mut codes_engine = ShareDB::init(
         party_id,
+        device_manager.clone(),
         l_coeff,
         &codes_db,
         QUERIES,
@@ -85,6 +87,7 @@ async fn main() -> eyre::Result<()> {
     );
     let mut masks_engine = ShareDB::init(
         party_id,
+        device_manager.clone(),
         l_coeff,
         &masks_db,
         QUERIES,
@@ -134,12 +137,12 @@ async fn main() -> eyre::Result<()> {
     // Create CUDA events for synchronization
     let dot_events = (0..=N_SAMPLES)
         .into_iter()
-        .map(|_| codes_engine.create_events())
+        .map(|_| device_manager.create_events())
         .collect::<Vec<_>>();
 
     let exchange_events = (0..=N_SAMPLES)
         .into_iter()
-        .map(|_| codes_engine.create_events())
+        .map(|_| device_manager.create_events())
         .collect::<Vec<_>>();
 
     let mut all_streams = vec![];
@@ -150,29 +153,29 @@ async fn main() -> eyre::Result<()> {
         let now = Instant::now();
 
         // share one set of streams for both engines
-        let streams = codes_engine.fork_streams();
+        let streams = device_manager.fork_streams();
+        let blass = device_manager.create_cublas(&streams);
 
         println!("fork took: {:?}", now.elapsed());
 
         // unblock the first set of streams
         if i == 0 {
-            codes_engine.record_event(&streams, &dot_events[0]);
-            codes_engine.record_event(&streams, &exchange_events[0]);
+            device_manager.record_event(&streams, &dot_events[0]);
+            device_manager.record_event(&streams, &exchange_events[0]);
         }
 
         // streams are shared, one is enough
-        // TODO: this is ugly, should be moved out of the engine API
-        codes_engine.await_event(&streams, &dot_events[i]);
+        device_manager.await_event(&streams, &dot_events[i]);
         println!("await_event took: {:?}", now.elapsed());
-        codes_engine.dot(&code_query, &streams);
-        masks_engine.dot(&mask_query, &streams);
+        codes_engine.dot(&code_query, &streams, &blass);
+        masks_engine.dot(&mask_query, &streams, &blass);
         println!("dot took: {:?}", now.elapsed());
-        codes_engine.record_event(&streams, &dot_events[i+1]);
+        device_manager.record_event(&streams, &dot_events[i+1]);
         println!("await_event took: {:?}", now.elapsed());
 
         println!("Dot took: {:?}", now.elapsed());
 
-        codes_engine.await_event(&streams, &exchange_events[i]);
+        device_manager.await_event(&streams, &exchange_events[i]);
         codes_engine.dot_reduce(&streams);
         masks_engine.dot_reduce(&streams);
         println!("Dot_reduce took: {:?}", now.elapsed());
@@ -187,7 +190,7 @@ async fn main() -> eyre::Result<()> {
             &streams,
         );
 
-        codes_engine.record_event(&streams, &exchange_events[i+1]);
+        device_manager.record_event(&streams, &exchange_events[i+1]);
 
         println!("Loop time: {:?}", now.elapsed());
 
@@ -195,7 +198,7 @@ async fn main() -> eyre::Result<()> {
     }
 
     for streams in all_streams {
-        codes_engine.await_streams(&streams);
+        device_manager.await_streams(&streams);
     }
 
     println!("Total time for {} samples: {:?}", N_SAMPLES, total_time.elapsed());
