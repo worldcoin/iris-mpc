@@ -161,7 +161,8 @@ async fn main() -> eyre::Result<()> {
     // Now all streams are running, we need to await each on CPU
     for i in 0..request_batches.len() {
         device_manager.await_streams(&streams[i]);
-        // TODO: fetch from GPU
+        let results = distance_comparator.fetch_results();
+        
     }
 
     // println!(
@@ -169,11 +170,6 @@ async fn main() -> eyre::Result<()> {
     //     N_SAMPLES,
     //     total_time.elapsed()
     // );
-
-    // TODO
-    // Sanity check: compare results against reference (debug only)
-    let (dists, _) = distance_comparator
-        .reconstruct_distances_debug(&codes_engine.results_peers, &masks_engine.results_peers);
 
     // let reference_dists = db.calculate_distances(&query_template);
 

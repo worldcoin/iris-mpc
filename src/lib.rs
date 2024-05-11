@@ -158,7 +158,7 @@ async fn http_root(ids: Vec<Id>, Path(device_id): Path<String>) -> String {
 pub struct DistanceComparator {
     devs: Vec<Arc<CudaDevice>>,
     kernels: Vec<CudaFunction>,
-    results: Vec<CudaSlice<bool>>,
+    results: Vec<CudaSlice<u32>>,
     db_length: usize,
     query_length: usize,
     n_devices: usize,
@@ -171,6 +171,7 @@ impl DistanceComparator {
         let mut devs = Vec::new();
         let mut results = Vec::new();
         let n_devices = CudaDevice::count().unwrap() as usize;
+        let results_uninit = vec![u32::MAX; query_length * std::mem::size_of::<u32>()];
 
         for i in 0..n_devices {
             let dev = CudaDevice::new(i).unwrap();
@@ -180,9 +181,7 @@ impl DistanceComparator {
                 .get_func(DIST_FUNCTION_NAME, DIST_FUNCTION_NAME)
                 .unwrap();
 
-            let result = dev
-                .alloc_zeros(db_length / n_devices * query_length)
-                .unwrap();
+            let result = dev.htod_copy(results_uninit.clone()).unwrap();
 
             kernels.push(function);
             devs.push(dev);
@@ -230,7 +229,8 @@ impl DistanceComparator {
                             &masks_result_peers[i][2],
                             &mut self.results[i],
                             MATCH_RATIO,
-                            (self.db_length / self.n_devices * self.query_length) as u64,
+                            (self.db_length / self.n_devices) as u64,
+                            self.query_length as u64,
                         ),
                     )
                     .unwrap();
@@ -308,10 +308,12 @@ impl DistanceComparator {
         )
     }
 
-    pub fn fetch_results(&self, device_id: usize) -> Vec<bool> {
-        self.devs[device_id]
-            .dtoh_sync_copy(&self.results[device_id])
-            .unwrap()
+    pub fn fetch_results(&self) -> Vec<Vec<u32>> {
+        let mut results = vec![];
+        for (i, dev) in self.devs.iter().enumerate() {
+            results.push(dev.dtoh_sync_copy(&self.results[i]).unwrap());
+        }
+        results
     }
 }
 
@@ -734,11 +736,14 @@ mod tests {
     use rand::{rngs::StdRng, Rng, SeedableRng};
 
     use crate::{
-        device_manager::{self, DeviceManager}, preprocess_query, setup::{
+        device_manager::{self, DeviceManager},
+        preprocess_query,
+        setup::{
             id::PartyID,
             iris_db::{db::IrisDB, shamir_db::ShamirIrisDB, shamir_iris::ShamirIris},
             shamir::Shamir,
-        }, ShareDB, P
+        },
+        ShareDB, P,
     };
     const WIDTH: usize = 12_800;
     const QUERY_SIZE: usize = 31;
