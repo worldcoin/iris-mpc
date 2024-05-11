@@ -5,21 +5,16 @@
 ///! Node 2: cargo run --release --bin protocol 2 [NODE_0_IP]
 use std::{env, time::Instant};
 
-use cudarc::driver::{
-    result::{
-        event,
-        stream::{synchronize, wait_event},
-    },
-    sys::CUevent_flags,
-    CudaDevice,
-};
 use float_eq::assert_float_eq;
 use gpu_iris_mpc::{
-    device_manager::DeviceManager, setup::{
+    device_manager::DeviceManager,
+    preprocess_query,
+    setup::{
         id::PartyID,
-        iris_db::{db::IrisDB, shamir_db::ShamirIrisDB, shamir_iris::ShamirIris},
+        iris_db::{db::IrisDB, iris::IrisCode, shamir_db::ShamirIrisDB, shamir_iris::ShamirIris},
         shamir::Shamir,
-    }, DistanceComparator, ShareDB
+    },
+    DistanceComparator, ShareDB,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tokio::time;
@@ -27,7 +22,8 @@ use tokio::time;
 const DB_SIZE: usize = 8 * 125_000;
 const QUERIES: usize = 930;
 const RNG_SEED: u64 = 42;
-const N_SAMPLES: usize = 10;
+const N_BATCHES: usize = 10; // We expect 10 batches with each QUERIES/ROTATIONS
+const MAX_CONCURRENT_REQUESTS: usize = 10;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
@@ -40,7 +36,6 @@ async fn main() -> eyre::Result<()> {
     let args = env::args().collect::<Vec<_>>();
     let party_id: usize = args[1].parse().unwrap();
     let url = args.get(2);
-    let n_devices = CudaDevice::count().unwrap() as usize;
 
     // Init RNGs
     let chacha_seeds = match party_id {
@@ -96,13 +91,105 @@ async fn main() -> eyre::Result<()> {
         Some(true),
         Some(3001),
     );
-    let mut distance_comparator = DistanceComparator::init(n_devices, DB_SIZE, QUERIES);
+    let mut distance_comparator = DistanceComparator::init(DB_SIZE, QUERIES);
 
     println!("Engines ready!");
 
-    // Prepare queries
-    let query_template = db.db[0].get_similar_iris(&mut rng);
-    let random_query = ShamirIris::share_iris(&query_template, &mut rng);
+    // Prepare streams and cuBLAS handles
+    // They will be reused for multiple requests since construction and destruction is costly
+    let mut streams = vec![];
+    let mut cublas_handles = vec![];
+    for i in 0..MAX_CONCURRENT_REQUESTS {
+        let tmp_streams = device_manager.fork_streams();
+        cublas_handles.push(device_manager.create_cublas(&tmp_streams));
+        streams.push(tmp_streams);
+    }
+
+    // Entrypoint for incoming request
+    let mut request_batches = vec![];
+    let mut dot_events = vec![];
+    let mut exchange_events = vec![];
+
+    while request_batches.len() < MAX_CONCURRENT_REQUESTS {
+        let query = random_query(party_id, &mut rng); // TODO: fetch from queue
+
+        request_batches.push(query);
+        dot_events.push(device_manager.create_events());
+        exchange_events.push(device_manager.create_events());
+    }
+
+    let total_time = Instant::now();
+
+    for i in 0..request_batches.len() {
+        let now = Instant::now();
+
+        let (code_query, mask_query) = request_batches[i].clone();
+        let request_streams = &streams[i];
+        let request_cublas_handles = &cublas_handles[i];
+
+        // First stream doesn't need to wait on anyone
+        if i == 0 {
+            device_manager.record_event(&request_streams, &dot_events[0]);
+            device_manager.record_event(&request_streams, &exchange_events[0]);
+        }
+
+        // BLOCK 1: calculate individual dot products
+        device_manager.await_event(request_streams, &dot_events[i]);
+        codes_engine.dot(&code_query, request_streams, request_cublas_handles);
+        masks_engine.dot(&mask_query, request_streams, request_cublas_handles);
+        device_manager.record_event(request_streams, &dot_events[i + 1]);
+
+        // BLOCK 2: calculate final dot product result, exchange and compare 
+        device_manager.await_event(request_streams, &exchange_events[i]);
+        codes_engine.dot_reduce(request_streams);
+        masks_engine.dot_reduce(request_streams);
+        codes_engine.exchange_results(request_streams);
+        masks_engine.exchange_results(request_streams);
+        distance_comparator.reconstruct_and_compare(
+            &codes_engine.results_peers,
+            &masks_engine.results_peers,
+            request_streams,
+        );
+        // skip last
+        if i < request_batches.len()-1 {
+            device_manager.record_event(request_streams, &exchange_events[i + 1]);
+        }
+
+        println!("Loop time: {:?}", now.elapsed());
+    }
+
+    // Now all streams are running, we need to await each on CPU
+    for i in 0..request_batches.len() {
+        device_manager.await_streams(&streams[i]);
+        // TODO: fetch from GPU
+    }
+
+    // println!(
+    //     "Total time for {} samples: {:?}",
+    //     N_SAMPLES,
+    //     total_time.elapsed()
+    // );
+
+    // TODO
+    // Sanity check: compare results against reference (debug only)
+    let (dists, _) = distance_comparator
+        .reconstruct_distances_debug(&codes_engine.results_peers, &masks_engine.results_peers);
+
+    // let reference_dists = db.calculate_distances(&query_template);
+
+    // for i in 0..DB_SIZE / n_devices {
+    //     assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-6);
+    // }
+
+    println!("Distances match the reference!");
+
+    time::sleep(time::Duration::from_secs(5)).await;
+    Ok(())
+}
+
+fn random_query(party_id: usize, rng: &mut StdRng) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+    let query_template = IrisCode::random_rng(rng);
+    let random_query = ShamirIris::share_iris(&query_template, rng);
     let mut code_queries = vec![vec![], vec![], vec![]];
     let mut mask_queries = vec![vec![], vec![], vec![]];
 
@@ -119,103 +206,19 @@ async fn main() -> eyre::Result<()> {
     }
 
     println!("Starting query...");
-    let code_query = codes_engine.preprocess_query(
+    let code_query = preprocess_query(
         &code_queries[party_id]
             .clone()
             .into_iter()
             .flatten()
             .collect::<Vec<_>>(),
     );
-    let mask_query = masks_engine.preprocess_query(
+    let mask_query = preprocess_query(
         &mask_queries[party_id]
             .clone()
             .into_iter()
             .flatten()
             .collect::<Vec<_>>(),
     );
-
-    // Create CUDA events for synchronization
-    let dot_events = (0..=N_SAMPLES)
-        .into_iter()
-        .map(|_| device_manager.create_events())
-        .collect::<Vec<_>>();
-
-    let exchange_events = (0..=N_SAMPLES)
-        .into_iter()
-        .map(|_| device_manager.create_events())
-        .collect::<Vec<_>>();
-
-    let mut all_streams = vec![];
-
-    let total_time = Instant::now();
-
-    for i in 0..N_SAMPLES {
-        let now = Instant::now();
-
-        // share one set of streams for both engines
-        let streams = device_manager.fork_streams();
-        let blass = device_manager.create_cublas(&streams);
-
-        println!("fork took: {:?}", now.elapsed());
-
-        // unblock the first set of streams
-        if i == 0 {
-            device_manager.record_event(&streams, &dot_events[0]);
-            device_manager.record_event(&streams, &exchange_events[0]);
-        }
-
-        // streams are shared, one is enough
-        device_manager.await_event(&streams, &dot_events[i]);
-        println!("await_event took: {:?}", now.elapsed());
-        codes_engine.dot(&code_query, &streams, &blass);
-        masks_engine.dot(&mask_query, &streams, &blass);
-        println!("dot took: {:?}", now.elapsed());
-        device_manager.record_event(&streams, &dot_events[i+1]);
-        println!("await_event took: {:?}", now.elapsed());
-
-        println!("Dot took: {:?}", now.elapsed());
-
-        device_manager.await_event(&streams, &exchange_events[i]);
-        codes_engine.dot_reduce(&streams);
-        masks_engine.dot_reduce(&streams);
-        println!("Dot_reduce took: {:?}", now.elapsed());
-
-        codes_engine.exchange_results(&streams);
-        masks_engine.exchange_results(&streams);
-        println!("Exchange took: {:?}", now.elapsed());
-
-        distance_comparator.reconstruct_and_compare(
-            &codes_engine.results_peers,
-            &masks_engine.results_peers,
-            &streams,
-        );
-
-        device_manager.record_event(&streams, &exchange_events[i+1]);
-
-        println!("Loop time: {:?}", now.elapsed());
-
-        all_streams.push(streams);
-    }
-
-    for streams in all_streams {
-        device_manager.await_streams(&streams);
-    }
-
-    println!("Total time for {} samples: {:?}", N_SAMPLES, total_time.elapsed());
-
-    // TODO
-    // Sanity check: compare results against reference (debug only)
-    let (dists, _) = distance_comparator
-        .reconstruct_distances_debug(&codes_engine.results_peers, &masks_engine.results_peers);
-
-    let reference_dists = db.calculate_distances(&query_template);
-
-    for i in 0..DB_SIZE / n_devices {
-        assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-6);
-    }
-
-    println!("Distances match the reference!");
-
-    time::sleep(time::Duration::from_secs(5)).await;
-    Ok(())
+    (code_query, mask_query)
 }
