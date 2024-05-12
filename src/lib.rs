@@ -543,6 +543,7 @@ impl ShareDB {
         blass: &Vec<CudaBlas>,
     ) {
         for idx in 0..self.device_manager.device_count() {
+            let now = Instant::now();
             // TODO: helper
             self.device_manager.device(idx).bind_to_thread().unwrap();
             let query1: CudaSlice<u8> = unsafe {
@@ -575,11 +576,15 @@ impl ShareDB {
                 .unwrap();
             }
 
+            println!("alloc query: {:?}", now.elapsed());
+
             // Prepare randomness to mask results
             if self.is_remote {
                 self.rngs[idx].0.fill_rng_no_host_copy(&streams[idx]);
                 self.rngs[idx].1.fill_rng_no_host_copy(&streams[idx]);
             }
+
+            println!("rng: {:?}", now.elapsed());
 
             // Calculate sums to correct output
             gemm(
@@ -597,6 +602,8 @@ impl ShareDB {
                 0,
             );
 
+            println!("gemm 1: {:?}", now.elapsed());
+
             gemm(
                 &blass[idx],
                 &query0,
@@ -611,6 +618,8 @@ impl ShareDB {
                 1,
                 0,
             );
+
+            println!("gemm 2: {:?}", now.elapsed());
 
             for (i, d) in [&self.db0[idx], &self.db1[idx]].iter().enumerate() {
                 for (j, q) in [&query0, &query1].iter().enumerate() {
