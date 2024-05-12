@@ -546,6 +546,7 @@ impl ShareDB {
             let now = Instant::now();
             // TODO: helper
             self.device_manager.device(idx).bind_to_thread().unwrap();
+            println!("bind: {:?}", now.elapsed());
             let query1: CudaSlice<u8> = unsafe {
                 self.device_manager
                     .device(idx)
@@ -642,6 +643,7 @@ impl ShareDB {
                     );
                 }
             }
+            println!("all other gemms: {:?}", now.elapsed());
         }
     }
 
