@@ -137,7 +137,10 @@ async fn main() -> eyre::Result<()> {
         device_manager.await_event(request_streams, &dot_events[i]);
         codes_engine.dot(&code_query, request_streams, request_cublas_handles);
         masks_engine.dot(&mask_query, request_streams, request_cublas_handles);
-        device_manager.record_event(request_streams, &dot_events[i + 1]);
+        // skip last
+        if i < request_batches.len()-1 {
+            device_manager.record_event(request_streams, &dot_events[i + 1]);
+        }
 
         // BLOCK 2: calculate final dot product result, exchange and compare 
         device_manager.await_event(request_streams, &exchange_events[i]);
