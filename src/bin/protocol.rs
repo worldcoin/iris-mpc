@@ -127,11 +127,15 @@ async fn main() -> eyre::Result<()> {
         let request_streams = &streams[i];
         let request_cublas_handles = &cublas_handles[i];
 
+        println!("1: {:?}", now.elapsed());
+
         // First stream doesn't need to wait on anyone
         if i == 0 {
             device_manager.record_event(&request_streams, &dot_events[0]);
             device_manager.record_event(&request_streams, &exchange_events[0]);
         }
+
+        println!("2: {:?}", now.elapsed());
 
         // BLOCK 1: calculate individual dot products
         device_manager.await_event(request_streams, &dot_events[i]);
@@ -141,6 +145,8 @@ async fn main() -> eyre::Result<()> {
         if i < request_batches.len()-1 {
             device_manager.record_event(request_streams, &dot_events[i + 1]);
         }
+
+        println!("3: {:?}", now.elapsed());
 
         // BLOCK 2: calculate final dot product result, exchange and compare 
         device_manager.await_event(request_streams, &exchange_events[i]);
