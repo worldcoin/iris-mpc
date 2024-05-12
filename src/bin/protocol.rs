@@ -170,7 +170,7 @@ async fn main() -> eyre::Result<()> {
     // Now all streams are running, we need to await each on CPU
     for i in 0..request_batches.len() {
         device_manager.await_streams(&streams[i]);
-        let results = distance_comparator.fetch_results();
+        // let results = distance_comparator.fetch_results();
     }
 
     println!(
