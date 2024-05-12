@@ -162,14 +162,13 @@ async fn main() -> eyre::Result<()> {
     for i in 0..request_batches.len() {
         device_manager.await_streams(&streams[i]);
         let results = distance_comparator.fetch_results();
-        
     }
 
-    // println!(
-    //     "Total time for {} samples: {:?}",
-    //     N_SAMPLES,
-    //     total_time.elapsed()
-    // );
+    println!(
+        "Total time for {} samples: {:?}",
+        request_batches.len(),
+        total_time.elapsed()
+    );
 
     // let reference_dists = db.calculate_distances(&query_template);
 
