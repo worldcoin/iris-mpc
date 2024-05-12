@@ -16,8 +16,7 @@ use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
         result::{
-            event, memcpy_htod_async,
-            stream::{self, synchronize, wait_event},
+            event, malloc_async, memcpy_htod_async, stream::{self, synchronize, wait_event}
         },
         sys::{CUevent, CUevent_flags},
         CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceSlice,
@@ -88,8 +87,8 @@ pub fn preprocess_query(query: &[u16]) -> Vec<Vec<u8>> {
 
 pub fn gemm(
     handle: &CudaBlas,
-    a: &CudaSlice<u8>,
-    b: &CudaSlice<u8>,
+    a: u64,
+    b: u64,
     c: &mut CudaSlice<i32>,
     a_offset: u64,
     b_offset: u64,
@@ -109,10 +108,10 @@ pub fn gemm(
             n as i32,
             k as i32,
             &alpha as *const i32 as *const c_void,
-            (*a.device_ptr() + a_offset) as *const _,
+            (a + a_offset) as *const _,
             sys::cublasDataType_t::CUDA_R_8I,
             k as i32,
-            (*b.device_ptr() + b_offset) as *const _,
+            (b + b_offset) as *const _,
             sys::cublasDataType_t::CUDA_R_8I,
             k as i32,
             &beta as *const i32 as *const c_void,
@@ -547,30 +546,24 @@ impl ShareDB {
             // TODO: helper
             self.device_manager.device(idx).bind_to_thread().unwrap();
             println!("bind: {:?}", now.elapsed());
-            let query1: CudaSlice<u8> = unsafe {
-                self.device_manager
-                    .device(idx)
-                    .alloc(std::mem::size_of::<u8>() * preprocessed_query[1].len())
-                    .unwrap()
+            let query1 = unsafe {
+                malloc_async(streams[idx].stream, std::mem::size_of::<u8>() * preprocessed_query[1].len()).unwrap()
             };
             unsafe {
                 memcpy_htod_async(
-                    *query1.device_ptr(),
+                    query1,
                     &preprocessed_query[1],
                     streams[idx].stream,
                 )
                 .unwrap();
             }
 
-            let query0: CudaSlice<u8> = unsafe {
-                self.device_manager
-                    .device(idx)
-                    .alloc(std::mem::size_of::<u8>() * preprocessed_query[0].len())
-                    .unwrap()
+            let query0 = unsafe {
+                malloc_async(streams[idx].stream, std::mem::size_of::<u8>() * preprocessed_query[0].len()).unwrap()
             };
             unsafe {
                 memcpy_htod_async(
-                    *query0.device_ptr(),
+                    query0,
                     &preprocessed_query[0],
                     streams[idx].stream,
                 )
@@ -590,8 +583,8 @@ impl ShareDB {
             // Calculate sums to correct output
             gemm(
                 &blass[idx],
-                &query1,
-                &self.ones[idx],
+                query1,
+                *self.ones[idx].device_ptr(),
                 &mut self.query1_sums[idx],
                 0,
                 0,
@@ -607,8 +600,8 @@ impl ShareDB {
 
             gemm(
                 &blass[idx],
-                &query0,
-                &self.ones[idx],
+                query0,
+                *self.ones[idx].device_ptr(),
                 &mut self.query0_sums[idx],
                 0,
                 0,
@@ -623,11 +616,11 @@ impl ShareDB {
             println!("gemm 2: {:?}", now.elapsed());
 
             for (i, d) in [&self.db0[idx], &self.db1[idx]].iter().enumerate() {
-                for (j, q) in [&query0, &query1].iter().enumerate() {
+                for (j, q) in [query0, query1].iter().enumerate() {
                     gemm(
                         &blass[idx],
-                        d,
-                        q,
+                        *d.device_ptr(),
+                        *q,
                         &mut self.intermediate_results[idx],
                         0,
                         0,
