@@ -48,9 +48,10 @@ impl DeviceManager {
     }
 
     pub fn await_streams(&self, streams: &Vec<CudaStream>) {
-        streams
-            .iter()
-            .for_each(|s| unsafe { synchronize(s.stream).unwrap() });
+        for i in 0..self.devices.len() {
+            self.devices[i].bind_to_thread().unwrap();
+            unsafe { synchronize(streams[i].stream).unwrap() }
+        }
     }
 
     pub fn create_events(&self) -> Vec<CUevent> {

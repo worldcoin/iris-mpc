@@ -131,8 +131,8 @@ async fn main() -> eyre::Result<()> {
 
         // First stream doesn't need to wait on anyone
         if i == 0 {
-            device_manager.record_event(&request_streams, &dot_events[0]);
-            device_manager.record_event(&request_streams, &exchange_events[0]);
+            device_manager.record_event(request_streams, &dot_events[0]);
+            device_manager.record_event(request_streams, &exchange_events[0]);
         }
 
         println!("2: {:?}", now.elapsed());
