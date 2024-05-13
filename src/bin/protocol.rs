@@ -24,7 +24,7 @@ const DB_SIZE: usize = 8 * 1000;
 const QUERIES: usize = 930;
 const RNG_SEED: u64 = 42;
 const N_BATCHES: usize = 10; // We expect 10 batches with each QUERIES/ROTATIONS
-const MAX_CONCURRENT_REQUESTS: usize = 1;
+const MAX_CONCURRENT_REQUESTS: usize = 10;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
@@ -96,14 +96,15 @@ async fn main() -> eyre::Result<()> {
 
     println!("Engines ready!");
 
-    // Prepare streams and cuBLAS handles
-    // They will be reused for multiple requests since construction and destruction is costly
+    // Prepare streams etc.
     let mut streams = vec![];
     let mut cublas_handles = vec![];
+    let mut results = vec![];
     for i in 0..MAX_CONCURRENT_REQUESTS {
         let tmp_streams = device_manager.fork_streams();
         cublas_handles.push(device_manager.create_cublas(&tmp_streams));
         streams.push(tmp_streams);
+        results.push(distance_comparator.prepare_results());
     }
 
     // Entrypoint for incoming request
@@ -147,13 +148,13 @@ async fn main() -> eyre::Result<()> {
         codes_engine.dot(&code_query, request_streams, request_cublas_handles);
         masks_engine.dot(&mask_query, request_streams, request_cublas_handles);
         // skip last
-        if i < request_batches.len()-1 {
+        if i < request_batches.len() - 1 {
             device_manager.record_event(request_streams, &dot_events[i + 1]);
         }
 
         println!("3: {:?}", now.elapsed());
 
-        // BLOCK 2: calculate final dot product result, exchange and compare 
+        // BLOCK 2: calculate final dot product result, exchange and compare
         device_manager.await_event(request_streams, &exchange_events[i]);
         codes_engine.dot_reduce(request_streams);
         masks_engine.dot_reduce(request_streams);
@@ -163,9 +164,10 @@ async fn main() -> eyre::Result<()> {
             &codes_engine.results_peers,
             &masks_engine.results_peers,
             request_streams,
+            &mut results[i],
         );
         // skip last
-        if i < request_batches.len()-1 {
+        if i < request_batches.len() - 1 {
             device_manager.record_event(request_streams, &exchange_events[i + 1]);
         }
 
@@ -174,20 +176,19 @@ async fn main() -> eyre::Result<()> {
 
     // Now all streams are running, we need to await each on CPU
     for i in 0..request_batches.len() {
-        device_manager.await_streams(&streams[i]);
+        // device_manager.await_streams(&streams[i]);
+        let results = distance_comparator.fetch_results(&results[i], &streams[i]);
+        println!("{:?}", results[0][0..10].to_vec());
     }
 
     println!(
-        "Total time for {} samples: {:?} ({:.2} Mcomps/s)",
-        request_batches.len() -1 ,
+        "Total time for {} samples: {:?} ({:.2} comps/s)",
+        request_batches.len() - 1,
         total_time.elapsed(),
-        DB_SIZE as f64 * (request_batches.len()-1) as f64 / total_time.elapsed().as_micros() as f64 / 1e3f64,
+        DB_SIZE as f64 * (request_batches.len() - 1) as f64
+            / total_time.elapsed().as_micros() as f64
+            * 1000f64,
     );
-
-    let results = distance_comparator.fetch_results();
-    for i in 0..request_batches.len() {
-        println!("{:?}", results[i][0..10].to_vec());
-    }
 
     // let reference_dists = db.calculate_distances(&query_template);
 

@@ -16,7 +16,8 @@ use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
         result::{
-            event, malloc_async, memcpy_dtoh_sync, memcpy_htod_async, stream::{self, synchronize, wait_event}
+            event, malloc_async, memcpy_dtoh_async, memcpy_dtoh_sync, memcpy_htod_async,
+            stream::{self, synchronize, wait_event},
         },
         sys::{CUevent, CUevent_flags},
         CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceSlice,
@@ -157,7 +158,6 @@ async fn http_root(ids: Vec<Id>, Path(device_id): Path<String>) -> String {
 pub struct DistanceComparator {
     devs: Vec<Arc<CudaDevice>>,
     kernels: Vec<CudaFunction>,
-    results: Vec<CudaSlice<u32>>,
     db_length: usize,
     query_length: usize,
     n_devices: usize,
@@ -168,9 +168,7 @@ impl DistanceComparator {
         let ptx = compile_ptx(PTX_SRC).unwrap();
         let mut kernels = Vec::new();
         let mut devs = Vec::new();
-        let mut results = Vec::new();
         let n_devices = CudaDevice::count().unwrap() as usize;
-        let results_uninit = vec![u32::MAX; query_length * std::mem::size_of::<u32>()];
 
         for i in 0..n_devices {
             let dev = CudaDevice::new(i).unwrap();
@@ -180,21 +178,24 @@ impl DistanceComparator {
                 .get_func(DIST_FUNCTION_NAME, DIST_FUNCTION_NAME)
                 .unwrap();
 
-            let result = dev.htod_copy(results_uninit.clone()).unwrap();
-
             kernels.push(function);
             devs.push(dev);
-            results.push(result);
         }
 
         Self {
             devs,
             kernels,
-            results,
             db_length,
             query_length,
             n_devices,
         }
+    }
+
+    pub fn prepare_results(&self) -> Vec<CudaSlice<u32>> {
+        let results_uninit = vec![u32::MAX; self.query_length * std::mem::size_of::<u32>()];
+        (0..self.n_devices)
+            .map(|i| self.devs[i].htod_copy(results_uninit.clone()).unwrap())
+            .collect::<Vec<_>>()
     }
 
     pub fn reconstruct_and_compare(
@@ -202,6 +203,7 @@ impl DistanceComparator {
         codes_result_peers: &Vec<Vec<CudaSlice<u8>>>,
         masks_result_peers: &Vec<Vec<CudaSlice<u8>>>,
         streams: &Vec<CudaStream>,
+        results: &mut Vec<CudaSlice<u32>>,
     ) {
         let num_elements = self.db_length / self.n_devices * self.query_length;
         let threads_per_block = 256;
@@ -226,7 +228,7 @@ impl DistanceComparator {
                             &masks_result_peers[i][0],
                             &masks_result_peers[i][1],
                             &masks_result_peers[i][2],
-                            &mut self.results[i],
+                            &mut results[i],
                             MATCH_RATIO,
                             (self.db_length / self.n_devices) as u64,
                             self.query_length as u64,
@@ -237,83 +239,20 @@ impl DistanceComparator {
         }
     }
 
-    pub fn reconstruct_distances_debug(
-        &mut self,
-        codes_result_peers: &Vec<Vec<CudaSlice<u8>>>,
-        masks_result_peers: &Vec<Vec<CudaSlice<u8>>>,
-    ) -> (Vec<f64>, Vec<(u16, u16)>) {
-        const DEBUG_FUNCTION: &str = "reconstructDebug";
-        let num_elements = self.db_length / self.n_devices * self.query_length;
-        let threads_per_block = 256;
-        let blocks_per_grid = num_elements.div_ceil(threads_per_block);
-        let cfg = LaunchConfig {
-            block_dim: (threads_per_block as u32, 1, 1),
-            grid_dim: (blocks_per_grid as u32, 1, 1),
-            shared_mem_bytes: 0,
-        };
-
-        let mut total_results_dists = vec![];
-        let mut total_results_noms = vec![];
-        let mut total_results_dens = vec![];
-
-        for i in 0..self.n_devices {
-            let dev = CudaDevice::new(i).unwrap();
-            let mut result: CudaSlice<f64> = dev
-                .alloc_zeros(self.db_length / self.n_devices * self.query_length)
-                .unwrap();
-            let mut result_noms: CudaSlice<u16> = dev
-                .alloc_zeros(self.db_length / self.n_devices * self.query_length)
-                .unwrap();
-            let mut result_dens: CudaSlice<u16> = dev
-                .alloc_zeros(self.db_length / self.n_devices * self.query_length)
-                .unwrap();
-            let ptx = compile_ptx(PTX_SRC).unwrap();
-            dev.load_ptx(ptx.clone(), DEBUG_FUNCTION, &[DEBUG_FUNCTION])
-                .unwrap();
-            let function = dev.get_func(DEBUG_FUNCTION, DEBUG_FUNCTION).unwrap();
-
-            unsafe {
-                function
-                    .clone()
-                    .launch(
-                        cfg,
-                        (
-                            &codes_result_peers[i][0],
-                            &codes_result_peers[i][1],
-                            &codes_result_peers[i][2],
-                            &masks_result_peers[i][0],
-                            &masks_result_peers[i][1],
-                            &masks_result_peers[i][2],
-                            &mut result,
-                            &mut result_noms,
-                            &mut result_dens,
-                            (self.db_length / self.n_devices * self.query_length) as u64,
-                        ),
-                    )
-                    .unwrap();
-            }
-
-            total_results_dists.extend(dev.dtoh_sync_copy(&result).unwrap());
-            total_results_noms.extend(dev.dtoh_sync_copy(&result_noms).unwrap());
-            total_results_dens.extend(dev.dtoh_sync_copy(&result_dens).unwrap());
-        }
-
-        (
-            total_results_dists,
-            total_results_noms
-                .into_iter()
-                .zip(total_results_dens)
-                .collect::<Vec<_>>(),
-        )
-    }
-
-    pub fn fetch_results(&self) -> Vec<Vec<u32>> {
+    pub fn fetch_results(
+        &self,
+        dev_results: &Vec<CudaSlice<u32>>,
+        streams: &Vec<CudaStream>,
+    ) -> Vec<Vec<u32>> {
         let mut results = vec![];
-        for (i, dev) in self.devs.iter().enumerate() {
-            dev.bind_to_thread().unwrap();
-            let mut tmp = vec![0u32; self.results[i].len()];
-            unsafe { memcpy_dtoh_sync(&mut tmp, *self.results[i].device_ptr()).unwrap() };
-            dev.synchronize();
+        for i in 0..self.n_devices {
+            self.devs[i].bind_to_thread().unwrap();
+            let mut tmp = vec![0u32; dev_results[i].len()];
+            unsafe {
+                memcpy_dtoh_async(&mut tmp, *dev_results[i].device_ptr(), streams[i].stream)
+                    .unwrap();
+                synchronize(streams[i].stream).unwrap();
+            }
             results.push(tmp);
         }
         results
@@ -551,27 +490,25 @@ impl ShareDB {
             self.device_manager.device(idx).bind_to_thread().unwrap();
             println!("bind: {:?}", now.elapsed());
             let query1 = unsafe {
-                malloc_async(streams[idx].stream, std::mem::size_of::<u8>() * preprocessed_query[1].len()).unwrap()
+                malloc_async(
+                    streams[idx].stream,
+                    std::mem::size_of::<u8>() * preprocessed_query[1].len(),
+                )
+                .unwrap()
             };
             unsafe {
-                memcpy_htod_async(
-                    query1,
-                    &preprocessed_query[1],
-                    streams[idx].stream,
-                )
-                .unwrap();
+                memcpy_htod_async(query1, &preprocessed_query[1], streams[idx].stream).unwrap();
             }
 
             let query0 = unsafe {
-                malloc_async(streams[idx].stream, std::mem::size_of::<u8>() * preprocessed_query[0].len()).unwrap()
+                malloc_async(
+                    streams[idx].stream,
+                    std::mem::size_of::<u8>() * preprocessed_query[0].len(),
+                )
+                .unwrap()
             };
             unsafe {
-                memcpy_htod_async(
-                    query0,
-                    &preprocessed_query[0],
-                    streams[idx].stream,
-                )
-                .unwrap();
+                memcpy_htod_async(query0, &preprocessed_query[0], streams[idx].stream).unwrap();
             }
 
             println!("alloc query: {:?}", now.elapsed());
