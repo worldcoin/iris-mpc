@@ -148,14 +148,14 @@ async fn main() -> eyre::Result<()> {
         codes_engine.dot(&code_query, request_streams, request_cublas_handles);
         masks_engine.dot(&mask_query, request_streams, request_cublas_handles);
         // skip last
-        if i < request_batches.len() - 1 {
-            device_manager.record_event(request_streams, &dot_events[i + 1]);
-        }
+        // if i < request_batches.len() - 1 {
+        //     device_manager.record_event(request_streams, &dot_events[i + 1]);
+        // }
 
         println!("3: {:?}", now.elapsed());
 
         // BLOCK 2: calculate final dot product result, exchange and compare
-        device_manager.await_event(request_streams, &exchange_events[i]);
+        // device_manager.await_event(request_streams, &exchange_events[i]);
         codes_engine.dot_reduce(request_streams);
         masks_engine.dot_reduce(request_streams);
         codes_engine.exchange_results(request_streams);
@@ -168,7 +168,7 @@ async fn main() -> eyre::Result<()> {
         );
         // skip last
         if i < request_batches.len() - 1 {
-            device_manager.record_event(request_streams, &exchange_events[i + 1]);
+            device_manager.record_event(request_streams, &dot_events[i + 1]);
         }
 
         println!("Loop time: {:?}", now.elapsed());
