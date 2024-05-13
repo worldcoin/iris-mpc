@@ -20,7 +20,7 @@ use gpu_iris_mpc::{
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tokio::time;
 
-const DB_SIZE: usize = 8 * 1000;
+const DB_SIZE: usize = 8 * 125_000;
 const QUERIES: usize = 930;
 const RNG_SEED: u64 = 42;
 const N_BATCHES: usize = 10; // We expect 10 batches with each QUERIES/ROTATIONS
@@ -167,7 +167,7 @@ async fn main() -> eyre::Result<()> {
             request_streams,
             &mut results[i],
         );
-        
+
         // skip last
         if i < request_batches.len() - 1 {
             device_manager.record_event(request_streams, &exchange_events[i + 1]);
@@ -187,7 +187,8 @@ async fn main() -> eyre::Result<()> {
         "Total time for {} samples: {:?} ({:.2} comps/s)",
         request_batches.len() - 1,
         total_time.elapsed(),
-        DB_SIZE as f64 * (request_batches.len() - 1) as f64
+        DB_SIZE as f64 * (request_batches.len() - 1) as f64 * QUERIES as f64
+            / 31f64
             / total_time.elapsed().as_micros() as f64
             * 1000f64,
     );
