@@ -176,7 +176,7 @@ async fn main() -> eyre::Result<()> {
     for i in 0..request_batches.len() {
         // device_manager.await_streams(&streams[i]);
         let results = distance_comparator.fetch_results(&results[i], &streams[i]);
-        println!("{:?}", results[0][0..10].to_vec());
+        println!("{:?}", results[i][0..10].to_vec());
     }
 
     println!(
