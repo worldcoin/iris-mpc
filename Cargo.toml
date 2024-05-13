@@ -26,6 +26,10 @@ num = { version = "0.4.2", features = ["num-bigint"] }
 [dev-dependencies]
 criterion = "0.5"
 
+#[[bench]]
+#name = "chacha"
+#harness = false
+
 [[bench]]
-name = "chacha"
+name = "memcpy"
 harness = false
