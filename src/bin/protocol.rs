@@ -203,16 +203,15 @@ async fn main() -> eyre::Result<()> {
 }
 
 fn random_query(party_id: usize, rng: &mut StdRng, db: &IrisDB) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
-    let rng_idx = rng.gen_range(0..db.len());
-    println!("random index: {}", rng_idx);
-    let query_template = db.db[rng_idx].clone();
-    let random_query = ShamirIris::share_iris(&query_template, rng);
     let mut code_queries = vec![vec![], vec![], vec![]];
     let mut mask_queries = vec![vec![], vec![], vec![]];
-
+    
     for i in 0..QUERIES {
+        let rng_idx = rng.gen_range(0..db.len());
+        let query_template = db.db[rng_idx].clone();
+        let random_query = ShamirIris::share_iris(&query_template, rng);
         // TODO: rotate
-        let tmp: [ShamirIris; 3] = random_query.clone();
+        let tmp = random_query.clone();
         code_queries[0].push(tmp[0].code.to_vec());
         code_queries[1].push(tmp[1].code.to_vec());
         code_queries[2].push(tmp[2].code.to_vec());
@@ -222,7 +221,6 @@ fn random_query(party_id: usize, rng: &mut StdRng, db: &IrisDB) -> (Vec<Vec<u8>>
         mask_queries[2].push(tmp[2].mask.to_vec());
     }
 
-    println!("Starting query...");
     let code_query = preprocess_query(
         &code_queries[party_id]
             .clone()
