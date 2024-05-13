@@ -175,8 +175,8 @@ async fn main() -> eyre::Result<()> {
     // Now all streams are running, we need to await each on CPU
     for i in 0..request_batches.len() {
         device_manager.await_streams(&streams[i]);
-        let results = distance_comparator.fetch_results();
-        println!("{:?}", results[0][0]);
+        // let results = distance_comparator.fetch_results();
+        // println!("{:?}", results[0][0]);
     }
 
     println!(
@@ -185,6 +185,11 @@ async fn main() -> eyre::Result<()> {
         total_time.elapsed(),
         DB_SIZE as f64 * (request_batches.len()-1) as f64 / total_time.elapsed().as_micros() as f64 / 1e3f64,
     );
+
+    for i in 0..request_batches.len() {
+        let results = distance_comparator.fetch_results();
+        println!("{:?}", results[i][0]);
+    }
 
     // let reference_dists = db.calculate_distances(&query_template);
 
