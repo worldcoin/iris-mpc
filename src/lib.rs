@@ -16,7 +16,7 @@ use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
         result::{
-            event, malloc_async, memcpy_htod_async, stream::{self, synchronize, wait_event}
+            event, malloc_async, memcpy_dtoh_sync, memcpy_htod_async, stream::{self, synchronize, wait_event}
         },
         sys::{CUevent, CUevent_flags},
         CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceSlice,
@@ -310,7 +310,10 @@ impl DistanceComparator {
     pub fn fetch_results(&self) -> Vec<Vec<u32>> {
         let mut results = vec![];
         for (i, dev) in self.devs.iter().enumerate() {
-            results.push(dev.dtoh_sync_copy(&self.results[i]).unwrap());
+            dev.bind_to_thread().unwrap();
+            let mut tmp = vec![0u32; self.results[i].len()];
+            unsafe { memcpy_dtoh_sync(&mut tmp, *self.results[i].device_ptr()).unwrap() };
+            results.push(tmp);
         }
         results
     }

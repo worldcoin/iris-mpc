@@ -5,6 +5,7 @@
 ///! Node 2: cargo run --release --bin protocol 2 [NODE_0_IP]
 use std::{env, time::Instant};
 
+use cudarc::driver::result::memcpy_dtoh_sync;
 use float_eq::assert_float_eq;
 use gpu_iris_mpc::{
     device_manager::DeviceManager,
@@ -19,7 +20,7 @@ use gpu_iris_mpc::{
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tokio::time;
 
-const DB_SIZE: usize = 8 * 125_000;
+const DB_SIZE: usize = 8 * 1000;
 const QUERIES: usize = 930;
 const RNG_SEED: u64 = 42;
 const N_BATCHES: usize = 10; // We expect 10 batches with each QUERIES/ROTATIONS
@@ -174,14 +175,15 @@ async fn main() -> eyre::Result<()> {
     // Now all streams are running, we need to await each on CPU
     for i in 0..request_batches.len() {
         device_manager.await_streams(&streams[i]);
-        // let results = distance_comparator.fetch_results();
+        let results = distance_comparator.fetch_results();
+        println!("{:?}", results[0][0]);
     }
 
     println!(
         "Total time for {} samples: {:?} ({:.2} Mcomps/s)",
         request_batches.len() -1 ,
         total_time.elapsed(),
-        total_time.elapsed().as_micros() as f64 / 1000f64 /(request_batches.len()-1) as f64 / 1e6f64,
+        DB_SIZE as f64 * (request_batches.len()-1) as f64 / total_time.elapsed().as_micros() as f64 / 1e3f64,
     );
 
     // let reference_dists = db.calculate_distances(&query_template);
