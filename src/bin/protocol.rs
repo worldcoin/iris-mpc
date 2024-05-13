@@ -118,10 +118,14 @@ async fn main() -> eyre::Result<()> {
         exchange_events.push(device_manager.create_events());
     }
 
-    let total_time = Instant::now();
+    let mut total_time = Instant::now();
 
     for i in 0..request_batches.len() {
         let now = Instant::now();
+        // Ignore first
+        if i == 1 {
+            total_time = Instant::now();
+        }
 
         let (code_query, mask_query) = request_batches[i].clone();
         let request_streams = &streams[i];
@@ -174,9 +178,10 @@ async fn main() -> eyre::Result<()> {
     }
 
     println!(
-        "Total time for {} samples: {:?}",
-        request_batches.len(),
-        total_time.elapsed()
+        "Total time for {} samples: {:?} ({:.2} Mcomps/s)",
+        request_batches.len() -1 ,
+        total_time.elapsed(),
+        total_time.elapsed().as_micros() as f64 / 1000f64 /(request_batches.len()-1) as f64 / 1e6f64,
     );
 
     // let reference_dists = db.calculate_distances(&query_template);
