@@ -20,7 +20,7 @@ use gpu_iris_mpc::{
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tokio::time;
 
-const DB_SIZE: usize = 8 * 125_000;
+const DB_SIZE: usize = 8 * 1000;
 const QUERIES: usize = 930;
 const RNG_SEED: u64 = 42;
 const N_BATCHES: usize = 10; // We expect 10 batches with each QUERIES/ROTATIONS
@@ -133,15 +133,11 @@ async fn main() -> eyre::Result<()> {
         let request_streams = &streams[i];
         let request_cublas_handles = &cublas_handles[i];
 
-        println!("1: {:?}", now.elapsed());
-
         // First stream doesn't need to wait on anyone
         if i == 0 {
             device_manager.record_event(request_streams, &dot_events[0]);
             device_manager.record_event(request_streams, &exchange_events[0]);
         }
-
-        println!("2: {:?}", now.elapsed());
 
         // BLOCK 1: calculate individual dot products
         device_manager.await_event(request_streams, &dot_events[i]);
@@ -184,13 +180,12 @@ async fn main() -> eyre::Result<()> {
     }
 
     println!(
-        "Total time for {} samples: {:?} ({:.2} comps/s)",
+        "Total time for {} samples: {:?} ({:.4} Mcomps/s)",
         request_batches.len() - 1,
         total_time.elapsed(),
         DB_SIZE as f64 * (request_batches.len() - 1) as f64 * QUERIES as f64
             / 31f64
             / total_time.elapsed().as_micros() as f64
-            * 1000f64,
     );
 
     // let reference_dists = db.calculate_distances(&query_template);
@@ -205,8 +200,10 @@ async fn main() -> eyre::Result<()> {
     Ok(())
 }
 
-fn random_query(party_id: usize, rng: &mut StdRng) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
-    let query_template = IrisCode::random_rng(rng);
+fn random_query(party_id: usize, rng: &mut StdRng, db: &IrisDB) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+    let rng_idx = rng.gen_range(0..db.len());
+    println!("random index: {}", rng_idx);
+    let query_template = db.db[rng_idx];
     let random_query = ShamirIris::share_iris(&query_template, rng);
     let mut code_queries = vec![vec![], vec![], vec![]];
     let mut mask_queries = vec![vec![], vec![], vec![]];

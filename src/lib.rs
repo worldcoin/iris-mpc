@@ -488,7 +488,6 @@ impl ShareDB {
             let now = Instant::now();
             // TODO: helper
             self.device_manager.device(idx).bind_to_thread().unwrap();
-            println!("bind: {:?}", now.elapsed());
             let query1 = unsafe {
                 malloc_async(
                     streams[idx].stream,
@@ -511,15 +510,11 @@ impl ShareDB {
                 memcpy_htod_async(query0, &preprocessed_query[0], streams[idx].stream).unwrap();
             }
 
-            println!("alloc query: {:?}", now.elapsed());
-
             // Prepare randomness to mask results
             if self.is_remote {
                 self.rngs[idx].0.fill_rng_no_host_copy(&streams[idx]);
                 self.rngs[idx].1.fill_rng_no_host_copy(&streams[idx]);
             }
-
-            println!("rng: {:?}", now.elapsed());
 
             // Calculate sums to correct output
             gemm(
@@ -537,8 +532,6 @@ impl ShareDB {
                 0,
             );
 
-            println!("gemm 1: {:?}", now.elapsed());
-
             gemm(
                 &blass[idx],
                 query0,
@@ -553,8 +546,6 @@ impl ShareDB {
                 1,
                 0,
             );
-
-            println!("gemm 2: {:?}", now.elapsed());
 
             for (i, d) in [&self.db0[idx], &self.db1[idx]].iter().enumerate() {
                 for (j, q) in [query0, query1].iter().enumerate() {
@@ -577,7 +568,6 @@ impl ShareDB {
                     );
                 }
             }
-            println!("all other gemms: {:?}", now.elapsed());
         }
     }
 
