@@ -313,6 +313,7 @@ impl DistanceComparator {
             dev.bind_to_thread().unwrap();
             let mut tmp = vec![0u32; self.results[i].len()];
             unsafe { memcpy_dtoh_sync(&mut tmp, *self.results[i].device_ptr()).unwrap() };
+            dev.synchronize();
             results.push(tmp);
         }
         results
