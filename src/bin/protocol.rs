@@ -24,7 +24,7 @@ const DB_SIZE: usize = 8 * 1000;
 const QUERIES: usize = 930;
 const RNG_SEED: u64 = 42;
 const N_BATCHES: usize = 10; // We expect 10 batches with each QUERIES/ROTATIONS
-const MAX_CONCURRENT_REQUESTS: usize = 10;
+const MAX_CONCURRENT_REQUESTS: usize = 1;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
@@ -175,8 +175,6 @@ async fn main() -> eyre::Result<()> {
     // Now all streams are running, we need to await each on CPU
     for i in 0..request_batches.len() {
         device_manager.await_streams(&streams[i]);
-        // let results = distance_comparator.fetch_results();
-        // println!("{:?}", results[0][0]);
     }
 
     println!(
@@ -186,9 +184,9 @@ async fn main() -> eyre::Result<()> {
         DB_SIZE as f64 * (request_batches.len()-1) as f64 / total_time.elapsed().as_micros() as f64 / 1e3f64,
     );
 
+    let results = distance_comparator.fetch_results();
     for i in 0..request_batches.len() {
-        let results = distance_comparator.fetch_results();
-        println!("{:?}", results[i][0]);
+        println!("{:?}", results[i][0..10].to_vec());
     }
 
     // let reference_dists = db.calculate_distances(&query_template);
