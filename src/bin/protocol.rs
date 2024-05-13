@@ -113,7 +113,7 @@ async fn main() -> eyre::Result<()> {
     let mut exchange_events = vec![];
 
     while request_batches.len() < MAX_CONCURRENT_REQUESTS {
-        let query = random_query(party_id, &mut rng); // TODO: fetch from queue
+        let query = random_query(party_id, &mut rng, &db); // TODO: fetch from queue
 
         request_batches.push(query);
         dot_events.push(device_manager.create_events());
@@ -203,7 +203,7 @@ async fn main() -> eyre::Result<()> {
 fn random_query(party_id: usize, rng: &mut StdRng, db: &IrisDB) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
     let rng_idx = rng.gen_range(0..db.len());
     println!("random index: {}", rng_idx);
-    let query_template = db.db[rng_idx];
+    let query_template = db.db[rng_idx].clone();
     let random_query = ShamirIris::share_iris(&query_template, rng);
     let mut code_queries = vec![vec![], vec![], vec![]];
     let mut mask_queries = vec![vec![], vec![], vec![]];
