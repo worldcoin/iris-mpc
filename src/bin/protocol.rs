@@ -103,7 +103,7 @@ async fn main() -> eyre::Result<()> {
     let mut results = vec![];
     let mut pinned_query_buffer : *mut c_void = std::ptr::null_mut();
     unsafe {
-        lib().cuMemAllocHost_v2(&mut pinned_query_buffer, IRIS_CODE_LENGTH * 4 * MAX_CONCURRENT_REQUESTS);
+        lib().cuMemAllocHost_v2(&mut pinned_query_buffer, IRIS_CODE_LENGTH * QUERIES * 4 * MAX_CONCURRENT_REQUESTS);
     }
     
     for i in 0..MAX_CONCURRENT_REQUESTS {
