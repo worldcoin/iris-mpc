@@ -25,7 +25,7 @@ const QUERIES: usize = 930;
 const IRIS_CODE_LENGTH: usize = 12800;
 const RNG_SEED: u64 = 42;
 const N_BATCHES: usize = 10; // We expect 10 batches with each QUERIES/ROTATIONS
-const MAX_CONCURRENT_REQUESTS: usize = 10;
+const MAX_CONCURRENT_REQUESTS: usize = 20;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
@@ -181,8 +181,8 @@ async fn main() -> eyre::Result<()> {
 
         // BLOCK 1: calculate individual dot products
         device_manager.await_event(request_streams, &dot_events[i]);
-        codes_engine.dot(buffers.0, IRIS_CODE_LENGTH, request_streams, request_cublas_handles);
-        masks_engine.dot(buffers.1, IRIS_CODE_LENGTH, request_streams, request_cublas_handles);
+        codes_engine.dot(buffers.0, request_streams, request_cublas_handles);
+        masks_engine.dot(buffers.1, request_streams, request_cublas_handles);
 
         // BLOCK 2: calculate final dot product result, exchange and compare
         device_manager.await_event(request_streams, &exchange_events[i]);

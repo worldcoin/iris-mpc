@@ -481,7 +481,6 @@ impl ShareDB {
     pub fn dot(
         &mut self,
         preprocessed_query: (*mut c_void, *mut c_void),
-        query_len: usize,
         streams: &Vec<CudaStream>,
         blass: &Vec<CudaBlas>,
     ) {
@@ -490,20 +489,20 @@ impl ShareDB {
             self.device_manager.device(idx).bind_to_thread().unwrap();
 
             // Copy the query from pinned memory
-            let query0 = unsafe { malloc_async(streams[idx].stream, query_len).unwrap() };
-            let query1 = unsafe { malloc_async(streams[idx].stream, query_len).unwrap() };
+            let query0 = unsafe { malloc_async(streams[idx].stream, IRIS_CODE_LENGTH * self.query_length).unwrap() };
+            let query1 = unsafe { malloc_async(streams[idx].stream, IRIS_CODE_LENGTH * self.query_length).unwrap() };
 
             unsafe {
                 lib().cuMemcpyHtoDAsync_v2(
                     query0,
                     preprocessed_query.0 as *const _,
-                    query_len,
+                    IRIS_CODE_LENGTH * self.query_length,
                     streams[idx].stream,
                 );
                 lib().cuMemcpyHtoDAsync_v2(
                     query1,
                     preprocessed_query.1 as *const _,
-                    query_len,
+                    IRIS_CODE_LENGTH * self.query_length,
                     streams[idx].stream,
                 );
             }
@@ -755,7 +754,6 @@ mod tests {
         let blass = device_manager.create_cublas(&streams);
         engine.dot(
             (query_pinned0, query_pinned1),
-            preprocessed_query[1].len(),
             &streams,
             &blass,
         );
@@ -873,7 +871,7 @@ mod tests {
 
             let streams = device_manager.fork_streams();
             let blass = device_manager.create_cublas(&streams);
-            engine.dot((query_pinned0, query_pinned1), preprocessed_query[0].len(), &streams, &blass);
+            engine.dot((query_pinned0, query_pinned1), &streams, &blass);
             engine.dot_reduce(&streams);
             device_manager.await_streams(&streams);
             engine.fetch_results(&mut gpu_result[i], 0);
@@ -1025,8 +1023,8 @@ mod tests {
             let streams = device_manager.fork_streams();
             let blass = device_manager.create_cublas(&streams);
 
-            codes_engine.dot((code_query_pinned0, code_query_pinned1), code_query[0].len(), &streams, &blass);
-            masks_engine.dot((mask_query_pinned0, mask_query_pinned1), mask_query[0].len(), &streams, &blass);
+            codes_engine.dot((code_query_pinned0, code_query_pinned1), &streams, &blass);
+            masks_engine.dot((mask_query_pinned0, mask_query_pinned1), &streams, &blass);
 
             codes_engine.dot_reduce(&streams);
             masks_engine.dot_reduce(&streams);
