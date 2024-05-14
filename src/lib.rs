@@ -19,7 +19,7 @@ use cudarc::{
             event, malloc_async, memcpy_dtoh_async, memcpy_dtoh_sync, memcpy_htod_async,
             stream::{self, synchronize, wait_event},
         },
-        sys::{CUevent, CUevent_flags},
+        sys::{CUevent, CUevent_flags, CUstream_st},
         CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceSlice,
         LaunchAsync, LaunchConfig,
     },
@@ -484,31 +484,39 @@ impl ShareDB {
         streams: &Vec<CudaStream>,
         blass: &Vec<CudaBlas>,
     ) {
+        let mut query_ptrs = vec![];
+        let mut thread_handles = vec![];
+        for idx in 0..self.device_manager.device_count() {
+            let q1 = preprocessed_query[1].clone();
+            let q0 = preprocessed_query[0].clone();
+            let s = streams[idx].stream as u64;
+
+            let query1 = unsafe {
+                malloc_async(s as *mut CUstream_st, std::mem::size_of::<u8>() * q1.len()).unwrap()
+            };
+
+            let query0 = unsafe {
+                malloc_async(s as *mut CUstream_st, std::mem::size_of::<u8>() * q0.len()).unwrap()
+            };
+
+            let handle = std::thread::spawn(move || unsafe {
+                memcpy_htod_async(query1, &q1, s as *mut CUstream_st).unwrap();
+                memcpy_htod_async(query0, &q0, s as *mut CUstream_st).unwrap();
+            });
+            thread_handles.push(handle);
+            query_ptrs.push((query1, query0))
+        }
+
+        for handle in thread_handles {
+            handle.join();
+        }
+
         for idx in 0..self.device_manager.device_count() {
             let now = Instant::now();
             // TODO: helper
             self.device_manager.device(idx).bind_to_thread().unwrap();
-            let query1 = unsafe {
-                malloc_async(
-                    streams[idx].stream,
-                    std::mem::size_of::<u8>() * preprocessed_query[1].len(),
-                )
-                .unwrap()
-            };
-            unsafe {
-                memcpy_htod_async(query1, &preprocessed_query[1], streams[idx].stream).unwrap();
-            }
 
-            let query0 = unsafe {
-                malloc_async(
-                    streams[idx].stream,
-                    std::mem::size_of::<u8>() * preprocessed_query[0].len(),
-                )
-                .unwrap()
-            };
-            unsafe {
-                memcpy_htod_async(query0, &preprocessed_query[0], streams[idx].stream).unwrap();
-            }
+            let (query1, query0) = query_ptrs[idx];
 
             // Prepare randomness to mask results
             if self.is_remote {
