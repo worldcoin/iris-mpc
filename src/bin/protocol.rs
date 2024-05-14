@@ -20,7 +20,7 @@ use gpu_iris_mpc::{
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tokio::time;
 
-const DB_SIZE: usize = 8 * 1000;
+const DB_SIZE: usize = 8 * 125_000;
 const QUERIES: usize = 930;
 const IRIS_CODE_LENGTH: usize = 12800;
 const RNG_SEED: u64 = 42;
@@ -148,28 +148,24 @@ async fn main() -> eyre::Result<()> {
         };
         
         unsafe {
-            println!("xxxx");
             std::ptr::copy(
                 code_query[0].as_ptr(),
                 buffers.0.0 as *mut _,
                 code_query[0].len(),
             );
 
-            println!("xxxx");
             std::ptr::copy(
                 code_query[1].as_ptr(),
                 buffers.0.1 as *mut _,
                 code_query[1].len(),
             );
 
-            println!("xxxx");
             std::ptr::copy(
                 mask_query[0].as_ptr(),
                 buffers.1.0 as *mut _,
                 mask_query[0].len(),
             );
 
-            println!("xxxx");
             std::ptr::copy(
                 mask_query[1].as_ptr(),
                 buffers.1.1 as *mut _,
@@ -177,28 +173,21 @@ async fn main() -> eyre::Result<()> {
             );
         }
 
-        println!("1: {:?}", now.elapsed());
-
         // First stream doesn't need to wait on anyone
         if i == 0 {
             device_manager.record_event(request_streams, &dot_events[0]);
             device_manager.record_event(request_streams, &exchange_events[0]);
         }
 
-        println!("2: {:?}", now.elapsed());
-
         // BLOCK 1: calculate individual dot products
         device_manager.await_event(request_streams, &dot_events[i]);
         codes_engine.dot(buffers.0, IRIS_CODE_LENGTH, request_streams, request_cublas_handles);
         masks_engine.dot(buffers.1, IRIS_CODE_LENGTH, request_streams, request_cublas_handles);
-        println!("3: {:?}", now.elapsed());
 
         // BLOCK 2: calculate final dot product result, exchange and compare
         device_manager.await_event(request_streams, &exchange_events[i]);
         codes_engine.dot_reduce(request_streams);
         masks_engine.dot_reduce(request_streams);
-
-        println!("4: {:?}", now.elapsed());
 
         // skip last
         if i < request_batches.len() - 1 {
