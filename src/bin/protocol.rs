@@ -140,32 +140,36 @@ async fn main() -> eyre::Result<()> {
         let request_cublas_handles = &cublas_handles[i];
 
         let buffers = unsafe {
-            let code_query0 = pinned_query_buffer.byte_add(i * IRIS_CODE_LENGTH * 4 + IRIS_CODE_LENGTH * 0);
-            let code_query1 = pinned_query_buffer.byte_add(i * IRIS_CODE_LENGTH * 4 + IRIS_CODE_LENGTH * 1);
-            let mask_query0 = pinned_query_buffer.byte_add(i * IRIS_CODE_LENGTH * 4 + IRIS_CODE_LENGTH * 2);
-            let mask_query1 = pinned_query_buffer.byte_add(i * IRIS_CODE_LENGTH * 4 + IRIS_CODE_LENGTH * 3);
+            let code_query0 = pinned_query_buffer.byte_add((i * 4 + 0) * IRIS_CODE_LENGTH * QUERIES);
+            let code_query1 = pinned_query_buffer.byte_add((i * 4 + 1) * IRIS_CODE_LENGTH * QUERIES);
+            let mask_query0 = pinned_query_buffer.byte_add((i * 4 + 2) * IRIS_CODE_LENGTH * QUERIES);
+            let mask_query1 = pinned_query_buffer.byte_add((i * 4 + 3) * IRIS_CODE_LENGTH * QUERIES);
             ((code_query0, code_query1), (mask_query0, mask_query1))
         };
-
+        
         unsafe {
+            println!("xxxx");
             std::ptr::copy(
                 code_query[0].as_ptr(),
                 buffers.0.0 as *mut _,
                 code_query[0].len(),
             );
 
+            println!("xxxx");
             std::ptr::copy(
                 code_query[1].as_ptr(),
                 buffers.0.1 as *mut _,
                 code_query[1].len(),
             );
 
+            println!("xxxx");
             std::ptr::copy(
                 mask_query[0].as_ptr(),
                 buffers.1.0 as *mut _,
                 mask_query[0].len(),
             );
 
+            println!("xxxx");
             std::ptr::copy(
                 mask_query[1].as_ptr(),
                 buffers.1.1 as *mut _,
