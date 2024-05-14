@@ -8,7 +8,7 @@ use std::{env, time::Instant};
 
 use cudarc::driver::CudaDevice;
 use float_eq::assert_float_eq;
-use gpu_iris_mpc::{
+use iris_mpc_gpu::{
     setup::{
         id::PartyID,
         iris_db::{db::IrisDB, shamir_db::ShamirIrisDB, shamir_iris::ShamirIris},

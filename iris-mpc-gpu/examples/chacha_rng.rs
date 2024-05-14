@@ -1,5 +1,5 @@
 use cudarc::driver::CudaDevice;
-use gpu_iris_mpc::{
+use iris_mpc_gpu::{
     rng::chacha_field::ChaChaCudaFeRng,
     setup::{id::PartyID, shamir::Shamir},
 };

@@ -1,0 +1,4 @@
+cargo run --release --bin tcp_upgrade_server -- --client-bind-addr 127.0.0.1:8000 --mpc-bind-addr 127.0.0.1:8001 --next-server 127.0.0.1:8101 --prev-server 127.0.0.1:8201 --party-id 0 --threads 1024 &
+cargo run --release --bin tcp_upgrade_server -- --client-bind-addr 127.0.0.1:8100 --mpc-bind-addr 127.0.0.1:8101 --next-server 127.0.0.1:8201 --prev-server 127.0.0.1:8001 --party-id 1 --threads 1024 &
+cargo run --release --bin tcp_upgrade_server -- --client-bind-addr 127.0.0.1:8200 --mpc-bind-addr 127.0.0.1:8201 --next-server 127.0.0.1:8001 --prev-server 127.0.0.1:8101 --party-id 2 --threads 1024 
+# cargo flamegraph --profile profiling --bin tcp_upgrade_server -- --client-bind-addr 127.0.0.1:8200 --mpc-bind-addr 127.0.0.1:8201 --next-server 127.0.0.1:8001 --prev-server 127.0.0.1:8101 --party-id 2 

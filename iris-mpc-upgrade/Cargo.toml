@@ -1,0 +1,49 @@
+[package]
+name = "iris-mpc-upgrade"
+version = "0.1.0"
+description = "Upgrade protocol from MPC Iris Check v1 to v1.5"
+publish.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+
+
+[features]
+
+[dependencies]
+aes-prng = "0.2.1"
+bincode.workspace = true
+bytemuck.workspace = true
+bytes.workspace = true
+clap = { workspace = true }
+color-eyre = { workspace = true }
+futures.workspace = true
+futures-concurrency = "7.6.0"
+hex = "0.4.3"
+itertools.workspace = true
+num-traits.workspace = true
+rand = { workspace = true }
+rand_chacha = { workspace = true }
+serde = { workspace = true }
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util = { version = "0.7.11", features = [
+    "codec",
+    "io",
+    "net",
+    "futures-util",
+] }
+tracing.workspace = true
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "upgrade"
+harness = false
