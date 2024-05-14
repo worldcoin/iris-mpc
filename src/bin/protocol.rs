@@ -3,9 +3,9 @@
 ///! Node 0: cargo run --release --bin protocol 0
 ///! Node 1: cargo run --release --bin protocol 1 [NODE_0_IP]
 ///! Node 2: cargo run --release --bin protocol 2 [NODE_0_IP]
-use std::{env, time::Instant};
+use std::{env, ffi::c_void, time::Instant};
 
-use cudarc::driver::result::memcpy_dtoh_sync;
+use cudarc::driver::{result::memcpy_dtoh_sync, sys::lib};
 use float_eq::assert_float_eq;
 use gpu_iris_mpc::{
     device_manager::DeviceManager,
@@ -22,6 +22,7 @@ use tokio::time;
 
 const DB_SIZE: usize = 8 * 125_000;
 const QUERIES: usize = 930;
+const IRIS_CODE_LENGTH: usize = 12800;
 const RNG_SEED: u64 = 42;
 const N_BATCHES: usize = 10; // We expect 10 batches with each QUERIES/ROTATIONS
 const MAX_CONCURRENT_REQUESTS: usize = 10;
@@ -100,7 +101,20 @@ async fn main() -> eyre::Result<()> {
     let mut streams = vec![];
     let mut cublas_handles = vec![];
     let mut results = vec![];
+    let mut pinned_query_buffers = vec![];
     for i in 0..MAX_CONCURRENT_REQUESTS {
+        let mut code_query_pinned0: *mut c_void = std::ptr::null_mut();
+        let mut code_query_pinned1: *mut c_void = std::ptr::null_mut();
+        let mut mask_query_pinned0: *mut c_void = std::ptr::null_mut();
+        let mut mask_query_pinned1: *mut c_void = std::ptr::null_mut();
+        unsafe {
+            lib().cuMemAllocHost_v2(&mut code_query_pinned0, IRIS_CODE_LENGTH);
+            lib().cuMemAllocHost_v2(&mut code_query_pinned1, IRIS_CODE_LENGTH);
+            lib().cuMemAllocHost_v2(&mut mask_query_pinned0, IRIS_CODE_LENGTH);
+            lib().cuMemAllocHost_v2(&mut mask_query_pinned1, IRIS_CODE_LENGTH);
+        }
+        pinned_query_buffers.push(((code_query_pinned0, code_query_pinned1), (mask_query_pinned0, mask_query_pinned1)));
+        
         let tmp_streams = device_manager.fork_streams();
         cublas_handles.push(device_manager.create_cublas(&tmp_streams));
         streams.push(tmp_streams);
@@ -133,6 +147,32 @@ async fn main() -> eyre::Result<()> {
         let request_streams = &streams[i];
         let request_cublas_handles = &cublas_handles[i];
 
+        unsafe {
+            std::ptr::copy(
+                code_query[0].as_ptr(),
+                pinned_query_buffers[i].0.0 as *mut _,
+                code_query[0].len(),
+            );
+
+            std::ptr::copy(
+                code_query[1].as_ptr(),
+                pinned_query_buffers[i].0.1 as *mut _,
+                code_query[1].len(),
+            );
+
+            std::ptr::copy(
+                mask_query[0].as_ptr(),
+                pinned_query_buffers[i].1.0 as *mut _,
+                mask_query[0].len(),
+            );
+
+            std::ptr::copy(
+                mask_query[1].as_ptr(),
+                pinned_query_buffers[i].1.1 as *mut _,
+                mask_query[1].len(),
+            );
+        }
+
         println!("1: {:?}", now.elapsed());
 
         // First stream doesn't need to wait on anyone
@@ -145,8 +185,8 @@ async fn main() -> eyre::Result<()> {
 
         // BLOCK 1: calculate individual dot products
         device_manager.await_event(request_streams, &dot_events[i]);
-        codes_engine.dot(&code_query, request_streams, request_cublas_handles);
-        masks_engine.dot(&mask_query, request_streams, request_cublas_handles);
+        codes_engine.dot(pinned_query_buffers[i].0, IRIS_CODE_LENGTH, request_streams, request_cublas_handles);
+        masks_engine.dot(pinned_query_buffers[i].1, IRIS_CODE_LENGTH, request_streams, request_cublas_handles);
         println!("3: {:?}", now.elapsed());
 
         // BLOCK 2: calculate final dot product result, exchange and compare
@@ -214,6 +254,7 @@ fn random_query(party_id: usize, rng: &mut StdRng, db: &IrisDB) -> (Vec<Vec<u8>>
     
     for i in 0..QUERIES {
         let rng_idx = rng.gen_range(0..db.len());
+        println!("{:?}", rng_idx);
         let query_template = db.db[rng_idx].clone();
         let random_query = ShamirIris::share_iris(&query_template, rng);
         // TODO: rotate
