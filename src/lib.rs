@@ -19,7 +19,7 @@ use cudarc::{
             event, malloc_async, memcpy_dtoh_async, memcpy_dtoh_sync, memcpy_htod_async,
             stream::{self, synchronize, wait_event},
         },
-        sys::{CUevent, CUevent_flags, CUstream_st},
+        sys::{lib, CUevent, CUevent_flags, CUstream_st},
         CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceSlice,
         LaunchAsync, LaunchConfig,
     },
@@ -480,54 +480,39 @@ impl ShareDB {
 
     pub fn dot(
         &mut self,
-        preprocessed_query: &Vec<Vec<u8>>,
+        preprocessed_query: (*mut c_void, *mut c_void),
+        query_len: usize,
         streams: &Vec<CudaStream>,
         blass: &Vec<CudaBlas>,
     ) {
-        let now = Instant::now();
-        let mut query_ptrs = vec![];
-        let mut thread_handles = vec![];
-        for idx in 0..self.device_manager.device_count() {
-            let q1 = preprocessed_query[1].clone();
-            let q0 = preprocessed_query[0].clone();
-            let s = streams[idx].stream as u64;
-
-            let query1 = unsafe {
-                malloc_async(s as *mut CUstream_st, std::mem::size_of::<u8>() * q1.len()).unwrap()
-            };
-
-            let query0 = unsafe {
-                malloc_async(s as *mut CUstream_st, std::mem::size_of::<u8>() * q0.len()).unwrap()
-            };
-
-            let handle = std::thread::spawn(move || unsafe {
-                memcpy_htod_async(query1, &q1, s as *mut CUstream_st).unwrap();
-                memcpy_htod_async(query0, &q0, s as *mut CUstream_st).unwrap();
-            });
-            thread_handles.push(handle);
-            query_ptrs.push((query1, query0))
-        }
-
-        for handle in thread_handles {
-            handle.join();
-        }
-
-        println!("query memcpy: {:?}", now.elapsed());
-
         for idx in 0..self.device_manager.device_count() {
             let now = Instant::now();
-
             self.device_manager.device(idx).bind_to_thread().unwrap();
 
-            let (query1, query0) = query_ptrs[idx];
+            // Copy the query from pinned memory
+            let query0 = unsafe { malloc_async(streams[idx].stream, query_len).unwrap() };
+            let query1 = unsafe { malloc_async(streams[idx].stream, query_len).unwrap() };
+
+            unsafe {
+                lib().cuMemcpyHtoDAsync_v2(
+                    query0,
+                    preprocessed_query.0 as *const _,
+                    query_len,
+                    streams[idx].stream,
+                );
+                lib().cuMemcpyHtoDAsync_v2(
+                    query1,
+                    preprocessed_query.1 as *const _,
+                    query_len,
+                    streams[idx].stream,
+                );
+            }
 
             // Prepare randomness to mask results
             if self.is_remote {
                 self.rngs[idx].0.fill_rng_no_host_copy(&streams[idx]);
                 self.rngs[idx].1.fill_rng_no_host_copy(&streams[idx]);
             }
-    
-            println!("rng: {:?}", now.elapsed());
 
             // Calculate sums to correct output
             gemm(
@@ -560,8 +545,6 @@ impl ShareDB {
                 0,
             );
 
-            println!("sum gemms: {:?}", now.elapsed());
-
             for (i, d) in [&self.db0[idx], &self.db1[idx]].iter().enumerate() {
                 for (j, q) in [query0, query1].iter().enumerate() {
                     gemm(
@@ -583,7 +566,6 @@ impl ShareDB {
                     );
                 }
             }
-            println!("other gemms: {:?}", now.elapsed());
         }
     }
 
@@ -681,6 +663,9 @@ impl ShareDB {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::c_void;
+
+    use cudarc::driver::sys::lib;
     use float_eq::assert_float_eq;
     use ndarray::Array2;
     use num_traits::FromPrimitive;
@@ -744,10 +729,36 @@ mod tests {
             None,
             None,
         );
-        let preprocessed_query = preprocess_query(&query);
+        let mut preprocessed_query = preprocess_query(&query);
+
+        let mut query_pinned1: *mut c_void = std::ptr::null_mut();
+        unsafe {
+            lib().cuMemAllocHost_v2(&mut query_pinned1, preprocessed_query[1].len());
+            std::ptr::copy(
+                preprocessed_query[1].as_ptr(),
+                query_pinned1 as *mut _,
+                preprocessed_query[1].len(),
+            );
+        }
+
+        let mut query_pinned0: *mut c_void = std::ptr::null_mut();
+        unsafe {
+            lib().cuMemAllocHost_v2(&mut query_pinned0, preprocessed_query[0].len());
+            std::ptr::copy(
+                preprocessed_query[0].as_ptr(),
+                query_pinned0 as *mut _,
+                preprocessed_query[0].len(),
+            );
+        }
+
         let streams = device_manager.fork_streams();
         let blass = device_manager.create_cublas(&streams);
-        engine.dot(&preprocessed_query, &streams, &blass);
+        engine.dot(
+            (query_pinned0, query_pinned1),
+            preprocessed_query[1].len(),
+            &streams,
+            &blass,
+        );
         engine.dot_reduce(&streams);
         device_manager.await_streams(&streams);
 
@@ -838,9 +849,31 @@ mod tests {
                 None,
             );
             let preprocessed_query = preprocess_query(&querys[i]);
+            let mut query_pinned1: *mut c_void = std::ptr::null_mut();
+            unsafe {
+                lib().cuMemAllocHost_v2(&mut query_pinned1, preprocessed_query[1].len());
+
+                std::ptr::copy(
+                    preprocessed_query[1].as_ptr(),
+                    query_pinned1 as *mut _,
+                    preprocessed_query[1].len(),
+                );
+            }
+
+            let mut query_pinned0: *mut c_void = std::ptr::null_mut();
+            unsafe {
+                lib().cuMemAllocHost_v2(&mut query_pinned0, preprocessed_query[0].len());
+
+                std::ptr::copy(
+                    preprocessed_query[0].as_ptr(),
+                    query_pinned0 as *mut _,
+                    preprocessed_query[0].len(),
+                );
+            }
+
             let streams = device_manager.fork_streams();
             let blass = device_manager.create_cublas(&streams);
-            engine.dot(&preprocessed_query, &streams, &blass);
+            engine.dot((query_pinned0, query_pinned1), preprocessed_query[0].len(), &streams, &blass);
             engine.dot_reduce(&streams);
             device_manager.await_streams(&streams);
             engine.fetch_results(&mut gpu_result[i], 0);
@@ -949,11 +982,51 @@ mod tests {
                     .collect::<Vec<_>>(),
             );
 
+            let mut code_query_pinned1: *mut c_void = std::ptr::null_mut();
+            unsafe {
+                lib().cuMemAllocHost_v2(&mut code_query_pinned1, code_query[1].len());
+                std::ptr::copy(
+                    code_query[1].as_ptr(),
+                    code_query_pinned1 as *mut _,
+                    code_query[1].len(),
+                );
+            }
+
+            let mut code_query_pinned0: *mut c_void = std::ptr::null_mut();
+            unsafe {
+                lib().cuMemAllocHost_v2(&mut code_query_pinned0, code_query[0].len());
+                std::ptr::copy(
+                    code_query[0].as_ptr(),
+                    code_query_pinned0 as *mut _,
+                    code_query[0].len(),
+                );
+            }
+
+            let mut mask_query_pinned1: *mut c_void = std::ptr::null_mut();
+            unsafe {
+                lib().cuMemAllocHost_v2(&mut mask_query_pinned1, mask_query[1].len());
+                std::ptr::copy(
+                    mask_query[1].as_ptr(),
+                    mask_query_pinned1 as *mut _,
+                    mask_query[1].len(),
+                );
+            }
+
+            let mut mask_query_pinned0: *mut c_void = std::ptr::null_mut();
+            unsafe {
+                lib().cuMemAllocHost_v2(&mut mask_query_pinned0, mask_query[0].len());
+                std::ptr::copy(
+                    mask_query[0].as_ptr(),
+                    mask_query_pinned0 as *mut _,
+                    mask_query[0].len(),
+                );
+            }
+
             let streams = device_manager.fork_streams();
             let blass = device_manager.create_cublas(&streams);
 
-            codes_engine.dot(&code_query, &streams, &blass);
-            masks_engine.dot(&mask_query, &streams, &blass);
+            codes_engine.dot((code_query_pinned0, code_query_pinned1), code_query[0].len(), &streams, &blass);
+            masks_engine.dot((mask_query_pinned0, mask_query_pinned1), mask_query[0].len(), &streams, &blass);
 
             codes_engine.dot_reduce(&streams);
             masks_engine.dot_reduce(&streams);
@@ -981,7 +1054,6 @@ mod tests {
 
             reconstructed_codes.push(code);
             reconstructed_masks.push(mask);
-            println!("{} {}", code, mask);
         }
 
         // Calculate the distance in plain
