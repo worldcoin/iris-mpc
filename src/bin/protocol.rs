@@ -24,7 +24,7 @@ const DB_SIZE: usize = 8 * 125_000;
 const QUERIES: usize = 930;
 const RNG_SEED: u64 = 42;
 const N_BATCHES: usize = 10; // We expect 10 batches with each QUERIES/ROTATIONS
-const MAX_CONCURRENT_REQUESTS: usize = 10;
+const MAX_CONCURRENT_REQUESTS: usize = 20;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
