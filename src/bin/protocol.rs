@@ -101,14 +101,11 @@ async fn main() -> eyre::Result<()> {
     let mut streams = vec![];
     let mut cublas_handles = vec![];
     let mut results = vec![];
-    let mut pinned_query_buffer: *mut c_void = std::ptr::null_mut();
+    let mut pinned_query_buffer : *mut c_void = std::ptr::null_mut();
     unsafe {
-        lib().cuMemAllocHost_v2(
-            &mut pinned_query_buffer,
-            IRIS_CODE_LENGTH * 4 * MAX_CONCURRENT_REQUESTS,
-        );
+        lib().cuMemAllocHost_v2(&mut pinned_query_buffer, IRIS_CODE_LENGTH * 4 * MAX_CONCURRENT_REQUESTS);
     }
-
+    
     for i in 0..MAX_CONCURRENT_REQUESTS {
         let tmp_streams = device_manager.fork_streams();
         cublas_handles.push(device_manager.create_cublas(&tmp_streams));
@@ -143,39 +140,35 @@ async fn main() -> eyre::Result<()> {
         let request_cublas_handles = &cublas_handles[i];
 
         let buffers = unsafe {
-            let code_query0 =
-                pinned_query_buffer.byte_add(i * IRIS_CODE_LENGTH * 4 + IRIS_CODE_LENGTH * 0);
-            let code_query1 =
-                pinned_query_buffer.byte_add(i * IRIS_CODE_LENGTH * 4 + IRIS_CODE_LENGTH * 1);
-            let mask_query0 =
-                pinned_query_buffer.byte_add(i * IRIS_CODE_LENGTH * 4 + IRIS_CODE_LENGTH * 2);
-            let mask_query1 =
-                pinned_query_buffer.byte_add(i * IRIS_CODE_LENGTH * 4 + IRIS_CODE_LENGTH * 3);
+            let code_query0 = pinned_query_buffer.byte_add(i * IRIS_CODE_LENGTH * 4 + IRIS_CODE_LENGTH * 0);
+            let code_query1 = pinned_query_buffer.byte_add(i * IRIS_CODE_LENGTH * 4 + IRIS_CODE_LENGTH * 1);
+            let mask_query0 = pinned_query_buffer.byte_add(i * IRIS_CODE_LENGTH * 4 + IRIS_CODE_LENGTH * 2);
+            let mask_query1 = pinned_query_buffer.byte_add(i * IRIS_CODE_LENGTH * 4 + IRIS_CODE_LENGTH * 3);
             ((code_query0, code_query1), (mask_query0, mask_query1))
         };
 
         unsafe {
             std::ptr::copy(
                 code_query[0].as_ptr(),
-                buffers.0 .0 as *mut _,
+                buffers.0.0 as *mut _,
                 code_query[0].len(),
             );
 
             std::ptr::copy(
                 code_query[1].as_ptr(),
-                buffers.0 .1 as *mut _,
+                buffers.0.1 as *mut _,
                 code_query[1].len(),
             );
 
             std::ptr::copy(
                 mask_query[0].as_ptr(),
-                buffers.1 .0 as *mut _,
+                buffers.1.0 as *mut _,
                 mask_query[0].len(),
             );
 
             std::ptr::copy(
                 mask_query[1].as_ptr(),
-                buffers.1 .1 as *mut _,
+                buffers.1.1 as *mut _,
                 mask_query[1].len(),
             );
         }
@@ -192,18 +185,8 @@ async fn main() -> eyre::Result<()> {
 
         // BLOCK 1: calculate individual dot products
         device_manager.await_event(request_streams, &dot_events[i]);
-        codes_engine.dot(
-            buffers.0,
-            IRIS_CODE_LENGTH,
-            request_streams,
-            request_cublas_handles,
-        );
-        masks_engine.dot(
-            buffers.1,
-            IRIS_CODE_LENGTH,
-            request_streams,
-            request_cublas_handles,
-        );
+        codes_engine.dot(buffers.0, IRIS_CODE_LENGTH, request_streams, request_cublas_handles);
+        masks_engine.dot(buffers.1, IRIS_CODE_LENGTH, request_streams, request_cublas_handles);
         println!("3: {:?}", now.elapsed());
 
         // BLOCK 2: calculate final dot product result, exchange and compare
@@ -268,7 +251,7 @@ async fn main() -> eyre::Result<()> {
 fn random_query(party_id: usize, rng: &mut StdRng, db: &IrisDB) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
     let mut code_queries = vec![vec![], vec![], vec![]];
     let mut mask_queries = vec![vec![], vec![], vec![]];
-
+    
     for i in 0..QUERIES {
         let rng_idx = rng.gen_range(0..db.len());
         // println!("{:?}", rng_idx);
