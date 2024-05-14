@@ -20,7 +20,7 @@ use gpu_iris_mpc::{
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tokio::time;
 
-const DB_SIZE: usize = 8 * 125_000;
+const DB_SIZE: usize = 8 * 1000;
 const QUERIES: usize = 930;
 const IRIS_CODE_LENGTH: usize = 12800;
 const RNG_SEED: u64 = 42;
@@ -254,7 +254,7 @@ fn random_query(party_id: usize, rng: &mut StdRng, db: &IrisDB) -> (Vec<Vec<u8>>
     
     for i in 0..QUERIES {
         let rng_idx = rng.gen_range(0..db.len());
-        println!("{:?}", rng_idx);
+        // println!("{:?}", rng_idx);
         let query_template = db.db[rng_idx].clone();
         let random_query = ShamirIris::share_iris(&query_template, rng);
         // TODO: rotate
