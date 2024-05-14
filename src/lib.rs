@@ -434,7 +434,7 @@ impl ShareDB {
                     ids[i]
                 } else {
                     // If not the server, give it a few secs to start
-                    thread::sleep(Duration::from_secs(5));
+                    thread::sleep(Duration::from_secs(20));
 
                     let res = reqwest::blocking::get(format!(
                         "http://{}:{}/{}",
@@ -513,7 +513,7 @@ impl ShareDB {
 
         for idx in 0..self.device_manager.device_count() {
             let now = Instant::now();
-            // TODO: helper
+
             self.device_manager.device(idx).bind_to_thread().unwrap();
 
             let (query1, query0) = query_ptrs[idx];
