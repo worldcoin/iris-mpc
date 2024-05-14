@@ -434,7 +434,7 @@ impl ShareDB {
                     ids[i]
                 } else {
                     // If not the server, give it a few secs to start
-                    thread::sleep(Duration::from_secs(20));
+                    thread::sleep(Duration::from_secs(10));
 
                     let res = reqwest::blocking::get(format!(
                         "http://{}:{}/{}",
@@ -484,6 +484,7 @@ impl ShareDB {
         streams: &Vec<CudaStream>,
         blass: &Vec<CudaBlas>,
     ) {
+        let now = Instant::now();
         let mut query_ptrs = vec![];
         let mut thread_handles = vec![];
         for idx in 0..self.device_manager.device_count() {
@@ -511,6 +512,8 @@ impl ShareDB {
             handle.join();
         }
 
+        println!("query memcpy: {:?}", now.elapsed());
+
         for idx in 0..self.device_manager.device_count() {
             let now = Instant::now();
 
@@ -523,6 +526,8 @@ impl ShareDB {
                 self.rngs[idx].0.fill_rng_no_host_copy(&streams[idx]);
                 self.rngs[idx].1.fill_rng_no_host_copy(&streams[idx]);
             }
+    
+            println!("rng: {:?}", now.elapsed());
 
             // Calculate sums to correct output
             gemm(
@@ -555,6 +560,8 @@ impl ShareDB {
                 0,
             );
 
+            println!("sum gemms: {:?}", now.elapsed());
+
             for (i, d) in [&self.db0[idx], &self.db1[idx]].iter().enumerate() {
                 for (j, q) in [query0, query1].iter().enumerate() {
                     gemm(
@@ -576,6 +583,7 @@ impl ShareDB {
                     );
                 }
             }
+            println!("other gemms: {:?}", now.elapsed());
         }
     }
 
