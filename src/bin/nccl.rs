@@ -14,7 +14,7 @@ use std::{
 use axum::{extract::Path, routing::get, Router};
 use cudarc::{
     driver::{CudaDevice, CudaSlice},
-    nccl::{Comm, Id},
+    nccl::{group_end, group_start, Comm, Id},
 };
 use once_cell::sync::Lazy;
 
@@ -62,7 +62,8 @@ async fn root(Path(device_id): Path<String>) -> String {
     IdWrapper(COMM_ID[device_id]).to_string()
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = env::args().collect::<Vec<_>>();
     let n_devices = CudaDevice::count().unwrap() as usize;
     let party_id: usize = args[1].parse().unwrap();
@@ -112,6 +113,7 @@ fn main() {
     for _ in 0..10 {
         let now = Instant::now();
 
+        group_start();
         for i in 0..n_devices {
             devs[i].bind_to_thread().unwrap();
 
@@ -119,6 +121,7 @@ fn main() {
             comms[i].broadcast(&Some(&slices[i]), &mut slices2[i], 1).unwrap();
             comms[i].broadcast(&Some(&slices[i]), &mut slices3[i], 2).unwrap();
         }
+        group_end();
 
         for i in 0..n_devices {
             devs[i].synchronize().unwrap();
