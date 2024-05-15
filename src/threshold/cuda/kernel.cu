@@ -536,9 +536,9 @@ extern "C" __global__ void packed_ot_helper(U32 *out_b, U64 *in_a, U32 *rand_cb,
     bool my_bit_a = ((in_a[wordindex] >> bitindex) & 1) == 1;
     out_b[i] = rand_cb[i];
     if (my_bit_a) {
-      wc[i] = rand_wb1[i];
-    } else {
       wc[i] = rand_wb2[i];
+    } else {
+      wc[i] = rand_wb1[i];
     }
   }
 }
