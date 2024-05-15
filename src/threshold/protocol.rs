@@ -10,7 +10,13 @@ use cudarc::{
     nvrtc::{self, Ptx},
 };
 use itertools::izip;
-use std::{rc::Rc, str::FromStr, sync::Arc, thread, time::Duration};
+use std::{
+    rc::Rc,
+    str::FromStr,
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
+};
 
 pub(crate) const P2K: u64 = (P as u64) << B_BITS;
 
@@ -1180,6 +1186,7 @@ impl Circuits {
         let x01_rec = self.allocate_single_buffer(self.chunk_size * 64);
         let mut x01 = Vec::with_capacity(self.n_devices);
 
+        let now = Instant::now();
         result::group_start().unwrap();
         for (idx, x01_send) in x01_send.iter().enumerate() {
             self.send(x01_send, self.next_id, idx);
@@ -1189,13 +1196,21 @@ impl Circuits {
             x01.push(ChunkShare::new(x01_send, x01_rec));
         }
         result::group_end().unwrap();
+        println!("Time for extract send/receive: {:?}", now.elapsed());
 
         // Transpose
+        let now = Instant::now();
         let x01 = self.transpose_pack_u64_with_len(x01, Self::BITS);
         let x2 = self.transpose_pack_u64_with_len(x2, Self::BITS);
+        println!("Time for transposes: {:?}", now.elapsed());
 
+        let now = Instant::now();
         let mut sum = self.binary_add_two(x01, x2);
+        println!("Time for binary_add_two: {:?}", now.elapsed());
+
+        let now = Instant::now();
         self.extraxt_msb_mod_p2k_of_sum(&mut sum);
+        println!("Time for binary_add_two: {:?}", now.elapsed());
 
         // Result is in the first bit of the output
         sum
