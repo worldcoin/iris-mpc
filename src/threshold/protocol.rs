@@ -743,7 +743,7 @@ impl Circuits {
                             &xp2.b,
                             &xp3.a,
                             &xp3.b,
-                            self.chunk_size,
+                            self.chunk_size * 18,
                             self.peer_id as u32,
                         ),
                     )
