@@ -14,49 +14,49 @@
 // Basic Blocks (not parallelized)
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename T> __global__ void not_inplace_inner(T *lhs) {
+template <typename T> __device__ void not_inplace_inner(T *lhs) {
   *lhs = ~(*lhs);
 }
 
-template <typename T> __global__ void not_inner(T *res, T *lhs) {
+template <typename T> __device__ void not_inner(T *res, T *lhs) {
   *res = ~(*lhs);
 }
 
-template <typename T> __global__ void xor_inner(T *res, T *lhs, T *rhs) {
+template <typename T> __device__ void xor_inner(T *res, T *lhs, T *rhs) {
   *res = *lhs ^ *rhs;
 }
 
-template <typename T> __global__ void xor_assign_inner(T *lhs, T *rhs) {
+template <typename T> __device__ void xor_assign_inner(T *lhs, T *rhs) {
   *lhs ^= *rhs;
 }
 
 // Computes the local part of the multiplication (including randomness)
 template <typename T>
-__global__ void and_pre_inner(T *res_a, T *lhs_a, T *lhs_b, T *rhs_a, T *rhs_b,
+__device__ void and_pre_inner(T *res_a, T *lhs_a, T *lhs_b, T *rhs_a, T *rhs_b,
                               T *r) {
   *res_a = (*lhs_a & *rhs_a) ^ (*lhs_b & *rhs_a) ^ (*lhs_a & *rhs_b) ^ *r;
 }
 
 template <typename T>
-__global__ void or_pre_inner(T *res_a, T *lhs_a, T *lhs_b, T *rhs_a, T *rhs_b,
+__device__ void or_pre_inner(T *res_a, T *lhs_a, T *lhs_b, T *rhs_a, T *rhs_b,
                              T *r) {
   and_pre_inner<T>(res_a, lhs_a, lhs_b, rhs_a, rhs_b, r); // AND with randomness
   *res_a ^= *lhs_a ^ *rhs_a; // XOR with the original values
 }
 
-__global__ void mul_lift_b(U64 *res, U16 *input) {
+__device__ void mul_lift_b(U64 *res, U16 *input) {
   *res = (U64)(*input) << B_BITS;
 }
 
-__global__ void u64_from_u16s(U64 *res, U16 *a, U16 *b, U16 *c, U16 *d) {
+__device__ void u64_from_u16s(U64 *res, U16 *a, U16 *b, U16 *c, U16 *d) {
   *res = (U64)(*a) | ((U64)(*b) << 16) | ((U64)(*c) << 32) | ((U64)(*d) << 48);
 }
 
-__global__ void u64_from_u32s(U64 *res, U32 *a, U32 *b) {
+__device__ void u64_from_u32s(U64 *res, U32 *a, U32 *b) {
   *res = (U64)(*a) | ((U64)(*b) << 32);
 }
 
-__global__ void transpose16x64(U64 *out, U16 *in) {
+__device__ void transpose16x64(U64 *out, U16 *in) {
   // len of out = 16
   // len of in = 64
 
@@ -79,7 +79,7 @@ __global__ void transpose16x64(U64 *out, U16 *in) {
   }
 }
 
-__global__ void transpose32x64(U64 *out, U32 *in) {
+__device__ void transpose32x64(U64 *out, U32 *in) {
   // len of out = 32
   // len of in = 64
 
@@ -102,7 +102,7 @@ __global__ void transpose32x64(U64 *out, U32 *in) {
   }
 }
 
-__global__ void transpose64x64(U64 *inout) {
+__device__ void transpose64x64(U64 *inout) {
   // len of inout = 64
 
   U64 m = 0x00000000FFFFFFFF;
@@ -125,7 +125,7 @@ __global__ void transpose64x64(U64 *inout) {
 ////////////////////////////////////////////////////////////////////////////////
 
 // Performs the transpose for a and b in parallel
-__global__ void u16_transpose_pack_u64(U64 *out_a, U64 *out_b, U16 *in_a,
+__device__ void u16_transpose_pack_u64(U64 *out_a, U64 *out_b, U16 *in_a,
                                        U16 *in_b, int in_len, int out_len) {
   // in has size in_len = 64 * n
   // out has size out_len, where each element is an array of n elements
@@ -158,7 +158,7 @@ __global__ void u16_transpose_pack_u64(U64 *out_a, U64 *out_b, U16 *in_a,
 }
 
 // Performs the transpose for a and b in parallel
-__global__ void u32_transpose_pack_u64(U64 *out_a, U64 *out_b, U32 *in_a,
+__device__ void u32_transpose_pack_u64(U64 *out_a, U64 *out_b, U32 *in_a,
                                        U32 *in_b, int in_len, int out_len) {
   // in has size in_len = 64 * n
   // out has size out_len, where each element is an array of n elements
@@ -192,10 +192,10 @@ __global__ void u32_transpose_pack_u64(U64 *out_a, U64 *out_b, U32 *in_a,
 
 // Performs the transpose for a and b in parallel
 // Overwrites the input!
-__global__ void u64_transpose_pack_u64(U64 *out_a, U64 *out_b, U64 *in_a,
+__device__ void u64_transpose_pack_u64(U64 *out_a, U64 *out_b, U64 *in_a,
                                        U64 *in_b, int in_len, int out_len) {}
 
-__global__ void lift_mul_sub(U64 *mask, U16 *code) {
+__device__ void lift_mul_sub(U64 *mask, U16 *code) {
   U64 a;
   mul_lift_b(&a, code);
   *mask *= A;
@@ -205,7 +205,7 @@ __global__ void lift_mul_sub(U64 *mask, U16 *code) {
 }
 
 // Puts the results into x_a, x_b and x01
-__global__ void split_msb_fp(U64 *x_a, U64 *x_b, U64 *x01, U64 *r, int id) {
+__device__ void split_msb_fp(U64 *x_a, U64 *x_b, U64 *x01, U64 *r, int id) {
   // I don't add the bitmod to the randomness, since the bits gets removed later
   // anyways
 
@@ -313,7 +313,6 @@ extern "C" __global__ void shared_u64_transpose_pack_u64(U64 *out_a, U64 *out_b,
                                                          U64 *in_a, U64 *in_b,
                                                          int in_len,
                                                          int out_len) {
-  extern __shared__ U64 transpose_buf[64 * 1024];
   // in has size in_len = 64 * n
   // out has size out_len, where each element is an array of n elements
   // Thus out itslef has n * out_len elements (split into n arrays)
@@ -323,9 +322,9 @@ extern "C" __global__ void shared_u64_transpose_pack_u64(U64 *out_a, U64 *out_b,
   assert(out_len <= 64);
   int n = in_len / 64;
 
-  U64 *transposed = &transpose_buf[threadIdx.x * 64];
   // Make each transpose in parallel
   if (i < n) {
+    U64 *transposed = (U64 *)alloca(64 * sizeof(U64));
     U64 *chunk = &in_a[i * 64];
     for (U32 j = 0; j < 64; j++) {
       transposed[j] = chunk[j];
@@ -337,6 +336,7 @@ extern "C" __global__ void shared_u64_transpose_pack_u64(U64 *out_a, U64 *out_b,
       out_a[j * n + i] = transposed[j];
     }
   } else if (i < 2 * n) {
+    U64 *transposed = (U64 *)alloca(64 * sizeof(U64));
     i -= n;
     U64 *chunk = &in_b[i * 64];
     for (U32 j = 0; j < 64; j++) {
@@ -374,11 +374,13 @@ extern "C" __global__ void shared_split1(U16 *inp_a, U16 *inp_b, U64 *xa_a,
   if (i < n) {
     xa_a[i] = (U64)(inp_a[i]);
     xa_b[i] = (U64)(inp_b[i]);
+    U64 subbed_p;
+    U64 subbed_pp;
 
     switch (id) {
     case 0:
-      U64 subbed_p = ((U64)(inp_a[i]) + P2K - P) % P2K;
-      U64 subbed_pp = ((U64)(inp_a[i]) + P2K - 2 * P) % P2K;
+      subbed_p = ((U64)(inp_a[i]) + P2K - P) % P2K;
+      subbed_pp = ((U64)(inp_a[i]) + P2K - 2 * P) % P2K;
       xp_a[i] = (U32)(subbed_p);
       xpp_a[i] = (U32)(subbed_pp);
       xp_b[i] = (U32)(inp_b[i]);
