@@ -11,7 +11,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{env, sync::Arc};
 use tokio::time::{self, Instant};
 
-const INPUTS_PER_GPU_SIZE: usize = 125_056;
+const INPUTS_PER_GPU_SIZE: usize = 125_056 * 100;
 const CHUNK_SIZE: usize = INPUTS_PER_GPU_SIZE / 64;
 const B_BITS: u64 = 20;
 pub(crate) const B: u64 = 1 << B_BITS;
