@@ -725,8 +725,8 @@ impl Circuits {
 
         result::group_start().unwrap();
         for (idx, (m0, m1)) in izip!(&m0, &m1).enumerate() {
-            self.send(m0, self.next_id, idx);
-            self.send(m1, self.next_id, idx);
+            self.send(m0, self.prev_id, idx);
+            self.send(m1, self.prev_id, idx);
         }
         result::group_end().unwrap();
 
