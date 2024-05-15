@@ -41,7 +41,7 @@ template <typename T>
 __global__ void or_pre_inner(T *res_a, T *lhs_a, T *lhs_b, T *rhs_a, T *rhs_b,
                              T *r) {
   and_pre_inner<T>(res_a, lhs_a, lhs_b, rhs_a, rhs_b, r); // AND with randomness
-  *res_a ^= *lhs_a ^ *lhs_b; // XOR with the original values
+  *res_a ^= *lhs_a ^ *rhs_a; // XOR with the original values
 }
 
 __global__ void mul_lift_b(U64 *res, U16 *input) {
