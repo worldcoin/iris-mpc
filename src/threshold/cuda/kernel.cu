@@ -203,10 +203,11 @@ __global__ void u64_transpose_pack_u64(U64 *out_a, U64 *out_b, U64 *in_a,
   assert(out_len <= 64);
   int n = in_len / 64;
 
+  __shared__ U64 transpose_buf[64 * 1024];
+  U64 *transposed = &transpose_buf[threadIdx.x * 64];
   // Make each transpose in parallel
   if (i < n) {
     U64 *chunk = &in_a[i * 64];
-    U64 transposed[64];
     for (U32 j = 0; j < 64; j++) {
       transposed[j] = chunk[j];
     }
@@ -219,7 +220,6 @@ __global__ void u64_transpose_pack_u64(U64 *out_a, U64 *out_b, U64 *in_a,
   } else if (i < 2 * n) {
     i -= n;
     U64 *chunk = &in_b[i * 64];
-    U64 transposed[64];
     for (U32 j = 0; j < 64; j++) {
       transposed[j] = chunk[j];
     }
