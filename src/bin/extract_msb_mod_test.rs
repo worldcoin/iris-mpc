@@ -22,7 +22,7 @@ fn sample_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<u16> {
             let mut x = rng.gen_range::<u16, _>(0..=IrisCodeArray::IRIS_CODE_SIZE as u16);
             let neg = rng.gen::<bool>();
             if neg {
-                x = P - x;
+                x = (P - x) % P;
             }
             x
         })
@@ -90,7 +90,7 @@ fn pack_with_device_padding(bits: Vec<bool>) -> Vec<u64> {
 fn real_result_msb(input: Vec<u16>) -> Vec<u64> {
     let mut res = Vec::with_capacity(input.len());
     for inp in input {
-        let r = P2K - ((inp as u64) << B_BITS);
+        let r = (P2K - ((inp as u64) << B_BITS)) % P2K;
         let msb = r >> (B_BITS + 16 - 1) & 1 == 1;
         res.push(msb)
     }
