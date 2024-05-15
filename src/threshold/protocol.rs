@@ -788,7 +788,52 @@ impl Circuits {
 
     // TODO include randomness
     fn bit_inject_neg_ot_helper(&mut self, inp: Vec<ChunkShare<u64>>) -> Vec<ChunkShare<u32>> {
-        todo!()
+        // TODO the buffers should probably already be allocated
+        let mut res = self.allocate_buffer::<u32>(self.chunk_size * 2 * 64);
+        let mut wc = self.allocate_single_buffer::<u32>(self.chunk_size * 2 * 64);
+
+        for (idx, (inp, res, wc)) in izip!(inp, &mut res, &mut wc).enumerate() {
+            // TODO this is just a placeholder
+            let rand_cb = self.devs[idx]
+                .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
+                .unwrap();
+            let rand_wb1 = self.devs[idx]
+                .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
+                .unwrap();
+            let rand_wb2 = self.devs[idx]
+                .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
+                .unwrap();
+
+            unsafe {
+                self.kernels[idx]
+                    .ot_helper
+                    .clone()
+                    .launch(
+                        self.cfg_ot.to_owned(),
+                        (
+                            &mut res.b,
+                            &inp.a,
+                            &rand_cb,
+                            &rand_wb1,
+                            &rand_wb2,
+                            wc,
+                            2 * self.chunk_size,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+
+        result::group_start().unwrap();
+        for (idx, wc) in wc.into_iter().enumerate() {
+            self.send(&wc, self.next_id, idx);
+        }
+        for (idx, res) in res.iter_mut().enumerate() {
+            self.receive(&mut res.a, self.next_id, idx);
+        }
+        result::group_end().unwrap();
+
+        res
     }
 
     fn bit_inject_neg_ot(&mut self, inp: Vec<ChunkShare<u64>>) -> Vec<ChunkShare<u32>> {
@@ -823,6 +868,8 @@ impl Circuits {
         self.split2(xpp, &mut xpp1, &mut xpp2, &mut xpp3);
 
         let o = self.binary_add_3_get_msb_twice::<18>(xp1, xp2, xp3, xpp1, xpp2, xpp3);
+
+        let injected = self.bit_inject_neg_ot(o);
 
         todo!()
     }
