@@ -14,6 +14,8 @@ use std::{rc::Rc, str::FromStr, sync::Arc, thread, time::Duration};
 
 pub(crate) const P2K: u64 = (P as u64) << B_BITS;
 
+const DEFAULT_LAUNCH_CONFIG_THREADS: u32 = 64;
+
 pub struct ChunkShare<T> {
     pub a: CudaSlice<T>,
     pub b: CudaSlice<T>,
@@ -200,12 +202,22 @@ impl Circuits {
         let n_devices = CudaDevice::count().unwrap() as usize;
 
         // TODO check this
-        let cfg = Self::launch_config_from_elements_and_threads(chunk_size as u32, 1024);
-        let cfg_inp = Self::launch_config_from_elements_and_threads(chunk_size as u32 * 64, 1024);
-        let cfg_transpose =
-            Self::launch_config_from_elements_and_threads(chunk_size as u32 * 2, 1024);
-        let cfg_ot =
-            Self::launch_config_from_elements_and_threads(chunk_size as u32 * 2 * 64, 1024);
+        let cfg = Self::launch_config_from_elements_and_threads(
+            chunk_size as u32,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+        );
+        let cfg_inp = Self::launch_config_from_elements_and_threads(
+            chunk_size as u32 * 64,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+        );
+        let cfg_transpose = Self::launch_config_from_elements_and_threads(
+            chunk_size as u32 * 2,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+        );
+        let cfg_ot = Self::launch_config_from_elements_and_threads(
+            chunk_size as u32 * 2 * 64,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+        );
 
         let mut devs = Vec::with_capacity(n_devices);
         let mut kernels = Vec::with_capacity(n_devices);
@@ -372,7 +384,7 @@ impl Circuits {
         // TODO also precompute?
         let cfg = Self::launch_config_from_elements_and_threads(
             self.chunk_size as u32 * bits as u32,
-            1024,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
         );
 
         unsafe {
@@ -449,7 +461,10 @@ impl Circuits {
         let rand = self.devs[idx].alloc_zeros::<u64>(x1.len()).unwrap();
 
         // TODO also precompute?
-        let cfg = Self::launch_config_from_elements_and_threads(x1.len() as u32, 1024);
+        let cfg = Self::launch_config_from_elements_and_threads(
+            x1.len() as u32,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+        );
 
         unsafe {
             self.kernels[idx]
@@ -514,7 +529,7 @@ impl Circuits {
         // TODO also precompute?
         let cfg = Self::launch_config_from_elements_and_threads(
             self.chunk_size as u32 * bits as u32,
-            1024,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
         );
 
         unsafe {
@@ -539,7 +554,7 @@ impl Circuits {
         // TODO also precompute?
         let cfg = Self::launch_config_from_elements_and_threads(
             self.chunk_size as u32 * bits as u32,
-            1024,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
         );
 
         unsafe {
