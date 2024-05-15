@@ -235,14 +235,13 @@ fn and_pre_test() {
 fn or_pre_test() {
     // Setup cuda
     let (dev, ptx) = setup_cuda(0).unwrap();
-    let function = load_function("shared_or_pre", &dev, ptx).unwrap();
+    let function = load_function("shared_or_pre_assign", &dev, ptx).unwrap();
     let cfg = LaunchConfig::for_num_elems(SIZE as u32);
 
     // CPU
     let mut res_a = vec![0u64; SIZE];
 
     // GPU
-    let mut res_a_gpu = dev.alloc_zeros::<u64>(SIZE).unwrap();
     let mut res_a_cpu = vec![0u64; SIZE];
 
     let mut rng = rand::thread_rng();
@@ -257,7 +256,7 @@ fn or_pre_test() {
         kernel::shared_or_pre(&mut res_a, &lhs_a, &lhs_b, &rhs_a, &rhs_b, &rand);
 
         // GPU
-        let lhs_a_cuda = dev.htod_copy(lhs_a).unwrap();
+        let mut lhs_a_cuda = dev.htod_copy(lhs_a).unwrap();
         let lhs_b_cuda = dev.htod_copy(lhs_b).unwrap();
         let rhs_a_cuda = dev.htod_copy(rhs_a).unwrap();
         let rhs_b_cuda = dev.htod_copy(rhs_b).unwrap();
@@ -269,8 +268,7 @@ fn or_pre_test() {
                 .launch(
                     cfg,
                     (
-                        &mut res_a_gpu,
-                        &lhs_a_cuda,
+                        &mut lhs_a_cuda,
                         &lhs_b_cuda,
                         &rhs_a_cuda,
                         &rhs_b_cuda,
@@ -280,7 +278,8 @@ fn or_pre_test() {
                 )
                 .unwrap();
         }
-        dev.dtoh_sync_copy_into(&res_a_gpu, &mut res_a_cpu).unwrap();
+        dev.dtoh_sync_copy_into(&lhs_a_cuda, &mut res_a_cpu)
+            .unwrap();
         assert_eq!(res_a_cpu.len(), SIZE);
 
         // Compare
