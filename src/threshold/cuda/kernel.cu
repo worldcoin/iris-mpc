@@ -192,22 +192,18 @@ __device__ void u32_transpose_pack_u64(U64 *out_a, U64 *out_b, U32 *in_a,
   }
 }
 
-// Performs the transpose for a and b in parallel
-// Overwrites the input!
-__device__ void u64_transpose_pack_u64(U64 *out_a, U64 *out_b, U64 *in_a,
-                                       U64 *in_b, int in_len, int out_len) {}
-
 __device__ void lift_mul_sub(U64 *mask, U32 *mask_corr1, U32 *mask_corr2,
                              U16 *code) {
   U64 corr1;
+  U64 corr2;
   *mask_corr1 %= B;
   *mask_corr2 %= B;
   mul_lift_p(&corr1, mask_corr1);
-  mul_lift_p(&corr1, mask_corr2);
+  mul_lift_p(&corr2, mask_corr2);
   *mask += P2K;
   *mask += P2K;
   *mask -= corr1;
-  *mask -= corr1;
+  *mask -= corr2;
 
   U64 a;
   mul_lift_b(&a, code);
