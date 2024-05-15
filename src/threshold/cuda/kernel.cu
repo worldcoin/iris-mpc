@@ -289,13 +289,15 @@ extern "C" __global__ void shared_and_pre(TYPE *res_a, TYPE *lhs_a, TYPE *lhs_b,
   }
 }
 
-extern "C" __global__ void shared_or_pre(TYPE *res_a, TYPE *lhs_a, TYPE *lhs_b,
-                                         TYPE *rhs_a, TYPE *rhs_b, TYPE *r,
-                                         int n) {
+extern "C" __global__ void shared_or_pre_assign(TYPE *lhs_a, TYPE *lhs_b,
+                                                TYPE *rhs_a, TYPE *rhs_b,
+                                                TYPE *r, int n) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
+    U64 res_a;
     or_pre_inner<TYPE>(&res_a[i], &lhs_a[i], &lhs_b[i], &rhs_a[i], &rhs_b[i],
                        &r[i]);
+    lhs_a[i] = res_a;
   }
 }
 

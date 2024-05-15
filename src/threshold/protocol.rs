@@ -42,6 +42,11 @@ impl<T> ChunkShare<T> {
             b: self.b.slice(i * chunk_size..(i + 1) * chunk_size),
         }
     }
+
+    fn len(&self) -> usize {
+        debug_assert_eq!(self.a.len(), self.b.len());
+        self.a.len()
+    }
 }
 
 impl<'a, T> ChunkShareView<'a, T> {
@@ -57,6 +62,11 @@ impl<'a, T> ChunkShareView<'a, T> {
             a: self.a.slice(start..end),
             b: self.b.slice(start..end),
         }
+    }
+
+    fn len(&self) -> usize {
+        debug_assert_eq!(self.a.len(), self.b.len());
+        self.a.len()
     }
 }
 
@@ -74,7 +84,7 @@ where
 
 struct Kernels {
     pub(crate) and: CudaFunction,
-    pub(crate) or: CudaFunction,
+    pub(crate) or_assign: CudaFunction,
     pub(crate) xor: CudaFunction,
     pub(crate) xor_assign: CudaFunction,
     pub(crate) not_inplace: CudaFunction,
@@ -100,7 +110,7 @@ impl Kernels {
                 "shared_xor",
                 "shared_xor_assign",
                 "shared_and_pre",
-                "shared_or_pre",
+                "shared_or_pre_assign",
                 "shared_not_inplace",
                 "shared_not",
                 "shared_lift_mul_sub_split",
@@ -115,7 +125,9 @@ impl Kernels {
         )
         .unwrap();
         let and = dev.get_func(Self::MOD_NAME, "shared_and_pre").unwrap();
-        let or = dev.get_func(Self::MOD_NAME, "shared_or_pre").unwrap();
+        let or_assign = dev
+            .get_func(Self::MOD_NAME, "shared_or_pre_assign")
+            .unwrap();
         let xor = dev.get_func(Self::MOD_NAME, "shared_xor").unwrap();
         let xor_assign = dev.get_func(Self::MOD_NAME, "shared_xor_assign").unwrap();
         let not_inplace = dev.get_func(Self::MOD_NAME, "shared_not_inplace").unwrap();
@@ -137,7 +149,7 @@ impl Kernels {
 
         Kernels {
             and,
-            or,
+            or_assign,
             xor,
             xor_assign,
             not_inplace,
@@ -421,6 +433,29 @@ impl Circuits {
                     self.cfg.to_owned(),
                     (&res.a, &x1.a, &x1.b, &x2.a, &x2.b, &rand, self.chunk_size),
                 )
+                .unwrap();
+        }
+    }
+
+    // TODO include randomness
+    fn or_many_pre_assign(
+        &mut self,
+        x1: &mut ChunkShareView<u64>,
+        x2: &ChunkShareView<u64>,
+        // rand: &CudaView<u64>,
+        idx: usize,
+    ) {
+        // TODO this is just a placeholder
+        let rand = self.devs[idx].alloc_zeros::<u64>(x1.len()).unwrap();
+
+        // TODO also precompute?
+        let cfg = Self::launch_config_from_elements_and_threads(x1.len() as u32, 1024);
+
+        unsafe {
+            self.kernels[idx]
+                .or_assign
+                .clone()
+                .launch(cfg, (&x1.a, &x1.b, &x2.a, &x2.b, &rand, x1.len()))
                 .unwrap();
         }
     }
@@ -1387,6 +1422,46 @@ impl Circuits {
         x01
     }
 
+    // Input has size ChunkSize
+    // Result is in lowest u64 of the input
+    // TODO include randmoness
+    fn or_tree_on_gpu(&mut self, bits: &mut [ChunkShareView<u64>]) {
+        debug_assert_eq!(self.n_devices, bits.len());
+        debug_assert_eq!(self.chunk_size, bits[0].len());
+
+        let mut num = self.chunk_size;
+        while num > 1 {
+            let mod_ = num & 1;
+            num >>= 1;
+
+            for (idx, bit) in bits.iter().enumerate() {
+                let mut a = bit.get_offset(0, num);
+                let b = bit.get_offset(1, num);
+                self.or_many_pre_assign(&mut a, &b, idx);
+                if mod_ != 0 {
+                    let src = bit.get_offset(2 * num, 1);
+                    let mut des = bit.get_offset(num, 1);
+                    des.a = src.a;
+                    des.b = src.b;
+                }
+            }
+
+            // Reshare
+            result::group_start().unwrap();
+            for (idx, bit) in bits.iter().enumerate() {
+                let a = bit.get_offset(0, num);
+                self.send_view(&a.a, self.next_id, idx);
+            }
+            for (idx, bit) in bits.iter_mut().enumerate() {
+                let mut a = bit.get_offset(0, num);
+                self.receive_view(&mut a.b, self.prev_id, idx);
+            }
+            result::group_end().unwrap();
+
+            num += mod_;
+        }
+    }
+
     // input should be of size: n_devices * input_size
     // Result is in res_msb, which is the first bit of the input
     pub fn compare_threshold_masked_many_fp(
@@ -1399,10 +1474,28 @@ impl Circuits {
 
         let (mut x2, correction) = self.lift_p2k(mask_dots);
         let x01 = self.lift_mul_sub_split(&mut x2, correction, code_dots);
-        let result = self.extract_msb_sum_mod(x01, x2);
+        self.extract_msb_sum_mod(x01, x2)
         // Result is in the first bit of the input
+    }
 
-        // TODO the or tree is still missing as well
-        result
+    // input should be of size: n_devices * input_size
+    // Result is in res_msb, which is the first bit of the input
+    pub fn compare_threshold_masked_many_fp_with_or_tree(
+        &mut self,
+        code_dots: Vec<ChunkShare<u16>>,
+        mask_dots: Vec<ChunkShare<u16>>,
+    ) {
+        let result = self.compare_threshold_masked_many_fp(code_dots, mask_dots);
+        let mut bits = Vec::with_capacity(self.n_devices);
+        for r in result.iter() {
+            // Result is in the first bit of the input
+            bits.push(r.get_offset(0, self.chunk_size));
+        }
+
+        self.or_tree_on_gpu(&mut bits);
+        // Result is in lowest u64 bits
+
+        // TODO the or tree is still missing
+        todo!()
     }
 }
