@@ -145,9 +145,9 @@ impl Kernels {
             .unwrap();
         let split1 = dev.get_func(Self::MOD_NAME, "shared_split1").unwrap();
         let split2 = dev.get_func(Self::MOD_NAME, "shared_split2").unwrap();
-        let ot_sender = dev.get_func(Self::MOD_NAME, "packer_ot_sender").unwrap();
-        let ot_receiver = dev.get_func(Self::MOD_NAME, "packer_ot_receiver").unwrap();
-        let ot_helper = dev.get_func(Self::MOD_NAME, "packer_ot_helper").unwrap();
+        let ot_sender = dev.get_func(Self::MOD_NAME, "packed_ot_sender").unwrap();
+        let ot_receiver = dev.get_func(Self::MOD_NAME, "packed_ot_receiver").unwrap();
+        let ot_helper = dev.get_func(Self::MOD_NAME, "packed_ot_helper").unwrap();
 
         Kernels {
             and,
