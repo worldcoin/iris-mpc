@@ -74,6 +74,7 @@ where
 
 struct Kernels {
     pub(crate) and: CudaFunction,
+    pub(crate) or: CudaFunction,
     pub(crate) xor: CudaFunction,
     pub(crate) xor_assign: CudaFunction,
     pub(crate) not_inplace: CudaFunction,
@@ -83,6 +84,9 @@ struct Kernels {
     pub(crate) transpose_32x64: CudaFunction,
     pub(crate) split1: CudaFunction,
     pub(crate) split2: CudaFunction,
+    pub(crate) ot_sender: CudaFunction,
+    pub(crate) ot_receiver: CudaFunction,
+    pub(crate) ot_helper: CudaFunction,
 }
 
 impl Kernels {
@@ -96,6 +100,7 @@ impl Kernels {
                 "shared_xor",
                 "shared_xor_assign",
                 "shared_and_pre",
+                "shared_or_pre",
                 "shared_not_inplace",
                 "shared_not",
                 "shared_lift_mul_sub_split",
@@ -103,10 +108,14 @@ impl Kernels {
                 "shared_u32_transpose_pack_u64",
                 "shared_split1",
                 "shared_split2",
+                "packed_ot_sender",
+                "packed_ot_receiver",
+                "packed_ot_helper",
             ],
         )
         .unwrap();
         let and = dev.get_func(Self::MOD_NAME, "shared_and_pre").unwrap();
+        let or = dev.get_func(Self::MOD_NAME, "shared_or_pre").unwrap();
         let xor = dev.get_func(Self::MOD_NAME, "shared_xor").unwrap();
         let xor_assign = dev.get_func(Self::MOD_NAME, "shared_xor_assign").unwrap();
         let not_inplace = dev.get_func(Self::MOD_NAME, "shared_not_inplace").unwrap();
@@ -122,9 +131,13 @@ impl Kernels {
             .unwrap();
         let split1 = dev.get_func(Self::MOD_NAME, "shared_split1").unwrap();
         let split2 = dev.get_func(Self::MOD_NAME, "shared_split2").unwrap();
+        let ot_sender = dev.get_func(Self::MOD_NAME, "packer_ot_sender").unwrap();
+        let ot_receiver = dev.get_func(Self::MOD_NAME, "packer_ot_receiver").unwrap();
+        let ot_helper = dev.get_func(Self::MOD_NAME, "packer_ot_helper").unwrap();
 
         Kernels {
             and,
+            or,
             xor,
             xor_assign,
             not_inplace,
@@ -134,6 +147,9 @@ impl Kernels {
             transpose_32x64,
             split1,
             split2,
+            ot_sender,
+            ot_receiver,
+            ot_helper,
         }
     }
 }
