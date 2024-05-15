@@ -452,3 +452,25 @@ extern "C" __global__ void packed_ot_sender(U32 *out_a, U32 *out_b, U64 *in_a,
     m1[i] = (xor-c) ^ rand_wa2[i];       // Negation is included in OT
   }
 }
+
+extern "C" __global__ void packed_ot_receiver(U32 *out_a, U32 *out_b, U64 *in_b,
+                                              U32 *m0, U32 *m1, U32 *rand_ca,
+                                              U32 *rand_wc, int n) {
+  // in is bits packed in 64 bit integers
+  // out is each bit injected into 32-bit
+  // Thus, in has size n, out has size 64 * n
+  // m0, m1, rand_ca, rand_wc are same size as out
+
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < 64 * n) {
+    int wordindex = i / 64;
+    int bitindex = i % 64;
+    bool my_bit_b = ((in_b[wordindex] >> bitindex) & 1) == 1;
+    out_a[i] = rand_ca[i];
+    if (my_bit_b) {
+      out_b[i] = rand_wc[i] ^ m1[i];
+    } else {
+      out_b[i] = rand_wc[i] ^ m0[i];
+    }
+  }
+}
