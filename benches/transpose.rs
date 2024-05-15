@@ -35,7 +35,7 @@ impl Kernels {
                 "shared_not",
                 "shared_lift_mul_sub_split",
                 "shared_u64_transpose_pack_u64",
-                "shared_u64_transpose_pack_u64_shared",
+                "shared_u64_transpose_pack_u64_global_mem",
                 "shared_u32_transpose_pack_u64",
                 "shared_split1",
                 "shared_split2",
@@ -43,10 +43,10 @@ impl Kernels {
         )
         .unwrap();
         let transpose_64x64 = dev
-            .get_func(Self::MOD_NAME, "shared_u64_transpose_pack_u64")
+            .get_func(Self::MOD_NAME, "shared_u64_transpose_pack_u64_global_mem")
             .unwrap();
         let transpose_64x64_shared = dev
-            .get_func(Self::MOD_NAME, "shared_u64_transpose_pack_u64_shared")
+            .get_func(Self::MOD_NAME, "shared_u64_transpose_pack_u64")
             .unwrap();
 
         Kernels {

@@ -324,10 +324,9 @@ extern "C" __global__ void shared_u32_transpose_pack_u64(U64 *out_a, U64 *out_b,
   u32_transpose_pack_u64(out_a, out_b, in_a, in_b, in_len, out_len);
 }
 
-extern "C" __global__ void shared_u64_transpose_pack_u64(U64 *out_a, U64 *out_b,
-                                                         U64 *in_a, U64 *in_b,
-                                                         int in_len,
-                                                         int out_len) {
+extern "C" __global__ void
+shared_u64_transpose_pack_u64_global_mem(U64 *out_a, U64 *out_b, U64 *in_a,
+                                         U64 *in_b, int in_len, int out_len) {
   // in has size in_len = 64 * n
   // out has size out_len, where each element is an array of n elements
   // Thus out itslef has n * out_len elements (split into n arrays)
@@ -357,9 +356,10 @@ extern "C" __global__ void shared_u64_transpose_pack_u64(U64 *out_a, U64 *out_b,
   }
 }
 
-extern "C" __global__ void
-shared_u64_transpose_pack_u64_shared(U64 *out_a, U64 *out_b, U64 *in_a,
-                                     U64 *in_b, int in_len, int out_len) {
+extern "C" __global__ void shared_u64_transpose_pack_u64(U64 *out_a, U64 *out_b,
+                                                         U64 *in_a, U64 *in_b,
+                                                         int in_len,
+                                                         int out_len) {
   // in has size in_len = 64 * n
   // out has size out_len, where each element is an array of n elements
   // Thus out itslef has n * out_len elements (split into n arrays)
