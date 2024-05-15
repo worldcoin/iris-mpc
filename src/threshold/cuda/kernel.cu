@@ -194,6 +194,8 @@ __global__ void u32_transpose_pack_u64(U64 *out_a, U64 *out_b, U32 *in_a,
 // Overwrites the input!
 __global__ void u64_transpose_pack_u64(U64 *out_a, U64 *out_b, U64 *in_a,
                                        U64 *in_b, int in_len, int out_len) {
+
+  extern __shared__ U64 transpose_buf[64 * 1024];
   // in has size in_len = 64 * n
   // out has size out_len, where each element is an array of n elements
   // Thus out itslef has n * out_len elements (split into n arrays)
@@ -203,7 +205,6 @@ __global__ void u64_transpose_pack_u64(U64 *out_a, U64 *out_b, U64 *in_a,
   assert(out_len <= 64);
   int n = in_len / 64;
 
-  extern __shared__ U64 transpose_buf[64 * 1024];
   U64 *transposed = &transpose_buf[threadIdx.x * 64];
   // Make each transpose in parallel
   if (i < n) {
