@@ -490,12 +490,12 @@ extern "C" __global__ void packed_ot_sender(U32 *out_a, U32 *out_b, U64 *in_a,
     int bitindex = i % 64;
     U32 my_bit_a = (in_a[wordindex] >> bitindex) & 1;
     U32 my_bit_b = (in_b[wordindex] >> bitindex) & 1;
-    res_a[i] = rand_ca[i];
-    res_b[i] = rand_cb[i];
+    out_a[i] = rand_ca[i];
+    out_b[i] = rand_cb[i];
     U32 c = rand_ca[i] + rand_cb[i];
-    U32 xor = my_bit_a ^ my_bit_b;
-    m0[i] = ((xor^1) - c) ^ rand_wa1[i]; // Negation is included in OT
-    m1[i] = (xor-c) ^ rand_wa2[i];       // Negation is included in OT
+    U32 xor_ab = my_bit_a ^ my_bit_b;
+    m0[i] = ((xor_ab ^ 1) - c) ^ rand_wa1[i]; // Negation is included in OT
+    m1[i] = (xor_ab - c) ^ rand_wa2[i];       // Negation is included in OT
   }
 }
 
