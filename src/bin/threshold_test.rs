@@ -11,7 +11,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{env, sync::Arc};
 use tokio::time::{self, Instant};
 
-const INPUTS_PER_GPU_SIZE: usize = 125_056 * 100;
+const INPUTS_PER_GPU_SIZE: usize = 12_505_600;
 const CHUNK_SIZE: usize = INPUTS_PER_GPU_SIZE / 64;
 const B_BITS: u64 = 20;
 pub(crate) const B: u64 = 1 << B_BITS;
@@ -188,6 +188,8 @@ async fn main() -> eyre::Result<()> {
         let now = Instant::now();
         let result = open(&mut party, result);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
+        println!("Send/Receive Time: {:?}", party.get_send_recv_time());
+        party.reset_send_recv_time();
 
         let mut correct = true;
         for (i, (r, r_)) in izip!(&result, &real_result).enumerate() {

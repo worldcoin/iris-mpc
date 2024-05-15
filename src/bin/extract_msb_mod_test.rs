@@ -178,6 +178,8 @@ async fn main() -> eyre::Result<()> {
         let now = Instant::now();
         let result = open(&mut party, result);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
+        println!("Send/Receive Time: {:?}", party.get_send_recv_time());
+        party.reset_send_recv_time();
 
         println!("Communicating took: {:?}", party.get_send_recv_time());
         party.reset_send_recv_time();
