@@ -339,7 +339,39 @@ extern "C" __global__ void shared_u64_transpose_pack_u64(U64 *out_a, U64 *out_b,
 
   // Make each transpose in parallel
   if (i < n) {
-    U64 *transposed = (U64 *)alloca(64 * sizeof(U64));
+    U64 *chunk = &in_a[i * 64];
+
+    transpose64x64(chunk);
+
+    for (U32 j = 0; j < out_len; j++) {
+      out_a[j * n + i] = chunk[j];
+    }
+  } else if (i < 2 * n) {
+    i -= n;
+    U64 *chunk = &in_b[i * 64];
+    transpose64x64(chunk);
+
+    for (U32 j = 0; j < out_len; j++) {
+      out_b[j * n + i] = chunk[j];
+    }
+  }
+}
+
+extern "C" __global__ void
+shared_u64_transpose_pack_u64_shared(U64 *out_a, U64 *out_b, U64 *in_a,
+                                     U64 *in_b, int in_len, int out_len) {
+  // in has size in_len = 64 * n
+  // out has size out_len, where each element is an array of n elements
+  // Thus out itslef has n * out_len elements (split into n arrays)
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+  assert(in_len % 64 == 0);
+  assert(out_len <= 64);
+  int n = in_len / 64;
+
+  // Make each transpose in parallel
+  U64 transposed[64];
+  if (i < n) {
     U64 *chunk = &in_a[i * 64];
     for (U32 j = 0; j < 64; j++) {
       transposed[j] = chunk[j];
@@ -351,7 +383,6 @@ extern "C" __global__ void shared_u64_transpose_pack_u64(U64 *out_a, U64 *out_b,
       out_a[j * n + i] = transposed[j];
     }
   } else if (i < 2 * n) {
-    U64 *transposed = (U64 *)alloca(64 * sizeof(U64));
     i -= n;
     U64 *chunk = &in_b[i * 64];
     for (U32 j = 0; j < 64; j++) {
