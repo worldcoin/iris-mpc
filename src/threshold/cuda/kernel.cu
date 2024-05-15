@@ -203,7 +203,7 @@ __global__ void u64_transpose_pack_u64(U64 *out_a, U64 *out_b, U64 *in_a,
   assert(out_len <= 64);
   int n = in_len / 64;
 
-  __shared__ U64 transpose_buf[64 * 1024];
+  extern __shared__ U64 transpose_buf[64 * 1024];
   U64 *transposed = &transpose_buf[threadIdx.x * 64];
   // Make each transpose in parallel
   if (i < n) {
