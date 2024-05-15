@@ -952,7 +952,7 @@ impl Circuits {
         let mut sum = self.binary_add_two(x01, x2);
         self.extraxt_msb_mod_p2k_of_sum(&mut sum);
 
-        // Result is in the first bit of the input
+        // Result is in the first bit of the output
         sum
     }
 
@@ -1013,7 +1013,7 @@ impl Circuits {
         }
 
         // Copy the last carry to the last bit of s
-        for (cc, ss) in izip!(&c, &s) {
+        for (cc, ss) in izip!(&c, &mut s) {
             let c_ = cc.as_view();
             let mut s_ = ss.get_offset(Self::BITS, self.chunk_size);
             s_.a = c_.a;
