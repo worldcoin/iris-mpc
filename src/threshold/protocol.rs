@@ -721,13 +721,19 @@ impl Circuits {
         xp2: &mut [ChunkShare<u64>],
         xp3: &mut [ChunkShare<u64>],
     ) {
+        // TODO also precompute?
+        let cfg = Self::launch_config_from_elements_and_threads(
+            self.chunk_size as u32 * 18,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+        );
+
         for (idx, (xp, xp1, xp2, xp3)) in izip!(xp, xp1, xp2, xp3).enumerate() {
             unsafe {
                 self.kernels[idx]
                     .split2
                     .clone()
                     .launch(
-                        self.cfg.to_owned(),
+                        cfg.to_owned(),
                         (
                             &xp.a,
                             &xp.b,
@@ -934,12 +940,12 @@ impl Circuits {
         let mut xa = self.allocate_buffer::<u64>(self.chunk_size * 64);
         let mut xp = self.allocate_buffer::<u32>(self.chunk_size * 64);
         let mut xpp = self.allocate_buffer::<u32>(self.chunk_size * 64);
-        let mut xp1 = self.allocate_buffer::<u64>(self.chunk_size);
-        let mut xp2 = self.allocate_buffer::<u64>(self.chunk_size);
-        let mut xp3 = self.allocate_buffer::<u64>(self.chunk_size);
-        let mut xpp1 = self.allocate_buffer::<u64>(self.chunk_size);
-        let mut xpp2 = self.allocate_buffer::<u64>(self.chunk_size);
-        let mut xpp3 = self.allocate_buffer::<u64>(self.chunk_size);
+        let mut xp1 = self.allocate_buffer::<u64>(self.chunk_size * 18);
+        let mut xp2 = self.allocate_buffer::<u64>(self.chunk_size * 18);
+        let mut xp3 = self.allocate_buffer::<u64>(self.chunk_size * 18);
+        let mut xpp1 = self.allocate_buffer::<u64>(self.chunk_size * 18);
+        let mut xpp2 = self.allocate_buffer::<u64>(self.chunk_size * 18);
+        let mut xpp3 = self.allocate_buffer::<u64>(self.chunk_size * 18);
 
         self.split1(shares, &mut xa, &mut xp, &mut xpp);
         let xp = self.transpose_pack_u32_with_len(xp, 18);
