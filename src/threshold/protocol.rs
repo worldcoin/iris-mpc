@@ -846,7 +846,11 @@ impl Circuits {
     }
 
     // input should be of size: n_devices * input_size
-    fn lift_p2k(&mut self, shares: Vec<ChunkShare<u16>>) -> Vec<ChunkShare<u64>> {
+    // outputs the uncorrected lifted shares and the injected share values
+    fn lift_p2k(
+        &mut self,
+        shares: Vec<ChunkShare<u16>>,
+    ) -> (Vec<ChunkShare<u64>>, Vec<ChunkShare<u32>>) {
         debug_assert_eq!(self.n_devices, shares.len());
 
         // TODO the buffers should probably already be allocated
@@ -871,7 +875,7 @@ impl Circuits {
 
         let injected = self.bit_inject_neg_ot(o);
 
-        todo!()
+        (xa, injected)
     }
 
     // K is 18 in our case
@@ -1343,6 +1347,7 @@ impl Circuits {
     pub fn lift_mul_sub_split(
         &mut self,
         mask_lifted: &mut [ChunkShare<u64>],
+        maks_correction: Vec<ChunkShare<u32>>,
         code: Vec<ChunkShare<u16>>,
     ) -> Vec<CudaSlice<u64>> {
         debug_assert_eq!(self.n_devices, mask_lifted.len());
@@ -1350,7 +1355,9 @@ impl Circuits {
 
         let mut x01 = self.allocate_single_buffer(self.chunk_size * 64);
 
-        for (idx, (m, c, x01)) in izip!(mask_lifted, &code, &mut x01).enumerate() {
+        for (idx, (m, mc, c, x01)) in
+            izip!(mask_lifted, maks_correction, &code, &mut x01).enumerate()
+        {
             // TODO this is just a placeholder
             let rand = self.devs[idx]
                 .alloc_zeros::<u64>(self.chunk_size * 64)
@@ -1365,6 +1372,8 @@ impl Circuits {
                             x01,
                             &m.a,
                             &m.b,
+                            &mc.a,
+                            &mc.b,
                             &c.a,
                             &c.b,
                             &rand,
@@ -1389,8 +1398,8 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, code_dots.len());
         debug_assert_eq!(self.n_devices, mask_dots.len());
 
-        let mut x2 = self.lift_p2k(mask_dots);
-        let x01 = self.lift_mul_sub_split(&mut x2, code_dots);
+        let (mut x2, correction) = self.lift_p2k(mask_dots);
+        let x01 = self.lift_mul_sub_split(&mut x2, correction, code_dots);
         let result = self.extract_msb_sum_mod(x01, x2);
         // Result is in the first bit of the input
 

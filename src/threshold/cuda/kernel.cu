@@ -48,6 +48,8 @@ __device__ void mul_lift_b(U64 *res, U16 *input) {
   *res = (U64)(*input) << B_BITS;
 }
 
+__device__ void mul_lift_p(U64 *res, U32 *input) { *res = (U64)(*input) * P; }
+
 __device__ void u64_from_u16s(U64 *res, U16 *a, U16 *b, U16 *c, U16 *d) {
   *res = (U64)(*a) | ((U64)(*b) << 16) | ((U64)(*c) << 32) | ((U64)(*d) << 48);
 }
@@ -195,7 +197,18 @@ __device__ void u32_transpose_pack_u64(U64 *out_a, U64 *out_b, U32 *in_a,
 __device__ void u64_transpose_pack_u64(U64 *out_a, U64 *out_b, U64 *in_a,
                                        U64 *in_b, int in_len, int out_len) {}
 
-__device__ void lift_mul_sub(U64 *mask, U16 *code) {
+__device__ void lift_mul_sub(U64 *mask, U32 *mask_corr1, U32 *mask_corr2,
+                             U16 *code) {
+  U64 corr1;
+  *mask_corr1 %= B;
+  *mask_corr2 %= B;
+  mul_lift_p(&corr1, &mask_corr1);
+  mul_lift_p(&corr1, &mask_corr2);
+  *mask += P2K;
+  *mask += P2K;
+  *mask -= corr1;
+  *mask -= corr1;
+
   U64 a;
   mul_lift_b(&a, code);
   *mask *= A;
@@ -351,14 +364,14 @@ extern "C" __global__ void shared_u64_transpose_pack_u64(U64 *out_a, U64 *out_b,
 }
 
 // Puts the results into mask_a, mask_b and x01
-extern "C" __global__ void shared_lift_mul_sub_split(U64 *x01, U64 *mask_a,
-                                                     U64 *mask_b, U16 *code_a,
-                                                     U16 *code_b, U64 *r, int n,
-                                                     int id) {
+extern "C" __global__ void
+shared_lift_mul_sub_split(U64 *x01, U64 *mask_a, U64 *mask_b, U32 *mask_corr_a,
+                          U32 *mask_corr_b, U16 *code_a, U16 *code_b, U64 *r,
+                          int n, int id) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
-    lift_mul_sub(&mask_a[i], &code_a[i]);
-    lift_mul_sub(&mask_b[i], &code_b[i]);
+    lift_mul_sub(&mask_a[i], &mask_corr_a[i], &mask_corr_a[i + n], &code_a[i]);
+    lift_mul_sub(&mask_b[i], &mask_corr_b[i], &mask_corr_b[i + n], &code_b[i]);
 
     split_msb_fp(&mask_a[i], &mask_b[i], &x01[i], &r[i], id);
   }
