@@ -735,7 +735,55 @@ impl Circuits {
 
     // TODO include randomness
     fn bit_inject_neg_ot_receiver(&mut self, inp: Vec<ChunkShare<u64>>) -> Vec<ChunkShare<u32>> {
-        todo!()
+        // TODO the buffers should probably already be allocated
+        let mut res = self.allocate_buffer::<u32>(self.chunk_size * 2 * 64);
+        let mut m0 = self.allocate_single_buffer::<u32>(self.chunk_size * 2 * 64);
+        let mut m1 = self.allocate_single_buffer::<u32>(self.chunk_size * 2 * 64);
+        let mut wc = self.allocate_single_buffer::<u32>(self.chunk_size * 2 * 64);
+
+        result::group_start().unwrap();
+        for (idx, (m0, m1, wc)) in izip!(&mut m0, &mut m1, &mut wc).enumerate() {
+            self.receive(m0, self.next_id, idx);
+            self.receive(wc, self.prev_id, idx);
+            self.receive(m1, self.next_id, idx);
+        }
+        result::group_end().unwrap();
+
+        for (idx, (inp, res, m0, m1, wc)) in izip!(inp, &mut res, &m0, &m1, &wc).enumerate() {
+            // TODO this is just a placeholder
+            let rand_ca = self.devs[idx]
+                .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
+                .unwrap();
+
+            unsafe {
+                self.kernels[idx]
+                    .ot_receiver
+                    .clone()
+                    .launch(
+                        self.cfg_ot.to_owned(),
+                        (
+                            &mut res.a,
+                            &mut res.b,
+                            &inp.b,
+                            m0,
+                            m1,
+                            &rand_ca,
+                            wc,
+                            2 * self.chunk_size,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+
+        // Reshare to Helper
+        result::group_start().unwrap();
+        for (idx, res) in res.iter().enumerate() {
+            self.send(&res.b, self.prev_id, idx);
+        }
+        result::group_end().unwrap();
+
+        res
     }
 
     // TODO include randomness
