@@ -425,3 +425,28 @@ extern "C" __global__ void shared_split2(U64 *xp_a, U64 *xp_b, U64 *xp1_a,
     }
   }
 }
+
+extern "C" __global__ void packed_ot_sender(U32 *out_a, U32 *out_b, U64 *in_a,
+                                            U64 *in_b, U32 *m0, U32 *m1,
+                                            U32 *rand_ca, U32 *rand_cb,
+                                            U32 *rand_wa1, U32 *rand_wa2,
+                                            int n) {
+  // in is bits packed in 64 bit integers
+  // out is each bit injected into 32-bit
+  // Thus, in has size n, out has size 64 * n
+  // m0, m1, rand_ca, rand_cb, rand_wa1, rand_wa2 are same size as out
+
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < 64 * n) {
+    int wordindex = i / 64;
+    int bitindex = i % 64;
+    U32 my_bit_a = (in_a[wordindex] >> bitindex) & 1;
+    U32 my_bit_b = (in_b[wordindex] >> bitindex) & 1;
+    res_a[i] = rand_ca[i];
+    res_b[i] = rand_cb[i];
+    U32 c = rand_ca[i] + rand_cb[i];
+    U32 xor = my_bit_a ^ my_bit_b;
+    m0[i] = ((xor^1) - c) ^ rand_wa1[i]; // Negation is included in OT
+    m1[i] = (xor-c) ^ rand_wa2[i];       // Negation is included in OT
+  }
+}
