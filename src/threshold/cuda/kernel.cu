@@ -33,7 +33,7 @@ template <typename T> __global__ void xor_assign_inner(T *lhs, T *rhs) {
 template <typename T>
 __global__ void or_pre_inner(T *res_a, T *lhs_a, T *lhs_b, T *rhs_a, T *rhs_b,
                              T *r) {
-  and_pre_inner(res_a, lhs_a, lhs_b, rhs_a, rhs_b, r); // AND with randomness
+  and_pre_inner<T>(res_a, lhs_a, lhs_b, rhs_a, rhs_b, r); // AND with randomness
   *res_a ^= *lhs_a ^ *lhs_b; // XOR with the original values
 }
 
