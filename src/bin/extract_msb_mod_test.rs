@@ -179,6 +179,8 @@ async fn main() -> eyre::Result<()> {
         let result = open(&mut party, result);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
 
+        println!("Communicating took: {:?}", party.get_send_recv_time());
+        party.reset_send_recv_time();
         let mut correct = true;
         for (i, (r, r_)) in izip!(&result, &real_result).enumerate() {
             if r != r_ {
