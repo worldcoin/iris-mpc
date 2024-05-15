@@ -140,10 +140,10 @@ async fn main() -> eyre::Result<()> {
         let request_cublas_handles = &cublas_handles[i];
 
         let buffers = unsafe {
-            let code_query0 = pinned_query_buffer;//.byte_add((i * 4 + 0) * IRIS_CODE_LENGTH * QUERIES);
-            let code_query1 = pinned_query_buffer;//.byte_add((i * 4 + 1) * IRIS_CODE_LENGTH * QUERIES);
-            let mask_query0 = pinned_query_buffer;//.byte_add((i * 4 + 2) * IRIS_CODE_LENGTH * QUERIES);
-            let mask_query1 = pinned_query_buffer;//.byte_add((i * 4 + 3) * IRIS_CODE_LENGTH * QUERIES);
+            let code_query0 = pinned_query_buffer.byte_add((i * 4 + 0) * IRIS_CODE_LENGTH * QUERIES);
+            let code_query1 = pinned_query_buffer.byte_add((i * 4 + 1) * IRIS_CODE_LENGTH * QUERIES);
+            let mask_query0 = pinned_query_buffer.byte_add((i * 4 + 2) * IRIS_CODE_LENGTH * QUERIES);
+            let mask_query1 = pinned_query_buffer.byte_add((i * 4 + 3) * IRIS_CODE_LENGTH * QUERIES);
             ((code_query0, code_query1), (mask_query0, mask_query1))
         };
         
