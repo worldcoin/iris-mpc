@@ -232,6 +232,65 @@ fn and_pre_test() {
 }
 
 #[test]
+fn or_pre_test() {
+    // Setup cuda
+    let (dev, ptx) = setup_cuda(0).unwrap();
+    let function = load_function("shared_or_pre", &dev, ptx).unwrap();
+    let cfg = LaunchConfig::for_num_elems(SIZE as u32);
+
+    // CPU
+    let mut res_a = vec![0u64; SIZE];
+
+    // GPU
+    let mut res_a_gpu = dev.alloc_zeros::<u64>(SIZE).unwrap();
+    let mut res_a_cpu = vec![0u64; SIZE];
+
+    let mut rng = rand::thread_rng();
+    for _ in 0..TESTRUNS {
+        // CPU
+        let lhs_a = random_vec(SIZE, &mut rng);
+        let lhs_b = random_vec(SIZE, &mut rng);
+        let rhs_a = random_vec(SIZE, &mut rng);
+        let rhs_b = random_vec(SIZE, &mut rng);
+        let rand = random_vec(SIZE, &mut rng); // This should in a production also happen on the GPU
+
+        kernel::shared_and_pre(&mut res_a, &lhs_a, &lhs_b, &rhs_a, &rhs_b, &rand);
+
+        // GPU
+        let lhs_a_cuda = dev.htod_copy(lhs_a).unwrap();
+        let lhs_b_cuda = dev.htod_copy(lhs_b).unwrap();
+        let rhs_a_cuda = dev.htod_copy(rhs_a).unwrap();
+        let rhs_b_cuda = dev.htod_copy(rhs_b).unwrap();
+        let rand_cuda = dev.htod_copy(rand).unwrap();
+
+        unsafe {
+            function
+                .to_owned()
+                .launch(
+                    cfg,
+                    (
+                        &mut res_a_gpu,
+                        &lhs_a_cuda,
+                        &lhs_b_cuda,
+                        &rhs_a_cuda,
+                        &rhs_b_cuda,
+                        &rand_cuda,
+                        SIZE as u32,
+                    ),
+                )
+                .unwrap();
+        }
+        dev.dtoh_sync_copy_into(&res_a_gpu, &mut res_a_cpu).unwrap();
+        assert_eq!(res_a_cpu.len(), SIZE);
+
+        // Compare
+        for i in 0..SIZE {
+            assert_eq!(res_a[i], res_a_cpu[i]);
+        }
+    }
+}
+
+#[test]
 fn mul_lift_test() {
     // Setup cuda
     let (dev, ptx) = setup_cuda(0).unwrap();

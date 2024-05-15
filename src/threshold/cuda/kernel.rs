@@ -64,6 +64,36 @@ pub fn shared_and_pre<T>(
     }
 }
 
+// Computes the local part of the multiplication (including randomness)
+pub fn shared_or_pre<T>(
+    res_a: &mut [T],
+    lhs_a: &[T],
+    lhs_b: &[T],
+    rhs_a: &[T],
+    rhs_b: &[T],
+    rand: &[T],
+) where
+    for<'a> &'a T: std::ops::BitAnd<&'a T, Output = T>,
+    for<'a> T: std::ops::BitXor<&'a T, Output = T>,
+    T: std::ops::BitXor<Output = T>,
+{
+    let n = res_a.len();
+    assert_eq!(n, lhs_a.len());
+    assert_eq!(n, lhs_b.len());
+    assert_eq!(n, rhs_a.len());
+    assert_eq!(n, rhs_b.len());
+    assert_eq!(n, rand.len());
+
+    for i in 0..n {
+        res_a[i] = (&lhs_a[i] & &rhs_a[i])
+            ^ (&lhs_b[i] & &rhs_a[i])
+            ^ (&lhs_a[i] & &rhs_b[i])
+            ^ &rand[i]
+            ^ &lhs_a[i]
+            ^ &rhs_a[i];
+    }
+}
+
 pub fn shared_mul_lift_b(res_a: &mut [u64], res_b: &mut [u64], lhs_a: &[u16], lhs_b: &[u16]) {
     let n = res_a.len();
     assert_eq!(n, res_b.len());

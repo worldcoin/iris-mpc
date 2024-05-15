@@ -30,6 +30,13 @@ template <typename T> __global__ void xor_assign_inner(T *lhs, T *rhs) {
   *lhs ^= *rhs;
 }
 
+template <typename T>
+__global__ void or_pre_inner(T *res_a, T *lhs_a, T *lhs_b, T *rhs_a, T *rhs_b,
+                             T *r) {
+  and_pre_inner(res_a, lhs_a, lhs_b, rhs_a, rhs_b, r); // AND with randomness
+  *res_a ^= *lhs_a ^ *lhs_b; // XOR with the original values
+}
+
 // Computes the local part of the multiplication (including randomness)
 template <typename T>
 __global__ void and_pre_inner(T *res_a, T *lhs_a, T *lhs_b, T *rhs_a, T *rhs_b,
@@ -294,6 +301,16 @@ extern "C" __global__ void shared_and_pre(TYPE *res_a, TYPE *lhs_a, TYPE *lhs_b,
   if (i < n) {
     and_pre_inner<TYPE>(&res_a[i], &lhs_a[i], &lhs_b[i], &rhs_a[i], &rhs_b[i],
                         &r[i]);
+  }
+}
+
+extern "C" __global__ void shared_or_pre(TYPE *res_a, TYPE *lhs_a, TYPE *lhs_b,
+                                         TYPE *rhs_a, TYPE *rhs_b, TYPE *r,
+                                         int n) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    or_pre_inner<TYPE>(&res_a[i], &lhs_a[i], &lhs_b[i], &rhs_a[i], &rhs_b[i],
+                       &r[i]);
   }
 }
 
