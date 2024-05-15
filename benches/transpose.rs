@@ -60,14 +60,14 @@ fn criterion_benchmark_transpose_64(
     c: &mut Criterion,
     dev: Arc<CudaDevice>,
     kernels: &Kernels,
-    buf_size: usize,
+    mat_size: usize,
 ) {
     let mut group = c.benchmark_group(format!(
         "Transpose 64x64 Field (buf_size = {} kMat)",
-        buf_size / 1000
+        mat_size / 1000
     ));
-    group.throughput(criterion::Throughput::Elements(buf_size as u64));
-    let buf_size = buf_size * 64;
+    group.throughput(criterion::Throughput::Elements(mat_size as u64));
+    let buf_size = mat_size * 64;
     let in_a: CudaSlice<u64> = dev.alloc_zeros(buf_size).unwrap();
     let in_b: CudaSlice<u64> = dev.alloc_zeros(buf_size).unwrap();
     let mut out_a: CudaSlice<u64> = dev.alloc_zeros(buf_size).unwrap();
@@ -92,10 +92,10 @@ fn criterion_benchmark_transpose_64(
 
     let mut group = c.benchmark_group(format!(
         "Transpose 64x64 Field Shared (buf_size = {} kMat)",
-        buf_size / 1000
+        mat_size / 1000
     ));
     group.throughput(criterion::Throughput::Elements(buf_size as u64));
-    let buf_size = buf_size * 64;
+    let buf_size = mat_size * 64;
     let in_a: CudaSlice<u64> = dev.alloc_zeros(buf_size).unwrap();
     let in_b: CudaSlice<u64> = dev.alloc_zeros(buf_size).unwrap();
     let mut out_a: CudaSlice<u64> = dev.alloc_zeros(buf_size).unwrap();
