@@ -846,7 +846,7 @@ impl Circuits {
     }
 
     // input should be of size: n_devices * input_size
-    // outputs the uncorrected lifted shares and the injected share values
+    // outputs the uncorrected lifted shares and the injected correction values
     fn lift_p2k(
         &mut self,
         shares: Vec<ChunkShare<u16>>,
@@ -1050,7 +1050,6 @@ impl Circuits {
             self.xor_assign_many(&mut cb, &b2.get_offset(K - 2, self.chunk_size), idx);
         }
 
-        // TODO no truncation and convert to bits yet!
         c
     }
 
