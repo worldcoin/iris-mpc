@@ -30,18 +30,18 @@ template <typename T> __global__ void xor_assign_inner(T *lhs, T *rhs) {
   *lhs ^= *rhs;
 }
 
-template <typename T>
-__global__ void or_pre_inner(T *res_a, T *lhs_a, T *lhs_b, T *rhs_a, T *rhs_b,
-                             T *r) {
-  and_pre_inner<T>(res_a, lhs_a, lhs_b, rhs_a, rhs_b, r); // AND with randomness
-  *res_a ^= *lhs_a ^ *lhs_b; // XOR with the original values
-}
-
 // Computes the local part of the multiplication (including randomness)
 template <typename T>
 __global__ void and_pre_inner(T *res_a, T *lhs_a, T *lhs_b, T *rhs_a, T *rhs_b,
                               T *r) {
   *res_a = (*lhs_a & *rhs_a) ^ (*lhs_b & *rhs_a) ^ (*lhs_a & *rhs_b) ^ *r;
+}
+
+template <typename T>
+__global__ void or_pre_inner(T *res_a, T *lhs_a, T *lhs_b, T *rhs_a, T *rhs_b,
+                             T *r) {
+  and_pre_inner<T>(res_a, lhs_a, lhs_b, rhs_a, rhs_b, r); // AND with randomness
+  *res_a ^= *lhs_a ^ *lhs_b; // XOR with the original values
 }
 
 __global__ void mul_lift_b(U64 *res, U16 *input) {
