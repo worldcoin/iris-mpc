@@ -474,3 +474,25 @@ extern "C" __global__ void packed_ot_receiver(U32 *out_a, U32 *out_b, U64 *in_b,
     }
   }
 }
+
+extern "C" __global__ void packed_ot_helper(U32 *out_b, U64 *in_a, U32 *rand_cb,
+                                            U32 *rand_wb1, U32 *rand_wb2,
+                                            U32 *wc, int n) {
+  // in is bits packed in 64 bit integers
+  // out is each bit injected into 32-bit
+  // Thus, in has size n, out has size 64 * n
+  // rand_wb1, rand_wb2, wc are same size as out
+
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < 64 * n) {
+    int wordindex = i / 64;
+    int bitindex = i % 64;
+    bool my_bit_a = ((in_a[wordindex] >> bitindex) & 1) == 1;
+    out_b[i] = rand_cb[i];
+    if (my_bit_a) {
+      wc[i] = rand_wb1[i];
+    } else {
+      wc[i] = rand_wb2[i];
+    }
+  }
+}
