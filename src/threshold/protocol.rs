@@ -723,7 +723,7 @@ impl Circuits {
         let mut s2 = self.allocate_buffer::<u64>(self.chunk_size * K);
         let mut c1 = self.allocate_buffer::<u64>(self.chunk_size * (K - 1));
         let mut c2 = self.allocate_buffer::<u64>(self.chunk_size * (K - 1));
-        let c = self.allocate_buffer::<u64>(self.chunk_size * 2); // Combined buffer for the two individual results (easier bitinject then)
+        let mut c = self.allocate_buffer::<u64>(self.chunk_size * 2); // Combined buffer for the two individual results (easier bitinject then)
 
         for (idx, (x1, x2, x3, y1, y2, y3, s1, s2, c1, c2)) in
             izip!(&xa_1, &xa_2, &xa_3, &xb_1, &xb_2, &xb_3, &mut s1, &mut s2, &mut c1, &mut c2)
