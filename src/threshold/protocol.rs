@@ -161,6 +161,7 @@ pub struct Circuits {
     cfg: LaunchConfig,
     cfg_inp: LaunchConfig,
     cfg_transpose: LaunchConfig,
+    cfg_ot: LaunchConfig,
     chunk_size: usize,
     n_devices: usize,
     devs: Vec<Arc<CudaDevice>>,
@@ -191,6 +192,8 @@ impl Circuits {
         let cfg_inp = Self::launch_config_from_elements_and_threads(chunk_size as u32 * 64, 1024);
         let cfg_transpose =
             Self::launch_config_from_elements_and_threads(chunk_size as u32 * 2, 1024);
+        let cfg_ot =
+            Self::launch_config_from_elements_and_threads(chunk_size as u32 * 2 * 64, 1024);
 
         let mut devs = Vec::with_capacity(n_devices);
         let mut kernels = Vec::with_capacity(n_devices);
@@ -256,6 +259,7 @@ impl Circuits {
             cfg,
             cfg_inp,
             cfg_transpose,
+            cfg_ot,
             chunk_size,
             n_devices,
             devs,
@@ -673,20 +677,79 @@ impl Circuits {
         }
     }
 
-    fn bit_inject_neg_ot_sender(&mut self, b: Vec<ChunkShare<u64>>) {
+    // TODO include randomness
+    fn bit_inject_neg_ot_sender(&mut self, inp: Vec<ChunkShare<u64>>) -> Vec<ChunkShare<u32>> {
+        // TODO the buffers should probably already be allocated
+        let mut res = self.allocate_buffer::<u32>(self.chunk_size * 2 * 64);
+        let mut m0 = self.allocate_single_buffer::<u32>(self.chunk_size * 2 * 64);
+        let mut m1 = self.allocate_single_buffer::<u32>(self.chunk_size * 2 * 64);
+
+        for (idx, (inp, res, m0, m1)) in izip!(inp, &mut res, &mut m0, &mut m1).enumerate() {
+            // TODO this is just a placeholder
+            let rand_ca = self.devs[idx]
+                .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
+                .unwrap();
+            let rand_cb = self.devs[idx]
+                .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
+                .unwrap();
+            let rand_wa1 = self.devs[idx]
+                .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
+                .unwrap();
+            let rand_wa2 = self.devs[idx]
+                .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
+                .unwrap();
+
+            unsafe {
+                self.kernels[idx]
+                    .ot_sender
+                    .clone()
+                    .launch(
+                        self.cfg_ot.to_owned(),
+                        (
+                            &mut res.a,
+                            &mut res.b,
+                            &inp.a,
+                            &inp.b,
+                            m0,
+                            m1,
+                            &rand_ca,
+                            &rand_cb,
+                            &rand_wa1,
+                            &rand_wa2,
+                            2 * self.chunk_size,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+
+        result::group_start().unwrap();
+        for (idx, (m0, m1)) in izip!(&m0, &m1).enumerate() {
+            self.send(m0, self.next_id, idx);
+            self.send(m1, self.next_id, idx);
+        }
+        result::group_end().unwrap();
+
+        res
+    }
+
+    // TODO include randomness
+    fn bit_inject_neg_ot_receiver(&mut self, inp: Vec<ChunkShare<u64>>) -> Vec<ChunkShare<u32>> {
         todo!()
     }
 
-    fn bit_inject_neg_ot_receiver(&mut self, b: Vec<ChunkShare<u64>>) {
+    // TODO include randomness
+    fn bit_inject_neg_ot_helper(&mut self, inp: Vec<ChunkShare<u64>>) -> Vec<ChunkShare<u32>> {
         todo!()
     }
 
-    fn bit_inject_neg_ot_helper(&mut self, b: Vec<ChunkShare<u64>>) {
-        todo!()
-    }
-
-    fn bit_inject_neg_ot(&mut self, b: Vec<ChunkShare<u64>>) {
-        todo!()
+    fn bit_inject_neg_ot(&mut self, inp: Vec<ChunkShare<u64>>) -> Vec<ChunkShare<u32>> {
+        match self.peer_id {
+            0 => self.bit_inject_neg_ot_helper(inp),
+            1 => self.bit_inject_neg_ot_receiver(inp),
+            2 => self.bit_inject_neg_ot_sender(inp),
+            _ => unreachable!(),
+        }
     }
 
     // input should be of size: n_devices * input_size
