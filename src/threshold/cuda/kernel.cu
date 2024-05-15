@@ -102,7 +102,6 @@ __global__ void transpose32x64(U64 *out, U32 *in) {
   }
 }
 
-// TODO: do this transpose in shared memory which should be much faster...
 __global__ void transpose64x64(U64 *inout) {
   // len of inout = 64
 
@@ -207,18 +206,27 @@ __global__ void u64_transpose_pack_u64(U64 *out_a, U64 *out_b, U64 *in_a,
   // Make each transpose in parallel
   if (i < n) {
     U64 *chunk = &in_a[i * 64];
-    transpose64x64(chunk);
+    U64 transposed[64];
+    for (U32 j = 0; j < 64; j++) {
+      transposed[j] = chunk[j];
+    }
+
+    transpose64x64(transposed);
 
     for (U32 j = 0; j < out_len; j++) {
-      out_a[j * n + i] = chunk[j];
+      out_a[j * n + i] = transposed[j];
     }
   } else if (i < 2 * n) {
     i -= n;
     U64 *chunk = &in_b[i * 64];
-    transpose64x64(chunk);
+    U64 transposed[64];
+    for (U32 j = 0; j < 64; j++) {
+      transposed[j] = chunk[j];
+    }
+    transpose64x64(transposed);
 
     for (U32 j = 0; j < out_len; j++) {
-      out_b[j * n + i] = chunk[j];
+      out_b[j * n + i] = transposed[j];
     }
   }
 }
