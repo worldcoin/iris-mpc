@@ -657,6 +657,22 @@ impl Circuits {
         }
     }
 
+    fn bit_inject_neg_ot_sender(&mut self, b: Vec<ChunkShare<u64>>) {
+        todo!()
+    }
+
+    fn bit_inject_neg_ot_receiver(&mut self, b: Vec<ChunkShare<u64>>) {
+        todo!()
+    }
+
+    fn bit_inject_neg_ot_helper(&mut self, b: Vec<ChunkShare<u64>>) {
+        todo!()
+    }
+
+    fn bit_inject_neg_ot(&mut self, b: Vec<ChunkShare<u64>>) {
+        todo!()
+    }
+
     // input should be of size: n_devices * input_size
     fn lift_p2k(&mut self, shares: Vec<ChunkShare<u16>>) -> Vec<ChunkShare<u64>> {
         debug_assert_eq!(self.n_devices, shares.len());
@@ -679,7 +695,7 @@ impl Circuits {
         self.split2(xp, &mut xp1, &mut xp2, &mut xp3);
         self.split2(xpp, &mut xpp1, &mut xpp2, &mut xpp3);
 
-        let (o1, o2) = self.binary_add_3_get_msb_twice::<18>(xp1, xp2, xp3, xpp1, xpp2, xpp3);
+        let o = self.binary_add_3_get_msb_twice::<18>(xp1, xp2, xp3, xpp1, xpp2, xpp3);
 
         todo!()
     }
@@ -694,7 +710,7 @@ impl Circuits {
         xb_1: Vec<ChunkShare<u64>>,
         xb_2: Vec<ChunkShare<u64>>,
         xb_3: Vec<ChunkShare<u64>>,
-    ) -> (Vec<ChunkShare<u64>>, Vec<ChunkShare<u64>>) {
+    ) -> Vec<ChunkShare<u64>> {
         debug_assert_eq!(self.n_devices, xa_1.len());
         debug_assert_eq!(self.n_devices, xa_2.len());
         debug_assert_eq!(self.n_devices, xa_3.len());
@@ -707,8 +723,7 @@ impl Circuits {
         let mut s2 = self.allocate_buffer::<u64>(self.chunk_size * K);
         let mut c1 = self.allocate_buffer::<u64>(self.chunk_size * (K - 1));
         let mut c2 = self.allocate_buffer::<u64>(self.chunk_size * (K - 1));
-        let mut ca = self.allocate_buffer::<u64>(self.chunk_size);
-        let mut cb = self.allocate_buffer::<u64>(self.chunk_size);
+        let c = self.allocate_buffer::<u64>(self.chunk_size * 2); // Combined buffer for the two individual results (easier bitinject then)
 
         for (idx, (x1, x2, x3, y1, y2, y3, s1, s2, c1, c2)) in
             izip!(&xa_1, &xa_2, &xa_3, &xb_1, &xb_2, &xb_3, &mut s1, &mut s2, &mut c1, &mut c2)
@@ -765,11 +780,9 @@ impl Circuits {
         let mut b2 = c2;
 
         // First full adder (carry is 0)
-        for (idx, (a1, b1, a2, b2, ca, cb)) in
-            izip!(&a1, &b1, &a2, &b2, &mut ca, &mut cb).enumerate()
-        {
-            let mut ca = ca.as_view();
-            let mut cb = cb.as_view();
+        for (idx, (a1, b1, a2, b2, c)) in izip!(&a1, &b1, &a2, &b2, &mut c).enumerate() {
+            let mut ca = c.get_offset(0, self.chunk_size);
+            let mut cb = c.get_offset(1, self.chunk_size);
             let a1 = a1.get_offset(1, self.chunk_size);
             let b1 = b1.get_offset(0, self.chunk_size);
             self.and_many_pre(&a1, &b1, &mut ca, idx);
@@ -780,19 +793,23 @@ impl Circuits {
 
         // Send/Receive
         result::group_start().unwrap();
-        for (idx, (ca, cb)) in izip!(&ca, &cb).enumerate() {
-            self.send_view(&ca.as_view().a, self.next_id, idx);
-            self.send_view(&cb.as_view().a, self.next_id, idx);
+        for (idx, c) in c.iter().enumerate() {
+            let mut ca = c.get_offset(0, self.chunk_size);
+            let mut cb = c.get_offset(1, self.chunk_size);
+            self.send_view(&ca.a, self.next_id, idx);
+            self.send_view(&cb.a, self.next_id, idx);
         }
-        for (idx, (ca, cb)) in izip!(&mut ca, &mut cb).enumerate() {
-            self.receive_view(&mut ca.as_view().b, self.prev_id, idx);
-            self.receive_view(&mut cb.as_view().b, self.prev_id, idx);
+        for (idx, c) in c.iter_mut().enumerate() {
+            let mut ca = c.get_offset(0, self.chunk_size);
+            let mut cb = c.get_offset(1, self.chunk_size);
+            self.receive_view(&mut ca.b, self.prev_id, idx);
+            self.receive_view(&mut cb.b, self.prev_id, idx);
         }
         result::group_end().unwrap();
 
         for k in 1..K - 2 {
-            for (idx, (a1, b1, a2, b2, ca, cb)) in
-                izip!(&mut a1, &mut b1, &mut a2, &mut b2, &mut ca, &mut cb).enumerate()
+            for (idx, (a1, b1, a2, b2, c)) in
+                izip!(&mut a1, &mut b1, &mut a2, &mut b2, &mut c).enumerate()
             {
                 // Unused space used for temparary storage
                 let mut tmp_ca = a1.get_offset(0, self.chunk_size);
@@ -803,8 +820,8 @@ impl Circuits {
                 let mut b1 = b1.get_offset(k, self.chunk_size);
                 let mut b2 = b2.get_offset(k, self.chunk_size);
 
-                let ca = ca.as_view();
-                let cb = cb.as_view();
+                let ca = c.get_offset(0, self.chunk_size);
+                let cb = c.get_offset(1, self.chunk_size);
 
                 self.xor_assign_many(&mut a1, &ca, idx);
                 self.xor_assign_many(&mut b1, &ca, idx);
@@ -832,30 +849,31 @@ impl Circuits {
             }
             result::group_end().unwrap();
 
-            for (idx, (ca, cb, a1, a2)) in izip!(&mut ca, &mut cb, &a1, &a2).enumerate() {
+            for (idx, (c, a1, a2)) in izip!(&mut c, &a1, &a2).enumerate() {
+                let mut ca = c.get_offset(0, self.chunk_size);
+                let mut cb = c.get_offset(1, self.chunk_size);
+
                 // Unused space used for temparary storage
                 let tmp_ca = a1.get_offset(0, self.chunk_size);
                 let tmp_cb = a2.get_offset(0, self.chunk_size);
-                self.xor_assign_many(&mut ca.as_view(), &tmp_ca, idx);
-                self.xor_assign_many(&mut cb.as_view(), &tmp_cb, idx);
+                self.xor_assign_many(&mut ca, &tmp_ca, idx);
+                self.xor_assign_many(&mut cb, &tmp_cb, idx);
             }
         }
 
         // Final outputs
-        for (idx, (a1, a2, b1, b2, ca, cb)) in
-            izip!(&a1, &a2, &b1, &b2, &mut ca, &mut cb).enumerate()
-        {
-            let mut ca = ca.as_view();
+        for (idx, (a1, a2, b1, b2, c)) in izip!(&a1, &a2, &b1, &b2, &mut c).enumerate() {
+            let mut ca = c.get_offset(0, self.chunk_size);
             self.xor_assign_many(&mut ca, &a1.get_offset(K - 1, self.chunk_size), idx);
             self.xor_assign_many(&mut ca, &b1.get_offset(K - 2, self.chunk_size), idx);
 
-            let mut cb = cb.as_view();
+            let mut cb = c.get_offset(1, self.chunk_size);
             self.xor_assign_many(&mut cb, &a2.get_offset(K - 1, self.chunk_size), idx);
             self.xor_assign_many(&mut cb, &b2.get_offset(K - 2, self.chunk_size), idx);
         }
 
         // TODO no truncation and convert to bits yet!
-        (ca, cb)
+        c
     }
 
     fn transpose_pack_u32_with_len(
