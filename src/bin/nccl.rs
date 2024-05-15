@@ -62,8 +62,7 @@ async fn root(Path(device_id): Path<String>) -> String {
     IdWrapper(COMM_ID[device_id]).to_string()
 }
 
-#[tokio::main]
-async fn main() -> eyre::Result<()> {
+fn main() {
     let args = env::args().collect::<Vec<_>>();
     let n_devices = CudaDevice::count().unwrap() as usize;
     let party_id: usize = args[1].parse().unwrap();
