@@ -254,7 +254,7 @@ fn or_pre_test() {
         let rhs_b = random_vec(SIZE, &mut rng);
         let rand = random_vec(SIZE, &mut rng); // This should in a production also happen on the GPU
 
-        kernel::shared_and_pre(&mut res_a, &lhs_a, &lhs_b, &rhs_a, &rhs_b, &rand);
+        kernel::shared_or_pre(&mut res_a, &lhs_a, &lhs_b, &rhs_a, &rhs_b, &rand);
 
         // GPU
         let lhs_a_cuda = dev.htod_copy(lhs_a).unwrap();
