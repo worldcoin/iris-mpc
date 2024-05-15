@@ -193,44 +193,7 @@ __global__ void u32_transpose_pack_u64(U64 *out_a, U64 *out_b, U32 *in_a,
 // Performs the transpose for a and b in parallel
 // Overwrites the input!
 __global__ void u64_transpose_pack_u64(U64 *out_a, U64 *out_b, U64 *in_a,
-                                       U64 *in_b, int in_len, int out_len) {
-
-  extern __shared__ U64 transpose_buf[64 * 1024];
-  // in has size in_len = 64 * n
-  // out has size out_len, where each element is an array of n elements
-  // Thus out itslef has n * out_len elements (split into n arrays)
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
-
-  assert(in_len % 64 == 0);
-  assert(out_len <= 64);
-  int n = in_len / 64;
-
-  U64 *transposed = &transpose_buf[threadIdx.x * 64];
-  // Make each transpose in parallel
-  if (i < n) {
-    U64 *chunk = &in_a[i * 64];
-    for (U32 j = 0; j < 64; j++) {
-      transposed[j] = chunk[j];
-    }
-
-    transpose64x64(transposed);
-
-    for (U32 j = 0; j < out_len; j++) {
-      out_a[j * n + i] = transposed[j];
-    }
-  } else if (i < 2 * n) {
-    i -= n;
-    U64 *chunk = &in_b[i * 64];
-    for (U32 j = 0; j < 64; j++) {
-      transposed[j] = chunk[j];
-    }
-    transpose64x64(transposed);
-
-    for (U32 j = 0; j < out_len; j++) {
-      out_b[j * n + i] = transposed[j];
-    }
-  }
-}
+                                       U64 *in_b, int in_len, int out_len) {}
 
 __global__ void lift_mul_sub(U64 *mask, U16 *code) {
   U64 a;
@@ -350,7 +313,41 @@ extern "C" __global__ void shared_u64_transpose_pack_u64(U64 *out_a, U64 *out_b,
                                                          U64 *in_a, U64 *in_b,
                                                          int in_len,
                                                          int out_len) {
-  u64_transpose_pack_u64(out_a, out_b, in_a, in_b, in_len, out_len);
+  extern __shared__ U64 transpose_buf[64 * 1024];
+  // in has size in_len = 64 * n
+  // out has size out_len, where each element is an array of n elements
+  // Thus out itslef has n * out_len elements (split into n arrays)
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+  assert(in_len % 64 == 0);
+  assert(out_len <= 64);
+  int n = in_len / 64;
+
+  U64 *transposed = &transpose_buf[threadIdx.x * 64];
+  // Make each transpose in parallel
+  if (i < n) {
+    U64 *chunk = &in_a[i * 64];
+    for (U32 j = 0; j < 64; j++) {
+      transposed[j] = chunk[j];
+    }
+
+    transpose64x64(transposed);
+
+    for (U32 j = 0; j < out_len; j++) {
+      out_a[j * n + i] = transposed[j];
+    }
+  } else if (i < 2 * n) {
+    i -= n;
+    U64 *chunk = &in_b[i * 64];
+    for (U32 j = 0; j < 64; j++) {
+      transposed[j] = chunk[j];
+    }
+    transpose64x64(transposed);
+
+    for (U32 j = 0; j < out_len; j++) {
+      out_b[j * n + i] = transposed[j];
+    }
+  }
 }
 
 // Puts the results into mask_a, mask_b and x01
