@@ -31,3 +31,7 @@ criterion = "0.5"
 [[bench]]
 name = "chacha"
 harness = false
+
+[[bench]]
+name = "transpose"
+harness = false

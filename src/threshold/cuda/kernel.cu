@@ -202,8 +202,8 @@ __device__ void lift_mul_sub(U64 *mask, U32 *mask_corr1, U32 *mask_corr2,
   U64 corr1;
   *mask_corr1 %= B;
   *mask_corr2 %= B;
-  mul_lift_p(&corr1, &mask_corr1);
-  mul_lift_p(&corr1, &mask_corr2);
+  mul_lift_p(&corr1, mask_corr1);
+  mul_lift_p(&corr1, mask_corr2);
   *mask += P2K;
   *mask += P2K;
   *mask -= corr1;
@@ -295,7 +295,7 @@ extern "C" __global__ void shared_or_pre_assign(TYPE *lhs_a, TYPE *lhs_b,
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     U64 res_a;
-    or_pre_inner<TYPE>(&res_a[i], &lhs_a[i], &lhs_b[i], &rhs_a[i], &rhs_b[i],
+    or_pre_inner<TYPE>(&res_a, &lhs_a[i], &lhs_b[i], &rhs_a[i], &rhs_b[i],
                        &r[i]);
     lhs_a[i] = res_a;
   }
