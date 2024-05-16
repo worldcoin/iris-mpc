@@ -186,6 +186,7 @@ impl Kernels {
 
 struct Buffers {
     u64_64c_1: Option<Vec<ChunkShare<u64>>>,
+    u64_64c_2: Option<Vec<ChunkShare<u64>>>,
     u32_64c_1: Option<Vec<ChunkShare<u32>>>,
     u32_64c_2: Option<Vec<ChunkShare<u32>>>,
     u64_18c_1: Option<Vec<ChunkShare<u64>>>,
@@ -205,6 +206,7 @@ struct Buffers {
 impl Buffers {
     fn new(devices: &[Arc<CudaDevice>], chunk_size: usize) -> Self {
         let u64_64c_1 = Some(Self::allocate_buffer(chunk_size * 64, devices));
+        let u64_64c_2 = Some(Self::allocate_buffer(chunk_size * 64, devices));
 
         let u32_64c_1 = Some(Self::allocate_buffer(chunk_size * 64, devices));
         let u32_64c_2 = Some(Self::allocate_buffer(chunk_size * 64, devices));
@@ -221,12 +223,14 @@ impl Buffers {
         let u64_2c_1 = Some(Self::allocate_buffer(chunk_size * 2, devices));
 
         let u32_128c_1 = Some(Self::allocate_buffer(chunk_size * 128, devices));
+
         let single_u32_128c_1 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
         let single_u32_128c_2 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
         let single_u32_128c_3 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
 
         Buffers {
             u64_64c_1,
+            u64_64c_2,
             u32_64c_1,
             u32_64c_2,
             u64_18c_1,
@@ -297,6 +301,7 @@ impl Buffers {
     // TODO make debug_asserts after the testing
     fn check_buffers(&self) {
         assert!(self.u64_64c_1.is_some());
+        assert!(self.u64_64c_2.is_some());
         assert!(self.u32_64c_1.is_some());
         assert!(self.u32_64c_2.is_some());
         assert!(self.u64_18c_1.is_some());
@@ -806,13 +811,6 @@ impl Circuits {
                 .launch(self.cfg.to_owned(), (&x.a, &x.b, self.chunk_size as i32))
                 .unwrap();
         }
-    }
-
-    fn allocate_single_buffer<T>(&self, size: usize) -> Vec<CudaSlice<T>>
-    where
-        T: cudarc::driver::ValidAsZeroBits + cudarc::driver::DeviceRepr,
-    {
-        Buffers::allocate_single_buffer(size, &self.devs)
     }
 
     pub fn allocate_buffer<T>(&self, size: usize) -> Vec<ChunkShare<T>>
@@ -1366,33 +1364,17 @@ impl Circuits {
 
     pub fn extract_msb_sum_mod(
         &mut self,
-        x01_send: Vec<CudaSlice<u64>>,
+        x01: &[ChunkShare<u64>],
         x2: &[ChunkShare<u64>],
         result: &mut [ChunkShare<u64>],
     ) {
-        debug_assert_eq!(self.n_devices, x01_send.len());
+        debug_assert_eq!(self.n_devices, x01.len());
         debug_assert_eq!(self.n_devices, x2.len());
         debug_assert_eq!(self.n_devices, result.len());
 
-        // TODO the buffers should probably already be allocated
-        let x01_rec = self.allocate_single_buffer(self.chunk_size * 64);
-        let mut x01 = Vec::with_capacity(self.n_devices);
-
-        let now = Instant::now();
-        result::group_start().unwrap();
-        for (idx, x01_send) in x01_send.iter().enumerate() {
-            self.send(x01_send, self.next_id, idx);
-        }
-        for (idx, (x01_send, mut x01_rec)) in izip!(x01_send, x01_rec).enumerate() {
-            self.receive(&mut x01_rec, self.prev_id, idx);
-            x01.push(ChunkShare::new(x01_send, x01_rec));
-        }
-        result::group_end().unwrap();
-        self.send_recv_time += now.elapsed();
-
         // Transpose
         let now = Instant::now();
-        let x01 = self.transpose_pack_u64_with_len(&x01, Self::BITS);
+        let x01 = self.transpose_pack_u64_with_len(x01, Self::BITS);
         let x2 = self.transpose_pack_u64_with_len(x2, Self::BITS);
         println!("Time for transposes: {:?}", now.elapsed());
 
@@ -1603,16 +1585,14 @@ impl Circuits {
         &mut self,
         mask_lifted: &mut [ChunkShare<u64>],
         mask_correction: &[ChunkShare<u32>],
+        x01: &mut [ChunkShare<u64>],
         code: Vec<ChunkShare<u16>>,
-    ) -> Vec<CudaSlice<u64>> {
+    ) {
         debug_assert_eq!(self.n_devices, mask_lifted.len());
         debug_assert_eq!(self.n_devices, code.len());
 
-        // TODO the buffers should probably already be allocated
-        let mut x01 = self.allocate_single_buffer(self.chunk_size * 64);
-
         for (idx, (m, mc, c, x01)) in
-            izip!(mask_lifted, mask_correction, &code, &mut x01).enumerate()
+            izip!(mask_lifted, mask_correction, &code, x01.iter_mut()).enumerate()
         {
             // TODO this is just a placeholder
             let rand = self.devs[idx]
@@ -1625,7 +1605,7 @@ impl Circuits {
                     .launch(
                         self.cfg_inp.to_owned(),
                         (
-                            x01,
+                            &x01.a,
                             &m.a,
                             &m.b,
                             &mc.a,
@@ -1641,7 +1621,8 @@ impl Circuits {
             }
         }
 
-        x01
+        // Reshare
+        self.send_receive(x01);
     }
 
     // Input has size ChunkSize
@@ -1697,15 +1678,17 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, mask_dots.len());
 
         let mut x2 = Buffers::take_buffer(&mut self.buffers.u64_64c_1);
+        let mut x01 = Buffers::take_buffer(&mut self.buffers.u64_64c_2);
         let mut corrections = Buffers::take_buffer(&mut self.buffers.u32_128c_1);
 
         self.lift_p2k(mask_dots, &mut x2, &mut corrections);
-        let x01 = self.lift_mul_sub_split(&mut x2, &corrections, code_dots);
+        self.lift_mul_sub_split(&mut x2, &corrections, &mut x01, code_dots);
 
         let mut res = Buffers::take_buffer(&mut self.buffers.u64_37c_1);
-        self.extract_msb_sum_mod(x01, &x2, &mut res);
+        self.extract_msb_sum_mod(&x01, &x2, &mut res);
 
         Buffers::return_buffer(&mut self.buffers.u64_64c_1, x2);
+        Buffers::return_buffer(&mut self.buffers.u64_64c_2, x01);
         Buffers::return_buffer(&mut self.buffers.u32_128c_1, corrections);
         Buffers::return_buffer(&mut self.buffers.u64_37c_1, res);
         self.buffers.check_buffers();
