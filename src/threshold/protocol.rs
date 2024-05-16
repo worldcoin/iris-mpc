@@ -1521,9 +1521,6 @@ impl Circuits {
                 self.receive_view(&mut a.b, self.prev_id, idx);
             }
             result::group_end().unwrap();
-            for dev in self.devs.iter() {
-                dev.synchronize().unwrap();
-            }
             self.send_recv_time += now.elapsed();
 
             num += mod_;
