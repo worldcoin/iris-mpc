@@ -101,6 +101,8 @@ async fn main() -> eyre::Result<()> {
         Some(3000),
     );
 
+    println!("Codes Engines ready!");
+
     if party_id != 0 {
         thread::sleep(Duration::from_secs(10));
     }

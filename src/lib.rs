@@ -443,6 +443,8 @@ impl ShareDB {
                             .unwrap();
                     axum::serve(listener, app).await.unwrap();
                 });
+            } else {
+                thread::sleep(Duration::from_secs(10));
             }
 
             for i in 0..n_devices {
