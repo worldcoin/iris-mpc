@@ -52,6 +52,7 @@ fn open(party: &mut Circuits, res: &ChunkShare<u64>) -> bool {
     cudarc::nccl::result::group_start().unwrap();
     party.send_view(&res.b, party.next_id(), 0);
     party.receive_view(&mut res_helper.a, party.prev_id(), 0);
+    cudarc::nccl::result::group_end().unwrap();
 
     let dev = party.get_devices()[0].clone();
 
