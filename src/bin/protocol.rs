@@ -103,10 +103,6 @@ async fn main() -> eyre::Result<()> {
 
     println!("Codes Engines ready!");
 
-    if party_id != 0 {
-        thread::sleep(Duration::from_secs(10));
-    }
-
     let mut masks_engine = ShareDB::init(
         party_id,
         device_manager.clone(),

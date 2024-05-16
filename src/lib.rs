@@ -444,7 +444,7 @@ impl ShareDB {
                     axum::serve(listener, app).await.unwrap();
                 });
             } else {
-                thread::sleep(Duration::from_secs(10));
+                thread::sleep(Duration::from_secs(2));
             }
 
             for i in 0..n_devices {
