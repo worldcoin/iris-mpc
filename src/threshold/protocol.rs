@@ -184,11 +184,55 @@ impl Kernels {
     }
 }
 
-struct Buffers {}
+struct Buffers {
+    u64_64c: Option<Vec<ChunkShare<u64>>>,
+}
 
 impl Buffers {
-    fn new() -> Self {
-        Buffers {}
+    fn new(devices: &[Arc<CudaDevice>], chunk_size: usize) -> Self {
+        let u64_64c = Self::allocate_buffer(chunk_size * 64, devices);
+
+        Buffers {
+            u64_64c: Some(u64_64c),
+        }
+    }
+
+    fn allocate_single_buffer<T>(size: usize, devices: &[Arc<CudaDevice>]) -> Vec<CudaSlice<T>>
+    where
+        T: cudarc::driver::ValidAsZeroBits + cudarc::driver::DeviceRepr,
+    {
+        let mut res = Vec::with_capacity(devices.len());
+
+        for dev in devices.iter() {
+            res.push(dev.alloc_zeros::<T>(size).unwrap());
+        }
+        res
+    }
+
+    fn allocate_buffer<T>(size: usize, devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<T>>
+    where
+        T: cudarc::driver::ValidAsZeroBits + cudarc::driver::DeviceRepr,
+    {
+        let mut res = Vec::with_capacity(devices.len());
+
+        for dev in devices.iter() {
+            let a = dev.alloc_zeros::<T>(size).unwrap();
+            let b = dev.alloc_zeros::<T>(size).unwrap();
+            res.push(ChunkShare::new(a, b));
+        }
+        res
+    }
+
+    fn take_buffer<T>(inp: &mut Option<Vec<ChunkShare<T>>>) -> Vec<ChunkShare<T>> {
+        std::mem::take(inp).unwrap()
+    }
+
+    fn return_buffer<T>(des: &mut Option<Vec<ChunkShare<T>>>, src: Vec<ChunkShare<T>>) {
+        *des = Some(src);
+    }
+
+    fn check_buffers(&self) {
+        debug_assert!(self.u64_64c.is_some());
     }
 }
 
@@ -265,7 +309,7 @@ impl Circuits {
 
         let comms = Self::instantiate_network(peer_id, peer_url, server_port, &devs);
 
-        let buffers = Buffers::new();
+        let buffers = Buffers::new(&devs, chunk_size);
 
         Circuits {
             peer_id,
@@ -682,26 +726,14 @@ impl Circuits {
     where
         T: cudarc::driver::ValidAsZeroBits + cudarc::driver::DeviceRepr,
     {
-        let mut res = Vec::with_capacity(self.n_devices);
-
-        for dev in self.devs.iter() {
-            res.push(dev.alloc_zeros::<T>(size).unwrap());
-        }
-        res
+        Buffers::allocate_single_buffer(size, &self.devs)
     }
 
     pub fn allocate_buffer<T>(&self, size: usize) -> Vec<ChunkShare<T>>
     where
         T: cudarc::driver::ValidAsZeroBits + cudarc::driver::DeviceRepr,
     {
-        let mut res = Vec::with_capacity(self.n_devices);
-
-        for dev in self.devs.iter() {
-            let a = dev.alloc_zeros::<T>(size).unwrap();
-            let b = dev.alloc_zeros::<T>(size).unwrap();
-            res.push(ChunkShare::new(a, b));
-        }
-        res
+        Buffers::allocate_buffer(size, &self.devs)
     }
 
     fn ceil_log2(x: usize) -> usize {
@@ -965,11 +997,12 @@ impl Circuits {
     fn lift_p2k(
         &mut self,
         shares: Vec<ChunkShare<u16>>,
-    ) -> (Vec<ChunkShare<u64>>, Vec<ChunkShare<u32>>) {
+        xa: &mut [ChunkShare<u64>],
+    ) -> Vec<ChunkShare<u32>> {
         debug_assert_eq!(self.n_devices, shares.len());
+        debug_assert_eq!(self.n_devices, xa.len());
 
         // TODO the buffers should probably already be allocated
-        let mut xa = self.allocate_buffer::<u64>(self.chunk_size * 64);
         let mut xp = self.allocate_buffer::<u32>(self.chunk_size * 64);
         let mut xpp = self.allocate_buffer::<u32>(self.chunk_size * 64);
         let mut xp1 = self.allocate_buffer::<u64>(self.chunk_size * 18);
@@ -979,7 +1012,7 @@ impl Circuits {
         let mut xpp2 = self.allocate_buffer::<u64>(self.chunk_size * 18);
         let mut xpp3 = self.allocate_buffer::<u64>(self.chunk_size * 18);
 
-        self.split1(shares, &mut xa, &mut xp, &mut xpp);
+        self.split1(shares, xa, &mut xp, &mut xpp);
         let xp = self.transpose_pack_u32_with_len(xp, 18);
         let xpp = self.transpose_pack_u32_with_len(xpp, 18);
 
@@ -990,7 +1023,8 @@ impl Circuits {
 
         let injected = self.bit_inject_neg_ot(o);
 
-        (xa, injected)
+        // Result is in buffers u64_64c, corrections is returned
+        injected
     }
 
     // K is 18 in our case
@@ -1209,7 +1243,7 @@ impl Circuits {
 
     fn transpose_pack_u64_with_len(
         &mut self,
-        inp: Vec<ChunkShare<u64>>,
+        inp: &[ChunkShare<u64>],
         bitlen: usize,
     ) -> Vec<ChunkShare<u64>> {
         debug_assert_eq!(self.n_devices, inp.len());
@@ -1243,7 +1277,7 @@ impl Circuits {
     pub fn extract_msb_sum_mod(
         &mut self,
         x01_send: Vec<CudaSlice<u64>>,
-        x2: Vec<ChunkShare<u64>>,
+        x2: &[ChunkShare<u64>],
     ) -> Vec<ChunkShare<u64>> {
         debug_assert_eq!(self.n_devices, x01_send.len());
         debug_assert_eq!(self.n_devices, x2.len());
@@ -1265,7 +1299,7 @@ impl Circuits {
 
         // Transpose
         let now = Instant::now();
-        let x01 = self.transpose_pack_u64_with_len(x01, Self::BITS);
+        let x01 = self.transpose_pack_u64_with_len(&x01, Self::BITS);
         let x2 = self.transpose_pack_u64_with_len(x2, Self::BITS);
         println!("Time for transposes: {:?}", now.elapsed());
 
@@ -1571,10 +1605,15 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, code_dots.len());
         debug_assert_eq!(self.n_devices, mask_dots.len());
 
-        let (mut x2, correction) = self.lift_p2k(mask_dots);
+        let mut x2 = Buffers::take_buffer(&mut self.buffers.u64_64c);
+        let correction = self.lift_p2k(mask_dots, &mut x2);
         let x01 = self.lift_mul_sub_split(&mut x2, correction, code_dots);
-        self.extract_msb_sum_mod(x01, x2)
+        let res = self.extract_msb_sum_mod(x01, &x2);
         // Result is in the first bit of the input
+
+        Buffers::return_buffer(&mut self.buffers.u64_64c, x2);
+        self.buffers.check_buffers();
+        res
     }
 
     // input should be of size: n_devices * input_size
