@@ -5,8 +5,10 @@ use memmap2::{Mmap, MmapMut};
 pub fn write_mmap_file(file_path: &str, data: &[u16]) -> eyre::Result<()> {
     let file = OpenOptions::new()
         .create(true)
+        .read(true)
         .write(true)
         .open(file_path)?;
+    file.set_len((data.len() * std::mem::size_of::<u16>()) as u64)?;
     let mut mmap = unsafe { MmapMut::map_mut(&file)? };
     let bytes = cast_slice(data);
     mmap[..bytes.len()].copy_from_slice(bytes);

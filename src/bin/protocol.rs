@@ -27,8 +27,8 @@ const QUERIES: usize = 930;
 const RNG_SEED: u64 = 42;
 const N_BATCHES: usize = 10; // We expect 10 batches with each QUERIES/ROTATIONS
 const MAX_CONCURRENT_REQUESTS: usize = 20;
-const DB_CODE_FILE: &str = "~/tmp/codes";
-const DB_MASK_FILE: &str = "~/tmp/masks";
+const DB_CODE_FILE: &str = "codes.db";
+const DB_MASK_FILE: &str = "masks.db";
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
@@ -64,7 +64,7 @@ async fn main() -> eyre::Result<()> {
     } else {
         let codes_db = shamir_db[party_id]
             .db
-            .par_iter()
+            .iter()
             .flat_map(|entry| entry.code)
             .collect::<Vec<_>>();
 
@@ -77,7 +77,7 @@ async fn main() -> eyre::Result<()> {
     } else {
         let masks_db = shamir_db[party_id]
             .db
-            .par_iter()
+            .iter()
             .flat_map(|entry| entry.mask)
             .collect::<Vec<_>>();
 
