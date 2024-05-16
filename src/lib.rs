@@ -445,11 +445,6 @@ impl ShareDB {
                 });
             }
 
-            // If not the server, give it a few secs to start
-            if peer_id != 0 {
-                thread::sleep(Duration::from_secs(10));
-            }
-
             for i in 0..n_devices {
                 let id = if peer_id == 0 {
                     ids[i]
@@ -472,6 +467,11 @@ impl ShareDB {
                 comms.push(Arc::new(
                     Comm::from_rank(device_manager.device(i), peer_id, 3, id).unwrap(),
                 ));
+            }
+            
+            // If not the server, give it a few secs to start
+            if peer_id != 0 {
+                thread::sleep(Duration::from_secs(10));
             }
         }
 
