@@ -1,6 +1,7 @@
 pub mod device_manager;
 pub mod rng;
 pub mod setup;
+pub mod mmap;
 
 use std::{
     ffi::c_void,
