@@ -1227,9 +1227,6 @@ impl Circuits {
             x01.push(ChunkShare::new(x01_send, x01_rec));
         }
         result::group_end().unwrap();
-        for dev in self.devs.iter() {
-            dev.synchronize().unwrap();
-        }
         self.send_recv_time += now.elapsed();
 
         // Transpose
