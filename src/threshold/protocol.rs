@@ -191,6 +191,10 @@ struct Buffers {
     u32_64c_2: Option<Vec<ChunkShare<u32>>>,
     u64_2c_1: Option<Vec<ChunkShare<u64>>>,
     u32_128c_1: Option<Vec<ChunkShare<u32>>>,
+    u64_17c_1: Option<Vec<ChunkShare<u64>>>,
+    u64_17c_2: Option<Vec<ChunkShare<u64>>>,
+    u64_18c_1: Option<Vec<ChunkShare<u64>>>,
+    u64_18c_2: Option<Vec<ChunkShare<u64>>>,
     u64_36c_1: Option<Vec<ChunkShare<u64>>>,
     u64_36c_2: Option<Vec<ChunkShare<u64>>>,
     u64_37c_1: Option<Vec<ChunkShare<u64>>>,
@@ -206,6 +210,11 @@ impl Buffers {
 
         let u32_64c_1 = Some(Self::allocate_buffer(chunk_size * 64, devices));
         let u32_64c_2 = Some(Self::allocate_buffer(chunk_size * 64, devices));
+
+        let u64_17c_1 = Some(Self::allocate_buffer(chunk_size * 17, devices));
+        let u64_17c_2 = Some(Self::allocate_buffer(chunk_size * 17, devices));
+        let u64_18c_1 = Some(Self::allocate_buffer(chunk_size * 18, devices));
+        let u64_18c_2 = Some(Self::allocate_buffer(chunk_size * 18, devices));
 
         let u64_36c_1 = Some(Self::allocate_buffer(chunk_size * 36, devices));
         let u64_36c_2 = Some(Self::allocate_buffer(chunk_size * 36, devices));
@@ -224,6 +233,10 @@ impl Buffers {
             u64_64c_2,
             u32_64c_1,
             u32_64c_2,
+            u64_17c_1,
+            u64_17c_2,
+            u64_18c_1,
+            u64_18c_2,
             u64_36c_1,
             u64_36c_2,
             u64_37c_1,
@@ -291,6 +304,10 @@ impl Buffers {
         assert!(self.u64_64c_2.is_some());
         assert!(self.u32_64c_1.is_some());
         assert!(self.u32_64c_2.is_some());
+        assert!(self.u64_17c_1.is_some());
+        assert!(self.u64_17c_2.is_some());
+        assert!(self.u64_18c_1.is_some());
+        assert!(self.u64_18c_2.is_some());
         assert!(self.u64_36c_1.is_some());
         assert!(self.u64_36c_2.is_some());
         assert!(self.u64_37c_1.is_some());
@@ -1141,23 +1158,10 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, xb_2.len());
         debug_assert_eq!(self.n_devices, xb_3.len());
 
-        // Reuse some buffers for intermediate values
-        let mut s1 = Vec::with_capacity(self.n_devices);
-        let mut s2 = Vec::with_capacity(self.n_devices);
-        let mut c1 = Vec::with_capacity(self.n_devices);
-        let mut c2 = Vec::with_capacity(self.n_devices);
-        let buffer1 = Buffers::take_buffer(&mut self.buffers.u64_36c_1);
-        let buffer2 = Buffers::take_buffer(&mut self.buffers.u64_36c_2);
-        for (b1, b2) in izip!(&buffer1, &buffer2) {
-            let s1_ = b1.get_offset(0, K * self.chunk_size);
-            let s2_ = b1.get_offset(1, K * self.chunk_size);
-            let c1_ = b2.get_offset(0, (K - 1) * self.chunk_size);
-            let c2_ = b2.get_offset(1, (K - 1) * self.chunk_size);
-            s1.push(s1_);
-            s2.push(s2_);
-            c1.push(c1_);
-            c2.push(c2_);
-        }
+        let mut s1 = Buffers::take_buffer(&mut self.buffers.u64_18c_1);
+        let mut s2 = Buffers::take_buffer(&mut self.buffers.u64_18c_2);
+        let mut c1 = Buffers::take_buffer(&mut self.buffers.u64_17c_1);
+        let mut c2 = Buffers::take_buffer(&mut self.buffers.u64_17c_2);
 
         for (idx, (x1, x2, x3, y1, y2, y3, s1, s2, c1, c2)) in izip!(
             xa_1,
@@ -1176,39 +1180,39 @@ impl Circuits {
             // First full adder to get 2 * c1 and s1
             let x2x3 = x2;
             self.packed_xor_assign_many(x2x3, x3, K, idx);
-            self.packed_xor_many(x1, x2x3, s1, K, idx);
+            self.packed_xor_many(x1, x2x3, &mut s1.as_view(), K, idx);
             // 2 * c1 (No pop since we start at index 0 and the functions only compute whats required)
             let x1x3 = x1;
             self.packed_xor_assign_many(x1x3, x3, K - 1, idx);
-            self.packed_and_many_pre(x1x3, x2x3, c1, K - 1, idx);
+            self.packed_and_many_pre(x1x3, x2x3, &mut c1.as_view(), K - 1, idx);
 
             // Second full adder to get 2 * c2 and s2
             let y2y3 = y2;
             self.packed_xor_assign_many(y2y3, y3, K, idx);
-            self.packed_xor_many(y1, y2y3, s2, K, idx);
+            self.packed_xor_many(y1, y2y3, &mut s2.as_view(), K, idx);
             // 2 * c2 (No pop since we start at index 0 and the functions only compute whats required)
             let y1y3 = y1;
             self.packed_xor_assign_many(y1y3, y3, K - 1, idx);
-            self.packed_and_many_pre(y1y3, y2y3, c2, K - 1, idx);
+            self.packed_and_many_pre(y1y3, y2y3, &mut c2.as_view(), K - 1, idx);
         }
 
         // Send/Receive full adders
         let now = Instant::now();
         result::group_start().unwrap();
         for (idx, (c1, c2)) in izip!(&c1, &c2).enumerate() {
-            self.packed_and_many_send(c1, K - 1, idx);
-            self.packed_and_many_send(c2, K - 1, idx);
+            self.packed_and_many_send(&c1.as_view(), K - 1, idx);
+            self.packed_and_many_send(&c2.as_view(), K - 1, idx);
         }
         for (idx, (c1, c2)) in izip!(&mut c1, &mut c2).enumerate() {
-            self.packed_and_many_receive(c1, K - 1, idx);
-            self.packed_and_many_receive(c2, K - 1, idx);
+            self.packed_and_many_receive(&mut c1.as_view(), K - 1, idx);
+            self.packed_and_many_receive(&mut c2.as_view(), K - 1, idx);
         }
         result::group_end().unwrap();
         self.send_recv_time += now.elapsed();
 
         for (idx, (c1, c2, x3, y3)) in izip!(&mut c1, &mut c2, xa_3, xb_3).enumerate() {
-            self.packed_xor_assign_many(c1, x3, K - 1, idx);
-            self.packed_xor_assign_many(c2, y3, K - 1, idx);
+            self.packed_xor_assign_many(&mut c1.as_view(), x3, K - 1, idx);
+            self.packed_xor_assign_many(&mut c2.as_view(), y3, K - 1, idx);
         }
 
         // Add 2c + s via a ripple carry adder
@@ -1316,8 +1320,10 @@ impl Circuits {
             self.xor_assign_many(&mut cb, &b2.get_offset(K - 2, self.chunk_size), idx);
         }
 
-        Buffers::return_buffer(&mut self.buffers.u64_36c_1, buffer1);
-        Buffers::return_buffer(&mut self.buffers.u64_36c_2, buffer2);
+        Buffers::return_buffer(&mut self.buffers.u64_18c_1, a1);
+        Buffers::return_buffer(&mut self.buffers.u64_18c_2, a2);
+        Buffers::return_buffer(&mut self.buffers.u64_17c_1, b1);
+        Buffers::return_buffer(&mut self.buffers.u64_17c_2, b2);
     }
 
     fn transpose_pack_u32_with_len(
