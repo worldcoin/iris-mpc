@@ -9,7 +9,7 @@ atomic_float = "0.1"
 axum = "0.7.5"
 bytemuck = "1.15"
 cudarc = { git = "https://github.com/philsippl/cudarc.git", rev = "46bf544", features = [
-    "cuda-12020",
+    "cuda-12030",
 ] }
 eyre = "0.6.12"
 hex = "0.4.3"
