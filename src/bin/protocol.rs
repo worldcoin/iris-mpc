@@ -28,6 +28,8 @@ const MAX_CONCURRENT_REQUESTS: usize = 20;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
+
+    let start_time = Instant::now();
     // TODO
     let mut rng = StdRng::seed_from_u64(RNG_SEED);
     let seed0 = rng.gen::<[u32; 8]>();
@@ -106,6 +108,8 @@ async fn main() -> eyre::Result<()> {
         streams.push(tmp_streams);
         results.push(distance_comparator.prepare_results());
     }
+
+    println!("start took: {:?}", start_time.elapsed());
 
     // Entrypoint for incoming request
     let mut request_batches = vec![];

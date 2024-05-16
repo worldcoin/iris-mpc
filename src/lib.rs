@@ -449,7 +449,7 @@ impl ShareDB {
                     ids[i]
                 } else {
                     // If not the server, give it a few secs to start
-                    thread::sleep(Duration::from_secs(5));
+                    thread::sleep(Duration::from_secs(10));
 
                     let res = reqwest::blocking::get(format!(
                         "http://{}:{}/{}",
