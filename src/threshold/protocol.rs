@@ -1735,7 +1735,7 @@ impl Circuits {
             let b = dev0.htod_sync_copy(&b).unwrap();
 
             unsafe {
-                self.kernels[idx]
+                self.kernels[0]
                     .assign
                     .clone()
                     .launch(self.cfg.to_owned(), (&des.a, &des.b, &a, &b, 1))
