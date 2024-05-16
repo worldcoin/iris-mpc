@@ -49,10 +49,10 @@ fn to_gpu(a: &[u64], b: &[u64], devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<u
 fn open(party: &mut Circuits, res: &ChunkShare<u64>) -> bool {
     let res = res.get_offset(0, 1);
     let mut res_helper = res.get_offset(1, 1);
-    cudarc::nccl::result::group_start().unwrap();
+    cudarc::nccl::result::group_start().expect("group start should work");
     party.send_view(&res.b, party.next_id(), 0);
     party.receive_view(&mut res_helper.a, party.prev_id(), 0);
-    cudarc::nccl::result::group_end().unwrap();
+    cudarc::nccl::result::group_end().expect("group end should work");
 
     let dev = party.get_devices()[0].clone();
 
