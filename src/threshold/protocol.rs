@@ -343,8 +343,6 @@ impl Circuits {
             )
         }
         .unwrap();
-
-        self.devs[idx].synchronize().unwrap();
     }
 
     pub fn receive_view<T>(&mut self, receive: &mut CudaView<T>, peer_id: usize, idx: usize)
@@ -363,8 +361,6 @@ impl Circuits {
             )
         }
         .unwrap();
-
-        self.devs[idx].synchronize().unwrap();
     }
 
     fn send<T>(&mut self, send: &CudaSlice<T>, peer_id: usize, idx: usize)
