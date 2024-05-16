@@ -224,17 +224,17 @@ impl Buffers {
     }
 
     fn take_buffer<T>(inp: &mut Option<Vec<ChunkShare<T>>>) -> Vec<ChunkShare<T>> {
-        debug_assert!(inp.is_some());
+        assert!(inp.is_some());
         std::mem::take(inp).unwrap()
     }
 
     fn return_buffer<T>(des: &mut Option<Vec<ChunkShare<T>>>, src: Vec<ChunkShare<T>>) {
-        debug_assert!(des.is_none());
+        assert!(des.is_none());
         *des = Some(src);
     }
 
     fn check_buffers(&self) {
-        debug_assert!(self.u64_64c.is_some());
+        assert!(self.u64_64c.is_some());
     }
 }
 
