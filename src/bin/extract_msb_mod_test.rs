@@ -175,17 +175,14 @@ async fn main() -> eyre::Result<()> {
         party.lift_mul_sub_split(&mut x2, &correction, &mut x01, code_gpu);
         println!("lift time: {:?}", now.elapsed());
         party.extract_msb_sum_mod(&x01, &x2, &mut res);
+        party.synchronize_all();
         println!("extract time: {:?}", now.elapsed());
 
         let now = Instant::now();
         let result = open(&mut party, &res);
         party.return_result_buffer(res);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
-        println!("Send/Receive Time: {:?}", party.get_send_recv_time());
-        party.reset_send_recv_time();
 
-        println!("Communicating took: {:?}", party.get_send_recv_time());
-        party.reset_send_recv_time();
         let mut correct = true;
         for (i, (r, r_)) in izip!(&result, &real_result).enumerate() {
             if r != r_ {

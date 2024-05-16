@@ -143,7 +143,7 @@ fn open(party: &mut Circuits, x: &[ChunkShare<u64>]) -> Vec<u64> {
 }
 
 #[allow(clippy::assertions_on_constants)]
-#[tokio::main]
+#[tokio::main(worker_threads = 1)]
 async fn main() -> eyre::Result<()> {
     assert!(
         INPUTS_PER_GPU_SIZE % 64 == 0,
@@ -167,7 +167,7 @@ async fn main() -> eyre::Result<()> {
     println!("Random shared inputs generated!");
 
     // Get Circuit Party
-    let mut party = Circuits::new(party_id, INPUTS_PER_GPU_SIZE, url, Some(3000));
+    let mut party = Circuits::new(party_id, INPUTS_PER_GPU_SIZE, url, Some(3001));
     let devices = party.get_devices();
 
     // Import to GPU
@@ -183,6 +183,7 @@ async fn main() -> eyre::Result<()> {
 
         let now = Instant::now();
         party.compare_threshold_masked_many_fp(code_gpu, mask_gpu);
+        party.synchronize_all();
         println!("compute time: {:?}", now.elapsed());
 
         let res = party.take_result_buffer();
@@ -190,8 +191,6 @@ async fn main() -> eyre::Result<()> {
         let result = open(&mut party, &res);
         party.return_result_buffer(res);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
-        println!("Send/Receive Time: {:?}", party.get_send_recv_time());
-        party.reset_send_recv_time();
 
         let mut correct = true;
         for (i, (r, r_)) in izip!(&result, &real_result).enumerate() {

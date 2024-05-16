@@ -337,17 +337,15 @@ pub struct Circuits {
     comms: Vec<Rc<Comm>>,
     kernels: Vec<Kernels>,
     buffers: Buffers,
-    send_recv_time: Duration,
 }
 
 impl Circuits {
     const BITS: usize = 16 + B_BITS as usize;
 
-    pub fn get_send_recv_time(&self) -> Duration {
-        self.send_recv_time
-    }
-    pub fn reset_send_recv_time(&mut self) {
-        self.send_recv_time = Duration::from_secs(0);
+    pub fn synchronize_all(&self) {
+        for dev in self.devs.iter() {
+            dev.synchronize().unwrap();
+        }
     }
 
     pub fn new(
@@ -412,7 +410,6 @@ impl Circuits {
             comms,
             kernels,
             buffers,
-            send_recv_time: Duration::from_secs(0),
         }
     }
 
@@ -514,8 +511,6 @@ impl Circuits {
             )
         }
         .unwrap();
-
-        self.devs[idx].synchronize().unwrap();
     }
 
     pub fn receive_view<T>(&mut self, receive: &mut CudaView<T>, peer_id: usize, idx: usize)
@@ -534,8 +529,6 @@ impl Circuits {
             )
         }
         .unwrap();
-
-        self.devs[idx].synchronize().unwrap();
     }
 
     fn send<T>(&mut self, send: &CudaSlice<T>, peer_id: usize, idx: usize)
@@ -682,7 +675,6 @@ impl Circuits {
     fn send_receive(&mut self, res: &mut [ChunkShare<u64>]) {
         debug_assert_eq!(res.len(), self.n_devices);
 
-        let now = Instant::now();
         result::group_start().unwrap();
         for (idx, res) in res.iter().enumerate() {
             self.send(&res.a, self.next_id, idx);
@@ -691,13 +683,11 @@ impl Circuits {
             self.receive_view(&mut res.as_view().b, self.prev_id, idx);
         }
         result::group_end().unwrap();
-        self.send_recv_time += now.elapsed();
     }
 
     fn send_receive_view(&mut self, res: &mut [ChunkShareView<u64>]) {
         debug_assert_eq!(res.len(), self.n_devices);
 
-        let now = Instant::now();
         result::group_start().unwrap();
         for (idx, res) in res.iter().enumerate() {
             self.send_view(&res.a, self.next_id, idx);
@@ -706,7 +696,6 @@ impl Circuits {
             self.receive_view(&mut res.b, self.prev_id, idx);
         }
         result::group_end().unwrap();
-        self.send_recv_time += now.elapsed();
     }
 
     pub fn xor_assign_many(
@@ -964,14 +953,12 @@ impl Circuits {
             }
         }
 
-        let now = Instant::now();
         result::group_start().unwrap();
         for (idx, (m0, m1)) in izip!(&m0, &m1).enumerate() {
             self.send(m0, self.prev_id, idx);
             self.send(m1, self.prev_id, idx);
         }
         result::group_end().unwrap();
-        self.send_recv_time += now.elapsed();
 
         Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_1, m0);
         Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_2, m1);
@@ -987,7 +974,6 @@ impl Circuits {
         let mut m1 = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_2);
         let mut wc = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_3);
 
-        let now = Instant::now();
         result::group_start().unwrap();
         for (idx, (m0, m1, wc)) in izip!(&mut m0, &mut m1, &mut wc).enumerate() {
             self.receive(m0, self.next_id, idx);
@@ -995,7 +981,6 @@ impl Circuits {
             self.receive(m1, self.next_id, idx);
         }
         result::group_end().unwrap();
-        self.send_recv_time += now.elapsed();
 
         for (idx, (inp, res, m0, m1, wc)) in izip!(inp, outp.iter_mut(), &m0, &m1, &wc).enumerate()
         {
@@ -1026,13 +1011,11 @@ impl Circuits {
         }
 
         // Reshare to Helper
-        let now = Instant::now();
         result::group_start().unwrap();
         for (idx, res) in outp.iter().enumerate() {
             self.send(&res.b, self.prev_id, idx);
         }
         result::group_end().unwrap();
-        self.send_recv_time += now.elapsed();
 
         Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_1, m0);
         Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_2, m1);
@@ -1075,16 +1058,16 @@ impl Circuits {
             }
         }
 
-        let now = Instant::now();
         result::group_start().unwrap();
         for (idx, wc) in wc.iter().enumerate() {
             self.send(wc, self.next_id, idx);
         }
+        result::group_end().unwrap();
+        result::group_start().unwrap();
         for (idx, res) in outp.iter_mut().enumerate() {
             self.receive(&mut res.a, self.next_id, idx);
         }
         result::group_end().unwrap();
-        self.send_recv_time += now.elapsed();
 
         Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_3, wc);
     }
@@ -1219,7 +1202,6 @@ impl Circuits {
         }
 
         // Send/Receive full adders
-        let now = Instant::now();
         result::group_start().unwrap();
         for (idx, (c1, c2)) in izip!(&c1, &c2).enumerate() {
             self.packed_and_many_send(&c1.as_view(), K - 1, idx);
@@ -1230,7 +1212,6 @@ impl Circuits {
             self.packed_and_many_receive(&mut c2.as_view(), K - 1, idx);
         }
         result::group_end().unwrap();
-        self.send_recv_time += now.elapsed();
 
         for (idx, (c1, c2, x3, y3)) in izip!(&mut c1, &mut c2, xa_3, xb_3).enumerate() {
             self.packed_xor_assign_many(&mut c1.as_view(), x3, K - 1, idx);
@@ -1258,7 +1239,6 @@ impl Circuits {
         }
 
         // Send/Receive
-        let now = Instant::now();
         result::group_start().unwrap();
         for (idx, c) in c.iter().enumerate() {
             let ca = c.get_offset(0, self.chunk_size);
@@ -1273,7 +1253,6 @@ impl Circuits {
             self.receive_view(&mut cb.b, self.prev_id, idx);
         }
         result::group_end().unwrap();
-        self.send_recv_time += now.elapsed();
 
         for k in 1..K - 2 {
             for (idx, (a1, b1, a2, b2, c)) in
@@ -1300,7 +1279,6 @@ impl Circuits {
             }
 
             // Send/Receive
-            let now = Instant::now();
             result::group_start().unwrap();
             for (idx, (a1, a2)) in izip!(&a1, &a2).enumerate() {
                 // Unused space used for temparary storage
@@ -1317,7 +1295,6 @@ impl Circuits {
                 self.receive_view(&mut tmp_cb.b, self.prev_id, idx);
             }
             result::group_end().unwrap();
-            self.send_recv_time += now.elapsed();
 
             for (idx, (c, a1, a2)) in izip!(c.iter_mut(), &a1, &a2).enumerate() {
                 let mut ca = c.get_offset(0, self.chunk_size);
@@ -1616,7 +1593,6 @@ impl Circuits {
             self.and_many_pre(&xor, ov, &mut and, idx);
         }
         // Send/Receive
-        let now = Instant::now();
         result::group_start().unwrap();
         for (idx, xx) in x.iter().enumerate() {
             let and = xx.get_offset(Self::BITS, self.chunk_size);
@@ -1627,7 +1603,6 @@ impl Circuits {
             self.receive_view(&mut and.b, self.prev_id, idx);
         }
         result::group_end().unwrap();
-        self.send_recv_time += now.elapsed();
 
         for (idx, (xx, res_msb)) in izip!(x.iter(), &mut res_msb).enumerate() {
             let and = xx.get_offset(Self::BITS, self.chunk_size);
@@ -1709,7 +1684,6 @@ impl Circuits {
             }
 
             // Reshare
-            let now = Instant::now();
             result::group_start().unwrap();
             for (idx, bit) in bits.iter().enumerate() {
                 let a = bit.get_offset(0, num);
@@ -1720,7 +1694,6 @@ impl Circuits {
                 self.receive_view(&mut a.b, self.prev_id, idx);
             }
             result::group_end().unwrap();
-            self.send_recv_time += now.elapsed();
 
             num += mod_;
         }
