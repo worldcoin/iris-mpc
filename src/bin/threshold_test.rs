@@ -143,7 +143,7 @@ fn open(party: &mut Circuits, x: Vec<ChunkShare<u64>>) -> Vec<u64> {
 }
 
 #[allow(clippy::assertions_on_constants)]
-#[tokio::main]
+#[tokio::main(worker_threads = 1)]
 async fn main() -> eyre::Result<()> {
     assert!(
         INPUTS_PER_GPU_SIZE % 64 == 0,
