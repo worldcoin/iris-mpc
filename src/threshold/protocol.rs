@@ -3,8 +3,8 @@ use crate::{http_root, setup::shamir::P, threshold::cuda::PTX_SRC, IdWrapper};
 use axum::{routing::get, Router};
 use cudarc::{
     driver::{
-        CudaDevice, CudaFunction, CudaSlice, CudaView, DevicePtr, DeviceSlice, LaunchAsync,
-        LaunchConfig,
+        CudaDevice, CudaFunction, CudaSlice, CudaView, CudaViewMut, DevicePtr, DeviceSlice,
+        LaunchAsync, LaunchConfig,
     },
     nccl::{result, Comm, Id},
     nvrtc::{self, Ptx},
@@ -43,11 +43,23 @@ impl<T> ChunkShare<T> {
             b: self.b.slice(..),
         }
     }
+    pub fn as_view_mut(&mut self) -> ChunkShareViewMut<T> {
+        ChunkShareViewMut {
+            a: self.a.slice_mut(..),
+            b: self.b.slice_mut(..),
+        }
+    }
 
     pub fn get_offset(&self, i: usize, chunk_size: usize) -> ChunkShareView<T> {
         ChunkShareView {
             a: self.a.slice(i * chunk_size..(i + 1) * chunk_size),
             b: self.b.slice(i * chunk_size..(i + 1) * chunk_size),
+        }
+    }
+    pub fn get_offset_mut(&mut self, i: usize, chunk_size: usize) -> ChunkShareViewMut<T> {
+        ChunkShareViewMut {
+            a: self.a.slice_mut(i * chunk_size..(i + 1) * chunk_size),
+            b: self.b.slice_mut(i * chunk_size..(i + 1) * chunk_size),
         }
     }
 
@@ -60,6 +72,11 @@ impl<T> ChunkShare<T> {
         debug_assert_eq!(self.a.len(), self.b.len());
         self.a.len()
     }
+}
+
+pub struct ChunkShareViewMut<'a, T> {
+    pub a: CudaViewMut<'a, T>,
+    pub b: CudaViewMut<'a, T>,
 }
 
 impl<'a, T> ChunkShareView<'a, T> {
@@ -550,7 +567,7 @@ impl Circuits {
         &mut self,
         x1: &ChunkShareView<u64>,
         x2: &ChunkShareView<u64>,
-        res: &mut ChunkShareView<u64>,
+        res: &mut ChunkShareViewMut<u64>,
         // rand: &CudaView<u64>,
         bits: usize,
         idx: usize,
@@ -573,7 +590,7 @@ impl Circuits {
                 .launch(
                     cfg,
                     (
-                        &res.a,
+                        &mut res.a,
                         &x1.a,
                         &x1.b,
                         &x2.a,
@@ -1185,7 +1202,7 @@ impl Circuits {
             // 2 * c1 (No pop since we start at index 0 and the functions only compute whats required)
             let x1x3 = x1;
             self.packed_xor_assign_many(x1x3, x3, K - 1, idx);
-            self.packed_and_many_pre(x1x3, x2x3, &mut c1.as_view(), K - 1, idx);
+            self.packed_and_many_pre(x1x3, x2x3, &mut c1.as_view_mut(), K - 1, idx);
 
             // Second full adder to get 2 * c2 and s2
             let y2y3 = y2;
@@ -1194,7 +1211,7 @@ impl Circuits {
             // 2 * c2 (No pop since we start at index 0 and the functions only compute whats required)
             let y1y3 = y1;
             self.packed_xor_assign_many(y1y3, y3, K - 1, idx);
-            self.packed_and_many_pre(y1y3, y2y3, &mut c2.as_view(), K - 1, idx);
+            self.packed_and_many_pre(y1y3, y2y3, &mut c2.as_view_mut(), K - 1, idx);
         }
 
         // Send/Receive full adders
