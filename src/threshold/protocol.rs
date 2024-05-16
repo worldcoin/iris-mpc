@@ -194,6 +194,7 @@ struct Buffers {
     u64_18c_4: Option<Vec<ChunkShare<u64>>>,
     u64_18c_5: Option<Vec<ChunkShare<u64>>>,
     u64_18c_6: Option<Vec<ChunkShare<u64>>>,
+    u64_2c_1: Option<Vec<ChunkShare<u64>>>,
 }
 
 impl Buffers {
@@ -210,6 +211,8 @@ impl Buffers {
         let u64_18c_5 = Some(Self::allocate_buffer(chunk_size * 18, devices));
         let u64_18c_6 = Some(Self::allocate_buffer(chunk_size * 18, devices));
 
+        let u64_2c_1 = Some(Self::allocate_buffer(chunk_size * 2, devices));
+
         Buffers {
             u64_64c_1,
             u32_64c_1,
@@ -220,6 +223,7 @@ impl Buffers {
             u64_18c_4,
             u64_18c_5,
             u64_18c_6,
+            u64_2c_1,
         }
     }
 
@@ -272,6 +276,7 @@ impl Buffers {
         assert!(self.u64_18c_4.is_some());
         assert!(self.u64_18c_5.is_some());
         assert!(self.u64_18c_6.is_some());
+        assert!(self.u64_2c_1.is_some());
     }
 }
 
@@ -856,7 +861,7 @@ impl Circuits {
     }
 
     // TODO include randomness
-    fn bit_inject_neg_ot_sender(&mut self, inp: Vec<ChunkShare<u64>>) -> Vec<ChunkShare<u32>> {
+    fn bit_inject_neg_ot_sender(&mut self, inp: &[ChunkShare<u64>]) -> Vec<ChunkShare<u32>> {
         // TODO the buffers should probably already be allocated
         let mut res = self.allocate_buffer::<u32>(self.chunk_size * 2 * 64);
         let mut m0 = self.allocate_single_buffer::<u32>(self.chunk_size * 2 * 64);
@@ -914,7 +919,7 @@ impl Circuits {
     }
 
     // TODO include randomness
-    fn bit_inject_neg_ot_receiver(&mut self, inp: Vec<ChunkShare<u64>>) -> Vec<ChunkShare<u32>> {
+    fn bit_inject_neg_ot_receiver(&mut self, inp: &[ChunkShare<u64>]) -> Vec<ChunkShare<u32>> {
         // TODO the buffers should probably already be allocated
         let mut res = self.allocate_buffer::<u32>(self.chunk_size * 2 * 64);
         let mut m0 = self.allocate_single_buffer::<u32>(self.chunk_size * 2 * 64);
@@ -971,7 +976,7 @@ impl Circuits {
     }
 
     // TODO include randomness
-    fn bit_inject_neg_ot_helper(&mut self, inp: Vec<ChunkShare<u64>>) -> Vec<ChunkShare<u32>> {
+    fn bit_inject_neg_ot_helper(&mut self, inp: &[ChunkShare<u64>]) -> Vec<ChunkShare<u32>> {
         // TODO the buffers should probably already be allocated
         let mut res = self.allocate_buffer::<u32>(self.chunk_size * 2 * 64);
         let mut wc = self.allocate_single_buffer::<u32>(self.chunk_size * 2 * 64);
@@ -1022,7 +1027,7 @@ impl Circuits {
         res
     }
 
-    fn bit_inject_neg_ot(&mut self, inp: Vec<ChunkShare<u64>>) -> Vec<ChunkShare<u32>> {
+    fn bit_inject_neg_ot(&mut self, inp: &[ChunkShare<u64>]) -> Vec<ChunkShare<u32>> {
         match self.peer_id {
             0 => self.bit_inject_neg_ot_helper(inp),
             1 => self.bit_inject_neg_ot_receiver(inp),
@@ -1043,12 +1048,15 @@ impl Circuits {
 
         let mut xp = Buffers::take_buffer(&mut self.buffers.u32_64c_1);
         let mut xpp = Buffers::take_buffer(&mut self.buffers.u32_64c_2);
+
         self.split1(shares, xa, &mut xp, &mut xpp);
         let xp_ = self.transpose_pack_u32_with_len(&xp, 18);
         let xpp_ = self.transpose_pack_u32_with_len(&xpp, 18);
+
         Buffers::return_buffer(&mut self.buffers.u32_64c_1, xp);
         Buffers::return_buffer(&mut self.buffers.u32_64c_2, xpp);
 
+        let mut c = Buffers::take_buffer(&mut self.buffers.u64_2c_1);
         let mut xp1 = Buffers::take_buffer(&mut self.buffers.u64_18c_1);
         let mut xp2 = Buffers::take_buffer(&mut self.buffers.u64_18c_2);
         let mut xp3 = Buffers::take_buffer(&mut self.buffers.u64_18c_3);
@@ -1058,8 +1066,10 @@ impl Circuits {
 
         self.split2(xp_, &mut xp1, &mut xp2, &mut xp3);
         self.split2(xpp_, &mut xpp1, &mut xpp2, &mut xpp3);
-        let o = self.binary_add_3_get_msb_twice::<18>(&xp1, &xp2, &xp3, &xpp1, &xpp2, &xpp3);
+        self.binary_add_3_get_msb_twice::<18>(&mut c, &xp1, &xp2, &xp3, &xpp1, &xpp2, &xpp3);
+        let injected = self.bit_inject_neg_ot(&c);
 
+        Buffers::return_buffer(&mut self.buffers.u64_2c_1, c);
         Buffers::return_buffer(&mut self.buffers.u64_18c_1, xp1);
         Buffers::return_buffer(&mut self.buffers.u64_18c_2, xp2);
         Buffers::return_buffer(&mut self.buffers.u64_18c_3, xp3);
@@ -1067,23 +1077,24 @@ impl Circuits {
         Buffers::return_buffer(&mut self.buffers.u64_18c_5, xpp2);
         Buffers::return_buffer(&mut self.buffers.u64_18c_6, xpp3);
 
-        let injected = self.bit_inject_neg_ot(o);
-
         // Result is in buffers u64_64c, corrections is returned
         injected
     }
 
     // K is 18 in our case
     // requires 66 * n_devices * chunk_size random u64 elements
+    #[allow(clippy::too_many_arguments)]
     fn binary_add_3_get_msb_twice<const K: usize>(
         &mut self,
+        c: &mut [ChunkShare<u64>],
         xa_1: &[ChunkShare<u64>],
         xa_2: &[ChunkShare<u64>],
         xa_3: &[ChunkShare<u64>],
         xb_1: &[ChunkShare<u64>],
         xb_2: &[ChunkShare<u64>],
         xb_3: &[ChunkShare<u64>],
-    ) -> Vec<ChunkShare<u64>> {
+    ) {
+        debug_assert_eq!(self.n_devices, c.len());
         debug_assert_eq!(self.n_devices, xa_1.len());
         debug_assert_eq!(self.n_devices, xa_2.len());
         debug_assert_eq!(self.n_devices, xa_3.len());
@@ -1096,7 +1107,7 @@ impl Circuits {
         let mut s2 = self.allocate_buffer::<u64>(self.chunk_size * K);
         let mut c1 = self.allocate_buffer::<u64>(self.chunk_size * (K - 1));
         let mut c2 = self.allocate_buffer::<u64>(self.chunk_size * (K - 1));
-        let mut c = self.allocate_buffer::<u64>(self.chunk_size * 2); // Combined buffer for the two individual results (easier bitinject then)
+        let mut c = self.allocate_buffer::<u64>(self.chunk_size * 2);
 
         for (idx, (x1, x2, x3, y1, y2, y3, s1, s2, c1, c2)) in
             izip!(xa_1, xa_2, xa_3, xb_1, xb_2, xb_3, &mut s1, &mut s2, &mut c1, &mut c2)
@@ -1250,8 +1261,6 @@ impl Circuits {
             self.xor_assign_many(&mut cb, &a2.get_offset(K - 1, self.chunk_size), idx);
             self.xor_assign_many(&mut cb, &b2.get_offset(K - 2, self.chunk_size), idx);
         }
-
-        c
     }
 
     fn transpose_pack_u32_with_len(
