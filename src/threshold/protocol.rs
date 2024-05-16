@@ -1718,20 +1718,29 @@ impl Circuits {
 
     // TODO is this the best we can do?
     fn collect_graphic_result(&mut self, bits: &mut [ChunkShareView<u64>]) {
+        // TODO also precompute?
+        let cfg = Self::launch_config_from_elements_and_threads(1, DEFAULT_LAUNCH_CONFIG_THREADS);
+
         debug_assert!(self.n_devices <= self.chunk_size);
         let dev0 = &self.devs[0];
         let bit0 = &bits[0];
         for (idx, (dev, bit)) in izip!(self.get_devices(), bits.iter()).enumerate().skip(1) {
             let src = bit.get_offset(0, 1);
-            let mut des = bit0.get_offset(idx, 1);
+            let des = bit0.get_offset(idx, 1);
 
             let a = dev.dtoh_sync_copy(&src.a).unwrap();
             let b = dev.dtoh_sync_copy(&src.b).unwrap();
 
             let a = dev0.htod_sync_copy(&a).unwrap();
             let b = dev0.htod_sync_copy(&b).unwrap();
-            des.a = a.slice(..);
-            des.b = b.slice(..);
+
+            unsafe {
+                self.kernels[idx]
+                    .assign
+                    .clone()
+                    .launch(self.cfg.to_owned(), (&des.a, &des.b, &a, &b, 1))
+                    .unwrap();
+            }
         }
     }
 
