@@ -822,9 +822,6 @@ impl Circuits {
             self.receive(m1, self.next_id, idx);
         }
         result::group_end().unwrap();
-        for dev in self.devs.iter() {
-            dev.synchronize().unwrap();
-        }
         self.send_recv_time += now.elapsed();
 
         for (idx, (inp, res, m0, m1, wc)) in izip!(inp, &mut res, &m0, &m1, &wc).enumerate() {
