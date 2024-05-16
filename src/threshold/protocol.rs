@@ -498,6 +498,9 @@ impl Circuits {
             self.receive_view(&mut res.as_view().b, self.prev_id, idx);
         }
         result::group_end().unwrap();
+        for dev in self.devs.iter() {
+            dev.synchronize().unwrap();
+        }
         self.send_recv_time += now.elapsed();
     }
 
@@ -513,6 +516,9 @@ impl Circuits {
             self.receive_view(&mut res.b, self.prev_id, idx);
         }
         result::group_end().unwrap();
+        for dev in self.devs.iter() {
+            dev.synchronize().unwrap();
+        }
         self.send_recv_time += now.elapsed();
     }
 
@@ -801,6 +807,9 @@ impl Circuits {
             self.send(m1, self.prev_id, idx);
         }
         result::group_end().unwrap();
+        for dev in self.devs.iter() {
+            dev.synchronize().unwrap();
+        }
         self.send_recv_time += now.elapsed();
 
         res
@@ -822,6 +831,9 @@ impl Circuits {
             self.receive(m1, self.next_id, idx);
         }
         result::group_end().unwrap();
+        for dev in self.devs.iter() {
+            dev.synchronize().unwrap();
+        }
         self.send_recv_time += now.elapsed();
 
         for (idx, (inp, res, m0, m1, wc)) in izip!(inp, &mut res, &m0, &m1, &wc).enumerate() {
@@ -858,6 +870,9 @@ impl Circuits {
             self.send(&res.b, self.prev_id, idx);
         }
         result::group_end().unwrap();
+        for dev in self.devs.iter() {
+            dev.synchronize().unwrap();
+        }
         self.send_recv_time += now.elapsed();
 
         res
@@ -910,6 +925,9 @@ impl Circuits {
             self.receive(&mut res.a, self.next_id, idx);
         }
         result::group_end().unwrap();
+        for dev in self.devs.iter() {
+            dev.synchronize().unwrap();
+        }
         self.send_recv_time += now.elapsed();
 
         res
@@ -1023,6 +1041,9 @@ impl Circuits {
             self.packed_and_many_receive(&mut c2.as_view(), K - 1, idx);
         }
         result::group_end().unwrap();
+        for dev in self.devs.iter() {
+            dev.synchronize().unwrap();
+        }
         self.send_recv_time += now.elapsed();
 
         for (idx, (c1, c2, x3, y3)) in izip!(&mut c1, &mut c2, &xa_3, &xb_3).enumerate() {
@@ -1066,6 +1087,9 @@ impl Circuits {
             self.receive_view(&mut cb.b, self.prev_id, idx);
         }
         result::group_end().unwrap();
+        for dev in self.devs.iter() {
+            dev.synchronize().unwrap();
+        }
         self.send_recv_time += now.elapsed();
 
         for k in 1..K - 2 {
@@ -1110,6 +1134,9 @@ impl Circuits {
                 self.receive_view(&mut tmp_cb.b, self.prev_id, idx);
             }
             result::group_end().unwrap();
+            for dev in self.devs.iter() {
+                dev.synchronize().unwrap();
+            }
             self.send_recv_time += now.elapsed();
 
             for (idx, (c, a1, a2)) in izip!(&mut c, &a1, &a2).enumerate() {
@@ -1225,6 +1252,9 @@ impl Circuits {
             x01.push(ChunkShare::new(x01_send, x01_rec));
         }
         result::group_end().unwrap();
+        for dev in self.devs.iter() {
+            dev.synchronize().unwrap();
+        }
         self.send_recv_time += now.elapsed();
 
         // Transpose
@@ -1426,6 +1456,9 @@ impl Circuits {
             self.receive_view(&mut and.b, self.prev_id, idx);
         }
         result::group_end().unwrap();
+        for dev in self.devs.iter() {
+            dev.synchronize().unwrap();
+        }
         self.send_recv_time += now.elapsed();
 
         for (idx, (xx, res_msb)) in izip!(x.iter(), &mut res_msb).enumerate() {
@@ -1519,6 +1552,9 @@ impl Circuits {
                 self.receive_view(&mut a.b, self.prev_id, idx);
             }
             result::group_end().unwrap();
+            for dev in self.devs.iter() {
+                dev.synchronize().unwrap();
+            }
             self.send_recv_time += now.elapsed();
 
             num += mod_;
