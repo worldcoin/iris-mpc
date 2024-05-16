@@ -196,6 +196,9 @@ struct Buffers {
     u64_18c_6: Option<Vec<ChunkShare<u64>>>,
     u64_2c_1: Option<Vec<ChunkShare<u64>>>,
     u32_128c_1: Option<Vec<ChunkShare<u32>>>,
+    single_u32_128c_1: Option<Vec<CudaSlice<u32>>>,
+    single_u32_128c_2: Option<Vec<CudaSlice<u32>>>,
+    single_u32_128c_3: Option<Vec<CudaSlice<u32>>>,
 }
 
 impl Buffers {
@@ -215,6 +218,9 @@ impl Buffers {
         let u64_2c_1 = Some(Self::allocate_buffer(chunk_size * 2, devices));
 
         let u32_128c_1 = Some(Self::allocate_buffer(chunk_size * 128, devices));
+        let single_u32_128c_1 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
+        let single_u32_128c_2 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
+        let single_u32_128c_3 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
 
         Buffers {
             u64_64c_1,
@@ -228,6 +234,9 @@ impl Buffers {
             u64_18c_6,
             u64_2c_1,
             u32_128c_1,
+            single_u32_128c_1,
+            single_u32_128c_2,
+            single_u32_128c_3,
         }
     }
 
@@ -270,6 +279,18 @@ impl Buffers {
     }
 
     // TODO make debug_asserts after the testing
+    fn take_single_buffer<T>(inp: &mut Option<Vec<CudaSlice<T>>>) -> Vec<CudaSlice<T>> {
+        assert!(inp.is_some());
+        std::mem::take(inp).unwrap()
+    }
+
+    // TODO make debug_asserts after the testing
+    fn return_single_buffer<T>(des: &mut Option<Vec<CudaSlice<T>>>, src: Vec<CudaSlice<T>>) {
+        assert!(des.is_none());
+        *des = Some(src);
+    }
+
+    // TODO make debug_asserts after the testing
     fn check_buffers(&self) {
         assert!(self.u64_64c_1.is_some());
         assert!(self.u32_64c_1.is_some());
@@ -282,6 +303,9 @@ impl Buffers {
         assert!(self.u64_18c_6.is_some());
         assert!(self.u64_2c_1.is_some());
         assert!(self.u32_128c_1.is_some());
+        assert!(self.single_u32_128c_1.is_some());
+        assert!(self.single_u32_128c_2.is_some());
+        assert!(self.single_u32_128c_3.is_some());
     }
 }
 
@@ -867,9 +891,8 @@ impl Circuits {
 
     // TODO include randomness
     fn bit_inject_neg_ot_sender(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u32>]) {
-        // TODO the buffers should probably already be allocated
-        let mut m0 = self.allocate_single_buffer::<u32>(self.chunk_size * 2 * 64);
-        let mut m1 = self.allocate_single_buffer::<u32>(self.chunk_size * 2 * 64);
+        let mut m0 = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_1);
+        let mut m1 = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_2);
 
         for (idx, (inp, res, m0, m1)) in izip!(inp, outp, &mut m0, &mut m1).enumerate() {
             // TODO this is just a placeholder
@@ -918,6 +941,9 @@ impl Circuits {
         }
         result::group_end().unwrap();
         self.send_recv_time += now.elapsed();
+
+        Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_1, m0);
+        Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_2, m1);
     }
 
     // TODO include randomness
@@ -926,10 +952,9 @@ impl Circuits {
         inp: &[ChunkShare<u64>],
         outp: &mut [ChunkShare<u32>],
     ) {
-        // TODO the buffers should probably already be allocated
-        let mut m0 = self.allocate_single_buffer::<u32>(self.chunk_size * 2 * 64);
-        let mut m1 = self.allocate_single_buffer::<u32>(self.chunk_size * 2 * 64);
-        let mut wc = self.allocate_single_buffer::<u32>(self.chunk_size * 2 * 64);
+        let mut m0 = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_1);
+        let mut m1 = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_2);
+        let mut wc = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_2);
 
         let now = Instant::now();
         result::group_start().unwrap();
@@ -977,12 +1002,15 @@ impl Circuits {
         }
         result::group_end().unwrap();
         self.send_recv_time += now.elapsed();
+
+        Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_1, m0);
+        Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_2, m1);
+        Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_3, wc);
     }
 
     // TODO include randomness
     fn bit_inject_neg_ot_helper(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u32>]) {
-        // TODO the buffers should probably already be allocated
-        let mut wc = self.allocate_single_buffer::<u32>(self.chunk_size * 2 * 64);
+        let mut wc = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_2);
 
         for (idx, (inp, res, wc)) in izip!(inp, outp.iter_mut(), &mut wc).enumerate() {
             // TODO this is just a placeholder
@@ -1018,14 +1046,16 @@ impl Circuits {
 
         let now = Instant::now();
         result::group_start().unwrap();
-        for (idx, wc) in wc.into_iter().enumerate() {
-            self.send(&wc, self.next_id, idx);
+        for (idx, wc) in wc.iter().enumerate() {
+            self.send(wc, self.next_id, idx);
         }
         for (idx, res) in outp.iter_mut().enumerate() {
             self.receive(&mut res.a, self.next_id, idx);
         }
         result::group_end().unwrap();
         self.send_recv_time += now.elapsed();
+
+        Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_3, wc);
     }
 
     fn bit_inject_neg_ot(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u32>]) {
