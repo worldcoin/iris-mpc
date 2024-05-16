@@ -56,9 +56,9 @@ fn open(party: &mut Circuits, res: &ChunkShare<u64>) -> bool {
 
     let dev = party.get_devices()[0].clone();
 
-    let a = dev.dtoh_sync_copy(&res.a).unwrap();
-    let b = dev.dtoh_sync_copy(&res.b).unwrap();
-    let c = dev.dtoh_sync_copy(&res_helper.a).unwrap();
+    let a = dev.dtoh_sync_copy(&res.a).expect("copy a works");
+    let b = dev.dtoh_sync_copy(&res.b).expect("copy b works");
+    let c = dev.dtoh_sync_copy(&res_helper.a).expect("copy c works");
     assert_eq!(a.len(), 1);
     assert_eq!(b.len(), 1);
     assert_eq!(c.len(), 1);
