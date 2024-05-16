@@ -4,7 +4,7 @@ use memmap2::{Mmap, MmapMut};
 
 pub fn write_mmap_file(file_path: &str, data: &[u16]) -> eyre::Result<()> {
     let file = OpenOptions::new()
-        .read(true)
+        .create(true)
         .write(true)
         .open(file_path)?;
     let mut mmap = unsafe { MmapMut::map_mut(&file)? };
