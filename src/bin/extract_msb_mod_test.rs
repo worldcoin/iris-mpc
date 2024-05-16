@@ -97,7 +97,7 @@ fn real_result_msb(input: Vec<u16>) -> Vec<u64> {
     pack_with_device_padding(res)
 }
 
-fn open(party: &mut Circuits, x: Vec<ChunkShare<u64>>) -> Vec<u64> {
+fn open(party: &mut Circuits, x: &[ChunkShare<u64>]) -> Vec<u64> {
     let n_devices = x.len();
     let mut a = Vec::with_capacity(n_devices);
     let mut b = Vec::with_capacity(n_devices);
@@ -169,14 +169,16 @@ async fn main() -> eyre::Result<()> {
         let correction = party.allocate_buffer::<u32>(INPUTS_PER_GPU_SIZE * 2);
         let code_gpu = code_gpu.clone();
 
+        let mut res = party.take_result_buffer();
         let now = Instant::now();
         let x01 = party.lift_mul_sub_split(&mut x2, &correction, code_gpu);
         println!("lift time: {:?}", now.elapsed());
-        let result = party.extract_msb_sum_mod(x01, &x2);
+        party.extract_msb_sum_mod(x01, &x2, &mut res);
         println!("extract time: {:?}", now.elapsed());
 
         let now = Instant::now();
-        let result = open(&mut party, result);
+        let result = open(&mut party, &res);
+        party.return_result_buffer(res);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
         println!("Send/Receive Time: {:?}", party.get_send_recv_time());
         party.reset_send_recv_time();

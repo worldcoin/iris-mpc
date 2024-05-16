@@ -196,6 +196,7 @@ struct Buffers {
     u64_18c_6: Option<Vec<ChunkShare<u64>>>,
     u64_2c_1: Option<Vec<ChunkShare<u64>>>,
     u32_128c_1: Option<Vec<ChunkShare<u32>>>,
+    u64_37c_1: Option<Vec<ChunkShare<u64>>>,
     single_u32_128c_1: Option<Vec<CudaSlice<u32>>>,
     single_u32_128c_2: Option<Vec<CudaSlice<u32>>>,
     single_u32_128c_3: Option<Vec<CudaSlice<u32>>>,
@@ -215,6 +216,8 @@ impl Buffers {
         let u64_18c_5 = Some(Self::allocate_buffer(chunk_size * 18, devices));
         let u64_18c_6 = Some(Self::allocate_buffer(chunk_size * 18, devices));
 
+        let u64_37c_1 = Some(Self::allocate_buffer(chunk_size * 37, devices));
+
         let u64_2c_1 = Some(Self::allocate_buffer(chunk_size * 2, devices));
 
         let u32_128c_1 = Some(Self::allocate_buffer(chunk_size * 128, devices));
@@ -232,6 +235,7 @@ impl Buffers {
             u64_18c_4,
             u64_18c_5,
             u64_18c_6,
+            u64_37c_1,
             u64_2c_1,
             u32_128c_1,
             single_u32_128c_1,
@@ -301,6 +305,7 @@ impl Buffers {
         assert!(self.u64_18c_4.is_some());
         assert!(self.u64_18c_5.is_some());
         assert!(self.u64_18c_6.is_some());
+        assert!(self.u64_37c_1.is_some());
         assert!(self.u64_2c_1.is_some());
         assert!(self.u32_128c_1.is_some());
         assert!(self.single_u32_128c_1.is_some());
@@ -400,6 +405,14 @@ impl Circuits {
             buffers,
             send_recv_time: Duration::from_secs(0),
         }
+    }
+
+    pub fn take_result_buffer(&mut self) -> Vec<ChunkShare<u64>> {
+        Buffers::take_buffer(&mut self.buffers.u64_37c_1)
+    }
+
+    pub fn return_result_buffer(&mut self, src: Vec<ChunkShare<u64>>) {
+        Buffers::return_buffer(&mut self.buffers.u64_37c_1, src);
     }
 
     pub fn instantiate_network(
@@ -1355,9 +1368,11 @@ impl Circuits {
         &mut self,
         x01_send: Vec<CudaSlice<u64>>,
         x2: &[ChunkShare<u64>],
-    ) -> Vec<ChunkShare<u64>> {
+        result: &mut [ChunkShare<u64>],
+    ) {
         debug_assert_eq!(self.n_devices, x01_send.len());
         debug_assert_eq!(self.n_devices, x2.len());
+        debug_assert_eq!(self.n_devices, result.len());
 
         // TODO the buffers should probably already be allocated
         let x01_rec = self.allocate_single_buffer(self.chunk_size * 64);
@@ -1382,15 +1397,14 @@ impl Circuits {
         println!("Time for transposes: {:?}", now.elapsed());
 
         let now = Instant::now();
-        let mut sum = self.binary_add_two(x01, x2);
+        self.binary_add_two(x01, x2, result);
         println!("Time for binary_add_two: {:?}", now.elapsed());
 
         let now = Instant::now();
-        self.extraxt_msb_mod_p2k_of_sum(&mut sum);
+        self.extraxt_msb_mod_p2k_of_sum(result);
         println!("Time for extract msb: {:?}", now.elapsed());
 
-        // Result is in the first bit of the output
-        sum
+        // Result is in the first bit of result
     }
 
     // requires 36 * n_devices * chunk_size random u64 elements
@@ -1398,9 +1412,11 @@ impl Circuits {
         &mut self,
         x1: Vec<ChunkShare<u64>>,
         x2: Vec<ChunkShare<u64>>,
+        s: &mut [ChunkShare<u64>],
     ) -> Vec<ChunkShare<u64>> {
         debug_assert_eq!(self.n_devices, x1.len());
         debug_assert_eq!(self.n_devices, x2.len());
+        debug_assert_eq!(self.n_devices, s.len());
 
         // TODO the buffers should probably already be allocated
         // Result with additional bit for overflow
@@ -1675,12 +1691,12 @@ impl Circuits {
     }
 
     // input should be of size: n_devices * input_size
-    // Result is in res_msb, which is the first bit of the input
+    // Result is in the first bit of res u64_37c_1
     pub fn compare_threshold_masked_many_fp(
         &mut self,
         code_dots: Vec<ChunkShare<u16>>,
         mask_dots: Vec<ChunkShare<u16>>,
-    ) -> Vec<ChunkShare<u64>> {
+    ) {
         debug_assert_eq!(self.n_devices, code_dots.len());
         debug_assert_eq!(self.n_devices, mask_dots.len());
 
@@ -1689,14 +1705,16 @@ impl Circuits {
 
         self.lift_p2k(mask_dots, &mut x2, &mut corrections);
         let x01 = self.lift_mul_sub_split(&mut x2, &corrections, code_dots);
-        let res = self.extract_msb_sum_mod(x01, &x2);
+
+        let mut res = Buffers::take_buffer(&mut self.buffers.u64_37c_1);
+        self.extract_msb_sum_mod(x01, &x2, &mut res);
 
         Buffers::return_buffer(&mut self.buffers.u64_64c_1, x2);
         Buffers::return_buffer(&mut self.buffers.u32_128c_1, corrections);
+        Buffers::return_buffer(&mut self.buffers.u64_37c_1, res);
         self.buffers.check_buffers();
 
-        // Result is in the first bit of res
-        res
+        // Result is in the first bit of res u64_37c_1
     }
 
     // input should be of size: n_devices * input_size
@@ -1706,7 +1724,8 @@ impl Circuits {
         code_dots: Vec<ChunkShare<u16>>,
         mask_dots: Vec<ChunkShare<u16>>,
     ) {
-        let result = self.compare_threshold_masked_many_fp(code_dots, mask_dots);
+        self.compare_threshold_masked_many_fp(code_dots, mask_dots);
+        let result = self.take_result_buffer();
         let mut bits = Vec::with_capacity(self.n_devices);
         for r in result.iter() {
             // Result is in the first bit of the input
@@ -1717,6 +1736,8 @@ impl Circuits {
         // Result is in lowest u64 bits
 
         // TODO the or tree is still missing
-        todo!()
+        todo!();
+        self.return_result_buffer(result);
+        self.buffers.check_buffers();
     }
 }

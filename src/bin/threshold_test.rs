@@ -106,7 +106,7 @@ fn real_result_msb(code_input: Vec<u16>, mask_input: Vec<u16>) -> Vec<u64> {
     pack_with_device_padding(res)
 }
 
-fn open(party: &mut Circuits, x: Vec<ChunkShare<u64>>) -> Vec<u64> {
+fn open(party: &mut Circuits, x: &[ChunkShare<u64>]) -> Vec<u64> {
     let n_devices = x.len();
     let mut a = Vec::with_capacity(n_devices);
     let mut b = Vec::with_capacity(n_devices);
@@ -182,11 +182,13 @@ async fn main() -> eyre::Result<()> {
         let mask_gpu = mask_gpu.clone();
 
         let now = Instant::now();
-        let result = party.compare_threshold_masked_many_fp(code_gpu, mask_gpu);
+        party.compare_threshold_masked_many_fp(code_gpu, mask_gpu);
         println!("compute time: {:?}", now.elapsed());
 
+        let res = party.take_result_buffer();
         let now = Instant::now();
-        let result = open(&mut party, result);
+        let result = open(&mut party, &res);
+        party.return_result_buffer(res);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
         println!("Send/Receive Time: {:?}", party.get_send_recv_time());
         party.reset_send_recv_time();
