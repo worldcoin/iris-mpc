@@ -133,7 +133,7 @@ struct Kernels {
     pub(crate) ot_receiver: CudaFunction,
     pub(crate) ot_helper: CudaFunction,
     pub(crate) assign: CudaFunction,
-    pub(crate) collabse_u64_helper: CudaFunction,
+    pub(crate) collapse_u64_helper: CudaFunction,
 }
 
 impl Kernels {
@@ -159,7 +159,7 @@ impl Kernels {
                 "packed_ot_receiver",
                 "packed_ot_helper",
                 "shared_assign",
-                "collabse_u64_helper",
+                "collapse_u64_helper",
             ],
         )
         .unwrap();
@@ -186,7 +186,7 @@ impl Kernels {
         let ot_receiver = dev.get_func(Self::MOD_NAME, "packed_ot_receiver").unwrap();
         let ot_helper = dev.get_func(Self::MOD_NAME, "packed_ot_helper").unwrap();
         let assign = dev.get_func(Self::MOD_NAME, "shared_assign").unwrap();
-        let collabse_u64_helper = dev.get_func(Self::MOD_NAME, "collabse_u64_helper").unwrap();
+        let collapse_u64_helper = dev.get_func(Self::MOD_NAME, "collapse_u64_helper").unwrap();
 
         Kernels {
             and,
@@ -204,7 +204,7 @@ impl Kernels {
             ot_receiver,
             ot_helper,
             assign,
-            collabse_u64_helper,
+            collapse_u64_helper,
         }
     }
 }
@@ -1747,11 +1747,11 @@ impl Circuits {
         let rand = self.devs[0].alloc_zeros::<u64>(1).unwrap();
 
         let mut current_bitsize = 64;
-        while current_bitsize >= 1 {
+        while current_bitsize > 1 {
             current_bitsize >>= 1;
             unsafe {
                 self.kernels[0]
-                    .collabse_u64_helper
+                    .collapse_u64_helper
                     .clone()
                     .launch(
                         cfg,
@@ -1778,6 +1778,7 @@ impl Circuits {
         if self.n_devices > 1 {
             // We have to collaps to one GPU
             self.collect_graphic_result(&mut bits);
+            // TODO only on one GPU
             self.or_tree_on_gpu(&mut bits, self.n_devices);
         }
 
