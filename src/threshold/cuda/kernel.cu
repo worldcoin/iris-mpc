@@ -446,26 +446,28 @@ extern "C" __global__ void shared_split1(U16 *inp_a, U16 *inp_b, U64 *xa_a,
   }
 }
 
-extern "C" __global__ void shared_split2(U64 *xp_a, U64 *xp_b, U64 *xp1_a,
-                                         U64 *xp1_b, U64 *xp2_a, U64 *xp2_b,
-                                         U64 *xp3_a, U64 *xp3_b, int n,
-                                         int id) {
+// xp1_a and xp1_b are in/outputs
+extern "C" __global__ void shared_split2(U64 *xp1_a, U64 *xp1_b, U64 *xp2_a,
+                                         U64 *xp2_b, U64 *xp3_a, U64 *xp3_b,
+                                         int n, int id) {
 
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
+    U64 tmp_a = xp1_a[i];
+    U64 tmp_b = xp1_b[i];
     switch (id) {
     case 0:
-      xp1_a[i] = xp_a[i];
+      xp1_a[i] = tmp_a;
       xp1_b[i] = 0;
       xp2_a[i] = 0;
       xp2_b[i] = 0;
       xp3_a[i] = 0;
-      xp3_b[i] = xp_b[i];
+      xp3_b[i] = tmp_b;
       break;
     case 1:
       xp1_a[i] = 0;
-      xp1_b[i] = xp_b[i];
-      xp2_a[i] = xp_a[i];
+      xp1_b[i] = tmp_b;
+      xp2_a[i] = tmp_a;
       xp2_b[i] = 0;
       xp3_a[i] = 0;
       xp3_b[i] = 0;
@@ -474,8 +476,8 @@ extern "C" __global__ void shared_split2(U64 *xp_a, U64 *xp_b, U64 *xp1_a,
       xp1_a[i] = 0;
       xp1_b[i] = 0;
       xp2_a[i] = 0;
-      xp2_b[i] = xp_b[i];
-      xp3_a[i] = xp_a[i];
+      xp2_b[i] = tmp_b;
+      xp3_a[i] = tmp_a;
       xp3_b[i] = 0;
       break;
     }

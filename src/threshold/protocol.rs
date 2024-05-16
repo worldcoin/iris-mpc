@@ -851,9 +851,9 @@ impl Circuits {
         }
     }
 
+    // xp1 is in/output
     fn split2(
         &self,
-        xp: Vec<ChunkShare<u64>>,
         xp1: &mut [ChunkShare<u64>],
         xp2: &mut [ChunkShare<u64>],
         xp3: &mut [ChunkShare<u64>],
@@ -864,7 +864,7 @@ impl Circuits {
             DEFAULT_LAUNCH_CONFIG_THREADS,
         );
 
-        for (idx, (xp, xp1, xp2, xp3)) in izip!(xp, xp1, xp2, xp3).enumerate() {
+        for (idx, (xp1, xp2, xp3)) in izip!(xp1, xp2, xp3).enumerate() {
             unsafe {
                 self.kernels[idx]
                     .split2
@@ -872,8 +872,6 @@ impl Circuits {
                     .launch(
                         cfg.to_owned(),
                         (
-                            &xp.a,
-                            &xp.b,
                             &xp1.a,
                             &xp1.b,
                             &xp2.a,
@@ -1080,14 +1078,6 @@ impl Circuits {
 
         let mut xp = Buffers::take_buffer(&mut self.buffers.u32_64c_1);
         let mut xpp = Buffers::take_buffer(&mut self.buffers.u32_64c_2);
-
-        self.split1(shares, xa, &mut xp, &mut xpp);
-        let xp_ = self.transpose_pack_u32_with_len(&xp, 18);
-        let xpp_ = self.transpose_pack_u32_with_len(&xpp, 18);
-
-        Buffers::return_buffer(&mut self.buffers.u32_64c_1, xp);
-        Buffers::return_buffer(&mut self.buffers.u32_64c_2, xpp);
-
         let mut c = Buffers::take_buffer(&mut self.buffers.u64_2c_1);
         let mut xp1 = Buffers::take_buffer(&mut self.buffers.u64_18c_1);
         let mut xp2 = Buffers::take_buffer(&mut self.buffers.u64_18c_2);
@@ -1096,11 +1086,17 @@ impl Circuits {
         let mut xpp2 = Buffers::take_buffer(&mut self.buffers.u64_18c_5);
         let mut xpp3 = Buffers::take_buffer(&mut self.buffers.u64_18c_6);
 
-        self.split2(xp_, &mut xp1, &mut xp2, &mut xp3);
-        self.split2(xpp_, &mut xpp1, &mut xpp2, &mut xpp3);
+        self.split1(shares, xa, &mut xp, &mut xpp);
+        self.transpose_pack_u32_with_len(&xp, &mut xp1, 18);
+        self.transpose_pack_u32_with_len(&xpp, &mut xpp1, 18);
+
+        self.split2(&mut xp1, &mut xp2, &mut xp3);
+        self.split2(&mut xpp1, &mut xpp2, &mut xpp3);
         self.binary_add_3_get_msb_twice::<18>(&mut c, &xp1, &xp2, &xp3, &xpp1, &xpp2, &xpp3);
         self.bit_inject_neg_ot(&c, injected);
 
+        Buffers::return_buffer(&mut self.buffers.u32_64c_1, xp);
+        Buffers::return_buffer(&mut self.buffers.u32_64c_2, xpp);
         Buffers::return_buffer(&mut self.buffers.u64_2c_1, c);
         Buffers::return_buffer(&mut self.buffers.u64_18c_1, xp1);
         Buffers::return_buffer(&mut self.buffers.u64_18c_2, xp2);
@@ -1294,14 +1290,13 @@ impl Circuits {
     fn transpose_pack_u32_with_len(
         &mut self,
         inp: &[ChunkShare<u32>],
+        outp: &mut [ChunkShare<u64>],
         bitlen: usize,
-    ) -> Vec<ChunkShare<u64>> {
+    ) {
         debug_assert_eq!(self.n_devices, inp.len());
+        debug_assert_eq!(self.n_devices, outp.len());
 
-        // TODO the buffers should probably already be allocated
-        let mut res = self.allocate_buffer::<u64>(self.chunk_size * bitlen);
-
-        for (idx, (inp, outp)) in izip!(inp, &mut res).enumerate() {
+        for (idx, (inp, outp)) in izip!(inp, outp).enumerate() {
             unsafe {
                 self.kernels[idx]
                     .transpose_32x64
@@ -1320,8 +1315,6 @@ impl Circuits {
                     .unwrap();
             }
         }
-
-        res
     }
 
     fn transpose_pack_u64_with_len(
