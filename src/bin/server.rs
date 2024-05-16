@@ -6,7 +6,6 @@ const REGION: &str = "us-east-2";
 
 #[derive(Debug, Parser)]
 struct Opt {
-    /// Which queue to use. If not provided, uses the first queue found.
     #[structopt(short, long)]
     queue: Option<String>,
 }
@@ -17,11 +16,7 @@ struct SQSMessage {
 }
 
 async fn receive(client: &Client, queue_url: &String) -> Result<(), Error> {
-    // let rcv_message_output = client.receive_message().queue_url(queue_url).send().await?;
-
-    client.receive_message().m
-
-    println!("Messages from queue with url: {}", queue_url);
+    let rcv_message_output = client.receive_message().queue_url(queue_url).send().await?;
 
     for message in rcv_message_output.messages.unwrap_or_default() {
         println!("Got the message: {:#?}", message);
