@@ -1738,7 +1738,7 @@ impl Circuits {
                 self.kernels[0]
                     .assign
                     .clone()
-                    .launch(self.cfg.to_owned(), (&des.a, &des.b, &a, &b, 1))
+                    .launch(cfg.to_owned(), (&des.a, &des.b, &a, &b, 1))
                     .unwrap();
             }
         }
