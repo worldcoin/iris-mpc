@@ -27,8 +27,8 @@ const QUERIES: usize = 930;
 const RNG_SEED: u64 = 42;
 const N_BATCHES: usize = 10; // We expect 10 batches with each QUERIES/ROTATIONS
 const MAX_CONCURRENT_REQUESTS: usize = 20;
-const DB_CODE_FILE: &str = "codes.db";
-const DB_MASK_FILE: &str = "masks.db";
+const DB_CODE_FILE: &str = "/opt/dlami/nvme/codes.db";
+const DB_MASK_FILE: &str = "/opt/dlami/nvme/masks.db";
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
