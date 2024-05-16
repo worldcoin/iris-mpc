@@ -1147,11 +1147,23 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, xb_2.len());
         debug_assert_eq!(self.n_devices, xb_3.len());
 
-        // TODO the buffers should probably already be allocated
-        let mut s1 = self.allocate_buffer::<u64>(self.chunk_size * K);
-        let mut s2 = self.allocate_buffer::<u64>(self.chunk_size * K);
-        let mut c1 = self.allocate_buffer::<u64>(self.chunk_size * (K - 1));
-        let mut c2 = self.allocate_buffer::<u64>(self.chunk_size * (K - 1));
+        // Reuse some buffers for intermediate values
+        let mut s1 = Vec::with_capacity(self.n_devices);
+        let mut s2 = Vec::with_capacity(self.n_devices);
+        let mut c1 = Vec::with_capacity(self.n_devices);
+        let mut c2 = Vec::with_capacity(self.n_devices);
+        let buffer1 = Buffers::take_buffer(&mut self.buffers.u64_36c_1);
+        let buffer2 = Buffers::take_buffer(&mut self.buffers.u64_36c_2);
+        for (b1, b2) in izip!(&buffer1, &buffer2) {
+            let s1_ = b1.get_offset(0, K * self.chunk_size);
+            let s2_ = b1.get_offset(1, K * self.chunk_size);
+            let c1_ = b2.get_offset(0, (K - 1) * self.chunk_size);
+            let c2_ = b2.get_offset(1, (K - 1) * self.chunk_size);
+            s1.push(s1_);
+            s2.push(s2_);
+            c1.push(c1_);
+            c2.push(c2_);
+        }
 
         for (idx, (x1, x2, x3, y1, y2, y3, s1, s2, c1, c2)) in
             izip!(xa_1, xa_2, xa_3, xb_1, xb_2, xb_3, &mut s1, &mut s2, &mut c1, &mut c2)
@@ -1162,43 +1174,41 @@ impl Circuits {
             let x3 = x3.as_view();
             let mut x2x3 = x2.as_view();
             self.packed_xor_assign_many(&mut x2x3, &x3, K, idx);
-            self.packed_xor_many(&x1, &x2x3, &mut s1.as_view(), K, idx);
+            self.packed_xor_many(&x1, &x2x3, s1, K, idx);
             // 2 * c1 (No pop since we start at index 0 and the functions only compute whats required)
             let mut x1x3 = x1;
             self.packed_xor_assign_many(&mut x1x3, &x3, K - 1, idx);
-            let mut c1 = c1.as_view();
-            self.packed_and_many_pre(&x1x3, &x2x3, &mut c1, K - 1, idx);
+            self.packed_and_many_pre(&x1x3, &x2x3, c1, K - 1, idx);
 
             // Second full adder to get 2 * c2 and s2
             let y1 = y1.as_view();
             let y3 = y3.as_view();
             let mut y2y3 = y2.as_view();
             self.packed_xor_assign_many(&mut y2y3, &y3, K, idx);
-            self.packed_xor_many(&y1, &y2y3, &mut s2.as_view(), K, idx);
+            self.packed_xor_many(&y1, &y2y3, s2, K, idx);
             // 2 * c2 (No pop since we start at index 0 and the functions only compute whats required)
             let mut y1y3 = y1;
             self.packed_xor_assign_many(&mut y1y3, &y3, K - 1, idx);
-            let mut c2 = c2.as_view();
-            self.packed_and_many_pre(&y1y3, &y2y3, &mut c2, K - 1, idx);
+            self.packed_and_many_pre(&y1y3, &y2y3, c2, K - 1, idx);
         }
 
         // Send/Receive full adders
         let now = Instant::now();
         result::group_start().unwrap();
         for (idx, (c1, c2)) in izip!(&c1, &c2).enumerate() {
-            self.packed_and_many_send(&c1.as_view(), K - 1, idx);
-            self.packed_and_many_send(&c2.as_view(), K - 1, idx);
+            self.packed_and_many_send(c1, K - 1, idx);
+            self.packed_and_many_send(c2, K - 1, idx);
         }
         for (idx, (c1, c2)) in izip!(&mut c1, &mut c2).enumerate() {
-            self.packed_and_many_receive(&mut c1.as_view(), K - 1, idx);
-            self.packed_and_many_receive(&mut c2.as_view(), K - 1, idx);
+            self.packed_and_many_receive(c1, K - 1, idx);
+            self.packed_and_many_receive(c2, K - 1, idx);
         }
         result::group_end().unwrap();
         self.send_recv_time += now.elapsed();
 
         for (idx, (c1, c2, x3, y3)) in izip!(&mut c1, &mut c2, xa_3, xb_3).enumerate() {
-            self.packed_xor_assign_many(&mut c1.as_view(), &x3.as_view(), K - 1, idx);
-            self.packed_xor_assign_many(&mut c2.as_view(), &y3.as_view(), K - 1, idx);
+            self.packed_xor_assign_many(c1, &x3.as_view(), K - 1, idx);
+            self.packed_xor_assign_many(c2, &y3.as_view(), K - 1, idx);
         }
 
         // Add 2c + s via a ripple carry adder
@@ -1305,6 +1315,9 @@ impl Circuits {
             self.xor_assign_many(&mut cb, &a2.get_offset(K - 1, self.chunk_size), idx);
             self.xor_assign_many(&mut cb, &b2.get_offset(K - 2, self.chunk_size), idx);
         }
+
+        Buffers::return_buffer(&mut self.buffers.u64_36c_1, buffer1);
+        Buffers::return_buffer(&mut self.buffers.u64_36c_2, buffer2);
     }
 
     fn transpose_pack_u32_with_len(
