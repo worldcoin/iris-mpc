@@ -197,6 +197,8 @@ struct Buffers {
     u64_18c_6: Option<Vec<ChunkShare<u64>>>,
     u64_2c_1: Option<Vec<ChunkShare<u64>>>,
     u32_128c_1: Option<Vec<ChunkShare<u32>>>,
+    u64_36c_1: Option<Vec<ChunkShare<u64>>>,
+    u64_36c_2: Option<Vec<ChunkShare<u64>>>,
     u64_37c_1: Option<Vec<ChunkShare<u64>>>,
     single_u32_128c_1: Option<Vec<CudaSlice<u32>>>,
     single_u32_128c_2: Option<Vec<CudaSlice<u32>>>,
@@ -218,6 +220,8 @@ impl Buffers {
         let u64_18c_5 = Some(Self::allocate_buffer(chunk_size * 18, devices));
         let u64_18c_6 = Some(Self::allocate_buffer(chunk_size * 18, devices));
 
+        let u64_36c_1 = Some(Self::allocate_buffer(chunk_size * 36, devices));
+        let u64_36c_2 = Some(Self::allocate_buffer(chunk_size * 36, devices));
         let u64_37c_1 = Some(Self::allocate_buffer(chunk_size * 37, devices));
 
         let u64_2c_1 = Some(Self::allocate_buffer(chunk_size * 2, devices));
@@ -239,6 +243,8 @@ impl Buffers {
             u64_18c_4,
             u64_18c_5,
             u64_18c_6,
+            u64_36c_1,
+            u64_36c_2,
             u64_37c_1,
             u64_2c_1,
             u32_128c_1,
@@ -310,6 +316,8 @@ impl Buffers {
         assert!(self.u64_18c_4.is_some());
         assert!(self.u64_18c_5.is_some());
         assert!(self.u64_18c_6.is_some());
+        assert!(self.u64_36c_1.is_some());
+        assert!(self.u64_36c_2.is_some());
         assert!(self.u64_37c_1.is_some());
         assert!(self.u64_2c_1.is_some());
         assert!(self.u32_128c_1.is_some());
@@ -1332,14 +1340,13 @@ impl Circuits {
     fn transpose_pack_u64_with_len(
         &mut self,
         inp: &[ChunkShare<u64>],
+        outp: &mut [ChunkShare<u64>],
         bitlen: usize,
-    ) -> Vec<ChunkShare<u64>> {
+    ) {
         debug_assert_eq!(self.n_devices, inp.len());
+        debug_assert_eq!(self.n_devices, outp.len());
 
-        // TODO the buffers should probably already be allocated
-        let mut res = self.allocate_buffer::<u64>(self.chunk_size * bitlen);
-
-        for (idx, (inp, outp)) in izip!(inp, &mut res).enumerate() {
+        for (idx, (inp, outp)) in izip!(inp, outp).enumerate() {
             unsafe {
                 self.kernels[idx]
                     .transpose_64x64
@@ -1358,8 +1365,6 @@ impl Circuits {
                     .unwrap();
             }
         }
-
-        res
     }
 
     pub fn extract_msb_sum_mod(
@@ -1374,13 +1379,20 @@ impl Circuits {
 
         // Transpose
         let now = Instant::now();
-        let x01 = self.transpose_pack_u64_with_len(x01, Self::BITS);
-        let x2 = self.transpose_pack_u64_with_len(x2, Self::BITS);
+
+        let mut x01_ = Buffers::take_buffer(&mut self.buffers.u64_36c_1);
+        let mut x2_ = Buffers::take_buffer(&mut self.buffers.u64_36c_2);
+
+        self.transpose_pack_u64_with_len(x01, &mut x01_, Self::BITS);
+        self.transpose_pack_u64_with_len(x2, &mut x2_, Self::BITS);
         println!("Time for transposes: {:?}", now.elapsed());
 
         let now = Instant::now();
-        self.binary_add_two(x01, x2, result);
+        self.binary_add_two(&mut x01_, &mut x2_, result);
         println!("Time for binary_add_two: {:?}", now.elapsed());
+
+        Buffers::return_buffer(&mut self.buffers.u64_36c_1, x01_);
+        Buffers::return_buffer(&mut self.buffers.u64_36c_2, x2_);
 
         let now = Instant::now();
         self.extraxt_msb_mod_p2k_of_sum(result);
@@ -1392,8 +1404,8 @@ impl Circuits {
     // requires 36 * n_devices * chunk_size random u64 elements
     fn binary_add_two(
         &mut self,
-        x1: Vec<ChunkShare<u64>>,
-        x2: Vec<ChunkShare<u64>>,
+        x1: &mut [ChunkShare<u64>],
+        x2: &mut [ChunkShare<u64>],
         s: &mut [ChunkShare<u64>],
     ) {
         debug_assert_eq!(self.n_devices, x1.len());
@@ -1405,11 +1417,11 @@ impl Circuits {
         let mut tmp_c = self.allocate_buffer::<u64>(self.chunk_size);
 
         // Add via a ripple carry adder
-        let mut a = x1;
-        let mut b = x2;
+        let a = x1;
+        let b = x2;
 
         // first half adder
-        for (idx, (aa, bb, ss, cc)) in izip!(&a, &mut b, s.iter(), &c).enumerate() {
+        for (idx, (aa, bb, ss, cc)) in izip!(a.iter(), b.iter_mut(), s.iter(), &c).enumerate() {
             let a0 = aa.get_offset(0, self.chunk_size);
             let b0 = bb.get_offset(0, self.chunk_size);
             let mut s0 = ss.get_offset(0, self.chunk_size);
@@ -1424,7 +1436,7 @@ impl Circuits {
         // Full adders: 1->k
         for k in 1..Self::BITS {
             for (idx, (aa, bb, ss, cc, tmp_cc)) in
-                izip!(&mut a, &mut b, s.iter_mut(), &mut c, &tmp_c).enumerate()
+                izip!(a.iter_mut(), b.iter_mut(), s.iter_mut(), &mut c, &tmp_c).enumerate()
             {
                 let mut ak = aa.get_offset(k, self.chunk_size);
                 let mut bk = bb.get_offset(k, self.chunk_size);
