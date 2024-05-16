@@ -1660,12 +1660,12 @@ impl Circuits {
 
         let mut x2 = Buffers::take_buffer(&mut self.buffers.u64_64c_1);
         let mut corrections = Buffers::take_buffer(&mut self.buffers.u32_128c_1);
+
         self.lift_p2k(mask_dots, &mut x2, &mut corrections);
         let x01 = self.lift_mul_sub_split(&mut x2, &corrections, code_dots);
         let res = self.extract_msb_sum_mod(x01, &x2);
 
         Buffers::return_buffer(&mut self.buffers.u64_64c_1, x2);
-        self.buffers.check_buffers();
         Buffers::return_buffer(&mut self.buffers.u32_128c_1, corrections);
         self.buffers.check_buffers();
 
