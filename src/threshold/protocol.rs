@@ -1092,7 +1092,7 @@ impl Circuits {
 
         self.split2(&mut xp1, &mut xp2, &mut xp3);
         self.split2(&mut xpp1, &mut xpp2, &mut xpp3);
-        self.binary_add_3_get_msb_twice::<18>(&mut c, &xp1, &xp2, &xp3, &xpp1, &xpp2, &xpp3);
+        self.binary_add_3_get_msb_twice(&mut c, &xp1, &xp2, &xp3, &xpp1, &xpp2, &xpp3);
         self.bit_inject_neg_ot(&c, injected);
 
         Buffers::return_buffer(&mut self.buffers.u32_64c_1, xp);
@@ -1109,7 +1109,7 @@ impl Circuits {
     // K is 18 in our case
     // requires 66 * n_devices * chunk_size random u64 elements
     #[allow(clippy::too_many_arguments)]
-    fn binary_add_3_get_msb_twice<const K: usize>(
+    fn binary_add_3_get_msb_twice(
         &mut self,
         c: &mut [ChunkShare<u64>],
         xa_1: &[ChunkShare<u64>],
@@ -1119,6 +1119,7 @@ impl Circuits {
         xb_2: &[ChunkShare<u64>],
         xb_3: &[ChunkShare<u64>],
     ) {
+        const K: usize = 18;
         debug_assert_eq!(self.n_devices, c.len());
         debug_assert_eq!(self.n_devices, xa_1.len());
         debug_assert_eq!(self.n_devices, xa_2.len());
