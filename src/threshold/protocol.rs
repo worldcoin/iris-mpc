@@ -1165,7 +1165,7 @@ impl Circuits {
         let mut b2 = c2;
 
         // First full adder (carry is 0)
-        for (idx, (a1, b1, a2, b2, c)) in izip!(&a1, &b1, &a2, &b2, &mut c).enumerate() {
+        for (idx, (a1, b1, a2, b2, c)) in izip!(&a1, &b1, &a2, &b2, c.iter_mut()).enumerate() {
             let mut ca = c.get_offset(0, self.chunk_size);
             let mut cb = c.get_offset(1, self.chunk_size);
             let a1 = a1.get_offset(1, self.chunk_size);
@@ -1196,7 +1196,7 @@ impl Circuits {
 
         for k in 1..K - 2 {
             for (idx, (a1, b1, a2, b2, c)) in
-                izip!(&mut a1, &mut b1, &mut a2, &mut b2, &mut c).enumerate()
+                izip!(&mut a1, &mut b1, &mut a2, &mut b2, c.iter_mut()).enumerate()
             {
                 // Unused space used for temparary storage
                 let mut tmp_ca = a1.get_offset(0, self.chunk_size);
@@ -1238,7 +1238,7 @@ impl Circuits {
             result::group_end().unwrap();
             self.send_recv_time += now.elapsed();
 
-            for (idx, (c, a1, a2)) in izip!(&mut c, &a1, &a2).enumerate() {
+            for (idx, (c, a1, a2)) in izip!(c.iter_mut(), &a1, &a2).enumerate() {
                 let mut ca = c.get_offset(0, self.chunk_size);
                 let mut cb = c.get_offset(1, self.chunk_size);
 
@@ -1251,7 +1251,7 @@ impl Circuits {
         }
 
         // Final outputs
-        for (idx, (a1, a2, b1, b2, c)) in izip!(&a1, &a2, &b1, &b2, &mut c).enumerate() {
+        for (idx, (a1, a2, b1, b2, c)) in izip!(&a1, &a2, &b1, &b2, c.iter_mut()).enumerate() {
             let mut ca = c.get_offset(0, self.chunk_size);
             self.xor_assign_many(&mut ca, &a1.get_offset(K - 1, self.chunk_size), idx);
             self.xor_assign_many(&mut ca, &b1.get_offset(K - 2, self.chunk_size), idx);
