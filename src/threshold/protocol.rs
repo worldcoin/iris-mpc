@@ -954,7 +954,7 @@ impl Circuits {
     ) {
         let mut m0 = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_1);
         let mut m1 = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_2);
-        let mut wc = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_2);
+        let mut wc = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_3);
 
         let now = Instant::now();
         result::group_start().unwrap();
@@ -1010,7 +1010,7 @@ impl Circuits {
 
     // TODO include randomness
     fn bit_inject_neg_ot_helper(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u32>]) {
-        let mut wc = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_2);
+        let mut wc = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_3);
 
         for (idx, (inp, res, wc)) in izip!(inp, outp.iter_mut(), &mut wc).enumerate() {
             // TODO this is just a placeholder
