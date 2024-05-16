@@ -801,9 +801,6 @@ impl Circuits {
             self.send(m1, self.prev_id, idx);
         }
         result::group_end().unwrap();
-        for dev in self.devs.iter() {
-            dev.synchronize().unwrap();
-        }
         self.send_recv_time += now.elapsed();
 
         res
