@@ -18,6 +18,7 @@ use gpu_iris_mpc::{
     DistanceComparator, ShareDB,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use tokio::time;
 
 const DB_SIZE: usize = 8 * 500_000;
@@ -58,13 +59,13 @@ async fn main() -> eyre::Result<()> {
     // Import masks to GPU DB
     let codes_db = shamir_db[party_id]
         .db
-        .iter()
+        .par_iter()
         .flat_map(|entry| entry.code)
         .collect::<Vec<_>>();
 
     let masks_db = shamir_db[party_id]
         .db
-        .iter()
+        .par_iter()
         .flat_map(|entry| entry.mask)
         .collect::<Vec<_>>();
 
