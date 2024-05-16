@@ -3,7 +3,7 @@
 ///! Node 0: cargo run --release --bin protocol 0
 ///! Node 1: cargo run --release --bin protocol 1 [NODE_0_IP]
 ///! Node 2: cargo run --release --bin protocol 2 [NODE_0_IP]
-use std::{env, fs::metadata, time::Instant};
+use std::{env, fs::metadata, thread, time::{Duration, Instant}};
 
 use cudarc::driver::result::memcpy_dtoh_sync;
 use float_eq::assert_float_eq;
@@ -100,6 +100,11 @@ async fn main() -> eyre::Result<()> {
         Some(true),
         Some(3000),
     );
+
+    if party_id != 0 {
+        thread::sleep(Duration::from_secs(10));
+    }
+
     let mut masks_engine = ShareDB::init(
         party_id,
         device_manager.clone(),
