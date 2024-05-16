@@ -115,6 +115,7 @@ struct Kernels {
     pub(crate) ot_sender: CudaFunction,
     pub(crate) ot_receiver: CudaFunction,
     pub(crate) ot_helper: CudaFunction,
+    pub(crate) assign: CudaFunction,
 }
 
 impl Kernels {
@@ -139,6 +140,7 @@ impl Kernels {
                 "packed_ot_sender",
                 "packed_ot_receiver",
                 "packed_ot_helper",
+                "shared_assign",
             ],
         )
         .unwrap();
@@ -164,6 +166,7 @@ impl Kernels {
         let ot_sender = dev.get_func(Self::MOD_NAME, "packed_ot_sender").unwrap();
         let ot_receiver = dev.get_func(Self::MOD_NAME, "packed_ot_receiver").unwrap();
         let ot_helper = dev.get_func(Self::MOD_NAME, "packed_ot_helper").unwrap();
+        let assign = dev.get_func(Self::MOD_NAME, "shared_assign").unwrap();
 
         Kernels {
             and,
@@ -180,6 +183,7 @@ impl Kernels {
             ot_sender,
             ot_receiver,
             ot_helper,
+            assign,
         }
     }
 }
@@ -604,6 +608,24 @@ impl Circuits {
         for i in 0..bits {
             let mut rcv = res.b.slice(i * self.chunk_size..(i + 1) * self.chunk_size);
             self.receive_view(&mut rcv, self.prev_id, idx);
+        }
+    }
+
+    fn assign_view(
+        &mut self,
+        des: &mut ChunkShareView<u64>,
+        src: &ChunkShareView<u64>,
+        idx: usize,
+    ) {
+        unsafe {
+            self.kernels[idx]
+                .assign
+                .clone()
+                .launch(
+                    self.cfg.to_owned(),
+                    (&des.a, &des.b, &src.a, &src.b, self.chunk_size as i32),
+                )
+                .unwrap();
         }
     }
 
@@ -1431,58 +1453,64 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, x2.len());
         debug_assert_eq!(self.n_devices, s.len());
 
-        // TODO the buffers should probably already be allocated
-        let mut c = self.allocate_buffer::<u64>(self.chunk_size);
-        let mut tmp_c = self.allocate_buffer::<u64>(self.chunk_size);
+        // Reuse some buffers for intermediate values
+        let mut c = Vec::with_capacity(self.n_devices);
+        let mut tmp_c = Vec::with_capacity(self.n_devices);
+        let buffer = Buffers::take_buffer(&mut self.buffers.u64_18c_1);
+        for b in buffer.iter() {
+            let b1 = b.get_offset(0, self.chunk_size);
+            let b2 = b.get_offset(1, self.chunk_size);
+            c.push(b1);
+            tmp_c.push(b2);
+        }
 
         // Add via a ripple carry adder
         let a = x1;
         let b = x2;
 
         // first half adder
-        for (idx, (aa, bb, ss, cc)) in izip!(a.iter(), b.iter_mut(), s.iter(), &c).enumerate() {
+        for (idx, (aa, bb, ss, cc)) in izip!(a.iter(), b.iter_mut(), s.iter(), &mut c).enumerate() {
             let a0 = aa.get_offset(0, self.chunk_size);
             let b0 = bb.get_offset(0, self.chunk_size);
             let mut s0 = ss.get_offset(0, self.chunk_size);
 
             self.xor_many(&a0, &b0, &mut s0, idx);
-            self.and_many_pre(&a0, &b0, &mut cc.as_view(), idx);
+            self.and_many_pre(&a0, &b0, cc, idx);
         }
 
         // Send/Receive
-        self.send_receive(&mut c);
+        self.send_receive_view(&mut c);
 
         // Full adders: 1->k
         for k in 1..Self::BITS {
             for (idx, (aa, bb, ss, cc, tmp_cc)) in
-                izip!(a.iter_mut(), b.iter_mut(), s.iter_mut(), &mut c, &tmp_c).enumerate()
+                izip!(a.iter_mut(), b.iter_mut(), s.iter_mut(), &mut c, &mut tmp_c).enumerate()
             {
                 let mut ak = aa.get_offset(k, self.chunk_size);
                 let mut bk = bb.get_offset(k, self.chunk_size);
                 let mut sk = ss.get_offset(k, self.chunk_size);
-                let c_ = cc.as_view();
 
-                self.xor_assign_many(&mut ak, &c_, idx);
+                self.xor_assign_many(&mut ak, cc, idx);
                 self.xor_many(&ak, &bk, &mut sk, idx);
-                self.xor_assign_many(&mut bk, &c_, idx);
-                self.and_many_pre(&ak, &bk, &mut tmp_cc.as_view(), idx);
+                self.xor_assign_many(&mut bk, cc, idx);
+                self.and_many_pre(&ak, &bk, tmp_cc, idx);
             }
 
             // Send/Receive
-            self.send_receive(&mut tmp_c);
+            self.send_receive_view(&mut tmp_c);
 
-            for (idx, (c, tmp_cc)) in izip!(&c, &tmp_c).enumerate() {
-                self.xor_assign_many(&mut c.as_view(), &tmp_cc.as_view(), idx);
+            for (idx, (c, tmp_cc)) in izip!(&mut c, &tmp_c).enumerate() {
+                self.xor_assign_many(c, tmp_cc, idx);
             }
         }
 
         // Copy the last carry to the last bit of s
-        for (cc, ss) in izip!(&c, s.iter_mut()) {
-            let c_ = cc.as_view();
+        for (idx, (cc, ss)) in izip!(&c, s.iter_mut()).enumerate() {
             let mut s_ = ss.get_offset(Self::BITS, self.chunk_size);
-            s_.a = c_.a;
-            s_.b = c_.b;
+            self.assign_view(&mut s_, cc, idx);
         }
+
+        Buffers::return_buffer(&mut self.buffers.u64_18c_1, buffer);
     }
 
     // The result will be located in the first bit of x

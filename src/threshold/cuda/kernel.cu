@@ -239,6 +239,15 @@ __device__ void split_msb_fp(U64 *x_a, U64 *x_b, U64 *x01, U64 *r, int id) {
 // Test kernels
 ////////////////////////////////////////////////////////////////////////////////
 
+extern "C" __global__ void shared_assign(TYPE *des_a, TYPE *des_b, TYPE *src_a,
+                                         TYPE *src_b, int n) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    *des_a = *src_a;
+    *des_b = *src_b;
+  }
+}
+
 extern "C" __global__ void shared_not_inplace(TYPE *lhs_a, TYPE *lhs_b, int n) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
