@@ -1413,14 +1413,12 @@ impl Circuits {
         x1: Vec<ChunkShare<u64>>,
         x2: Vec<ChunkShare<u64>>,
         s: &mut [ChunkShare<u64>],
-    ) -> Vec<ChunkShare<u64>> {
+    ) {
         debug_assert_eq!(self.n_devices, x1.len());
         debug_assert_eq!(self.n_devices, x2.len());
         debug_assert_eq!(self.n_devices, s.len());
 
         // TODO the buffers should probably already be allocated
-        // Result with additional bit for overflow
-        let mut s = self.allocate_buffer::<u64>(self.chunk_size * (Self::BITS + 1));
         let mut c = self.allocate_buffer::<u64>(self.chunk_size);
         let mut tmp_c = self.allocate_buffer::<u64>(self.chunk_size);
 
@@ -1429,7 +1427,7 @@ impl Circuits {
         let mut b = x2;
 
         // first half adder
-        for (idx, (aa, bb, ss, cc)) in izip!(&a, &mut b, &s, &c).enumerate() {
+        for (idx, (aa, bb, ss, cc)) in izip!(&a, &mut b, s.iter(), &c).enumerate() {
             let a0 = aa.get_offset(0, self.chunk_size);
             let b0 = bb.get_offset(0, self.chunk_size);
             let mut s0 = ss.get_offset(0, self.chunk_size);
@@ -1444,7 +1442,7 @@ impl Circuits {
         // Full adders: 1->k
         for k in 1..Self::BITS {
             for (idx, (aa, bb, ss, cc, tmp_cc)) in
-                izip!(&mut a, &mut b, &mut s, &mut c, &tmp_c).enumerate()
+                izip!(&mut a, &mut b, s.iter_mut(), &mut c, &tmp_c).enumerate()
             {
                 let mut ak = aa.get_offset(k, self.chunk_size);
                 let mut bk = bb.get_offset(k, self.chunk_size);
@@ -1466,14 +1464,12 @@ impl Circuits {
         }
 
         // Copy the last carry to the last bit of s
-        for (cc, ss) in izip!(&c, &mut s) {
+        for (cc, ss) in izip!(&c, s.iter_mut()) {
             let c_ = cc.as_view();
             let mut s_ = ss.get_offset(Self::BITS, self.chunk_size);
             s_.a = c_.a;
             s_.b = c_.b;
         }
-
-        s
     }
 
     // The result will be located in the first bit of x
