@@ -921,6 +921,8 @@ impl Circuits {
         for (idx, wc) in wc.into_iter().enumerate() {
             self.send(&wc, self.next_id, idx);
         }
+        result::group_end().unwrap();
+        result::group_start().unwrap();
         for (idx, res) in res.iter_mut().enumerate() {
             self.receive(&mut res.a, self.next_id, idx);
         }
