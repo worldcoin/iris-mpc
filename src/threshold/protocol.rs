@@ -835,6 +835,13 @@ impl Circuits {
         }
     }
 
+    pub fn allocate_buffer<T>(&self, size: usize) -> Vec<ChunkShare<T>>
+    where
+        T: cudarc::driver::ValidAsZeroBits + cudarc::driver::DeviceRepr,
+    {
+        Buffers::allocate_buffer(size, &self.devs)
+    }
+
     fn ceil_log2(x: usize) -> usize {
         let mut y = 0;
         let mut x = x - 1;
