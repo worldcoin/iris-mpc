@@ -447,7 +447,7 @@ impl ShareDB {
 
             // If not the server, give it a few secs to start
             if peer_id != 0 {
-                thread::sleep(Duration::from_secs(5));
+                thread::sleep(Duration::from_secs(10));
             }
 
             for i in 0..n_devices {
