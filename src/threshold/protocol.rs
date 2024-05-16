@@ -1358,6 +1358,7 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, x01_send.len());
         debug_assert_eq!(self.n_devices, x2.len());
 
+        // TODO the buffers should probably already be allocated
         let x01_rec = self.allocate_single_buffer(self.chunk_size * 64);
         let mut x01 = Vec::with_capacity(self.n_devices);
 
@@ -1594,6 +1595,7 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, mask_lifted.len());
         debug_assert_eq!(self.n_devices, code.len());
 
+        // TODO the buffers should probably already be allocated
         let mut x01 = self.allocate_single_buffer(self.chunk_size * 64);
 
         for (idx, (m, mc, c, x01)) in
