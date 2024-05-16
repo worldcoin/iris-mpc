@@ -1736,7 +1736,7 @@ impl Circuits {
     }
 
     // TODO include randomness
-    fn collapse_u64(&mut self, input: &ChunkShare<u64>) {
+    fn collapse_u64(&mut self, input: &mut ChunkShare<u64>) {
         let mut res = input.get_offset(0, 1);
         let helper = input.get_offset(1, 1);
 
@@ -1782,7 +1782,7 @@ impl Circuits {
         }
 
         // Result is in lowest u64 bits on the first GPU
-        self.collapse_u64(&result[0]);
+        self.collapse_u64(&mut result[0]);
         // Result is in the first bit of the first GPU
     }
 

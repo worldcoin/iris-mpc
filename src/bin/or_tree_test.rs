@@ -46,9 +46,9 @@ fn to_gpu(a: &[u64], b: &[u64], devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<u
     result
 }
 
-fn open(party: &mut Circuits, res: &ChunkShare<u64>) -> bool {
-    let res = res.get_offset(0, 1);
-    let mut res_helper = res.get_offset(1, 1);
+fn open(party: &mut Circuits, result: &mut ChunkShare<u64>) -> bool {
+    let res = result.get_offset(0, 1);
+    let mut res_helper = result.get_offset(1, 1);
     cudarc::nccl::result::group_start().expect("group start should work");
     party.send_view(&res.b, party.next_id(), 0);
     party.receive_view(&mut res_helper.a, party.prev_id(), 0);
@@ -111,7 +111,7 @@ async fn main() -> eyre::Result<()> {
 
         let now = Instant::now();
         // Result is in the first bit of the first GPU
-        let result = open(&mut party, &share_gpu[0]);
+        let result = open(&mut party, &mut share_gpu[0]);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
 
         if i == n_devices {
