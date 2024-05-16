@@ -195,6 +195,7 @@ struct Buffers {
     u64_18c_5: Option<Vec<ChunkShare<u64>>>,
     u64_18c_6: Option<Vec<ChunkShare<u64>>>,
     u64_2c_1: Option<Vec<ChunkShare<u64>>>,
+    u32_128c_1: Option<Vec<ChunkShare<u32>>>,
 }
 
 impl Buffers {
@@ -213,6 +214,8 @@ impl Buffers {
 
         let u64_2c_1 = Some(Self::allocate_buffer(chunk_size * 2, devices));
 
+        let u32_128c_1 = Some(Self::allocate_buffer(chunk_size * 128, devices));
+
         Buffers {
             u64_64c_1,
             u32_64c_1,
@@ -224,6 +227,7 @@ impl Buffers {
             u64_18c_5,
             u64_18c_6,
             u64_2c_1,
+            u32_128c_1,
         }
     }
 
@@ -277,6 +281,7 @@ impl Buffers {
         assert!(self.u64_18c_5.is_some());
         assert!(self.u64_18c_6.is_some());
         assert!(self.u64_2c_1.is_some());
+        assert!(self.u32_128c_1.is_some());
     }
 }
 
@@ -861,13 +866,12 @@ impl Circuits {
     }
 
     // TODO include randomness
-    fn bit_inject_neg_ot_sender(&mut self, inp: &[ChunkShare<u64>]) -> Vec<ChunkShare<u32>> {
+    fn bit_inject_neg_ot_sender(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u32>]) {
         // TODO the buffers should probably already be allocated
-        let mut res = self.allocate_buffer::<u32>(self.chunk_size * 2 * 64);
         let mut m0 = self.allocate_single_buffer::<u32>(self.chunk_size * 2 * 64);
         let mut m1 = self.allocate_single_buffer::<u32>(self.chunk_size * 2 * 64);
 
-        for (idx, (inp, res, m0, m1)) in izip!(inp, &mut res, &mut m0, &mut m1).enumerate() {
+        for (idx, (inp, res, m0, m1)) in izip!(inp, outp, &mut m0, &mut m1).enumerate() {
             // TODO this is just a placeholder
             let rand_ca = self.devs[idx]
                 .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
@@ -914,14 +918,15 @@ impl Circuits {
         }
         result::group_end().unwrap();
         self.send_recv_time += now.elapsed();
-
-        res
     }
 
     // TODO include randomness
-    fn bit_inject_neg_ot_receiver(&mut self, inp: &[ChunkShare<u64>]) -> Vec<ChunkShare<u32>> {
+    fn bit_inject_neg_ot_receiver(
+        &mut self,
+        inp: &[ChunkShare<u64>],
+        outp: &mut [ChunkShare<u32>],
+    ) {
         // TODO the buffers should probably already be allocated
-        let mut res = self.allocate_buffer::<u32>(self.chunk_size * 2 * 64);
         let mut m0 = self.allocate_single_buffer::<u32>(self.chunk_size * 2 * 64);
         let mut m1 = self.allocate_single_buffer::<u32>(self.chunk_size * 2 * 64);
         let mut wc = self.allocate_single_buffer::<u32>(self.chunk_size * 2 * 64);
@@ -936,7 +941,8 @@ impl Circuits {
         result::group_end().unwrap();
         self.send_recv_time += now.elapsed();
 
-        for (idx, (inp, res, m0, m1, wc)) in izip!(inp, &mut res, &m0, &m1, &wc).enumerate() {
+        for (idx, (inp, res, m0, m1, wc)) in izip!(inp, outp.iter_mut(), &m0, &m1, &wc).enumerate()
+        {
             // TODO this is just a placeholder
             let rand_ca = self.devs[idx]
                 .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
@@ -966,22 +972,19 @@ impl Circuits {
         // Reshare to Helper
         let now = Instant::now();
         result::group_start().unwrap();
-        for (idx, res) in res.iter().enumerate() {
+        for (idx, res) in outp.iter().enumerate() {
             self.send(&res.b, self.prev_id, idx);
         }
         result::group_end().unwrap();
         self.send_recv_time += now.elapsed();
-
-        res
     }
 
     // TODO include randomness
-    fn bit_inject_neg_ot_helper(&mut self, inp: &[ChunkShare<u64>]) -> Vec<ChunkShare<u32>> {
+    fn bit_inject_neg_ot_helper(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u32>]) {
         // TODO the buffers should probably already be allocated
-        let mut res = self.allocate_buffer::<u32>(self.chunk_size * 2 * 64);
         let mut wc = self.allocate_single_buffer::<u32>(self.chunk_size * 2 * 64);
 
-        for (idx, (inp, res, wc)) in izip!(inp, &mut res, &mut wc).enumerate() {
+        for (idx, (inp, res, wc)) in izip!(inp, outp.iter_mut(), &mut wc).enumerate() {
             // TODO this is just a placeholder
             let rand_cb = self.devs[idx]
                 .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
@@ -1018,20 +1021,18 @@ impl Circuits {
         for (idx, wc) in wc.into_iter().enumerate() {
             self.send(&wc, self.next_id, idx);
         }
-        for (idx, res) in res.iter_mut().enumerate() {
+        for (idx, res) in outp.iter_mut().enumerate() {
             self.receive(&mut res.a, self.next_id, idx);
         }
         result::group_end().unwrap();
         self.send_recv_time += now.elapsed();
-
-        res
     }
 
-    fn bit_inject_neg_ot(&mut self, inp: &[ChunkShare<u64>]) -> Vec<ChunkShare<u32>> {
+    fn bit_inject_neg_ot(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u32>]) {
         match self.peer_id {
-            0 => self.bit_inject_neg_ot_helper(inp),
-            1 => self.bit_inject_neg_ot_receiver(inp),
-            2 => self.bit_inject_neg_ot_sender(inp),
+            0 => self.bit_inject_neg_ot_helper(inp, outp),
+            1 => self.bit_inject_neg_ot_receiver(inp, outp),
+            2 => self.bit_inject_neg_ot_sender(inp, outp),
             _ => unreachable!(),
         }
     }
@@ -1042,7 +1043,8 @@ impl Circuits {
         &mut self,
         shares: Vec<ChunkShare<u16>>,
         xa: &mut [ChunkShare<u64>],
-    ) -> Vec<ChunkShare<u32>> {
+        injected: &mut [ChunkShare<u32>],
+    ) {
         debug_assert_eq!(self.n_devices, shares.len());
         debug_assert_eq!(self.n_devices, xa.len());
 
@@ -1067,7 +1069,7 @@ impl Circuits {
         self.split2(xp_, &mut xp1, &mut xp2, &mut xp3);
         self.split2(xpp_, &mut xpp1, &mut xpp2, &mut xpp3);
         self.binary_add_3_get_msb_twice::<18>(&mut c, &xp1, &xp2, &xp3, &xpp1, &xpp2, &xpp3);
-        let injected = self.bit_inject_neg_ot(&c);
+        self.bit_inject_neg_ot(&c, injected);
 
         Buffers::return_buffer(&mut self.buffers.u64_2c_1, c);
         Buffers::return_buffer(&mut self.buffers.u64_18c_1, xp1);
@@ -1076,9 +1078,6 @@ impl Circuits {
         Buffers::return_buffer(&mut self.buffers.u64_18c_4, xpp1);
         Buffers::return_buffer(&mut self.buffers.u64_18c_5, xpp2);
         Buffers::return_buffer(&mut self.buffers.u64_18c_6, xpp3);
-
-        // Result is in buffers u64_64c, corrections is returned
-        injected
     }
 
     // K is 18 in our case
@@ -1566,7 +1565,7 @@ impl Circuits {
     pub fn lift_mul_sub_split(
         &mut self,
         mask_lifted: &mut [ChunkShare<u64>],
-        maks_correction: Vec<ChunkShare<u32>>,
+        mask_correction: &[ChunkShare<u32>],
         code: Vec<ChunkShare<u16>>,
     ) -> Vec<CudaSlice<u64>> {
         debug_assert_eq!(self.n_devices, mask_lifted.len());
@@ -1575,7 +1574,7 @@ impl Circuits {
         let mut x01 = self.allocate_single_buffer(self.chunk_size * 64);
 
         for (idx, (m, mc, c, x01)) in
-            izip!(mask_lifted, maks_correction, &code, &mut x01).enumerate()
+            izip!(mask_lifted, mask_correction, &code, &mut x01).enumerate()
         {
             // TODO this is just a placeholder
             let rand = self.devs[idx]
@@ -1660,11 +1659,14 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, mask_dots.len());
 
         let mut x2 = Buffers::take_buffer(&mut self.buffers.u64_64c_1);
-        let correction = self.lift_p2k(mask_dots, &mut x2);
-        let x01 = self.lift_mul_sub_split(&mut x2, correction, code_dots);
+        let mut corrections = Buffers::take_buffer(&mut self.buffers.u32_128c_1);
+        self.lift_p2k(mask_dots, &mut x2, &mut corrections);
+        let x01 = self.lift_mul_sub_split(&mut x2, &corrections, code_dots);
         let res = self.extract_msb_sum_mod(x01, &x2);
 
         Buffers::return_buffer(&mut self.buffers.u64_64c_1, x2);
+        self.buffers.check_buffers();
+        Buffers::return_buffer(&mut self.buffers.u32_128c_1, corrections);
         self.buffers.check_buffers();
 
         // Result is in the first bit of res
