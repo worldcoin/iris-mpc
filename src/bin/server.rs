@@ -20,6 +20,8 @@ async fn receive(client: &Client, queue_url: &String) -> Result<(), Error> {
 
     for message in rcv_message_output.messages.unwrap_or_default() {
         println!("Got the message: {:#?}", message);
+
+        // client.delete_message().receipt_handle(message.receipt_handle)
     }
 
     Ok(())
