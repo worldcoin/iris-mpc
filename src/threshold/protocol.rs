@@ -51,7 +51,12 @@ impl<T> ChunkShare<T> {
         }
     }
 
-    fn len(&self) -> usize {
+    pub fn is_empty(&self) -> bool {
+        debug_assert_eq!(self.a.is_empty(), self.b.is_empty());
+        self.a.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
         debug_assert_eq!(self.a.len(), self.b.len());
         self.a.len()
     }
@@ -72,7 +77,12 @@ impl<'a, T> ChunkShareView<'a, T> {
         }
     }
 
-    fn len(&self) -> usize {
+    pub fn is_empty(&self) -> bool {
+        debug_assert_eq!(self.a.is_empty(), self.b.is_empty());
+        self.a.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
         debug_assert_eq!(self.a.len(), self.b.len());
         self.a.len()
     }
@@ -174,6 +184,14 @@ impl Kernels {
     }
 }
 
+struct Buffers {}
+
+impl Buffers {
+    fn new() -> Self {
+        Buffers {}
+    }
+}
+
 pub struct Circuits {
     peer_id: usize,
     next_id: usize,
@@ -187,6 +205,7 @@ pub struct Circuits {
     devs: Vec<Arc<CudaDevice>>,
     comms: Vec<Rc<Comm>>,
     kernels: Vec<Kernels>,
+    buffers: Buffers,
     send_recv_time: Duration,
 }
 
@@ -206,7 +225,6 @@ impl Circuits {
         peer_url: Option<&String>,
         server_port: Option<u16>,
     ) -> Self {
-        // TODO check this
         // For the transpose, inputs should be multiple of 64 bits
         debug_assert!(input_size % 64 == 0);
         // Chunk size is the number of u64 elements per bit in the binary circuits
@@ -215,7 +233,7 @@ impl Circuits {
         debug_assert_eq!(Self::ceil_log2(P2K as usize), Self::BITS);
         let n_devices = CudaDevice::count().unwrap() as usize;
 
-        // TODO check this
+        // TODO all configs here or in code?
         let cfg = Self::launch_config_from_elements_and_threads(
             chunk_size as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
@@ -245,6 +263,35 @@ impl Circuits {
             kernels.push(kernel);
         }
 
+        let comms = Self::instantiate_network(peer_id, peer_url, server_port, &devs);
+
+        let buffers = Buffers::new();
+
+        Circuits {
+            peer_id,
+            next_id: (peer_id + 1) % 3,
+            prev_id: (peer_id + 2) % 3,
+            cfg,
+            cfg_inp,
+            cfg_transpose,
+            cfg_ot,
+            chunk_size,
+            n_devices,
+            devs,
+            comms,
+            kernels,
+            buffers,
+            send_recv_time: Duration::from_secs(0),
+        }
+    }
+
+    pub fn instantiate_network(
+        peer_id: usize,
+        peer_url: Option<&String>,
+        server_port: Option<u16>,
+        devices: &[Arc<CudaDevice>],
+    ) -> Vec<Rc<Comm>> {
+        let n_devices = devices.len();
         let mut comms = Vec::with_capacity(n_devices);
         let mut ids = Vec::with_capacity(n_devices);
         for _ in 0..n_devices {
@@ -284,27 +331,12 @@ impl Circuits {
             ids.push(id);
 
             // Bind to thread (important!)
-            devs[i].bind_to_thread().unwrap();
+            devices[i].bind_to_thread().unwrap();
             comms.push(Rc::new(
-                Comm::from_rank(devs[i].clone(), peer_id, 3, id).unwrap(),
+                Comm::from_rank(devices[i].clone(), peer_id, 3, id).unwrap(),
             ));
         }
-
-        Circuits {
-            peer_id,
-            next_id: (peer_id + 1) % 3,
-            prev_id: (peer_id + 2) % 3,
-            cfg,
-            cfg_inp,
-            cfg_transpose,
-            cfg_ot,
-            chunk_size,
-            n_devices,
-            devs,
-            comms,
-            kernels,
-            send_recv_time: Duration::from_secs(0),
-        }
+        comms
     }
 
     pub fn next_id(&self) -> usize {
