@@ -177,7 +177,6 @@ async fn main() -> eyre::Result<()> {
     println!("Starting tests...");
 
     for _ in 0..10 {
-        // Simulate Masks to be zero for this test
         let code_gpu = code_gpu.clone();
         let mask_gpu = mask_gpu.clone();
 

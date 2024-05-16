@@ -1,6 +1,6 @@
 use super::cuda::kernel::B_BITS;
 use crate::{http_root, setup::shamir::P, threshold::cuda::PTX_SRC, IdWrapper};
-use axum::{routing::get, Error, Router};
+use axum::{routing::get, Router};
 use cudarc::{
     driver::{
         CudaDevice, CudaFunction, CudaSlice, CudaView, CudaViewMut, DevicePtr, DeviceSlice,
@@ -610,8 +610,8 @@ impl Circuits {
     // Keep in mind: group needs to be open!
     fn packed_and_many_send(&mut self, res: &ChunkShareView<u64>, bits: usize, idx: usize) {
         // TODO check if this is the best we can do
-        let mut send = res.a.slice(0..bits * self.chunk_size);
-        self.send_view(&mut send, self.next_id, idx);
+        let send = res.a.slice(0..bits * self.chunk_size);
+        self.send_view(&send, self.next_id, idx);
     }
 
     // Keep in mind: group needs to be open!
@@ -1766,6 +1766,26 @@ impl Circuits {
         }
     }
 
+    // Result is in the first bit of the first GPU
+    pub fn or_reduce_result(&mut self, result: &mut [ChunkShare<u64>]) {
+        let mut bits = Vec::with_capacity(self.n_devices);
+        for r in result.iter() {
+            // Result is in the first bit of the input
+            bits.push(r.get_offset(0, self.chunk_size));
+        }
+
+        self.or_tree_on_gpu(&mut bits, self.chunk_size);
+        if self.n_devices > 1 {
+            // We have to collaps to one GPU
+            self.collect_graphic_result(&mut bits);
+            self.or_tree_on_gpu(&mut bits, self.n_devices);
+        }
+
+        // Result is in lowest u64 bits on the first GPU
+        self.collapse_u64(&result[0]);
+        // Result is in the first bit of the first GPU
+    }
+
     // input should be of size: n_devices * input_size
     // Result is in the first bit of res u64_37c_1
     pub fn compare_threshold_masked_many_fp(
@@ -1803,22 +1823,8 @@ impl Circuits {
         mask_dots: Vec<ChunkShare<u16>>,
     ) {
         self.compare_threshold_masked_many_fp(code_dots, mask_dots);
-        let result = self.take_result_buffer();
-        let mut bits = Vec::with_capacity(self.n_devices);
-        for r in result.iter() {
-            // Result is in the first bit of the input
-            bits.push(r.get_offset(0, self.chunk_size));
-        }
-
-        self.or_tree_on_gpu(&mut bits, self.chunk_size);
-        if self.n_devices > 1 {
-            // We have to collaps to one GPU
-            self.collect_graphic_result(&mut bits);
-            self.or_tree_on_gpu(&mut bits, self.n_devices);
-        }
-
-        // Result is in lowest u64 bits on the first GPU
-        self.collapse_u64(&result[0]);
+        let mut result = self.take_result_buffer();
+        self.or_reduce_result(&mut result);
         // Result is in the first bit of the first GPU
 
         self.return_result_buffer(result);
