@@ -456,15 +456,27 @@ extern "C" __global__ void shared_split2(U64 *xp_a, U64 *xp_b, U64 *xp1_a,
     switch (id) {
     case 0:
       xp1_a[i] = xp_a[i];
+      xp1_b[i] = 0;
+      xp2_a[i] = 0;
+      xp2_b[i] = 0;
+      xp3_a[i] = 0;
       xp3_b[i] = xp_b[i];
       break;
     case 1:
-      xp2_a[i] = xp_a[i];
+      xp1_a[i] = 0;
       xp1_b[i] = xp_b[i];
+      xp2_a[i] = xp_a[i];
+      xp2_b[i] = 0;
+      xp3_a[i] = 0;
+      xp3_b[i] = 0;
       break;
     case 2:
-      xp3_a[i] = xp_a[i];
+      xp1_a[i] = 0;
+      xp1_b[i] = 0;
+      xp2_a[i] = 0;
       xp2_b[i] = xp_b[i];
+      xp3_a[i] = xp_a[i];
+      xp3_b[i] = 0;
       break;
     }
   }
