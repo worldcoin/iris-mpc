@@ -589,19 +589,15 @@ impl Circuits {
     // Keep in mind: group needs to be open!
     fn packed_and_many_send(&mut self, res: &ChunkShareView<u64>, bits: usize, idx: usize) {
         // TODO check if this is the best we can do
-        for i in 0..bits {
-            let send = res.a.slice(i * self.chunk_size..(i + 1) * self.chunk_size);
-            self.send_view(&send, self.next_id, idx);
-        }
+        let mut send = res.a.slice(0..bits * self.chunk_size);
+        self.send_view(&mut send, self.next_id, idx);
     }
 
     // Keep in mind: group needs to be open!
     fn packed_and_many_receive(&mut self, res: &mut ChunkShareView<u64>, bits: usize, idx: usize) {
         // TODO check if this is the best we can do
-        for i in 0..bits {
-            let mut rcv = res.b.slice(i * self.chunk_size..(i + 1) * self.chunk_size);
-            self.receive_view(&mut rcv, self.prev_id, idx);
-        }
+        let mut rcv = res.b.slice(0..bits * self.chunk_size);
+        self.receive_view(&mut rcv, self.prev_id, idx);
     }
 
     fn assign_view(
