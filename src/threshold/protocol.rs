@@ -185,15 +185,21 @@ impl Kernels {
 }
 
 struct Buffers {
-    u64_64c: Option<Vec<ChunkShare<u64>>>,
+    u64_64c_1: Option<Vec<ChunkShare<u64>>>,
+    u32_64c_1: Option<Vec<ChunkShare<u32>>>,
+    u32_64c_2: Option<Vec<ChunkShare<u32>>>,
 }
 
 impl Buffers {
     fn new(devices: &[Arc<CudaDevice>], chunk_size: usize) -> Self {
-        let u64_64c = Self::allocate_buffer(chunk_size * 64, devices);
+        let u64_64c_1 = Some(Self::allocate_buffer(chunk_size * 64, devices));
+        let u32_64c_1 = Some(Self::allocate_buffer(chunk_size * 64, devices));
+        let u32_64c_2 = Some(Self::allocate_buffer(chunk_size * 64, devices));
 
         Buffers {
-            u64_64c: Some(u64_64c),
+            u64_64c_1,
+            u32_64c_1,
+            u32_64c_2,
         }
     }
 
@@ -223,18 +229,23 @@ impl Buffers {
         res
     }
 
+    // TODO make debug_asserts after the testing
     fn take_buffer<T>(inp: &mut Option<Vec<ChunkShare<T>>>) -> Vec<ChunkShare<T>> {
         assert!(inp.is_some());
         std::mem::take(inp).unwrap()
     }
 
+    // TODO make debug_asserts after the testing
     fn return_buffer<T>(des: &mut Option<Vec<ChunkShare<T>>>, src: Vec<ChunkShare<T>>) {
         assert!(des.is_none());
         *des = Some(src);
     }
 
+    // TODO make debug_asserts after the testing
     fn check_buffers(&self) {
-        assert!(self.u64_64c.is_some());
+        assert!(self.u64_64c_1.is_some());
+        assert!(self.u32_64c_1.is_some());
+        assert!(self.u32_64c_2.is_some());
     }
 }
 
@@ -1005,8 +1016,6 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, xa.len());
 
         // TODO the buffers should probably already be allocated
-        let mut xp = self.allocate_buffer::<u32>(self.chunk_size * 64);
-        let mut xpp = self.allocate_buffer::<u32>(self.chunk_size * 64);
         let mut xp1 = self.allocate_buffer::<u64>(self.chunk_size * 18);
         let mut xp2 = self.allocate_buffer::<u64>(self.chunk_size * 18);
         let mut xp3 = self.allocate_buffer::<u64>(self.chunk_size * 18);
@@ -1014,12 +1023,16 @@ impl Circuits {
         let mut xpp2 = self.allocate_buffer::<u64>(self.chunk_size * 18);
         let mut xpp3 = self.allocate_buffer::<u64>(self.chunk_size * 18);
 
+        let mut xp = Buffers::take_buffer(&mut self.buffers.u32_64c_1);
+        let mut xpp = Buffers::take_buffer(&mut self.buffers.u32_64c_2);
         self.split1(shares, xa, &mut xp, &mut xpp);
-        let xp = self.transpose_pack_u32_with_len(xp, 18);
-        let xpp = self.transpose_pack_u32_with_len(xpp, 18);
+        let xp_ = self.transpose_pack_u32_with_len(&xp, 18);
+        let xpp_ = self.transpose_pack_u32_with_len(&xpp, 18);
+        Buffers::return_buffer(&mut self.buffers.u32_64c_1, xp);
+        Buffers::return_buffer(&mut self.buffers.u32_64c_2, xpp);
 
-        self.split2(xp, &mut xp1, &mut xp2, &mut xp3);
-        self.split2(xpp, &mut xpp1, &mut xpp2, &mut xpp3);
+        self.split2(xp_, &mut xp1, &mut xp2, &mut xp3);
+        self.split2(xpp_, &mut xpp1, &mut xpp2, &mut xpp3);
 
         let o = self.binary_add_3_get_msb_twice::<18>(xp1, xp2, xp3, xpp1, xpp2, xpp3);
 
@@ -1212,7 +1225,7 @@ impl Circuits {
 
     fn transpose_pack_u32_with_len(
         &mut self,
-        inp: Vec<ChunkShare<u32>>,
+        inp: &[ChunkShare<u32>],
         bitlen: usize,
     ) -> Vec<ChunkShare<u64>> {
         debug_assert_eq!(self.n_devices, inp.len());
@@ -1607,14 +1620,15 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, code_dots.len());
         debug_assert_eq!(self.n_devices, mask_dots.len());
 
-        let mut x2 = Buffers::take_buffer(&mut self.buffers.u64_64c);
+        let mut x2 = Buffers::take_buffer(&mut self.buffers.u64_64c_1);
         let correction = self.lift_p2k(mask_dots, &mut x2);
         let x01 = self.lift_mul_sub_split(&mut x2, correction, code_dots);
         let res = self.extract_msb_sum_mod(x01, &x2);
-        // Result is in the first bit of the input
 
-        Buffers::return_buffer(&mut self.buffers.u64_64c, x2);
+        Buffers::return_buffer(&mut self.buffers.u64_64c_1, x2);
         self.buffers.check_buffers();
+
+        // Result is in the first bit of res
         res
     }
 
