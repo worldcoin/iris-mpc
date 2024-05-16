@@ -1,6 +1,6 @@
 use super::cuda::kernel::B_BITS;
 use crate::{http_root, setup::shamir::P, threshold::cuda::PTX_SRC, IdWrapper};
-use axum::{routing::get, Router};
+use axum::{routing::get, Error, Router};
 use cudarc::{
     driver::{
         CudaDevice, CudaFunction, CudaSlice, CudaView, CudaViewMut, DevicePtr, DeviceSlice,
@@ -133,6 +133,7 @@ struct Kernels {
     pub(crate) ot_receiver: CudaFunction,
     pub(crate) ot_helper: CudaFunction,
     pub(crate) assign: CudaFunction,
+    pub(crate) collabse_u64_helper: CudaFunction,
 }
 
 impl Kernels {
@@ -158,6 +159,7 @@ impl Kernels {
                 "packed_ot_receiver",
                 "packed_ot_helper",
                 "shared_assign",
+                "collabse_u64_helper",
             ],
         )
         .unwrap();
@@ -184,6 +186,7 @@ impl Kernels {
         let ot_receiver = dev.get_func(Self::MOD_NAME, "packed_ot_receiver").unwrap();
         let ot_helper = dev.get_func(Self::MOD_NAME, "packed_ot_helper").unwrap();
         let assign = dev.get_func(Self::MOD_NAME, "shared_assign").unwrap();
+        let collabse_u64_helper = dev.get_func(Self::MOD_NAME, "collabse_u64_helper").unwrap();
 
         Kernels {
             and,
@@ -201,6 +204,7 @@ impl Kernels {
             ot_receiver,
             ot_helper,
             assign,
+            collabse_u64_helper,
         }
     }
 }
@@ -693,7 +697,7 @@ impl Circuits {
             self.send(&res.a, self.next_id, idx);
         }
         for (idx, res) in res.iter_mut().enumerate() {
-            self.receive_view(&mut res.as_view().b, self.prev_id, idx);
+            self.receive(&mut res.b, self.prev_id, idx);
         }
         result::group_end().unwrap();
     }
@@ -1675,11 +1679,11 @@ impl Circuits {
     // Input has size ChunkSize
     // Result is in lowest u64 of the input
     // TODO include randmoness
-    fn or_tree_on_gpu(&mut self, bits: &mut [ChunkShareView<u64>]) {
+    fn or_tree_on_gpu(&mut self, bits: &mut [ChunkShareView<u64>], size: usize) {
         debug_assert_eq!(self.n_devices, bits.len());
-        debug_assert_eq!(self.chunk_size, bits[0].len());
+        debug_assert!(size <= bits[0].len());
 
-        let mut num = self.chunk_size;
+        let mut num = size;
         while num > 1 {
             let mod_ = num & 1;
             num >>= 1;
@@ -1709,6 +1713,56 @@ impl Circuits {
             result::group_end().unwrap();
 
             num += mod_;
+        }
+    }
+
+    // TODO is this the best we can do?
+    fn collect_graphic_result(&mut self, bits: &mut [ChunkShareView<u64>]) {
+        debug_assert!(self.n_devices <= self.chunk_size);
+        let dev0 = &self.devs[0];
+        let bit0 = &bits[0];
+        for (idx, (dev, bit)) in izip!(self.get_devices(), bits.iter()).enumerate().skip(1) {
+            let src = bit.get_offset(0, 1);
+            let mut des = bit0.get_offset(idx, 1);
+
+            let a = dev.dtoh_sync_copy(&src.a).unwrap();
+            let b = dev.dtoh_sync_copy(&src.b).unwrap();
+
+            let a = dev0.htod_sync_copy(&a).unwrap();
+            let b = dev0.htod_sync_copy(&b).unwrap();
+            des.a = a.slice(..);
+            des.b = b.slice(..);
+        }
+    }
+
+    // TODO include randomness
+    fn collapse_u64(&mut self, input: &ChunkShare<u64>) {
+        let mut res = input.get_offset(0, 1);
+        let helper = input.get_offset(1, 1);
+
+        // TODO also precompute?
+        let cfg = Self::launch_config_from_elements_and_threads(1, DEFAULT_LAUNCH_CONFIG_THREADS);
+
+        // TODO this is just a placeholder
+        let rand = self.devs[0].alloc_zeros::<u64>(1).unwrap();
+
+        let mut current_bitsize = 64;
+        while current_bitsize >= 1 {
+            current_bitsize >>= 1;
+            unsafe {
+                self.kernels[0]
+                    .collabse_u64_helper
+                    .clone()
+                    .launch(
+                        cfg,
+                        (&res.a, &res.b, &helper.a, &helper.b, &rand, current_bitsize),
+                    )
+                    .unwrap();
+            }
+            result::group_start().unwrap();
+            self.send_view(&res.a, self.next_id, 0);
+            self.receive_view(&mut res.b, self.prev_id, 0);
+            result::group_end().unwrap();
         }
     }
 
@@ -1742,7 +1796,7 @@ impl Circuits {
     }
 
     // input should be of size: n_devices * input_size
-    // Result is in res_msb, which is the first bit of the input
+    // Result is in the lowest bit of the result buffer on the first gpu
     pub fn compare_threshold_masked_many_fp_with_or_tree(
         &mut self,
         code_dots: Vec<ChunkShare<u16>>,
@@ -1756,12 +1810,20 @@ impl Circuits {
             bits.push(r.get_offset(0, self.chunk_size));
         }
 
-        self.or_tree_on_gpu(&mut bits);
-        // Result is in lowest u64 bits
+        self.or_tree_on_gpu(&mut bits, self.chunk_size);
+        if self.n_devices > 1 {
+            // We have to collaps to one GPU
+            self.collect_graphic_result(&mut bits);
+            self.or_tree_on_gpu(&mut bits, self.n_devices);
+        }
 
-        // TODO the or tree is still missing
-        todo!();
+        // Result is in lowest u64 bits on the first GPU
+        self.collapse_u64(&result[0]);
+        // Result is in the first bit of the first GPU
+
         self.return_result_buffer(result);
         self.buffers.check_buffers();
+
+        // Result is in the lowest bit of the result buffer on the first gpu
     }
 }

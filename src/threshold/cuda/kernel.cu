@@ -561,3 +561,21 @@ extern "C" __global__ void packed_ot_helper(U32 *out_b, U64 *in_a, U32 *rand_cb,
     }
   }
 }
+
+extern "C" __global__ void collabse_u64_helper(U64 *inout_a, U64 *in_b,
+                                               U64 *helper_a, U64 *helper_b,
+                                               U64 *r, int next_bitsize) {
+
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i == 0) {
+    U64 mask = (1 << next_bitsize) - 1;
+    *helper_a = (*inout_a >> next_bitsize) & mask;
+    *inout_a &= mask;
+    *helper_b = (*in_b >> next_bitsize) & mask;
+    *in_b &= mask;
+
+    U64 res_a;
+    or_pre_inner<TYPE>(&res_a, inout_a, in_b, helper_a, helper_b, r);
+    *inout_a = res_a & mask;
+  }
+}
