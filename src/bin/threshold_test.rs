@@ -183,6 +183,7 @@ async fn main() -> eyre::Result<()> {
 
         let now = Instant::now();
         let result = party.compare_threshold_masked_many_fp(code_gpu, mask_gpu);
+        party.synchronize_all();
         println!("compute time: {:?}", now.elapsed());
 
         let now = Instant::now();

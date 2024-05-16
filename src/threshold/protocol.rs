@@ -200,6 +200,12 @@ impl Circuits {
         self.send_recv_time = Duration::from_secs(0);
     }
 
+    pub fn synchronize_all(&self) {
+        for dev in self.devs.iter() {
+            dev.synchronize().unwrap();
+        }
+    }
+
     pub fn new(
         peer_id: usize,
         input_size: usize, // per GPU
