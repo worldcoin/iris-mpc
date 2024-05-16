@@ -188,18 +188,38 @@ struct Buffers {
     u64_64c_1: Option<Vec<ChunkShare<u64>>>,
     u32_64c_1: Option<Vec<ChunkShare<u32>>>,
     u32_64c_2: Option<Vec<ChunkShare<u32>>>,
+    u64_18c_1: Option<Vec<ChunkShare<u64>>>,
+    u64_18c_2: Option<Vec<ChunkShare<u64>>>,
+    u64_18c_3: Option<Vec<ChunkShare<u64>>>,
+    u64_18c_4: Option<Vec<ChunkShare<u64>>>,
+    u64_18c_5: Option<Vec<ChunkShare<u64>>>,
+    u64_18c_6: Option<Vec<ChunkShare<u64>>>,
 }
 
 impl Buffers {
     fn new(devices: &[Arc<CudaDevice>], chunk_size: usize) -> Self {
         let u64_64c_1 = Some(Self::allocate_buffer(chunk_size * 64, devices));
+
         let u32_64c_1 = Some(Self::allocate_buffer(chunk_size * 64, devices));
         let u32_64c_2 = Some(Self::allocate_buffer(chunk_size * 64, devices));
+
+        let u64_18c_1 = Some(Self::allocate_buffer(chunk_size * 18, devices));
+        let u64_18c_2 = Some(Self::allocate_buffer(chunk_size * 18, devices));
+        let u64_18c_3 = Some(Self::allocate_buffer(chunk_size * 18, devices));
+        let u64_18c_4 = Some(Self::allocate_buffer(chunk_size * 18, devices));
+        let u64_18c_5 = Some(Self::allocate_buffer(chunk_size * 18, devices));
+        let u64_18c_6 = Some(Self::allocate_buffer(chunk_size * 18, devices));
 
         Buffers {
             u64_64c_1,
             u32_64c_1,
             u32_64c_2,
+            u64_18c_1,
+            u64_18c_2,
+            u64_18c_3,
+            u64_18c_4,
+            u64_18c_5,
+            u64_18c_6,
         }
     }
 
@@ -246,6 +266,12 @@ impl Buffers {
         assert!(self.u64_64c_1.is_some());
         assert!(self.u32_64c_1.is_some());
         assert!(self.u32_64c_2.is_some());
+        assert!(self.u64_18c_1.is_some());
+        assert!(self.u64_18c_2.is_some());
+        assert!(self.u64_18c_3.is_some());
+        assert!(self.u64_18c_4.is_some());
+        assert!(self.u64_18c_5.is_some());
+        assert!(self.u64_18c_6.is_some());
     }
 }
 
@@ -1015,14 +1041,6 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, shares.len());
         debug_assert_eq!(self.n_devices, xa.len());
 
-        // TODO the buffers should probably already be allocated
-        let mut xp1 = self.allocate_buffer::<u64>(self.chunk_size * 18);
-        let mut xp2 = self.allocate_buffer::<u64>(self.chunk_size * 18);
-        let mut xp3 = self.allocate_buffer::<u64>(self.chunk_size * 18);
-        let mut xpp1 = self.allocate_buffer::<u64>(self.chunk_size * 18);
-        let mut xpp2 = self.allocate_buffer::<u64>(self.chunk_size * 18);
-        let mut xpp3 = self.allocate_buffer::<u64>(self.chunk_size * 18);
-
         let mut xp = Buffers::take_buffer(&mut self.buffers.u32_64c_1);
         let mut xpp = Buffers::take_buffer(&mut self.buffers.u32_64c_2);
         self.split1(shares, xa, &mut xp, &mut xpp);
@@ -1031,10 +1049,23 @@ impl Circuits {
         Buffers::return_buffer(&mut self.buffers.u32_64c_1, xp);
         Buffers::return_buffer(&mut self.buffers.u32_64c_2, xpp);
 
+        let mut xp1 = Buffers::take_buffer(&mut self.buffers.u64_18c_1);
+        let mut xp2 = Buffers::take_buffer(&mut self.buffers.u64_18c_2);
+        let mut xp3 = Buffers::take_buffer(&mut self.buffers.u64_18c_3);
+        let mut xpp1 = Buffers::take_buffer(&mut self.buffers.u64_18c_4);
+        let mut xpp2 = Buffers::take_buffer(&mut self.buffers.u64_18c_5);
+        let mut xpp3 = Buffers::take_buffer(&mut self.buffers.u64_18c_6);
+
         self.split2(xp_, &mut xp1, &mut xp2, &mut xp3);
         self.split2(xpp_, &mut xpp1, &mut xpp2, &mut xpp3);
+        let o = self.binary_add_3_get_msb_twice::<18>(&xp1, &xp2, &xp3, &xpp1, &xpp2, &xpp3);
 
-        let o = self.binary_add_3_get_msb_twice::<18>(xp1, xp2, xp3, xpp1, xpp2, xpp3);
+        Buffers::return_buffer(&mut self.buffers.u64_18c_1, xp1);
+        Buffers::return_buffer(&mut self.buffers.u64_18c_2, xp2);
+        Buffers::return_buffer(&mut self.buffers.u64_18c_3, xp3);
+        Buffers::return_buffer(&mut self.buffers.u64_18c_4, xpp1);
+        Buffers::return_buffer(&mut self.buffers.u64_18c_5, xpp2);
+        Buffers::return_buffer(&mut self.buffers.u64_18c_6, xpp3);
 
         let injected = self.bit_inject_neg_ot(o);
 
@@ -1046,12 +1077,12 @@ impl Circuits {
     // requires 66 * n_devices * chunk_size random u64 elements
     fn binary_add_3_get_msb_twice<const K: usize>(
         &mut self,
-        xa_1: Vec<ChunkShare<u64>>,
-        xa_2: Vec<ChunkShare<u64>>,
-        xa_3: Vec<ChunkShare<u64>>,
-        xb_1: Vec<ChunkShare<u64>>,
-        xb_2: Vec<ChunkShare<u64>>,
-        xb_3: Vec<ChunkShare<u64>>,
+        xa_1: &[ChunkShare<u64>],
+        xa_2: &[ChunkShare<u64>],
+        xa_3: &[ChunkShare<u64>],
+        xb_1: &[ChunkShare<u64>],
+        xb_2: &[ChunkShare<u64>],
+        xb_3: &[ChunkShare<u64>],
     ) -> Vec<ChunkShare<u64>> {
         debug_assert_eq!(self.n_devices, xa_1.len());
         debug_assert_eq!(self.n_devices, xa_2.len());
@@ -1068,7 +1099,7 @@ impl Circuits {
         let mut c = self.allocate_buffer::<u64>(self.chunk_size * 2); // Combined buffer for the two individual results (easier bitinject then)
 
         for (idx, (x1, x2, x3, y1, y2, y3, s1, s2, c1, c2)) in
-            izip!(&xa_1, &xa_2, &xa_3, &xb_1, &xb_2, &xb_3, &mut s1, &mut s2, &mut c1, &mut c2)
+            izip!(xa_1, xa_2, xa_3, xb_1, xb_2, xb_3, &mut s1, &mut s2, &mut c1, &mut c2)
                 .enumerate()
         {
             // First full adder to get 2 * c1 and s1
@@ -1110,7 +1141,7 @@ impl Circuits {
         result::group_end().unwrap();
         self.send_recv_time += now.elapsed();
 
-        for (idx, (c1, c2, x3, y3)) in izip!(&mut c1, &mut c2, &xa_3, &xb_3).enumerate() {
+        for (idx, (c1, c2, x3, y3)) in izip!(&mut c1, &mut c2, xa_3, xb_3).enumerate() {
             self.packed_xor_assign_many(&mut c1.as_view(), &x3.as_view(), K - 1, idx);
             self.packed_xor_assign_many(&mut c2.as_view(), &y3.as_view(), K - 1, idx);
         }
