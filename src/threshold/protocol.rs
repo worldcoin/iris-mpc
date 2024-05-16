@@ -1112,9 +1112,6 @@ impl Circuits {
                 self.receive_view(&mut tmp_cb.b, self.prev_id, idx);
             }
             result::group_end().unwrap();
-            for dev in self.devs.iter() {
-                dev.synchronize().unwrap();
-            }
             self.send_recv_time += now.elapsed();
 
             for (idx, (c, a1, a2)) in izip!(&mut c, &a1, &a2).enumerate() {
