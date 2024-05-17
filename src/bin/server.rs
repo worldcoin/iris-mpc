@@ -1,50 +1,222 @@
-use aws_config::meta::region::RegionProviderChain;
-use aws_sdk_sqs::{config::Region, meta::PKG_VERSION, Client, Error};
+use aws_sdk_sqs::{config::Region, Client, Error};
 use clap::Parser;
 use gpu_iris_mpc::{setup::iris_db::shamir_iris::ShamirIris, sqs::SQSMessage};
-use serde::{Deserialize, Serialize};
+use std::{env, fs::metadata, time::Instant};
+
+use gpu_iris_mpc::{
+    device_manager::DeviceManager,
+    mmap::{read_mmap_file, write_mmap_file},
+    preprocess_query,
+    setup::{
+        id::PartyID,
+        iris_db::{db::IrisDB, iris::IrisCode, shamir_db::ShamirIrisDB},
+        shamir::Shamir,
+    },
+    DistanceComparator, ShareDB,
+};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 
 const REGION: &str = "us-east-2";
 const QUERY_SIZE: usize = 30;
+const DB_SIZE: usize = 8 * 500_000;
+const QUERIES: usize = 930;
+const RNG_SEED: u64 = 42;
+const MAX_CONCURRENT_REQUESTS: usize = 5;
+const DB_CODE_FILE: &str = "/opt/dlami/nvme/codes.db";
+const DB_MASK_FILE: &str = "/opt/dlami/nvme/masks.db";
 
 #[derive(Debug, Parser)]
 struct Opt {
     #[structopt(short, long)]
-    queue: Option<String>,
+    queue: String,
 }
 
-async fn receive(client: &Client, queue_url: &String) -> eyre::Result<()> {
-    let rcv_message_output = client.receive_message().queue_url(queue_url).send().await?;
+async fn receive_batch(client: &Client, queue_url: &String) -> eyre::Result<Vec<ShamirIris>> {
+    let mut batch = vec![];
 
-    for message in rcv_message_output.messages.unwrap_or_default() {
-        let messsage: SQSMessage = serde_json::from_str(message.body().unwrap())?;
-        let iris: ShamirIris = messsage.message.into();
+    while batch.len() < QUERY_SIZE {
+        let rcv_message_output = client
+            .receive_message()
+            .max_number_of_messages(1i32)
+            .queue_url(queue_url)
+            .send()
+            .await?;
 
-        // put in batch
+        for message in rcv_message_output.messages.unwrap_or_default() {
+            let messsage: SQSMessage = serde_json::from_str(message.body().unwrap())?;
+            let iris: ShamirIris = messsage.message.into();
 
+            batch.extend(iris.all_rotations());
+        }
     }
 
-    Ok(())
+    Ok(batch)
+}
+
+fn prepare_query_batch(batch: Vec<ShamirIris>) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+    let (code_queries, mask_queries): (Vec<Vec<u16>>, Vec<Vec<u16>>) = batch
+        .iter()
+        .map(|iris| (iris.code.to_vec(), iris.mask.to_vec()))
+        .unzip();
+
+    let code_query = preprocess_query(&code_queries.into_iter().flatten().collect::<Vec<_>>());
+    let mask_query = preprocess_query(&mask_queries.into_iter().flatten().collect::<Vec<_>>());
+    (code_query, mask_query)
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Error> {
-    let Opt {
-        queue,
-    } = Opt::parse();
+async fn main() -> eyre::Result<()> {
+    let Opt { queue } = Opt::parse();
 
     let region_provider = Region::new(REGION);
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let client = Client::new(&shared_config);
 
-    // let first_queue_url = find_first_queue(&client).await?;
-    let queue_url = queue.unwrap();
+    let mut rng = StdRng::seed_from_u64(RNG_SEED);
+    let seed0 = rng.gen::<[u32; 8]>();
+    let seed1 = rng.gen::<[u32; 8]>();
+    let seed2 = rng.gen::<[u32; 8]>();
 
-    let message = SQSMessage {
-        body: "hello from my queue".to_owned(),
+    let args = env::args().collect::<Vec<_>>();
+    let party_id: usize = args[1].parse().unwrap();
+    let url = args.get(2);
+
+    // Init RNGs
+    let chacha_seeds = match party_id {
+        0 => (seed0, seed2),
+        1 => (seed1, seed0),
+        2 => (seed2, seed1),
+        _ => unimplemented!(),
     };
 
-    receive(&client, &queue_url).await?;
+    // Init DB
+    let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
+    let shamir_db = ShamirIrisDB::share_db_par(&db, &mut rng);
+    let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(party_id as u8).unwrap());
+
+    println!("Random shared DB generated!");
+
+    // Import masks to GPU DB
+    let codes_db = if metadata(DB_CODE_FILE).is_ok() {
+        read_mmap_file(DB_CODE_FILE)?
+    } else {
+        let codes_db = shamir_db[party_id]
+            .db
+            .iter()
+            .flat_map(|entry| entry.code)
+            .collect::<Vec<_>>();
+
+        write_mmap_file(DB_CODE_FILE, &codes_db)?;
+        codes_db
+    };
+
+    let masks_db = if metadata(DB_MASK_FILE).is_ok() {
+        read_mmap_file(DB_MASK_FILE)?
+    } else {
+        let masks_db = shamir_db[party_id]
+            .db
+            .iter()
+            .flat_map(|entry| entry.mask)
+            .collect::<Vec<_>>();
+
+        write_mmap_file(DB_MASK_FILE, &masks_db)?;
+        masks_db
+    };
+
+    println!("Starting engines...");
+
+    let device_manager = DeviceManager::init();
+
+    let mut codes_engine = ShareDB::init(
+        party_id,
+        device_manager.clone(),
+        l_coeff,
+        &codes_db,
+        QUERIES,
+        chacha_seeds,
+        url.clone(),
+        Some(true),
+        Some(3000),
+    );
+
+    println!("Codes Engines ready!");
+
+    let mut masks_engine = ShareDB::init(
+        party_id,
+        device_manager.clone(),
+        l_coeff,
+        &masks_db,
+        QUERIES,
+        chacha_seeds,
+        url.clone(),
+        Some(true),
+        Some(3001),
+    );
+    let mut distance_comparator = DistanceComparator::init(DB_SIZE, QUERIES);
+
+    println!("Engines ready!");
+
+    // Prepare streams etc.
+    let mut streams = vec![];
+    let mut cublas_handles = vec![];
+    let mut results = vec![];
+    for _ in 0..MAX_CONCURRENT_REQUESTS {
+        let tmp_streams = device_manager.fork_streams();
+        cublas_handles.push(device_manager.create_cublas(&tmp_streams));
+        streams.push(tmp_streams);
+        results.push(distance_comparator.prepare_results());
+    }
+
+    // Main Loop
+    let mut current_dot_event = device_manager.create_events();
+    let mut next_dot_event = device_manager.create_events();
+    let mut current_exchange_event = device_manager.create_events();
+    let mut next_exchange_event = device_manager.create_events();
+    let mut request_counter = 0;
+
+    loop {
+        let batch = receive_batch(&client, &queue).await?;
+        let (code_query, mask_query) = prepare_query_batch(batch);
+
+        let request_streams = &streams[request_counter % MAX_CONCURRENT_REQUESTS];
+        let request_cublas_handles = &cublas_handles[request_counter % MAX_CONCURRENT_REQUESTS];
+
+        // First stream doesn't need to wait on anyone
+        if request_counter == 0 {
+            device_manager.record_event(request_streams, &current_dot_event);
+            device_manager.record_event(request_streams, &current_exchange_event);
+        }
+
+        // BLOCK 1: calculate individual dot products
+        device_manager.await_event(request_streams, &current_dot_event);
+        codes_engine.dot(&code_query, request_streams, request_cublas_handles);
+        masks_engine.dot(&mask_query, request_streams, request_cublas_handles);
+
+        // BLOCK 2: calculate final dot product result, exchange and compare
+        device_manager.await_event(request_streams, &current_exchange_event);
+        codes_engine.dot_reduce(request_streams);
+        masks_engine.dot_reduce(request_streams);
+
+        device_manager.record_event(request_streams, &next_dot_event);
+
+        codes_engine.exchange_results(request_streams);
+        masks_engine.exchange_results(request_streams);
+        distance_comparator.reconstruct_and_compare(
+            &codes_engine.results_peers,
+            &masks_engine.results_peers,
+            request_streams,
+            &mut results[request_counter % MAX_CONCURRENT_REQUESTS],
+        );
+
+        device_manager.record_event(request_streams, &next_exchange_event);
+
+        // Prepare for next batch
+        request_counter += 1;
+        current_dot_event = next_dot_event;
+        current_exchange_event = next_exchange_event;
+        next_dot_event = device_manager.create_events();
+        next_exchange_event = device_manager.create_events();
+    }
 
     Ok(())
 }

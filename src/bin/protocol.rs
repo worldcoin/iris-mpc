@@ -3,10 +3,8 @@
 ///! Node 0: cargo run --release --bin protocol 0
 ///! Node 1: cargo run --release --bin protocol 1 [NODE_0_IP]
 ///! Node 2: cargo run --release --bin protocol 2 [NODE_0_IP]
-use std::{env, fs::metadata, thread, time::{Duration, Instant}};
+use std::{env, fs::metadata, time::Instant};
 
-use cudarc::driver::result::memcpy_dtoh_sync;
-use float_eq::assert_float_eq;
 use gpu_iris_mpc::{
     device_manager::DeviceManager,
     mmap::{read_mmap_file, write_mmap_file},
@@ -19,7 +17,6 @@ use gpu_iris_mpc::{
     DistanceComparator, ShareDB,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use tokio::time;
 
 const DB_SIZE: usize = 8 * 500_000;
