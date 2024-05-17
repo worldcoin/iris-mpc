@@ -1,6 +1,7 @@
 pub mod device_manager;
 pub mod rng;
 pub mod setup;
+pub mod mmap;
 
 use std::{
     ffi::c_void,
@@ -427,14 +428,15 @@ impl ShareDB {
                             .unwrap();
                     axum::serve(listener, app).await.unwrap();
                 });
+            } else {
+                thread::sleep(Duration::from_secs(2));
             }
 
             for i in 0..n_devices {
                 let id = if peer_id == 0 {
                     ids[i]
                 } else {
-                    // If not the server, give it a few secs to start
-                    thread::sleep(Duration::from_secs(5));
+                    
 
                     let res = reqwest::blocking::get(format!(
                         "http://{}:{}/{}",
@@ -965,7 +967,6 @@ mod tests {
 
             reconstructed_codes.push(code);
             reconstructed_masks.push(mask);
-            println!("{} {}", code, mask);
         }
 
         // Calculate the distance in plain

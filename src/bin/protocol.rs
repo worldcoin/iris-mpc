@@ -3,12 +3,13 @@
 ///! Node 0: cargo run --release --bin protocol 0
 ///! Node 1: cargo run --release --bin protocol 1 [NODE_0_IP]
 ///! Node 2: cargo run --release --bin protocol 2 [NODE_0_IP]
-use std::{env, time::Instant};
+use std::{env, fs::metadata, thread, time::{Duration, Instant}};
 
 use cudarc::driver::result::memcpy_dtoh_sync;
 use float_eq::assert_float_eq;
 use gpu_iris_mpc::{
     device_manager::DeviceManager,
+    mmap::{read_mmap_file, write_mmap_file},
     preprocess_query,
     setup::{
         id::PartyID,
@@ -18,16 +19,20 @@ use gpu_iris_mpc::{
     DistanceComparator, ShareDB,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use tokio::time;
 
-const DB_SIZE: usize = 8 * 125_000;
+const DB_SIZE: usize = 8 * 500_000;
 const QUERIES: usize = 930;
 const RNG_SEED: u64 = 42;
 const N_BATCHES: usize = 10; // We expect 10 batches with each QUERIES/ROTATIONS
 const MAX_CONCURRENT_REQUESTS: usize = 20;
+const DB_CODE_FILE: &str = "/opt/dlami/nvme/codes.db";
+const DB_MASK_FILE: &str = "/opt/dlami/nvme/masks.db";
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
+    let start_time = Instant::now();
     // TODO
     let mut rng = StdRng::seed_from_u64(RNG_SEED);
     let seed0 = rng.gen::<[u32; 8]>();
@@ -54,17 +59,31 @@ async fn main() -> eyre::Result<()> {
     println!("Random shared DB generated!");
 
     // Import masks to GPU DB
-    let codes_db = shamir_db[party_id]
-        .db
-        .iter()
-        .flat_map(|entry| entry.code)
-        .collect::<Vec<_>>();
+    let codes_db = if metadata(DB_CODE_FILE).is_ok() {
+        read_mmap_file(DB_CODE_FILE)?
+    } else {
+        let codes_db = shamir_db[party_id]
+            .db
+            .iter()
+            .flat_map(|entry| entry.code)
+            .collect::<Vec<_>>();
 
-    let masks_db = shamir_db[party_id]
-        .db
-        .iter()
-        .flat_map(|entry| entry.mask)
-        .collect::<Vec<_>>();
+        write_mmap_file(DB_CODE_FILE, &codes_db)?;
+        codes_db
+    };
+
+    let masks_db = if metadata(DB_MASK_FILE).is_ok() {
+        read_mmap_file(DB_MASK_FILE)?
+    } else {
+        let masks_db = shamir_db[party_id]
+            .db
+            .iter()
+            .flat_map(|entry| entry.mask)
+            .collect::<Vec<_>>();
+
+        write_mmap_file(DB_MASK_FILE, &masks_db)?;
+        masks_db
+    };
 
     println!("Starting engines...");
 
@@ -81,6 +100,9 @@ async fn main() -> eyre::Result<()> {
         Some(true),
         Some(3000),
     );
+
+    println!("Codes Engines ready!");
+
     let mut masks_engine = ShareDB::init(
         party_id,
         device_manager.clone(),
@@ -106,6 +128,8 @@ async fn main() -> eyre::Result<()> {
         streams.push(tmp_streams);
         results.push(distance_comparator.prepare_results());
     }
+
+    println!("start took: {:?}", start_time.elapsed());
 
     // Entrypoint for incoming request
     let mut request_batches = vec![];
@@ -143,7 +167,6 @@ async fn main() -> eyre::Result<()> {
         device_manager.await_event(request_streams, &dot_events[i]);
         codes_engine.dot(&code_query, request_streams, request_cublas_handles);
         masks_engine.dot(&mask_query, request_streams, request_cublas_handles);
-        println!("3: {:?}", now.elapsed());
 
         // BLOCK 2: calculate final dot product result, exchange and compare
         device_manager.await_event(request_streams, &exchange_events[i]);
@@ -205,7 +228,7 @@ async fn main() -> eyre::Result<()> {
 fn random_query(party_id: usize, rng: &mut StdRng, db: &IrisDB) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
     let mut code_queries = vec![vec![], vec![], vec![]];
     let mut mask_queries = vec![vec![], vec![], vec![]];
-    
+
     for i in 0..QUERIES {
         let rng_idx = rng.gen_range(0..db.len());
         let query_template = db.db[rng_idx].clone();
