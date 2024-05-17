@@ -106,6 +106,10 @@ impl ChaChaCudaRng {
     }
     pub fn set_cuda_slice(&mut self, slice: CudaSlice<u32>) {
         assert!(self.rng_chunk.is_none());
+        assert!(
+            slice.len() % 16 == 0,
+            "slice length must be a multiple of 16"
+        );
         self.rng_chunk = Some(slice);
     }
     pub fn take_cuda_slice(&mut self) -> CudaSlice<u32> {
