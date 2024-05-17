@@ -158,11 +158,11 @@ async fn http_root(ids: Vec<Id>, Path(device_id): Path<String>) -> String {
 }
 
 pub struct DistanceComparator {
-    devs: Vec<Arc<CudaDevice>>,
-    kernels: Vec<CudaFunction>,
-    db_length: usize,
-    query_length: usize,
-    n_devices: usize,
+    pub devs: Vec<Arc<CudaDevice>>,
+    pub kernels: Vec<CudaFunction>,
+    pub db_length: usize,
+    pub query_length: usize,
+    pub n_devices: usize,
 }
 
 impl DistanceComparator {
@@ -193,10 +193,10 @@ impl DistanceComparator {
         }
     }
 
-    pub fn prepare_results(&self) -> Vec<CudaSlice<u32>> {
-        let results_uninit = vec![u32::MAX; self.query_length * std::mem::size_of::<u32>()];
+    pub fn prepare_results(&self) -> Vec<u64> {
+        let results_uninit = vec![u32::MAX; self.query_length];
         (0..self.n_devices)
-            .map(|i| self.devs[i].htod_copy(results_uninit.clone()).unwrap())
+            .map(|i| *self.devs[i].htod_copy(results_uninit.clone()).unwrap().device_ptr())
             .collect::<Vec<_>>()
     }
 
@@ -205,7 +205,7 @@ impl DistanceComparator {
         codes_result_peers: &Vec<Vec<CudaSlice<u8>>>,
         masks_result_peers: &Vec<Vec<CudaSlice<u8>>>,
         streams: &Vec<CudaStream>,
-        results: &mut Vec<CudaSlice<u32>>,
+        results: &mut Vec<u64>,
     ) {
         let num_elements = self.db_length / self.n_devices * self.query_length;
         let threads_per_block = 256;
@@ -230,7 +230,7 @@ impl DistanceComparator {
                             &masks_result_peers[i][0],
                             &masks_result_peers[i][1],
                             &masks_result_peers[i][2],
-                            &mut results[i],
+                            results[i],
                             MATCH_RATIO,
                             (self.db_length / self.n_devices) as u64,
                             self.query_length as u64,
@@ -243,17 +243,17 @@ impl DistanceComparator {
 
     pub fn fetch_results(
         &self,
-        dev_results: &Vec<CudaSlice<u32>>,
-        streams: &Vec<CudaStream>,
+        dev_results: &Vec<u64>,
+        streams: &Vec<u64>,
     ) -> Vec<Vec<u32>> {
         let mut results = vec![];
         for i in 0..self.n_devices {
             self.devs[i].bind_to_thread().unwrap();
-            let mut tmp = vec![0u32; dev_results[i].len()];
+            let mut tmp = vec![0u32; self.query_length];
             unsafe {
-                memcpy_dtoh_async(&mut tmp, *dev_results[i].device_ptr(), streams[i].stream)
+                memcpy_dtoh_async(&mut tmp, dev_results[i], streams[i] as *mut _)
                     .unwrap();
-                synchronize(streams[i].stream).unwrap();
+                synchronize(streams[i] as *mut _).unwrap();
             }
             results.push(tmp);
         }
