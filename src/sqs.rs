@@ -22,10 +22,10 @@ pub struct SQSMessage {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SMPCRequest {
-    request_type: String,
-    request_id: String,
-    iris_code: Vec<u16>,
-    mask_code: Vec<u16>,
+    pub request_type: String,
+    pub request_id: String,
+    pub iris_code: Vec<u16>,
+    pub mask_code: Vec<u16>,
 }
 
 impl From<SMPCRequest> for ShamirIris {
