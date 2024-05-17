@@ -6,11 +6,10 @@ use cudarc::{
 };
 
 pub struct ChaChaCudaRng {
-    buf_size: usize,
     dev: Arc<CudaDevice>,
     kernel: CudaFunction,
-    rng_chunk: CudaSlice<u32>,
-    output_buffer: Vec<u32>,
+    rng_chunk: Option<CudaSlice<u32>>,
+    output_buffer: Option<Vec<u32>>,
     /// the current state of the chacha rng
     chacha_ctx: ChaChaCtx,
 }
@@ -34,29 +33,46 @@ impl ChaChaCudaRng {
             .get_func(CHACHA_FUNCTION_NAME, CHACHA_FUNCTION_NAME)
             .unwrap();
 
+        if buf_size_bytes == 0 {
+            return Self {
+                dev,
+                kernel,
+                rng_chunk: None,
+                output_buffer: None,
+                chacha_ctx: ChaChaCtx::init(seed, 0, 0),
+            };
+        }
         let buf = vec![0u32; buf_size_bytes / 4];
         let rng_chunk = dev.htod_sync_copy(&buf).unwrap();
 
         Self {
-            buf_size: buf_size_bytes / 4,
             dev,
             kernel,
-            rng_chunk,
-            output_buffer: buf,
+            rng_chunk: Some(rng_chunk),
+            output_buffer: Some(buf),
             chacha_ctx: ChaChaCtx::init(seed, 0, 0),
         }
+    }
+    pub fn init_empty(dev: Arc<CudaDevice>, seed: [u32; 8]) -> Self {
+        Self::init(0, dev, seed)
     }
 
     pub fn fill_rng(&mut self) {
         self.fill_rng_no_host_copy();
 
+        assert!(self.rng_chunk.is_some() && self.output_buffer.is_some());
         self.dev
-            .dtoh_sync_copy_into(&self.rng_chunk, &mut self.output_buffer)
+            .dtoh_sync_copy_into(
+                self.rng_chunk.as_ref().unwrap(),
+                self.output_buffer.as_mut().unwrap(),
+            )
             .unwrap();
     }
 
     pub fn fill_rng_no_host_copy(&mut self) {
-        let num_ks_calls = self.buf_size / 16; // we produce 16 u32s per kernel call
+        assert!(self.rng_chunk.is_some());
+        let len = self.rng_chunk.as_ref().unwrap().len();
+        let num_ks_calls = len / 16; // we produce 16 u32s per kernel call
         let threads_per_block = 256; // todo sync with kernel
         let blocks_per_grid = (num_ks_calls + threads_per_block - 1) / threads_per_block;
         let cfg = LaunchConfig {
@@ -65,11 +81,10 @@ impl ChaChaCudaRng {
             shared_mem_bytes: 0,
         };
         let state_slice = self.dev.htod_sync_copy(&self.chacha_ctx.state).unwrap();
-        let len = self.rng_chunk.len();
         unsafe {
             self.kernel
                 .clone()
-                .launch(cfg, (&mut self.rng_chunk, &state_slice, len))
+                .launch(cfg, (self.rng_chunk.as_mut().unwrap(), &state_slice, len))
                 .unwrap();
         }
         // increment the state counter of the ChaChaRng with the number of produced blocks
@@ -78,16 +93,23 @@ impl ChaChaCudaRng {
         self.chacha_ctx.set_counter(counter);
     }
 
-    pub fn data(&self) -> &[u32] {
-        &self.output_buffer
+    pub fn data(&self) -> Option<&[u32]> {
+        self.output_buffer.as_ref().map(Vec::as_slice)
     }
 
     pub fn get_mut_chacha(&mut self) -> &mut ChaChaCtx {
         &mut self.chacha_ctx
     }
 
-    pub fn cuda_slice(&self) -> &CudaSlice<u32> {
-        &self.rng_chunk
+    pub fn cuda_slice(&self) -> Option<&CudaSlice<u32>> {
+        self.rng_chunk.as_ref()
+    }
+    pub fn set_cuda_slice(&mut self, slice: CudaSlice<u32>) {
+        assert!(self.rng_chunk.is_none());
+        self.rng_chunk = Some(slice);
+    }
+    pub fn take_cuda_slice(&mut self) -> CudaSlice<u32> {
+        self.rng_chunk.take().unwrap()
     }
 }
 
@@ -155,11 +177,11 @@ mod tests {
     fn test_chacha_rng() {
         let mut rng = ChaChaCudaRng::init(1024 * 1024, CudaDevice::new(0).unwrap(), [0u32; 8]);
         rng.fill_rng();
-        let zeros = rng.data().iter().filter(|x| x == &&0).count();
+        let zeros = rng.data().unwrap().iter().filter(|x| x == &&0).count();
         // we would expect no 0s in the output buffer even 1 is 1/4096;
         assert!(zeros <= 1);
-        let data = rng.data().to_vec();
+        let data = rng.data().unwrap().to_vec();
         rng.fill_rng();
-        assert!(&data[..] != rng.data());
+        assert!(&data[..] != rng.data().unwrap());
     }
 }
