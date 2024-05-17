@@ -579,6 +579,15 @@ impl Circuits {
         self.comms[idx].recv(receive, peer_id as i32).unwrap();
     }
 
+    // Fill randomness using the correlated RNG
+    fn fill_rand_u64(&mut self, rand: &mut CudaSlice<u64>, idx: usize) {
+        let rng = &mut self.rngs[idx];
+        let mut rand_trans: CudaViewMut<u32> =
+        // the transmute_mut is safe because we know that one u64 is 2 u32s, and the buffer is aligned properly for the transmute
+            unsafe { rand.transmute_mut(rand.len() * 2).unwrap() };
+        rng.fill_rng_into(&mut rand_trans);
+    }
+
     // TODO include randomness
     fn packed_and_many_pre(
         &mut self,
@@ -589,15 +598,10 @@ impl Circuits {
         bits: usize,
         idx: usize,
     ) {
-        // TODO this is just a placeholder
         let mut rand = self.devs[idx]
             .alloc_zeros::<u64>(self.chunk_size * bits)
             .unwrap();
-        let rng = &mut self.rngs[idx];
-        let mut rand_trans: CudaViewMut<u32> =
-            unsafe { rand.transmute_mut(rand.len() * 2).unwrap() };
-        // rng.set_cuda_slice(rand_trans)
-        rng.fill_rng_into(&mut rand_trans);
+        self.fill_rand_u64(&mut rand, idx);
 
         // TODO also precompute?
         let cfg = Self::launch_config_from_elements_and_threads(
@@ -666,8 +670,8 @@ impl Circuits {
         // rand: &CudaView<u64>,
         idx: usize,
     ) {
-        // TODO this is just a placeholder
-        let rand = self.devs[idx].alloc_zeros::<u64>(self.chunk_size).unwrap();
+        let mut rand = self.devs[idx].alloc_zeros::<u64>(self.chunk_size).unwrap();
+        self.fill_rand_u64(&mut rand, idx);
 
         unsafe {
             self.kernels[idx]
@@ -689,8 +693,8 @@ impl Circuits {
         // rand: &CudaView<u64>,
         idx: usize,
     ) {
-        // TODO this is just a placeholder
-        let rand = self.devs[idx].alloc_zeros::<u64>(x1.len()).unwrap();
+        let mut rand = self.devs[idx].alloc_zeros::<u64>(x1.len()).unwrap();
+        self.fill_rand_u64(&mut rand, idx);
 
         // TODO also precompute?
         let cfg = Self::launch_config_from_elements_and_threads(
@@ -950,19 +954,22 @@ impl Circuits {
         let mut m1 = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_2);
 
         for (idx, (inp, res, m0, m1)) in izip!(inp, outp, &mut m0, &mut m1).enumerate() {
-            // TODO this is just a placeholder
-            let rand_ca = self.devs[idx]
+            let mut rand_ca = self.devs[idx]
                 .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
                 .unwrap();
-            let rand_cb = self.devs[idx]
+            self.rngs[idx].fill_rng_into(&mut rand_ca.slice_mut(..));
+            let mut rand_cb = self.devs[idx]
                 .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
                 .unwrap();
-            let rand_wa1 = self.devs[idx]
+            self.rngs[idx].fill_rng_into(&mut rand_cb.slice_mut(..));
+            let mut rand_wa1 = self.devs[idx]
                 .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
                 .unwrap();
-            let rand_wa2 = self.devs[idx]
+            self.rngs[idx].fill_rng_into(&mut rand_wa1.slice_mut(..));
+            let mut rand_wa2 = self.devs[idx]
                 .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
                 .unwrap();
+            self.rngs[idx].fill_rng_into(&mut rand_wa2.slice_mut(..));
 
             unsafe {
                 self.kernels[idx]
@@ -1019,10 +1026,15 @@ impl Circuits {
 
         for (idx, (inp, res, m0, m1, wc)) in izip!(inp, outp.iter_mut(), &m0, &m1, &wc).enumerate()
         {
-            // TODO this is just a placeholder
-            let rand_ca = self.devs[idx]
+            let mut rand_ca = self.devs[idx]
                 .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
                 .unwrap();
+            self.rngs[idx].fill_rng_into(&mut rand_ca.slice_mut(..));
+            // we need to advance the RNG to the same point as the sender
+            // sender generates 3 more buffers of self.chunk_size * 2 * 64
+            self.rngs[idx].advance_by_bytes(
+                (3 * self.chunk_size * 2 * 64 * std::mem::size_of::<u32>()) as u64,
+            );
 
             unsafe {
                 self.kernels[idx]
@@ -1062,16 +1074,22 @@ impl Circuits {
         let mut wc = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_3);
 
         for (idx, (inp, res, wc)) in izip!(inp, outp.iter_mut(), &mut wc).enumerate() {
-            // TODO this is just a placeholder
-            let rand_cb = self.devs[idx]
+            // skip generation of rand_ca, so we are at the same stream position
+            self.rngs[idx]
+                .advance_by_bytes((self.chunk_size * 2 * 64 * std::mem::size_of::<u32>()) as u64);
+
+            let mut rand_cb = self.devs[idx]
                 .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
                 .unwrap();
-            let rand_wb1 = self.devs[idx]
+            self.rngs[idx].fill_rng_into(&mut rand_cb.slice_mut(..));
+            let mut rand_wb1 = self.devs[idx]
                 .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
                 .unwrap();
-            let rand_wb2 = self.devs[idx]
+            self.rngs[idx].fill_rng_into(&mut rand_wb1.slice_mut(..));
+            let mut rand_wb2 = self.devs[idx]
                 .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
                 .unwrap();
+            self.rngs[idx].fill_rng_into(&mut rand_wb2.slice_mut(..));
 
             unsafe {
                 self.kernels[idx]
@@ -1663,10 +1681,10 @@ impl Circuits {
         for (idx, (m, mc, c, x01)) in
             izip!(mask_lifted, mask_correction, &code, x01.iter_mut()).enumerate()
         {
-            // TODO this is just a placeholder
-            let rand = self.devs[idx]
+            let mut rand = self.devs[idx]
                 .alloc_zeros::<u64>(self.chunk_size * 64)
                 .unwrap();
+            self.fill_rand_u64(&mut rand, idx);
             unsafe {
                 self.kernels[idx]
                     .lift_mul_sub_split
@@ -1770,8 +1788,8 @@ impl Circuits {
         // TODO also precompute?
         let cfg = Self::launch_config_from_elements_and_threads(1, DEFAULT_LAUNCH_CONFIG_THREADS);
 
-        // TODO this is just a placeholder
-        let rand = self.devs[0].alloc_zeros::<u64>(1).unwrap();
+        let mut rand = self.devs[0].alloc_zeros::<u64>(1 * 16).unwrap(); // minimum size is 16 for RNG, need only 1 though
+        self.fill_rand_u64(&mut rand, 0);
 
         let mut current_bitsize = 64;
         while current_bitsize > 1 {

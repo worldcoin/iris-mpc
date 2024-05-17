@@ -82,6 +82,16 @@ impl ChaChaCudaCorrRng {
     pub fn get_mut_chacha(&mut self) -> (&mut ChaChaCtx, &mut ChaChaCtx) {
         (&mut self.chacha_ctx1, &mut self.chacha_ctx2)
     }
+    pub fn advance_by_bytes(&mut self, bytes: u64) {
+        assert!(bytes % 64 == 0, "bytes must be a multiple of 64");
+        let num_ks_calls = bytes / 64; // we produce 16 u32s per kernel call
+        let mut counter = self.chacha_ctx1.get_counter();
+        counter += num_ks_calls; // one call to KS produces 16 u32s
+        self.chacha_ctx1.set_counter(counter);
+        let mut counter = self.chacha_ctx2.get_counter();
+        counter += num_ks_calls; // one call to KS produces 16 u32s
+        self.chacha_ctx2.set_counter(counter);
+    }
 }
 
 // Modeled after:
