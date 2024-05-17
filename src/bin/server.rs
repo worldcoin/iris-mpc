@@ -5,6 +5,7 @@ use gpu_iris_mpc::{setup::iris_db::shamir_iris::ShamirIris, sqs::SQSMessage};
 use serde::{Deserialize, Serialize};
 
 const REGION: &str = "us-east-2";
+const QUERY_SIZE: usize = 30;
 
 #[derive(Debug, Parser)]
 struct Opt {

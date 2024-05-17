@@ -58,4 +58,18 @@ impl ShamirIris {
 
         result
     }
+
+    pub fn rotate(&self) -> Vec<ShamirIris> {
+        let mut reference = self.clone();
+        let mut result = vec![];
+        reference.code.rotate_left(15*4);
+        reference.mask.rotate_left(15*4);
+        for _ in 0..31 {
+            let mut rotated = reference.clone();
+            rotated.code.rotate_right(4);
+            rotated.mask.rotate_right(4);
+            result.push(rotated);
+        }
+        result
+    }
 }
