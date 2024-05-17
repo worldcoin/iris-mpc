@@ -13,7 +13,6 @@ use cudarc::{
     nvrtc::{self, Ptx},
 };
 use itertools::izip;
-use rand::rngs;
 use std::{
     rc::Rc,
     str::FromStr,
@@ -588,7 +587,6 @@ impl Circuits {
         rng.fill_rng_into(&mut rand_trans);
     }
 
-    // TODO include randomness
     fn packed_and_many_pre(
         &mut self,
         x1: &ChunkShareView<u64>,
@@ -598,6 +596,7 @@ impl Circuits {
         bits: usize,
         idx: usize,
     ) {
+        // TODO: do not fill with zeros for speedup
         let mut rand = self.devs[idx]
             .alloc_zeros::<u64>(self.chunk_size * bits)
             .unwrap();
@@ -661,7 +660,6 @@ impl Circuits {
         }
     }
 
-    // TODO include randomness
     fn and_many_pre(
         &mut self,
         x1: &ChunkShareView<u64>,
@@ -685,7 +683,6 @@ impl Circuits {
         }
     }
 
-    // TODO include randomness
     fn or_many_pre_assign(
         &mut self,
         x1: &mut ChunkShareView<u64>,
@@ -948,7 +945,6 @@ impl Circuits {
         }
     }
 
-    // TODO include randomness
     fn bit_inject_neg_ot_sender(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u32>]) {
         let mut m0 = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_1);
         let mut m1 = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_2);
@@ -1006,7 +1002,6 @@ impl Circuits {
         Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_2, m1);
     }
 
-    // TODO include randomness
     fn bit_inject_neg_ot_receiver(
         &mut self,
         inp: &[ChunkShare<u64>],
@@ -1069,7 +1064,6 @@ impl Circuits {
         Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_3, wc);
     }
 
-    // TODO include randomness
     fn bit_inject_neg_ot_helper(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u32>]) {
         let mut wc = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_3);
 
@@ -1667,7 +1661,6 @@ impl Circuits {
 
     // Puts the result (x2) into mask_lifted and returns x01
     // requires 64 * n_devices * chunk_size random u64 elements
-    // TODO include randomness
     pub fn lift_mul_sub_split(
         &mut self,
         mask_lifted: &mut [ChunkShare<u64>],
@@ -1714,7 +1707,6 @@ impl Circuits {
 
     // Input has size ChunkSize
     // Result is in lowest u64 of the input
-    // TODO include randmoness
     fn or_tree_on_gpu(&mut self, bits: &mut [ChunkShareView<u64>], size: usize) {
         debug_assert_eq!(self.n_devices, bits.len());
         debug_assert!(size <= bits[0].len());
@@ -1780,7 +1772,6 @@ impl Circuits {
         }
     }
 
-    // TODO include randomness
     fn collapse_u64(&mut self, input: &mut ChunkShare<u64>) {
         let mut res = input.get_offset(0, 1);
         let helper = input.get_offset(1, 1);
