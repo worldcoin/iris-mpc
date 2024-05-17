@@ -294,7 +294,6 @@ impl ShareDB {
         is_remote: Option<bool>,
         server_port: Option<u16>,
     ) -> Self {
-        let now = Instant::now();
         // TODO: replace with a MAX_DB_SIZE to allow for insertions
         let db_length = db_entries.len() / IRIS_CODE_LENGTH;
         let n_devices = device_manager.device_count();
@@ -314,17 +313,11 @@ impl ShareDB {
             kernels.push(function);
         }
 
-        println!("1: {:?}", now.elapsed());
-        let now = Instant::now();
-
         let mut a1_host = db_entries
             .par_iter()
             .map(|&x: &u16| (x >> 8) as u8)
             .collect::<Vec<_>>();
         let mut a0_host = db_entries.par_iter().map(|&x| x as u8).collect::<Vec<_>>();
-
-        println!("2: {:?}", now.elapsed());
-        let now = Instant::now();
 
         // TODO: maybe use gemm here already to speed up loading (we'll need to correct the results as well)
         let a1_sums: Vec<u32> = a1_host
@@ -337,9 +330,6 @@ impl ShareDB {
             .map(|row| row.par_iter().map(|&x| x as u32).sum::<u32>())
             .collect();
 
-        println!("3: {:?}", now.elapsed());
-        let now = Instant::now();
-
         a1_host
             .par_iter_mut()
             .for_each(|x| *x = (*x as i32 - 128) as u8);
@@ -347,9 +337,6 @@ impl ShareDB {
         a0_host
             .par_iter_mut()
             .for_each(|x| *x = (*x as i32 - 128) as u8);
-
-        println!("4: {:?}", now.elapsed());
-        let now = Instant::now();
 
         // Split up db and load to all devices
         let chunk_size = db_length / n_devices;
@@ -380,8 +367,6 @@ impl ShareDB {
         let ones = (0..n_devices)
             .map(|idx| device_manager.device(idx).htod_sync_copy(&ones).unwrap())
             .collect::<Vec<_>>();
-
-        println!("5: {:?}", now.elapsed());
 
         //TODO: depending on the batch size, intermediate_results can get quite big, we can perform the gemm in chunks to limit this
         let mut intermediate_results = vec![];
@@ -982,7 +967,6 @@ mod tests {
 
             reconstructed_codes.push(code);
             reconstructed_masks.push(mask);
-            println!("{} {}", code, mask);
         }
 
         // Calculate the distance in plain
