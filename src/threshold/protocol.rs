@@ -1,5 +1,8 @@
 use super::cuda::kernel::B_BITS;
-use crate::{http_root, setup::shamir::P, threshold::cuda::PTX_SRC, IdWrapper};
+use crate::{
+    http_root, rng::chacha_corr::ChaChaCudaCorrRng, setup::shamir::P, threshold::cuda::PTX_SRC,
+    IdWrapper,
+};
 use axum::{routing::get, Router};
 use cudarc::{
     driver::{
@@ -10,6 +13,7 @@ use cudarc::{
     nvrtc::{self, Ptx},
 };
 use itertools::izip;
+use rand::rngs;
 use std::{
     rc::Rc,
     str::FromStr,
@@ -358,6 +362,7 @@ pub struct Circuits {
     comms: Vec<Rc<Comm>>,
     kernels: Vec<Kernels>,
     buffers: Buffers,
+    rngs: Vec<ChaChaCudaCorrRng>,
 }
 
 impl Circuits {
@@ -403,14 +408,21 @@ impl Circuits {
 
         let mut devs = Vec::with_capacity(n_devices);
         let mut kernels = Vec::with_capacity(n_devices);
+        let mut rngs = Vec::with_capacity(n_devices);
 
         let ptx = nvrtc::compile_ptx(PTX_SRC).unwrap();
         for i in 0..n_devices {
             let dev = CudaDevice::new(i).unwrap();
             let kernel = Kernels::new(dev.clone(), ptx.clone());
+            let rng = ChaChaCudaCorrRng::init(
+                dev.clone(),
+                [peer_id as u32; 8],
+                [((peer_id + 1) % 3) as u32; 8],
+            );
 
             devs.push(dev);
             kernels.push(kernel);
+            rngs.push(rng);
         }
 
         let comms = Self::instantiate_network(peer_id, peer_url, server_port, &devs);
@@ -431,6 +443,7 @@ impl Circuits {
             comms,
             kernels,
             buffers,
+            rngs,
         }
     }
 
@@ -577,9 +590,14 @@ impl Circuits {
         idx: usize,
     ) {
         // TODO this is just a placeholder
-        let rand = self.devs[idx]
+        let mut rand = self.devs[idx]
             .alloc_zeros::<u64>(self.chunk_size * bits)
             .unwrap();
+        let rng = &mut self.rngs[idx];
+        let mut rand_trans: CudaViewMut<u32> =
+            unsafe { rand.transmute_mut(rand.len() * 2).unwrap() };
+        // rng.set_cuda_slice(rand_trans)
+        rng.fill_rng_into(&mut rand_trans);
 
         // TODO also precompute?
         let cfg = Self::launch_config_from_elements_and_threads(

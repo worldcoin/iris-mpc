@@ -1,15 +1,13 @@
 use std::sync::Arc;
 
 use cudarc::{
-    driver::{CudaDevice, CudaFunction, CudaSlice, DeviceSlice, LaunchAsync, LaunchConfig},
+    driver::{CudaDevice, CudaFunction, CudaViewMut, DeviceSlice, LaunchAsync, LaunchConfig},
     nvrtc::compile_ptx,
 };
 
 pub struct ChaChaCudaCorrRng {
     dev: Arc<CudaDevice>,
     kernels: [CudaFunction; 2],
-    rng_chunk: Option<CudaSlice<u32>>,
-    output_buffer: Option<Vec<u32>>,
     /// the current state of the chacha rng
     chacha_ctx1: ChaChaCtx,
     chacha_ctx2: ChaChaCtx,
@@ -21,18 +19,8 @@ const CHACHA2_FUNCTION_NAME: &str = "chacha12_xor";
 
 impl ChaChaCudaCorrRng {
     // takes number of bytes to produce, buffer has u32 datatype so will produce buf_size/4 u32s
-    pub fn init(
-        buf_size_bytes: usize,
-        dev: Arc<CudaDevice>,
-        seed1: [u32; 8],
-        seed2: [u32; 8],
-    ) -> Self {
+    pub fn init(dev: Arc<CudaDevice>, seed1: [u32; 8], seed2: [u32; 8]) -> Self {
         let ptx = compile_ptx(CHACHA_PTX_SRC).unwrap();
-
-        assert!(
-            buf_size_bytes % 64 == 0,
-            "buf_size must be a multiple of 64 atm"
-        );
 
         dev.load_ptx(
             ptx.clone(),
@@ -47,47 +35,17 @@ impl ChaChaCudaCorrRng {
             .get_func(CHACHA_FUNCTION_NAME, CHACHA2_FUNCTION_NAME)
             .unwrap();
 
-        if buf_size_bytes == 0 {
-            return Self {
-                dev,
-                kernels: [kernel1, kernel2],
-                rng_chunk: None,
-                output_buffer: None,
-                chacha_ctx1: ChaChaCtx::init(seed1, 0, 0),
-                chacha_ctx2: ChaChaCtx::init(seed2, 0, 0),
-            };
-        }
-        let buf = vec![0u32; buf_size_bytes / 4];
-        let rng_chunk = dev.htod_sync_copy(&buf).unwrap();
-
         Self {
             dev,
             kernels: [kernel1, kernel2],
-            rng_chunk: Some(rng_chunk),
-            output_buffer: Some(buf),
             chacha_ctx1: ChaChaCtx::init(seed1, 0, 0),
             chacha_ctx2: ChaChaCtx::init(seed2, 0, 0),
         }
     }
-    pub fn init_empty(dev: Arc<CudaDevice>, seed1: [u32; 8], seed2: [u32; 8]) -> Self {
-        Self::init(0, dev, seed1, seed2)
-    }
 
-    pub fn fill_rng(&mut self) {
-        self.fill_rng_no_host_copy();
-
-        assert!(self.rng_chunk.is_some() && self.output_buffer.is_some());
-        self.dev
-            .dtoh_sync_copy_into(
-                self.rng_chunk.as_ref().unwrap(),
-                self.output_buffer.as_mut().unwrap(),
-            )
-            .unwrap();
-    }
-
-    pub fn fill_rng_no_host_copy(&mut self) {
-        assert!(self.rng_chunk.is_some());
-        let len = self.rng_chunk.as_ref().unwrap().len();
+    pub fn fill_rng_into(&mut self, buf: &mut CudaViewMut<u32>) {
+        let len = buf.len();
+        assert!(len % 16 == 0, "buffer length must be a multiple of 16");
         let num_ks_calls = len / 16; // we produce 16 u32s per kernel call
         let threads_per_block = 256; // todo sync with kernel
         let blocks_per_grid = (num_ks_calls + threads_per_block - 1) / threads_per_block;
@@ -101,7 +59,7 @@ impl ChaChaCudaCorrRng {
         unsafe {
             self.kernels[0]
                 .clone()
-                .launch(cfg, (self.rng_chunk.as_mut().unwrap(), &state_slice1, len))
+                .launch(cfg, (&mut *buf, &state_slice1, len))
                 .unwrap();
         }
         // increment the state counter of the ChaChaRng with the number of produced blocks
@@ -112,7 +70,7 @@ impl ChaChaCudaCorrRng {
         unsafe {
             self.kernels[1]
                 .clone()
-                .launch(cfg, (self.rng_chunk.as_mut().unwrap(), &state_slice2, len))
+                .launch(cfg, (buf, &state_slice2, len))
                 .unwrap();
         }
         // increment the state counter of the ChaChaRng with the number of produced blocks
@@ -121,27 +79,8 @@ impl ChaChaCudaCorrRng {
         self.chacha_ctx2.set_counter(counter);
     }
 
-    pub fn data(&self) -> Option<&[u32]> {
-        self.output_buffer.as_ref().map(Vec::as_slice)
-    }
-
     pub fn get_mut_chacha(&mut self) -> (&mut ChaChaCtx, &mut ChaChaCtx) {
         (&mut self.chacha_ctx1, &mut self.chacha_ctx2)
-    }
-
-    pub fn cuda_slice(&self) -> Option<&CudaSlice<u32>> {
-        self.rng_chunk.as_ref()
-    }
-    pub fn set_cuda_slice(&mut self, slice: CudaSlice<u32>) {
-        assert!(self.rng_chunk.is_none());
-        assert!(
-            slice.len() % 16 == 0,
-            "slice length must be a multiple of 16"
-        );
-        self.rng_chunk = Some(slice);
-    }
-    pub fn take_cuda_slice(&mut self) -> CudaSlice<u32> {
-        self.rng_chunk.take().unwrap()
     }
 }
 
@@ -209,42 +148,38 @@ mod tests {
 
     #[test]
     fn test_chacha_rng() {
-        let mut rng = ChaChaCudaCorrRng::init(
-            1024 * 1024,
-            CudaDevice::new(0).unwrap(),
-            [0u32; 8],
-            [1u32; 8],
-        );
-        rng.fill_rng();
-        let zeros = rng.data().unwrap().iter().filter(|x| x == &&0).count();
+        let dev = CudaDevice::new(0).unwrap();
+        let mut rng = ChaChaCudaCorrRng::init(dev.clone(), [0u32; 8], [1u32; 8]);
+        let mut buf = dev.alloc_zeros(1024 * 1024).unwrap();
+        rng.fill_rng_into(&mut buf.slice_mut(..));
+        let data = dev.dtoh_sync_copy(&buf).unwrap();
+        let zeros = data.iter().filter(|x| x == &&0).count();
         // we would expect no 0s in the output buffer even 1 is 1/4096;
         assert!(zeros <= 1);
-        let data = rng.data().unwrap().to_vec();
-        rng.fill_rng();
-        assert!(&data[..] != rng.data().unwrap());
+        rng.fill_rng_into(&mut buf.slice_mut(..));
+        let data2 = dev.dtoh_sync_copy(&buf).unwrap();
+        assert!(data != data2);
     }
 
     #[test]
     fn test_correlation() {
+        let dev = CudaDevice::new(0).unwrap();
         let seed1 = [0u32; 8];
         let seed2 = [1u32; 8];
         let seed3 = [2u32; 8];
-        let mut rng1 =
-            ChaChaCudaCorrRng::init(1024 * 1024, CudaDevice::new(0).unwrap(), seed1, seed2);
-        let mut rng2 =
-            ChaChaCudaCorrRng::init(1024 * 1024, CudaDevice::new(0).unwrap(), seed2, seed3);
-        let mut rng3 =
-            ChaChaCudaCorrRng::init(1024 * 1024, CudaDevice::new(0).unwrap(), seed3, seed1);
+        let mut rng1 = ChaChaCudaCorrRng::init(dev.clone(), seed1, seed2);
+        let mut rng2 = ChaChaCudaCorrRng::init(dev.clone(), seed2, seed3);
+        let mut rng3 = ChaChaCudaCorrRng::init(dev.clone(), seed3, seed1);
 
-        rng1.fill_rng();
-        rng2.fill_rng();
-        rng3.fill_rng();
+        let mut buf = dev.alloc_zeros(1024 * 1024).unwrap();
+        rng1.fill_rng_into(&mut buf.slice_mut(..));
+        let data1 = dev.dtoh_sync_copy(&buf).unwrap();
+        rng2.fill_rng_into(&mut buf.slice_mut(..));
+        let data2 = dev.dtoh_sync_copy(&buf).unwrap();
+        rng3.fill_rng_into(&mut buf.slice_mut(..));
+        let data3 = dev.dtoh_sync_copy(&buf).unwrap();
 
-        for (a, b, c) in izip!(
-            rng1.data().unwrap(),
-            rng2.data().unwrap(),
-            rng3.data().unwrap()
-        ) {
+        for (a, b, c) in izip!(data1, data2, data3) {
             assert_eq!(a ^ b ^ c, 0);
         }
     }
