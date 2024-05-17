@@ -1,6 +1,8 @@
 use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_sqs::{config::Region, meta::PKG_VERSION, Client, Error};
 use clap::Parser;
+use gpu_iris_mpc::{setup::iris_db::shamir_iris::ShamirIris, sqs::SQSMessage};
+use serde::{Deserialize, Serialize};
 
 const REGION: &str = "us-east-2";
 
@@ -10,18 +12,15 @@ struct Opt {
     queue: Option<String>,
 }
 
-#[derive(Debug)]
-struct SQSMessage {
-    body: String,
-}
-
-async fn receive(client: &Client, queue_url: &String) -> Result<(), Error> {
+async fn receive(client: &Client, queue_url: &String) -> eyre::Result<()> {
     let rcv_message_output = client.receive_message().queue_url(queue_url).send().await?;
 
     for message in rcv_message_output.messages.unwrap_or_default() {
-        println!("Got the message: {:#?}", message);
+        let messsage: SQSMessage = serde_json::from_str(message.body().unwrap())?;
+        let iris: ShamirIris = messsage.message.into();
 
-        // client.delete_message().receipt_handle(message.receipt_handle)
+        // put in batch
+
     }
 
     Ok(())
