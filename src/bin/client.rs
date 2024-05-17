@@ -1,4 +1,4 @@
-use aws_sdk_sns::{config::Region, Client};
+use aws_sdk_sns::{config::Region, types::PublishBatchRequestEntry, Client};
 use clap::Parser;
 use gpu_iris_mpc::{
     setup::iris_db::{iris::IrisCode, shamir_iris::ShamirIris},
@@ -36,6 +36,7 @@ async fn main() -> eyre::Result<()> {
         let shared_template = ShamirIris::share_iris(&template, &mut rng);
         let id = Uuid::new_v4();
 
+        let mut messages = vec![];
         for i in 0..3 {
             let request_message = SMPCRequest {
                 request_type: ENROLLMENT_REQUEST_TYPE.to_string(),
@@ -44,16 +45,22 @@ async fn main() -> eyre::Result<()> {
                 mask_code: shared_template[i].mask.to_vec(),
             };
 
-            let message = to_string(&request_message)?;
-
-            client
-                .publish()
-                .topic_arn(topic_arn.clone())
-                .message(message)
-                .message_group_id(format!("node{}", i))
-                .send()
-                .await?;
+            messages.push(
+                PublishBatchRequestEntry::builder()
+                    .message(to_string(&request_message)?)
+                    .message_group_id(format!("node{}", i))
+                    .build()
+                    .unwrap(),
+            );
         }
+
+        // Send all messages in batch
+        client
+            .publish_batch()
+            .topic_arn(topic_arn.clone())
+            .set_publish_batch_request_entries(Some(messages))
+            .send()
+            .await?;
     }
 
     Ok(())
