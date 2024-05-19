@@ -25,7 +25,6 @@ use gpu_iris_mpc::{
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 const REGION: &str = "us-east-2";
-const QUERY_SIZE: usize = 30;
 const DB_SIZE: usize = 8 * 1_000;
 const QUERIES: usize = 930;
 const RNG_SEED: u64 = 42;
@@ -48,7 +47,7 @@ struct Opt {
 async fn receive_batch(client: &Client, queue_url: &String) -> eyre::Result<Vec<ShamirIris>> {
     let mut batch = vec![];
 
-    while batch.len() < QUERY_SIZE {
+    while batch.len() < QUERIES {
         let rcv_message_output = client
             .receive_message()
             .max_number_of_messages(1i32)
