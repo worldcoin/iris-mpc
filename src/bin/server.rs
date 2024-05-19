@@ -1,7 +1,14 @@
 use aws_sdk_sqs::{config::Region, Client, Error};
 use clap::Parser;
-use cudarc::driver::{result::{memcpy_dtoh_async, stream::synchronize}, sys::lib, DevicePtr};
-use gpu_iris_mpc::{setup::iris_db::shamir_iris::ShamirIris, sqs::{SMPCRequest, SQSMessage}};
+use cudarc::driver::{
+    result::{memcpy_dtoh_async, stream::synchronize},
+    sys::lib,
+    DevicePtr,
+};
+use gpu_iris_mpc::{
+    setup::iris_db::shamir_iris::ShamirIris,
+    sqs::{SMPCRequest, SQSMessage},
+};
 use std::{env, fs::metadata, time::Instant};
 
 use gpu_iris_mpc::{
@@ -74,7 +81,11 @@ fn prepare_query_batch(batch: Vec<ShamirIris>) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
-    let Opt { queue, party_id, bootstrap_url} = Opt::parse();
+    let Opt {
+        queue,
+        party_id,
+        bootstrap_url,
+    } = Opt::parse();
 
     let region_provider = Region::new(REGION);
     let shared_config = aws_config::from_env().region(region_provider).load().await;
@@ -211,7 +222,10 @@ async fn main() -> eyre::Result<()> {
             &codes_engine.results_peers,
             &masks_engine.results_peers,
             request_streams,
-            results[request_counter % MAX_CONCURRENT_REQUESTS].iter().map(|r| *r.device_ptr()).collect::<Vec<_>>(),
+            results[request_counter % MAX_CONCURRENT_REQUESTS]
+                .iter()
+                .map(|r| *r.device_ptr())
+                .collect::<Vec<_>>(),
         );
 
         device_manager.record_event(request_streams, &next_exchange_event);
@@ -224,34 +238,41 @@ async fn main() -> eyre::Result<()> {
         next_exchange_event = device_manager.create_events();
 
         // Start thread to wait for the results
-        // let tmp_streams = streams[request_counter % MAX_CONCURRENT_REQUESTS].iter().map(|s| s.stream as u64).collect::<Vec<_>>();
-        // let tmp_results = results[request_counter % MAX_CONCURRENT_REQUESTS].clone();
-        // let tmp_devs = distance_comparator.devs.clone();
-        // tokio::spawn(async move {
-        let mut index_results = vec![];
-        let tmp: Vec<u64> = results[request_counter % MAX_CONCURRENT_REQUESTS].iter().map(|r| *r.device_ptr()).collect::<Vec<_>>();
-        for i in 0..distance_comparator.devs.len() {
-            distance_comparator.devs[i].bind_to_thread().unwrap();
-            let mut tmp_result = vec![0u32; QUERIES];
-            unsafe {
-                    lib()
-                    .cuMemcpyDtoHAsync_v2(
-                        tmp_result.as_mut_ptr() as *mut _,
-                        tmp[i],
-                        QUERIES * std::mem::size_of::<u32>(),
-                        streams[request_counter % MAX_CONCURRENT_REQUESTS][i].stream as *mut _,
-                    )
-                    .result().unwrap();
-                synchronize(streams[request_counter % MAX_CONCURRENT_REQUESTS][i].stream as *mut _).unwrap();
-            }
-            index_results.push(tmp_result);
-        }
+        let tmp_streams = streams[request_counter % MAX_CONCURRENT_REQUESTS]
+            .iter()
+            .map(|s| s.stream as u64)
+            .collect::<Vec<_>>();
+        let tmp_devs = distance_comparator.devs.clone();
+        let tmp_results: Vec<u64> = results[request_counter % MAX_CONCURRENT_REQUESTS]
+            .iter()
+            .map(|r| *r.device_ptr())
+            .collect::<Vec<_>>();
 
-        for j in 0..8 {
-            print!("{:?} ", index_results[j][0]);
-        }
-        println!("")
-        // });
+        tokio::spawn(async move {
+            let mut index_results = vec![];
+            for i in 0..tmp_devs.len() {
+                tmp_devs[i].bind_to_thread().unwrap();
+                let mut tmp_result = vec![0u32; QUERIES];
+                unsafe {
+                    lib()
+                        .cuMemcpyDtoHAsync_v2(
+                            tmp_result.as_mut_ptr() as *mut _,
+                            tmp_results[i],
+                            QUERIES * std::mem::size_of::<u32>(),
+                            tmp_streams[i] as *mut _,
+                        )
+                        .result()
+                        .unwrap();
+                    synchronize(tmp_streams[i] as *mut _).unwrap();
+                }
+                index_results.push(tmp_result);
+            }
+
+            for j in 0..8 {
+                print!("{:?} ", index_results[j][0]);
+            }
+            println!("")
+        });
     }
 
     Ok(())
