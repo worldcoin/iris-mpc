@@ -25,7 +25,7 @@ use gpu_iris_mpc::{
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 const REGION: &str = "us-east-2";
-const DB_SIZE: usize = 8 * 100_000;
+const DB_SIZE: usize = 8 * 1_000;
 const QUERIES: usize = 930;
 const RNG_SEED: u64 = 42;
 const MAX_CONCURRENT_REQUESTS: usize = 5;
@@ -118,6 +118,9 @@ async fn main() -> eyre::Result<()> {
     } else {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
+
+        println!("{:?}", db.db[0].code);
+
         let shamir_db = ShamirIrisDB::share_db_par(&db, &mut rng);
 
         let codes_db = shamir_db[party_id]

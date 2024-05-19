@@ -25,6 +25,7 @@ struct Opt {
     #[structopt(short, long)]
     topic_arn: String,
 
+    #[structopt(short, long)]
     db_index: Option<usize>,
 }
 
@@ -49,6 +50,8 @@ async fn main() -> eyre::Result<()> {
         } else {
             IrisCode::random_rng(&mut rng)
         };
+
+        println!("{:?}", template.code);
         let shared_template = ShamirIris::share_iris(&template, &mut rng);
 
         let mut messages = vec![];
