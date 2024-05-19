@@ -291,7 +291,7 @@ impl ShareDB {
         db_entries: &[u16],
         query_length: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
-        peer_url: Option<&String>,
+        peer_url: Option<String>,
         is_remote: Option<bool>,
         server_port: Option<u16>,
     ) -> Self {

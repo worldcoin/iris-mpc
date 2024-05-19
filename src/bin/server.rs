@@ -35,7 +35,7 @@ struct Opt {
     party_id: usize,
 
     #[structopt(short, long)]
-    bootstrap_url: String,
+    bootstrap_url: Option<String>,
 }
 
 async fn receive_batch(client: &Client, queue_url: &String) -> eyre::Result<Vec<ShamirIris>> {
@@ -137,7 +137,7 @@ async fn main() -> eyre::Result<()> {
         &codes_db,
         QUERIES,
         chacha_seeds,
-        Some(&bootstrap_url),
+        bootstrap_url.clone(),
         Some(true),
         Some(3000),
     );
@@ -151,7 +151,7 @@ async fn main() -> eyre::Result<()> {
         &masks_db,
         QUERIES,
         chacha_seeds,
-        Some(&bootstrap_url),
+        bootstrap_url.clone(),
         Some(true),
         Some(3001),
     );

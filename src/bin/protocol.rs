@@ -38,7 +38,7 @@ async fn main() -> eyre::Result<()> {
 
     let args = env::args().collect::<Vec<_>>();
     let party_id: usize = args[1].parse().unwrap();
-    let url = args.get(2);
+    let url = Some(*args.get(2).unwrap());
 
     // Init RNGs
     let chacha_seeds = match party_id {
@@ -193,13 +193,13 @@ async fn main() -> eyre::Result<()> {
     }
 
     // Now all streams are running, we need to await each on CPU
-    for i in 0..request_batches.len() {
-        let results = distance_comparator.fetch_results(&results[i], &streams[i]);
-        for j in 0..8 {
-            print!("{:?} ", results[j][0]);
-        }
-        println!("")
-    }
+    // for i in 0..request_batches.len() {
+    //     let results = distance_comparator.fetch_results(&results[i], &streams[i]);
+    //     for j in 0..8 {
+    //         print!("{:?} ", results[j][0]);
+    //     }
+    //     println!("")
+    // }
 
     println!(
         "Total time for {} samples: {:?} ({:.4} Mcomps/s)",
