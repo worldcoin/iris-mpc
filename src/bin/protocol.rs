@@ -1,259 +1,259 @@
-///! End-to-end example implementation of the MPC v1.5 protocol
-///! This requires three individual nodes. It can be run like this:
-///! Node 0: cargo run --release --bin protocol 0
-///! Node 1: cargo run --release --bin protocol 1 [NODE_0_IP]
-///! Node 2: cargo run --release --bin protocol 2 [NODE_0_IP]
-use std::{env, fs::metadata, time::Instant};
+// ///! End-to-end example implementation of the MPC v1.5 protocol
+// ///! This requires three individual nodes. It can be run like this:
+// ///! Node 0: cargo run --release --bin protocol 0
+// ///! Node 1: cargo run --release --bin protocol 1 [NODE_0_IP]
+// ///! Node 2: cargo run --release --bin protocol 2 [NODE_0_IP]
+// use std::{env, fs::metadata, time::Instant};
 
-use gpu_iris_mpc::{
-    device_manager::DeviceManager,
-    mmap::{read_mmap_file, write_mmap_file},
-    preprocess_query,
-    setup::{
-        id::PartyID,
-        iris_db::{db::IrisDB, iris::IrisCode, shamir_db::ShamirIrisDB, shamir_iris::ShamirIris},
-        shamir::Shamir,
-    },
-    DistanceComparator, ShareDB,
-};
-use rand::{rngs::StdRng, Rng, SeedableRng};
-use tokio::time;
+// use gpu_iris_mpc::{
+//     device_manager::DeviceManager,
+//     mmap::{read_mmap_file, write_mmap_file},
+//     preprocess_query,
+//     setup::{
+//         id::PartyID,
+//         iris_db::{db::IrisDB, iris::IrisCode, shamir_db::ShamirIrisDB, shamir_iris::ShamirIris},
+//         shamir::Shamir,
+//     },
+//     DistanceComparator, ShareDB,
+// };
+// use rand::{rngs::StdRng, Rng, SeedableRng};
+// use tokio::time;
 
-const DB_SIZE: usize = 8 * 500_000;
-const QUERIES: usize = 930;
-const RNG_SEED: u64 = 42;
-const N_BATCHES: usize = 10; // We expect 10 batches with each QUERIES/ROTATIONS
-const MAX_CONCURRENT_REQUESTS: usize = 20;
-const DB_CODE_FILE: &str = "/opt/dlami/nvme/codes.db";
-const DB_MASK_FILE: &str = "/opt/dlami/nvme/masks.db";
+// const DB_SIZE: usize = 8 * 500_000;
+// const QUERIES: usize = 930;
+// const RNG_SEED: u64 = 42;
+// const N_BATCHES: usize = 10; // We expect 10 batches with each QUERIES/ROTATIONS
+// const MAX_CONCURRENT_REQUESTS: usize = 20;
+// const DB_CODE_FILE: &str = "/opt/dlami/nvme/codes.db";
+// const DB_MASK_FILE: &str = "/opt/dlami/nvme/masks.db";
 
-#[tokio::main]
-async fn main() -> eyre::Result<()> {
-    let start_time = Instant::now();
-    // TODO
-    let mut rng = StdRng::seed_from_u64(RNG_SEED);
-    let seed0 = rng.gen::<[u32; 8]>();
-    let seed1 = rng.gen::<[u32; 8]>();
-    let seed2 = rng.gen::<[u32; 8]>();
+// #[tokio::main]
+// async fn main() -> eyre::Result<()> {
+//     let start_time = Instant::now();
+//     // TODO
+//     let mut rng = StdRng::seed_from_u64(RNG_SEED);
+//     let seed0 = rng.gen::<[u32; 8]>();
+//     let seed1 = rng.gen::<[u32; 8]>();
+//     let seed2 = rng.gen::<[u32; 8]>();
 
-    let args = env::args().collect::<Vec<_>>();
-    let party_id: usize = args[1].parse().unwrap();
-    let url = Some(*args.get(2).unwrap());
+//     let args = env::args().collect::<Vec<_>>();
+//     let party_id: usize = args[1].parse().unwrap();
+//     let url = Some(*args.get(2).unwrap());
 
-    // Init RNGs
-    let chacha_seeds = match party_id {
-        0 => (seed0, seed2),
-        1 => (seed1, seed0),
-        2 => (seed2, seed1),
-        _ => unimplemented!(),
-    };
+//     // Init RNGs
+//     let chacha_seeds = match party_id {
+//         0 => (seed0, seed2),
+//         1 => (seed1, seed0),
+//         2 => (seed2, seed1),
+//         _ => unimplemented!(),
+//     };
 
-    // Init DB
-    let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
-    let shamir_db = ShamirIrisDB::share_db_par(&db, &mut rng);
-    let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(party_id as u8).unwrap());
+//     // Init DB
+//     let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
+//     let shamir_db = ShamirIrisDB::share_db_par(&db, &mut rng);
+//     let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(party_id as u8).unwrap());
 
-    println!("Random shared DB generated!");
+//     println!("Random shared DB generated!");
 
-    // Import masks to GPU DB
-    let codes_db = if metadata(DB_CODE_FILE).is_ok() {
-        read_mmap_file(DB_CODE_FILE)?
-    } else {
-        let codes_db = shamir_db[party_id]
-            .db
-            .iter()
-            .flat_map(|entry| entry.code)
-            .collect::<Vec<_>>();
+//     // Import masks to GPU DB
+//     let codes_db = if metadata(DB_CODE_FILE).is_ok() {
+//         read_mmap_file(DB_CODE_FILE)?
+//     } else {
+//         let codes_db = shamir_db[party_id]
+//             .db
+//             .iter()
+//             .flat_map(|entry| entry.code)
+//             .collect::<Vec<_>>();
 
-        write_mmap_file(DB_CODE_FILE, &codes_db)?;
-        codes_db
-    };
+//         write_mmap_file(DB_CODE_FILE, &codes_db)?;
+//         codes_db
+//     };
 
-    let masks_db = if metadata(DB_MASK_FILE).is_ok() {
-        read_mmap_file(DB_MASK_FILE)?
-    } else {
-        let masks_db = shamir_db[party_id]
-            .db
-            .iter()
-            .flat_map(|entry| entry.mask)
-            .collect::<Vec<_>>();
+//     let masks_db = if metadata(DB_MASK_FILE).is_ok() {
+//         read_mmap_file(DB_MASK_FILE)?
+//     } else {
+//         let masks_db = shamir_db[party_id]
+//             .db
+//             .iter()
+//             .flat_map(|entry| entry.mask)
+//             .collect::<Vec<_>>();
 
-        write_mmap_file(DB_MASK_FILE, &masks_db)?;
-        masks_db
-    };
+//         write_mmap_file(DB_MASK_FILE, &masks_db)?;
+//         masks_db
+//     };
 
-    println!("Starting engines...");
+//     println!("Starting engines...");
 
-    let device_manager = DeviceManager::init();
+//     let device_manager = DeviceManager::init();
 
-    let mut codes_engine = ShareDB::init(
-        party_id,
-        device_manager.clone(),
-        l_coeff,
-        &codes_db,
-        QUERIES,
-        chacha_seeds,
-        url.clone(),
-        Some(true),
-        Some(3000),
-    );
+//     let mut codes_engine = ShareDB::init(
+//         party_id,
+//         device_manager.clone(),
+//         l_coeff,
+//         &codes_db,
+//         QUERIES,
+//         chacha_seeds,
+//         url.clone(),
+//         Some(true),
+//         Some(3000),
+//     );
 
-    println!("Codes Engines ready!");
+//     println!("Codes Engines ready!");
 
-    let mut masks_engine = ShareDB::init(
-        party_id,
-        device_manager.clone(),
-        l_coeff,
-        &masks_db,
-        QUERIES,
-        chacha_seeds,
-        url.clone(),
-        Some(true),
-        Some(3001),
-    );
-    let mut distance_comparator = DistanceComparator::init(DB_SIZE, QUERIES);
+//     let mut masks_engine = ShareDB::init(
+//         party_id,
+//         device_manager.clone(),
+//         l_coeff,
+//         &masks_db,
+//         QUERIES,
+//         chacha_seeds,
+//         url.clone(),
+//         Some(true),
+//         Some(3001),
+//     );
+//     let mut distance_comparator = DistanceComparator::init(DB_SIZE, QUERIES);
 
-    println!("Engines ready!");
+//     println!("Engines ready!");
 
-    // Prepare streams etc.
-    let mut streams = vec![];
-    let mut cublas_handles = vec![];
-    let mut results = vec![];
-    for i in 0..MAX_CONCURRENT_REQUESTS {
-        let tmp_streams = device_manager.fork_streams();
-        cublas_handles.push(device_manager.create_cublas(&tmp_streams));
-        streams.push(tmp_streams);
-        results.push(distance_comparator.prepare_results());
-    }
+//     // Prepare streams etc.
+//     let mut streams = vec![];
+//     let mut cublas_handles = vec![];
+//     let mut results = vec![];
+//     for i in 0..MAX_CONCURRENT_REQUESTS {
+//         let tmp_streams = device_manager.fork_streams();
+//         cublas_handles.push(device_manager.create_cublas(&tmp_streams));
+//         streams.push(tmp_streams);
+//         results.push(distance_comparator.prepare_results());
+//     }
 
-    println!("start took: {:?}", start_time.elapsed());
+//     println!("start took: {:?}", start_time.elapsed());
 
-    // Entrypoint for incoming request
-    let mut request_batches = vec![];
-    let mut dot_events = vec![];
-    let mut exchange_events = vec![];
+//     // Entrypoint for incoming request
+//     let mut request_batches = vec![];
+//     let mut dot_events = vec![];
+//     let mut exchange_events = vec![];
 
-    while request_batches.len() < MAX_CONCURRENT_REQUESTS {
-        let query = random_query(party_id, &mut rng, &db); // TODO: fetch from queue
+//     while request_batches.len() < MAX_CONCURRENT_REQUESTS {
+//         let query = random_query(party_id, &mut rng, &db); // TODO: fetch from queue
 
-        request_batches.push(query);
-        dot_events.push(device_manager.create_events());
-        exchange_events.push(device_manager.create_events());
-    }
+//         request_batches.push(query);
+//         dot_events.push(device_manager.create_events());
+//         exchange_events.push(device_manager.create_events());
+//     }
 
-    let mut total_time = Instant::now();
+//     let mut total_time = Instant::now();
 
-    for i in 0..request_batches.len() {
-        let now = Instant::now();
-        // Ignore first
-        if i == 1 {
-            total_time = Instant::now();
-        }
+//     for i in 0..request_batches.len() {
+//         let now = Instant::now();
+//         // Ignore first
+//         if i == 1 {
+//             total_time = Instant::now();
+//         }
 
-        let (code_query, mask_query) = request_batches[i].clone();
-        let request_streams = &streams[i];
-        let request_cublas_handles = &cublas_handles[i];
+//         let (code_query, mask_query) = request_batches[i].clone();
+//         let request_streams = &streams[i];
+//         let request_cublas_handles = &cublas_handles[i];
 
-        // First stream doesn't need to wait on anyone
-        if i == 0 {
-            device_manager.record_event(request_streams, &dot_events[0]);
-            device_manager.record_event(request_streams, &exchange_events[0]);
-        }
+//         // First stream doesn't need to wait on anyone
+//         if i == 0 {
+//             device_manager.record_event(request_streams, &dot_events[0]);
+//             device_manager.record_event(request_streams, &exchange_events[0]);
+//         }
 
-        // BLOCK 1: calculate individual dot products
-        device_manager.await_event(request_streams, &dot_events[i]);
-        codes_engine.dot(&code_query, request_streams, request_cublas_handles);
-        masks_engine.dot(&mask_query, request_streams, request_cublas_handles);
+//         // BLOCK 1: calculate individual dot products
+//         device_manager.await_event(request_streams, &dot_events[i]);
+//         codes_engine.dot(&code_query, request_streams, request_cublas_handles);
+//         masks_engine.dot(&mask_query, request_streams, request_cublas_handles);
 
-        // BLOCK 2: calculate final dot product result, exchange and compare
-        device_manager.await_event(request_streams, &exchange_events[i]);
-        codes_engine.dot_reduce(request_streams);
-        masks_engine.dot_reduce(request_streams);
+//         // BLOCK 2: calculate final dot product result, exchange and compare
+//         device_manager.await_event(request_streams, &exchange_events[i]);
+//         codes_engine.dot_reduce(request_streams);
+//         masks_engine.dot_reduce(request_streams);
 
-        // skip last
-        if i < request_batches.len() - 1 {
-            device_manager.record_event(request_streams, &dot_events[i + 1]);
-        }
+//         // skip last
+//         if i < request_batches.len() - 1 {
+//             device_manager.record_event(request_streams, &dot_events[i + 1]);
+//         }
 
-        codes_engine.exchange_results(request_streams);
-        masks_engine.exchange_results(request_streams);
-        distance_comparator.reconstruct_and_compare(
-            &codes_engine.results_peers,
-            &masks_engine.results_peers,
-            request_streams,
-            &mut results[i],
-        );
+//         codes_engine.exchange_results(request_streams);
+//         masks_engine.exchange_results(request_streams);
+//         distance_comparator.reconstruct_and_compare(
+//             &codes_engine.results_peers,
+//             &masks_engine.results_peers,
+//             request_streams,
+//             &mut results[i],
+//         );
 
-        // skip last
-        if i < request_batches.len() - 1 {
-            device_manager.record_event(request_streams, &exchange_events[i + 1]);
-        }
+//         // skip last
+//         if i < request_batches.len() - 1 {
+//             device_manager.record_event(request_streams, &exchange_events[i + 1]);
+//         }
 
-        println!("Loop time: {:?}", now.elapsed());
-    }
+//         println!("Loop time: {:?}", now.elapsed());
+//     }
 
-    // Now all streams are running, we need to await each on CPU
-    // for i in 0..request_batches.len() {
-    //     let results = distance_comparator.fetch_results(&results[i], &streams[i]);
-    //     for j in 0..8 {
-    //         print!("{:?} ", results[j][0]);
-    //     }
-    //     println!("")
-    // }
+//     // Now all streams are running, we need to await each on CPU
+//     // for i in 0..request_batches.len() {
+//     //     let results = distance_comparator.fetch_results(&results[i], &streams[i]);
+//     //     for j in 0..8 {
+//     //         print!("{:?} ", results[j][0]);
+//     //     }
+//     //     println!("")
+//     // }
 
-    println!(
-        "Total time for {} samples: {:?} ({:.4} Mcomps/s)",
-        request_batches.len() - 1,
-        total_time.elapsed(),
-        DB_SIZE as f64 * (request_batches.len() - 1) as f64 * QUERIES as f64
-            / 31f64
-            / total_time.elapsed().as_micros() as f64
-    );
+//     println!(
+//         "Total time for {} samples: {:?} ({:.4} Mcomps/s)",
+//         request_batches.len() - 1,
+//         total_time.elapsed(),
+//         DB_SIZE as f64 * (request_batches.len() - 1) as f64 * QUERIES as f64
+//             / 31f64
+//             / total_time.elapsed().as_micros() as f64
+//     );
 
-    // let reference_dists = db.calculate_distances(&query_template);
+//     // let reference_dists = db.calculate_distances(&query_template);
 
-    // for i in 0..DB_SIZE / n_devices {
-    //     assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-6);
-    // }
+//     // for i in 0..DB_SIZE / n_devices {
+//     //     assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-6);
+//     // }
 
-    println!("Distances match the reference!");
+//     println!("Distances match the reference!");
 
-    time::sleep(time::Duration::from_secs(5)).await;
-    Ok(())
-}
+//     time::sleep(time::Duration::from_secs(5)).await;
+//     Ok(())
+// }
 
-fn random_query(party_id: usize, rng: &mut StdRng, db: &IrisDB) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
-    let mut code_queries = vec![vec![], vec![], vec![]];
-    let mut mask_queries = vec![vec![], vec![], vec![]];
+// fn random_query(party_id: usize, rng: &mut StdRng, db: &IrisDB) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+//     let mut code_queries = vec![vec![], vec![], vec![]];
+//     let mut mask_queries = vec![vec![], vec![], vec![]];
 
-    for i in 0..QUERIES {
-        let rng_idx = rng.gen_range(0..db.len());
-        let query_template = db.db[rng_idx].clone();
-        let random_query = ShamirIris::share_iris(&query_template, rng);
-        // TODO: rotate
-        let tmp = random_query.clone();
-        code_queries[0].push(tmp[0].code.to_vec());
-        code_queries[1].push(tmp[1].code.to_vec());
-        code_queries[2].push(tmp[2].code.to_vec());
+//     for i in 0..QUERIES {
+//         let rng_idx = rng.gen_range(0..db.len());
+//         let query_template = db.db[rng_idx].clone();
+//         let random_query = ShamirIris::share_iris(&query_template, rng);
+//         // TODO: rotate
+//         let tmp = random_query.clone();
+//         code_queries[0].push(tmp[0].code.to_vec());
+//         code_queries[1].push(tmp[1].code.to_vec());
+//         code_queries[2].push(tmp[2].code.to_vec());
 
-        mask_queries[0].push(tmp[0].mask.to_vec());
-        mask_queries[1].push(tmp[1].mask.to_vec());
-        mask_queries[2].push(tmp[2].mask.to_vec());
-    }
+//         mask_queries[0].push(tmp[0].mask.to_vec());
+//         mask_queries[1].push(tmp[1].mask.to_vec());
+//         mask_queries[2].push(tmp[2].mask.to_vec());
+//     }
 
-    let code_query = preprocess_query(
-        &code_queries[party_id]
-            .clone()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>(),
-    );
-    let mask_query = preprocess_query(
-        &mask_queries[party_id]
-            .clone()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>(),
-    );
-    (code_query, mask_query)
-}
+//     let code_query = preprocess_query(
+//         &code_queries[party_id]
+//             .clone()
+//             .into_iter()
+//             .flatten()
+//             .collect::<Vec<_>>(),
+//     );
+//     let mask_query = preprocess_query(
+//         &mask_queries[party_id]
+//             .clone()
+//             .into_iter()
+//             .flatten()
+//             .collect::<Vec<_>>(),
+//     );
+//     (code_query, mask_query)
+// }
