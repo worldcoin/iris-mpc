@@ -10,6 +10,7 @@ aws-config = { version = "1.0.1", features = ["behavior-version-latest"] }
 aws-sdk-sqs = { version = "1.3.0" }
 aws-sdk-sns = { version = "1.3.0" }
 axum = "0.7.5"
+base64 = "0.22.1"
 bytemuck = "1.15"
 clap = { version = "~4.4", features = ["derive"] }
 cudarc = { git = "https://github.com/philsippl/cudarc.git", rev="46bf544", features = ["cuda-12020"] }

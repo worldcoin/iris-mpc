@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose, Engine};
 use serde::{Deserialize, Serialize};
 
 use crate::setup::iris_db::shamir_iris::ShamirIris;
@@ -24,17 +25,17 @@ pub struct SQSMessage {
 pub struct SMPCRequest {
     pub request_type: String,
     pub request_id: String,
-    pub iris_code: Vec<u16>,
-    pub mask_code: Vec<u16>,
+    pub iris_code: String,
+    pub mask_code: String,
 }
 
 impl From<SMPCRequest> for ShamirIris {
     fn from(request: SMPCRequest) -> Self {
         let mut iris = ShamirIris::default();
-        for i in 0..iris.code.len() {
-            iris.code[i] = request.iris_code[i];
-            iris.mask[i] = request.mask_code[i];
-        }
+        let code = general_purpose::STANDARD.decode(request.iris_code.as_bytes()).unwrap();
+        let mask = general_purpose::STANDARD.decode(request.mask_code.as_bytes()).unwrap();
+        iris.code.copy_from_slice(bytemuck::cast_slice(&code));
+        iris.mask.copy_from_slice(bytemuck::cast_slice(&mask));
         iris
     }
 }
