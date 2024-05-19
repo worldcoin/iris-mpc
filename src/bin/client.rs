@@ -15,9 +15,9 @@ use uuid::Uuid;
 
 const N_QUERIES: usize = 30;
 const REGION: &str = "us-east-2";
-const RNG_SEED: u64 = 1337;
+const RNG_SEED: u64 = 42;
 const RNG_SEED_SERVER: u64 = 42;
-const DB_SIZE: usize = 100;
+const DB_SIZE: usize = 8 * 1_000;
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 
 #[derive(Debug, Parser)]
