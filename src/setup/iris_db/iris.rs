@@ -5,7 +5,7 @@ pub const MATCH_THRESHOLD_RATIO: f64 = 0.34;
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct IrisCodeArray([u64; Self::IRIS_CODE_SIZE_U64]);
+pub struct IrisCodeArray(pub [u64; Self::IRIS_CODE_SIZE_U64]);
 impl Default for IrisCodeArray {
     fn default() -> Self {
         Self::ZERO
