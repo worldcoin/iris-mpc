@@ -56,12 +56,19 @@ async fn receive_batch(client: &Client, queue_url: &String) -> eyre::Result<Vec<
             .send()
             .await?;
 
-        for message in rcv_message_output.messages.unwrap_or_default() {
-            let message: SQSMessage = serde_json::from_str(message.body().unwrap())?;
+        for sns_message in rcv_message_output.messages.unwrap_or_default() {
+            let message: SQSMessage = serde_json::from_str(sns_message.body().unwrap())?;
             let message: SMPCRequest = serde_json::from_str(&message.message)?;
             let iris: ShamirIris = message.into();
 
             batch.extend(iris.all_rotations());
+            // TODO: we should only delete after processing
+            client
+                .delete_message()
+                .queue_url(queue_url)
+                .receipt_handle(sns_message.receipt_handle.unwrap())
+                .send()
+                .await?;
         }
     }
 
