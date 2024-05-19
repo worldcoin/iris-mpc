@@ -125,7 +125,7 @@ async fn main() -> eyre::Result<()> {
 
     // Generate or load DB
     let (codes_db, masks_db) = if metadata(DB_CODE_FILE).is_ok() && metadata(DB_MASK_FILE).is_ok() {
-        (read_mmap_file(DB_CODE_FILE)?, read_mmap_file(DB_CODE_FILE)?)
+        (read_mmap_file(DB_CODE_FILE)?, read_mmap_file(DB_MASK_FILE)?)
     } else {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
