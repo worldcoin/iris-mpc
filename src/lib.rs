@@ -193,10 +193,10 @@ impl DistanceComparator {
         }
     }
 
-    pub fn prepare_results(&self) -> Vec<u64> {
+    pub fn prepare_results(&self) -> Vec<CudaSlice<u32>> {
         let results_uninit = vec![u32::MAX; self.query_length];
         (0..self.n_devices)
-            .map(|i| *self.devs[i].htod_copy(results_uninit.clone()).unwrap().device_ptr())
+            .map(|i| self.devs[i].htod_copy(results_uninit.clone()).unwrap())
             .collect::<Vec<_>>()
     }
 
@@ -205,7 +205,7 @@ impl DistanceComparator {
         codes_result_peers: &Vec<Vec<CudaSlice<u8>>>,
         masks_result_peers: &Vec<Vec<CudaSlice<u8>>>,
         streams: &Vec<CudaStream>,
-        results: &mut Vec<u64>,
+        results: Vec<u64>,
     ) {
         let num_elements = self.db_length / self.n_devices * self.query_length;
         let threads_per_block = 256;

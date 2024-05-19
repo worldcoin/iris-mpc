@@ -1,6 +1,6 @@
 use aws_sdk_sqs::{config::Region, Client, Error};
 use clap::Parser;
-use cudarc::driver::{result::{memcpy_dtoh_async, stream::synchronize}, sys::lib};
+use cudarc::driver::{result::{memcpy_dtoh_async, stream::synchronize}, sys::lib, DevicePtr};
 use gpu_iris_mpc::{setup::iris_db::shamir_iris::ShamirIris, sqs::{SMPCRequest, SQSMessage}};
 use std::{env, fs::metadata, time::Instant};
 
@@ -211,7 +211,7 @@ async fn main() -> eyre::Result<()> {
             &codes_engine.results_peers,
             &masks_engine.results_peers,
             request_streams,
-            &mut results[request_counter % MAX_CONCURRENT_REQUESTS],
+            results[request_counter % MAX_CONCURRENT_REQUESTS].iter().map(|r| *r.device_ptr()).collect::<Vec<_>>(),
         );
 
         device_manager.record_event(request_streams, &next_exchange_event);
@@ -229,18 +229,19 @@ async fn main() -> eyre::Result<()> {
         // let tmp_devs = distance_comparator.devs.clone();
         // tokio::spawn(async move {
         let mut index_results = vec![];
+        let tmp: Vec<u64> = results[request_counter % MAX_CONCURRENT_REQUESTS].iter().map(|r| *r.device_ptr()).collect::<Vec<_>>();
         for i in 0..distance_comparator.devs.len() {
             distance_comparator.devs[i].bind_to_thread().unwrap();
             let mut tmp_result = vec![0u32; QUERIES];
             unsafe {
-                    // lib()
-                    // .cuMemcpyDtoHAsync_v2(
-                    //     tmp_result.as_mut_ptr() as *mut _,
-                    //     results[request_counter % MAX_CONCURRENT_REQUESTS][i],
-                    //     QUERIES * std::mem::size_of::<u32>(),
-                    //     streams[request_counter % MAX_CONCURRENT_REQUESTS][i].stream as *mut _,
-                    // )
-                    // .result().unwrap();
+                    lib()
+                    .cuMemcpyDtoHAsync_v2(
+                        tmp_result.as_mut_ptr() as *mut _,
+                        tmp[i],
+                        QUERIES * std::mem::size_of::<u32>(),
+                        streams[request_counter % MAX_CONCURRENT_REQUESTS][i].stream as *mut _,
+                    )
+                    .result().unwrap();
                 synchronize(streams[request_counter % MAX_CONCURRENT_REQUESTS][i].stream as *mut _).unwrap();
             }
             index_results.push(tmp_result);
