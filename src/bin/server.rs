@@ -51,40 +51,39 @@ struct Opt {
 async fn receive_batch(client: &Client, queue_url: &String, party_id: usize) -> eyre::Result<Vec<ShamirIris>> {
     let mut batch = vec![];
 
-    let mut tmp_code: [u64; 200] = [0u64; 200];
-    let mut tmp_mask: [u64; 200] = [0u64; 200];
+    // let mut tmp_code: [u64; 200] = [0u64; 200];
+    // let mut tmp_mask: [u64; 200] = [0u64; 200];
 
-    tmp_code.copy_from_slice(SAMPLE_CODE);
-    tmp_mask.copy_from_slice(SAMPLE_MASK);
+    // tmp_code.copy_from_slice(SAMPLE_CODE);
+    // tmp_mask.copy_from_slice(SAMPLE_MASK);
 
-    let mut rng = StdRng::seed_from_u64(1337);
-    let template = IrisCode { code: IrisCodeArray(tmp_code), mask: IrisCodeArray(tmp_mask) };
-    let iris = ShamirIris::share_iris(&template, &mut rng);
+    // let mut rng = StdRng::seed_from_u64(1337);
+    // let template = IrisCode { code: IrisCodeArray(tmp_code), mask: IrisCodeArray(tmp_mask) };
+    // let iris = ShamirIris::share_iris(&template, &mut rng);
 
     while batch.len() < QUERIES {
-        batch.push(iris[party_id].clone());
-        // let rcv_message_output = client
-        //     .receive_message()
-        //     .max_number_of_messages(1i32)
-        //     .queue_url(queue_url)
-        //     .send()
-        //     .await?;
+        let rcv_message_output = client
+            .receive_message()
+            .max_number_of_messages(1i32)
+            .queue_url(queue_url)
+            .send()
+            .await?;
 
-        // for sns_message in rcv_message_output.messages.unwrap_or_default() {
-        //     let message: SQSMessage = serde_json::from_str(sns_message.body().unwrap())?;
-        //     let message: SMPCRequest = serde_json::from_str(&message.message)?;
+        for sns_message in rcv_message_output.messages.unwrap_or_default() {
+            let message: SQSMessage = serde_json::from_str(sns_message.body().unwrap())?;
+            let message: SMPCRequest = serde_json::from_str(&message.message)?;
 
-        //     let iris: ShamirIris = message.into();
+            let iris: ShamirIris = message.into();
 
-        //     batch.extend(iris.all_rotations());
-        //     // TODO: we should only delete after processing
-        //     client
-        //         .delete_message()
-        //         .queue_url(queue_url)
-        //         .receipt_handle(sns_message.receipt_handle.unwrap())
-        //         .send()
-        //         .await?;
-        // }
+            batch.extend(iris.all_rotations());
+            // TODO: we should only delete after processing
+            client
+                .delete_message()
+                .queue_url(queue_url)
+                .receipt_handle(sns_message.receipt_handle.unwrap())
+                .send()
+                .await?;
+        }
     }
 
     Ok(batch)
@@ -130,7 +129,7 @@ async fn main() -> eyre::Result<()> {
 
     // Generate or load DB
     let (codes_db, masks_db) = if metadata(DB_CODE_FILE).is_ok() && metadata(DB_MASK_FILE).is_ok() {
-        (read_mmap_file(DB_CODE_FILE)?, read_mmap_file(DB_CODE_FILE)?)
+        (read_mmap_file(DB_CODE_FILE)?, read_mmap_file(DB_MASK_FILE)?)
     } else {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
