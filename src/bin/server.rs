@@ -44,42 +44,33 @@ struct Opt {
     bootstrap_url: Option<String>,
 }
 
-async fn receive_batch(client: &Client, queue_url: &String, party_id: usize) -> eyre::Result<Vec<ShamirIris>> {
+async fn receive_batch(client: &Client, queue_url: &String) -> eyre::Result<Vec<ShamirIris>> {
     let mut batch = vec![];
-
-    let mut rng = StdRng::seed_from_u64(RNG_SEED);
-    let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
-
-
     while batch.len() < QUERIES {
+        let rcv_message_output = client
+            .receive_message()
+            .max_number_of_messages(1i32)
+            .queue_url(queue_url)
+            .send()
+            .await?;
 
-        let tmp = ShamirIris::share_iris(&db.db[0], &mut rng);
-        batch.push(tmp[party_id].clone());
+        for sns_message in rcv_message_output.messages.unwrap_or_default() {
+            let message: SQSMessage = serde_json::from_str(sns_message.body().unwrap())?;
+            let message: SMPCRequest = serde_json::from_str(&message.message)?;
 
-        // let rcv_message_output = client
-        //     .receive_message()
-        //     .max_number_of_messages(1i32)
-        //     .queue_url(queue_url)
-        //     .send()
-        //     .await?;
+            println!("{:?}", message.request_id);
 
-        // for sns_message in rcv_message_output.messages.unwrap_or_default() {
-        //     let message: SQSMessage = serde_json::from_str(sns_message.body().unwrap())?;
-        //     let message: SMPCRequest = serde_json::from_str(&message.message)?;
+            let iris: ShamirIris = message.into();
 
-        //     println!("{:?}", message.request_id);
-
-        //     let iris: ShamirIris = message.into();
-
-        //     batch.extend(iris.all_rotations());
-        //     // TODO: we should only delete after processing
-        //     client
-        //         .delete_message()
-        //         .queue_url(queue_url)
-        //         .receipt_handle(sns_message.receipt_handle.unwrap())
-        //         .send()
-        //         .await?;
-        // }
+            batch.extend(iris.all_rotations());
+            // TODO: we should only delete after processing
+            client
+                .delete_message()
+                .queue_url(queue_url)
+                .receipt_handle(sns_message.receipt_handle.unwrap())
+                .send()
+                .await?;
+        }
     }
 
     Ok(batch)
@@ -201,7 +192,7 @@ async fn main() -> eyre::Result<()> {
     let mut request_counter = 0;
 
     loop {
-        let batch = receive_batch(&client, &queue, party_id).await?;
+        let batch = receive_batch(&client, &queue).await?;
         let (code_query, mask_query) = prepare_query_batch(batch);
 
         println!("Received new batch.");
@@ -252,9 +243,7 @@ async fn main() -> eyre::Result<()> {
             .map(|r| *r.device_ptr())
             .collect::<Vec<_>>();
 
-        device_manager.await_streams(&request_streams);
-
-        // tokio::spawn(async move {
+        tokio::spawn(async move {
             let mut index_results = vec![];
             for i in 0..tmp_devs.len() {
                 tmp_devs[i].bind_to_thread().unwrap();
@@ -278,7 +267,7 @@ async fn main() -> eyre::Result<()> {
                 print!("{:?} ", index_results[j][0]);
             }
             println!("");
-        // });
+        });
 
         // Prepare for next batch
         request_counter += 1;
