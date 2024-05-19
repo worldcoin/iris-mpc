@@ -58,6 +58,9 @@ async fn receive_batch(client: &Client, queue_url: &String) -> eyre::Result<Vec<
         for sns_message in rcv_message_output.messages.unwrap_or_default() {
             let message: SQSMessage = serde_json::from_str(sns_message.body().unwrap())?;
             let message: SMPCRequest = serde_json::from_str(&message.message)?;
+
+            println!("{:?}", message.request_id);
+
             let iris: ShamirIris = message.into();
 
             batch.extend(iris.all_rotations());
