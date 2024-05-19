@@ -232,15 +232,6 @@ async fn main() -> eyre::Result<()> {
 
         device_manager.record_event(request_streams, &next_exchange_event);
 
-        device_manager.await_streams(&request_streams);
-
-        // Prepare for next batch
-        request_counter += 1;
-        current_dot_event = next_dot_event;
-        current_exchange_event = next_exchange_event;
-        next_dot_event = device_manager.create_events();
-        next_exchange_event = device_manager.create_events();
-
         // Start thread to wait for the results
         let tmp_streams = streams[request_counter % MAX_CONCURRENT_REQUESTS]
             .iter()
@@ -252,7 +243,7 @@ async fn main() -> eyre::Result<()> {
             .map(|r| *r.device_ptr())
             .collect::<Vec<_>>();
 
-        // tokio::spawn(async move {
+        tokio::spawn(async move {
             let mut index_results = vec![];
             for i in 0..tmp_devs.len() {
                 tmp_devs[i].bind_to_thread().unwrap();
@@ -276,7 +267,14 @@ async fn main() -> eyre::Result<()> {
                 print!("{:?} ", index_results[j][0]);
             }
             println!("")
-        // });
+        });
+
+        // Prepare for next batch
+        request_counter += 1;
+        current_dot_event = next_dot_event;
+        current_exchange_event = next_exchange_event;
+        next_dot_event = device_manager.create_events();
+        next_exchange_event = device_manager.create_events();
     }
 
     Ok(())
