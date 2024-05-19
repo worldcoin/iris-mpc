@@ -247,7 +247,7 @@ async fn main() -> eyre::Result<()> {
 
         device_manager.await_streams(&request_streams);
 
-        // tokio::spawn(async move {
+        tokio::spawn(async move {
             let mut index_results = vec![];
             for i in 0..tmp_devs.len() {
                 tmp_devs[i].bind_to_thread().unwrap();
@@ -267,16 +267,21 @@ async fn main() -> eyre::Result<()> {
                 index_results.push(tmp_result);
             }
 
+            let mut found = false;
             for j in 0..8 {
                 for i in 0..QUERIES {
                     if index_results[j][i] != u32::MAX {
-                        println!("dev {}, query {}: {:?} ", j, i, index_results[j][i]);
+                        println!("Found query {} at index {:?}", i, (DB_SIZE/8*j) as u32 + index_results[j][i]);
+                        found = true;
                         break;
                     }
                 }
             }
+            if !found {
+                println!("Not found in DB.");
+            }
             println!("----");
-        // });
+        });
 
         // Prepare for next batch
         request_counter += 1;
