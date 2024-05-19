@@ -1,4 +1,5 @@
 use aws_sdk_sqs::{config::Region, Client, Error};
+use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use cudarc::driver::{
     result::{memcpy_dtoh_async, stream::synchronize},
@@ -61,8 +62,19 @@ async fn receive_batch(client: &Client, queue_url: &String, party_id: usize) -> 
     let template = IrisCode { code: IrisCodeArray(tmp_code), mask: IrisCodeArray(tmp_mask) };
     let iris = ShamirIris::share_iris(&template, &mut rng);
 
+    let iris_code =
+        general_purpose::STANDARD.encode(bytemuck::cast_slice(&iris[party_id].code));
+    let mask_code =
+        general_purpose::STANDARD.encode(bytemuck::cast_slice(&iris[party_id].mask));
+
+    let code = general_purpose::STANDARD.decode(iris_code.as_bytes()).unwrap();
+    let mask = general_purpose::STANDARD.decode(mask_code.as_bytes()).unwrap();
+    let mut iris = ShamirIris::default();
+    iris.code.copy_from_slice(bytemuck::cast_slice(&code));
+    iris.mask.copy_from_slice(bytemuck::cast_slice(&mask));
+
     while batch.len() < QUERIES {
-        batch.push(iris[party_id].clone());
+        batch.push(iris.clone());
         // let rcv_message_output = client
         //     .receive_message()
         //     .max_number_of_messages(1i32)
