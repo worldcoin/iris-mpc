@@ -254,7 +254,7 @@ async fn main() -> eyre::Result<()> {
             .map(|r| *r.device_ptr())
             .collect::<Vec<_>>();
 
-        // tokio::spawn(async move {
+        tokio::spawn(async move {
             let mut index_results = vec![];
             for i in 0..tmp_devs.len() {
                 tmp_devs[i].bind_to_thread().unwrap();
@@ -278,7 +278,7 @@ async fn main() -> eyre::Result<()> {
                 print!("{:?} ", index_results[j][0]);
             }
             println!("")
-        // });
+        });
     }
 
     Ok(())
