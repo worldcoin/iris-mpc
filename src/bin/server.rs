@@ -181,6 +181,8 @@ async fn main() -> eyre::Result<()> {
         let batch = receive_batch(&client, &queue).await?;
         let (code_query, mask_query) = prepare_query_batch(batch);
 
+        println!("Received new batch.");
+
         let request_streams = &streams[request_counter % MAX_CONCURRENT_REQUESTS];
         let request_cublas_handles = &cublas_handles[request_counter % MAX_CONCURRENT_REQUESTS];
 

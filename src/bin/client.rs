@@ -54,7 +54,7 @@ async fn main() -> eyre::Result<()> {
                 PublishBatchRequestEntry::builder()
                     .message(to_string(&request_message)?)
                     .id(sns_id.to_string())
-                    .message_group_id(format!("node{}", i))
+                    .message_group_id(format!("node{}", i+1))
                     .build()
                     .unwrap(),
             );
