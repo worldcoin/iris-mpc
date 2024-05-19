@@ -233,14 +233,14 @@ async fn main() -> eyre::Result<()> {
             distance_comparator.devs[i].bind_to_thread().unwrap();
             let mut tmp_result = vec![0u32; QUERIES];
             unsafe {
-                    lib()
-                    .cuMemcpyDtoHAsync_v2(
-                        tmp_result.as_mut_ptr() as *mut _,
-                        results[request_counter % MAX_CONCURRENT_REQUESTS][i],
-                        QUERIES * std::mem::size_of::<u32>(),
-                        streams[request_counter % MAX_CONCURRENT_REQUESTS][i].stream as *mut _,
-                    )
-                    .result().unwrap();
+                    // lib()
+                    // .cuMemcpyDtoHAsync_v2(
+                    //     tmp_result.as_mut_ptr() as *mut _,
+                    //     results[request_counter % MAX_CONCURRENT_REQUESTS][i],
+                    //     QUERIES * std::mem::size_of::<u32>(),
+                    //     streams[request_counter % MAX_CONCURRENT_REQUESTS][i].stream as *mut _,
+                    // )
+                    // .result().unwrap();
                 synchronize(streams[request_counter % MAX_CONCURRENT_REQUESTS][i].stream as *mut _).unwrap();
             }
             index_results.push(tmp_result);
