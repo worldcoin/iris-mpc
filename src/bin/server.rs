@@ -25,7 +25,7 @@ use gpu_iris_mpc::{
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 const REGION: &str = "us-east-2";
-const DB_SIZE: usize = 8 * 1_000;
+const DB_SIZE: usize = 8 * 100_000;
 const QUERIES: usize = 930;
 const RNG_SEED: u64 = 42;
 const MAX_CONCURRENT_REQUESTS: usize = 5;
