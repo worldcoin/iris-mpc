@@ -51,7 +51,6 @@ async fn main() -> eyre::Result<()> {
             IrisCode::random_rng(&mut rng)
         };
 
-        println!("{:?}", template.mask);
         let shared_template = ShamirIris::share_iris(&template, &mut rng);
 
         let mut messages = vec![];

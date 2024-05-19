@@ -119,8 +119,6 @@ async fn main() -> eyre::Result<()> {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
-        println!("{:?}", db.db[0].mask);
-
         let shamir_db = ShamirIrisDB::share_db_par(&db, &mut rng);
 
         let codes_db = shamir_db[party_id]
@@ -243,7 +241,9 @@ async fn main() -> eyre::Result<()> {
             .map(|r| *r.device_ptr())
             .collect::<Vec<_>>();
 
-        tokio::spawn(async move {
+        device_manager.await_streams(&request_streams);
+
+        // tokio::spawn(async move {
             let mut index_results = vec![];
             for i in 0..tmp_devs.len() {
                 tmp_devs[i].bind_to_thread().unwrap();
@@ -266,8 +266,8 @@ async fn main() -> eyre::Result<()> {
             for j in 0..8 {
                 print!("{:?} ", index_results[j][0]);
             }
-            println!("")
-        });
+            println!("");
+        // });
 
         // Prepare for next batch
         request_counter += 1;
