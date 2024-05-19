@@ -245,8 +245,6 @@ async fn main() -> eyre::Result<()> {
             .map(|r| *r.device_ptr())
             .collect::<Vec<_>>();
 
-        device_manager.await_streams(&request_streams);
-
         tokio::spawn(async move {
             let mut index_results = vec![];
             for i in 0..tmp_devs.len() {
