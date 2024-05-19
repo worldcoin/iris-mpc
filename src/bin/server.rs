@@ -45,7 +45,7 @@ struct Opt {
     bootstrap_url: Option<String>,
 }
 
-async fn receive_batch(client: &Client, queue_url: &String, party_id: usize) -> eyre::Result<Vec<ShamirIris>> {
+async fn receive_batch(client: &Client, queue_url: &String) -> eyre::Result<Vec<ShamirIris>> {
     let mut batch = vec![];
 
     while batch.len() < QUERIES {
@@ -194,7 +194,7 @@ async fn main() -> eyre::Result<()> {
     let mut request_counter = 0;
 
     loop {
-        let batch = receive_batch(&client, &queue, party_id).await?;
+        let batch = receive_batch(&client, &queue).await?;
         let (code_query, mask_query) = prepare_query_batch(batch);
 
         println!("Received new batch.");
@@ -270,11 +270,12 @@ async fn main() -> eyre::Result<()> {
             for j in 0..8 {
                 for i in 0..QUERIES {
                     if index_results[j][i] != u32::MAX {
-                        print!("{} {}: {:?} ", j, i, index_results[j][i]);
+                        println!("dev {}, query {}: {:?} ", j, i, index_results[j][i]);
+                        break;
                     }
                 }
             }
-            println!("");
+            println!("----");
         // });
 
         // Prepare for next batch
