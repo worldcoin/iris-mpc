@@ -19,7 +19,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 
 const REGION: &str = "us-east-2";
 const QUERY_SIZE: usize = 30;
-const DB_SIZE: usize = 8 * 500_000;
+const DB_SIZE: usize = 8 * 1_000;
 const QUERIES: usize = 930;
 const RNG_SEED: u64 = 42;
 const MAX_CONCURRENT_REQUESTS: usize = 5;
@@ -30,6 +30,12 @@ const DB_MASK_FILE: &str = "/opt/dlami/nvme/masks.db";
 struct Opt {
     #[structopt(short, long)]
     queue: String,
+
+    #[structopt(short, long)]
+    party_id: usize,
+
+    #[structopt(short, long)]
+    bootstrap_url: String,
 }
 
 async fn receive_batch(client: &Client, queue_url: &String) -> eyre::Result<Vec<ShamirIris>> {
@@ -67,7 +73,7 @@ fn prepare_query_batch(batch: Vec<ShamirIris>) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
-    let Opt { queue } = Opt::parse();
+    let Opt { queue, party_id, bootstrap_url} = Opt::parse();
 
     let region_provider = Region::new(REGION);
     let shared_config = aws_config::from_env().region(region_provider).load().await;
@@ -77,10 +83,6 @@ async fn main() -> eyre::Result<()> {
     let seed0 = rng.gen::<[u32; 8]>();
     let seed1 = rng.gen::<[u32; 8]>();
     let seed2 = rng.gen::<[u32; 8]>();
-
-    let args = env::args().collect::<Vec<_>>();
-    let party_id: usize = args[1].parse().unwrap();
-    let url = args.get(2);
 
     // Init RNGs
     let chacha_seeds = match party_id {
@@ -135,7 +137,7 @@ async fn main() -> eyre::Result<()> {
         &codes_db,
         QUERIES,
         chacha_seeds,
-        url.clone(),
+        Some(&bootstrap_url),
         Some(true),
         Some(3000),
     );
@@ -149,7 +151,7 @@ async fn main() -> eyre::Result<()> {
         &masks_db,
         QUERIES,
         chacha_seeds,
-        url.clone(),
+        Some(&bootstrap_url),
         Some(true),
         Some(3001),
     );

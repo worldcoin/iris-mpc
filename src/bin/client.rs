@@ -31,7 +31,7 @@ async fn main() -> eyre::Result<()> {
     let client = Client::new(&shared_config);
 
     // Prepare query
-    for _ in 0..N_QUERIES {
+    for _i in 0..N_QUERIES {
         let template = IrisCode::random_rng(&mut rng);
         let shared_template = ShamirIris::share_iris(&template, &mut rng);
         let id = Uuid::new_v4();
@@ -61,6 +61,8 @@ async fn main() -> eyre::Result<()> {
             .set_publish_batch_request_entries(Some(messages))
             .send()
             .await?;
+
+        println!("Enrollment request batch {} published.", _i);
     }
 
     Ok(())
