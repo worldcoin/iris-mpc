@@ -14,7 +14,7 @@ pub struct SQSMessage {
     #[serde(rename = "TopicArn")]
     pub topic_arn: String,
     #[serde(rename = "Message")]
-    pub message: SMPCRequest,
+    pub message: String,
     #[serde(rename = "Timestamp")]
     pub timestamp: String,
     #[serde(rename = "UnsubscribeURL")]

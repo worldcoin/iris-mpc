@@ -1,4 +1,8 @@
-use aws_sdk_sns::{config::Region, types::PublishBatchRequestEntry, Client};
+use aws_sdk_sns::{
+    config::Region,
+    types::{MessageAttributeValue, PublishBatchRequestEntry},
+    Client,
+};
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use gpu_iris_mpc::{
@@ -35,13 +39,15 @@ async fn main() -> eyre::Result<()> {
     for _i in 0..N_QUERIES {
         let template = IrisCode::random_rng(&mut rng);
         let shared_template = ShamirIris::share_iris(&template, &mut rng);
-        
+
         let mut messages = vec![];
         for i in 0..3 {
             let request_id = Uuid::new_v4();
             let sns_id = Uuid::new_v4();
-            let iris_code = general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_template[i].code));
-            let mask_code = general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_template[i].mask));
+            let iris_code =
+                general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_template[i].code));
+            let mask_code =
+                general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_template[i].mask));
 
             let request_message = SMPCRequest {
                 request_type: ENROLLMENT_REQUEST_TYPE.to_string(),
@@ -54,7 +60,14 @@ async fn main() -> eyre::Result<()> {
                 PublishBatchRequestEntry::builder()
                     .message(to_string(&request_message)?)
                     .id(sns_id.to_string())
-                    .message_group_id(format!("node{}", i+1))
+                    .message_group_id(ENROLLMENT_REQUEST_TYPE)
+                    .message_attributes(
+                        "nodeId",
+                        MessageAttributeValue::builder()
+                            .set_string_value(Some(i.to_string()))
+                            .set_data_type(Some("String".to_string()))
+                            .build()?,
+                    )
                     .build()
                     .unwrap(),
             );

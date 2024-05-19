@@ -1,7 +1,7 @@
 use aws_sdk_sqs::{config::Region, Client, Error};
 use clap::Parser;
 use cudarc::driver::{result::{memcpy_dtoh_async, stream::synchronize}, sys::lib};
-use gpu_iris_mpc::{setup::iris_db::shamir_iris::ShamirIris, sqs::SQSMessage};
+use gpu_iris_mpc::{setup::iris_db::shamir_iris::ShamirIris, sqs::{SMPCRequest, SQSMessage}};
 use std::{env, fs::metadata, time::Instant};
 
 use gpu_iris_mpc::{
@@ -50,8 +50,9 @@ async fn receive_batch(client: &Client, queue_url: &String) -> eyre::Result<Vec<
             .await?;
 
         for message in rcv_message_output.messages.unwrap_or_default() {
-            let messsage: SQSMessage = serde_json::from_str(message.body().unwrap())?;
-            let iris: ShamirIris = messsage.message.into();
+            let message: SQSMessage = serde_json::from_str(message.body().unwrap())?;
+            let message: SMPCRequest = serde_json::from_str(&message.message)?;
+            let iris: ShamirIris = message.into();
 
             batch.extend(iris.all_rotations());
         }
