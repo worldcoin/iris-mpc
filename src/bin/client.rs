@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 const N_QUERIES: usize = 30;
 const REGION: &str = "us-east-2";
-const RNG_SEED: u64 = 42;
+const RNG_SEED: u64 = 1337;
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 100;
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
@@ -51,12 +51,11 @@ async fn main() -> eyre::Result<()> {
             IrisCode::random_rng(&mut rng)
         };
 
-        let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let shared_template = ShamirIris::share_iris(&template, &mut rng);
+        let request_id = Uuid::new_v4();
 
         let mut messages = vec![];
         for i in 0..3 {
-            let request_id = Uuid::new_v4();
             let sns_id = Uuid::new_v4();
             let iris_code =
                 general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_template[i].code));
