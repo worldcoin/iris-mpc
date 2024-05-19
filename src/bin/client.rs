@@ -6,22 +6,26 @@ use aws_sdk_sns::{
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use gpu_iris_mpc::{
-    setup::iris_db::{iris::IrisCode, shamir_iris::ShamirIris},
+    setup::iris_db::{db::IrisDB, iris::IrisCode, shamir_iris::ShamirIris},
     sqs::SMPCRequest,
 };
 use rand::{rngs::StdRng, SeedableRng};
 use serde_json::to_string;
 use uuid::Uuid;
 
-const N_QUERIES: usize = 90;
+const N_QUERIES: usize = 30;
 const REGION: &str = "us-east-2";
-const RNG_SEED: u64 = 42;
+const RNG_SEED: u64 = 1337;
+const RNG_SEED_SERVER: u64 = 42;
+const DB_SIZE: usize = 100;
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 
 #[derive(Debug, Parser)]
 struct Opt {
     #[structopt(short, long)]
     topic_arn: String,
+
+    db_index: Option<usize>,
 }
 
 #[tokio::main]
@@ -29,15 +33,22 @@ async fn main() -> eyre::Result<()> {
     tracing_subscriber::fmt::init();
     let mut rng = StdRng::seed_from_u64(RNG_SEED);
 
-    let Opt { topic_arn } = Opt::parse();
+    let Opt { topic_arn, db_index } = Opt::parse();
 
     let region_provider = Region::new(REGION);
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let client = Client::new(&shared_config);
 
+    let db = IrisDB::new_random_par(DB_SIZE, &mut StdRng::seed_from_u64(RNG_SEED_SERVER));
+
     // Prepare query
     for _i in 0..N_QUERIES {
-        let template = IrisCode::random_rng(&mut rng);
+
+        let template = if let Some(db_index) = db_index {
+            db.db[db_index].clone()
+        } else {
+            IrisCode::random_rng(&mut rng)
+        };
         let shared_template = ShamirIris::share_iris(&template, &mut rng);
 
         let mut messages = vec![];

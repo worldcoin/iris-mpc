@@ -110,38 +110,31 @@ async fn main() -> eyre::Result<()> {
         _ => unimplemented!(),
     };
 
-    // Init DB
-    let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
-    let shamir_db = ShamirIrisDB::share_db_par(&db, &mut rng);
     let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(party_id as u8).unwrap());
 
-    println!("Random shared DB generated!");
-
-    // Import masks to GPU DB
-    let codes_db = if metadata(DB_CODE_FILE).is_ok() {
-        read_mmap_file(DB_CODE_FILE)?
+    // Generate or load DB
+    let (codes_db, masks_db) = if metadata(DB_CODE_FILE).is_ok() && metadata(DB_MASK_FILE).is_ok() {
+        (read_mmap_file(DB_CODE_FILE)?, read_mmap_file(DB_CODE_FILE)?)
     } else {
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+        let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
+        let shamir_db = ShamirIrisDB::share_db_par(&db, &mut rng);
+
         let codes_db = shamir_db[party_id]
             .db
             .iter()
             .flat_map(|entry| entry.code)
             .collect::<Vec<_>>();
 
-        write_mmap_file(DB_CODE_FILE, &codes_db)?;
-        codes_db
-    };
-
-    let masks_db = if metadata(DB_MASK_FILE).is_ok() {
-        read_mmap_file(DB_MASK_FILE)?
-    } else {
         let masks_db = shamir_db[party_id]
             .db
             .iter()
             .flat_map(|entry| entry.mask)
             .collect::<Vec<_>>();
 
+        write_mmap_file(DB_CODE_FILE, &codes_db)?;
         write_mmap_file(DB_MASK_FILE, &masks_db)?;
-        masks_db
+        (codes_db, masks_db)
     };
 
     println!("Starting engines...");
