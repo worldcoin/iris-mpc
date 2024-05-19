@@ -201,6 +201,7 @@ async fn main() -> eyre::Result<()> {
 
         let request_streams = &streams[request_counter % MAX_CONCURRENT_REQUESTS];
         let request_cublas_handles = &cublas_handles[request_counter % MAX_CONCURRENT_REQUESTS];
+        let request_results = &results[request_counter % MAX_CONCURRENT_REQUESTS];
 
         // First stream doesn't need to wait on anyone
         if request_counter == 0 {
@@ -226,7 +227,7 @@ async fn main() -> eyre::Result<()> {
             &codes_engine.results_peers,
             &masks_engine.results_peers,
             request_streams,
-            results[request_counter % MAX_CONCURRENT_REQUESTS]
+            request_results
                 .iter()
                 .map(|r| *r.device_ptr())
                 .collect::<Vec<_>>(),
@@ -235,12 +236,12 @@ async fn main() -> eyre::Result<()> {
         device_manager.record_event(request_streams, &next_exchange_event);
 
         // Start thread to wait for the results
-        let tmp_streams = streams[request_counter % MAX_CONCURRENT_REQUESTS]
+        let tmp_streams = request_streams
             .iter()
             .map(|s| s.stream as u64)
             .collect::<Vec<_>>();
         let tmp_devs = distance_comparator.devs.clone();
-        let tmp_results: Vec<u64> = results[request_counter % MAX_CONCURRENT_REQUESTS]
+        let tmp_results: Vec<u64> = request_results
             .iter()
             .map(|r| *r.device_ptr())
             .collect::<Vec<_>>();

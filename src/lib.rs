@@ -638,18 +638,6 @@ impl ShareDB {
                 .device(device_id)
                 .dtoh_sync_copy_into(&res_trans.unwrap(), results)
                 .unwrap();
-
-            // TODO: async transfer
-            // lib()
-            //     .cuMemcpyDtoHAsync_v2(
-            //         results,
-            //         *self.results[device_id].device_ptr(),
-            //         self.results[device_id].len(),
-            //         self.streams[device_id].stream,
-            //     )
-            //     .result().unwrap();
-
-            // result::stream::synchronize(self.streams[device_id].stream).unwrap();
         }
     }
 

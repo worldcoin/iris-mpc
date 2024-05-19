@@ -40,5 +40,5 @@ criterion = "0.5"
 #harness = false
 
 [[bench]]
-name = "memcpy"
+name = "matmul"
 harness = false
