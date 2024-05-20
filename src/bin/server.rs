@@ -2,7 +2,7 @@ use aws_sdk_sqs::{config::Region, Client, Error};
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use cudarc::driver::{
-    result::{event::elapsed, memcpy_dtoh_async, stream::synchronize},
+    result::{event::{self, elapsed}, memcpy_dtoh_async, stream::synchronize},
     sys::lib,
     DevicePtr,
 };
@@ -27,7 +27,7 @@ use gpu_iris_mpc::{
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 const REGION: &str = "us-east-2";
-const DB_SIZE: usize = 8 * 300_000;
+const DB_SIZE: usize = 8 * 50_000;
 const QUERIES: usize = 930;
 const RNG_SEED: u64 = 42;
 const N_BATCHES: usize = 10;
@@ -193,13 +193,15 @@ async fn main() -> eyre::Result<()> {
     let mut next_exchange_event = device_manager.create_events();
     let mut request_counter = 0;
     let mut timer_events = vec![];
+    let start_timer = device_manager.create_events();
+    let end_timer = device_manager.create_events();
 
     // loop {
     for _ in 0..N_BATCHES {
+        let now = Instant::now();
         let batch = receive_batch(&client, &queue).await?;
+        println!("Received batch in {:?}", now.elapsed());
         let (code_query, mask_query) = prepare_query_batch(batch);
-
-        println!("Received new batch.");
 
         let mut timers = vec![];
 
@@ -211,6 +213,7 @@ async fn main() -> eyre::Result<()> {
         if request_counter == 0 {
             device_manager.record_event(request_streams, &current_dot_event);
             device_manager.record_event(request_streams, &current_exchange_event);
+            device_manager.record_event(request_streams, &start_timer);
         }
 
         // BLOCK 1: calculate individual dot products
@@ -275,6 +278,7 @@ async fn main() -> eyre::Result<()> {
             .iter()
             .map(|r| *r.device_ptr())
             .collect::<Vec<_>>();
+        let tmp_evts = end_timer.iter().map(|e| *e as u64).collect::<Vec<_>>();
 
         tokio::spawn(async move {
             let mut index_results = vec![];
@@ -291,6 +295,8 @@ async fn main() -> eyre::Result<()> {
                         )
                         .result()
                         .unwrap();
+
+                    event::record(tmp_evts[i] as *mut _, tmp_streams[i] as *mut _).unwrap();
                     synchronize(tmp_streams[i] as *mut _).unwrap();
                 }
                 index_results.push(tmp_result);
@@ -320,6 +326,7 @@ async fn main() -> eyre::Result<()> {
         current_exchange_event = next_exchange_event;
         next_dot_event = device_manager.create_events();
         next_exchange_event = device_manager.create_events();
+        println!("CPU time of one iteration {:?}", now.elapsed());
     }
 
     sleep(Duration::from_secs(5)).await;
@@ -333,6 +340,13 @@ async fn main() -> eyre::Result<()> {
         }
     }
 
+    for i in 0..8 {
+        unsafe {
+            device_manager.device(i).bind_to_thread().unwrap();
+            let total_time = elapsed(start_timer[i], end_timer[i]).unwrap();
+            println!("Total time: {:?}", total_time);
+        }
+    }
 
     Ok(())
 }
