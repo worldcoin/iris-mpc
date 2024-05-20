@@ -430,15 +430,13 @@ impl ShareDB {
                     axum::serve(listener, app).await.unwrap();
                 });
             } else {
-                thread::sleep(Duration::from_secs(5));
+                thread::sleep(Duration::from_secs(10));
             }
 
             for i in 0..n_devices {
                 let id = if peer_id == 0 {
                     ids[i]
                 } else {
-                    
-
                     let res = reqwest::blocking::get(format!(
                         "http://{}:{}/{}",
                         peer_url.clone().unwrap(),
