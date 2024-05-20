@@ -193,8 +193,7 @@ async fn main() -> eyre::Result<()> {
     let mut current_exchange_event = device_manager.create_events();
     let mut next_exchange_event = device_manager.create_events();
     let mut request_counter = 0;
-    let mut all_dot_events = vec![];
-    let mut all_exchange_events = vec![];
+    let mut timer_events = vec![];
 
     // loop {
     for _ in 0..N_BATCHES {
@@ -202,6 +201,8 @@ async fn main() -> eyre::Result<()> {
         let (code_query, mask_query) = prepare_query_batch(batch);
 
         println!("Received new batch.");
+
+        let mut timers = vec![];
 
         let request_streams = &streams[request_counter % MAX_CONCURRENT_REQUESTS];
         let request_cublas_handles = &cublas_handles[request_counter % MAX_CONCURRENT_REQUESTS];
@@ -215,8 +216,10 @@ async fn main() -> eyre::Result<()> {
 
         // BLOCK 1: calculate individual dot products
         device_manager.await_event(request_streams, &current_dot_event);
+        timers.push(device_manager.create_events());
         codes_engine.dot(&code_query, request_streams, request_cublas_handles);
         masks_engine.dot(&mask_query, request_streams, request_cublas_handles);
+        timers.push(device_manager.create_events());
 
         // BLOCK 2: calculate final dot product result, exchange and compare
         device_manager.await_event(request_streams, &current_exchange_event);
@@ -225,8 +228,11 @@ async fn main() -> eyre::Result<()> {
 
         device_manager.record_event(request_streams, &next_dot_event);
 
+        timers.push(device_manager.create_events());
         codes_engine.exchange_results(request_streams);
         masks_engine.exchange_results(request_streams);
+        timers.push(device_manager.create_events());
+
         distance_comparator.reconstruct_and_compare(
             &codes_engine.results_peers,
             &masks_engine.results_peers,
@@ -287,8 +293,7 @@ async fn main() -> eyre::Result<()> {
         });
 
         // Prepare for next batch
-        all_dot_events.push(current_dot_event);
-        all_exchange_events.push(current_exchange_event);
+        timer_events.push(timers);
 
         request_counter += 1;
         current_dot_event = next_dot_event;
@@ -297,10 +302,11 @@ async fn main() -> eyre::Result<()> {
         next_exchange_event = device_manager.create_events();
     }
 
-    for i in 0..all_dot_events.len()-1 {
+    for timers in timer_events {
         unsafe {
-            let dot_time = elapsed(all_dot_events[i][0], all_dot_events[i+1][0]).unwrap();
-            let exchange_time = elapsed(all_dot_events[i][0], all_dot_events[i+1][0]).unwrap();
+            device_manager.device(0).bind_to_thread().unwrap();
+            let dot_time = elapsed(timers[0][0], timers[1][0]).unwrap();
+            let exchange_time = elapsed(timers[2][0], timers[3][0]).unwrap();
             println!("Dot time: {:?}, Exchange time: {:?}", dot_time, exchange_time);
         }
     }
