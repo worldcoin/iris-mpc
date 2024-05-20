@@ -10,7 +10,8 @@ use gpu_iris_mpc::{
     setup::iris_db::{iris::IrisCodeArray, shamir_iris::ShamirIris},
     sqs::{SMPCRequest, SQSMessage},
 };
-use std::{env, fs::metadata, time::Instant};
+use tokio::time::sleep;
+use std::{env, fs::metadata, time::{Duration, Instant}};
 
 use gpu_iris_mpc::{
     device_manager::DeviceManager,
@@ -216,10 +217,21 @@ async fn main() -> eyre::Result<()> {
 
         // BLOCK 1: calculate individual dot products
         device_manager.await_event(request_streams, &current_dot_event);
-        timers.push(device_manager.create_events());
+
+        //// DEBUG
+        let evts = device_manager.create_events();
+        device_manager.record_event(request_streams, &evts);
+        timers.push(evts);
+        //// END DEBUG
+
         codes_engine.dot(&code_query, request_streams, request_cublas_handles);
         masks_engine.dot(&mask_query, request_streams, request_cublas_handles);
-        timers.push(device_manager.create_events());
+        
+        //// DEBUG
+        let evts = device_manager.create_events();
+        device_manager.record_event(request_streams, &evts);
+        timers.push(evts);
+        //// END DEBUG
 
         // BLOCK 2: calculate final dot product result, exchange and compare
         device_manager.await_event(request_streams, &current_exchange_event);
@@ -228,10 +240,20 @@ async fn main() -> eyre::Result<()> {
 
         device_manager.record_event(request_streams, &next_dot_event);
 
-        timers.push(device_manager.create_events());
+        //// DEBUG
+        let evts = device_manager.create_events();
+        device_manager.record_event(request_streams, &evts);
+        timers.push(evts);
+        //// END DEBUG
+        
         codes_engine.exchange_results(request_streams);
         masks_engine.exchange_results(request_streams);
-        timers.push(device_manager.create_events());
+        
+        //// DEBUG
+        let evts = device_manager.create_events();
+        device_manager.record_event(request_streams, &evts);
+        timers.push(evts);
+        //// END DEBUG
 
         distance_comparator.reconstruct_and_compare(
             &codes_engine.results_peers,
@@ -301,6 +323,8 @@ async fn main() -> eyre::Result<()> {
         next_dot_event = device_manager.create_events();
         next_exchange_event = device_manager.create_events();
     }
+
+    sleep(Duration::from_secs(5)).await;
 
     for timers in timer_events {
         unsafe {
