@@ -2,7 +2,7 @@ use aws_sdk_sqs::{config::Region, Client, Error};
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use cudarc::driver::{
-    result::{memcpy_dtoh_async, stream::synchronize},
+    result::{event::elapsed, memcpy_dtoh_async, stream::synchronize},
     sys::lib,
     DevicePtr,
 };
@@ -29,6 +29,7 @@ const REGION: &str = "us-east-2";
 const DB_SIZE: usize = 8 * 1_000;
 const QUERIES: usize = 930;
 const RNG_SEED: u64 = 42;
+const N_BATCHES: usize = 5;
 const MAX_CONCURRENT_REQUESTS: usize = 5;
 const DB_CODE_FILE: &str = "/opt/dlami/nvme/codes.db";
 const DB_MASK_FILE: &str = "/opt/dlami/nvme/masks.db";
@@ -192,8 +193,11 @@ async fn main() -> eyre::Result<()> {
     let mut current_exchange_event = device_manager.create_events();
     let mut next_exchange_event = device_manager.create_events();
     let mut request_counter = 0;
+    let mut all_dot_events = vec![];
+    let mut all_exchange_events = vec![];
 
-    loop {
+    // loop {
+    for _ in 0..N_BATCHES {
         let batch = receive_batch(&client, &queue).await?;
         let (code_query, mask_query) = prepare_query_batch(batch);
 
@@ -283,12 +287,24 @@ async fn main() -> eyre::Result<()> {
         });
 
         // Prepare for next batch
+        all_dot_events.push(current_dot_event);
+        all_exchange_events.push(current_exchange_event);
+
         request_counter += 1;
         current_dot_event = next_dot_event;
         current_exchange_event = next_exchange_event;
         next_dot_event = device_manager.create_events();
         next_exchange_event = device_manager.create_events();
     }
+
+    for i in 0..all_dot_events.len()-1 {
+        unsafe {
+            let dot_time = elapsed(all_dot_events[i][0], all_dot_events[i+1][0]).unwrap();
+            let exchange_time = elapsed(all_dot_events[i][0], all_dot_events[i+1][0]).unwrap();
+            println!("Dot time: {:?}, Exchange time: {:?}", dot_time, exchange_time);
+        }
+    }
+
 
     Ok(())
 }

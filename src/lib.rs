@@ -494,7 +494,7 @@ impl ShareDB {
             let query1 = unsafe {
                 malloc_async(
                     streams[idx].stream,
-                    std::mem::size_of::<u8>() * preprocessed_query[1].len(),
+                    preprocessed_query[1].len(),
                 )
                 .unwrap()
             };
@@ -505,7 +505,7 @@ impl ShareDB {
             let query0 = unsafe {
                 malloc_async(
                     streams[idx].stream,
-                    std::mem::size_of::<u8>() * preprocessed_query[0].len(),
+                    preprocessed_query[0].len(),
                 )
                 .unwrap()
             };

@@ -10,7 +10,7 @@ fn random_vec(n: usize, m: usize, max_value: u32) -> Vec<u16> {
 }
 
 const RNG_SEED: u64 = 42;
-const DB_SIZE: usize = 500_000;
+const DB_SIZE: usize = 4_000_000;
 const QUERY_SIZE: usize = 930;
 const WIDTH: usize = 12800;
 
