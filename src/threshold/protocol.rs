@@ -550,6 +550,26 @@ impl Circuits {
         rng.fill_rng_into(&mut rand_trans);
     }
 
+    // Fill randomness using the correlated RNG
+    fn fill_my_rng_into_u16(&mut self, rand: &mut CudaSlice<u16>, idx: usize) {
+        debug_assert_eq!(rand.len() % 2, 0);
+        let rng = &mut self.rngs[idx];
+        let mut rand_trans: CudaViewMut<u32> =
+            // the transmute_mut is safe because we know that one u32 is 2 u16s, and the buffer is aligned properly for the transmute
+                unsafe { rand.transmute_mut(rand.len() / 2).unwrap() };
+        rng.fill_my_rng_into(&mut rand_trans);
+    }
+
+    // Fill randomness using the correlated RNG
+    fn fill_their_rng_into_u16(&mut self, rand: &mut CudaSlice<u16>, idx: usize) {
+        debug_assert_eq!(rand.len() % 2, 0);
+        let rng = &mut self.rngs[idx];
+        let mut rand_trans: CudaViewMut<u32> =
+            // the transmute_mut is safe because we know that one u32 is 2 u16s, and the buffer is aligned properly for the transmute
+                unsafe { rand.transmute_mut(rand.len() / 2).unwrap() };
+        rng.fill_their_rng_into(&mut rand_trans);
+    }
+
     fn packed_and_many_pre(
         &mut self,
         x1: &ChunkShareView<u64>,
@@ -929,7 +949,7 @@ impl Circuits {
         }
     }
 
-    fn bit_inject_neg_ot_sender(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u32>]) {
+    fn bit_inject_neg_ot_sender(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u16>]) {
         let mut m0 = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_1);
         let mut m1 = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_2);
 
@@ -940,28 +960,28 @@ impl Circuits {
                     .alloc::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
-            self.rngs[idx].fill_my_rng_into(&mut rand_ca.slice_mut(..));
+            self.fill_my_rng_into_u16(&mut rand_ca, idx);
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_cb = unsafe {
                 self.devs[idx]
                     .alloc::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
-            self.rngs[idx].fill_their_rng_into(&mut rand_cb.slice_mut(..));
+            self.fill_their_rng_into_u16(&mut rand_cb, idx);
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_wa1 = unsafe {
                 self.devs[idx]
                     .alloc::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
-            self.rngs[idx].fill_my_rng_into(&mut rand_wa1.slice_mut(..));
+            self.fill_my_rng_into_u16(&mut rand_wa1, idx);
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_wa2 = unsafe {
                 self.devs[idx]
                     .alloc::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
-            self.rngs[idx].fill_my_rng_into(&mut rand_wa2.slice_mut(..));
+            self.fill_my_rng_into_u16(&mut rand_wa2, idx);
 
             let cfg = Self::launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64 * 2,
@@ -1028,7 +1048,7 @@ impl Circuits {
                     .alloc::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
-            self.rngs[idx].fill_my_rng_into(&mut rand_ca.slice_mut(..));
+            self.fill_my_rng_into_u16(&mut rand_ca, idx);
 
             let cfg = Self::launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64 * 2,
@@ -1059,7 +1079,10 @@ impl Circuits {
         // Reshare to Helper
         result::group_start().unwrap();
         for (idx, res) in outp.iter().enumerate() {
-            self.send(&res.b, self.prev_id, idx);
+            // We have to transmute since u16 is not sendable
+            let res_b_trans: CudaView<u8> = // the transmute_mut is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
+            unsafe { res.b.transmute(res.b.len() * 2).unwrap() };
+            self.send_view(&res_b_trans, self.prev_id, idx);
         }
         result::group_end().unwrap();
 
@@ -1078,21 +1101,21 @@ impl Circuits {
                     .alloc::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
-            self.rngs[idx].fill_their_rng_into(&mut rand_cb.slice_mut(..));
+            self.fill_their_rng_into_u16(&mut rand_cb, idx);
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_wb1 = unsafe {
                 self.devs[idx]
                     .alloc::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
-            self.rngs[idx].fill_their_rng_into(&mut rand_wb1.slice_mut(..));
+            self.fill_their_rng_into_u16(&mut rand_wb1, idx);
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_wb2 = unsafe {
                 self.devs[idx]
                     .alloc::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
-            self.rngs[idx].fill_their_rng_into(&mut rand_wb2.slice_mut(..));
+            self.fill_their_rng_into_u16(&mut rand_wb2, idx);
 
             let cfg = Self::launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64 * 2,
@@ -1126,7 +1149,10 @@ impl Circuits {
         result::group_end().unwrap();
         result::group_start().unwrap();
         for (idx, res) in outp.iter_mut().enumerate() {
-            self.receive(&mut res.a, self.next_id, idx);
+            // We have to transmute since u16 is not receivable
+            let mut res_a_trans: CudaView<u8> = // the transmute_mut is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
+            unsafe { res.a.transmute(res.a.len() * 2).unwrap() };
+            self.receive_view(&mut res_a_trans, self.next_id, idx);
         }
         result::group_end().unwrap();
 
