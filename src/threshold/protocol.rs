@@ -587,7 +587,6 @@ impl Circuits {
         x1: &ChunkShareView<u64>,
         x2: &ChunkShareView<u64>,
         res: &mut ChunkShareViewMut<u64>,
-        // rand: &CudaView<u64>,
         bits: usize,
         idx: usize,
     ) {
@@ -623,14 +622,12 @@ impl Circuits {
 
     // Keep in mind: group needs to be open!
     fn packed_and_many_send(&mut self, res: &ChunkShareView<u64>, bits: usize, idx: usize) {
-        // TODO check if this is the best we can do
         let send = res.a.slice(0..bits * self.chunk_size);
         self.send_view(&send, self.next_id, idx);
     }
 
     // Keep in mind: group needs to be open!
     fn packed_and_many_receive(&mut self, res: &mut ChunkShareView<u64>, bits: usize, idx: usize) {
-        // TODO check if this is the best we can do
         let mut rcv = res.b.slice(0..bits * self.chunk_size);
         self.receive_view(&mut rcv, self.prev_id, idx);
     }
