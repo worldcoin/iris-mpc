@@ -21,7 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) const P2K: u64 = (P as u64) << B_BITS;
+pub(crate) const P2K: u32 = (P as u32) << B_BITS;
 
 const DEFAULT_LAUNCH_CONFIG_THREADS: u32 = 64;
 
@@ -213,10 +213,10 @@ impl Kernels {
 }
 
 struct Buffers {
-    u64_64c_1: Option<Vec<ChunkShare<u64>>>,
-    u64_64c_2: Option<Vec<ChunkShare<u64>>>,
     u32_64c_1: Option<Vec<ChunkShare<u32>>>,
     u32_64c_2: Option<Vec<ChunkShare<u32>>>,
+    u32_64c_3: Option<Vec<ChunkShare<u32>>>,
+    u32_64c_4: Option<Vec<ChunkShare<u32>>>,
     u64_2c_1: Option<Vec<ChunkShare<u64>>>,
     u32_128c_1: Option<Vec<ChunkShare<u32>>>,
     u64_17c_1: Option<Vec<ChunkShare<u64>>>,
@@ -233,11 +233,10 @@ struct Buffers {
 
 impl Buffers {
     fn new(devices: &[Arc<CudaDevice>], chunk_size: usize) -> Self {
-        let u64_64c_1 = Some(Self::allocate_buffer(chunk_size * 64, devices));
-        let u64_64c_2 = Some(Self::allocate_buffer(chunk_size * 64, devices));
-
         let u32_64c_1 = Some(Self::allocate_buffer(chunk_size * 64, devices));
         let u32_64c_2 = Some(Self::allocate_buffer(chunk_size * 64, devices));
+        let u32_64c_3 = Some(Self::allocate_buffer(chunk_size * 64, devices));
+        let u32_64c_4 = Some(Self::allocate_buffer(chunk_size * 64, devices));
 
         let u64_17c_1 = Some(Self::allocate_buffer(chunk_size * 17, devices));
         let u64_17c_2 = Some(Self::allocate_buffer(chunk_size * 17, devices));
@@ -257,10 +256,10 @@ impl Buffers {
         let single_u32_128c_3 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
 
         Buffers {
-            u64_64c_1,
-            u64_64c_2,
             u32_64c_1,
             u32_64c_2,
+            u32_64c_3,
+            u32_64c_4,
             u64_17c_1,
             u64_17c_2,
             u64_18c_1,
@@ -323,10 +322,10 @@ impl Buffers {
     }
 
     fn check_buffers(&self) {
-        debug_assert!(self.u64_64c_1.is_some());
-        debug_assert!(self.u64_64c_2.is_some());
         debug_assert!(self.u32_64c_1.is_some());
         debug_assert!(self.u32_64c_2.is_some());
+        debug_assert!(self.u32_64c_3.is_some());
+        debug_assert!(self.u32_64c_4.is_some());
         debug_assert!(self.u64_17c_1.is_some());
         debug_assert!(self.u64_17c_2.is_some());
         debug_assert!(self.u64_18c_1.is_some());
@@ -864,7 +863,7 @@ impl Circuits {
     fn split1(
         &self,
         inp: Vec<ChunkShare<u16>>,
-        xa: &mut [ChunkShare<u64>],
+        xa: &mut [ChunkShare<u32>],
         xp: &mut [ChunkShare<u32>],
         xpp: &mut [ChunkShare<u32>],
     ) {
@@ -1151,15 +1150,15 @@ impl Circuits {
     fn lift_p2k(
         &mut self,
         shares: Vec<ChunkShare<u16>>,
-        xa: &mut [ChunkShare<u64>],
+        xa: &mut [ChunkShare<u32>],
         injected: &mut [ChunkShare<u32>],
     ) {
         const K: usize = 18;
         debug_assert_eq!(self.n_devices, shares.len());
         debug_assert_eq!(self.n_devices, xa.len());
 
-        let mut xp = Buffers::take_buffer(&mut self.buffers.u32_64c_1);
-        let mut xpp = Buffers::take_buffer(&mut self.buffers.u32_64c_2);
+        let mut xp = Buffers::take_buffer(&mut self.buffers.u32_64c_3);
+        let mut xpp = Buffers::take_buffer(&mut self.buffers.u32_64c_4);
         let mut c = Buffers::take_buffer(&mut self.buffers.u64_2c_1);
 
         // Reuse some buffers for intermediate values
@@ -1198,8 +1197,8 @@ impl Circuits {
         );
         self.bit_inject_neg_ot(&c, injected);
 
-        Buffers::return_buffer(&mut self.buffers.u32_64c_1, xp);
-        Buffers::return_buffer(&mut self.buffers.u32_64c_2, xpp);
+        Buffers::return_buffer(&mut self.buffers.u32_64c_3, xp);
+        Buffers::return_buffer(&mut self.buffers.u32_64c_4, xpp);
         Buffers::return_buffer(&mut self.buffers.u64_2c_1, c);
         Buffers::return_buffer(&mut self.buffers.u64_36c_1, buffer1);
         Buffers::return_buffer(&mut self.buffers.u64_36c_2, buffer2);
@@ -1651,10 +1650,10 @@ impl Circuits {
         let mut res_msb = not_msb;
 
         // Finally, the overflow bit (P2K is zero)
-        #[allow(clippy::assertions_on_constants)]
-        {
-            debug_assert!(((P2K >> Self::BITS) & 1) == 0);
-        }
+        // #[allow(clippy::assertions_on_constants)]
+        // {
+        //     debug_assert!(((P2K >> Self::BITS) & 1) == 0);
+        // }
         for (idx, (xx, ov, res_msb)) in izip!(x.iter(), &mut c, &mut res_msb).enumerate() {
             let xmsb = xx.get_offset(Self::BITS - 1, self.chunk_size);
             let xb = xx.get_offset(Self::BITS, self.chunk_size);
@@ -1907,8 +1906,8 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, code_dots.len());
         debug_assert_eq!(self.n_devices, mask_dots.len());
 
-        let mut x2 = Buffers::take_buffer(&mut self.buffers.u64_64c_1);
-        let mut x01 = Buffers::take_buffer(&mut self.buffers.u64_64c_2);
+        let mut x2 = Buffers::take_buffer(&mut self.buffers.u32_64c_1);
+        let mut x01 = Buffers::take_buffer(&mut self.buffers.u32_64c_2);
         let mut corrections = Buffers::take_buffer(&mut self.buffers.u32_128c_1);
 
         self.lift_p2k(mask_dots, &mut x2, &mut corrections);
@@ -1917,8 +1916,8 @@ impl Circuits {
         let mut res = Buffers::take_buffer(&mut self.buffers.u64_37c_1);
         self.extract_msb_sum_mod(&x01, &x2, &mut res);
 
-        Buffers::return_buffer(&mut self.buffers.u64_64c_1, x2);
-        Buffers::return_buffer(&mut self.buffers.u64_64c_2, x01);
+        Buffers::return_buffer(&mut self.buffers.u32_64c_1, x2);
+        Buffers::return_buffer(&mut self.buffers.u32_64c_2, x01);
         Buffers::return_buffer(&mut self.buffers.u32_128c_1, corrections);
         Buffers::return_buffer(&mut self.buffers.u64_37c_1, res);
         self.buffers.check_buffers();

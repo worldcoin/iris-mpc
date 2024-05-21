@@ -415,16 +415,16 @@ shared_lift_mul_sub_split(U64 *x01, U64 *mask_a, U64 *mask_b, U32 *mask_corr_a,
   }
 }
 
-extern "C" __global__ void shared_split1(U16 *inp_a, U16 *inp_b, U64 *xa_a,
-                                         U64 *xa_b, U32 *xp_a, U32 *xp_b,
+extern "C" __global__ void shared_split1(U16 *inp_a, U16 *inp_b, U32 *xa_a,
+                                         U32 *xa_b, U32 *xp_a, U32 *xp_b,
                                          U32 *xpp_a, U32 *xpp_b, int n,
                                          int id) {
   assert(n % 64 == 0);
 
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
-    xa_a[i] = (U64)(inp_a[i]);
-    xa_b[i] = (U64)(inp_b[i]);
+    xa_a[i] = (U32)(inp_a[i]);
+    xa_b[i] = (U32)(inp_b[i]);
     U64 subbed_p;
     U64 subbed_pp;
 
