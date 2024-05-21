@@ -15,7 +15,7 @@ pub struct ChaChaCudaFeRng {
     /// the device to use
     dev: Arc<CudaDevice>,
     /// compiled and loaded kernels for our 2 functions
-    kernels: Vec<CudaFunction>,
+    kernels: [CudaFunction; 2],
     /// a reference to the current chunk of the rng output in the cuda device
     rng_chunk: CudaSlice<u32>,
     /// a buffer to copy the output to in the host device
@@ -24,7 +24,8 @@ pub struct ChaChaCudaFeRng {
     chacha_ctx: ChaChaCtx,
 }
 
-const CHACHA_PTX_SRC: &str = include_str!("chacha_field.cu");
+const CHACHA_PTX_SRC: &str = include_str!("chacha.cu");
+const FIELD_PTX_SRC: &str = include_str!("field_fix.cu");
 const CHACHA_FUNCTION_NAME: &str = "chacha12";
 const FIELD_FUNCTION_NAME: &str = "fix_fe";
 
@@ -39,29 +40,24 @@ impl ChaChaCudaFeRng {
     /// `dev`: the cuda device to run the RNG on
     /// `key`: the seed to use for the RNG
     pub fn init(buf_size: usize, dev: Arc<CudaDevice>, seed: [u32; 8]) -> Self {
-        let mut kernels = Vec::new();
         let ptx = compile_ptx(CHACHA_PTX_SRC).unwrap();
+        let ptx2 = compile_ptx(FIELD_PTX_SRC).unwrap();
 
         assert!(
             buf_size % (OK_U16_BUF_ELEMENTS) == 0,
             "buf_size must be a multiple of 1000 atm"
         );
 
-        dev.load_ptx(
-            ptx.clone(),
-            CHACHA_FUNCTION_NAME,
-            &[CHACHA_FUNCTION_NAME, FIELD_FUNCTION_NAME],
-        )
-        .unwrap();
-        let function = dev
+        dev.load_ptx(ptx, CHACHA_FUNCTION_NAME, &[CHACHA_FUNCTION_NAME])
+            .unwrap();
+        let cuda_function = dev
             .get_func(CHACHA_FUNCTION_NAME, CHACHA_FUNCTION_NAME)
+            .unwrap();
+        dev.load_ptx(ptx2, CHACHA_FUNCTION_NAME, &[FIELD_FUNCTION_NAME])
             .unwrap();
         let fe_fix_function = dev
             .get_func(CHACHA_FUNCTION_NAME, FIELD_FUNCTION_NAME)
             .unwrap();
-
-        kernels.push(function);
-        kernels.push(fe_fix_function);
 
         let valid_buffer_size = buf_size;
         let buf_size = (valid_buffer_size / OK_U16_BUF_ELEMENTS) * MIN_U16_BUF_ELEMENTS;
@@ -73,7 +69,7 @@ impl ChaChaCudaFeRng {
             buf_size,
             valid_buffer_size,
             dev,
-            kernels,
+            kernels: [cuda_function, fe_fix_function],
             rng_chunk,
             output_buffer: buf,
             chacha_ctx: ChaChaCtx::init(seed, 0, 0),
@@ -107,7 +103,7 @@ impl ChaChaCudaFeRng {
         }
         // increment the state counter of the ChaChaRng with the number of produced blocks
         let mut counter = self.chacha_ctx.get_counter();
-        counter += self.buf_size as u64 / 32; // one call to KS produces 32 u16s
+        counter += num_ks_calls as u64; // one call to KS produces 32 u16s
         self.chacha_ctx.set_counter(counter);
 
         // slice is now filled with u32s, we need to fix the contained u16 to be valid field elements
