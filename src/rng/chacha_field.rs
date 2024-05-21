@@ -94,7 +94,7 @@ impl ChaChaCudaFeRng {
             shared_mem_bytes: 0, // do we need this since we use __shared__ in kernel?
         };
         let state_slice = self.dev.htod_sync_copy(&self.chacha_ctx.state).unwrap();
-        let len = self.rng_chunk.len();
+        let len = self.rng_chunk.len() as u64;
         unsafe {
             self.kernels[0]
                 .clone()

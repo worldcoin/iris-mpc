@@ -12,6 +12,7 @@ cudarc = { git = "https://github.com/philsippl/cudarc.git", rev = "46bf544", fea
     "cuda-12020",
 ] }
 eyre = "0.6.12"
+float_eq = "1.0.1"
 hex = "0.4.3"
 itertools = "0.12"
 ndarray = "0.15.3"

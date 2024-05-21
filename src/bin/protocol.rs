@@ -1,10 +1,16 @@
+///! End-to-end example implementation of the MPC v1.5 protocol
+///! This requires three individual nodes. It can be run like this:
+///! Node 0: cargo run --release --bin protocol 0
+///! Node 1: cargo run --release --bin protocol 1 [NODE_0_IP]
+///! Node 2: cargo run --release --bin protocol 2 [NODE_0_IP]
 use std::{env, time::Instant};
 
 use cudarc::driver::CudaDevice;
+use float_eq::assert_float_eq;
 use gpu_iris_mpc::{
     setup::{
         id::PartyID,
-        iris_db::{db::IrisDB, iris::IrisCode, shamir_db::ShamirIrisDB, shamir_iris::ShamirIris},
+        iris_db::{db::IrisDB, shamir_db::ShamirIrisDB, shamir_iris::ShamirIris},
         shamir::Shamir,
     },
     DistanceComparator, ShareDB,
@@ -19,7 +25,7 @@ const RNG_SEED: u64 = 1337;
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     // TODO
-    let mut rng = StdRng::seed_from_u64(42);
+    let mut rng = StdRng::seed_from_u64(RNG_SEED);
     let seed0 = rng.gen::<[u32; 8]>();
     let seed1 = rng.gen::<[u32; 8]>();
     let seed2 = rng.gen::<[u32; 8]>();
@@ -38,8 +44,8 @@ async fn main() -> eyre::Result<()> {
     };
 
     // Init DB
-    let db = IrisDB::new_random_seed(DB_SIZE, RNG_SEED);
-    let shamir_db = ShamirIrisDB::share_db_seed(&db, RNG_SEED);
+    let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
+    let shamir_db = ShamirIrisDB::share_db_par(&db, &mut rng);
     let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(party_id as u8).unwrap());
 
     println!("Random shared DB generated!");
@@ -64,7 +70,7 @@ async fn main() -> eyre::Result<()> {
         l_coeff,
         &codes_db,
         QUERIES,
-        Some(chacha_seeds),
+        chacha_seeds,
         url,
         Some(true),
         Some(3000),
@@ -74,7 +80,7 @@ async fn main() -> eyre::Result<()> {
         l_coeff,
         &masks_db,
         QUERIES,
-        Some(chacha_seeds),
+        chacha_seeds,
         url,
         Some(true),
         Some(3001),
@@ -84,7 +90,8 @@ async fn main() -> eyre::Result<()> {
     println!("Engines ready!");
 
     // Prepare queries
-    let random_query = ShamirIris::share_iris(&IrisCode::random_rng(&mut rng), &mut rng);
+    let query_template = db.db[0].get_similar_iris(&mut rng);
+    let random_query = ShamirIris::share_iris(&query_template, &mut rng);
     let mut code_queries = [vec![], vec![], vec![]];
     let mut mask_queries = [vec![], vec![], vec![]];
 
@@ -116,7 +123,7 @@ async fn main() -> eyre::Result<()> {
             .collect::<Vec<_>>(),
     );
 
-    for _ in 0..10 {
+    for _ in 0..1 {
         let now = Instant::now();
 
         codes_engine.dot(&code_query);
@@ -131,13 +138,28 @@ async fn main() -> eyre::Result<()> {
         masks_engine.exchange_results();
         println!("Exchange masks took: {:?}", now.elapsed());
 
-        distance_comparator.reconstruct(&codes_engine.results_peers, &masks_engine.results_peers);
+        distance_comparator
+            .reconstruct_and_compare(&codes_engine.results_peers, &masks_engine.results_peers);
 
         println!("Total time: {:?}", now.elapsed());
     }
 
-    let dists = distance_comparator.fetch_results(0);
-    println!("{:?}", dists[0..10].to_vec());
+    let mut results_codes = vec![0u16; DB_SIZE / n_devices * QUERIES];
+    codes_engine.fetch_results(&mut results_codes, 0);
+    let mut results_masks = vec![0u16; DB_SIZE / n_devices * QUERIES];
+    masks_engine.fetch_results(&mut results_masks, 0);
+
+    // Sanity check: compare results against reference (debug only)
+    let (dists, _) = distance_comparator
+        .reconstruct_distances_debug(&codes_engine.results_peers, &masks_engine.results_peers);
+
+    let reference_dists = db.calculate_distances(&query_template);
+
+    for i in 0..DB_SIZE / n_devices {
+        assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-6);
+    }
+
+    println!("Distances match the reference!");
 
     time::sleep(time::Duration::from_secs(5)).await;
     Ok(())
