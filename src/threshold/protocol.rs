@@ -684,8 +684,8 @@ impl Circuits {
     ) {
         // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
         let size = (x1.len() + 15) / 16;
-        let mut rand = unsafe { self.devs[idx].alloc_zeros::<u64>(size * 16).unwrap() };
-        // self.fill_rand_u64(&mut rand, idx);
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(size * 16).unwrap() };
+        self.fill_rand_u64(&mut rand, idx);
 
         // TODO also precompute?
         let cfg = Self::launch_config_from_elements_and_threads(
@@ -1805,8 +1805,6 @@ impl Circuits {
 
             let mut a_ = dev.dtoh_sync_copy(&src.a).unwrap();
             let mut b_ = dev.dtoh_sync_copy(&src.b).unwrap();
-            assert_eq!(a_.len(), 1);
-            assert_eq!(b_.len(), 1);
 
             a.push(a_.pop().unwrap());
             b.push(b_.pop().unwrap());
@@ -1814,12 +1812,8 @@ impl Circuits {
 
         // Put results onto first GPU
         let des = bit0.get_range(1, self.n_devices);
-        assert_eq!(des.len(), self.n_devices - 1);
         let a = dev0.htod_sync_copy(&a).unwrap();
         let b = dev0.htod_sync_copy(&b).unwrap();
-
-        assert_eq!(a.len(), self.n_devices - 1);
-        assert_eq!(b.len(), self.n_devices - 1);
 
         // TODO also precompute?
         let cfg = Self::launch_config_from_elements_and_threads(
