@@ -1,9 +1,8 @@
-///! End-to-end example implementation of the MPC v1.5 protocol
-///! This requires three individual nodes. It can be run like this:
-///! Node 0: cargo run --release --bin protocol 0
-///! Node 1: cargo run --release --bin protocol 1 [NODE_0_IP]
-///! Node 2: cargo run --release --bin protocol 2 [NODE_0_IP]
-
+//! End-to-end example implementation of the MPC v1.5 protocol
+//! This requires three individual nodes. It can be run like this:
+//! Node 0: cargo run --release --bin protocol 0
+//! Node 1: cargo run --release --bin protocol 1 [NODE_0_IP]
+//! Node 2: cargo run --release --bin protocol 2 [NODE_0_IP]
 use std::{env, time::Instant};
 
 use cudarc::driver::CudaDevice;
@@ -19,9 +18,9 @@ use gpu_iris_mpc::{
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tokio::time;
 
-const DB_SIZE: usize = 8 * 1000;
-const QUERIES: usize = 31;
-const RNG_SEED: u64 = 42;
+const DB_SIZE: usize = 8 * 125_000;
+const QUERIES: usize = 930;
+const RNG_SEED: u64 = 1337;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
@@ -72,7 +71,7 @@ async fn main() -> eyre::Result<()> {
         &codes_db,
         QUERIES,
         chacha_seeds,
-        url.clone(),
+        url,
         Some(true),
         Some(3000),
     );
@@ -82,7 +81,7 @@ async fn main() -> eyre::Result<()> {
         &masks_db,
         QUERIES,
         chacha_seeds,
-        url.clone(),
+        url,
         Some(true),
         Some(3001),
     );
@@ -93,10 +92,10 @@ async fn main() -> eyre::Result<()> {
     // Prepare queries
     let query_template = db.db[0].get_similar_iris(&mut rng);
     let random_query = ShamirIris::share_iris(&query_template, &mut rng);
-    let mut code_queries = vec![vec![], vec![], vec![]];
-    let mut mask_queries = vec![vec![], vec![], vec![]];
+    let mut code_queries = [vec![], vec![], vec![]];
+    let mut mask_queries = [vec![], vec![], vec![]];
 
-    for i in 0..QUERIES {
+    for _ in 0..QUERIES {
         // TODO: rotate
         let tmp: [ShamirIris; 3] = random_query.clone();
         code_queries[0].push(tmp[0].code.to_vec());

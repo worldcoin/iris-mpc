@@ -40,12 +40,16 @@ impl ShamirIrisDB {
         // Fork out the rngs to be able to use them concurrently
         let rng_seeds = db.db.iter().map(|_| rng.gen()).collect::<Vec<_>>();
 
-        let (db1, (db2, db3)): (Vec<_>, (Vec<_>, Vec<_>)) = db.db.par_iter().enumerate().map(|(i, iris)| {
-            let mut rng = StdRng::from_seed(rng_seeds[i]);
-            let [shares1, shares2, shares3] = ShamirIris::share_iris(iris, &mut rng);
-            (shares1, (shares2, shares3))
-        }).unzip();
-
+        let (db1, (db2, db3)): (Vec<_>, (Vec<_>, Vec<_>)) = db
+            .db
+            .par_iter()
+            .enumerate()
+            .map(|(i, iris)| {
+                let mut rng = StdRng::from_seed(rng_seeds[i]);
+                let [shares1, shares2, shares3] = ShamirIris::share_iris(iris, &mut rng);
+                (shares1, (shares2, shares3))
+            })
+            .unzip();
 
         [Self { db: db1 }, Self { db: db2 }, Self { db: db3 }]
     }
