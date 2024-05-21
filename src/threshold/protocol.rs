@@ -386,6 +386,7 @@ impl Circuits {
         for i in 0..n_devices {
             let dev = CudaDevice::new(i).unwrap();
             let kernel = Kernels::new(dev.clone(), ptx.clone());
+            // TODO seeds are not random yet :)
             let rng = ChaChaCudaCorrRng::init(
                 dev.clone(),
                 [peer_id as u32; 8],
@@ -1808,7 +1809,6 @@ impl Circuits {
         }
     }
 
-    // TODO is this the best we can do?
     fn collect_graphic_result(&mut self, bits: &mut [ChunkShareView<u64>]) {
         debug_assert!(self.n_devices <= self.chunk_size);
         let dev0 = &self.devs[0];
