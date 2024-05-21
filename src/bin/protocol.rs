@@ -1,8 +1,8 @@
-///! End-to-end example implementation of the MPC v1.5 protocol
-///! This requires three individual nodes. It can be run like this:
-///! Node 0: cargo run --release --bin protocol 0
-///! Node 1: cargo run --release --bin protocol 1 [NODE_0_IP]
-///! Node 2: cargo run --release --bin protocol 2 [NODE_0_IP]
+//! End-to-end example implementation of the MPC v1.5 protocol
+//! This requires three individual nodes. It can be run like this:
+//! Node 0: cargo run --release --bin protocol 0
+//! Node 1: cargo run --release --bin protocol 1 [NODE_0_IP]
+//! Node 2: cargo run --release --bin protocol 2 [NODE_0_IP]
 use std::{env, time::Instant};
 
 use cudarc::driver::CudaDevice;
