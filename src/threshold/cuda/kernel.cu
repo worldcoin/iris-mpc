@@ -3,7 +3,7 @@
 #define U64 unsigned long long
 #define TYPE U64
 
-#define MATCH_THRESHOLD_RATIO 0.34
+#define MATCH_THRESHOLD_RATIO 0.375
 #define B_BITS 20
 #define B (1ULL << B_BITS)
 #define A ((U64)((1. - 2. * MATCH_THRESHOLD_RATIO) * (double)B))

@@ -1,7 +1,7 @@
 use rand::distributions::{Bernoulli, Distribution};
 use rand::Rng;
 
-pub const MATCH_THRESHOLD_RATIO: f64 = 0.34;
+pub const MATCH_THRESHOLD_RATIO: f64 = 0.375;
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
