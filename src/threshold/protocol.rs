@@ -683,7 +683,8 @@ impl Circuits {
         idx: usize,
     ) {
         // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
-        let mut rand = unsafe { self.devs[idx].alloc::<u64>(x1.len()).unwrap() };
+        let size = (x1.len() + 15) / 16;
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(size * 16).unwrap() };
         self.fill_rand_u64(&mut rand, idx);
 
         // TODO also precompute?
