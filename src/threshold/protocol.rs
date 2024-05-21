@@ -950,14 +950,14 @@ impl Circuits {
                     .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
-            // self.rngs[idx].fill_my_rng_into(&mut rand_ca.slice_mut(..));
+            self.rngs[idx].fill_my_rng_into(&mut rand_ca.slice_mut(..));
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_cb = unsafe {
                 self.devs[idx]
                     .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
-            // self.rngs[idx].fill_their_rng_into(&mut rand_cb.slice_mut(..));
+            self.rngs[idx].fill_their_rng_into(&mut rand_cb.slice_mut(..));
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_wa1 = unsafe {
                 self.devs[idx]
@@ -1033,7 +1033,7 @@ impl Circuits {
                     .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
-            // self.rngs[idx].fill_my_rng_into(&mut rand_ca.slice_mut(..));
+            self.rngs[idx].fill_my_rng_into(&mut rand_ca.slice_mut(..));
 
             unsafe {
                 self.kernels[idx]
@@ -1078,7 +1078,7 @@ impl Circuits {
                     .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
-            // self.rngs[idx].fill_their_rng_into(&mut rand_cb.slice_mut(..));
+            self.rngs[idx].fill_their_rng_into(&mut rand_cb.slice_mut(..));
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_wb1 = unsafe {
                 self.devs[idx]
