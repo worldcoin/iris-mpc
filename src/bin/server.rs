@@ -216,6 +216,15 @@ async fn main() -> eyre::Result<()> {
             device_manager.record_event(request_streams, &start_timer);
         }
 
+        // Transfer queries to device
+        // TODO: free all of this!
+        let code_query = device_manager.htod_transfer_query(&code_query, request_streams);
+        let mask_query = device_manager.htod_transfer_query(&mask_query, request_streams);
+        let code_query_sums = codes_engine.query_sums(&code_query, request_streams, request_cublas_handles);
+        let mask_query_sums = masks_engine.query_sums(&mask_query, request_streams, request_cublas_handles);
+
+        // Calculate the query sums
+
         // BLOCK 1: calculate individual dot products
         device_manager.await_event(request_streams, &current_dot_event);
 
@@ -225,8 +234,8 @@ async fn main() -> eyre::Result<()> {
         timers.push(evts);
         //// END DEBUG
 
-        codes_engine.dot(&code_query, request_streams, request_cublas_handles);
-        masks_engine.dot(&mask_query, request_streams, request_cublas_handles);
+        codes_engine.dot(code_query, request_streams, request_cublas_handles);
+        masks_engine.dot(mask_query, request_streams, request_cublas_handles);
         
         //// DEBUG
         let evts = device_manager.create_events();
@@ -236,8 +245,8 @@ async fn main() -> eyre::Result<()> {
 
         // BLOCK 2: calculate final dot product result, exchange and compare
         device_manager.await_event(request_streams, &current_exchange_event);
-        codes_engine.dot_reduce(request_streams);
-        masks_engine.dot_reduce(request_streams);
+        codes_engine.dot_reduce(code_query_sums, request_streams);
+        masks_engine.dot_reduce(mask_query_sums, request_streams);
 
         device_manager.record_event(request_streams, &next_dot_event);
 

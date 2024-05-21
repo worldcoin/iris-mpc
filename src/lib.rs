@@ -1,7 +1,7 @@
 pub mod device_manager;
+pub mod mmap;
 pub mod rng;
 pub mod setup;
-pub mod mmap;
 pub mod sqs;
 
 use std::{
@@ -92,7 +92,7 @@ pub fn gemm(
     handle: &CudaBlas,
     a: u64,
     b: u64,
-    c: &mut CudaSlice<i32>,
+    c: u64,
     a_offset: u64,
     b_offset: u64,
     c_offset: u64,
@@ -118,7 +118,7 @@ pub fn gemm(
             sys::cublasDataType_t::CUDA_R_8I,
             k as i32,
             &beta as *const i32 as *const c_void,
-            (*c.device_ptr_mut() + c_offset) as *mut _,
+            (c + c_offset) as *mut _,
             sys::cublasDataType_t::CUDA_R_32I,
             m as i32,
             sys::cublasComputeType_t::CUBLAS_COMPUTE_32I_PEDANTIC,
@@ -241,18 +241,13 @@ impl DistanceComparator {
         }
     }
 
-    pub fn fetch_results(
-        &self,
-        dev_results: &Vec<u64>,
-        streams: &Vec<u64>,
-    ) -> Vec<Vec<u32>> {
+    pub fn fetch_results(&self, dev_results: &Vec<u64>, streams: &Vec<u64>) -> Vec<Vec<u32>> {
         let mut results = vec![];
         for i in 0..self.n_devices {
             self.devs[i].bind_to_thread().unwrap();
             let mut tmp = vec![0u32; self.query_length];
             unsafe {
-                memcpy_dtoh_async(&mut tmp, dev_results[i], streams[i] as *mut _)
-                    .unwrap();
+                memcpy_dtoh_async(&mut tmp, dev_results[i], streams[i] as *mut _).unwrap();
                 synchronize(streams[i] as *mut _).unwrap();
             }
             results.push(tmp);
@@ -479,37 +474,72 @@ impl ShareDB {
         }
     }
 
+    pub fn query_sums(
+        &self,
+        query_ptrs: &(Vec<u64>, Vec<u64>),
+        streams: &Vec<CudaStream>,
+        blass: &Vec<CudaBlas>,
+    ) -> (Vec<u64>, Vec<u64>) {
+        let mut query1_sums = vec![];
+        let mut query0_sums = vec![];
+
+        for idx in 0..self.device_manager.device_count() {
+            self.device_manager.device(idx).bind_to_thread().unwrap();
+
+            let query0 = query_ptrs.0[idx];
+            let query1 = query_ptrs.1[idx];
+
+            let query0_sum =
+                unsafe { malloc_async(streams[idx].stream, query_ptrs.0.len()).unwrap() };
+
+            let query1_sum =
+                unsafe { malloc_async(streams[idx].stream, query_ptrs.1.len()).unwrap() };
+
+            gemm(
+                &blass[idx],
+                query0,
+                *self.ones[idx].device_ptr(),
+                query0_sum,
+                0,
+                0,
+                0,
+                self.query_length,
+                1,
+                IRIS_CODE_LENGTH,
+                1,
+                0,
+            );
+            gemm(
+                &blass[idx],
+                query1,
+                *self.ones[idx].device_ptr(),
+                query1_sum,
+                0,
+                0,
+                0,
+                self.query_length,
+                1,
+                IRIS_CODE_LENGTH,
+                1,
+                0,
+            );
+
+            query0_sums.push(query0_sum);
+            query1_sums.push(query1_sum);
+        }
+        (query0_sums, query1_sums)
+    }
+
     pub fn dot(
         &mut self,
-        preprocessed_query: &Vec<Vec<u8>>,
+        query_ptrs: (Vec<u64>, Vec<u64>),
         streams: &Vec<CudaStream>,
         blass: &Vec<CudaBlas>,
     ) {
         for idx in 0..self.device_manager.device_count() {
-            let now = Instant::now();
-            // TODO: helper
             self.device_manager.device(idx).bind_to_thread().unwrap();
-            let query1 = unsafe {
-                malloc_async(
-                    streams[idx].stream,
-                    preprocessed_query[1].len(),
-                )
-                .unwrap()
-            };
-            unsafe {
-                memcpy_htod_async(query1, &preprocessed_query[1], streams[idx].stream).unwrap();
-            }
-
-            let query0 = unsafe {
-                malloc_async(
-                    streams[idx].stream,
-                    preprocessed_query[0].len(),
-                )
-                .unwrap()
-            };
-            unsafe {
-                memcpy_htod_async(query0, &preprocessed_query[0], streams[idx].stream).unwrap();
-            }
+            let query0 = query_ptrs.0[idx];
+            let query1 = query_ptrs.1[idx];
 
             // Prepare randomness to mask results
             if self.is_remote {
@@ -517,44 +547,13 @@ impl ShareDB {
                 self.rngs[idx].1.fill_rng_no_host_copy(&streams[idx]);
             }
 
-            // Calculate sums to correct output
-            gemm(
-                &blass[idx],
-                query1,
-                *self.ones[idx].device_ptr(),
-                &mut self.query1_sums[idx],
-                0,
-                0,
-                0,
-                self.query_length,
-                1,
-                IRIS_CODE_LENGTH,
-                1,
-                0,
-            );
-
-            gemm(
-                &blass[idx],
-                query0,
-                *self.ones[idx].device_ptr(),
-                &mut self.query0_sums[idx],
-                0,
-                0,
-                0,
-                self.query_length,
-                1,
-                IRIS_CODE_LENGTH,
-                1,
-                0,
-            );
-
             for (i, d) in [&self.db0[idx], &self.db1[idx]].iter().enumerate() {
                 for (j, q) in [query0, query1].iter().enumerate() {
                     gemm(
                         &blass[idx],
                         *d.device_ptr(),
                         *q,
-                        &mut self.intermediate_results[idx],
+                        *self.intermediate_results[idx].device_ptr(),
                         0,
                         0,
                         (self.db_length / self.device_manager.device_count()
@@ -572,7 +571,7 @@ impl ShareDB {
         }
     }
 
-    pub fn dot_reduce(&mut self, streams: &Vec<CudaStream>) {
+    pub fn dot_reduce(&mut self, query_sums: (Vec<u64>, Vec<u64>), streams: &Vec<CudaStream>) {
         let num_elements = self.db_length / self.device_manager.device_count() * self.query_length;
         let threads_per_block = 256;
         let blocks_per_grid = num_elements.div_ceil(threads_per_block);
@@ -594,8 +593,8 @@ impl ShareDB {
                             &mut self.results[idx],
                             &self.db0_sums[idx],
                             &self.db1_sums[idx],
-                            &self.query0_sums[idx],
-                            &self.query1_sums[idx],
+                            query_sums.0[idx],
+                            query_sums.1[idx],
                             self.db_length as u64 / self.device_manager.device_count() as u64,
                             (self.db_length / self.device_manager.device_count()
                                 * self.query_length) as u64,
@@ -720,8 +719,10 @@ mod tests {
         let preprocessed_query = preprocess_query(&query);
         let streams = device_manager.fork_streams();
         let blass = device_manager.create_cublas(&streams);
-        engine.dot(&preprocessed_query, &streams, &blass);
-        engine.dot_reduce(&streams);
+        let preprocessed_query = device_manager.htod_transfer_query(&preprocessed_query, &streams);
+        let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
+        engine.dot(preprocessed_query, &streams, &blass);
+        engine.dot_reduce(query_sums, &streams);
         device_manager.await_streams(&streams);
 
         let a_nda = random_ndarray::<u64>(db, DB_SIZE, WIDTH);
@@ -813,8 +814,11 @@ mod tests {
             let preprocessed_query = preprocess_query(&querys[i]);
             let streams = device_manager.fork_streams();
             let blass = device_manager.create_cublas(&streams);
-            engine.dot(&preprocessed_query, &streams, &blass);
-            engine.dot_reduce(&streams);
+            let preprocessed_query =
+                device_manager.htod_transfer_query(&preprocessed_query, &streams);
+            let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
+            engine.dot(preprocessed_query, &streams, &blass);
+            engine.dot_reduce(query_sums, &streams);
             device_manager.await_streams(&streams);
             engine.fetch_results(&mut gpu_result[i], 0);
         }
@@ -924,12 +928,16 @@ mod tests {
 
             let streams = device_manager.fork_streams();
             let blass = device_manager.create_cublas(&streams);
+            let code_query = device_manager.htod_transfer_query(&code_query, &streams);
+            let mask_query = device_manager.htod_transfer_query(&mask_query, &streams);
+            let code_query_sums = codes_engine.query_sums(&code_query, &streams, &blass);
+            let mask_query_sums = masks_engine.query_sums(&mask_query, &streams, &blass);
 
-            codes_engine.dot(&code_query, &streams, &blass);
-            masks_engine.dot(&mask_query, &streams, &blass);
+            codes_engine.dot(code_query, &streams, &blass);
+            masks_engine.dot(mask_query, &streams, &blass);
 
-            codes_engine.dot_reduce(&streams);
-            masks_engine.dot_reduce(&streams);
+            codes_engine.dot_reduce(code_query_sums, &streams);
+            masks_engine.dot_reduce(mask_query_sums, &streams);
 
             device_manager.await_streams(&streams);
 

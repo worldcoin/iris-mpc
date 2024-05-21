@@ -1,11 +1,11 @@
+use core::sync;
 use std::sync::Arc;
 
 use cudarc::{
     cublas::CudaBlas,
     driver::{
         result::{
-            event,
-            stream::{synchronize, wait_event},
+            event, malloc_async, memcpy_htod_async, stream::{synchronize, wait_event}
         },
         sys::{CUevent, CUevent_flags},
         CudaDevice, CudaStream,
@@ -84,6 +84,29 @@ impl DeviceManager {
                 .unwrap();
             };
         }
+    }
+
+    pub fn htod_transfer_query(&self, preprocessed_query: &Vec<Vec<u8>>, streams: &Vec<CudaStream>) -> (Vec<u64>, Vec<u64>) {
+        let mut query0_ptrs = vec![];
+        let mut query1_ptrs = vec![];
+        for idx in 0..self.device_count() {
+            self.device(idx).bind_to_thread().unwrap();
+            let query0 =
+                unsafe { malloc_async(streams[idx].stream, preprocessed_query[0].len()).unwrap() };
+            unsafe {
+                memcpy_htod_async(query0, &preprocessed_query[0], streams[idx].stream).unwrap();
+            }
+
+            let query1 =
+                unsafe { malloc_async(streams[idx].stream, preprocessed_query[1].len()).unwrap() };
+            unsafe {
+                memcpy_htod_async(query1, &preprocessed_query[1], streams[idx].stream).unwrap();
+            }
+
+            query0_ptrs.push(query0);
+            query1_ptrs.push(query1);
+        }
+        (query0_ptrs, query1_ptrs)
     }
 
     pub fn device(&self, index: usize) -> Arc<CudaDevice> {
