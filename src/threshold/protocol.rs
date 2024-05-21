@@ -1806,16 +1806,23 @@ impl Circuits {
         for (dev, bit) in izip!(self.get_devices(), bits.iter()).skip(1) {
             let src = bit.get_range(0, 1);
 
-            let a_ = dev.dtoh_sync_copy(&src.a).unwrap().pop().unwrap();
-            let b_ = dev.dtoh_sync_copy(&src.b).unwrap().pop().unwrap();
-            a.push(a_);
-            b.push(b_);
+            let mut a_ = dev.dtoh_sync_copy(&src.a).unwrap();
+            let mut b_ = dev.dtoh_sync_copy(&src.b).unwrap();
+            assert_eq!(a_.len(), 1);
+            assert_eq!(b_.len(), 1);
+
+            a.push(a_.pop().unwrap());
+            b.push(b_.pop().unwrap());
         }
 
         // Put results onto first GPU
         let des = bit0.get_range(1, self.n_devices);
+        assert_eq!(des.len(), self.n_devices - 1);
         let a = dev0.htod_sync_copy(&a).unwrap();
         let b = dev0.htod_sync_copy(&b).unwrap();
+
+        assert_eq!(a.len(), self.n_devices - 1);
+        assert_eq!(b.len(), self.n_devices - 1);
 
         // TODO also precompute?
         let cfg = Self::launch_config_from_elements_and_threads(
