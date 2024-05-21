@@ -1755,8 +1755,7 @@ impl Circuits {
                 if mod_ != 0 {
                     let src = bit.get_offset(2 * num, 1);
                     let mut des = bit.get_offset(num, 1);
-                    des.a = src.a;
-                    des.b = src.b;
+                    self.assign_view(&mut des, &src, idx);
                 }
             }
 
@@ -1795,8 +1794,7 @@ impl Circuits {
             if mod_ != 0 {
                 let src = bit.get_offset(2 * num, 1);
                 let mut des = bit.get_offset(num, 1);
-                des.a = src.a;
-                des.b = src.b;
+                self.assign_view(&mut des, &src, idx);
             }
 
             // Reshare
