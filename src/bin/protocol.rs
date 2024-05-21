@@ -65,7 +65,7 @@ async fn main() -> eyre::Result<()> {
         &codes_db,
         QUERIES,
         Some(chacha_seeds),
-        url.clone(),
+        url,
         Some(true),
         Some(3000),
     );
@@ -75,7 +75,7 @@ async fn main() -> eyre::Result<()> {
         &masks_db,
         QUERIES,
         Some(chacha_seeds),
-        url.clone(),
+        url,
         Some(true),
         Some(3001),
     );
@@ -85,10 +85,10 @@ async fn main() -> eyre::Result<()> {
 
     // Prepare queries
     let random_query = ShamirIris::share_iris(&IrisCode::random_rng(&mut rng), &mut rng);
-    let mut code_queries = vec![vec![], vec![], vec![]];
-    let mut mask_queries = vec![vec![], vec![], vec![]];
+    let mut code_queries = [vec![], vec![], vec![]];
+    let mut mask_queries = [vec![], vec![], vec![]];
 
-    for i in 0..QUERIES {
+    for _ in 0..QUERIES {
         // TODO: rotate
         let tmp: [ShamirIris; 3] = random_query.clone();
         code_queries[0].push(tmp[0].code.to_vec());

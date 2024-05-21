@@ -94,7 +94,7 @@ impl ChaChaCudaRng {
     }
 
     pub fn data(&self) -> Option<&[u32]> {
-        self.output_buffer.as_ref().map(Vec::as_slice)
+        self.output_buffer.as_deref()
     }
 
     pub fn get_mut_chacha(&mut self) -> &mut ChaChaCtx {

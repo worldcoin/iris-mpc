@@ -81,7 +81,7 @@ fn criterion_benchmark_transpose_64(
                 kernel
                     .clone()
                     .launch(
-                        config.clone(),
+                        config,
                         (&mut out_a, &mut out_b, &in_a, &in_b, buf_size as i32, 64i32),
                     )
                     .unwrap()
@@ -109,7 +109,7 @@ fn criterion_benchmark_transpose_64(
                 kernel
                     .clone()
                     .launch(
-                        config.clone(),
+                        config,
                         (&mut out_a, &mut out_b, &in_a, &in_b, buf_size as i32, 64i32),
                     )
                     .unwrap()
