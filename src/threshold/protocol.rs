@@ -410,11 +410,11 @@ impl Circuits {
     }
 
     pub fn take_result_buffer(&mut self) -> Vec<ChunkShare<u64>> {
-        Buffers::take_buffer(&mut self.buffers.u64_36c_1)
+        Buffers::take_buffer(&mut self.buffers.u64_36c_3)
     }
 
     pub fn return_result_buffer(&mut self, src: Vec<ChunkShare<u64>>) {
-        Buffers::return_buffer(&mut self.buffers.u64_36c_1, src);
+        Buffers::return_buffer(&mut self.buffers.u64_36c_3, src);
     }
 
     pub fn instantiate_network(
