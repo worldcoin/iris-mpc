@@ -16,7 +16,7 @@ const INPUTS_PER_GPU_SIZE: usize = 116_250_624;
 // const INPUTS_PER_GPU_SIZE: usize = 12_505_600;
 const CHUNK_SIZE: usize = INPUTS_PER_GPU_SIZE / 64;
 
-const B_BITS: u64 = 20;
+const B_BITS: u64 = 16;
 pub(crate) const B: u64 = 1 << B_BITS;
 pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
 const P2K: u64 = (P as u64) << B_BITS;
