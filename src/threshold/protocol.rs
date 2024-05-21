@@ -1785,9 +1785,8 @@ impl Circuits {
 
             // Reshare
             result::group_start().unwrap();
-            let a = bit.get_offset(0, num);
-            self.send_view(&a.a, self.next_id, idx);
             let mut a = bit.get_offset(0, num);
+            self.send_view(&a.a, self.next_id, idx);
             self.receive_view(&mut a.b, self.prev_id, idx);
             result::group_end().unwrap();
 
