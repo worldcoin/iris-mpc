@@ -592,7 +592,7 @@ impl ShareDB {
 
     pub fn dot_reduce(
         &mut self,
-        query_sums: (Vec<u64>, Vec<u64>),
+        query_sums: &(Vec<u64>, Vec<u64>),
         db_sums: &(Vec<CudaSlice<u32>>, Vec<CudaSlice<u32>>),
         streams: &Vec<CudaStream>,
     ) {
@@ -752,7 +752,7 @@ mod tests {
             &streams,
             &blass,
         );
-        engine.dot_reduce(query_sums, &db_slices.1, &streams);
+        engine.dot_reduce(&query_sums, &db_slices.1, &streams);
         device_manager.await_streams(&streams);
 
         let a_nda = random_ndarray::<u64>(db, DB_SIZE, WIDTH);
@@ -854,7 +854,7 @@ mod tests {
                 &streams,
                 &blass,
             );
-            engine.dot_reduce(query_sums, &db_slices.1, &streams);
+            engine.dot_reduce(&query_sums, &db_slices.1, &streams);
             device_manager.await_streams(&streams);
             engine.fetch_results(&mut gpu_result[i], 0);
         }
@@ -990,8 +990,8 @@ mod tests {
                 &blass,
             );
 
-            codes_engine.dot_reduce(code_query_sums, &code_db_slices.1, &streams);
-            masks_engine.dot_reduce(mask_query_sums, &mask_db_slices.1, &streams);
+            codes_engine.dot_reduce(&code_query_sums, &code_db_slices.1, &streams);
+            masks_engine.dot_reduce(&mask_query_sums, &mask_db_slices.1, &streams);
 
             device_manager.await_streams(&streams);
 

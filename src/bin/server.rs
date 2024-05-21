@@ -189,6 +189,31 @@ async fn main() -> eyre::Result<()> {
 
     println!("Engines ready!");
 
+    // Engines for inflight queries
+    let mut batch_codes_engine = ShareDB::init(
+        party_id,
+        device_manager.clone(),
+        l_coeff,
+        QUERIES,
+        QUERIES,
+        chacha_seeds,
+        bootstrap_url.clone(),
+        Some(true),
+        Some(3002),
+    );
+    let mut batch_masks_engine = ShareDB::init(
+        party_id,
+        device_manager.clone(),
+        l_coeff,
+        QUERIES,
+        QUERIES,
+        chacha_seeds,
+        bootstrap_url.clone(),
+        Some(true),
+        Some(3003),
+    );
+    let mut batch_distance_comparator = DistanceComparator::init(QUERIES, QUERIES);
+
     // Prepare streams etc.
     let mut streams = vec![];
     let mut cublas_handles = vec![];
@@ -242,6 +267,8 @@ async fn main() -> eyre::Result<()> {
         // BLOCK 1: calculate individual dot products
         device_manager.await_event(request_streams, &current_dot_event);
 
+
+
         //// DEBUG
         let evts = device_manager.create_events();
         device_manager.record_event(request_streams, &evts);
@@ -275,8 +302,8 @@ async fn main() -> eyre::Result<()> {
 
         // BLOCK 2: calculate final dot product result, exchange and compare
         device_manager.await_event(request_streams, &current_exchange_event);
-        codes_engine.dot_reduce(code_query_sums, &code_db_slices.1, request_streams);
-        masks_engine.dot_reduce(mask_query_sums, &mask_db_slices.1, request_streams);
+        codes_engine.dot_reduce(&code_query_sums, &code_db_slices.1, request_streams);
+        masks_engine.dot_reduce(&mask_query_sums, &mask_db_slices.1, request_streams);
 
         device_manager.record_event(request_streams, &next_dot_event);
 
