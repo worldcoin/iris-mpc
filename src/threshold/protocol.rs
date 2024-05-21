@@ -684,8 +684,8 @@ impl Circuits {
     ) {
         // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
         let size = (x1.len() + 15) / 16;
-        let mut rand = unsafe { self.devs[idx].alloc::<u64>(size * 16).unwrap() };
-        self.fill_rand_u64(&mut rand, idx);
+        let mut rand = unsafe { self.devs[idx].alloc_zeros::<u64>(size * 16).unwrap() };
+        // self.fill_rand_u64(&mut rand, idx);
 
         // TODO also precompute?
         let cfg = Self::launch_config_from_elements_and_threads(
@@ -1832,8 +1832,8 @@ impl Circuits {
         let cfg = Self::launch_config_from_elements_and_threads(1, DEFAULT_LAUNCH_CONFIG_THREADS);
 
         // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
-        let mut rand = unsafe { self.devs[0].alloc::<u64>(16).unwrap() }; // minimum size is 16 for RNG, need only 10 though
-        self.fill_rand_u64(&mut rand, 0);
+        let mut rand = unsafe { self.devs[0].alloc_zeros::<u64>(16).unwrap() }; // minimum size is 16 for RNG, need only 10 though
+                                                                                // self.fill_rand_u64(&mut rand, 0);
 
         let mut rand_offset = rand.slice(..);
 
