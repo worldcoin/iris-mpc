@@ -79,6 +79,54 @@ impl ChaChaCudaCorrRng {
         self.chacha_ctx2.set_counter(counter);
     }
 
+    pub fn fill_my_rng_into(&mut self, buf: &mut CudaViewMut<u32>) {
+        let len = buf.len();
+        assert!(len % 16 == 0, "buffer length must be a multiple of 16");
+        let num_ks_calls = len / 16; // we produce 16 u32s per kernel call
+        let threads_per_block = 256; // todo sync with kernel
+        let blocks_per_grid = (num_ks_calls + threads_per_block - 1) / threads_per_block;
+        let cfg = LaunchConfig {
+            block_dim: (threads_per_block as u32, 1, 1),
+            grid_dim: (blocks_per_grid as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        let state_slice1 = self.dev.htod_sync_copy(&self.chacha_ctx1.state).unwrap();
+        unsafe {
+            self.kernels[0]
+                .clone()
+                .launch(cfg, (&mut *buf, &state_slice1, len))
+                .unwrap();
+        }
+        // increment the state counter of the ChaChaRng with the number of produced blocks
+        let mut counter = self.chacha_ctx1.get_counter();
+        counter += num_ks_calls as u64; // one call to KS produces 16 u32, so we increase the counter by the number of KS calls
+        self.chacha_ctx1.set_counter(counter);
+    }
+
+    pub fn fill_their_rng_into(&mut self, buf: &mut CudaViewMut<u32>) {
+        let len = buf.len();
+        assert!(len % 16 == 0, "buffer length must be a multiple of 16");
+        let num_ks_calls = len / 16; // we produce 16 u32s per kernel call
+        let threads_per_block = 256; // todo sync with kernel
+        let blocks_per_grid = (num_ks_calls + threads_per_block - 1) / threads_per_block;
+        let cfg = LaunchConfig {
+            block_dim: (threads_per_block as u32, 1, 1),
+            grid_dim: (blocks_per_grid as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        let state_slice2 = self.dev.htod_sync_copy(&self.chacha_ctx2.state).unwrap();
+        unsafe {
+            self.kernels[0]
+                .clone()
+                .launch(cfg, (&mut *buf, &state_slice2, len))
+                .unwrap();
+        }
+        // increment the state counter of the ChaChaRng with the number of produced blocks
+        let mut counter = self.chacha_ctx2.get_counter();
+        counter += num_ks_calls as u64; // one call to KS produces 16 u32, so we increase the counter by the number of KS calls
+        self.chacha_ctx2.set_counter(counter);
+    }
+
     pub fn get_mut_chacha(&mut self) -> (&mut ChaChaCtx, &mut ChaChaCtx) {
         (&mut self.chacha_ctx1, &mut self.chacha_ctx2)
     }
