@@ -55,7 +55,7 @@ impl ToString for IdWrapper {
     }
 }
 
-const DUMMY_DATA_LEN: usize = 5 * (1 << 30);
+const DUMMY_DATA_LEN: usize = 300 * (1 << 20);
 
 async fn root(Path(device_id): Path<String>) -> String {
     let device_id: usize = device_id.parse().unwrap();
