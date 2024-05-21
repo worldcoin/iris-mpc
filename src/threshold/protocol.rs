@@ -346,10 +346,6 @@ pub struct Circuits {
     peer_id: usize,
     next_id: usize,
     prev_id: usize,
-    cfg: LaunchConfig,
-    cfg_inp: LaunchConfig,
-    cfg_transpose: LaunchConfig,
-    cfg_ot: LaunchConfig,
     chunk_size: usize,
     n_devices: usize,
     devs: Vec<Arc<CudaDevice>>,
@@ -382,24 +378,6 @@ impl Circuits {
         debug_assert_eq!(Self::ceil_log2(P2K as usize), Self::BITS);
         let n_devices = CudaDevice::count().unwrap() as usize;
 
-        // TODO all configs here or in code?
-        let cfg = Self::launch_config_from_elements_and_threads(
-            chunk_size as u32,
-            DEFAULT_LAUNCH_CONFIG_THREADS,
-        );
-        let cfg_inp = Self::launch_config_from_elements_and_threads(
-            chunk_size as u32 * 64,
-            DEFAULT_LAUNCH_CONFIG_THREADS,
-        );
-        let cfg_transpose = Self::launch_config_from_elements_and_threads(
-            chunk_size as u32 * 2,
-            DEFAULT_LAUNCH_CONFIG_THREADS,
-        );
-        let cfg_ot = Self::launch_config_from_elements_and_threads(
-            chunk_size as u32 * 2 * 64,
-            DEFAULT_LAUNCH_CONFIG_THREADS,
-        );
-
         let mut devs = Vec::with_capacity(n_devices);
         let mut kernels = Vec::with_capacity(n_devices);
         let mut rngs = Vec::with_capacity(n_devices);
@@ -427,10 +405,6 @@ impl Circuits {
             peer_id,
             next_id: (peer_id + 1) % 3,
             prev_id: (peer_id + 2) % 3,
-            cfg,
-            cfg_inp,
-            cfg_transpose,
-            cfg_ot,
             chunk_size,
             n_devices,
             devs,
@@ -594,7 +568,6 @@ impl Circuits {
         let mut rand = unsafe { self.devs[idx].alloc::<u64>(self.chunk_size * bits).unwrap() };
         self.fill_rand_u64(&mut rand, idx);
 
-        // TODO also precompute?
         let cfg = Self::launch_config_from_elements_and_threads(
             self.chunk_size as u32 * bits as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
@@ -638,14 +611,17 @@ impl Circuits {
         src: &ChunkShareView<u64>,
         idx: usize,
     ) {
+        debug_assert_eq!(src.len(), des.len());
+        let cfg = Self::launch_config_from_elements_and_threads(
+            src.len() as u32,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+        );
+
         unsafe {
             self.kernels[idx]
                 .assign
                 .clone()
-                .launch(
-                    self.cfg.to_owned(),
-                    (&des.a, &des.b, &src.a, &src.b, self.chunk_size as i32),
-                )
+                .launch(cfg, (&des.a, &des.b, &src.a, &src.b, src.len() as i32))
                 .unwrap();
         }
     }
@@ -657,6 +633,11 @@ impl Circuits {
         res: &mut ChunkShareView<u64>,
         idx: usize,
     ) {
+        let cfg = Self::launch_config_from_elements_and_threads(
+            self.chunk_size as u32,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+        );
+
         // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
         let mut rand = unsafe { self.devs[idx].alloc::<u64>(self.chunk_size).unwrap() };
         self.fill_rand_u64(&mut rand, idx);
@@ -666,7 +647,7 @@ impl Circuits {
                 .and
                 .clone()
                 .launch(
-                    self.cfg.to_owned(),
+                    cfg,
                     (&res.a, &x1.a, &x1.b, &x2.a, &x2.b, &rand, self.chunk_size),
                 )
                 .unwrap();
@@ -684,7 +665,6 @@ impl Circuits {
         let mut rand = unsafe { self.devs[idx].alloc::<u64>(size * 16).unwrap() };
         self.fill_rand_u64(&mut rand, idx);
 
-        // TODO also precompute?
         let cfg = Self::launch_config_from_elements_and_threads(
             x1.len() as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
@@ -731,14 +711,16 @@ impl Circuits {
         x2: &ChunkShareView<u64>,
         idx: usize,
     ) {
+        let cfg = Self::launch_config_from_elements_and_threads(
+            self.chunk_size as u32,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+        );
+
         unsafe {
             self.kernels[idx]
                 .xor_assign
                 .clone()
-                .launch(
-                    self.cfg.to_owned(),
-                    (&x1.a, &x1.b, &x2.a, &x2.b, self.chunk_size),
-                )
+                .launch(cfg, (&x1.a, &x1.b, &x2.a, &x2.b, self.chunk_size))
                 .unwrap();
         }
     }
@@ -750,7 +732,6 @@ impl Circuits {
         bits: usize,
         idx: usize,
     ) {
-        // TODO also precompute?
         let cfg = Self::launch_config_from_elements_and_threads(
             self.chunk_size as u32 * bits as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
@@ -775,7 +756,6 @@ impl Circuits {
         bits: usize,
         idx: usize,
     ) {
-        // TODO also precompute?
         let cfg = Self::launch_config_from_elements_and_threads(
             self.chunk_size as u32 * bits as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
@@ -808,12 +788,17 @@ impl Circuits {
         res: &mut ChunkShareView<u64>,
         idx: usize,
     ) {
+        let cfg = Self::launch_config_from_elements_and_threads(
+            self.chunk_size as u32,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+        );
+
         unsafe {
             self.kernels[idx]
                 .xor
                 .clone()
                 .launch(
-                    self.cfg.to_owned(),
+                    cfg,
                     (
                         &res.a,
                         &res.b,
@@ -829,24 +814,31 @@ impl Circuits {
     }
 
     fn not_many(&self, x: &ChunkShareView<u64>, res: &mut ChunkShareView<u64>, idx: usize) {
+        let cfg = Self::launch_config_from_elements_and_threads(
+            self.chunk_size as u32,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+        );
+
         unsafe {
             self.kernels[idx]
                 .not
                 .clone()
-                .launch(
-                    self.cfg.to_owned(),
-                    (&res.a, &res.b, &x.a, &x.b, self.chunk_size as i32),
-                )
+                .launch(cfg, (&res.a, &res.b, &x.a, &x.b, self.chunk_size as i32))
                 .unwrap();
         }
     }
 
     fn not_inplace_many(&self, x: &mut ChunkShareView<u64>, idx: usize) {
+        let cfg = Self::launch_config_from_elements_and_threads(
+            self.chunk_size as u32,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+        );
+
         unsafe {
             self.kernels[idx]
                 .not_inplace
                 .clone()
-                .launch(self.cfg.to_owned(), (&x.a, &x.b, self.chunk_size as i32))
+                .launch(cfg, (&x.a, &x.b, self.chunk_size as i32))
                 .unwrap();
         }
     }
@@ -875,13 +867,18 @@ impl Circuits {
         xp: &mut [ChunkShare<u32>],
         xpp: &mut [ChunkShare<u32>],
     ) {
+        let cfg = Self::launch_config_from_elements_and_threads(
+            self.chunk_size as u32 * 64,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+        );
+
         for (idx, (inp, xa, xp, xpp)) in izip!(inp, xa, xp, xpp).enumerate() {
             unsafe {
                 self.kernels[idx]
                     .split1
                     .clone()
                     .launch(
-                        self.cfg_inp.to_owned(),
+                        cfg,
                         (
                             &inp.a,
                             &inp.b,
@@ -907,7 +904,6 @@ impl Circuits {
         xp2: &mut [ChunkShareView<u64>],
         xp3: &mut [ChunkShareView<u64>],
     ) {
-        // TODO also precompute?
         let cfg = Self::launch_config_from_elements_and_threads(
             self.chunk_size as u32 * 18,
             DEFAULT_LAUNCH_CONFIG_THREADS,
@@ -970,12 +966,17 @@ impl Circuits {
             };
             self.rngs[idx].fill_my_rng_into(&mut rand_wa2.slice_mut(..));
 
+            let cfg = Self::launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 64 * 2,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+            );
+
             unsafe {
                 self.kernels[idx]
                     .ot_sender
                     .clone()
                     .launch(
-                        self.cfg_ot.to_owned(),
+                        cfg,
                         (
                             &mut res.a,
                             &mut res.b,
@@ -1032,12 +1033,17 @@ impl Circuits {
             };
             self.rngs[idx].fill_my_rng_into(&mut rand_ca.slice_mut(..));
 
+            let cfg = Self::launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 64 * 2,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+            );
+
             unsafe {
                 self.kernels[idx]
                     .ot_receiver
                     .clone()
                     .launch(
-                        self.cfg_ot.to_owned(),
+                        cfg,
                         (
                             &mut res.a,
                             &mut res.b,
@@ -1091,12 +1097,17 @@ impl Circuits {
             };
             self.rngs[idx].fill_their_rng_into(&mut rand_wb2.slice_mut(..));
 
+            let cfg = Self::launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 64 * 2,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+            );
+
             unsafe {
                 self.kernels[idx]
                     .ot_helper
                     .clone()
                     .launch(
-                        self.cfg_ot.to_owned(),
+                        cfg,
                         (
                             &mut res.b,
                             &inp.a,
@@ -1387,13 +1398,18 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, inp.len());
         debug_assert_eq!(self.n_devices, outp.len());
 
+        let cfg = Self::launch_config_from_elements_and_threads(
+            self.chunk_size as u32 * 2,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+        );
+
         for (idx, (inp, outp)) in izip!(inp, outp).enumerate() {
             unsafe {
                 self.kernels[idx]
                     .transpose_32x64
                     .clone()
                     .launch(
-                        self.cfg_transpose.to_owned(),
+                        cfg,
                         (
                             &outp.a,
                             &outp.b,
@@ -1417,13 +1433,18 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, inp.len());
         debug_assert_eq!(self.n_devices, outp.len());
 
+        let cfg = Self::launch_config_from_elements_and_threads(
+            self.chunk_size as u32 * 2,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+        );
+
         for (idx, (inp, outp)) in izip!(inp, outp).enumerate() {
             unsafe {
                 self.kernels[idx]
                     .transpose_64x64
                     .clone()
                     .launch(
-                        self.cfg_transpose.to_owned(),
+                        cfg,
                         (
                             &mut outp.a,
                             &mut outp.b,
@@ -1683,12 +1704,18 @@ impl Circuits {
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand = unsafe { self.devs[idx].alloc::<u64>(self.chunk_size * 64).unwrap() };
             self.fill_rand_u64(&mut rand, idx);
+
+            let cfg = Self::launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 64,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+            );
+
             unsafe {
                 self.kernels[idx]
                     .lift_mul_sub_split
                     .clone()
                     .launch(
-                        self.cfg_inp.to_owned(),
+                        cfg,
                         (
                             &x01.a,
                             &m.a,
@@ -1803,29 +1830,18 @@ impl Circuits {
         }
 
         // Put results onto first GPU
-        let des = bit0.get_range(1, self.n_devices);
+        let mut des = bit0.get_range(1, self.n_devices);
         let a = dev0.htod_sync_copy(&a).unwrap();
         let b = dev0.htod_sync_copy(&b).unwrap();
+        let c = ChunkShare::new(a, b);
 
-        // TODO also precompute?
-        let cfg = Self::launch_config_from_elements_and_threads(
-            self.n_devices as u32 - 1,
-            DEFAULT_LAUNCH_CONFIG_THREADS,
-        );
-        unsafe {
-            self.kernels[0]
-                .assign
-                .clone()
-                .launch(cfg, (&des.a, &des.b, &a, &b, self.n_devices - 1))
-                .unwrap();
-        }
+        self.assign_view(&mut des, &c.as_view(), 0);
     }
 
     fn collapse_u64(&mut self, input: &mut ChunkShare<u64>) {
         let mut res = input.get_offset(0, 1);
         let helper = input.get_offset(1, 1);
 
-        // TODO also precompute?
         let cfg = Self::launch_config_from_elements_and_threads(1, DEFAULT_LAUNCH_CONFIG_THREADS);
 
         // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
