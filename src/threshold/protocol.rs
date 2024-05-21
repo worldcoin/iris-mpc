@@ -1722,11 +1722,11 @@ impl Circuits {
 
     // Input has size ChunkSize
     // Result is in lowest u64 of the input
-    fn or_tree_on_gpu(&mut self, bits: &mut [ChunkShareView<u64>], size: usize) {
+    fn or_tree_on_gpus(&mut self, bits: &mut [ChunkShareView<u64>]) {
         debug_assert_eq!(self.n_devices, bits.len());
-        debug_assert!(size <= bits[0].len());
+        debug_assert!(self.chunk_size <= bits[0].len());
 
-        let mut num = size;
+        let mut num = self.chunk_size;
         while num > 1 {
             let mod_ = num & 1;
             num >>= 1;
@@ -1753,6 +1753,41 @@ impl Circuits {
                 let mut a = bit.get_offset(0, num);
                 self.receive_view(&mut a.b, self.prev_id, idx);
             }
+            result::group_end().unwrap();
+
+            num += mod_;
+        }
+    }
+
+    // Same as or_tree_on_gpus, but on one GPU only
+    // Result is in lowest u64 of the input
+    fn or_tree_on_gpu(&mut self, bits: &mut [ChunkShareView<u64>], size: usize, idx: usize) {
+        debug_assert_eq!(self.n_devices, bits.len());
+        debug_assert!(size <= bits[0].len());
+
+        let bit = &mut bits[idx];
+
+        let mut num = size;
+        while num > 1 {
+            let mod_ = num & 1;
+            num >>= 1;
+
+            let mut a = bit.get_offset(0, num);
+            let b = bit.get_offset(1, num);
+            self.or_many_pre_assign(&mut a, &b, idx);
+            if mod_ != 0 {
+                let src = bit.get_offset(2 * num, 1);
+                let mut des = bit.get_offset(num, 1);
+                des.a = src.a;
+                des.b = src.b;
+            }
+
+            // Reshare
+            result::group_start().unwrap();
+            let a = bit.get_offset(0, num);
+            self.send_view(&a.a, self.next_id, idx);
+            let mut a = bit.get_offset(0, num);
+            self.receive_view(&mut a.b, self.prev_id, idx);
             result::group_end().unwrap();
 
             num += mod_;
@@ -1835,12 +1870,11 @@ impl Circuits {
             bits.push(r.get_offset(0, self.chunk_size));
         }
 
-        self.or_tree_on_gpu(&mut bits, self.chunk_size);
+        self.or_tree_on_gpus(&mut bits);
         if self.n_devices > 1 {
             // We have to collaps to one GPU
             self.collect_graphic_result(&mut bits);
-            // TODO only on one GPU
-            self.or_tree_on_gpu(&mut bits, self.n_devices);
+            self.or_tree_on_gpu(&mut bits, self.n_devices, 0);
         }
 
         // Result is in lowest u64 bits on the first GPU
