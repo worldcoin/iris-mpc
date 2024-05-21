@@ -243,8 +243,8 @@ extern "C" __global__ void shared_assign(TYPE *des_a, TYPE *des_b, TYPE *src_a,
                                          TYPE *src_b, int n) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
-    *des_a = *src_a;
-    *des_b = *src_b;
+    des_a[i] = src_a[i];
+    des_b[i] = src_b[i];
   }
 }
 
