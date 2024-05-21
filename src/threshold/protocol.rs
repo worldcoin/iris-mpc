@@ -302,48 +302,43 @@ impl Buffers {
         res
     }
 
-    // TODO make debug_asserts after the testing
     fn take_buffer<T>(inp: &mut Option<Vec<ChunkShare<T>>>) -> Vec<ChunkShare<T>> {
-        assert!(inp.is_some());
+        debug_assert!(inp.is_some());
         std::mem::take(inp).unwrap()
     }
 
-    // TODO make debug_asserts after the testing
     fn return_buffer<T>(des: &mut Option<Vec<ChunkShare<T>>>, src: Vec<ChunkShare<T>>) {
-        assert!(des.is_none());
+        debug_assert!(des.is_none());
         *des = Some(src);
     }
 
-    // TODO make debug_asserts after the testing
     fn take_single_buffer<T>(inp: &mut Option<Vec<CudaSlice<T>>>) -> Vec<CudaSlice<T>> {
-        assert!(inp.is_some());
+        debug_assert!(inp.is_some());
         std::mem::take(inp).unwrap()
     }
 
-    // TODO make debug_asserts after the testing
     fn return_single_buffer<T>(des: &mut Option<Vec<CudaSlice<T>>>, src: Vec<CudaSlice<T>>) {
-        assert!(des.is_none());
+        debug_assert!(des.is_none());
         *des = Some(src);
     }
 
-    // TODO make debug_asserts after the testing
     fn check_buffers(&self) {
-        assert!(self.u64_64c_1.is_some());
-        assert!(self.u64_64c_2.is_some());
-        assert!(self.u32_64c_1.is_some());
-        assert!(self.u32_64c_2.is_some());
-        assert!(self.u64_17c_1.is_some());
-        assert!(self.u64_17c_2.is_some());
-        assert!(self.u64_18c_1.is_some());
-        assert!(self.u64_18c_2.is_some());
-        assert!(self.u64_36c_1.is_some());
-        assert!(self.u64_36c_2.is_some());
-        assert!(self.u64_37c_1.is_some());
-        assert!(self.u64_2c_1.is_some());
-        assert!(self.u32_128c_1.is_some());
-        assert!(self.single_u32_128c_1.is_some());
-        assert!(self.single_u32_128c_2.is_some());
-        assert!(self.single_u32_128c_3.is_some());
+        debug_assert!(self.u64_64c_1.is_some());
+        debug_assert!(self.u64_64c_2.is_some());
+        debug_assert!(self.u32_64c_1.is_some());
+        debug_assert!(self.u32_64c_2.is_some());
+        debug_assert!(self.u64_17c_1.is_some());
+        debug_assert!(self.u64_17c_2.is_some());
+        debug_assert!(self.u64_18c_1.is_some());
+        debug_assert!(self.u64_18c_2.is_some());
+        debug_assert!(self.u64_36c_1.is_some());
+        debug_assert!(self.u64_36c_2.is_some());
+        debug_assert!(self.u64_37c_1.is_some());
+        debug_assert!(self.u64_2c_1.is_some());
+        debug_assert!(self.u32_128c_1.is_some());
+        debug_assert!(self.single_u32_128c_1.is_some());
+        debug_assert!(self.single_u32_128c_2.is_some());
+        debug_assert!(self.single_u32_128c_3.is_some());
     }
 }
 
@@ -596,10 +591,8 @@ impl Circuits {
         bits: usize,
         idx: usize,
     ) {
-        // TODO: do not fill with zeros for speedup
-        let mut rand = self.devs[idx]
-            .alloc_zeros::<u64>(self.chunk_size * bits)
-            .unwrap();
+        // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(self.chunk_size * bits).unwrap() };
         self.fill_rand_u64(&mut rand, idx);
 
         // TODO also precompute?
@@ -665,10 +658,10 @@ impl Circuits {
         x1: &ChunkShareView<u64>,
         x2: &ChunkShareView<u64>,
         res: &mut ChunkShareView<u64>,
-        // rand: &CudaView<u64>,
         idx: usize,
     ) {
-        let mut rand = self.devs[idx].alloc_zeros::<u64>(self.chunk_size).unwrap();
+        // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(self.chunk_size).unwrap() };
         self.fill_rand_u64(&mut rand, idx);
 
         unsafe {
@@ -687,10 +680,10 @@ impl Circuits {
         &mut self,
         x1: &mut ChunkShareView<u64>,
         x2: &ChunkShareView<u64>,
-        // rand: &CudaView<u64>,
         idx: usize,
     ) {
-        let mut rand = self.devs[idx].alloc_zeros::<u64>(x1.len()).unwrap();
+        // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(x1.len()).unwrap() };
         self.fill_rand_u64(&mut rand, idx);
 
         // TODO also precompute?
@@ -950,21 +943,33 @@ impl Circuits {
         let mut m1 = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_2);
 
         for (idx, (inp, res, m0, m1)) in izip!(inp, outp, &mut m0, &mut m1).enumerate() {
-            let mut rand_ca = self.devs[idx]
-                .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
-                .unwrap();
+            // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+            let mut rand_ca = unsafe {
+                self.devs[idx]
+                    .alloc::<u32>(self.chunk_size * 2 * 64)
+                    .unwrap()
+            };
             self.rngs[idx].fill_rng_into(&mut rand_ca.slice_mut(..));
-            let mut rand_cb = self.devs[idx]
-                .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
-                .unwrap();
+            // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+            let mut rand_cb = unsafe {
+                self.devs[idx]
+                    .alloc::<u32>(self.chunk_size * 2 * 64)
+                    .unwrap()
+            };
             self.rngs[idx].fill_rng_into(&mut rand_cb.slice_mut(..));
-            let mut rand_wa1 = self.devs[idx]
-                .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
-                .unwrap();
+            // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+            let mut rand_wa1 = unsafe {
+                self.devs[idx]
+                    .alloc::<u32>(self.chunk_size * 2 * 64)
+                    .unwrap()
+            };
             self.rngs[idx].fill_rng_into(&mut rand_wa1.slice_mut(..));
-            let mut rand_wa2 = self.devs[idx]
-                .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
-                .unwrap();
+            // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+            let mut rand_wa2 = unsafe {
+                self.devs[idx]
+                    .alloc::<u32>(self.chunk_size * 2 * 64)
+                    .unwrap()
+            };
             self.rngs[idx].fill_rng_into(&mut rand_wa2.slice_mut(..));
 
             unsafe {
@@ -1021,9 +1026,12 @@ impl Circuits {
 
         for (idx, (inp, res, m0, m1, wc)) in izip!(inp, outp.iter_mut(), &m0, &m1, &wc).enumerate()
         {
-            let mut rand_ca = self.devs[idx]
-                .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
-                .unwrap();
+            // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+            let mut rand_ca = unsafe {
+                self.devs[idx]
+                    .alloc::<u32>(self.chunk_size * 2 * 64)
+                    .unwrap()
+            };
             self.rngs[idx].fill_rng_into(&mut rand_ca.slice_mut(..));
             // we need to advance the RNG to the same point as the sender
             // sender generates 3 more buffers of self.chunk_size * 2 * 64
@@ -1071,18 +1079,26 @@ impl Circuits {
             // skip generation of rand_ca, so we are at the same stream position
             self.rngs[idx]
                 .advance_by_bytes((self.chunk_size * 2 * 64 * std::mem::size_of::<u32>()) as u64);
-
-            let mut rand_cb = self.devs[idx]
-                .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
-                .unwrap();
+            // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+            let mut rand_cb = unsafe {
+                self.devs[idx]
+                    .alloc::<u32>(self.chunk_size * 2 * 64)
+                    .unwrap()
+            };
             self.rngs[idx].fill_rng_into(&mut rand_cb.slice_mut(..));
-            let mut rand_wb1 = self.devs[idx]
-                .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
-                .unwrap();
+            // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+            let mut rand_wb1 = unsafe {
+                self.devs[idx]
+                    .alloc::<u32>(self.chunk_size * 2 * 64)
+                    .unwrap()
+            };
             self.rngs[idx].fill_rng_into(&mut rand_wb1.slice_mut(..));
-            let mut rand_wb2 = self.devs[idx]
-                .alloc_zeros::<u32>(self.chunk_size * 2 * 64)
-                .unwrap();
+            // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+            let mut rand_wb2 = unsafe {
+                self.devs[idx]
+                    .alloc::<u32>(self.chunk_size * 2 * 64)
+                    .unwrap()
+            };
             self.rngs[idx].fill_rng_into(&mut rand_wb2.slice_mut(..));
 
             unsafe {
@@ -1674,9 +1690,8 @@ impl Circuits {
         for (idx, (m, mc, c, x01)) in
             izip!(mask_lifted, mask_correction, &code, x01.iter_mut()).enumerate()
         {
-            let mut rand = self.devs[idx]
-                .alloc_zeros::<u64>(self.chunk_size * 64)
-                .unwrap();
+            // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+            let mut rand = unsafe { self.devs[idx].alloc::<u64>(self.chunk_size * 64).unwrap() };
             self.fill_rand_u64(&mut rand, idx);
             unsafe {
                 self.kernels[idx]
@@ -1779,7 +1794,8 @@ impl Circuits {
         // TODO also precompute?
         let cfg = Self::launch_config_from_elements_and_threads(1, DEFAULT_LAUNCH_CONFIG_THREADS);
 
-        let mut rand = self.devs[0].alloc_zeros::<u64>(1 * 16).unwrap(); // minimum size is 16 for RNG, need only 1 though
+        // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+        let mut rand = unsafe { self.devs[0].alloc::<u64>(16).unwrap() }; // minimum size is 16 for RNG, need only 1 though
         self.fill_rand_u64(&mut rand, 0);
 
         let mut current_bitsize = 64;
