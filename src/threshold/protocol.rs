@@ -1468,8 +1468,8 @@ impl Circuits {
         let mut x01_ = Vec::with_capacity(self.n_devices);
         let mut x2_ = Vec::with_capacity(self.n_devices);
         for (b1, b2) in izip!(&buffer1, &buffer2) {
-            let b1_ = b1.get_offset(0, 32 * self.chunk_size);
-            let b2_ = b2.get_offset(0, 32 * self.chunk_size);
+            let b1_ = b1.get_offset(0, Self::BITS * self.chunk_size);
+            let b2_ = b2.get_offset(0, Self::BITS * self.chunk_size);
             x01_.push(b1_);
             x2_.push(b2_);
         }
