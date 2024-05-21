@@ -13,7 +13,7 @@ use std::{
 
 use axum::{extract::Path, routing::get, Router};
 use cudarc::{
-    driver::{CudaDevice, CudaSlice},
+    driver::{result::event::{self, elapsed}, sys::CUevent_flags, CudaDevice, CudaSlice},
     nccl::{group_end, group_start, Comm, Id},
 };
 use once_cell::sync::Lazy;
@@ -55,7 +55,7 @@ impl ToString for IdWrapper {
     }
 }
 
-const DUMMY_DATA_LEN: usize = 300 * (1 << 20);
+const DUMMY_DATA_LEN: usize = 600 * (1 << 20);
 
 async fn root(Path(device_id): Path<String>) -> String {
     let device_id: usize = device_id.parse().unwrap();
@@ -113,18 +113,36 @@ async fn main() {
     for _ in 0..10 {
         let now = Instant::now();
 
-        group_start();
+        // group_start();
+        let mut events = vec![];
+
         for i in 0..n_devices {
             devs[i].bind_to_thread().unwrap();
-
+            let start = event::create(CUevent_flags::CU_EVENT_DEFAULT).unwrap();
+            unsafe {
+                event::record(start, *devs[i].cu_stream()).unwrap();
+            }
             comms[i].broadcast(&Some(&slices[i]), &mut slices1[i], 0).unwrap();
             comms[i].broadcast(&Some(&slices[i]), &mut slices2[i], 1).unwrap();
             comms[i].broadcast(&Some(&slices[i]), &mut slices3[i], 2).unwrap();
+            let end = event::create(CUevent_flags::CU_EVENT_DEFAULT).unwrap();
+            unsafe {
+                event::record(end, *devs[i].cu_stream()).unwrap();
+            }
+            events.push((start, end));
         }
-        group_end();
+        // group_end();
 
         for i in 0..n_devices {
             devs[i].synchronize().unwrap();
+        }
+
+        for (i, event) in events.iter().enumerate() {
+            devs[i].bind_to_thread().unwrap();
+            unsafe {
+                let time = elapsed(event.0, event.1).unwrap();
+                println!("device {} took {:?}", i, time);
+            }
         }
 
         if party_id != 0 {
