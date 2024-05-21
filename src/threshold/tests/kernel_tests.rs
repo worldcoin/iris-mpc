@@ -297,14 +297,14 @@ fn mul_lift_test() {
     let cfg = LaunchConfig::for_num_elems(SIZE as u32);
 
     // CPU
-    let mut res_a = vec![0u64; SIZE];
-    let mut res_b = vec![0u64; SIZE];
+    let mut res_a = vec![0u32; SIZE];
+    let mut res_b = vec![0u32; SIZE];
 
     // GPU
-    let mut res_a_gpu = dev.alloc_zeros::<u64>(SIZE).unwrap();
-    let mut res_b_gpu = dev.alloc_zeros::<u64>(SIZE).unwrap();
-    let mut res_a_cpu = vec![0u64; SIZE];
-    let mut res_b_cpu = vec![0u64; SIZE];
+    let mut res_a_gpu = dev.alloc_zeros::<u32>(SIZE).unwrap();
+    let mut res_b_gpu = dev.alloc_zeros::<u32>(SIZE).unwrap();
+    let mut res_a_cpu = vec![0u32; SIZE];
+    let mut res_b_cpu = vec![0u32; SIZE];
 
     let mut rng = rand::thread_rng();
     for _ in 0..TESTRUNS {

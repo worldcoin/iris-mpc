@@ -128,7 +128,6 @@ struct Kernels {
     pub(crate) not_inplace: CudaFunction,
     pub(crate) not: CudaFunction,
     pub(crate) lift_mul_sub_split: CudaFunction,
-    pub(crate) transpose_64x64: CudaFunction,
     pub(crate) transpose_32x64: CudaFunction,
     pub(crate) split1: CudaFunction,
     pub(crate) split2: CudaFunction,
@@ -154,7 +153,6 @@ impl Kernels {
                 "shared_not_inplace",
                 "shared_not",
                 "shared_lift_mul_sub_split",
-                "shared_u64_transpose_pack_u64",
                 "shared_u32_transpose_pack_u64",
                 "shared_split1",
                 "shared_split2",
@@ -177,9 +175,6 @@ impl Kernels {
         let lift_mul_sub_split = dev
             .get_func(Self::MOD_NAME, "shared_lift_mul_sub_split")
             .unwrap();
-        let transpose_64x64 = dev
-            .get_func(Self::MOD_NAME, "shared_u64_transpose_pack_u64")
-            .unwrap();
         let transpose_32x64 = dev
             .get_func(Self::MOD_NAME, "shared_u32_transpose_pack_u64")
             .unwrap();
@@ -199,7 +194,6 @@ impl Kernels {
             not_inplace,
             not,
             lift_mul_sub_split,
-            transpose_64x64,
             transpose_32x64,
             split1,
             split2,
@@ -218,17 +212,17 @@ struct Buffers {
     u32_64c_3: Option<Vec<ChunkShare<u32>>>,
     u32_64c_4: Option<Vec<ChunkShare<u32>>>,
     u64_2c_1: Option<Vec<ChunkShare<u64>>>,
-    u32_128c_1: Option<Vec<ChunkShare<u32>>>,
+    u16_128c_1: Option<Vec<ChunkShare<u16>>>,
     u64_17c_1: Option<Vec<ChunkShare<u64>>>,
     u64_17c_2: Option<Vec<ChunkShare<u64>>>,
     u64_18c_1: Option<Vec<ChunkShare<u64>>>,
     u64_18c_2: Option<Vec<ChunkShare<u64>>>,
-    u64_36c_1: Option<Vec<ChunkShare<u64>>>,
-    u64_36c_2: Option<Vec<ChunkShare<u64>>>,
-    u64_37c_1: Option<Vec<ChunkShare<u64>>>,
-    single_u32_128c_1: Option<Vec<CudaSlice<u32>>>,
-    single_u32_128c_2: Option<Vec<CudaSlice<u32>>>,
-    single_u32_128c_3: Option<Vec<CudaSlice<u32>>>,
+    u64_32c_1: Option<Vec<ChunkShare<u64>>>,
+    u64_32c_2: Option<Vec<ChunkShare<u64>>>,
+    u64_33c_1: Option<Vec<ChunkShare<u64>>>,
+    single_u16_128c_1: Option<Vec<CudaSlice<u32>>>,
+    single_u16_128c_2: Option<Vec<CudaSlice<u32>>>,
+    single_u16_128c_3: Option<Vec<CudaSlice<u32>>>,
 }
 
 impl Buffers {
@@ -243,17 +237,17 @@ impl Buffers {
         let u64_18c_1 = Some(Self::allocate_buffer(chunk_size * 18, devices));
         let u64_18c_2 = Some(Self::allocate_buffer(chunk_size * 18, devices));
 
-        let u64_36c_1 = Some(Self::allocate_buffer(chunk_size * 36, devices));
-        let u64_36c_2 = Some(Self::allocate_buffer(chunk_size * 36, devices));
-        let u64_37c_1 = Some(Self::allocate_buffer(chunk_size * 37, devices));
+        let u64_32c_1 = Some(Self::allocate_buffer(chunk_size * 32, devices));
+        let u64_32c_2 = Some(Self::allocate_buffer(chunk_size * 32, devices));
+        let u64_33c_1 = Some(Self::allocate_buffer(chunk_size * 33, devices));
 
         let u64_2c_1 = Some(Self::allocate_buffer(chunk_size * 2, devices));
 
-        let u32_128c_1 = Some(Self::allocate_buffer(chunk_size * 128, devices));
+        let u16_128c_1 = Some(Self::allocate_buffer(chunk_size * 128, devices));
 
-        let single_u32_128c_1 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
-        let single_u32_128c_2 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
-        let single_u32_128c_3 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
+        let single_u16_128c_1 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
+        let single_u16_128c_2 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
+        let single_u16_128c_3 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
 
         Buffers {
             u32_64c_1,
@@ -264,14 +258,14 @@ impl Buffers {
             u64_17c_2,
             u64_18c_1,
             u64_18c_2,
-            u64_36c_1,
-            u64_36c_2,
-            u64_37c_1,
+            u64_32c_1,
+            u64_32c_2,
+            u64_33c_1,
             u64_2c_1,
-            u32_128c_1,
-            single_u32_128c_1,
-            single_u32_128c_2,
-            single_u32_128c_3,
+            u16_128c_1,
+            single_u16_128c_1,
+            single_u16_128c_2,
+            single_u16_128c_3,
         }
     }
 
@@ -330,14 +324,14 @@ impl Buffers {
         debug_assert!(self.u64_17c_2.is_some());
         debug_assert!(self.u64_18c_1.is_some());
         debug_assert!(self.u64_18c_2.is_some());
-        debug_assert!(self.u64_36c_1.is_some());
-        debug_assert!(self.u64_36c_2.is_some());
-        debug_assert!(self.u64_37c_1.is_some());
+        debug_assert!(self.u64_32c_1.is_some());
+        debug_assert!(self.u64_32c_2.is_some());
+        debug_assert!(self.u64_33c_1.is_some());
         debug_assert!(self.u64_2c_1.is_some());
-        debug_assert!(self.u32_128c_1.is_some());
-        debug_assert!(self.single_u32_128c_1.is_some());
-        debug_assert!(self.single_u32_128c_2.is_some());
-        debug_assert!(self.single_u32_128c_3.is_some());
+        debug_assert!(self.u16_128c_1.is_some());
+        debug_assert!(self.single_u16_128c_1.is_some());
+        debug_assert!(self.single_u16_128c_2.is_some());
+        debug_assert!(self.single_u16_128c_3.is_some());
     }
 }
 
@@ -416,11 +410,11 @@ impl Circuits {
     }
 
     pub fn take_result_buffer(&mut self) -> Vec<ChunkShare<u64>> {
-        Buffers::take_buffer(&mut self.buffers.u64_37c_1)
+        Buffers::take_buffer(&mut self.buffers.u64_33c_1)
     }
 
     pub fn return_result_buffer(&mut self, src: Vec<ChunkShare<u64>>) {
-        Buffers::return_buffer(&mut self.buffers.u64_37c_1, src);
+        Buffers::return_buffer(&mut self.buffers.u64_33c_1, src);
     }
 
     pub fn instantiate_network(
@@ -679,7 +673,10 @@ impl Circuits {
         }
     }
 
-    fn send_receive(&mut self, res: &mut [ChunkShare<u64>]) {
+    fn send_receive<T>(&mut self, res: &mut [ChunkShare<T>])
+    where
+        T: cudarc::nccl::NcclType,
+    {
         debug_assert_eq!(res.len(), self.n_devices);
 
         result::group_start().unwrap();
@@ -933,35 +930,35 @@ impl Circuits {
     }
 
     fn bit_inject_neg_ot_sender(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u32>]) {
-        let mut m0 = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_1);
-        let mut m1 = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_2);
+        let mut m0 = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_1);
+        let mut m1 = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_2);
 
         for (idx, (inp, res, m0, m1)) in izip!(inp, outp, &mut m0, &mut m1).enumerate() {
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_ca = unsafe {
                 self.devs[idx]
-                    .alloc::<u32>(self.chunk_size * 2 * 64)
+                    .alloc::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
             self.rngs[idx].fill_my_rng_into(&mut rand_ca.slice_mut(..));
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_cb = unsafe {
                 self.devs[idx]
-                    .alloc::<u32>(self.chunk_size * 2 * 64)
+                    .alloc::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
             self.rngs[idx].fill_their_rng_into(&mut rand_cb.slice_mut(..));
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_wa1 = unsafe {
                 self.devs[idx]
-                    .alloc::<u32>(self.chunk_size * 2 * 64)
+                    .alloc::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
             self.rngs[idx].fill_my_rng_into(&mut rand_wa1.slice_mut(..));
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_wa2 = unsafe {
                 self.devs[idx]
-                    .alloc::<u32>(self.chunk_size * 2 * 64)
+                    .alloc::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
             self.rngs[idx].fill_my_rng_into(&mut rand_wa2.slice_mut(..));
@@ -1002,18 +999,18 @@ impl Circuits {
         }
         result::group_end().unwrap();
 
-        Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_1, m0);
-        Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_2, m1);
+        Buffers::return_single_buffer(&mut self.buffers.single_u16_128c_1, m0);
+        Buffers::return_single_buffer(&mut self.buffers.single_u16_128c_2, m1);
     }
 
     fn bit_inject_neg_ot_receiver(
         &mut self,
         inp: &[ChunkShare<u64>],
-        outp: &mut [ChunkShare<u32>],
+        outp: &mut [ChunkShare<u16>],
     ) {
-        let mut m0 = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_1);
-        let mut m1 = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_2);
-        let mut wc = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_3);
+        let mut m0 = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_1);
+        let mut m1 = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_2);
+        let mut wc = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_3);
 
         result::group_start().unwrap();
         for (idx, (m0, m1, wc)) in izip!(&mut m0, &mut m1, &mut wc).enumerate() {
@@ -1028,7 +1025,7 @@ impl Circuits {
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_ca = unsafe {
                 self.devs[idx]
-                    .alloc::<u32>(self.chunk_size * 2 * 64)
+                    .alloc::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
             self.rngs[idx].fill_my_rng_into(&mut rand_ca.slice_mut(..));
@@ -1066,33 +1063,33 @@ impl Circuits {
         }
         result::group_end().unwrap();
 
-        Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_1, m0);
-        Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_2, m1);
-        Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_3, wc);
+        Buffers::return_single_buffer(&mut self.buffers.single_u16_128c_1, m0);
+        Buffers::return_single_buffer(&mut self.buffers.single_u16_128c_2, m1);
+        Buffers::return_single_buffer(&mut self.buffers.single_u16_128c_3, wc);
     }
 
-    fn bit_inject_neg_ot_helper(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u32>]) {
-        let mut wc = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_3);
+    fn bit_inject_neg_ot_helper(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u16>]) {
+        let mut wc = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_3);
 
         for (idx, (inp, res, wc)) in izip!(inp, outp.iter_mut(), &mut wc).enumerate() {
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_cb = unsafe {
                 self.devs[idx]
-                    .alloc::<u32>(self.chunk_size * 2 * 64)
+                    .alloc::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
             self.rngs[idx].fill_their_rng_into(&mut rand_cb.slice_mut(..));
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_wb1 = unsafe {
                 self.devs[idx]
-                    .alloc::<u32>(self.chunk_size * 2 * 64)
+                    .alloc::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
             self.rngs[idx].fill_their_rng_into(&mut rand_wb1.slice_mut(..));
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_wb2 = unsafe {
                 self.devs[idx]
-                    .alloc::<u32>(self.chunk_size * 2 * 64)
+                    .alloc::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
             self.rngs[idx].fill_their_rng_into(&mut rand_wb2.slice_mut(..));
@@ -1133,10 +1130,10 @@ impl Circuits {
         }
         result::group_end().unwrap();
 
-        Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_3, wc);
+        Buffers::return_single_buffer(&mut self.buffers.single_u16_128c_3, wc);
     }
 
-    fn bit_inject_neg_ot(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u32>]) {
+    fn bit_inject_neg_ot(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u16>]) {
         match self.peer_id {
             0 => self.bit_inject_neg_ot_helper(inp, outp),
             1 => self.bit_inject_neg_ot_receiver(inp, outp),
@@ -1151,7 +1148,7 @@ impl Circuits {
         &mut self,
         shares: Vec<ChunkShare<u16>>,
         xa: &mut [ChunkShare<u32>],
-        injected: &mut [ChunkShare<u32>],
+        injected: &mut [ChunkShare<u16>],
     ) {
         const K: usize = 18;
         debug_assert_eq!(self.n_devices, shares.len());
@@ -1424,12 +1421,7 @@ impl Circuits {
         }
     }
 
-    fn transpose_pack_u64_with_len(
-        &mut self,
-        inp: &[ChunkShare<u64>],
-        outp: &mut [ChunkShare<u64>],
-        bitlen: usize,
-    ) {
+    fn transpose_pack_u32(&mut self, inp: &[ChunkShare<u32>], outp: &mut [ChunkShare<u64>]) {
         debug_assert_eq!(self.n_devices, inp.len());
         debug_assert_eq!(self.n_devices, outp.len());
 
@@ -1441,18 +1433,11 @@ impl Circuits {
         for (idx, (inp, outp)) in izip!(inp, outp).enumerate() {
             unsafe {
                 self.kernels[idx]
-                    .transpose_64x64
+                    .transpose_32x64
                     .clone()
                     .launch(
                         cfg,
-                        (
-                            &mut outp.a,
-                            &mut outp.b,
-                            &inp.a,
-                            &inp.b,
-                            self.chunk_size * 64,
-                            bitlen,
-                        ),
+                        (&outp.a, &outp.b, &inp.a, &inp.b, self.chunk_size * 64, 32),
                     )
                     .unwrap();
             }
@@ -1461,8 +1446,8 @@ impl Circuits {
 
     pub fn extract_msb_sum_mod(
         &mut self,
-        x01: &[ChunkShare<u64>],
-        x2: &[ChunkShare<u64>],
+        x01: &[ChunkShare<u32>],
+        x2: &[ChunkShare<u32>],
         result: &mut [ChunkShare<u64>],
     ) {
         debug_assert_eq!(self.n_devices, x01.len());
@@ -1472,19 +1457,19 @@ impl Circuits {
         // Transpose
         let now = Instant::now();
 
-        let mut x01_ = Buffers::take_buffer(&mut self.buffers.u64_36c_1);
-        let mut x2_ = Buffers::take_buffer(&mut self.buffers.u64_36c_2);
+        let mut x01_ = Buffers::take_buffer(&mut self.buffers.u64_32c_1);
+        let mut x2_ = Buffers::take_buffer(&mut self.buffers.u64_32c_2);
 
-        self.transpose_pack_u64_with_len(x01, &mut x01_, Self::BITS);
-        self.transpose_pack_u64_with_len(x2, &mut x2_, Self::BITS);
+        self.transpose_pack_u32(x01, &mut x01_);
+        self.transpose_pack_u32(x2, &mut x2_);
         println!("Time for transposes: {:?}", now.elapsed());
 
         let now = Instant::now();
         self.binary_add_two(&mut x01_, &mut x2_, result);
         println!("Time for binary_add_two: {:?}", now.elapsed());
 
-        Buffers::return_buffer(&mut self.buffers.u64_36c_1, x01_);
-        Buffers::return_buffer(&mut self.buffers.u64_36c_2, x2_);
+        Buffers::return_buffer(&mut self.buffers.u64_32c_1, x01_);
+        Buffers::return_buffer(&mut self.buffers.u64_32c_2, x2_);
 
         let now = Instant::now();
         self.extraxt_msb_mod_p2k_of_sum(result);
@@ -1690,9 +1675,9 @@ impl Circuits {
     // requires 64 * n_devices * chunk_size random u64 elements
     pub fn lift_mul_sub_split(
         &mut self,
-        mask_lifted: &mut [ChunkShare<u64>],
-        mask_correction: &[ChunkShare<u32>],
-        x01: &mut [ChunkShare<u64>],
+        mask_lifted: &mut [ChunkShare<u32>],
+        mask_correction: &[ChunkShare<u16>],
+        x01: &mut [ChunkShare<u32>],
         code: Vec<ChunkShare<u16>>,
     ) {
         debug_assert_eq!(self.n_devices, mask_lifted.len());
@@ -1897,7 +1882,7 @@ impl Circuits {
     }
 
     // input should be of size: n_devices * input_size
-    // Result is in the first bit of res u64_37c_1
+    // Result is in the first bit of res u64_33c_1
     pub fn compare_threshold_masked_many_fp(
         &mut self,
         code_dots: Vec<ChunkShare<u16>>,
@@ -1908,21 +1893,21 @@ impl Circuits {
 
         let mut x2 = Buffers::take_buffer(&mut self.buffers.u32_64c_1);
         let mut x01 = Buffers::take_buffer(&mut self.buffers.u32_64c_2);
-        let mut corrections = Buffers::take_buffer(&mut self.buffers.u32_128c_1);
+        let mut corrections = Buffers::take_buffer(&mut self.buffers.u16_128c_1);
 
         self.lift_p2k(mask_dots, &mut x2, &mut corrections);
         self.lift_mul_sub_split(&mut x2, &corrections, &mut x01, code_dots);
 
-        let mut res = Buffers::take_buffer(&mut self.buffers.u64_37c_1);
+        let mut res = Buffers::take_buffer(&mut self.buffers.u64_33c_1);
         self.extract_msb_sum_mod(&x01, &x2, &mut res);
 
         Buffers::return_buffer(&mut self.buffers.u32_64c_1, x2);
         Buffers::return_buffer(&mut self.buffers.u32_64c_2, x01);
-        Buffers::return_buffer(&mut self.buffers.u32_128c_1, corrections);
-        Buffers::return_buffer(&mut self.buffers.u64_37c_1, res);
+        Buffers::return_buffer(&mut self.buffers.u16_128c_1, corrections);
+        Buffers::return_buffer(&mut self.buffers.u64_33c_1, res);
         self.buffers.check_buffers();
 
-        // Result is in the first bit of res u64_37c_1
+        // Result is in the first bit of res u64_33c_1
     }
 
     // input should be of size: n_devices * input_size

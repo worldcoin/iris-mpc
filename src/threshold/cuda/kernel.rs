@@ -94,15 +94,15 @@ pub fn shared_or_pre<T>(
     }
 }
 
-pub fn shared_mul_lift_b(res_a: &mut [u64], res_b: &mut [u64], lhs_a: &[u16], lhs_b: &[u16]) {
+pub fn shared_mul_lift_b(res_a: &mut [u32], res_b: &mut [u32], lhs_a: &[u16], lhs_b: &[u16]) {
     let n = res_a.len();
     assert_eq!(n, res_b.len());
     assert_eq!(n, lhs_a.len());
     assert_eq!(n, lhs_b.len());
 
     for i in 0..n {
-        res_a[i] = (lhs_a[i] as u64) << B_BITS;
-        res_b[i] = (lhs_b[i] as u64) << B_BITS;
+        res_a[i] = (lhs_a[i] as u32) << B_BITS;
+        res_b[i] = (lhs_b[i] as u32) << B_BITS;
     }
 }
 
