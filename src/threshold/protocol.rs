@@ -1796,38 +1796,29 @@ impl Circuits {
 
     // TODO is this the best we can do?
     fn collect_graphic_result(&mut self, bits: &mut [ChunkShareView<u64>]) {
+        // TODO also precompute?
+        let cfg = Self::launch_config_from_elements_and_threads(1, DEFAULT_LAUNCH_CONFIG_THREADS);
+
         debug_assert!(self.n_devices <= self.chunk_size);
         let dev0 = &self.devs[0];
         let bit0 = &bits[0];
-
-        // Get results onto CPU
-        let mut a = Vec::with_capacity(self.n_devices - 1);
-        let mut b = Vec::with_capacity(self.n_devices - 1);
-        for (dev, bit) in izip!(self.get_devices(), bits.iter()).skip(1) {
+        for (idx, (dev, bit)) in izip!(self.get_devices(), bits.iter()).enumerate().skip(1) {
             let src = bit.get_offset(0, 1);
+            let des = bit0.get_offset(idx, 1);
 
-            let a_ = dev.dtoh_sync_copy(&src.a).unwrap().pop().unwrap();
-            let b_ = dev.dtoh_sync_copy(&src.b).unwrap().pop().unwrap();
-            a.push(a_);
-            b.push(b_);
-        }
+            let a = dev.dtoh_sync_copy(&src.a).unwrap();
+            let b = dev.dtoh_sync_copy(&src.b).unwrap();
 
-        // Put results onto first GPU
-        let des = bit0.get_range(1, self.n_devices);
-        let a = dev0.htod_sync_copy(&a).unwrap();
-        let b = dev0.htod_sync_copy(&b).unwrap();
+            let a = dev0.htod_sync_copy(&a).unwrap();
+            let b = dev0.htod_sync_copy(&b).unwrap();
 
-        // TODO also precompute?
-        let cfg = Self::launch_config_from_elements_and_threads(
-            self.n_devices as u32 - 1,
-            DEFAULT_LAUNCH_CONFIG_THREADS,
-        );
-        unsafe {
-            self.kernels[0]
-                .assign
-                .clone()
-                .launch(cfg, (&des.a, &des.b, &a, &b, self.n_devices - 1))
-                .unwrap();
+            unsafe {
+                self.kernels[0]
+                    .assign
+                    .clone()
+                    .launch(cfg.to_owned(), (&des.a, &des.b, &a, &b, 1))
+                    .unwrap();
+            }
         }
     }
 
