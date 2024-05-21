@@ -1701,8 +1701,8 @@ impl Circuits {
             izip!(mask_lifted, mask_correction, &code, x01.iter_mut()).enumerate()
         {
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
-            let mut rand = unsafe { self.devs[idx].alloc::<u64>(self.chunk_size * 64).unwrap() };
-            self.fill_rand_u64(&mut rand, idx);
+            let mut rand = unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
+            self.rngs[idx].fill_rng_into(&mut rand.slice_mut(..));
 
             let cfg = Self::launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64,

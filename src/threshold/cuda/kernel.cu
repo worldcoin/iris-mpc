@@ -214,7 +214,7 @@ __device__ void lift_mul_sub(U32 *mask, U16 *mask_corr1, U16 *mask_corr2,
 }
 
 // Puts the results into x_a, x_b and x01
-__device__ void split_msb_fp(U64 *x_a, U64 *x_b, U64 *x01, U64 *r, int id) {
+__device__ void split_msb_fp(U32 *x_a, U32 *x_b, U32 *x01, U32 *r, int id) {
   // I don't add the bitmod to the randomness, since the bits gets removed later
   // anyways
 
@@ -224,7 +224,7 @@ __device__ void split_msb_fp(U64 *x_a, U64 *x_b, U64 *x01, U64 *r, int id) {
     *x_a = 0;
     break;
   case 1:
-    *x01 = *r ^ ((*x_a + *x_b) % P2K);
+    *x01 = *r ^ (U32)((U64)(*x_a + *x_b) % P2K);
     *x_a = 0;
     *x_b = 0;
     break;
@@ -403,8 +403,8 @@ extern "C" __global__ void shared_u64_transpose_pack_u64(U64 *out_a, U64 *out_b,
 
 // Puts the results into mask_a, mask_b and x01
 extern "C" __global__ void
-shared_lift_mul_sub_split(U64 *x01, U64 *mask_a, U64 *mask_b, U32 *mask_corr_a,
-                          U32 *mask_corr_b, U16 *code_a, U16 *code_b, U64 *r,
+shared_lift_mul_sub_split(U32 *x01, U32 *mask_a, U32 *mask_b, U16 *mask_corr_a,
+                          U16 *mask_corr_b, U16 *code_a, U16 *code_b, U32 *r,
                           int n, int id) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
