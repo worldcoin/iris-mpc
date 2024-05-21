@@ -2,16 +2,25 @@ use aws_sdk_sqs::{config::Region, Client, Error};
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use cudarc::driver::{
-    result::{event::{self, elapsed}, memcpy_dtoh_async, stream::synchronize},
+    result::{
+        event::{self, elapsed},
+        memcpy_dtoh_async,
+        stream::synchronize,
+    },
     sys::lib,
     DevicePtr,
 };
 use gpu_iris_mpc::{
+    device_ptrs,
     setup::iris_db::{iris::IrisCodeArray, shamir_iris::ShamirIris},
     sqs::{SMPCRequest, SQSMessage},
 };
+use std::{
+    env,
+    fs::metadata,
+    time::{Duration, Instant},
+};
 use tokio::time::sleep;
-use std::{env, fs::metadata, time::{Duration, Instant}};
 
 use gpu_iris_mpc::{
     device_manager::DeviceManager,
@@ -150,7 +159,7 @@ async fn main() -> eyre::Result<()> {
         party_id,
         device_manager.clone(),
         l_coeff,
-        &codes_db,
+        DB_SIZE,
         QUERIES,
         chacha_seeds,
         bootstrap_url.clone(),
@@ -158,19 +167,24 @@ async fn main() -> eyre::Result<()> {
         Some(3000),
     );
 
+    let code_db_slices = codes_engine.load_db(&codes_db);
+
     println!("Codes Engines ready!");
 
     let mut masks_engine = ShareDB::init(
         party_id,
         device_manager.clone(),
         l_coeff,
-        &masks_db,
+        DB_SIZE,
         QUERIES,
         chacha_seeds,
         bootstrap_url.clone(),
         Some(true),
         Some(3001),
     );
+
+    let mask_db_slices = masks_engine.load_db(&masks_db);
+
     let mut distance_comparator = DistanceComparator::init(DB_SIZE, QUERIES);
 
     println!("Engines ready!");
@@ -220,10 +234,10 @@ async fn main() -> eyre::Result<()> {
         // TODO: free all of this!
         let code_query = device_manager.htod_transfer_query(&code_query, request_streams);
         let mask_query = device_manager.htod_transfer_query(&mask_query, request_streams);
-        let code_query_sums = codes_engine.query_sums(&code_query, request_streams, request_cublas_handles);
-        let mask_query_sums = masks_engine.query_sums(&mask_query, request_streams, request_cublas_handles);
-
-        // Calculate the query sums
+        let code_query_sums =
+            codes_engine.query_sums(&code_query, request_streams, request_cublas_handles);
+        let mask_query_sums =
+            masks_engine.query_sums(&mask_query, request_streams, request_cublas_handles);
 
         // BLOCK 1: calculate individual dot products
         device_manager.await_event(request_streams, &current_dot_event);
@@ -234,9 +248,25 @@ async fn main() -> eyre::Result<()> {
         timers.push(evts);
         //// END DEBUG
 
-        codes_engine.dot(code_query, request_streams, request_cublas_handles);
-        masks_engine.dot(mask_query, request_streams, request_cublas_handles);
-        
+        codes_engine.dot(
+            &code_query,
+            &(
+                device_ptrs(&code_db_slices.0 .0),
+                device_ptrs(&code_db_slices.0 .1),
+            ),
+            request_streams,
+            request_cublas_handles,
+        );
+        masks_engine.dot(
+            &mask_query,
+            &(
+                device_ptrs(&mask_db_slices.0 .0),
+                device_ptrs(&mask_db_slices.0 .1),
+            ),
+            request_streams,
+            request_cublas_handles,
+        );
+
         //// DEBUG
         let evts = device_manager.create_events();
         device_manager.record_event(request_streams, &evts);
@@ -245,8 +275,8 @@ async fn main() -> eyre::Result<()> {
 
         // BLOCK 2: calculate final dot product result, exchange and compare
         device_manager.await_event(request_streams, &current_exchange_event);
-        codes_engine.dot_reduce(code_query_sums, request_streams);
-        masks_engine.dot_reduce(mask_query_sums, request_streams);
+        codes_engine.dot_reduce(code_query_sums, &code_db_slices.1, request_streams);
+        masks_engine.dot_reduce(mask_query_sums, &mask_db_slices.1, request_streams);
 
         device_manager.record_event(request_streams, &next_dot_event);
 
@@ -255,10 +285,10 @@ async fn main() -> eyre::Result<()> {
         device_manager.record_event(request_streams, &evts);
         timers.push(evts);
         //// END DEBUG
-        
+
         codes_engine.exchange_results(request_streams);
         masks_engine.exchange_results(request_streams);
-        
+
         //// DEBUG
         let evts = device_manager.create_events();
         device_manager.record_event(request_streams, &evts);
@@ -315,7 +345,11 @@ async fn main() -> eyre::Result<()> {
             for j in 0..8 {
                 for i in 0..QUERIES {
                     if index_results[j][i] != u32::MAX {
-                        println!("Found query {} at index {:?}", i, (DB_SIZE/8*j) as u32 + index_results[j][i]);
+                        println!(
+                            "Found query {} at index {:?}",
+                            i,
+                            (DB_SIZE / 8 * j) as u32 + index_results[j][i]
+                        );
                         found = true;
                         break;
                     }
@@ -345,7 +379,10 @@ async fn main() -> eyre::Result<()> {
             device_manager.device(0).bind_to_thread().unwrap();
             let dot_time = elapsed(timers[0][0], timers[1][0]).unwrap();
             let exchange_time = elapsed(timers[2][0], timers[3][0]).unwrap();
-            println!("Dot time: {:?}, Exchange time: {:?}", dot_time, exchange_time);
+            println!(
+                "Dot time: {:?}, Exchange time: {:?}",
+                dot_time, exchange_time
+            );
         }
     }
 

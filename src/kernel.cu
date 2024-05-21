@@ -1,12 +1,12 @@
 #define P 65519
 
-extern "C" __global__ void matmul(int *c, unsigned short *output, unsigned int *a0Sums, unsigned int *a1Sums, int *b0Sums, int *b1Sums, size_t numRows, size_t numElements, size_t numCols, long long lCoeff, unsigned short *rngMasks0, unsigned short *rngMasks1)
+extern "C" __global__ void matmul(int *c, unsigned short *output, int *a0Sums, int *a1Sums, int *b0Sums, int *b1Sums, size_t numRows, size_t numElements, size_t numCols, long long lCoeff, unsigned short *rngMasks0, unsigned short *rngMasks1)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
     {
-        unsigned int a0s = a0Sums[idx % numRows];
-        unsigned int a1s = a1Sums[idx % numRows];
+        int a0s = a0Sums[idx % numRows] + numCols * 128;
+        int a1s = a1Sums[idx % numRows] + numCols * 128;
 
         // Correct the sum to unsigned
         int b0s = b0Sums[idx / numRows] + numCols * 128;
