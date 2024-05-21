@@ -1832,8 +1832,10 @@ impl Circuits {
         let cfg = Self::launch_config_from_elements_and_threads(1, DEFAULT_LAUNCH_CONFIG_THREADS);
 
         // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
-        let mut rand = unsafe { self.devs[0].alloc::<u64>(16).unwrap() }; // minimum size is 16 for RNG, need only 1 though
+        let mut rand = unsafe { self.devs[0].alloc::<u64>(16).unwrap() }; // minimum size is 16 for RNG, need only 10 though
         self.fill_rand_u64(&mut rand, 0);
+
+        let mut rand_offset = rand.slice(..);
 
         let mut current_bitsize = 64;
         while current_bitsize > 1 {
@@ -1844,10 +1846,19 @@ impl Circuits {
                     .clone()
                     .launch(
                         cfg,
-                        (&res.a, &res.b, &helper.a, &helper.b, &rand, current_bitsize),
+                        (
+                            &res.a,
+                            &res.b,
+                            &helper.a,
+                            &helper.b,
+                            &rand_offset,
+                            current_bitsize,
+                        ),
                     )
                     .unwrap();
             }
+            let bytes = (current_bitsize + 7) / 8;
+            rand_offset = rand_offset.slice(bytes..); // Advance randomness
             result::group_start().unwrap();
             self.send_view(&res.a, self.next_id, 0);
             self.receive_view(&mut res.b, self.prev_id, 0);
