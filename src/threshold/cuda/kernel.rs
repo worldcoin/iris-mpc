@@ -1,4 +1,4 @@
-pub(crate) const B_BITS: u64 = 20;
+pub(crate) const B_BITS: u64 = 16;
 
 pub fn shared_xor<T>(
     res_a: &mut [T],
