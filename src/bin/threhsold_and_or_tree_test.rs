@@ -118,8 +118,8 @@ fn open(party: &mut Circuits, result: &mut ChunkShare<u64>) -> bool {
 #[tokio::main(worker_threads = 1)]
 async fn main() -> eyre::Result<()> {
     assert!(
-        INPUTS_PER_GPU_SIZE % 64 == 0,
-        "Inputs per GPU size must be a multiple of 64"
+        INPUTS_PER_GPU_SIZE % (2048) == 0,
+        "Inputs per GPU size must be a multiple of 2048"
     );
     // TODO
     let mut rng = StdRng::seed_from_u64(42);
