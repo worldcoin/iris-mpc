@@ -1764,7 +1764,7 @@ impl Circuits {
     // Result is in lowest u64 of the input
     fn or_tree_on_gpu(&mut self, bits: &mut [ChunkShareView<u64>], size: usize, idx: usize) {
         debug_assert_eq!(self.n_devices, bits.len());
-        debug_assert!(size <= bits[0].len());
+        debug_assert!(size <= bits[idx].len());
 
         let bit = &mut bits[idx];
 
@@ -1804,7 +1804,7 @@ impl Circuits {
         let mut a = Vec::with_capacity(self.n_devices - 1);
         let mut b = Vec::with_capacity(self.n_devices - 1);
         for (dev, bit) in izip!(self.get_devices(), bits.iter()).skip(1) {
-            let src = bit.get_offset(0, 1);
+            let src = bit.get_range(0, 1);
 
             let a_ = dev.dtoh_sync_copy(&src.a).unwrap().pop().unwrap();
             let b_ = dev.dtoh_sync_copy(&src.b).unwrap().pop().unwrap();
