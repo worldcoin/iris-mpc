@@ -200,17 +200,19 @@ __device__ void lift_mul_sub(U32 *mask, U16 *mask_corr1, U16 *mask_corr2,
   //   *mask_corr2 %= B;
   mul_lift_p(&corr1, mask_corr1);
   mul_lift_p(&corr2, mask_corr2);
-  *mask += P2K;
-  *mask += P2K;
-  *mask -= corr1;
-  *mask -= corr2;
+  U64 tmp = *mask;
+  tmp += P2K;
+  tmp += P2K;
+  tmp -= corr1;
+  tmp -= corr2;
 
   U32 a;
   mul_lift_b(&a, code);
-  *mask *= A;
-  *mask += P2K;
-  *mask -= a;
-  *mask %= P2K;
+  tmp *= A;
+  tmp += P2K;
+  tmp -= a;
+  tmp %= P2K;
+  *mask = (U32)tmp;
 }
 
 // Puts the results into x_a, x_b and x01
