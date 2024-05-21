@@ -11,7 +11,9 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{env, sync::Arc};
 use tokio::time::{self, Instant};
 
-const INPUTS_PER_GPU_SIZE: usize = 12_505_600;
+//ceil(930 * 125_000 / 2048) * 2048
+const INPUTS_PER_GPU_SIZE: usize = 116_250_624;
+// const INPUTS_PER_GPU_SIZE: usize = 12_505_600;
 const CHUNK_SIZE: usize = INPUTS_PER_GPU_SIZE / 64;
 const B_BITS: u64 = 20;
 const P2K: u64 = (P as u64) << B_BITS;
@@ -137,8 +139,9 @@ fn open(party: &mut Circuits, x: &[ChunkShare<u64>]) -> Vec<u64> {
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     assert!(
-        INPUTS_PER_GPU_SIZE % 64 == 0,
-        "Inputs per GPU size must be a multiple of 64"
+        INPUTS_PER_GPU_SIZE % (2048) == 0,
+        // Mod 16 for randomness, mod 64 for chunk size
+        "Inputs per GPU size must be a multiple of 2048"
     );
     // TODO
     let mut rng = StdRng::seed_from_u64(42);
