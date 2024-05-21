@@ -411,7 +411,7 @@ impl Circuits {
             let rng = ChaChaCudaCorrRng::init(
                 dev.clone(),
                 [peer_id as u32; 8],
-                [((peer_id + 1) % 3) as u32; 8],
+                [((peer_id + 2) % 3) as u32; 8],
             );
 
             devs.push(dev);
