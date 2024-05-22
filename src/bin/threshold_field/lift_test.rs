@@ -4,7 +4,7 @@ use gpu_iris_mpc::{
         iris_db::iris::IrisCodeArray,
         shamir::{Shamir, P},
     },
-    threshold::protocol::{ChunkShare, Circuits},
+    threshold_field::protocol::{ChunkShare, Circuits},
 };
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};

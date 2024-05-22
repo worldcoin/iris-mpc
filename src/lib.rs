@@ -1,6 +1,6 @@
 pub mod rng;
 pub mod setup;
-pub mod threshold;
+pub mod threshold_field;
 
 use std::{ffi::c_void, rc::Rc, str::FromStr, sync::Arc, thread, time::Duration};
 

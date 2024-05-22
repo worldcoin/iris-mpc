@@ -1,5 +1,5 @@
 use cudarc::driver::CudaDevice;
-use gpu_iris_mpc::threshold::protocol::{ChunkShare, Circuits};
+use gpu_iris_mpc::threshold_field::protocol::{ChunkShare, Circuits};
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{env, sync::Arc};
