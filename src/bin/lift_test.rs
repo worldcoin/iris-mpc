@@ -139,7 +139,7 @@ fn open(
             assert!(corr2 == 0 || corr2 == 1);
             let mut res = *res_a as u64 + res_b as u64 + res_c as u64;
             res += P2K - P as u64 * corr1 as u64;
-            res += P2K - P as u64 * corr1 as u64;
+            res += P2K - P as u64 * corr2 as u64;
             *res_a = (res % P2K) as u32;
         }
         result.extend(res_a);
