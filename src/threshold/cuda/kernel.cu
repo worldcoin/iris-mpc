@@ -433,7 +433,7 @@ extern "C" __global__ void shared_split1(U16 *inp_a, U16 *inp_b, U32 *xa_a,
     switch (id) {
     case 0:
       subbed_p = ((U64)(inp_a[i]) + P2K - P) % P2K;
-      subbed_pp = ((U64)(inp_a[i]) + P2K - 2 * (U64)(P)) % P2K;
+      subbed_pp = ((U64)(inp_a[i]) + P2K - 2ULL * (U64)(P)) % P2K;
       xp_a[i] = (U32)(subbed_p);
       xpp_a[i] = (U32)(subbed_pp);
       xp_b[i] = (U32)(inp_b[i]);
@@ -441,7 +441,7 @@ extern "C" __global__ void shared_split1(U16 *inp_a, U16 *inp_b, U32 *xa_a,
       break;
     case 1:
       subbed_p = ((U64)(inp_b[i]) + P2K - P) % P2K;
-      subbed_pp = ((U64)(inp_b[i]) + P2K - 2 * (U64)(P)) % P2K;
+      subbed_pp = ((U64)(inp_b[i]) + P2K - 2ULL * (U64)(P)) % P2K;
       xp_a[i] = (U32)(inp_a[i]);
       xpp_a[i] = (U32)(inp_a[i]);
       xp_b[i] = (U32)(subbed_p);
