@@ -1500,7 +1500,7 @@ impl Circuits {
         // Result is in the first bit of result
     }
 
-    // requires 36 * n_devices * chunk_size random u64 elements
+    // requires Self::BITS * n_devices * chunk_size random u64 elements
     fn binary_add_two(
         &mut self,
         x1: &mut [ChunkShareView<u64>],
