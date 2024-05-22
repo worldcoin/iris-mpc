@@ -1,7 +1,7 @@
 use cudarc::driver::CudaDevice;
 use gpu_iris_mpc::{
     setup::{
-        iris_db::iris::{IrisCodeArray, MATCH_THRESHOLD_RATIO},
+        iris_db::iris::IrisCodeArray,
         shamir::{Shamir, P},
     },
     threshold::protocol::{ChunkShare, Circuits},
