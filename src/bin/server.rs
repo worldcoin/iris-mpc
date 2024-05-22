@@ -35,6 +35,7 @@ use gpu_iris_mpc::{
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
+const ENABLE_QUERY_DEDUP: bool = true;
 const REGION: &str = "us-east-2";
 const DB_SIZE: usize = 8 * 50_000;
 const QUERIES: usize = 930;
@@ -44,8 +45,8 @@ const MAX_CONCURRENT_REQUESTS: usize = 5;
 const DB_CODE_FILE: &str = "/opt/dlami/nvme/codes.db";
 const DB_MASK_FILE: &str = "/opt/dlami/nvme/masks.db";
 
-macro_rules! record_event_and_push {
-    ($manager:expr, $streams:expr, $events:expr, $timers:expr) => {
+macro_rules! debug_record_event {
+    ($manager:expr, $streams:expr, $timers:expr) => {
         let evts = $manager.create_events();
         $manager.record_event($streams, &evts);
         $timers.push(evts);
@@ -193,7 +194,7 @@ async fn main() -> eyre::Result<()> {
 
     let mask_db_slices = masks_engine.load_db(&masks_db);
 
-    let mut distance_comparator = DistanceComparator::init(DB_SIZE, QUERIES);
+    let mut distance_comparator = DistanceComparator::init(DB_SIZE, QUERIES, true);
 
     println!("Engines ready!");
 
@@ -220,17 +221,19 @@ async fn main() -> eyre::Result<()> {
         Some(true),
         Some(3003),
     );
-    let mut batch_distance_comparator = DistanceComparator::init(QUERIES, QUERIES);
+    let mut batch_distance_comparator = DistanceComparator::init(QUERIES, QUERIES, false);
 
     // Prepare streams etc.
     let mut streams = vec![];
     let mut cublas_handles = vec![];
     let mut results = vec![];
+    let mut batch_results = vec![];
     for _ in 0..MAX_CONCURRENT_REQUESTS {
         let tmp_streams = device_manager.fork_streams();
         cublas_handles.push(device_manager.create_cublas(&tmp_streams));
         streams.push(tmp_streams);
         results.push(distance_comparator.prepare_results());
+        batch_results.push(batch_distance_comparator.prepare_results());
     }
 
     // Main Loop
@@ -255,6 +258,7 @@ async fn main() -> eyre::Result<()> {
         let request_streams = &streams[request_counter % MAX_CONCURRENT_REQUESTS];
         let request_cublas_handles = &cublas_handles[request_counter % MAX_CONCURRENT_REQUESTS];
         let request_results = &results[request_counter % MAX_CONCURRENT_REQUESTS];
+        let request_batch_results = &batch_results[request_counter % MAX_CONCURRENT_REQUESTS];
 
         // First stream doesn't need to wait on anyone
         if request_counter == 0 {
@@ -272,39 +276,43 @@ async fn main() -> eyre::Result<()> {
         let mask_query_sums =
             masks_engine.query_sums(&mask_query, request_streams, request_cublas_handles);
 
+        if ENABLE_QUERY_DEDUP {
+            batch_codes_engine.dot(
+                &code_query,
+                &code_query,
+                request_streams,
+                request_cublas_handles,
+            );
+    
+            batch_masks_engine.dot(
+                &code_query,
+                &code_query,
+                request_streams,
+                request_cublas_handles,
+            );
+    
+            batch_codes_engine.dot_reduce(&code_query_sums, &code_query_sums, request_streams);
+            batch_masks_engine.dot_reduce(&code_query_sums, &code_query_sums, request_streams);
+    
+            batch_codes_engine.exchange_results(request_streams);
+            batch_masks_engine.exchange_results(request_streams);
+    
+            batch_distance_comparator.reconstruct_and_compare(
+                &batch_codes_engine.results_peers,
+                &batch_masks_engine.results_peers,
+                request_streams,
+                device_ptrs(request_batch_results),
+            );
+
+            // filter out dups
+            // TODO:
+        }
+
+
         // BLOCK 1: calculate individual dot products
         device_manager.await_event(request_streams, &current_dot_event);
 
-        batch_codes_engine.dot(
-            &code_query,
-            &code_query,
-            request_streams,
-            request_cublas_handles,
-        );
-
-        batch_masks_engine.dot(
-            &code_query,
-            &code_query,
-            request_streams,
-            request_cublas_handles,
-        );
-
-        batch_codes_engine.dot_reduce(&code_query_sums, &code_query_sums, request_streams);
-        batch_masks_engine.dot_reduce(&code_query_sums, &code_query_sums, request_streams);
-
-        batch_codes_engine.exchange_results(request_streams);
-        batch_masks_engine.exchange_results(request_streams);
-
-        batch_distance_comparator.reconstruct_and_compare(
-            &batch_codes_engine.results_peers,
-            &batch_masks_engine.results_peers,
-            request_streams,
-            device_ptrs(request_results), // TODO
-        );
-
-        //// DEBUG
-        record_event_and_push!(device_manager, request_streams, &current_dot_event, timers);
-        //// END DEBUG
+        debug_record_event!(device_manager, request_streams, timers);
 
         codes_engine.dot(
             &code_query,
@@ -325,12 +333,11 @@ async fn main() -> eyre::Result<()> {
             request_cublas_handles,
         );
 
-        //// DEBUG
-        record_event_and_push!(device_manager, request_streams, &current_dot_event, timers);
-        //// END DEBUG
+        debug_record_event!(device_manager, request_streams, timers);
 
         // BLOCK 2: calculate final dot product result, exchange and compare
         device_manager.await_event(request_streams, &current_exchange_event);
+
         codes_engine.dot_reduce(
             &code_query_sums,
             &(
@@ -350,16 +357,12 @@ async fn main() -> eyre::Result<()> {
 
         device_manager.record_event(request_streams, &next_dot_event);
 
-        //// DEBUG
-        record_event_and_push!(device_manager, request_streams, &current_dot_event, timers);
-        //// END DEBUG
+        debug_record_event!(device_manager, request_streams, timers);
 
         codes_engine.exchange_results(request_streams);
         masks_engine.exchange_results(request_streams);
 
-        //// DEBUG
-        record_event_and_push!(device_manager, request_streams, &current_dot_event, timers);
-        //// END DEBUG
+        debug_record_event!(device_manager, request_streams, timers);
 
         distance_comparator.reconstruct_and_compare(
             &codes_engine.results_peers,
@@ -367,6 +370,8 @@ async fn main() -> eyre::Result<()> {
             request_streams,
             device_ptrs(request_results),
         );
+
+        // TODO: filter out dups from query and append query to DB
 
         device_manager.record_event(request_streams, &next_exchange_event);
 

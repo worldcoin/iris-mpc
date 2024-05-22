@@ -45,7 +45,7 @@ fn bench_memcpy(c: &mut Criterion) {
             let preprocessed_query = device_manager.htod_transfer_query(&preprocessed_query, &streams);
             let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
             engine.dot(&preprocessed_query, &(device_ptrs(&db_slices.0 .0), device_ptrs(&db_slices.0 .1)), &streams, &blass);
-            engine.dot_reduce(&query_sums, &db_slices.1, &streams);
+            engine.dot_reduce(&query_sums, &(device_ptrs(&db_slices.1 .0), device_ptrs(&db_slices.1 .1)), &streams);
             device_manager.await_streams(&streams);
         });
     });

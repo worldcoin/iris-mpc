@@ -40,6 +40,7 @@ const MATCH_RATIO: f64 = 0.375;
 const LIMBS: usize = 2;
 const MATMUL_FUNCTION_NAME: &str = "matmul";
 const DIST_FUNCTION_NAME: &str = "reconstructAndCompare";
+const DEDUP_FUNCTION_NAME: &str = "dedupQuery";
 
 struct IdWrapper(Id);
 
@@ -163,16 +164,18 @@ async fn http_root(ids: Vec<Id>, Path(device_id): Path<String>) -> String {
 
 pub struct DistanceComparator {
     pub devs: Vec<Arc<CudaDevice>>,
-    pub kernels: Vec<CudaFunction>,
+    pub dist_kernels: Vec<CudaFunction>,
+    pub dedup_kernels: Vec<CudaFunction>,
     pub db_length: usize,
     pub query_length: usize,
     pub n_devices: usize,
 }
 
 impl DistanceComparator {
-    pub fn init(db_length: usize, query_length: usize) -> Self {
+    pub fn init(db_length: usize, query_length: usize, shard: bool) -> Self {
         let ptx = compile_ptx(PTX_SRC).unwrap();
-        let mut kernels = Vec::new();
+        let mut dist_kernels = Vec::new();
+        let mut dedup_kernels = Vec::new();
         let mut devs = Vec::new();
         let n_devices = CudaDevice::count().unwrap() as usize;
 
@@ -180,17 +183,31 @@ impl DistanceComparator {
             let dev = CudaDevice::new(i).unwrap();
             dev.load_ptx(ptx.clone(), DIST_FUNCTION_NAME, &[DIST_FUNCTION_NAME])
                 .unwrap();
-            let function = dev
+            let dist_function = dev
                 .get_func(DIST_FUNCTION_NAME, DIST_FUNCTION_NAME)
                 .unwrap();
 
-            kernels.push(function);
+            dev.load_ptx(ptx.clone(), DEDUP_FUNCTION_NAME, &[DEDUP_FUNCTION_NAME])
+                .unwrap();
+            let dedup_function = dev
+                .get_func(DEDUP_FUNCTION_NAME, DEDUP_FUNCTION_NAME)
+                .unwrap();
+
+            dist_kernels.push(dist_function);
+            dedup_kernels.push(dedup_function);
             devs.push(dev);
         }
 
+        let db_length = if shard {
+            db_length / n_devices
+        } else {
+            db_length
+        };
+
         Self {
             devs,
-            kernels,
+            dist_kernels,
+            dedup_kernels,
             db_length,
             query_length,
             n_devices,
@@ -211,7 +228,7 @@ impl DistanceComparator {
         streams: &Vec<CudaStream>,
         results: Vec<u64>,
     ) {
-        let num_elements = self.db_length / self.n_devices * self.query_length;
+        let num_elements = self.db_length * self.query_length;
         let threads_per_block = 256;
         let blocks_per_grid = num_elements.div_ceil(threads_per_block);
         let cfg = LaunchConfig {
@@ -222,7 +239,7 @@ impl DistanceComparator {
 
         for i in 0..self.n_devices {
             unsafe {
-                self.kernels[i]
+                self.dist_kernels[i]
                     .clone()
                     .launch_on_stream(
                         &streams[i],
@@ -236,8 +253,46 @@ impl DistanceComparator {
                             &masks_result_peers[i][2],
                             results[i],
                             MATCH_RATIO,
-                            (self.db_length / self.n_devices) as u64,
+                            self.db_length as u64,
                             self.query_length as u64,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
+    pub fn dedup_query(
+        &self,
+        match_results: &Vec<u64>,
+        queries1: &Vec<u64>,
+        queries2: &Vec<u64>,
+        is_rotated: bool,
+        streams: &Vec<CudaStream>,
+    ) {
+        let num_elements = self.db_length * self.query_length;
+        let threads_per_block = 256;
+        let blocks_per_grid = num_elements.div_ceil(threads_per_block);
+        let cfg = LaunchConfig {
+            block_dim: (threads_per_block as u32, 1, 1),
+            grid_dim: (blocks_per_grid as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        for i in 0..self.n_devices {
+            unsafe {
+                self.dedup_kernels[i]
+                    .clone()
+                    .launch_on_stream(
+                        &streams[i],
+                        cfg,
+                        (
+                            match_results[i],
+                            queries1[i],
+                            queries2[i],
+                            self.query_length as u64,
+                            self.db_length as u64,
+                            is_rotated,
                         ),
                     )
                     .unwrap();
@@ -677,10 +732,12 @@ impl ShareDB {
 
 #[cfg(test)]
 mod tests {
+    use cudarc::driver::{result::memcpy_dtoh_sync, sys::lib};
     use float_eq::assert_float_eq;
     use ndarray::Array2;
     use num_traits::FromPrimitive;
     use rand::{rngs::StdRng, Rng, SeedableRng};
+    use rayon::vec;
 
     use crate::{
         device_manager::{self, DeviceManager},
@@ -690,7 +747,7 @@ mod tests {
             iris_db::{db::IrisDB, shamir_db::ShamirIrisDB, shamir_iris::ShamirIris},
             shamir::Shamir,
         },
-        ShareDB, P,
+        DistanceComparator, ShareDB, P,
     };
     const WIDTH: usize = 12_800;
     const QUERY_SIZE: usize = 31;
@@ -1059,5 +1116,67 @@ mod tests {
         for i in 0..DB_SIZE / N_DEVICES {
             assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-6);
         }
+    }
+
+    #[test]
+    fn test_dedup_query() {
+        const QUERIES: usize = 30;
+        const WIDTH: usize = 12800;
+        const QUERY_LEN: usize = QUERIES * WIDTH;
+        let query1 = [1u8; QUERY_LEN].to_vec();
+        let query2 = [1u8; QUERY_LEN].to_vec();
+        let mut match_results = [1u32; QUERIES * QUERIES].to_vec();
+    
+        // set the first query to no-match
+        for i in 0..QUERIES {
+            match_results[i] = u32::MAX;
+        }
+
+        let device_manager = DeviceManager::init();
+        let distance_comparator = DistanceComparator::init(QUERIES, QUERIES, false);
+
+        let streams = device_manager.fork_streams();
+        let query_ptrs = device_manager.htod_transfer_query(&vec![query1, query2], &streams);
+
+        let mut result_ptrs = vec![];
+        for i in 0..device_manager.device_count() {
+            result_ptrs.push(
+                device_manager
+                    .device(i)
+                    .htod_copy(match_results.clone())
+                    .unwrap(),
+            );
+        }
+
+        device_manager.await_streams(&streams);
+
+        distance_comparator.dedup_query(
+            &device_ptrs(&result_ptrs),
+            &query_ptrs.0,
+            &query_ptrs.1,
+            false,
+            &streams,
+        );
+
+        device_manager.await_streams(&streams);
+
+        let mut new_query1 = [1u8; QUERY_LEN];
+        unsafe {
+            device_manager.device(0).bind_to_thread().unwrap();
+            lib().cuMemcpyDtoH_v2(
+                new_query1.as_mut_ptr() as *mut _,
+                query_ptrs.0[0],
+                QUERY_LEN,
+            );
+        }
+
+        for i in 0..QUERY_LEN {
+            if i / 12800 == 0 {
+                assert_eq!(new_query1[i], 1, "index {} not 1", i);
+            } else {
+                assert_eq!(new_query1[i], 0, "index {} not 0", i);
+            }
+        }
+            
     }
 }
