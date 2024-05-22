@@ -95,14 +95,7 @@ fn open(party: &mut Circuits, x: &mut [ChunkShare<u32>]) -> Vec<u32> {
     }
     cudarc::nccl::result::group_end().unwrap();
     for (idx, res) in x.iter_mut().enumerate() {
-        if idx == 0 {
-            println!("a:{:?}", a.last().unwrap()[0]);
-            println!("b:{:?}", b.last().unwrap()[0]);
-        }
         c.push(devices[idx].dtoh_sync_copy(&res.a).unwrap());
-        if idx == 0 {
-            println!("c:{:?}", c.last().unwrap()[0]);
-        }
     }
 
     let mut result = Vec::with_capacity(n_devices * INPUTS_PER_GPU_SIZE);
