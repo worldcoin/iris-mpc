@@ -81,6 +81,10 @@ fn open(party: &mut Circuits, x: &mut [ChunkShare<u16>]) -> Vec<u16> {
     let mut c = Vec::with_capacity(n_devices);
 
     let devices = party.get_devices();
+    for (idx, res) in x.iter().enumerate() {
+        a.push(devices[idx].dtoh_sync_copy(&res.a).unwrap());
+        b.push(devices[idx].dtoh_sync_copy(&res.b).unwrap());
+    }
     cudarc::nccl::result::group_start().unwrap();
     for (idx, res) in x.iter().enumerate() {
         // Result is in bit 0
@@ -93,6 +97,10 @@ fn open(party: &mut Circuits, x: &mut [ChunkShare<u16>]) -> Vec<u16> {
         c.push(devices[idx].dtoh_sync_copy(&res.a).unwrap());
     }
     cudarc::nccl::result::group_end().unwrap();
+
+    for (idx, res) in x.iter_mut().enumerate() {
+        c.push(devices[idx].dtoh_sync_copy(&res.a).unwrap());
+    }
 
     let mut result = Vec::with_capacity(n_devices * INPUTS_PER_GPU_SIZE);
     for (mut a, b, c) in izip!(a, b, c) {
