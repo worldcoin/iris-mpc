@@ -191,6 +191,11 @@ async fn main() -> eyre::Result<()> {
             if r != r_ {
                 correct = false;
                 println!("Test failed on index: {}: {} != {}", i, r, r_);
+                println!(
+                    "xor: {}, trailing_zeros: {}",
+                    r ^ r_,
+                    (r ^ r_).trailing_zeros()
+                );
                 break;
             }
         }

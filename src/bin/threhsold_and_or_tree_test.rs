@@ -16,7 +16,7 @@ const INPUTS_PER_GPU_SIZE: usize = 116_250_624;
 // const INPUTS_PER_GPU_SIZE: usize = 12_505_600;
 const B_BITS: u64 = 16;
 pub(crate) const B: u64 = 1 << B_BITS;
-pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
+pub(crate) const A: u16 = (((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64) as u16;
 const P2K: u64 = (P as u64) << B_BITS;
 
 fn sample_code_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<u16> {
@@ -85,7 +85,7 @@ fn real_result_msb_reduce(code_input: Vec<u16>, mask_input: Vec<u16>) -> bool {
     assert_eq!(code_input.len(), mask_input.len());
     let mut res = false;
     for (c, m) in code_input.into_iter().zip(mask_input) {
-        let r = ((m as u64) * A + P2K - ((c as u64) << B_BITS)) % P2K;
+        let r = ((m as u64) * A as u64 + P2K - ((c as u64) << B_BITS)) % P2K;
         let msb = r >> (B_BITS + 16 - 1) & 1 == 1;
         res |= msb;
     }
