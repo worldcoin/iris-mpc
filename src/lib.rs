@@ -593,7 +593,7 @@ impl ShareDB {
     pub fn dot_reduce(
         &mut self,
         query_sums: &(Vec<u64>, Vec<u64>),
-        db_sums: &(Vec<CudaSlice<u32>>, Vec<CudaSlice<u32>>),
+        db_sums: &(Vec<u64>, Vec<u64>),
         streams: &Vec<CudaStream>,
     ) {
         let num_elements = self.db_length / self.device_manager.device_count() * self.query_length;
@@ -615,8 +615,8 @@ impl ShareDB {
                         (
                             &self.intermediate_results[idx],
                             &mut self.results[idx],
-                            &db_sums.0[idx],
-                            &db_sums.1[idx],
+                            db_sums.0[idx],
+                            db_sums.1[idx],
                             query_sums.0[idx],
                             query_sums.1[idx],
                             self.db_length as u64 / self.device_manager.device_count() as u64,
@@ -752,7 +752,11 @@ mod tests {
             &streams,
             &blass,
         );
-        engine.dot_reduce(&query_sums, &db_slices.1, &streams);
+        engine.dot_reduce(
+            &query_sums,
+            &(device_ptrs(&db_slices.1 .0), device_ptrs(&db_slices.1 .1)),
+            &streams,
+        );
         device_manager.await_streams(&streams);
 
         let a_nda = random_ndarray::<u64>(db, DB_SIZE, WIDTH);
@@ -854,7 +858,11 @@ mod tests {
                 &streams,
                 &blass,
             );
-            engine.dot_reduce(&query_sums, &db_slices.1, &streams);
+            engine.dot_reduce(
+                &query_sums,
+                &(device_ptrs(&db_slices.1 .0), device_ptrs(&db_slices.1 .1)),
+                &streams,
+            );
             device_manager.await_streams(&streams);
             engine.fetch_results(&mut gpu_result[i], 0);
         }
@@ -990,8 +998,22 @@ mod tests {
                 &blass,
             );
 
-            codes_engine.dot_reduce(&code_query_sums, &code_db_slices.1, &streams);
-            masks_engine.dot_reduce(&mask_query_sums, &mask_db_slices.1, &streams);
+            codes_engine.dot_reduce(
+                &code_query_sums,
+                &(
+                    device_ptrs(&code_db_slices.1 .0),
+                    device_ptrs(&code_db_slices.1 .1),
+                ),
+                &streams,
+            );
+            masks_engine.dot_reduce(
+                &mask_query_sums,
+                &(
+                    device_ptrs(&mask_db_slices.1 .0),
+                    device_ptrs(&mask_db_slices.1 .1),
+                ),
+                &streams,
+            );
 
             device_manager.await_streams(&streams);
 

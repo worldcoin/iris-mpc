@@ -44,6 +44,14 @@ const MAX_CONCURRENT_REQUESTS: usize = 5;
 const DB_CODE_FILE: &str = "/opt/dlami/nvme/codes.db";
 const DB_MASK_FILE: &str = "/opt/dlami/nvme/masks.db";
 
+macro_rules! record_event_and_push {
+    ($manager:expr, $streams:expr, $events:expr, $timers:expr) => {
+        let evts = $manager.create_events();
+        $manager.record_event($streams, &evts);
+        $timers.push(evts);
+    };
+}
+
 #[derive(Debug, Parser)]
 struct Opt {
     #[structopt(short, long)]
@@ -267,12 +275,35 @@ async fn main() -> eyre::Result<()> {
         // BLOCK 1: calculate individual dot products
         device_manager.await_event(request_streams, &current_dot_event);
 
+        batch_codes_engine.dot(
+            &code_query,
+            &code_query,
+            request_streams,
+            request_cublas_handles,
+        );
 
+        batch_masks_engine.dot(
+            &code_query,
+            &code_query,
+            request_streams,
+            request_cublas_handles,
+        );
+
+        batch_codes_engine.dot_reduce(&code_query_sums, &code_query_sums, request_streams);
+        batch_masks_engine.dot_reduce(&code_query_sums, &code_query_sums, request_streams);
+
+        batch_codes_engine.exchange_results(request_streams);
+        batch_masks_engine.exchange_results(request_streams);
+
+        batch_distance_comparator.reconstruct_and_compare(
+            &batch_codes_engine.results_peers,
+            &batch_masks_engine.results_peers,
+            request_streams,
+            device_ptrs(request_results), // TODO
+        );
 
         //// DEBUG
-        let evts = device_manager.create_events();
-        device_manager.record_event(request_streams, &evts);
-        timers.push(evts);
+        record_event_and_push!(device_manager, request_streams, &current_dot_event, timers);
         //// END DEBUG
 
         codes_engine.dot(
@@ -295,41 +326,46 @@ async fn main() -> eyre::Result<()> {
         );
 
         //// DEBUG
-        let evts = device_manager.create_events();
-        device_manager.record_event(request_streams, &evts);
-        timers.push(evts);
+        record_event_and_push!(device_manager, request_streams, &current_dot_event, timers);
         //// END DEBUG
 
         // BLOCK 2: calculate final dot product result, exchange and compare
         device_manager.await_event(request_streams, &current_exchange_event);
-        codes_engine.dot_reduce(&code_query_sums, &code_db_slices.1, request_streams);
-        masks_engine.dot_reduce(&mask_query_sums, &mask_db_slices.1, request_streams);
+        codes_engine.dot_reduce(
+            &code_query_sums,
+            &(
+                device_ptrs(&code_db_slices.1 .0),
+                device_ptrs(&code_db_slices.1 .1),
+            ),
+            request_streams,
+        );
+        masks_engine.dot_reduce(
+            &mask_query_sums,
+            &(
+                device_ptrs(&mask_db_slices.1 .0),
+                device_ptrs(&mask_db_slices.1 .1),
+            ),
+            request_streams,
+        );
 
         device_manager.record_event(request_streams, &next_dot_event);
 
         //// DEBUG
-        let evts = device_manager.create_events();
-        device_manager.record_event(request_streams, &evts);
-        timers.push(evts);
+        record_event_and_push!(device_manager, request_streams, &current_dot_event, timers);
         //// END DEBUG
 
         codes_engine.exchange_results(request_streams);
         masks_engine.exchange_results(request_streams);
 
         //// DEBUG
-        let evts = device_manager.create_events();
-        device_manager.record_event(request_streams, &evts);
-        timers.push(evts);
+        record_event_and_push!(device_manager, request_streams, &current_dot_event, timers);
         //// END DEBUG
 
         distance_comparator.reconstruct_and_compare(
             &codes_engine.results_peers,
             &masks_engine.results_peers,
             request_streams,
-            request_results
-                .iter()
-                .map(|r| *r.device_ptr())
-                .collect::<Vec<_>>(),
+            device_ptrs(request_results),
         );
 
         device_manager.record_event(request_streams, &next_exchange_event);
@@ -340,10 +376,7 @@ async fn main() -> eyre::Result<()> {
             .map(|s| s.stream as u64)
             .collect::<Vec<_>>();
         let tmp_devs = distance_comparator.devs.clone();
-        let tmp_results: Vec<u64> = request_results
-            .iter()
-            .map(|r| *r.device_ptr())
-            .collect::<Vec<_>>();
+        let tmp_results = device_ptrs(request_results);
         let tmp_evts = end_timer.iter().map(|e| *e as u64).collect::<Vec<_>>();
 
         tokio::spawn(async move {
