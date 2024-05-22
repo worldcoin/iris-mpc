@@ -133,8 +133,9 @@ fn open(
             assert!(corr1 == 0 || corr1 == 1);
             assert!(corr2 == 0 || corr2 == 1);
             let mut res = *res_a as u64 + res_b as u64 + res_c as u64;
-            res += P2K - P as u64 * corr1 as u64;
-            res += P2K - P as u64 * corr2 as u64;
+            // res += P2K - P as u64 * corr1 as u64;
+            // res += P2K - P as u64 * corr2 as u64;
+            assert!(res < P2K);
             *res_a = (res % P2K) as u32;
         }
         result.extend(res_a);
@@ -196,6 +197,13 @@ async fn main() -> eyre::Result<()> {
             if r != r_ {
                 correct = false;
                 println!("Test failed on index: {}: {} != {}", i, r, r_);
+                println!(
+                    "real: {}, got: {}, -P:  {} -2P : {}",
+                    r_,
+                    r,
+                    r - P as u32,
+                    r - P as u32 - P as u32
+                );
                 break;
             }
         }
