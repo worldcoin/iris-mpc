@@ -220,9 +220,9 @@ struct Buffers {
     u64_36c_1: Option<Vec<ChunkShare<u64>>>,
     u64_36c_2: Option<Vec<ChunkShare<u64>>>,
     u64_36c_3: Option<Vec<ChunkShare<u64>>>,
-    single_u16_128c_1: Option<Vec<CudaSlice<u32>>>,
-    single_u16_128c_2: Option<Vec<CudaSlice<u32>>>,
-    single_u16_128c_3: Option<Vec<CudaSlice<u32>>>,
+    single_u16_128c_1: Option<Vec<CudaSlice<u16>>>,
+    single_u16_128c_2: Option<Vec<CudaSlice<u16>>>,
+    single_u16_128c_3: Option<Vec<CudaSlice<u16>>>,
 }
 
 impl Buffers {
@@ -489,6 +489,20 @@ impl Circuits {
             block_dim: (t, 1, 1),
             shared_mem_bytes: 0,
         }
+    }
+
+    pub fn send_u16(&mut self, send: &CudaSlice<u16>, peer_id: usize, idx: usize) {
+        // We have to transmute since u16 is not sendable
+        let send_trans: CudaView<u8> = // the transmute_mut is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
+        unsafe { send.transmute(send.len() * 2).unwrap() };
+        self.send_view(&send_trans, peer_id, idx);
+    }
+
+    pub fn receive_u16(&mut self, receive: &mut CudaSlice<u16>, peer_id: usize, idx: usize) {
+        // We have to transmute since u16 is not receivable
+        let mut receive_trans: CudaView<u8> = // the transmute_mut is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
+        unsafe { receive.transmute(receive.len() * 2).unwrap() };
+        self.send_view(&mut receive_trans, peer_id, idx);
     }
 
     pub fn send_view<T>(&mut self, send: &CudaView<T>, peer_id: usize, idx: usize)
@@ -1016,8 +1030,8 @@ impl Circuits {
 
         result::group_start().unwrap();
         for (idx, (m0, m1)) in izip!(&m0, &m1).enumerate() {
-            self.send(m0, self.prev_id, idx);
-            self.send(m1, self.prev_id, idx);
+            self.send_u16(m0, self.prev_id, idx);
+            self.send_u16(m1, self.prev_id, idx);
         }
         result::group_end().unwrap();
 
@@ -1036,9 +1050,9 @@ impl Circuits {
 
         result::group_start().unwrap();
         for (idx, (m0, m1, wc)) in izip!(&mut m0, &mut m1, &mut wc).enumerate() {
-            self.receive(m0, self.next_id, idx);
-            self.receive(wc, self.prev_id, idx);
-            self.receive(m1, self.next_id, idx);
+            self.receive_u16(m0, self.next_id, idx);
+            self.receive_u16(wc, self.prev_id, idx);
+            self.receive_u16(m1, self.next_id, idx);
         }
         result::group_end().unwrap();
 
@@ -1081,10 +1095,7 @@ impl Circuits {
         // Reshare to Helper
         result::group_start().unwrap();
         for (idx, res) in outp.iter().enumerate() {
-            // We have to transmute since u16 is not sendable
-            let res_b_trans: CudaView<u8> = // the transmute_mut is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
-            unsafe { res.b.transmute(res.b.len() * 2).unwrap() };
-            self.send_view(&res_b_trans, self.prev_id, idx);
+            self.send_u16(&res.b, self.prev_id, idx);
         }
         result::group_end().unwrap();
 
@@ -1146,15 +1157,12 @@ impl Circuits {
 
         result::group_start().unwrap();
         for (idx, wc) in wc.iter().enumerate() {
-            self.send(wc, self.next_id, idx);
+            self.send_u16(wc, self.next_id, idx);
         }
         result::group_end().unwrap();
         result::group_start().unwrap();
         for (idx, res) in outp.iter_mut().enumerate() {
-            // We have to transmute since u16 is not receivable
-            let mut res_a_trans: CudaView<u8> = // the transmute_mut is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
-            unsafe { res.a.transmute(res.a.len() * 2).unwrap() };
-            self.receive_view(&mut res_a_trans, self.next_id, idx);
+            self.receive_u16(&mut res.a, self.next_id, idx);
         }
         result::group_end().unwrap();
 
