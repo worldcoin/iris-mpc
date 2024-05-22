@@ -89,12 +89,9 @@ fn open(party: &mut Circuits, x: &mut [ChunkShare<u16>]) -> Vec<u16> {
     for (idx, res) in x.iter().enumerate() {
         // Result is in bit 0
         party.send_u16(&res.b, party.next_id(), idx);
-        a.push(devices[idx].dtoh_sync_copy(&res.a).unwrap());
-        b.push(devices[idx].dtoh_sync_copy(&res.b).unwrap());
     }
     for (idx, res) in x.iter_mut().enumerate() {
         party.receive_u16(&mut res.a, party.prev_id(), idx);
-        c.push(devices[idx].dtoh_sync_copy(&res.a).unwrap());
     }
     cudarc::nccl::result::group_end().unwrap();
 
