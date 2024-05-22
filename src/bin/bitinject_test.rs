@@ -5,7 +5,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{env, sync::Arc};
 use tokio::time::{self, Instant};
 
-const INPUTS_PER_GPU_SIZE: usize = 2048;
+const INPUTS_PER_GPU_SIZE: usize = 2048 * 2;
 
 fn sample_bits<R: Rng>(size: usize, rng: &mut R) -> Vec<u64> {
     (0..size / 64).map(|_| rng.gen::<u64>()).collect::<Vec<_>>()
@@ -129,7 +129,7 @@ async fn main() -> eyre::Result<()> {
     println!("Random shared inputs generated!");
 
     // Get Circuit Party
-    let mut party = Circuits::new(party_id, INPUTS_PER_GPU_SIZE, url, Some(3001));
+    let mut party = Circuits::new(party_id, INPUTS_PER_GPU_SIZE / 2, url, Some(3001));
     let devices = party.get_devices();
 
     // Import to GPU
