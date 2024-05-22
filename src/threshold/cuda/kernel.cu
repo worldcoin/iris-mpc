@@ -209,7 +209,6 @@ __device__ void lift_mul_sub(U32 *mask, U16 *mask_corr1, U16 *mask_corr2,
   U32 a;
   mul_lift_b(&a, code);
   tmp *= A;
-  tmp %= P2K;
   tmp += P2K;
   tmp -= a;
   tmp %= P2K;
