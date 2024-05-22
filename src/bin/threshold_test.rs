@@ -103,7 +103,7 @@ fn real_result_msb(code_input: Vec<u16>, mask_input: Vec<u16>) -> Vec<u64> {
     let mut res = Vec::with_capacity(code_input.len());
     for (c, m) in code_input.into_iter().zip(mask_input) {
         let r = ((m as u64) * A as u64 + P2K - ((c as u64) << B_BITS)) % P2K;
-        let msb = r >> (B_BITS + 16 - 1) & 1 == 1;
+        let msb = (r >> (B_BITS + 16 - 1)) & 1 == 1;
         res.push(msb)
     }
     pack_with_device_padding(res)
