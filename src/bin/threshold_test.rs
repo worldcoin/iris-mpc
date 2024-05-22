@@ -200,7 +200,7 @@ async fn main() -> eyre::Result<()> {
             if r != r_ {
                 correct = false;
                 println!("Test failed on index: {}: {} != {}", i, r, r_);
-                break;
+                // break;
             }
         }
         if correct {
