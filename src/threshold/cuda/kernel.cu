@@ -6,7 +6,7 @@
 #define MATCH_THRESHOLD_RATIO 0.375
 #define B_BITS 16
 #define B (1ULL << B_BITS)
-#define A 16384
+#define A ((U16)((1. - 2. * MATCH_THRESHOLD_RATIO) * (double)B))
 #define P ((1ULL << 16) - 17)
 #define P2K (P << B_BITS)
 
