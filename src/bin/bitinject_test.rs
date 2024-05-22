@@ -42,8 +42,8 @@ fn to_gpu(a: &[u64], b: &[u64], devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<u
 
     for (dev, a, b) in izip!(
         devices,
-        a.chunks(INPUTS_PER_GPU_SIZE),
-        b.chunks(INPUTS_PER_GPU_SIZE)
+        a.chunks(INPUTS_PER_GPU_SIZE / 64),
+        b.chunks(INPUTS_PER_GPU_SIZE / 64)
     ) {
         let a_ = dev.htod_sync_copy(a).unwrap();
         let b_ = dev.htod_sync_copy(b).unwrap();
