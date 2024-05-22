@@ -97,7 +97,7 @@ fn open(party: &mut Circuits, x: &mut [ChunkShare<u16>]) -> Vec<u16> {
     let mut result = Vec::with_capacity(n_devices * INPUTS_PER_GPU_SIZE);
     for (mut a, b, c) in izip!(a, b, c) {
         for (a, b, c) in izip!(a.iter_mut(), b, c) {
-            *a ^= b ^ c;
+            *a += b + c;
         }
         result.extend(a);
     }
