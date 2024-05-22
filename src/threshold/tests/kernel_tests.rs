@@ -505,7 +505,7 @@ fn transpose_64x64_test_with_len<const L: usize>() {
     }
     const N: usize = SIZE / 64;
 
-    let cfg = launch_config_from_elements_and_threads(2 * N as u32, 512);
+    let cfg = launch_config_from_elements_and_threads(2 * N as u32, 64);
 
     // GPU
     let mut res_a_gpu = dev.alloc_zeros::<u64>(N * L).unwrap();
