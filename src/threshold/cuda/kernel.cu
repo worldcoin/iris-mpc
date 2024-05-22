@@ -7,8 +7,8 @@
 #define B_BITS 16
 #define B ((U32)(1ULL << B_BITS))
 #define A ((U16)((1. - 2. * MATCH_THRESHOLD_RATIO) * (double)B))
-#define P ((U16)((1ULL << 16) - 17))
-#define P2K ((U32)(P) << B_BITS)
+#define P ((U64)((1ULL << 16) - 17))
+#define P2K ((U64)(P) << B_BITS)
 
 ////////////////////////////////////////////////////////////////////////////////
 // Basic Blocks (not parallelized)
