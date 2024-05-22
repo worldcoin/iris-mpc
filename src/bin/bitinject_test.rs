@@ -68,7 +68,7 @@ fn real_result(input: Vec<u64>) -> Vec<u16> {
     let mut res = Vec::with_capacity(input.len() * 64);
     for i in input.into_iter() {
         for j in 0..64 {
-            res.push((1 - (i >> j) & 1) as u16)
+            res.push(1 - ((i >> j) & 1) as u16)
         }
     }
     res
