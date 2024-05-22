@@ -1189,7 +1189,7 @@ impl Circuits {
 
         self.split1(shares, xa, &mut xp, &mut xpp);
         self.transpose_pack_u32_with_len(&xp, &mut xp1, K);
-        self.transpose_pack_u32_with_len(&xpp, &mut xpp1, 18);
+        self.transpose_pack_u32_with_len(&xpp, &mut xpp1, K);
 
         self.split2(&mut xp1, &mut xp2, &mut xp3);
         self.split2(&mut xpp1, &mut xpp2, &mut xpp3);
