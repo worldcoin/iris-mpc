@@ -196,8 +196,8 @@ __device__ void lift_mul_sub(U32 *mask, U16 *mask_corr1, U16 *mask_corr2,
                              U16 *code) {
   U32 corr1;
   U32 corr2;
-  //   *mask_corr1 %= B;
-  //   *mask_corr2 %= B;
+  *mask_corr1 %= B;
+  *mask_corr2 %= B;
   mul_lift_p(&corr1, mask_corr1);
   mul_lift_p(&corr2, mask_corr2);
   U64 tmp = *mask;
