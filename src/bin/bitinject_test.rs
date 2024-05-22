@@ -67,7 +67,7 @@ fn alloc_res(size: usize, devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<u16>> {
 fn real_result(input: Vec<u64>) -> Vec<u16> {
     let mut res = Vec::with_capacity(input.len());
     for i in input.into_iter() {
-        for j in 0..64 {
+        for j in (0..64).rev() {
             res.push(((i >> j) & 1) as u16)
         }
     }
