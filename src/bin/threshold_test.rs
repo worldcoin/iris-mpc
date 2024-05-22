@@ -148,7 +148,6 @@ fn open(party: &mut Circuits, x: &[ChunkShare<u64>]) -> Vec<u64> {
 #[allow(clippy::assertions_on_constants)]
 #[tokio::main(worker_threads = 1)]
 async fn main() -> eyre::Result<()> {
-    println!("A: {}, B: {}", A, B);
     assert!(
         INPUTS_PER_GPU_SIZE % (2048) == 0,
         // Mod 16 for randomness, mod 64 for chunk size

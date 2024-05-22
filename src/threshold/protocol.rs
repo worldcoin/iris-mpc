@@ -959,31 +959,31 @@ impl Circuits {
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_ca = unsafe {
                 self.devs[idx]
-                    .alloc::<u16>(self.chunk_size * 2 * 64)
+                    .alloc_zeros::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
-            self.fill_my_rng_into_u16(&mut rand_ca, idx);
+            // self.fill_my_rng_into_u16(&mut rand_ca, idx);
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_cb = unsafe {
                 self.devs[idx]
-                    .alloc::<u16>(self.chunk_size * 2 * 64)
+                    .alloc_zeros::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
-            self.fill_their_rng_into_u16(&mut rand_cb, idx);
+            // self.fill_their_rng_into_u16(&mut rand_cb, idx);
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_wa1 = unsafe {
                 self.devs[idx]
-                    .alloc::<u16>(self.chunk_size * 2 * 64)
+                    .alloc_zeros::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
-            self.fill_my_rng_into_u16(&mut rand_wa1, idx);
+            // self.fill_my_rng_into_u16(&mut rand_wa1, idx);
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_wa2 = unsafe {
                 self.devs[idx]
-                    .alloc::<u16>(self.chunk_size * 2 * 64)
+                    .alloc_zeros::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
-            self.fill_my_rng_into_u16(&mut rand_wa2, idx);
+            // self.fill_my_rng_into_u16(&mut rand_wa2, idx);
 
             let cfg = Self::launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64 * 2,
@@ -1047,10 +1047,10 @@ impl Circuits {
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_ca = unsafe {
                 self.devs[idx]
-                    .alloc::<u16>(self.chunk_size * 2 * 64)
+                    .alloc_zeros::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
-            self.fill_my_rng_into_u16(&mut rand_ca, idx);
+            // self.fill_my_rng_into_u16(&mut rand_ca, idx);
 
             let cfg = Self::launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64 * 2,
@@ -1100,24 +1100,24 @@ impl Circuits {
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_cb = unsafe {
                 self.devs[idx]
-                    .alloc::<u16>(self.chunk_size * 2 * 64)
+                    .alloc_zeros::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
-            self.fill_their_rng_into_u16(&mut rand_cb, idx);
+            // self.fill_their_rng_into_u16(&mut rand_cb, idx);
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_wb1 = unsafe {
                 self.devs[idx]
-                    .alloc::<u16>(self.chunk_size * 2 * 64)
+                    .alloc_zeros::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
-            self.fill_their_rng_into_u16(&mut rand_wb1, idx);
+            // self.fill_their_rng_into_u16(&mut rand_wb1, idx);
             // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
             let mut rand_wb2 = unsafe {
                 self.devs[idx]
-                    .alloc::<u16>(self.chunk_size * 2 * 64)
+                    .alloc_zeros::<u16>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
-            self.fill_their_rng_into_u16(&mut rand_wb2, idx);
+            // self.fill_their_rng_into_u16(&mut rand_wb2, idx);
 
             let cfg = Self::launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64 * 2,
