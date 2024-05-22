@@ -16,8 +16,6 @@ use tokio::time::{self, Instant};
 const INPUTS_PER_GPU_SIZE: usize = 12_507_136;
 
 const B_BITS: u64 = 16;
-pub(crate) const B: u64 = 1 << B_BITS;
-pub(crate) const A: u16 = (((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64) as u16;
 const P2K: u64 = (P as u64) << B_BITS;
 
 fn sample_mask_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<u16> {
@@ -70,10 +68,7 @@ fn to_gpu(a: &[u16], b: &[u16], devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<u
 }
 
 fn real_result_msb(mask_input: Vec<u16>) -> Vec<u32> {
-    mask_input
-        .into_iter()
-        .map(|x| (x as u32) * A as u32)
-        .collect()
+    mask_input.into_iter().map(|x| (x as u32)).collect()
 }
 
 fn open(
