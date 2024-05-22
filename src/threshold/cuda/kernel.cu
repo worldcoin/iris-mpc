@@ -194,6 +194,9 @@ __device__ void u32_transpose_pack_u64(U64 *out_a, U64 *out_b, U32 *in_a,
 
 __device__ void lift_mul_sub(U32 *mask, U16 *mask_corr1, U16 *mask_corr2,
                              U16 *code) {
+  *mask = 0;
+  *mask_corr1 = 0;
+  *mask_corr2 = 0;
   U32 corr1;
   U32 corr2;
   *mask_corr1 %= B;
