@@ -153,7 +153,6 @@ async fn main() -> eyre::Result<()> {
 
     // Get inputs
     let code_dots = sample_dots(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);
-    println!("Input at 3740: {}", code_dots[3740]);
     let (code_share_a, code_share_b) = rep_share_vec_fp(&code_dots, party_id, &mut rng);
     let real_result = real_result_msb(code_dots);
     println!("Random shared inputs generated!");
@@ -192,11 +191,6 @@ async fn main() -> eyre::Result<()> {
             if r != r_ {
                 correct = false;
                 println!("Test failed on index: {}: {} != {}", i, r, r_);
-                println!(
-                    "xor: {}, trailing_zeros: {}",
-                    r ^ r_,
-                    (r ^ r_).trailing_zeros()
-                );
                 break;
             }
         }
