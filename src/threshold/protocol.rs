@@ -502,7 +502,7 @@ impl Circuits {
         // We have to transmute since u16 is not receivable
         let mut receive_trans: CudaView<u8> = // the transmute_mut is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
         unsafe { receive.transmute(receive.len() * 2).unwrap() };
-        self.send_view(&mut receive_trans, peer_id, idx);
+        self.receive_view(&mut receive_trans, peer_id, idx);
     }
 
     pub fn send_view<T>(&mut self, send: &CudaView<T>, peer_id: usize, idx: usize)
