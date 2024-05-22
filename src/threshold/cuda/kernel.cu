@@ -226,7 +226,7 @@ __device__ void split_msb_fp(U32 *x_a, U32 *x_b, U32 *x01, U32 *r, int id) {
     *x_a = 0;
     break;
   case 1:
-    *x01 = *r ^ (U32)((U64)(*x_a + *x_b) % P2K);
+    *x01 = *r ^ (U32)(((U64)(*x_a) + (U64)(*x_b)) % P2K);
     *x_a = 0;
     *x_b = 0;
     break;
