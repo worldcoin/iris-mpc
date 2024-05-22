@@ -14,7 +14,7 @@ fn sample_bits<R: Rng>(size: usize, rng: &mut R) -> Vec<u64> {
 fn rep_share<R: Rng>(value: u64, id: usize, rng: &mut R) -> (u64, u64) {
     let a = rng.next_u64();
     let b = rng.next_u64();
-    let c = value - a - b;
+    let c = value ^ a ^ b;
 
     match id {
         0 => (a, c),
