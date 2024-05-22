@@ -1137,7 +1137,7 @@ impl Circuits {
         Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_3, wc);
     }
 
-    fn bit_inject_neg_ot(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u32>]) {
+    pub fn bit_inject_neg_ot(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u32>]) {
         match self.peer_id {
             0 => self.bit_inject_neg_ot_helper(inp, outp),
             1 => self.bit_inject_neg_ot_receiver(inp, outp),
