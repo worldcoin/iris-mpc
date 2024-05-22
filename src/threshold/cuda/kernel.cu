@@ -5,10 +5,10 @@
 
 #define MATCH_THRESHOLD_RATIO 0.375
 #define B_BITS 16
-#define B (1ULL << B_BITS)
+#define B ((u32)(1ULL << B_BITS))
 #define A ((U16)((1. - 2. * MATCH_THRESHOLD_RATIO) * (double)B))
-#define P ((1ULL << 16) - 17)
-#define P2K (P << B_BITS)
+#define P ((u16)((1ULL << 16) - 17))
+#define P2K ((u32)(U32(P) << B_BITS))
 
 ////////////////////////////////////////////////////////////////////////////////
 // Basic Blocks (not parallelized)
