@@ -541,14 +541,14 @@ impl Circuits {
         .unwrap();
     }
 
-    fn send<T>(&mut self, send: &CudaSlice<T>, peer_id: usize, idx: usize)
+    pub fn send<T>(&mut self, send: &CudaSlice<T>, peer_id: usize, idx: usize)
     where
         T: cudarc::nccl::NcclType,
     {
         self.comms[idx].send(send, peer_id as i32).unwrap();
     }
 
-    fn receive<T>(&mut self, receive: &mut CudaSlice<T>, peer_id: usize, idx: usize)
+    pub fn receive<T>(&mut self, receive: &mut CudaSlice<T>, peer_id: usize, idx: usize)
     where
         T: cudarc::nccl::NcclType,
     {
@@ -1162,7 +1162,7 @@ impl Circuits {
 
     // input should be of size: n_devices * input_size
     // outputs the uncorrected lifted shares and the injected correction values
-    fn lift_p2k(
+    pub fn lift_p2k(
         &mut self,
         shares: Vec<ChunkShare<u16>>,
         xa: &mut [ChunkShare<u32>],

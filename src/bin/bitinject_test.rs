@@ -87,7 +87,6 @@ fn open(party: &mut Circuits, x: &mut [ChunkShare<u16>]) -> Vec<u16> {
     }
     cudarc::nccl::result::group_start().unwrap();
     for (idx, res) in x.iter().enumerate() {
-        // Result is in bit 0
         party.send_u16(&res.b, party.next_id(), idx);
     }
     for (idx, res) in x.iter_mut().enumerate() {
