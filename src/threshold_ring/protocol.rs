@@ -201,7 +201,6 @@ impl Kernels {
     }
 }
 
-// TODO check reusage
 struct Buffers {
     u64_64c_1: Option<Vec<ChunkShare<u64>>>,
     u64_36c_1: Option<Vec<ChunkShare<u64>>>,
