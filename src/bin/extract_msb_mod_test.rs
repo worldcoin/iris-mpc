@@ -168,15 +168,15 @@ async fn main() -> eyre::Result<()> {
         let correction = party.allocate_buffer::<u32>(INPUTS_PER_GPU_SIZE * 2);
         let code_gpu = code_gpu.clone();
 
-        let mut res = party.take_result_buffer();
         let now = Instant::now();
         party.lift_mul_sub(&mut x, &correction, code_gpu);
         println!("lift time: {:?}", now.elapsed());
-        // party.extract_msb_sum_mod(&x01, &x2, &mut res);
+        party.extract_msb(&mut x);
         party.synchronize_all();
         println!("extract time: {:?}", now.elapsed());
 
         let now = Instant::now();
+        let res = party.take_result_buffer();
         let result = open(&mut party, &res);
         party.return_result_buffer(res);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());

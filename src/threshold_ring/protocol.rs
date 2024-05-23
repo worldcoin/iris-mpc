@@ -386,13 +386,11 @@ impl Circuits {
     }
 
     pub fn take_result_buffer(&mut self) -> Vec<ChunkShare<u64>> {
-        todo!()
-        // Buffers::take_buffer(&mut self.buffers.u64_37c_1)
+        Buffers::take_buffer(&mut self.buffers.u64_36c_1)
     }
 
     pub fn return_result_buffer(&mut self, src: Vec<ChunkShare<u64>>) {
-        todo!()
-        // Buffers::return_buffer(&mut self.buffers.u64_37c_1, src);
+        Buffers::return_buffer(&mut self.buffers.u64_36c_1, src);
     }
 
     pub fn instantiate_network(
@@ -1411,14 +1409,14 @@ impl Circuits {
         Buffers::return_buffer(&mut self.buffers.u64_36c_3, buffer1);
     }
 
-    fn extract_msb(&mut self, c: &mut [ChunkShare<u64>], x: &mut [ChunkShare<u64>]) {
+    pub fn extract_msb(&mut self, x: &mut [ChunkShare<u64>]) {
         let mut x1 = Buffers::take_buffer(&mut self.buffers.u64_36c_1);
         let mut x2 = Buffers::take_buffer(&mut self.buffers.u64_36c_2);
         let mut x3 = Buffers::take_buffer(&mut self.buffers.u64_36c_3);
 
         self.transpose_pack_u64_with_len(x, &mut x1, Self::BITS);
         self.split(&mut x1, &mut x2, &mut x3, Self::BITS);
-        todo!();
+        self.binary_add_3_get_msb(&mut x1, &mut x2, &mut x3);
 
         Buffers::return_buffer(&mut self.buffers.u64_36c_1, x1);
         Buffers::return_buffer(&mut self.buffers.u64_36c_2, x2);
@@ -1426,11 +1424,12 @@ impl Circuits {
     }
 
     // K is Self::BITS = 16 + B_BITS in our case
+    // The result is located in the first bit of x1
     fn binary_add_3_get_msb(
         &mut self,
-        x1: &mut [ChunkShareView<u64>],
-        x2: &mut [ChunkShareView<u64>],
-        x3: &mut [ChunkShareView<u64>],
+        x1: &mut [ChunkShare<u64>],
+        x2: &mut [ChunkShare<u64>],
+        x3: &mut [ChunkShare<u64>],
     ) {
         debug_assert_eq!(self.n_devices, x1.len());
         debug_assert_eq!(self.n_devices, x2.len());
@@ -1440,11 +1439,12 @@ impl Circuits {
         let mut carry = Buffers::take_buffer(&mut self.buffers.u64_35c_2);
 
         for (idx, (x1, x2, x3, s, c)) in
-            izip!(x1, x2, x3.iter_mut(), &mut s, &mut carry).enumerate()
+            izip!(x1.iter_mut(), x2, x3.iter_mut(), &mut s, &mut carry).enumerate()
         {
             // First full adder to get 2 * c1 and s1
-            let x2x3 = x2;
-            self.packed_xor_assign_many(x2x3, x3, Self::BITS, idx);
+            let x3 = x3.as_view();
+            let mut x2x3 = x2.as_view();
+            self.packed_xor_assign_many(&mut x2x3, &x3, Self::BITS, idx);
             // Don't need first bit for s
             self.packed_xor_many(
                 &x1.get_range(self.chunk_size, Self::BITS * self.chunk_size),
@@ -1454,18 +1454,79 @@ impl Circuits {
                 idx,
             );
             // 2 * c1
-            let x1x3 = x1;
-            self.packed_xor_assign_many(x1x3, x3, Self::BITS - 1, idx);
-            self.packed_and_many_pre(x1x3, x2x3, &mut c.as_view(), Self::BITS - 1, idx);
+            let mut x1x3 = x1.as_view();
+            self.packed_xor_assign_many(&mut x1x3, &x3, Self::BITS - 1, idx);
+            self.packed_and_many_pre(&x1x3, &x2x3, &mut c.as_view(), Self::BITS - 1, idx);
         }
         // Send/Receive full adders
         self.packed_send_receive(&mut carry, Self::BITS - 1);
         // Postprocess xor
         for (idx, (c, x3)) in izip!(&mut carry, x3).enumerate() {
-            self.packed_xor_assign_many(&mut c.as_view(), x3, Self::BITS - 1, idx);
+            self.packed_xor_assign_many(&mut c.as_view(), &x3.as_view(), Self::BITS - 1, idx);
         }
 
-        todo!()
+        // Add 2c + s via a ripple carry adder
+        // LSB of c is 0
+        // First round: half adder can be skipped due to LSB of c being 0
+        let mut a = s;
+        let mut b = carry;
+
+        // The first part of x1 is used as the carry and the result
+        let mut carry = Vec::with_capacity(self.n_devices);
+
+        // First full adder (carry is 0)
+        for (idx, (a, b, c)) in izip!(&a, &b, x1.iter_mut()).enumerate() {
+            let mut c = c.get_offset(0, self.chunk_size);
+            let a = a.get_offset(0, self.chunk_size);
+            let b = b.get_offset(0, self.chunk_size);
+            self.and_many_pre(&a, &b, &mut c, idx);
+            carry.push(c);
+        }
+        // Send/Receive
+        self.send_receive_view(&mut carry);
+
+        for k in 1..Self::BITS - 2 {
+            for (idx, (a, b, c)) in izip!(&mut a, &mut b, carry.iter_mut()).enumerate() {
+                // Unused space used for temparary storage
+                let mut tmp_c = a.get_offset(0, self.chunk_size);
+
+                let mut a = a.get_offset(k, self.chunk_size);
+                let mut b = b.get_offset(k, self.chunk_size);
+
+                self.xor_assign_many(&mut a, c, idx);
+                self.xor_assign_many(&mut b, c, idx);
+                self.and_many_pre(&a, &b, &mut tmp_c, idx);
+            }
+            // Send/Receive
+            result::group_start().unwrap();
+            for (idx, a) in a.iter().enumerate() {
+                // Unused space used for temparary storage
+                let tmp_c = a.get_offset(0, self.chunk_size);
+                self.send_view(&tmp_c.a, self.next_id, idx);
+            }
+            for (idx, a) in a.iter_mut().enumerate() {
+                // Unused space used for temparary storage
+                let mut tmp_c = a.get_offset(0, self.chunk_size);
+                self.receive_view(&mut tmp_c.b, self.prev_id, idx);
+            }
+            result::group_end().unwrap();
+            // Postprocess xor
+            for (idx, (c, a)) in izip!(carry.iter_mut(), &a).enumerate() {
+                // Unused space used for temparary storage
+                let tmp_c = a.get_offset(0, self.chunk_size);
+                self.xor_assign_many(c, &tmp_c, idx);
+            }
+        }
+
+        //Las round: just caclculate the output
+        for (idx, (a, b, c)) in izip!(a, b, &mut carry).enumerate() {
+            let a = a.get_offset(Self::BITS - 1, self.chunk_size);
+            let b = a.get_offset(Self::BITS - 1, self.chunk_size);
+            self.xor_assign_many(c, &a, idx);
+            self.xor_assign_many(c, &b, idx);
+        }
+
+        // Result is in the first bit of x1
     }
 
     // Input has size ChunkSize
@@ -1628,7 +1689,7 @@ impl Circuits {
     }
 
     // input should be of size: n_devices * input_size
-    // Result is in the first bit of res u64_37c_1
+    // Result is in the first bit of res u64_36c_1
     pub fn compare_threshold_masked_many(
         &mut self,
         code_dots: Vec<ChunkShare<u16>>,
@@ -1644,15 +1705,15 @@ impl Circuits {
         self.lift_mul_sub(&mut x, &corrections, code_dots);
         todo!();
 
-        // let mut res = Buffers::take_buffer(&mut self.buffers.u64_37c_1);
+        // let mut res = Buffers::take_buffer(&mut self.buffers.u64_36c_1);
         // self.extract_msb_sum_mod(&x01, &x2, &mut res);
 
         Buffers::return_buffer(&mut self.buffers.u64_64c_1, x);
         Buffers::return_buffer(&mut self.buffers.u32_128c_1, corrections);
-        // Buffers::return_buffer(&mut self.buffers.u64_37c_1, res);
+        // Buffers::return_buffer(&mut self.buffers.u64_36c_1, res);
         // self.buffers.check_buffers();
 
-        // Result is in the first bit of res u64_37c_1
+        // Result is in the first bit of res u64_36c_1
     }
 
     // input should be of size: n_devices * input_size
