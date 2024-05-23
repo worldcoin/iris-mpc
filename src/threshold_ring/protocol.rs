@@ -198,7 +198,10 @@ impl Kernels {
     }
 }
 
+// TODO check namings
 struct Buffers {
+    u64_64c_1: Option<Vec<ChunkShare<u64>>>,
+    u32_128c_1: Option<Vec<ChunkShare<u32>>>,
     single_u32_128c_1: Option<Vec<CudaSlice<u32>>>,
     single_u32_128c_2: Option<Vec<CudaSlice<u32>>>,
     single_u32_128c_3: Option<Vec<CudaSlice<u32>>>,
@@ -206,11 +209,17 @@ struct Buffers {
 
 impl Buffers {
     fn new(devices: &[Arc<CudaDevice>], chunk_size: usize) -> Self {
+        let u64_64c_1 = Some(Self::allocate_buffer(chunk_size * 64, devices));
+
+        let u32_128c_1 = Some(Self::allocate_buffer(chunk_size * 128, devices));
+
         let single_u32_128c_1 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
         let single_u32_128c_2 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
         let single_u32_128c_3 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
 
         Buffers {
+            u64_64c_1,
+            u32_128c_1,
             single_u32_128c_1,
             single_u32_128c_2,
             single_u32_128c_3,
@@ -264,6 +273,8 @@ impl Buffers {
     }
 
     fn check_buffers(&self) {
+        debug_assert!(self.u64_64c_1.is_some());
+        debug_assert!(self.u32_128c_1.is_some());
         debug_assert!(self.single_u32_128c_1.is_some());
         debug_assert!(self.single_u32_128c_2.is_some());
         debug_assert!(self.single_u32_128c_3.is_some());
@@ -1063,6 +1074,17 @@ impl Circuits {
         }
     }
 
+    // input should be of size: n_devices * input_size
+    // outputs the uncorrected lifted shares and the injected correction values
+    pub fn lift_mpc(
+        &mut self,
+        shares: Vec<ChunkShare<u16>>,
+        xa: &mut [ChunkShare<u64>],
+        injected: &mut [ChunkShare<u32>],
+    ) {
+        todo!()
+    }
+
     // Input has size ChunkSize
     // Result is in lowest u64 of the input
     fn or_tree_on_gpus(&mut self, bits: &mut [ChunkShareView<u64>]) {
@@ -1229,22 +1251,22 @@ impl Circuits {
         code_dots: Vec<ChunkShare<u16>>,
         mask_dots: Vec<ChunkShare<u16>>,
     ) {
-        // debug_assert_eq!(self.n_devices, code_dots.len());
-        // debug_assert_eq!(self.n_devices, mask_dots.len());
+        debug_assert_eq!(self.n_devices, code_dots.len());
+        debug_assert_eq!(self.n_devices, mask_dots.len());
 
-        // let mut x2 = Buffers::take_buffer(&mut self.buffers.u64_64c_1);
+        let mut x2 = Buffers::take_buffer(&mut self.buffers.u64_64c_1);
         // let mut x01 = Buffers::take_buffer(&mut self.buffers.u64_64c_2);
-        // let mut corrections = Buffers::take_buffer(&mut self.buffers.u32_128c_1);
+        let mut corrections = Buffers::take_buffer(&mut self.buffers.u32_128c_1);
 
-        // self.lift_p2k(mask_dots, &mut x2, &mut corrections);
+        self.lift_mpc(mask_dots, &mut x2, &mut corrections);
         // self.lift_mul_sub_split(&mut x2, &corrections, &mut x01, code_dots);
 
         // let mut res = Buffers::take_buffer(&mut self.buffers.u64_37c_1);
         // self.extract_msb_sum_mod(&x01, &x2, &mut res);
 
-        // Buffers::return_buffer(&mut self.buffers.u64_64c_1, x2);
+        Buffers::return_buffer(&mut self.buffers.u64_64c_1, x2);
         // Buffers::return_buffer(&mut self.buffers.u64_64c_2, x01);
-        // Buffers::return_buffer(&mut self.buffers.u32_128c_1, corrections);
+        Buffers::return_buffer(&mut self.buffers.u32_128c_1, corrections);
         // Buffers::return_buffer(&mut self.buffers.u64_37c_1, res);
         // self.buffers.check_buffers();
 
