@@ -143,9 +143,10 @@ async fn main() -> eyre::Result<()> {
 
     for _ in 0..10 {
         let code_gpu = code_gpu.clone();
+        let code_gpu_view = code_gpu.iter().map(|x| x.as_view()).collect::<Vec<_>>();
 
         let now = Instant::now();
-        party.bit_inject_ot(&code_gpu, &mut res);
+        party.bit_inject_ot(&code_gpu_view, &mut res);
         party.synchronize_all();
         println!("compute time: {:?}", now.elapsed());
 
