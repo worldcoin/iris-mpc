@@ -1426,8 +1426,8 @@ impl Circuits {
 
         //Las round: just caclculate the output
         for (idx, (a, b, c)) in izip!(&a, &b, &mut carry).enumerate() {
-            let a = a.get_offset(Self::BITS - 1, self.chunk_size);
-            let b = b.get_offset(Self::BITS - 1, self.chunk_size);
+            let a = a.get_offset(Self::BITS - 2, self.chunk_size);
+            let b = b.get_offset(Self::BITS - 2, self.chunk_size);
             self.xor_assign_many(c, &a, idx);
             self.xor_assign_many(c, &b, idx);
         }
