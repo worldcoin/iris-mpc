@@ -1203,9 +1203,11 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, x3.len());
 
         let mut s = Buffers::take_buffer(&mut self.buffers.u64_15c_1);
-        let mut c = Buffers::take_buffer(&mut self.buffers.u64_16c_4);
+        let mut carry = Buffers::take_buffer(&mut self.buffers.u64_16c_4);
 
-        for (idx, (x1, x2, x3, s, c)) in izip!(x1, x2, x3.iter_mut(), &mut s, &mut c).enumerate() {
+        for (idx, (x1, x2, x3, s, c)) in
+            izip!(x1, x2, x3.iter_mut(), &mut s, &mut carry).enumerate()
+        {
             // First full adder to get 2 * c1 and s1
             let mut x2x3 = x2.as_view();
             self.packed_xor_assign_many(&mut x2x3, &x3.as_view(), K, idx);
@@ -1222,14 +1224,70 @@ impl Circuits {
             self.packed_xor_assign_many(&mut x1x3, &x3.as_view(), K, idx);
             self.packed_and_many_pre(&x1x3, &x2x3, &mut c.as_view_mut(), K, idx);
         }
-
         // Send/Receive full adders
-        self.packed_send_receive(&mut c, K);
+        self.packed_send_receive(&mut carry, K);
+        // Postprocess xor
+        for (idx, (c, x3)) in izip!(&mut carry, x3).enumerate() {
+            self.packed_xor_assign_many(&mut c.as_view(), &x3.as_view(), K, idx);
+        }
+
+        // Add 2c + s via a ripple carry adder
+        // LSB of c is 0
+        // First round: half adder can be skipped due to LSB of c being 0
+        let mut a = s;
+        let mut b = carry;
+
+        // The first part of the result is used as the carry
+        let mut carry = Vec::with_capacity(self.n_devices);
+
+        // First full adder (carry is 0)
+        for (idx, (a, b, c)) in izip!(&a, &b, c.iter_mut()).enumerate() {
+            let mut c = c.get_offset(0, self.chunk_size);
+            let a = a.get_offset(0, self.chunk_size);
+            let b = b.get_offset(0, self.chunk_size);
+            self.and_many_pre(&a, &b, &mut c, idx);
+            carry.push(c);
+        }
+        // Send/Receive
+        self.send_receive_view(&mut carry);
+
+        for k in 1..K - 1 {
+            for (idx, (a, b, c)) in izip!(&mut a, &mut b, carry.iter_mut()).enumerate() {
+                // Unused space used for temparary storage
+                let mut tmp_c = a.get_offset(0, self.chunk_size);
+
+                let mut a = a.get_offset(k, self.chunk_size);
+                let mut b = b.get_offset(k, self.chunk_size);
+
+                self.xor_assign_many(&mut a, c, idx);
+                self.xor_assign_many(&mut b, c, idx);
+                self.and_many_pre(&a, &b, &mut tmp_c, idx);
+            }
+            // Send/Receive
+            result::group_start().unwrap();
+            for (idx, a) in a.iter().enumerate() {
+                // Unused space used for temparary storage
+                let tmp_c = a.get_offset(0, self.chunk_size);
+                self.send_view(&tmp_c.a, self.next_id, idx);
+            }
+            for (idx, a) in a.iter_mut().enumerate() {
+                // Unused space used for temparary storage
+                let mut tmp_c = a.get_offset(0, self.chunk_size);
+                self.receive_view(&mut tmp_c.b, self.prev_id, idx);
+            }
+            result::group_end().unwrap();
+            // Postprocess xor
+            for (idx, (c, a)) in izip!(carry.iter_mut(), &a).enumerate() {
+                // Unused space used for temparary storage
+                let tmp_c = a.get_offset(0, self.chunk_size);
+                self.xor_assign_many(c, &tmp_c, idx);
+            }
+        }
 
         todo!();
 
-        Buffers::return_buffer(&mut self.buffers.u64_15c_1, s);
-        Buffers::return_buffer(&mut self.buffers.u64_16c_4, c);
+        Buffers::return_buffer(&mut self.buffers.u64_15c_1, a);
+        Buffers::return_buffer(&mut self.buffers.u64_16c_4, b);
     }
 
     // Input has size ChunkSize
