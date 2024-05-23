@@ -969,6 +969,8 @@ impl Circuits {
         for (idx, wc) in wc.iter().enumerate() {
             self.send_u16(wc, self.next_id, idx);
         }
+        result::group_end().unwrap();
+        result::group_start().unwrap();
         for (idx, res) in outp.iter_mut().enumerate() {
             self.receive_u16(&mut res.a, self.next_id, idx);
         }
