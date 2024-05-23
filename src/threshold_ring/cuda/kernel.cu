@@ -199,6 +199,38 @@ __device__ void lift_mul_sub(U64 *mask, U32 *mask_corr1, U32 *mask_corr2,
   *mask -= a;
 }
 
+__device__ void split_inner(U64 *x1_a, U64 *x1_b, U64 *x2_a, U64 *x2_b,
+                            U64 *x3_a, U64 *x3_b, int id) {
+  U64 tmp_a = *x1_a;
+  U64 tmp_b = *x1_b;
+  switch (id) {
+  case 0:
+    *x1_a = tmp_a;
+    *x1_b = 0;
+    *x2_a = 0;
+    *x2_b = 0;
+    *x3_a = 0;
+    *x3_b = tmp_b;
+    break;
+  case 1:
+    *x1_a = 0;
+    *x1_b = tmp_b;
+    *x2_a = tmp_a;
+    *x2_b = 0;
+    *x3_a = 0;
+    *x3_b = 0;
+    break;
+  case 2:
+    *x1_a = 0;
+    *x1_b = 0;
+    *x2_a = 0;
+    *x2_b = tmp_b;
+    *x3_a = tmp_a;
+    *x3_b = 0;
+    break;
+  }
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // Test kernels
 ////////////////////////////////////////////////////////////////////////////////
@@ -369,34 +401,7 @@ extern "C" __global__ void split(U64 *x1_a, U64 *x1_b, U64 *x2_a, U64 *x2_b,
                                  U64 *x3_a, U64 *x3_b, int n, int id) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
-    U64 tmp_a = x1_a[i];
-    U64 tmp_b = x1_b[i];
-    switch (id) {
-    case 0:
-      x1_a[i] = tmp_a;
-      x1_b[i] = 0;
-      x2_a[i] = 0;
-      x2_b[i] = 0;
-      x3_a[i] = 0;
-      x3_b[i] = tmp_b;
-      break;
-    case 1:
-      x1_a[i] = 0;
-      x1_b[i] = tmp_b;
-      x2_a[i] = tmp_a;
-      x2_b[i] = 0;
-      x3_a[i] = 0;
-      x3_b[i] = 0;
-      break;
-    case 2:
-      x1_a[i] = 0;
-      x1_b[i] = 0;
-      x2_a[i] = 0;
-      x2_b[i] = tmp_b;
-      x3_a[i] = tmp_a;
-      x3_b[i] = 0;
-      break;
-    }
+    split_inner(&x1_a[i], &x1_b[i], &x2_a[i], &x2_b[i], &x3_a[i], &x3_b[i], id)
   }
 }
 
@@ -409,7 +414,9 @@ extern "C" __global__ void lift_split(U16 *in_a, U16 *in_b, U64 *lifted_a,
     lifted_a[i] = (U64)(in_a[i]);
     lifted_b[i] = (U64)(in_b[i]);
   }
-  split(x1_a, x1_b, x2_a, x2_b, x3_a, x3_b, 16 * chunk_size, id);
+  if (i < 16 * chunk_size) {
+    split_inner(&x1_a[i], &x1_b[i], &x2_a[i], &x2_b[i], &x3_a[i], &x3_b[i], id)
+  }
 }
 
 // Puts the results into mask_a, mask_b and x01

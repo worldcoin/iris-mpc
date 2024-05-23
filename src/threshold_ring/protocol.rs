@@ -1243,7 +1243,6 @@ impl Circuits {
         let mut c = Vec::with_capacity(self.n_devices);
         let buffer1 = Buffers::take_buffer(&mut self.buffers.u64_36c_1);
         let buffer2 = Buffers::take_buffer(&mut self.buffers.u64_36c_2);
-        // let mut c = Buffers::take_buffer(&mut self.buffers.u64_2c_1);
         for (b1, b2) in izip!(&buffer1, &buffer2) {
             let a = b1.get_offset(0, K * self.chunk_size);
             let b = b1.get_offset(1, K * self.chunk_size);
