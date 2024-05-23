@@ -127,7 +127,7 @@ struct Kernels {
     pub(crate) split: CudaFunction,
     pub(crate) lift_split: CudaFunction,
     pub(crate) lift_mul_sub: CudaFunction,
-    pub(crate) transpose_64x64: CudaFunction,
+    pub(crate) transpose_32x64: CudaFunction,
     pub(crate) transpose_16x64: CudaFunction,
     pub(crate) ot_sender: CudaFunction,
     pub(crate) ot_receiver: CudaFunction,
@@ -151,7 +151,7 @@ impl Kernels {
                 "split",
                 "lift_split",
                 "shared_lift_mul_sub",
-                "shared_u64_transpose_pack_u64",
+                "shared_u32_transpose_pack_u64",
                 "shared_u16_transpose_pack_u64",
                 "packed_ot_sender",
                 "packed_ot_receiver",
@@ -170,8 +170,8 @@ impl Kernels {
         let split = dev.get_func(Self::MOD_NAME, "split").unwrap();
         let lift_split = dev.get_func(Self::MOD_NAME, "lift_split").unwrap();
         let lift_mul_sub = dev.get_func(Self::MOD_NAME, "shared_lift_mul_sub").unwrap();
-        let transpose_64x64 = dev
-            .get_func(Self::MOD_NAME, "shared_u64_transpose_pack_u64")
+        let transpose_32x64 = dev
+            .get_func(Self::MOD_NAME, "shared_u32_transpose_pack_u64")
             .unwrap();
         let transpose_16x64 = dev
             .get_func(Self::MOD_NAME, "shared_u16_transpose_pack_u64")
@@ -190,7 +190,7 @@ impl Kernels {
             split,
             lift_split,
             lift_mul_sub,
-            transpose_64x64,
+            transpose_32x64,
             transpose_16x64,
             ot_sender,
             ot_receiver,
@@ -1006,9 +1006,9 @@ impl Circuits {
         }
     }
 
-    fn transpose_pack_u64_with_len(
+    fn transpose_pack_u32_with_len(
         &mut self,
-        inp: &[ChunkShare<u64>],
+        inp: &[ChunkShare<u32>],
         outp: &mut [ChunkShare<u64>],
         bitlen: usize,
     ) {
@@ -1023,7 +1023,7 @@ impl Circuits {
         for (idx, (inp, outp)) in izip!(inp, outp).enumerate() {
             unsafe {
                 self.kernels[idx]
-                    .transpose_64x64
+                    .transpose_32x64
                     .clone()
                     .launch(
                         cfg,
@@ -1321,7 +1321,7 @@ impl Circuits {
         let mut x2 = Buffers::take_buffer(&mut self.buffers.u64_32c_2);
         let mut x3 = Buffers::take_buffer(&mut self.buffers.u64_32c_3);
 
-        self.transpose_pack_u64_with_len(x, &mut x1, Self::BITS);
+        self.transpose_pack_u32_with_len(x, &mut x1, Self::BITS);
         self.split(&mut x1, &mut x2, &mut x3, Self::BITS);
         self.binary_add_3_get_msb(&mut x1, &mut x2, &mut x3);
 
