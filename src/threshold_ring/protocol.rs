@@ -124,8 +124,6 @@ struct Kernels {
     pub(crate) or_assign: CudaFunction,
     pub(crate) xor: CudaFunction,
     pub(crate) xor_assign: CudaFunction,
-    pub(crate) not_inplace: CudaFunction,
-    pub(crate) not: CudaFunction,
     pub(crate) split: CudaFunction,
     pub(crate) lift_split: CudaFunction,
     pub(crate) lift_mul_sub: CudaFunction,
@@ -150,8 +148,6 @@ impl Kernels {
                 "shared_xor_assign",
                 "shared_and_pre",
                 "shared_or_pre_assign",
-                "shared_not_inplace",
-                "shared_not",
                 "split",
                 "lift_split",
                 "shared_lift_mul_sub",
@@ -171,8 +167,6 @@ impl Kernels {
             .unwrap();
         let xor = dev.get_func(Self::MOD_NAME, "shared_xor").unwrap();
         let xor_assign = dev.get_func(Self::MOD_NAME, "shared_xor_assign").unwrap();
-        let not_inplace = dev.get_func(Self::MOD_NAME, "shared_not_inplace").unwrap();
-        let not = dev.get_func(Self::MOD_NAME, "shared_not").unwrap();
         let split = dev.get_func(Self::MOD_NAME, "split").unwrap();
         let lift_split = dev.get_func(Self::MOD_NAME, "lift_split").unwrap();
         let lift_mul_sub = dev.get_func(Self::MOD_NAME, "shared_lift_mul_sub").unwrap();
@@ -193,8 +187,6 @@ impl Kernels {
             or_assign,
             xor,
             xor_assign,
-            not_inplace,
-            not,
             split,
             lift_split,
             lift_mul_sub,
@@ -667,23 +659,10 @@ impl Circuits {
 
         result::group_start().unwrap();
         for (idx, res) in res.iter().enumerate() {
-            self.packed_and_many_send(&res, bits, idx);
+            self.packed_and_many_send(res, bits, idx);
         }
         for (idx, res) in res.iter_mut().enumerate() {
             self.packed_and_many_receive(res, bits, idx);
-        }
-        result::group_end().unwrap();
-    }
-
-    fn send_receive(&mut self, res: &mut [ChunkShare<u64>]) {
-        debug_assert_eq!(res.len(), self.n_devices);
-
-        result::group_start().unwrap();
-        for (idx, res) in res.iter().enumerate() {
-            self.send(&res.a, self.next_id, idx);
-        }
-        for (idx, res) in res.iter_mut().enumerate() {
-            self.receive(&mut res.b, self.prev_id, idx);
         }
         result::group_end().unwrap();
     }
@@ -772,83 +751,11 @@ impl Circuits {
         }
     }
 
-    fn xor_many(
-        &self,
-        x1: &ChunkShareView<u64>,
-        x2: &ChunkShareView<u64>,
-        res: &mut ChunkShareView<u64>,
-        idx: usize,
-    ) {
-        let cfg = Self::launch_config_from_elements_and_threads(
-            self.chunk_size as u32,
-            DEFAULT_LAUNCH_CONFIG_THREADS,
-        );
-
-        unsafe {
-            self.kernels[idx]
-                .xor
-                .clone()
-                .launch(
-                    cfg,
-                    (
-                        &res.a,
-                        &res.b,
-                        &x1.a,
-                        &x1.b,
-                        &x2.a,
-                        &x2.b,
-                        self.chunk_size as i32,
-                    ),
-                )
-                .unwrap();
-        }
-    }
-
-    fn not_many(&self, x: &ChunkShareView<u64>, res: &mut ChunkShareView<u64>, idx: usize) {
-        let cfg = Self::launch_config_from_elements_and_threads(
-            self.chunk_size as u32,
-            DEFAULT_LAUNCH_CONFIG_THREADS,
-        );
-
-        unsafe {
-            self.kernels[idx]
-                .not
-                .clone()
-                .launch(cfg, (&res.a, &res.b, &x.a, &x.b, self.chunk_size as i32))
-                .unwrap();
-        }
-    }
-
-    fn not_inplace_many(&self, x: &mut ChunkShareView<u64>, idx: usize) {
-        let cfg = Self::launch_config_from_elements_and_threads(
-            self.chunk_size as u32,
-            DEFAULT_LAUNCH_CONFIG_THREADS,
-        );
-
-        unsafe {
-            self.kernels[idx]
-                .not_inplace
-                .clone()
-                .launch(cfg, (&x.a, &x.b, self.chunk_size as i32))
-                .unwrap();
-        }
-    }
-
     pub fn allocate_buffer<T>(&self, size: usize) -> Vec<ChunkShare<T>>
     where
         T: cudarc::driver::ValidAsZeroBits + cudarc::driver::DeviceRepr,
     {
         Buffers::allocate_buffer(size, &self.devs)
-    }
-
-    fn ceil_log2(x: usize) -> usize {
-        let mut y = 0;
-        let mut x = x - 1;
-        while x > 0 {
-            x >>= 1;
-            y += 1;
-        }
-        y
     }
 
     fn bit_inject_ot_sender(&mut self, inp: &[ChunkShareView<u64>], outp: &mut [ChunkShare<u32>]) {
@@ -1521,7 +1428,7 @@ impl Circuits {
         //Las round: just caclculate the output
         for (idx, (a, b, c)) in izip!(a, b, &mut carry).enumerate() {
             let a = a.get_offset(Self::BITS - 1, self.chunk_size);
-            let b = a.get_offset(Self::BITS - 1, self.chunk_size);
+            let b = b.get_offset(Self::BITS - 1, self.chunk_size);
             self.xor_assign_many(c, &a, idx);
             self.xor_assign_many(c, &b, idx);
         }
@@ -1689,7 +1596,7 @@ impl Circuits {
     }
 
     // input should be of size: n_devices * input_size
-    // Result is in the first bit of res u64_36c_1
+    // Result is in the first bit of the result buffer
     pub fn compare_threshold_masked_many(
         &mut self,
         code_dots: Vec<ChunkShare<u16>>,
@@ -1703,17 +1610,13 @@ impl Circuits {
 
         self.lift_mpc(mask_dots, &mut x, &mut corrections);
         self.lift_mul_sub(&mut x, &corrections, code_dots);
-        todo!();
-
-        // let mut res = Buffers::take_buffer(&mut self.buffers.u64_36c_1);
-        // self.extract_msb_sum_mod(&x01, &x2, &mut res);
+        self.extract_msb(&mut x);
 
         Buffers::return_buffer(&mut self.buffers.u64_64c_1, x);
         Buffers::return_buffer(&mut self.buffers.u32_128c_1, corrections);
-        // Buffers::return_buffer(&mut self.buffers.u64_36c_1, res);
-        // self.buffers.check_buffers();
+        self.buffers.check_buffers();
 
-        // Result is in the first bit of res u64_36c_1
+        // Result is in the first bit of the result buffer
     }
 
     // input should be of size: n_devices * input_size
