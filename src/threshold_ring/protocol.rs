@@ -1,6 +1,5 @@
 use crate::{
-    http_root, rng::chacha_corr::ChaChaCudaCorrRng, setup::shamir::P,
-    threshold_ring::cuda::PTX_SRC, IdWrapper,
+    http_root, rng::chacha_corr::ChaChaCudaCorrRng, threshold_ring::cuda::PTX_SRC, IdWrapper,
 };
 use axum::{routing::get, Router};
 use cudarc::{
@@ -21,7 +20,6 @@ use std::{
 };
 
 pub(crate) const B_BITS: usize = 20;
-pub(crate) const P2K: u64 = (P as u64) << B_BITS;
 
 const DEFAULT_LAUNCH_CONFIG_THREADS: u32 = 64;
 
@@ -202,12 +200,15 @@ impl Kernels {
     }
 }
 
-// TODO check namings
+// TODO check reusage
 struct Buffers {
     u64_64c_1: Option<Vec<ChunkShare<u64>>>,
     u64_16c_2: Option<Vec<ChunkShare<u64>>>,
     u64_16c_3: Option<Vec<ChunkShare<u64>>>,
+    u64_16c_4: Option<Vec<ChunkShare<u64>>>,
+    u64_16c_5: Option<Vec<ChunkShare<u64>>>,
     u64_16c_1: Option<Vec<ChunkShare<u64>>>,
+    u64_2c_1: Option<Vec<ChunkShare<u64>>>,
     u32_128c_1: Option<Vec<ChunkShare<u32>>>,
     single_u32_128c_1: Option<Vec<CudaSlice<u32>>>,
     single_u32_128c_2: Option<Vec<CudaSlice<u32>>>,
@@ -220,6 +221,10 @@ impl Buffers {
         let u64_16c_1 = Some(Self::allocate_buffer(chunk_size * 16, devices));
         let u64_16c_2 = Some(Self::allocate_buffer(chunk_size * 16, devices));
         let u64_16c_3 = Some(Self::allocate_buffer(chunk_size * 16, devices));
+        let u64_16c_4 = Some(Self::allocate_buffer(chunk_size * 16, devices));
+        let u64_16c_5 = Some(Self::allocate_buffer(chunk_size * 16, devices));
+
+        let u64_2c_1 = Some(Self::allocate_buffer(chunk_size * 2, devices));
 
         let u32_128c_1 = Some(Self::allocate_buffer(chunk_size * 128, devices));
 
@@ -232,6 +237,9 @@ impl Buffers {
             u64_16c_1,
             u64_16c_2,
             u64_16c_3,
+            u64_16c_4,
+            u64_16c_5,
+            u64_2c_1,
             u32_128c_1,
             single_u32_128c_1,
             single_u32_128c_2,
@@ -290,6 +298,9 @@ impl Buffers {
         debug_assert!(self.u64_16c_1.is_some());
         debug_assert!(self.u64_16c_2.is_some());
         debug_assert!(self.u64_16c_3.is_some());
+        debug_assert!(self.u64_16c_4.is_some());
+        debug_assert!(self.u64_16c_5.is_some());
+        debug_assert!(self.u64_2c_1.is_some());
         debug_assert!(self.u32_128c_1.is_some());
         debug_assert!(self.single_u32_128c_1.is_some());
         debug_assert!(self.single_u32_128c_2.is_some());
@@ -311,7 +322,7 @@ pub struct Circuits {
 }
 
 impl Circuits {
-    const BITS: usize = 16 + B_BITS as usize;
+    const BITS: usize = 16 + B_BITS;
 
     pub fn synchronize_all(&self) {
         for dev in self.devs.iter() {
@@ -329,8 +340,6 @@ impl Circuits {
         debug_assert!(input_size % 64 == 0);
         // Chunk size is the number of u64 elements per bit in the binary circuits
         let chunk_size = input_size / 64;
-
-        debug_assert_eq!(Self::ceil_log2(P2K as usize), Self::BITS);
         let n_devices = CudaDevice::count().unwrap() as usize;
 
         let mut devs = Vec::with_capacity(n_devices);
@@ -371,13 +380,15 @@ impl Circuits {
         }
     }
 
-    // pub fn take_result_buffer(&mut self) -> Vec<ChunkShare<u64>> {
-    //     Buffers::take_buffer(&mut self.buffers.u64_37c_1)
-    // }
+    pub fn take_result_buffer(&mut self) -> Vec<ChunkShare<u64>> {
+        todo!()
+        // Buffers::take_buffer(&mut self.buffers.u64_37c_1)
+    }
 
-    // pub fn return_result_buffer(&mut self, src: Vec<ChunkShare<u64>>) {
-    //     Buffers::return_buffer(&mut self.buffers.u64_37c_1, src);
-    // }
+    pub fn return_result_buffer(&mut self, src: Vec<ChunkShare<u64>>) {
+        todo!()
+        // Buffers::return_buffer(&mut self.buffers.u64_37c_1, src);
+    }
 
     pub fn instantiate_network(
         peer_id: usize,
@@ -1103,6 +1114,7 @@ impl Circuits {
             DEFAULT_LAUNCH_CONFIG_THREADS,
         );
 
+        // K = 16 is hardcoded in the kernel
         for (idx, (inp, lifted, x1, x2, x3)) in izip!(inp, lifted, inout1, out2, out3).enumerate() {
             unsafe {
                 self.kernels[idx]
@@ -1138,18 +1150,45 @@ impl Circuits {
         xa: &mut [ChunkShare<u64>],
         injected: &mut [ChunkShare<u32>],
     ) {
+        const K: usize = 16;
         let mut x1 = Buffers::take_buffer(&mut self.buffers.u64_16c_1);
         let mut x2 = Buffers::take_buffer(&mut self.buffers.u64_16c_2);
         let mut x3 = Buffers::take_buffer(&mut self.buffers.u64_16c_3);
+        let mut c = Buffers::take_buffer(&mut self.buffers.u64_2c_1);
 
-        self.transpose_pack_u16_with_len(&shares, &mut x1, 16);
-
+        self.transpose_pack_u16_with_len(&shares, &mut x1, K);
         self.lift_split(shares, xa, &mut x1, &mut x2, &mut x3);
+        self.binary_add_3_get_two_carries(&mut c, &mut x1, &mut x2, &mut x3);
+        self.bit_inject_ot(&c, injected);
 
-        todo!();
         Buffers::return_buffer(&mut self.buffers.u64_16c_1, x1);
         Buffers::return_buffer(&mut self.buffers.u64_16c_2, x2);
         Buffers::return_buffer(&mut self.buffers.u64_16c_3, x3);
+        Buffers::return_buffer(&mut self.buffers.u64_2c_1, c);
+    }
+
+    // K is 16 in our case
+    #[allow(clippy::too_many_arguments)]
+    fn binary_add_3_get_two_carries(
+        &mut self,
+        c: &mut [ChunkShare<u64>],
+        x1: &mut [ChunkShare<u64>],
+        x2: &mut [ChunkShare<u64>],
+        x3: &mut [ChunkShare<u64>],
+    ) {
+        const K: usize = 16;
+        debug_assert_eq!(self.n_devices, c.len());
+        debug_assert_eq!(self.n_devices, x1.len());
+        debug_assert_eq!(self.n_devices, x2.len());
+        debug_assert_eq!(self.n_devices, x3.len());
+
+        let mut s = Buffers::take_buffer(&mut self.buffers.u64_16c_4);
+        let mut c = Buffers::take_buffer(&mut self.buffers.u64_16c_5);
+
+        todo!();
+
+        Buffers::return_buffer(&mut self.buffers.u64_16c_4, s);
+        Buffers::return_buffer(&mut self.buffers.u64_16c_5, c);
     }
 
     // Input has size ChunkSize
@@ -1326,6 +1365,7 @@ impl Circuits {
         let mut corrections = Buffers::take_buffer(&mut self.buffers.u32_128c_1);
 
         self.lift_mpc(mask_dots, &mut x2, &mut corrections);
+        todo!();
         // self.lift_mul_sub_split(&mut x2, &corrections, &mut x01, code_dots);
 
         // let mut res = Buffers::take_buffer(&mut self.buffers.u64_37c_1);
@@ -1347,13 +1387,13 @@ impl Circuits {
         code_dots: Vec<ChunkShare<u16>>,
         mask_dots: Vec<ChunkShare<u16>>,
     ) {
-        // self.compare_threshold_masked_many(code_dots, mask_dots);
-        // let mut result = self.take_result_buffer();
-        // self.or_reduce_result(&mut result);
-        // // Result is in the first bit of the first GPU
+        self.compare_threshold_masked_many(code_dots, mask_dots);
+        let mut result = self.take_result_buffer();
+        self.or_reduce_result(&mut result);
+        // Result is in the first bit of the first GPU
 
-        // self.return_result_buffer(result);
-        // self.buffers.check_buffers();
+        self.return_result_buffer(result);
+        self.buffers.check_buffers();
 
         // Result is in the lowest bit of the result buffer on the first gpu
     }

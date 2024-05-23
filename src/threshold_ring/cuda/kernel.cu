@@ -368,28 +368,28 @@ extern "C" __global__ void lift_split(U16 *in_a, U16 *in_b, U64 *lifted_a,
     U64 tmp_b = x1_b[i];
     switch (id) {
     case 0:
-      xp1_a[i] = tmp_a;
-      xp1_b[i] = 0;
-      xp2_a[i] = 0;
-      xp2_b[i] = 0;
-      xp3_a[i] = 0;
-      xp3_b[i] = tmp_b;
+      x1_a[i] = tmp_a;
+      x1_b[i] = 0;
+      x2_a[i] = 0;
+      x2_b[i] = 0;
+      x3_a[i] = 0;
+      x3_b[i] = tmp_b;
       break;
     case 1:
-      xp1_a[i] = 0;
-      xp1_b[i] = tmp_b;
-      xp2_a[i] = tmp_a;
-      xp2_b[i] = 0;
-      xp3_a[i] = 0;
-      xp3_b[i] = 0;
+      x1_a[i] = 0;
+      x1_b[i] = tmp_b;
+      x2_a[i] = tmp_a;
+      x2_b[i] = 0;
+      x3_a[i] = 0;
+      x3_b[i] = 0;
       break;
     case 2:
-      xp1_a[i] = 0;
-      xp1_b[i] = 0;
-      xp2_a[i] = 0;
-      xp2_b[i] = tmp_b;
-      xp3_a[i] = tmp_a;
-      xp3_b[i] = 0;
+      x1_a[i] = 0;
+      x1_b[i] = 0;
+      x2_a[i] = 0;
+      x2_b[i] = tmp_b;
+      x3_a[i] = tmp_a;
+      x3_b[i] = 0;
       break;
     }
   }
