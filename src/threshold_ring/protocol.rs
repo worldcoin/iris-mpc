@@ -215,6 +215,8 @@ struct Buffers {
     u64_36c_1: Option<Vec<ChunkShare<u64>>>,
     u64_36c_2: Option<Vec<ChunkShare<u64>>>,
     u64_36c_3: Option<Vec<ChunkShare<u64>>>,
+    u64_35c_1: Option<Vec<ChunkShare<u64>>>,
+    u64_35c_2: Option<Vec<ChunkShare<u64>>>,
     u32_128c_1: Option<Vec<ChunkShare<u32>>>,
     single_u32_128c_1: Option<Vec<CudaSlice<u32>>>,
     single_u32_128c_2: Option<Vec<CudaSlice<u32>>>,
@@ -228,6 +230,9 @@ impl Buffers {
         let u64_36c_2 = Some(Self::allocate_buffer(chunk_size * 36, devices));
         let u64_36c_3 = Some(Self::allocate_buffer(chunk_size * 36, devices));
 
+        let u64_35c_1 = Some(Self::allocate_buffer(chunk_size * 35, devices));
+        let u64_35c_2 = Some(Self::allocate_buffer(chunk_size * 35, devices));
+
         let u32_128c_1 = Some(Self::allocate_buffer(chunk_size * 128, devices));
 
         let single_u32_128c_1 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
@@ -239,6 +244,8 @@ impl Buffers {
             u64_36c_1,
             u64_36c_2,
             u64_36c_3,
+            u64_35c_1,
+            u64_35c_2,
             u32_128c_1,
             single_u32_128c_1,
             single_u32_128c_2,
@@ -297,6 +304,8 @@ impl Buffers {
         debug_assert!(self.u64_36c_1.is_some());
         debug_assert!(self.u64_36c_2.is_some());
         debug_assert!(self.u64_36c_3.is_some());
+        debug_assert!(self.u64_35c_1.is_some());
+        debug_assert!(self.u64_35c_2.is_some());
         debug_assert!(self.u32_128c_1.is_some());
         debug_assert!(self.single_u32_128c_1.is_some());
         debug_assert!(self.single_u32_128c_2.is_some());
@@ -642,7 +651,20 @@ impl Circuits {
         }
     }
 
-    fn packed_send_receive(&mut self, res: &mut [ChunkShareView<u64>], bits: usize) {
+    fn packed_send_receive(&mut self, res: &mut [ChunkShare<u64>], bits: usize) {
+        debug_assert_eq!(res.len(), self.n_devices);
+
+        result::group_start().unwrap();
+        for (idx, res) in res.iter().enumerate() {
+            self.packed_and_many_send(&res.as_view(), bits, idx);
+        }
+        for (idx, res) in res.iter_mut().enumerate() {
+            self.packed_and_many_receive(&mut res.as_view(), bits, idx);
+        }
+        result::group_end().unwrap();
+    }
+
+    fn packed_send_receive_view(&mut self, res: &mut [ChunkShareView<u64>], bits: usize) {
         debug_assert_eq!(res.len(), self.n_devices);
 
         result::group_start().unwrap();
@@ -1305,7 +1327,7 @@ impl Circuits {
             carry.push(c);
         }
         // Send/Receive full adders
-        self.packed_send_receive(&mut carry, K);
+        self.packed_send_receive_view(&mut carry, K);
         // Postprocess xor
         for (idx, (c, x3)) in izip!(&mut carry, x3).enumerate() {
             self.packed_xor_assign_many(c, x3, K, idx);
@@ -1413,6 +1435,35 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, x1.len());
         debug_assert_eq!(self.n_devices, x2.len());
         debug_assert_eq!(self.n_devices, x3.len());
+
+        let mut s = Buffers::take_buffer(&mut self.buffers.u64_35c_1);
+        let mut carry = Buffers::take_buffer(&mut self.buffers.u64_35c_2);
+
+        for (idx, (x1, x2, x3, s, c)) in
+            izip!(x1, x2, x3.iter_mut(), &mut s, &mut carry).enumerate()
+        {
+            // First full adder to get 2 * c1 and s1
+            let x2x3 = x2;
+            self.packed_xor_assign_many(x2x3, x3, Self::BITS, idx);
+            // Don't need first bit for s
+            self.packed_xor_many(
+                &x1.get_range(self.chunk_size, Self::BITS * self.chunk_size),
+                &x2x3.get_range(self.chunk_size, Self::BITS * self.chunk_size),
+                &mut s.as_view(),
+                Self::BITS - 1,
+                idx,
+            );
+            // 2 * c1
+            let x1x3 = x1;
+            self.packed_xor_assign_many(x1x3, x3, Self::BITS - 1, idx);
+            self.packed_and_many_pre(x1x3, x2x3, &mut c.as_view(), Self::BITS - 1, idx);
+        }
+        // Send/Receive full adders
+        self.packed_send_receive(&mut carry, Self::BITS - 1);
+        // Postprocess xor
+        for (idx, (c, x3)) in izip!(&mut carry, x3).enumerate() {
+            self.packed_xor_assign_many(&mut c.as_view(), x3, Self::BITS - 1, idx);
+        }
 
         todo!()
     }
