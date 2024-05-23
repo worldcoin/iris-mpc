@@ -378,11 +378,11 @@ impl Circuits {
     }
 
     pub fn take_result_buffer(&mut self) -> Vec<ChunkShare<u64>> {
-        Buffers::take_buffer(&mut self.buffers.u64_36c_1)
+        Buffers::take_buffer(&mut self.buffers.u64_32c_1)
     }
 
     pub fn return_result_buffer(&mut self, src: Vec<ChunkShare<u64>>) {
-        Buffers::return_buffer(&mut self.buffers.u64_36c_1, src);
+        Buffers::return_buffer(&mut self.buffers.u64_32c_1, src);
     }
 
     pub fn instantiate_network(
@@ -1168,8 +1168,8 @@ impl Circuits {
         let mut x2 = Vec::with_capacity(self.n_devices);
         let mut x3 = Vec::with_capacity(self.n_devices);
         let mut c = Vec::with_capacity(self.n_devices);
-        let buffer1 = Buffers::take_buffer(&mut self.buffers.u64_36c_1);
-        let buffer2 = Buffers::take_buffer(&mut self.buffers.u64_36c_2);
+        let buffer1 = Buffers::take_buffer(&mut self.buffers.u64_32c_1);
+        let buffer2 = Buffers::take_buffer(&mut self.buffers.u64_32c_2);
         for (b1, b2) in izip!(&buffer1, &buffer2) {
             let a = b1.get_offset(0, K * self.chunk_size);
             let b = b1.get_offset(1, K * self.chunk_size);
@@ -1186,8 +1186,8 @@ impl Circuits {
         self.binary_add_3_get_two_carries(&mut c, &mut x1, &mut x2, &mut x3);
         self.bit_inject_ot(&c, injected);
 
-        Buffers::return_buffer(&mut self.buffers.u64_36c_1, buffer1);
-        Buffers::return_buffer(&mut self.buffers.u64_36c_2, buffer2);
+        Buffers::return_buffer(&mut self.buffers.u64_32c_1, buffer1);
+        Buffers::return_buffer(&mut self.buffers.u64_32c_2, buffer2);
     }
 
     // K is 16 in our case
@@ -1207,7 +1207,7 @@ impl Circuits {
         // Reuse buffer
         let mut s = Vec::with_capacity(self.n_devices);
         let mut carry = Vec::with_capacity(self.n_devices);
-        let buffer1 = Buffers::take_buffer(&mut self.buffers.u64_36c_3);
+        let buffer1 = Buffers::take_buffer(&mut self.buffers.u64_32c_3);
 
         for (idx, (x1, x2, x3, b)) in izip!(x1, x2, x3.iter_mut(), &buffer1).enumerate() {
             let mut s_ = b.get_offset(0, (K - 1) * self.chunk_size);
@@ -1313,7 +1313,7 @@ impl Circuits {
         }
         result::group_end().unwrap();
 
-        Buffers::return_buffer(&mut self.buffers.u64_36c_3, buffer1);
+        Buffers::return_buffer(&mut self.buffers.u64_32c_3, buffer1);
     }
 
     pub fn extract_msb(&mut self, x: &mut [ChunkShare<u32>]) {
@@ -1426,15 +1426,15 @@ impl Circuits {
         }
 
         //Las round: just caclculate the output
-        for (idx, (a, b, c)) in izip!(a, b, &mut carry).enumerate() {
+        for (idx, (a, b, c)) in izip!(&a, &b, &mut carry).enumerate() {
             let a = a.get_offset(Self::BITS - 1, self.chunk_size);
             let b = b.get_offset(Self::BITS - 1, self.chunk_size);
             self.xor_assign_many(c, &a, idx);
             self.xor_assign_many(c, &b, idx);
         }
 
-        Buffers::return_buffer(&mut self.buffers.u64_31c_1, s);
-        Buffers::return_buffer(&mut self.buffers.u64_31c_2, carry);
+        Buffers::return_buffer(&mut self.buffers.u64_31c_1, a);
+        Buffers::return_buffer(&mut self.buffers.u64_31c_2, b);
 
         // Result is in the first bit of x1
     }
