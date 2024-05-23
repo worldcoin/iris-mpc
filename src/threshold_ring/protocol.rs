@@ -127,8 +127,9 @@ struct Kernels {
     pub(crate) xor_assign: CudaFunction,
     pub(crate) not_inplace: CudaFunction,
     pub(crate) not: CudaFunction,
+    pub(crate) lift_split: CudaFunction,
     pub(crate) transpose_64x64: CudaFunction,
-    pub(crate) transpose_32x64: CudaFunction,
+    pub(crate) transpose_16x64: CudaFunction,
     pub(crate) ot_sender: CudaFunction,
     pub(crate) ot_receiver: CudaFunction,
     pub(crate) ot_helper: CudaFunction,
@@ -150,8 +151,9 @@ impl Kernels {
                 "shared_or_pre_assign",
                 "shared_not_inplace",
                 "shared_not",
+                "lift_split",
                 "shared_u64_transpose_pack_u64",
-                "shared_u32_transpose_pack_u64",
+                "shared_u16_transpose_pack_u64",
                 "packed_ot_sender",
                 "packed_ot_receiver",
                 "packed_ot_helper",
@@ -168,11 +170,12 @@ impl Kernels {
         let xor_assign = dev.get_func(Self::MOD_NAME, "shared_xor_assign").unwrap();
         let not_inplace = dev.get_func(Self::MOD_NAME, "shared_not_inplace").unwrap();
         let not = dev.get_func(Self::MOD_NAME, "shared_not").unwrap();
+        let lift_split = dev.get_func(Self::MOD_NAME, "lift_split").unwrap();
         let transpose_64x64 = dev
             .get_func(Self::MOD_NAME, "shared_u64_transpose_pack_u64")
             .unwrap();
-        let transpose_32x64 = dev
-            .get_func(Self::MOD_NAME, "shared_u32_transpose_pack_u64")
+        let transpose_16x64 = dev
+            .get_func(Self::MOD_NAME, "shared_u16_transpose_pack_u64")
             .unwrap();
         let ot_sender = dev.get_func(Self::MOD_NAME, "packed_ot_sender").unwrap();
         let ot_receiver = dev.get_func(Self::MOD_NAME, "packed_ot_receiver").unwrap();
@@ -187,8 +190,9 @@ impl Kernels {
             xor_assign,
             not_inplace,
             not,
+            lift_split,
             transpose_64x64,
-            transpose_32x64,
+            transpose_16x64,
             ot_sender,
             ot_receiver,
             ot_helper,
@@ -201,6 +205,9 @@ impl Kernels {
 // TODO check namings
 struct Buffers {
     u64_64c_1: Option<Vec<ChunkShare<u64>>>,
+    u64_16c_2: Option<Vec<ChunkShare<u64>>>,
+    u64_16c_3: Option<Vec<ChunkShare<u64>>>,
+    u64_16c_1: Option<Vec<ChunkShare<u64>>>,
     u32_128c_1: Option<Vec<ChunkShare<u32>>>,
     single_u32_128c_1: Option<Vec<CudaSlice<u32>>>,
     single_u32_128c_2: Option<Vec<CudaSlice<u32>>>,
@@ -210,6 +217,9 @@ struct Buffers {
 impl Buffers {
     fn new(devices: &[Arc<CudaDevice>], chunk_size: usize) -> Self {
         let u64_64c_1 = Some(Self::allocate_buffer(chunk_size * 64, devices));
+        let u64_16c_1 = Some(Self::allocate_buffer(chunk_size * 16, devices));
+        let u64_16c_2 = Some(Self::allocate_buffer(chunk_size * 16, devices));
+        let u64_16c_3 = Some(Self::allocate_buffer(chunk_size * 16, devices));
 
         let u32_128c_1 = Some(Self::allocate_buffer(chunk_size * 128, devices));
 
@@ -219,6 +229,9 @@ impl Buffers {
 
         Buffers {
             u64_64c_1,
+            u64_16c_1,
+            u64_16c_2,
+            u64_16c_3,
             u32_128c_1,
             single_u32_128c_1,
             single_u32_128c_2,
@@ -274,6 +287,9 @@ impl Buffers {
 
     fn check_buffers(&self) {
         debug_assert!(self.u64_64c_1.is_some());
+        debug_assert!(self.u64_16c_1.is_some());
+        debug_assert!(self.u64_16c_2.is_some());
+        debug_assert!(self.u64_16c_3.is_some());
         debug_assert!(self.u32_128c_1.is_some());
         debug_assert!(self.single_u32_128c_1.is_some());
         debug_assert!(self.single_u32_128c_2.is_some());
@@ -1004,10 +1020,10 @@ impl Circuits {
         }
     }
 
-    fn transpose_pack_u32_with_len(
+    fn transpose_pack_u16_with_len(
         &mut self,
-        inp: &[ChunkShare<u32>],
-        outp: &mut [ChunkShareView<u64>],
+        inp: &[ChunkShare<u16>],
+        outp: &mut [ChunkShare<u64>],
         bitlen: usize,
     ) {
         debug_assert_eq!(self.n_devices, inp.len());
@@ -1021,13 +1037,13 @@ impl Circuits {
         for (idx, (inp, outp)) in izip!(inp, outp).enumerate() {
             unsafe {
                 self.kernels[idx]
-                    .transpose_32x64
+                    .transpose_16x64
                     .clone()
                     .launch(
                         cfg,
                         (
-                            &outp.a,
-                            &outp.b,
+                            &mut outp.a,
+                            &mut outp.b,
                             &inp.a,
                             &inp.b,
                             self.chunk_size * 64,
@@ -1074,6 +1090,46 @@ impl Circuits {
         }
     }
 
+    fn lift_split(
+        &mut self,
+        inp: Vec<ChunkShare<u16>>,
+        lifted: &mut [ChunkShare<u64>],
+        inout1: &mut [ChunkShare<u64>],
+        out2: &mut [ChunkShare<u64>],
+        out3: &mut [ChunkShare<u64>],
+    ) {
+        let cfg = Self::launch_config_from_elements_and_threads(
+            self.chunk_size as u32 * 64,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+        );
+
+        for (idx, (inp, lifted, x1, x2, x3)) in izip!(inp, lifted, inout1, out2, out3).enumerate() {
+            unsafe {
+                self.kernels[idx]
+                    .lift_split
+                    .clone()
+                    .launch(
+                        cfg,
+                        (
+                            &inp.a,
+                            &inp.b,
+                            &lifted.a,
+                            &lifted.b,
+                            &x1.a,
+                            &x1.b,
+                            &x2.a,
+                            &x2.b,
+                            &x3.a,
+                            &x3.b,
+                            self.chunk_size,
+                            self.peer_id as u32,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
     // input should be of size: n_devices * input_size
     // outputs the uncorrected lifted shares and the injected correction values
     pub fn lift_mpc(
@@ -1082,7 +1138,18 @@ impl Circuits {
         xa: &mut [ChunkShare<u64>],
         injected: &mut [ChunkShare<u32>],
     ) {
-        todo!()
+        let mut x1 = Buffers::take_buffer(&mut self.buffers.u64_16c_1);
+        let mut x2 = Buffers::take_buffer(&mut self.buffers.u64_16c_2);
+        let mut x3 = Buffers::take_buffer(&mut self.buffers.u64_16c_3);
+
+        self.transpose_pack_u16_with_len(&shares, &mut x1, 16);
+
+        self.lift_split(shares, xa, &mut x1, &mut x2, &mut x3);
+
+        todo!();
+        Buffers::return_buffer(&mut self.buffers.u64_16c_1, x1);
+        Buffers::return_buffer(&mut self.buffers.u64_16c_2, x2);
+        Buffers::return_buffer(&mut self.buffers.u64_16c_3, x3);
     }
 
     // Input has size ChunkSize

@@ -354,6 +354,47 @@ extern "C" __global__ void shared_u64_transpose_pack_u64(U64 *out_a, U64 *out_b,
   }
 }
 
+extern "C" __global__ void lift_split(U16 *in_a, U16 *in_b, U64 *lifted_a,
+                                      U64 *lifted_b, U64 *x1_a, U64 *x1_b,
+                                      U64 *x2_a, U64 *x2_b, U64 *x3_a,
+                                      U64 *x3_b, int chunk_size, int id) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < 64 * chunk_size) {
+    lifted_a[i] = (U64)(in_a[i]);
+    lifted_b[i] = (U64)(in_b[i]);
+  }
+  if (i < 16 * chunk_size) {
+    U64 tmp_a = x1_a[i];
+    U64 tmp_b = x1_b[i];
+    switch (id) {
+    case 0:
+      xp1_a[i] = tmp_a;
+      xp1_b[i] = 0;
+      xp2_a[i] = 0;
+      xp2_b[i] = 0;
+      xp3_a[i] = 0;
+      xp3_b[i] = tmp_b;
+      break;
+    case 1:
+      xp1_a[i] = 0;
+      xp1_b[i] = tmp_b;
+      xp2_a[i] = tmp_a;
+      xp2_b[i] = 0;
+      xp3_a[i] = 0;
+      xp3_b[i] = 0;
+      break;
+    case 2:
+      xp1_a[i] = 0;
+      xp1_b[i] = 0;
+      xp2_a[i] = 0;
+      xp2_b[i] = tmp_b;
+      xp3_a[i] = tmp_a;
+      xp3_b[i] = 0;
+      break;
+    }
+  }
+}
+
 extern "C" __global__ void packed_ot_sender(U32 *out_a, U32 *out_b, U64 *in_a,
                                             U64 *in_b, U32 *m0, U32 *m1,
                                             U32 *rand_ca, U32 *rand_cb,
