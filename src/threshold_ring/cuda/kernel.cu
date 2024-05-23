@@ -42,6 +42,10 @@ __device__ void u64_from_u16s(U64 *res, U16 *a, U16 *b, U16 *c, U16 *d) {
   *res = (U64)(*a) | ((U64)(*b) << 16) | ((U64)(*c) << 32) | ((U64)(*d) << 48);
 }
 
+__device__ void u64_from_u32s(U64 *res, U32 *a, U32 *b) {
+  *res = (U64)(*a) | ((U64)(*b) << 32);
+}
+
 __device__ void transpose16x64(U64 *out, U16 *in) {
   // len of out = 16
   // len of in = 64
