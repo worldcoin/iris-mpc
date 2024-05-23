@@ -1284,7 +1284,27 @@ impl Circuits {
             }
         }
 
-        todo!();
+        // Finally, last bit of a is 0
+        for (idx, (b, c)) in izip!(&mut b, c.iter_mut()).enumerate() {
+            let mut c1 = c.get_offset(0, self.chunk_size);
+            let mut c2 = c.get_offset(1, self.chunk_size);
+            let b = b.get_offset(K - 1, self.chunk_size);
+            self.and_many_pre(&b, &c1, &mut c2, idx);
+            self.xor_assign_many(&mut c1, &b, idx);
+        }
+        // Send/Receive
+        result::group_start().unwrap();
+        for (idx, c) in c.iter().enumerate() {
+            // Unused space used for temparary storage
+            let tmp_c = c.get_offset(1, self.chunk_size);
+            self.send_view(&tmp_c.a, self.next_id, idx);
+        }
+        for (idx, c) in c.iter_mut().enumerate() {
+            // Unused space used for temparary storage
+            let mut tmp_c = c.get_offset(1, self.chunk_size);
+            self.receive_view(&mut tmp_c.b, self.prev_id, idx);
+        }
+        result::group_end().unwrap();
 
         Buffers::return_buffer(&mut self.buffers.u64_15c_1, a);
         Buffers::return_buffer(&mut self.buffers.u64_16c_4, b);
