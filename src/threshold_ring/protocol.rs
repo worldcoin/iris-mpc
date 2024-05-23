@@ -784,7 +784,7 @@ impl Circuits {
         y
     }
 
-    fn bit_inject_neg_ot_sender(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u32>]) {
+    fn bit_inject_ot_sender(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u32>]) {
         let mut m0 = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_1);
         let mut m1 = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_2);
 
@@ -858,11 +858,7 @@ impl Circuits {
         Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_2, m1);
     }
 
-    fn bit_inject_neg_ot_receiver(
-        &mut self,
-        inp: &[ChunkShare<u64>],
-        outp: &mut [ChunkShare<u32>],
-    ) {
+    fn bit_inject_ot_receiver(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u32>]) {
         let mut m0 = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_1);
         let mut m1 = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_2);
         let mut wc = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_3);
@@ -923,7 +919,7 @@ impl Circuits {
         Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_3, wc);
     }
 
-    fn bit_inject_neg_ot_helper(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u32>]) {
+    fn bit_inject_ot_helper(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u32>]) {
         let mut wc = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_3);
 
         for (idx, (inp, res, wc)) in izip!(inp, outp.iter_mut(), &mut wc).enumerate() {
@@ -988,11 +984,11 @@ impl Circuits {
         Buffers::return_single_buffer(&mut self.buffers.single_u32_128c_3, wc);
     }
 
-    pub fn bit_inject_neg_ot(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u32>]) {
+    pub fn bit_inject_ot(&mut self, inp: &[ChunkShare<u64>], outp: &mut [ChunkShare<u32>]) {
         match self.peer_id {
-            0 => self.bit_inject_neg_ot_helper(inp, outp),
-            1 => self.bit_inject_neg_ot_receiver(inp, outp),
-            2 => self.bit_inject_neg_ot_sender(inp, outp),
+            0 => self.bit_inject_ot_helper(inp, outp),
+            1 => self.bit_inject_ot_receiver(inp, outp),
+            2 => self.bit_inject_ot_sender(inp, outp),
             _ => unreachable!(),
         }
     }
