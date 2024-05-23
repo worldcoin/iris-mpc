@@ -1426,12 +1426,15 @@ impl Circuits {
         }
 
         //Las round: just caclculate the output
-        for (idx, (a, b, c)) in izip!(a, b, &mut carry).enumerate() {
+        for (idx, (a, b, c)) in izip!(&a, &b, &mut carry).enumerate() {
             let a = a.get_offset(Self::BITS - 1, self.chunk_size);
             let b = b.get_offset(Self::BITS - 1, self.chunk_size);
             self.xor_assign_many(c, &a, idx);
             self.xor_assign_many(c, &b, idx);
         }
+
+        Buffers::return_buffer(&mut self.buffers.u64_35c_1, a);
+        Buffers::return_buffer(&mut self.buffers.u64_35c_2, b);
 
         // Result is in the first bit of x1
     }
