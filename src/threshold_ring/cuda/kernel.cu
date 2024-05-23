@@ -401,7 +401,7 @@ extern "C" __global__ void split(U64 *x1_a, U64 *x1_b, U64 *x2_a, U64 *x2_b,
                                  U64 *x3_a, U64 *x3_b, int n, int id) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
-    split_inner(&x1_a[i], &x1_b[i], &x2_a[i], &x2_b[i], &x3_a[i], &x3_b[i], id)
+    split_inner(&x1_a[i], &x1_b[i], &x2_a[i], &x2_b[i], &x3_a[i], &x3_b[i], id);
   }
 }
 
@@ -415,7 +415,7 @@ extern "C" __global__ void lift_split(U16 *in_a, U16 *in_b, U64 *lifted_a,
     lifted_b[i] = (U64)(in_b[i]);
   }
   if (i < 16 * chunk_size) {
-    split_inner(&x1_a[i], &x1_b[i], &x2_a[i], &x2_b[i], &x3_a[i], &x3_b[i], id)
+    split_inner(&x1_a[i], &x1_b[i], &x2_a[i], &x2_b[i], &x3_a[i], &x3_b[i], id);
   }
 }
 
