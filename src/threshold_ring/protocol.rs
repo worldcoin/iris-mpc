@@ -13,7 +13,7 @@ use cudarc::{
 use itertools::izip;
 use std::{rc::Rc, str::FromStr, sync::Arc, thread, time::Duration};
 
-pub(crate) const B_BITS: usize = 20;
+pub(crate) const B_BITS: usize = 16;
 
 const DEFAULT_LAUNCH_CONFIG_THREADS: u32 = 64;
 
