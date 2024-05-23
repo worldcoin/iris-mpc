@@ -162,7 +162,7 @@ __device__ void u32_transpose_pack_u64(U64 *out_a, U64 *out_b, U32 *in_a,
   }
 }
 
-__device__ void lift_mul_sub(U64 *mask, U16 *mask_corr1, U16 *mask_corr2,
+__device__ void lift_mul_sub(U32 *mask, U16 *mask_corr1, U16 *mask_corr2,
                              U16 *code) {
   *mask -= (U32)(*mask_corr1) << 16;
   *mask -= (U32)(*mask_corr2) << 17;
