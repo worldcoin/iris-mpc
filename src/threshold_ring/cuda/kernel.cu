@@ -365,16 +365,10 @@ extern "C" __global__ void shared_u64_transpose_pack_u64(U64 *out_a, U64 *out_b,
   }
 }
 
-extern "C" __global__ void lift_split(U16 *in_a, U16 *in_b, U64 *lifted_a,
-                                      U64 *lifted_b, U64 *x1_a, U64 *x1_b,
-                                      U64 *x2_a, U64 *x2_b, U64 *x3_a,
-                                      U64 *x3_b, int chunk_size, int id) {
+extern "C" __global__ void split(U64 *x1_a, U64 *x1_b, U64 *x2_a, U64 *x2_b,
+                                 U64 *x3_a, U64 *x3_b, int n, int id) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < 64 * chunk_size) {
-    lifted_a[i] = (U64)(in_a[i]);
-    lifted_b[i] = (U64)(in_b[i]);
-  }
-  if (i < 16 * chunk_size) {
+  if (i < n) {
     U64 tmp_a = x1_a[i];
     U64 tmp_b = x1_b[i];
     switch (id) {
@@ -404,6 +398,18 @@ extern "C" __global__ void lift_split(U16 *in_a, U16 *in_b, U64 *lifted_a,
       break;
     }
   }
+}
+
+extern "C" __global__ void lift_split(U16 *in_a, U16 *in_b, U64 *lifted_a,
+                                      U64 *lifted_b, U64 *x1_a, U64 *x1_b,
+                                      U64 *x2_a, U64 *x2_b, U64 *x3_a,
+                                      U64 *x3_b, int chunk_size, int id) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < 64 * chunk_size) {
+    lifted_a[i] = (U64)(in_a[i]);
+    lifted_b[i] = (U64)(in_b[i]);
+  }
+  split(x1_a, x1_b, x2_a, x2_b, x3_a, x3_b, 16 * chunk_size, id);
 }
 
 // Puts the results into mask_a, mask_b and x01

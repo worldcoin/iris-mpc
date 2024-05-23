@@ -132,6 +132,7 @@ struct Kernels {
     pub(crate) xor_assign: CudaFunction,
     pub(crate) not_inplace: CudaFunction,
     pub(crate) not: CudaFunction,
+    pub(crate) split: CudaFunction,
     pub(crate) lift_split: CudaFunction,
     pub(crate) lift_mul_sub: CudaFunction,
     pub(crate) transpose_64x64: CudaFunction,
@@ -157,6 +158,7 @@ impl Kernels {
                 "shared_or_pre_assign",
                 "shared_not_inplace",
                 "shared_not",
+                "split",
                 "lift_split",
                 "shared_lift_mul_sub",
                 "shared_u64_transpose_pack_u64",
@@ -177,6 +179,7 @@ impl Kernels {
         let xor_assign = dev.get_func(Self::MOD_NAME, "shared_xor_assign").unwrap();
         let not_inplace = dev.get_func(Self::MOD_NAME, "shared_not_inplace").unwrap();
         let not = dev.get_func(Self::MOD_NAME, "shared_not").unwrap();
+        let split = dev.get_func(Self::MOD_NAME, "split").unwrap();
         let lift_split = dev.get_func(Self::MOD_NAME, "lift_split").unwrap();
         let lift_mul_sub = dev.get_func(Self::MOD_NAME, "shared_lift_mul_sub").unwrap();
         let transpose_64x64 = dev
@@ -198,6 +201,7 @@ impl Kernels {
             xor_assign,
             not_inplace,
             not,
+            split,
             lift_split,
             lift_mul_sub,
             transpose_64x64,
@@ -1117,6 +1121,42 @@ impl Circuits {
         }
     }
 
+    fn split(
+        &mut self,
+        inout1: &mut [ChunkShare<u64>],
+        out2: &mut [ChunkShare<u64>],
+        out3: &mut [ChunkShare<u64>],
+        bits: usize,
+    ) {
+        let cfg = Self::launch_config_from_elements_and_threads(
+            self.chunk_size as u32 * 64,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+        );
+
+        // K = 16 is hardcoded in the kernel
+        for (idx, (x1, x2, x3)) in izip!(inout1, out2, out3).enumerate() {
+            unsafe {
+                self.kernels[idx]
+                    .split
+                    .clone()
+                    .launch(
+                        cfg,
+                        (
+                            &x1.a,
+                            &x1.b,
+                            &x2.a,
+                            &x2.b,
+                            &x3.a,
+                            &x3.b,
+                            self.chunk_size * bits,
+                            self.peer_id as u32,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
     fn lift_split(
         &mut self,
         inp: Vec<ChunkShare<u16>>,
@@ -1357,7 +1397,16 @@ impl Circuits {
 
     // K is Self::BITS = 16 + B_BITS in our case
     fn extract_msb(&mut self, c: &mut [ChunkShare<u64>], x: &mut [ChunkShare<u64>]) {
-        todo!()
+        let mut x1 = Buffers::take_buffer(&mut self.buffers.u64_36c_1);
+        let mut x2 = Buffers::take_buffer(&mut self.buffers.u64_36c_2);
+        let mut x3 = Buffers::take_buffer(&mut self.buffers.u64_36c_3);
+
+        self.transpose_pack_u64_with_len(x, &mut x1, Self::BITS);
+        self.split(&mut x1, &mut x2, &mut x3, Self::BITS);
+
+        Buffers::return_buffer(&mut self.buffers.u64_36c_1, x1);
+        Buffers::return_buffer(&mut self.buffers.u64_36c_2, x2);
+        Buffers::return_buffer(&mut self.buffers.u64_36c_3, x3);
     }
 
     // Input has size ChunkSize
