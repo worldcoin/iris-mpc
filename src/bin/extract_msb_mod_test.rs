@@ -172,7 +172,7 @@ async fn main() -> eyre::Result<()> {
         let now = Instant::now();
         party.lift_mul_sub(&mut x, &correction, code_gpu);
         println!("lift time: {:?}", now.elapsed());
-        party.extract_msb_sum_mod(&x01, &x2, &mut res);
+        // party.extract_msb_sum_mod(&x01, &x2, &mut res);
         party.synchronize_all();
         println!("extract time: {:?}", now.elapsed());
 
