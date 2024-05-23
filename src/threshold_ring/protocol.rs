@@ -203,13 +203,13 @@ impl Kernels {
 
 // TODO check reusage
 struct Buffers {
-    u64_64c_1: Option<Vec<ChunkShare<u64>>>,
-    u64_36c_1: Option<Vec<ChunkShare<u64>>>,
-    u64_36c_2: Option<Vec<ChunkShare<u64>>>,
-    u64_36c_3: Option<Vec<ChunkShare<u64>>>,
-    u64_35c_1: Option<Vec<ChunkShare<u64>>>,
-    u64_35c_2: Option<Vec<ChunkShare<u64>>>,
-    u32_128c_1: Option<Vec<ChunkShare<u32>>>,
+    u32_64c_1: Option<Vec<ChunkShare<u32>>>,
+    u64_32c_1: Option<Vec<ChunkShare<u64>>>,
+    u64_32c_2: Option<Vec<ChunkShare<u64>>>,
+    u64_32c_3: Option<Vec<ChunkShare<u64>>>,
+    u64_31c_1: Option<Vec<ChunkShare<u64>>>,
+    u64_31c_2: Option<Vec<ChunkShare<u64>>>,
+    u16_128c_1: Option<Vec<ChunkShare<u16>>>,
     single_u32_128c_1: Option<Vec<CudaSlice<u32>>>,
     single_u32_128c_2: Option<Vec<CudaSlice<u32>>>,
     single_u32_128c_3: Option<Vec<CudaSlice<u32>>>,
@@ -217,28 +217,28 @@ struct Buffers {
 
 impl Buffers {
     fn new(devices: &[Arc<CudaDevice>], chunk_size: usize) -> Self {
-        let u64_64c_1 = Some(Self::allocate_buffer(chunk_size * 64, devices));
-        let u64_36c_1 = Some(Self::allocate_buffer(chunk_size * 36, devices));
-        let u64_36c_2 = Some(Self::allocate_buffer(chunk_size * 36, devices));
-        let u64_36c_3 = Some(Self::allocate_buffer(chunk_size * 36, devices));
+        let u32_64c_1 = Some(Self::allocate_buffer(chunk_size * 64, devices));
+        let u64_32c_1 = Some(Self::allocate_buffer(chunk_size * 32, devices));
+        let u64_32c_2 = Some(Self::allocate_buffer(chunk_size * 32, devices));
+        let u64_32c_3 = Some(Self::allocate_buffer(chunk_size * 32, devices));
 
-        let u64_35c_1 = Some(Self::allocate_buffer(chunk_size * 35, devices));
-        let u64_35c_2 = Some(Self::allocate_buffer(chunk_size * 35, devices));
+        let u64_31c_1 = Some(Self::allocate_buffer(chunk_size * 31, devices));
+        let u64_31c_2 = Some(Self::allocate_buffer(chunk_size * 31, devices));
 
-        let u32_128c_1 = Some(Self::allocate_buffer(chunk_size * 128, devices));
+        let u16_128c_1 = Some(Self::allocate_buffer(chunk_size * 128, devices));
 
         let single_u32_128c_1 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
         let single_u32_128c_2 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
         let single_u32_128c_3 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
 
         Buffers {
-            u64_64c_1,
-            u64_36c_1,
-            u64_36c_2,
-            u64_36c_3,
-            u64_35c_1,
-            u64_35c_2,
-            u32_128c_1,
+            u32_64c_1,
+            u64_32c_1,
+            u64_32c_2,
+            u64_32c_3,
+            u64_31c_1,
+            u64_31c_2,
+            u16_128c_1,
             single_u32_128c_1,
             single_u32_128c_2,
             single_u32_128c_3,
@@ -292,13 +292,13 @@ impl Buffers {
     }
 
     fn check_buffers(&self) {
-        debug_assert!(self.u64_64c_1.is_some());
-        debug_assert!(self.u64_36c_1.is_some());
-        debug_assert!(self.u64_36c_2.is_some());
-        debug_assert!(self.u64_36c_3.is_some());
-        debug_assert!(self.u64_35c_1.is_some());
-        debug_assert!(self.u64_35c_2.is_some());
-        debug_assert!(self.u32_128c_1.is_some());
+        debug_assert!(self.u32_64c_1.is_some());
+        debug_assert!(self.u64_32c_1.is_some());
+        debug_assert!(self.u64_32c_2.is_some());
+        debug_assert!(self.u64_32c_3.is_some());
+        debug_assert!(self.u64_31c_1.is_some());
+        debug_assert!(self.u64_31c_2.is_some());
+        debug_assert!(self.u16_128c_1.is_some());
         debug_assert!(self.single_u32_128c_1.is_some());
         debug_assert!(self.single_u32_128c_2.is_some());
         debug_assert!(self.single_u32_128c_3.is_some());
@@ -1080,7 +1080,7 @@ impl Circuits {
     fn lift_split(
         &mut self,
         inp: Vec<ChunkShare<u16>>,
-        lifted: &mut [ChunkShare<u64>],
+        lifted: &mut [ChunkShare<u32>],
         inout1: &mut [ChunkShareView<u64>],
         out2: &mut [ChunkShareView<u64>],
         out3: &mut [ChunkShareView<u64>],
@@ -1120,8 +1120,8 @@ impl Circuits {
 
     pub fn lift_mul_sub(
         &mut self,
-        mask_lifted: &mut [ChunkShare<u64>],
-        mask_correction: &[ChunkShare<u32>],
+        mask_lifted: &mut [ChunkShare<u32>],
+        mask_correction: &[ChunkShare<u16>],
         code: Vec<ChunkShare<u16>>,
     ) {
         debug_assert_eq!(self.n_devices, mask_lifted.len());
@@ -1160,8 +1160,8 @@ impl Circuits {
     pub fn lift_mpc(
         &mut self,
         shares: Vec<ChunkShare<u16>>,
-        xa: &mut [ChunkShare<u64>],
-        injected: &mut [ChunkShare<u32>],
+        xa: &mut [ChunkShare<u32>],
+        injected: &mut [ChunkShare<u16>],
     ) {
         const K: usize = 16;
         let mut x1 = Vec::with_capacity(self.n_devices);
@@ -1316,18 +1316,18 @@ impl Circuits {
         Buffers::return_buffer(&mut self.buffers.u64_36c_3, buffer1);
     }
 
-    pub fn extract_msb(&mut self, x: &mut [ChunkShare<u64>]) {
-        let mut x1 = Buffers::take_buffer(&mut self.buffers.u64_36c_1);
-        let mut x2 = Buffers::take_buffer(&mut self.buffers.u64_36c_2);
-        let mut x3 = Buffers::take_buffer(&mut self.buffers.u64_36c_3);
+    pub fn extract_msb(&mut self, x: &mut [ChunkShare<u32>]) {
+        let mut x1 = Buffers::take_buffer(&mut self.buffers.u64_32c_1);
+        let mut x2 = Buffers::take_buffer(&mut self.buffers.u64_32c_2);
+        let mut x3 = Buffers::take_buffer(&mut self.buffers.u64_32c_3);
 
         self.transpose_pack_u64_with_len(x, &mut x1, Self::BITS);
         self.split(&mut x1, &mut x2, &mut x3, Self::BITS);
         self.binary_add_3_get_msb(&mut x1, &mut x2, &mut x3);
 
-        Buffers::return_buffer(&mut self.buffers.u64_36c_1, x1);
-        Buffers::return_buffer(&mut self.buffers.u64_36c_2, x2);
-        Buffers::return_buffer(&mut self.buffers.u64_36c_3, x3);
+        Buffers::return_buffer(&mut self.buffers.u64_32c_1, x1);
+        Buffers::return_buffer(&mut self.buffers.u64_32c_2, x2);
+        Buffers::return_buffer(&mut self.buffers.u64_32c_3, x3);
     }
 
     // K is Self::BITS = 16 + B_BITS in our case
@@ -1342,8 +1342,8 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, x2.len());
         debug_assert_eq!(self.n_devices, x3.len());
 
-        let mut s = Buffers::take_buffer(&mut self.buffers.u64_35c_1);
-        let mut carry = Buffers::take_buffer(&mut self.buffers.u64_35c_2);
+        let mut s = Buffers::take_buffer(&mut self.buffers.u64_31c_1);
+        let mut carry = Buffers::take_buffer(&mut self.buffers.u64_31c_2);
 
         for (idx, (x1, x2, x3, s, c)) in
             izip!(x1.iter_mut(), x2, x3.iter_mut(), &mut s, &mut carry).enumerate()
@@ -1432,6 +1432,9 @@ impl Circuits {
             self.xor_assign_many(c, &a, idx);
             self.xor_assign_many(c, &b, idx);
         }
+
+        Buffers::return_buffer(&mut self.buffers.u64_31c_1, s);
+        Buffers::return_buffer(&mut self.buffers.u64_31c_2, carry);
 
         // Result is in the first bit of x1
     }
@@ -1605,15 +1608,15 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, code_dots.len());
         debug_assert_eq!(self.n_devices, mask_dots.len());
 
-        let mut x = Buffers::take_buffer(&mut self.buffers.u64_64c_1);
-        let mut corrections = Buffers::take_buffer(&mut self.buffers.u32_128c_1);
+        let mut x = Buffers::take_buffer(&mut self.buffers.u32_64c_1);
+        let mut corrections = Buffers::take_buffer(&mut self.buffers.u16_128c_1);
 
         self.lift_mpc(mask_dots, &mut x, &mut corrections);
         self.lift_mul_sub(&mut x, &corrections, code_dots);
         self.extract_msb(&mut x);
 
-        Buffers::return_buffer(&mut self.buffers.u64_64c_1, x);
-        Buffers::return_buffer(&mut self.buffers.u32_128c_1, corrections);
+        Buffers::return_buffer(&mut self.buffers.u32_64c_1, x);
+        Buffers::return_buffer(&mut self.buffers.u16_128c_1, corrections);
         self.buffers.check_buffers();
 
         // Result is in the first bit of the result buffer

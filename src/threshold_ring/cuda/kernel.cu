@@ -34,8 +34,8 @@ __device__ void or_pre_inner(T *res_a, T *lhs_a, T *lhs_b, T *rhs_a, T *rhs_b,
   *res_a ^= *lhs_a ^ *rhs_a; // XOR with the original values
 }
 
-__device__ void mul_lift_b(U64 *res, U16 *input) {
-  *res = (U64)(*input) << B_BITS;
+__device__ void mul_lift_b(U32 *res, U16 *input) {
+  *res = (U32)(*input) << B_BITS;
 }
 
 __device__ void u64_from_u16s(U64 *res, U16 *a, U16 *b, U16 *c, U16 *d) {
@@ -120,12 +120,12 @@ __device__ void u16_transpose_pack_u64(U64 *out_a, U64 *out_b, U16 *in_a,
   }
 }
 
-__device__ void lift_mul_sub(U64 *mask, U32 *mask_corr1, U32 *mask_corr2,
+__device__ void lift_mul_sub(U64 *mask, U16 *mask_corr1, U16 *mask_corr2,
                              U16 *code) {
-  *mask -= (U64)(*mask_corr1) << 16;
-  *mask -= (U64)(*mask_corr2) << 17;
+  *mask -= (U32)(*mask_corr1) << 16;
+  *mask -= (U32)(*mask_corr2) << 17;
 
-  U64 a;
+  U32 a;
   mul_lift_b(&a, code);
   *mask *= A;
   *mask -= a;
@@ -272,14 +272,14 @@ extern "C" __global__ void split(U64 *x1_a, U64 *x1_b, U64 *x2_a, U64 *x2_b,
   }
 }
 
-extern "C" __global__ void lift_split(U16 *in_a, U16 *in_b, U64 *lifted_a,
-                                      U64 *lifted_b, U64 *x1_a, U64 *x1_b,
+extern "C" __global__ void lift_split(U16 *in_a, U16 *in_b, U32 *lifted_a,
+                                      U32 *lifted_b, U64 *x1_a, U64 *x1_b,
                                       U64 *x2_a, U64 *x2_b, U64 *x3_a,
                                       U64 *x3_b, int chunk_size, int id) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < 64 * chunk_size) {
-    lifted_a[i] = (U64)(in_a[i]);
-    lifted_b[i] = (U64)(in_b[i]);
+    lifted_a[i] = (U32)(in_a[i]);
+    lifted_b[i] = (U32)(in_b[i]);
   }
   if (i < 16 * chunk_size) {
     split_inner(&x1_a[i], &x1_b[i], &x2_a[i], &x2_b[i], &x3_a[i], &x3_b[i], id);
@@ -287,9 +287,9 @@ extern "C" __global__ void lift_split(U16 *in_a, U16 *in_b, U64 *lifted_a,
 }
 
 // Puts the results into mask_a, mask_b and x01
-extern "C" __global__ void shared_lift_mul_sub(U64 *mask_a, U64 *mask_b,
-                                               U32 *mask_corr_a,
-                                               U32 *mask_corr_b, U16 *code_a,
+extern "C" __global__ void shared_lift_mul_sub(U32 *mask_a, U32 *mask_b,
+                                               U16 *mask_corr_a,
+                                               U16 *mask_corr_b, U16 *code_a,
                                                U16 *code_b, int n) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
