@@ -173,17 +173,17 @@ async fn main() -> eyre::Result<()> {
 
     for _ in 0..10 {
         // Simulate Masks to be zero for this test
-        let mut x2 = party.allocate_buffer::<u64>(INPUTS_PER_GPU_SIZE);
+        let mut x = party.allocate_buffer::<u64>(INPUTS_PER_GPU_SIZE);
         let mut correction = party.allocate_buffer::<u32>(INPUTS_PER_GPU_SIZE * 2);
         let mask_gpu = mask_gpu.clone();
 
         let now = Instant::now();
-        party.lift_mpc(mask_gpu, &mut x2, &mut correction);
+        party.lift_mpc(mask_gpu, &mut x, &mut correction);
         party.synchronize_all();
         println!("compute time: {:?}", now.elapsed());
 
         let now = Instant::now();
-        let result = open(&mut party, &mut x2, &mut correction);
+        let result = open(&mut party, &mut x, &mut correction);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
 
         let mut correct = true;

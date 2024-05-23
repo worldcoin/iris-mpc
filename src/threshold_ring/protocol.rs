@@ -133,6 +133,7 @@ struct Kernels {
     pub(crate) not_inplace: CudaFunction,
     pub(crate) not: CudaFunction,
     pub(crate) lift_split: CudaFunction,
+    pub(crate) lift_mul_sub: CudaFunction,
     pub(crate) transpose_64x64: CudaFunction,
     pub(crate) transpose_16x64: CudaFunction,
     pub(crate) ot_sender: CudaFunction,
@@ -157,6 +158,7 @@ impl Kernels {
                 "shared_not_inplace",
                 "shared_not",
                 "lift_split",
+                "shared_lift_mul_sub",
                 "shared_u64_transpose_pack_u64",
                 "shared_u16_transpose_pack_u64",
                 "packed_ot_sender",
@@ -176,6 +178,7 @@ impl Kernels {
         let not_inplace = dev.get_func(Self::MOD_NAME, "shared_not_inplace").unwrap();
         let not = dev.get_func(Self::MOD_NAME, "shared_not").unwrap();
         let lift_split = dev.get_func(Self::MOD_NAME, "lift_split").unwrap();
+        let lift_mul_sub = dev.get_func(Self::MOD_NAME, "shared_lift_mul_sub").unwrap();
         let transpose_64x64 = dev
             .get_func(Self::MOD_NAME, "shared_u64_transpose_pack_u64")
             .unwrap();
@@ -196,6 +199,7 @@ impl Kernels {
             not_inplace,
             not,
             lift_split,
+            lift_mul_sub,
             transpose_64x64,
             transpose_16x64,
             ot_sender,
@@ -1162,6 +1166,43 @@ impl Circuits {
         }
     }
 
+    pub fn lift_mul_sub(
+        &mut self,
+        mask_lifted: &mut [ChunkShare<u64>],
+        mask_correction: &[ChunkShare<u32>],
+        code: Vec<ChunkShare<u16>>,
+    ) {
+        debug_assert_eq!(self.n_devices, mask_lifted.len());
+        debug_assert_eq!(self.n_devices, mask_correction.len());
+        debug_assert_eq!(self.n_devices, code.len());
+
+        for (idx, (m, mc, c)) in izip!(mask_lifted, mask_correction, &code).enumerate() {
+            let cfg = Self::launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 64,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+            );
+
+            unsafe {
+                self.kernels[idx]
+                    .lift_mul_sub
+                    .clone()
+                    .launch(
+                        cfg,
+                        (
+                            &m.a,
+                            &m.b,
+                            &mc.a,
+                            &mc.b,
+                            &c.a,
+                            &c.b,
+                            self.chunk_size as u32 * 64,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
     // input should be of size: n_devices * input_size
     // outputs the uncorrected lifted shares and the injected correction values
     pub fn lift_mpc(
@@ -1479,19 +1520,17 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, code_dots.len());
         debug_assert_eq!(self.n_devices, mask_dots.len());
 
-        let mut x2 = Buffers::take_buffer(&mut self.buffers.u64_64c_1);
-        // let mut x01 = Buffers::take_buffer(&mut self.buffers.u64_64c_2);
+        let mut x = Buffers::take_buffer(&mut self.buffers.u64_64c_1);
         let mut corrections = Buffers::take_buffer(&mut self.buffers.u32_128c_1);
 
-        self.lift_mpc(mask_dots, &mut x2, &mut corrections);
+        self.lift_mpc(mask_dots, &mut x, &mut corrections);
+        self.lift_mul_sub(&mut x, &corrections, code_dots);
         todo!();
-        // self.lift_mul_sub_split(&mut x2, &corrections, &mut x01, code_dots);
 
         // let mut res = Buffers::take_buffer(&mut self.buffers.u64_37c_1);
         // self.extract_msb_sum_mod(&x01, &x2, &mut res);
 
-        Buffers::return_buffer(&mut self.buffers.u64_64c_1, x2);
-        // Buffers::return_buffer(&mut self.buffers.u64_64c_2, x01);
+        Buffers::return_buffer(&mut self.buffers.u64_64c_1, x);
         Buffers::return_buffer(&mut self.buffers.u32_128c_1, corrections);
         // Buffers::return_buffer(&mut self.buffers.u64_37c_1, res);
         // self.buffers.check_buffers();

@@ -188,6 +188,17 @@ __device__ void u32_transpose_pack_u64(U64 *out_a, U64 *out_b, U32 *in_a,
   }
 }
 
+__device__ void lift_mul_sub(U64 *mask, U32 *mask_corr1, U32 *mask_corr2,
+                             U16 *code) {
+  *mask -= (U64)(*mask_corr1) << 16;
+  *mask -= (U64)(*mask_corr2) << 17;
+
+  U64 a;
+  mul_lift_b(&a, code);
+  *mask *= A;
+  *mask -= a;
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // Test kernels
 ////////////////////////////////////////////////////////////////////////////////
@@ -392,6 +403,18 @@ extern "C" __global__ void lift_split(U16 *in_a, U16 *in_b, U64 *lifted_a,
       x3_b[i] = 0;
       break;
     }
+  }
+}
+
+// Puts the results into mask_a, mask_b and x01
+extern "C" __global__ void shared_lift_mul_sub(U64 *mask_a, U64 *mask_b,
+                                               U32 *mask_corr_a,
+                                               U32 *mask_corr_b, U16 *code_a,
+                                               U16 *code_b, int n) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    lift_mul_sub(&mask_a[i], &mask_corr_a[i], &mask_corr_a[i + n], &code_a[i]);
+    lift_mul_sub(&mask_b[i], &mask_corr_b[i], &mask_corr_b[i + n], &code_b[i]);
   }
 }
 
