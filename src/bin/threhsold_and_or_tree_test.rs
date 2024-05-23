@@ -11,8 +11,6 @@ use tokio::time::{self, Instant};
 //ceil(930 * 125_000 / 2048) * 2048
 // const INPUTS_PER_GPU_SIZE: usize = 116_250_624;
 const INPUTS_PER_GPU_SIZE: usize = 12_507_136;
-const CHUNK_SIZE: usize = INPUTS_PER_GPU_SIZE / 64;
-
 const B_BITS: u64 = 20;
 pub(crate) const B: u64 = 1 << B_BITS;
 pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
@@ -78,67 +76,39 @@ fn to_gpu(a: &[u16], b: &[u16], devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<u
     result
 }
 
-fn pack_with_device_padding(bits: Vec<bool>) -> Vec<u64> {
-    assert!(bits.len() % INPUTS_PER_GPU_SIZE == 0);
-    let mut res = vec![];
-    for devices in bits.chunks_exact(INPUTS_PER_GPU_SIZE) {
-        for bits in devices.chunks(64) {
-            let mut r = 0;
-            for (i, bit) in bits.iter().enumerate() {
-                r |= u64::from(*bit) << i;
-            }
-            res.push(r);
-        }
+fn real_result_msb_reduce(code_input: Vec<u16>, mask_input: Vec<u16>) -> bool {
+    assert_eq!(code_input.len(), mask_input.len());
+    let mod_ = 1u64 << (16 + B_BITS);
+    let mut res = false;
+    for (c, m) in code_input.into_iter().zip(mask_input) {
+        let r = ((m as u64) * A - ((c as u64) << B_BITS)) % mod_;
+        let msb = r >> (B_BITS + 16 - 1) & 1 == 1;
+        res |= msb;
     }
     res
 }
 
-fn real_result_msb(code_input: Vec<u16>, mask_input: Vec<u16>) -> Vec<u64> {
-    assert_eq!(code_input.len(), mask_input.len());
-    let mod_ = 1u64 << (16 + B_BITS);
-    let mut res = Vec::with_capacity(code_input.len());
-    for (c, m) in code_input.into_iter().zip(mask_input) {
-        let r = ((m as u64) * A - ((c as u64) << B_BITS)) % mod_;
-        let msb = r >> (B_BITS + 16 - 1) & 1 == 1;
-        res.push(msb)
-    }
-    pack_with_device_padding(res)
-}
+fn open(party: &mut Circuits, result: &mut ChunkShare<u64>) -> bool {
+    let res = result.get_offset(0, 1);
+    let mut res_helper = result.get_offset(1, 1);
+    cudarc::nccl::result::group_start().expect("group start should work");
+    party.send_view(&res.b, party.next_id(), 0);
+    party.receive_view(&mut res_helper.a, party.prev_id(), 0);
+    cudarc::nccl::result::group_end().expect("group end should work");
 
-fn open(party: &mut Circuits, x: &[ChunkShare<u64>]) -> Vec<u64> {
-    let n_devices = x.len();
-    let mut a = Vec::with_capacity(n_devices);
-    let mut b = Vec::with_capacity(n_devices);
-    let mut c = Vec::with_capacity(n_devices);
+    let dev = party.get_devices()[0].clone();
 
-    cudarc::nccl::result::group_start().unwrap();
-    for (idx, res) in x.iter().enumerate() {
-        // Result is in bit 0
-        let res = res.get_offset(0, CHUNK_SIZE);
-        party.send_view(&res.b, party.next_id(), idx);
-        a.push(res.a);
-        b.push(res.b);
-    }
-    for (idx, res) in x.iter().enumerate() {
-        let mut res = res.get_offset(1, CHUNK_SIZE);
-        party.receive_view(&mut res.a, party.prev_id(), idx);
-        c.push(res.a);
-    }
-    cudarc::nccl::result::group_end().unwrap();
-
-    let mut result = Vec::with_capacity(n_devices * CHUNK_SIZE);
-    let devices = party.get_devices();
-    for (dev, a, b, c) in izip!(devices, a, b, c) {
-        let mut a = dev.dtoh_sync_copy(&a).unwrap();
-        let b = dev.dtoh_sync_copy(&b).unwrap();
-        let c = dev.dtoh_sync_copy(&c).unwrap();
-        for (a, b, c) in izip!(a.iter_mut(), b, c) {
-            *a ^= b ^ c;
-        }
-        result.extend(a);
-    }
-    assert_eq!(result.len(), n_devices * CHUNK_SIZE);
-    result
+    let a = dev.dtoh_sync_copy(&res.a).expect("copy a works");
+    let b = dev.dtoh_sync_copy(&res.b).expect("copy b works");
+    let c = dev.dtoh_sync_copy(&res_helper.a).expect("copy c works");
+    assert_eq!(a.len(), 1);
+    assert_eq!(b.len(), 1);
+    assert_eq!(c.len(), 1);
+    assert!(a[0] == 0 || a[0] == 1);
+    assert!(b[0] == 0 || b[0] == 1);
+    assert!(c[0] == 0 || c[0] == 1);
+    let result = a[0] ^ b[0] ^ c[0];
+    result == 1
 }
 
 #[allow(clippy::assertions_on_constants)]
@@ -163,7 +133,7 @@ async fn main() -> eyre::Result<()> {
 
     let (code_share_a, code_share_b) = rep_share_vec(&code_dots, party_id, &mut rng);
     let (mask_share_a, mask_share_b) = rep_share_vec(&mask_dots, party_id, &mut rng);
-    let real_result = real_result_msb(code_dots, mask_dots);
+    let real_result = real_result_msb_reduce(code_dots, mask_dots);
     println!("Random shared inputs generated!");
 
     // Get Circuit Party
@@ -181,26 +151,20 @@ async fn main() -> eyre::Result<()> {
         let mask_gpu = mask_gpu.clone();
 
         let now = Instant::now();
-        party.compare_threshold_masked_many(code_gpu, mask_gpu);
+        party.compare_threshold_masked_many_with_or_tree(code_gpu, mask_gpu);
         party.synchronize_all();
         println!("compute time: {:?}", now.elapsed());
 
-        let res = party.take_result_buffer();
+        let mut res = party.take_result_buffer();
         let now = Instant::now();
-        let result = open(&mut party, &res);
+        let result = open(&mut party, &mut res[0]);
         party.return_result_buffer(res);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
 
-        let mut correct = true;
-        for (i, (r, r_)) in izip!(&result, &real_result).enumerate() {
-            if r != r_ {
-                correct = false;
-                println!("Test failed on index: {}: {} != {}", i, r, r_);
-                break;
-            }
-        }
-        if correct {
+        if result == real_result {
             println!("Test passed!");
+        } else {
+            println!("Test failed!");
         }
     }
 
