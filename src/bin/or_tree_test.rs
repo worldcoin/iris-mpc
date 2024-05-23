@@ -7,7 +7,7 @@ use tokio::time::{self, Instant};
 
 //ceil(930 * 125_000 / 2048) * 2048
 const INPUTS_PER_GPU_SIZE: usize = 116_250_624;
-// const INPUTS_PER_GPU_SIZE: usize = 12_505_600;
+// const INPUTS_PER_GPU_SIZE: usize = 12_507_136;
 const CHUNK_SIZE: usize = INPUTS_PER_GPU_SIZE / 64;
 
 fn rep_share_bin<R: Rng>(value: u64, id: usize, rng: &mut R) -> (u64, u64) {
