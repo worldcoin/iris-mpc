@@ -1,6 +1,6 @@
 use crate::{
     http_root, rng::chacha_corr::ChaChaCudaCorrRng, setup::shamir::P,
-    threshold_field::cuda::PTX_SRC, IdWrapper,
+    threshold_ring::cuda::PTX_SRC, IdWrapper,
 };
 use axum::{routing::get, Router};
 use cudarc::{
