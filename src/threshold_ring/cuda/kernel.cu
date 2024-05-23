@@ -303,13 +303,13 @@ extern "C" __global__ void shared_lift_mul_sub(U32 *mask_a, U32 *mask_b,
   }
 }
 
-extern "C" __global__ void packed_ot_sender(U32 *out_a, U32 *out_b, U64 *in_a,
-                                            U64 *in_b, U32 *m0, U32 *m1,
-                                            U32 *rand_ca, U32 *rand_cb,
-                                            U32 *rand_wa1, U32 *rand_wa2,
+extern "C" __global__ void packed_ot_sender(U16 *out_a, U16 *out_b, U64 *in_a,
+                                            U64 *in_b, U16 *m0, U16 *m1,
+                                            U16 *rand_ca, U16 *rand_cb,
+                                            U16 *rand_wa1, U16 *rand_wa2,
                                             int n) {
   // in is bits packed in 64 bit integers
-  // out is each bit injected into 32-bit
+  // out is each bit injected into 16-bit
   // Thus, in has size n, out has size 64 * n
   // m0, m1, rand_ca, rand_cb, rand_wa1, rand_wa2 are same size as out
 
@@ -317,22 +317,22 @@ extern "C" __global__ void packed_ot_sender(U32 *out_a, U32 *out_b, U64 *in_a,
   if (i < 64 * n) {
     int wordindex = i / 64;
     int bitindex = i % 64;
-    U32 my_bit_a = (in_a[wordindex] >> bitindex) & 1;
-    U32 my_bit_b = (in_b[wordindex] >> bitindex) & 1;
+    U16 my_bit_a = (in_a[wordindex] >> bitindex) & 1;
+    U16 my_bit_b = (in_b[wordindex] >> bitindex) & 1;
     out_a[i] = rand_ca[i];
     out_b[i] = rand_cb[i];
-    U32 c = rand_ca[i] + rand_cb[i];
-    U32 xor_ab = my_bit_a ^ my_bit_b;
+    U16 c = rand_ca[i] + rand_cb[i];
+    U16 xor_ab = my_bit_a ^ my_bit_b;
     m0[i] = (xor_ab - c) ^ rand_wa1[i];
     m1[i] = ((xor_ab ^ 1) - c) ^ rand_wa2[i];
   }
 }
 
-extern "C" __global__ void packed_ot_receiver(U32 *out_a, U32 *out_b, U64 *in_b,
-                                              U32 *m0, U32 *m1, U32 *rand_ca,
-                                              U32 *rand_wc, int n) {
+extern "C" __global__ void packed_ot_receiver(U16 *out_a, U16 *out_b, U64 *in_b,
+                                              U16 *m0, U16 *m1, U16 *rand_ca,
+                                              U16 *rand_wc, int n) {
   // in is bits packed in 64 bit integers
-  // out is each bit injected into 32-bit
+  // out is each bit injected into 16-bit
   // Thus, in has size n, out has size 64 * n
   // m0, m1, rand_ca, rand_wc are same size as out
 
@@ -350,11 +350,11 @@ extern "C" __global__ void packed_ot_receiver(U32 *out_a, U32 *out_b, U64 *in_b,
   }
 }
 
-extern "C" __global__ void packed_ot_helper(U32 *out_b, U64 *in_a, U32 *rand_cb,
-                                            U32 *rand_wb1, U32 *rand_wb2,
-                                            U32 *wc, int n) {
+extern "C" __global__ void packed_ot_helper(U16 *out_b, U64 *in_a, U16 *rand_cb,
+                                            U16 *rand_wb1, U16 *rand_wb2,
+                                            U16 *wc, int n) {
   // in is bits packed in 64 bit integers
-  // out is each bit injected into 32-bit
+  // out is each bit injected into U16-bit
   // Thus, in has size n, out has size 64 * n
   // rand_wb1, rand_wb2, wc are same size as out
 
