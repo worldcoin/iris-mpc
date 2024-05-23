@@ -1247,7 +1247,7 @@ impl Circuits {
             let a = b1.get_offset(0, K * self.chunk_size);
             let b = b1.get_offset(1, K * self.chunk_size);
             let c_ = b2.get_offset(0, K * self.chunk_size);
-            let d = b2.get_range(K * self.chunk_size, K * self.chunk_size + 2);
+            let d = b2.get_range(K * self.chunk_size, (K + 2) * self.chunk_size);
             x1.push(a);
             x2.push(b);
             x3.push(c_);
