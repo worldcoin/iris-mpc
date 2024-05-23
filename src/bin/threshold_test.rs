@@ -1,7 +1,7 @@
 use cudarc::driver::CudaDevice;
 use gpu_iris_mpc::{
-    setup::iris_db::iris::IrisCodeArray,
-    threshold_ring::protocol::{ChunkShare, Circuits},
+    setup::iris_db::iris::{IrisCodeArray, MATCH_THRESHOLD_RATIO},
+    threshold_field::protocol::{ChunkShare, Circuits},
 };
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -12,9 +12,12 @@ use tokio::time::{self, Instant};
 // const INPUTS_PER_GPU_SIZE: usize = 116_250_624;
 const INPUTS_PER_GPU_SIZE: usize = 12_507_136;
 const CHUNK_SIZE: usize = INPUTS_PER_GPU_SIZE / 64;
-const B_BITS: u64 = 20;
 
-fn sample_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<u16> {
+const B_BITS: u64 = 20;
+pub(crate) const B: u64 = 1 << B_BITS;
+pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
+
+fn sample_code_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<u16> {
     (0..size)
         .map(|_| {
             let mut x = rng.gen_range::<u16, _>(0..=IrisCodeArray::IRIS_CODE_SIZE as u16);
@@ -24,6 +27,12 @@ fn sample_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<u16> {
             }
             x
         })
+        .collect::<Vec<_>>()
+}
+
+fn sample_mask_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<u16> {
+    (0..size)
+        .map(|_| rng.gen_range::<u16, _>(0..=IrisCodeArray::IRIS_CODE_SIZE as u16))
         .collect::<Vec<_>>()
 }
 
@@ -84,11 +93,12 @@ fn pack_with_device_padding(bits: Vec<bool>) -> Vec<u64> {
     res
 }
 
-fn real_result_msb(input: Vec<u16>) -> Vec<u64> {
+fn real_result_msb(code_input: Vec<u16>, mask_input: Vec<u16>) -> Vec<u64> {
+    assert_eq!(code_input.len(), mask_input.len());
     let mod_ = 1u64 << (16 + B_BITS);
-    let mut res = Vec::with_capacity(input.len());
-    for inp in input {
-        let r = (u64::MAX - ((inp as u64) << B_BITS) + 1) % mod_;
+    let mut res = Vec::with_capacity(code_input.len());
+    for (c, m) in code_input.into_iter().zip(mask_input) {
+        let r = ((m as u64) * A - ((c as u64) << B_BITS)) % mod_;
         let msb = r >> (B_BITS + 16 - 1) & 1 == 1;
         res.push(msb)
     }
@@ -132,7 +142,7 @@ fn open(party: &mut Circuits, x: &[ChunkShare<u64>]) -> Vec<u64> {
 }
 
 #[allow(clippy::assertions_on_constants)]
-#[tokio::main]
+#[tokio::main(worker_threads = 1)]
 async fn main() -> eyre::Result<()> {
     assert!(
         INPUTS_PER_GPU_SIZE % (2048) == 0,
@@ -148,32 +158,32 @@ async fn main() -> eyre::Result<()> {
     let n_devices = CudaDevice::count().unwrap() as usize;
 
     // Get inputs
-    let code_dots = sample_dots(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);
+    let code_dots = sample_code_dots(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);
+    let mask_dots = sample_mask_dots(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);
+
     let (code_share_a, code_share_b) = rep_share_vec(&code_dots, party_id, &mut rng);
-    let real_result = real_result_msb(code_dots);
+    let (mask_share_a, mask_share_b) = rep_share_vec(&mask_dots, party_id, &mut rng);
+    let real_result = real_result_msb(code_dots, mask_dots);
     println!("Random shared inputs generated!");
 
     // Get Circuit Party
-    let mut party = Circuits::new(party_id, INPUTS_PER_GPU_SIZE, url, Some(3000));
+    let mut party = Circuits::new(party_id, INPUTS_PER_GPU_SIZE, url, Some(3001));
     let devices = party.get_devices();
 
     // Import to GPU
     let code_gpu = to_gpu(&code_share_a, &code_share_b, &devices);
+    let mask_gpu = to_gpu(&mask_share_a, &mask_share_b, &devices);
     println!("Data is on GPUs!");
     println!("Starting tests...");
 
     for _ in 0..10 {
-        // Simulate Masks to be zero for this test
-        let mut x = party.allocate_buffer::<u64>(INPUTS_PER_GPU_SIZE);
-        let correction = party.allocate_buffer::<u32>(INPUTS_PER_GPU_SIZE * 2);
         let code_gpu = code_gpu.clone();
+        let mask_gpu = mask_gpu.clone();
 
         let now = Instant::now();
-        party.lift_mul_sub(&mut x, &correction, code_gpu);
-        println!("lift time: {:?}", now.elapsed());
-        party.extract_msb(&mut x);
+        party.compare_threshold_masked_many_fp(code_gpu, mask_gpu);
         party.synchronize_all();
-        println!("extract time: {:?}", now.elapsed());
+        println!("compute time: {:?}", now.elapsed());
 
         let res = party.take_result_buffer();
         let now = Instant::now();
