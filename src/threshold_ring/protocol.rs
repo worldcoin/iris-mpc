@@ -1397,7 +1397,7 @@ impl Circuits {
 
         self.transpose_pack_u64_with_len(x, &mut x1, Self::BITS);
         self.split(&mut x1, &mut x2, &mut x3, Self::BITS);
-        todo!()
+        todo!();
 
         Buffers::return_buffer(&mut self.buffers.u64_36c_1, x1);
         Buffers::return_buffer(&mut self.buffers.u64_36c_2, x2);
