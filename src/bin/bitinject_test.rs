@@ -53,7 +53,7 @@ fn to_gpu(a: &[u64], b: &[u64], devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<u
     result
 }
 
-fn alloc_res(size: usize, devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<u32>> {
+fn alloc_res(size: usize, devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<u16>> {
     devices
         .iter()
         .map(|dev| {
@@ -64,17 +64,17 @@ fn alloc_res(size: usize, devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<u32>> {
         .collect()
 }
 
-fn real_result(input: Vec<u64>) -> Vec<u32> {
+fn real_result(input: Vec<u64>) -> Vec<u16> {
     let mut res = Vec::with_capacity(input.len());
     for i in input.into_iter() {
         for j in 0..64 {
-            res.push(((i >> j) & 1) as u32)
+            res.push(((i >> j) & 1) as u16)
         }
     }
     res
 }
 
-fn open(party: &mut Circuits, x: &mut [ChunkShare<u32>]) -> Vec<u32> {
+fn open(party: &mut Circuits, x: &mut [ChunkShare<u16>]) -> Vec<u16> {
     let n_devices = x.len();
     let mut a = Vec::with_capacity(n_devices);
     let mut b = Vec::with_capacity(n_devices);
@@ -87,10 +87,10 @@ fn open(party: &mut Circuits, x: &mut [ChunkShare<u32>]) -> Vec<u32> {
     }
     cudarc::nccl::result::group_start().unwrap();
     for (idx, res) in x.iter().enumerate() {
-        party.send_view(&res.b.slice(..), party.next_id(), idx);
+        party.send_u16(&res.b, party.next_id(), idx);
     }
     for (idx, res) in x.iter_mut().enumerate() {
-        party.receive_view(&mut res.a.slice(..), party.prev_id(), idx);
+        party.receive_u16(&mut res.a, party.prev_id(), idx);
     }
     cudarc::nccl::result::group_end().unwrap();
     for (idx, res) in x.iter_mut().enumerate() {

@@ -12,8 +12,6 @@ use tokio::time::{self, Instant};
 // const INPUTS_PER_GPU_SIZE: usize = 116_250_624;
 const INPUTS_PER_GPU_SIZE: usize = 12_507_136;
 
-const B_BITS: u64 = 16;
-
 fn sample_mask_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<u16> {
     (0..size)
         .map(|_| rng.gen_range::<u16, _>(0..=IrisCodeArray::IRIS_CODE_SIZE as u16))
@@ -62,15 +60,15 @@ fn to_gpu(a: &[u16], b: &[u16], devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<u
     result
 }
 
-fn real_result_msb(mask_input: Vec<u16>) -> Vec<u64> {
-    mask_input.into_iter().map(|x| (x as u64)).collect()
+fn real_result_msb(mask_input: Vec<u16>) -> Vec<u32> {
+    mask_input.into_iter().map(|x| (x as u32)).collect()
 }
 
 fn open(
     party: &mut Circuits,
-    x: &mut [ChunkShare<u64>],
-    corrections: &mut [ChunkShare<u32>],
-) -> Vec<u64> {
+    x: &mut [ChunkShare<u32>],
+    corrections: &mut [ChunkShare<u16>],
+) -> Vec<u32> {
     let n_devices = x.len();
     let mut res_a = Vec::with_capacity(n_devices);
     let mut res_b = Vec::with_capacity(n_devices);
@@ -89,11 +87,11 @@ fn open(
     cudarc::nccl::result::group_start().unwrap();
     for (idx, (res, corr)) in izip!(x.iter(), corrections.iter()).enumerate() {
         party.send(&res.b, party.next_id(), idx);
-        party.send(&corr.b, party.next_id(), idx);
+        party.send_u16(&corr.b, party.next_id(), idx);
     }
     for (idx, (res, corr)) in izip!(x.iter_mut(), corrections.iter_mut()).enumerate() {
         party.receive(&mut res.a, party.prev_id(), idx);
-        party.receive(&mut corr.a, party.prev_id(), idx);
+        party.receive_u16(&mut corr.a, party.prev_id(), idx);
     }
     cudarc::nccl::result::group_end().unwrap();
     for (idx, (res, corr)) in izip!(x, corrections).enumerate() {
@@ -128,9 +126,9 @@ fn open(
             assert!(corr1 == 0 || corr1 == 1);
             assert!(corr2 == 0 || corr2 == 1);
             let mut res = *res_a + res_b + res_c;
-            res -= (corr1 as u64) << 16;
-            res -= (corr2 as u64) << 17;
-            *res_a = res % (1u64 << (16 + B_BITS));
+            res -= (corr1 as u32) << 16;
+            res -= (corr2 as u32) << 17;
+            *res_a = res;
         }
         result.extend(res_a);
     }
@@ -173,8 +171,8 @@ async fn main() -> eyre::Result<()> {
 
     for _ in 0..10 {
         // Simulate Masks to be zero for this test
-        let mut x = party.allocate_buffer::<u64>(INPUTS_PER_GPU_SIZE);
-        let mut correction = party.allocate_buffer::<u32>(INPUTS_PER_GPU_SIZE * 2);
+        let mut x = party.allocate_buffer::<u32>(INPUTS_PER_GPU_SIZE);
+        let mut correction = party.allocate_buffer::<u16>(INPUTS_PER_GPU_SIZE * 2);
         let mask_gpu = mask_gpu.clone();
 
         let now = Instant::now();
