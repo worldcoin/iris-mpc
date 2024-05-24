@@ -127,6 +127,7 @@ async fn main() {
             }
             
             group_start().unwrap();
+            devs[i].bind_to_thread().unwrap();
             for stream in streams {
                 let start = event::create(CUevent_flags::CU_EVENT_DEFAULT).unwrap();
                 unsafe {
