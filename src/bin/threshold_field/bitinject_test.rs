@@ -1,5 +1,5 @@
 use cudarc::driver::CudaDevice;
-use gpu_iris_mpc::threshold_ring::protocol::{ChunkShare, Circuits};
+use gpu_iris_mpc::threshold_field::protocol::{ChunkShare, Circuits};
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{env, sync::Arc};
@@ -68,7 +68,7 @@ fn real_result(input: Vec<u64>) -> Vec<u32> {
     let mut res = Vec::with_capacity(input.len());
     for i in input.into_iter() {
         for j in 0..64 {
-            res.push(((i >> j) & 1) as u32)
+            res.push(1 - ((i >> j) & 1) as u32)
         }
     }
     res
@@ -143,10 +143,9 @@ async fn main() -> eyre::Result<()> {
 
     for _ in 0..10 {
         let code_gpu = code_gpu.clone();
-        let code_gpu_view = code_gpu.iter().map(|x| x.as_view()).collect::<Vec<_>>();
 
         let now = Instant::now();
-        party.bit_inject_ot(&code_gpu_view, &mut res);
+        party.bit_inject_neg_ot(&code_gpu, &mut res);
         party.synchronize_all();
         println!("compute time: {:?}", now.elapsed());
 
