@@ -9,8 +9,7 @@ use std::{env, sync::Arc};
 use tokio::time::{self, Instant};
 
 //ceil(930 * 125_000 / 2048) * 2048
-// const INPUTS_PER_GPU_SIZE: usize = 116_250_624;
-const INPUTS_PER_GPU_SIZE: usize = 12_507_136;
+const INPUTS_PER_GPU_SIZE: usize = 116_250_624;
 
 fn sample_mask_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<u16> {
     (0..size)
