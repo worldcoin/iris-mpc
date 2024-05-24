@@ -11,7 +11,7 @@ use tokio::time::{self, Instant};
 //ceil(930 * 125_000 / 2048) * 2048
 const INPUTS_PER_GPU_SIZE: usize = 116_250_624;
 // const INPUTS_PER_GPU_SIZE: usize = 12_507_136;
-const B_BITS: u64 = 20;
+const B_BITS: u64 = 16;
 pub(crate) const B: u64 = 1 << B_BITS;
 pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
 
