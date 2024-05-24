@@ -10,7 +10,7 @@ use std::{env, ffi::c_void, str::FromStr, time::Instant};
 use axum::{extract::Path, routing::get, Router};
 use cudarc::{
     driver::{
-        result::event::{self, elapsed},
+        result::{event::{self, elapsed}, stream::synchronize},
         sys::CUevent_flags,
         CudaDevice, CudaSlice, DevicePtr, DeviceSlice,
     },
@@ -114,6 +114,7 @@ async fn main() {
         let now = Instant::now();
 
         let mut events = vec![];
+        let mut all_streams = vec![];
 
         for i in 0..n_devices {
             devs[i].bind_to_thread().unwrap();
@@ -122,6 +123,7 @@ async fn main() {
             for _ in 0..2 {
                 let stream = devs[i].fork_default_stream().unwrap();
                 streams.push(stream);
+                all_streams.push(stream);
             }
 
             group_start();
@@ -174,6 +176,10 @@ async fn main() {
 
         for i in 0..n_devices {
             devs[i].synchronize().unwrap();
+        }
+
+        for stream in all_streams {
+            unsafe {synchronize(stream.stream);}
         }
 
         for (i, event) in events.iter().enumerate() {
