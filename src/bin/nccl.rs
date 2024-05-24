@@ -82,7 +82,7 @@ async fn main() {
     let mut slices = vec![];
     let mut slices1 = vec![];
     let mut slices2 = vec![];
-    let mut slices3 = vec![];
+    // let mut slices3 = vec![];
 
     for i in 0..n_devices {
         let id = if party_id == 0 {
@@ -96,18 +96,18 @@ async fn main() {
         let slice: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
         let slice1: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
         let slice2: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
-        let slice3: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
+        // let slice3: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
 
         println!("starting device {i}...");
 
-        let comm = Comm::from_rank(dev.clone(), party_id, 3, id).unwrap();
+        let comm = Comm::from_rank(dev.clone(), party_id, 2, id).unwrap();
 
         devs.push(dev);
         comms.push(comm);
         slices.push(slice);
         slices1.push(slice1);
         slices2.push(slice2);
-        slices3.push(slice3);
+        // slices3.push(slice3);
     }
 
     for _ in 0..10 {
@@ -124,7 +124,7 @@ async fn main() {
             }
             comms[i].broadcast(&Some(&slices[i]), &mut slices1[i], 0).unwrap();
             comms[i].broadcast(&Some(&slices[i]), &mut slices2[i], 1).unwrap();
-            comms[i].broadcast(&Some(&slices[i]), &mut slices3[i], 2).unwrap();
+            // comms[i].broadcast(&Some(&slices[i]), &mut slices3[i], 2).unwrap();
             let end = event::create(CUevent_flags::CU_EVENT_DEFAULT).unwrap();
             unsafe {
                 event::record(end, *devs[i].cu_stream()).unwrap();
