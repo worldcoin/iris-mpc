@@ -93,7 +93,7 @@ impl ChaChaCudaFeRng {
             grid_dim: (blocks_per_grid as u32, 1, 1),
             shared_mem_bytes: 0, // do we need this since we use __shared__ in kernel?
         };
-        let state_slice = self.dev.htod_sync_copy(&self.chacha_ctx.state).unwrap();
+        let state_slice = self.dev.htod_copy(self.chacha_ctx.state.to_vec()).unwrap();
         let len = self.rng_chunk.len() as u64;
         unsafe {
             self.kernels[0]
@@ -127,8 +127,6 @@ impl ChaChaCudaFeRng {
                 )
                 .unwrap();
         }
-        // do we need this synchronize?
-        self.dev.synchronize().unwrap();
     }
     pub fn data(&self) -> &[u16] {
         &bytemuck::cast_slice(self.output_buffer.as_slice())[0..self.valid_buffer_size]

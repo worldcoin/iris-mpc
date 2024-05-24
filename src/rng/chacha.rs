@@ -80,7 +80,7 @@ impl ChaChaCudaRng {
             grid_dim: (blocks_per_grid as u32, 1, 1),
             shared_mem_bytes: 0,
         };
-        let state_slice = self.dev.htod_sync_copy(&self.chacha_ctx.state).unwrap();
+        let state_slice = self.dev.htod_copy(self.chacha_ctx.state.to_vec()).unwrap();
         unsafe {
             self.kernel
                 .clone()

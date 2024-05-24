@@ -54,8 +54,8 @@ impl ChaChaCudaCorrRng {
             grid_dim: (blocks_per_grid as u32, 1, 1),
             shared_mem_bytes: 0,
         };
-        let state_slice1 = self.dev.htod_sync_copy(&self.chacha_ctx1.state).unwrap();
-        let state_slice2 = self.dev.htod_sync_copy(&self.chacha_ctx2.state).unwrap();
+        let state_slice1 = self.dev.htod_copy(self.chacha_ctx1.state.to_vec()).unwrap();
+        let state_slice2 = self.dev.htod_copy(self.chacha_ctx2.state.to_vec()).unwrap();
         unsafe {
             self.kernels[0]
                 .clone()
@@ -90,7 +90,7 @@ impl ChaChaCudaCorrRng {
             grid_dim: (blocks_per_grid as u32, 1, 1),
             shared_mem_bytes: 0,
         };
-        let state_slice1 = self.dev.htod_sync_copy(&self.chacha_ctx1.state).unwrap();
+        let state_slice1 = self.dev.htod_copy(self.chacha_ctx1.state.to_vec()).unwrap();
         unsafe {
             self.kernels[0]
                 .clone()
@@ -114,7 +114,7 @@ impl ChaChaCudaCorrRng {
             grid_dim: (blocks_per_grid as u32, 1, 1),
             shared_mem_bytes: 0,
         };
-        let state_slice2 = self.dev.htod_sync_copy(&self.chacha_ctx2.state).unwrap();
+        let state_slice2 = self.dev.htod_copy(self.chacha_ctx2.state.to_vec()).unwrap();
         unsafe {
             self.kernels[0]
                 .clone()
