@@ -122,8 +122,8 @@ async fn main() {
             let mut streams = vec![];
             for _ in 0..2 {
                 let stream = devs[i].fork_default_stream().unwrap();
+                all_streams.push(stream.stream);
                 streams.push(stream);
-                all_streams.push(stream);
             }
 
             group_start();
@@ -179,7 +179,7 @@ async fn main() {
         }
 
         for stream in all_streams {
-            unsafe {synchronize(stream.stream);}
+            unsafe {synchronize(stream);}
         }
 
         for (i, event) in events.iter().enumerate() {
