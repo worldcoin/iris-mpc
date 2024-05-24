@@ -5,16 +5,16 @@
 //! Host: NCCL_DEBUG=INFO cargo run --release --bin nccl 0
 //! Node: NCCL_DEBUG=INFO cargo run --release --bin nccl {1,2} HOST_IP:3000
 
-use std::{
-    env,
-    str::FromStr,
-    time::Instant,
-};
+use std::{env, ffi::c_void, str::FromStr, time::Instant};
 
 use axum::{extract::Path, routing::get, Router};
 use cudarc::{
-    driver::{result::event::{self, elapsed}, sys::CUevent_flags, CudaDevice, CudaSlice},
-    nccl::{group_end, group_start, Comm, Id},
+    driver::{
+        result::event::{self, elapsed},
+        sys::CUevent_flags,
+        CudaDevice, CudaSlice, DevicePtr, DeviceSlice,
+    },
+    nccl::{group_end, group_start, result, sys, Comm, Id},
 };
 use once_cell::sync::Lazy;
 
@@ -113,25 +113,56 @@ async fn main() {
     for _ in 0..10 {
         let now = Instant::now();
 
-        // group_start();
         let mut events = vec![];
 
         for i in 0..n_devices {
             devs[i].bind_to_thread().unwrap();
-            let start = event::create(CUevent_flags::CU_EVENT_DEFAULT).unwrap();
-            unsafe {
-                event::record(start, *devs[i].cu_stream()).unwrap();
+
+            for _ in 0..2 {
+                let stream = devs[i].fork_default_stream().unwrap();
+                let start = event::create(CUevent_flags::CU_EVENT_DEFAULT).unwrap();
+                unsafe {
+                    event::record(start, stream.stream).unwrap();
+                }
+                // comms[i]
+                //     .broadcast(&Some(&slices[i]), &mut slices1[i], 0)
+                //     .unwrap();
+                // comms[i]
+                //     .broadcast(&Some(&slices[i]), &mut slices2[i], 1)
+                //     .unwrap();
+
+                unsafe {
+                    result::broadcast(
+                        *slices[i].device_ptr() as *mut c_void,
+                        *slices1[i].device_ptr() as *mut c_void,
+                        slices[i].len(),
+                        sys::ncclDataType_t::ncclUint8,
+                        0,
+                        comms[i].comm,
+                        stream.stream as *mut _,
+                    )
+                    .unwrap();
+
+                    result::broadcast(
+                        *slices[i].device_ptr() as *mut c_void,
+                        *slices2[i].device_ptr() as *mut c_void,
+                        slices[i].len(),
+                        sys::ncclDataType_t::ncclUint8,
+                        1,
+                        comms[i].comm,
+                        stream.stream as *mut _,
+                    )
+                    .unwrap();
+                }
+
+                // comms[i].broadcast(&Some(&slices[i]), &mut slices3[i], 2).unwrap();
+                let end = event::create(CUevent_flags::CU_EVENT_DEFAULT).unwrap();
+                unsafe {
+                    event::record(end, stream.stream).unwrap();
+                }
+                events.push((start, end));
             }
-            comms[i].broadcast(&Some(&slices[i]), &mut slices1[i], 0).unwrap();
-            comms[i].broadcast(&Some(&slices[i]), &mut slices2[i], 1).unwrap();
-            // comms[i].broadcast(&Some(&slices[i]), &mut slices3[i], 2).unwrap();
-            let end = event::create(CUevent_flags::CU_EVENT_DEFAULT).unwrap();
-            unsafe {
-                event::record(end, *devs[i].cu_stream()).unwrap();
-            }
-            events.push((start, end));
         }
-        // group_end();
 
         for i in 0..n_devices {
             devs[i].synchronize().unwrap();
@@ -148,9 +179,10 @@ async fn main() {
         if party_id != 0 {
             let elapsed = now.elapsed();
             // Throughput multiplied by 4 because every device sends *and* receives the buffer to/from two peers.
-            let throughput =
-                (DUMMY_DATA_LEN as f64 * n_devices as f64 * 4f64) / (elapsed.as_millis() as f64) / 1_000_000_000f64
-                    * 1_000f64;
+            let throughput = (DUMMY_DATA_LEN as f64 * n_devices as f64 * 4f64)
+                / (elapsed.as_millis() as f64)
+                / 1_000_000_000f64
+                * 1_000f64;
             println!(
                 "received in {:?} [{:.2} GB/s] [{:.2} Gbps]",
                 elapsed,
