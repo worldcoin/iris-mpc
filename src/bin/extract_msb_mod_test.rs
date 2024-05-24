@@ -12,7 +12,7 @@ use tokio::time::{self, Instant};
 // const INPUTS_PER_GPU_SIZE: usize = 116_250_624;
 const INPUTS_PER_GPU_SIZE: usize = 12_507_136;
 const CHUNK_SIZE: usize = INPUTS_PER_GPU_SIZE / 64;
-const B_BITS: u64 = 20;
+const B_BITS: u64 = 16;
 
 fn sample_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<u16> {
     (0..size)
@@ -164,8 +164,8 @@ async fn main() -> eyre::Result<()> {
 
     for _ in 0..10 {
         // Simulate Masks to be zero for this test
-        let mut x = party.allocate_buffer::<u64>(INPUTS_PER_GPU_SIZE);
-        let correction = party.allocate_buffer::<u32>(INPUTS_PER_GPU_SIZE * 2);
+        let mut x = party.allocate_buffer::<u32>(INPUTS_PER_GPU_SIZE);
+        let correction = party.allocate_buffer::<u16>(INPUTS_PER_GPU_SIZE * 2);
         let code_gpu = code_gpu.clone();
 
         let now = Instant::now();
