@@ -1,7 +1,10 @@
 use cudarc::driver::CudaDevice;
 use gpu_iris_mpc::{
-    setup::iris_db::iris::IrisCodeArray,
-    threshold_ring::protocol::{ChunkShare, Circuits},
+    setup::{
+        iris_db::iris::IrisCodeArray,
+        shamir::{Shamir, P},
+    },
+    threshold_field::protocol::{ChunkShare, Circuits},
 };
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -9,10 +12,11 @@ use std::{env, sync::Arc};
 use tokio::time::{self, Instant};
 
 //ceil(930 * 125_000 / 2048) * 2048
-// const INPUTS_PER_GPU_SIZE: usize = 116_250_624;
-const INPUTS_PER_GPU_SIZE: usize = 12_507_136;
+const INPUTS_PER_GPU_SIZE: usize = 116_250_624;
+// const INPUTS_PER_GPU_SIZE: usize = 12_505_600;
 const CHUNK_SIZE: usize = INPUTS_PER_GPU_SIZE / 64;
 const B_BITS: u64 = 20;
+const P2K: u64 = (P as u64) << B_BITS;
 
 fn sample_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<u16> {
     (0..size)
@@ -20,17 +24,18 @@ fn sample_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<u16> {
             let mut x = rng.gen_range::<u16, _>(0..=IrisCodeArray::IRIS_CODE_SIZE as u16);
             let neg = rng.gen::<bool>();
             if neg {
-                x = u16::MAX - x + 1;
+                x = (P - x) % P;
             }
             x
         })
         .collect::<Vec<_>>()
 }
 
-fn rep_share<R: Rng>(value: u16, id: usize, rng: &mut R) -> (u16, u16) {
-    let a = rng.gen();
-    let b = rng.gen();
-    let c = value - a - b;
+fn rep_share_fp<R: Rng>(value: u16, id: usize, rng: &mut R) -> (u16, u16) {
+    let a = Shamir::random_fp(rng);
+    let b = Shamir::random_fp(rng);
+    let c = value as u32 + P as u32 + P as u32 - a as u32 - b as u32;
+    let c = (c % P as u32) as u16;
 
     match id {
         0 => (a, c),
@@ -40,11 +45,11 @@ fn rep_share<R: Rng>(value: u16, id: usize, rng: &mut R) -> (u16, u16) {
     }
 }
 
-fn rep_share_vec<R: Rng>(value: &[u16], id: usize, rng: &mut R) -> (Vec<u16>, Vec<u16>) {
+fn rep_share_vec_fp<R: Rng>(value: &[u16], id: usize, rng: &mut R) -> (Vec<u16>, Vec<u16>) {
     let mut a = Vec::with_capacity(value.len());
     let mut b = Vec::with_capacity(value.len());
     for v in value.iter() {
-        let (a_, b_) = rep_share(*v, id, rng);
+        let (a_, b_) = rep_share_fp(*v, id, rng);
         a.push(a_);
         b.push(b_);
     }
@@ -85,10 +90,9 @@ fn pack_with_device_padding(bits: Vec<bool>) -> Vec<u64> {
 }
 
 fn real_result_msb(input: Vec<u16>) -> Vec<u64> {
-    let mod_ = 1u64 << (16 + B_BITS);
     let mut res = Vec::with_capacity(input.len());
     for inp in input {
-        let r = (u64::MAX - ((inp as u64) << B_BITS) + 1) % mod_;
+        let r = (P2K - ((inp as u64) << B_BITS)) % P2K;
         let msb = r >> (B_BITS + 16 - 1) & 1 == 1;
         res.push(msb)
     }
@@ -149,7 +153,7 @@ async fn main() -> eyre::Result<()> {
 
     // Get inputs
     let code_dots = sample_dots(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);
-    let (code_share_a, code_share_b) = rep_share_vec(&code_dots, party_id, &mut rng);
+    let (code_share_a, code_share_b) = rep_share_vec_fp(&code_dots, party_id, &mut rng);
     let real_result = real_result_msb(code_dots);
     println!("Random shared inputs generated!");
 
@@ -164,18 +168,19 @@ async fn main() -> eyre::Result<()> {
 
     for _ in 0..10 {
         // Simulate Masks to be zero for this test
-        let mut x = party.allocate_buffer::<u64>(INPUTS_PER_GPU_SIZE);
+        let mut x2 = party.allocate_buffer::<u64>(INPUTS_PER_GPU_SIZE);
+        let mut x01 = party.allocate_buffer::<u64>(INPUTS_PER_GPU_SIZE);
         let correction = party.allocate_buffer::<u32>(INPUTS_PER_GPU_SIZE * 2);
         let code_gpu = code_gpu.clone();
 
+        let mut res = party.take_result_buffer();
         let now = Instant::now();
-        party.lift_mul_sub(&mut x, &correction, code_gpu);
+        party.lift_mul_sub_split(&mut x2, &correction, &mut x01, code_gpu);
         println!("lift time: {:?}", now.elapsed());
-        party.extract_msb(&mut x);
+        party.extract_msb_sum_mod(&x01, &x2, &mut res);
         party.synchronize_all();
         println!("extract time: {:?}", now.elapsed());
 
-        let res = party.take_result_buffer();
         let now = Instant::now();
         let result = open(&mut party, &res);
         party.return_result_buffer(res);
