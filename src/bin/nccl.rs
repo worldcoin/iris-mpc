@@ -116,6 +116,7 @@ async fn main() {
         let mut events = vec![];
         let mut all_streams = vec![];
 
+        group_start();
         for i in 0..n_devices {
             devs[i].bind_to_thread().unwrap();
 
@@ -126,9 +127,7 @@ async fn main() {
                 streams.push(stream);
             }
 
-            group_start();
             for stream in streams {
-                
                 let start = event::create(CUevent_flags::CU_EVENT_DEFAULT).unwrap();
                 unsafe {
                     event::record(start, stream.stream).unwrap();
