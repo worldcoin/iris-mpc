@@ -178,7 +178,7 @@ async fn main() {
         }
 
         for (i, stream) in all_streams.iter().enumerate() {
-            devs[i].bind_to_thread().unwrap();
+            devs[i/2].bind_to_thread().unwrap();
             unsafe {synchronize(*stream);}
         }
 
