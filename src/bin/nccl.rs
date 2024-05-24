@@ -177,10 +177,10 @@ async fn main() {
             devs[i].synchronize().unwrap();
         }
 
-        for (i, stream) in all_streams.iter().enumerate() {
-            devs[i/2].bind_to_thread().unwrap();
-            unsafe {synchronize(*stream);}
-        }
+        // for (i, stream) in all_streams.iter().enumerate() {
+        //     devs[i/2].bind_to_thread().unwrap();
+        //     unsafe {synchronize(*stream);}
+        // }
 
         for (i, event) in events.iter().enumerate() {
             devs[i/2].bind_to_thread().unwrap();
