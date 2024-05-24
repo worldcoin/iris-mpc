@@ -117,8 +117,8 @@ async fn main() {
         let mut all_streams = vec![];
 
         for i in 0..n_devices {
-            group_start().unwrap();
             devs[i].bind_to_thread().unwrap();
+            group_start().unwrap();
 
             let mut streams = vec![];
             for _ in 0..2 {
