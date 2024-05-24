@@ -169,7 +169,7 @@ async fn main() {
         }
 
         for (i, event) in events.iter().enumerate() {
-            devs[i].bind_to_thread().unwrap();
+            devs[i/2].bind_to_thread().unwrap();
             unsafe {
                 let time = elapsed(event.0, event.1).unwrap();
                 println!("device {} took {:?}", i, time);
