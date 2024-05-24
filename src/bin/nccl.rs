@@ -119,7 +119,7 @@ async fn main() {
             devs[i].bind_to_thread().unwrap();
 
             let mut streams = vec![];
-            for i in 0..2 {
+            for _ in 0..2 {
                 let stream = devs[i].fork_default_stream().unwrap();
                 streams.push(stream);
             }
