@@ -116,8 +116,8 @@ async fn main() {
         let mut events = vec![];
         let mut all_streams = vec![];
 
-        group_start();
         for i in 0..n_devices {
+            group_start().unwrap();
             devs[i].bind_to_thread().unwrap();
 
             let mut streams = vec![];
@@ -170,8 +170,8 @@ async fn main() {
                 }
                 events.push((start, end));
             }
+            group_end().unwrap();
         }
-        group_end();
 
         for i in 0..n_devices {
             devs[i].synchronize().unwrap();
