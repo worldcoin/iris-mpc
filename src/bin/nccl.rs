@@ -124,6 +124,7 @@ async fn main() {
                 streams.push(stream);
             }
 
+            group_start();
             for stream in streams {
                 
                 let start = event::create(CUevent_flags::CU_EVENT_DEFAULT).unwrap();
@@ -169,6 +170,7 @@ async fn main() {
                 events.push((start, end));
             }
         }
+        group_end();
 
         for i in 0..n_devices {
             devs[i].synchronize().unwrap();
