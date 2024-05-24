@@ -1,4 +1,4 @@
-use crate::{setup::shamir::Shamir, threshold::cuda::kernel};
+use crate::{setup::shamir::Shamir, threshold_field::cuda::kernel};
 use cudarc::{
     driver::{CudaDevice, CudaFunction, DriverError, LaunchAsync, LaunchConfig},
     nvrtc::{self, Ptx},

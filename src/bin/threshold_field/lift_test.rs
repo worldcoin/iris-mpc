@@ -1,7 +1,10 @@
 use cudarc::driver::CudaDevice;
 use gpu_iris_mpc::{
-    setup::iris_db::iris::IrisCodeArray,
-    threshold_ring::protocol::{ChunkShare, Circuits},
+    setup::{
+        iris_db::iris::IrisCodeArray,
+        shamir::{Shamir, P},
+    },
+    threshold_field::protocol::{ChunkShare, Circuits},
 };
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -13,6 +16,7 @@ use tokio::time::{self, Instant};
 const INPUTS_PER_GPU_SIZE: usize = 12_507_136;
 
 const B_BITS: u64 = 20;
+const P2K: u64 = (P as u64) << B_BITS;
 
 fn sample_mask_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<u16> {
     (0..size)
@@ -20,10 +24,11 @@ fn sample_mask_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<u16> {
         .collect::<Vec<_>>()
 }
 
-fn rep_share<R: Rng>(value: u16, id: usize, rng: &mut R) -> (u16, u16) {
-    let a = rng.gen();
-    let b = rng.gen();
-    let c = value - a - b;
+fn rep_share_fp<R: Rng>(value: u16, id: usize, rng: &mut R) -> (u16, u16) {
+    let a = Shamir::random_fp(rng);
+    let b = Shamir::random_fp(rng);
+    let c = value as u32 + P as u32 + P as u32 - a as u32 - b as u32;
+    let c = (c % P as u32) as u16;
 
     match id {
         0 => (a, c),
@@ -33,11 +38,11 @@ fn rep_share<R: Rng>(value: u16, id: usize, rng: &mut R) -> (u16, u16) {
     }
 }
 
-fn rep_share_vec<R: Rng>(value: &[u16], id: usize, rng: &mut R) -> (Vec<u16>, Vec<u16>) {
+fn rep_share_vec_fp<R: Rng>(value: &[u16], id: usize, rng: &mut R) -> (Vec<u16>, Vec<u16>) {
     let mut a = Vec::with_capacity(value.len());
     let mut b = Vec::with_capacity(value.len());
     for v in value.iter() {
-        let (a_, b_) = rep_share(*v, id, rng);
+        let (a_, b_) = rep_share_fp(*v, id, rng);
         a.push(a_);
         b.push(b_);
     }
@@ -128,9 +133,9 @@ fn open(
             assert!(corr1 == 0 || corr1 == 1);
             assert!(corr2 == 0 || corr2 == 1);
             let mut res = *res_a + res_b + res_c;
-            res -= (corr1 as u64) << 16;
-            res -= (corr2 as u64) << 17;
-            *res_a = res % (1u64 << (16 + B_BITS));
+            res += P2K - P as u64 * corr1 as u64;
+            res += P2K - P as u64 * corr2 as u64;
+            *res_a = res % P2K;
         }
         result.extend(res_a);
     }
@@ -158,7 +163,7 @@ async fn main() -> eyre::Result<()> {
     // Get inputs
     let mask_dots = sample_mask_dots(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);
 
-    let (mask_share_a, mask_share_b) = rep_share_vec(&mask_dots, party_id, &mut rng);
+    let (mask_share_a, mask_share_b) = rep_share_vec_fp(&mask_dots, party_id, &mut rng);
     let real_result = real_result_msb(mask_dots);
     println!("Random shared inputs generated!");
 
@@ -173,17 +178,17 @@ async fn main() -> eyre::Result<()> {
 
     for _ in 0..10 {
         // Simulate Masks to be zero for this test
-        let mut x = party.allocate_buffer::<u64>(INPUTS_PER_GPU_SIZE);
+        let mut x2 = party.allocate_buffer::<u64>(INPUTS_PER_GPU_SIZE);
         let mut correction = party.allocate_buffer::<u32>(INPUTS_PER_GPU_SIZE * 2);
         let mask_gpu = mask_gpu.clone();
 
         let now = Instant::now();
-        party.lift_mpc(mask_gpu, &mut x, &mut correction);
+        party.lift_p2k(mask_gpu, &mut x2, &mut correction);
         party.synchronize_all();
         println!("compute time: {:?}", now.elapsed());
 
         let now = Instant::now();
-        let result = open(&mut party, &mut x, &mut correction);
+        let result = open(&mut party, &mut x2, &mut correction);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
 
         let mut correct = true;

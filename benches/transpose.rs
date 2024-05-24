@@ -120,7 +120,7 @@ fn criterion_benchmark_transpose_64(
 }
 fn criterion_benchmark_transpose(c: &mut Criterion) {
     let dev = CudaDevice::new(0).unwrap();
-    let pts = compile_ptx(include_str!("../src/threshold/cuda/kernel.cu")).unwrap();
+    let pts = compile_ptx(include_str!("../src/threshold_field/cuda/kernel.cu")).unwrap();
     let kernels = Kernels::new(dev.clone(), pts);
     for log_buf_size in 10..=20 {
         let buf_size = 1usize << log_buf_size;
