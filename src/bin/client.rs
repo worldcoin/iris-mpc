@@ -6,7 +6,7 @@ use aws_sdk_sns::{
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use gpu_iris_mpc::{
-    setup::iris_db::{db::IrisDB, iris::{IrisCode, IrisCodeArray}, shamir_iris::ShamirIris},
+    setup::iris_db::{db::IrisDB, iris::IrisCode, shamir_iris::ShamirIris},
     sqs::SMPCRequest,
 };
 use rand::{rngs::StdRng, SeedableRng};

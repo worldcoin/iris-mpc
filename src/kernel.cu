@@ -40,27 +40,32 @@ extern "C" __global__ void reconstructAndCompare(unsigned short *codes_result1, 
     }
 }
 
-extern "C" __global__ void dedupQuery(unsigned int* matchResultsSelf, unsigned int* matchResults, unsigned char** queries, unsigned char** queriesNew, unsigned char** queriesSum, unsigned char** queriesSumNew, unsigned int rowCounter, size_t queryLength)
+extern "C" __global__ void dedupQuery(unsigned int *matchResultsSelf, unsigned int *matchResults, unsigned char *queries1, unsigned char *queries2, unsigned char *queriesNew1, unsigned char *queriesNew2, unsigned char *queriesSum1, unsigned char *queriesSum2, unsigned char *queriesSumNew1, unsigned char *queriesSumNew2, unsigned int *rowCounter, size_t queryLength, size_t deviceIdx)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < queryLength)
     {
-        bool compSelf = false;
-        if (idx == ROTATIONS || (idx - 1) % ROTATIONS == 0)
+        bool match = false;
+        for (int r = 0; r <= ROTATIONS * 2; r++)
         {
-            compSelf = true;
+            int oldIdx = (deviceIdx * queryLength + idx) * (2 * ROTATIONS + 1) + r;
+            if (matchResults[oldIdx] != UINT_MAX || (r == ROTATIONS && matchResultsSelf[oldIdx] != UINT_MAX))
+            {
+                match = true;
+            }
         }
 
-        if (matchResults[idx] == UINT_MAX || (compSelf && matchResultsSelf[idx] == UINT_MAX))
+        if (match)
+            return;
+
+        int row = atomicAdd(rowCounter, 1);
+        int oldIdx = (deviceIdx * queryLength + idx) * (2 * ROTATIONS + 1) + ROTATIONS;
+        queriesSumNew1[row] = queriesSum1[oldIdx];
+        queriesSumNew2[row] = queriesSum2[oldIdx];
+        for (int i = 0; i < IRIS_CODE_LENGTH; i++)
         {
-            int row = atomicAdd(rowCounter, 1) - 1;
-            queriesSumNew[0][row] = queriesSum[0][row];
-            queriesSumNew[1][row] = queriesSum[1][row];
-            for (int i=0;i<IRIS_CODE_LENGTH;i++)
-            {
-                queriesNew[0][idx * IRIS_CODE_LENGTH + i] = queries[0][idx * IRIS_CODE_LENGTH + i];
-                queriesNew[1][idx * IRIS_CODE_LENGTH + i] = queries[1][idx * IRIS_CODE_LENGTH + i];
-            }
+            queriesNew1[row * IRIS_CODE_LENGTH + i] = queries1[oldIdx * IRIS_CODE_LENGTH + i];
+            queriesNew2[row * IRIS_CODE_LENGTH + i] = queries2[oldIdx * IRIS_CODE_LENGTH + i];
         }
     }
 }

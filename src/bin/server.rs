@@ -228,12 +228,14 @@ async fn main() -> eyre::Result<()> {
     let mut cublas_handles = vec![];
     let mut results = vec![];
     let mut batch_results = vec![];
+    let mut query_results_mask = vec![];
     for _ in 0..MAX_CONCURRENT_REQUESTS {
         let tmp_streams = device_manager.fork_streams();
         cublas_handles.push(device_manager.create_cublas(&tmp_streams));
         streams.push(tmp_streams);
         results.push(distance_comparator.prepare_results());
         batch_results.push(batch_distance_comparator.prepare_results());
+        query_results_mask.push(batch_distance_comparator.prepare_results_mask());
     }
 
     // Main Loop
