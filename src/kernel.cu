@@ -40,7 +40,7 @@ extern "C" __global__ void reconstructAndCompare(unsigned short *codes_result1, 
     }
 }
 
-extern "C" __global__ void dedupQuery(unsigned int *matchResultsSelf, unsigned int *matchResults, unsigned char *queries1, unsigned char *queries2, unsigned char *queriesNew1, unsigned char *queriesNew2, unsigned char *queriesSum1, unsigned char *queriesSum2, unsigned char *queriesSumNew1, unsigned char *queriesSumNew2, unsigned int *rowCounter, size_t queryLength, size_t deviceIdx)
+extern "C" __global__ void dedupAndAppend(unsigned int *matchResultsSelf, unsigned int *matchResults, unsigned char *queries1, unsigned char *queries2, unsigned char *queriesNew1, unsigned char *queriesNew2, unsigned char *queriesSum1, unsigned char *queriesSum2, unsigned char *queriesSumNew1, unsigned char *queriesSumNew2, unsigned int *dbSize, size_t queryLength, size_t deviceIdx)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < queryLength)
@@ -58,8 +58,10 @@ extern "C" __global__ void dedupQuery(unsigned int *matchResultsSelf, unsigned i
         if (match)
             return;
 
-        int row = atomicAdd(rowCounter, 1);
+        int row = atomicAdd(dbSize, 1);
         int oldIdx = (deviceIdx * queryLength + idx) * (2 * ROTATIONS + 1) + ROTATIONS;
+
+        // write back result
         queriesSumNew1[row] = queriesSum1[oldIdx];
         queriesSumNew2[row] = queriesSum2[oldIdx];
         for (int i = 0; i < IRIS_CODE_LENGTH; i++)
