@@ -18,7 +18,7 @@ use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
         result::{
-            event, launch_kernel, malloc_async, memcpy_dtoh_async, memcpy_dtoh_sync, memcpy_htod_async, stream::{self, synchronize, wait_event}
+            event, launch_kernel, malloc_async, memcpy_dtoh_async, memcpy_dtoh_sync, memcpy_htod_async, memset_d8_async, stream::{self, synchronize, wait_event}
         }, sys::{CUevent, CUevent_flags}, CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceRepr, DeviceSlice, LaunchAsync, LaunchConfig
     },
     nccl::{result, Comm, Id, NcclType},
@@ -587,10 +587,15 @@ impl ShareDB {
 
             let query0_sum =
                 unsafe { malloc_async(streams[idx].stream, query_ptrs.0.len()).unwrap() };
-
+                
             let query1_sum =
                 unsafe { malloc_async(streams[idx].stream, query_ptrs.1.len()).unwrap() };
 
+            unsafe {
+                memset_d8_async(query0_sum, 0, query_ptrs.0.len(), streams[idx].stream).unwrap();
+                memset_d8_async(query1_sum, 0, query_ptrs.1.len(), streams[idx].stream).unwrap();
+            }    
+                
             gemm(
                 &blass[idx],
                 query0,
