@@ -18,8 +18,13 @@ use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
         result::{
-            event, launch_kernel, malloc_async, memcpy_dtoh_async, memcpy_dtoh_sync, memcpy_htod_async, memset_d8_async, stream::{self, synchronize, wait_event}
-        }, sys::{CUevent, CUevent_flags}, CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceRepr, DeviceSlice, LaunchAsync, LaunchConfig
+            event, launch_kernel, malloc_async, memcpy_dtoh_async, memcpy_dtoh_sync,
+            memcpy_htod_async, memset_d8_async,
+            stream::{self, synchronize, wait_event},
+        },
+        sys::{CUevent, CUevent_flags},
+        CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceRepr,
+        DeviceSlice, LaunchAsync, LaunchConfig,
     },
     nccl::{result, Comm, Id, NcclType},
     nvrtc::compile_ptx,
@@ -184,8 +189,12 @@ impl DistanceComparator {
                 .get_func(DIST_FUNCTION_NAME, DIST_FUNCTION_NAME)
                 .unwrap();
 
-            dev.load_ptx(ptx.clone(), DEDUPAPPEND_FUNCTION_NAME, &[DEDUPAPPEND_FUNCTION_NAME])
-                .unwrap();
+            dev.load_ptx(
+                ptx.clone(),
+                DEDUPAPPEND_FUNCTION_NAME,
+                &[DEDUPAPPEND_FUNCTION_NAME],
+            )
+            .unwrap();
             let dedup_function = dev
                 .get_func(DEDUPAPPEND_FUNCTION_NAME, DEDUPAPPEND_FUNCTION_NAME)
                 .unwrap();
@@ -298,9 +307,9 @@ impl DistanceComparator {
                 match_results[i],
                 queries1[i],
                 queries2[i],
-                queries1_new[i], 
+                queries1_new[i],
                 queries2_new[i],
-                query_sums1[i], 
+                query_sums1[i],
                 query_sums2[i],
                 query_sums_new1[i],
                 query_sums_new2[i],
@@ -309,8 +318,11 @@ impl DistanceComparator {
                 i as u64,
             ];
 
-            unsafe { 
-                let mut params = params.iter().map(|x| x.as_kernel_param()).collect::<Vec<_>>();
+            unsafe {
+                let mut params = params
+                    .iter()
+                    .map(|x| x.as_kernel_param())
+                    .collect::<Vec<_>>();
                 launch_kernel(
                     self.dedup_kernels[i].cu_function,
                     cfg.grid_dim,
@@ -318,7 +330,8 @@ impl DistanceComparator {
                     cfg.shared_mem_bytes,
                     streams[i].stream,
                     &mut params,
-                ).unwrap();
+                )
+                .unwrap();
             }
         }
     }
@@ -587,15 +600,15 @@ impl ShareDB {
 
             let query0_sum =
                 unsafe { malloc_async(streams[idx].stream, query_ptrs.0.len()).unwrap() };
-                
+
             let query1_sum =
                 unsafe { malloc_async(streams[idx].stream, query_ptrs.1.len()).unwrap() };
 
             unsafe {
                 memset_d8_async(query0_sum, 0, query_ptrs.0.len(), streams[idx].stream).unwrap();
                 memset_d8_async(query1_sum, 0, query_ptrs.1.len(), streams[idx].stream).unwrap();
-            }    
-                
+            }
+
             gemm(
                 &blass[idx],
                 query0,
@@ -831,44 +844,47 @@ mod tests {
         let preprocessed_query = device_manager.htod_transfer_query(&preprocessed_query, &streams);
         let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
         let db_slices = engine.load_db(&db);
-        engine.dot(
-            &preprocessed_query,
-            &(device_ptrs(&db_slices.0 .0), device_ptrs(&db_slices.0 .1)),
-            &streams,
-            &blass,
-        );
-        engine.dot_reduce(
-            &query_sums,
-            &(device_ptrs(&db_slices.1 .0), device_ptrs(&db_slices.1 .1)),
-            &streams,
-        );
-        device_manager.await_streams(&streams);
 
-        let a_nda = random_ndarray::<u64>(db, DB_SIZE, WIDTH);
-        let b_nda = random_ndarray::<u64>(query, QUERY_SIZE, WIDTH);
-        let c_nda = a_nda.dot(&b_nda.t());
+        for _ in 0..5 {
+            engine.dot(
+                &preprocessed_query,
+                &(device_ptrs(&db_slices.0 .0), device_ptrs(&db_slices.0 .1)),
+                &streams,
+                &blass,
+            );
+            engine.dot_reduce(
+                &query_sums,
+                &(device_ptrs(&db_slices.1 .0), device_ptrs(&db_slices.1 .1)),
+                &streams,
+            );
+            device_manager.await_streams(&streams);
 
-        let mut vec_column_major: Vec<u16> = Vec::new();
-        for col in 0..c_nda.ncols() {
-            for row in c_nda.column(col) {
-                vec_column_major.push((*row % (P as u64)) as u16);
+            let a_nda = random_ndarray::<u64>(db.clone(), DB_SIZE, WIDTH);
+            let b_nda = random_ndarray::<u64>(query.clone(), QUERY_SIZE, WIDTH);
+            let c_nda = a_nda.dot(&b_nda.t());
+
+            let mut vec_column_major: Vec<u16> = Vec::new();
+            for col in 0..c_nda.ncols() {
+                for row in c_nda.column(col) {
+                    vec_column_major.push((*row % (P as u64)) as u16);
+                }
             }
-        }
 
-        for device_idx in 0..N_DEVICES {
-            engine.fetch_results(&mut gpu_result, device_idx);
-            let selected_elements: Vec<u16> = vec_column_major
-                .chunks(DB_SIZE)
-                .flat_map(|chunk| {
-                    chunk
-                        .iter()
-                        .skip(DB_SIZE / N_DEVICES * device_idx)
-                        .take(DB_SIZE / N_DEVICES)
-                })
-                .cloned()
-                .collect();
+            for device_idx in 0..N_DEVICES {
+                engine.fetch_results(&mut gpu_result, device_idx);
+                let selected_elements: Vec<u16> = vec_column_major
+                    .chunks(DB_SIZE)
+                    .flat_map(|chunk| {
+                        chunk
+                            .iter()
+                            .skip(DB_SIZE / N_DEVICES * device_idx)
+                            .take(DB_SIZE / N_DEVICES)
+                    })
+                    .cloned()
+                    .collect();
 
-            assert_eq!(selected_elements, gpu_result);
+                assert_eq!(selected_elements, gpu_result);
+            }
         }
     }
 
@@ -1149,7 +1165,7 @@ mod tests {
     #[test]
     fn test_dedup_query() {
         const ROTATIONS: usize = 31;
-        const DB_SIZE: usize =  100;
+        const DB_SIZE: usize = 100;
         const QUERIES: usize = 248;
         const WIDTH: usize = 12800;
         const QUERY_LEN: usize = QUERIES * WIDTH;
@@ -1178,9 +1194,12 @@ mod tests {
 
         let streams = device_manager.fork_streams();
         let query_ptrs = device_manager.htod_transfer_query(&vec![query1, query2], &streams);
-        let query_sum_ptrs = device_manager.htod_transfer_query(&vec![query_sums1, query_sums2], &streams);
-        let query_ptrs_new = device_manager.htod_transfer_query(&vec![query1_new, query2_new], &streams);
-        let query_sum_ptrs_new = device_manager.htod_transfer_query(&vec![query_sums1_new, query_sums2_new], &streams);
+        let query_sum_ptrs =
+            device_manager.htod_transfer_query(&vec![query_sums1, query_sums2], &streams);
+        let query_ptrs_new =
+            device_manager.htod_transfer_query(&vec![query1_new, query2_new], &streams);
+        let query_sum_ptrs_new =
+            device_manager.htod_transfer_query(&vec![query_sums1_new, query_sums2_new], &streams);
 
         let mut result_ptrs = vec![];
         let mut result_ptrs_self = vec![];
@@ -1201,12 +1220,7 @@ mod tests {
                     .unwrap(),
             );
 
-            db_sizes.push(
-                device_manager
-                    .device(i)
-                    .htod_copy(vec![0u32;1])
-                    .unwrap(),
-            );
+            db_sizes.push(device_manager.device(i).htod_copy(vec![0u32; 1]).unwrap());
         }
 
         device_manager.await_streams(&streams);
