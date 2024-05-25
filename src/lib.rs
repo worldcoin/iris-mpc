@@ -227,13 +227,6 @@ impl DistanceComparator {
             .collect::<Vec<_>>()
     }
 
-    pub fn prepare_results_mask(&self) -> Vec<CudaSlice<bool>> {
-        let results_uninit = vec![false; self.query_length];
-        (0..self.n_devices)
-            .map(|i| self.devs[i].htod_copy(results_uninit.clone()).unwrap())
-            .collect::<Vec<_>>()
-    }
-
     pub fn reconstruct_and_compare(
         &mut self,
         codes_result_peers: &Vec<Vec<CudaSlice<u8>>>,
