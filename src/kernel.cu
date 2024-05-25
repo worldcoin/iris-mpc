@@ -40,26 +40,26 @@ extern "C" __global__ void reconstructAndCompare(unsigned short *codes_result1, 
     }
 }
 
-extern "C" __global__ void dedupQuery(unsigned int* matchResults, unsigned char* queries1, unsigned char* queries2, size_t queryLength, size_t dbLength, bool isRotated)
+extern "C" __global__ void dedupQuery(unsigned int* matchResultsSelf, unsigned int* matchResults, unsigned char** queries, unsigned char** queriesNew, unsigned char** queriesSum, unsigned char** queriesSumNew, unsigned int rowCounter, size_t queryLength)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < queryLength * dbLength)
+    if (idx < queryLength)
     {
-        size_t queryIdx = idx / dbLength;
-        size_t dbIdx = idx % dbLength;
-
-        if (isRotated && !(queryIdx == ROTATIONS || (queryIdx - 1) % ROTATIONS == 0))
+        bool compSelf = false;
+        if (idx == ROTATIONS || (idx - 1) % ROTATIONS == 0)
         {
-            // Don't compare rotated against rotated elements.
-            return;
+            compSelf = true;
         }
 
-        if (matchResults[idx] != UINT_MAX)
+        if (matchResults[idx] == UINT_MAX || (compSelf && matchResultsSelf[idx] == UINT_MAX))
         {
+            int row = atomicAdd(rowCounter, 1) - 1;
+            queriesSumNew[0][row] = queriesSum[0][row];
+            queriesSumNew[1][row] = queriesSum[1][row];
             for (int i=0;i<IRIS_CODE_LENGTH;i++)
             {
-                queries1[queryIdx * IRIS_CODE_LENGTH + i] = 0;
-                queries2[queryIdx * IRIS_CODE_LENGTH + i] = 0;
+                queriesNew[0][idx * IRIS_CODE_LENGTH + i] = queries[0][idx * IRIS_CODE_LENGTH + i];
+                queriesNew[1][idx * IRIS_CODE_LENGTH + i] = queries[1][idx * IRIS_CODE_LENGTH + i];
             }
         }
     }
