@@ -37,7 +37,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 
 const ENABLE_QUERY_DEDUP: bool = false;
 const REGION: &str = "us-east-2";
-const DB_SIZE: usize = 8 * 50_000;
+const DB_SIZE: usize = 8 * 1_000;
 const QUERIES: usize = 930;
 const RNG_SEED: u64 = 42;
 const N_BATCHES: usize = 10;
