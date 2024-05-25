@@ -276,6 +276,8 @@ async fn main() -> eyre::Result<()> {
         let mask_query_sums =
             masks_engine.query_sums(&mask_query, request_streams, request_cublas_handles);
 
+        device_manager.await_streams(request_streams);
+
         // if ENABLE_QUERY_DEDUP {
         //     batch_codes_engine.dot(
         //         &code_query,
@@ -370,8 +372,6 @@ async fn main() -> eyre::Result<()> {
             request_streams,
             device_ptrs(request_results),
         );
-
-        // TODO: filter out dups from query and append query to DB
 
         device_manager.record_event(request_streams, &next_exchange_event);
 
