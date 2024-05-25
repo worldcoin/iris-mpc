@@ -37,7 +37,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 
 const ENABLE_QUERY_DEDUP: bool = false;
 const REGION: &str = "us-east-2";
-const DB_SIZE: usize = 8 * 1_000;
+const DB_SIZE: usize = 8 * 5_000;
 const QUERIES: usize = 930;
 const RNG_SEED: u64 = 42;
 const N_BATCHES: usize = 10;
@@ -275,8 +275,6 @@ async fn main() -> eyre::Result<()> {
             codes_engine.query_sums(&code_query, request_streams, request_cublas_handles);
         let mask_query_sums =
             masks_engine.query_sums(&mask_query, request_streams, request_cublas_handles);
-
-        device_manager.await_streams(request_streams);
 
         // if ENABLE_QUERY_DEDUP {
         //     batch_codes_engine.dot(
