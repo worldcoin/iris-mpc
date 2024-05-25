@@ -35,7 +35,7 @@ use gpu_iris_mpc::{
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
-const ENABLE_QUERY_DEDUP: bool = true;
+const ENABLE_QUERY_DEDUP: bool = false;
 const REGION: &str = "us-east-2";
 const DB_SIZE: usize = 8 * 50_000;
 const QUERIES: usize = 930;
