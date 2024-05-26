@@ -35,7 +35,8 @@ use gpu_iris_mpc::{
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
-const ENABLE_QUERY_DEDUP: bool = false;
+const ENABLE_DEDUP_QUERY: bool = false;
+const ENABLE_WRITE_DB: bool = false;
 const REGION: &str = "us-east-2";
 const DB_SIZE: usize = 8 * 5_000;
 const QUERIES: usize = 930;
@@ -199,41 +200,41 @@ async fn main() -> eyre::Result<()> {
     println!("Engines ready!");
 
     // Engines for inflight queries
-    // let mut batch_codes_engine = ShareDB::init(
-    //     party_id,
-    //     device_manager.clone(),
-    //     l_coeff,
-    //     QUERIES,
-    //     QUERIES,
-    //     chacha_seeds,
-    //     bootstrap_url.clone(),
-    //     Some(true),
-    //     Some(3002),
-    // );
-    // let mut batch_masks_engine = ShareDB::init(
-    //     party_id,
-    //     device_manager.clone(),
-    //     l_coeff,
-    //     QUERIES,
-    //     QUERIES,
-    //     chacha_seeds,
-    //     bootstrap_url.clone(),
-    //     Some(true),
-    //     Some(3003),
-    // );
-    // let mut batch_distance_comparator = DistanceComparator::init(QUERIES, QUERIES, false);
+    let mut batch_codes_engine = ShareDB::init(
+        party_id,
+        device_manager.clone(),
+        l_coeff,
+        QUERIES,
+        QUERIES,
+        chacha_seeds,
+        bootstrap_url.clone(),
+        Some(true),
+        Some(3002),
+    );
+    let mut batch_masks_engine = ShareDB::init(
+        party_id,
+        device_manager.clone(),
+        l_coeff,
+        QUERIES,
+        QUERIES,
+        chacha_seeds,
+        bootstrap_url.clone(),
+        Some(true),
+        Some(3003),
+    );
+    let mut batch_distance_comparator = DistanceComparator::init(QUERIES, QUERIES, false);
 
     // Prepare streams etc.
     let mut streams = vec![];
     let mut cublas_handles = vec![];
     let mut results = vec![];
-    // let mut batch_results = vec![];
+    let mut batch_results = vec![];
     for _ in 0..MAX_CONCURRENT_REQUESTS {
         let tmp_streams = device_manager.fork_streams();
         cublas_handles.push(device_manager.create_cublas(&tmp_streams));
         streams.push(tmp_streams);
         results.push(distance_comparator.prepare_results());
-        // batch_results.push(batch_distance_comparator.prepare_results());
+        batch_results.push(batch_distance_comparator.prepare_results());
     }
 
     // Main Loop
@@ -245,6 +246,13 @@ async fn main() -> eyre::Result<()> {
     let mut timer_events = vec![];
     let start_timer = device_manager.create_events();
     let end_timer = device_manager.create_events();
+
+    let mut code_db_sizes = vec![];
+    let mut mask_db_sizes = vec![];
+    for i in 0..device_manager.device_count() {
+        code_db_sizes.push(device_manager.device(i).htod_copy(vec![0u32; 1]).unwrap()); // TODO
+        mask_db_sizes.push(device_manager.device(i).htod_copy(vec![0u32; 1]).unwrap()); // TODO
+    }
 
     // loop {
     for _ in 0..N_BATCHES {
@@ -258,7 +266,7 @@ async fn main() -> eyre::Result<()> {
         let request_streams = &streams[request_counter % MAX_CONCURRENT_REQUESTS];
         let request_cublas_handles = &cublas_handles[request_counter % MAX_CONCURRENT_REQUESTS];
         let request_results = &results[request_counter % MAX_CONCURRENT_REQUESTS];
-        // let request_batch_results = &batch_results[request_counter % MAX_CONCURRENT_REQUESTS];
+        let request_batch_results = &batch_results[request_counter % MAX_CONCURRENT_REQUESTS];
 
         // First stream doesn't need to wait on anyone
         if request_counter == 0 {
@@ -276,38 +284,34 @@ async fn main() -> eyre::Result<()> {
         let mask_query_sums =
             masks_engine.query_sums(&mask_query, request_streams, request_cublas_handles);
 
-        // if ENABLE_QUERY_DEDUP {
-        //     batch_codes_engine.dot(
-        //         &code_query,
-        //         &code_query,
-        //         request_streams,
-        //         request_cublas_handles,
-        //     );
+        if ENABLE_DEDUP_QUERY {
+            batch_codes_engine.dot(
+                &code_query,
+                &code_query,
+                request_streams,
+                request_cublas_handles,
+            );
     
-        //     batch_masks_engine.dot(
-        //         &code_query,
-        //         &code_query,
-        //         request_streams,
-        //         request_cublas_handles,
-        //     );
+            batch_masks_engine.dot(
+                &code_query,
+                &code_query,
+                request_streams,
+                request_cublas_handles,
+            );
     
-        //     batch_codes_engine.dot_reduce(&code_query_sums, &code_query_sums, request_streams);
-        //     batch_masks_engine.dot_reduce(&code_query_sums, &code_query_sums, request_streams);
+            batch_codes_engine.dot_reduce(&code_query_sums, &code_query_sums, request_streams);
+            batch_masks_engine.dot_reduce(&code_query_sums, &code_query_sums, request_streams);
     
-        //     batch_codes_engine.exchange_results(request_streams);
-        //     batch_masks_engine.exchange_results(request_streams);
+            batch_codes_engine.exchange_results(request_streams);
+            batch_masks_engine.exchange_results(request_streams);
     
-        //     batch_distance_comparator.reconstruct_and_compare(
-        //         &batch_codes_engine.results_peers,
-        //         &batch_masks_engine.results_peers,
-        //         request_streams,
-        //         device_ptrs(request_batch_results),
-        //     );
-
-        //     // filter out dups
-        //     // TODO:
-        // }
-
+            batch_distance_comparator.reconstruct_and_compare(
+                &batch_codes_engine.results_peers,
+                &batch_masks_engine.results_peers,
+                request_streams,
+                device_ptrs(request_batch_results),
+            );
+        }
 
         // BLOCK 1: calculate individual dot products
         device_manager.await_event(request_streams, &current_dot_event);
@@ -323,6 +327,7 @@ async fn main() -> eyre::Result<()> {
             request_streams,
             request_cublas_handles,
         );
+
         masks_engine.dot(
             &mask_query,
             &(
@@ -370,6 +375,38 @@ async fn main() -> eyre::Result<()> {
             request_streams,
             device_ptrs(request_results),
         );
+
+        if ENABLE_DEDUP_QUERY && ENABLE_WRITE_DB {
+            distance_comparator.dedup_and_append(
+                &device_ptrs(request_batch_results),
+                &device_ptrs(request_results),
+                &code_query.0,
+                &code_query.1,
+                &device_ptrs(&code_db_slices.0 .0),
+                &device_ptrs(&code_db_slices.0 .1),
+                &code_query_sums.0,
+                &code_query_sums.1,
+                &device_ptrs(&code_db_slices.1 .0),
+                &device_ptrs(&code_db_slices.1 .1),
+                &device_ptrs(&code_db_sizes),
+                request_streams,
+            );
+
+            distance_comparator.dedup_and_append(
+                &device_ptrs(request_batch_results),
+                &device_ptrs(request_results),
+                &mask_query.0,
+                &mask_query.1,
+                &device_ptrs(&mask_db_slices.0 .0),
+                &device_ptrs(&mask_db_slices.0 .1),
+                &mask_query_sums.0,
+                &mask_query_sums.1,
+                &device_ptrs(&mask_db_slices.1 .0),
+                &device_ptrs(&mask_db_slices.1 .1),
+                &device_ptrs(&mask_db_sizes),
+                request_streams,
+            );
+        }
 
         device_manager.record_event(request_streams, &next_exchange_event);
 

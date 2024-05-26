@@ -5,12 +5,7 @@ pub mod setup;
 pub mod sqs;
 
 use std::{
-    ffi::c_void,
-    ptr,
-    str::FromStr,
-    sync::Arc,
-    thread,
-    time::{Duration, Instant},
+    ffi::c_void, mem, ptr, str::FromStr, sync::Arc, thread, time::{Duration, Instant}
 };
 
 use axum::{extract::Path, routing::get, Router};
@@ -27,7 +22,7 @@ use cudarc::{
         DeviceSlice, LaunchAsync, LaunchConfig,
     },
     nccl::{result, Comm, Id, NcclType},
-    nvrtc::compile_ptx,
+    nvrtc::{compile_ptx, compile_ptx_with_opts, CompileOptions},
 };
 use device_manager::DeviceManager;
 use rayon::prelude::*;
@@ -592,15 +587,10 @@ impl ShareDB {
             let query1 = query_ptrs.1[idx];
 
             let query0_sum =
-                unsafe { malloc_async(streams[idx].stream, self.query_length * 4).unwrap() };
+                unsafe { malloc_async(streams[idx].stream, self.query_length * mem::size_of::<u32>()).unwrap() };
 
             let query1_sum =
-                unsafe { malloc_async(streams[idx].stream, self.query_length * 4).unwrap() };
-
-            // unsafe {
-            //     memset_d8_async(query0_sum, 0, query_ptrs.0.len(), streams[idx].stream).unwrap();
-            //     memset_d8_async(query1_sum, 0, query_ptrs.1.len(), streams[idx].stream).unwrap();
-            // }
+                unsafe { malloc_async(streams[idx].stream, self.query_length * mem::size_of::<u32>()).unwrap() };
 
             gemm(
                 &blass[idx],
