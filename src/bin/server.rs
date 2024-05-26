@@ -382,7 +382,7 @@ async fn main() -> eyre::Result<()> {
         let tmp_results = device_ptrs(request_results);
         let tmp_evts = end_timer.iter().map(|e| *e as u64).collect::<Vec<_>>();
 
-        tokio::spawn(async move {
+        // tokio::spawn(async move {
             let mut index_results = vec![];
             for i in 0..tmp_devs.len() {
                 tmp_devs[i].bind_to_thread().unwrap();
@@ -422,7 +422,7 @@ async fn main() -> eyre::Result<()> {
                 println!("Not found in DB.");
             }
             println!("----");
-        });
+        // });
 
         // Prepare for next batch
         timer_events.push(timers);
