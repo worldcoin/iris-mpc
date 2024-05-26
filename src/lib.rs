@@ -592,15 +592,15 @@ impl ShareDB {
             let query1 = query_ptrs.1[idx];
 
             let query0_sum =
-                unsafe { malloc_async(streams[idx].stream, query_ptrs.0.len()).unwrap() };
+                unsafe { malloc_async(streams[idx].stream, self.query_length * 4).unwrap() };
 
             let query1_sum =
-                unsafe { malloc_async(streams[idx].stream, query_ptrs.1.len()).unwrap() };
+                unsafe { malloc_async(streams[idx].stream, self.query_length * 4).unwrap() };
 
-            unsafe {
-                memset_d8_async(query0_sum, 0, query_ptrs.0.len(), streams[idx].stream).unwrap();
-                memset_d8_async(query1_sum, 0, query_ptrs.1.len(), streams[idx].stream).unwrap();
-            }
+            // unsafe {
+            //     memset_d8_async(query0_sum, 0, query_ptrs.0.len(), streams[idx].stream).unwrap();
+            //     memset_d8_async(query1_sum, 0, query_ptrs.1.len(), streams[idx].stream).unwrap();
+            // }
 
             gemm(
                 &blass[idx],
