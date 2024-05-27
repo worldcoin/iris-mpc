@@ -327,18 +327,18 @@ async fn main() -> eyre::Result<()> {
                 request_cublas_handles,
             );
 
-            batch_codes_engine.dot_reduce(
-                &code_query_sums,
-                &code_query_sums,
-                &query_db_size,
-                request_streams,
-            );
-            batch_masks_engine.dot_reduce(
-                &code_query_sums,
-                &code_query_sums,
-                &query_db_size,
-                request_streams,
-            );
+            // batch_codes_engine.dot_reduce(
+            //     &code_query_sums,
+            //     &code_query_sums,
+            //     &query_db_size,
+            //     request_streams,
+            // );
+            // batch_masks_engine.dot_reduce(
+            //     &code_query_sums,
+            //     &code_query_sums,
+            //     &query_db_size,
+            //     request_streams,
+            // );
 
             // batch_codes_engine.exchange_results(request_streams);
             // batch_masks_engine.exchange_results(request_streams);
