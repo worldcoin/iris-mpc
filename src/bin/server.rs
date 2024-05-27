@@ -340,8 +340,8 @@ async fn main() -> eyre::Result<()> {
                 request_streams,
             );
 
-            batch_codes_engine.exchange_results(request_streams);
-            batch_masks_engine.exchange_results(request_streams);
+            // batch_codes_engine.exchange_results(request_streams);
+            // batch_masks_engine.exchange_results(request_streams);
 
             // batch_distance_comparator.reconstruct_and_compare(
             //     &batch_codes_engine.results_peers,
