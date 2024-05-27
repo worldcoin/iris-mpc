@@ -653,10 +653,10 @@ impl ShareDB {
             let query1 = query_ptrs.1[idx];
 
             // Prepare randomness to mask results
-            if self.is_remote {
-                self.rngs[idx].0.fill_rng_no_host_copy(&streams[idx]);
-                self.rngs[idx].1.fill_rng_no_host_copy(&streams[idx]);
-            }
+            // if self.is_remote {
+            //     self.rngs[idx].0.fill_rng_no_host_copy(&streams[idx]);
+            //     self.rngs[idx].1.fill_rng_no_host_copy(&streams[idx]);
+            // }
 
             for (i, d) in [db.0[idx], db.1[idx]].iter().enumerate() {
                 for (j, q) in [query0, query1].iter().enumerate() {
