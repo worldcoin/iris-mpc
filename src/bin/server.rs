@@ -311,13 +311,13 @@ async fn main() -> eyre::Result<()> {
         device_manager.await_event(request_streams, &current_dot_event);
 
         if ENABLE_DEDUP_QUERY {
-            batch_codes_engine.dot(
-                &code_query,
-                &code_query,
-                &query_db_size,
-                request_streams,
-                request_cublas_handles,
-            );
+            // batch_codes_engine.dot(
+            //     &code_query,
+            //     &code_query,
+            //     &query_db_size,
+            //     request_streams,
+            //     request_cublas_handles,
+            // );
 
             batch_masks_engine.dot(
                 &code_query,
