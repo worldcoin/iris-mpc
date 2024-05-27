@@ -38,7 +38,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 const ENABLE_DEDUP_QUERY: bool = false;
 const ENABLE_WRITE_DB: bool = false;
 const REGION: &str = "us-east-2";
-const DB_SIZE: usize = 8 * 5_000;
+const DB_SIZE: usize = 8 * 1_000;
 const QUERIES: usize = 930;
 const RNG_SEED: u64 = 42;
 const N_BATCHES: usize = 10;
@@ -349,6 +349,8 @@ async fn main() -> eyre::Result<()> {
                     .device(i)
                     .dtoh_sync_copy(&code_db_sizes[i])
                     .unwrap()[0] as usize;
+
+                println!("Updating DB size on device {}: {:?}", i, current_db_size[i]);
             }
         }
 
