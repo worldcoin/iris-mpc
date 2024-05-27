@@ -49,7 +49,7 @@ extern "C" __global__ void dedupAndAppend(unsigned int *matchResultsSelf, unsign
         for (int r = 0; r <= ROTATIONS * 2; r++)
         {
             int oldIdx = (deviceIdx * queryLength + idx) * (2 * ROTATIONS + 1) + r;
-            if (matchResults[oldIdx] != UINT_MAX || (r == ROTATIONS && matchResultsSelf[oldIdx] != UINT_MAX))
+            if (matchResults[oldIdx] != UINT_MAX)
             {
                 match = true;
             }

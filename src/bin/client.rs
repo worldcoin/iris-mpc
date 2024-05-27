@@ -44,7 +44,6 @@ async fn main() -> eyre::Result<()> {
 
     // Prepare query
     for _i in 0..N_QUERIES {
-        let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let template = if let Some(db_index) = db_index {
             db.db[db_index].clone()
         } else {
