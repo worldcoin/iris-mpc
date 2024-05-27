@@ -668,7 +668,7 @@ impl ShareDB {
                         0,
                         0,
                         (db_sizes[i] * self.query_length * 4 * (i * 2 + j)) as u64,
-                        db_sizes[i] / self.device_manager.device_count(),
+                        db_sizes[i],
                         self.query_length,
                         IRIS_CODE_LENGTH,
                         1,
@@ -687,8 +687,7 @@ impl ShareDB {
         streams: &Vec<CudaStream>,
     ) {
         for idx in 0..self.device_manager.device_count() {
-            let num_elements =
-                db_sizes[idx] / self.device_manager.device_count() * self.query_length;
+            let num_elements = db_sizes[idx] * self.query_length;
             let threads_per_block = 256;
             let blocks_per_grid = num_elements.div_ceil(threads_per_block);
             let cfg = LaunchConfig {
