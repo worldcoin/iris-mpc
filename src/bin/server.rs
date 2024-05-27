@@ -1,22 +1,18 @@
-use aws_sdk_sqs::{config::Region, Client, Error};
-use base64::{engine::general_purpose, Engine};
+use aws_sdk_sqs::{config::Region, Client};
 use clap::Parser;
 use cudarc::driver::{
     result::{
         event::{self, elapsed},
-        memcpy_dtoh_async,
         stream::synchronize,
     },
     sys::lib,
-    DevicePtr,
 };
 use gpu_iris_mpc::{
     device_ptrs,
-    setup::iris_db::{iris::IrisCodeArray, shamir_iris::ShamirIris},
+    setup::iris_db::shamir_iris::ShamirIris,
     sqs::{SMPCRequest, SQSMessage},
 };
 use std::{
-    env,
     fs::metadata,
     time::{Duration, Instant},
 };
@@ -28,14 +24,14 @@ use gpu_iris_mpc::{
     preprocess_query,
     setup::{
         id::PartyID,
-        iris_db::{db::IrisDB, iris::IrisCode, shamir_db::ShamirIrisDB},
+        iris_db::{db::IrisDB, shamir_db::ShamirIrisDB},
         shamir::Shamir,
     },
     DistanceComparator, ShareDB,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
-const ENABLE_DEDUP_QUERY: bool = false;
+const ENABLE_DEDUP_QUERY: bool = true;
 const ENABLE_WRITE_DB: bool = false;
 const REGION: &str = "us-east-2";
 const DB_SIZE: usize = 8 * 1_000;
@@ -179,8 +175,6 @@ async fn main() -> eyre::Result<()> {
 
     let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE);
 
-    println!("Codes Engines ready!");
-
     let mut masks_engine = ShareDB::init(
         party_id,
         device_manager.clone(),
@@ -196,8 +190,6 @@ async fn main() -> eyre::Result<()> {
     let mask_db_slices = masks_engine.load_db(&masks_db, DB_SIZE);
 
     let mut distance_comparator = DistanceComparator::init(DB_SIZE, QUERIES, true);
-
-    println!("Engines ready!");
 
     // Engines for inflight queries
     let mut batch_codes_engine = ShareDB::init(
@@ -255,7 +247,7 @@ async fn main() -> eyre::Result<()> {
                 .device(i)
                 .htod_copy(vec![(DB_SIZE / device_manager.device_count()) as u32; 1])
                 .unwrap(),
-        ); // TODO
+        );
         mask_db_sizes.push(
             device_manager
                 .device(i)
@@ -267,6 +259,8 @@ async fn main() -> eyre::Result<()> {
     let mut current_db_size: Vec<usize> =
         vec![DB_SIZE / device_manager.device_count(); device_manager.device_count()];
     let query_db_size = vec![QUERIES; device_manager.device_count()];
+
+    println!("All systems ready.");
 
     // loop {
     for _ in 0..N_BATCHES {
@@ -297,6 +291,24 @@ async fn main() -> eyre::Result<()> {
             codes_engine.query_sums(&code_query, request_streams, request_cublas_handles);
         let mask_query_sums =
             masks_engine.query_sums(&mask_query, request_streams, request_cublas_handles);
+
+        // update the db size, skip this for the first two
+        if request_counter > 2 {
+            // We have two streams working concurrently, we'll await the stream before previous one
+            let previous_streams = &streams[(request_counter - 2) % MAX_CONCURRENT_REQUESTS];
+            device_manager.await_streams(&previous_streams);
+            for i in 0..device_manager.device_count() {
+                current_db_size[i] = device_manager
+                    .device(i)
+                    .dtoh_sync_copy(&code_db_sizes[i])
+                    .unwrap()[0] as usize;
+
+                println!("Updating DB size on device {}: {:?}", i, current_db_size[i]);
+            }
+        }
+
+        // BLOCK 1: calculate individual dot products
+        device_manager.await_event(request_streams, &current_dot_event);
 
         if ENABLE_DEDUP_QUERY {
             batch_codes_engine.dot(
@@ -331,31 +343,13 @@ async fn main() -> eyre::Result<()> {
             batch_codes_engine.exchange_results(request_streams);
             batch_masks_engine.exchange_results(request_streams);
 
-            batch_distance_comparator.reconstruct_and_compare(
-                &batch_codes_engine.results_peers,
-                &batch_masks_engine.results_peers,
-                request_streams,
-                device_ptrs(request_batch_results),
-            );
+            // batch_distance_comparator.reconstruct_and_compare(
+            //     &batch_codes_engine.results_peers,
+            //     &batch_masks_engine.results_peers,
+            //     request_streams,
+            //     device_ptrs(request_batch_results),
+            // );
         }
-
-        // update the db size, skip this for the first two
-        if request_counter > 2 {
-            // We have two streams working concurrently, we'll await the stream before previous one
-            let previous_streams = &streams[(request_counter - 2) % MAX_CONCURRENT_REQUESTS];
-            device_manager.await_streams(&previous_streams);
-            for i in 0..device_manager.device_count() {
-                current_db_size[i] = device_manager
-                    .device(i)
-                    .dtoh_sync_copy(&code_db_sizes[i])
-                    .unwrap()[0] as usize;
-
-                println!("Updating DB size on device {}: {:?}", i, current_db_size[i]);
-            }
-        }
-
-        // BLOCK 1: calculate individual dot products
-        device_manager.await_event(request_streams, &current_dot_event);
 
         debug_record_event!(device_manager, request_streams, timers);
 
