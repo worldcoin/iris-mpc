@@ -319,13 +319,13 @@ async fn main() -> eyre::Result<()> {
             //     request_cublas_handles,
             // );
 
-            batch_masks_engine.dot(
-                &code_query,
-                &code_query,
-                &query_db_size,
-                request_streams,
-                request_cublas_handles,
-            );
+            // batch_masks_engine.dot(
+            //     &code_query,
+            //     &code_query,
+            //     &query_db_size,
+            //     request_streams,
+            //     request_cublas_handles,
+            // );
 
             // batch_codes_engine.dot_reduce(
             //     &code_query_sums,
