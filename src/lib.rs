@@ -370,7 +370,6 @@ impl ShareDB {
         is_remote: Option<bool>,
         server_port: Option<u16>,
     ) -> Self {
-        // TODO: replace with a MAX_DB_SIZE to allow for insertions
         let n_devices = device_manager.device_count();
         let ptx = compile_ptx(PTX_SRC).unwrap();
         let is_remote = is_remote.unwrap_or(false);
