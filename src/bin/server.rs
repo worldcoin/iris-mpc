@@ -207,7 +207,7 @@ async fn main() -> eyre::Result<()> {
         party_id,
         device_manager.clone(),
         l_coeff,
-        QUERIES * 8,
+        QUERIES * device_manager.device_count(),
         QUERIES,
         chacha_seeds,
         bootstrap_url.clone(),
@@ -319,36 +319,36 @@ async fn main() -> eyre::Result<()> {
                 request_cublas_handles,
             );
 
-            // batch_masks_engine.dot(
-            //     &code_query,
-            //     &code_query,
-            //     &query_db_size,
-            //     request_streams,
-            //     request_cublas_handles,
-            // );
+            batch_masks_engine.dot(
+                &code_query,
+                &code_query,
+                &query_db_size,
+                request_streams,
+                request_cublas_handles,
+            );
 
-            // batch_codes_engine.dot_reduce(
-            //     &code_query_sums,
-            //     &code_query_sums,
-            //     &query_db_size,
-            //     request_streams,
-            // );
-            // batch_masks_engine.dot_reduce(
-            //     &code_query_sums,
-            //     &code_query_sums,
-            //     &query_db_size,
-            //     request_streams,
-            // );
+            batch_codes_engine.dot_reduce(
+                &code_query_sums,
+                &code_query_sums,
+                &query_db_size,
+                request_streams,
+            );
+            batch_masks_engine.dot_reduce(
+                &code_query_sums,
+                &code_query_sums,
+                &query_db_size,
+                request_streams,
+            );
 
-            // batch_codes_engine.exchange_results(request_streams);
-            // batch_masks_engine.exchange_results(request_streams);
+            batch_codes_engine.exchange_results(request_streams);
+            batch_masks_engine.exchange_results(request_streams);
 
-            // batch_distance_comparator.reconstruct_and_compare(
-            //     &batch_codes_engine.results_peers,
-            //     &batch_masks_engine.results_peers,
-            //     request_streams,
-            //     device_ptrs(request_batch_results),
-            // );
+            batch_distance_comparator.reconstruct_and_compare(
+                &batch_codes_engine.results_peers,
+                &batch_masks_engine.results_peers,
+                request_streams,
+                device_ptrs(request_batch_results),
+            );
         }
 
         debug_record_event!(device_manager, request_streams, timers);
