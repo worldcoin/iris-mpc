@@ -177,7 +177,7 @@ async fn main() -> eyre::Result<()> {
         Some(3000),
     );
 
-    let code_db_slices = codes_engine.load_db(&codes_db);
+    let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE);
 
     println!("Codes Engines ready!");
 
@@ -193,7 +193,7 @@ async fn main() -> eyre::Result<()> {
         Some(3001),
     );
 
-    let mask_db_slices = masks_engine.load_db(&masks_db);
+    let mask_db_slices = masks_engine.load_db(&masks_db, DB_SIZE);
 
     let mut distance_comparator = DistanceComparator::init(DB_SIZE, QUERIES, true);
 
@@ -250,9 +250,23 @@ async fn main() -> eyre::Result<()> {
     let mut code_db_sizes = vec![];
     let mut mask_db_sizes = vec![];
     for i in 0..device_manager.device_count() {
-        code_db_sizes.push(device_manager.device(i).htod_copy(vec![0u32; 1]).unwrap()); // TODO
-        mask_db_sizes.push(device_manager.device(i).htod_copy(vec![0u32; 1]).unwrap()); // TODO
+        code_db_sizes.push(
+            device_manager
+                .device(i)
+                .htod_copy(vec![(DB_SIZE / device_manager.device_count()) as u32; 1])
+                .unwrap(),
+        ); // TODO
+        mask_db_sizes.push(
+            device_manager
+                .device(i)
+                .htod_copy(vec![(DB_SIZE / device_manager.device_count()) as u32; 1])
+                .unwrap(),
+        );
     }
+
+    let mut current_db_size: Vec<usize> =
+        vec![DB_SIZE / device_manager.device_count(); device_manager.device_count()];
+    let query_db_size = vec![QUERIES; device_manager.device_count()];
 
     // loop {
     for _ in 0..N_BATCHES {
@@ -288,29 +302,54 @@ async fn main() -> eyre::Result<()> {
             batch_codes_engine.dot(
                 &code_query,
                 &code_query,
+                &query_db_size,
                 request_streams,
                 request_cublas_handles,
             );
-    
+
             batch_masks_engine.dot(
                 &code_query,
                 &code_query,
+                &query_db_size,
                 request_streams,
                 request_cublas_handles,
             );
-    
-            batch_codes_engine.dot_reduce(&code_query_sums, &code_query_sums, request_streams);
-            batch_masks_engine.dot_reduce(&code_query_sums, &code_query_sums, request_streams);
-    
+
+            batch_codes_engine.dot_reduce(
+                &code_query_sums,
+                &code_query_sums,
+                &query_db_size,
+                request_streams,
+            );
+            batch_masks_engine.dot_reduce(
+                &code_query_sums,
+                &code_query_sums,
+                &query_db_size,
+                request_streams,
+            );
+
             batch_codes_engine.exchange_results(request_streams);
             batch_masks_engine.exchange_results(request_streams);
-    
+
             batch_distance_comparator.reconstruct_and_compare(
                 &batch_codes_engine.results_peers,
                 &batch_masks_engine.results_peers,
                 request_streams,
                 device_ptrs(request_batch_results),
             );
+        }
+
+        // update the db size, skip this for the first two
+        if request_counter > 2 {
+            // We have two streams working concurrently, we'll await the stream before previous one
+            let previous_streams = &streams[(request_counter - 2) % MAX_CONCURRENT_REQUESTS];
+            device_manager.await_streams(&previous_streams);
+            for i in 0..device_manager.device_count() {
+                current_db_size[i] = device_manager
+                    .device(i)
+                    .dtoh_sync_copy(&code_db_sizes[i])
+                    .unwrap()[0] as usize;
+            }
         }
 
         // BLOCK 1: calculate individual dot products
@@ -324,6 +363,7 @@ async fn main() -> eyre::Result<()> {
                 device_ptrs(&code_db_slices.0 .0),
                 device_ptrs(&code_db_slices.0 .1),
             ),
+            &current_db_size,
             request_streams,
             request_cublas_handles,
         );
@@ -334,6 +374,7 @@ async fn main() -> eyre::Result<()> {
                 device_ptrs(&mask_db_slices.0 .0),
                 device_ptrs(&mask_db_slices.0 .1),
             ),
+            &current_db_size,
             request_streams,
             request_cublas_handles,
         );
@@ -349,6 +390,7 @@ async fn main() -> eyre::Result<()> {
                 device_ptrs(&code_db_slices.1 .0),
                 device_ptrs(&code_db_slices.1 .1),
             ),
+            &current_db_size,
             request_streams,
         );
         masks_engine.dot_reduce(
@@ -357,6 +399,7 @@ async fn main() -> eyre::Result<()> {
                 device_ptrs(&mask_db_slices.1 .0),
                 device_ptrs(&mask_db_slices.1 .1),
             ),
+            &current_db_size,
             request_streams,
         );
 
