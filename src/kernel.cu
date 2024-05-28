@@ -58,16 +58,16 @@ extern "C" __global__ void dedupAndAppend(unsigned int *matchResultsSelf, unsign
         if (match)
             return;
 
-        // int row = atomicAdd(dbSize, 1);
-        // int oldIdx = (deviceIdx * queryLength + idx) * (2 * ROTATIONS + 1) + ROTATIONS;
+        int row = atomicAdd(dbSize, 1);
+        int oldIdx = (deviceIdx * queryLength + idx) * (2 * ROTATIONS + 1) + ROTATIONS;
 
         // write back result
-        // queriesSumNew1[row] = queriesSum1[oldIdx];
-        // queriesSumNew2[row] = queriesSum2[oldIdx];
-        // for (int i = 0; i < IRIS_CODE_LENGTH; i++)
-        // {
-        //     queriesNew1[row * IRIS_CODE_LENGTH + i] = queries1[oldIdx * IRIS_CODE_LENGTH + i];
-        //     queriesNew2[row * IRIS_CODE_LENGTH + i] = queries2[oldIdx * IRIS_CODE_LENGTH + i];
-        // }
+        queriesSumNew1[row] = queriesSum1[oldIdx];
+        queriesSumNew2[row] = queriesSum2[oldIdx];
+        for (int i = 0; i < IRIS_CODE_LENGTH; i++)
+        {
+            queriesNew1[row * IRIS_CODE_LENGTH + i] = queries1[oldIdx * IRIS_CODE_LENGTH + i];
+            queriesNew2[row * IRIS_CODE_LENGTH + i] = queries2[oldIdx * IRIS_CODE_LENGTH + i];
+        }
     }
 }
