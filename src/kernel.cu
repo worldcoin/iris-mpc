@@ -58,8 +58,8 @@ extern "C" __global__ void dedupAndAppend(unsigned int *matchResultsSelf, unsign
         if (match)
             return;
 
-        int row = atomicAdd(dbSize, 1);
-        int oldIdx = (deviceIdx * queryLength + idx) * (2 * ROTATIONS + 1) + ROTATIONS;
+        // int row = atomicAdd(dbSize, 1);
+        // int oldIdx = (deviceIdx * queryLength + idx) * (2 * ROTATIONS + 1) + ROTATIONS;
 
         // write back result
         // queriesSumNew1[row] = queriesSum1[oldIdx];
