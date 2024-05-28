@@ -35,7 +35,7 @@ const ENABLE_DEDUP_QUERY: bool = true;
 const ENABLE_WRITE_DB: bool = true;
 const REGION: &str = "us-east-2";
 const DB_SIZE: usize = 8 * 1_000;
-const DB_BUFFER: usize = 1_000;
+const DB_BUFFER: usize = 100;
 const QUERIES: usize = 992;
 const RNG_SEED: u64 = 42;
 const N_BATCHES: usize = 10;
@@ -353,7 +353,6 @@ async fn main() -> eyre::Result<()> {
             distance_comparator.reconstruct_and_compare(
                 &batch_codes_engine.results_peers,
                 &batch_masks_engine.results_peers,
-                &device_ptrs(&query_db_sizes),
                 &query_db_size,
                 request_streams,
                 device_ptrs(request_batch_results),
@@ -420,7 +419,6 @@ async fn main() -> eyre::Result<()> {
         distance_comparator.reconstruct_and_compare(
             &codes_engine.results_peers,
             &masks_engine.results_peers,
-            &device_ptrs(&code_db_sizes),
             &current_db_size,
             request_streams,
             device_ptrs(request_results),
@@ -496,9 +494,10 @@ async fn main() -> eyre::Result<()> {
                 for i in 0..QUERIES {
                     if index_results[j][i] != u32::MAX {
                         println!(
-                            "Found query {} at index {:?}",
+                            "Found query {} at index {:?} (device {})",
                             i,
-                            (DB_SIZE / 8 * j) as u32 + index_results[j][i]
+                            (DB_SIZE / 8 * j) as u32 + index_results[j][i],
+                            j
                         );
                         found = true;
                         break;

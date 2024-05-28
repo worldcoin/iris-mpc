@@ -223,7 +223,6 @@ impl DistanceComparator {
         &mut self,
         codes_result_peers: &Vec<Vec<CudaSlice<u8>>>,
         masks_result_peers: &Vec<Vec<CudaSlice<u8>>>,
-        db_size_ptrs: &Vec<u64>,
         db_sizes: &Vec<usize>,
         streams: &Vec<CudaStream>,
         results: Vec<u64>,
@@ -253,7 +252,7 @@ impl DistanceComparator {
                             &masks_result_peers[i][2],
                             results[i],
                             MATCH_RATIO,
-                            db_size_ptrs[i],
+                            db_sizes[i] as u64,
                             self.query_length as u64,
                         ),
                     )
