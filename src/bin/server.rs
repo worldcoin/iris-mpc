@@ -305,10 +305,10 @@ async fn main() -> eyre::Result<()> {
             let previous_streams = &streams[(request_counter - 2) % MAX_CONCURRENT_REQUESTS];
             device_manager.await_streams(&previous_streams);
             for i in 0..device_manager.device_count() {
-                // current_db_size[i] = device_manager
-                //     .device(i)
-                //     .dtoh_sync_copy(&code_db_sizes[i])
-                //     .unwrap()[0] as usize;
+                current_db_size[i] = device_manager
+                    .device(i)
+                    .dtoh_sync_copy(&code_db_sizes[i])
+                    .unwrap()[0] as usize;
 
                 println!("Updating DB size on device {}: {:?}", i, current_db_size[i]);
             }
