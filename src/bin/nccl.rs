@@ -5,11 +5,7 @@
 //! Host: NCCL_DEBUG=INFO cargo run --release --bin nccl 0
 //! Node: NCCL_DEBUG=INFO cargo run --release --bin nccl {1,2} HOST_IP:3000
 
-use std::{
-    env,
-    str::FromStr,
-    time::Instant,
-};
+use std::{env, str::FromStr, time::Instant};
 
 use axum::{extract::Path, routing::get, Router};
 use cudarc::{
@@ -43,15 +39,16 @@ impl FromStr for IdWrapper {
     }
 }
 
-impl ToString for IdWrapper {
-    fn to_string(&self) -> String {
-        hex::encode(
+impl std::fmt::Display for IdWrapper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = hex::encode(
             self.0
                 .internal()
                 .iter()
                 .map(|&c| c as u8)
                 .collect::<Vec<_>>(),
-        )
+        );
+        write!(f, "{}", s)
     }
 }
 
@@ -116,21 +113,28 @@ async fn main() -> eyre::Result<()> {
         for i in 0..n_devices {
             devs[i].bind_to_thread().unwrap();
 
-            comms[i].broadcast(&Some(&slices[i]), &mut slices1[i], 0).unwrap();
-            comms[i].broadcast(&Some(&slices[i]), &mut slices2[i], 1).unwrap();
-            comms[i].broadcast(&Some(&slices[i]), &mut slices3[i], 2).unwrap();
+            comms[i]
+                .broadcast(&Some(&slices[i]), &mut slices1[i], 0)
+                .unwrap();
+            comms[i]
+                .broadcast(&Some(&slices[i]), &mut slices2[i], 1)
+                .unwrap();
+            comms[i]
+                .broadcast(&Some(&slices[i]), &mut slices3[i], 2)
+                .unwrap();
         }
 
-        for i in 0..n_devices {
-            devs[i].synchronize().unwrap();
+        for dev in devs.iter() {
+            dev.synchronize().unwrap();
         }
 
         if party_id != 0 {
             let elapsed = now.elapsed();
             // Throughput multiplied by 4 because every device sends *and* receives the buffer to/from two peers.
-            let throughput =
-                (DUMMY_DATA_LEN as f64 * n_devices as f64 * 4f64) / (elapsed.as_millis() as f64) / 1_000_000_000f64
-                    * 1_000f64;
+            let throughput = (DUMMY_DATA_LEN as f64 * n_devices as f64 * 4f64)
+                / (elapsed.as_millis() as f64)
+                / 1_000_000_000f64
+                * 1_000f64;
             println!(
                 "received in {:?} [{:.2} GB/s] [{:.2} Gbps]",
                 elapsed,
