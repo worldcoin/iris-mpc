@@ -228,7 +228,6 @@ impl DistanceComparator {
         streams: &Vec<CudaStream>,
         results: Vec<u64>,
     ) {
-        
         for i in 0..self.n_devices {
             let num_elements = db_sizes[i] * self.query_length;
             let threads_per_block = 256;
@@ -489,6 +488,7 @@ impl ShareDB {
         &self,
         db_entries: &[u16],
         db_length: usize, //TODO: should handle different sizes for each device
+        max_db_length: usize,
     ) -> (
         (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
         (Vec<CudaSlice<u32>>, Vec<CudaSlice<u32>>),
@@ -520,25 +520,40 @@ impl ShareDB {
 
         // Split up db and load to all devices
         let chunk_size = db_length / self.device_manager.device_count();
+        let max_size = max_db_length / self.device_manager.device_count();
 
         let db1_sums = a1_sums
             .chunks(chunk_size)
             .enumerate()
             .map(|(idx, chunk)| {
+                let mut slice = unsafe {
+                    self.device_manager
+                        .device(idx)
+                        .alloc(max_size)
+                        .unwrap()
+                };
                 self.device_manager
                     .device(idx)
-                    .htod_sync_copy(&chunk)
-                    .unwrap()
+                    .htod_copy_into(chunk.to_vec(), &mut slice)
+                    .unwrap();
+                slice
             })
             .collect::<Vec<_>>();
         let db0_sums = a0_sums
             .chunks(chunk_size)
             .enumerate()
             .map(|(idx, chunk)| {
+                let mut slice = unsafe {
+                    self.device_manager
+                        .device(idx)
+                        .alloc(max_size)
+                        .unwrap()
+                };
                 self.device_manager
                     .device(idx)
-                    .htod_sync_copy(&chunk)
-                    .unwrap()
+                    .htod_copy_into(chunk.to_vec(), &mut slice)
+                    .unwrap();
+                slice
             })
             .collect::<Vec<_>>();
 
@@ -546,20 +561,34 @@ impl ShareDB {
             .chunks(chunk_size * IRIS_CODE_LENGTH)
             .enumerate()
             .map(|(idx, chunk)| {
+                let mut slice = unsafe {
+                    self.device_manager
+                        .device(idx)
+                        .alloc(max_size * IRIS_CODE_LENGTH)
+                        .unwrap()
+                };
                 self.device_manager
                     .device(idx)
-                    .htod_sync_copy(&chunk)
-                    .unwrap()
+                    .htod_copy_into(chunk.to_vec(), &mut slice)
+                    .unwrap();
+                slice
             })
             .collect::<Vec<_>>();
         let db0 = a0_host
             .chunks(chunk_size * IRIS_CODE_LENGTH)
             .enumerate()
             .map(|(idx, chunk)| {
+                let mut slice = unsafe {
+                    self.device_manager
+                        .device(idx)
+                        .alloc(max_size * IRIS_CODE_LENGTH)
+                        .unwrap()
+                };
                 self.device_manager
                     .device(idx)
-                    .htod_sync_copy(&chunk)
-                    .unwrap()
+                    .htod_copy_into(chunk.to_vec(), &mut slice)
+                    .unwrap();
+                slice
             })
             .collect::<Vec<_>>();
 
@@ -843,7 +872,7 @@ mod tests {
         let blass = device_manager.create_cublas(&streams);
         let preprocessed_query = device_manager.htod_transfer_query(&preprocessed_query, &streams);
         let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
-        let db_slices = engine.load_db(&db, DB_SIZE);
+        let db_slices = engine.load_db(&db, DB_SIZE, DB_SIZE);
 
         for _ in 0..5 {
             engine.dot(
@@ -955,7 +984,7 @@ mod tests {
             let preprocessed_query =
                 device_manager.htod_transfer_query(&preprocessed_query, &streams);
             let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
-            let db_slices = engine.load_db(&db, DB_SIZE);
+            let db_slices = engine.load_db(&db, DB_SIZE, DB_SIZE);
             engine.dot(
                 &preprocessed_query,
                 &(device_ptrs(&db_slices.0 .0), device_ptrs(&db_slices.0 .1)),
@@ -1083,8 +1112,8 @@ mod tests {
             let mask_query = device_manager.htod_transfer_query(&mask_query, &streams);
             let code_query_sums = codes_engine.query_sums(&code_query, &streams, &blass);
             let mask_query_sums = masks_engine.query_sums(&mask_query, &streams, &blass);
-            let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE);
-            let mask_db_slices = codes_engine.load_db(&masks_db, DB_SIZE);
+            let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE, DB_SIZE);
+            let mask_db_slices = codes_engine.load_db(&masks_db, DB_SIZE, DB_SIZE);
 
             codes_engine.dot(
                 &code_query,

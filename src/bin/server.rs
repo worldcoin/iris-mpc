@@ -166,7 +166,7 @@ async fn main() -> eyre::Result<()> {
         party_id,
         device_manager.clone(),
         l_coeff,
-        DB_SIZE + DB_BUFFER * 12800,
+        DB_SIZE + DB_BUFFER,
         QUERIES,
         chacha_seeds,
         bootstrap_url.clone(),
@@ -174,13 +174,13 @@ async fn main() -> eyre::Result<()> {
         Some(3000),
     );
 
-    let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE);
+    let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE, DB_SIZE + DB_BUFFER);
 
     let mut masks_engine = ShareDB::init(
         party_id,
         device_manager.clone(),
         l_coeff,
-        DB_SIZE + DB_BUFFER * 12800,
+        DB_SIZE + DB_BUFFER,
         QUERIES,
         chacha_seeds,
         bootstrap_url.clone(),
@@ -188,7 +188,7 @@ async fn main() -> eyre::Result<()> {
         Some(3001),
     );
 
-    let mask_db_slices = masks_engine.load_db(&masks_db, DB_SIZE);
+    let mask_db_slices = masks_engine.load_db(&masks_db, DB_SIZE, DB_SIZE + DB_BUFFER);
 
     let mut distance_comparator = DistanceComparator::init(QUERIES);
 
