@@ -58,7 +58,7 @@ extern "C" __global__ void dedupAndAppend(unsigned int *matchResultsSelf, unsign
         if (match)
             return;
 
-        int row = atomicAdd(&dbSize[0], 1);
+        int row = atomicAdd(&dbSize[0], 1) + 1;
         int oldIdx = (deviceIdx * queryLength + idx) * (2 * ROTATIONS + 1) + ROTATIONS;
 
         // write back result
