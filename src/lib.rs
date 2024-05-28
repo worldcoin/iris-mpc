@@ -533,8 +533,7 @@ impl ShareDB {
                         .unwrap()
                 };
                 self.device_manager
-                    .device(idx)
-                    .htod_copy_into(chunk.to_vec(), &mut slice)
+                    .htod_copy_into(chunk.to_vec(), &mut slice, idx)
                     .unwrap();
                 slice
             })
@@ -550,8 +549,7 @@ impl ShareDB {
                         .unwrap()
                 };
                 self.device_manager
-                    .device(idx)
-                    .htod_copy_into(chunk.to_vec(), &mut slice)
+                    .htod_copy_into(chunk.to_vec(), &mut slice, idx)
                     .unwrap();
                 slice
             })
@@ -568,8 +566,7 @@ impl ShareDB {
                         .unwrap()
                 };
                 self.device_manager
-                    .device(idx)
-                    .htod_copy_into(chunk.to_vec(), &mut slice)
+                    .htod_copy_into(chunk.to_vec(), &mut slice, idx)
                     .unwrap();
                 slice
             })
@@ -585,8 +582,7 @@ impl ShareDB {
                         .unwrap()
                 };
                 self.device_manager
-                    .device(idx)
-                    .htod_copy_into(chunk.to_vec(), &mut slice)
+                    .htod_copy_into(chunk.to_vec(), &mut slice, idx)
                     .unwrap();
                 slice
             })
@@ -872,7 +868,7 @@ mod tests {
         let blass = device_manager.create_cublas(&streams);
         let preprocessed_query = device_manager.htod_transfer_query(&preprocessed_query, &streams);
         let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
-        let db_slices = engine.load_db(&db, DB_SIZE, DB_SIZE);
+        let db_slices = engine.load_db(&db, DB_SIZE, DB_SIZE + 100);
 
         for _ in 0..5 {
             engine.dot(

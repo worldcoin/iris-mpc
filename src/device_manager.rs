@@ -5,10 +5,8 @@ use cudarc::{
     cublas::CudaBlas,
     driver::{
         result::{
-            event, malloc_async, memcpy_htod_async, stream::{synchronize, wait_event}
-        },
-        sys::{CUevent, CUevent_flags},
-        CudaDevice, CudaStream,
+            self, event, malloc_async, memcpy_htod_async, stream::{synchronize, wait_event}
+        }, sys::{CUevent, CUevent_flags}, CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceRepr
     },
 };
 
@@ -119,5 +117,16 @@ impl DeviceManager {
 
     pub fn device_count(&self) -> usize {
         self.devices.len()
+    }
+
+    pub fn htod_copy_into<T: DeviceRepr + Unpin>(
+        &self,
+        src: Vec<T>,
+        dst: &mut CudaSlice<T>,
+        index: usize,
+    ) -> Result<(), result::DriverError> {
+        self.device(index).bind_to_thread()?;
+        unsafe { result::memcpy_htod_sync(*dst.device_ptr(), src.as_ref())? };
+        Ok(())
     }
 }
