@@ -93,7 +93,7 @@ impl ChaChaCudaFeRng {
     //         .unwrap();
     // }
 
-    pub fn fill_rng_no_host_copy(&mut self, stream: &CudaStream) {
+    pub fn fill_rng_no_host_copy(&mut self, buf_size: usize, stream: &CudaStream) {
         let num_ks_calls = self.buf_size / 32; // one call to KS produces 32 u16s
         let threads_per_block = 256; // todo sync with kernel
         let blocks_per_grid = (num_ks_calls + threads_per_block - 1) / threads_per_block;
@@ -113,11 +113,12 @@ impl ChaChaCudaFeRng {
             result::memcpy_htod_async(*state_slice.device_ptr(), &self.chacha_ctx.state, stream.stream);
         }
 
-        let len = self.rng_chunk.len() as u64;
+        let buf_size = (buf_size / OK_U16_BUF_ELEMENTS) * MIN_U16_BUF_ELEMENTS;
+        let len = (buf_size / std::mem::size_of::<u32>()) * std::mem::size_of::<u16>();
         unsafe {
             self.kernels[0]
                 .clone()
-                .launch_on_stream(stream, cfg, (&mut self.rng_chunk, &state_slice, len))
+                .launch_on_stream(stream, cfg, (&mut self.rng_chunk, &state_slice, len as u64))
                 .unwrap();
         }
 

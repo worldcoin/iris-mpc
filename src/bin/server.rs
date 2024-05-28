@@ -35,6 +35,7 @@ const ENABLE_DEDUP_QUERY: bool = true;
 const ENABLE_WRITE_DB: bool = true;
 const REGION: &str = "us-east-2";
 const DB_SIZE: usize = 8 * 1_000;
+const DB_BUFFER: usize = 1_000;
 const QUERIES: usize = 992;
 const RNG_SEED: u64 = 42;
 const N_BATCHES: usize = 10;
@@ -165,7 +166,7 @@ async fn main() -> eyre::Result<()> {
         party_id,
         device_manager.clone(),
         l_coeff,
-        DB_SIZE,
+        DB_SIZE + DB_BUFFER * 12800,
         QUERIES,
         chacha_seeds,
         bootstrap_url.clone(),
@@ -179,7 +180,7 @@ async fn main() -> eyre::Result<()> {
         party_id,
         device_manager.clone(),
         l_coeff,
-        DB_SIZE,
+        DB_SIZE + DB_BUFFER * 12800,
         QUERIES,
         chacha_seeds,
         bootstrap_url.clone(),
@@ -189,7 +190,7 @@ async fn main() -> eyre::Result<()> {
 
     let mask_db_slices = masks_engine.load_db(&masks_db, DB_SIZE);
 
-    let mut distance_comparator = DistanceComparator::init(DB_SIZE, QUERIES, true);
+    let mut distance_comparator = DistanceComparator::init(QUERIES);
 
     // Engines for inflight queries
     let mut batch_codes_engine = ShareDB::init(
@@ -214,7 +215,6 @@ async fn main() -> eyre::Result<()> {
         Some(true),
         Some(3003),
     );
-    let mut batch_distance_comparator = DistanceComparator::init(QUERIES, QUERIES, false);
 
     // Prepare streams etc.
     let mut streams = vec![];
@@ -226,7 +226,7 @@ async fn main() -> eyre::Result<()> {
         cublas_handles.push(device_manager.create_cublas(&tmp_streams));
         streams.push(tmp_streams);
         results.push(distance_comparator.prepare_results());
-        batch_results.push(batch_distance_comparator.prepare_results());
+        batch_results.push(distance_comparator.prepare_results());
     }
 
     // Main Loop
@@ -241,6 +241,7 @@ async fn main() -> eyre::Result<()> {
 
     let mut code_db_sizes = vec![];
     let mut mask_db_sizes = vec![];
+    let mut query_db_sizes = vec![];
     for i in 0..device_manager.device_count() {
         code_db_sizes.push(
             device_manager
@@ -252,6 +253,12 @@ async fn main() -> eyre::Result<()> {
             device_manager
                 .device(i)
                 .htod_copy(vec![(DB_SIZE / device_manager.device_count()) as u32; 1])
+                .unwrap(),
+        );
+        query_db_sizes.push(
+            device_manager
+                .device(i)
+                .htod_copy(vec![QUERIES as u32; 1])
                 .unwrap(),
         );
     }
@@ -343,9 +350,11 @@ async fn main() -> eyre::Result<()> {
             batch_codes_engine.exchange_results(request_streams);
             batch_masks_engine.exchange_results(request_streams);
 
-            batch_distance_comparator.reconstruct_and_compare(
+            distance_comparator.reconstruct_and_compare(
                 &batch_codes_engine.results_peers,
                 &batch_masks_engine.results_peers,
+                &device_ptrs(&query_db_sizes),
+                &query_db_size,
                 request_streams,
                 device_ptrs(request_batch_results),
             );
@@ -411,6 +420,8 @@ async fn main() -> eyre::Result<()> {
         distance_comparator.reconstruct_and_compare(
             &codes_engine.results_peers,
             &masks_engine.results_peers,
+            &device_ptrs(&code_db_sizes),
+            &current_db_size,
             request_streams,
             device_ptrs(request_results),
         );

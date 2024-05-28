@@ -168,13 +168,12 @@ pub struct DistanceComparator {
     pub devs: Vec<Arc<CudaDevice>>,
     pub dist_kernels: Vec<CudaFunction>,
     pub dedup_kernels: Vec<CudaFunction>,
-    pub db_length: usize,
     pub query_length: usize,
     pub n_devices: usize,
 }
 
 impl DistanceComparator {
-    pub fn init(db_length: usize, query_length: usize, shard: bool) -> Self {
+    pub fn init(query_length: usize) -> Self {
         let ptx = compile_ptx(PTX_SRC).unwrap();
         let mut dist_kernels = Vec::new();
         let mut dedup_kernels = Vec::new();
@@ -204,17 +203,10 @@ impl DistanceComparator {
             devs.push(dev);
         }
 
-        let db_length = if shard {
-            db_length / n_devices
-        } else {
-            db_length
-        };
-
         Self {
             devs,
             dist_kernels,
             dedup_kernels,
-            db_length,
             query_length,
             n_devices,
         }
@@ -231,19 +223,22 @@ impl DistanceComparator {
         &mut self,
         codes_result_peers: &Vec<Vec<CudaSlice<u8>>>,
         masks_result_peers: &Vec<Vec<CudaSlice<u8>>>,
+        db_size_ptrs: &Vec<u64>,
+        db_sizes: &Vec<usize>,
         streams: &Vec<CudaStream>,
         results: Vec<u64>,
     ) {
-        let num_elements = self.db_length * self.query_length;
-        let threads_per_block = 256;
-        let blocks_per_grid = num_elements.div_ceil(threads_per_block);
-        let cfg = LaunchConfig {
-            block_dim: (threads_per_block as u32, 1, 1),
-            grid_dim: (blocks_per_grid as u32, 1, 1),
-            shared_mem_bytes: 0,
-        };
-
+        
         for i in 0..self.n_devices {
+            let num_elements = db_sizes[i] * self.query_length;
+            let threads_per_block = 256;
+            let blocks_per_grid = num_elements.div_ceil(threads_per_block);
+            let cfg = LaunchConfig {
+                block_dim: (threads_per_block as u32, 1, 1),
+                grid_dim: (blocks_per_grid as u32, 1, 1),
+                shared_mem_bytes: 0,
+            };
+
             unsafe {
                 self.dist_kernels[i]
                     .clone()
@@ -259,7 +254,7 @@ impl DistanceComparator {
                             &masks_result_peers[i][2],
                             results[i],
                             MATCH_RATIO,
-                            self.db_length as u64,
+                            db_size_ptrs[i],
                             self.query_length as u64,
                         ),
                     )
@@ -280,7 +275,7 @@ impl DistanceComparator {
         query_sums2: &Vec<u64>,
         query_sums_new1: &Vec<u64>,
         query_sums_new2: &Vec<u64>,
-        db_sizes: &Vec<u64>,
+        db_size_ptrs: &Vec<u64>,
         streams: &Vec<CudaStream>,
     ) {
         let num_elements = self.query_length / ROTATIONS / self.n_devices;
@@ -306,7 +301,7 @@ impl DistanceComparator {
                 query_sums2[i],
                 query_sums_new1[i],
                 query_sums_new2[i],
-                db_sizes[i],
+                db_size_ptrs[i],
                 (self.query_length / ROTATIONS / self.n_devices) as u64,
                 i as u64,
             ];
@@ -363,7 +358,7 @@ impl ShareDB {
         peer_id: usize,
         device_manager: DeviceManager,
         lagrange_coeff: u16,
-        db_length: usize,
+        max_db_length: usize,
         query_length: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
         peer_url: Option<String>,
@@ -396,8 +391,7 @@ impl ShareDB {
         let mut intermediate_results = vec![];
         let mut results = vec![];
         let mut results_peers = vec![];
-        let chunk_size = db_length / n_devices;
-        let results_len = chunk_size * query_length;
+        let results_len = max_db_length / n_devices * query_length;
 
         for idx in 0..n_devices {
             unsafe {
@@ -413,7 +407,7 @@ impl ShareDB {
         }
 
         // Init RNGs
-        let rng_buf_size: usize = (db_length / n_devices * query_length)
+        let rng_buf_size: usize = (max_db_length / n_devices * query_length)
             .div_ceil(CHACHA_BUFFER_SIZE)
             * CHACHA_BUFFER_SIZE;
         let mut rngs = vec![];
@@ -653,8 +647,16 @@ impl ShareDB {
 
             // Prepare randomness to mask results
             if self.is_remote {
-                self.rngs[idx].0.fill_rng_no_host_copy(&streams[idx]);
-                self.rngs[idx].1.fill_rng_no_host_copy(&streams[idx]);
+                let rng_buf_size: usize = (db_sizes[idx] * self.query_length)
+                    .div_ceil(CHACHA_BUFFER_SIZE)
+                    * CHACHA_BUFFER_SIZE;
+
+                self.rngs[idx]
+                    .0
+                    .fill_rng_no_host_copy(rng_buf_size, &streams[idx]);
+                self.rngs[idx]
+                    .1
+                    .fill_rng_no_host_copy(rng_buf_size, &streams[idx]);
             }
 
             for (i, d) in [db.0[idx], db.1[idx]].iter().enumerate() {
@@ -1198,7 +1200,7 @@ mod tests {
         match_results_self[100] = 0;
 
         let device_manager = DeviceManager::init();
-        let distance_comparator = DistanceComparator::init(DB_SIZE, QUERIES, false);
+        let distance_comparator = DistanceComparator::init(QUERIES);
 
         let streams = device_manager.fork_streams();
         let query_ptrs = device_manager.htod_transfer_query(&vec![query1, query2], &streams);
