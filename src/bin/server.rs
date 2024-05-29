@@ -482,19 +482,19 @@ async fn main() -> eyre::Result<()> {
                 // TODO: dtod to insert in db
 
                 let host_result = vec![u32::MAX; QUERIES / ROTATIONS];
-                unsafe {
-                    lib()
-                        .cuMemcpyDtoHAsync_v2(
-                            host_result.as_ptr() as *mut _,
-                            tmp_final_results[i],
-                            host_result.len() * std::mem::size_of::<u32>(),
-                            tmp_streams[i] as *mut _,
-                        )
-                        .result()
-                        .unwrap();
+                // unsafe {
+                //     lib()
+                //         .cuMemcpyDtoHAsync_v2(
+                //             host_result.as_ptr() as *mut _,
+                //             tmp_final_results[i],
+                //             host_result.len() * std::mem::size_of::<u32>(),
+                //             tmp_streams[i] as *mut _,
+                //         )
+                //         .result()
+                //         .unwrap();
 
-                    event::record(tmp_evts[i] as *mut _, tmp_streams[i] as *mut _).unwrap();
-                }
+                //     event::record(tmp_evts[i] as *mut _, tmp_streams[i] as *mut _).unwrap();
+                // }
 
                 unsafe {
                     synchronize(tmp_streams[i] as *mut _).unwrap();
