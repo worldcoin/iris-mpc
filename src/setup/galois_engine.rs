@@ -30,7 +30,7 @@ pub mod degree2 {
                 let element = GaloisRingElement {
                     coefs: [iris_code.get_bit(i) as u16, iris_code.get_bit(i + 1) as u16],
                 };
-                let share = ShamirGaloisRingShare::encode_3(&element);
+                let share = ShamirGaloisRingShare::encode_3_mat(&element.coefs);
                 for j in 0..3 {
                     shares[j].coefs[i] = share[j].y.coefs[0];
                     shares[j].coefs[i + 1] = share[j].y.coefs[1];
@@ -163,7 +163,7 @@ pub mod degree4 {
                         iris_code.get_bit(i + 3) as u16,
                     ],
                 };
-                let share = ShamirGaloisRingShare::encode_3(&element);
+                let share = ShamirGaloisRingShare::encode_3_mat(&element.coefs);
                 for j in 0..3 {
                     shares[j].coefs[i] = share[j].y.coefs[0];
                     shares[j].coefs[i + 1] = share[j].y.coefs[1];
@@ -197,7 +197,7 @@ pub mod degree4 {
                         iris_code.get_bit(i + 1) as u16, // Note the order of bits
                     ],
                 };
-                let share = ShamirGaloisRingShare::encode_3(&element);
+                let share = ShamirGaloisRingShare::encode_3_mat(&element.coefs);
                 let lagrange_coeffs = ShamirGaloisRingShare::deg_3_lagrange_polys_at_zero();
                 for j in 0..3 {
                     let adjusted_share = share[j].y * lagrange_coeffs[j];
