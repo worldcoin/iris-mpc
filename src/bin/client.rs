@@ -9,7 +9,7 @@ use gpu_iris_mpc::{
     setup::iris_db::{db::IrisDB, iris::IrisCode, shamir_iris::ShamirIris},
     sqs::SMPCRequest,
 };
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{rngs::StdRng, thread_rng, SeedableRng};
 use serde_json::to_string;
 use uuid::Uuid;
 
@@ -32,7 +32,7 @@ struct Opt {
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     tracing_subscriber::fmt::init();
-    let mut rng = StdRng::seed_from_u64(RNG_SEED);
+    let mut rng = thread_rng();
 
     let Opt { topic_arn, db_index } = Opt::parse();
 
