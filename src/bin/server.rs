@@ -2,15 +2,14 @@ use aws_sdk_sqs::{config::Region, Client};
 use clap::Parser;
 use cudarc::driver::{
     result::{
-        event::{self, elapsed},
-        stream::synchronize,
+        self, event::{self, elapsed}, stream::synchronize
     },
     sys::lib,
 };
 use gpu_iris_mpc::{
     device_ptrs,
     setup::iris_db::shamir_iris::ShamirIris,
-    sqs::{SMPCRequest, SQSMessage},
+    sqs::{SMPCRequest, SQSMessage}, ROTATIONS,
 };
 use std::{
     fs::metadata,
@@ -221,12 +220,14 @@ async fn main() -> eyre::Result<()> {
     let mut cublas_handles = vec![];
     let mut results = vec![];
     let mut batch_results = vec![];
+    let mut final_results = vec![];
     for _ in 0..MAX_CONCURRENT_REQUESTS {
         let tmp_streams = device_manager.fork_streams();
         cublas_handles.push(device_manager.create_cublas(&tmp_streams));
         streams.push(tmp_streams);
         results.push(distance_comparator.prepare_results());
         batch_results.push(distance_comparator.prepare_results());
+        final_results.push(distance_comparator.prepare_final_results());
     }
 
     // Main Loop
@@ -282,6 +283,7 @@ async fn main() -> eyre::Result<()> {
         let request_cublas_handles = &cublas_handles[request_counter % MAX_CONCURRENT_REQUESTS];
         let request_results = &results[request_counter % MAX_CONCURRENT_REQUESTS];
         let request_batch_results = &batch_results[request_counter % MAX_CONCURRENT_REQUESTS];
+        let request_final_results = &final_results[request_counter % MAX_CONCURRENT_REQUESTS];
 
         // First stream doesn't need to wait on anyone
         if request_counter == 0 {
@@ -436,6 +438,7 @@ async fn main() -> eyre::Result<()> {
                 &code_query_sums.1,
                 &device_ptrs(&code_db_slices.1 .0),
                 &device_ptrs(&code_db_slices.1 .1),
+                &device_ptrs(&request_final_results),
                 &device_ptrs(&code_db_sizes),
                 request_streams,
             );
@@ -451,6 +454,7 @@ async fn main() -> eyre::Result<()> {
                 &mask_query_sums.1,
                 &device_ptrs(&mask_db_slices.1 .0),
                 &device_ptrs(&mask_db_slices.1 .1),
+                &device_ptrs(&request_final_results),
                 &device_ptrs(&mask_db_sizes),
                 request_streams,
             );
@@ -464,19 +468,22 @@ async fn main() -> eyre::Result<()> {
             .map(|s| s.stream as u64)
             .collect::<Vec<_>>();
         let tmp_devs = distance_comparator.devs.clone();
-        let tmp_results = device_ptrs(request_results);
+        let tmp_final_results = device_ptrs(request_final_results);
         let tmp_evts = end_timer.iter().map(|e| *e as u64).collect::<Vec<_>>();
 
         tokio::spawn(async move {
-            let mut index_results = vec![];
+            let mut host_results = vec![];
             for i in 0..tmp_devs.len() {
                 tmp_devs[i].bind_to_thread().unwrap();
-                let mut tmp_result = vec![0u32; QUERIES];
+
+                // TODO: dtod to insert in db
+
+                host_results.push(vec![u32::MAX; QUERIES / ROTATIONS]);
                 unsafe {
                     lib()
                         .cuMemcpyDtoHAsync_v2(
-                            tmp_result.as_mut_ptr() as *mut _,
-                            tmp_results[i],
+                            host_results[i].as_mut_ptr() as *mut _,
+                            tmp_final_results[i],
                             QUERIES * std::mem::size_of::<u32>(),
                             tmp_streams[i] as *mut _,
                         )
@@ -484,30 +491,16 @@ async fn main() -> eyre::Result<()> {
                         .unwrap();
 
                     event::record(tmp_evts[i] as *mut _, tmp_streams[i] as *mut _).unwrap();
-                    synchronize(tmp_streams[i] as *mut _).unwrap();
                 }
-                index_results.push(tmp_result);
             }
 
-            let mut found = false;
-            for j in 0..8 {
-                for i in 0..QUERIES {
-                    if index_results[j][i] != u32::MAX {
-                        println!(
-                            "Found query {} at index {:?} (device {})",
-                            i,
-                            (DB_SIZE / 8 * j) as u32 + index_results[j][i],
-                            j
-                        );
-                        found = true;
-                        break;
-                    }
+            for i in 0..tmp_devs.len() {
+                tmp_devs[i].bind_to_thread().unwrap();
+                unsafe {synchronize(tmp_streams[i] as *mut _).unwrap();}
+                for j in 0..host_results[i].len() {
+                    println!("Query {}: unique={} [index: {}]", i*8+j, host_results[i][j] == u32::MAX, host_results[i][j]);
                 }
             }
-            if !found {
-                println!("Not found in DB.");
-            }
-            println!("----");
         });
 
         // Prepare for next batch

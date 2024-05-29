@@ -39,7 +39,7 @@ const IRIS_CODE_LENGTH: usize = 12_800;
 const CHACHA_BUFFER_SIZE: usize = 1000;
 const MATCH_RATIO: f64 = 0.375;
 const LIMBS: usize = 2;
-const ROTATIONS: usize = 31;
+pub const ROTATIONS: usize = 31;
 const MATMUL_FUNCTION_NAME: &str = "matmul";
 const DIST_FUNCTION_NAME: &str = "reconstructAndCompare";
 const DEDUPAPPEND_FUNCTION_NAME: &str = "dedupAndAppend";
@@ -220,6 +220,13 @@ impl DistanceComparator {
             .collect::<Vec<_>>()
     }
 
+    pub fn prepare_final_results(&self) -> Vec<CudaSlice<u32>> {
+        let results_uninit = vec![u32::MAX; self.query_length / ROTATIONS];
+        (0..self.n_devices)
+            .map(|i| self.devs[i].htod_copy(results_uninit.clone()).unwrap())
+            .collect::<Vec<_>>()
+    }
+
     pub fn reconstruct_and_compare(
         &mut self,
         codes_result_peers: &Vec<Vec<CudaSlice<u8>>>,
@@ -274,10 +281,11 @@ impl DistanceComparator {
         query_sums2: &Vec<u64>,
         query_sums_new1: &Vec<u64>,
         query_sums_new2: &Vec<u64>,
+        final_results: &Vec<u64>,
         db_size_ptrs: &Vec<u64>,
         streams: &Vec<CudaStream>,
     ) {
-        let num_elements = self.query_length / ROTATIONS / self.n_devices;
+        let num_elements = self.query_length / ROTATIONS;
         let threads_per_block = 256;
         let blocks_per_grid = num_elements.div_ceil(threads_per_block);
         let cfg = LaunchConfig {
@@ -300,8 +308,9 @@ impl DistanceComparator {
                 query_sums2[i],
                 query_sums_new1[i],
                 query_sums_new2[i],
+                final_results[i],
                 db_size_ptrs[i],
-                (self.query_length / ROTATIONS / self.n_devices) as u64,
+                (self.query_length / ROTATIONS) as u64,
                 i as u64,
             ];
 
@@ -799,7 +808,7 @@ impl ShareDB {
 
 #[cfg(test)]
 mod tests {
-    use cudarc::driver::sys::lib;
+    use cudarc::driver::{sys::lib, DevicePtr, DeviceSlice};
     use float_eq::assert_float_eq;
     use ndarray::Array2;
     use num_traits::FromPrimitive;
@@ -1217,13 +1226,13 @@ mod tests {
 
         // set all to matches
         let mut match_results = [u32::MAX; QUERIES].to_vec();
-        // set 2 to match
-        match_results[32] = 0;
 
         let mut match_results_self = [u32::MAX; QUERIES].to_vec();
         // set 1 to match
         match_results_self[15] = 0;
         match_results_self[100] = 0;
+
+        let final_results = [u32::MAX; QUERIES / ROTATIONS].to_vec();
 
         let device_manager = DeviceManager::init();
         let distance_comparator = DistanceComparator::init(QUERIES);
@@ -1239,9 +1248,16 @@ mod tests {
 
         let mut result_ptrs = vec![];
         let mut result_ptrs_self = vec![];
+        let mut final_results_ptrs = vec![];
         let mut db_sizes = vec![];
 
         for i in 0..device_manager.device_count() {
+            // set ith to match
+            if i > 0 {
+                match_results[(i-1) * 32] = u32::MAX;
+            }
+            match_results[i * 32] = 0;
+            
             result_ptrs.push(
                 device_manager
                     .device(i)
@@ -1253,6 +1269,13 @@ mod tests {
                 device_manager
                     .device(i)
                     .htod_copy(match_results_self.clone())
+                    .unwrap(),
+            );
+
+            final_results_ptrs.push(
+                device_manager
+                    .device(i)
+                    .htod_copy(final_results.clone())
                     .unwrap(),
             );
 
@@ -1272,6 +1295,7 @@ mod tests {
             &query_sum_ptrs.1,
             &query_sum_ptrs_new.0,
             &query_sum_ptrs_new.1,
+            &device_ptrs(&final_results_ptrs),
             &device_ptrs(&db_sizes),
             &streams,
         );
@@ -1279,15 +1303,24 @@ mod tests {
         device_manager.await_streams(&streams);
 
         for i in 0..8 {
-            let mut new_query1 = [3u8; QUERY_LEN / ROTATIONS / 8].to_vec();
+            let mut result = [3u32; QUERIES / ROTATIONS].to_vec();
             unsafe {
                 device_manager.device(i).bind_to_thread().unwrap();
                 lib().cuMemcpyDtoH_v2(
-                    new_query1.as_mut_ptr() as *mut _,
-                    query_ptrs_new.0[i],
-                    new_query1.len(),
+                    result.as_mut_ptr() as *mut _,
+                    *final_results_ptrs[i].device_ptr(),
+                    final_results_ptrs[i].len() * 4,
                 );
             }
+            
+            for j in 0..result.len() {
+                if j == i {
+                    assert_eq!(result[j], 0);
+                } else {
+                    assert_eq!(result[j], u32::MAX);
+                }
+            }
+
         }
     }
 }

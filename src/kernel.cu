@@ -40,7 +40,7 @@ extern "C" __global__ void reconstructAndCompare(unsigned short *codes_result1, 
     }
 }
 
-extern "C" __global__ void dedupAndAppend(unsigned int *matchResultsSelf, unsigned int *matchResults, unsigned char *queries1, unsigned char *queries2, unsigned char *queriesNew1, unsigned char *queriesNew2, unsigned int *queriesSum1, unsigned int *queriesSum2, unsigned int *queriesSumNew1, unsigned int *queriesSumNew2, unsigned int *dbSize, size_t queryLength, size_t deviceIdx)
+extern "C" __global__ void dedupAndAppend(unsigned int *matchResultsSelf, unsigned int *matchResults, unsigned char *queries1, unsigned char *queries2, unsigned char *queriesNew1, unsigned char *queriesNew2, unsigned int *queriesSum1, unsigned int *queriesSum2, unsigned int *queriesSumNew1, unsigned int *queriesSumNew2, unsigned int* finalResults, unsigned int *dbSize, size_t queryLength, size_t deviceIdx)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < queryLength)
@@ -48,9 +48,10 @@ extern "C" __global__ void dedupAndAppend(unsigned int *matchResultsSelf, unsign
         bool match = false;
         for (int r = 0; r <= ROTATIONS * 2; r++)
         {
-            int oldIdx = (deviceIdx * queryLength + idx) * (2 * ROTATIONS + 1) + r;
+            int oldIdx = idx * (2 * ROTATIONS + 1) + r;
             if (matchResults[oldIdx] != UINT_MAX)
             {
+                finalResults[idx] = matchResults[oldIdx];
                 match = true;
             }
         }
@@ -58,6 +59,7 @@ extern "C" __global__ void dedupAndAppend(unsigned int *matchResultsSelf, unsign
         if (match)
             return;
 
+        finalResults[idx] = UINT_MAX;
         int row = atomicAdd(&dbSize[0], 1);
         int oldIdx = (deviceIdx * queryLength + idx) * (2 * ROTATIONS + 1) + ROTATIONS;
 
