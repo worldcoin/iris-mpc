@@ -484,7 +484,7 @@ async fn main() -> eyre::Result<()> {
                         .cuMemcpyDtoHAsync_v2(
                             host_results[i].as_mut_ptr() as *mut _,
                             tmp_final_results[i],
-                            QUERIES * std::mem::size_of::<u32>(),
+                            host_results.len()  * std::mem::size_of::<u32>(),
                             tmp_streams[i] as *mut _,
                         )
                         .result()
