@@ -7,12 +7,13 @@ use cudarc::driver::{
         stream::synchronize,
     },
     sys::lib,
+    CudaSlice,
 };
 use gpu_iris_mpc::{
-    device_ptrs,
+    device_manager, device_ptrs,
     setup::iris_db::shamir_iris::ShamirIris,
     sqs::{SMPCRequest, SQSMessage},
-    ROTATIONS,
+    IRIS_CODE_LENGTH, ROTATIONS,
 };
 use std::{
     fs::metadata,
@@ -37,7 +38,7 @@ const ENABLE_DEDUP_QUERY: bool = true;
 const ENABLE_WRITE_DB: bool = true;
 const REGION: &str = "us-east-2";
 const DB_SIZE: usize = 8 * 1_000;
-const DB_BUFFER: usize = 8 * 100;
+const DB_BUFFER: usize = 8 * 1_000;
 const QUERIES: usize = 992;
 const RNG_SEED: u64 = 42;
 const N_BATCHES: usize = 10;
@@ -105,6 +106,28 @@ fn prepare_query_batch(batch: Vec<ShamirIris>) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
     let code_query = preprocess_query(&code_queries.into_iter().flatten().collect::<Vec<_>>());
     let mask_query = preprocess_query(&mask_queries.into_iter().flatten().collect::<Vec<_>>());
     (code_query, mask_query)
+}
+
+fn alloc_query_result(
+    query_length: usize,
+    device_manager: &DeviceManager,
+) -> (
+    (Vec<CudaSlice<u8>>, Vec<CudaSlice<u8>>),
+    (Vec<CudaSlice<u32>>, Vec<CudaSlice<u32>>),
+) {
+    let queries_uninit = vec![0u8; query_length * IRIS_CODE_LENGTH];
+    let query_sums_uninit = vec![0u32; query_length];
+    let mut queries1 = vec![];
+    let mut queries2 = vec![];
+    let mut query_sums1 = vec![];
+    let mut query_sums2 = vec![];
+    for dev in device_manager.devices() {
+        queries1.push(dev.htod_copy(queries_uninit.clone()).unwrap());
+        queries2.push(dev.htod_copy(queries_uninit.clone()).unwrap());
+        query_sums1.push(dev.htod_copy(query_sums_uninit.clone()).unwrap());
+        query_sums2.push(dev.htod_copy(query_sums_uninit.clone()).unwrap());
+    }
+    ((queries1, queries2), (query_sums1, query_sums2))
 }
 
 #[tokio::main]
@@ -224,6 +247,7 @@ async fn main() -> eyre::Result<()> {
     let mut results = vec![];
     let mut batch_results = vec![];
     let mut final_results = vec![];
+    let mut query_results = vec![];
     for _ in 0..MAX_CONCURRENT_REQUESTS {
         let tmp_streams = device_manager.fork_streams();
         cublas_handles.push(device_manager.create_cublas(&tmp_streams));
@@ -231,6 +255,7 @@ async fn main() -> eyre::Result<()> {
         results.push(distance_comparator.prepare_results());
         batch_results.push(distance_comparator.prepare_results());
         final_results.push(distance_comparator.prepare_final_results());
+        query_results.push(alloc_query_result(QUERIES / ROTATIONS, &device_manager));
     }
 
     // Main Loop
@@ -287,6 +312,7 @@ async fn main() -> eyre::Result<()> {
         let request_results = &results[request_counter % MAX_CONCURRENT_REQUESTS];
         let request_batch_results = &batch_results[request_counter % MAX_CONCURRENT_REQUESTS];
         let request_final_results = &final_results[request_counter % MAX_CONCURRENT_REQUESTS];
+        let request_query_results = &query_results[request_counter % MAX_CONCURRENT_REQUESTS];
 
         // First stream doesn't need to wait on anyone
         if request_counter == 0 {
@@ -435,12 +461,12 @@ async fn main() -> eyre::Result<()> {
                 &device_ptrs(request_results),
                 &code_query.0,
                 &code_query.1,
-                &device_ptrs(&code_db_slices.0 .0),
-                &device_ptrs(&code_db_slices.0 .1),
+                &device_ptrs(&request_query_results.0 .0),
+                &device_ptrs(&request_query_results.0 .1),
                 &code_query_sums.0,
                 &code_query_sums.1,
-                &device_ptrs(&code_db_slices.1 .0),
-                &device_ptrs(&code_db_slices.1 .1),
+                &device_ptrs(&request_query_results.1 .0),
+                &device_ptrs(&request_query_results.1 .1),
                 &device_ptrs(&request_final_results),
                 &device_ptrs(&code_db_sizes),
                 request_streams,
@@ -451,12 +477,12 @@ async fn main() -> eyre::Result<()> {
                 &device_ptrs(request_results),
                 &mask_query.0,
                 &mask_query.1,
-                &device_ptrs(&mask_db_slices.0 .0),
-                &device_ptrs(&mask_db_slices.0 .1),
+                &device_ptrs(&request_query_results.0 .0),
+                &device_ptrs(&request_query_results.0 .1),
                 &mask_query_sums.0,
                 &mask_query_sums.1,
-                &device_ptrs(&mask_db_slices.1 .0),
-                &device_ptrs(&mask_db_slices.1 .1),
+                &device_ptrs(&request_query_results.1 .0),
+                &device_ptrs(&request_query_results.1 .1),
                 &device_ptrs(&request_final_results),
                 &device_ptrs(&mask_db_sizes),
                 request_streams,
@@ -478,16 +504,24 @@ async fn main() -> eyre::Result<()> {
             let mut host_results = vec![];
             for i in 0..tmp_devs.len() {
                 tmp_devs[i].bind_to_thread().unwrap();
+                host_results.push(vec![u32::MAX; QUERIES / ROTATIONS]);
 
                 // TODO: dtod to insert in db
+                // unsafe {
+                //     result::memcpy_dtod_async(
+                //         *dst.device_ptr_mut(),
+                //         *src.device_ptr(),
+                //         src.len() * std::mem::size_of::<T>(),
+                //         tmp_streams[i],
+                //     )
+                // }
 
-                let host_result = vec![u32::MAX; QUERIES / ROTATIONS];
                 unsafe {
                     lib()
                         .cuMemcpyDtoHAsync_v2(
-                            host_result.as_ptr() as *mut _,
+                            host_results[i].as_ptr() as *mut _,
                             tmp_final_results[i],
-                            host_result.len() * std::mem::size_of::<u32>(),
+                            host_results[i].len() * std::mem::size_of::<u32>(),
                             tmp_streams[i] as *mut _,
                         )
                         .result()
@@ -495,12 +529,13 @@ async fn main() -> eyre::Result<()> {
 
                     event::record(tmp_evts[i] as *mut _, tmp_streams[i] as *mut _).unwrap();
                 }
+            }
 
+            for i in 0..tmp_devs.len() {
+                tmp_devs[i].bind_to_thread().unwrap();
                 unsafe {
                     synchronize(tmp_streams[i] as *mut _).unwrap();
                 }
-
-                host_results.push(host_result);
             }
 
             for j in 0..host_results[0].len() {
@@ -510,7 +545,7 @@ async fn main() -> eyre::Result<()> {
                         match_entry = host_results[i][j];
                         break;
                     }
-                } 
+                }
                 println!(
                     "Query {}: unique={} [index: {}]",
                     j,

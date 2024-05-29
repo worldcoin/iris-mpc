@@ -33,13 +33,13 @@ use device_manager::DeviceManager;
 use rayon::prelude::*;
 use rng::chacha_field::ChaChaCudaFeRng;
 
+pub const IRIS_CODE_LENGTH: usize = 12_800;
+pub const ROTATIONS: usize = 31;
 pub(crate) const P: u16 = 65519;
 const PTX_SRC: &str = include_str!("kernel.cu");
-const IRIS_CODE_LENGTH: usize = 12_800;
 const CHACHA_BUFFER_SIZE: usize = 1000;
 const MATCH_RATIO: f64 = 0.375;
 const LIMBS: usize = 2;
-pub const ROTATIONS: usize = 31;
 const MATMUL_FUNCTION_NAME: &str = "matmul";
 const DIST_FUNCTION_NAME: &str = "reconstructAndCompare";
 const DEDUPAPPEND_FUNCTION_NAME: &str = "dedupAndAppend";
