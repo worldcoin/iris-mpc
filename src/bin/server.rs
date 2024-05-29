@@ -2,14 +2,17 @@ use aws_sdk_sqs::{config::Region, Client};
 use clap::Parser;
 use cudarc::driver::{
     result::{
-        self, event::{self, elapsed}, stream::synchronize
+        self,
+        event::{self, elapsed},
+        stream::synchronize,
     },
     sys::lib,
 };
 use gpu_iris_mpc::{
     device_ptrs,
     setup::iris_db::shamir_iris::ShamirIris,
-    sqs::{SMPCRequest, SQSMessage}, ROTATIONS,
+    sqs::{SMPCRequest, SQSMessage},
+    ROTATIONS,
 };
 use std::{
     fs::metadata,
@@ -472,19 +475,18 @@ async fn main() -> eyre::Result<()> {
         let tmp_evts = end_timer.iter().map(|e| *e as u64).collect::<Vec<_>>();
 
         tokio::spawn(async move {
-            let mut host_results = vec![];
             for i in 0..tmp_devs.len() {
                 tmp_devs[i].bind_to_thread().unwrap();
 
                 // TODO: dtod to insert in db
 
-                host_results.push(vec![u32::MAX; QUERIES / ROTATIONS]);
+                let host_results = vec![u32::MAX; QUERIES / ROTATIONS];
                 unsafe {
                     lib()
                         .cuMemcpyDtoHAsync_v2(
-                            host_results[i].as_mut_ptr() as *mut _,
+                            host_results.as_ptr() as *mut _,
                             tmp_final_results[i],
-                            host_results[i].len()  * std::mem::size_of::<u32>(),
+                            host_results.len() * std::mem::size_of::<u32>(),
                             tmp_streams[i] as *mut _,
                         )
                         .result()
@@ -492,13 +494,18 @@ async fn main() -> eyre::Result<()> {
 
                     event::record(tmp_evts[i] as *mut _, tmp_streams[i] as *mut _).unwrap();
                 }
-            }
 
-            for i in 0..tmp_devs.len() {
-                tmp_devs[i].bind_to_thread().unwrap();
-                unsafe {synchronize(tmp_streams[i] as *mut _).unwrap();}
-                for j in 0..host_results[i].len() {
-                    println!("Query {}: unique={} [index: {}]", i*8+j, host_results[i][j] == u32::MAX, host_results[i][j]);
+                unsafe {
+                    synchronize(tmp_streams[i] as *mut _).unwrap();
+                }
+
+                for j in 0..host_results.len() {
+                    println!(
+                        "Query {}: unique={} [index: {}]",
+                        i * 8 + j,
+                        host_results[j] == u32::MAX,
+                        host_results[j]
+                    );
                 }
             }
         });
