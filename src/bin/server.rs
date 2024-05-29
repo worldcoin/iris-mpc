@@ -475,18 +475,19 @@ async fn main() -> eyre::Result<()> {
         let tmp_evts = end_timer.iter().map(|e| *e as u64).collect::<Vec<_>>();
 
         tokio::spawn(async move {
+            let mut host_results = vec![];
             for i in 0..tmp_devs.len() {
                 tmp_devs[i].bind_to_thread().unwrap();
 
                 // TODO: dtod to insert in db
 
-                let host_results = vec![u32::MAX; QUERIES / ROTATIONS];
+                let host_result = vec![u32::MAX; QUERIES / ROTATIONS];
                 unsafe {
                     lib()
                         .cuMemcpyDtoHAsync_v2(
-                            host_results.as_ptr() as *mut _,
+                            host_result.as_ptr() as *mut _,
                             tmp_final_results[i],
-                            host_results.len() * std::mem::size_of::<u32>(),
+                            host_result.len() * std::mem::size_of::<u32>(),
                             tmp_streams[i] as *mut _,
                         )
                         .result()
@@ -499,14 +500,23 @@ async fn main() -> eyre::Result<()> {
                     synchronize(tmp_streams[i] as *mut _).unwrap();
                 }
 
-                for j in 0..host_results.len() {
-                    println!(
-                        "Query {}: unique={} [index: {}]",
-                        i * 8 + j,
-                        host_results[j] == u32::MAX,
-                        host_results[j]
-                    );
+                host_results.push(host_result);
+            }
+
+            for j in 0..host_results.len() {
+                let mut match_entry = u32::MAX;
+                for i in 0..tmp_devs.len() {
+                    if host_results[i][j] != u32::MAX {
+                        match_entry = host_results[i][j];
+                        break;
+                    }
                 }
+                println!(
+                    "Query {}: unique={} [index: {}]",
+                    j,
+                    match_entry == u32::MAX,
+                    match_entry
+                );
             }
         });
 
