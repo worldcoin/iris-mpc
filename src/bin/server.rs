@@ -471,7 +471,7 @@ async fn main() -> eyre::Result<()> {
             .map(|s| s.stream as u64)
             .collect::<Vec<_>>();
         let tmp_devs = distance_comparator.devs.clone();
-        let tmp_final_results = device_ptrs(request_final_results);
+        let tmp_final_results = device_ptrs(request_results);
         let tmp_evts = end_timer.iter().map(|e| *e as u64).collect::<Vec<_>>();
 
         tokio::spawn(async move {
@@ -487,7 +487,7 @@ async fn main() -> eyre::Result<()> {
                         .cuMemcpyDtoHAsync_v2(
                             host_result.as_ptr() as *mut _,
                             tmp_final_results[i],
-                            1,
+                            host_result.len() * std::mem::size_of::<u32>(),
                             tmp_streams[i] as *mut _,
                         )
                         .result()
