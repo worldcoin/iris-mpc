@@ -255,6 +255,54 @@ impl ShamirGaloisRingShare {
             .unwrap()
     }
 
+    pub fn encode_3_mat(input: &[u16; 4]) -> [ShamirGaloisRingShare; 3] {
+        let mut rng = rand::thread_rng();
+        let invec = [
+            input[0],
+            input[1],
+            input[2],
+            input[3],
+            rng.gen(),
+            rng.gen(),
+            rng.gen(),
+            rng.gen(),
+        ];
+        let share1 = ShamirGaloisRingShare {
+            id: 1,
+            y: GaloisRingElement {
+                coefs: [
+                    invec[0].wrapping_add(invec[4]),
+                    invec[1].wrapping_add(invec[5]),
+                    invec[2].wrapping_add(invec[6]),
+                    invec[3].wrapping_add(invec[7]),
+                ],
+            },
+        };
+        let share2 = ShamirGaloisRingShare {
+            id: 2,
+            y: GaloisRingElement {
+                coefs: [
+                    invec[0].wrapping_add(invec[7]),
+                    invec[1].wrapping_add(invec[4]).wrapping_add(invec[7]),
+                    invec[2].wrapping_add(invec[5]),
+                    invec[3].wrapping_add(invec[6]),
+                ],
+            },
+        };
+        let share3 = ShamirGaloisRingShare {
+            id: 3,
+            y: GaloisRingElement {
+                coefs: [
+                    share2.y.coefs[0].wrapping_add(invec[4]),
+                    share2.y.coefs[1].wrapping_add(invec[5]),
+                    share2.y.coefs[2].wrapping_add(invec[6]),
+                    share2.y.coefs[3].wrapping_add(invec[7]),
+                ],
+            },
+        };
+        [share1, share2, share3]
+    }
+
     pub fn deg_3_lagrange_polys_at_zero() -> [GaloisRingElement; 3] {
         let mut res = [GaloisRingElement::ONE; 3];
         for i in 1..=3 {
@@ -309,6 +357,24 @@ mod tests {
 
         let shares1 = ShamirGaloisRingShare::encode_3(&input1);
         let shares2 = ShamirGaloisRingShare::encode_3(&input2);
+        let shares_mul = [
+            shares1[0] * shares2[0],
+            shares1[1] * shares2[1],
+            shares1[2] * shares2[2],
+        ];
+
+        let reconstructed = ShamirGaloisRingShare::reconstruct_deg_2_shares(&shares_mul);
+        let expected = input1 * input2;
+
+        assert_eq!(reconstructed, expected);
+    }
+    #[test]
+    fn sharing_mat() {
+        let input1 = GaloisRingElement::random(&mut rand::thread_rng());
+        let input2 = GaloisRingElement::random(&mut rand::thread_rng());
+
+        let shares1 = ShamirGaloisRingShare::encode_3_mat(&input1.coefs);
+        let shares2 = ShamirGaloisRingShare::encode_3_mat(&input2.coefs);
         let shares_mul = [
             shares1[0] * shares2[0],
             shares1[1] * shares2[1],
