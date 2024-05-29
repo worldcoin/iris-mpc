@@ -503,7 +503,7 @@ async fn main() -> eyre::Result<()> {
                 host_results.push(host_result);
             }
 
-            for j in 0..host_results.len() {
+            for j in 0..host_results[0].len() {
                 let mut match_entry = u32::MAX;
                 for i in 0..tmp_devs.len() {
                     if host_results[i][j] != u32::MAX {
