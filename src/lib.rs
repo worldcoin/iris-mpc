@@ -139,6 +139,7 @@ fn broadcast_stream<T: NcclType>(
     sendbuff: &Option<&CudaSlice<T>>,
     recvbuff: &mut CudaSlice<T>,
     root: i32,
+    len: usize,
     comm: &Comm,
     stream: &CudaStream,
 ) -> Result<result::NcclStatus, result::NcclError> {
@@ -150,7 +151,7 @@ fn broadcast_stream<T: NcclType>(
         result::broadcast(
             send_ptr,
             *recvbuff.device_ptr() as *mut c_void,
-            recvbuff.len(),
+            len,
             T::as_nccl_type(),
             root,
             comm.comm,
@@ -749,13 +750,14 @@ impl ShareDB {
 
     /// Broadcasts the results to all other peers.
     /// Calls are async to host, but sync to device.
-    pub fn exchange_results(&mut self, streams: &Vec<CudaStream>) {
+    pub fn exchange_results(&mut self, db_sizes: &Vec<usize>, streams: &Vec<CudaStream>) {
         for idx in 0..self.device_manager.device_count() {
             for i in 0..3 {
                 broadcast_stream(
                     &Some(&self.results[idx]),
                     &mut self.results_peers[idx][i],
                     i as i32,
+                    db_sizes[idx] * self.query_length,
                     &self.comms[idx],
                     &streams[idx],
                 )

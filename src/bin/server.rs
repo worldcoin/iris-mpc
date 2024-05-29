@@ -347,8 +347,8 @@ async fn main() -> eyre::Result<()> {
                 request_streams,
             );
 
-            batch_codes_engine.exchange_results(request_streams);
-            batch_masks_engine.exchange_results(request_streams);
+            batch_codes_engine.exchange_results(&query_db_size, request_streams);
+            batch_masks_engine.exchange_results(&query_db_size, request_streams);
 
             distance_comparator.reconstruct_and_compare(
                 &batch_codes_engine.results_peers,
@@ -411,8 +411,8 @@ async fn main() -> eyre::Result<()> {
 
         debug_record_event!(device_manager, request_streams, timers);
 
-        codes_engine.exchange_results(request_streams);
-        masks_engine.exchange_results(request_streams);
+        codes_engine.exchange_results(&current_db_size, request_streams);
+        masks_engine.exchange_results(&current_db_size, request_streams);
 
         debug_record_event!(device_manager, request_streams, timers);
 
