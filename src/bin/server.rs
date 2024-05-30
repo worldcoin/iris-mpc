@@ -34,6 +34,7 @@ use gpu_iris_mpc::{
     },
     DistanceComparator, ShareDB,
 };
+use rand::prelude::SliceRandom;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 const ENABLE_DEDUP_QUERY: bool = true;
@@ -43,6 +44,7 @@ const DB_SIZE: usize = 8 * 1_000;
 const DB_BUFFER: usize = 8 * 1_000;
 const QUERIES: usize = 992;
 const RNG_SEED: u64 = 42;
+const SHUFFLE_SEED: u64 = 42;
 const N_BATCHES: usize = 10;
 const MAX_CONCURRENT_REQUESTS: usize = 5;
 const DB_CODE_FILE: &str = "/opt/dlami/nvme/codes.db";
@@ -151,6 +153,8 @@ async fn main() -> eyre::Result<()> {
         party_id,
         bootstrap_url,
     } = Opt::parse();
+
+    let mut shuffle_rng = StdRng::seed_from_u64(SHUFFLE_SEED);
 
     let region_provider = Region::new(REGION);
     let shared_config = aws_config::from_env().region(region_provider).load().await;
@@ -511,6 +515,7 @@ async fn main() -> eyre::Result<()> {
         let tmp_code_db_slices = slice_tuples_to_ptrs(&code_db_slices);
         let tmp_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
         let tmp_evts = end_timer.iter().map(|e| *e as u64).collect::<Vec<_>>();
+        let mut shuffle_rng = shuffle_rng.clone();
         let current_stream_event_tmp = current_stream_event
             .iter()
             .map(|e| *e as u64)
@@ -567,9 +572,10 @@ async fn main() -> eyre::Result<()> {
                 insertion_list.push(j);
             }
 
-            let insertion_list: Vec<&[usize]> = insertion_list
+            let mut insertion_list = insertion_list
                 .chunks(QUERIES / ROTATIONS / tmp_devs.len())
                 .collect::<Vec<_>>();
+            insertion_list.shuffle(&mut shuffle_rng);
 
             for i in 0..tmp_devs.len() {
                 tmp_devs[i].bind_to_thread().unwrap();
