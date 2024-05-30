@@ -271,8 +271,10 @@ async fn main() -> eyre::Result<()> {
     }
 
     // Main Loop
-    let mut previous_previous__event = device_manager.create_events();
-    let mut previous_block_event = device_manager.create_events();
+    let mut previous_previous_stream_event = device_manager.create_events();
+    let mut previous_stream_event = device_manager.create_events();
+    let mut current_stream_event = device_manager.create_events();
+
     let mut current_dot_event = device_manager.create_events();
     let mut next_dot_event = device_manager.create_events();
     let mut current_exchange_event = device_manager.create_events();
@@ -325,7 +327,6 @@ async fn main() -> eyre::Result<()> {
 
         let mut timers = vec![];
 
-        let current_stream_event = device_manager.create_events();
         let request_streams = &streams[request_counter % MAX_CONCURRENT_REQUESTS];
         let request_cublas_handles = &cublas_handles[request_counter % MAX_CONCURRENT_REQUESTS];
         let request_results = &results[request_counter % MAX_CONCURRENT_REQUESTS];
@@ -352,9 +353,8 @@ async fn main() -> eyre::Result<()> {
         if request_counter > 2 {
             // We have two streams working concurrently, we'll await the stream before previous one
             let previous_streams = &streams[(request_counter - 2) % MAX_CONCURRENT_REQUESTS];
-
-            // TODO: await event
-            device_manager.await_streams(&previous_streams);
+            device_manager.await_event(previous_streams, &previous_previous_stream_event);
+            device_manager.await_streams(previous_streams);
         }
 
         let current_db_size_stream = current_db_size_mutex
@@ -567,6 +567,10 @@ async fn main() -> eyre::Result<()> {
                 insertion_list.push(j);
             }
 
+            let insertion_list: Vec<&[usize]> = insertion_list
+                .chunks(QUERIES / ROTATIONS / tmp_devs.len())
+                .collect::<Vec<_>>();
+
             for i in 0..tmp_devs.len() {
                 tmp_devs[i].bind_to_thread().unwrap();
 
@@ -591,7 +595,7 @@ async fn main() -> eyre::Result<()> {
                     *current_db_size_mutex_clone[i].lock().unwrap()
                 );
 
-                for insertion_idx in insertion_list.clone() {
+                for insertion_idx in insertion_list[i] {
                     unsafe {
                         // Step 4: fetch and update db counters
                         // Append to codes db
@@ -686,6 +690,9 @@ async fn main() -> eyre::Result<()> {
         timer_events.push(timers);
 
         request_counter += 1;
+        previous_previous_stream_event = previous_stream_event;
+        previous_stream_event = current_stream_event;
+        current_stream_event = device_manager.create_events();
         current_dot_event = next_dot_event;
         current_exchange_event = next_exchange_event;
         next_dot_event = device_manager.create_events();
@@ -708,7 +715,7 @@ async fn main() -> eyre::Result<()> {
         }
     }
 
-    for i in 0..8 {
+    for i in 0..device_manager.device_count() {
         unsafe {
             device_manager.device(i).bind_to_thread().unwrap();
             let total_time = elapsed(start_timer[i], end_timer[i]).unwrap();
