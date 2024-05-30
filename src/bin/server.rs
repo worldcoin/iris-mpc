@@ -18,6 +18,7 @@ use gpu_iris_mpc::{
 use std::{
     fs::metadata,
     mem,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use tokio::time::sleep;
@@ -260,8 +261,6 @@ async fn main() -> eyre::Result<()> {
     let mut results = vec![];
     let mut batch_results = vec![];
     let mut final_results = vec![];
-    let mut query_code_results = vec![];
-    let mut query_mask_results = vec![];
     for _ in 0..MAX_CONCURRENT_REQUESTS {
         let tmp_streams = device_manager.fork_streams();
         cublas_handles.push(device_manager.create_cublas(&tmp_streams));
@@ -269,8 +268,6 @@ async fn main() -> eyre::Result<()> {
         results.push(distance_comparator.prepare_results());
         batch_results.push(distance_comparator.prepare_results());
         final_results.push(distance_comparator.prepare_final_results());
-        query_code_results.push(alloc_query_result(QUERIES / ROTATIONS, &device_manager));
-        query_mask_results.push(alloc_query_result(QUERIES / ROTATIONS, &device_manager));
     }
 
     // Main Loop
@@ -309,9 +306,13 @@ async fn main() -> eyre::Result<()> {
         );
     }
 
-    let mut current_db_size: Vec<usize> =
+    let current_db_size: Vec<usize> =
         vec![DB_SIZE / device_manager.device_count(); device_manager.device_count()];
     let query_db_size = vec![QUERIES; device_manager.device_count()];
+    let current_db_size_mutex = current_db_size
+        .iter()
+        .map(|&s| Arc::new(Mutex::new(s)))
+        .collect::<Vec<_>>();
 
     println!("All systems ready.");
 
@@ -330,10 +331,6 @@ async fn main() -> eyre::Result<()> {
         let request_results = &results[request_counter % MAX_CONCURRENT_REQUESTS];
         let request_batch_results = &batch_results[request_counter % MAX_CONCURRENT_REQUESTS];
         let request_final_results = &final_results[request_counter % MAX_CONCURRENT_REQUESTS];
-        let request_query_code_results =
-            &query_code_results[request_counter % MAX_CONCURRENT_REQUESTS];
-        let request_query_mask_results =
-            &query_mask_results[request_counter % MAX_CONCURRENT_REQUESTS];
 
         // First stream doesn't need to wait on anyone
         if request_counter == 0 {
@@ -358,15 +355,12 @@ async fn main() -> eyre::Result<()> {
 
             // TODO: await event
             device_manager.await_streams(&previous_streams);
-            // for i in 0..device_manager.device_count() {
-            //     current_db_size[i] = device_manager
-            //         .device(i)
-            //         .dtoh_sync_copy(&code_db_sizes[i])
-            //         .unwrap()[0] as usize;
-
-            //     println!("Updating DB size on device {}: {:?}", i, current_db_size[i]);
-            // }
         }
+
+        let current_db_size_stream = current_db_size_mutex
+            .iter()
+            .map(|e| *e.lock().unwrap())
+            .collect::<Vec<_>>();
 
         // BLOCK 1: calculate individual dot products
         device_manager.await_event(request_streams, &current_dot_event);
@@ -421,7 +415,7 @@ async fn main() -> eyre::Result<()> {
                 device_ptrs(&code_db_slices.0 .0),
                 device_ptrs(&code_db_slices.0 .1),
             ),
-            &current_db_size,
+            &current_db_size_stream,
             request_streams,
             request_cublas_handles,
         );
@@ -432,7 +426,7 @@ async fn main() -> eyre::Result<()> {
                 device_ptrs(&mask_db_slices.0 .0),
                 device_ptrs(&mask_db_slices.0 .1),
             ),
-            &current_db_size,
+            &current_db_size_stream,
             request_streams,
             request_cublas_handles,
         );
@@ -448,7 +442,7 @@ async fn main() -> eyre::Result<()> {
                 device_ptrs(&code_db_slices.1 .0),
                 device_ptrs(&code_db_slices.1 .1),
             ),
-            &current_db_size,
+            &current_db_size_stream,
             request_streams,
         );
         masks_engine.dot_reduce(
@@ -457,7 +451,7 @@ async fn main() -> eyre::Result<()> {
                 device_ptrs(&mask_db_slices.1 .0),
                 device_ptrs(&mask_db_slices.1 .1),
             ),
-            &current_db_size,
+            &current_db_size_stream,
             request_streams,
         );
 
@@ -465,15 +459,15 @@ async fn main() -> eyre::Result<()> {
 
         debug_record_event!(device_manager, request_streams, timers);
 
-        codes_engine.exchange_results(&current_db_size, request_streams);
-        masks_engine.exchange_results(&current_db_size, request_streams);
+        codes_engine.exchange_results(&current_db_size_stream, request_streams);
+        masks_engine.exchange_results(&current_db_size_stream, request_streams);
 
         debug_record_event!(device_manager, request_streams, timers);
 
         distance_comparator.reconstruct_and_compare(
             &codes_engine.results_peers,
             &masks_engine.results_peers,
-            &current_db_size,
+            &current_db_size_stream,
             request_streams,
             device_ptrs(request_results),
         );
@@ -484,12 +478,8 @@ async fn main() -> eyre::Result<()> {
                 &device_ptrs(request_results),
                 &code_query.0,
                 &code_query.1,
-                &device_ptrs(&request_query_code_results.0 .0),
-                &device_ptrs(&request_query_code_results.0 .1),
                 &code_query_sums.0,
                 &code_query_sums.1,
-                &device_ptrs(&request_query_code_results.1 .0),
-                &device_ptrs(&request_query_code_results.1 .1),
                 &device_ptrs(&request_final_results),
                 &device_ptrs(&code_db_sizes),
                 request_streams,
@@ -500,12 +490,8 @@ async fn main() -> eyre::Result<()> {
                 &device_ptrs(request_results),
                 &mask_query.0,
                 &mask_query.1,
-                &device_ptrs(&request_query_mask_results.0 .0),
-                &device_ptrs(&request_query_mask_results.0 .1),
                 &mask_query_sums.0,
                 &mask_query_sums.1,
-                &device_ptrs(&request_query_mask_results.1 .0),
-                &device_ptrs(&request_query_mask_results.1 .1),
                 &device_ptrs(&request_final_results),
                 &device_ptrs(&mask_db_sizes),
                 request_streams,
@@ -522,13 +508,16 @@ async fn main() -> eyre::Result<()> {
         let tmp_devs = distance_comparator.devs.clone();
         let tmp_final_results = device_ptrs(request_final_results);
         let tmp_code_db_sizes = device_ptrs(&code_db_sizes);
-        let tmp_request_query_code_results = slice_tuples_to_ptrs(request_query_code_results);
-        let tmp_request_query_mask_results = slice_tuples_to_ptrs(request_query_mask_results);
         let tmp_code_db_slices = slice_tuples_to_ptrs(&code_db_slices);
+        let tmp_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
         let tmp_evts = end_timer.iter().map(|e| *e as u64).collect::<Vec<_>>();
         let current_stream_event_tmp = current_stream_event
             .iter()
             .map(|e| *e as u64)
+            .collect::<Vec<_>>();
+        let current_db_size_mutex_clone = current_db_size_mutex
+            .iter()
+            .map(|e| Arc::clone(e))
             .collect::<Vec<_>>();
 
         tokio::spawn(async move {
@@ -559,6 +548,7 @@ async fn main() -> eyre::Result<()> {
             }
 
             // Step 2: Evaluate the results across devices
+            let mut insertion_list = vec![];
             for j in 0..host_results[0].len() {
                 let mut match_entry = u32::MAX;
                 for i in 0..tmp_devs.len() {
@@ -573,6 +563,8 @@ async fn main() -> eyre::Result<()> {
                     match_entry == u32::MAX,
                     match_entry
                 );
+
+                insertion_list.push(j);
             }
 
             for i in 0..tmp_devs.len() {
@@ -587,52 +579,105 @@ async fn main() -> eyre::Result<()> {
                             tmp_code_db_sizes[i],
                             mem::size_of::<u32>(),
                         )
-                        .result();
+                        .result()
+                        .unwrap();
                 }
 
-                current_db_size[i] = tmp_db_size[0]; // TODO
+                *current_db_size_mutex_clone[i].lock().unwrap() = tmp_db_size[0];
+                println!(
+                    "Updating DB size on device {}: {:?} [{:?}]",
+                    i,
+                    tmp_db_size[0],
+                    *current_db_size_mutex_clone[i].lock().unwrap()
+                );
 
-                println!("Updating DB size on device {}: {:?}", i, current_db_size[i]);
+                for insertion_idx in insertion_list.clone() {
+                    unsafe {
+                        // Step 4: fetch and update db counters
+                        // Append to codes db
+                        result::memcpy_dtod_async(
+                            tmp_code_db_slices.0 .0[i] + tmp_db_size[0] as u64,
+                            code_query.0[i] + (insertion_idx * IRIS_CODE_LENGTH) as u64,
+                            IRIS_CODE_LENGTH,
+                            tmp_streams[i] as *mut _,
+                        )
+                        .unwrap();
 
-                unsafe {
-                    // Step 4: fetch and update db counters
-                    result::memcpy_dtod_async(
-                        tmp_code_db_slices.0 .0[i] + tmp_db_size[0] as u64,
-                        tmp_request_query_code_results.0 .0[i],
-                        3,
-                        tmp_streams[i] as *mut _
-                    );
+                        result::memcpy_dtod_async(
+                            tmp_code_db_slices.0 .1[i] + tmp_db_size[0] as u64,
+                            code_query.1[i] + (insertion_idx * IRIS_CODE_LENGTH) as u64,
+                            IRIS_CODE_LENGTH,
+                            tmp_streams[i] as *mut _,
+                        )
+                        .unwrap();
 
-                    result::memcpy_dtod_async(
-                        tmp_code_db_slices.0 .1[i] + tmp_db_size[0] as u64,
-                        tmp_request_query_code_results.0 .1[i],
-                        3,
-                        tmp_streams[i] as *mut _
-                    );
+                        result::memcpy_dtod_async(
+                            tmp_code_db_slices.1 .0[i]
+                                + (tmp_db_size[0] * mem::size_of::<u32>()) as u64,
+                            code_query_sums.0[i]
+                                + (insertion_idx * IRIS_CODE_LENGTH * mem::size_of::<u32>()) as u64,
+                            IRIS_CODE_LENGTH * mem::size_of::<u32>(),
+                            tmp_streams[i] as *mut _,
+                        )
+                        .unwrap();
 
-                    result::memcpy_dtod_async(
-                        tmp_code_db_slices.1 .0[i] + (tmp_db_size[0] * mem::size_of::<u32>()) as u64,
-                        tmp_request_query_code_results.1 .1[i],
-                        3,
-                        tmp_streams[i] as *mut _
-                    );
+                        result::memcpy_dtod_async(
+                            tmp_code_db_slices.1 .1[i]
+                                + (tmp_db_size[0] * mem::size_of::<u32>()) as u64,
+                            code_query_sums.1[i]
+                                + (insertion_idx * IRIS_CODE_LENGTH * mem::size_of::<u32>()) as u64,
+                            IRIS_CODE_LENGTH * mem::size_of::<u32>(),
+                            tmp_streams[i] as *mut _,
+                        )
+                        .unwrap();
 
-                    result::memcpy_dtod_async(
-                        tmp_code_db_slices.1 .1[i] + (tmp_db_size[0] * mem::size_of::<u32>()) as u64,
-                        tmp_request_query_code_results.1 .1[i],
-                        3,
-                        tmp_streams[i] as *mut _
-                    );
+                        // Append to masks db
+                        result::memcpy_dtod_async(
+                            tmp_mask_db_slices.0 .0[i] + tmp_db_size[0] as u64,
+                            mask_query.0[i] + (insertion_idx * IRIS_CODE_LENGTH) as u64,
+                            IRIS_CODE_LENGTH,
+                            tmp_streams[i] as *mut _,
+                        )
+                        .unwrap();
 
-                    // Step 5: emit stream finished event to unblock the stream after the following
-                    event::record(
-                        current_stream_event_tmp[i] as *mut _,
-                        tmp_streams[i] as *mut _,
-                    )
-                    .unwrap();
+                        result::memcpy_dtod_async(
+                            tmp_mask_db_slices.0 .1[i] + tmp_db_size[0] as u64,
+                            mask_query.1[i] + (insertion_idx * IRIS_CODE_LENGTH) as u64,
+                            IRIS_CODE_LENGTH,
+                            tmp_streams[i] as *mut _,
+                        )
+                        .unwrap();
 
-                    // Emit debug event to measure time for e2e process
-                    event::record(tmp_evts[i] as *mut _, tmp_streams[i] as *mut _).unwrap();
+                        result::memcpy_dtod_async(
+                            tmp_mask_db_slices.1 .0[i]
+                                + (tmp_db_size[0] * mem::size_of::<u32>()) as u64,
+                            mask_query_sums.0[i]
+                                + (insertion_idx * IRIS_CODE_LENGTH * mem::size_of::<u32>()) as u64,
+                            IRIS_CODE_LENGTH * mem::size_of::<u32>(),
+                            tmp_streams[i] as *mut _,
+                        )
+                        .unwrap();
+
+                        result::memcpy_dtod_async(
+                            tmp_mask_db_slices.1 .1[i]
+                                + (tmp_db_size[0] * mem::size_of::<u32>()) as u64,
+                            mask_query_sums.1[i]
+                                + (insertion_idx * IRIS_CODE_LENGTH * mem::size_of::<u32>()) as u64,
+                            IRIS_CODE_LENGTH * mem::size_of::<u32>(),
+                            tmp_streams[i] as *mut _,
+                        )
+                        .unwrap();
+
+                        // Step 5: emit stream finished event to unblock the stream after the following
+                        event::record(
+                            current_stream_event_tmp[i] as *mut _,
+                            tmp_streams[i] as *mut _,
+                        )
+                        .unwrap();
+
+                        // Emit debug event to measure time for e2e process
+                        event::record(tmp_evts[i] as *mut _, tmp_streams[i] as *mut _).unwrap();
+                    }
                 }
             }
         });
