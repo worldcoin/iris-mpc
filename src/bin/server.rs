@@ -17,6 +17,7 @@ use gpu_iris_mpc::{
 };
 use std::{
     fs::metadata,
+    mem,
     time::{Duration, Instant},
 };
 use tokio::time::sleep;
@@ -112,10 +113,10 @@ fn alloc_query_result(
     query_length: usize,
     device_manager: &DeviceManager,
 ) -> (
-    (Vec<CudaSlice<u8>>, Vec<CudaSlice<u8>>),
+    (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
     (Vec<CudaSlice<u32>>, Vec<CudaSlice<u32>>),
 ) {
-    let queries_uninit = vec![0u8; query_length * IRIS_CODE_LENGTH];
+    let queries_uninit = vec![0i8; query_length * IRIS_CODE_LENGTH];
     let query_sums_uninit = vec![0u32; query_length];
     let mut queries1 = vec![];
     let mut queries2 = vec![];
@@ -128,6 +129,18 @@ fn alloc_query_result(
         query_sums2.push(dev.htod_copy(query_sums_uninit.clone()).unwrap());
     }
     ((queries1, queries2), (query_sums1, query_sums2))
+}
+
+fn slice_tuples_to_ptrs(
+    tuple: &(
+        (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
+        (Vec<CudaSlice<u32>>, Vec<CudaSlice<u32>>),
+    ),
+) -> ((Vec<u64>, Vec<u64>), (Vec<u64>, Vec<u64>)) {
+    (
+        (device_ptrs(&tuple.0 .0), device_ptrs(&tuple.0 .1)),
+        (device_ptrs(&tuple.1 .0), device_ptrs(&tuple.1 .1)),
+    )
 }
 
 #[tokio::main]
@@ -247,7 +260,8 @@ async fn main() -> eyre::Result<()> {
     let mut results = vec![];
     let mut batch_results = vec![];
     let mut final_results = vec![];
-    let mut query_results = vec![];
+    let mut query_code_results = vec![];
+    let mut query_mask_results = vec![];
     for _ in 0..MAX_CONCURRENT_REQUESTS {
         let tmp_streams = device_manager.fork_streams();
         cublas_handles.push(device_manager.create_cublas(&tmp_streams));
@@ -255,10 +269,13 @@ async fn main() -> eyre::Result<()> {
         results.push(distance_comparator.prepare_results());
         batch_results.push(distance_comparator.prepare_results());
         final_results.push(distance_comparator.prepare_final_results());
-        query_results.push(alloc_query_result(QUERIES / ROTATIONS, &device_manager));
+        query_code_results.push(alloc_query_result(QUERIES / ROTATIONS, &device_manager));
+        query_mask_results.push(alloc_query_result(QUERIES / ROTATIONS, &device_manager));
     }
 
     // Main Loop
+    let mut previous_previous__event = device_manager.create_events();
+    let mut previous_block_event = device_manager.create_events();
     let mut current_dot_event = device_manager.create_events();
     let mut next_dot_event = device_manager.create_events();
     let mut current_exchange_event = device_manager.create_events();
@@ -307,12 +324,16 @@ async fn main() -> eyre::Result<()> {
 
         let mut timers = vec![];
 
+        let current_stream_event = device_manager.create_events();
         let request_streams = &streams[request_counter % MAX_CONCURRENT_REQUESTS];
         let request_cublas_handles = &cublas_handles[request_counter % MAX_CONCURRENT_REQUESTS];
         let request_results = &results[request_counter % MAX_CONCURRENT_REQUESTS];
         let request_batch_results = &batch_results[request_counter % MAX_CONCURRENT_REQUESTS];
         let request_final_results = &final_results[request_counter % MAX_CONCURRENT_REQUESTS];
-        let request_query_results = &query_results[request_counter % MAX_CONCURRENT_REQUESTS];
+        let request_query_code_results =
+            &query_code_results[request_counter % MAX_CONCURRENT_REQUESTS];
+        let request_query_mask_results =
+            &query_mask_results[request_counter % MAX_CONCURRENT_REQUESTS];
 
         // First stream doesn't need to wait on anyone
         if request_counter == 0 {
@@ -334,15 +355,17 @@ async fn main() -> eyre::Result<()> {
         if request_counter > 2 {
             // We have two streams working concurrently, we'll await the stream before previous one
             let previous_streams = &streams[(request_counter - 2) % MAX_CONCURRENT_REQUESTS];
-            device_manager.await_streams(&previous_streams);
-            for i in 0..device_manager.device_count() {
-                current_db_size[i] = device_manager
-                    .device(i)
-                    .dtoh_sync_copy(&code_db_sizes[i])
-                    .unwrap()[0] as usize;
 
-                println!("Updating DB size on device {}: {:?}", i, current_db_size[i]);
-            }
+            // TODO: await event
+            device_manager.await_streams(&previous_streams);
+            // for i in 0..device_manager.device_count() {
+            //     current_db_size[i] = device_manager
+            //         .device(i)
+            //         .dtoh_sync_copy(&code_db_sizes[i])
+            //         .unwrap()[0] as usize;
+
+            //     println!("Updating DB size on device {}: {:?}", i, current_db_size[i]);
+            // }
         }
 
         // BLOCK 1: calculate individual dot products
@@ -461,12 +484,12 @@ async fn main() -> eyre::Result<()> {
                 &device_ptrs(request_results),
                 &code_query.0,
                 &code_query.1,
-                &device_ptrs(&request_query_results.0 .0),
-                &device_ptrs(&request_query_results.0 .1),
+                &device_ptrs(&request_query_code_results.0 .0),
+                &device_ptrs(&request_query_code_results.0 .1),
                 &code_query_sums.0,
                 &code_query_sums.1,
-                &device_ptrs(&request_query_results.1 .0),
-                &device_ptrs(&request_query_results.1 .1),
+                &device_ptrs(&request_query_code_results.1 .0),
+                &device_ptrs(&request_query_code_results.1 .1),
                 &device_ptrs(&request_final_results),
                 &device_ptrs(&code_db_sizes),
                 request_streams,
@@ -477,12 +500,12 @@ async fn main() -> eyre::Result<()> {
                 &device_ptrs(request_results),
                 &mask_query.0,
                 &mask_query.1,
-                &device_ptrs(&request_query_results.0 .0),
-                &device_ptrs(&request_query_results.0 .1),
+                &device_ptrs(&request_query_mask_results.0 .0),
+                &device_ptrs(&request_query_mask_results.0 .1),
                 &mask_query_sums.0,
                 &mask_query_sums.1,
-                &device_ptrs(&request_query_results.1 .0),
-                &device_ptrs(&request_query_results.1 .1),
+                &device_ptrs(&request_query_mask_results.1 .0),
+                &device_ptrs(&request_query_mask_results.1 .1),
                 &device_ptrs(&request_final_results),
                 &device_ptrs(&mask_db_sizes),
                 request_streams,
@@ -498,23 +521,22 @@ async fn main() -> eyre::Result<()> {
             .collect::<Vec<_>>();
         let tmp_devs = distance_comparator.devs.clone();
         let tmp_final_results = device_ptrs(request_final_results);
+        let tmp_code_db_sizes = device_ptrs(&code_db_sizes);
+        let tmp_request_query_code_results = slice_tuples_to_ptrs(request_query_code_results);
+        let tmp_request_query_mask_results = slice_tuples_to_ptrs(request_query_mask_results);
+        let tmp_code_db_slices = slice_tuples_to_ptrs(&code_db_slices);
         let tmp_evts = end_timer.iter().map(|e| *e as u64).collect::<Vec<_>>();
+        let current_stream_event_tmp = current_stream_event
+            .iter()
+            .map(|e| *e as u64)
+            .collect::<Vec<_>>();
 
         tokio::spawn(async move {
             let mut host_results = vec![];
+            // Step 1: Fetch the uniqueness results for each query for each device
             for i in 0..tmp_devs.len() {
                 tmp_devs[i].bind_to_thread().unwrap();
                 host_results.push(vec![u32::MAX; QUERIES / ROTATIONS]);
-
-                // TODO: dtod to insert in db
-                // unsafe {
-                //     result::memcpy_dtod_async(
-                //         *dst.device_ptr_mut(),
-                //         *src.device_ptr(),
-                //         src.len() * std::mem::size_of::<T>(),
-                //         tmp_streams[i],
-                //     )
-                // }
 
                 unsafe {
                     lib()
@@ -526,8 +548,6 @@ async fn main() -> eyre::Result<()> {
                         )
                         .result()
                         .unwrap();
-
-                    event::record(tmp_evts[i] as *mut _, tmp_streams[i] as *mut _).unwrap();
                 }
             }
 
@@ -538,6 +558,7 @@ async fn main() -> eyre::Result<()> {
                 }
             }
 
+            // Step 2: Evaluate the results across devices
             for j in 0..host_results[0].len() {
                 let mut match_entry = u32::MAX;
                 for i in 0..tmp_devs.len() {
@@ -553,6 +574,67 @@ async fn main() -> eyre::Result<()> {
                     match_entry
                 );
             }
+
+            for i in 0..tmp_devs.len() {
+                tmp_devs[i].bind_to_thread().unwrap();
+
+                // Step 3: fetch and update db counters
+                let tmp_db_size = vec![0usize; 1];
+                unsafe {
+                    lib()
+                        .cuMemcpyDtoH_v2(
+                            tmp_db_size.as_ptr() as *mut _,
+                            tmp_code_db_sizes[i],
+                            mem::size_of::<u32>(),
+                        )
+                        .result();
+                }
+
+                current_db_size[i] = tmp_db_size[0]; // TODO
+
+                println!("Updating DB size on device {}: {:?}", i, current_db_size[i]);
+
+                unsafe {
+                    // Step 4: fetch and update db counters
+                    result::memcpy_dtod_async(
+                        tmp_code_db_slices.0 .0[i] + tmp_db_size[0] as u64,
+                        tmp_request_query_code_results.0 .0[i],
+                        3,
+                        tmp_streams[i] as *mut _
+                    );
+
+                    result::memcpy_dtod_async(
+                        tmp_code_db_slices.0 .1[i] + tmp_db_size[0] as u64,
+                        tmp_request_query_code_results.0 .1[i],
+                        3,
+                        tmp_streams[i] as *mut _
+                    );
+
+                    result::memcpy_dtod_async(
+                        tmp_code_db_slices.1 .0[i] + (tmp_db_size[0] * mem::size_of::<u32>()) as u64,
+                        tmp_request_query_code_results.1 .1[i],
+                        3,
+                        tmp_streams[i] as *mut _
+                    );
+
+                    result::memcpy_dtod_async(
+                        tmp_code_db_slices.1 .1[i] + (tmp_db_size[0] * mem::size_of::<u32>()) as u64,
+                        tmp_request_query_code_results.1 .1[i],
+                        3,
+                        tmp_streams[i] as *mut _
+                    );
+
+                    // Step 5: emit stream finished event to unblock the stream after the following
+                    event::record(
+                        current_stream_event_tmp[i] as *mut _,
+                        tmp_streams[i] as *mut _,
+                    )
+                    .unwrap();
+
+                    // Emit debug event to measure time for e2e process
+                    event::record(tmp_evts[i] as *mut _, tmp_streams[i] as *mut _).unwrap();
+                }
+            }
         });
 
         // Prepare for next batch
@@ -563,6 +645,7 @@ async fn main() -> eyre::Result<()> {
         current_exchange_event = next_exchange_event;
         next_dot_event = device_manager.create_events();
         next_exchange_event = device_manager.create_events();
+
         println!("CPU time of one iteration {:?}", now.elapsed());
     }
 
