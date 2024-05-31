@@ -1211,11 +1211,6 @@ mod tests {
         let query_sums1 = [1u8; QUERY_LEN].to_vec();
         let query_sums2 = [1u8; QUERY_LEN].to_vec();
 
-        let query1_new = [0u8; QUERY_LEN / ROTATIONS].to_vec();
-        let query2_new = [0u8; QUERY_LEN / ROTATIONS].to_vec();
-        let query_sums1_new = [0u8; QUERY_LEN / ROTATIONS].to_vec();
-        let query_sums2_new = [0u8; QUERY_LEN / ROTATIONS].to_vec();
-
         // set all to matches
         let mut match_results = [u32::MAX; QUERIES].to_vec();
 
@@ -1233,10 +1228,6 @@ mod tests {
         let query_ptrs = device_manager.htod_transfer_query(&vec![query1, query2], &streams);
         let query_sum_ptrs =
             device_manager.htod_transfer_query(&vec![query_sums1, query_sums2], &streams);
-        let query_ptrs_new =
-            device_manager.htod_transfer_query(&vec![query1_new, query2_new], &streams);
-        let query_sum_ptrs_new =
-            device_manager.htod_transfer_query(&vec![query_sums1_new, query_sums2_new], &streams);
 
         let mut result_ptrs = vec![];
         let mut result_ptrs_self = vec![];
@@ -1281,12 +1272,8 @@ mod tests {
             &device_ptrs(&result_ptrs),
             &query_ptrs.0,
             &query_ptrs.1,
-            &query_ptrs_new.0,
-            &query_ptrs_new.1,
             &query_sum_ptrs.0,
             &query_sum_ptrs.1,
-            &query_sum_ptrs_new.0,
-            &query_sum_ptrs_new.1,
             &device_ptrs(&final_results_ptrs),
             &device_ptrs(&db_sizes),
             &streams,

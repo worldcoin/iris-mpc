@@ -37,8 +37,8 @@ use gpu_iris_mpc::{
 use rand::prelude::SliceRandom;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
-const ENABLE_DEDUP_QUERY: bool = true;
-const ENABLE_WRITE_DB: bool = true;
+const ENABLE_DEDUP_QUERY: bool = false;
+const ENABLE_WRITE_DB: bool = false;
 const REGION: &str = "us-east-2";
 const DB_SIZE: usize = 8 * 1_000;
 const DB_BUFFER: usize = 8 * 1_000;
@@ -47,8 +47,9 @@ const RNG_SEED: u64 = 42;
 const SHUFFLE_SEED: u64 = 42;
 const N_BATCHES: usize = 10;
 const MAX_CONCURRENT_REQUESTS: usize = 5;
-const DB_CODE_FILE: &str = "/opt/dlami/nvme/codes.db";
-const DB_MASK_FILE: &str = "/opt/dlami/nvme/masks.db";
+const DB_CODE_FILE: &str = "codes.db";
+const DB_MASK_FILE: &str = "masks.db";
+const DEFAULT_PATH: &str = "/opt/dlami/nvme/";
 
 macro_rules! debug_record_event {
     ($manager:expr, $streams:expr, $timers:expr) => {
@@ -68,6 +69,9 @@ struct Opt {
 
     #[structopt(short, long)]
     bootstrap_url: Option<String>,
+
+    #[structopt(short, long)]
+    path: Option<String>,
 }
 
 async fn receive_batch(client: &Client, queue_url: &String) -> eyre::Result<Vec<ShamirIris>> {
@@ -130,7 +134,12 @@ async fn main() -> eyre::Result<()> {
         queue,
         party_id,
         bootstrap_url,
+        path,
     } = Opt::parse();
+    let path = path.unwrap_or(DEFAULT_PATH.to_string());
+
+    let code_db_path = format!("{}/{}", path, DB_CODE_FILE);
+    let mask_db_path = format!("{}/{}", path, DB_MASK_FILE);
 
     let shuffle_rng = StdRng::seed_from_u64(SHUFFLE_SEED);
 
@@ -154,8 +163,8 @@ async fn main() -> eyre::Result<()> {
     let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(party_id as u8).unwrap());
 
     // Generate or load DB
-    let (codes_db, masks_db) = if metadata(DB_CODE_FILE).is_ok() && metadata(DB_MASK_FILE).is_ok() {
-        (read_mmap_file(DB_CODE_FILE)?, read_mmap_file(DB_MASK_FILE)?)
+    let (codes_db, masks_db) = if metadata(&code_db_path).is_ok() && metadata(&mask_db_path).is_ok() {
+        (read_mmap_file(&code_db_path)?, read_mmap_file(&mask_db_path)?)
     } else {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
@@ -174,8 +183,8 @@ async fn main() -> eyre::Result<()> {
             .flat_map(|entry| entry.mask)
             .collect::<Vec<_>>();
 
-        write_mmap_file(DB_CODE_FILE, &codes_db)?;
-        write_mmap_file(DB_MASK_FILE, &masks_db)?;
+        write_mmap_file(&code_db_path, &codes_db)?;
+        write_mmap_file(&mask_db_path, &masks_db)?;
         (codes_db, masks_db)
     };
 
