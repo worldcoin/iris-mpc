@@ -126,7 +126,7 @@ async fn main() {
                 streams.push(stream);
             }
             
-            group_start().unwrap();
+            // group_start().unwrap();
             devs[i].bind_to_thread().unwrap();
             for stream in streams {
                 let start = event::create(CUevent_flags::CU_EVENT_DEFAULT).unwrap();
@@ -171,7 +171,7 @@ async fn main() {
                 }
                 events.push((start, end));
             }
-            group_end().unwrap();
+            // group_end().unwrap();
         }
         
         for i in 0..n_devices {
