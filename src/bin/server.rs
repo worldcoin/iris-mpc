@@ -516,7 +516,6 @@ async fn main() -> eyre::Result<()> {
             let mut host_results = vec![];
             // Step 1: Fetch the uniqueness results for each query for each device
             for i in 0..tmp_devs.len() {
-                println!("fetching results {}", i);
                 tmp_devs[i].bind_to_thread().unwrap();
                 host_results.push(vec![u32::MAX; QUERIES / ROTATIONS]);
 
