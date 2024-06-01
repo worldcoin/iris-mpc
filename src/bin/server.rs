@@ -37,8 +37,8 @@ use gpu_iris_mpc::{
 use rand::prelude::SliceRandom;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
-const ENABLE_DEDUP_QUERY: bool = false;
-const ENABLE_WRITE_DB: bool = false;
+const ENABLE_DEDUP_QUERY: bool = true;
+const ENABLE_WRITE_DB: bool = true;
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
 const DB_BUFFER: usize = 8 * 1_000;
