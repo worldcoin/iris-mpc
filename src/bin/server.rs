@@ -583,7 +583,7 @@ async fn main() -> eyre::Result<()> {
                         result::memcpy_dtod_async(
                             tmp_code_db_slices.1 .0[i] + (old_size * mem::size_of::<u32>() as u64),
                             code_query_sums.0[i]
-                                + (insertion_idx * IRIS_CODE_LENGTH * mem::size_of::<u32>()) as u64,
+                                + (insertion_idx * mem::size_of::<u32>()) as u64,
                             IRIS_CODE_LENGTH * mem::size_of::<u32>(),
                             tmp_streams[i] as *mut _,
                         )
@@ -592,7 +592,7 @@ async fn main() -> eyre::Result<()> {
                         result::memcpy_dtod_async(
                             tmp_code_db_slices.1 .1[i] + (old_size * mem::size_of::<u32>() as u64),
                             code_query_sums.1[i]
-                                + (insertion_idx * IRIS_CODE_LENGTH * mem::size_of::<u32>()) as u64,
+                                + (insertion_idx * mem::size_of::<u32>()) as u64,
                             IRIS_CODE_LENGTH * mem::size_of::<u32>(),
                             tmp_streams[i] as *mut _,
                         )
@@ -618,7 +618,7 @@ async fn main() -> eyre::Result<()> {
                         result::memcpy_dtod_async(
                             tmp_mask_db_slices.1 .0[i] + (old_size * mem::size_of::<u32>() as u64),
                             mask_query_sums.0[i]
-                                + (insertion_idx * IRIS_CODE_LENGTH * mem::size_of::<u32>()) as u64,
+                                + (insertion_idx * mem::size_of::<u32>()) as u64,
                             IRIS_CODE_LENGTH * mem::size_of::<u32>(),
                             tmp_streams[i] as *mut _,
                         )
@@ -627,7 +627,7 @@ async fn main() -> eyre::Result<()> {
                         result::memcpy_dtod_async(
                             tmp_mask_db_slices.1 .1[i] + (old_size * mem::size_of::<u32>() as u64),
                             mask_query_sums.1[i]
-                                + (insertion_idx * IRIS_CODE_LENGTH * mem::size_of::<u32>()) as u64,
+                                + (insertion_idx * mem::size_of::<u32>()) as u64,
                             IRIS_CODE_LENGTH * mem::size_of::<u32>(),
                             tmp_streams[i] as *mut _,
                         )
