@@ -522,10 +522,11 @@ async fn main() -> eyre::Result<()> {
 
                 unsafe {
                     lib()
-                        .cuMemcpyDtoH_v2(
+                        .cuMemcpyDtoHAsync_v2(
                             host_results[i].as_ptr() as *mut _,
                             tmp_final_results[i],
                             host_results[i].len() * std::mem::size_of::<u32>(),
+                            tmp_streams[i] as *mut _,
                         )
                         .result()
                         .unwrap();
