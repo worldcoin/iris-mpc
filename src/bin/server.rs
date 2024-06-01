@@ -544,10 +544,14 @@ async fn main() -> eyre::Result<()> {
                 for i in 0..tmp_devs.len() {
                     if host_results[i][j] != u32::MAX {
                         match_entry = host_results[i][j];
-                        insertion_list.push(j);
                         break;
                     }
                 }
+
+                if match_entry == u32::MAX {
+                    insertion_list.push(j);
+                }
+
                 println!(
                     "Query {}: unique={} [index: {}]",
                     j,
