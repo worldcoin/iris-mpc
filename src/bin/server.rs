@@ -42,7 +42,7 @@ const ENABLE_WRITE_DB: bool = true;
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
 const DB_BUFFER: usize = 8 * 1_000;
-const QUERIES: usize = 992;
+const QUERIES: usize = 496;
 const RNG_SEED: u64 = 42;
 const SHUFFLE_SEED: u64 = 42;
 const N_BATCHES: usize = 10;
@@ -463,6 +463,11 @@ async fn main() -> eyre::Result<()> {
             device_ptrs(request_results),
         );
 
+        device_manager.await_streams(request_streams);
+        let xx = device_manager.device(0).dtoh_sync_copy(&request_results[0]).unwrap();
+        println!("xxxx: {:?}", xx);
+
+
         if ENABLE_DEDUP_QUERY && ENABLE_WRITE_DB {
             distance_comparator.dedup_and_append(
                 &device_ptrs(request_batch_results),
@@ -539,6 +544,7 @@ async fn main() -> eyre::Result<()> {
                 for i in 0..tmp_devs.len() {
                     if host_results[i][j] != u32::MAX {
                         match_entry = host_results[i][j];
+                        insertion_list.push(j);
                         break;
                     }
                 }
@@ -548,8 +554,6 @@ async fn main() -> eyre::Result<()> {
                     match_entry == u32::MAX,
                     match_entry
                 );
-
-                insertion_list.push(j);
             }
 
             let mut insertion_list = insertion_list

@@ -13,7 +13,7 @@ use rand::{rngs::StdRng, thread_rng, SeedableRng};
 use serde_json::to_string;
 use uuid::Uuid;
 
-const N_QUERIES: usize = 32;
+const N_QUERIES: usize = 16;
 const REGION: &str = "eu-north-1";
 const RNG_SEED: u64 = 42;
 const RNG_SEED_SERVER: u64 = 42;
