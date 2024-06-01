@@ -559,7 +559,10 @@ async fn main() -> eyre::Result<()> {
             let mut insertion_list = insertion_list
                 .chunks(QUERIES / ROTATIONS / tmp_devs.len())
                 .collect::<Vec<_>>();
+
+            println!("insertion_list: {:?}", insertion_list);
             insertion_list.shuffle(&mut shuffle_rng);
+            println!("insertion_list: {:?}", insertion_list);
 
             for i in 0..tmp_devs.len() {
                 tmp_devs[i].bind_to_thread().unwrap();
