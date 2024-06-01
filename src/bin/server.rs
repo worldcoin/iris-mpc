@@ -522,23 +522,13 @@ async fn main() -> eyre::Result<()> {
 
                 unsafe {
                     lib()
-                        .cuMemcpyDtoHAsync_v2(
+                        .cuMemcpyDtoH_v2(
                             host_results[i].as_ptr() as *mut _,
                             tmp_final_results[i],
                             host_results[i].len() * std::mem::size_of::<u32>(),
-                            tmp_streams[i] as *mut _,
                         )
                         .result()
                         .unwrap();
-                }
-            }
-
-            
-            for i in 0..tmp_devs.len() {
-                tmp_devs[i].bind_to_thread().unwrap();
-                println!("syncing {}", i);
-                unsafe {
-                    synchronize(tmp_streams[i] as *mut _).unwrap();
                 }
             }
 
