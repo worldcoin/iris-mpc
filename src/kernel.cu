@@ -60,6 +60,5 @@ extern "C" __global__ void dedupAndAppend(unsigned int *matchResultsSelf, unsign
             return;
 
         finalResults[idx] = UINT_MAX;
-        int row = atomicAdd(&dbSize[0], 1); // TODO
     }
 }
