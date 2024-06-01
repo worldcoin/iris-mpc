@@ -758,7 +758,7 @@ impl ShareDB {
                     &Some(&self.results[idx]),
                     &mut self.results_peers[idx][i],
                     i as i32,
-                    db_sizes[idx] * self.query_length,
+                    db_sizes[idx] * self.query_length * 2,
                     &self.comms[idx],
                     &streams[idx],
                 )
