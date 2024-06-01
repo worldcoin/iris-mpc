@@ -238,7 +238,7 @@ async fn main() -> eyre::Result<()> {
         party_id,
         device_manager.clone(),
         l_coeff,
-        QUERIES * device_manager.device_count(),
+        QUERIES,
         QUERIES,
         chacha_seeds,
         bootstrap_url.clone(),
@@ -282,13 +282,13 @@ async fn main() -> eyre::Result<()> {
         code_db_sizes.push(
             device_manager
                 .device(i)
-                .htod_copy(vec![(DB_SIZE / device_manager.device_count()) as u32; 2])
+                .htod_copy(vec![(DB_SIZE / device_manager.device_count()) as u32; 1])
                 .unwrap(),
         );
         mask_db_sizes.push(
             device_manager
                 .device(i)
-                .htod_copy(vec![(DB_SIZE / device_manager.device_count()) as u32; 2])
+                .htod_copy(vec![(DB_SIZE / device_manager.device_count()) as u32; 1])
                 .unwrap(),
         );
         query_db_sizes.push(
