@@ -467,38 +467,17 @@ async fn main() -> eyre::Result<()> {
             device_ptrs(request_results),
         );
 
-        device_manager.await_streams(request_streams);
-        let xx = device_manager
-            .device(0)
-            .dtoh_sync_copy(&request_results[0])
-            .unwrap();
-        println!("xxxx: {:?}", xx);
-
-        if ENABLE_DEDUP_QUERY && ENABLE_WRITE_DB {
-            distance_comparator.dedup_and_append(
-                &device_ptrs(request_batch_results),
-                &device_ptrs(request_results),
-                &code_query.0,
-                &code_query.1,
-                &code_query_sums.0,
-                &code_query_sums.1,
-                &device_ptrs(&request_final_results),
-                &device_ptrs(&code_db_sizes),
-                request_streams,
-            );
-
-            distance_comparator.dedup_and_append(
-                &device_ptrs(request_batch_results),
-                &device_ptrs(request_results),
-                &mask_query.0,
-                &mask_query.1,
-                &mask_query_sums.0,
-                &mask_query_sums.1,
-                &device_ptrs(&request_final_results),
-                &device_ptrs(&mask_db_sizes),
-                request_streams,
-            );
-        }
+        distance_comparator.dedup_and_append(
+            &device_ptrs(request_batch_results),
+            &device_ptrs(request_results),
+            &code_query.0,
+            &code_query.1,
+            &code_query_sums.0,
+            &code_query_sums.1,
+            &device_ptrs(&request_final_results),
+            &device_ptrs(&code_db_sizes),
+            request_streams,
+        );
 
         device_manager.record_event(request_streams, &next_exchange_event);
 
