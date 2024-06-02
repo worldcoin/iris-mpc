@@ -574,7 +574,7 @@ async fn main() -> eyre::Result<()> {
             for i in 0..tmp_devs.len() {
                 tmp_devs[i].bind_to_thread().unwrap();
 
-                if insertion_list.len() >= i {
+                if insertion_list.len() > i {
                     let mut old_size = *current_db_size_mutex_clone[i].lock().unwrap() as u64;
                     for insertion_idx in insertion_list[i] {
                         unsafe {
