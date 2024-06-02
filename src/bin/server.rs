@@ -659,28 +659,32 @@ async fn main() -> eyre::Result<()> {
                         }
                         old_size += 1;
                     }
+
+                    unsafe {
+                        // Step 3: write new db sizes to device
+                        *current_db_size_mutex_clone[i].lock().unwrap() +=
+                            insertion_list[i].len() as usize;
+                        println!(
+                            "Updating DB size on device {}: {:?}",
+                            i,
+                            *current_db_size_mutex_clone[i].lock().unwrap()
+                        );
+
+                        let tmp_host =
+                            vec![*current_db_size_mutex_clone[i].lock().unwrap() as u32; 1];
+                        lib()
+                            .cuMemcpyHtoDAsync_v2(
+                                tmp_code_db_sizes[i],
+                                tmp_host.as_ptr() as *mut _,
+                                mem::size_of::<u32>(),
+                                tmp_streams[i] as *mut _,
+                            )
+                            .result()
+                            .unwrap();
+                    }
                 }
+
                 unsafe {
-                    // Step 3: write new db sizes to device
-                    *current_db_size_mutex_clone[i].lock().unwrap() +=
-                        insertion_list[i].len() as usize;
-                    println!(
-                        "Updating DB size on device {}: {:?}",
-                        i,
-                        *current_db_size_mutex_clone[i].lock().unwrap()
-                    );
-
-                    let tmp_host = vec![*current_db_size_mutex_clone[i].lock().unwrap() as u32; 1];
-                    lib()
-                        .cuMemcpyHtoDAsync_v2(
-                            tmp_code_db_sizes[i],
-                            tmp_host.as_ptr() as *mut _,
-                            mem::size_of::<u32>(),
-                            tmp_streams[i] as *mut _,
-                        )
-                        .result()
-                        .unwrap();
-
                     // Step 5: emit stream finished event to unblock the stream after the following
                     event::record(
                         current_stream_event_tmp[i] as *mut _,
