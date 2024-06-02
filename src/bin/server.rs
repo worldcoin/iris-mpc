@@ -37,10 +37,8 @@ use gpu_iris_mpc::{
 use rand::prelude::SliceRandom;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
-const ENABLE_DEDUP_QUERY: bool = true;
-const ENABLE_WRITE_DB: bool = true;
 const REGION: &str = "eu-north-1";
-const DB_SIZE: usize = 8 * 1_000;
+const DB_SIZE: usize = 8 * 250_000;
 const DB_BUFFER: usize = 8 * 1_000;
 const QUERIES: usize = 496;
 const RNG_SEED: u64 = 42;
@@ -360,47 +358,45 @@ async fn main() -> eyre::Result<()> {
         // BLOCK 1: calculate individual dot products
         device_manager.await_event(request_streams, &current_dot_event);
 
-        if ENABLE_DEDUP_QUERY {
-            batch_codes_engine.dot(
-                &code_query,
-                &code_query,
-                &query_db_size,
-                request_streams,
-                request_cublas_handles,
-            );
+        batch_codes_engine.dot(
+            &code_query,
+            &code_query,
+            &query_db_size,
+            request_streams,
+            request_cublas_handles,
+        );
 
-            batch_masks_engine.dot(
-                &code_query,
-                &code_query,
-                &query_db_size,
-                request_streams,
-                request_cublas_handles,
-            );
+        batch_masks_engine.dot(
+            &code_query,
+            &code_query,
+            &query_db_size,
+            request_streams,
+            request_cublas_handles,
+        );
 
-            batch_codes_engine.dot_reduce(
-                &code_query_sums,
-                &code_query_sums,
-                &query_db_size,
-                request_streams,
-            );
-            batch_masks_engine.dot_reduce(
-                &code_query_sums,
-                &code_query_sums,
-                &query_db_size,
-                request_streams,
-            );
+        batch_codes_engine.dot_reduce(
+            &code_query_sums,
+            &code_query_sums,
+            &query_db_size,
+            request_streams,
+        );
+        batch_masks_engine.dot_reduce(
+            &code_query_sums,
+            &code_query_sums,
+            &query_db_size,
+            request_streams,
+        );
 
-            batch_codes_engine.exchange_results(&query_db_size, request_streams);
-            batch_masks_engine.exchange_results(&query_db_size, request_streams);
+        batch_codes_engine.exchange_results(&query_db_size, request_streams);
+        batch_masks_engine.exchange_results(&query_db_size, request_streams);
 
-            distance_comparator.reconstruct_and_compare(
-                &batch_codes_engine.results_peers,
-                &batch_masks_engine.results_peers,
-                &query_db_size,
-                request_streams,
-                device_ptrs(request_batch_results),
-            );
-        }
+        distance_comparator.reconstruct_and_compare(
+            &batch_codes_engine.results_peers,
+            &batch_masks_engine.results_peers,
+            &query_db_size,
+            request_streams,
+            device_ptrs(request_batch_results),
+        );
 
         debug_record_event!(device_manager, request_streams, timers);
 
