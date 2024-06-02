@@ -572,79 +572,79 @@ async fn main() -> eyre::Result<()> {
                 tmp_devs[i].bind_to_thread().unwrap();
                 let mut old_size = *current_db_size_mutex_clone[i].lock().unwrap() as u64;
                 for insertion_idx in insertion_list[i] {
-                    unsafe {
-                        // Step 4: fetch and update db counters
-                        // Append to codes db
-                        result::memcpy_dtod_async(
-                            tmp_code_db_slices.0 .0[i] + old_size,
-                            code_query.0[i] + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
-                            IRIS_CODE_LENGTH,
-                            tmp_streams[i] as *mut _,
-                        )
-                        .unwrap();
+                    // unsafe {
+                    //     // Step 4: fetch and update db counters
+                    //     // Append to codes db
+                    //     result::memcpy_dtod_async(
+                    //         tmp_code_db_slices.0 .0[i] + old_size,
+                    //         code_query.0[i] + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
+                    //         IRIS_CODE_LENGTH,
+                    //         tmp_streams[i] as *mut _,
+                    //     )
+                    //     .unwrap();
 
-                        result::memcpy_dtod_async(
-                            tmp_code_db_slices.0 .1[i] + old_size,
-                            code_query.1[i] + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
-                            IRIS_CODE_LENGTH,
-                            tmp_streams[i] as *mut _,
-                        )
-                        .unwrap();
+                    //     result::memcpy_dtod_async(
+                    //         tmp_code_db_slices.0 .1[i] + old_size,
+                    //         code_query.1[i] + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
+                    //         IRIS_CODE_LENGTH,
+                    //         tmp_streams[i] as *mut _,
+                    //     )
+                    //     .unwrap();
 
-                        result::memcpy_dtod_async(
-                            tmp_code_db_slices.1 .0[i] + (old_size * mem::size_of::<u32>() as u64),
-                            code_query_sums.0[i]
-                                + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
-                            mem::size_of::<u32>(),
-                            tmp_streams[i] as *mut _,
-                        )
-                        .unwrap();
+                    //     result::memcpy_dtod_async(
+                    //         tmp_code_db_slices.1 .0[i] + (old_size * mem::size_of::<u32>() as u64),
+                    //         code_query_sums.0[i]
+                    //             + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
+                    //         mem::size_of::<u32>(),
+                    //         tmp_streams[i] as *mut _,
+                    //     )
+                    //     .unwrap();
 
-                        result::memcpy_dtod_async(
-                            tmp_code_db_slices.1 .1[i] + (old_size * mem::size_of::<u32>() as u64),
-                            code_query_sums.1[i]
-                                + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
-                            mem::size_of::<u32>(),
-                            tmp_streams[i] as *mut _,
-                        )
-                        .unwrap();
+                    //     result::memcpy_dtod_async(
+                    //         tmp_code_db_slices.1 .1[i] + (old_size * mem::size_of::<u32>() as u64),
+                    //         code_query_sums.1[i]
+                    //             + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
+                    //         mem::size_of::<u32>(),
+                    //         tmp_streams[i] as *mut _,
+                    //     )
+                    //     .unwrap();
 
-                        // Append to masks db
-                        result::memcpy_dtod_async(
-                            tmp_mask_db_slices.0 .0[i] + old_size,
-                            mask_query.0[i] + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
-                            IRIS_CODE_LENGTH,
-                            tmp_streams[i] as *mut _,
-                        )
-                        .unwrap();
+                    //     // Append to masks db
+                    //     result::memcpy_dtod_async(
+                    //         tmp_mask_db_slices.0 .0[i] + old_size,
+                    //         mask_query.0[i] + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
+                    //         IRIS_CODE_LENGTH,
+                    //         tmp_streams[i] as *mut _,
+                    //     )
+                    //     .unwrap();
 
-                        result::memcpy_dtod_async(
-                            tmp_mask_db_slices.0 .1[i] + old_size,
-                            mask_query.1[i] + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
-                            IRIS_CODE_LENGTH,
-                            tmp_streams[i] as *mut _,
-                        )
-                        .unwrap();
+                    //     result::memcpy_dtod_async(
+                    //         tmp_mask_db_slices.0 .1[i] + old_size,
+                    //         mask_query.1[i] + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
+                    //         IRIS_CODE_LENGTH,
+                    //         tmp_streams[i] as *mut _,
+                    //     )
+                    //     .unwrap();
 
-                        result::memcpy_dtod_async(
-                            tmp_mask_db_slices.1 .0[i] + (old_size * mem::size_of::<u32>() as u64),
-                            mask_query_sums.0[i]
-                                + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
-                            mem::size_of::<u32>(),
-                            tmp_streams[i] as *mut _,
-                        )
-                        .unwrap();
+                    //     result::memcpy_dtod_async(
+                    //         tmp_mask_db_slices.1 .0[i] + (old_size * mem::size_of::<u32>() as u64),
+                    //         mask_query_sums.0[i]
+                    //             + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
+                    //         mem::size_of::<u32>(),
+                    //         tmp_streams[i] as *mut _,
+                    //     )
+                    //     .unwrap();
 
-                        result::memcpy_dtod_async(
-                            tmp_mask_db_slices.1 .1[i] + (old_size * mem::size_of::<u32>() as u64),
-                            mask_query_sums.1[i]
-                                + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
-                            mem::size_of::<u32>(),
-                            tmp_streams[i] as *mut _,
-                        )
-                        .unwrap();
-                    }
-                    old_size += 1;
+                    //     result::memcpy_dtod_async(
+                    //         tmp_mask_db_slices.1 .1[i] + (old_size * mem::size_of::<u32>() as u64),
+                    //         mask_query_sums.1[i]
+                    //             + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
+                    //         mem::size_of::<u32>(),
+                    //         tmp_streams[i] as *mut _,
+                    //     )
+                    //     .unwrap();
+                    // }
+                    // old_size += 1;
                 }
                 unsafe {
                     // Step 3: write new db sizes to device
