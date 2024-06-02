@@ -648,15 +648,15 @@ async fn main() -> eyre::Result<()> {
                 }
                 unsafe {
                     // Step 3: write new db sizes to device
-                    *current_db_size_mutex_clone[i].lock().unwrap() +=
-                        insertion_list[i].len() as usize;
-                    println!(
-                        "Updating DB size on device {}: {:?}",
-                        i,
-                        *current_db_size_mutex_clone[i].lock().unwrap()
-                    );
+                    // *current_db_size_mutex_clone[i].lock().unwrap() +=
+                    //     insertion_list[i].len() as usize;
+                    // println!(
+                    //     "Updating DB size on device {}: {:?}",
+                    //     i,
+                    //     *current_db_size_mutex_clone[i].lock().unwrap()
+                    // );
 
-                    let tmp_host = vec![*current_db_size_mutex_clone[i].lock().unwrap() as u32; 1];
+                    // let tmp_host = vec![*current_db_size_mutex_clone[i].lock().unwrap() as u32; 1];
                     // lib()
                     //     .cuMemcpyHtoDAsync_v2(
                     //         tmp_code_db_sizes[i],
