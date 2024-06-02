@@ -163,8 +163,12 @@ async fn main() -> eyre::Result<()> {
     let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(party_id as u8).unwrap());
 
     // Generate or load DB
-    let (codes_db, masks_db) = if metadata(&code_db_path).is_ok() && metadata(&mask_db_path).is_ok() {
-        (read_mmap_file(&code_db_path)?, read_mmap_file(&mask_db_path)?)
+    let (codes_db, masks_db) = if metadata(&code_db_path).is_ok() && metadata(&mask_db_path).is_ok()
+    {
+        (
+            read_mmap_file(&code_db_path)?,
+            read_mmap_file(&mask_db_path)?,
+        )
     } else {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
@@ -464,9 +468,11 @@ async fn main() -> eyre::Result<()> {
         );
 
         device_manager.await_streams(request_streams);
-        let xx = device_manager.device(0).dtoh_sync_copy(&request_results[0]).unwrap();
+        let xx = device_manager
+            .device(0)
+            .dtoh_sync_copy(&request_results[0])
+            .unwrap();
         println!("xxxx: {:?}", xx);
-
 
         if ENABLE_DEDUP_QUERY && ENABLE_WRITE_DB {
             distance_comparator.dedup_and_append(
@@ -563,88 +569,96 @@ async fn main() -> eyre::Result<()> {
             let mut insertion_list = insertion_list
                 .chunks(QUERIES / ROTATIONS / tmp_devs.len())
                 .collect::<Vec<_>>();
-
-            println!("insertion_list: {:?}", insertion_list);
             insertion_list.shuffle(&mut shuffle_rng);
-            println!("insertion_list: {:?}", insertion_list);
 
             for i in 0..tmp_devs.len() {
                 tmp_devs[i].bind_to_thread().unwrap();
-                let mut old_size = *current_db_size_mutex_clone[i].lock().unwrap() as u64;
-                for insertion_idx in insertion_list[i] {
-                    unsafe {
-                        // Step 4: fetch and update db counters
-                        // Append to codes db
-                        result::memcpy_dtod_async(
-                            tmp_code_db_slices.0 .0[i] + old_size * IRIS_CODE_LENGTH as u64,
-                            code_query.0[i] + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
-                            IRIS_CODE_LENGTH,
-                            tmp_streams[i] as *mut _,
-                        )
-                        .unwrap();
 
-                        result::memcpy_dtod_async(
-                            tmp_code_db_slices.0 .1[i] + old_size * IRIS_CODE_LENGTH as u64,
-                            code_query.1[i] + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
-                            IRIS_CODE_LENGTH,
-                            tmp_streams[i] as *mut _,
-                        )
-                        .unwrap();
+                if insertion_list.len() >= i {
+                    let mut old_size = *current_db_size_mutex_clone[i].lock().unwrap() as u64;
+                    for insertion_idx in insertion_list[i] {
+                        unsafe {
+                            // Step 4: fetch and update db counters
+                            // Append to codes db
+                            result::memcpy_dtod_async(
+                                tmp_code_db_slices.0 .0[i] + old_size * IRIS_CODE_LENGTH as u64,
+                                code_query.0[i]
+                                    + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
+                                IRIS_CODE_LENGTH,
+                                tmp_streams[i] as *mut _,
+                            )
+                            .unwrap();
 
-                        result::memcpy_dtod_async(
-                            tmp_code_db_slices.1 .0[i] + (old_size * mem::size_of::<u32>() as u64),
-                            code_query_sums.0[i]
-                                + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
-                            mem::size_of::<u32>(),
-                            tmp_streams[i] as *mut _,
-                        )
-                        .unwrap();
+                            result::memcpy_dtod_async(
+                                tmp_code_db_slices.0 .1[i] + old_size * IRIS_CODE_LENGTH as u64,
+                                code_query.1[i]
+                                    + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
+                                IRIS_CODE_LENGTH,
+                                tmp_streams[i] as *mut _,
+                            )
+                            .unwrap();
 
-                        result::memcpy_dtod_async(
-                            tmp_code_db_slices.1 .1[i] + (old_size * mem::size_of::<u32>() as u64),
-                            code_query_sums.1[i]
-                                + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
-                            mem::size_of::<u32>(),
-                            tmp_streams[i] as *mut _,
-                        )
-                        .unwrap();
+                            result::memcpy_dtod_async(
+                                tmp_code_db_slices.1 .0[i]
+                                    + (old_size * mem::size_of::<u32>() as u64),
+                                code_query_sums.0[i]
+                                    + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
+                                mem::size_of::<u32>(),
+                                tmp_streams[i] as *mut _,
+                            )
+                            .unwrap();
 
-                        // Append to masks db
-                        result::memcpy_dtod_async(
-                            tmp_mask_db_slices.0 .0[i] + old_size * IRIS_CODE_LENGTH as u64,
-                            mask_query.0[i] + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
-                            IRIS_CODE_LENGTH,
-                            tmp_streams[i] as *mut _,
-                        )
-                        .unwrap();
+                            result::memcpy_dtod_async(
+                                tmp_code_db_slices.1 .1[i]
+                                    + (old_size * mem::size_of::<u32>() as u64),
+                                code_query_sums.1[i]
+                                    + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
+                                mem::size_of::<u32>(),
+                                tmp_streams[i] as *mut _,
+                            )
+                            .unwrap();
 
-                        result::memcpy_dtod_async(
-                            tmp_mask_db_slices.0 .1[i] + old_size * IRIS_CODE_LENGTH as u64,
-                            mask_query.1[i] + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
-                            IRIS_CODE_LENGTH,
-                            tmp_streams[i] as *mut _,
-                        )
-                        .unwrap();
+                            // Append to masks db
+                            result::memcpy_dtod_async(
+                                tmp_mask_db_slices.0 .0[i] + old_size * IRIS_CODE_LENGTH as u64,
+                                mask_query.0[i]
+                                    + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
+                                IRIS_CODE_LENGTH,
+                                tmp_streams[i] as *mut _,
+                            )
+                            .unwrap();
 
-                        result::memcpy_dtod_async(
-                            tmp_mask_db_slices.1 .0[i] + (old_size * mem::size_of::<u32>() as u64),
-                            mask_query_sums.0[i]
-                                + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
-                            mem::size_of::<u32>(),
-                            tmp_streams[i] as *mut _,
-                        )
-                        .unwrap();
+                            result::memcpy_dtod_async(
+                                tmp_mask_db_slices.0 .1[i] + old_size * IRIS_CODE_LENGTH as u64,
+                                mask_query.1[i]
+                                    + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
+                                IRIS_CODE_LENGTH,
+                                tmp_streams[i] as *mut _,
+                            )
+                            .unwrap();
 
-                        result::memcpy_dtod_async(
-                            tmp_mask_db_slices.1 .1[i] + (old_size * mem::size_of::<u32>() as u64),
-                            mask_query_sums.1[i]
-                                + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
-                            mem::size_of::<u32>(),
-                            tmp_streams[i] as *mut _,
-                        )
-                        .unwrap();
+                            result::memcpy_dtod_async(
+                                tmp_mask_db_slices.1 .0[i]
+                                    + (old_size * mem::size_of::<u32>() as u64),
+                                mask_query_sums.0[i]
+                                    + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
+                                mem::size_of::<u32>(),
+                                tmp_streams[i] as *mut _,
+                            )
+                            .unwrap();
+
+                            result::memcpy_dtod_async(
+                                tmp_mask_db_slices.1 .1[i]
+                                    + (old_size * mem::size_of::<u32>() as u64),
+                                mask_query_sums.1[i]
+                                    + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
+                                mem::size_of::<u32>(),
+                                tmp_streams[i] as *mut _,
+                            )
+                            .unwrap();
+                        }
+                        old_size += 1;
                     }
-                    old_size += 1;
                 }
                 unsafe {
                     // Step 3: write new db sizes to device
