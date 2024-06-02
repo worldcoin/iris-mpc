@@ -64,9 +64,9 @@ extern "C" __global__ void dedupResults(unsigned int *matchResultsSelf, unsigned
         // Check if there is a match in the query itelf
         // We only need to check a single query, since we don't want to rotate double
         int oldIdx = idx * (2 * ROTATIONS + 1) + ROTATIONS;
-        if (matchResultsSelf[oldIdx] != UINT_MAX && oldIdx > matchResultsSelf[oldIdx])
+        if (matchResultsSelf[oldIdx] != UINT_MAX)
         {
-            finalResults[idx] = UINT_MAX - matchResultsSelf[oldIdx] - 1;
+            finalResults[idx] = matchResultsSelf[oldIdx];
             return;
         }
 
