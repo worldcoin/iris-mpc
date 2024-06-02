@@ -576,7 +576,7 @@ async fn main() -> eyre::Result<()> {
                         // Step 4: fetch and update db counters
                         // Append to codes db
                         result::memcpy_dtod_async(
-                            tmp_code_db_slices.0 .0[i] + old_size,
+                            tmp_code_db_slices.0 .0[i] + old_size * IRIS_CODE_LENGTH as u64,
                             code_query.0[i] + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
                             IRIS_CODE_LENGTH,
                             tmp_streams[i] as *mut _,
@@ -584,7 +584,7 @@ async fn main() -> eyre::Result<()> {
                         .unwrap();
 
                         result::memcpy_dtod_async(
-                            tmp_code_db_slices.0 .1[i] + old_size,
+                            tmp_code_db_slices.0 .1[i] + old_size * IRIS_CODE_LENGTH as u64,
                             code_query.1[i] + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
                             IRIS_CODE_LENGTH,
                             tmp_streams[i] as *mut _,
