@@ -42,7 +42,7 @@ const MATCH_RATIO: f64 = 0.375;
 const LIMBS: usize = 2;
 const MATMUL_FUNCTION_NAME: &str = "matmul";
 const DIST_FUNCTION_NAME: &str = "reconstructAndCompare";
-const DEDUPAPPEND_FUNCTION_NAME: &str = "dedupAndAppend";
+const DEDUP_FUNCTION_NAME: &str = "dedupResults";
 
 struct IdWrapper(Id);
 
@@ -191,12 +191,12 @@ impl DistanceComparator {
 
             dev.load_ptx(
                 ptx.clone(),
-                DEDUPAPPEND_FUNCTION_NAME,
-                &[DEDUPAPPEND_FUNCTION_NAME],
+                DEDUP_FUNCTION_NAME,
+                &[DEDUP_FUNCTION_NAME],
             )
             .unwrap();
             let dedup_function = dev
-                .get_func(DEDUPAPPEND_FUNCTION_NAME, DEDUPAPPEND_FUNCTION_NAME)
+                .get_func(DEDUP_FUNCTION_NAME, DEDUP_FUNCTION_NAME)
                 .unwrap();
 
             dist_kernels.push(dist_function);
@@ -269,14 +269,10 @@ impl DistanceComparator {
         }
     }
 
-    pub fn dedup_and_append(
+    pub fn dedup_results(
         &self,
         match_results_self: &Vec<u64>,
         match_results: &Vec<u64>,
-        queries1: &Vec<u64>,
-        queries2: &Vec<u64>,
-        query_sums1: &Vec<u64>,
-        query_sums2: &Vec<u64>,
         final_results: &Vec<u64>,
         db_size_ptrs: &Vec<u64>,
         streams: &Vec<CudaStream>,
@@ -296,14 +292,9 @@ impl DistanceComparator {
             let params = vec![
                 match_results_self[i],
                 match_results[i],
-                queries1[i],
-                queries2[i],
-                query_sums1[i],
-                query_sums2[i],
                 final_results[i],
                 db_size_ptrs[i],
                 (self.query_length / ROTATIONS) as u64,
-                i as u64,
             ];
 
             unsafe {
@@ -1202,14 +1193,7 @@ mod tests {
     #[test]
     fn test_dedup_query() {
         const ROTATIONS: usize = 31;
-        const DB_SIZE: usize = 100;
         const QUERIES: usize = 248;
-        const WIDTH: usize = 12800;
-        const QUERY_LEN: usize = QUERIES * WIDTH;
-        let query1 = [1u8; QUERY_LEN].to_vec();
-        let query2 = [1u8; QUERY_LEN].to_vec();
-        let query_sums1 = [1u8; QUERY_LEN].to_vec();
-        let query_sums2 = [1u8; QUERY_LEN].to_vec();
 
         // set all to matches
         let mut match_results = [u32::MAX; QUERIES].to_vec();
@@ -1217,7 +1201,6 @@ mod tests {
         let mut match_results_self = [u32::MAX; QUERIES].to_vec();
         // set 1 to match
         match_results_self[15] = 0;
-        match_results_self[100] = 0;
 
         let final_results = [u32::MAX; QUERIES / ROTATIONS].to_vec();
 
@@ -1225,9 +1208,6 @@ mod tests {
         let distance_comparator = DistanceComparator::init(QUERIES);
 
         let streams = device_manager.fork_streams();
-        let query_ptrs = device_manager.htod_transfer_query(&vec![query1, query2], &streams);
-        let query_sum_ptrs =
-            device_manager.htod_transfer_query(&vec![query_sums1, query_sums2], &streams);
 
         let mut result_ptrs = vec![];
         let mut result_ptrs_self = vec![];
@@ -1267,13 +1247,9 @@ mod tests {
 
         device_manager.await_streams(&streams);
 
-        distance_comparator.dedup_and_append(
+        distance_comparator.dedup_results(
             &device_ptrs(&result_ptrs_self),
             &device_ptrs(&result_ptrs),
-            &query_ptrs.0,
-            &query_ptrs.1,
-            &query_sum_ptrs.0,
-            &query_sum_ptrs.1,
             &device_ptrs(&final_results_ptrs),
             &device_ptrs(&db_sizes),
             &streams,

@@ -4,13 +4,12 @@ use cudarc::driver::{
     result::{
         self,
         event::{self, elapsed},
-        stream::synchronize,
     },
     sys::lib,
     CudaSlice,
 };
 use gpu_iris_mpc::{
-    device_manager, device_ptrs,
+    device_ptrs,
     setup::iris_db::shamir_iris::ShamirIris,
     sqs::{SMPCRequest, SQSMessage},
     IRIS_CODE_LENGTH, ROTATIONS,
@@ -38,7 +37,7 @@ use rand::prelude::SliceRandom;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 const REGION: &str = "eu-north-1";
-const DB_SIZE: usize = 8 * 250_000;
+const DB_SIZE: usize = 8 * 1_000;
 const DB_BUFFER: usize = 8 * 1_000;
 const QUERIES: usize = 496;
 const RNG_SEED: u64 = 42;
@@ -463,13 +462,9 @@ async fn main() -> eyre::Result<()> {
             device_ptrs(request_results),
         );
 
-        distance_comparator.dedup_and_append(
+        distance_comparator.dedup_results(
             &device_ptrs(request_batch_results),
             &device_ptrs(request_results),
-            &code_query.0,
-            &code_query.1,
-            &code_query_sums.0,
-            &code_query_sums.1,
             &device_ptrs(&request_final_results),
             &device_ptrs(&code_db_sizes),
             request_streams,

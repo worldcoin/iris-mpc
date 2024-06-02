@@ -40,12 +40,14 @@ extern "C" __global__ void reconstructAndCompare(unsigned short *codes_result1, 
     }
 }
 
-extern "C" __global__ void dedupAndAppend(unsigned int *matchResultsSelf, unsigned int *matchResults, unsigned char *queries1, unsigned char *queries2, unsigned int *queriesSum1, unsigned int *queriesSum2, unsigned int* finalResults, unsigned int *dbSize, size_t queryLength, size_t deviceIdx)
+extern "C" __global__ void dedupResults(unsigned int *matchResultsSelf, unsigned int *matchResults, unsigned int *finalResults, unsigned int *dbSize, size_t queryLength)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < queryLength)
     {
         bool match = false;
+
+        // Check if there is a match in the db
         for (int r = 0; r <= ROTATIONS * 2; r++)
         {
             int oldIdx = idx * (2 * ROTATIONS + 1) + r;
@@ -54,6 +56,15 @@ extern "C" __global__ void dedupAndAppend(unsigned int *matchResultsSelf, unsign
                 finalResults[idx] = matchResults[oldIdx];
                 match = true;
             }
+        }
+
+        // Check if there is a match in the query itelf
+        // We only need to check a single query, since we don't want to rotate double
+        int oldIdx = idx * (2 * ROTATIONS + 1) + ROTATIONS;
+        if (matchResultsSelf[oldIdx] < idx)
+        {
+            finalResults[idx] = UINT_MAX - matchResultsSelf[oldIdx] - 1;
+            match = true;
         }
 
         if (match)

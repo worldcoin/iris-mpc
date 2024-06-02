@@ -9,7 +9,7 @@ use gpu_iris_mpc::{
     setup::iris_db::{db::IrisDB, iris::IrisCode, shamir_iris::ShamirIris},
     sqs::SMPCRequest,
 };
-use rand::{rngs::StdRng, thread_rng, SeedableRng};
+use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use serde_json::to_string;
 use uuid::Uuid;
 
@@ -27,15 +27,22 @@ struct Opt {
 
     #[structopt(short, long)]
     db_index: Option<usize>,
+
+    rng_seed: Option<u64>,
 }
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     tracing_subscriber::fmt::init();
-    let mut rng = thread_rng();
+    
+    let Opt { topic_arn, db_index, rng_seed } = Opt::parse();
 
-    let Opt { topic_arn, db_index } = Opt::parse();
-
+    let mut rng = if let Some(rng_seed) = rng_seed {
+        StdRng::seed_from_u64(rng_seed)
+    } else {
+        StdRng::from_entropy()
+    };
+    
     let region_provider = Region::new(REGION);
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let client = Client::new(&shared_config);
