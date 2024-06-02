@@ -67,7 +67,7 @@ extern "C" __global__ void dedupResults(unsigned int *matchResultsSelf, unsigned
         if (matchResultsSelf[oldIdx] != UINT_MAX)
         {
             finalResults[idx] = UINT_MAX - matchResultsSelf[oldIdx] - 1;
-            match = true;
+            return;
         }
 
         finalResults[idx] = UINT_MAX;
