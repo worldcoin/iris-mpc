@@ -366,8 +366,8 @@ async fn main() -> eyre::Result<()> {
         );
 
         batch_masks_engine.dot(
-            &code_query,
-            &code_query,
+            &mask_query,
+            &mask_query,
             &query_db_size,
             request_streams,
             request_cublas_handles,
@@ -379,9 +379,10 @@ async fn main() -> eyre::Result<()> {
             &query_db_size,
             request_streams,
         );
+
         batch_masks_engine.dot_reduce(
-            &code_query_sums,
-            &code_query_sums,
+            &mask_query_sums,
+            &mask_query_sums,
             &query_db_size,
             request_streams,
         );
