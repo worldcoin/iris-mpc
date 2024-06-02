@@ -570,7 +570,7 @@ async fn main() -> eyre::Result<()> {
 
             for i in 0..tmp_devs.len() {
                 tmp_devs[i].bind_to_thread().unwrap();
-                let old_size = *current_db_size_mutex_clone[i].lock().unwrap() as u64;
+                let mut old_size = *current_db_size_mutex_clone[i].lock().unwrap() as u64;
                 for insertion_idx in insertion_list[i] {
                     unsafe {
                         // Step 4: fetch and update db counters
@@ -644,7 +644,7 @@ async fn main() -> eyre::Result<()> {
                         )
                         .unwrap();
                     }
-                    *current_db_size_mutex_clone[i].lock().unwrap() += 1;
+                    old_size += 1;
                 }
                 unsafe {
                     // Step 3: write new db sizes to device
@@ -657,15 +657,15 @@ async fn main() -> eyre::Result<()> {
                     );
 
                     let tmp_host = vec![*current_db_size_mutex_clone[i].lock().unwrap() as u32; 1];
-                    lib()
-                        .cuMemcpyHtoDAsync_v2(
-                            tmp_code_db_sizes[i],
-                            tmp_host.as_ptr() as *mut _,
-                            mem::size_of::<u32>(),
-                            tmp_streams[i] as *mut _,
-                        )
-                        .result()
-                        .unwrap();
+                    // lib()
+                    //     .cuMemcpyHtoDAsync_v2(
+                    //         tmp_code_db_sizes[i],
+                    //         tmp_host.as_ptr() as *mut _,
+                    //         mem::size_of::<u32>(),
+                    //         tmp_streams[i] as *mut _,
+                    //     )
+                    //     .result()
+                    //     .unwrap();
 
                     // Step 5: emit stream finished event to unblock the stream after the following
                     event::record(
