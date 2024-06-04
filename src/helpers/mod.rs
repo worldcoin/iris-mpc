@@ -1,4 +1,4 @@
-use cudarc::driver::CudaSlice;
+use cudarc::driver::{CudaSlice, DevicePtr};
 
 pub mod mmap;
 pub mod sqs;

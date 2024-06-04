@@ -9,7 +9,7 @@ use cudarc::driver::{
     CudaSlice,
 };
 use gpu_iris_mpc::{
-    helpers::sqs::{SMPCRequest, SQSMessage}, setup::iris_db::shamir_iris::ShamirIris, IRIS_CODE_LENGTH, ROTATIONS
+    dot::{device_manager::DeviceManager, distance_comparator::DistanceComparator, share_db::{preprocess_query, ShareDB}, IRIS_CODE_LENGTH, ROTATIONS}, helpers::{device_ptrs, mmap::{read_mmap_file, write_mmap_file}, sqs::{SMPCRequest, SQSMessage}}, setup::iris_db::shamir_iris::ShamirIris
 };
 use std::{
     fs::metadata,
@@ -19,15 +19,11 @@ use std::{
 };
 use tokio::time::sleep;
 
-use gpu_iris_mpc::{
-    device_manager::DeviceManager,
-    setup::{
+use gpu_iris_mpc::setup::{
         id::PartyID,
         iris_db::{db::IrisDB, shamir_db::ShamirIrisDB},
         shamir::Shamir,
-    },
-    DistanceComparator, ShareDB,
-};
+    };
 use rand::prelude::SliceRandom;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 

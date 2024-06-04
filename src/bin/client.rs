@@ -5,17 +5,13 @@ use aws_sdk_sns::{
 };
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
-use gpu_iris_mpc::{
-    setup::iris_db::{db::IrisDB, iris::IrisCode, shamir_iris::ShamirIris},
-    sqs::SMPCRequest,
-};
-use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
+use gpu_iris_mpc::{helpers::sqs::SMPCRequest, setup::iris_db::{db::IrisDB, iris::IrisCode, shamir_iris::ShamirIris}};
+use rand::{rngs::StdRng, SeedableRng};
 use serde_json::to_string;
 use uuid::Uuid;
 
-const N_QUERIES: usize = 16 * 10;
+const N_QUERIES: usize = 16;
 const REGION: &str = "eu-north-1";
-const RNG_SEED: u64 = 42;
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
@@ -28,20 +24,26 @@ struct Opt {
     #[structopt(short, long)]
     db_index: Option<usize>,
 
+    #[structopt(short, long)]
     rng_seed: Option<u64>,
+
+    #[structopt(short, long)]
+    n_repeat: Option<usize>,
 }
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     tracing_subscriber::fmt::init();
     
-    let Opt { topic_arn, db_index, rng_seed } = Opt::parse();
+    let Opt { topic_arn, db_index, rng_seed, n_repeat} = Opt::parse();
 
     let mut rng = if let Some(rng_seed) = rng_seed {
         StdRng::seed_from_u64(rng_seed)
     } else {
         StdRng::from_entropy()
     };
+
+    let n_repeat = n_repeat.unwrap_or(0);
     
     let region_provider = Region::new(REGION);
     let shared_config = aws_config::from_env().region(region_provider).load().await;
@@ -50,9 +52,13 @@ async fn main() -> eyre::Result<()> {
     let db = IrisDB::new_random_par(DB_SIZE, &mut StdRng::seed_from_u64(RNG_SEED_SERVER));
 
     // Prepare query
-    for _i in 0..N_QUERIES {
+    for query_idx in 0..N_QUERIES {
         let template = if let Some(db_index) = db_index {
-            db.db[db_index].clone()
+            if query_idx < n_repeat {
+                db.db[db_index].clone()
+            } else {
+                IrisCode::random_rng(&mut rng)
+            }
         } else {
             IrisCode::random_rng(&mut rng)
         };
@@ -100,7 +106,7 @@ async fn main() -> eyre::Result<()> {
             .send()
             .await?;
 
-        println!("Enrollment request batch {} published.", _i);
+        println!("Enrollment request batch {} published.", query_idx);
     }
 
     Ok(())
