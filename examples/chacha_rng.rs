@@ -102,9 +102,6 @@ fn main() {
     chacha1_p0_0.fill_rng();
     chacha2_p0_0.fill_rng();
 
-    // if you only need the values on the GPU, call this instead (much faster due to no host copy)
-    chacha1_p0_0.fill_rng_no_host_copy();
-    chacha2_p0_0.fill_rng_no_host_copy();
     // and get the reference to the CudaSlice to pass to other stuff
     let _slice1 = chacha1_p0_0.cuda_slice();
     let _slice2 = chacha2_p0_0.cuda_slice();

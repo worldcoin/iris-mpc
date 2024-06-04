@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use cudarc::{
-    driver::{CudaDevice, CudaFunction, CudaSlice, DeviceSlice, LaunchAsync, LaunchConfig},
+    driver::{
+        result, CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut,
+        DeviceSlice, LaunchAsync, LaunchConfig,
+    },
     nvrtc::compile_ptx,
 };
 
@@ -65,6 +68,8 @@ impl ChaChaCudaFeRng {
         let buf = vec![0u32; (buf_size / std::mem::size_of::<u32>()) * std::mem::size_of::<u16>()];
         let rng_chunk = dev.htod_sync_copy(&buf).unwrap();
 
+        let chacha_ctx = ChaChaCtx::init(seed, 0, 0);
+
         Self {
             buf_size,
             valid_buffer_size,
@@ -72,19 +77,19 @@ impl ChaChaCudaFeRng {
             kernels: [cuda_function, fe_fix_function],
             rng_chunk,
             output_buffer: buf,
-            chacha_ctx: ChaChaCtx::init(seed, 0, 0),
+            chacha_ctx,
         }
     }
 
     pub fn fill_rng(&mut self) {
-        self.fill_rng_no_host_copy();
+        self.fill_rng_no_host_copy(self.output_buffer.len(), &self.dev.fork_default_stream().unwrap());
 
         self.dev
             .dtoh_sync_copy_into(&self.rng_chunk, &mut self.output_buffer)
             .unwrap();
     }
 
-    pub fn fill_rng_no_host_copy(&mut self) {
+    pub fn fill_rng_no_host_copy(&mut self, buf_size: usize, stream: &CudaStream) {
         let num_ks_calls = self.buf_size / 32; // one call to KS produces 32 u16s
         let threads_per_block = 256; // todo sync with kernel
         let blocks_per_grid = (num_ks_calls + threads_per_block - 1) / threads_per_block;
@@ -93,14 +98,26 @@ impl ChaChaCudaFeRng {
             grid_dim: (blocks_per_grid as u32, 1, 1),
             shared_mem_bytes: 0, // do we need this since we use __shared__ in kernel?
         };
-        let state_slice = self.dev.htod_sync_copy(&self.chacha_ctx.state).unwrap();
-        let len = self.rng_chunk.len() as u64;
+
+        self.dev.bind_to_thread().unwrap();
+        let state_slice: CudaSlice<u32> = unsafe {
+            self.dev
+                .alloc(std::mem::size_of::<u32>() * self.chacha_ctx.state.len())
+                .unwrap()
+        };
+        unsafe {
+            result::memcpy_htod_async(*state_slice.device_ptr(), &self.chacha_ctx.state, stream.stream).unwrap();
+        }
+
+        let buf_size = (buf_size / OK_U16_BUF_ELEMENTS) * MIN_U16_BUF_ELEMENTS;
+        let len = (buf_size / std::mem::size_of::<u32>()) * std::mem::size_of::<u16>();
         unsafe {
             self.kernels[0]
                 .clone()
-                .launch(cfg, (&mut self.rng_chunk, &state_slice, len))
+                .launch_on_stream(stream, cfg, (&mut self.rng_chunk, &state_slice, len as u64))
                 .unwrap();
         }
+
         // increment the state counter of the ChaChaRng with the number of produced blocks
         let mut counter = self.chacha_ctx.get_counter();
         counter += num_ks_calls as u64; // one call to KS produces 32 u16s
@@ -118,7 +135,8 @@ impl ChaChaCudaFeRng {
         unsafe {
             self.kernels[1]
                 .clone()
-                .launch(
+                .launch_on_stream(
+                    stream,
                     cfg,
                     (
                         &mut self.rng_chunk,
@@ -128,7 +146,7 @@ impl ChaChaCudaFeRng {
                 .unwrap();
         }
         // do we need this synchronize?
-        self.dev.synchronize().unwrap();
+        // self.dev.synchronize().unwrap();
     }
     pub fn data(&self) -> &[u16] {
         &bytemuck::cast_slice(self.output_buffer.as_slice())[0..self.valid_buffer_size]

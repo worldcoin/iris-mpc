@@ -1,7 +1,9 @@
 use super::iris::{IrisCode, IrisCodeArray};
 use crate::setup::shamir::{Shamir, P32};
 use rand::Rng;
+use serde::{de::Visitor, Deserialize, Serialize, Serializer};
 
+#[derive(Debug)]
 pub struct ShamirIris {
     pub code: [u16; IrisCodeArray::IRIS_CODE_SIZE],
     pub mask: [u16; IrisCodeArray::IRIS_CODE_SIZE],
@@ -26,6 +28,8 @@ impl Default for ShamirIris {
 }
 
 impl ShamirIris {
+    const COLS: usize = 200;
+
     fn share_bit<R: Rng>(code: bool, mask: bool, rng: &mut R) -> ([u16; 3], [u16; 3]) {
         // code needs to be encoded before sharing
         let val = (code & mask) as u32;
@@ -56,4 +60,37 @@ impl ShamirIris {
 
         result
     }
+
+    pub fn all_rotations(&self) -> Vec<ShamirIris> {
+        let mut reference = self.clone();
+        let mut result = vec![];
+        reference.rotate_left(16*4);
+        for _ in 0..31 {
+            reference.rotate_right(4);
+            result.push(reference.clone());
+        }
+        result
+    }
+
+    pub fn rotate_right(&mut self, by: usize) {
+        self.code
+            .chunks_exact_mut(Self::COLS * 4)
+            .for_each(|chunk| chunk.rotate_right(by));
+
+        self.mask
+            .chunks_exact_mut(Self::COLS * 4)
+            .for_each(|chunk| chunk.rotate_right(by));
+    }
+    
+    pub fn rotate_left(&mut self, by: usize) {
+        self.code
+            .chunks_exact_mut(Self::COLS * 4)
+            .for_each(|chunk| chunk.rotate_left(by));
+
+        self.mask
+            .chunks_exact_mut(Self::COLS * 4)
+            .for_each(|chunk| chunk.rotate_left(by));
+    }
+
+    
 }
