@@ -1,19 +1,11 @@
-use std::{
-    ffi::c_void,
-    mem, ptr,
-    str::FromStr,
-    sync::Arc,
-    thread,
-    time::Duration,
-};
+use std::{ffi::c_void, mem, ptr, str::FromStr, sync::Arc, thread, time::Duration};
 
-use axum::{extract::Path, routing::get, Router};
+use axum::{routing::get, Router};
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
-        result::malloc_async,
-        CudaFunction, CudaSlice, CudaStream, DevicePtr,
-        DeviceSlice, LaunchAsync, LaunchConfig,
+        result::malloc_async, CudaFunction, CudaSlice, CudaStream, DevicePtr, LaunchAsync,
+        LaunchConfig,
     },
     nccl::{result, Comm, Id, NcclType},
     nvrtc::compile_ptx,
@@ -21,7 +13,10 @@ use cudarc::{
 use rayon::prelude::*;
 use rng::chacha_field::ChaChaCudaFeRng;
 
-use crate::rng;
+use crate::{
+    helpers::id_wrapper::{http_root, IdWrapper},
+    rng,
+};
 
 use super::{device_manager::DeviceManager, IRIS_CODE_LENGTH};
 
@@ -32,37 +27,6 @@ const LIMBS: usize = 2;
 const MATMUL_FUNCTION_NAME: &str = "matmul";
 const DIST_FUNCTION_NAME: &str = "reconstructAndCompare";
 const DEDUP_FUNCTION_NAME: &str = "dedupResults";
-
-struct IdWrapper(Id);
-
-impl FromStr for IdWrapper {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let bytes = hex::decode(s)
-            .unwrap()
-            .iter()
-            .map(|&c| c as i8)
-            .collect::<Vec<_>>();
-
-        let mut id = [0i8; 128];
-        id.copy_from_slice(&bytes);
-
-        Ok(IdWrapper(Id::uninit(id)))
-    }
-}
-
-impl ToString for IdWrapper {
-    fn to_string(&self) -> String {
-        hex::encode(
-            self.0
-                .internal()
-                .iter()
-                .map(|&c| c as u8)
-                .collect::<Vec<_>>(),
-        )
-    }
-}
 
 pub fn preprocess_query(query: &[u16]) -> Vec<Vec<u8>> {
     let mut result = vec![];
@@ -143,11 +107,6 @@ fn broadcast_stream<T: NcclType>(
             stream.stream as *mut _,
         )
     }
-}
-
-async fn http_root(ids: Vec<Id>, Path(device_id): Path<String>) -> String {
-    let device_id: usize = device_id.parse().unwrap();
-    IdWrapper(ids[device_id]).to_string()
 }
 
 pub struct ShareDB {
@@ -338,12 +297,7 @@ impl ShareDB {
             .chunks(chunk_size)
             .enumerate()
             .map(|(idx, chunk)| {
-                let mut slice = unsafe {
-                    self.device_manager
-                        .device(idx)
-                        .alloc(max_size)
-                        .unwrap()
-                };
+                let mut slice = unsafe { self.device_manager.device(idx).alloc(max_size).unwrap() };
                 self.device_manager
                     .htod_copy_into(chunk.to_vec(), &mut slice, idx)
                     .unwrap();
@@ -354,12 +308,7 @@ impl ShareDB {
             .chunks(chunk_size)
             .enumerate()
             .map(|(idx, chunk)| {
-                let mut slice = unsafe {
-                    self.device_manager
-                        .device(idx)
-                        .alloc(max_size)
-                        .unwrap()
-                };
+                let mut slice = unsafe { self.device_manager.device(idx).alloc(max_size).unwrap() };
                 self.device_manager
                     .htod_copy_into(chunk.to_vec(), &mut slice, idx)
                     .unwrap();
@@ -618,11 +567,13 @@ mod tests {
     use rand::{rngs::StdRng, Rng, SeedableRng};
 
     use crate::{
-        dot::{device_manager::DeviceManager, P}, helpers::device_ptrs, setup::{
+        dot::{device_manager::DeviceManager, P},
+        helpers::device_ptrs,
+        setup::{
             id::PartyID,
             iris_db::{db::IrisDB, shamir_db::ShamirIrisDB, shamir_iris::ShamirIris},
             shamir::Shamir,
-        }
+        },
     };
 
     use super::{preprocess_query, ShareDB};
