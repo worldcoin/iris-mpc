@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
-use gpu_iris_mpc::{device_manager::DeviceManager, device_ptrs, preprocess_query, setup::shamir::P, ShareDB};
+use gpu_iris_mpc::{dot::{device_manager::DeviceManager, share_db::{preprocess_query, ShareDB}}, helpers::device_ptrs, setup::shamir::P};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 fn random_vec(n: usize, m: usize, max_value: u32) -> Vec<u16> {
@@ -35,7 +35,8 @@ fn bench_memcpy(c: &mut Criterion) {
     let preprocessed_query = preprocess_query(&query);
     let streams = device_manager.fork_streams();
     let blass = device_manager.create_cublas(&streams);
-    let db_slices = engine.load_db(&db);
+    let db_slices = engine.load_db(&db, DB_SIZE, DB_SIZE);
+    let db_sizes = vec![DB_SIZE; 8];
 
     group.throughput(Throughput::Elements((DB_SIZE * QUERY_SIZE / 31) as u64));
     group.sample_size(10);
@@ -44,8 +45,8 @@ fn bench_memcpy(c: &mut Criterion) {
         b.iter(|| {
             let preprocessed_query = device_manager.htod_transfer_query(&preprocessed_query, &streams);
             let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
-            engine.dot(&preprocessed_query, &(device_ptrs(&db_slices.0 .0), device_ptrs(&db_slices.0 .1)), &streams, &blass);
-            engine.dot_reduce(&query_sums, &(device_ptrs(&db_slices.1 .0), device_ptrs(&db_slices.1 .1)), &streams);
+            engine.dot(&preprocessed_query, &(device_ptrs(&db_slices.0 .0), device_ptrs(&db_slices.0 .1)), &db_sizes, &streams, &blass);
+            engine.dot_reduce(&query_sums, &(device_ptrs(&db_slices.1 .0), device_ptrs(&db_slices.1 .1)), &db_sizes, &streams);
             device_manager.await_streams(&streams);
         });
     });

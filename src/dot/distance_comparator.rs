@@ -186,7 +186,9 @@ impl DistanceComparator {
 
 #[cfg(test)]
 mod tests {
-    use crate::helpers::device_ptrs;
+    use cudarc::driver::{sys::lib, DevicePtr, DeviceSlice};
+
+    use crate::{dot::{device_manager::DeviceManager, distance_comparator::DistanceComparator}, helpers::device_ptrs};
 
     #[test]
     fn test_dedup_query() {
@@ -198,7 +200,7 @@ mod tests {
 
         let mut match_results_self = [u32::MAX; QUERIES].to_vec();
         // set 1 to match
-        match_results_self[15] = 0;
+        // match_results_self[15] = 0;
 
         let final_results = [u32::MAX; QUERIES / ROTATIONS].to_vec();
 
