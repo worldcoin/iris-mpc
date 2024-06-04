@@ -1,4 +1,3 @@
-use core::sync;
 use std::sync::Arc;
 
 use cudarc::{

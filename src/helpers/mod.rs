@@ -1,0 +1,8 @@
+use cudarc::driver::CudaSlice;
+
+pub mod mmap;
+pub mod sqs;
+
+pub fn device_ptrs<T>(slice: &Vec<CudaSlice<T>>) -> Vec<u64> {
+    slice.iter().map(|s| *s.device_ptr()).collect()
+}

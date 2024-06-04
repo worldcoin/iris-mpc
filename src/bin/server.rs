@@ -9,10 +9,7 @@ use cudarc::driver::{
     CudaSlice,
 };
 use gpu_iris_mpc::{
-    device_ptrs,
-    setup::iris_db::shamir_iris::ShamirIris,
-    sqs::{SMPCRequest, SQSMessage},
-    IRIS_CODE_LENGTH, ROTATIONS,
+    helpers::sqs::{SMPCRequest, SQSMessage}, setup::iris_db::shamir_iris::ShamirIris, IRIS_CODE_LENGTH, ROTATIONS
 };
 use std::{
     fs::metadata,
@@ -24,8 +21,6 @@ use tokio::time::sleep;
 
 use gpu_iris_mpc::{
     device_manager::DeviceManager,
-    mmap::{read_mmap_file, write_mmap_file},
-    preprocess_query,
     setup::{
         id::PartyID,
         iris_db::{db::IrisDB, shamir_db::ShamirIrisDB},

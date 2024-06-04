@@ -85,13 +85,13 @@ impl ChaChaCudaFeRng {
         }
     }
 
-    // pub fn fill_rng(&mut self) {
-    //     self.fill_rng_no_host_copy(None);
+    pub fn fill_rng(&mut self) {
+        self.fill_rng_no_host_copy(self.output_buffer.len(), &self.dev.fork_default_stream().unwrap());
 
-    //     self.dev
-    //         .dtoh_sync_copy_into(&self.rng_chunk, &mut self.output_buffer)
-    //         .unwrap();
-    // }
+        self.dev
+            .dtoh_sync_copy_into(&self.rng_chunk, &mut self.output_buffer)
+            .unwrap();
+    }
 
     pub fn fill_rng_no_host_copy(&mut self, buf_size: usize, stream: &CudaStream) {
         let num_ks_calls = self.buf_size / 32; // one call to KS produces 32 u16s
@@ -110,7 +110,7 @@ impl ChaChaCudaFeRng {
                 .unwrap()
         };
         unsafe {
-            result::memcpy_htod_async(*state_slice.device_ptr(), &self.chacha_ctx.state, stream.stream);
+            result::memcpy_htod_async(*state_slice.device_ptr(), &self.chacha_ctx.state, stream.stream).unwrap();
         }
 
         let buf_size = (buf_size / OK_U16_BUF_ELEMENTS) * MIN_U16_BUF_ELEMENTS;
@@ -174,15 +174,15 @@ mod tests {
     use super::*;
 
     const P: u16 = 65519;
-    // #[test]
-    // fn test_chacha_rng() {
-    //     let mut rng =
-    //         ChaChaCudaFeRng::init(1000 * 1000 * 50, CudaDevice::new(0).unwrap(), [0u32; 8]);
-    //     rng.fill_rng();
-    //     assert!(rng.data().iter().all(|&x| x < P));
-    //     let data = rng.data().to_vec();
-    //     rng.fill_rng();
-    //     assert!(rng.data().iter().all(|&x| x < P));
-    //     assert!(&data[..] != rng.data());
-    // }
+    #[test]
+    fn test_chacha_rng() {
+        let mut rng =
+            ChaChaCudaFeRng::init(1000 * 1000 * 50, CudaDevice::new(0).unwrap(), [0u32; 8]);
+        rng.fill_rng();
+        assert!(rng.data().iter().all(|&x| x < P));
+        let data = rng.data().to_vec();
+        rng.fill_rng();
+        assert!(rng.data().iter().all(|&x| x < P));
+        assert!(&data[..] != rng.data());
+    }
 }
