@@ -6,7 +6,7 @@ pub mod degree2 {
 
     #[derive(Debug, Clone)]
     pub struct GaloisRingIrisCodeShare {
-        pub id: usize,
+        pub id:    usize,
         pub coefs: [u16; 12800],
     }
 
@@ -14,15 +14,15 @@ pub mod degree2 {
         pub fn encode_iris_code(iris_code: &IrisCodeArray) -> [GaloisRingIrisCodeShare; 3] {
             let mut shares = [
                 GaloisRingIrisCodeShare {
-                    id: 1,
+                    id:    1,
                     coefs: [0; 12800],
                 },
                 GaloisRingIrisCodeShare {
-                    id: 2,
+                    id:    2,
                     coefs: [0; 12800],
                 },
                 GaloisRingIrisCodeShare {
-                    id: 3,
+                    id:    3,
                     coefs: [0; 12800],
                 },
             ];
@@ -48,7 +48,8 @@ pub mod degree2 {
                         coefs: [shares[j].coefs[i], shares[j].coefs[i + 1]],
                     };
                     let adjusted_share = share * lagrange_coeffs[j];
-                    // we write the bits back into the flat array in the "wrong" order, such that we can do simple dot product later
+                    // we write the bits back into the flat array in the "wrong" order, such that we
+                    // can do simple dot product later
                     shares[j].coefs[i] = adjusted_share.coefs[0];
                     shares[j].coefs[i + 1] = adjusted_share.coefs[1]; // Note the order of bits
                 }
@@ -81,11 +82,10 @@ pub mod degree2 {
 
     #[cfg(test)]
     mod tests {
-        use rand::thread_rng;
-
         use crate::setup::{
             galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::iris::IrisCodeArray,
         };
+        use rand::thread_rng;
 
         #[test]
         fn galois_dot_trick() {
@@ -134,7 +134,7 @@ pub mod degree4 {
 
     #[derive(Debug, Clone)]
     pub struct GaloisRingIrisCodeShare {
-        pub id: usize,
+        pub id:    usize,
         pub coefs: [u16; 12800],
     }
 
@@ -142,15 +142,15 @@ pub mod degree4 {
         pub fn encode_iris_code(iris_code: &IrisCodeArray) -> [GaloisRingIrisCodeShare; 3] {
             let mut shares = [
                 GaloisRingIrisCodeShare {
-                    id: 1,
+                    id:    1,
                     coefs: [0; 12800],
                 },
                 GaloisRingIrisCodeShare {
-                    id: 2,
+                    id:    2,
                     coefs: [0; 12800],
                 },
                 GaloisRingIrisCodeShare {
-                    id: 3,
+                    id:    3,
                     coefs: [0; 12800],
                 },
             ];
@@ -176,15 +176,15 @@ pub mod degree4 {
         pub fn encode_iris_code_query(iris_code: &IrisCodeArray) -> [GaloisRingIrisCodeShare; 3] {
             let mut shares = [
                 GaloisRingIrisCodeShare {
-                    id: 1,
+                    id:    1,
                     coefs: [0; 12800],
                 },
                 GaloisRingIrisCodeShare {
-                    id: 2,
+                    id:    2,
                     coefs: [0; 12800],
                 },
                 GaloisRingIrisCodeShare {
-                    id: 3,
+                    id:    3,
                     coefs: [0; 12800],
                 },
             ];
@@ -201,7 +201,8 @@ pub mod degree4 {
                 let lagrange_coeffs = ShamirGaloisRingShare::deg_3_lagrange_polys_at_zero();
                 for j in 0..3 {
                     let adjusted_share = share[j].y * lagrange_coeffs[j];
-                    // we write the bits back into the flat array in the "wrong" order, such that we can do simple dot product later
+                    // we write the bits back into the flat array in the "wrong" order, such that we
+                    // can do simple dot product later
                     shares[j].coefs[i] = adjusted_share.coefs[0];
                     shares[j].coefs[i + 3] = adjusted_share.coefs[1]; // Note the order of bits
                     shares[j].coefs[i + 2] = adjusted_share.coefs[2];
@@ -246,9 +247,8 @@ pub mod degree4 {
 
     #[cfg(test)]
     mod tests {
-        use rand::thread_rng;
-
         use crate::setup::iris_db::iris::IrisCodeArray;
+        use rand::thread_rng;
 
         #[test]
         fn galois_dot_trick() {

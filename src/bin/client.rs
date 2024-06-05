@@ -5,7 +5,10 @@ use aws_sdk_sns::{
 };
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
-use gpu_iris_mpc::{helpers::sqs::SMPCRequest, setup::iris_db::{db::IrisDB, iris::IrisCode, shamir_iris::ShamirIris}};
+use gpu_iris_mpc::{
+    helpers::sqs::SMPCRequest,
+    setup::iris_db::{db::IrisDB, iris::IrisCode, shamir_iris::ShamirIris},
+};
 use rand::{rngs::StdRng, SeedableRng};
 use serde_json::to_string;
 use uuid::Uuid;
@@ -34,8 +37,13 @@ struct Opt {
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     tracing_subscriber::fmt::init();
-    
-    let Opt { topic_arn, db_index, rng_seed, n_repeat} = Opt::parse();
+
+    let Opt {
+        topic_arn,
+        db_index,
+        rng_seed,
+        n_repeat,
+    } = Opt::parse();
 
     let mut rng = if let Some(rng_seed) = rng_seed {
         StdRng::seed_from_u64(rng_seed)
@@ -44,7 +52,7 @@ async fn main() -> eyre::Result<()> {
     };
 
     let n_repeat = n_repeat.unwrap_or(0);
-    
+
     let region_provider = Region::new(REGION);
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let client = Client::new(&shared_config);

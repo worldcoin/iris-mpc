@@ -1,6 +1,6 @@
-use std::fs::{File, OpenOptions};
 use bytemuck::cast_slice;
 use memmap2::{Mmap, MmapMut};
+use std::fs::{File, OpenOptions};
 
 pub fn write_mmap_file(file_path: &str, data: &[u16]) -> eyre::Result<()> {
     let file = OpenOptions::new()

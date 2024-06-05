@@ -1,7 +1,6 @@
-use std::str::FromStr;
-
 use axum::extract::Path;
 use cudarc::nccl::Id;
+use std::str::FromStr;
 
 pub struct IdWrapper(pub Id);
 

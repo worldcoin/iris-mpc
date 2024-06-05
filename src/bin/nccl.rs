@@ -1,11 +1,10 @@
 //! # NCCL DMA bench
-//! This script establishes a pairwise connection via NCCL between all devices of two hosts.
-//! Each device pair gets its separate NCCL comm channel, with the host device being rank 0.
-//! It also starts a HTTP server on the host on port 3000 to exchange the NCCL COMM_IDs.
-//! Host: NCCL_DEBUG=INFO cargo run --release --bin nccl 0
-//! Node: NCCL_DEBUG=INFO cargo run --release --bin nccl {1,2} HOST_IP:3000
-
-use std::{env, str::FromStr, time::Instant};
+//! This script establishes a pairwise connection via NCCL between all devices
+//! of two hosts. Each device pair gets its separate NCCL comm channel, with the
+//! host device being rank 0. It also starts a HTTP server on the host on port
+//! 3000 to exchange the NCCL COMM_IDs. Host: NCCL_DEBUG=INFO cargo run
+//! --release --bin nccl 0 Node: NCCL_DEBUG=INFO cargo run --release --bin nccl
+//! {1,2} HOST_IP:3000
 
 use axum::{extract::Path, routing::get, Router};
 use cudarc::{
@@ -13,6 +12,7 @@ use cudarc::{
     nccl::{Comm, Id},
 };
 use once_cell::sync::Lazy;
+use std::{env, str::FromStr, time::Instant};
 
 static COMM_ID: Lazy<Vec<Id>> = Lazy::new(|| {
     (0..CudaDevice::count().unwrap())
@@ -130,7 +130,8 @@ async fn main() -> eyre::Result<()> {
 
         if party_id != 0 {
             let elapsed = now.elapsed();
-            // Throughput multiplied by 4 because every device sends *and* receives the buffer to/from two peers.
+            // Throughput multiplied by 4 because every device sends *and* receives the
+            // buffer to/from two peers.
             let throughput = (DUMMY_DATA_LEN as f64 * n_devices as f64 * 4f64)
                 / (elapsed.as_millis() as f64)
                 / 1_000_000_000f64

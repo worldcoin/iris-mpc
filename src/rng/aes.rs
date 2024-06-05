@@ -1,14 +1,13 @@
-use std::{mem, sync::Arc};
-
 use cudarc::{
     driver::{CudaDevice, CudaFunction, CudaSlice, LaunchAsync, LaunchConfig},
     nvrtc::compile_ptx,
 };
+use std::{mem, sync::Arc};
 
 pub struct AesCudaRng {
-    buf_size: usize,
-    devs: Vec<Arc<CudaDevice>>,
-    kernels: Vec<CudaFunction>,
+    buf_size:   usize,
+    devs:       Vec<Arc<CudaDevice>>,
+    kernels:    Vec<CudaFunction>,
     rng_chunks: Vec<CudaSlice<u8>>,
     output_buf: Vec<u8>,
 }
@@ -59,8 +58,8 @@ impl AesCudaRng {
         let threads_per_block = 256;
         let blocks_per_grid = (num_kernel_calls + threads_per_block - 1) / threads_per_block;
         let cfg = LaunchConfig {
-            block_dim: (threads_per_block as u32, 1, 1),
-            grid_dim: (blocks_per_grid as u32, 1, 1),
+            block_dim:        (threads_per_block as u32, 1, 1),
+            grid_dim:         (blocks_per_grid as u32, 1, 1),
             shared_mem_bytes: 0,
         };
         let key_bytes = [0u8; 16];

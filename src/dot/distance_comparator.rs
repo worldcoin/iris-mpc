@@ -1,18 +1,12 @@
-use std::sync::Arc;
-
+use super::ROTATIONS;
 use cudarc::{
     driver::{
-        result::{
-            launch_kernel, memcpy_dtoh_async,
-            stream::synchronize,
-        },
-        CudaDevice, CudaFunction, CudaSlice, CudaStream, DeviceRepr,
-        LaunchAsync, LaunchConfig,
+        result::{launch_kernel, memcpy_dtoh_async, stream::synchronize},
+        CudaDevice, CudaFunction, CudaSlice, CudaStream, DeviceRepr, LaunchAsync, LaunchConfig,
     },
     nvrtc::compile_ptx,
 };
-
-use super::ROTATIONS;
+use std::sync::Arc;
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const MATCH_RATIO: f64 = 0.375;
@@ -20,11 +14,11 @@ const DIST_FUNCTION_NAME: &str = "reconstructAndCompare";
 const DEDUP_FUNCTION_NAME: &str = "dedupResults";
 
 pub struct DistanceComparator {
-    pub devs: Vec<Arc<CudaDevice>>,
-    pub dist_kernels: Vec<CudaFunction>,
+    pub devs:          Vec<Arc<CudaDevice>>,
+    pub dist_kernels:  Vec<CudaFunction>,
     pub dedup_kernels: Vec<CudaFunction>,
-    pub query_length: usize,
-    pub n_devices: usize,
+    pub query_length:  usize,
+    pub n_devices:     usize,
 }
 
 impl DistanceComparator {
@@ -43,12 +37,8 @@ impl DistanceComparator {
                 .get_func(DIST_FUNCTION_NAME, DIST_FUNCTION_NAME)
                 .unwrap();
 
-            dev.load_ptx(
-                ptx.clone(),
-                DEDUP_FUNCTION_NAME,
-                &[DEDUP_FUNCTION_NAME],
-            )
-            .unwrap();
+            dev.load_ptx(ptx.clone(), DEDUP_FUNCTION_NAME, &[DEDUP_FUNCTION_NAME])
+                .unwrap();
             let dedup_function = dev
                 .get_func(DEDUP_FUNCTION_NAME, DEDUP_FUNCTION_NAME)
                 .unwrap();
@@ -94,8 +84,8 @@ impl DistanceComparator {
             let threads_per_block = 256;
             let blocks_per_grid = num_elements.div_ceil(threads_per_block);
             let cfg = LaunchConfig {
-                block_dim: (threads_per_block as u32, 1, 1),
-                grid_dim: (blocks_per_grid as u32, 1, 1),
+                block_dim:        (threads_per_block as u32, 1, 1),
+                grid_dim:         (blocks_per_grid as u32, 1, 1),
                 shared_mem_bytes: 0,
             };
 
@@ -135,8 +125,8 @@ impl DistanceComparator {
         let threads_per_block = 256;
         let blocks_per_grid = num_elements.div_ceil(threads_per_block);
         let cfg = LaunchConfig {
-            block_dim: (threads_per_block as u32, 1, 1),
-            grid_dim: (blocks_per_grid as u32, 1, 1),
+            block_dim:        (threads_per_block as u32, 1, 1),
+            grid_dim:         (blocks_per_grid as u32, 1, 1),
             shared_mem_bytes: 0,
         };
 
@@ -186,9 +176,11 @@ impl DistanceComparator {
 
 #[cfg(test)]
 mod tests {
+    use crate::{
+        dot::{device_manager::DeviceManager, distance_comparator::DistanceComparator},
+        helpers::device_ptrs,
+    };
     use cudarc::driver::{sys::lib, DevicePtr, DeviceSlice};
-
-    use crate::{dot::{device_manager::DeviceManager, distance_comparator::DistanceComparator}, helpers::device_ptrs};
 
     #[test]
     fn test_dedup_query() {
@@ -217,10 +209,10 @@ mod tests {
         for i in 0..device_manager.device_count() {
             // set ith to match
             if i > 0 {
-                match_results[(i-1) * 32] = u32::MAX;
+                match_results[(i - 1) * 32] = u32::MAX;
             }
             match_results[i * 32] = 0;
-            
+
             result_ptrs.push(
                 device_manager
                     .device(i)
@@ -267,7 +259,7 @@ mod tests {
                     final_results_ptrs[i].len() * 4,
                 );
             }
-            
+
             for j in 0..result.len() {
                 if j == i {
                     assert_eq!(result[j], 0);
@@ -275,7 +267,6 @@ mod tests {
                     assert_eq!(result[j], u32::MAX);
                 }
             }
-
         }
     }
 }

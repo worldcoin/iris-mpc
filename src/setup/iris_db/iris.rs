@@ -1,5 +1,7 @@
-use rand::distributions::{Bernoulli, Distribution};
-use rand::Rng;
+use rand::{
+    distributions::{Bernoulli, Distribution},
+    Rng,
+};
 
 pub const MATCH_THRESHOLD_RATIO: f64 = 0.375;
 
@@ -30,9 +32,9 @@ impl IrisCodeArray {
     }
     pub fn bits(&self) -> Bits<'_> {
         Bits {
-            code: self,
+            code:    self,
             current: 0,
-            index: 0,
+            index:   0,
         }
     }
     #[inline]
@@ -169,9 +171,9 @@ impl IrisCode {
 }
 
 pub struct Bits<'a> {
-    code: &'a IrisCodeArray,
+    code:    &'a IrisCodeArray,
     current: u64,
-    index: usize,
+    index:   usize,
 }
 
 impl Iterator for Bits<'_> {

@@ -1,22 +1,21 @@
-use std::sync::Arc;
-
 use criterion::{criterion_group, criterion_main, Criterion};
 use cudarc::{
     driver::{CudaDevice, CudaFunction, CudaSlice, LaunchAsync, LaunchConfig},
     nvrtc::{compile_ptx, Ptx},
 };
+use std::sync::Arc;
 
 fn lauch_config(num_threads: u32, num_total: u32) -> LaunchConfig {
     let num_blocks = (num_total + num_threads - 1) / num_threads;
     LaunchConfig {
-        grid_dim: (num_blocks, 1, 1),
-        block_dim: (num_threads, 1, 1),
+        grid_dim:         (num_blocks, 1, 1),
+        block_dim:        (num_threads, 1, 1),
         shared_mem_bytes: 0,
     }
 }
 
 struct Kernels {
-    pub(crate) transpose_64x64: CudaFunction,
+    pub(crate) transpose_64x64:        CudaFunction,
     pub(crate) transpose_64x64_shared: CudaFunction,
 }
 
@@ -24,23 +23,19 @@ impl Kernels {
     const MOD_NAME: &'static str = "TComp";
 
     pub(crate) fn new(dev: Arc<CudaDevice>, ptx: Ptx) -> Kernels {
-        dev.load_ptx(
-            ptx.clone(),
-            Self::MOD_NAME,
-            &[
-                "shared_xor",
-                "shared_xor_assign",
-                "shared_and_pre",
-                "shared_not_inplace",
-                "shared_not",
-                "shared_lift_mul_sub_split",
-                "shared_u64_transpose_pack_u64",
-                "shared_u64_transpose_pack_u64_global_mem",
-                "shared_u32_transpose_pack_u64",
-                "shared_split1",
-                "shared_split2",
-            ],
-        )
+        dev.load_ptx(ptx.clone(), Self::MOD_NAME, &[
+            "shared_xor",
+            "shared_xor_assign",
+            "shared_and_pre",
+            "shared_not_inplace",
+            "shared_not",
+            "shared_lift_mul_sub_split",
+            "shared_u64_transpose_pack_u64",
+            "shared_u64_transpose_pack_u64_global_mem",
+            "shared_u32_transpose_pack_u64",
+            "shared_split1",
+            "shared_split2",
+        ])
         .unwrap();
         let transpose_64x64 = dev
             .get_func(Self::MOD_NAME, "shared_u64_transpose_pack_u64_global_mem")

@@ -23,7 +23,8 @@ pub mod degree2 {
         pub fn inverse(&self) -> Self {
             // hard-coded inverses for some elements we need
             // too lazy to implement the general case in rust
-            // and we do not need the general case, since this is only used for the lagrange polys, which can be pre-computed anyway
+            // and we do not need the general case, since this is only used for the lagrange
+            // polys, which can be pre-computed anyway
 
             if *self == GaloisRingElement::ZERO {
                 panic!("Division by zero");
@@ -122,7 +123,7 @@ pub mod degree2 {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct ShamirGaloisRingShare {
         pub id: usize,
-        pub y: GaloisRingElement,
+        pub y:  GaloisRingElement,
     }
     impl std::ops::Add for ShamirGaloisRingShare {
         type Output = Self;
@@ -130,7 +131,7 @@ pub mod degree2 {
             assert_eq!(self.id, rhs.id, "ids must be euqal");
             ShamirGaloisRingShare {
                 id: self.id,
-                y: self.y + &rhs.y,
+                y:  self.y + &rhs.y,
             }
         }
     }
@@ -140,7 +141,7 @@ pub mod degree2 {
             assert_eq!(self.id, rhs.id, "ids must be euqal");
             ShamirGaloisRingShare {
                 id: self.id,
-                y: self.y * &rhs.y,
+                y:  self.y * &rhs.y,
             }
         }
     }
@@ -150,7 +151,7 @@ pub mod degree2 {
             assert_eq!(self.id, rhs.id, "ids must be euqal");
             ShamirGaloisRingShare {
                 id: self.id,
-                y: self.y - &rhs.y,
+                y:  self.y - &rhs.y,
             }
         }
     }
@@ -176,7 +177,7 @@ pub mod degree2 {
             let invec = [input[0], input[1], rng.gen(), rng.gen()];
             let share1 = ShamirGaloisRingShare {
                 id: 1,
-                y: GaloisRingElement {
+                y:  GaloisRingElement {
                     coefs: [
                         invec[0].wrapping_add(invec[2]),
                         invec[1].wrapping_add(invec[3]),
@@ -185,7 +186,7 @@ pub mod degree2 {
             };
             let share2 = ShamirGaloisRingShare {
                 id: 2,
-                y: GaloisRingElement {
+                y:  GaloisRingElement {
                     coefs: [
                         invec[0].wrapping_add(invec[3]),
                         invec[1].wrapping_add(invec[2]).wrapping_add(invec[3]),
@@ -194,7 +195,7 @@ pub mod degree2 {
             };
             let share3 = ShamirGaloisRingShare {
                 id: 3,
-                y: GaloisRingElement {
+                y:  GaloisRingElement {
                     coefs: [
                         share2.y.coefs[0].wrapping_add(invec[2]),
                         share2.y.coefs[1].wrapping_add(invec[3]),
@@ -354,7 +355,8 @@ pub mod degree4 {
         pub fn inverse(&self) -> Self {
             // hard-coded inverses for some elements we need
             // too lazy to implement the general case in rust
-            // and we do not need the general case, since this is only used for the lagrange polys, which can be pre-computed anyway
+            // and we do not need the general case, since this is only used for the lagrange
+            // polys, which can be pre-computed anyway
 
             if *self == GaloisRingElement::ZERO {
                 panic!("Division by zero");
@@ -505,7 +507,7 @@ pub mod degree4 {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct ShamirGaloisRingShare {
         pub id: usize,
-        pub y: GaloisRingElement,
+        pub y:  GaloisRingElement,
     }
     impl std::ops::Add for ShamirGaloisRingShare {
         type Output = Self;
@@ -513,7 +515,7 @@ pub mod degree4 {
             assert_eq!(self.id, rhs.id, "ids must be euqal");
             ShamirGaloisRingShare {
                 id: self.id,
-                y: self.y + &rhs.y,
+                y:  self.y + &rhs.y,
             }
         }
     }
@@ -523,7 +525,7 @@ pub mod degree4 {
             assert_eq!(self.id, rhs.id, "ids must be euqal");
             ShamirGaloisRingShare {
                 id: self.id,
-                y: self.y * &rhs.y,
+                y:  self.y * &rhs.y,
             }
         }
     }
@@ -533,7 +535,7 @@ pub mod degree4 {
             assert_eq!(self.id, rhs.id, "ids must be euqal");
             ShamirGaloisRingShare {
                 id: self.id,
-                y: self.y - &rhs.y,
+                y:  self.y - &rhs.y,
             }
         }
     }
@@ -568,7 +570,7 @@ pub mod degree4 {
             ];
             let share1 = ShamirGaloisRingShare {
                 id: 1,
-                y: GaloisRingElement {
+                y:  GaloisRingElement {
                     coefs: [
                         invec[0].wrapping_add(invec[4]),
                         invec[1].wrapping_add(invec[5]),
@@ -579,7 +581,7 @@ pub mod degree4 {
             };
             let share2 = ShamirGaloisRingShare {
                 id: 2,
-                y: GaloisRingElement {
+                y:  GaloisRingElement {
                     coefs: [
                         invec[0].wrapping_add(invec[7]),
                         invec[1].wrapping_add(invec[4]).wrapping_add(invec[7]),
@@ -590,7 +592,7 @@ pub mod degree4 {
             };
             let share3 = ShamirGaloisRingShare {
                 id: 3,
-                y: GaloisRingElement {
+                y:  GaloisRingElement {
                     coefs: [
                         share2.y.coefs[0].wrapping_add(invec[4]),
                         share2.y.coefs[1].wrapping_add(invec[5]),

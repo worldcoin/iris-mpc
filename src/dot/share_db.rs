@@ -1,5 +1,8 @@
-use std::{ffi::c_void, mem, ptr, str::FromStr, sync::Arc, thread, time::Duration};
-
+use super::{device_manager::DeviceManager, IRIS_CODE_LENGTH};
+use crate::{
+    helpers::id_wrapper::{http_root, IdWrapper},
+    rng,
+};
 use axum::{routing::get, Router};
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
@@ -12,13 +15,7 @@ use cudarc::{
 };
 use rayon::prelude::*;
 use rng::chacha_field::ChaChaCudaFeRng;
-
-use crate::{
-    helpers::id_wrapper::{http_root, IdWrapper},
-    rng,
-};
-
-use super::{device_manager::DeviceManager, IRIS_CODE_LENGTH};
+use std::{ffi::c_void, mem, ptr, str::FromStr, sync::Arc, thread, time::Duration};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const CHACHA_BUFFER_SIZE: usize = 1000;
@@ -110,17 +107,17 @@ fn broadcast_stream<T: NcclType>(
 }
 
 pub struct ShareDB {
-    is_remote: bool,
-    lagrange_coeff: u16,
-    query_length: usize,
-    device_manager: DeviceManager,
-    kernels: Vec<CudaFunction>,
-    rngs: Vec<(ChaChaCudaFeRng, ChaChaCudaFeRng)>,
-    comms: Vec<Arc<Comm>>,
-    ones: Vec<CudaSlice<u8>>,
+    is_remote:            bool,
+    lagrange_coeff:       u16,
+    query_length:         usize,
+    device_manager:       DeviceManager,
+    kernels:              Vec<CudaFunction>,
+    rngs:                 Vec<(ChaChaCudaFeRng, ChaChaCudaFeRng)>,
+    comms:                Vec<Arc<Comm>>,
+    ones:                 Vec<CudaSlice<u8>>,
     intermediate_results: Vec<CudaSlice<i32>>,
-    pub results: Vec<CudaSlice<u8>>,
-    pub results_peers: Vec<Vec<CudaSlice<u8>>>,
+    pub results:          Vec<CudaSlice<u8>>,
+    pub results_peers:    Vec<Vec<CudaSlice<u8>>>,
 }
 
 impl ShareDB {
@@ -157,7 +154,8 @@ impl ShareDB {
             .map(|idx| device_manager.device(idx).htod_sync_copy(&ones).unwrap())
             .collect::<Vec<_>>();
 
-        //TODO: depending on the batch size, intermediate_results can get quite big, we can perform the gemm in chunks to limit this
+        // TODO: depending on the batch size, intermediate_results can get quite big, we
+        // can perform the gemm in chunks to limit this
         let mut intermediate_results = vec![];
         let mut results = vec![];
         let mut results_peers = vec![];
@@ -258,7 +256,7 @@ impl ShareDB {
     pub fn load_db(
         &self,
         db_entries: &[u16],
-        db_length: usize, //TODO: should handle different sizes for each device
+        db_length: usize, // TODO: should handle different sizes for each device
         max_db_length: usize,
     ) -> (
         (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
@@ -270,7 +268,8 @@ impl ShareDB {
             .collect::<Vec<_>>();
         let mut a0_host = db_entries.par_iter().map(|&x| x as i8).collect::<Vec<_>>();
 
-        // TODO: maybe use gemm here already to speed up loading (we'll need to correct the results as well)
+        // TODO: maybe use gemm here already to speed up loading (we'll need to correct
+        // the results as well)
         a1_host
             .par_iter_mut()
             .for_each(|x| *x = (*x as i32 - 128) as i8);
@@ -478,8 +477,8 @@ impl ShareDB {
             let threads_per_block = 256;
             let blocks_per_grid = num_elements.div_ceil(threads_per_block);
             let cfg = LaunchConfig {
-                block_dim: (threads_per_block as u32, 1, 1),
-                grid_dim: (blocks_per_grid as u32, 1, 1),
+                block_dim:        (threads_per_block as u32, 1, 1),
+                grid_dim:         (blocks_per_grid as u32, 1, 1),
                 shared_mem_bytes: 0,
             };
 
@@ -560,12 +559,7 @@ impl ShareDB {
 
 #[cfg(test)]
 mod tests {
-    use cudarc::driver::DeviceSlice;
-    use float_eq::assert_float_eq;
-    use ndarray::Array2;
-    use num_traits::FromPrimitive;
-    use rand::{rngs::StdRng, Rng, SeedableRng};
-
+    use super::{preprocess_query, ShareDB};
     use crate::{
         dot::{device_manager::DeviceManager, P},
         helpers::device_ptrs,
@@ -575,8 +569,11 @@ mod tests {
             shamir::Shamir,
         },
     };
-
-    use super::{preprocess_query, ShareDB};
+    use cudarc::driver::DeviceSlice;
+    use float_eq::assert_float_eq;
+    use ndarray::Array2;
+    use num_traits::FromPrimitive;
+    use rand::{rngs::StdRng, Rng, SeedableRng};
     const WIDTH: usize = 12_800;
     const QUERY_SIZE: usize = 31;
     const DB_SIZE: usize = 8 * 1000;
@@ -771,8 +768,8 @@ mod tests {
         }
     }
 
-    /// Calculates the distances between a query and a shamir secret shared db and
-    /// checks the result against reference plain implementation.
+    /// Calculates the distances between a query and a shamir secret shared db
+    /// and checks the result against reference plain implementation.
     #[test]
     fn check_shared_distances() {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);

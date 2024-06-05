@@ -1,24 +1,24 @@
-use std::sync::Arc;
-
 use cudarc::{
     driver::{CudaDevice, CudaFunction, CudaSlice, DeviceSlice, LaunchAsync, LaunchConfig},
     nvrtc::compile_ptx,
 };
+use std::sync::Arc;
 
 pub struct ChaChaCudaRng {
-    dev: Arc<CudaDevice>,
-    kernel: CudaFunction,
-    rng_chunk: Option<CudaSlice<u32>>,
+    dev:           Arc<CudaDevice>,
+    kernel:        CudaFunction,
+    rng_chunk:     Option<CudaSlice<u32>>,
     output_buffer: Option<Vec<u32>>,
     /// the current state of the chacha rng
-    chacha_ctx: ChaChaCtx,
+    chacha_ctx:    ChaChaCtx,
 }
 
 const CHACHA_PTX_SRC: &str = include_str!("chacha.cu");
 const CHACHA_FUNCTION_NAME: &str = "chacha12";
 
 impl ChaChaCudaRng {
-    // takes number of bytes to produce, buffer has u32 datatype so will produce buf_size/4 u32s
+    // takes number of bytes to produce, buffer has u32 datatype so will produce
+    // buf_size/4 u32s
     pub fn init(buf_size_bytes: usize, dev: Arc<CudaDevice>, seed: [u32; 8]) -> Self {
         let ptx = compile_ptx(CHACHA_PTX_SRC).unwrap();
 
@@ -76,8 +76,8 @@ impl ChaChaCudaRng {
         let threads_per_block = 256; // todo sync with kernel
         let blocks_per_grid = (num_ks_calls + threads_per_block - 1) / threads_per_block;
         let cfg = LaunchConfig {
-            block_dim: (threads_per_block as u32, 1, 1),
-            grid_dim: (blocks_per_grid as u32, 1, 1),
+            block_dim:        (threads_per_block as u32, 1, 1),
+            grid_dim:         (blocks_per_grid as u32, 1, 1),
             shared_mem_bytes: 0,
         };
         let state_slice = self.dev.htod_sync_copy(&self.chacha_ctx.state).unwrap();
@@ -87,9 +87,11 @@ impl ChaChaCudaRng {
                 .launch(cfg, (self.rng_chunk.as_mut().unwrap(), &state_slice, len))
                 .unwrap();
         }
-        // increment the state counter of the ChaChaRng with the number of produced blocks
+        // increment the state counter of the ChaChaRng with the number of produced
+        // blocks
         let mut counter = self.chacha_ctx.get_counter();
-        counter += num_ks_calls as u64; // one call to KS produces 16 u32, so we increase the counter by the number of KS calls
+        counter += num_ks_calls as u64; // one call to KS produces 16 u32, so we increase the counter by the number of
+                                        // KS calls
         self.chacha_ctx.set_counter(counter);
     }
 

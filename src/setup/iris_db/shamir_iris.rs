@@ -64,7 +64,7 @@ impl ShamirIris {
     pub fn all_rotations(&self) -> Vec<ShamirIris> {
         let mut reference = self.clone();
         let mut result = vec![];
-        reference.rotate_left(16*4);
+        reference.rotate_left(16 * 4);
         for _ in 0..31 {
             reference.rotate_right(4);
             result.push(reference.clone());
@@ -81,7 +81,7 @@ impl ShamirIris {
             .chunks_exact_mut(Self::COLS * 4)
             .for_each(|chunk| chunk.rotate_right(by));
     }
-    
+
     pub fn rotate_left(&mut self, by: usize) {
         self.code
             .chunks_exact_mut(Self::COLS * 4)
@@ -91,6 +91,4 @@ impl ShamirIris {
             .chunks_exact_mut(Self::COLS * 4)
             .for_each(|chunk| chunk.rotate_left(by));
     }
-
-    
 }

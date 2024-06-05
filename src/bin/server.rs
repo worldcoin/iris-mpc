@@ -9,8 +9,24 @@ use cudarc::driver::{
     CudaSlice,
 };
 use gpu_iris_mpc::{
-    dot::{device_manager::DeviceManager, distance_comparator::DistanceComparator, share_db::{preprocess_query, ShareDB}, IRIS_CODE_LENGTH, ROTATIONS}, helpers::{device_ptrs, mmap::{read_mmap_file, write_mmap_file}, sqs::{SMPCRequest, SQSMessage}}, setup::iris_db::shamir_iris::ShamirIris
+    dot::{
+        device_manager::DeviceManager,
+        distance_comparator::DistanceComparator,
+        share_db::{preprocess_query, ShareDB},
+        IRIS_CODE_LENGTH, ROTATIONS,
+    },
+    helpers::{
+        device_ptrs,
+        mmap::{read_mmap_file, write_mmap_file},
+        sqs::{SMPCRequest, SQSMessage},
+    },
+    setup::{
+        id::PartyID,
+        iris_db::{db::IrisDB, shamir_db::ShamirIrisDB, shamir_iris::ShamirIris},
+        shamir::Shamir,
+    },
 };
+use rand::{prelude::SliceRandom, rngs::StdRng, Rng, SeedableRng};
 use std::{
     fs::metadata,
     mem,
@@ -18,14 +34,6 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::time::sleep;
-
-use gpu_iris_mpc::setup::{
-        id::PartyID,
-        iris_db::{db::IrisDB, shamir_db::ShamirIrisDB},
-        shamir::Shamir,
-    };
-use rand::prelude::SliceRandom;
-use rand::{rngs::StdRng, Rng, SeedableRng};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
@@ -334,7 +342,8 @@ async fn main() -> eyre::Result<()> {
 
         // update the db size, skip this for the first two
         if request_counter > 2 {
-            // We have two streams working concurrently, we'll await the stream before previous one
+            // We have two streams working concurrently, we'll await the stream before
+            // previous one
             let previous_streams = &streams[(request_counter - 2) % MAX_CONCURRENT_REQUESTS];
             device_manager.await_event(previous_streams, &previous_previous_stream_event);
             device_manager.await_streams(previous_streams);

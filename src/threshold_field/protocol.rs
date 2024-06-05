@@ -1,6 +1,9 @@
 use super::cuda::kernel::B_BITS;
 use crate::{
-    helpers::id_wrapper::{http_root, IdWrapper}, rng::chacha_corr::ChaChaCudaCorrRng, setup::shamir::P, threshold_field::cuda::PTX_SRC
+    helpers::id_wrapper::{http_root, IdWrapper},
+    rng::chacha_corr::ChaChaCudaCorrRng,
+    setup::shamir::P,
+    threshold_field::cuda::PTX_SRC,
 };
 use axum::{routing::get, Router};
 use cudarc::{
@@ -120,21 +123,21 @@ where
 }
 
 struct Kernels {
-    pub(crate) and: CudaFunction,
-    pub(crate) or_assign: CudaFunction,
-    pub(crate) xor: CudaFunction,
-    pub(crate) xor_assign: CudaFunction,
-    pub(crate) not_inplace: CudaFunction,
-    pub(crate) not: CudaFunction,
-    pub(crate) lift_mul_sub_split: CudaFunction,
-    pub(crate) transpose_64x64: CudaFunction,
-    pub(crate) transpose_32x64: CudaFunction,
-    pub(crate) split1: CudaFunction,
-    pub(crate) split2: CudaFunction,
-    pub(crate) ot_sender: CudaFunction,
-    pub(crate) ot_receiver: CudaFunction,
-    pub(crate) ot_helper: CudaFunction,
-    pub(crate) assign: CudaFunction,
+    pub(crate) and:                 CudaFunction,
+    pub(crate) or_assign:           CudaFunction,
+    pub(crate) xor:                 CudaFunction,
+    pub(crate) xor_assign:          CudaFunction,
+    pub(crate) not_inplace:         CudaFunction,
+    pub(crate) not:                 CudaFunction,
+    pub(crate) lift_mul_sub_split:  CudaFunction,
+    pub(crate) transpose_64x64:     CudaFunction,
+    pub(crate) transpose_32x64:     CudaFunction,
+    pub(crate) split1:              CudaFunction,
+    pub(crate) split2:              CudaFunction,
+    pub(crate) ot_sender:           CudaFunction,
+    pub(crate) ot_receiver:         CudaFunction,
+    pub(crate) ot_helper:           CudaFunction,
+    pub(crate) assign:              CudaFunction,
     pub(crate) collapse_u64_helper: CudaFunction,
 }
 
@@ -142,28 +145,24 @@ impl Kernels {
     const MOD_NAME: &'static str = "TComp";
 
     pub(crate) fn new(dev: Arc<CudaDevice>, ptx: Ptx) -> Kernels {
-        dev.load_ptx(
-            ptx.clone(),
-            Self::MOD_NAME,
-            &[
-                "shared_xor",
-                "shared_xor_assign",
-                "shared_and_pre",
-                "shared_or_pre_assign",
-                "shared_not_inplace",
-                "shared_not",
-                "shared_lift_mul_sub_split",
-                "shared_u64_transpose_pack_u64",
-                "shared_u32_transpose_pack_u64",
-                "shared_split1",
-                "shared_split2",
-                "packed_ot_sender",
-                "packed_ot_receiver",
-                "packed_ot_helper",
-                "shared_assign",
-                "collapse_u64_helper",
-            ],
-        )
+        dev.load_ptx(ptx.clone(), Self::MOD_NAME, &[
+            "shared_xor",
+            "shared_xor_assign",
+            "shared_and_pre",
+            "shared_or_pre_assign",
+            "shared_not_inplace",
+            "shared_not",
+            "shared_lift_mul_sub_split",
+            "shared_u64_transpose_pack_u64",
+            "shared_u32_transpose_pack_u64",
+            "shared_split1",
+            "shared_split2",
+            "packed_ot_sender",
+            "packed_ot_receiver",
+            "packed_ot_helper",
+            "shared_assign",
+            "collapse_u64_helper",
+        ])
         .unwrap();
         let and = dev.get_func(Self::MOD_NAME, "shared_and_pre").unwrap();
         let or_assign = dev
@@ -212,19 +211,19 @@ impl Kernels {
 }
 
 struct Buffers {
-    u64_64c_1: Option<Vec<ChunkShare<u64>>>,
-    u64_64c_2: Option<Vec<ChunkShare<u64>>>,
-    u32_64c_1: Option<Vec<ChunkShare<u32>>>,
-    u32_64c_2: Option<Vec<ChunkShare<u32>>>,
-    u64_2c_1: Option<Vec<ChunkShare<u64>>>,
-    u32_128c_1: Option<Vec<ChunkShare<u32>>>,
-    u64_17c_1: Option<Vec<ChunkShare<u64>>>,
-    u64_17c_2: Option<Vec<ChunkShare<u64>>>,
-    u64_18c_1: Option<Vec<ChunkShare<u64>>>,
-    u64_18c_2: Option<Vec<ChunkShare<u64>>>,
-    u64_36c_1: Option<Vec<ChunkShare<u64>>>,
-    u64_36c_2: Option<Vec<ChunkShare<u64>>>,
-    u64_37c_1: Option<Vec<ChunkShare<u64>>>,
+    u64_64c_1:         Option<Vec<ChunkShare<u64>>>,
+    u64_64c_2:         Option<Vec<ChunkShare<u64>>>,
+    u32_64c_1:         Option<Vec<ChunkShare<u32>>>,
+    u32_64c_2:         Option<Vec<ChunkShare<u32>>>,
+    u64_2c_1:          Option<Vec<ChunkShare<u64>>>,
+    u32_128c_1:        Option<Vec<ChunkShare<u32>>>,
+    u64_17c_1:         Option<Vec<ChunkShare<u64>>>,
+    u64_17c_2:         Option<Vec<ChunkShare<u64>>>,
+    u64_18c_1:         Option<Vec<ChunkShare<u64>>>,
+    u64_18c_2:         Option<Vec<ChunkShare<u64>>>,
+    u64_36c_1:         Option<Vec<ChunkShare<u64>>>,
+    u64_36c_2:         Option<Vec<ChunkShare<u64>>>,
+    u64_37c_1:         Option<Vec<ChunkShare<u64>>>,
     single_u32_128c_1: Option<Vec<CudaSlice<u32>>>,
     single_u32_128c_2: Option<Vec<CudaSlice<u32>>>,
     single_u32_128c_3: Option<Vec<CudaSlice<u32>>>,
@@ -342,16 +341,16 @@ impl Buffers {
 }
 
 pub struct Circuits {
-    peer_id: usize,
-    next_id: usize,
-    prev_id: usize,
+    peer_id:    usize,
+    next_id:    usize,
+    prev_id:    usize,
     chunk_size: usize,
-    n_devices: usize,
-    devs: Vec<Arc<CudaDevice>>,
-    comms: Vec<Rc<Comm>>,
-    kernels: Vec<Kernels>,
-    buffers: Buffers,
-    rngs: Vec<ChaChaCudaCorrRng>,
+    n_devices:  usize,
+    devs:       Vec<Arc<CudaDevice>>,
+    comms:      Vec<Rc<Comm>>,
+    kernels:    Vec<Kernels>,
+    buffers:    Buffers,
+    rngs:       Vec<ChaChaCudaCorrRng>,
 }
 
 impl Circuits {
@@ -491,8 +490,8 @@ impl Circuits {
     fn launch_config_from_elements_and_threads(n: u32, t: u32) -> LaunchConfig {
         let num_blocks = (n + t - 1) / t;
         LaunchConfig {
-            grid_dim: (num_blocks, 1, 1),
-            block_dim: (t, 1, 1),
+            grid_dim:         (num_blocks, 1, 1),
+            block_dim:        (t, 1, 1),
             shared_mem_bytes: 0,
         }
     }
@@ -564,7 +563,8 @@ impl Circuits {
         bits: usize,
         idx: usize,
     ) {
-        // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+        // SAFETY: Only unsafe because memory is not initialized. But, we fill
+        // afterwards.
         let mut rand = unsafe { self.devs[idx].alloc::<u64>(self.chunk_size * bits).unwrap() };
         self.fill_rand_u64(&mut rand, idx);
 
@@ -638,7 +638,8 @@ impl Circuits {
             DEFAULT_LAUNCH_CONFIG_THREADS,
         );
 
-        // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+        // SAFETY: Only unsafe because memory is not initialized. But, we fill
+        // afterwards.
         let mut rand = unsafe { self.devs[idx].alloc::<u64>(self.chunk_size).unwrap() };
         self.fill_rand_u64(&mut rand, idx);
 
@@ -660,7 +661,8 @@ impl Circuits {
         x2: &ChunkShareView<u64>,
         idx: usize,
     ) {
-        // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+        // SAFETY: Only unsafe because memory is not initialized. But, we fill
+        // afterwards.
         let size = (x1.len() + 15) / 16;
         let mut rand = unsafe { self.devs[idx].alloc::<u64>(size * 16).unwrap() };
         self.fill_rand_u64(&mut rand, idx);
@@ -937,28 +939,32 @@ impl Circuits {
         let mut m1 = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_2);
 
         for (idx, (inp, res, m0, m1)) in izip!(inp, outp, &mut m0, &mut m1).enumerate() {
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+            // SAFETY: Only unsafe because memory is not initialized. But, we fill
+            // afterwards.
             let mut rand_ca = unsafe {
                 self.devs[idx]
                     .alloc::<u32>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
             self.rngs[idx].fill_my_rng_into(&mut rand_ca.slice_mut(..));
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+            // SAFETY: Only unsafe because memory is not initialized. But, we fill
+            // afterwards.
             let mut rand_cb = unsafe {
                 self.devs[idx]
                     .alloc::<u32>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
             self.rngs[idx].fill_their_rng_into(&mut rand_cb.slice_mut(..));
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+            // SAFETY: Only unsafe because memory is not initialized. But, we fill
+            // afterwards.
             let mut rand_wa1 = unsafe {
                 self.devs[idx]
                     .alloc::<u32>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
             self.rngs[idx].fill_my_rng_into(&mut rand_wa1.slice_mut(..));
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+            // SAFETY: Only unsafe because memory is not initialized. But, we fill
+            // afterwards.
             let mut rand_wa2 = unsafe {
                 self.devs[idx]
                     .alloc::<u32>(self.chunk_size * 2 * 64)
@@ -1025,7 +1031,8 @@ impl Circuits {
 
         for (idx, (inp, res, m0, m1, wc)) in izip!(inp, outp.iter_mut(), &m0, &m1, &wc).enumerate()
         {
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+            // SAFETY: Only unsafe because memory is not initialized. But, we fill
+            // afterwards.
             let mut rand_ca = unsafe {
                 self.devs[idx]
                     .alloc::<u32>(self.chunk_size * 2 * 64)
@@ -1075,21 +1082,24 @@ impl Circuits {
         let mut wc = Buffers::take_single_buffer(&mut self.buffers.single_u32_128c_3);
 
         for (idx, (inp, res, wc)) in izip!(inp, outp.iter_mut(), &mut wc).enumerate() {
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+            // SAFETY: Only unsafe because memory is not initialized. But, we fill
+            // afterwards.
             let mut rand_cb = unsafe {
                 self.devs[idx]
                     .alloc::<u32>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
             self.rngs[idx].fill_their_rng_into(&mut rand_cb.slice_mut(..));
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+            // SAFETY: Only unsafe because memory is not initialized. But, we fill
+            // afterwards.
             let mut rand_wb1 = unsafe {
                 self.devs[idx]
                     .alloc::<u32>(self.chunk_size * 2 * 64)
                     .unwrap()
             };
             self.rngs[idx].fill_their_rng_into(&mut rand_wb1.slice_mut(..));
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+            // SAFETY: Only unsafe because memory is not initialized. But, we fill
+            // afterwards.
             let mut rand_wb2 = unsafe {
                 self.devs[idx]
                     .alloc::<u32>(self.chunk_size * 2 * 64)
@@ -1250,7 +1260,8 @@ impl Circuits {
             let x2x3 = x2;
             self.packed_xor_assign_many(x2x3, x3, K, idx);
             self.packed_xor_many(x1, x2x3, &mut s1.as_view(), K, idx);
-            // 2 * c1 (No pop since we start at index 0 and the functions only compute whats required)
+            // 2 * c1 (No pop since we start at index 0 and the functions only compute whats
+            // required)
             let x1x3 = x1;
             self.packed_xor_assign_many(x1x3, x3, K - 1, idx);
             self.packed_and_many_pre(x1x3, x2x3, &mut c1.as_view_mut(), K - 1, idx);
@@ -1259,7 +1270,8 @@ impl Circuits {
             let y2y3 = y2;
             self.packed_xor_assign_many(y2y3, y3, K, idx);
             self.packed_xor_many(y1, y2y3, &mut s2.as_view(), K, idx);
-            // 2 * c2 (No pop since we start at index 0 and the functions only compute whats required)
+            // 2 * c2 (No pop since we start at index 0 and the functions only compute whats
+            // required)
             let y1y3 = y1;
             self.packed_xor_assign_many(y1y3, y3, K - 1, idx);
             self.packed_and_many_pre(y1y3, y2y3, &mut c2.as_view_mut(), K - 1, idx);
@@ -1659,8 +1671,9 @@ impl Circuits {
             let xb = xx.get_offset(Self::BITS, self.chunk_size);
             self.xor_assign_many(ov, &xb, idx);
 
-            // We now have the ov bit (ov), the msb of the addition (xmsb) and the result of the subtraction (res_msb). We need to multiplex.
-            // ov = 1 -> xmsb, ov = 0 -> res_msb
+            // We now have the ov bit (ov), the msb of the addition (xmsb) and the result of
+            // the subtraction (res_msb). We need to multiplex. ov = 1 -> xmsb,
+            // ov = 0 -> res_msb
             let mut and = xb;
             let mut xor = xmsb;
             self.xor_assign_many(&mut xor, res_msb, idx);
@@ -1701,7 +1714,8 @@ impl Circuits {
         for (idx, (m, mc, c, x01)) in
             izip!(mask_lifted, mask_correction, &code, x01.iter_mut()).enumerate()
         {
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+            // SAFETY: Only unsafe because memory is not initialized. But, we fill
+            // afterwards.
             let mut rand = unsafe { self.devs[idx].alloc::<u64>(self.chunk_size * 64).unwrap() };
             self.fill_rand_u64(&mut rand, idx);
 
@@ -1841,7 +1855,8 @@ impl Circuits {
 
         let cfg = Self::launch_config_from_elements_and_threads(1, DEFAULT_LAUNCH_CONFIG_THREADS);
 
-        // SAFETY: Only unsafe because memory is not initialized. But, we fill afterwards.
+        // SAFETY: Only unsafe because memory is not initialized. But, we fill
+        // afterwards.
         let mut rand = unsafe { self.devs[0].alloc::<u64>(16).unwrap() }; // minimum size is 16 for RNG, need only 10 though
         self.fill_rand_u64(&mut rand, 0);
 

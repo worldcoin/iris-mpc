@@ -1,13 +1,15 @@
-use std::sync::Arc;
-
 use cudarc::{
     cublas::CudaBlas,
     driver::{
         result::{
-            self, event, malloc_async, memcpy_htod_async, stream::{synchronize, wait_event}
-        }, sys::{CUevent, CUevent_flags}, CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceRepr
+            self, event, malloc_async, memcpy_htod_async,
+            stream::{synchronize, wait_event},
+        },
+        sys::{CUevent, CUevent_flags},
+        CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceRepr,
     },
 };
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct DeviceManager {
@@ -83,7 +85,11 @@ impl DeviceManager {
         }
     }
 
-    pub fn htod_transfer_query(&self, preprocessed_query: &Vec<Vec<u8>>, streams: &Vec<CudaStream>) -> (Vec<u64>, Vec<u64>) {
+    pub fn htod_transfer_query(
+        &self,
+        preprocessed_query: &Vec<Vec<u8>>,
+        streams: &Vec<CudaStream>,
+    ) -> (Vec<u64>, Vec<u64>) {
         let mut query0_ptrs = vec![];
         let mut query1_ptrs = vec![];
         for idx in 0..self.device_count() {
