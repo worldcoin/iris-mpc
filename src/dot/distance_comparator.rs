@@ -73,10 +73,10 @@ impl DistanceComparator {
 
     pub fn reconstruct_and_compare(
         &mut self,
-        codes_result_peers: &Vec<Vec<CudaSlice<u8>>>,
-        masks_result_peers: &Vec<Vec<CudaSlice<u8>>>,
-        db_sizes: &Vec<usize>,
-        streams: &Vec<CudaStream>,
+        codes_result_peers: &[Vec<CudaSlice<u8>>],
+        masks_result_peers: &[Vec<CudaSlice<u8>>],
+        db_sizes: &[usize],
+        streams: &[CudaStream],
         results: Vec<u64>,
     ) {
         for i in 0..self.n_devices {
@@ -115,11 +115,11 @@ impl DistanceComparator {
 
     pub fn dedup_results(
         &self,
-        match_results_self: &Vec<u64>,
-        match_results: &Vec<u64>,
-        final_results: &Vec<u64>,
-        db_size_ptrs: &Vec<u64>,
-        streams: &Vec<CudaStream>,
+        match_results_self: &[u64],
+        match_results: &[u64],
+        final_results: &[u64],
+        db_size_ptrs: &[u64],
+        streams: &[CudaStream],
     ) {
         let num_elements = self.query_length / ROTATIONS;
         let threads_per_block = 256;
@@ -133,11 +133,13 @@ impl DistanceComparator {
         for i in 0..self.n_devices {
             self.devs[i].bind_to_thread().unwrap();
 
-            let params = [match_results_self[i],
+            let params = [
+                match_results_self[i],
                 match_results[i],
                 final_results[i],
                 db_size_ptrs[i],
-                (self.query_length / ROTATIONS) as u64];
+                (self.query_length / ROTATIONS) as u64,
+            ];
 
             unsafe {
                 let mut params = params
@@ -157,7 +159,7 @@ impl DistanceComparator {
         }
     }
 
-    pub fn fetch_results(&self, dev_results: &Vec<u64>, streams: &Vec<u64>) -> Vec<Vec<u32>> {
+    pub fn fetch_results(&self, dev_results: &[u64], streams: &[u64]) -> Vec<Vec<u32>> {
         let mut results = vec![];
         for i in 0..self.n_devices {
             self.devs[i].bind_to_thread().unwrap();

@@ -15,15 +15,13 @@ use cudarc::{
 };
 use rayon::prelude::*;
 use rng::chacha_field::ChaChaCudaFeRng;
-use std::{ffi::c_void, mem, ptr, str::FromStr, sync::Arc, thread, time::Duration};
+use std::{ffi::c_void, mem, ptr, rc::Rc, str::FromStr, thread, time::Duration};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const CHACHA_BUFFER_SIZE: usize = 1000;
-const MATCH_RATIO: f64 = 0.375;
+// const MATCH_RATIO: f64 = 0.375;
 const LIMBS: usize = 2;
 const MATMUL_FUNCTION_NAME: &str = "matmul";
-const DIST_FUNCTION_NAME: &str = "reconstructAndCompare";
-const DEDUP_FUNCTION_NAME: &str = "dedupResults";
 
 pub fn preprocess_query(query: &[u16]) -> Vec<Vec<u8>> {
     let mut result = vec![];
@@ -41,6 +39,7 @@ pub fn preprocess_query(query: &[u16]) -> Vec<Vec<u8>> {
     result.to_vec()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn gemm(
     handle: &CudaBlas,
     a: u64,
@@ -113,7 +112,7 @@ pub struct ShareDB {
     device_manager:       DeviceManager,
     kernels:              Vec<CudaFunction>,
     rngs:                 Vec<(ChaChaCudaFeRng, ChaChaCudaFeRng)>,
-    comms:                Vec<Arc<Comm>>,
+    comms:                Vec<Rc<Comm>>,
     ones:                 Vec<CudaSlice<u8>>,
     intermediate_results: Vec<CudaSlice<i32>>,
     pub results:          Vec<CudaSlice<u8>>,
@@ -121,6 +120,7 @@ pub struct ShareDB {
 }
 
 impl ShareDB {
+    #[allow(clippy::too_many_arguments)]
     pub fn init(
         peer_id: usize,
         device_manager: DeviceManager,
@@ -232,7 +232,7 @@ impl ShareDB {
 
                 // Bind to thread (important!)
                 device_manager.device(i).bind_to_thread().unwrap();
-                comms.push(Arc::new(
+                comms.push(Rc::new(
                     Comm::from_rank(device_manager.device(i), peer_id, 3, id).unwrap(),
                 ));
             }
@@ -253,6 +253,7 @@ impl ShareDB {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn load_db(
         &self,
         db_entries: &[u16],
@@ -354,8 +355,8 @@ impl ShareDB {
     pub fn query_sums(
         &self,
         query_ptrs: &(Vec<u64>, Vec<u64>),
-        streams: &Vec<CudaStream>,
-        blass: &Vec<CudaBlas>,
+        streams: &[CudaStream],
+        blass: &[CudaBlas],
     ) -> (Vec<u64>, Vec<u64>) {
         let mut query1_sums = vec![];
         let mut query0_sums = vec![];
@@ -421,9 +422,9 @@ impl ShareDB {
         &mut self,
         query_ptrs: &(Vec<u64>, Vec<u64>),
         db: &(Vec<u64>, Vec<u64>),
-        db_sizes: &Vec<usize>,
-        streams: &Vec<CudaStream>,
-        blass: &Vec<CudaBlas>,
+        db_sizes: &[usize],
+        streams: &[CudaStream],
+        blass: &[CudaBlas],
     ) {
         for idx in 0..self.device_manager.device_count() {
             self.device_manager.device(idx).bind_to_thread().unwrap();
@@ -469,8 +470,8 @@ impl ShareDB {
         &mut self,
         query_sums: &(Vec<u64>, Vec<u64>),
         db_sums: &(Vec<u64>, Vec<u64>),
-        db_sizes: &Vec<usize>,
-        streams: &Vec<CudaStream>,
+        db_sizes: &[usize],
+        streams: &[CudaStream],
     ) {
         for idx in 0..self.device_manager.device_count() {
             let num_elements = db_sizes[idx] * self.query_length;
@@ -510,7 +511,7 @@ impl ShareDB {
 
     /// Broadcasts the results to all other peers.
     /// Calls are async to host, but sync to device.
-    pub fn exchange_results(&mut self, db_sizes: &Vec<usize>, streams: &Vec<CudaStream>) {
+    pub fn exchange_results(&mut self, db_sizes: &[usize], streams: &[CudaStream]) {
         for idx in 0..self.device_manager.device_count() {
             for i in 0..3 {
                 broadcast_stream(
@@ -526,7 +527,7 @@ impl ShareDB {
         }
     }
 
-    pub fn fetch_results(&self, results: &mut [u16], db_sizes: &Vec<usize>, device_id: usize) {
+    pub fn fetch_results(&self, results: &mut [u16], db_sizes: &[usize], device_id: usize) {
         unsafe {
             let res_trans =
                 self.results[device_id].transmute(db_sizes[device_id] * self.query_length);
@@ -541,7 +542,7 @@ impl ShareDB {
     pub fn fetch_results_peer(
         &self,
         results: &mut [u16],
-        db_sizes: &Vec<usize>,
+        db_sizes: &[usize],
         device_id: usize,
         peer_id: usize,
     ) {
@@ -569,7 +570,6 @@ mod tests {
             shamir::Shamir,
         },
     };
-    use cudarc::driver::DeviceSlice;
     use float_eq::assert_float_eq;
     use ndarray::Array2;
     use num_traits::FromPrimitive;
@@ -682,9 +682,11 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let db = random_vec(DB_SIZE, WIDTH, P as u32);
         let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
-        let mut gpu_result = [vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
+        let mut gpu_result = [
             vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
-            vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES]];
+            vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
+            vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
+        ];
         let db_sizes = vec![DB_SIZE / N_DEVICES; N_DEVICES];
 
         // Calculate non-shared
@@ -781,7 +783,7 @@ mod tests {
         let mut code_queries = [vec![], vec![], vec![]];
         let mut mask_queries = [vec![], vec![], vec![]];
 
-        for i in 0..QUERY_SIZE {
+        for _i in 0..QUERY_SIZE {
             // TODO: rotate
             let tmp: [ShamirIris; 3] = random_query.clone();
             code_queries[0].push(tmp[0].code.to_vec());
@@ -793,13 +795,17 @@ mod tests {
             mask_queries[2].push(tmp[2].mask.to_vec());
         }
 
-        let mut results_codes = [vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
+        let mut results_codes = [
             vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
-            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE]];
+            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
+            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
+        ];
 
-        let mut results_masks = [vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
+        let mut results_masks = [
             vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
-            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE]];
+            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
+            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
+        ];
 
         for party_id in 0..3 {
             let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(party_id as u8).unwrap());

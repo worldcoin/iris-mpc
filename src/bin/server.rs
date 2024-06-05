@@ -1,3 +1,4 @@
+#![allow(clippy::needless_range_loop)]
 use aws_sdk_sqs::{config::Region, Client};
 use clap::Parser;
 use cudarc::driver::{
@@ -112,6 +113,7 @@ fn prepare_query_batch(batch: Vec<ShamirIris>) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
     (code_query, mask_query)
 }
 
+#[allow(clippy::type_complexity)]
 fn slice_tuples_to_ptrs(
     tuple: &(
         (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
@@ -633,16 +635,14 @@ async fn main() -> eyre::Result<()> {
 
                     unsafe {
                         // Step 3: write new db sizes to device
-                        *current_db_size_mutex_clone[i].lock().unwrap() +=
-                            insertion_list[i].len();
+                        *current_db_size_mutex_clone[i].lock().unwrap() += insertion_list[i].len();
                         println!(
                             "Updating DB size on device {}: {:?}",
                             i,
                             *current_db_size_mutex_clone[i].lock().unwrap()
                         );
 
-                        let tmp_host =
-                            [*current_db_size_mutex_clone[i].lock().unwrap() as u32; 1];
+                        let tmp_host = [*current_db_size_mutex_clone[i].lock().unwrap() as u32; 1];
                         lib()
                             .cuMemcpyHtoDAsync_v2(
                                 tmp_code_db_sizes[i],
