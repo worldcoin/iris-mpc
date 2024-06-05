@@ -16,7 +16,7 @@ pub fn criterion_benchmark_chacha12_field_runner(c: &mut Criterion, buf_size: us
         })
     });
     let dev = CudaDevice::new(0).unwrap();
-    let mut chacha = chacha_field::ChaChaCudaFeRng::init(buf_size, dev, [0u32; 8]);
+    let mut chacha = chacha_field::ChaChaCudaFeRng::init(buf_size, dev.clone(), [0u32; 8]);
     group.bench_function("without copy to host", move |b| {
         b.iter(|| {
             chacha.fill_rng_no_host_copy(buf_size, &dev.fork_default_stream().unwrap());
