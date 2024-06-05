@@ -133,13 +133,11 @@ impl DistanceComparator {
         for i in 0..self.n_devices {
             self.devs[i].bind_to_thread().unwrap();
 
-            let params = vec![
-                match_results_self[i],
+            let params = [match_results_self[i],
                 match_results[i],
                 final_results[i],
                 db_size_ptrs[i],
-                (self.query_length / ROTATIONS) as u64,
-            ];
+                (self.query_length / ROTATIONS) as u64];
 
             unsafe {
                 let mut params = params
@@ -190,7 +188,7 @@ mod tests {
         // set all to matches
         let mut match_results = [u32::MAX; QUERIES].to_vec();
 
-        let mut match_results_self = [u32::MAX; QUERIES].to_vec();
+        let match_results_self = [u32::MAX; QUERIES].to_vec();
         // set 1 to match
         // match_results_self[15] = 0;
 

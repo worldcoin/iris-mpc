@@ -1,7 +1,7 @@
 use super::chacha::ChaChaCtx;
 use cudarc::{
     driver::{
-        result, CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut,
+        result, CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr,
         DeviceSlice, LaunchAsync, LaunchConfig,
     },
     nvrtc::compile_ptx,

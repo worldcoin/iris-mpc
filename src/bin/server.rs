@@ -466,7 +466,7 @@ async fn main() -> eyre::Result<()> {
         distance_comparator.dedup_results(
             &device_ptrs(request_batch_results),
             &device_ptrs(request_results),
-            &device_ptrs(&request_final_results),
+            &device_ptrs(request_final_results),
             &device_ptrs(&code_db_sizes),
             request_streams,
         );
@@ -491,7 +491,7 @@ async fn main() -> eyre::Result<()> {
             .collect::<Vec<_>>();
         let current_db_size_mutex_clone = current_db_size_mutex
             .iter()
-            .map(|e| Arc::clone(e))
+            .map(Arc::clone)
             .collect::<Vec<_>>();
 
         tokio::spawn(async move {
@@ -634,7 +634,7 @@ async fn main() -> eyre::Result<()> {
                     unsafe {
                         // Step 3: write new db sizes to device
                         *current_db_size_mutex_clone[i].lock().unwrap() +=
-                            insertion_list[i].len() as usize;
+                            insertion_list[i].len();
                         println!(
                             "Updating DB size on device {}: {:?}",
                             i,
@@ -642,7 +642,7 @@ async fn main() -> eyre::Result<()> {
                         );
 
                         let tmp_host =
-                            vec![*current_db_size_mutex_clone[i].lock().unwrap() as u32; 1];
+                            [*current_db_size_mutex_clone[i].lock().unwrap() as u32; 1];
                         lib()
                             .cuMemcpyHtoDAsync_v2(
                                 tmp_code_db_sizes[i],

@@ -57,7 +57,7 @@ pub fn gemm(
 ) {
     unsafe {
         gemm_ex(
-            handle.handle().clone(),
+            *handle.handle(),
             sys::cublasOperation_t::CUBLAS_OP_T,
             sys::cublasOperation_t::CUBLAS_OP_N,
             m as i32,
@@ -586,7 +586,7 @@ mod tests {
         T: FromPrimitive,
     {
         Array2::from_shape_vec(
-            (n as usize, m as usize),
+            (n, m),
             array
                 .into_iter()
                 .map(|x| T::from_u16(x).unwrap())
@@ -682,11 +682,9 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let db = random_vec(DB_SIZE, WIDTH, P as u32);
         let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
-        let mut gpu_result = vec![
+        let mut gpu_result = [vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
             vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
-            vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
-            vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
-        ];
+            vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES]];
         let db_sizes = vec![DB_SIZE / N_DEVICES; N_DEVICES];
 
         // Calculate non-shared
@@ -701,8 +699,8 @@ mod tests {
             }
         }
 
-        let mut dbs = vec![vec![], vec![], vec![]];
-        let mut querys = vec![vec![], vec![], vec![]];
+        let mut dbs = [vec![], vec![], vec![]];
+        let mut querys = [vec![], vec![], vec![]];
 
         // Calculate shared
         for i in 0..db.len() {
@@ -780,8 +778,8 @@ mod tests {
         // Prepare query
         let query_template = db.db[0].get_similar_iris(&mut rng);
         let random_query = ShamirIris::share_iris(&query_template, &mut rng);
-        let mut code_queries = vec![vec![], vec![], vec![]];
-        let mut mask_queries = vec![vec![], vec![], vec![]];
+        let mut code_queries = [vec![], vec![], vec![]];
+        let mut mask_queries = [vec![], vec![], vec![]];
 
         for i in 0..QUERY_SIZE {
             // TODO: rotate
@@ -795,17 +793,13 @@ mod tests {
             mask_queries[2].push(tmp[2].mask.to_vec());
         }
 
-        let mut results_codes = vec![
+        let mut results_codes = [vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
             vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
-            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
-            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
-        ];
+            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE]];
 
-        let mut results_masks = vec![
+        let mut results_masks = [vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
             vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
-            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
-            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
-        ];
+            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE]];
 
         for party_id in 0..3 {
             let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(party_id as u8).unwrap());
@@ -942,7 +936,7 @@ mod tests {
             .zip(reconstructed_masks)
             .map(|(code, mask)| {
                 const OFFSET: u32 = 32759;
-                let offset_nom = (code as u32 + OFFSET) % (P as u32);
+                let offset_nom = (code + OFFSET) % (P as u32);
                 0.5f64 - offset_nom as f64 / (2f64 * mask as f64)
                     + OFFSET as f64 / (2f64 * mask as f64)
             })

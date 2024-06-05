@@ -61,10 +61,10 @@ pub mod degree2 {
             let mut sum = 0u16;
             for i in (0..12800).step_by(2) {
                 let x = GaloisRingElement {
-                    coefs: [self.coefs[i + 0], self.coefs[i + 1]],
+                    coefs: [self.coefs[i], self.coefs[i + 1]],
                 };
                 let y = GaloisRingElement {
-                    coefs: [other.coefs[i + 0], other.coefs[i + 1]],
+                    coefs: [other.coefs[i], other.coefs[i + 1]],
                 };
                 let z = x * y;
                 sum = sum.wrapping_add(z.coefs[0]);
@@ -217,7 +217,7 @@ pub mod degree4 {
             for i in (0..12800).step_by(4) {
                 let x = GaloisRingElement {
                     coefs: [
-                        self.coefs[i + 0],
+                        self.coefs[i],
                         self.coefs[i + 1],
                         self.coefs[i + 2],
                         self.coefs[i + 3],
@@ -225,7 +225,7 @@ pub mod degree4 {
                 };
                 let y = GaloisRingElement {
                     coefs: [
-                        other.coefs[i + 0],
+                        other.coefs[i],
                         other.coefs[i + 3],
                         other.coefs[i + 2],
                         other.coefs[i + 1],

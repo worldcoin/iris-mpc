@@ -1,7 +1,6 @@
 use super::iris::{IrisCode, IrisCodeArray};
 use crate::setup::shamir::{Shamir, P32};
 use rand::Rng;
-use serde::{de::Visitor, Deserialize, Serialize, Serializer};
 
 #[derive(Debug)]
 pub struct ShamirIris {
