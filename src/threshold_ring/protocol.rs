@@ -304,6 +304,10 @@ impl Buffers {
     }
 }
 
+pub struct SendableRcComm(Arc<Comm>);
+
+unsafe impl Send for SendableRcComm {}
+
 pub struct Circuits {
     peer_id: usize,
     next_id: usize,
@@ -311,7 +315,7 @@ pub struct Circuits {
     chunk_size: usize,
     n_devices: usize,
     devs: Vec<Arc<CudaDevice>>,
-    comms: Vec<Rc<Comm>>,
+    comms: Vec<SendableRcComm>,
     kernels: Vec<Kernels>,
     buffers: Buffers,
     rngs: Vec<ChaChaCudaCorrRng>,
@@ -389,7 +393,7 @@ impl Circuits {
         peer_url: Option<&String>,
         server_port: Option<u16>,
         devices: &[Arc<CudaDevice>],
-    ) -> Vec<Rc<Comm>> {
+    ) -> Vec<SendableRcComm> {
         let n_devices = devices.len();
         let mut comms = Vec::with_capacity(n_devices);
         let mut ids = Vec::with_capacity(n_devices);
@@ -431,9 +435,9 @@ impl Circuits {
 
             // Bind to thread (important!)
             devices[i].bind_to_thread().unwrap();
-            comms.push(Rc::new(
+            comms.push(SendableRcComm(Arc::new(
                 Comm::from_rank(devices[i].clone(), peer_id, 3, id).unwrap(),
-            ));
+            )));
         }
         comms
     }
@@ -483,8 +487,8 @@ impl Circuits {
                 send.len(),
                 T::as_nccl_type(),
                 peer_id as i32,
-                self.comms[idx].comm,
-                *self.comms[idx].device.cu_stream() as *mut _,
+                self.comms[idx].0.comm.0,
+                *self.comms[idx].0.device.cu_stream() as *mut _,
             )
         }
         .unwrap();
@@ -501,8 +505,8 @@ impl Circuits {
                 receive.len(),
                 T::as_nccl_type(),
                 peer_id as i32,
-                self.comms[idx].comm,
-                *self.comms[idx].device.cu_stream() as *mut _,
+                self.comms[idx].0.comm.0,
+                *self.comms[idx].0.device.cu_stream() as *mut _,
             )
         }
         .unwrap();
@@ -512,14 +516,14 @@ impl Circuits {
     where
         T: cudarc::nccl::NcclType,
     {
-        self.comms[idx].send(send, peer_id as i32).unwrap();
+        self.comms[idx].0.send(send, peer_id as i32).unwrap();
     }
 
     pub fn receive<T>(&mut self, receive: &mut CudaSlice<T>, peer_id: usize, idx: usize)
     where
         T: cudarc::nccl::NcclType,
     {
-        self.comms[idx].recv(receive, peer_id as i32).unwrap();
+        self.comms[idx].0.recv(receive, peer_id as i32).unwrap();
     }
 
     // Fill randomness using the correlated RNG

@@ -7,7 +7,11 @@ use cudarc::{
         result::malloc_async, CudaFunction, CudaSlice, CudaStream, DevicePtr, LaunchAsync,
         LaunchConfig,
     },
-    nccl::{result, Comm, Id, NcclType},
+    nccl::{
+        self,
+        result::{self, send},
+        Comm, Id, NcclType,
+    },
     nvrtc::compile_ptx,
 };
 use rayon::prelude::*;
@@ -103,13 +107,52 @@ fn broadcast_stream<T: NcclType>(
             len,
             T::as_nccl_type(),
             root,
-            comm.comm,
+            comm.comm.0,
+            stream.stream as *mut _,
+        )
+    }
+}
+
+fn send_stream<T: NcclType>(
+    sendbuff: &CudaSlice<T>,
+    len: usize,
+    peer: usize,
+    comm: &Comm,
+    stream: &CudaStream,
+) -> Result<result::NcclStatus, result::NcclError> {
+    unsafe {
+        result::send(
+            *sendbuff.device_ptr() as *mut _,
+            len,
+            T::as_nccl_type(),
+            peer as i32,
+            comm.comm.0,
+            stream.stream as *mut _,
+        )
+    }
+}
+
+fn receive_stream<T: NcclType>(
+    recvbuff: &mut CudaSlice<T>,
+    len: usize,
+    peer: usize,
+    comm: &Comm,
+    stream: &CudaStream,
+) -> Result<result::NcclStatus, result::NcclError> {
+    unsafe {
+        result::recv(
+            *recvbuff.device_ptr() as *mut _,
+            len,
+            T::as_nccl_type(),
+            peer as i32,
+            comm.comm.0,
             stream.stream as *mut _,
         )
     }
 }
 
 pub struct ShareDB {
+    peer_id: usize,
     is_remote: bool,
     lagrange_coeff: u16,
     query_length: usize,
@@ -120,7 +163,7 @@ pub struct ShareDB {
     ones: Vec<CudaSlice<u8>>,
     intermediate_results: Vec<CudaSlice<i32>>,
     pub results: Vec<CudaSlice<u8>>,
-    pub results_peers: Vec<Vec<CudaSlice<u8>>>,
+    pub results_peer: Vec<CudaSlice<u8>>,
 }
 
 impl ShareDB {
@@ -160,7 +203,7 @@ impl ShareDB {
         //TODO: depending on the batch size, intermediate_results can get quite big, we can perform the gemm in chunks to limit this
         let mut intermediate_results = vec![];
         let mut results = vec![];
-        let mut results_peers = vec![];
+        let mut results_peer = vec![];
         let results_len = max_db_length / n_devices * query_length;
 
         for idx in 0..n_devices {
@@ -168,11 +211,7 @@ impl ShareDB {
                 intermediate_results
                     .push(device_manager.device(idx).alloc(results_len * 4).unwrap());
                 results.push(device_manager.device(idx).alloc(results_len * 2).unwrap());
-                results_peers.push(vec![
-                    device_manager.device(idx).alloc(results_len * 2).unwrap(),
-                    device_manager.device(idx).alloc(results_len * 2).unwrap(),
-                    device_manager.device(idx).alloc(results_len * 2).unwrap(),
-                ]);
+                results_peer.push(device_manager.device(idx).alloc(results_len * 2).unwrap());
             }
         }
 
@@ -241,6 +280,7 @@ impl ShareDB {
         }
 
         Self {
+            peer_id,
             is_remote,
             lagrange_coeff,
             query_length,
@@ -251,7 +291,7 @@ impl ShareDB {
             intermediate_results,
             ones,
             results,
-            results_peers,
+            results_peer,
         }
     }
 
@@ -509,46 +549,37 @@ impl ShareDB {
         }
     }
 
-    /// Broadcasts the results to all other peers.
-    /// Calls are async to host, but sync to device.
-    pub fn exchange_results(&mut self, db_sizes: &Vec<usize>, streams: &Vec<CudaStream>) {
+    pub fn reshare_results(&mut self, db_sizes: &Vec<usize>, streams: &Vec<CudaStream>) {
+        let next_peer = (self.peer_id + 1) % 3;
+        let prev_peer = (self.peer_id + 2) % 3;
+
+        nccl::group_start().unwrap();
         for idx in 0..self.device_manager.device_count() {
-            for i in 0..3 {
-                broadcast_stream(
-                    &Some(&self.results[idx]),
-                    &mut self.results_peers[idx][i],
-                    i as i32,
-                    db_sizes[idx] * self.query_length * 2,
-                    &self.comms[idx],
-                    &streams[idx],
-                )
-                .unwrap();
-            }
+            send_stream(
+                &self.results[idx],
+                db_sizes[idx] * self.query_length * 2,
+                next_peer,
+                &self.comms[idx],
+                &streams[idx],
+            )
+            .unwrap();
+
+            receive_stream(
+                &mut self.results_peer[idx],
+                db_sizes[idx] * self.query_length * 2,
+                prev_peer,
+                &self.comms[idx],
+                &streams[idx],
+            )
+            .unwrap();
         }
+        nccl::group_end().unwrap();
     }
 
     pub fn fetch_results(&self, results: &mut [u16], db_sizes: &Vec<usize>, device_id: usize) {
         unsafe {
             let res_trans =
                 self.results[device_id].transmute(db_sizes[device_id] * self.query_length);
-
-            self.device_manager
-                .device(device_id)
-                .dtoh_sync_copy_into(&res_trans.unwrap(), results)
-                .unwrap();
-        }
-    }
-
-    pub fn fetch_results_peer(
-        &self,
-        results: &mut [u16],
-        db_sizes: &Vec<usize>,
-        device_id: usize,
-        peer_id: usize,
-    ) {
-        unsafe {
-            let res_trans = self.results_peers[device_id][peer_id]
-                .transmute(db_sizes[device_id] * self.query_length);
 
             self.device_manager
                 .device(device_id)

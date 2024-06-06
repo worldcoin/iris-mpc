@@ -508,7 +508,7 @@ impl Circuits {
                 send.len(),
                 T::as_nccl_type(),
                 peer_id as i32,
-                self.comms[idx].comm,
+                self.comms[idx].comm.0,
                 *self.comms[idx].device.cu_stream() as *mut _,
             )
         }
@@ -526,7 +526,7 @@ impl Circuits {
                 receive.len(),
                 T::as_nccl_type(),
                 peer_id as i32,
-                self.comms[idx].comm,
+                self.comms[idx].comm.0,
                 *self.comms[idx].device.cu_stream() as *mut _,
             )
         }

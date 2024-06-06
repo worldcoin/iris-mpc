@@ -81,48 +81,6 @@ impl DistanceComparator {
             .collect::<Vec<_>>()
     }
 
-    pub fn reconstruct_and_compare(
-        &mut self,
-        codes_result_peers: &Vec<Vec<CudaSlice<u8>>>,
-        masks_result_peers: &Vec<Vec<CudaSlice<u8>>>,
-        db_sizes: &Vec<usize>,
-        streams: &Vec<CudaStream>,
-        results: Vec<u64>,
-    ) {
-        for i in 0..self.n_devices {
-            let num_elements = db_sizes[i] * self.query_length;
-            let threads_per_block = 256;
-            let blocks_per_grid = num_elements.div_ceil(threads_per_block);
-            let cfg = LaunchConfig {
-                block_dim: (threads_per_block as u32, 1, 1),
-                grid_dim: (blocks_per_grid as u32, 1, 1),
-                shared_mem_bytes: 0,
-            };
-
-            unsafe {
-                self.dist_kernels[i]
-                    .clone()
-                    .launch_on_stream(
-                        &streams[i],
-                        cfg,
-                        (
-                            &codes_result_peers[i][0],
-                            &codes_result_peers[i][1],
-                            &codes_result_peers[i][2],
-                            &masks_result_peers[i][0],
-                            &masks_result_peers[i][1],
-                            &masks_result_peers[i][2],
-                            results[i],
-                            MATCH_RATIO,
-                            db_sizes[i] as u64,
-                            self.query_length as u64,
-                        ),
-                    )
-                    .unwrap();
-            }
-        }
-    }
-
     pub fn dedup_results(
         &self,
         match_results_self: &Vec<u64>,

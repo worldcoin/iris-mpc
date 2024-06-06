@@ -13,7 +13,7 @@ axum = "0.7.5"
 base64 = "0.22.1"
 bytemuck = "1.15"
 clap = { version = "~4.4", features = ["derive"] }
-cudarc = { git = "https://github.com/philsippl/cudarc.git", rev="4674121", features = ["cuda-12020"] }
+cudarc = { git = "https://github.com/philsippl/cudarc.git", rev="0a0ab89", features = ["cuda-12020"] }
 memmap2 = "0.5.3"
 eyre = "0.6.12"
 float_eq = "1.0.1"
