@@ -6,7 +6,7 @@ use cudarc::driver::{
         event::{self, elapsed},
     },
     sys::lib,
-    CudaSlice, CudaView, DevicePtr,
+    CudaSlice, CudaStream, CudaView, DevicePtr,
 };
 use gpu_iris_mpc::{
     dot::{
@@ -133,7 +133,15 @@ fn slice_tuples_to_ptrs(
     )
 }
 
-fn open(party: &mut Circuits, x: &[ChunkShare<u64>], chunk_size: &[usize]) -> Vec<u64> {
+fn open(
+    party: &mut Circuits,
+    x: &[ChunkShare<u64>],
+    distance_comparator: &DistanceComparator,
+    results_ptrs: &[u64],
+    streams: &[u64],
+    chunk_size: usize,
+    db_sizes: &[usize],
+) {
     let n_devices = x.len();
     let mut a = Vec::with_capacity(n_devices);
     let mut b = Vec::with_capacity(n_devices);
@@ -142,30 +150,19 @@ fn open(party: &mut Circuits, x: &[ChunkShare<u64>], chunk_size: &[usize]) -> Ve
     cudarc::nccl::result::group_start().unwrap();
     for (idx, res) in x.iter().enumerate() {
         // Result is in bit 0
-        let res = res.get_offset(0, chunk_size[idx]);
+        let res = res.get_offset(0, chunk_size);
         party.send_view(&res.b, party.next_id(), idx);
         a.push(res.a);
         b.push(res.b);
     }
     for (idx, res) in x.iter().enumerate() {
-        let mut res = res.get_offset(1, chunk_size[idx]);
+        let mut res = res.get_offset(1, chunk_size);
         party.receive_view(&mut res.a, party.prev_id(), idx);
         c.push(res.a);
     }
     cudarc::nccl::result::group_end().unwrap();
 
-    let mut result = vec![];
-    let devices = party.get_devices();
-    for (dev, a, b, c) in izip!(devices, a, b, c) {
-        let mut a = dev.dtoh_sync_copy(&a).unwrap();
-        let b = dev.dtoh_sync_copy(&b).unwrap();
-        let c = dev.dtoh_sync_copy(&c).unwrap();
-        for (a, b, c) in izip!(a.iter_mut(), b, c) {
-            *a ^= b ^ c;
-        }
-        result.extend(a);
-    }
-    result
+    distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, &streams);
 }
 
 #[tokio::main]
@@ -264,8 +261,6 @@ async fn main() -> eyre::Result<()> {
 
     let mask_db_slices = masks_engine.load_db(&masks_db, DB_SIZE, DB_SIZE + DB_BUFFER);
 
-    let distance_comparator = DistanceComparator::init(QUERIES);
-
     // Engines for inflight queries
     let mut batch_codes_engine = ShareDB::init(
         party_id,
@@ -291,19 +286,26 @@ async fn main() -> eyre::Result<()> {
     );
 
     // Phase 2
-    let mut phase2_batch = Arc::new(Mutex::new(Circuits::new(
+    let phase2_chunk_size_max =
+        (QUERIES * (DB_SIZE + DB_BUFFER) / device_manager.device_count()).div_ceil(2048) * 2048;
+    let phase2_batch_chunk_size =
+        (QUERIES * QUERIES / device_manager.device_count()).div_ceil(2048) * 2048;
+
+    let phase2_batch = Arc::new(Mutex::new(Circuits::new(
         party_id,
-        INPUTS_PER_GPU_SIZE,
+        phase2_batch_chunk_size,
         Some(&bootstrap_url.clone().unwrap()),
         Some(3004),
     )));
 
-    let mut phase2 = Arc::new(Mutex::new(Circuits::new(
+    let phase2 = Arc::new(Mutex::new(Circuits::new(
         party_id,
-        INPUTS_PER_GPU_SIZE,
+        phase2_chunk_size_max,
         Some(&bootstrap_url.unwrap()),
         Some(3005),
     )));
+
+    let distance_comparator = Arc::new(Mutex::new(DistanceComparator::init(QUERIES)));
 
     // Prepare streams etc.
     let mut streams = vec![];
@@ -315,9 +317,9 @@ async fn main() -> eyre::Result<()> {
         let tmp_streams = device_manager.fork_streams();
         cublas_handles.push(device_manager.create_cublas(&tmp_streams));
         streams.push(tmp_streams);
-        results.push(distance_comparator.prepare_results());
-        batch_results.push(distance_comparator.prepare_results());
-        final_results.push(distance_comparator.prepare_final_results());
+        results.push(distance_comparator.lock().unwrap().prepare_results());
+        batch_results.push(distance_comparator.lock().unwrap().prepare_results());
+        final_results.push(distance_comparator.lock().unwrap().prepare_final_results());
     }
 
     // Main Loop
@@ -521,10 +523,8 @@ async fn main() -> eyre::Result<()> {
             .iter()
             .map(|s| s.stream as u64)
             .collect::<Vec<_>>();
-        let tmp_devs = distance_comparator.devs.clone();
+        let tmp_devs = device_manager.devices().clone();
         let tmp_code_db_sizes = device_ptrs(&code_db_sizes);
-        let tmp_code_db_slices = slice_tuples_to_ptrs(&code_db_slices);
-        let tmp_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
         let tmp_evts = end_timer.iter().map(|e| *e as u64).collect::<Vec<_>>();
         let mut shuffle_rng = shuffle_rng.clone();
         let current_stream_event_tmp = current_stream_event
@@ -535,19 +535,22 @@ async fn main() -> eyre::Result<()> {
             .iter()
             .map(|e| Arc::clone(e))
             .collect::<Vec<_>>();
+        let tmp_request_batch_results = device_ptrs(&request_batch_results);
+        let tmp_request_results = device_ptrs(&request_results);
+        let tmp_request_final_results = device_ptrs(&request_final_results);
         let tmp_code_results = device_ptrs(&codes_engine.results);
         let tmp_code_results_peer = device_ptrs(&codes_engine.results_peer);
         let tmp_mask_results = device_ptrs(&masks_engine.results);
         let tmp_mask_results_peer = device_ptrs(&masks_engine.results_peer);
         let tmp_phase2 = phase2.clone();
+        let tmp_phase2_batch = phase2_batch.clone();
+        let tmp_distance_comparator = distance_comparator.clone();
+        let tmp_code_db_slices = slice_tuples_to_ptrs(&code_db_slices);
+        let tmp_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
 
         tokio::spawn(async move {
-            let tmp_phase2 = tmp_phase2.lock().unwrap();
-
-            let result_sizes = current_db_size_mutex_clone
-                .iter()
-                .map(|e| *e.lock().unwrap() * QUERIES)
-                .collect::<Vec<_>>();
+            let mut tmp_phase2 = tmp_phase2.lock().unwrap();
+            let tmp_distance_comparator = tmp_distance_comparator.lock().unwrap();
 
             let (result_sizes, db_sizes): (Vec<_>, Vec<_>) = current_db_size_mutex_clone
                 .iter()
@@ -555,34 +558,52 @@ async fn main() -> eyre::Result<()> {
                 .unzip();
 
             let dot_codes: Vec<CudaSlice<u16>> =
-                device_ptrs_to_slices(&tmp_code_results, result_sizes, &tmp_devs);
+                device_ptrs_to_slices(&tmp_code_results, &result_sizes, &tmp_devs);
             let dot_codes_peer: Vec<CudaSlice<u16>> =
-                device_ptrs_to_slices(&tmp_code_results_peer, result_sizes, &tmp_devs);
-            let dot_codes: Vec<CudaSlice<u16>> =
-                device_ptrs_to_slices(&tmp_mask_results, result_sizes, &tmp_devs);
+                device_ptrs_to_slices(&tmp_code_results_peer, &result_sizes, &tmp_devs);
+            let dot_masks: Vec<CudaSlice<u16>> =
+                device_ptrs_to_slices(&tmp_mask_results, &result_sizes, &tmp_devs);
             let dot_masks_peer: Vec<CudaSlice<u16>> =
-                device_ptrs_to_slices(&tmp_code_results_peer, result_sizes, &tmp_devs);
+                device_ptrs_to_slices(&tmp_mask_results_peer, &result_sizes, &tmp_devs);
 
             let code_dots = dot_codes
-                .iter()
-                .zip(dot_codes_peer.iter())
-                .map(|(&a, &b)| ChunkShare::new(a, b))
+                .into_iter()
+                .zip(dot_codes_peer.into_iter())
+                .map(|(a, b)| ChunkShare::new(a, b))
                 .collect::<Vec<_>>();
 
-            let mask_dots = dot_codes
-                .iter()
-                .zip(dot_codes_peer.iter())
-                .map(|(&a, &b)| ChunkShare::new(a, b))
+            let mask_dots = dot_masks
+                .into_iter()
+                .zip(dot_masks_peer.into_iter())
+                .map(|(a, b)| ChunkShare::new(a, b))
                 .collect::<Vec<_>>();
 
-            tmp_phase2
-                .compare_threshold_masked_many(code_dots, mask_dots);
+            tmp_phase2.compare_threshold_masked_many(code_dots, mask_dots);
 
-            tmp_phase2.synchronize_all();
+            tmp_phase2.synchronize_all(); // TODO
 
             let res = tmp_phase2.take_result_buffer();
-            let result = open(&mut tmp_phase2, &res, &db_sizes);
+            let chunk_size = tmp_phase2.chunk_size();
+            open(
+                &mut tmp_phase2,
+                &res,
+                &tmp_distance_comparator,
+                &tmp_request_results,
+                &tmp_streams,
+                chunk_size,
+                &db_sizes,
+            );
             tmp_phase2.return_result_buffer(res);
+
+            tmp_distance_comparator.merge_results(
+                &tmp_request_results,
+                &tmp_request_results,
+                &tmp_request_final_results,
+                &tmp_streams,
+            );
+
+            let host_results = tmp_distance_comparator
+                .fetch_final_results(&tmp_request_final_results, &tmp_streams);
 
             // Step 2: Evaluate the results across devices
             let mut insertion_list = vec![];
@@ -725,8 +746,19 @@ async fn main() -> eyre::Result<()> {
                     }
                 }
 
+                // Update Phase 2 chunk size to max db size
+                // TODO: make this dynamic for each device
+                let mut max_db_size = 0;
+                for i in 0..tmp_devs.len() {
+                    let size = current_db_size_mutex_clone[i].lock().unwrap();
+                    if *size > max_db_size {
+                        max_db_size = *size;
+                    }
+                }
+                tmp_phase2.set_chunk_size((QUERIES * max_db_size).div_ceil(2048) * 2048);
+
+                // Step 5: emit stream finished event to unblock the stream after the following
                 unsafe {
-                    // Step 5: emit stream finished event to unblock the stream after the following
                     event::record(
                         current_stream_event_tmp[i] as *mut _,
                         tmp_streams[i] as *mut _,

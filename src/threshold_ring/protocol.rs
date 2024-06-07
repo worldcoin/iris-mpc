@@ -380,6 +380,16 @@ impl Circuits {
         }
     }
 
+    // TODO: have different chunk sizes for each gpu
+    pub fn set_chunk_size(&mut self, chunk_size: usize) {
+        self.chunk_size = chunk_size;
+    }
+
+    // TODO: have different chunk sizes for each gpu
+    pub fn chunk_size(&self) -> usize {
+        self.chunk_size
+    }  
+
     pub fn take_result_buffer(&mut self) -> Vec<ChunkShare<u64>> {
         Buffers::take_buffer(&mut self.buffers.u64_32c_1)
     }

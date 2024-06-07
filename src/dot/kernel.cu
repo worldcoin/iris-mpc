@@ -25,14 +25,13 @@ extern "C" __global__ void matmul(int *c, unsigned short *output, int *a0Sums, i
     }
 }
 
-extern "C" __global__ void reconstructAndCompare(unsigned short *codes_result1, unsigned short *codes_result2, unsigned short *codes_result3, unsigned short *masks_result1, unsigned short *masks_result2, unsigned short *masks_result3, unsigned int *output, double match_ratio, size_t dbLength, size_t queryLength)
+extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned int *output, size_t dbLength, size_t queryLength)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < dbLength * queryLength)
     {
-        short nom = ((unsigned int)codes_result1[idx] + (unsigned int)codes_result2[idx] + (unsigned int)codes_result3[idx]) % (unsigned int)P;
-        short den = ((unsigned int)masks_result1[idx] + (unsigned int)masks_result2[idx] + (unsigned int)masks_result3[idx]) % (unsigned int)P;
-        if ((nom > (1.0 - 2.0 * match_ratio) * den) && (output[idx / dbLength] > idx % dbLength))
+        bool result = result1[idx] ^ result2[idx] ^ result3[idx];
+        if (result && (output[idx / dbLength] > idx % dbLength))
         {
             // return db element with smallest index
             output[idx / dbLength] = idx % dbLength;
@@ -40,7 +39,7 @@ extern "C" __global__ void reconstructAndCompare(unsigned short *codes_result1, 
     }
 }
 
-extern "C" __global__ void dedupResults(unsigned int *matchResultsSelf, unsigned int *matchResults, unsigned int *finalResults, unsigned int *dbSize, size_t queryLength)
+extern "C" __global__ void mergeResults(unsigned int *matchResultsSelf, unsigned int *matchResults, unsigned int *finalResults, size_t queryLength)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < queryLength)
@@ -63,12 +62,12 @@ extern "C" __global__ void dedupResults(unsigned int *matchResultsSelf, unsigned
 
         // Check if there is a match in the query itelf
         // We only need to check a single query, since we don't want to rotate double
-        int oldIdx = idx * (2 * ROTATIONS + 1) + ROTATIONS;
-        if (matchResultsSelf[oldIdx] != UINT_MAX && oldIdx != matchResultsSelf[oldIdx])
-        {
-            finalResults[idx] = matchResultsSelf[oldIdx];
-            return;
-        }
+        // int oldIdx = idx * (2 * ROTATIONS + 1) + ROTATIONS;
+        // if (matchResultsSelf[oldIdx] != UINT_MAX && oldIdx != matchResultsSelf[oldIdx])
+        // {
+        //     finalResults[idx] = matchResultsSelf[oldIdx];
+        //     return;
+        // }
 
         finalResults[idx] = UINT_MAX;
     }
