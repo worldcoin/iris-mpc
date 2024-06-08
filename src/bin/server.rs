@@ -20,7 +20,7 @@ use gpu_iris_mpc::{
         mmap::{read_mmap_file, write_mmap_file},
         sqs::{SMPCRequest, SQSMessage},
     },
-    setup::iris_db::shamir_iris::ShamirIris,
+    setup::{galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::shamir_iris::ShamirIris},
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use itertools::izip;
@@ -210,18 +210,18 @@ async fn main() -> eyre::Result<()> {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
-        let shamir_db = ShamirIrisDB::share_db_par(&db, &mut rng);
-
-        let codes_db = shamir_db[party_id]
+        let codes_db = db
             .db
             .iter()
-            .flat_map(|entry| entry.code)
+            .map(|iris| GaloisRingIrisCodeShare::encode_iris_code(&iris.code)[party_id].coefs)
+            .flatten()
             .collect::<Vec<_>>();
 
-        let masks_db = shamir_db[party_id]
+        let masks_db = db
             .db
             .iter()
-            .flat_map(|entry| entry.mask)
+            .map(|iris| GaloisRingIrisCodeShare::encode_iris_code(&iris.mask)[party_id].coefs)
+            .flatten()
             .collect::<Vec<_>>();
 
         write_mmap_file(&code_db_path, &codes_db)?;
@@ -633,142 +633,144 @@ async fn main() -> eyre::Result<()> {
                 .collect::<Vec<_>>();
             insertion_list.shuffle(&mut shuffle_rng);
 
-            for i in 0..tmp_devs.len() {
-                tmp_devs[i].bind_to_thread().unwrap();
+            println!("Insertion list: {:?}", insertion_list);
 
-                if insertion_list.len() > i {
-                    let mut old_size = *current_db_size_mutex_clone[i].lock().unwrap() as u64;
-                    for insertion_idx in insertion_list[i] {
-                        unsafe {
-                            // Step 4: fetch and update db counters
-                            // Append to codes db
-                            result::memcpy_dtod_async(
-                                tmp_code_db_slices.0 .0[i] + old_size * IRIS_CODE_LENGTH as u64,
-                                code_query.0[i]
-                                    + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
-                                IRIS_CODE_LENGTH,
-                                tmp_streams[i] as *mut _,
-                            )
-                            .unwrap();
+            // for i in 0..tmp_devs.len() {
+            //     tmp_devs[i].bind_to_thread().unwrap();
 
-                            result::memcpy_dtod_async(
-                                tmp_code_db_slices.0 .1[i] + old_size * IRIS_CODE_LENGTH as u64,
-                                code_query.1[i]
-                                    + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
-                                IRIS_CODE_LENGTH,
-                                tmp_streams[i] as *mut _,
-                            )
-                            .unwrap();
+            //     if insertion_list.len() > i {
+            //         let mut old_size = *current_db_size_mutex_clone[i].lock().unwrap() as u64;
+            //         for insertion_idx in insertion_list[i] {
+            //             unsafe {
+            //                 // Step 4: fetch and update db counters
+            //                 // Append to codes db
+            //                 result::memcpy_dtod_async(
+            //                     tmp_code_db_slices.0 .0[i] + old_size * IRIS_CODE_LENGTH as u64,
+            //                     code_query.0[i]
+            //                         + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
+            //                     IRIS_CODE_LENGTH,
+            //                     tmp_streams[i] as *mut _,
+            //                 )
+            //                 .unwrap();
 
-                            result::memcpy_dtod_async(
-                                tmp_code_db_slices.1 .0[i]
-                                    + (old_size * mem::size_of::<u32>() as u64),
-                                code_query_sums.0[i]
-                                    + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
-                                mem::size_of::<u32>(),
-                                tmp_streams[i] as *mut _,
-                            )
-                            .unwrap();
+            //                 result::memcpy_dtod_async(
+            //                     tmp_code_db_slices.0 .1[i] + old_size * IRIS_CODE_LENGTH as u64,
+            //                     code_query.1[i]
+            //                         + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
+            //                     IRIS_CODE_LENGTH,
+            //                     tmp_streams[i] as *mut _,
+            //                 )
+            //                 .unwrap();
 
-                            result::memcpy_dtod_async(
-                                tmp_code_db_slices.1 .1[i]
-                                    + (old_size * mem::size_of::<u32>() as u64),
-                                code_query_sums.1[i]
-                                    + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
-                                mem::size_of::<u32>(),
-                                tmp_streams[i] as *mut _,
-                            )
-                            .unwrap();
+            //                 result::memcpy_dtod_async(
+            //                     tmp_code_db_slices.1 .0[i]
+            //                         + (old_size * mem::size_of::<u32>() as u64),
+            //                     code_query_sums.0[i]
+            //                         + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
+            //                     mem::size_of::<u32>(),
+            //                     tmp_streams[i] as *mut _,
+            //                 )
+            //                 .unwrap();
 
-                            // Append to masks db
-                            result::memcpy_dtod_async(
-                                tmp_mask_db_slices.0 .0[i] + old_size * IRIS_CODE_LENGTH as u64,
-                                mask_query.0[i]
-                                    + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
-                                IRIS_CODE_LENGTH,
-                                tmp_streams[i] as *mut _,
-                            )
-                            .unwrap();
+            //                 result::memcpy_dtod_async(
+            //                     tmp_code_db_slices.1 .1[i]
+            //                         + (old_size * mem::size_of::<u32>() as u64),
+            //                     code_query_sums.1[i]
+            //                         + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
+            //                     mem::size_of::<u32>(),
+            //                     tmp_streams[i] as *mut _,
+            //                 )
+            //                 .unwrap();
 
-                            result::memcpy_dtod_async(
-                                tmp_mask_db_slices.0 .1[i] + old_size * IRIS_CODE_LENGTH as u64,
-                                mask_query.1[i]
-                                    + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
-                                IRIS_CODE_LENGTH,
-                                tmp_streams[i] as *mut _,
-                            )
-                            .unwrap();
+            //                 // Append to masks db
+            //                 result::memcpy_dtod_async(
+            //                     tmp_mask_db_slices.0 .0[i] + old_size * IRIS_CODE_LENGTH as u64,
+            //                     mask_query.0[i]
+            //                         + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
+            //                     IRIS_CODE_LENGTH,
+            //                     tmp_streams[i] as *mut _,
+            //                 )
+            //                 .unwrap();
 
-                            result::memcpy_dtod_async(
-                                tmp_mask_db_slices.1 .0[i]
-                                    + (old_size * mem::size_of::<u32>() as u64),
-                                mask_query_sums.0[i]
-                                    + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
-                                mem::size_of::<u32>(),
-                                tmp_streams[i] as *mut _,
-                            )
-                            .unwrap();
+            //                 result::memcpy_dtod_async(
+            //                     tmp_mask_db_slices.0 .1[i] + old_size * IRIS_CODE_LENGTH as u64,
+            //                     mask_query.1[i]
+            //                         + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
+            //                     IRIS_CODE_LENGTH,
+            //                     tmp_streams[i] as *mut _,
+            //                 )
+            //                 .unwrap();
 
-                            result::memcpy_dtod_async(
-                                tmp_mask_db_slices.1 .1[i]
-                                    + (old_size * mem::size_of::<u32>() as u64),
-                                mask_query_sums.1[i]
-                                    + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
-                                mem::size_of::<u32>(),
-                                tmp_streams[i] as *mut _,
-                            )
-                            .unwrap();
-                        }
-                        old_size += 1;
-                    }
+            //                 result::memcpy_dtod_async(
+            //                     tmp_mask_db_slices.1 .0[i]
+            //                         + (old_size * mem::size_of::<u32>() as u64),
+            //                     mask_query_sums.0[i]
+            //                         + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
+            //                     mem::size_of::<u32>(),
+            //                     tmp_streams[i] as *mut _,
+            //                 )
+            //                 .unwrap();
 
-                    unsafe {
-                        // Step 3: write new db sizes to device
-                        *current_db_size_mutex_clone[i].lock().unwrap() +=
-                            insertion_list[i].len() as usize;
-                        println!(
-                            "Updating DB size on device {}: {:?}",
-                            i,
-                            *current_db_size_mutex_clone[i].lock().unwrap()
-                        );
+            //                 result::memcpy_dtod_async(
+            //                     tmp_mask_db_slices.1 .1[i]
+            //                         + (old_size * mem::size_of::<u32>() as u64),
+            //                     mask_query_sums.1[i]
+            //                         + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
+            //                     mem::size_of::<u32>(),
+            //                     tmp_streams[i] as *mut _,
+            //                 )
+            //                 .unwrap();
+            //             }
+            //             old_size += 1;
+            //         }
 
-                        let tmp_host =
-                            vec![*current_db_size_mutex_clone[i].lock().unwrap() as u32; 1];
-                        lib()
-                            .cuMemcpyHtoDAsync_v2(
-                                tmp_code_db_sizes[i],
-                                tmp_host.as_ptr() as *mut _,
-                                mem::size_of::<u32>(),
-                                tmp_streams[i] as *mut _,
-                            )
-                            .result()
-                            .unwrap();
-                    }
-                }
+            //         unsafe {
+            //             // Step 3: write new db sizes to device
+            //             *current_db_size_mutex_clone[i].lock().unwrap() +=
+            //                 insertion_list[i].len() as usize;
+            //             println!(
+            //                 "Updating DB size on device {}: {:?}",
+            //                 i,
+            //                 *current_db_size_mutex_clone[i].lock().unwrap()
+            //             );
 
-                // Update Phase 2 chunk size to max db size
-                // TODO: make this dynamic for each device
-                let mut max_db_size = 0;
-                for i in 0..tmp_devs.len() {
-                    let size = current_db_size_mutex_clone[i].lock().unwrap();
-                    if *size > max_db_size {
-                        max_db_size = *size;
-                    }
-                }
-                tmp_phase2.set_chunk_size((QUERIES * max_db_size).div_ceil(2048) * 2048);
+            //             let tmp_host =
+            //                 vec![*current_db_size_mutex_clone[i].lock().unwrap() as u32; 1];
+            //             lib()
+            //                 .cuMemcpyHtoDAsync_v2(
+            //                     tmp_code_db_sizes[i],
+            //                     tmp_host.as_ptr() as *mut _,
+            //                     mem::size_of::<u32>(),
+            //                     tmp_streams[i] as *mut _,
+            //                 )
+            //                 .result()
+            //                 .unwrap();
+            //         }
+            //     }
 
-                // Step 5: emit stream finished event to unblock the stream after the following
-                unsafe {
-                    event::record(
-                        current_stream_event_tmp[i] as *mut _,
-                        tmp_streams[i] as *mut _,
-                    )
-                    .unwrap();
+            //     // Update Phase 2 chunk size to max db size
+            //     // TODO: make this dynamic for each device
+            //     let mut max_db_size = 0;
+            //     for i in 0..tmp_devs.len() {
+            //         let size = current_db_size_mutex_clone[i].lock().unwrap();
+            //         if *size > max_db_size {
+            //             max_db_size = *size;
+            //         }
+            //     }
+            //     tmp_phase2.set_chunk_size((QUERIES * max_db_size).div_ceil(2048) * 2048);
 
-                    // Emit debug event to measure time for e2e process
-                    event::record(tmp_evts[i] as *mut _, tmp_streams[i] as *mut _).unwrap();
-                }
-            }
+            //     // Step 5: emit stream finished event to unblock the stream after the following
+            //     unsafe {
+            //         event::record(
+            //             current_stream_event_tmp[i] as *mut _,
+            //             tmp_streams[i] as *mut _,
+            //         )
+            //         .unwrap();
+
+            //         // Emit debug event to measure time for e2e process
+            //         event::record(tmp_evts[i] as *mut _, tmp_streams[i] as *mut _).unwrap();
+            //     }
+            // }
         });
 
         // Prepare for next batch
