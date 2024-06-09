@@ -171,8 +171,7 @@ pub mod degree2 {
                 .unwrap()
         }
 
-        pub fn encode_3_mat(input: &[u16; 2]) -> [ShamirGaloisRingShare; 3] {
-            let mut rng = rand::thread_rng();
+        pub fn encode_3_mat<R: Rng>(input: &[u16; 2], rng: &mut R) -> [ShamirGaloisRingShare; 3] {
             let invec = [input[0], input[1], rng.gen(), rng.gen()];
             let share1 = ShamirGaloisRingShare {
                 id: 1,
@@ -232,6 +231,8 @@ pub mod degree2 {
 
     #[cfg(test)]
     mod tests {
+        use rand::thread_rng;
+
         use super::{GaloisRingElement, ShamirGaloisRingShare};
 
         #[test]
@@ -280,8 +281,8 @@ pub mod degree2 {
             let input1 = GaloisRingElement::random(&mut rand::thread_rng());
             let input2 = GaloisRingElement::random(&mut rand::thread_rng());
 
-            let shares1 = ShamirGaloisRingShare::encode_3_mat(&input1.coefs);
-            let shares2 = ShamirGaloisRingShare::encode_3_mat(&input2.coefs);
+            let shares1 = ShamirGaloisRingShare::encode_3_mat(&input1.coefs, &mut thread_rng());
+            let shares2 = ShamirGaloisRingShare::encode_3_mat(&input2.coefs, &mut thread_rng());
             let shares_mul = [
                 shares1[0] * shares2[0],
                 shares1[1] * shares2[1],

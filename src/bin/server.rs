@@ -3,8 +3,11 @@ use clap::Parser;
 use cudarc::driver::{
     result::{
         self,
-        event::{self, elapsed}, stream::synchronize,
-    }, sys::lib, CudaDevice, CudaSlice, CudaStream, CudaView, DevicePtr
+        event::{self, elapsed},
+        stream::synchronize,
+    },
+    sys::lib,
+    CudaDevice, CudaSlice, CudaStream, CudaView, DevicePtr,
 };
 use gpu_iris_mpc::{
     dot::{
@@ -197,20 +200,31 @@ async fn main() -> eyre::Result<()> {
             read_mmap_file(&mask_db_path)?,
         )
     } else {
-        let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
         let codes_db = db
             .db
             .iter()
-            .map(|iris| GaloisRingIrisCodeShare::encode_iris_code(&iris.code)[party_id].coefs)
+            .map(|iris| {
+                GaloisRingIrisCodeShare::encode_iris_code(
+                    &iris.code,
+                    &mut StdRng::seed_from_u64(RNG_SEED),
+                )[party_id]
+                    .coefs
+            })
             .flatten()
             .collect::<Vec<_>>();
 
         let masks_db = db
             .db
             .iter()
-            .map(|iris| GaloisRingIrisCodeShare::encode_iris_code(&iris.mask)[party_id].coefs)
+            .map(|iris| {
+                GaloisRingIrisCodeShare::encode_iris_code(
+                    &iris.mask,
+                    &mut StdRng::seed_from_u64(RNG_SEED),
+                )[party_id]
+                    .coefs
+            })
             .flatten()
             .collect::<Vec<_>>();
 
@@ -619,8 +633,8 @@ async fn main() -> eyre::Result<()> {
 
             tmp_phase2.synchronize_all(); // TODO
 
-            let host_results = tmp_distance_comparator
-                .fetch_final_results(&tmp_request_final_results);
+            let host_results =
+                tmp_distance_comparator.fetch_final_results(&tmp_request_final_results);
 
             println!("insert");
 
