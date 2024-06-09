@@ -32,11 +32,7 @@ use std::{
 };
 use tokio::time::sleep;
 
-use gpu_iris_mpc::setup::{
-    id::PartyID,
-    iris_db::db::IrisDB,
-    shamir::Shamir,
-};
+use gpu_iris_mpc::setup::{id::PartyID, iris_db::db::IrisDB, shamir::Shamir};
 use rand::prelude::SliceRandom;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
@@ -541,13 +537,21 @@ async fn main() -> eyre::Result<()> {
         let tmp_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
 
         tokio::spawn(async move {
+            println!("thread start");
             let mut tmp_phase2 = tmp_phase2.lock().unwrap();
+            println!("tmp_phase2");
             let tmp_distance_comparator = tmp_distance_comparator.lock().unwrap();
+            println!("tmp_distance_comparator");
 
             let (result_sizes, db_sizes): (Vec<_>, Vec<_>) = current_db_size_mutex_clone
                 .iter()
-                .map(|e| (*e.lock().unwrap(), *e.lock().unwrap() * QUERIES))
+                .map(|e| {
+                    let db_size = *e.lock().unwrap();
+                    (db_size * QUERIES, db_size)
+                })
                 .unzip();
+
+            println!("1");
 
             let dot_codes: Vec<CudaSlice<u16>> =
                 device_ptrs_to_slices(&tmp_code_results, &result_sizes, &tmp_devs);
@@ -558,11 +562,15 @@ async fn main() -> eyre::Result<()> {
             let dot_masks_peer: Vec<CudaSlice<u16>> =
                 device_ptrs_to_slices(&tmp_mask_results_peer, &result_sizes, &tmp_devs);
 
+            println!("2");
+
             let code_dots = dot_codes
                 .into_iter()
                 .zip(dot_codes_peer.into_iter())
                 .map(|(a, b)| ChunkShare::new(a, b))
                 .collect::<Vec<_>>();
+
+            println!("3");
 
             let mask_dots = dot_masks
                 .into_iter()
