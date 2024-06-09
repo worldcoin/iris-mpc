@@ -4,9 +4,7 @@ use cudarc::driver::{
     result::{
         self,
         event::{self, elapsed},
-    },
-    sys::lib,
-    CudaSlice, CudaStream, CudaView, DevicePtr,
+    }, sys::lib, CudaDevice, CudaSlice, CudaStream, CudaView, DevicePtr
 };
 use gpu_iris_mpc::{
     dot::{
@@ -153,6 +151,8 @@ fn open(
         c.push(res.a);
     }
     cudarc::nccl::result::group_end().unwrap();
+
+    party.synchronize_all();
 
     distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, &streams);
 }
@@ -610,8 +610,10 @@ async fn main() -> eyre::Result<()> {
                 &tmp_streams,
             );
 
+            tmp_phase2.synchronize_all(); // TODO
+
             let host_results = tmp_distance_comparator
-                .fetch_final_results(&tmp_request_final_results, &tmp_streams);
+                .fetch_final_results(&tmp_request_final_results);
 
             println!("insert");
 

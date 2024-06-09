@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cudarc::{
     driver::{
-        result::{launch_kernel, memcpy_dtoh_async, stream::synchronize},
+        result::{launch_kernel, memcpy_dtoh_async, memcpy_dtoh_sync, stream::synchronize},
         CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, DeviceRepr, LaunchAsync,
         LaunchConfig,
     },
@@ -115,9 +115,9 @@ impl DistanceComparator {
 
     pub fn merge_results(
         &self,
-        match_results_self: &Vec<u64>,
-        match_results: &Vec<u64>,
-        final_results: &Vec<u64>,
+        match_results_self: &[u64],
+        match_results: &[u64],
+        final_results: &[u64],
         streams: &[u64],
     ) {
         let num_elements = self.query_length / ROTATIONS;
@@ -157,14 +157,13 @@ impl DistanceComparator {
         }
     }
 
-    pub fn fetch_final_results(&self, final_results_ptrs: &[u64], streams: &Vec<u64>) -> Vec<Vec<u32>> {
+    pub fn fetch_final_results(&self, final_results_ptrs: &[u64]) -> Vec<Vec<u32>> {
         let mut results = vec![];
         for i in 0..self.n_devices {
             self.devs[i].bind_to_thread().unwrap();
-            let mut tmp = vec![0u32; self.query_length];
+            let mut tmp = vec![0u32; self.query_length / ROTATIONS];
             unsafe {
-                memcpy_dtoh_async(&mut tmp, final_results_ptrs[i], streams[i] as *mut _).unwrap();
-                synchronize(streams[i] as *mut _).unwrap();
+                memcpy_dtoh_sync(&mut tmp, final_results_ptrs[i]).unwrap();
             }
             results.push(tmp);
         }
