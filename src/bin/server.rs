@@ -40,7 +40,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
 const DB_BUFFER: usize = 8 * 1_000;
-const QUERIES: usize = 496;
+const QUERIES: usize = 31;
 const RNG_SEED: u64 = 42;
 const SHUFFLE_SEED: u64 = 42;
 const N_BATCHES: usize = 10;
@@ -157,7 +157,25 @@ fn open(
 
     party.synchronize_all();
 
-    distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, &streams);
+    let mut result = Vec::with_capacity(n_devices * db_sizes[0]);
+    let devices = party.get_devices();
+    for (dev, a, b, c) in izip!(devices, a, b, c) {
+        let mut a = dev.dtoh_sync_copy(&a).unwrap();
+        let b = dev.dtoh_sync_copy(&b).unwrap();
+        let c = dev.dtoh_sync_copy(&c).unwrap();
+        for (a, b, c) in izip!(a.iter_mut(), b, c) {
+            println!("{} ^ {} ^ {}", a, b, c);
+            *a ^= b ^ c;
+            println!("Result: {}", a);
+        }
+        result.extend(a);
+        
+    }
+
+
+    // assert_eq!(result.len(), n_devices * CHUNK_SIZE);
+
+    // distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, &streams);
 }
 
 #[tokio::main]
@@ -601,6 +619,8 @@ async fn main() -> eyre::Result<()> {
 
             println!("starting phase 2");
 
+
+
             tmp_phase2.compare_threshold_masked_many(code_dots, mask_dots);
 
             println!("sync all");
@@ -618,7 +638,7 @@ async fn main() -> eyre::Result<()> {
                 &tmp_request_results,
                 &tmp_streams,
                 chunk_size,
-                &db_sizes,
+                &result_sizes,
             );
             tmp_phase2.return_result_buffer(res);
 
