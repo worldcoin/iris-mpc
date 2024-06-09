@@ -89,7 +89,11 @@ async fn receive_batch(client: &Client, queue_url: &String) -> eyre::Result<Vec<
 
             let iris: ShamirIris = message.into();
 
-            batch.extend(iris.all_rotations());
+            // batch.extend(iris.all_rotations());
+            for _ in 0..ROTATIONS {
+                batch.push(iris.clone());
+            }
+
             // TODO: we should only delete after processing
             client
                 .delete_message()
