@@ -34,7 +34,7 @@ use tokio::time::sleep;
 
 use gpu_iris_mpc::setup::{
     id::PartyID,
-    iris_db::{db::IrisDB, shamir_db::ShamirIrisDB},
+    iris_db::db::IrisDB,
     shamir::Shamir,
 };
 use rand::prelude::SliceRandom;
@@ -48,10 +48,6 @@ const RNG_SEED: u64 = 42;
 const SHUFFLE_SEED: u64 = 42;
 const N_BATCHES: usize = 10;
 const MAX_CONCURRENT_REQUESTS: usize = 5;
-//ceil(496 * 496 / 2048) * 2048
-const INPUTS_PER_GPU_SIZE_BATCH: usize = 247_808;
-//ceil(496 * 1_000 / 2048) * 2048
-const INPUTS_PER_GPU_SIZE: usize = 497_664;
 const DB_CODE_FILE: &str = "codes.db";
 const DB_MASK_FILE: &str = "masks.db";
 const DEFAULT_PATH: &str = "/opt/dlami/nvme/";
@@ -236,7 +232,6 @@ async fn main() -> eyre::Result<()> {
     let mut codes_engine = ShareDB::init(
         party_id,
         device_manager.clone(),
-        l_coeff,
         DB_SIZE + DB_BUFFER,
         QUERIES,
         chacha_seeds,
@@ -250,7 +245,6 @@ async fn main() -> eyre::Result<()> {
     let mut masks_engine = ShareDB::init(
         party_id,
         device_manager.clone(),
-        l_coeff,
         DB_SIZE + DB_BUFFER,
         QUERIES,
         chacha_seeds,
@@ -265,7 +259,6 @@ async fn main() -> eyre::Result<()> {
     let mut batch_codes_engine = ShareDB::init(
         party_id,
         device_manager.clone(),
-        l_coeff,
         QUERIES * device_manager.device_count(),
         QUERIES,
         chacha_seeds,
@@ -276,7 +269,6 @@ async fn main() -> eyre::Result<()> {
     let mut batch_masks_engine = ShareDB::init(
         party_id,
         device_manager.clone(),
-        l_coeff,
         QUERIES * device_manager.device_count(),
         QUERIES,
         chacha_seeds,
@@ -417,38 +409,38 @@ async fn main() -> eyre::Result<()> {
         // BLOCK 1: calculate individual dot products
         device_manager.await_event(request_streams, &current_dot_event);
 
-        batch_codes_engine.dot(
-            &code_query,
-            &code_query,
-            &query_db_size,
-            request_streams,
-            request_cublas_handles,
-        );
+        // batch_codes_engine.dot(
+        //     &code_query,
+        //     &code_query,
+        //     &query_db_size,
+        //     request_streams,
+        //     request_cublas_handles,
+        // );
 
-        batch_masks_engine.dot(
-            &mask_query,
-            &mask_query,
-            &query_db_size,
-            request_streams,
-            request_cublas_handles,
-        );
+        // batch_masks_engine.dot(
+        //     &mask_query,
+        //     &mask_query,
+        //     &query_db_size,
+        //     request_streams,
+        //     request_cublas_handles,
+        // );
 
-        batch_codes_engine.dot_reduce(
-            &code_query_sums,
-            &code_query_sums,
-            &query_db_size,
-            request_streams,
-        );
+        // batch_codes_engine.dot_reduce(
+        //     &code_query_sums,
+        //     &code_query_sums,
+        //     &query_db_size,
+        //     request_streams,
+        // );
 
-        batch_masks_engine.dot_reduce(
-            &mask_query_sums,
-            &mask_query_sums,
-            &query_db_size,
-            request_streams,
-        );
+        // batch_masks_engine.dot_reduce(
+        //     &mask_query_sums,
+        //     &mask_query_sums,
+        //     &query_db_size,
+        //     request_streams,
+        // );
 
-        batch_codes_engine.reshare_results(&query_db_size, request_streams);
-        batch_masks_engine.reshare_results(&query_db_size, request_streams);
+        // batch_codes_engine.reshare_results(&query_db_size, request_streams);
+        // batch_masks_engine.reshare_results(&query_db_size, request_streams);
 
         // distance_comparator.reconstruct_and_compare(
         //     &batch_codes_engine.results_peers,

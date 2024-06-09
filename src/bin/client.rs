@@ -5,7 +5,7 @@ use aws_sdk_sns::{
 };
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
-use gpu_iris_mpc::{helpers::sqs::SMPCRequest, setup::iris_db::{db::IrisDB, iris::IrisCode, shamir_iris::ShamirIris}};
+use gpu_iris_mpc::{helpers::sqs::SMPCRequest, setup::{galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::{db::IrisDB, iris::IrisCode, shamir_iris::ShamirIris}}};
 use rand::{rngs::StdRng, SeedableRng};
 use serde_json::to_string;
 use uuid::Uuid;
@@ -63,16 +63,17 @@ async fn main() -> eyre::Result<()> {
             IrisCode::random_rng(&mut rng)
         };
 
-        let shared_template = ShamirIris::share_iris(&template, &mut rng);
+        let shared_code = GaloisRingIrisCodeShare::encode_iris_code(&template.code);
+        let shared_mask = GaloisRingIrisCodeShare::encode_iris_code(&template.mask);
         let request_id = Uuid::new_v4();
 
         let mut messages = vec![];
         for i in 0..3 {
             let sns_id = Uuid::new_v4();
             let iris_code =
-                general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_template[i].code));
+                general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_code[i].coefs));
             let mask_code =
-                general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_template[i].mask));
+                general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_mask[i].coefs));
 
             let request_message = SMPCRequest {
                 request_type: ENROLLMENT_REQUEST_TYPE.to_string(),
