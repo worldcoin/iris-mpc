@@ -214,9 +214,7 @@ impl ShareDB {
         }
 
         // Init RNGs
-        let rng_buf_size: usize = (max_db_length / n_devices * query_length)
-            .div_ceil(CHACHA_BUFFER_SIZE)
-            * CHACHA_BUFFER_SIZE;
+        let rng_buf_size: usize = max_db_length / n_devices * query_length;
         let mut rngs = vec![];
         for idx in 0..n_devices {
             let (seed0, seed1) = chacha_seeds;
