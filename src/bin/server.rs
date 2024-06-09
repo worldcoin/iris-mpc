@@ -225,6 +225,12 @@ async fn main() -> eyre::Result<()> {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
+        let c0 = GaloisRingIrisCodeShare::encode_iris_code(
+            &db.db[0].code,
+            &mut StdRng::seed_from_u64(RNG_SEED),
+        );
+        println!("{:?}", c0);
+
         let codes_db = db
             .db
             .iter()
