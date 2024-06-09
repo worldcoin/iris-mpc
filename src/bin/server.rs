@@ -222,6 +222,7 @@ async fn main() -> eyre::Result<()> {
             read_mmap_file(&mask_db_path)?,
         )
     } else {
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
         let codes_db = db
