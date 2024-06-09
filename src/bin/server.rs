@@ -508,6 +508,8 @@ async fn main() -> eyre::Result<()> {
         // TODO: move after phase 2
         device_manager.record_event(request_streams, &next_exchange_event);
 
+        println!("phase 1 done");
+
         // Start thread to wait for the results
         let tmp_streams = request_streams
             .iter()
@@ -568,9 +570,15 @@ async fn main() -> eyre::Result<()> {
                 .map(|(a, b)| ChunkShare::new(a, b))
                 .collect::<Vec<_>>();
 
+            println!("starting phase 2");
+
             tmp_phase2.compare_threshold_masked_many(code_dots, mask_dots);
 
+            println!("sync all");
+
             tmp_phase2.synchronize_all(); // TODO
+
+            println!("open ...");
 
             let res = tmp_phase2.take_result_buffer();
             let chunk_size = tmp_phase2.chunk_size();
@@ -585,6 +593,8 @@ async fn main() -> eyre::Result<()> {
             );
             tmp_phase2.return_result_buffer(res);
 
+            println!("merge");
+
             tmp_distance_comparator.merge_results(
                 &tmp_request_results,
                 &tmp_request_results,
@@ -594,6 +604,8 @@ async fn main() -> eyre::Result<()> {
 
             let host_results = tmp_distance_comparator
                 .fetch_final_results(&tmp_request_final_results, &tmp_streams);
+
+            println!("insert");
 
             // Step 2: Evaluate the results across devices
             let mut insertion_list = vec![];
