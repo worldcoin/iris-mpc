@@ -425,13 +425,14 @@ impl Circuits {
             });
         }
 
+        if peer_id != 0 {
+            thread::sleep(Duration::from_secs(5));
+        }
+
         for i in 0..n_devices {
             let id = if peer_id == 0 {
                 ids[i]
             } else {
-                // If not the server, give it a few secs to start
-                thread::sleep(Duration::from_secs(1));
-
                 let res = reqwest::blocking::get(format!(
                     "http://{}:{}/{}",
                     peer_url.unwrap(),
