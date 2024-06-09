@@ -286,26 +286,26 @@ async fn main() -> eyre::Result<()> {
     let mask_db_slices = masks_engine.load_db(&masks_db, DB_SIZE, DB_SIZE + DB_BUFFER);
 
     // Engines for inflight queries
-    let mut batch_codes_engine = ShareDB::init(
-        party_id,
-        device_manager.clone(),
-        QUERIES * device_manager.device_count(),
-        QUERIES,
-        chacha_seeds,
-        bootstrap_url.clone(),
-        Some(true),
-        Some(3002),
-    );
-    let mut batch_masks_engine = ShareDB::init(
-        party_id,
-        device_manager.clone(),
-        QUERIES * device_manager.device_count(),
-        QUERIES,
-        chacha_seeds,
-        bootstrap_url.clone(),
-        Some(true),
-        Some(3003),
-    );
+    // let mut batch_codes_engine = ShareDB::init(
+    //     party_id,
+    //     device_manager.clone(),
+    //     QUERIES * device_manager.device_count(),
+    //     QUERIES,
+    //     chacha_seeds,
+    //     bootstrap_url.clone(),
+    //     Some(true),
+    //     Some(3002),
+    // );
+    // let mut batch_masks_engine = ShareDB::init(
+    //     party_id,
+    //     device_manager.clone(),
+    //     QUERIES * device_manager.device_count(),
+    //     QUERIES,
+    //     chacha_seeds,
+    //     bootstrap_url.clone(),
+    //     Some(true),
+    //     Some(3003),
+    // );
 
     // Phase 2
     let phase2_chunk_size_max =
