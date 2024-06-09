@@ -38,8 +38,8 @@ use rand::prelude::SliceRandom;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 const REGION: &str = "eu-north-1";
-const DB_SIZE: usize = 8 * 1_000;
-const DB_BUFFER: usize = 8 * 1_000;
+const DB_SIZE: usize = 8 * 640;
+const DB_BUFFER: usize = 8 * 640;
 const QUERIES: usize = 31;
 const RNG_SEED: u64 = 42;
 const SHUFFLE_SEED: u64 = 42;
