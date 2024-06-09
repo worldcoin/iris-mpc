@@ -305,7 +305,7 @@ async fn main() -> eyre::Result<()> {
 
     // Phase 2
     let phase2_chunk_size_max =
-        (QUERIES * (DB_SIZE) / device_manager.device_count()).div_ceil(2048) * 2048; // + BUFFER
+        (QUERIES * DB_SIZE / device_manager.device_count()).div_ceil(2048) * 2048; // + BUFFER
     let phase2_batch_chunk_size =
         (QUERIES * QUERIES / device_manager.device_count()).div_ceil(2048) * 2048;
 
@@ -601,6 +601,13 @@ async fn main() -> eyre::Result<()> {
             let dot_masks_peer: Vec<CudaSlice<u16>> =
                 device_ptrs_to_slices(&tmp_mask_results_peer, &result_sizes, &tmp_devs);
 
+            let a1 = tmp_devs[0].dtoh_sync_copy(&dot_codes[0]).unwrap();
+            let a2 = tmp_devs[0].dtoh_sync_copy(&dot_codes_peer[0]).unwrap();
+            let a3 = tmp_devs[0].dtoh_sync_copy(&dot_masks[0]).unwrap();
+            let a4 = tmp_devs[0].dtoh_sync_copy(&dot_masks_peer[0]).unwrap();
+
+            println!("dot results: {:?} {:?} {:?} {:?}", a1[0..5].to_vec(), a2[0..5].to_vec(), a3[0..5].to_vec(), a4[0..5].to_vec());
+
             println!("2");
 
             let code_dots = dot_codes
@@ -618,8 +625,6 @@ async fn main() -> eyre::Result<()> {
                 .collect::<Vec<_>>();
 
             println!("starting phase 2");
-
-
 
             tmp_phase2.compare_threshold_masked_many(code_dots, mask_dots);
 
