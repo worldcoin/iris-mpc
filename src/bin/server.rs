@@ -193,8 +193,6 @@ async fn main() -> eyre::Result<()> {
         _ => unimplemented!(),
     };
 
-    let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(party_id as u8).unwrap());
-
     // Generate or load DB
     let (codes_db, masks_db) = if metadata(&code_db_path).is_ok() && metadata(&mask_db_path).is_ok()
     {
@@ -286,14 +284,14 @@ async fn main() -> eyre::Result<()> {
     let phase2_batch = Arc::new(Mutex::new(Circuits::new(
         party_id,
         phase2_batch_chunk_size,
-        Some(&bootstrap_url.clone().unwrap()),
+        bootstrap_url.clone(),
         Some(3004),
     )));
 
     let phase2 = Arc::new(Mutex::new(Circuits::new(
         party_id,
         phase2_chunk_size_max,
-        Some(&bootstrap_url.unwrap()),
+        bootstrap_url.clone(),
         Some(3005),
     )));
 

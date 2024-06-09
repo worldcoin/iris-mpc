@@ -87,6 +87,11 @@ async fn main() -> eyre::Result<()> {
     let url = args.get(2);
     let n_devices = CudaDevice::count().unwrap() as usize;
 
+    let url = match url {
+        Some(s) => Some(s.clone()),
+        None => None,
+    };
+
     // Get Circuit Party
     let mut party = Circuits::new(party_id, INPUTS_PER_GPU_SIZE, url, Some(3001));
     let devices = party.get_devices();

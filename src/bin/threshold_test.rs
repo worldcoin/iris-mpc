@@ -157,6 +157,11 @@ async fn main() -> eyre::Result<()> {
     let url = args.get(2);
     let n_devices = CudaDevice::count().unwrap() as usize;
 
+    let url = match url {
+        Some(s) => Some(s.clone()),
+        None => None,
+    };
+
     // Get inputs
     let code_dots = sample_code_dots(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);
     let mask_dots = sample_mask_dots(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);

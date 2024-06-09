@@ -333,7 +333,7 @@ impl Circuits {
     pub fn new(
         peer_id: usize,
         input_size: usize, // per GPU
-        peer_url: Option<&String>,
+        peer_url: Option<String>,
         server_port: Option<u16>,
     ) -> Self {
         // For the transpose, inputs should be multiple of 64 bits
@@ -400,7 +400,7 @@ impl Circuits {
 
     pub fn instantiate_network(
         peer_id: usize,
-        peer_url: Option<&String>,
+        peer_url: Option<String>,
         server_port: Option<u16>,
         devices: &[Arc<CudaDevice>],
     ) -> Vec<SendableRcComm> {
@@ -426,7 +426,7 @@ impl Circuits {
         }
 
         if peer_id != 0 {
-            thread::sleep(Duration::from_secs(10));
+            thread::sleep(Duration::from_secs(5));
         }
 
         for i in 0..n_devices {
@@ -435,7 +435,7 @@ impl Circuits {
             } else {
                 let res = reqwest::blocking::get(format!(
                     "http://{}:{}/{}",
-                    peer_url.unwrap(),
+                    peer_url.clone().unwrap(),
                     server_port.unwrap(),
                     i
                 ))
