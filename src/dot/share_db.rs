@@ -157,7 +157,7 @@ pub struct ShareDB {
     query_length: usize,
     device_manager: DeviceManager,
     kernels: Vec<CudaFunction>,
-    rngs: Vec<(ChaChaCudaFeRng, ChaChaCudaFeRng)>,
+    rngs: Vec<(ChaChaCudaRng, ChaChaCudaRng)>,
     comms: Vec<Arc<Comm>>,
     ones: Vec<CudaSlice<u8>>,
     intermediate_results: Vec<CudaSlice<i32>>,
@@ -476,10 +476,10 @@ impl ShareDB {
 
                 self.rngs[idx]
                     .0
-                    .fill_rng_no_host_copy(rng_buf_size, &streams[idx]);
+                    .fill_rng_no_host_copy(&streams[idx]);
                 self.rngs[idx]
                     .1
-                    .fill_rng_no_host_copy(rng_buf_size, &streams[idx]);
+                    .fill_rng_no_host_copy(&streams[idx]);
             }
 
             for (i, d) in [db.0[idx], db.1[idx]].iter().enumerate() {
@@ -536,8 +536,8 @@ impl ShareDB {
                             db_sizes[idx] as u64,
                             (db_sizes[idx] * self.query_length) as u64,
                             IRIS_CODE_LENGTH as u64,
-                            self.rngs[idx].0.cuda_slice(),
-                            self.rngs[idx].1.cuda_slice(),
+                            self.rngs[idx].0.cuda_slice().unwrap(),
+                            self.rngs[idx].1.cuda_slice().unwrap(),
                         ),
                     )
                     .unwrap();
