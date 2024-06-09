@@ -3,7 +3,7 @@ use clap::Parser;
 use cudarc::driver::{
     result::{
         self,
-        event::{self, elapsed},
+        event::{self, elapsed}, stream::synchronize,
     }, sys::lib, CudaDevice, CudaSlice, CudaStream, CudaView, DevicePtr
 };
 use gpu_iris_mpc::{
@@ -537,6 +537,13 @@ async fn main() -> eyre::Result<()> {
         let tmp_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
 
         tokio::spawn(async move {
+            // wait for phase 1 streams
+            for i in 0..tmp_streams.len() {
+                unsafe {
+                    synchronize(tmp_streams[i] as *mut _).unwrap();
+                }
+            }
+
             println!("thread start");
             let mut tmp_phase2 = tmp_phase2.lock().unwrap();
             println!("tmp_phase2");
