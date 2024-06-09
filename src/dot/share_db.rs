@@ -19,7 +19,7 @@ use rng::chacha_field::ChaChaCudaFeRng;
 
 use crate::{
     helpers::id_wrapper::{http_root, IdWrapper},
-    rng,
+    rng::{self, chacha::ChaChaCudaRng},
 };
 
 use super::{device_manager::DeviceManager, IRIS_CODE_LENGTH};
@@ -221,10 +221,10 @@ impl ShareDB {
         for idx in 0..n_devices {
             let (seed0, seed1) = chacha_seeds;
             let mut chacha1 =
-                ChaChaCudaFeRng::init(rng_buf_size, device_manager.device(idx).clone(), seed0);
+                ChaChaCudaRng::init(rng_buf_size, device_manager.device(idx).clone(), seed0);
             chacha1.get_mut_chacha().set_nonce(idx as u64);
             let mut chacha2 =
-                ChaChaCudaFeRng::init(rng_buf_size, device_manager.device(idx).clone(), seed1);
+                ChaChaCudaRng::init(rng_buf_size, device_manager.device(idx).clone(), seed1);
             chacha2.get_mut_chacha().set_nonce(idx as u64);
             rngs.push((chacha1, chacha2));
         }
