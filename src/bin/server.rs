@@ -37,6 +37,16 @@ use gpu_iris_mpc::setup::{id::PartyID, iris_db::db::IrisDB, shamir::Shamir};
 use rand::prelude::SliceRandom;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
+macro_rules! await_streams {
+    ($streams:expr) => {
+        for i in 0..$streams.len() {
+            unsafe {
+                synchronize($streams[i] as *mut _).unwrap();
+            }
+        }
+    };
+}
+
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1000;
 const DB_BUFFER: usize = 8 * 1000;
@@ -158,11 +168,33 @@ fn open(
         c.push(res.a);
     }
     cudarc::nccl::result::group_end().unwrap();
-
-    party.synchronize_all();
-    // assert_eq!(result.len(), n_devices * CHUNK_SIZE);
-
     distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, &streams);
+}
+
+fn get_non_matching_indices(host_results: &[Vec<u32>]) -> Vec<usize> {
+    let mut insertion_list = vec![];
+    for j in 0..host_results[0].len() {
+        let mut match_entry = u32::MAX;
+        for i in 0..host_results.len() {
+            if host_results[i][j] != u32::MAX {
+                match_entry = host_results[i][j];
+                break;
+            }
+        }
+
+        if match_entry == u32::MAX {
+            insertion_list.push(j);
+        }
+
+        // DEBUG
+        println!(
+            "Query {}: match={} [index: {}]",
+            j,
+            match_entry != u32::MAX,
+            match_entry
+        );
+    }
+    insertion_list
 }
 
 #[tokio::main]
@@ -528,47 +560,40 @@ async fn main() -> eyre::Result<()> {
         println!("phase 1 done");
 
         // Start thread to wait for the results
-        let tmp_streams = request_streams
+        let thread_streams = request_streams
             .iter()
             .map(|s| s.stream as u64)
             .collect::<Vec<_>>();
-        let tmp_devs = device_manager.devices().clone();
-        let tmp_code_db_sizes = device_ptrs(&code_db_sizes);
-        let tmp_evts = end_timer.iter().map(|e| *e as u64).collect::<Vec<_>>();
-        let mut shuffle_rng = shuffle_rng.clone();
-        let current_stream_event_tmp = current_stream_event
+        let thread_devs = device_manager.devices().clone();
+        let thread_code_db_sizes = device_ptrs(&code_db_sizes);
+        let thread_evts = end_timer.iter().map(|e| *e as u64).collect::<Vec<_>>();
+        let mut thread_shuffle_rng = shuffle_rng.clone();
+        let thread_current_stream_event = current_stream_event
             .iter()
             .map(|e| *e as u64)
             .collect::<Vec<_>>();
-        let current_db_size_mutex_clone = current_db_size_mutex
+        let thread_current_db_size_mutex = current_db_size_mutex
             .iter()
             .map(|e| Arc::clone(e))
             .collect::<Vec<_>>();
-        let tmp_request_batch_results = device_ptrs(&request_batch_results);
-        let tmp_request_results = device_ptrs(&request_results);
-        let tmp_request_final_results = device_ptrs(&request_final_results);
-        let tmp_code_results = device_ptrs(&codes_engine.results);
-        let tmp_code_results_peer = device_ptrs(&codes_engine.results_peer);
-        let tmp_mask_results = device_ptrs(&masks_engine.results);
-        let tmp_mask_results_peer = device_ptrs(&masks_engine.results_peer);
-        let tmp_phase2 = phase2.clone();
-        let tmp_phase2_batch = phase2_batch.clone();
-        let tmp_distance_comparator = distance_comparator.clone();
-        let tmp_code_db_slices = slice_tuples_to_ptrs(&code_db_slices);
-        let tmp_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
+        let thread_request_batch_results = device_ptrs(&request_batch_results);
+        let thread_request_results = device_ptrs(&request_results);
+        let thread_request_final_results = device_ptrs(&request_final_results);
+        let thread_code_results = device_ptrs(&codes_engine.results);
+        let thread_code_results_peer = device_ptrs(&codes_engine.results_peer);
+        let thread_mask_results = device_ptrs(&masks_engine.results);
+        let thread_mask_results_peer = device_ptrs(&masks_engine.results_peer);
+        let thread_phase2 = phase2.clone();
+        let thread_phase2_batch = phase2_batch.clone();
+        let thread_distance_comparator = distance_comparator.clone();
+        let thread_code_db_slices = slice_tuples_to_ptrs(&code_db_slices);
+        let thread_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
 
         tokio::spawn(async move {
-            // wait for phase 1 streams
-            for i in 0..tmp_streams.len() {
-                unsafe {
-                    synchronize(tmp_streams[i] as *mut _).unwrap();
-                }
-            }
+            let mut tmp_phase2 = thread_phase2.lock().unwrap();
+            let tmp_distance_comparator = thread_distance_comparator.lock().unwrap();
 
-            let mut tmp_phase2 = tmp_phase2.lock().unwrap();
-            let tmp_distance_comparator = tmp_distance_comparator.lock().unwrap();
-
-            let (result_sizes, db_sizes): (Vec<_>, Vec<_>) = current_db_size_mutex_clone
+            let (result_sizes, db_sizes): (Vec<_>, Vec<_>) = thread_current_db_size_mutex
                 .iter()
                 .map(|e| {
                     let db_size = *e.lock().unwrap();
@@ -577,13 +602,13 @@ async fn main() -> eyre::Result<()> {
                 .unzip();
 
             let dot_codes: Vec<CudaSlice<u16>> =
-                device_ptrs_to_slices(&tmp_code_results, &result_sizes, &tmp_devs);
+                device_ptrs_to_slices(&thread_code_results, &result_sizes, &thread_devs);
             let dot_codes_peer: Vec<CudaSlice<u16>> =
-                device_ptrs_to_slices(&tmp_code_results_peer, &result_sizes, &tmp_devs);
+                device_ptrs_to_slices(&thread_code_results_peer, &result_sizes, &thread_devs);
             let dot_masks: Vec<CudaSlice<u16>> =
-                device_ptrs_to_slices(&tmp_mask_results, &result_sizes, &tmp_devs);
+                device_ptrs_to_slices(&thread_mask_results, &result_sizes, &thread_devs);
             let dot_masks_peer: Vec<CudaSlice<u16>> =
-                device_ptrs_to_slices(&tmp_mask_results_peer, &result_sizes, &tmp_devs);
+                device_ptrs_to_slices(&thread_mask_results_peer, &result_sizes, &thread_devs);
 
             let code_dots = dot_codes
                 .into_iter()
@@ -597,65 +622,47 @@ async fn main() -> eyre::Result<()> {
                 .map(|(a, b)| ChunkShare::new(a, b))
                 .collect::<Vec<_>>();
 
+            let streams = tmp_phase2
+                .get_devices()
+                .iter()
+                .map(|d| *d.cu_stream() as u64)
+                .collect::<Vec<_>>();
+
+            // Wait for Phase 1 to finish
+            await_streams!(thread_streams);
+
+            // Phase 2 [DB]: compare each result against threshold
             tmp_phase2.compare_threshold_masked_many(code_dots, mask_dots);
 
-            tmp_phase2.synchronize_all(); // TODO
-
+            // Phase 2 [DB]: Reveal the binary results
             let res = tmp_phase2.take_result_buffer();
             let chunk_size = tmp_phase2.chunk_size();
             open(
                 &mut tmp_phase2,
                 &res,
                 &tmp_distance_comparator,
-                &tmp_request_results,
-                &tmp_streams,
+                &thread_request_results,
+                &streams,
                 chunk_size,
-                &result_sizes,
-            );
-            tmp_phase2.return_result_buffer(res);
-
-            tmp_distance_comparator.merge_results(
-                &tmp_request_results,
-                &tmp_request_results,
-                &tmp_request_final_results,
-                &tmp_streams,
+                &db_sizes,
             );
 
-            tmp_phase2.synchronize_all(); // TODO
-
-            let host_results =
-                tmp_distance_comparator.fetch_final_results(&tmp_request_final_results);
-
-            println!("insert");
+            // Merge results and fetch matching indices
+            let host_results = tmp_distance_comparator.merge_results(
+                &thread_request_results,
+                &thread_request_results,
+                &thread_request_final_results,
+                &streams,
+            );
 
             // Step 2: Evaluate the results across devices
-            let mut insertion_list = vec![];
-            for j in 0..host_results[0].len() {
-                let mut match_entry = u32::MAX;
-                for i in 0..tmp_devs.len() {
-                    if host_results[i][j] != u32::MAX {
-                        match_entry = host_results[i][j];
-                        break;
-                    }
-                }
-
-                if match_entry == u32::MAX {
-                    insertion_list.push(j);
-                }
-
-                println!(
-                    "Query {}: unique={} [index: {}]",
-                    j,
-                    match_entry == u32::MAX,
-                    match_entry
-                );
-            }
-
+            let insertion_list = get_non_matching_indices(&host_results);
             let mut insertion_list = insertion_list
-                .chunks(QUERIES / ROTATIONS / tmp_devs.len())
+                .chunks(QUERIES / ROTATIONS / thread_devs.len())
                 .collect::<Vec<_>>();
-            insertion_list.shuffle(&mut shuffle_rng);
+            insertion_list.shuffle(&mut thread_shuffle_rng);
 
+            // DEBUG
             println!("Insertion list: {:?}", insertion_list);
 
             // for i in 0..tmp_devs.len() {

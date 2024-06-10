@@ -31,14 +31,15 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
     if (idx < dbLength * queryLength / 64)
     {
         unsigned long long result = result1[idx] ^ result2[idx] ^ result3[idx];
-        for (int i=0;i<64;i++) {
+        for (int i = 0; i < 64; i++)
+        {
             unsigned int queryIdx = (idx * 64 + i) / dbLength;
             unsigned int dbIdx = (idx * 64 + i) % dbLength;
             bool match = (result & (1ULL << i));
-            if (match && (dbIdx < output[queryIdx]))
+            if (match)
             {
                 // return db element with smallest index
-                output[queryIdx] = dbIdx;
+                atomicMin(&output[queryIdx], dbIdx);
             }
         }
     }

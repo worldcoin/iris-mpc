@@ -1,8 +1,8 @@
-use std::sync::Arc;
+use std::{sync::Arc, thread, time::Duration};
 
 use cudarc::{
     driver::{
-        result::{launch_kernel, memcpy_dtoh_async, memcpy_dtoh_sync, stream::synchronize},
+        result::{self, launch_kernel, memcpy_dtoh_async, memcpy_dtoh_sync, stream::synchronize},
         CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, DeviceRepr, LaunchAsync,
         LaunchConfig,
     },
@@ -80,7 +80,7 @@ impl DistanceComparator {
         streams: &[u64],
     ) {
         for i in 0..self.n_devices {
-            let num_elements = db_sizes[i] * self.query_length;
+            let num_elements = db_sizes[i] * self.query_length / 64;
             let threads_per_block = 256;
             let blocks_per_grid = num_elements.div_ceil(threads_per_block);
             let cfg = LaunchConfig {
@@ -101,7 +101,7 @@ impl DistanceComparator {
 
             unsafe {
                 launch_kernel(
-                    self.merge_kernels[i].cu_function,
+                    self.open_kernels[i].cu_function,
                     cfg.grid_dim,
                     cfg.block_dim,
                     cfg.shared_mem_bytes,
@@ -119,7 +119,7 @@ impl DistanceComparator {
         match_results: &[u64],
         final_results: &[u64],
         streams: &[u64],
-    ) {
+    ) -> Vec<Vec<u32>> {
         let num_elements = self.query_length / ROTATIONS;
         let threads_per_block = 256;
         let blocks_per_grid = num_elements.div_ceil(threads_per_block);
@@ -155,6 +155,8 @@ impl DistanceComparator {
                 .unwrap();
             }
         }
+
+        self.fetch_final_results(final_results)
     }
 
     pub fn fetch_final_results(&self, final_results_ptrs: &[u64]) -> Vec<Vec<u32>> {
