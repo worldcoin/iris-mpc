@@ -24,7 +24,6 @@ use gpu_iris_mpc::{
     setup::{galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::shamir_iris::ShamirIris},
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
-use itertools::izip;
 use std::{
     fs::metadata,
     mem,
@@ -33,19 +32,9 @@ use std::{
 };
 use tokio::time::sleep;
 
-use gpu_iris_mpc::setup::{id::PartyID, iris_db::db::IrisDB, shamir::Shamir};
+use gpu_iris_mpc::setup::iris_db::db::IrisDB;
 use rand::prelude::SliceRandom;
 use rand::{rngs::StdRng, Rng, SeedableRng};
-
-macro_rules! await_streams {
-    ($streams:expr) => {
-        for i in 0..$streams.len() {
-            unsafe {
-                synchronize($streams[i] as *mut _).unwrap();
-            }
-        }
-    };
-}
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1000;
@@ -197,6 +186,33 @@ fn get_non_matching_indices(host_results: &[Vec<u32>]) -> Vec<usize> {
     insertion_list
 }
 
+fn await_streams(streams: &[u64]) {
+    for i in 0..streams.len() {
+        unsafe {
+            synchronize(streams[i] as *mut _).unwrap();
+        }
+    }
+}
+
+fn dtod_at_offset(
+    dst: u64,
+    dst_offset: usize,
+    src: u64,
+    src_offset: usize,
+    len: usize,
+    stream_ptr: u64,
+) {
+    unsafe {
+        result::memcpy_dtod_async(
+            dst + dst_offset as u64,
+            src + src_offset as u64,
+            len,
+            stream_ptr as *mut _,
+        )
+        .unwrap();
+    }
+}
+
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     let Opt {
@@ -326,7 +342,7 @@ async fn main() -> eyre::Result<()> {
 
     // Phase 2
     let phase2_chunk_size_max =
-        (QUERIES * DB_SIZE / device_manager.device_count()).div_ceil(2048) * 2048; // + BUFFER
+        (QUERIES * (DB_SIZE + DB_BUFFER) / device_manager.device_count()).div_ceil(2048) * 2048;
     let phase2_batch_chunk_size =
         (QUERIES * QUERIES / device_manager.device_count()).div_ceil(2048) * 2048;
 
@@ -361,7 +377,6 @@ async fn main() -> eyre::Result<()> {
         final_results.push(distance_comparator.lock().unwrap().prepare_final_results());
     }
 
-    // Main Loop
     let mut previous_previous_stream_event = device_manager.create_events();
     let mut previous_stream_event = device_manager.create_events();
     let mut current_stream_event = device_manager.create_events();
@@ -409,8 +424,9 @@ async fn main() -> eyre::Result<()> {
 
     println!("All systems ready.");
 
+    // Main loop
+    for _ in 0..5 {
     // loop {
-    for _ in 0..N_BATCHES {
         let now = Instant::now();
         let batch = receive_batch(&client, &queue).await?;
         println!("Received batch in {:?}", now.elapsed());
@@ -559,13 +575,12 @@ async fn main() -> eyre::Result<()> {
 
         println!("phase 1 done");
 
-        // Start thread to wait for the results
+        // Convert a bunch of objects to device pointers to not have copies of memory
         let thread_streams = request_streams
             .iter()
             .map(|s| s.stream as u64)
             .collect::<Vec<_>>();
         let thread_devs = device_manager.devices().clone();
-        let thread_code_db_sizes = device_ptrs(&code_db_sizes);
         let thread_evts = end_timer.iter().map(|e| *e as u64).collect::<Vec<_>>();
         let mut thread_shuffle_rng = shuffle_rng.clone();
         let thread_current_stream_event = current_stream_event
@@ -629,7 +644,7 @@ async fn main() -> eyre::Result<()> {
                 .collect::<Vec<_>>();
 
             // Wait for Phase 1 to finish
-            await_streams!(thread_streams);
+            await_streams(&thread_streams);
 
             // Phase 2 [DB]: compare each result against threshold
             tmp_phase2.compare_threshold_masked_many(code_dots, mask_dots);
@@ -655,7 +670,7 @@ async fn main() -> eyre::Result<()> {
                 &streams,
             );
 
-            // Step 2: Evaluate the results across devices
+            // Evaluate the results across devices
             let insertion_list = get_non_matching_indices(&host_results);
             let mut insertion_list = insertion_list
                 .chunks(QUERIES / ROTATIONS / thread_devs.len())
@@ -665,142 +680,79 @@ async fn main() -> eyre::Result<()> {
             // DEBUG
             println!("Insertion list: {:?}", insertion_list);
 
-            // for i in 0..tmp_devs.len() {
-            //     tmp_devs[i].bind_to_thread().unwrap();
+            for i in 0..thread_devs.len() {
+                thread_devs[i].bind_to_thread().unwrap();
+                if insertion_list.len() > i {
+                    let mut old_db_size = *thread_current_db_size_mutex[i].lock().unwrap();
+                    for insertion_idx in insertion_list[i] {
+                        // Append to codes and masks db
+                        for (db, query, sums) in [
+                            (&thread_code_db_slices, &code_query, &code_query_sums),
+                            (&thread_mask_db_slices, &mask_query, &mask_query_sums),
+                        ] {
+                            dtod_at_offset(
+                                db.0 .0[i],
+                                old_db_size * IRIS_CODE_LENGTH,
+                                query.0[i],
+                                insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                                IRIS_CODE_LENGTH,
+                                streams[i],
+                            );
 
-            //     if insertion_list.len() > i {
-            //         let mut old_size = *current_db_size_mutex_clone[i].lock().unwrap() as u64;
-            //         for insertion_idx in insertion_list[i] {
-            //             unsafe {
-            //                 // Step 4: fetch and update db counters
-            //                 // Append to codes db
-            //                 result::memcpy_dtod_async(
-            //                     tmp_code_db_slices.0 .0[i] + old_size * IRIS_CODE_LENGTH as u64,
-            //                     code_query.0[i]
-            //                         + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
-            //                     IRIS_CODE_LENGTH,
-            //                     tmp_streams[i] as *mut _,
-            //                 )
-            //                 .unwrap();
+                            dtod_at_offset(
+                                db.0 .1[i],
+                                old_db_size * IRIS_CODE_LENGTH,
+                                query.1[i],
+                                insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                                IRIS_CODE_LENGTH,
+                                streams[i],
+                            );
 
-            //                 result::memcpy_dtod_async(
-            //                     tmp_code_db_slices.0 .1[i] + old_size * IRIS_CODE_LENGTH as u64,
-            //                     code_query.1[i]
-            //                         + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
-            //                     IRIS_CODE_LENGTH,
-            //                     tmp_streams[i] as *mut _,
-            //                 )
-            //                 .unwrap();
+                            dtod_at_offset(
+                                db.1 .0[i],
+                                old_db_size * mem::size_of::<u32>(),
+                                sums.0[i],
+                                insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                                mem::size_of::<u32>(),
+                                streams[i],
+                            );
 
-            //                 result::memcpy_dtod_async(
-            //                     tmp_code_db_slices.1 .0[i]
-            //                         + (old_size * mem::size_of::<u32>() as u64),
-            //                     code_query_sums.0[i]
-            //                         + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
-            //                     mem::size_of::<u32>(),
-            //                     tmp_streams[i] as *mut _,
-            //                 )
-            //                 .unwrap();
+                            dtod_at_offset(
+                                db.1 .1[i],
+                                old_db_size * mem::size_of::<u32>(),
+                                sums.1[i],
+                                insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                                mem::size_of::<u32>(),
+                                streams[i],
+                            );
+                        }
+                    }
+                    old_db_size += 1;
+                }
 
-            //                 result::memcpy_dtod_async(
-            //                     tmp_code_db_slices.1 .1[i]
-            //                         + (old_size * mem::size_of::<u32>() as u64),
-            //                     code_query_sums.1[i]
-            //                         + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
-            //                     mem::size_of::<u32>(),
-            //                     tmp_streams[i] as *mut _,
-            //                 )
-            //                 .unwrap();
+                // Write new db sizes to device
+                *thread_current_db_size_mutex[i].lock().unwrap() +=
+                    insertion_list[i].len() as usize;
+                // DEBUG
+                println!(
+                    "Updating DB size on device {}: {:?}",
+                    i,
+                    *thread_current_db_size_mutex[i].lock().unwrap()
+                );
 
-            //                 // Append to masks db
-            //                 result::memcpy_dtod_async(
-            //                     tmp_mask_db_slices.0 .0[i] + old_size * IRIS_CODE_LENGTH as u64,
-            //                     mask_query.0[i]
-            //                         + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
-            //                     IRIS_CODE_LENGTH,
-            //                     tmp_streams[i] as *mut _,
-            //                 )
-            //                 .unwrap();
+                // Emit stream finished event to unblock the stream after the following
+                unsafe {
+                    event::record(
+                        thread_current_stream_event[i] as *mut _,
+                        thread_streams[i] as *mut _,
+                    )
+                    .unwrap();
+    
+                    // DEBUG: emit event to measure time for e2e process
+                    event::record(thread_evts[i] as *mut _, thread_streams[i] as *mut _).unwrap();
+                }
+            }
 
-            //                 result::memcpy_dtod_async(
-            //                     tmp_mask_db_slices.0 .1[i] + old_size * IRIS_CODE_LENGTH as u64,
-            //                     mask_query.1[i]
-            //                         + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
-            //                     IRIS_CODE_LENGTH,
-            //                     tmp_streams[i] as *mut _,
-            //                 )
-            //                 .unwrap();
-
-            //                 result::memcpy_dtod_async(
-            //                     tmp_mask_db_slices.1 .0[i]
-            //                         + (old_size * mem::size_of::<u32>() as u64),
-            //                     mask_query_sums.0[i]
-            //                         + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
-            //                     mem::size_of::<u32>(),
-            //                     tmp_streams[i] as *mut _,
-            //                 )
-            //                 .unwrap();
-
-            //                 result::memcpy_dtod_async(
-            //                     tmp_mask_db_slices.1 .1[i]
-            //                         + (old_size * mem::size_of::<u32>() as u64),
-            //                     mask_query_sums.1[i]
-            //                         + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
-            //                     mem::size_of::<u32>(),
-            //                     tmp_streams[i] as *mut _,
-            //                 )
-            //                 .unwrap();
-            //             }
-            //             old_size += 1;
-            //         }
-
-            //         unsafe {
-            //             // Step 3: write new db sizes to device
-            //             *current_db_size_mutex_clone[i].lock().unwrap() +=
-            //                 insertion_list[i].len() as usize;
-            //             println!(
-            //                 "Updating DB size on device {}: {:?}",
-            //                 i,
-            //                 *current_db_size_mutex_clone[i].lock().unwrap()
-            //             );
-
-            //             let tmp_host =
-            //                 vec![*current_db_size_mutex_clone[i].lock().unwrap() as u32; 1];
-            //             lib()
-            //                 .cuMemcpyHtoDAsync_v2(
-            //                     tmp_code_db_sizes[i],
-            //                     tmp_host.as_ptr() as *mut _,
-            //                     mem::size_of::<u32>(),
-            //                     tmp_streams[i] as *mut _,
-            //                 )
-            //                 .result()
-            //                 .unwrap();
-            //         }
-            //     }
-
-            //     // Update Phase 2 chunk size to max db size
-            //     // TODO: make this dynamic for each device
-            //     let mut max_db_size = 0;
-            //     for i in 0..tmp_devs.len() {
-            //         let size = current_db_size_mutex_clone[i].lock().unwrap();
-            //         if *size > max_db_size {
-            //             max_db_size = *size;
-            //         }
-            //     }
-            //     tmp_phase2.set_chunk_size((QUERIES * max_db_size).div_ceil(2048) * 2048);
-
-            //     // Step 5: emit stream finished event to unblock the stream after the following
-            //     unsafe {
-            //         event::record(
-            //             current_stream_event_tmp[i] as *mut _,
-            //             tmp_streams[i] as *mut _,
-            //         )
-            //         .unwrap();
-
-            //         // Emit debug event to measure time for e2e process
-            //         event::record(tmp_evts[i] as *mut _, tmp_streams[i] as *mut _).unwrap();
-            //     }
-            // }
         });
 
         // Prepare for next batch
