@@ -160,26 +160,9 @@ fn open(
     cudarc::nccl::result::group_end().unwrap();
 
     party.synchronize_all();
-
-    let mut result = Vec::with_capacity(n_devices * db_sizes[0]);
-    let devices = party.get_devices();
-    for (dev, a, b, c) in izip!(devices, a, b, c) {
-        let mut a = dev.dtoh_sync_copy(&a).unwrap();
-        let b = dev.dtoh_sync_copy(&b).unwrap();
-        let c = dev.dtoh_sync_copy(&c).unwrap();
-        for (a, b, c) in izip!(a.iter_mut(), b, c) {
-            println!("{} ^ {} ^ {}", a, b, c);
-            *a ^= b ^ c;
-            println!("Result: {}", a);
-        }
-        result.extend(a);
-        
-    }
-
-
     // assert_eq!(result.len(), n_devices * CHUNK_SIZE);
 
-    // distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, &streams);
+    distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, &streams);
 }
 
 #[tokio::main]
@@ -582,11 +565,8 @@ async fn main() -> eyre::Result<()> {
                 }
             }
 
-            println!("thread start");
             let mut tmp_phase2 = tmp_phase2.lock().unwrap();
-            println!("tmp_phase2");
             let tmp_distance_comparator = tmp_distance_comparator.lock().unwrap();
-            println!("tmp_distance_comparator");
 
             let (result_sizes, db_sizes): (Vec<_>, Vec<_>) = current_db_size_mutex_clone
                 .iter()
@@ -595,8 +575,6 @@ async fn main() -> eyre::Result<()> {
                     (db_size * QUERIES, db_size)
                 })
                 .unzip();
-
-            println!("1");
 
             let dot_codes: Vec<CudaSlice<u16>> =
                 device_ptrs_to_slices(&tmp_code_results, &result_sizes, &tmp_devs);
@@ -607,22 +585,11 @@ async fn main() -> eyre::Result<()> {
             let dot_masks_peer: Vec<CudaSlice<u16>> =
                 device_ptrs_to_slices(&tmp_mask_results_peer, &result_sizes, &tmp_devs);
 
-            let a1 = tmp_devs[0].dtoh_sync_copy(&dot_codes[0]).unwrap();
-            let a2 = tmp_devs[0].dtoh_sync_copy(&dot_codes_peer[0]).unwrap();
-            let a3 = tmp_devs[0].dtoh_sync_copy(&dot_masks[0]).unwrap();
-            let a4 = tmp_devs[0].dtoh_sync_copy(&dot_masks_peer[0]).unwrap();
-
-            println!("dot results: {:?} {:?} {:?} {:?}", a1[0..5].to_vec(), a2[0..5].to_vec(), a3[0..5].to_vec(), a4[0..5].to_vec());
-
-            println!("2");
-
             let code_dots = dot_codes
                 .into_iter()
                 .zip(dot_codes_peer.into_iter())
                 .map(|(a, b)| ChunkShare::new(a, b))
                 .collect::<Vec<_>>();
-
-            println!("3");
 
             let mask_dots = dot_masks
                 .into_iter()
@@ -630,15 +597,9 @@ async fn main() -> eyre::Result<()> {
                 .map(|(a, b)| ChunkShare::new(a, b))
                 .collect::<Vec<_>>();
 
-            println!("starting phase 2");
-
             tmp_phase2.compare_threshold_masked_many(code_dots, mask_dots);
 
-            println!("sync all");
-
             tmp_phase2.synchronize_all(); // TODO
-
-            println!("open ...");
 
             let res = tmp_phase2.take_result_buffer();
             let chunk_size = tmp_phase2.chunk_size();
@@ -652,8 +613,6 @@ async fn main() -> eyre::Result<()> {
                 &result_sizes,
             );
             tmp_phase2.return_result_buffer(res);
-
-            println!("merge");
 
             tmp_distance_comparator.merge_results(
                 &tmp_request_results,
