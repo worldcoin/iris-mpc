@@ -661,6 +661,7 @@ async fn main() -> eyre::Result<()> {
                 chunk_size,
                 &db_sizes,
             );
+            tmp_phase2.return_result_buffer(res);
 
             // Merge results and fetch matching indices
             let host_results = tmp_distance_comparator.merge_results(
