@@ -76,10 +76,11 @@ async fn main() -> eyre::Result<()> {
 
         let shared_code = GaloisRingIrisCodeShare::encode_iris_code(
             &template.code,
+            &template.mask,
             &mut StdRng::seed_from_u64(RNG_SEED_SERVER),
         );
         let shared_code = GaloisRingIrisCodeShare::preprocess_iris_code_query_shares(shared_code);
-        let shared_mask = GaloisRingIrisCodeShare::encode_iris_code(
+        let shared_mask = GaloisRingIrisCodeShare::encode_mask_code(
             &template.mask,
             &mut StdRng::seed_from_u64(RNG_SEED_SERVER),
         );

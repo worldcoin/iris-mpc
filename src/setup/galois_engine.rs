@@ -13,7 +13,47 @@ pub mod degree2 {
     }
 
     impl GaloisRingIrisCodeShare {
-        pub fn encode_iris_code<R: Rng>(iris_code: &IrisCodeArray, rng: &mut R) -> [GaloisRingIrisCodeShare; 3] {
+        pub fn encode_iris_code<R: Rng>(
+            iris_code: &IrisCodeArray,
+            mask_code: &IrisCodeArray,
+            rng: &mut R,
+        ) -> [GaloisRingIrisCodeShare; 3] {
+            let mut shares = [
+                GaloisRingIrisCodeShare {
+                    id: 1,
+                    coefs: [0; 12800],
+                },
+                GaloisRingIrisCodeShare {
+                    id: 2,
+                    coefs: [0; 12800],
+                },
+                GaloisRingIrisCodeShare {
+                    id: 3,
+                    coefs: [0; 12800],
+                },
+            ];
+            for i in (0..12800).step_by(2) {
+                let element = GaloisRingElement {
+                    coefs: [
+                        (mask_code.get_bit(i) as u16
+                            - 2 * ((iris_code.get_bit(i) & mask_code.get_bit(i)) as u16)),
+                        (mask_code.get_bit(i + 1) as u16
+                            - 2 * ((iris_code.get_bit(i + 1) & mask_code.get_bit(i + 1)) as u16)),
+                    ],
+                };
+                let share = ShamirGaloisRingShare::encode_3_mat(&element.coefs, rng);
+                for j in 0..3 {
+                    shares[j].coefs[i] = share[j].y.coefs[0];
+                    shares[j].coefs[i + 1] = share[j].y.coefs[1];
+                }
+            }
+            shares
+        }
+
+        pub fn encode_mask_code<R: Rng>(
+            iris_code: &IrisCodeArray,
+            rng: &mut R,
+        ) -> [GaloisRingIrisCodeShare; 3] {
             let mut shares = [
                 GaloisRingIrisCodeShare {
                     id: 1,
@@ -94,8 +134,9 @@ pub mod degree2 {
             for _ in 0..10 {
                 let iris_db = IrisCodeArray::random_rng(&mut thread_rng());
                 let iris_query = IrisCodeArray::random_rng(&mut thread_rng());
-                let shares = GaloisRingIrisCodeShare::encode_iris_code(&iris_db, &mut thread_rng());
-                let query_shares = GaloisRingIrisCodeShare::encode_iris_code(&iris_query, &mut thread_rng());
+                let shares = GaloisRingIrisCodeShare::encode_mask_code(&iris_db, &mut thread_rng());
+                let query_shares =
+                    GaloisRingIrisCodeShare::encode_mask_code(&iris_query, &mut thread_rng());
                 let query_shares =
                     GaloisRingIrisCodeShare::preprocess_iris_code_query_shares(query_shares);
                 let mut dot = [0; 3];
@@ -112,8 +153,9 @@ pub mod degree2 {
             for _ in 0..10 {
                 let iris_db = IrisCodeArray::random_rng(&mut thread_rng());
                 let iris_query = IrisCodeArray::random_rng(&mut thread_rng());
-                let shares = GaloisRingIrisCodeShare::encode_iris_code(&iris_db, &mut thread_rng());
-                let query_shares = GaloisRingIrisCodeShare::encode_iris_code(&iris_query, &mut thread_rng());
+                let shares = GaloisRingIrisCodeShare::encode_mask_code(&iris_db, &mut thread_rng());
+                let query_shares =
+                    GaloisRingIrisCodeShare::encode_mask_code(&iris_query, &mut thread_rng());
                 let query_shares =
                     GaloisRingIrisCodeShare::preprocess_iris_code_query_shares(query_shares);
                 let mut dot = [0; 3];

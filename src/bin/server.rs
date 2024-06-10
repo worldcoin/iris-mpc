@@ -225,18 +225,13 @@ async fn main() -> eyre::Result<()> {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
-        let c0 = GaloisRingIrisCodeShare::encode_iris_code(
-            &db.db[0].code,
-            &mut StdRng::seed_from_u64(RNG_SEED),
-        );
-        println!("{:?}", c0);
-
         let codes_db = db
             .db
             .iter()
             .map(|iris| {
                 GaloisRingIrisCodeShare::encode_iris_code(
                     &iris.code,
+                    &iris.mask,
                     &mut StdRng::seed_from_u64(RNG_SEED),
                 )[party_id]
                     .coefs
@@ -248,7 +243,7 @@ async fn main() -> eyre::Result<()> {
             .db
             .iter()
             .map(|iris| {
-                GaloisRingIrisCodeShare::encode_iris_code(
+                GaloisRingIrisCodeShare::encode_mask_code(
                     &iris.mask,
                     &mut StdRng::seed_from_u64(RNG_SEED),
                 )[party_id]

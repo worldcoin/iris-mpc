@@ -1,4 +1,3 @@
-#define P 65519
 #define UINT_MAX 0xffffffff
 #define ROTATIONS 15
 #define IRIS_CODE_LENGTH 12800
