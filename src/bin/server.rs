@@ -56,6 +56,14 @@ macro_rules! debug_record_event {
     };
 }
 
+macro_rules! forget_vec {
+    ($vec:expr) => {
+        while let Some(item) = $vec.pop() {
+            std::mem::forget(item);
+        }
+    };
+}
+
 #[derive(Debug, Parser)]
 struct Opt {
     #[structopt(short, long)]
@@ -625,13 +633,13 @@ async fn main() -> eyre::Result<()> {
             let dot_masks_peer: Vec<CudaSlice<u16>> =
                 device_ptrs_to_slices(&thread_mask_results_peer, &result_sizes, &thread_devs);
 
-            let code_dots = dot_codes
+            let mut code_dots = dot_codes
                 .into_iter()
                 .zip(dot_codes_peer.into_iter())
                 .map(|(a, b)| ChunkShare::new(a, b))
                 .collect::<Vec<_>>();
 
-            let mask_dots = dot_masks
+            let mut mask_dots = dot_masks
                 .into_iter()
                 .zip(dot_masks_peer.into_iter())
                 .map(|(a, b)| ChunkShare::new(a, b))
@@ -647,7 +655,7 @@ async fn main() -> eyre::Result<()> {
             await_streams(&thread_streams);
 
             // Phase 2 [DB]: compare each result against threshold
-            tmp_phase2.compare_threshold_masked_many(code_dots, mask_dots);
+            tmp_phase2.compare_threshold_masked_many(&code_dots, &mask_dots);
 
             // Phase 2 [DB]: Reveal the binary results
             let res = tmp_phase2.take_result_buffer();
@@ -727,8 +735,8 @@ async fn main() -> eyre::Result<()> {
                                 streams[i],
                             );
                         }
+                        old_db_size += 1;
                     }
-                    old_db_size += 1;
                 }
 
                 // Write new db sizes to device
@@ -754,6 +762,9 @@ async fn main() -> eyre::Result<()> {
                 }
             }
 
+            // Make sure to not call `Drop` on those
+            forget_vec!(code_dots);
+            forget_vec!(mask_dots);
         });
 
         // Prepare for next batch

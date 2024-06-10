@@ -1111,7 +1111,7 @@ impl Circuits {
 
     fn lift_split(
         &mut self,
-        inp: Vec<ChunkShare<u16>>,
+        inp: &[ChunkShare<u16>],
         lifted: &mut [ChunkShare<u32>],
         inout1: &mut [ChunkShareView<u64>],
         out2: &mut [ChunkShareView<u64>],
@@ -1154,13 +1154,13 @@ impl Circuits {
         &mut self,
         mask_lifted: &mut [ChunkShare<u32>],
         mask_correction: &[ChunkShare<u16>],
-        code: Vec<ChunkShare<u16>>,
+        code: &[ChunkShare<u16>],
     ) {
         debug_assert_eq!(self.n_devices, mask_lifted.len());
         debug_assert_eq!(self.n_devices, mask_correction.len());
         debug_assert_eq!(self.n_devices, code.len());
 
-        for (idx, (m, mc, c)) in izip!(mask_lifted, mask_correction, &code).enumerate() {
+        for (idx, (m, mc, c)) in izip!(mask_lifted, mask_correction, code).enumerate() {
             let cfg = Self::launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64,
                 DEFAULT_LAUNCH_CONFIG_THREADS,
@@ -1191,7 +1191,7 @@ impl Circuits {
     // outputs the uncorrected lifted shares and the injected correction values
     pub fn lift_mpc(
         &mut self,
-        shares: Vec<ChunkShare<u16>>,
+        shares: &[ChunkShare<u16>],
         xa: &mut [ChunkShare<u32>],
         injected: &mut [ChunkShare<u16>],
     ) {
@@ -1634,8 +1634,8 @@ impl Circuits {
     // Result is in the first bit of the result buffer
     pub fn compare_threshold_masked_many(
         &mut self,
-        code_dots: Vec<ChunkShare<u16>>,
-        mask_dots: Vec<ChunkShare<u16>>,
+        code_dots: &[ChunkShare<u16>],
+        mask_dots: &[ChunkShare<u16>],
     ) {
         debug_assert_eq!(self.n_devices, code_dots.len());
         debug_assert_eq!(self.n_devices, mask_dots.len());
@@ -1658,8 +1658,8 @@ impl Circuits {
     // Result is in the lowest bit of the result buffer on the first gpu
     pub fn compare_threshold_masked_many_with_or_tree(
         &mut self,
-        code_dots: Vec<ChunkShare<u16>>,
-        mask_dots: Vec<ChunkShare<u16>>,
+        code_dots: &[ChunkShare<u16>],
+        mask_dots: &[ChunkShare<u16>],
     ) {
         self.compare_threshold_masked_many(code_dots, mask_dots);
         let mut result = self.take_result_buffer();
