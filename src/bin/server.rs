@@ -39,7 +39,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1000;
 const DB_BUFFER: usize = 8 * 1000;
-const QUERIES: usize = 31;
+const QUERIES: usize = 31 * 16;
 const RNG_SEED: u64 = 42;
 const SHUFFLE_SEED: u64 = 42;
 const N_BATCHES: usize = 10;
