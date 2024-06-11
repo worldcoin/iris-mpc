@@ -127,6 +127,7 @@ struct Kernels {
     pub(crate) xor:                   CudaFunction,
     pub(crate) xor_assign:            CudaFunction,
     pub(crate) single_xor_assign_u16: CudaFunction,
+    pub(crate) single_xor_assign_u32: CudaFunction,
     pub(crate) single_xor_assign_u64: CudaFunction,
     pub(crate) split:                 CudaFunction,
     pub(crate) lift_split:            CudaFunction,
@@ -148,6 +149,7 @@ impl Kernels {
             "shared_xor",
             "shared_xor_assign",
             "xor_assign_u16",
+            "xor_assign_u32",
             "xor_assign_u64",
             "shared_and_pre",
             "shared_or_pre_assign",
@@ -170,6 +172,7 @@ impl Kernels {
         let xor = dev.get_func(Self::MOD_NAME, "shared_xor").unwrap();
         let xor_assign = dev.get_func(Self::MOD_NAME, "shared_xor_assign").unwrap();
         let single_xor_assign_u16 = dev.get_func(Self::MOD_NAME, "xor_assign_u16").unwrap();
+        let single_xor_assign_u32 = dev.get_func(Self::MOD_NAME, "xor_assign_u32").unwrap();
         let single_xor_assign_u64 = dev.get_func(Self::MOD_NAME, "xor_assign_u64").unwrap();
         let split = dev.get_func(Self::MOD_NAME, "split").unwrap();
         let lift_split = dev.get_func(Self::MOD_NAME, "lift_split").unwrap();
@@ -192,6 +195,7 @@ impl Kernels {
             xor,
             xor_assign,
             single_xor_assign_u16,
+            single_xor_assign_u32,
             single_xor_assign_u64,
             split,
             lift_split,
@@ -482,20 +486,7 @@ impl Circuits {
         }
     }
 
-    fn otp_encrypt_and_send_next_u16(&mut self, send: &CudaSlice<u16>, idx: usize) {
-        let data_len = send.len();
-        // must be even
-        debug_assert_eq!(data_len & 1, 0);
-        // SAFETY: Only unsafe because memory is not initialized. But, we fill
-        // afterwards.
-        let mut rand_alloc = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
-        let mut rand = self.fill_my_rng_into_u16(&mut rand_alloc, idx);
-
-        self.single_xor_assign_u16(&mut rand, &send.slice(..), idx, data_len);
-        self.send(&rand_alloc, self.next_id, idx);
-    }
-
-    fn otp_encrypt_and_send_next_view_u16(&mut self, send: &CudaView<u16>, idx: usize) {
+    pub fn otp_encrypt_and_send_next_view_u16(&mut self, send: &CudaView<u16>, idx: usize) {
         let data_len = send.len();
         // must be even
         debug_assert_eq!(data_len & 1, 0);
@@ -508,21 +499,24 @@ impl Circuits {
         self.send(&rand_alloc, self.next_id, idx);
     }
 
-    fn otp_receive_prev_and_decrypt_u16(&mut self, receive: &mut CudaSlice<u16>, idx: usize) {
-        let data_len = receive.len();
+    fn otp_encrypt_and_send_prev_view_u16(&mut self, send: &CudaView<u16>, idx: usize) {
+        let data_len = send.len();
         // must be even
         debug_assert_eq!(data_len & 1, 0);
-        self.receive_u16(receive, self.prev_id, idx);
-
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
         let mut rand_alloc = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
-        let rand = self.fill_their_rng_into_u16(&mut rand_alloc, idx);
+        let mut rand = self.fill_their_rng_into_u16(&mut rand_alloc, idx);
 
-        self.single_xor_assign_u16(&mut receive.slice(..), &rand, idx, data_len);
+        self.single_xor_assign_u16(&mut rand, send, idx, data_len);
+        self.send(&rand_alloc, self.prev_id, idx);
     }
 
-    fn otp_receive_prev_and_decrypt_view_u16(&mut self, receive: &mut CudaView<u16>, idx: usize) {
+    pub fn otp_receive_prev_and_decrypt_view_u16(
+        &mut self,
+        receive: &mut CudaView<u16>,
+        idx: usize,
+    ) {
         let data_len = receive.len();
         // must be even
         debug_assert_eq!(data_len & 1, 0);
@@ -536,18 +530,50 @@ impl Circuits {
         self.single_xor_assign_u16(receive, &rand, idx, data_len);
     }
 
-    fn otp_encrypt_and_send_next_u64(&mut self, send: &CudaSlice<u64>, idx: usize) {
+    fn otp_receive_next_and_decrypt_view_u16(&mut self, receive: &mut CudaView<u16>, idx: usize) {
+        let data_len = receive.len();
+        // must be even
+        debug_assert_eq!(data_len & 1, 0);
+        self.receive_view_u16(receive, self.next_id, idx);
+
+        // SAFETY: Only unsafe because memory is not initialized. But, we fill
+        // afterwards.
+        let mut rand_alloc = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
+        let rand = self.fill_my_rng_into_u16(&mut rand_alloc, idx);
+
+        self.single_xor_assign_u16(receive, &rand, idx, data_len);
+    }
+
+    pub fn otp_encrypt_and_send_next_view_u32(&mut self, send: &CudaView<u32>, idx: usize) {
         let data_len = send.len();
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
-        let mut rand = unsafe { self.devs[idx].alloc::<u64>(data_len).unwrap() };
-        self.fill_my_rand_u64(&mut rand, idx);
+        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len).unwrap() };
+        let rng = &mut self.rngs[idx];
+        rng.fill_my_rng_into(&mut rand.slice_mut(..));
 
-        self.single_xor_assign_u64(&mut rand.slice(..), &send.slice(..), idx, data_len);
+        self.single_xor_assign_u32(&mut rand.slice(..), send, idx, data_len);
         self.send(&rand, self.next_id, idx);
     }
 
-    fn otp_encrypt_and_send_next_view_u64(&mut self, send: &CudaView<u64>, idx: usize) {
+    pub fn otp_receive_prev_and_decrypt_view_u32(
+        &mut self,
+        receive: &mut CudaView<u32>,
+        idx: usize,
+    ) {
+        let data_len = receive.len();
+        self.receive_view(receive, self.prev_id, idx);
+
+        // SAFETY: Only unsafe because memory is not initialized. But, we fill
+        // afterwards.
+        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len).unwrap() };
+        let rng = &mut self.rngs[idx];
+        rng.fill_my_rng_into(&mut rand.slice_mut(..));
+
+        self.single_xor_assign_u32(receive, &rand.slice(..), idx, data_len);
+    }
+
+    pub fn otp_encrypt_and_send_next_view_u64(&mut self, send: &CudaView<u64>, idx: usize) {
         let data_len = send.len();
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
@@ -558,19 +584,11 @@ impl Circuits {
         self.send(&rand, self.next_id, idx);
     }
 
-    fn otp_receive_prev_and_decrypt_u64(&mut self, receive: &mut CudaSlice<u64>, idx: usize) {
-        let data_len = receive.len();
-        self.receive(receive, self.prev_id, idx);
-
-        // SAFETY: Only unsafe because memory is not initialized. But, we fill
-        // afterwards.
-        let mut rand = unsafe { self.devs[idx].alloc::<u64>(data_len).unwrap() };
-        self.fill_their_rand_u64(&mut rand, idx);
-
-        self.single_xor_assign_u64(&mut receive.slice(..), &rand.slice(..), idx, data_len);
-    }
-
-    fn otp_receive_prev_and_decrypt_view_u64(&mut self, receive: &mut CudaView<u64>, idx: usize) {
+    pub fn otp_receive_prev_and_decrypt_view_u64(
+        &mut self,
+        receive: &mut CudaView<u64>,
+        idx: usize,
+    ) {
         let data_len = receive.len();
         self.receive_view(receive, self.prev_id, idx);
 
@@ -582,60 +600,25 @@ impl Circuits {
         self.single_xor_assign_u64(receive, &rand.slice(..), idx, data_len);
     }
 
-    pub fn send_u16(&mut self, send: &CudaSlice<u16>, peer_id: usize, idx: usize) {
-        // We have to transmute since u16 is not sendable
-        let send_trans: CudaView<u8> = // the transmute_mut is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
-        unsafe { send.transmute(send.len() * 2).unwrap() };
-        self.send_view(&send_trans, peer_id, idx);
-    }
-
-    pub fn receive_u16(&mut self, receive: &mut CudaSlice<u16>, peer_id: usize, idx: usize) {
+    fn receive_view_u16(&mut self, receive: &mut CudaView<u16>, peer_id: usize, idx: usize) {
         // We have to transmute since u16 is not receivable
-        let mut receive_trans: CudaView<u8> = // the transmute_mut is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
-        unsafe { receive.transmute(receive.len() * 2).unwrap() };
+        let mut receive_trans: CudaView<u8> =        // the transmute_mut is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
+     unsafe { receive.transmute(receive.len() * 2).unwrap() };
         self.receive_view(&mut receive_trans, peer_id, idx);
     }
 
-    pub fn send_view_u16(&mut self, send: &CudaView<u16>, peer_id: usize, idx: usize) {
-        // We have to transmute since u16 is not sendable
-        let send_trans: CudaView<u8> = // the transmute_mut is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
-        unsafe { send.transmute(send.len() * 2).unwrap() };
-        self.send_view(&send_trans, peer_id, idx);
-    }
-
-    pub fn receive_view_u16(&mut self, receive: &mut CudaView<u16>, peer_id: usize, idx: usize) {
-        // We have to transmute since u16 is not receivable
-        let mut receive_trans: CudaView<u8> = // the transmute_mut is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
-        unsafe { receive.transmute(receive.len() * 2).unwrap() };
-        self.receive_view(&mut receive_trans, peer_id, idx);
-    }
-
-    pub fn send_view<T>(&mut self, send: &CudaView<T>, peer_id: usize, idx: usize)
-    where
-        T: cudarc::nccl::NcclType,
-    {
-        self.comms[idx].send_view(send, peer_id as i32).unwrap();
-    }
-
-    pub fn receive_view<T>(&mut self, receive: &mut CudaView<T>, peer_id: usize, idx: usize)
+    fn receive_view<T>(&mut self, receive: &mut CudaView<T>, peer_id: usize, idx: usize)
     where
         T: cudarc::nccl::NcclType,
     {
         self.comms[idx].recv_view(receive, peer_id as i32).unwrap();
     }
 
-    pub fn send<T>(&mut self, send: &CudaSlice<T>, peer_id: usize, idx: usize)
+    fn send<T>(&mut self, send: &CudaSlice<T>, peer_id: usize, idx: usize)
     where
         T: cudarc::nccl::NcclType,
     {
         self.comms[idx].send(send, peer_id as i32).unwrap();
-    }
-
-    pub fn receive<T>(&mut self, receive: &mut CudaSlice<T>, peer_id: usize, idx: usize)
-    where
-        T: cudarc::nccl::NcclType,
-    {
-        self.comms[idx].recv(receive, peer_id as i32).unwrap();
     }
 
     // Fill randomness using the correlated RNG
@@ -734,13 +717,13 @@ impl Circuits {
     // Keep in mind: group needs to be open!
     fn packed_and_many_send(&mut self, res: &ChunkShareView<u64>, bits: usize, idx: usize) {
         let send = res.a.slice(0..bits * self.chunk_size);
-        self.send_view(&send, self.next_id, idx);
+        self.otp_encrypt_and_send_next_view_u64(&send, idx);
     }
 
     // Keep in mind: group needs to be open!
     fn packed_and_many_receive(&mut self, res: &mut ChunkShareView<u64>, bits: usize, idx: usize) {
         let mut rcv = res.b.slice(0..bits * self.chunk_size);
-        self.receive_view(&mut rcv, self.prev_id, idx);
+        self.otp_receive_prev_and_decrypt_view_u64(&mut rcv, idx);
     }
 
     fn assign_view(
@@ -851,10 +834,10 @@ impl Circuits {
 
         result::group_start().unwrap();
         for (idx, res) in res.iter().enumerate() {
-            self.send_view(&res.a, self.next_id, idx);
+            self.otp_encrypt_and_send_next_view_u64(&res.a, idx);
         }
         for (idx, res) in res.iter_mut().enumerate() {
-            self.receive_view(&mut res.b, self.prev_id, idx);
+            self.otp_receive_prev_and_decrypt_view_u64(&mut res.b, idx);
         }
         result::group_end().unwrap();
     }
@@ -880,6 +863,27 @@ impl Circuits {
         }
     }
 
+    fn single_xor_assign_u32(
+        &self,
+        x1: &mut CudaView<u32>,
+        x2: &CudaView<u32>,
+        idx: usize,
+        size: usize,
+    ) {
+        let cfg = Self::launch_config_from_elements_and_threads(
+            size as u32,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+        );
+
+        unsafe {
+            self.kernels[idx]
+                .single_xor_assign_u32
+                .clone()
+                .launch(cfg, (&*x1, x2, size))
+                .unwrap();
+        }
+    }
+
     fn single_xor_assign_u64(
         &self,
         x1: &mut CudaView<u64>,
@@ -894,7 +898,7 @@ impl Circuits {
 
         unsafe {
             self.kernels[idx]
-                .single_xor_assign_u16
+                .single_xor_assign_u64
                 .clone()
                 .launch(cfg, (&*x1, x2, size))
                 .unwrap();
@@ -1039,8 +1043,8 @@ impl Circuits {
 
         result::group_start().unwrap();
         for (idx, (m0, m1)) in izip!(&m0, &m1).enumerate() {
-            self.send_view_u16(m0, self.prev_id, idx);
-            self.send_view_u16(m1, self.prev_id, idx);
+            self.otp_encrypt_and_send_prev_view_u16(m0, idx);
+            self.otp_encrypt_and_send_prev_view_u16(m1, idx);
         }
         result::group_end().unwrap();
 
@@ -1062,9 +1066,9 @@ impl Circuits {
 
         result::group_start().unwrap();
         for (idx, (m0, m1, wc)) in izip!(&mut m0, &mut m1, &mut wc).enumerate() {
-            self.receive_view_u16(m0, self.next_id, idx);
-            self.receive_view_u16(wc, self.prev_id, idx);
-            self.receive_view_u16(m1, self.next_id, idx);
+            self.otp_receive_next_and_decrypt_view_u16(m0, idx);
+            self.otp_receive_prev_and_decrypt_view_u16(wc, idx);
+            self.otp_receive_next_and_decrypt_view_u16(m1, idx);
         }
         result::group_end().unwrap();
 
@@ -1105,7 +1109,7 @@ impl Circuits {
         // Reshare to Helper
         result::group_start().unwrap();
         for (idx, res) in outp.iter().enumerate() {
-            self.send_view_u16(&res.b, self.prev_id, idx);
+            self.otp_encrypt_and_send_prev_view_u16(&res.b, idx);
         }
         result::group_end().unwrap();
 
@@ -1166,12 +1170,12 @@ impl Circuits {
 
         result::group_start().unwrap();
         for (idx, wc) in wc.iter().enumerate() {
-            self.send_view_u16(wc, self.next_id, idx);
+            self.otp_encrypt_and_send_next_view_u16(wc, idx);
         }
         result::group_end().unwrap();
         result::group_start().unwrap();
         for (idx, res) in outp.iter_mut().enumerate() {
-            self.receive_view_u16(&mut res.a, self.next_id, idx);
+            self.otp_receive_next_and_decrypt_view_u16(&mut res.a, idx);
         }
         result::group_end().unwrap();
 
@@ -1493,12 +1497,12 @@ impl Circuits {
             for (idx, a) in a.iter().enumerate() {
                 // Unused space used for temparary storage
                 let tmp_c = a.get_offset(0, self.chunk_size);
-                self.send_view(&tmp_c.a, self.next_id, idx);
+                self.otp_encrypt_and_send_next_view_u64(&tmp_c.a, idx);
             }
             for (idx, a) in a.iter_mut().enumerate() {
                 // Unused space used for temparary storage
                 let mut tmp_c = a.get_offset(0, self.chunk_size);
-                self.receive_view(&mut tmp_c.b, self.prev_id, idx);
+                self.otp_receive_prev_and_decrypt_view_u64(&mut tmp_c.b, idx);
             }
             result::group_end().unwrap();
             // Postprocess xor
@@ -1522,12 +1526,12 @@ impl Circuits {
         for (idx, c) in c.iter().enumerate() {
             // Unused space used for temparary storage
             let tmp_c = c.get_offset(1, self.chunk_size);
-            self.send_view(&tmp_c.a, self.next_id, idx);
+            self.otp_encrypt_and_send_next_view_u64(&tmp_c.a, idx);
         }
         for (idx, c) in c.iter_mut().enumerate() {
             // Unused space used for temparary storage
             let mut tmp_c = c.get_offset(1, self.chunk_size);
-            self.receive_view(&mut tmp_c.b, self.prev_id, idx);
+            self.otp_receive_prev_and_decrypt_view_u64(&mut tmp_c.b, idx);
         }
         result::group_end().unwrap();
 
@@ -1631,12 +1635,12 @@ impl Circuits {
             for (idx, a) in a.iter().enumerate() {
                 // Unused space used for temparary storage
                 let tmp_c = a.get_offset(0, self.chunk_size);
-                self.send_view(&tmp_c.a, self.next_id, idx);
+                self.otp_encrypt_and_send_next_view_u64(&tmp_c.a, idx);
             }
             for (idx, a) in a.iter_mut().enumerate() {
                 // Unused space used for temparary storage
                 let mut tmp_c = a.get_offset(0, self.chunk_size);
-                self.receive_view(&mut tmp_c.b, self.prev_id, idx);
+                self.otp_receive_prev_and_decrypt_view_u64(&mut tmp_c.b, idx);
             }
             result::group_end().unwrap();
             // Postprocess xor
@@ -1687,11 +1691,11 @@ impl Circuits {
             result::group_start().unwrap();
             for (idx, bit) in bits.iter().enumerate() {
                 let a = bit.get_offset(0, num);
-                self.send_view(&a.a, self.next_id, idx);
+                self.otp_encrypt_and_send_next_view_u64(&a.a, idx);
             }
             for (idx, bit) in bits.iter_mut().enumerate() {
                 let mut a = bit.get_offset(0, num);
-                self.receive_view(&mut a.b, self.prev_id, idx);
+                self.otp_receive_prev_and_decrypt_view_u64(&mut a.b, idx);
             }
             result::group_end().unwrap();
 
@@ -1724,8 +1728,8 @@ impl Circuits {
             // Reshare
             result::group_start().unwrap();
             let mut a = bit.get_offset(0, num);
-            self.send_view(&a.a, self.next_id, idx);
-            self.receive_view(&mut a.b, self.prev_id, idx);
+            self.otp_encrypt_and_send_next_view_u64(&a.a, idx);
+            self.otp_receive_prev_and_decrypt_view_u64(&mut a.b, idx);
             result::group_end().unwrap();
 
             num += mod_;
@@ -1795,8 +1799,8 @@ impl Circuits {
             let bytes = (current_bitsize + 7) / 8;
             rand_offset = rand_offset.slice(bytes..); // Advance randomness
             result::group_start().unwrap();
-            self.send_view(&res.a, self.next_id, 0);
-            self.receive_view(&mut res.b, self.prev_id, 0);
+            self.otp_encrypt_and_send_next_view_u64(&res.a, 0);
+            self.otp_receive_prev_and_decrypt_view_u64(&mut res.b, 0);
             result::group_end().unwrap();
         }
     }

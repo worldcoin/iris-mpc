@@ -94,12 +94,12 @@ fn open(
     }
     cudarc::nccl::result::group_start().unwrap();
     for (idx, (res, corr)) in izip!(x.iter(), corrections.iter()).enumerate() {
-        party.send_view(&res.b, party.next_id(), idx);
-        party.send_view_u16(&corr.b, party.next_id(), idx);
+        party.otp_encrypt_and_send_next_view_u32(&res.b, idx);
+        party.otp_encrypt_and_send_next_view_u16(&corr.b, idx);
     }
     for (idx, (res, corr)) in izip!(x.iter_mut(), corrections.iter_mut()).enumerate() {
-        party.receive_view(&mut res.a, party.prev_id(), idx);
-        party.receive_view_u16(&mut corr.a, party.prev_id(), idx);
+        party.otp_receive_prev_and_decrypt_view_u32(&mut res.a, idx);
+        party.otp_receive_prev_and_decrypt_view_u16(&mut corr.a, idx);
     }
     cudarc::nccl::result::group_end().unwrap();
     for (idx, (res, corr)) in izip!(x, corrections).enumerate() {

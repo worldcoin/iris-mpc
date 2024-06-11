@@ -92,8 +92,8 @@ fn open(party: &mut Circuits, result: &mut ChunkShare<u64>) -> bool {
     let res = result.get_offset(0, 1);
     let mut res_helper = result.get_offset(1, 1);
     cudarc::nccl::result::group_start().expect("group start should work");
-    party.send_view(&res.b, party.next_id(), 0);
-    party.receive_view(&mut res_helper.a, party.prev_id(), 0);
+    party.otp_encrypt_and_send_next_view_u64(&res.b, 0);
+    party.otp_receive_prev_and_decrypt_view_u64(&mut res_helper.a, 0);
     cudarc::nccl::result::group_end().expect("group end should work");
 
     let dev = party.get_devices()[0].clone();
