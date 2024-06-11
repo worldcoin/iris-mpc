@@ -327,6 +327,7 @@ impl Circuits {
     pub fn new(
         peer_id: usize,
         input_size: usize, // per GPU
+        alloc_size: usize,
         peer_url: Option<&String>,
         server_port: Option<u16>,
     ) -> Self {
@@ -334,6 +335,7 @@ impl Circuits {
         debug_assert!(input_size % 64 == 0);
         // Chunk size is the number of u64 elements per bit in the binary circuits
         let chunk_size = input_size / 64;
+        debug_assert!(alloc_size >= chunk_size);
         let n_devices = CudaDevice::count().unwrap() as usize;
 
         let mut devs = Vec::with_capacity(n_devices);
@@ -358,7 +360,7 @@ impl Circuits {
 
         let comms = Self::instantiate_network(peer_id, peer_url, server_port, &devs);
 
-        let buffers = Buffers::new(&devs, chunk_size);
+        let buffers = Buffers::new(&devs, alloc_size);
 
         Circuits {
             peer_id,

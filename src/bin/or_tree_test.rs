@@ -88,7 +88,13 @@ async fn main() -> eyre::Result<()> {
     let n_devices = CudaDevice::count().unwrap() as usize;
 
     // Get Circuit Party
-    let mut party = Circuits::new(party_id, INPUTS_PER_GPU_SIZE, url, Some(3001));
+    let mut party = Circuits::new(
+        party_id,
+        INPUTS_PER_GPU_SIZE,
+        INPUTS_PER_GPU_SIZE / 64,
+        url,
+        Some(3001),
+    );
     let devices = party.get_devices();
 
     println!("Starting tests...");

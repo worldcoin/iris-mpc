@@ -154,7 +154,13 @@ async fn main() -> eyre::Result<()> {
     println!("Random shared inputs generated!");
 
     // Get Circuit Party
-    let mut party = Circuits::new(party_id, INPUTS_PER_GPU_SIZE, url, Some(3000));
+    let mut party = Circuits::new(
+        party_id,
+        INPUTS_PER_GPU_SIZE,
+        INPUTS_PER_GPU_SIZE / 64,
+        url,
+        Some(3000),
+    );
     let devices = party.get_devices();
 
     // Import to GPU
