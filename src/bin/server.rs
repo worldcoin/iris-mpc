@@ -737,17 +737,17 @@ async fn main() -> eyre::Result<()> {
                         }
                         old_db_size += 1;
                     }
-                }
 
-                // Write new db sizes to device
-                *thread_current_db_size_mutex[i].lock().unwrap() +=
-                    insertion_list[i].len() as usize;
-                // DEBUG
-                println!(
-                    "Updating DB size on device {}: {:?}",
-                    i,
-                    *thread_current_db_size_mutex[i].lock().unwrap()
-                );
+                    // Write new db sizes to device
+                    *thread_current_db_size_mutex[i].lock().unwrap() +=
+                        insertion_list[i].len() as usize;
+                    // DEBUG
+                    println!(
+                        "Updating DB size on device {}: {:?}",
+                        i,
+                        *thread_current_db_size_mutex[i].lock().unwrap()
+                    );
+                }
 
                 // Emit stream finished event to unblock the stream after the following
                 unsafe {
