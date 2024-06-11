@@ -482,8 +482,8 @@ impl Circuits {
         }
     }
 
-    fn otp_encrypt_and_send_u16(&mut self, x: &CudaSlice<u16>, idx: usize) {
-        let data_len = x.len();
+    fn otp_encrypt_and_send_next_u16(&mut self, send: &CudaSlice<u16>, idx: usize) {
+        let data_len = send.len();
         // must be even
         debug_assert_eq!(data_len & 1, 0);
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
@@ -491,12 +491,12 @@ impl Circuits {
         let mut rand_alloc = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
         let mut rand = self.fill_my_rng_into_u16(&mut rand_alloc, idx);
 
-        self.single_xor_assign_u16(&mut rand, &x.slice(..), idx, data_len);
+        self.single_xor_assign_u16(&mut rand, &send.slice(..), idx, data_len);
         self.send(&rand_alloc, self.next_id, idx);
     }
 
-    fn otp_encrypt_and_send_view_u16(&mut self, x: &CudaView<u16>, idx: usize) {
-        let data_len = x.len();
+    fn otp_encrypt_and_send_next_view_u16(&mut self, send: &CudaView<u16>, idx: usize) {
+        let data_len = send.len();
         // must be even
         debug_assert_eq!(data_len & 1, 0);
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
@@ -504,8 +504,36 @@ impl Circuits {
         let mut rand_alloc = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
         let mut rand = self.fill_my_rng_into_u16(&mut rand_alloc, idx);
 
-        self.single_xor_assign_u16(&mut rand, x, idx, data_len);
+        self.single_xor_assign_u16(&mut rand, send, idx, data_len);
         self.send(&rand_alloc, self.next_id, idx);
+    }
+
+    fn otp_receive_prev_and_decrypt_u16(&mut self, receive: &mut CudaSlice<u16>, idx: usize) {
+        let data_len = receive.len();
+        // must be even
+        debug_assert_eq!(data_len & 1, 0);
+        self.receive_u16(receive, self.prev_id, idx);
+
+        // SAFETY: Only unsafe because memory is not initialized. But, we fill
+        // afterwards.
+        let mut rand_alloc = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
+        let rand = self.fill_their_rng_into_u16(&mut rand_alloc, idx);
+
+        self.single_xor_assign_u16(&mut receive.slice(..), &rand, idx, data_len);
+    }
+
+    fn otp_receive_prev_and_decrypt_view_u16(&mut self, receive: &mut CudaView<u16>, idx: usize) {
+        let data_len = receive.len();
+        // must be even
+        debug_assert_eq!(data_len & 1, 0);
+        self.receive_view_u16(receive, self.prev_id, idx);
+
+        // SAFETY: Only unsafe because memory is not initialized. But, we fill
+        // afterwards.
+        let mut rand_alloc = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
+        let rand = self.fill_their_rng_into_u16(&mut rand_alloc, idx);
+
+        self.single_xor_assign_u16(receive, &rand, idx, data_len);
     }
 
     pub fn send_u16(&mut self, send: &CudaSlice<u16>, peer_id: usize, idx: usize) {
