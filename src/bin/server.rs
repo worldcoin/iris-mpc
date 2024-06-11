@@ -686,7 +686,7 @@ async fn main() -> eyre::Result<()> {
             await_streams(&thread_streams);
 
             // Phase 2 [Batch]: compare each result against threshold
-            thread_phase2.compare_threshold_masked_many(&code_dots_batch, &mask_dots_batch);
+            thread_phase2_batch.compare_threshold_masked_many(&code_dots_batch, &mask_dots_batch);
 
             // Phase 2 [Batch]: Reveal the binary results
             let res = thread_phase2_batch.take_result_buffer();
@@ -705,7 +705,7 @@ async fn main() -> eyre::Result<()> {
                 chunk_size_batch,
                 &db_sizes_batch,
             );
-            thread_phase2.return_result_buffer(res);
+            thread_phase2_batch.return_result_buffer(res);
 
             // Phase 2 [DB]: compare each result against threshold
             thread_phase2.compare_threshold_masked_many(&code_dots, &mask_dots);
