@@ -181,7 +181,7 @@ async fn main() -> eyre::Result<()> {
         let mask_gpu = mask_gpu.clone();
 
         let now = Instant::now();
-        party.lift_mpc(mask_gpu, &mut x, &mut correction);
+        party.lift_mpc(&mask_gpu, &mut x, &mut correction);
         party.synchronize_all();
         println!("compute time: {:?}", now.elapsed());
 

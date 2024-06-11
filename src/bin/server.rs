@@ -26,7 +26,11 @@ use gpu_iris_mpc::{
 };
 use itertools::izip;
 use std::{
-    fs::metadata, mem, sync::{Arc, Mutex}, thread, time::{Duration, Instant}
+    fs::metadata,
+    mem,
+    sync::{Arc, Mutex},
+    thread,
+    time::{Duration, Instant},
 };
 use tokio::time::sleep;
 
@@ -94,10 +98,7 @@ async fn receive_batch(client: &Client, queue_url: &String) -> eyre::Result<Vec<
 
             let iris: ShamirIris = message.into();
 
-            // batch.extend(iris.all_rotations());
-            for _ in 0..31 {
-                batch.push(iris.clone());
-            }
+            batch.extend(iris.all_rotations());
 
             // TODO: we should only delete after processing
             client
@@ -432,7 +433,7 @@ async fn main() -> eyre::Result<()> {
 
     // Main loop
     for _ in 0..5 {
-    // loop {
+        // loop {
         let now = Instant::now();
         let batch = receive_batch(&client, &queue).await?;
         println!("Received batch in {:?}", now.elapsed());
@@ -657,7 +658,8 @@ async fn main() -> eyre::Result<()> {
 
             // Phase 2 [DB]: Reveal the binary results
             let res = tmp_phase2.take_result_buffer();
-            let thread_request_results_slice: Vec<CudaSlice<u32>> = device_ptrs_to_slices(&thread_request_results, &vec![QUERIES;8], &thread_devs);
+            let thread_request_results_slice: Vec<CudaSlice<u32>> =
+                device_ptrs_to_slices(&thread_request_results, &vec![QUERIES; 8], &thread_devs);
             let chunk_size = tmp_phase2.chunk_size();
             open(
                 &mut tmp_phase2,
@@ -754,7 +756,7 @@ async fn main() -> eyre::Result<()> {
                         thread_streams[i] as *mut _,
                     )
                     .unwrap();
-    
+
                     // DEBUG: emit event to measure time for e2e process
                     event::record(thread_evts[i] as *mut _, thread_streams[i] as *mut _).unwrap();
                 }
