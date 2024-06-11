@@ -24,6 +24,7 @@ use gpu_iris_mpc::{
     setup::{galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::shamir_iris::ShamirIris},
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
+use itertools::izip;
 use std::{
     fs::metadata,
     mem,
@@ -97,7 +98,7 @@ async fn receive_batch(client: &Client, queue_url: &String) -> eyre::Result<Vec<
             let iris: ShamirIris = message.into();
 
             // batch.extend(iris.all_rotations());
-            for _ in 0..ROTATIONS {
+            for _ in 0..31 {
                 batch.push(iris.clone());
             }
 
@@ -165,7 +166,21 @@ fn open(
         c.push(res.a);
     }
     cudarc::nccl::result::group_end().unwrap();
-    distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, &streams);
+
+    let mut result = Vec::with_capacity(n_devices * chunk_size);
+    let devices = party.get_devices();
+    for (dev, a, b, c) in izip!(devices, a, b, c) {
+        let mut a = dev.dtoh_sync_copy(&a).unwrap();
+        let b = dev.dtoh_sync_copy(&b).unwrap();
+        let c = dev.dtoh_sync_copy(&c).unwrap();
+        for (a, b, c) in izip!(a.iter_mut(), b, c) {
+            *a ^= b ^ c;
+            println!("a: {}", a);
+        }
+        result.extend(a);
+    }
+
+    // distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, &streams);
 }
 
 fn get_non_matching_indices(host_results: &[Vec<u32>]) -> Vec<usize> {
