@@ -157,7 +157,7 @@ pub struct ShareDB {
     query_length: usize,
     device_manager: DeviceManager,
     kernels: Vec<CudaFunction>,
-    rngs: Vec<(ChaChaCudaFeRng, ChaChaCudaFeRng)>,
+    rngs: Vec<(ChaChaCudaRng, ChaChaCudaRng)>,
     comms: Vec<Arc<Comm>>,
     ones: Vec<CudaSlice<u8>>,
     intermediate_results: Vec<CudaSlice<i32>>,
@@ -214,17 +214,15 @@ impl ShareDB {
         }
 
         // Init RNGs
-        let rng_buf_size: usize = (max_db_length / n_devices * query_length)
-            .div_ceil(CHACHA_BUFFER_SIZE)
-            * CHACHA_BUFFER_SIZE;
+        let rng_buf_size: usize = (max_db_length / n_devices * query_length).div_ceil(64) * 64;
         let mut rngs = vec![];
         for idx in 0..n_devices {
             let (seed0, seed1) = chacha_seeds;
             let mut chacha1 =
-                ChaChaCudaFeRng::init(rng_buf_size, device_manager.device(idx).clone(), seed0);
+                ChaChaCudaRng::init(rng_buf_size, device_manager.device(idx).clone(), seed0);
             chacha1.get_mut_chacha().set_nonce(idx as u64);
             let mut chacha2 =
-                ChaChaCudaFeRng::init(rng_buf_size, device_manager.device(idx).clone(), seed1);
+                ChaChaCudaRng::init(rng_buf_size, device_manager.device(idx).clone(), seed1);
             chacha2.get_mut_chacha().set_nonce(idx as u64);
             rngs.push((chacha1, chacha2));
         }
@@ -469,14 +467,11 @@ impl ShareDB {
             let query1 = query_ptrs.1[idx];
 
             // Prepare randomness to mask results
-            // if self.is_remote {
-            //     let rng_buf_size: usize = (db_sizes[idx] * self.query_length)
-            //         .div_ceil(CHACHA_BUFFER_SIZE)
-            //         * CHACHA_BUFFER_SIZE;
-
-            //     self.rngs[idx].0.fill_rng_no_host_copy(&streams[idx]);
-            //     self.rngs[idx].1.fill_rng_no_host_copy(&streams[idx]);
-            // }
+            if self.is_remote {
+                let len: usize = (db_sizes[idx] * self.query_length).div_ceil(64) * 64;
+                self.rngs[idx].0.fill_rng_no_host_copy(len, &streams[idx]);
+                self.rngs[idx].1.fill_rng_no_host_copy(len, &streams[idx]);
+            }
 
             for (i, d) in [db.0[idx], db.1[idx]].iter().enumerate() {
                 for (j, q) in [query0, query1].iter().enumerate() {
@@ -507,6 +502,10 @@ impl ShareDB {
         streams: &Vec<CudaStream>,
     ) {
         for idx in 0..self.device_manager.device_count() {
+            assert!(
+                self.rngs[idx].0.cuda_slice().is_some() && self.rngs[idx].1.cuda_slice().is_some()
+            );
+
             let num_elements = db_sizes[idx] * self.query_length;
             let threads_per_block = 256;
             let blocks_per_grid = num_elements.div_ceil(threads_per_block);
@@ -532,8 +531,8 @@ impl ShareDB {
                             db_sizes[idx] as u64,
                             (db_sizes[idx] * self.query_length) as u64,
                             IRIS_CODE_LENGTH as u64,
-                            self.rngs[idx].0.cuda_slice(),
-                            self.rngs[idx].1.cuda_slice(),
+                            self.rngs[idx].0.cuda_slice().unwrap(),
+                            self.rngs[idx].1.cuda_slice().unwrap(),
                         ),
                     )
                     .unwrap();
