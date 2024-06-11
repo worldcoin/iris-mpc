@@ -68,12 +68,12 @@ extern "C" __global__ void mergeResults(unsigned int *matchResultsSelf, unsigned
 
         // Check if there is a match in the query itelf
         // We only need to check a single query, since we don't want to rotate double
-        // int oldIdx = idx * (2 * ROTATIONS + 1) + ROTATIONS;
-        // if (matchResultsSelf[oldIdx] != UINT_MAX && oldIdx != matchResultsSelf[oldIdx])
-        // {
-        //     finalResults[idx] = matchResultsSelf[oldIdx];
-        //     return;
-        // }
+        int oldIdx = idx * (2 * ROTATIONS + 1) + ROTATIONS;
+        if (matchResultsSelf[oldIdx] != UINT_MAX && oldIdx != matchResultsSelf[oldIdx])
+        {
+            finalResults[idx] = matchResultsSelf[oldIdx];
+            return;
+        }
 
         finalResults[idx] = UINT_MAX;
     }

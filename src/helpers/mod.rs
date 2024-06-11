@@ -11,9 +11,9 @@ pub fn device_ptrs<T>(slice: &Vec<CudaSlice<T>>) -> Vec<u64> {
 }
 
 pub fn device_ptrs_to_slices<T>(
-    ptrs: &Vec<u64>,
-    sizes: &Vec<usize>,
-    devs: &Vec<Arc<CudaDevice>>,
+    ptrs: &[u64],
+    sizes: &[usize],
+    devs: &[Arc<CudaDevice>],
 ) -> Vec<CudaSlice<T>> {
     ptrs.iter()
         .enumerate()
