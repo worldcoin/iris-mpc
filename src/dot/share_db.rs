@@ -99,7 +99,7 @@ fn broadcast_stream<T: NcclType>(
             len,
             T::as_nccl_type(),
             root,
-            comm.comm,
+            comm.comm.0,
             stream.stream as *mut _,
         )
     }

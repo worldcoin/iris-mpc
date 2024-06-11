@@ -8,8 +8,8 @@ use crate::{
 use axum::{routing::get, Router};
 use cudarc::{
     driver::{
-        CudaDevice, CudaFunction, CudaSlice, CudaView, CudaViewMut, DevicePtr, DeviceSlice,
-        LaunchAsync, LaunchConfig,
+        CudaDevice, CudaFunction, CudaSlice, CudaView, CudaViewMut, DeviceSlice, LaunchAsync,
+        LaunchConfig,
     },
     nccl::{result, Comm, Id},
     nvrtc::{self, Ptx},
@@ -500,36 +500,14 @@ impl Circuits {
     where
         T: cudarc::nccl::NcclType,
     {
-        // Copied from cudarc nccl implementation
-        unsafe {
-            result::send(
-                *send.device_ptr() as *mut _,
-                send.len(),
-                T::as_nccl_type(),
-                peer_id as i32,
-                self.comms[idx].comm,
-                *self.comms[idx].device.cu_stream() as *mut _,
-            )
-        }
-        .unwrap();
+        self.comms[idx].send_view(send, peer_id as i32).unwrap();
     }
 
     pub fn receive_view<T>(&mut self, receive: &mut CudaView<T>, peer_id: usize, idx: usize)
     where
         T: cudarc::nccl::NcclType,
     {
-        // Copied from cudarc nccl implementation
-        unsafe {
-            result::recv(
-                *receive.device_ptr() as *mut _,
-                receive.len(),
-                T::as_nccl_type(),
-                peer_id as i32,
-                self.comms[idx].comm,
-                *self.comms[idx].device.cu_stream() as *mut _,
-            )
-        }
-        .unwrap();
+        self.comms[idx].recv_view(receive, peer_id as i32).unwrap();
     }
 
     pub fn send<T>(&mut self, send: &CudaSlice<T>, peer_id: usize, idx: usize)

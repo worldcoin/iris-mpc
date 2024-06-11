@@ -1,7 +1,7 @@
 use cudarc::driver::CudaDevice;
 use gpu_iris_mpc::{
     setup::iris_db::iris::IrisCodeArray,
-    threshold_ring::protocol::{ChunkShare, Circuits},
+    threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
 };
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -11,6 +11,14 @@ use tokio::time::{self, Instant};
 // ceil(930 * 125_000 / 2048) * 2048
 // const INPUTS_PER_GPU_SIZE: usize = 116_250_624;
 const INPUTS_PER_GPU_SIZE: usize = 12_507_136;
+
+fn to_view<T>(inp: &[ChunkShare<T>]) -> Vec<ChunkShareView<T>> {
+    let mut res = Vec::with_capacity(inp.len());
+    for inp in inp {
+        res.push(inp.as_view());
+    }
+    res
+}
 
 fn sample_mask_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<u16> {
     (0..size)
@@ -66,8 +74,8 @@ fn real_result_msb(mask_input: Vec<u16>) -> Vec<u32> {
 
 fn open(
     party: &mut Circuits,
-    x: &mut [ChunkShare<u32>],
-    corrections: &mut [ChunkShare<u16>],
+    x: &mut [ChunkShareView<u32>],
+    corrections: &mut [ChunkShareView<u16>],
 ) -> Vec<u32> {
     let n_devices = x.len();
     let mut res_a = Vec::with_capacity(n_devices);
@@ -86,12 +94,12 @@ fn open(
     }
     cudarc::nccl::result::group_start().unwrap();
     for (idx, (res, corr)) in izip!(x.iter(), corrections.iter()).enumerate() {
-        party.send(&res.b, party.next_id(), idx);
-        party.send_u16(&corr.b, party.next_id(), idx);
+        party.send_view(&res.b, party.next_id(), idx);
+        party.send_view_u16(&corr.b, party.next_id(), idx);
     }
     for (idx, (res, corr)) in izip!(x.iter_mut(), corrections.iter_mut()).enumerate() {
-        party.receive(&mut res.a, party.prev_id(), idx);
-        party.receive_u16(&mut corr.a, party.prev_id(), idx);
+        party.receive_view(&mut res.a, party.prev_id(), idx);
+        party.receive_view_u16(&mut corr.a, party.prev_id(), idx);
     }
     cudarc::nccl::result::group_end().unwrap();
     for (idx, (res, corr)) in izip!(x, corrections).enumerate() {
@@ -177,8 +185,10 @@ async fn main() -> eyre::Result<()> {
 
     for _ in 0..10 {
         // Simulate Masks to be zero for this test
-        let mut x = party.allocate_buffer::<u32>(INPUTS_PER_GPU_SIZE);
-        let mut correction = party.allocate_buffer::<u16>(INPUTS_PER_GPU_SIZE * 2);
+        let x_ = party.allocate_buffer::<u32>(INPUTS_PER_GPU_SIZE);
+        let mut x = to_view(&x_);
+        let correction_ = party.allocate_buffer::<u16>(INPUTS_PER_GPU_SIZE * 2);
+        let mut correction = to_view(&correction_);
         let mask_gpu = mask_gpu.clone();
 
         let now = Instant::now();

@@ -1,7 +1,7 @@
 use cudarc::driver::CudaDevice;
 use gpu_iris_mpc::{
     setup::iris_db::iris::IrisCodeArray,
-    threshold_ring::protocol::{ChunkShare, Circuits},
+    threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
 };
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -13,6 +13,14 @@ use tokio::time::{self, Instant};
 const INPUTS_PER_GPU_SIZE: usize = 12_507_136;
 const CHUNK_SIZE: usize = INPUTS_PER_GPU_SIZE / 64;
 const B_BITS: u64 = 16;
+
+fn to_view<T>(inp: &[ChunkShare<T>]) -> Vec<ChunkShareView<T>> {
+    let mut res = Vec::with_capacity(inp.len());
+    for inp in inp {
+        res.push(inp.as_view());
+    }
+    res
+}
 
 fn sample_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<u16> {
     (0..size)
@@ -170,8 +178,10 @@ async fn main() -> eyre::Result<()> {
 
     for _ in 0..10 {
         // Simulate Masks to be zero for this test
-        let mut x = party.allocate_buffer::<u32>(INPUTS_PER_GPU_SIZE);
-        let correction = party.allocate_buffer::<u16>(INPUTS_PER_GPU_SIZE * 2);
+        let x_ = party.allocate_buffer::<u32>(INPUTS_PER_GPU_SIZE);
+        let mut x = to_view(&x_);
+        let correction_ = party.allocate_buffer::<u16>(INPUTS_PER_GPU_SIZE * 2);
+        let correction = to_view(&correction_);
         let code_gpu = code_gpu.clone();
 
         let now = Instant::now();
