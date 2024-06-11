@@ -26,10 +26,7 @@ use gpu_iris_mpc::{
 };
 use itertools::izip;
 use std::{
-    fs::metadata,
-    mem,
-    sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    fs::metadata, mem, sync::{Arc, Mutex}, thread, time::{Duration, Instant}
 };
 use tokio::time::sleep;
 
@@ -142,8 +139,7 @@ fn open(
     party: &mut Circuits,
     x: &[ChunkShare<u64>],
     distance_comparator: &DistanceComparator,
-    results_ptrs: &[u64],
-    streams: &[u64],
+    results_ptrs: &[CudaSlice<u32>],
     chunk_size: usize,
     db_sizes: &[usize],
 ) {
@@ -167,20 +163,7 @@ fn open(
     }
     cudarc::nccl::result::group_end().unwrap();
 
-    let mut result = Vec::with_capacity(n_devices * chunk_size);
-    let devices = party.get_devices();
-    for (dev, a, b, c) in izip!(devices, a, b, c) {
-        let mut a = dev.dtoh_sync_copy(&a).unwrap();
-        let b = dev.dtoh_sync_copy(&b).unwrap();
-        let c = dev.dtoh_sync_copy(&c).unwrap();
-        for (a, b, c) in izip!(a.iter_mut(), b, c) {
-            *a ^= b ^ c;
-            println!("a: {}", a);
-        }
-        result.extend(a);
-    }
-
-    // distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, &streams);
+    distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes);
 }
 
 fn get_non_matching_indices(host_results: &[Vec<u32>]) -> Vec<usize> {
@@ -674,13 +657,13 @@ async fn main() -> eyre::Result<()> {
 
             // Phase 2 [DB]: Reveal the binary results
             let res = tmp_phase2.take_result_buffer();
+            let thread_request_results_slice: Vec<CudaSlice<u32>> = device_ptrs_to_slices(&thread_request_results, &vec![QUERIES;8], &thread_devs);
             let chunk_size = tmp_phase2.chunk_size();
             open(
                 &mut tmp_phase2,
                 &res,
                 &tmp_distance_comparator,
-                &thread_request_results,
-                &streams,
+                &thread_request_results_slice,
                 chunk_size,
                 &db_sizes,
             );

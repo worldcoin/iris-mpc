@@ -2,9 +2,7 @@ use std::{sync::Arc, thread, time::Duration};
 
 use cudarc::{
     driver::{
-        result::{self, launch_kernel, memcpy_dtoh_async, memcpy_dtoh_sync, stream::synchronize},
-        CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, DeviceRepr, LaunchAsync,
-        LaunchConfig,
+        result::{self, launch_kernel, memcpy_dtoh_async, memcpy_dtoh_sync, stream::synchronize}, sys, CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, DeviceRepr, LaunchAsync, LaunchConfig
     },
     nvrtc::compile_ptx,
 };
@@ -75,9 +73,8 @@ impl DistanceComparator {
         results1: &[CudaView<u64>],
         results2: &[CudaView<u64>],
         results3: &[CudaView<u64>],
-        results_ptrs: &[u64],
+        results_ptrs: &[CudaSlice<u32>],
         db_sizes: &[usize],
-        streams: &[u64],
     ) {
         for i in 0..self.n_devices {
             let num_elements = db_sizes[i] * self.query_length / 64;
@@ -90,25 +87,15 @@ impl DistanceComparator {
             };
             self.devs[i].bind_to_thread().unwrap();
 
-            let mut params = vec![
-                (&results1[i]).as_kernel_param(),
-                (&results2[i]).as_kernel_param(),
-                (&results3[i]).as_kernel_param(),
-                (&results_ptrs[i]).as_kernel_param(),
-                (db_sizes[i] as u64).as_kernel_param(),
-                (self.query_length as u64).as_kernel_param(),
-            ];
-
             unsafe {
-                launch_kernel(
-                    self.open_kernels[i].cu_function,
-                    cfg.grid_dim,
-                    cfg.block_dim,
-                    cfg.shared_mem_bytes,
-                    streams[i] as *mut _,
-                    &mut params,
-                )
-                .unwrap();
+                self.open_kernels[i].clone().launch(cfg, (
+                    &results1[i],
+                    &results2[i],
+                    &results3[i],
+                    &results_ptrs[i],
+                    db_sizes[i],
+                    self.query_length,
+                )).unwrap();
             }
         }
     }
