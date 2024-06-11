@@ -536,6 +536,52 @@ impl Circuits {
         self.single_xor_assign_u16(receive, &rand, idx, data_len);
     }
 
+    fn otp_encrypt_and_send_next_u64(&mut self, send: &CudaSlice<u64>, idx: usize) {
+        let data_len = send.len();
+        // SAFETY: Only unsafe because memory is not initialized. But, we fill
+        // afterwards.
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(data_len).unwrap() };
+        self.fill_my_rand_u64(&mut rand, idx);
+
+        self.single_xor_assign_u64(&mut rand.slice(..), &send.slice(..), idx, data_len);
+        self.send(&rand, self.next_id, idx);
+    }
+
+    fn otp_encrypt_and_send_next_view_u64(&mut self, send: &CudaView<u64>, idx: usize) {
+        let data_len = send.len();
+        // SAFETY: Only unsafe because memory is not initialized. But, we fill
+        // afterwards.
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(data_len).unwrap() };
+        self.fill_my_rand_u64(&mut rand, idx);
+
+        self.single_xor_assign_u64(&mut rand.slice(..), send, idx, data_len);
+        self.send(&rand, self.next_id, idx);
+    }
+
+    fn otp_receive_prev_and_decrypt_u64(&mut self, receive: &mut CudaSlice<u64>, idx: usize) {
+        let data_len = receive.len();
+        self.receive(receive, self.prev_id, idx);
+
+        // SAFETY: Only unsafe because memory is not initialized. But, we fill
+        // afterwards.
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(data_len).unwrap() };
+        self.fill_their_rand_u64(&mut rand, idx);
+
+        self.single_xor_assign_u64(&mut receive.slice(..), &rand.slice(..), idx, data_len);
+    }
+
+    fn otp_receive_prev_and_decrypt_view_u64(&mut self, receive: &mut CudaView<u64>, idx: usize) {
+        let data_len = receive.len();
+        self.receive_view(receive, self.prev_id, idx);
+
+        // SAFETY: Only unsafe because memory is not initialized. But, we fill
+        // afterwards.
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(data_len).unwrap() };
+        self.fill_their_rand_u64(&mut rand, idx);
+
+        self.single_xor_assign_u64(receive, &rand.slice(..), idx, data_len);
+    }
+
     pub fn send_u16(&mut self, send: &CudaSlice<u16>, peer_id: usize, idx: usize) {
         // We have to transmute since u16 is not sendable
         let send_trans: CudaView<u8> = // the transmute_mut is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
@@ -599,6 +645,24 @@ impl Circuits {
         // the transmute_mut is safe because we know that one u64 is 2 u32s, and the buffer is aligned properly for the transmute
             unsafe { rand.transmute_mut(rand.len() * 2).unwrap() };
         rng.fill_rng_into(&mut rand_trans);
+    }
+
+    // Fill randomness using the correlated RNG
+    fn fill_my_rand_u64(&mut self, rand: &mut CudaSlice<u64>, idx: usize) {
+        let rng = &mut self.rngs[idx];
+        let mut rand_trans: CudaViewMut<u32> =
+            // the transmute_mut is safe because we know that one u64 is 2 u32s, and the buffer is aligned properly for the transmute
+                unsafe { rand.transmute_mut(rand.len() * 2).unwrap() };
+        rng.fill_my_rng_into(&mut rand_trans);
+    }
+
+    // Fill randomness using the correlated RNG
+    fn fill_their_rand_u64(&mut self, rand: &mut CudaSlice<u64>, idx: usize) {
+        let rng = &mut self.rngs[idx];
+        let mut rand_trans: CudaViewMut<u32> =
+                // the transmute_mut is safe because we know that one u64 is 2 u32s, and the buffer is aligned properly for the transmute
+                    unsafe { rand.transmute_mut(rand.len() * 2).unwrap() };
+        rng.fill_their_rng_into(&mut rand_trans);
     }
 
     // Fill randomness using the correlated RNG
