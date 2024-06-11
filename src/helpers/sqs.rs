@@ -1,7 +1,7 @@
 use base64::{engine::general_purpose, Engine};
 use serde::{Deserialize, Serialize};
 
-use crate::setup::iris_db::shamir_iris::ShamirIris;
+use crate::setup::iris_db::{iris::IrisCodeArray, shamir_iris::ShamirIris};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SQSMessage {
@@ -29,13 +29,17 @@ pub struct SMPCRequest {
     pub mask_code: String,
 }
 
-impl From<SMPCRequest> for ShamirIris {
-    fn from(request: SMPCRequest) -> Self {
-        let mut iris = ShamirIris::default();
-        let code = general_purpose::STANDARD.decode(request.iris_code.as_bytes()).unwrap();
-        let mask = general_purpose::STANDARD.decode(request.mask_code.as_bytes()).unwrap();
-        iris.code.copy_from_slice(bytemuck::cast_slice(&code));
-        iris.mask.copy_from_slice(bytemuck::cast_slice(&mask));
-        iris
+impl SMPCRequest {
+    fn decode_bytes(bytes: &[u8]) -> [u16; IrisCodeArray::IRIS_CODE_SIZE] {
+        let code = general_purpose::STANDARD.decode(bytes).unwrap();
+        let mut buffer = [0u16; IrisCodeArray::IRIS_CODE_SIZE];
+        buffer.copy_from_slice(bytemuck::cast_slice(&code));
+        buffer
+    }
+    pub fn get_iris_shares(&self) -> [u16; IrisCodeArray::IRIS_CODE_SIZE] {
+        Self::decode_bytes(self.iris_code.as_bytes())
+    }
+    pub fn get_mask_shares(&self) -> [u16; IrisCodeArray::IRIS_CODE_SIZE] {
+        Self::decode_bytes(self.mask_code.as_bytes())
     }
 }

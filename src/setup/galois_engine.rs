@@ -13,6 +13,12 @@ pub mod degree2 {
     }
 
     impl GaloisRingIrisCodeShare {
+        const COLS: usize = 200;
+
+        pub fn new(id: usize, coefs: [u16; 12800]) -> Self {
+            Self { id, coefs }
+        }
+
         pub fn encode_iris_code<R: Rng>(
             iris_code: &IrisCodeArray,
             mask_code: &IrisCodeArray,
@@ -80,20 +86,28 @@ pub mod degree2 {
             }
             shares
         }
+
+        pub fn preprocess_iris_code_query_share(
+            party_id: usize,
+            share: &mut GaloisRingIrisCodeShare,
+        ) {
+            let lagrange_coeffs = ShamirGaloisRingShare::deg_3_lagrange_polys_at_zero();
+            for i in (0..12800).step_by(2) {
+                let new_share = GaloisRingElement {
+                    coefs: [share.coefs[i], share.coefs[i + 1]],
+                };
+                let adjusted_share = new_share * lagrange_coeffs[party_id];
+                // we write the bits back into the flat array in the "wrong" order, such that we can do simple dot product later
+                share.coefs[i] = adjusted_share.coefs[0];
+                share.coefs[i + 1] = adjusted_share.coefs[1]; // Note the order of bits
+            }
+        }
+
         pub fn preprocess_iris_code_query_shares(
             mut shares: [GaloisRingIrisCodeShare; 3],
         ) -> [GaloisRingIrisCodeShare; 3] {
-            let lagrange_coeffs = ShamirGaloisRingShare::deg_3_lagrange_polys_at_zero();
-            for i in (0..12800).step_by(2) {
-                for j in 0..3 {
-                    let share = GaloisRingElement {
-                        coefs: [shares[j].coefs[i], shares[j].coefs[i + 1]],
-                    };
-                    let adjusted_share = share * lagrange_coeffs[j];
-                    // we write the bits back into the flat array in the "wrong" order, such that we can do simple dot product later
-                    shares[j].coefs[i] = adjusted_share.coefs[0];
-                    shares[j].coefs[i + 1] = adjusted_share.coefs[1]; // Note the order of bits
-                }
+            for i in 0..3 {
+                Self::preprocess_iris_code_query_share(i, &mut shares[i]);
             }
             shares
         }
@@ -118,6 +132,29 @@ pub mod degree2 {
                 sum = sum.wrapping_add(self.coefs[i].wrapping_mul(other.coefs[i]));
             }
             sum
+        }
+
+        pub fn all_rotations(&self) -> Vec<GaloisRingIrisCodeShare> {
+            let mut reference = self.clone();
+            let mut result = vec![];
+            reference.rotate_left(16);
+            for _ in 0..31 {
+                reference.rotate_right(1);
+                result.push(reference.clone());
+            }
+            result
+        }
+
+        pub fn rotate_right(&mut self, by: usize) {
+            self.coefs
+                .chunks_exact_mut(Self::COLS * 4)
+                .for_each(|chunk| chunk.rotate_right(by * 4));
+        }
+
+        pub fn rotate_left(&mut self, by: usize) {
+            self.coefs
+                .chunks_exact_mut(Self::COLS * 4)
+                .for_each(|chunk| chunk.rotate_left(by * 4));
         }
     }
 

@@ -6,8 +6,7 @@ use cudarc::driver::{
         event::{self, elapsed},
         stream::synchronize,
     },
-    sys::lib,
-    CudaDevice, CudaSlice, CudaStream, CudaView, DevicePtr,
+    CudaDevice, CudaSlice,
 };
 use gpu_iris_mpc::{
     dot::{
@@ -21,15 +20,13 @@ use gpu_iris_mpc::{
         mmap::{read_mmap_file, write_mmap_file},
         sqs::{SMPCRequest, SQSMessage},
     },
-    setup::{galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::shamir_iris::ShamirIris},
+    setup::galois_engine::degree2::GaloisRingIrisCodeShare,
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
-use itertools::izip;
 use std::{
     fs::metadata,
     mem,
     sync::{Arc, Mutex},
-    thread,
     time::{Duration, Instant},
 };
 use tokio::time::sleep;
@@ -81,10 +78,26 @@ struct Opt {
     path: Option<String>,
 }
 
-async fn receive_batch(client: &Client, queue_url: &String) -> eyre::Result<Vec<ShamirIris>> {
-    let mut batch = vec![];
+#[derive(Default)]
+struct BatchQueryEntries {
+    pub code: Vec<GaloisRingIrisCodeShare>,
+    pub mask: Vec<GaloisRingIrisCodeShare>,
+}
 
-    while batch.len() < QUERIES {
+#[derive(Default)]
+struct BatchQuery {
+    pub query: BatchQueryEntries,
+    pub db: BatchQueryEntries,
+}
+
+async fn receive_batch(
+    party_id: usize,
+    client: &Client,
+    queue_url: &String,
+) -> eyre::Result<BatchQuery> {
+    let mut batch_query = BatchQuery::default();
+
+    while batch_query.db.code.len() < QUERIES {
         let rcv_message_output = client
             .receive_message()
             .max_number_of_messages(1i32)
@@ -96,9 +109,17 @@ async fn receive_batch(client: &Client, queue_url: &String) -> eyre::Result<Vec<
             let message: SQSMessage = serde_json::from_str(sns_message.body().unwrap())?;
             let message: SMPCRequest = serde_json::from_str(&message.message)?;
 
-            let iris: ShamirIris = message.into();
+            let mut iris_share = GaloisRingIrisCodeShare::new(party_id, message.get_iris_shares());
+            let mut mask_share = GaloisRingIrisCodeShare::new(party_id, message.get_mask_shares());
 
-            batch.extend(iris.all_rotations());
+            batch_query.db.code.extend(iris_share.all_rotations());
+            batch_query.db.mask.extend(mask_share.all_rotations());
+
+            GaloisRingIrisCodeShare::preprocess_iris_code_query_share(party_id, &mut iris_share);
+            GaloisRingIrisCodeShare::preprocess_iris_code_query_share(party_id, &mut mask_share);
+
+            batch_query.query.code.extend(iris_share.all_rotations());
+            batch_query.query.mask.extend(mask_share.all_rotations());
 
             // TODO: we should only delete after processing
             client
@@ -110,18 +131,17 @@ async fn receive_batch(client: &Client, queue_url: &String) -> eyre::Result<Vec<
         }
     }
 
-    Ok(batch)
+    Ok(batch_query)
 }
 
-fn prepare_query_batch(batch: Vec<ShamirIris>) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
-    let (code_queries, mask_queries): (Vec<Vec<u16>>, Vec<Vec<u16>>) = batch
-        .iter()
-        .map(|iris| (iris.code.to_vec(), iris.mask.to_vec()))
-        .unzip();
-
-    let code_query = preprocess_query(&code_queries.into_iter().flatten().collect::<Vec<_>>());
-    let mask_query = preprocess_query(&mask_queries.into_iter().flatten().collect::<Vec<_>>());
-    (code_query, mask_query)
+fn prepare_query_shares(shares: Vec<GaloisRingIrisCodeShare>) -> Vec<Vec<u8>> {
+    preprocess_query(
+        &shares
+            .into_iter()
+            .map(|e| e.coefs)
+            .flatten()
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn slice_tuples_to_ptrs(
@@ -450,9 +470,11 @@ async fn main() -> eyre::Result<()> {
     for _ in 0..5 {
         // loop {
         let now = Instant::now();
-        let batch = receive_batch(&client, &queue).await?;
+        let batch = receive_batch(party_id, &client, &queue).await?;
         println!("Received batch in {:?}", now.elapsed());
-        let (code_query, mask_query) = prepare_query_batch(batch);
+
+        let code_query = prepare_query_shares(batch.query.code);
+        let mask_query = prepare_query_shares(batch.query.mask);
 
         let mut timers = vec![];
 
