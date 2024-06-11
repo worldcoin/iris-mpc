@@ -568,7 +568,7 @@ impl Circuits {
         // afterwards.
         let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len).unwrap() };
         let rng = &mut self.rngs[idx];
-        rng.fill_my_rng_into(&mut rand.slice_mut(..));
+        rng.fill_their_rng_into(&mut rand.slice_mut(..));
 
         self.single_xor_assign_u32(receive, &rand.slice(..), idx, data_len);
     }
