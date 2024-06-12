@@ -13,7 +13,7 @@ use cudarc::{
     nvrtc::{self, Ptx},
 };
 use itertools::{izip, Itertools};
-use std::{rc::Rc, str::FromStr, sync::Arc, thread, time::Duration};
+use std::{ops::Range, rc::Rc, str::FromStr, sync::Arc, thread, time::Duration};
 
 pub(crate) const B_BITS: usize = 16;
 
@@ -898,6 +898,50 @@ impl Circuits {
         }
     }
 
+    fn send_receive_view_with_offset(
+        &mut self,
+        res: &mut [ChunkShareView<u64>],
+        range: Range<usize>,
+    ) {
+        debug_assert_eq!(res.len(), self.n_devices);
+        let data_len = range.end - range.start;
+
+        let send_bufs = res
+            .iter()
+            .enumerate()
+            .map(|(idx, res)| {
+                let mut rand = unsafe { self.devs[idx].alloc::<u64>(data_len).unwrap() };
+                self.fill_my_rand_u64(&mut rand, idx);
+                self.single_xor_assign_u64(
+                    &mut rand.slice(..),
+                    &res.a.slice(range.clone()),
+                    idx,
+                    data_len,
+                );
+                rand
+            })
+            .collect_vec();
+
+        result::group_start().unwrap();
+        for (idx, res) in send_bufs.iter().enumerate() {
+            self.send(&res, self.next_id, idx);
+        }
+        for (idx, res) in res.iter_mut().enumerate() {
+            self.receive_view(&mut res.b.slice(range.clone()), self.prev_id, idx);
+        }
+        result::group_end().unwrap();
+        for (idx, res) in res.iter_mut().enumerate() {
+            let mut rand = unsafe { self.devs[idx].alloc::<u64>(data_len).unwrap() };
+            self.fill_their_rand_u64(&mut rand, idx);
+            self.single_xor_assign_u64(
+                &mut res.b.slice(range.clone()),
+                &rand.slice(..),
+                idx,
+                data_len,
+            );
+        }
+    }
+
     fn single_xor_assign_u16(
         &self,
         x1: &mut CudaView<u16>,
@@ -1578,18 +1622,7 @@ impl Circuits {
             self.xor_assign_many(&mut c1, &b, idx);
         }
         // Send/Receive
-        result::group_start().unwrap();
-        for (idx, c) in c.iter().enumerate() {
-            // Unused space used for temparary storage
-            let tmp_c = c.get_offset(1, self.chunk_size);
-            self.send_view(&tmp_c.a, self.next_id, idx);
-        }
-        for (idx, c) in c.iter_mut().enumerate() {
-            // Unused space used for temparary storage
-            let mut tmp_c = c.get_offset(1, self.chunk_size);
-            self.receive_view(&mut tmp_c.b, self.prev_id, idx);
-        }
-        result::group_end().unwrap();
+        self.send_receive_view_with_offset(c, self.chunk_size..2 * self.chunk_size);
 
         Buffers::return_buffer(&mut self.buffers.u64_32c_3, buffer1);
     }
