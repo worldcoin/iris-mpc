@@ -10,7 +10,7 @@ use gpu_iris_mpc::{
     helpers::sqs::SMPCRequest,
     setup::{
         galois_engine::degree2::GaloisRingIrisCodeShare,
-        iris_db::{db::IrisDB, iris::IrisCode, shamir_iris::ShamirIris},
+        iris_db::{db::IrisDB, iris::IrisCode},
     },
 };
 use rand::{rngs::StdRng, SeedableRng};

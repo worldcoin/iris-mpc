@@ -493,6 +493,7 @@ fn transpose_32x64_test() {
     transpose_32x64_test_with_len::<2>();
 }
 
+#[allow(dead_code, unused)]
 fn transpose_64x64_test_with_len<const L: usize>() {
     // Setup cuda
     let (dev, ptx) = setup_cuda(0).unwrap();

@@ -34,8 +34,6 @@ use std::{
 use tokio::time::sleep;
 
 use gpu_iris_mpc::setup::iris_db::db::IrisDB;
-use rand::prelude::SliceRandom;
-use rand::{rngs::StdRng, Rng, SeedableRng};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1000;
@@ -43,7 +41,6 @@ const DB_BUFFER: usize = 8 * 1000;
 const QUERIES: usize = 31 * 16;
 const RNG_SEED: u64 = 42;
 const SHUFFLE_SEED: u64 = 42;
-const N_BATCHES: usize = 10;
 const MAX_CONCURRENT_REQUESTS: usize = 5;
 const DB_CODE_FILE: &str = "codes.db";
 const DB_MASK_FILE: &str = "masks.db";
@@ -335,7 +332,7 @@ async fn main() -> eyre::Result<()> {
 
     println!("Starting engines...");
 
-    let device_manager = DeviceManager::init();
+    let device_manager = Arc::new(DeviceManager::init());
 
     // Phase 1 Setup
     let mut codes_engine = ShareDB::init(
@@ -386,6 +383,8 @@ async fn main() -> eyre::Result<()> {
     );
 
     // Phase 2 Setup
+    let phase2_chunk_size =
+        (QUERIES * DB_SIZE / device_manager.device_count()).div_ceil(2048) * 2048;
     let phase2_chunk_size_max =
         (QUERIES * (DB_SIZE + DB_BUFFER) / device_manager.device_count()).div_ceil(2048) * 2048;
     let phase2_batch_chunk_size =
@@ -394,12 +393,14 @@ async fn main() -> eyre::Result<()> {
     let phase2_batch = Arc::new(Mutex::new(Circuits::new(
         party_id,
         phase2_batch_chunk_size,
+        phase2_batch_chunk_size,
         bootstrap_url.clone(),
         Some(4004),
     )));
 
     let phase2 = Arc::new(Mutex::new(Circuits::new(
         party_id,
+        phase2_chunk_size,
         phase2_chunk_size_max,
         bootstrap_url.clone(),
         Some(4005),
@@ -608,7 +609,8 @@ async fn main() -> eyre::Result<()> {
             .iter()
             .map(|s| s.stream as u64)
             .collect::<Vec<_>>();
-        let thread_devs = device_manager.devices().clone();
+        let thread_device_manager = device_manager.clone();
+        // let thread_devs = thread_device_manager.devices();
         let thread_evts = end_timer.iter().map(|e| *e as u64).collect::<Vec<_>>();
         let mut thread_shuffle_rng = shuffle_rng.clone();
         let thread_current_stream_event = current_stream_event
@@ -643,11 +645,10 @@ async fn main() -> eyre::Result<()> {
         let thread_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
 
         tokio::spawn(async move {
-            println!("1");
+            let thread_devs = thread_device_manager.devices();
             let mut thread_phase2_batch = thread_phase2_batch.lock().unwrap();
             let mut thread_phase2 = thread_phase2.lock().unwrap();
             let tmp_distance_comparator = thread_distance_comparator.lock().unwrap();
-            println!("2");
             let (result_sizes, db_sizes): (Vec<_>, Vec<_>) = thread_current_db_size_mutex
                 .iter()
                 .map(|e| {
@@ -692,10 +693,10 @@ async fn main() -> eyre::Result<()> {
                 .iter()
                 .map(|d| *d.cu_stream() as u64)
                 .collect::<Vec<_>>();
-            println!("3");
+            
             // Wait for Phase 1 to finish
             await_streams(&thread_streams);
-            println!("4");
+
             // Phase 2 [Batch]: compare each result against threshold
             thread_phase2_batch.compare_threshold_masked_many(&code_dots_batch, &mask_dots_batch);
 
@@ -718,12 +719,8 @@ async fn main() -> eyre::Result<()> {
             );
             thread_phase2_batch.return_result_buffer(res);
 
-            println!("5");
-
             // Phase 2 [DB]: compare each result against threshold
             thread_phase2.compare_threshold_masked_many(&code_dots, &mask_dots);
-
-            println!("6");
 
             // Phase 2 [DB]: Reveal the binary results
             let res = thread_phase2.take_result_buffer();

@@ -1,7 +1,9 @@
+use std::{ffi::c_void, mem, str::FromStr, sync::Arc, thread, time::Duration};
+
 use super::{device_manager::DeviceManager, IRIS_CODE_LENGTH};
 use crate::{
     helpers::id_wrapper::{http_root, IdWrapper},
-    rng,
+    rng::chacha::ChaChaCudaRng,
 };
 use axum::{routing::get, Router};
 use cudarc::{
@@ -11,27 +13,15 @@ use cudarc::{
         LaunchConfig,
     },
     nccl::{
-        self,
-        result::{self, send},
-        Comm, Id, NcclType,
+        self, result, Comm, Id, NcclType
     },
     nvrtc::compile_ptx,
 };
 use rayon::prelude::*;
-use rng::chacha_field::ChaChaCudaFeRng;
-
-use crate::{
-    helpers::id_wrapper::{http_root, IdWrapper},
-    rng::{self, chacha::ChaChaCudaRng},
-};
-
-use super::{device_manager::DeviceManager, IRIS_CODE_LENGTH};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
-const CHACHA_BUFFER_SIZE: usize = 1000;
-// const MATCH_RATIO: f64 = 0.375;
-const LIMBS: usize = 2;
 const MATMUL_FUNCTION_NAME: &str = "matmul";
+const LIMBS: usize = 2;
 
 pub fn preprocess_query(query: &[u16]) -> Vec<Vec<u8>> {
     let mut result = vec![];
@@ -90,31 +80,6 @@ pub fn gemm(
     }
 }
 
-fn broadcast_stream<T: NcclType>(
-    sendbuff: &Option<&CudaSlice<T>>,
-    recvbuff: &mut CudaSlice<T>,
-    root: i32,
-    len: usize,
-    comm: &Comm,
-    stream: &CudaStream,
-) -> Result<result::NcclStatus, result::NcclError> {
-    unsafe {
-        let send_ptr = match sendbuff {
-            Some(buffer) => *buffer.device_ptr() as *const _,
-            None => ptr::null(),
-        };
-        result::broadcast(
-            send_ptr,
-            *recvbuff.device_ptr() as *mut c_void,
-            len,
-            T::as_nccl_type(),
-            root,
-            comm.comm.0,
-            stream.stream as *mut _,
-        )
-    }
-}
-
 fn send_stream<T: NcclType>(
     sendbuff: &CudaSlice<T>,
     len: usize,
@@ -157,7 +122,7 @@ pub struct ShareDB {
     peer_id: usize,
     is_remote: bool,
     query_length: usize,
-    device_manager: DeviceManager,
+    device_manager: Arc<DeviceManager>,
     kernels: Vec<CudaFunction>,
     rngs: Vec<(ChaChaCudaRng, ChaChaCudaRng)>,
     comms: Vec<Arc<Comm>>,
@@ -171,7 +136,7 @@ impl ShareDB {
     #[allow(clippy::too_many_arguments)]
     pub fn init(
         peer_id: usize,
-        device_manager: DeviceManager,
+        device_manager: Arc<DeviceManager>,
         max_db_length: usize,
         query_length: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
@@ -273,7 +238,7 @@ impl ShareDB {
 
                 // Bind to thread (important!)
                 device_manager.device(i).bind_to_thread().unwrap();
-                comms.push(Rc::new(
+                comms.push(Arc::new(
                     Comm::from_rank(device_manager.device(i), peer_id, 3, id).unwrap(),
                 ));
             }
@@ -588,15 +553,15 @@ impl ShareDB {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::{preprocess_query, ShareDB};
     use crate::{
         dot::device_manager::DeviceManager,
         helpers::device_ptrs,
         setup::{
             galois_engine::degree2::GaloisRingIrisCodeShare,
-            id::PartyID,
-            iris_db::{db::IrisDB, shamir_db::ShamirIrisDB, shamir_iris::ShamirIris},
-            shamir::Shamir,
+            iris_db::db::IrisDB,
         },
     };
     use float_eq::assert_float_eq;
@@ -638,7 +603,7 @@ mod tests {
         let db = random_vec(DB_SIZE, WIDTH, u16::MAX as u32);
         let query = random_vec(QUERY_SIZE, WIDTH, u16::MAX as u32);
         let mut gpu_result = vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE];
-        let device_manager = DeviceManager::init();
+        let device_manager = Arc::new(DeviceManager::init());
         let db_sizes = vec![DB_SIZE / device_manager.device_count(); device_manager.device_count()];
 
         let mut engine = ShareDB::init(
@@ -718,7 +683,7 @@ mod tests {
         let db_sizes = vec![DB_SIZE / N_DEVICES; N_DEVICES];
 
         for i in 0..3 {
-            let device_manager = DeviceManager::init();
+            let device_manager = Arc::new(DeviceManager::init());
 
             let codes_db = db
                 .db
@@ -867,7 +832,7 @@ mod tests {
                 .flatten()
                 .collect::<Vec<_>>();
 
-            let device_manager = DeviceManager::init();
+            let device_manager = Arc::new(DeviceManager::init());
 
             let mut codes_engine = ShareDB::init(
                 party_id,

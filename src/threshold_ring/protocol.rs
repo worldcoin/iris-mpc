@@ -13,7 +13,7 @@ use cudarc::{
     nvrtc::{self, Ptx},
 };
 use itertools::izip;
-use std::{rc::Rc, str::FromStr, sync::Arc, thread, time::Duration};
+use std::{str::FromStr, sync::Arc, thread, time::Duration};
 
 pub(crate) const B_BITS: usize = 16;
 
@@ -1145,7 +1145,7 @@ impl Circuits {
 
     fn lift_split(
         &mut self,
-        inp: Vec<ChunkShare<u16>>,
+        inp: &[ChunkShare<u16>],
         lifted: &mut [ChunkShareView<u32>],
         inout1: &mut [ChunkShareView<u64>],
         out2: &mut [ChunkShareView<u64>],
@@ -1188,7 +1188,7 @@ impl Circuits {
         &mut self,
         mask_lifted: &mut [ChunkShareView<u32>],
         mask_correction: &[ChunkShareView<u16>],
-        code: Vec<ChunkShare<u16>>,
+        code: &[ChunkShare<u16>],
     ) {
         debug_assert_eq!(self.n_devices, mask_lifted.len());
         debug_assert_eq!(self.n_devices, mask_correction.len());
@@ -1225,7 +1225,7 @@ impl Circuits {
     // outputs the uncorrected lifted shares and the injected correction values
     pub fn lift_mpc(
         &mut self,
-        shares: Vec<ChunkShare<u16>>,
+        shares: &[ChunkShare<u16>],
         xa: &mut [ChunkShareView<u32>],
         injected: &mut [ChunkShareView<u16>],
     ) {

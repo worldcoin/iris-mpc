@@ -1,12 +1,13 @@
-use std::{sync::Arc, thread, time::Duration};
+use std::sync::Arc;
 
 use cudarc::{
     driver::{
-        result::{self, launch_kernel, memcpy_dtoh_async, memcpy_dtoh_sync, stream::synchronize}, sys, CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, DeviceRepr, LaunchAsync, LaunchConfig
+        result::{launch_kernel, memcpy_dtoh_sync}, CudaDevice, CudaFunction, CudaSlice, CudaView, DeviceRepr, LaunchAsync, LaunchConfig
     },
     nvrtc::compile_ptx,
 };
-use std::sync::Arc;
+
+use super::ROTATIONS;
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const OPEN_RESULTS_FUNCTION: &str = "openResults";

@@ -1,8 +1,7 @@
-use crate::setup::iris_db::shamir_iris::ShamirIris;
 use base64::{engine::general_purpose, Engine};
 use serde::{Deserialize, Serialize};
 
-use crate::setup::iris_db::{iris::IrisCodeArray, shamir_iris::ShamirIris};
+use crate::setup::iris_db::iris::IrisCodeArray;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SQSMessage {
