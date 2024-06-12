@@ -729,7 +729,7 @@ async fn main() -> eyre::Result<()> {
                 &thread_devs,
             );
 
-            let chunk_size = thread_phase2.chunk_size(); // TODO: update based on current size
+            let chunk_size = thread_phase2.chunk_size();
             open(
                 &mut thread_phase2,
                 &res,
@@ -818,6 +818,7 @@ async fn main() -> eyre::Result<()> {
                     // Write new db sizes to device
                     *thread_current_db_size_mutex[i].lock().unwrap() +=
                         insertion_list[i].len() as usize;
+
                     // DEBUG
                     println!(
                         "Updating DB size on device {}: {:?}",
@@ -825,6 +826,16 @@ async fn main() -> eyre::Result<()> {
                         *thread_current_db_size_mutex[i].lock().unwrap()
                     );
                 }
+
+                // Update Phase 2 chunk size to max all db sizes on all devices
+                let max_db_size = thread_current_db_size_mutex
+                    .iter()
+                    .map(|e| *e.lock().unwrap())
+                    .max()
+                    .unwrap();
+                let new_chunk_size = (QUERIES * max_db_size).div_ceil(2048) * 2048;
+                assert!(new_chunk_size <= phase2_chunk_size_max);
+                thread_phase2.set_chunk_size(new_chunk_size);
 
                 // Emit stream finished event to unblock the stream after the following
                 unsafe {
