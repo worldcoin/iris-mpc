@@ -71,6 +71,7 @@ async fn main() -> eyre::Result<()> {
                 IrisCode::random_rng(&mut rng)
             }
         } else {
+            let mut rng = StdRng::seed_from_u64(1337); // TODO
             IrisCode::random_rng(&mut rng)
         };
 
@@ -79,12 +80,10 @@ async fn main() -> eyre::Result<()> {
             &template.mask,
             &mut StdRng::seed_from_u64(RNG_SEED_SERVER),
         );
-        let shared_code = GaloisRingIrisCodeShare::preprocess_iris_code_query_shares(shared_code);
         let shared_mask = GaloisRingIrisCodeShare::encode_mask_code(
             &template.mask,
             &mut StdRng::seed_from_u64(RNG_SEED_SERVER),
         );
-        let shared_mask = GaloisRingIrisCodeShare::preprocess_iris_code_query_shares(shared_mask);
         let request_id = Uuid::new_v4();
 
         let mut messages = vec![];

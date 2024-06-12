@@ -386,7 +386,7 @@ async fn main() -> eyre::Result<()> {
     let phase2_chunk_size_max =
         (QUERIES * (DB_SIZE + DB_BUFFER) / device_manager.device_count()).div_ceil(2048) * 2048;
     let phase2_batch_chunk_size =
-        (QUERIES * QUERIES / device_manager.device_count()).div_ceil(2048) * 2048;
+        (QUERIES * QUERIES).div_ceil(2048) * 2048;
 
     let phase2_batch = Arc::new(Mutex::new(Circuits::new(
         party_id,
