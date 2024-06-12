@@ -237,21 +237,21 @@ extern "C" __global__ void shared_xor_assign(TYPE *lhs_a, TYPE *lhs_b,
   }
 }
 
-extern "C" __global__ void xor_assign_u16(U16 *lhs U16 *rhs, int n) {
+extern "C" __global__ void xor_assign_u16(U16 *lhs, U16 *rhs, int n) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     xor_assign_inner<U16>(&lhs[i], &rhs[i]);
   }
 }
 
-extern "C" __global__ void xor_assign_u32(U32 *lhs U32 *rhs, int n) {
+extern "C" __global__ void xor_assign_u32(U32 *lhs, U32 *rhs, int n) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     xor_assign_inner<U32>(&lhs[i], &rhs[i]);
   }
 }
 
-extern "C" __global__ void xor_assign_u64(U64 *lhs U64 *rhs, int n) {
+extern "C" __global__ void xor_assign_u64(U64 *lhs, U64 *rhs, int n) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     xor_assign_inner<U64>(&lhs[i], &rhs[i]);
