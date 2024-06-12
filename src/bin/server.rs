@@ -343,7 +343,7 @@ async fn main() -> eyre::Result<()> {
         chacha_seeds,
         bootstrap_url.clone(),
         Some(true),
-        Some(3000),
+        Some(4000),
     );
 
     let mut masks_engine = ShareDB::init(
@@ -354,7 +354,7 @@ async fn main() -> eyre::Result<()> {
         chacha_seeds,
         bootstrap_url.clone(),
         Some(true),
-        Some(3001),
+        Some(4001),
     );
 
     let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE, DB_SIZE + DB_BUFFER);
@@ -369,7 +369,7 @@ async fn main() -> eyre::Result<()> {
         chacha_seeds,
         bootstrap_url.clone(),
         Some(true),
-        Some(3002),
+        Some(4002),
     );
     let mut batch_masks_engine = ShareDB::init(
         party_id,
@@ -379,7 +379,7 @@ async fn main() -> eyre::Result<()> {
         chacha_seeds,
         bootstrap_url.clone(),
         Some(true),
-        Some(3003),
+        Some(4003),
     );
 
     // Phase 2 Setup
@@ -392,14 +392,14 @@ async fn main() -> eyre::Result<()> {
         party_id,
         phase2_batch_chunk_size,
         bootstrap_url.clone(),
-        Some(3004),
+        Some(4004),
     )));
 
     let phase2 = Arc::new(Mutex::new(Circuits::new(
         party_id,
         phase2_chunk_size_max,
         bootstrap_url.clone(),
-        Some(3005),
+        Some(4005),
     )));
 
     let distance_comparator = Arc::new(Mutex::new(DistanceComparator::init(QUERIES)));
