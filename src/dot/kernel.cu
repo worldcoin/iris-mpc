@@ -28,7 +28,7 @@ extern "C" __global__ void matmul(int *c, unsigned short *output, int *a0Sums, i
 extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned int *output, size_t dbLength, size_t queryLength)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < dbLength * queryLength / 64)
+    if (idx < (dbLength * queryLength + 63) / 64)
     {
         unsigned long long result = result1[idx] ^ result2[idx] ^ result3[idx];
         for (int i = 0; i < 64; i++)
@@ -36,11 +36,14 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
             unsigned int queryIdx = (idx * 64 + i) / dbLength;
             unsigned int dbIdx = (idx * 64 + i) % dbLength;
             bool match = (result & (1ULL << i));
+
+            // Check if we are out of bounds for the query or db
+            if (queryIdx >= queryLength || dbIdx >= dbLength)
+                return;
+
+            // return db element with smallest index
             if (match)
-            {
-                // return db element with smallest index
                 atomicMin(&output[queryIdx], dbIdx);
-            }
         }
     }
 }

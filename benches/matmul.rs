@@ -8,6 +8,7 @@ use gpu_iris_mpc::{
     setup::shamir::P,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
+use std::sync::Arc;
 
 fn random_vec(n: usize, m: usize, max_value: u32) -> Vec<u16> {
     let mut rng = StdRng::seed_from_u64(RNG_SEED);
@@ -26,12 +27,11 @@ fn bench_memcpy(c: &mut Criterion) {
 
     let db = random_vec(DB_SIZE, WIDTH, P as u32);
     let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
-    let device_manager = DeviceManager::init();
+    let device_manager = Arc::new(DeviceManager::init());
 
     let mut engine = ShareDB::init(
         0,
         device_manager.clone(),
-        1,
         DB_SIZE,
         QUERY_SIZE,
         ([0u32; 8], [0u32; 8]),

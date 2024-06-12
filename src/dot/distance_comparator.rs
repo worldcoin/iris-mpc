@@ -75,7 +75,7 @@ impl DistanceComparator {
         db_sizes: &[usize],
     ) {
         for i in 0..self.n_devices {
-            let num_elements = db_sizes[i] * self.query_length / 64;
+            let num_elements = (db_sizes[i] * self.query_length).div_ceil(64);
             let threads_per_block = 256;
             let blocks_per_grid = num_elements.div_ceil(threads_per_block);
             let cfg = LaunchConfig {
