@@ -728,39 +728,7 @@ impl Circuits {
     }
 
     fn packed_send_receive_view(&mut self, res: &mut [ChunkShareView<u64>], bits: usize) {
-        debug_assert_eq!(res.len(), self.n_devices);
-
-        let send_bufs = res
-            .iter()
-            .enumerate()
-            .map(|(idx, res)| {
-                let data_len = bits * self.chunk_size;
-                let mut rand = unsafe { self.devs[idx].alloc::<u64>(data_len).unwrap() };
-                self.fill_my_rand_u64(&mut rand, idx);
-                self.single_xor_assign_u64(
-                    &mut rand.slice(0..rand.len()),
-                    &res.a.slice(0..data_len),
-                    idx,
-                    data_len,
-                );
-                rand
-            })
-            .collect_vec();
-
-        result::group_start().unwrap();
-        for (idx, res) in send_bufs.iter().enumerate() {
-            self.send(res, self.next_id, idx);
-        }
-        for (idx, res) in res.iter_mut().enumerate() {
-            self.packed_and_many_receive(res, bits, idx);
-        }
-        result::group_end().unwrap();
-        for (idx, res) in res.iter_mut().enumerate() {
-            let data_len = bits * self.chunk_size;
-            let mut rand = unsafe { self.devs[idx].alloc::<u64>(data_len).unwrap() };
-            self.fill_their_rand_u64(&mut rand, idx);
-            self.single_xor_assign_u64(&mut res.b, &rand.slice(..), idx, data_len);
-        }
+        self.send_receive_view_with_offset(res, 0..bits * self.chunk_size)
     }
 
     fn send_receive_view(&mut self, res: &mut [ChunkShareView<u64>]) {
@@ -1651,16 +1619,7 @@ impl Circuits {
             }
 
             // Reshare
-            result::group_start().unwrap();
-            for (idx, bit) in bits.iter().enumerate() {
-                let a = bit.get_offset(0, num);
-                self.send_view(&a.a, self.next_id, idx);
-            }
-            for (idx, bit) in bits.iter_mut().enumerate() {
-                let mut a = bit.get_offset(0, num);
-                self.receive_view(&mut a.b, self.prev_id, idx);
-            }
-            result::group_end().unwrap();
+            self.send_receive_view_with_offset(bits, 0..num);
 
             num += mod_;
         }
@@ -1689,6 +1648,7 @@ impl Circuits {
             }
 
             // Reshare
+            // TODO: XOR enc
             result::group_start().unwrap();
             let mut a = bit.get_offset(0, num);
             self.send_view(&a.a, self.next_id, idx);
@@ -1761,6 +1721,8 @@ impl Circuits {
             }
             let bytes = (current_bitsize + 7) / 8;
             rand_offset = rand_offset.slice(bytes..); // Advance randomness
+
+            // TODO: XOR enc
             result::group_start().unwrap();
             self.send_view(&res.a, self.next_id, 0);
             self.receive_view(&mut res.b, self.prev_id, 0);
