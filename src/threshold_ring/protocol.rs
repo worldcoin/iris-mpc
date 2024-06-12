@@ -577,11 +577,12 @@ impl Circuits {
         let data_len = send.len();
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
-        let mut rand = unsafe { self.devs[idx].alloc_zeros::<u64>(data_len).unwrap() };
-        // self.fill_my_rand_u64(&mut rand, idx);
+        // let mut rand = unsafe { self.devs[idx].alloc_zeros::<u64>(data_len).unwrap()
+        // }; self.fill_my_rand_u64(&mut rand, idx);
 
-        self.single_xor_assign_u64(&mut rand.slice(..), send, idx, data_len);
-        self.send(&rand, self.next_id, idx);
+        // self.single_xor_assign_u64(&mut rand.slice(..), send, idx, data_len);
+        // self.send(&rand, self.next_id, idx);
+        self.send_view(send, self.next_id, idx);
     }
 
     pub fn otp_receive_prev_and_decrypt_view_u64(
@@ -594,10 +595,11 @@ impl Circuits {
 
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
-        let mut rand = unsafe { self.devs[idx].alloc_zeros::<u64>(data_len).unwrap() };
+        // let mut rand = unsafe {
+        // self.devs[idx].alloc::<u64>(data_len).unwrap() };
         // self.fill_their_rand_u64(&mut rand, idx);
 
-        self.single_xor_assign_u64(receive, &rand.slice(..), idx, data_len);
+        // self.single_xor_assign_u64(receive, &rand.slice(..), idx, data_len);
     }
 
     fn receive_view_u16(&mut self, receive: &mut CudaView<u16>, peer_id: usize, idx: usize) {
@@ -619,6 +621,13 @@ impl Circuits {
         T: cudarc::nccl::NcclType,
     {
         self.comms[idx].send(send, peer_id as i32).unwrap();
+    }
+
+    fn send_view<T>(&mut self, send: &CudaView<T>, peer_id: usize, idx: usize)
+    where
+        T: cudarc::nccl::NcclType,
+    {
+        self.comms[idx].send_view(send, peer_id as i32).unwrap();
     }
 
     // Fill randomness using the correlated RNG
