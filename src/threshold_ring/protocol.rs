@@ -581,8 +581,8 @@ impl Circuits {
         // self.fill_my_rand_u64(&mut rand, idx);
 
         self.single_xor_assign_u64(&mut rand.slice(..), send, idx, data_len);
-        // self.send(&rand, self.next_id, idx);
-        self.send_view(send, self.next_id, idx);
+        self.send(&rand, self.next_id, idx);
+        // self.send_view(send, self.next_id, idx);
     }
 
     pub fn otp_receive_prev_and_decrypt_view_u64(
