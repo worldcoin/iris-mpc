@@ -113,13 +113,13 @@ fn open(party: &mut Circuits, x: &[ChunkShare<u64>]) -> Vec<u64> {
     for (idx, res) in x.iter().enumerate() {
         // Result is in bit 0
         let res = res.get_offset(0, CHUNK_SIZE);
-        party.otp_encrypt_and_send_next_view_u64(&res.b, idx);
+        party.send_view(&res.b, party.next_id(), idx);
         a.push(res.a);
         b.push(res.b);
     }
     for (idx, res) in x.iter().enumerate() {
         let mut res = res.get_offset(1, CHUNK_SIZE);
-        party.otp_receive_prev_and_decrypt_view_u64(&mut res.a, idx);
+        party.receive_view(&mut res.a, party.prev_id(), idx);
         c.push(res.a);
     }
     cudarc::nccl::result::group_end().unwrap();

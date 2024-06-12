@@ -613,7 +613,7 @@ impl Circuits {
         self.receive_view(&mut receive_trans, peer_id, idx);
     }
 
-    fn receive_view<T>(&mut self, receive: &mut CudaView<T>, peer_id: usize, idx: usize)
+    pub fn receive_view<T>(&mut self, receive: &mut CudaView<T>, peer_id: usize, idx: usize)
     where
         T: cudarc::nccl::NcclType,
     {
@@ -627,7 +627,7 @@ impl Circuits {
         self.comms[idx].send(send, peer_id as i32).unwrap();
     }
 
-    fn send_view<T>(&mut self, send: &CudaView<T>, peer_id: usize, idx: usize)
+    pub fn send_view<T>(&mut self, send: &CudaView<T>, peer_id: usize, idx: usize)
     where
         T: cudarc::nccl::NcclType,
     {
