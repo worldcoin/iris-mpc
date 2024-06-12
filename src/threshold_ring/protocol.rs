@@ -597,7 +597,7 @@ impl Circuits {
         let mut rand = unsafe { self.devs[idx].alloc_zeros::<u64>(data_len).unwrap() };
         // self.fill_their_rand_u64(&mut rand, idx);
 
-        self.single_xor_assign_u64(receive, &rand.slice(..), idx, data_len);
+        // self.single_xor_assign_u64(receive, &rand.slice(..), idx, data_len);
     }
 
     fn receive_view_u16(&mut self, receive: &mut CudaView<u16>, peer_id: usize, idx: usize) {
