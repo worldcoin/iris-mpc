@@ -475,6 +475,8 @@ async fn main() -> eyre::Result<()> {
 
         let code_query = prepare_query_shares(batch.query.code);
         let mask_query = prepare_query_shares(batch.query.mask);
+        let code_query_insert = prepare_query_shares(batch.db.code);
+        let mask_query_insert = prepare_query_shares(batch.db.mask);
 
         let mut timers = vec![];
 
@@ -495,10 +497,16 @@ async fn main() -> eyre::Result<()> {
         // TODO: free all of this!
         let code_query = device_manager.htod_transfer_query(&code_query, request_streams);
         let mask_query = device_manager.htod_transfer_query(&mask_query, request_streams);
+        let code_query_insert = device_manager.htod_transfer_query(&code_query_insert, request_streams);
+        let mask_query_insert = device_manager.htod_transfer_query(&mask_query_insert, request_streams);
         let code_query_sums =
             codes_engine.query_sums(&code_query, request_streams, request_cublas_handles);
         let mask_query_sums =
             masks_engine.query_sums(&mask_query, request_streams, request_cublas_handles);
+        let code_query_insert_sums =
+            codes_engine.query_sums(&code_query_insert, request_streams, request_cublas_handles);
+        let mask_query_insert_sums =
+            masks_engine.query_sums(&mask_query_insert, request_streams, request_cublas_handles);
 
         // update the db size, skip this for the first two
         if request_counter > 2 {
@@ -520,7 +528,7 @@ async fn main() -> eyre::Result<()> {
 
         batch_codes_engine.dot(
             &code_query,
-            &code_query,
+            &code_query_insert,
             &query_db_size,
             request_streams,
             request_cublas_handles,
@@ -528,7 +536,7 @@ async fn main() -> eyre::Result<()> {
 
         batch_masks_engine.dot(
             &mask_query,
-            &mask_query,
+            &mask_query_insert,
             &query_db_size,
             request_streams,
             request_cublas_handles,
@@ -536,14 +544,14 @@ async fn main() -> eyre::Result<()> {
 
         batch_codes_engine.dot_reduce(
             &code_query_sums,
-            &code_query_sums,
+            &code_query_insert_sums,
             &query_db_size,
             request_streams,
         );
 
         batch_masks_engine.dot_reduce(
             &mask_query_sums,
-            &mask_query_sums,
+            &mask_query_insert_sums,
             &query_db_size,
             request_streams,
         );
@@ -776,8 +784,8 @@ async fn main() -> eyre::Result<()> {
                     for insertion_idx in insertion_list[i] {
                         // Append to codes and masks db
                         for (db, query, sums) in [
-                            (&thread_code_db_slices, &code_query, &code_query_sums),
-                            (&thread_mask_db_slices, &mask_query, &mask_query_sums),
+                            (&thread_code_db_slices, &code_query_insert, &code_query_insert_sums),
+                            (&thread_mask_db_slices, &mask_query_insert, &mask_query_insert_sums),
                         ] {
                             dtod_at_offset(
                                 db.0 .0[i],
