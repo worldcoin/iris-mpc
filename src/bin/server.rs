@@ -386,7 +386,7 @@ async fn main() -> eyre::Result<()> {
     let phase2_chunk_size_max =
         (QUERIES * (DB_SIZE + DB_BUFFER) / device_manager.device_count()).div_ceil(2048) * 2048;
     let phase2_batch_chunk_size =
-        (QUERIES * QUERIES / device_manager.device_count()).div_ceil(2048) * 2048;
+        (QUERIES * QUERIES).div_ceil(2048) * 2048;
 
     let phase2_batch = Arc::new(Mutex::new(Circuits::new(
         party_id,
@@ -431,30 +431,6 @@ async fn main() -> eyre::Result<()> {
     let mut timer_events = vec![];
     let start_timer = device_manager.create_events();
     let end_timer = device_manager.create_events();
-
-    let mut code_db_sizes = vec![];
-    let mut mask_db_sizes = vec![];
-    let mut query_db_sizes = vec![];
-    for i in 0..device_manager.device_count() {
-        code_db_sizes.push(
-            device_manager
-                .device(i)
-                .htod_copy(vec![(DB_SIZE / device_manager.device_count()) as u32; 1])
-                .unwrap(),
-        );
-        mask_db_sizes.push(
-            device_manager
-                .device(i)
-                .htod_copy(vec![(DB_SIZE / device_manager.device_count()) as u32; 1])
-                .unwrap(),
-        );
-        query_db_sizes.push(
-            device_manager
-                .device(i)
-                .htod_copy(vec![QUERIES as u32; 1])
-                .unwrap(),
-        );
-    }
 
     let current_db_size: Vec<usize> =
         vec![DB_SIZE / device_manager.device_count(); device_manager.device_count()];
