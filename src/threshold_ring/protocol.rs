@@ -495,118 +495,14 @@ impl Circuits {
         }
     }
 
-    pub fn otp_encrypt_and_send_next_view_u16(&mut self, send: &CudaView<u16>, idx: usize) {
-        let data_len = send.len();
-        // must be even
-        debug_assert_eq!(data_len & 1, 0);
-        // SAFETY: Only unsafe because memory is not initialized. But, we fill
-        // afterwards.
-        let mut rand_alloc = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
-        let mut rand = self.fill_my_rng_into_u16(&mut rand_alloc, idx);
-
-        self.single_xor_assign_u16(&mut rand, send, idx, data_len);
-        self.send(&rand_alloc, self.next_id, idx);
+    pub fn send_view_u16(&mut self, send: &CudaView<u16>, peer_id: usize, idx: usize) {
+        // We have to transmute since u16 is not receivable
+        let mut send_trans: CudaView<u8> =        // the transmute_mut is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
+     unsafe { send.transmute(send.len() * 2).unwrap() };
+        self.send_view(&mut send_trans, peer_id, idx);
     }
 
-    fn otp_encrypt_and_send_prev_view_u16(&mut self, send: &CudaView<u16>, idx: usize) {
-        let data_len = send.len();
-        // must be even
-        debug_assert_eq!(data_len & 1, 0);
-        // SAFETY: Only unsafe because memory is not initialized. But, we fill
-        // afterwards.
-        let mut rand_alloc = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
-        let mut rand = self.fill_their_rng_into_u16(&mut rand_alloc, idx);
-
-        self.single_xor_assign_u16(&mut rand, send, idx, data_len);
-        self.send(&rand_alloc, self.prev_id, idx);
-    }
-
-    pub fn otp_receive_prev_and_decrypt_view_u16(
-        &mut self,
-        receive: &mut CudaView<u16>,
-        idx: usize,
-    ) {
-        let data_len = receive.len();
-        // must be even
-        debug_assert_eq!(data_len & 1, 0);
-        self.receive_view_u16(receive, self.prev_id, idx);
-
-        // SAFETY: Only unsafe because memory is not initialized. But, we fill
-        // afterwards.
-        let mut rand_alloc = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
-        let rand = self.fill_their_rng_into_u16(&mut rand_alloc, idx);
-
-        self.single_xor_assign_u16(receive, &rand, idx, data_len);
-    }
-
-    fn otp_receive_next_and_decrypt_view_u16(&mut self, receive: &mut CudaView<u16>, idx: usize) {
-        let data_len = receive.len();
-        // must be even
-        debug_assert_eq!(data_len & 1, 0);
-        self.receive_view_u16(receive, self.next_id, idx);
-
-        // SAFETY: Only unsafe because memory is not initialized. But, we fill
-        // afterwards.
-        let mut rand_alloc = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
-        let rand = self.fill_my_rng_into_u16(&mut rand_alloc, idx);
-
-        self.single_xor_assign_u16(receive, &rand, idx, data_len);
-    }
-
-    pub fn otp_encrypt_and_send_next_view_u32(&mut self, send: &CudaView<u32>, idx: usize) {
-        let data_len = send.len();
-        // SAFETY: Only unsafe because memory is not initialized. But, we fill
-        // afterwards.
-        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len).unwrap() };
-        let rng = &mut self.rngs[idx];
-        rng.fill_my_rng_into(&mut rand.slice_mut(..));
-
-        self.single_xor_assign_u32(&mut rand.slice(..), send, idx, data_len);
-        self.send(&rand, self.next_id, idx);
-    }
-
-    pub fn otp_receive_prev_and_decrypt_view_u32(
-        &mut self,
-        receive: &mut CudaView<u32>,
-        idx: usize,
-    ) {
-        let data_len = receive.len();
-        self.receive_view(receive, self.prev_id, idx);
-
-        // SAFETY: Only unsafe because memory is not initialized. But, we fill
-        // afterwards.
-        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len).unwrap() };
-        let rng = &mut self.rngs[idx];
-        rng.fill_their_rng_into(&mut rand.slice_mut(..));
-
-        self.single_xor_assign_u32(receive, &rand.slice(..), idx, data_len);
-    }
-
-    pub fn otp_encrypt_u64(&mut self, send: &CudaView<u64>, idx: usize) {
-        let data_len = send.len();
-        // SAFETY: Only unsafe because memory is not initialized. But, we fill
-        // afterwards.
-        // let mut rand = unsafe { self.devs[idx].alloc_zeros::<u64>(data_len).unwrap() };
-        // self.fill_my_rand_u64(&mut rand, idx);
-
-        // self.single_xor_assign_u64(&mut rand.slice(0..rand.len()), send, idx, data_len);
-        self.send_view(&send, self.next_id, idx);
-        // self.send_view(send, self.next_id, idx);
-    }
-
-    pub fn otp_decrypt_view_inplace_u64(&mut self, receive: &mut CudaView<u64>, idx: usize) {
-        let data_len = receive.len();
-        self.receive_view(receive, self.prev_id, idx);
-
-        // SAFETY: Only unsafe because memory is not initialized. But, we fill
-        // afterwards.
-        // let mut rand = unsafe { self.devs[idx].alloc_zeros::<u64>(data_len).unwrap() };
-        // self.fill_their_rand_u64(&mut rand, idx);
-
-        // self.single_xor_assign_u64(receive, &rand.slice(0..rand.len()), idx, data_len);
-    }
-
-    fn receive_view_u16(&mut self, receive: &mut CudaView<u16>, peer_id: usize, idx: usize) {
+    pub fn receive_view_u16(&mut self, receive: &mut CudaView<u16>, peer_id: usize, idx: usize) {
         // We have to transmute since u16 is not receivable
         let mut receive_trans: CudaView<u8> =        // the transmute_mut is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
      unsafe { receive.transmute(receive.len() * 2).unwrap() };
@@ -1143,8 +1039,8 @@ impl Circuits {
 
         result::group_start().unwrap();
         for (idx, (m0, m1)) in izip!(&m0, &m1).enumerate() {
-            self.otp_encrypt_and_send_prev_view_u16(m0, idx);
-            self.otp_encrypt_and_send_prev_view_u16(m1, idx);
+            self.send_view_u16(m0, self.prev_id, idx);
+            self.send_view_u16(m1, self.prev_id, idx);
         }
         result::group_end().unwrap();
 
@@ -1166,9 +1062,9 @@ impl Circuits {
 
         result::group_start().unwrap();
         for (idx, (m0, m1, wc)) in izip!(&mut m0, &mut m1, &mut wc).enumerate() {
-            self.otp_receive_next_and_decrypt_view_u16(m0, idx);
-            self.otp_receive_prev_and_decrypt_view_u16(wc, idx);
-            self.otp_receive_next_and_decrypt_view_u16(m1, idx);
+            self.receive_view_u16(m0, self.next_id, idx);
+            self.receive_view_u16(wc, self.prev_id, idx);
+            self.receive_view_u16(m1, self.next_id, idx);
         }
         result::group_end().unwrap();
 
@@ -1209,7 +1105,7 @@ impl Circuits {
         // Reshare to Helper
         result::group_start().unwrap();
         for (idx, res) in outp.iter().enumerate() {
-            self.otp_encrypt_and_send_prev_view_u16(&res.b, idx);
+            self.send_view_u16(&res.b, self.prev_id, idx);
         }
         result::group_end().unwrap();
 
@@ -1270,12 +1166,12 @@ impl Circuits {
 
         result::group_start().unwrap();
         for (idx, wc) in wc.iter().enumerate() {
-            self.otp_encrypt_and_send_next_view_u16(wc, idx);
+            self.send_view_u16(wc, self.next_id, idx);
         }
         result::group_end().unwrap();
         result::group_start().unwrap();
         for (idx, res) in outp.iter_mut().enumerate() {
-            self.otp_receive_next_and_decrypt_view_u16(&mut res.a, idx);
+            self.receive_view_u16(&mut res.a, self.next_id, idx);
         }
         result::group_end().unwrap();
 

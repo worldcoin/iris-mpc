@@ -95,10 +95,10 @@ fn open(party: &mut Circuits, x: &mut [ChunkShareView<u16>]) -> Vec<u16> {
     }
     cudarc::nccl::result::group_start().unwrap();
     for (idx, res) in x.iter().enumerate() {
-        party.otp_encrypt_and_send_next_view_u16(&res.b, idx);
+        party.send_view_u16(&res.b, party.next_id(), idx);
     }
     for (idx, res) in x.iter_mut().enumerate() {
-        party.otp_receive_prev_and_decrypt_view_u16(&mut res.a, idx);
+        party.receive_view_u16(&mut res.a, party.prev_id(), idx);
     }
     cudarc::nccl::result::group_end().unwrap();
     for (idx, res) in x.iter_mut().enumerate() {
