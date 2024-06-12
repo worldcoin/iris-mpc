@@ -1,5 +1,3 @@
-use std::{ffi::c_void, mem, str::FromStr, sync::Arc, thread, time::Duration};
-
 use super::{device_manager::DeviceManager, IRIS_CODE_LENGTH};
 use crate::{
     helpers::id_wrapper::{http_root, IdWrapper},
@@ -12,12 +10,11 @@ use cudarc::{
         result::malloc_async, CudaFunction, CudaSlice, CudaStream, DevicePtr, LaunchAsync,
         LaunchConfig,
     },
-    nccl::{
-        self, result, Comm, Id, NcclType
-    },
+    nccl::{self, result, Comm, Id, NcclType},
     nvrtc::compile_ptx,
 };
 use rayon::prelude::*;
+use std::{ffi::c_void, mem, str::FromStr, sync::Arc, thread, time::Duration};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const MATMUL_FUNCTION_NAME: &str = "matmul";
@@ -119,17 +116,17 @@ fn receive_stream<T: NcclType>(
 }
 
 pub struct ShareDB {
-    peer_id: usize,
-    is_remote: bool,
-    query_length: usize,
-    device_manager: Arc<DeviceManager>,
-    kernels: Vec<CudaFunction>,
-    rngs: Vec<(ChaChaCudaRng, ChaChaCudaRng)>,
-    comms: Vec<Arc<Comm>>,
-    ones: Vec<CudaSlice<u8>>,
+    peer_id:              usize,
+    is_remote:            bool,
+    query_length:         usize,
+    device_manager:       Arc<DeviceManager>,
+    kernels:              Vec<CudaFunction>,
+    rngs:                 Vec<(ChaChaCudaRng, ChaChaCudaRng)>,
+    comms:                Vec<Arc<Comm>>,
+    ones:                 Vec<CudaSlice<u8>>,
     intermediate_results: Vec<CudaSlice<i32>>,
-    pub results: Vec<CudaSlice<u8>>,
-    pub results_peer: Vec<CudaSlice<u8>>,
+    pub results:          Vec<CudaSlice<u8>>,
+    pub results_peer:     Vec<CudaSlice<u8>>,
 }
 
 impl ShareDB {
@@ -553,21 +550,17 @@ impl ShareDB {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::{preprocess_query, ShareDB};
     use crate::{
         dot::device_manager::DeviceManager,
         helpers::device_ptrs,
-        setup::{
-            galois_engine::degree2::GaloisRingIrisCodeShare,
-            iris_db::db::IrisDB,
-        },
+        setup::{galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     };
     use float_eq::assert_float_eq;
     use ndarray::Array2;
     use num_traits::FromPrimitive;
     use rand::{rngs::StdRng, Rng, SeedableRng};
+    use std::sync::Arc;
     const WIDTH: usize = 12_800;
     const QUERY_SIZE: usize = 31;
     const DB_SIZE: usize = 8 * 1000;

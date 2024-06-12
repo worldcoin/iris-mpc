@@ -1,6 +1,5 @@
-use std::sync::Arc;
-
 use cudarc::driver::{CudaDevice, CudaSlice, DevicePtr};
+use std::sync::Arc;
 
 pub mod id_wrapper;
 pub mod mmap;
@@ -19,9 +18,9 @@ pub fn device_ptrs_to_slices<T>(
         .enumerate()
         .map(|(idx, &p)| CudaSlice {
             cu_device_ptr: p,
-            len: sizes[idx],
-            device: devs[idx].clone(),
-            host_buf: None,
+            len:           sizes[idx],
+            device:        devs[idx].clone(),
+            host_buf:      None,
         })
         .collect()
 }

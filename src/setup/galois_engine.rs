@@ -1,10 +1,9 @@
 pub mod degree2 {
-    use rand::Rng;
-
     use crate::setup::{
         galois::degree2::{GaloisRingElement, ShamirGaloisRingShare},
         iris_db::iris::IrisCodeArray,
     };
+    use rand::Rng;
 
     #[derive(Debug, Clone)]
     pub struct GaloisRingIrisCodeShare {
@@ -62,15 +61,15 @@ pub mod degree2 {
         ) -> [GaloisRingIrisCodeShare; 3] {
             let mut shares = [
                 GaloisRingIrisCodeShare {
-                    id: 1,
+                    id:    1,
                     coefs: [0; 12800],
                 },
                 GaloisRingIrisCodeShare {
-                    id: 2,
+                    id:    2,
                     coefs: [0; 12800],
                 },
                 GaloisRingIrisCodeShare {
-                    id: 3,
+                    id:    3,
                     coefs: [0; 12800],
                 },
             ];
@@ -97,9 +96,11 @@ pub mod degree2 {
                     coefs: [share.coefs[i], share.coefs[i + 1]],
                 };
                 let adjusted_share = new_share * lagrange_coeffs[party_id];
-                // we write the bits back into the flat array in the "wrong" order, such that we can do simple dot product later
+                // we write the bits back into the flat array in the "wrong" order, such that we
+                // can do simple dot product later
                 share.coefs[i] = adjusted_share.coefs[0];
-                share.coefs[i + 1] = adjusted_share.coefs[1]; // Note the order of bits
+                share.coefs[i + 1] = adjusted_share.coefs[1]; // Note the order
+                                                              // of bits
             }
         }
 

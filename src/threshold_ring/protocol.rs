@@ -404,7 +404,7 @@ impl Circuits {
     // TODO: have different chunk sizes for each gpu
     pub fn chunk_size(&self) -> usize {
         self.chunk_size
-    }  
+    }
 
     pub fn take_result_buffer(&mut self) -> Vec<ChunkShare<u64>> {
         Buffers::take_buffer(&mut self.buffers.u64_32c_1)
@@ -528,7 +528,10 @@ impl Circuits {
     where
         T: cudarc::nccl::NcclType,
     {
-        self.comms[idx].0.recv_view(receive, peer_id as i32).unwrap();
+        self.comms[idx]
+            .0
+            .recv_view(receive, peer_id as i32)
+            .unwrap();
     }
 
     pub fn send<T>(&mut self, send: &CudaSlice<T>, peer_id: usize, idx: usize)

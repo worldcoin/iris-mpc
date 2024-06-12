@@ -1,26 +1,25 @@
-use std::sync::Arc;
-
+use super::ROTATIONS;
 use cudarc::{
     driver::{
-        result::{launch_kernel, memcpy_dtoh_sync}, CudaDevice, CudaFunction, CudaSlice, CudaView, DeviceRepr, LaunchAsync, LaunchConfig
+        result::{launch_kernel, memcpy_dtoh_sync},
+        CudaDevice, CudaFunction, CudaSlice, CudaView, DeviceRepr, LaunchAsync, LaunchConfig,
     },
     nvrtc::compile_ptx,
 };
-
-use super::ROTATIONS;
+use std::sync::Arc;
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const OPEN_RESULTS_FUNCTION: &str = "openResults";
 const MERGE_RESULTS_FUNCTION: &str = "mergeResults";
 
 pub struct DistanceComparator {
-    pub devs: Vec<Arc<CudaDevice>>,
-    pub open_kernels: Vec<CudaFunction>,
-    pub merge_kernels: Vec<CudaFunction>,
-    pub query_length: usize,
-    pub n_devices: usize,
+    pub devs:           Vec<Arc<CudaDevice>>,
+    pub open_kernels:   Vec<CudaFunction>,
+    pub merge_kernels:  Vec<CudaFunction>,
+    pub query_length:   usize,
+    pub n_devices:      usize,
     pub opened_results: Vec<CudaSlice<u32>>,
-    pub final_results: Vec<CudaSlice<u32>>,
+    pub final_results:  Vec<CudaSlice<u32>>,
 }
 
 impl DistanceComparator {
@@ -35,11 +34,10 @@ impl DistanceComparator {
 
         for i in 0..n_devices {
             let dev = CudaDevice::new(i).unwrap();
-            dev.load_ptx(
-                ptx.clone(),
-                "",
-                &[OPEN_RESULTS_FUNCTION, MERGE_RESULTS_FUNCTION],
-            )
+            dev.load_ptx(ptx.clone(), "", &[
+                OPEN_RESULTS_FUNCTION,
+                MERGE_RESULTS_FUNCTION,
+            ])
             .unwrap();
 
             let open_results_function = dev.get_func("", OPEN_RESULTS_FUNCTION).unwrap();
@@ -88,14 +86,20 @@ impl DistanceComparator {
             self.devs[i].bind_to_thread().unwrap();
 
             unsafe {
-                self.open_kernels[i].clone().launch(cfg, (
-                    &results1[i],
-                    &results2[i],
-                    &results3[i],
-                    &results_ptrs[i],
-                    db_sizes[i],
-                    self.query_length,
-                )).unwrap();
+                self.open_kernels[i]
+                    .clone()
+                    .launch(
+                        cfg,
+                        (
+                            &results1[i],
+                            &results2[i],
+                            &results3[i],
+                            &results_ptrs[i],
+                            db_sizes[i],
+                            self.query_length,
+                        ),
+                    )
+                    .unwrap();
             }
         }
     }

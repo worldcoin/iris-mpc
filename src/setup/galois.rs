@@ -232,9 +232,8 @@ pub mod degree2 {
 
     #[cfg(test)]
     mod tests {
-        use rand::thread_rng;
-
         use super::{GaloisRingElement, ShamirGaloisRingShare};
+        use rand::thread_rng;
 
         #[test]
         fn inverses() {

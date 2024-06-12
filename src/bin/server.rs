@@ -21,7 +21,7 @@ use gpu_iris_mpc::{
         mmap::{read_mmap_file, write_mmap_file},
         sqs::{SMPCRequest, SQSMessage},
     },
-    setup::galois_engine::degree2::GaloisRingIrisCodeShare,
+    setup::{galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use rand::{prelude::SliceRandom, rngs::StdRng, Rng, SeedableRng};
@@ -32,8 +32,6 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::time::sleep;
-
-use gpu_iris_mpc::setup::iris_db::db::IrisDB;
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1000;
@@ -86,7 +84,7 @@ struct BatchQueryEntries {
 #[derive(Default)]
 struct BatchQuery {
     pub query: BatchQueryEntries,
-    pub db: BatchQueryEntries,
+    pub db:    BatchQueryEntries,
 }
 
 async fn receive_batch(
@@ -387,8 +385,7 @@ async fn main() -> eyre::Result<()> {
         (QUERIES * DB_SIZE / device_manager.device_count()).div_ceil(2048) * 2048;
     let phase2_chunk_size_max =
         (QUERIES * (DB_SIZE + DB_BUFFER) / device_manager.device_count()).div_ceil(2048) * 2048;
-    let phase2_batch_chunk_size =
-        (QUERIES * QUERIES).div_ceil(2048) * 2048;
+    let phase2_batch_chunk_size = (QUERIES * QUERIES).div_ceil(2048) * 2048;
 
     let phase2_batch = Arc::new(Mutex::new(Circuits::new(
         party_id,
@@ -477,8 +474,10 @@ async fn main() -> eyre::Result<()> {
         // TODO: free all of this!
         let code_query = device_manager.htod_transfer_query(&code_query, request_streams);
         let mask_query = device_manager.htod_transfer_query(&mask_query, request_streams);
-        let code_query_insert = device_manager.htod_transfer_query(&code_query_insert, request_streams);
-        let mask_query_insert = device_manager.htod_transfer_query(&mask_query_insert, request_streams);
+        let code_query_insert =
+            device_manager.htod_transfer_query(&code_query_insert, request_streams);
+        let mask_query_insert =
+            device_manager.htod_transfer_query(&mask_query_insert, request_streams);
         let code_query_sums =
             codes_engine.query_sums(&code_query, request_streams, request_cublas_handles);
         let mask_query_sums =
@@ -693,7 +692,7 @@ async fn main() -> eyre::Result<()> {
                 .iter()
                 .map(|d| *d.cu_stream() as u64)
                 .collect::<Vec<_>>();
-            
+
             // Wait for Phase 1 to finish
             await_streams(&thread_streams);
 
@@ -766,8 +765,16 @@ async fn main() -> eyre::Result<()> {
                     for insertion_idx in insertion_list[i] {
                         // Append to codes and masks db
                         for (db, query, sums) in [
-                            (&thread_code_db_slices, &code_query_insert, &code_query_insert_sums),
-                            (&thread_mask_db_slices, &mask_query_insert, &mask_query_insert_sums),
+                            (
+                                &thread_code_db_slices,
+                                &code_query_insert,
+                                &code_query_insert_sums,
+                            ),
+                            (
+                                &thread_mask_db_slices,
+                                &mask_query_insert,
+                                &mask_query_insert_sums,
+                            ),
                         ] {
                             dtod_at_offset(
                                 db.0 .0[i],
