@@ -386,7 +386,7 @@ async fn main() -> eyre::Result<()> {
     let phase2_chunk_size_max =
         (QUERIES * (DB_SIZE + DB_BUFFER) / device_manager.device_count()).div_ceil(2048) * 2048;
     let phase2_batch_chunk_size =
-        (QUERIES * QUERIES).div_ceil(2048) * 2048;
+        (QUERIES * QUERIES / device_manager.device_count()).div_ceil(2048) * 2048;
 
     let phase2_batch = Arc::new(Mutex::new(Circuits::new(
         party_id,
@@ -639,10 +639,11 @@ async fn main() -> eyre::Result<()> {
         let thread_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
 
         tokio::spawn(async move {
+            println!("1");
             let mut thread_phase2_batch = thread_phase2_batch.lock().unwrap();
             let mut thread_phase2 = thread_phase2.lock().unwrap();
             let tmp_distance_comparator = thread_distance_comparator.lock().unwrap();
-
+            println!("2");
             let (result_sizes, db_sizes): (Vec<_>, Vec<_>) = thread_current_db_size_mutex
                 .iter()
                 .map(|e| {
@@ -687,10 +688,10 @@ async fn main() -> eyre::Result<()> {
                 .iter()
                 .map(|d| *d.cu_stream() as u64)
                 .collect::<Vec<_>>();
-
+            println!("3");
             // Wait for Phase 1 to finish
             await_streams(&thread_streams);
-
+            println!("4");
             // Phase 2 [Batch]: compare each result against threshold
             thread_phase2_batch.compare_threshold_masked_many(&code_dots_batch, &mask_dots_batch);
 
@@ -713,8 +714,12 @@ async fn main() -> eyre::Result<()> {
             );
             thread_phase2_batch.return_result_buffer(res);
 
+            println!("5");
+
             // Phase 2 [DB]: compare each result against threshold
             thread_phase2.compare_threshold_masked_many(&code_dots, &mask_dots);
+
+            println!("6");
 
             // Phase 2 [DB]: Reveal the binary results
             let res = thread_phase2.take_result_buffer();
