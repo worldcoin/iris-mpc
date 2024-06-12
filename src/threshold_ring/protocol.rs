@@ -1605,18 +1605,7 @@ impl Circuits {
                 self.and_many_pre(&a, &b, &mut tmp_c, idx);
             }
             // Send/Receive
-            result::group_start().unwrap();
-            for (idx, a) in a.iter().enumerate() {
-                // Unused space used for temparary storage
-                let tmp_c = a.get_offset(0, self.chunk_size);
-                self.send_view(&tmp_c.a, self.next_id, idx);
-            }
-            for (idx, a) in a.iter_mut().enumerate() {
-                // Unused space used for temparary storage
-                let mut tmp_c = a.get_offset(0, self.chunk_size);
-                self.receive_view(&mut tmp_c.b, self.prev_id, idx);
-            }
-            result::group_end().unwrap();
+            self.send_receive_view_with_offset(&mut a, 0..self.chunk_size);
             // Postprocess xor
             for (idx, (c, a)) in izip!(carry.iter_mut(), &a).enumerate() {
                 // Unused space used for temparary storage
