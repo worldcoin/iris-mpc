@@ -17,7 +17,8 @@ fn main() {
     let seed2 = thread_rng().gen::<[u32; 8]>();
 
     // each party has 2 RNGs, initialized with the seeds
-    // we also have a internal buffer size of valid field elements to be produced, needs to be a multiple of 1000
+    // we also have a internal buffer size of valid field elements to be produced,
+    // needs to be a multiple of 1000
     const RNG_BUF_SIZE: usize = 1000 * 1000 * 31; // lets do 31 million at a time here
 
     // party 0
@@ -25,12 +26,14 @@ fn main() {
     let mut chacha1_p0_0 = ChaChaCudaFeRng::init(RNG_BUF_SIZE, CudaDevice::new(0).unwrap(), seed0);
     let mut chacha2_p0_0 = ChaChaCudaFeRng::init(RNG_BUF_SIZE, CudaDevice::new(0).unwrap(), seed2);
 
-    // // we can also use the same seeds to construct new RNGs, but on a different device, however, we need to set a new nonce to ensure the RNG streams are different
-    // let mut chacha1_p0_1 = ChaChaCudaFeRng::init(RNG_BUF_SIZE, CudaDevice::new(1).unwrap(), seed1);
-    // // default nonce is 0
+    // // we can also use the same seeds to construct new RNGs, but on a different
+    // device, however, we need to set a new nonce to ensure the RNG streams are
+    // different let mut chacha1_p0_1 = ChaChaCudaFeRng::init(RNG_BUF_SIZE,
+    // CudaDevice::new(1).unwrap(), seed1); // default nonce is 0
     // chacha1_p0_1.get_mut_chacha().set_nonce(1);
-    // let mut chacha2_p0_1 = ChaChaCudaFeRng::init(RNG_BUF_SIZE, CudaDevice::new(1).unwrap(), seed2);
-    // chacha2_p0_1.get_mut_chacha().set_nonce(1);
+    // let mut chacha2_p0_1 = ChaChaCudaFeRng::init(RNG_BUF_SIZE,
+    // CudaDevice::new(1).unwrap(), seed2); chacha2_p0_1.get_mut_chacha().
+    // set_nonce(1);
 
     // party 1 (this would be on another machine, but we simulate it here)
     // we construct the RNGs, using the first device, and the seeds

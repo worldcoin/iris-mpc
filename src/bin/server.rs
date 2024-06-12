@@ -1,3 +1,4 @@
+#![allow(clippy::needless_range_loop)]
 use aws_sdk_sqs::{config::Region, Client};
 use clap::Parser;
 use cudarc::driver::{
@@ -23,6 +24,7 @@ use gpu_iris_mpc::{
     setup::galois_engine::degree2::GaloisRingIrisCodeShare,
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
+use rand::{prelude::SliceRandom, rngs::StdRng, Rng, SeedableRng};
 use std::{
     fs::metadata,
     mem,
@@ -144,6 +146,7 @@ fn prepare_query_shares(shares: Vec<GaloisRingIrisCodeShare>) -> Vec<Vec<u8>> {
     )
 }
 
+#[allow(clippy::type_complexity)]
 fn slice_tuples_to_ptrs(
     tuple: &(
         (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
@@ -486,7 +489,8 @@ async fn main() -> eyre::Result<()> {
 
         // update the db size, skip this for the first two
         if request_counter > 2 {
-            // We have two streams working concurrently, we'll await the stream before previous one
+            // We have two streams working concurrently, we'll await the stream before
+            // previous one
             let previous_streams = &streams[(request_counter - 2) % MAX_CONCURRENT_REQUESTS];
             device_manager.await_event(previous_streams, &previous_previous_stream_event);
             device_manager.await_streams(previous_streams);
@@ -613,7 +617,7 @@ async fn main() -> eyre::Result<()> {
             .collect::<Vec<_>>();
         let thread_current_db_size_mutex = current_db_size_mutex
             .iter()
-            .map(|e| Arc::clone(e))
+            .map(Arc::clone)
             .collect::<Vec<_>>();
         let db_sizes_batch = query_db_size.clone();
         let thread_request_results_batch = device_ptrs(&request_results_batch);

@@ -1,5 +1,8 @@
-use std::{ffi::c_void, mem, ptr, str::FromStr, sync::Arc, thread, time::Duration};
-
+use super::{device_manager::DeviceManager, IRIS_CODE_LENGTH};
+use crate::{
+    helpers::id_wrapper::{http_root, IdWrapper},
+    rng,
+};
 use axum::{routing::get, Router};
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
@@ -26,11 +29,9 @@ use super::{device_manager::DeviceManager, IRIS_CODE_LENGTH};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const CHACHA_BUFFER_SIZE: usize = 1000;
-const MATCH_RATIO: f64 = 0.375;
+// const MATCH_RATIO: f64 = 0.375;
 const LIMBS: usize = 2;
 const MATMUL_FUNCTION_NAME: &str = "matmul";
-const DIST_FUNCTION_NAME: &str = "reconstructAndCompare";
-const DEDUP_FUNCTION_NAME: &str = "dedupResults";
 
 pub fn preprocess_query(query: &[u16]) -> Vec<Vec<u8>> {
     let mut result = vec![];
@@ -48,6 +49,7 @@ pub fn preprocess_query(query: &[u16]) -> Vec<Vec<u8>> {
     result.to_vec()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn gemm(
     handle: &CudaBlas,
     a: u64,
@@ -64,7 +66,7 @@ pub fn gemm(
 ) {
     unsafe {
         gemm_ex(
-            handle.handle().clone(),
+            *handle.handle(),
             sys::cublasOperation_t::CUBLAS_OP_T,
             sys::cublasOperation_t::CUBLAS_OP_N,
             m as i32,
@@ -166,6 +168,7 @@ pub struct ShareDB {
 }
 
 impl ShareDB {
+    #[allow(clippy::too_many_arguments)]
     pub fn init(
         peer_id: usize,
         device_manager: DeviceManager,
@@ -198,7 +201,8 @@ impl ShareDB {
             .map(|idx| device_manager.device(idx).htod_sync_copy(&ones).unwrap())
             .collect::<Vec<_>>();
 
-        //TODO: depending on the batch size, intermediate_results can get quite big, we can perform the gemm in chunks to limit this
+        // TODO: depending on the batch size, intermediate_results can get quite big, we
+        // can perform the gemm in chunks to limit this
         let mut intermediate_results = vec![];
         let mut results = vec![];
         let mut results_peer = vec![];
@@ -269,7 +273,7 @@ impl ShareDB {
 
                 // Bind to thread (important!)
                 device_manager.device(i).bind_to_thread().unwrap();
-                comms.push(Arc::new(
+                comms.push(Rc::new(
                     Comm::from_rank(device_manager.device(i), peer_id, 3, id).unwrap(),
                 ));
             }
@@ -290,10 +294,11 @@ impl ShareDB {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn load_db(
         &self,
         db_entries: &[u16],
-        db_length: usize, //TODO: should handle different sizes for each device
+        db_length: usize, // TODO: should handle different sizes for each device
         max_db_length: usize,
     ) -> (
         (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
@@ -305,7 +310,8 @@ impl ShareDB {
             .collect::<Vec<_>>();
         let mut a0_host = db_entries.par_iter().map(|&x| x as i8).collect::<Vec<_>>();
 
-        // TODO: maybe use gemm here already to speed up loading (we'll need to correct the results as well)
+        // TODO: maybe use gemm here already to speed up loading (we'll need to correct
+        // the results as well)
         a1_host
             .par_iter_mut()
             .for_each(|x| *x = (*x as i32 - 128) as i8);
@@ -390,8 +396,8 @@ impl ShareDB {
     pub fn query_sums(
         &self,
         query_ptrs: &(Vec<u64>, Vec<u64>),
-        streams: &Vec<CudaStream>,
-        blass: &Vec<CudaBlas>,
+        streams: &[CudaStream],
+        blass: &[CudaBlas],
     ) -> (Vec<u64>, Vec<u64>) {
         let mut query1_sums = vec![];
         let mut query0_sums = vec![];
@@ -457,9 +463,9 @@ impl ShareDB {
         &mut self,
         query_ptrs: &(Vec<u64>, Vec<u64>),
         db: &(Vec<u64>, Vec<u64>),
-        db_sizes: &Vec<usize>,
-        streams: &Vec<CudaStream>,
-        blass: &Vec<CudaBlas>,
+        db_sizes: &[usize],
+        streams: &[CudaStream],
+        blass: &[CudaBlas],
     ) {
         for idx in 0..self.device_manager.device_count() {
             self.device_manager.device(idx).bind_to_thread().unwrap();
@@ -498,8 +504,8 @@ impl ShareDB {
         &mut self,
         query_sums: &(Vec<u64>, Vec<u64>),
         db_sums: &(Vec<u64>, Vec<u64>),
-        db_sizes: &Vec<usize>,
-        streams: &Vec<CudaStream>,
+        db_sizes: &[usize],
+        streams: &[CudaStream],
     ) {
         for idx in 0..self.device_manager.device_count() {
             assert!(
@@ -510,8 +516,8 @@ impl ShareDB {
             let threads_per_block = 256;
             let blocks_per_grid = num_elements.div_ceil(threads_per_block);
             let cfg = LaunchConfig {
-                block_dim: (threads_per_block as u32, 1, 1),
-                grid_dim: (blocks_per_grid as u32, 1, 1),
+                block_dim:        (threads_per_block as u32, 1, 1),
+                grid_dim:         (blocks_per_grid as u32, 1, 1),
                 shared_mem_bytes: 0,
             };
 
@@ -540,7 +546,7 @@ impl ShareDB {
         }
     }
 
-    pub fn reshare_results(&mut self, db_sizes: &Vec<usize>, streams: &Vec<CudaStream>) {
+    pub fn reshare_results(&mut self, db_sizes: &[usize], streams: &[CudaStream]) {
         let next_peer = (self.peer_id + 1) % 3;
         let prev_peer = (self.peer_id + 2) % 3;
 
@@ -567,7 +573,7 @@ impl ShareDB {
         nccl::group_end().unwrap();
     }
 
-    pub fn fetch_results(&self, results: &mut [u16], db_sizes: &Vec<usize>, device_id: usize) {
+    pub fn fetch_results(&self, results: &mut [u16], db_sizes: &[usize], device_id: usize) {
         unsafe {
             let res_trans =
                 self.results[device_id].transmute(db_sizes[device_id] * self.query_length);
@@ -582,12 +588,7 @@ impl ShareDB {
 
 #[cfg(test)]
 mod tests {
-    use cudarc::driver::DeviceSlice;
-    use float_eq::assert_float_eq;
-    use ndarray::Array2;
-    use num_traits::FromPrimitive;
-    use rand::{rngs::StdRng, Rng, SeedableRng};
-
+    use super::{preprocess_query, ShareDB};
     use crate::{
         dot::device_manager::DeviceManager,
         helpers::device_ptrs,
@@ -598,8 +599,10 @@ mod tests {
             shamir::Shamir,
         },
     };
-
-    use super::{preprocess_query, ShareDB};
+    use float_eq::assert_float_eq;
+    use ndarray::Array2;
+    use num_traits::FromPrimitive;
+    use rand::{rngs::StdRng, Rng, SeedableRng};
     const WIDTH: usize = 12_800;
     const QUERY_SIZE: usize = 31;
     const DB_SIZE: usize = 8 * 1000;
@@ -612,7 +615,7 @@ mod tests {
         T: FromPrimitive,
     {
         Array2::from_shape_vec(
-            (n as usize, m as usize),
+            (n, m),
             array
                 .into_iter()
                 .map(|x| T::from_u16(x).unwrap())
@@ -785,8 +788,8 @@ mod tests {
         }
     }
 
-    /// Calculates the distances between a query and a shamir secret shared db and
-    /// checks the result against reference plain implementation.
+    /// Calculates the distances between a query and a shamir secret shared db
+    /// and checks the result against reference plain implementation.
     #[test]
     fn check_shared_distances() {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
@@ -795,13 +798,13 @@ mod tests {
 
         let db_sizes = vec![DB_SIZE / N_DEVICES; N_DEVICES];
 
-        let mut results_codes = vec![
+        let mut results_codes = [
             vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
             vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
             vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
         ];
 
-        let mut results_masks = vec![
+        let mut results_masks = [
             vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
             vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
             vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],

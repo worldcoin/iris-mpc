@@ -1,3 +1,4 @@
+#![allow(clippy::needless_range_loop)]
 use aws_sdk_sns::{
     config::Region,
     types::{MessageAttributeValue, PublishBatchRequestEntry},

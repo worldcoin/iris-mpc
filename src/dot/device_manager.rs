@@ -1,13 +1,15 @@
-use std::sync::Arc;
-
 use cudarc::{
     cublas::CudaBlas,
     driver::{
         result::{
-            self, event, malloc_async, memcpy_htod_async, stream::{synchronize, wait_event}
-        }, sys::{CUevent, CUevent_flags}, CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceRepr
+            self, event, malloc_async, memcpy_htod_async,
+            stream::{synchronize, wait_event},
+        },
+        sys::{CUevent, CUevent_flags},
+        CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceRepr,
     },
 };
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct DeviceManager {
@@ -44,7 +46,7 @@ impl DeviceManager {
             .collect::<Vec<_>>()
     }
 
-    pub fn await_streams(&self, streams: &Vec<CudaStream>) {
+    pub fn await_streams(&self, streams: &[CudaStream]) {
         for i in 0..self.devices.len() {
             self.devices[i].bind_to_thread().unwrap();
             unsafe { synchronize(streams[i].stream).unwrap() }
@@ -60,7 +62,7 @@ impl DeviceManager {
         events
     }
 
-    pub fn record_event(&self, streams: &Vec<CudaStream>, events: &Vec<CUevent>) {
+    pub fn record_event(&self, streams: &[CudaStream], events: &[CUevent]) {
         for idx in 0..self.devices.len() {
             unsafe {
                 self.devices[idx].bind_to_thread().unwrap();
@@ -69,7 +71,7 @@ impl DeviceManager {
         }
     }
 
-    pub fn await_event(&self, streams: &Vec<CudaStream>, events: &Vec<CUevent>) {
+    pub fn await_event(&self, streams: &[CudaStream], events: &[CUevent]) {
         for idx in 0..self.devices.len() {
             unsafe {
                 self.devices[idx].bind_to_thread().unwrap();
@@ -83,7 +85,11 @@ impl DeviceManager {
         }
     }
 
-    pub fn htod_transfer_query(&self, preprocessed_query: &Vec<Vec<u8>>, streams: &Vec<CudaStream>) -> (Vec<u64>, Vec<u64>) {
+    pub fn htod_transfer_query(
+        &self,
+        preprocessed_query: &[Vec<u8>],
+        streams: &[CudaStream],
+    ) -> (Vec<u64>, Vec<u64>) {
         let mut query0_ptrs = vec![];
         let mut query1_ptrs = vec![];
         for idx in 0..self.device_count() {
@@ -110,7 +116,7 @@ impl DeviceManager {
         self.devices[index].clone()
     }
 
-    pub fn devices(&self) -> &Vec<Arc<CudaDevice>> {
+    pub fn devices(&self) -> &[Arc<CudaDevice>] {
         &self.devices
     }
 

@@ -8,7 +8,7 @@ pub mod degree2 {
 
     #[derive(Debug, Clone)]
     pub struct GaloisRingIrisCodeShare {
-        pub id: usize,
+        pub id:    usize,
         pub coefs: [u16; 12800],
     }
 
@@ -26,15 +26,15 @@ pub mod degree2 {
         ) -> [GaloisRingIrisCodeShare; 3] {
             let mut shares = [
                 GaloisRingIrisCodeShare {
-                    id: 1,
+                    id:    1,
                     coefs: [0; 12800],
                 },
                 GaloisRingIrisCodeShare {
-                    id: 2,
+                    id:    2,
                     coefs: [0; 12800],
                 },
                 GaloisRingIrisCodeShare {
-                    id: 3,
+                    id:    3,
                     coefs: [0; 12800],
                 },
             ];
@@ -116,10 +116,10 @@ pub mod degree2 {
             let mut sum = 0u16;
             for i in (0..12800).step_by(2) {
                 let x = GaloisRingElement {
-                    coefs: [self.coefs[i + 0], self.coefs[i + 1]],
+                    coefs: [self.coefs[i], self.coefs[i + 1]],
                 };
                 let y = GaloisRingElement {
-                    coefs: [other.coefs[i + 0], other.coefs[i + 1]],
+                    coefs: [other.coefs[i], other.coefs[i + 1]],
                 };
                 let z = x * y;
                 sum = sum.wrapping_add(z.coefs[0]);
@@ -160,11 +160,10 @@ pub mod degree2 {
 
     #[cfg(test)]
     mod tests {
-        use rand::thread_rng;
-
         use crate::setup::{
             galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::iris::IrisCodeArray,
         };
+        use rand::thread_rng;
 
         #[test]
         fn galois_dot_trick() {
@@ -215,7 +214,7 @@ pub mod degree4 {
 
     #[derive(Debug, Clone)]
     pub struct GaloisRingIrisCodeShare {
-        pub id: usize,
+        pub id:    usize,
         pub coefs: [u16; 12800],
     }
 
@@ -223,15 +222,15 @@ pub mod degree4 {
         pub fn encode_iris_code(iris_code: &IrisCodeArray) -> [GaloisRingIrisCodeShare; 3] {
             let mut shares = [
                 GaloisRingIrisCodeShare {
-                    id: 1,
+                    id:    1,
                     coefs: [0; 12800],
                 },
                 GaloisRingIrisCodeShare {
-                    id: 2,
+                    id:    2,
                     coefs: [0; 12800],
                 },
                 GaloisRingIrisCodeShare {
-                    id: 3,
+                    id:    3,
                     coefs: [0; 12800],
                 },
             ];
@@ -257,15 +256,15 @@ pub mod degree4 {
         pub fn encode_iris_code_query(iris_code: &IrisCodeArray) -> [GaloisRingIrisCodeShare; 3] {
             let mut shares = [
                 GaloisRingIrisCodeShare {
-                    id: 1,
+                    id:    1,
                     coefs: [0; 12800],
                 },
                 GaloisRingIrisCodeShare {
-                    id: 2,
+                    id:    2,
                     coefs: [0; 12800],
                 },
                 GaloisRingIrisCodeShare {
-                    id: 3,
+                    id:    3,
                     coefs: [0; 12800],
                 },
             ];
@@ -282,7 +281,8 @@ pub mod degree4 {
                 let lagrange_coeffs = ShamirGaloisRingShare::deg_3_lagrange_polys_at_zero();
                 for j in 0..3 {
                     let adjusted_share = share[j].y * lagrange_coeffs[j];
-                    // we write the bits back into the flat array in the "wrong" order, such that we can do simple dot product later
+                    // we write the bits back into the flat array in the "wrong" order, such that we
+                    // can do simple dot product later
                     shares[j].coefs[i] = adjusted_share.coefs[0];
                     shares[j].coefs[i + 3] = adjusted_share.coefs[1]; // Note the order of bits
                     shares[j].coefs[i + 2] = adjusted_share.coefs[2];
@@ -297,7 +297,7 @@ pub mod degree4 {
             for i in (0..12800).step_by(4) {
                 let x = GaloisRingElement {
                     coefs: [
-                        self.coefs[i + 0],
+                        self.coefs[i],
                         self.coefs[i + 1],
                         self.coefs[i + 2],
                         self.coefs[i + 3],
@@ -305,7 +305,7 @@ pub mod degree4 {
                 };
                 let y = GaloisRingElement {
                     coefs: [
-                        other.coefs[i + 0],
+                        other.coefs[i],
                         other.coefs[i + 3],
                         other.coefs[i + 2],
                         other.coefs[i + 1],
@@ -327,9 +327,8 @@ pub mod degree4 {
 
     #[cfg(test)]
     mod tests {
-        use rand::thread_rng;
-
         use crate::setup::iris_db::iris::IrisCodeArray;
+        use rand::thread_rng;
 
         #[test]
         fn galois_dot_trick() {

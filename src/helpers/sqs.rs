@@ -1,3 +1,4 @@
+use crate::setup::iris_db::shamir_iris::ShamirIris;
 use base64::{engine::general_purpose, Engine};
 use serde::{Deserialize, Serialize};
 
@@ -8,25 +9,25 @@ pub struct SQSMessage {
     #[serde(rename = "Type")]
     pub notification_type: String,
     #[serde(rename = "MessageId")]
-    pub message_id: String,
+    pub message_id:        String,
     #[serde(rename = "SequenceNumber")]
-    pub sequence_number: String,
+    pub sequence_number:   String,
     #[serde(rename = "TopicArn")]
-    pub topic_arn: String,
+    pub topic_arn:         String,
     #[serde(rename = "Message")]
-    pub message: String,
+    pub message:           String,
     #[serde(rename = "Timestamp")]
-    pub timestamp: String,
+    pub timestamp:         String,
     #[serde(rename = "UnsubscribeURL")]
-    pub unsubscribe_url: String,
+    pub unsubscribe_url:   String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SMPCRequest {
     pub request_type: String,
-    pub request_id: String,
-    pub iris_code: String,
-    pub mask_code: String,
+    pub request_id:   String,
+    pub iris_code:    String,
+    pub mask_code:    String,
 }
 
 impl SMPCRequest {

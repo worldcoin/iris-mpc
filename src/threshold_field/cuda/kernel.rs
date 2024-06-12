@@ -122,7 +122,7 @@ fn share_transpose16x64(inp: &[u16; 64], outp: &mut [u64; 16]) {
     }
 
     // version of 64x64 transpose that only does the swaps needed for 16 bits
-    m = 0x00FF00FF00FF00FF;
+    m = 0x00ff00ff00ff00ff;
     j = 8;
     while j != 0 {
         k = 0;
@@ -170,7 +170,7 @@ fn share_transpose32x64(inp: &[u32; 64], outp: &mut [u64; 32]) {
     }
 
     // version of 64x64 transpose that only does the swaps needed for 16 bits
-    m = 0x0000FFFF0000FFFF;
+    m = 0x0000ffff0000ffff;
     j = 16;
     while j != 0 {
         k = 0;
@@ -209,7 +209,7 @@ fn share_transpose64x64(inout: &mut [u64; 64]) {
     let mut t: u64;
 
     // version of 64x64 transpose that only does the swaps needed for 16 bits
-    m = 0x00000000FFFFFFFF;
+    m = 0x00000000ffffffff;
     j = 32;
     while j != 0 {
         k = 0;

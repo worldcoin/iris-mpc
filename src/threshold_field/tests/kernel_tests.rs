@@ -1,3 +1,4 @@
+use super::super::cuda::PTX_SRC;
 use crate::{setup::shamir::Shamir, threshold_field::cuda::kernel};
 use cudarc::{
     driver::{CudaDevice, CudaFunction, DriverError, LaunchAsync, LaunchConfig},
@@ -8,8 +9,6 @@ use rand::{
     Rng,
 };
 use std::sync::Arc;
-
-use super::super::cuda::PTX_SRC;
 
 fn random_vec<T, R: Rng>(n: usize, rng: &mut R) -> Vec<T>
 where
@@ -25,8 +24,8 @@ fn random_vec_fp<R: Rng>(n: usize, rng: &mut R) -> Vec<u16> {
 fn launch_config_from_elements_and_threads(n: u32, t: u32) -> LaunchConfig {
     let num_blocks = (n + t - 1) / t;
     LaunchConfig {
-        grid_dim: (num_blocks, 1, 1),
-        block_dim: (t, 1, 1),
+        grid_dim:         (num_blocks, 1, 1),
+        block_dim:        (t, 1, 1),
         shared_mem_bytes: 0,
     }
 }

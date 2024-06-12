@@ -1,7 +1,6 @@
-use std::str::FromStr;
-
 use axum::extract::Path;
 use cudarc::nccl::Id;
+use std::str::FromStr;
 
 pub struct IdWrapper(pub Id);
 
@@ -22,15 +21,15 @@ impl FromStr for IdWrapper {
     }
 }
 
-impl ToString for IdWrapper {
-    fn to_string(&self) -> String {
-        hex::encode(
+impl std::fmt::Display for IdWrapper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&hex::encode(
             self.0
                 .internal()
                 .iter()
                 .map(|&c| c as u8)
                 .collect::<Vec<_>>(),
-        )
+        ))
     }
 }
 

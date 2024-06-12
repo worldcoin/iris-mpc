@@ -6,8 +6,7 @@ use cudarc::{
     },
     nvrtc::compile_ptx,
 };
-
-use super::ROTATIONS;
+use std::sync::Arc;
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const OPEN_RESULTS_FUNCTION: &str = "openResults";
@@ -81,8 +80,8 @@ impl DistanceComparator {
             let threads_per_block = 256;
             let blocks_per_grid = num_elements.div_ceil(threads_per_block);
             let cfg = LaunchConfig {
-                block_dim: (threads_per_block as u32, 1, 1),
-                grid_dim: (blocks_per_grid as u32, 1, 1),
+                block_dim:        (threads_per_block as u32, 1, 1),
+                grid_dim:         (blocks_per_grid as u32, 1, 1),
                 shared_mem_bytes: 0,
             };
             self.devs[i].bind_to_thread().unwrap();
@@ -111,15 +110,15 @@ impl DistanceComparator {
         let threads_per_block = 256;
         let blocks_per_grid = num_elements.div_ceil(threads_per_block);
         let cfg = LaunchConfig {
-            block_dim: (threads_per_block as u32, 1, 1),
-            grid_dim: (blocks_per_grid as u32, 1, 1),
+            block_dim:        (threads_per_block as u32, 1, 1),
+            grid_dim:         (blocks_per_grid as u32, 1, 1),
             shared_mem_bytes: 0,
         };
 
         for i in 0..self.n_devices {
             self.devs[i].bind_to_thread().unwrap();
 
-            let params = vec![
+            let params = [
                 match_results_self[i],
                 match_results[i],
                 final_results[i],

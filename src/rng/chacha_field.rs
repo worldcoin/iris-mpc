@@ -1,30 +1,28 @@
-use std::sync::Arc;
-
+use super::chacha::ChaChaCtx;
 use cudarc::{
     driver::{
-        result, CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut,
-        DeviceSlice, LaunchAsync, LaunchConfig,
+        result, CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, LaunchAsync,
+        LaunchConfig,
     },
     nvrtc::compile_ptx,
 };
-
-use super::chacha::ChaChaCtx;
+use std::sync::Arc;
 
 pub struct ChaChaCudaFeRng {
     // the total buffer size
-    buf_size: usize,
+    buf_size:          usize,
     // the amount of valid values in the buffer
     valid_buffer_size: usize,
     /// the device to use
-    dev: Arc<CudaDevice>,
+    dev:               Arc<CudaDevice>,
     /// compiled and loaded kernels for our 2 functions
-    kernels: [CudaFunction; 2],
+    kernels:           [CudaFunction; 2],
     /// a reference to the current chunk of the rng output in the cuda device
-    rng_chunk: CudaSlice<u32>,
+    rng_chunk:         CudaSlice<u32>,
     /// a buffer to copy the output to in the host device
-    output_buffer: Vec<u32>,
+    output_buffer:     Vec<u32>,
     /// the current state of the chacha rng
-    chacha_ctx: ChaChaCtx,
+    chacha_ctx:        ChaChaCtx,
 }
 
 const CHACHA_PTX_SRC: &str = include_str!("chacha.cu");
@@ -32,16 +30,16 @@ const FIELD_PTX_SRC: &str = include_str!("field_fix.cu");
 const CHACHA_FUNCTION_NAME: &str = "chacha12";
 const FIELD_FUNCTION_NAME: &str = "fix_fe";
 
-// probability calculation says that prob that more than 24 values of 1024 are not in field is less than 1/2^128
+// probability calculation says that prob that more than 24 values of 1024 are
+// not in field is less than 1/2^128
 const MIN_U16_BUF_ELEMENTS: usize = 1024;
 const OK_U16_BUF_ELEMENTS: usize = 1000;
 
 impl ChaChaCudaFeRng {
-    ///
     /// # Arguments
-    /// `buf_size`: takes number of u16 elements to produce per call to rng(), needs to be a multiple of 1000
-    /// `dev`: the cuda device to run the RNG on
-    /// `key`: the seed to use for the RNG
+    /// `buf_size`: takes number of u16 elements to produce per call to rng(),
+    /// needs to be a multiple of 1000 `dev`: the cuda device to run the RNG
+    /// on `key`: the seed to use for the RNG
     pub fn init(buf_size: usize, dev: Arc<CudaDevice>, seed: [u32; 8]) -> Self {
         let ptx = compile_ptx(CHACHA_PTX_SRC).unwrap();
         let ptx2 = compile_ptx(FIELD_PTX_SRC).unwrap();
@@ -82,7 +80,10 @@ impl ChaChaCudaFeRng {
     }
 
     pub fn fill_rng(&mut self) {
-        self.fill_rng_no_host_copy(self.output_buffer.len(), &self.dev.fork_default_stream().unwrap());
+        self.fill_rng_no_host_copy(
+            self.output_buffer.len(),
+            &self.dev.fork_default_stream().unwrap(),
+        );
 
         self.dev
             .dtoh_sync_copy_into(&self.rng_chunk, &mut self.output_buffer)
@@ -94,8 +95,8 @@ impl ChaChaCudaFeRng {
         let threads_per_block = 256; // todo sync with kernel
         let blocks_per_grid = (num_ks_calls + threads_per_block - 1) / threads_per_block;
         let cfg = LaunchConfig {
-            block_dim: (threads_per_block as u32, 1, 1),
-            grid_dim: (blocks_per_grid as u32, 1, 1),
+            block_dim:        (threads_per_block as u32, 1, 1),
+            grid_dim:         (blocks_per_grid as u32, 1, 1),
             shared_mem_bytes: 0, // do we need this since we use __shared__ in kernel?
         };
 
@@ -106,7 +107,12 @@ impl ChaChaCudaFeRng {
                 .unwrap()
         };
         unsafe {
-            result::memcpy_htod_async(*state_slice.device_ptr(), &self.chacha_ctx.state, stream.stream).unwrap();
+            result::memcpy_htod_async(
+                *state_slice.device_ptr(),
+                &self.chacha_ctx.state,
+                stream.stream,
+            )
+            .unwrap();
         }
 
         let buf_size = (buf_size / OK_U16_BUF_ELEMENTS) * MIN_U16_BUF_ELEMENTS;
@@ -118,18 +124,20 @@ impl ChaChaCudaFeRng {
                 .unwrap();
         }
 
-        // increment the state counter of the ChaChaRng with the number of produced blocks
+        // increment the state counter of the ChaChaRng with the number of produced
+        // blocks
         let mut counter = self.chacha_ctx.get_counter();
         counter += num_ks_calls as u64; // one call to KS produces 32 u16s
         self.chacha_ctx.set_counter(counter);
 
-        // slice is now filled with u32s, we need to fix the contained u16 to be valid field elements
+        // slice is now filled with u32s, we need to fix the contained u16 to be valid
+        // field elements
         let num_fix_calls = self.valid_buffer_size / 1000;
         let threads_per_block = 256; // this should be fine to be whatever
         let blocks_per_grid = (num_fix_calls + threads_per_block - 1) / threads_per_block;
         let cfg = LaunchConfig {
-            block_dim: (threads_per_block as u32, 1, 1),
-            grid_dim: (blocks_per_grid as u32, 1, 1),
+            block_dim:        (threads_per_block as u32, 1, 1),
+            grid_dim:         (blocks_per_grid as u32, 1, 1),
             shared_mem_bytes: 0, // do we need this since we use __shared__ in kernel?
         };
         unsafe {

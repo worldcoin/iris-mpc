@@ -1,13 +1,12 @@
-use std::sync::Arc;
-
 use cudarc::{
     driver::{CudaDevice, CudaFunction, CudaViewMut, DeviceSlice, LaunchAsync, LaunchConfig},
     nvrtc::compile_ptx,
 };
+use std::sync::Arc;
 
 pub struct ChaChaCudaCorrRng {
-    dev: Arc<CudaDevice>,
-    kernels: [CudaFunction; 2],
+    dev:         Arc<CudaDevice>,
+    kernels:     [CudaFunction; 2],
     /// the current state of the chacha rng
     chacha_ctx1: ChaChaCtx,
     chacha_ctx2: ChaChaCtx,
@@ -18,15 +17,15 @@ const CHACHA_FUNCTION_NAME: &str = "chacha12";
 const CHACHA2_FUNCTION_NAME: &str = "chacha12_xor";
 
 impl ChaChaCudaCorrRng {
-    // takes number of bytes to produce, buffer has u32 datatype so will produce buf_size/4 u32s
+    // takes number of bytes to produce, buffer has u32 datatype so will produce
+    // buf_size/4 u32s
     pub fn init(dev: Arc<CudaDevice>, seed1: [u32; 8], seed2: [u32; 8]) -> Self {
         let ptx = compile_ptx(CHACHA_PTX_SRC).unwrap();
 
-        dev.load_ptx(
-            ptx.clone(),
+        dev.load_ptx(ptx.clone(), CHACHA_FUNCTION_NAME, &[
             CHACHA_FUNCTION_NAME,
-            &[CHACHA_FUNCTION_NAME, CHACHA2_FUNCTION_NAME],
-        )
+            CHACHA2_FUNCTION_NAME,
+        ])
         .unwrap();
         let kernel1 = dev
             .get_func(CHACHA_FUNCTION_NAME, CHACHA_FUNCTION_NAME)
@@ -50,8 +49,8 @@ impl ChaChaCudaCorrRng {
         let threads_per_block = 256; // todo sync with kernel
         let blocks_per_grid = (num_ks_calls + threads_per_block - 1) / threads_per_block;
         let cfg = LaunchConfig {
-            block_dim: (threads_per_block as u32, 1, 1),
-            grid_dim: (blocks_per_grid as u32, 1, 1),
+            block_dim:        (threads_per_block as u32, 1, 1),
+            grid_dim:         (blocks_per_grid as u32, 1, 1),
             shared_mem_bytes: 0,
         };
         let state_slice1 = self.dev.htod_sync_copy(&self.chacha_ctx1.state).unwrap();
@@ -62,9 +61,11 @@ impl ChaChaCudaCorrRng {
                 .launch(cfg, (&mut *buf, &state_slice1, len))
                 .unwrap();
         }
-        // increment the state counter of the ChaChaRng with the number of produced blocks
+        // increment the state counter of the ChaChaRng with the number of produced
+        // blocks
         let mut counter = self.chacha_ctx1.get_counter();
-        counter += num_ks_calls as u64; // one call to KS produces 16 u32, so we increase the counter by the number of KS calls
+        counter += num_ks_calls as u64; // one call to KS produces 16 u32, so we increase the counter by the number of
+                                        // KS calls
         self.chacha_ctx1.set_counter(counter);
 
         unsafe {
@@ -73,9 +74,11 @@ impl ChaChaCudaCorrRng {
                 .launch(cfg, (buf, &state_slice2, len))
                 .unwrap();
         }
-        // increment the state counter of the ChaChaRng with the number of produced blocks
+        // increment the state counter of the ChaChaRng with the number of produced
+        // blocks
         let mut counter = self.chacha_ctx2.get_counter();
-        counter += num_ks_calls as u64; // one call to KS produces 16 u32, so we increase the counter by the number of KS calls
+        counter += num_ks_calls as u64; // one call to KS produces 16 u32, so we increase the counter by the number of
+                                        // KS calls
         self.chacha_ctx2.set_counter(counter);
     }
 
@@ -86,8 +89,8 @@ impl ChaChaCudaCorrRng {
         let threads_per_block = 256; // todo sync with kernel
         let blocks_per_grid = (num_ks_calls + threads_per_block - 1) / threads_per_block;
         let cfg = LaunchConfig {
-            block_dim: (threads_per_block as u32, 1, 1),
-            grid_dim: (blocks_per_grid as u32, 1, 1),
+            block_dim:        (threads_per_block as u32, 1, 1),
+            grid_dim:         (blocks_per_grid as u32, 1, 1),
             shared_mem_bytes: 0,
         };
         let state_slice1 = self.dev.htod_sync_copy(&self.chacha_ctx1.state).unwrap();
@@ -97,9 +100,11 @@ impl ChaChaCudaCorrRng {
                 .launch(cfg, (&mut *buf, &state_slice1, len))
                 .unwrap();
         }
-        // increment the state counter of the ChaChaRng with the number of produced blocks
+        // increment the state counter of the ChaChaRng with the number of produced
+        // blocks
         let mut counter = self.chacha_ctx1.get_counter();
-        counter += num_ks_calls as u64; // one call to KS produces 16 u32, so we increase the counter by the number of KS calls
+        counter += num_ks_calls as u64; // one call to KS produces 16 u32, so we increase the counter by the number of
+                                        // KS calls
         self.chacha_ctx1.set_counter(counter);
     }
 
@@ -110,8 +115,8 @@ impl ChaChaCudaCorrRng {
         let threads_per_block = 256; // todo sync with kernel
         let blocks_per_grid = (num_ks_calls + threads_per_block - 1) / threads_per_block;
         let cfg = LaunchConfig {
-            block_dim: (threads_per_block as u32, 1, 1),
-            grid_dim: (blocks_per_grid as u32, 1, 1),
+            block_dim:        (threads_per_block as u32, 1, 1),
+            grid_dim:         (blocks_per_grid as u32, 1, 1),
             shared_mem_bytes: 0,
         };
         let state_slice2 = self.dev.htod_sync_copy(&self.chacha_ctx2.state).unwrap();
@@ -121,9 +126,11 @@ impl ChaChaCudaCorrRng {
                 .launch(cfg, (&mut *buf, &state_slice2, len))
                 .unwrap();
         }
-        // increment the state counter of the ChaChaRng with the number of produced blocks
+        // increment the state counter of the ChaChaRng with the number of produced
+        // blocks
         let mut counter = self.chacha_ctx2.get_counter();
-        counter += num_ks_calls as u64; // one call to KS produces 16 u32, so we increase the counter by the number of KS calls
+        counter += num_ks_calls as u64; // one call to KS produces 16 u32, so we increase the counter by the number of
+                                        // KS calls
         self.chacha_ctx2.set_counter(counter);
     }
 
@@ -200,9 +207,8 @@ impl ChaChaCtx {
 #[cfg(test)]
 mod tests {
 
-    use itertools::izip;
-
     use super::*;
+    use itertools::izip;
 
     #[test]
     fn test_chacha_rng() {
