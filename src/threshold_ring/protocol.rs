@@ -839,8 +839,8 @@ impl Circuits {
             .enumerate()
             .map(|(idx, res)| {
                 let data_len = bits * self.chunk_size;
-                let mut rand = unsafe { self.devs[idx].alloc_zeros::<u64>(data_len).unwrap() };
-                // self.fill_my_rand_u64(&mut rand, idx);
+                let mut rand = unsafe { self.devs[idx].alloc::<u64>(data_len).unwrap() };
+                self.fill_my_rand_u64(&mut rand, idx);
                 self.single_xor_assign_u64(
                     &mut rand.slice(0..rand.len()),
                     &res.a.slice(0..data_len),
@@ -861,8 +861,8 @@ impl Circuits {
         result::group_end().unwrap();
         for (idx, res) in res.iter_mut().enumerate() {
             let data_len = bits * self.chunk_size;
-            let mut rand = unsafe { self.devs[idx].alloc_zeros::<u64>(data_len).unwrap() };
-            // self.fill_my_rand_u64(&mut rand, idx);
+            let mut rand = unsafe { self.devs[idx].alloc::<u64>(data_len).unwrap() };
+            self.fill_their_rand_u64(&mut rand, idx);
             self.single_xor_assign_u64(&mut res.b, &rand.slice(..), idx, data_len);
         }
     }
