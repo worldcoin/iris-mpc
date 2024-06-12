@@ -594,8 +594,7 @@ impl Circuits {
 
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
-        // let mut rand = unsafe {
-        // self.devs[idx].alloc_zeros::<u64>(data_len).unwrap() };
+        let mut rand = unsafe { self.devs[idx].alloc_zeros::<u64>(data_len).unwrap() };
         // self.fill_their_rand_u64(&mut rand, idx);
 
         // self.single_xor_assign_u64(receive, &rand.slice(..), idx, data_len);
