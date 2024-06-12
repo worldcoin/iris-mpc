@@ -586,11 +586,11 @@ impl Circuits {
         let data_len = send.len();
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
-        let mut rand = unsafe { self.devs[idx].alloc_zeros::<u64>(data_len).unwrap() };
+        // let mut rand = unsafe { self.devs[idx].alloc_zeros::<u64>(data_len).unwrap() };
         // self.fill_my_rand_u64(&mut rand, idx);
 
-        self.single_xor_assign_u64(&mut rand.slice(0..rand.len()), send, idx, data_len);
-        self.send(&rand, self.next_id, idx);
+        // self.single_xor_assign_u64(&mut rand.slice(0..rand.len()), send, idx, data_len);
+        self.send_view(&send, self.next_id, idx);
         // self.send_view(send, self.next_id, idx);
     }
 
@@ -604,10 +604,10 @@ impl Circuits {
 
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
-        let mut rand = unsafe { self.devs[idx].alloc_zeros::<u64>(data_len).unwrap() };
+        // let mut rand = unsafe { self.devs[idx].alloc_zeros::<u64>(data_len).unwrap() };
         // self.fill_their_rand_u64(&mut rand, idx);
 
-        self.single_xor_assign_u64(receive, &rand.slice(0..rand.len()), idx, data_len);
+        // self.single_xor_assign_u64(receive, &rand.slice(0..rand.len()), idx, data_len);
     }
 
     fn receive_view_u16(&mut self, receive: &mut CudaView<u16>, peer_id: usize, idx: usize) {
