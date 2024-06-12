@@ -12,7 +12,7 @@ use cudarc::{
     nccl::{result, Comm, Id},
     nvrtc::{self, Ptx},
 };
-use itertools::izip;
+use itertools::{izip, Itertools};
 use std::{rc::Rc, str::FromStr, sync::Arc, thread, time::Duration};
 
 pub(crate) const B_BITS: usize = 16;
@@ -736,13 +736,13 @@ impl Circuits {
         dbg!(res.a.len());
         dbg!(bits * self.chunk_size);
         let send = res.a.slice(0..bits * self.chunk_size);
-        self.otp_encrypt_and_send_next_view_u64(&send, idx);
+        self.send_view(&send, self.next_id, idx);
     }
 
     // Keep in mind: group needs to be open!
     fn packed_and_many_receive(&mut self, res: &mut ChunkShareView<u64>, bits: usize, idx: usize) {
         let mut rcv = res.b.slice(0..bits * self.chunk_size);
-        self.otp_receive_prev_and_decrypt_view_u64(&mut rcv, idx);
+        self.receive_view(&mut rcv, self.prev_id, idx)
     }
 
     fn assign_view(
@@ -838,27 +838,68 @@ impl Circuits {
     fn packed_send_receive_view(&mut self, res: &mut [ChunkShareView<u64>], bits: usize) {
         debug_assert_eq!(res.len(), self.n_devices);
 
+        let send_bufs = res
+            .iter()
+            .enumerate()
+            .map(|(idx, res)| {
+                let data_len = bits * self.chunk_size;
+                let mut rand = unsafe { self.devs[idx].alloc_zeros::<u64>(data_len).unwrap() };
+                // self.fill_my_rand_u64(&mut rand, idx);
+                self.single_xor_assign_u64(
+                    &mut rand.slice(0..rand.len()),
+                    &res.a.slice(0..data_len),
+                    idx,
+                    data_len,
+                );
+                rand
+            })
+            .collect_vec();
+
         result::group_start().unwrap();
-        for (idx, res) in res.iter().enumerate() {
-            self.packed_and_many_send(res, bits, idx);
+        for (idx, res) in send_bufs.iter().enumerate() {
+            self.send(res, self.next_id, idx);
         }
         for (idx, res) in res.iter_mut().enumerate() {
             self.packed_and_many_receive(res, bits, idx);
         }
         result::group_end().unwrap();
+        for (idx, res) in res.iter_mut().enumerate() {
+            let data_len = bits * self.chunk_size;
+            let mut rand = unsafe { self.devs[idx].alloc_zeros::<u64>(data_len).unwrap() };
+            // self.fill_my_rand_u64(&mut rand, idx);
+            self.single_xor_assign_u64(&mut res.b, &rand.slice(..), idx, data_len);
+        }
     }
 
     fn send_receive_view(&mut self, res: &mut [ChunkShareView<u64>]) {
         debug_assert_eq!(res.len(), self.n_devices);
 
+        let send_bufs = res
+            .iter()
+            .enumerate()
+            .map(|(idx, res)| {
+                let data_len = res.len();
+                let mut rand = unsafe { self.devs[idx].alloc_zeros::<u64>(data_len).unwrap() };
+                // self.fill_my_rand_u64(&mut rand, idx);
+                self.single_xor_assign_u64(&mut rand.slice(0..rand.len()), &res.a, idx, data_len);
+                rand
+            })
+            .collect_vec();
+
         result::group_start().unwrap();
-        for (idx, res) in res.iter().enumerate() {
-            self.otp_encrypt_and_send_next_view_u64(&res.a, idx);
+        for (idx, res) in send_bufs.iter().enumerate() {
+            self.send(&res, self.next_id, idx);
         }
         for (idx, res) in res.iter_mut().enumerate() {
-            self.otp_receive_prev_and_decrypt_view_u64(&mut res.b, idx);
+            self.receive_view(&mut res.b, self.prev_id, idx);
         }
         result::group_end().unwrap();
+        for (idx, res) in res.iter_mut().enumerate() {
+            let data_len = res.len();
+            let mut rand = unsafe { self.devs[idx].alloc_zeros::<u64>(data_len).unwrap() };
+            // self.fill_my_rand_u64(&mut rand, idx);
+            self.single_xor_assign_u64(&mut res.b, &rand.slice(..), idx, data_len);
+        }
     }
 
     fn single_xor_assign_u16(
