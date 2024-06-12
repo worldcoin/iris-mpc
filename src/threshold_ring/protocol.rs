@@ -582,7 +582,7 @@ impl Circuits {
         self.single_xor_assign_u32(receive, &rand.slice(..), idx, data_len);
     }
 
-    pub fn otp_encrypt_and_send_next_view_u64(&mut self, send: &CudaView<u64>, idx: usize) {
+    pub fn otp_encrypt_u64(&mut self, send: &CudaView<u64>, idx: usize) {
         let data_len = send.len();
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
@@ -594,11 +594,7 @@ impl Circuits {
         // self.send_view(send, self.next_id, idx);
     }
 
-    pub fn otp_receive_prev_and_decrypt_view_u64(
-        &mut self,
-        receive: &mut CudaView<u64>,
-        idx: usize,
-    ) {
+    pub fn otp_decrypt_view_inplace_u64(&mut self, receive: &mut CudaView<u64>, idx: usize) {
         let data_len = receive.len();
         self.receive_view(receive, self.prev_id, idx);
 
@@ -1557,12 +1553,12 @@ impl Circuits {
             for (idx, a) in a.iter().enumerate() {
                 // Unused space used for temparary storage
                 let tmp_c = a.get_offset(0, self.chunk_size);
-                self.otp_encrypt_and_send_next_view_u64(&tmp_c.a, idx);
+                self.send_view(&tmp_c.a, self.next_id, idx);
             }
             for (idx, a) in a.iter_mut().enumerate() {
                 // Unused space used for temparary storage
                 let mut tmp_c = a.get_offset(0, self.chunk_size);
-                self.otp_receive_prev_and_decrypt_view_u64(&mut tmp_c.b, idx);
+                self.receive_view(&mut tmp_c.b, self.prev_id, idx);
             }
             result::group_end().unwrap();
             // Postprocess xor
@@ -1586,12 +1582,12 @@ impl Circuits {
         for (idx, c) in c.iter().enumerate() {
             // Unused space used for temparary storage
             let tmp_c = c.get_offset(1, self.chunk_size);
-            self.otp_encrypt_and_send_next_view_u64(&tmp_c.a, idx);
+            self.send_view(&tmp_c.a, self.next_id, idx);
         }
         for (idx, c) in c.iter_mut().enumerate() {
             // Unused space used for temparary storage
             let mut tmp_c = c.get_offset(1, self.chunk_size);
-            self.otp_receive_prev_and_decrypt_view_u64(&mut tmp_c.b, idx);
+            self.receive_view(&mut tmp_c.b, self.prev_id, idx);
         }
         result::group_end().unwrap();
 
@@ -1695,12 +1691,12 @@ impl Circuits {
             for (idx, a) in a.iter().enumerate() {
                 // Unused space used for temparary storage
                 let tmp_c = a.get_offset(0, self.chunk_size);
-                self.otp_encrypt_and_send_next_view_u64(&tmp_c.a, idx);
+                self.send_view(&tmp_c.a, self.next_id, idx);
             }
             for (idx, a) in a.iter_mut().enumerate() {
                 // Unused space used for temparary storage
                 let mut tmp_c = a.get_offset(0, self.chunk_size);
-                self.otp_receive_prev_and_decrypt_view_u64(&mut tmp_c.b, idx);
+                self.receive_view(&mut tmp_c.b, self.prev_id, idx);
             }
             result::group_end().unwrap();
             // Postprocess xor
@@ -1751,11 +1747,11 @@ impl Circuits {
             result::group_start().unwrap();
             for (idx, bit) in bits.iter().enumerate() {
                 let a = bit.get_offset(0, num);
-                self.otp_encrypt_and_send_next_view_u64(&a.a, idx);
+                self.send_view(&a.a, self.next_id, idx);
             }
             for (idx, bit) in bits.iter_mut().enumerate() {
                 let mut a = bit.get_offset(0, num);
-                self.otp_receive_prev_and_decrypt_view_u64(&mut a.b, idx);
+                self.receive_view(&mut a.b, self.prev_id, idx);
             }
             result::group_end().unwrap();
 
@@ -1788,8 +1784,8 @@ impl Circuits {
             // Reshare
             result::group_start().unwrap();
             let mut a = bit.get_offset(0, num);
-            self.otp_encrypt_and_send_next_view_u64(&a.a, idx);
-            self.otp_receive_prev_and_decrypt_view_u64(&mut a.b, idx);
+            self.send_view(&a.a, self.next_id, idx);
+            self.receive_view(&mut a.b, self.prev_id, idx);
             result::group_end().unwrap();
 
             num += mod_;
@@ -1859,8 +1855,8 @@ impl Circuits {
             let bytes = (current_bitsize + 7) / 8;
             rand_offset = rand_offset.slice(bytes..); // Advance randomness
             result::group_start().unwrap();
-            self.otp_encrypt_and_send_next_view_u64(&res.a, 0);
-            self.otp_receive_prev_and_decrypt_view_u64(&mut res.b, 0);
+            self.send_view(&res.a, self.next_id, 0);
+            self.receive_view(&mut res.b, self.prev_id, 0);
             result::group_end().unwrap();
         }
     }
