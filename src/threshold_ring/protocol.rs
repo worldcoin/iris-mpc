@@ -450,14 +450,19 @@ impl Circuits {
                 // If not the server, give it a few secs to start
                 thread::sleep(Duration::from_secs(1));
 
-                let res = reqwest::blocking::get(format!(
-                    "http://{}:{}/{}",
-                    peer_url.unwrap(),
-                    server_port.unwrap(),
-                    i
-                ))
-                .unwrap();
-                IdWrapper::from_str(&res.text().unwrap()).unwrap().0
+                let peer_url = peer_url.unwrap().to_owned();
+                thread::spawn(move || {
+                    let res = reqwest::blocking::get(format!(
+                        "http://{}:{}/{}",
+                        peer_url,
+                        server_port.unwrap(),
+                        i
+                    ))
+                    .unwrap();
+                    IdWrapper::from_str(&res.text().unwrap()).unwrap().0
+                })
+                .join()
+                .unwrap()
             };
             ids.push(id);
 
