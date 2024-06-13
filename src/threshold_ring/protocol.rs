@@ -122,52 +122,46 @@ where
 }
 
 struct Kernels {
-    pub(crate) and: CudaFunction,
-    pub(crate) or_assign: CudaFunction,
-    pub(crate) xor: CudaFunction,
-    pub(crate) xor_assign: CudaFunction,
+    pub(crate) and:                   CudaFunction,
+    pub(crate) or_assign:             CudaFunction,
+    pub(crate) xor:                   CudaFunction,
+    pub(crate) xor_assign:            CudaFunction,
     pub(crate) single_xor_assign_u16: CudaFunction,
-    pub(crate) single_xor_assign_u32: CudaFunction,
     pub(crate) single_xor_assign_u64: CudaFunction,
-    pub(crate) split: CudaFunction,
-    pub(crate) lift_split: CudaFunction,
-    pub(crate) lift_mul_sub: CudaFunction,
-    pub(crate) transpose_32x64: CudaFunction,
-    pub(crate) transpose_16x64: CudaFunction,
-    pub(crate) ot_sender: CudaFunction,
-    pub(crate) ot_receiver: CudaFunction,
-    pub(crate) ot_helper: CudaFunction,
-    pub(crate) assign: CudaFunction,
-    pub(crate) collapse_u64_helper: CudaFunction,
+    pub(crate) split:                 CudaFunction,
+    pub(crate) lift_split:            CudaFunction,
+    pub(crate) lift_mul_sub:          CudaFunction,
+    pub(crate) transpose_32x64:       CudaFunction,
+    pub(crate) transpose_16x64:       CudaFunction,
+    pub(crate) ot_sender:             CudaFunction,
+    pub(crate) ot_receiver:           CudaFunction,
+    pub(crate) ot_helper:             CudaFunction,
+    pub(crate) assign:                CudaFunction,
+    pub(crate) collapse_u64_helper:   CudaFunction,
 }
 
 impl Kernels {
     const MOD_NAME: &'static str = "TComp";
 
     pub(crate) fn new(dev: Arc<CudaDevice>, ptx: Ptx) -> Kernels {
-        dev.load_ptx(
-            ptx.clone(),
-            Self::MOD_NAME,
-            &[
-                "shared_xor",
-                "shared_xor_assign",
-                "xor_assign_u16",
-                "xor_assign_u32",
-                "xor_assign_u64",
-                "shared_and_pre",
-                "shared_or_pre_assign",
-                "split",
-                "lift_split",
-                "shared_lift_mul_sub",
-                "shared_u32_transpose_pack_u64",
-                "shared_u16_transpose_pack_u64",
-                "packed_ot_sender",
-                "packed_ot_receiver",
-                "packed_ot_helper",
-                "shared_assign",
-                "collapse_u64_helper",
-            ],
-        )
+        dev.load_ptx(ptx.clone(), Self::MOD_NAME, &[
+            "shared_xor",
+            "shared_xor_assign",
+            "xor_assign_u16",
+            "xor_assign_u64",
+            "shared_and_pre",
+            "shared_or_pre_assign",
+            "split",
+            "lift_split",
+            "shared_lift_mul_sub",
+            "shared_u32_transpose_pack_u64",
+            "shared_u16_transpose_pack_u64",
+            "packed_ot_sender",
+            "packed_ot_receiver",
+            "packed_ot_helper",
+            "shared_assign",
+            "collapse_u64_helper",
+        ])
         .unwrap();
         let and = dev.get_func(Self::MOD_NAME, "shared_and_pre").unwrap();
         let or_assign = dev
@@ -176,7 +170,6 @@ impl Kernels {
         let xor = dev.get_func(Self::MOD_NAME, "shared_xor").unwrap();
         let xor_assign = dev.get_func(Self::MOD_NAME, "shared_xor_assign").unwrap();
         let single_xor_assign_u16 = dev.get_func(Self::MOD_NAME, "xor_assign_u16").unwrap();
-        let single_xor_assign_u32 = dev.get_func(Self::MOD_NAME, "xor_assign_u32").unwrap();
         let single_xor_assign_u64 = dev.get_func(Self::MOD_NAME, "xor_assign_u64").unwrap();
         let split = dev.get_func(Self::MOD_NAME, "split").unwrap();
         let lift_split = dev.get_func(Self::MOD_NAME, "lift_split").unwrap();
@@ -199,7 +192,6 @@ impl Kernels {
             xor,
             xor_assign,
             single_xor_assign_u16,
-            single_xor_assign_u32,
             single_xor_assign_u64,
             split,
             lift_split,
@@ -216,13 +208,13 @@ impl Kernels {
 }
 
 struct Buffers {
-    u32_64c_1: Option<Vec<ChunkShare<u32>>>,
-    u64_32c_1: Option<Vec<ChunkShare<u64>>>,
-    u64_32c_2: Option<Vec<ChunkShare<u64>>>,
-    u64_32c_3: Option<Vec<ChunkShare<u64>>>,
-    u64_31c_1: Option<Vec<ChunkShare<u64>>>,
-    u64_31c_2: Option<Vec<ChunkShare<u64>>>,
-    u16_128c_1: Option<Vec<ChunkShare<u16>>>,
+    u32_64c_1:         Option<Vec<ChunkShare<u32>>>,
+    u64_32c_1:         Option<Vec<ChunkShare<u64>>>,
+    u64_32c_2:         Option<Vec<ChunkShare<u64>>>,
+    u64_32c_3:         Option<Vec<ChunkShare<u64>>>,
+    u64_31c_1:         Option<Vec<ChunkShare<u64>>>,
+    u64_31c_2:         Option<Vec<ChunkShare<u64>>>,
+    u16_128c_1:        Option<Vec<ChunkShare<u16>>>,
     single_u16_128c_1: Option<Vec<CudaSlice<u16>>>,
     single_u16_128c_2: Option<Vec<CudaSlice<u16>>>,
     single_u16_128c_3: Option<Vec<CudaSlice<u16>>>,
@@ -335,16 +327,16 @@ impl Buffers {
 }
 
 pub struct Circuits {
-    peer_id: usize,
-    next_id: usize,
-    prev_id: usize,
+    peer_id:    usize,
+    next_id:    usize,
+    prev_id:    usize,
     chunk_size: usize,
-    n_devices: usize,
-    devs: Vec<Arc<CudaDevice>>,
-    comms: Vec<Rc<Comm>>,
-    kernels: Vec<Kernels>,
-    buffers: Buffers,
-    rngs: Vec<ChaChaCudaCorrRng>,
+    n_devices:  usize,
+    devs:       Vec<Arc<CudaDevice>>,
+    comms:      Vec<Rc<Comm>>,
+    kernels:    Vec<Kernels>,
+    buffers:    Buffers,
+    rngs:       Vec<ChaChaCudaCorrRng>,
 }
 
 impl Circuits {
@@ -489,17 +481,17 @@ impl Circuits {
     fn launch_config_from_elements_and_threads(n: u32, t: u32) -> LaunchConfig {
         let num_blocks = (n + t - 1) / t;
         LaunchConfig {
-            grid_dim: (num_blocks, 1, 1),
-            block_dim: (t, 1, 1),
+            grid_dim:         (num_blocks, 1, 1),
+            block_dim:        (t, 1, 1),
             shared_mem_bytes: 0,
         }
     }
 
     pub fn send_view_u16(&mut self, send: &CudaView<u16>, peer_id: usize, idx: usize) {
         // We have to transmute since u16 is not receivable
-        let mut send_trans: CudaView<u8> =        // the transmute_mut is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
+        let  send_trans: CudaView<u8> =        // the transmute_mut is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
      unsafe { send.transmute(send.len() * 2).unwrap() };
-        self.send_view(&mut send_trans, peer_id, idx);
+        self.send_view(&send_trans, peer_id, idx);
     }
 
     pub fn receive_view_u16(&mut self, receive: &mut CudaView<u16>, peer_id: usize, idx: usize) {
@@ -623,20 +615,6 @@ impl Circuits {
         }
     }
 
-    // Keep in mind: group needs to be open!
-    fn packed_and_many_send(&mut self, res: &ChunkShareView<u64>, bits: usize, idx: usize) {
-        dbg!(res.a.len());
-        dbg!(bits * self.chunk_size);
-        let send = res.a.slice(0..bits * self.chunk_size);
-        self.send_view(&send, self.next_id, idx);
-    }
-
-    // Keep in mind: group needs to be open!
-    fn packed_and_many_receive(&mut self, res: &mut ChunkShareView<u64>, bits: usize, idx: usize) {
-        let mut rcv = res.b.slice(0..bits * self.chunk_size);
-        self.receive_view(&mut rcv, self.prev_id, idx)
-    }
-
     fn assign_view(
         &mut self,
         des: &mut ChunkShareView<u64>,
@@ -713,18 +691,23 @@ impl Circuits {
         }
     }
 
-    #[allow(unused)]
-    fn packed_send_receive(&mut self, res: &mut [ChunkShare<u64>], bits: usize) {
-        debug_assert_eq!(res.len(), self.n_devices);
+    fn otp_encrypt_my_rng_u64(
+        &mut self,
+        input: &ChunkShareView<u64>,
+        idx: usize,
+    ) -> CudaSlice<u64> {
+        let data_len = input.len();
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(data_len).unwrap() };
+        self.fill_my_rand_u64(&mut rand, idx);
+        self.single_xor_assign_u64(&mut rand.slice(..), &input.a, idx, data_len);
+        rand
+    }
 
-        result::group_start().unwrap();
-        for (idx, res) in res.iter().enumerate() {
-            self.packed_and_many_send(&res.as_view(), bits, idx);
-        }
-        for (idx, res) in res.iter_mut().enumerate() {
-            self.packed_and_many_receive(&mut res.as_view(), bits, idx);
-        }
-        result::group_end().unwrap();
+    fn otp_decrypt_their_rng_u64(&mut self, inout: &mut ChunkShareView<u64>, idx: usize) {
+        let data_len = inout.len();
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(data_len).unwrap() };
+        self.fill_their_rand_u64(&mut rand, idx);
+        self.single_xor_assign_u64(&mut inout.b, &rand.slice(..), idx, data_len);
     }
 
     fn packed_send_receive_view(&mut self, res: &mut [ChunkShareView<u64>], bits: usize) {
@@ -737,28 +720,19 @@ impl Circuits {
         let send_bufs = res
             .iter()
             .enumerate()
-            .map(|(idx, res)| {
-                let data_len = res.len();
-                let mut rand = unsafe { self.devs[idx].alloc::<u64>(data_len).unwrap() };
-                self.fill_my_rand_u64(&mut rand, idx);
-                self.single_xor_assign_u64(&mut rand.slice(0..rand.len()), &res.a, idx, data_len);
-                rand
-            })
+            .map(|(idx, res)| self.otp_encrypt_my_rng_u64(res, idx))
             .collect_vec();
 
         result::group_start().unwrap();
         for (idx, res) in send_bufs.iter().enumerate() {
-            self.send(&res, self.next_id, idx);
+            self.send(res, self.next_id, idx);
         }
         for (idx, res) in res.iter_mut().enumerate() {
             self.receive_view(&mut res.b, self.prev_id, idx);
         }
         result::group_end().unwrap();
         for (idx, res) in res.iter_mut().enumerate() {
-            let data_len = res.len();
-            let mut rand = unsafe { self.devs[idx].alloc::<u64>(data_len).unwrap() };
-            self.fill_their_rand_u64(&mut rand, idx);
-            self.single_xor_assign_u64(&mut res.b, &rand.slice(..), idx, data_len);
+            self.otp_decrypt_their_rng_u64(res, idx);
         }
     }
 
@@ -768,41 +742,25 @@ impl Circuits {
         range: Range<usize>,
     ) {
         debug_assert_eq!(res.len(), self.n_devices);
-        let data_len = range.end - range.start;
 
         let send_bufs = res
             .iter()
             .enumerate()
             .map(|(idx, res)| {
-                let mut rand = unsafe { self.devs[idx].alloc::<u64>(data_len).unwrap() };
-                self.fill_my_rand_u64(&mut rand, idx);
-                self.single_xor_assign_u64(
-                    &mut rand.slice(..),
-                    &res.a.slice(range.clone()),
-                    idx,
-                    data_len,
-                );
-                rand
+                self.otp_encrypt_my_rng_u64(&res.get_range(range.start, range.end), idx)
             })
             .collect_vec();
 
         result::group_start().unwrap();
         for (idx, res) in send_bufs.iter().enumerate() {
-            self.send(&res, self.next_id, idx);
+            self.send(res, self.next_id, idx);
         }
         for (idx, res) in res.iter_mut().enumerate() {
             self.receive_view(&mut res.b.slice(range.clone()), self.prev_id, idx);
         }
         result::group_end().unwrap();
         for (idx, res) in res.iter_mut().enumerate() {
-            let mut rand = unsafe { self.devs[idx].alloc::<u64>(data_len).unwrap() };
-            self.fill_their_rand_u64(&mut rand, idx);
-            self.single_xor_assign_u64(
-                &mut res.b.slice(range.clone()),
-                &rand.slice(..),
-                idx,
-                data_len,
-            );
+            self.otp_decrypt_their_rng_u64(&mut res.get_range(range.start, range.end), idx);
         }
     }
 
@@ -821,27 +779,6 @@ impl Circuits {
         unsafe {
             self.kernels[idx]
                 .single_xor_assign_u16
-                .clone()
-                .launch(cfg, (&*x1, x2, size))
-                .unwrap();
-        }
-    }
-
-    fn single_xor_assign_u32(
-        &self,
-        x1: &mut CudaView<u32>,
-        x2: &CudaView<u32>,
-        idx: usize,
-        size: usize,
-    ) {
-        let cfg = Self::launch_config_from_elements_and_threads(
-            size as u32,
-            DEFAULT_LAUNCH_CONFIG_THREADS,
-        );
-
-        unsafe {
-            self.kernels[idx]
-                .single_xor_assign_u32
                 .clone()
                 .launch(cfg, (&*x1, x2, size))
                 .unwrap();
