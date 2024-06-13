@@ -38,6 +38,10 @@ uuid = { version = "1.8.0", features = ["v4"] }
 [dev-dependencies]
 criterion = "0.5"
 
+[features]
+default = []
+otp_encrypt = []
+
 #[[bench]]
 #name = "chacha"
 #harness = false
