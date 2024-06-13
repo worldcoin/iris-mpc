@@ -9,7 +9,7 @@ extern "C" __global__ void matmul_correct_and_reduce(int *c, unsigned short *out
     {
         int s0 = a0Sums[idx % numRows] + b0Sums[idx / numRows];
         int s1 = a1Sums[idx % numRows] + b1Sums[idx / numRows];
-        output[idx] = c[idx] + (s0 << 7) + ((s0 + s1) << 15) + rngMasks0[idx] + rngMasks1[idx];
+        output[idx] = c[idx] + (s0 << 7) + ((s0 + s1) << 15) + rngMasks0[idx] - rngMasks1[idx];
     }
 }
 
