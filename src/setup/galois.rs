@@ -1,6 +1,6 @@
 pub mod degree2 {
     use rand::{CryptoRng, Rng};
-    /// An element of the Galois ring $\mathbb{Z}_{2^{16}}[x]/(x^2 - x - 1)$.
+    /// An element of the Galois ring `$\mathbb{Z}_{2^{16}}[x]/(x^2 - x - 1)$`.
     #[derive(Copy, Clone, Debug, PartialEq, Eq)]
     pub struct GaloisRingElement {
         pub coefs: [u16; 2],
@@ -321,7 +321,7 @@ pub mod degree4 {
         impl Basis for Monomial {}
     }
 
-    /// An element of the Galois ring $\mathbb{Z}_{2^{16}}[x]/(x^4 - x - 1)$.
+    /// An element of the Galois ring `$\mathbb{Z}_{2^{16}}[x]/(x^4 - x - 1)$`.
     #[derive(Copy, Clone, Debug, PartialEq, Eq)]
     pub struct GaloisRingElement<B: Basis> {
         pub coefs: [u16; 4],
