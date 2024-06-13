@@ -990,19 +990,20 @@ impl Circuits {
         let m0_ = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_1);
         let m1_ = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_2);
         let wc_ = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_3);
-        let mut m0 = Buffers::get_single_buffer_chunk(&m0_, self.chunk_size * 64);
-        let mut m1 = Buffers::get_single_buffer_chunk(&m1_, self.chunk_size * 64);
+        let mut m0 = Buffers::get_single_buffer_chunk(&m0_, self.chunk_size * 128);
+        let mut m1 = Buffers::get_single_buffer_chunk(&m1_, self.chunk_size * 128);
         let mut wc = Buffers::get_single_buffer_chunk(&wc_, self.chunk_size * 128);
 
         result::group_start().unwrap();
         for (idx, (m0, m1, wc)) in izip!(&mut m0, &mut m1, &mut wc).enumerate() {
-            self.receive_view(m0, self.next_id, idx);
+            self.receive_view_u16(m0, self.next_id, idx);
             self.receive_view_u16(wc, self.prev_id, idx);
-            self.receive_view(m1, self.next_id, idx);
+            self.receive_view_u16(m1, self.next_id, idx);
         }
         result::group_end().unwrap();
 
-        for (idx, (inp, res, m0, m1, wc)) in izip!(inp, outp.iter_mut(), &m0, &m1, &wc).enumerate()
+        for (idx, (inp, res, m0, m1, wc)) in
+            izip!(inp, outp.iter_mut(), m0.iter_mut(), m1.iter_mut(), &wc).enumerate()
         {
             // SAFETY: Only unsafe because memory is not initialized. But, we fill
             // afterwards.
@@ -1011,14 +1012,8 @@ impl Circuits {
             let rand_ca = self.fill_my_rng_into_u16(&mut rand_ca_alloc, idx);
 
             // OTP decrypt
-            let mut m0_ : CudaView<u16> =
-            // the transmute is safe because we know that one u32 is 2 u16s, and the buffer is aligned properly for the transmute
-                unsafe { m0.transmute(m0.len() * 2).unwrap() };
-            let mut m1_ : CudaView<u16> =
-                // the transmute is safe because we know that one u32 is 2 u16s, and the buffer is aligned properly for the transmute
-                    unsafe { m1.transmute(m1.len() * 2).unwrap() };
-            self.otp_decrypt_my_rng_u16(&mut m0, idx);
-            self.otp_decrypt_my_rng_u16(&mut m1, idx);
+            self.otp_decrypt_my_rng_u16(m0, idx);
+            self.otp_decrypt_my_rng_u16(m1, idx);
 
             let cfg = Self::launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64 * 2,
@@ -1035,8 +1030,8 @@ impl Circuits {
                             &res.a,
                             &res.b,
                             &inp.b,
-                            &m0_,
-                            &m1_,
+                            &*m0,
+                            &*m1,
                             &rand_ca,
                             wc,
                             2 * self.chunk_size,
