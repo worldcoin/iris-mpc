@@ -1150,7 +1150,7 @@ impl Circuits {
         #[cfg(not(feature = "otp_encrypt"))]
         {
             for (idx, send) in outp.iter().enumerate() {
-                self.send_view_u16(&send.a, self.prev_id, idx);
+                self.send_view_u16(&send.b, self.prev_id, idx);
             }
         }
         result::group_end().unwrap();
