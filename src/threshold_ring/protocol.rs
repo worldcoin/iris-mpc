@@ -691,6 +691,23 @@ impl Circuits {
         }
     }
 
+    fn otp_encrypt_their_rng_u16(&mut self, input: &CudaView<u16>, idx: usize) -> CudaSlice<u32> {
+        let data_len = input.len();
+        debug_assert_eq!(data_len & 1, 0);
+        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
+        let mut rand_u16 = self.fill_their_rng_into_u16(&mut rand, idx);
+        self.single_xor_assign_u16(&mut rand_u16, &input, idx, data_len);
+        rand
+    }
+
+    fn otp_decrypt_my_rng_u16(&mut self, input: &mut CudaView<u16>, idx: usize) {
+        let data_len = input.len();
+        debug_assert_eq!(data_len & 1, 0);
+        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
+        let rand_u16 = self.fill_my_rng_into_u16(&mut rand, idx);
+        self.single_xor_assign_u16(input, &rand_u16, idx, data_len);
+    }
+
     fn otp_encrypt_my_rng_u64(
         &mut self,
         input: &ChunkShareView<u64>,
@@ -942,10 +959,22 @@ impl Circuits {
             }
         }
 
+        // OTP encrypt
+        let m0 = m0
+            .into_iter()
+            .enumerate()
+            .map(|(idx, m0)| self.otp_encrypt_their_rng_u16(&m0, idx))
+            .collect_vec();
+        let m1 = m1
+            .into_iter()
+            .enumerate()
+            .map(|(idx, m1)| self.otp_encrypt_their_rng_u16(&m1, idx))
+            .collect_vec();
+
         result::group_start().unwrap();
         for (idx, (m0, m1)) in izip!(&m0, &m1).enumerate() {
-            self.send_view_u16(m0, self.prev_id, idx);
-            self.send_view_u16(m1, self.prev_id, idx);
+            self.send(m0, self.prev_id, idx);
+            self.send(m1, self.prev_id, idx);
         }
         result::group_end().unwrap();
 
@@ -961,15 +990,15 @@ impl Circuits {
         let m0_ = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_1);
         let m1_ = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_2);
         let wc_ = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_3);
-        let mut m0 = Buffers::get_single_buffer_chunk(&m0_, self.chunk_size * 128);
-        let mut m1 = Buffers::get_single_buffer_chunk(&m1_, self.chunk_size * 128);
+        let mut m0 = Buffers::get_single_buffer_chunk(&m0_, self.chunk_size * 64);
+        let mut m1 = Buffers::get_single_buffer_chunk(&m1_, self.chunk_size * 64);
         let mut wc = Buffers::get_single_buffer_chunk(&wc_, self.chunk_size * 128);
 
         result::group_start().unwrap();
         for (idx, (m0, m1, wc)) in izip!(&mut m0, &mut m1, &mut wc).enumerate() {
-            self.receive_view_u16(m0, self.next_id, idx);
+            self.receive_view(m0, self.next_id, idx);
             self.receive_view_u16(wc, self.prev_id, idx);
-            self.receive_view_u16(m1, self.next_id, idx);
+            self.receive_view(m1, self.next_id, idx);
         }
         result::group_end().unwrap();
 
@@ -980,6 +1009,16 @@ impl Circuits {
             let mut rand_ca_alloc =
                 unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
             let rand_ca = self.fill_my_rng_into_u16(&mut rand_ca_alloc, idx);
+
+            // OTP decrypt
+            let mut m0_ : CudaView<u16> =
+            // the transmute is safe because we know that one u32 is 2 u16s, and the buffer is aligned properly for the transmute
+                unsafe { m0.transmute(m0.len() * 2).unwrap() };
+            let mut m1_ : CudaView<u16> =
+                // the transmute is safe because we know that one u32 is 2 u16s, and the buffer is aligned properly for the transmute
+                    unsafe { m1.transmute(m1.len() * 2).unwrap() };
+            self.otp_decrypt_my_rng_u16(&mut m0, idx);
+            self.otp_decrypt_my_rng_u16(&mut m1, idx);
 
             let cfg = Self::launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64 * 2,
@@ -996,8 +1035,8 @@ impl Circuits {
                             &res.a,
                             &res.b,
                             &inp.b,
-                            m0,
-                            m1,
+                            &m0_,
+                            &m1_,
                             &rand_ca,
                             wc,
                             2 * self.chunk_size,
