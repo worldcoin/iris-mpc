@@ -841,7 +841,7 @@ async fn main() -> eyre::Result<()> {
                     .unwrap();
                 let new_chunk_size = (QUERIES * max_db_size).div_ceil(2048) * 2048;
                 assert!(new_chunk_size <= phase2_chunk_size_max);
-                thread_phase2.set_chunk_size(new_chunk_size);
+                thread_phase2.set_chunk_size(new_chunk_size / 64);
 
                 // Emit stream finished event to unblock the stream after the following
                 unsafe {
