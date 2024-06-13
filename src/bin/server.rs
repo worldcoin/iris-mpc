@@ -398,7 +398,7 @@ async fn main() -> eyre::Result<()> {
     let phase2 = Arc::new(Mutex::new(Circuits::new(
         party_id,
         phase2_chunk_size,
-        phase2_chunk_size_max,
+        phase2_chunk_size_max / 64,
         bootstrap_url.clone(),
         Some(4005),
     )));
@@ -443,12 +443,19 @@ async fn main() -> eyre::Result<()> {
 
     println!("All systems ready.");
 
+    let mut total_time = Instant::now();
+
     // Main loop
-    for _ in 0..5 {
+    for _i in 0..10 {
+        // Skip first iteration
+        if _i == 1 {
+            total_time = Instant::now();
+        }
         // loop {
         let now = Instant::now();
         let batch = receive_batch(party_id, &client, &queue).await?;
         println!("Received batch in {:?}", now.elapsed());
+        total_time -= now.elapsed();
 
         let code_query = prepare_query_shares(batch.query.code);
         let mask_query = prepare_query_shares(batch.query.mask);
@@ -872,6 +879,8 @@ async fn main() -> eyre::Result<()> {
 
         println!("CPU time of one iteration {:?}", now.elapsed());
     }
+
+    println!("Total time for 9 iterations: {:?}", total_time.elapsed());
 
     sleep(Duration::from_secs(5)).await;
 
