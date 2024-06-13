@@ -1,6 +1,7 @@
 use crate::{
     helpers::id_wrapper::{http_root, IdWrapper},
     rng::chacha_corr::ChaChaCudaCorrRng,
+    setup::id,
     threshold_ring::cuda::PTX_SRC,
 };
 use axum::{routing::get, Router};
@@ -691,12 +692,21 @@ impl Circuits {
         }
     }
 
+    fn otp_encrypt_my_rng_u16(&mut self, input: &CudaView<u16>, idx: usize) -> CudaSlice<u32> {
+        let data_len = input.len();
+        debug_assert_eq!(data_len & 1, 0);
+        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
+        let mut rand_u16 = self.fill_my_rng_into_u16(&mut rand, idx);
+        self.single_xor_assign_u16(&mut rand_u16, input, idx, data_len);
+        rand
+    }
+
     fn otp_encrypt_their_rng_u16(&mut self, input: &CudaView<u16>, idx: usize) -> CudaSlice<u32> {
         let data_len = input.len();
         debug_assert_eq!(data_len & 1, 0);
         let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
         let mut rand_u16 = self.fill_their_rng_into_u16(&mut rand, idx);
-        self.single_xor_assign_u16(&mut rand_u16, &input, idx, data_len);
+        self.single_xor_assign_u16(&mut rand_u16, input, idx, data_len);
         rand
     }
 
@@ -705,6 +715,14 @@ impl Circuits {
         debug_assert_eq!(data_len & 1, 0);
         let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
         let rand_u16 = self.fill_my_rng_into_u16(&mut rand, idx);
+        self.single_xor_assign_u16(input, &rand_u16, idx, data_len);
+    }
+
+    fn otp_decrypt_their_rng_u16(&mut self, input: &mut CudaView<u16>, idx: usize) {
+        let data_len = input.len();
+        debug_assert_eq!(data_len & 1, 0);
+        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
+        let rand_u16 = self.fill_their_rng_into_u16(&mut rand, idx);
         self.single_xor_assign_u16(input, &rand_u16, idx, data_len);
     }
 
@@ -994,6 +1012,8 @@ impl Circuits {
         let mut m1 = Buffers::get_single_buffer_chunk(&m1_, self.chunk_size * 128);
         let mut wc = Buffers::get_single_buffer_chunk(&wc_, self.chunk_size * 128);
 
+        let mut send = Vec::with_capacity(inp.len());
+
         result::group_start().unwrap();
         for (idx, (m0, m1, wc)) in izip!(&mut m0, &mut m1, &mut wc).enumerate() {
             self.receive_view_u16(m0, self.next_id, idx);
@@ -1013,6 +1033,7 @@ impl Circuits {
 
             // OTP decrypt
             self.otp_decrypt_my_rng_u16(m0, idx);
+            self.otp_decrypt_their_rng_u16(wc, idx);
             self.otp_decrypt_my_rng_u16(m1, idx);
 
             let cfg = Self::launch_config_from_elements_and_threads(
@@ -1039,12 +1060,15 @@ impl Circuits {
                     )
                     .unwrap();
             }
+
+            // OTP encrypt
+            send.push(self.otp_encrypt_their_rng_u16(&res.b, idx));
         }
 
         // Reshare to Helper
         result::group_start().unwrap();
-        for (idx, res) in outp.iter().enumerate() {
-            self.send_view_u16(&res.b, self.prev_id, idx);
+        for (idx, send) in send.iter().enumerate() {
+            self.send(send, self.prev_id, idx);
         }
         result::group_end().unwrap();
 
@@ -1060,6 +1084,8 @@ impl Circuits {
     ) {
         let wc_ = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_3);
         let wc = Buffers::get_single_buffer_chunk(&wc_, self.chunk_size * 128);
+
+        let mut send = Vec::with_capacity(inp.len());
 
         for (idx, (inp, res, wc)) in izip!(inp, outp.iter_mut(), &wc).enumerate() {
             // SAFETY: Only unsafe because memory is not initialized. But, we fill
@@ -1101,11 +1127,14 @@ impl Circuits {
                     )
                     .unwrap();
             }
+
+            // OTP encrypt
+            send.push(self.otp_encrypt_my_rng_u16(wc, idx));
         }
 
         result::group_start().unwrap();
-        for (idx, wc) in wc.iter().enumerate() {
-            self.send_view_u16(wc, self.next_id, idx);
+        for (idx, send) in send.iter().enumerate() {
+            self.send(send, self.next_id, idx);
         }
         result::group_end().unwrap();
         result::group_start().unwrap();
@@ -1113,6 +1142,10 @@ impl Circuits {
             self.receive_view_u16(&mut res.a, self.next_id, idx);
         }
         result::group_end().unwrap();
+        // OTP decrypt
+        for (idx, res) in outp.iter_mut().enumerate() {
+            self.otp_decrypt_my_rng_u16(&mut res.a, idx);
+        }
 
         Buffers::return_single_buffer(&mut self.buffers.single_u16_128c_3, wc_);
     }
