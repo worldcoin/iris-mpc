@@ -98,7 +98,7 @@ fn open(
         party.send_view_u16(&corr.b, party.next_id(), idx);
     }
     for (idx, (res, corr)) in izip!(x.iter_mut(), corrections.iter_mut()).enumerate() {
-        party.send_view(&mut res.a, party.next_id(), idx);
+        party.receive_view(&mut res.a, party.prev_id(), idx);
         party.receive_view_u16(&mut corr.a, party.prev_id(), idx);
     }
     cudarc::nccl::result::group_end().unwrap();
