@@ -1,7 +1,6 @@
 use crate::{
     helpers::id_wrapper::{http_root, IdWrapper},
     rng::chacha_corr::ChaChaCudaCorrRng,
-    setup::id,
     threshold_ring::cuda::PTX_SRC,
 };
 use axum::{routing::get, Router};
@@ -1022,8 +1021,14 @@ impl Circuits {
         }
         result::group_end().unwrap();
 
-        for (idx, (inp, res, m0, m1, wc)) in
-            izip!(inp, outp.iter_mut(), m0.iter_mut(), m1.iter_mut(), &wc).enumerate()
+        for (idx, (inp, res, m0, m1, wc)) in izip!(
+            inp,
+            outp.iter_mut(),
+            m0.iter_mut(),
+            m1.iter_mut(),
+            wc.iter_mut()
+        )
+        .enumerate()
         {
             // SAFETY: Only unsafe because memory is not initialized. But, we fill
             // afterwards.
@@ -1054,7 +1059,7 @@ impl Circuits {
                             &*m0,
                             &*m1,
                             &rand_ca,
-                            wc,
+                            &*wc,
                             2 * self.chunk_size,
                         ),
                     )
