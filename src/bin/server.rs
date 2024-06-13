@@ -34,9 +34,9 @@ use std::{
 use tokio::time::sleep;
 
 const REGION: &str = "eu-north-1";
-const DB_SIZE: usize = 8 * 1000;
-const DB_BUFFER: usize = 8 * 1000;
-const QUERIES: usize = 31 * 16;
+const DB_SIZE: usize = 8 * 250_000;
+const DB_BUFFER: usize = 8 * 1_000;
+const QUERIES: usize = 31 * 32;
 const RNG_SEED: u64 = 42;
 const SHUFFLE_SEED: u64 = 42;
 const MAX_CONCURRENT_REQUESTS: usize = 5;
@@ -598,7 +598,6 @@ async fn main() -> eyre::Result<()> {
 
         debug_record_event!(device_manager, request_streams, timers);
 
-        // TODO: move after phase 2
         device_manager.record_event(request_streams, &next_exchange_event);
 
         println!("phase 1 done");
