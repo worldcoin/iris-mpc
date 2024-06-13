@@ -17,7 +17,7 @@ use rayon::prelude::*;
 use std::{ffi::c_void, mem, str::FromStr, sync::Arc, thread, time::Duration};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
-const MATMUL_FUNCTION_NAME: &str = "matmul";
+const REDUCE_FUNCTION_NAME: &str = "matmul_correct_and_reduce";
 const LIMBS: usize = 2;
 
 pub fn preprocess_query(query: &[u16]) -> Vec<Vec<u8>> {
@@ -149,10 +149,10 @@ impl ShareDB {
 
         for i in 0..n_devices {
             let dev = device_manager.device(i);
-            dev.load_ptx(ptx.clone(), MATMUL_FUNCTION_NAME, &[MATMUL_FUNCTION_NAME])
+            dev.load_ptx(ptx.clone(), REDUCE_FUNCTION_NAME, &[REDUCE_FUNCTION_NAME])
                 .unwrap();
             let function = dev
-                .get_func(MATMUL_FUNCTION_NAME, MATMUL_FUNCTION_NAME)
+                .get_func(REDUCE_FUNCTION_NAME, REDUCE_FUNCTION_NAME)
                 .unwrap();
 
             kernels.push(function);
@@ -172,15 +172,25 @@ impl ShareDB {
 
         for idx in 0..n_devices {
             unsafe {
-                intermediate_results
-                    .push(device_manager.device(idx).alloc(results_len * 4).unwrap());
-                results.push(device_manager.device(idx).alloc(results_len * 2).unwrap());
-                results_peer.push(device_manager.device(idx).alloc(results_len * 2).unwrap());
+                intermediate_results.push(device_manager.device(idx).alloc(results_len).unwrap());
+                results.push(
+                    device_manager
+                        .device(idx)
+                        .alloc(results_len * std::mem::size_of::<u16>())
+                        .unwrap(),
+                );
+                results_peer.push(
+                    device_manager
+                        .device(idx)
+                        .alloc(results_len * std::mem::size_of::<u16>())
+                        .unwrap(),
+                );
             }
         }
 
         // Init RNGs
-        let rng_buf_size: usize = (max_db_length / n_devices * query_length).div_ceil(64) * 64;
+        let rng_buf_size: usize =
+            (max_db_length / n_devices * query_length * mem::size_of::<u16>()).div_ceil(64) * 64;
         let mut rngs = vec![];
         for idx in 0..n_devices {
             let (seed0, seed1) = chacha_seeds;
@@ -443,6 +453,9 @@ impl ShareDB {
 
             for (i, d) in [db.0[idx], db.1[idx]].iter().enumerate() {
                 for (j, q) in [query0, query1].iter().enumerate() {
+                    if i + j >= LIMBS {
+                        continue;
+                    }
                     gemm(
                         &blass[idx],
                         *d,
@@ -450,12 +463,12 @@ impl ShareDB {
                         *self.intermediate_results[idx].device_ptr(),
                         0,
                         0,
-                        (db_sizes[idx] * self.query_length * 4 * (i * 2 + j)) as u64,
+                        0,
                         db_sizes[idx],
                         self.query_length,
                         IRIS_CODE_LENGTH,
-                        1,
-                        0,
+                        1 << 8 * (i + j),
+                        if i + j == 0 { 0 } else { 1 },
                     );
                 }
             }
@@ -498,7 +511,6 @@ impl ShareDB {
                             query_sums.1[idx],
                             db_sizes[idx] as u64,
                             (db_sizes[idx] * self.query_length) as u64,
-                            IRIS_CODE_LENGTH as u64,
                             self.rngs[idx].0.cuda_slice().unwrap(),
                             self.rngs[idx].1.cuda_slice().unwrap(),
                         ),
@@ -631,8 +643,8 @@ mod tests {
         );
         device_manager.await_streams(&streams);
 
-        let a_nda = random_ndarray::<u64>(db.clone(), DB_SIZE, WIDTH);
-        let b_nda = random_ndarray::<u64>(query.clone(), QUERY_SIZE, WIDTH);
+        let a_nda = random_ndarray::<u16>(db.clone(), DB_SIZE, WIDTH);
+        let b_nda = random_ndarray::<u16>(query.clone(), QUERY_SIZE, WIDTH);
         let c_nda = a_nda.dot(&b_nda.t());
 
         let mut vec_column_major: Vec<u16> = Vec::new();
