@@ -34,7 +34,7 @@ use std::{
 use tokio::time::sleep;
 
 const REGION: &str = "eu-north-1";
-const DB_SIZE: usize = 8 * 250_000;
+const DB_SIZE: usize = 8 * 1_000;
 const DB_BUFFER: usize = 8 * 1_000;
 const QUERIES: usize = 31 * 32;
 const RNG_SEED: u64 = 42;
@@ -650,6 +650,9 @@ async fn main() -> eyre::Result<()> {
         let thread_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
 
         tokio::spawn(async move {
+            // Wait for Phase 1 to finish
+            await_streams(&thread_streams);
+
             let thread_devs = thread_device_manager.devices();
             let mut thread_phase2_batch = thread_phase2_batch.lock().unwrap();
             let mut thread_phase2 = thread_phase2.lock().unwrap();
@@ -698,9 +701,6 @@ async fn main() -> eyre::Result<()> {
                 .iter()
                 .map(|d| *d.cu_stream() as u64)
                 .collect::<Vec<_>>();
-
-            // Wait for Phase 1 to finish
-            await_streams(&thread_streams);
 
             // Phase 2 [Batch]: compare each result against threshold
             thread_phase2_batch.compare_threshold_masked_many(&code_dots_batch, &mask_dots_batch);
