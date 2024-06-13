@@ -731,17 +731,19 @@ impl Circuits {
         idx: usize,
     ) -> CudaSlice<u64> {
         let data_len = input.len();
-        let mut rand = unsafe { self.devs[idx].alloc::<u64>(data_len).unwrap() };
+        let rand_size = (data_len + 7) / 8; // Multiple of 16 u32
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(rand_size * 8).unwrap() };
         self.fill_my_rand_u64(&mut rand, idx);
-        self.single_xor_assign_u64(&mut rand.slice(..), &input.a, idx, data_len);
+        self.single_xor_assign_u64(&mut rand.slice(..data_len), &input.a, idx, data_len);
         rand
     }
 
     fn otp_decrypt_their_rng_u64(&mut self, inout: &mut ChunkShareView<u64>, idx: usize) {
         let data_len = inout.len();
-        let mut rand = unsafe { self.devs[idx].alloc::<u64>(data_len).unwrap() };
+        let rand_size = (data_len + 7) / 8; // Multiple of 16 u32
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(rand_size * 8).unwrap() };
         self.fill_their_rand_u64(&mut rand, idx);
-        self.single_xor_assign_u64(&mut inout.b, &rand.slice(..), idx, data_len);
+        self.single_xor_assign_u64(&mut inout.b, &rand.slice(..data_len), idx, data_len);
     }
 
     fn packed_send_receive_view(&mut self, res: &mut [ChunkShareView<u64>], bits: usize) {
