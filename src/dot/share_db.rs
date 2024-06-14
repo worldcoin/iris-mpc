@@ -14,7 +14,7 @@ use cudarc::{
     nvrtc::compile_ptx,
 };
 use rayon::prelude::*;
-use std::{ffi::c_void, mem, str::FromStr, sync::Arc, thread, time::Duration};
+use std::{env, ffi::c_void, mem, str::FromStr, sync::Arc, thread, time::Duration};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const REDUCE_FUNCTION_NAME: &str = "matmul_correct_and_reduce";
@@ -229,6 +229,12 @@ impl ShareDB {
             }
 
             for i in 0..n_devices {
+
+                env::set_var("NCCL_COMM_ID", format!("10.15.32.27:{}", 43520 + (server_port.unwrap()-4000) * 10 + i as u16));
+                if peer_id == 0 {
+                    let xx = Id::new();
+                }
+
                 let id = IdWrapper::from_str(&format!("2f671c856cc744b00200aa{:02x}0a0f201b0000000000000000000000000000000000000000000000000400000000000000906b0385fe7f0000434ed33384550000a8640000000000000000000000000000b022d83a845500000002000000000000b8600385fe7f000000000000000000000700000000000000405e0385fe7f0000", (server_port.unwrap()-4000) * 10 + i as u16)).unwrap().0;
                 ids.push(id);
 
@@ -240,7 +246,7 @@ impl ShareDB {
             }
         }
 
-        Self {
+        let share_db = Self {
             peer_id,
             is_remote,
             query_length,
@@ -252,7 +258,8 @@ impl ShareDB {
             ones,
             results,
             results_peer,
-        }
+        };
+        share_db
     }
 
     #[allow(clippy::type_complexity)]
