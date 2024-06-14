@@ -34,9 +34,10 @@ use std::{
 use tokio::time::sleep;
 
 const REGION: &str = "eu-north-1";
-const DB_SIZE: usize = 8 * 100_000;
+const DB_SIZE: usize = 8 * 250_000;
 const DB_BUFFER: usize = 8 * 1_000;
 const QUERIES: usize = 31 * 32;
+const N_BATCHES: usize = 10;
 const RNG_SEED: u64 = 42;
 const SHUFFLE_SEED: u64 = 42;
 const MAX_CONCURRENT_REQUESTS: usize = 5;
@@ -447,7 +448,7 @@ async fn main() -> eyre::Result<()> {
     let mut batch_times = Duration::from_secs(0);
 
     // Main loop
-    for _i in 0..10 {
+    for _i in 0..N_BATCHES {
         // Skip first iteration
         if _i == 1 {
             total_time = Instant::now();
@@ -651,7 +652,7 @@ async fn main() -> eyre::Result<()> {
         let thread_code_db_slices = slice_tuples_to_ptrs(&code_db_slices);
         let thread_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             // Wait for Phase 1 to finish
             await_streams(&thread_streams);
 
@@ -881,6 +882,11 @@ async fn main() -> eyre::Result<()> {
         next_exchange_event = device_manager.create_events();
 
         println!("CPU time of one iteration {:?}", now.elapsed());
+
+        // Await the last one for benching
+        if _i == N_BATCHES - 1 {
+            handle.await?;
+        }
     }
 
     println!("Total time for 9 iterations: {:?}", total_time.elapsed() - batch_times);
