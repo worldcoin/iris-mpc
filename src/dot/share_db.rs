@@ -230,7 +230,7 @@ impl ShareDB {
 
             for i in 0..n_devices {
                 let id = if peer_id == 0 {
-                    ids[i]
+                    IdWrapper::from_str(&format!("2f671c856cc744b00200aa{:02x}0a0f201b0000000000000000000000000000000000000000000000000400000000000000906b0385fe7f0000434ed33384550000a8640000000000000000000000000000b022d83a845500000002000000000000b8600385fe7f000000000000000000000700000000000000405e0385fe7f0000", i)).unwrap().0
                 } else {
                     let peer_url = peer_url.clone().unwrap();
                     std::thread::spawn(move || {
