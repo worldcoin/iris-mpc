@@ -451,6 +451,7 @@ async fn main() -> eyre::Result<()> {
         // Skip first iteration
         if _i == 1 {
             total_time = Instant::now();
+            batch_times = Duration::from_secs(0);
         }
         // loop {
         let now = Instant::now();
