@@ -34,7 +34,7 @@ use std::{
 use tokio::time::sleep;
 
 const REGION: &str = "eu-north-1";
-const DB_SIZE: usize = 8 * 100_000;
+const DB_SIZE: usize = 8 * 1_000;
 const DB_BUFFER: usize = 8 * 1_000;
 const QUERIES: usize = 31 * 32;
 const RNG_SEED: u64 = 42;
@@ -444,6 +444,7 @@ async fn main() -> eyre::Result<()> {
     println!("All systems ready.");
 
     let mut total_time = Instant::now();
+    let mut batch_times = Duration::from_secs(0);
 
     // Main loop
     for _i in 0..10 {
@@ -455,7 +456,7 @@ async fn main() -> eyre::Result<()> {
         let now = Instant::now();
         let batch = receive_batch(party_id, &client, &queue).await?;
         println!("Received batch in {:?}", now.elapsed());
-        total_time -= now.elapsed();
+        batch_times += now.elapsed();
 
         let code_query = prepare_query_shares(batch.query.code);
         let mask_query = prepare_query_shares(batch.query.mask);
@@ -498,9 +499,9 @@ async fn main() -> eyre::Result<()> {
         if request_counter > 2 {
             // We have two streams working concurrently, we'll await the stream before
             // previous one
-            let previous_streams = &streams[(request_counter - 2) % MAX_CONCURRENT_REQUESTS];
-            device_manager.await_event(previous_streams, &previous_previous_stream_event);
-            device_manager.await_streams(previous_streams);
+            let previous_previous_streams = &streams[(request_counter - 2) % MAX_CONCURRENT_REQUESTS];
+            device_manager.await_event(previous_previous_streams, &previous_previous_stream_event);
+            device_manager.await_streams(previous_previous_streams);
         }
 
         let current_db_size_stream = current_db_size_mutex
@@ -696,6 +697,7 @@ async fn main() -> eyre::Result<()> {
                 &thread_devs,
             );
 
+            // We only use the default streams of the devices, therefore Phase 2's are never running concurrently
             let streams = thread_phase2
                 .get_devices()
                 .iter()
@@ -880,7 +882,7 @@ async fn main() -> eyre::Result<()> {
         println!("CPU time of one iteration {:?}", now.elapsed());
     }
 
-    println!("Total time for 9 iterations: {:?}", total_time.elapsed());
+    println!("Total time for 9 iterations: {:?}", total_time.elapsed() - batch_times);
 
     sleep(Duration::from_secs(5)).await;
 
