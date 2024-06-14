@@ -207,9 +207,9 @@ impl ShareDB {
         let mut comms = vec![];
         if is_remote {
             let mut ids = vec![];
-            for _ in 0..n_devices {
-                ids.push(Id::new().unwrap());
-            }
+            // for _ in 0..n_devices {
+            //     ids.push(Id::new().unwrap());
+            // }
 
             // Start HTTP server to exchange NCCL commIds
             if peer_id == 0 {
@@ -229,23 +229,7 @@ impl ShareDB {
             }
 
             for i in 0..n_devices {
-                let id = if peer_id == 0 {
-                    IdWrapper::from_str(&format!("2f671c856cc744b00200aa{:02x}0a0f201b0000000000000000000000000000000000000000000000000400000000000000906b0385fe7f0000434ed33384550000a8640000000000000000000000000000b022d83a845500000002000000000000b8600385fe7f000000000000000000000700000000000000405e0385fe7f0000", i)).unwrap().0
-                } else {
-                    let peer_url = peer_url.clone().unwrap();
-                    std::thread::spawn(move || {
-                        let res = reqwest::blocking::get(format!(
-                            "http://{}:{}/{}",
-                            peer_url,
-                            server_port.unwrap(),
-                            i
-                        ))
-                        .unwrap();
-                        IdWrapper::from_str(&res.text().unwrap()).unwrap().0
-                    })
-                    .join()
-                    .unwrap()
-                };
+                let id = IdWrapper::from_str(&format!("2f671c856cc744b00200aa{:02x}0a0f201b0000000000000000000000000000000000000000000000000400000000000000906b0385fe7f0000434ed33384550000a8640000000000000000000000000000b022d83a845500000002000000000000b8600385fe7f000000000000000000000700000000000000405e0385fe7f0000", (4000-server_port.unwrap()) * 10 + i as u16)).unwrap().0;
                 ids.push(id);
 
                 // Bind to thread (important!)
