@@ -449,14 +449,19 @@ impl Circuits {
             let id = if peer_id == 0 {
                 ids[i]
             } else {
-                let res = reqwest::blocking::get(format!(
-                    "http://{}:{}/{}",
-                    peer_url.clone().unwrap(),
-                    server_port.unwrap(),
-                    i
-                ))
-                .unwrap();
-                IdWrapper::from_str(&res.text().unwrap()).unwrap().0
+                let peer_url = peer_url.clone().unwrap();
+                std::thread::spawn(move || {
+                    let res = reqwest::blocking::get(format!(
+                        "http://{}:{}/{}",
+                        peer_url,
+                        server_port.unwrap(),
+                        i
+                    ))
+                    .unwrap();
+                    IdWrapper::from_str(&res.text().unwrap()).unwrap().0
+                })
+                .join()
+                .unwrap()
             };
             ids.push(id);
 
