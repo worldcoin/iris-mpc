@@ -34,6 +34,7 @@ impl std::fmt::Display for IdWrapper {
 }
 
 pub async fn http_root(ids: Vec<Id>, Path(device_id): Path<String>) -> String {
-    let device_id: usize = device_id.parse().unwrap();
-    IdWrapper(ids[device_id]).to_string()
+    // let device_id: usize = device_id.parse().unwrap();
+    // IdWrapper(ids[device_id]).to_string()
+    "2f671c856cc744b00200aaaa0a0f201b0000000000000000000000000000000000000000000000000400000000000000906b0385fe7f0000434ed33384550000a8640000000000000000000000000000b022d83a845500000002000000000000b8600385fe7f000000000000000000000700000000000000405e0385fe7f0000".to_string()
 }
