@@ -21,10 +21,7 @@ use time::OffsetDateTime;
 /// Derive a shared secret from two KMS keys
 /// Unfortunately, this is not yet implemented in the AWS SDK for Rust, so we
 /// have to do it manually with the API and SigV4
-pub async fn derive_shared_secret(
-    own_key_id: &str,
-    other_key_id: &str,
-) -> eyre::Result<[u8; 32]> {
+pub async fn derive_shared_secret(own_key_id: &str, other_key_id: &str) -> eyre::Result<[u8; 32]> {
     let shared_config = aws_config::from_env().load().await;
     let other_pub_key = get_public_key(other_key_id).await?;
 
