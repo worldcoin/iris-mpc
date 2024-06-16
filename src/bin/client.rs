@@ -8,13 +8,16 @@ use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use gpu_iris_mpc::{
     helpers::sqs::SMPCRequest,
-    setup::iris_db::{db::IrisDB, iris::IrisCode, shamir_iris::ShamirIris},
+    setup::{
+        galois_engine::degree2::GaloisRingIrisCodeShare,
+        iris_db::{db::IrisDB, iris::IrisCode},
+    },
 };
 use rand::{rngs::StdRng, SeedableRng};
 use serde_json::to_string;
 use uuid::Uuid;
 
-const N_QUERIES: usize = 16;
+const N_QUERIES: usize = 32 * 10;
 const REGION: &str = "eu-north-1";
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;
@@ -69,19 +72,28 @@ async fn main() -> eyre::Result<()> {
                 IrisCode::random_rng(&mut rng)
             }
         } else {
+            let mut rng = StdRng::seed_from_u64(1337); // TODO
             IrisCode::random_rng(&mut rng)
         };
 
-        let shared_template = ShamirIris::share_iris(&template, &mut rng);
+        let shared_code = GaloisRingIrisCodeShare::encode_iris_code(
+            &template.code,
+            &template.mask,
+            &mut StdRng::seed_from_u64(RNG_SEED_SERVER),
+        );
+        let shared_mask = GaloisRingIrisCodeShare::encode_mask_code(
+            &template.mask,
+            &mut StdRng::seed_from_u64(RNG_SEED_SERVER),
+        );
         let request_id = Uuid::new_v4();
 
         let mut messages = vec![];
         for i in 0..3 {
             let sns_id = Uuid::new_v4();
             let iris_code =
-                general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_template[i].code));
+                general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_code[i].coefs));
             let mask_code =
-                general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_template[i].mask));
+                general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_mask[i].coefs));
 
             let request_message = SMPCRequest {
                 request_type: ENROLLMENT_REQUEST_TYPE.to_string(),

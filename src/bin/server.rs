@@ -5,9 +5,9 @@ use cudarc::driver::{
     result::{
         self,
         event::{self, elapsed},
+        stream::synchronize,
     },
-    sys::lib,
-    CudaSlice,
+    CudaDevice, CudaSlice,
 };
 use gpu_iris_mpc::{
     dot::{
@@ -17,15 +17,12 @@ use gpu_iris_mpc::{
         IRIS_CODE_LENGTH, ROTATIONS,
     },
     helpers::{
-        device_ptrs,
+        device_ptrs, device_ptrs_to_slices,
         mmap::{read_mmap_file, write_mmap_file},
         sqs::{SMPCRequest, SQSMessage},
     },
-    setup::{
-        id::PartyID,
-        iris_db::{db::IrisDB, shamir_db::ShamirIrisDB, shamir_iris::ShamirIris},
-        shamir::Shamir,
-    },
+    setup::{galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
+    threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use rand::{prelude::SliceRandom, rngs::StdRng, Rng, SeedableRng};
 use std::{
@@ -37,12 +34,12 @@ use std::{
 use tokio::time::sleep;
 
 const REGION: &str = "eu-north-1";
-const DB_SIZE: usize = 8 * 1_000;
+const DB_SIZE: usize = 8 * 250_000;
 const DB_BUFFER: usize = 8 * 1_000;
-const QUERIES: usize = 496;
+const QUERIES: usize = 31 * 32;
+const N_BATCHES: usize = 10;
 const RNG_SEED: u64 = 42;
 const SHUFFLE_SEED: u64 = 42;
-const N_BATCHES: usize = 10;
 const MAX_CONCURRENT_REQUESTS: usize = 5;
 const DB_CODE_FILE: &str = "codes.db";
 const DB_MASK_FILE: &str = "masks.db";
@@ -53,6 +50,14 @@ macro_rules! debug_record_event {
         let evts = $manager.create_events();
         $manager.record_event($streams, &evts);
         $timers.push(evts);
+    };
+}
+
+macro_rules! forget_vec {
+    ($vec:expr) => {
+        while let Some(item) = $vec.pop() {
+            std::mem::forget(item);
+        }
     };
 }
 
@@ -71,10 +76,26 @@ struct Opt {
     path: Option<String>,
 }
 
-async fn receive_batch(client: &Client, queue_url: &String) -> eyre::Result<Vec<ShamirIris>> {
-    let mut batch = vec![];
+#[derive(Default)]
+struct BatchQueryEntries {
+    pub code: Vec<GaloisRingIrisCodeShare>,
+    pub mask: Vec<GaloisRingIrisCodeShare>,
+}
 
-    while batch.len() < QUERIES {
+#[derive(Default)]
+struct BatchQuery {
+    pub query: BatchQueryEntries,
+    pub db:    BatchQueryEntries,
+}
+
+async fn receive_batch(
+    party_id: usize,
+    client: &Client,
+    queue_url: &String,
+) -> eyre::Result<BatchQuery> {
+    let mut batch_query = BatchQuery::default();
+
+    while batch_query.db.code.len() < QUERIES {
         let rcv_message_output = client
             .receive_message()
             .max_number_of_messages(1i32)
@@ -86,9 +107,18 @@ async fn receive_batch(client: &Client, queue_url: &String) -> eyre::Result<Vec<
             let message: SQSMessage = serde_json::from_str(sns_message.body().unwrap())?;
             let message: SMPCRequest = serde_json::from_str(&message.message)?;
 
-            let iris: ShamirIris = message.into();
+            let mut iris_share = GaloisRingIrisCodeShare::new(party_id, message.get_iris_shares());
+            let mut mask_share = GaloisRingIrisCodeShare::new(party_id, message.get_mask_shares());
 
-            batch.extend(iris.all_rotations());
+            batch_query.db.code.extend(iris_share.all_rotations());
+            batch_query.db.mask.extend(mask_share.all_rotations());
+
+            GaloisRingIrisCodeShare::preprocess_iris_code_query_share(party_id, &mut iris_share);
+            GaloisRingIrisCodeShare::preprocess_iris_code_query_share(party_id, &mut mask_share);
+
+            batch_query.query.code.extend(iris_share.all_rotations());
+            batch_query.query.mask.extend(mask_share.all_rotations());
+
             // TODO: we should only delete after processing
             client
                 .delete_message()
@@ -99,18 +129,17 @@ async fn receive_batch(client: &Client, queue_url: &String) -> eyre::Result<Vec<
         }
     }
 
-    Ok(batch)
+    Ok(batch_query)
 }
 
-fn prepare_query_batch(batch: Vec<ShamirIris>) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
-    let (code_queries, mask_queries): (Vec<Vec<u16>>, Vec<Vec<u16>>) = batch
-        .iter()
-        .map(|iris| (iris.code.to_vec(), iris.mask.to_vec()))
-        .unzip();
-
-    let code_query = preprocess_query(&code_queries.into_iter().flatten().collect::<Vec<_>>());
-    let mask_query = preprocess_query(&mask_queries.into_iter().flatten().collect::<Vec<_>>());
-    (code_query, mask_query)
+fn prepare_query_shares(shares: Vec<GaloisRingIrisCodeShare>) -> Vec<Vec<u8>> {
+    preprocess_query(
+        &shares
+            .into_iter()
+            .map(|e| e.coefs)
+            .flatten()
+            .collect::<Vec<_>>(),
+    )
 }
 
 #[allow(clippy::type_complexity)]
@@ -124,6 +153,105 @@ fn slice_tuples_to_ptrs(
         (device_ptrs(&tuple.0 .0), device_ptrs(&tuple.0 .1)),
         (device_ptrs(&tuple.1 .0), device_ptrs(&tuple.1 .1)),
     )
+}
+
+fn open(
+    party: &mut Circuits,
+    x: &[ChunkShare<u64>],
+    distance_comparator: &DistanceComparator,
+    results_ptrs: &[CudaSlice<u32>],
+    chunk_size: usize,
+    db_sizes: &[usize],
+) {
+    let n_devices = x.len();
+    let mut a = Vec::with_capacity(n_devices);
+    let mut b = Vec::with_capacity(n_devices);
+    let mut c = Vec::with_capacity(n_devices);
+
+    cudarc::nccl::result::group_start().unwrap();
+    for (idx, res) in x.iter().enumerate() {
+        // Result is in bit 0
+        let res = res.get_offset(0, chunk_size);
+        party.send_view(&res.b, party.next_id(), idx);
+        a.push(res.a);
+        b.push(res.b);
+    }
+    for (idx, res) in x.iter().enumerate() {
+        let mut res = res.get_offset(1, chunk_size);
+        party.receive_view(&mut res.a, party.prev_id(), idx);
+        c.push(res.a);
+    }
+    cudarc::nccl::result::group_end().unwrap();
+
+    distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes);
+}
+
+fn get_non_matching_indices(host_results: &[Vec<u32>]) -> Vec<usize> {
+    let mut insertion_list = vec![];
+    for j in 0..host_results[0].len() {
+        let mut match_entry = u32::MAX;
+        for i in 0..host_results.len() {
+            if host_results[i][j] != u32::MAX {
+                match_entry = host_results[i][j];
+                break;
+            }
+        }
+
+        if match_entry == u32::MAX {
+            insertion_list.push(j);
+        }
+
+        // DEBUG
+        println!(
+            "Query {}: match={} [index: {}]",
+            j,
+            match_entry != u32::MAX,
+            match_entry
+        );
+    }
+    insertion_list
+}
+
+fn await_streams(streams: &[u64]) {
+    for i in 0..streams.len() {
+        unsafe {
+            synchronize(streams[i] as *mut _).unwrap();
+        }
+    }
+}
+
+fn dtod_at_offset(
+    dst: u64,
+    dst_offset: usize,
+    src: u64,
+    src_offset: usize,
+    len: usize,
+    stream_ptr: u64,
+) {
+    unsafe {
+        result::memcpy_dtod_async(
+            dst + dst_offset as u64,
+            src + src_offset as u64,
+            len,
+            stream_ptr as *mut _,
+        )
+        .unwrap();
+    }
+}
+
+fn device_ptrs_to_shares<T>(
+    a: &[u64],
+    b: &[u64],
+    lens: &[usize],
+    devs: &[Arc<CudaDevice>],
+) -> Vec<ChunkShare<T>> {
+    let a = device_ptrs_to_slices(a, lens, devs);
+    let b = device_ptrs_to_slices(b, lens, devs);
+
+    a.into_iter()
+        .zip(b.into_iter())
+        .map(|(a, b)| ChunkShare::new(a, b))
+        .collect::<Vec<_>>()
 }
 
 #[tokio::main]
@@ -158,8 +286,6 @@ async fn main() -> eyre::Result<()> {
         _ => unimplemented!(),
     };
 
-    let l_coeff = Shamir::my_lagrange_coeff_d2(PartyID::try_from(party_id as u8).unwrap());
-
     // Generate or load DB
     let (codes_db, masks_db) = if metadata(&code_db_path).is_ok() && metadata(&mask_db_path).is_ok()
     {
@@ -171,18 +297,31 @@ async fn main() -> eyre::Result<()> {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
-        let shamir_db = ShamirIrisDB::share_db_par(&db, &mut rng);
-
-        let codes_db = shamir_db[party_id]
+        let codes_db = db
             .db
             .iter()
-            .flat_map(|entry| entry.code)
+            .map(|iris| {
+                GaloisRingIrisCodeShare::encode_iris_code(
+                    &iris.code,
+                    &iris.mask,
+                    &mut StdRng::seed_from_u64(RNG_SEED),
+                )[party_id]
+                    .coefs
+            })
+            .flatten()
             .collect::<Vec<_>>();
 
-        let masks_db = shamir_db[party_id]
+        let masks_db = db
             .db
             .iter()
-            .flat_map(|entry| entry.mask)
+            .map(|iris| {
+                GaloisRingIrisCodeShare::encode_mask_code(
+                    &iris.mask,
+                    &mut StdRng::seed_from_u64(RNG_SEED),
+                )[party_id]
+                    .coefs
+            })
+            .flatten()
             .collect::<Vec<_>>();
 
         write_mmap_file(&code_db_path, &codes_db)?;
@@ -192,61 +331,80 @@ async fn main() -> eyre::Result<()> {
 
     println!("Starting engines...");
 
-    let device_manager = DeviceManager::init();
+    let device_manager = Arc::new(DeviceManager::init());
 
+    // Phase 1 Setup
     let mut codes_engine = ShareDB::init(
         party_id,
         device_manager.clone(),
-        l_coeff,
         DB_SIZE + DB_BUFFER,
         QUERIES,
         chacha_seeds,
         bootstrap_url.clone(),
         Some(true),
-        Some(3000),
+        Some(4000),
     );
-
-    let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE, DB_SIZE + DB_BUFFER);
 
     let mut masks_engine = ShareDB::init(
         party_id,
         device_manager.clone(),
-        l_coeff,
         DB_SIZE + DB_BUFFER,
         QUERIES,
         chacha_seeds,
         bootstrap_url.clone(),
         Some(true),
-        Some(3001),
+        Some(4001),
     );
 
+    let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE, DB_SIZE + DB_BUFFER);
     let mask_db_slices = masks_engine.load_db(&masks_db, DB_SIZE, DB_SIZE + DB_BUFFER);
-
-    let mut distance_comparator = DistanceComparator::init(QUERIES);
 
     // Engines for inflight queries
     let mut batch_codes_engine = ShareDB::init(
         party_id,
         device_manager.clone(),
-        l_coeff,
         QUERIES * device_manager.device_count(),
         QUERIES,
         chacha_seeds,
         bootstrap_url.clone(),
         Some(true),
-        Some(3002),
+        Some(4002),
     );
     let mut batch_masks_engine = ShareDB::init(
         party_id,
         device_manager.clone(),
-        l_coeff,
         QUERIES * device_manager.device_count(),
         QUERIES,
         chacha_seeds,
         bootstrap_url.clone(),
         Some(true),
-        Some(3003),
+        Some(4003),
     );
+
+    // Phase 2 Setup
+    let phase2_chunk_size =
+        (QUERIES * DB_SIZE / device_manager.device_count()).div_ceil(2048) * 2048;
+    let phase2_chunk_size_max =
+        (QUERIES * (DB_SIZE + DB_BUFFER) / device_manager.device_count()).div_ceil(2048) * 2048;
+    let phase2_batch_chunk_size = (QUERIES * QUERIES).div_ceil(2048) * 2048;
+
+    let phase2_batch = Arc::new(Mutex::new(Circuits::new(
+        party_id,
+        phase2_batch_chunk_size,
+        phase2_batch_chunk_size,
+        bootstrap_url.clone(),
+        Some(4004),
+    )));
+
+    let phase2 = Arc::new(Mutex::new(Circuits::new(
+        party_id,
+        phase2_chunk_size,
+        phase2_chunk_size_max / 64,
+        bootstrap_url.clone(),
+        Some(4005),
+    )));
+
+    let distance_comparator = Arc::new(Mutex::new(DistanceComparator::init(QUERIES)));
 
     // Prepare streams etc.
     let mut streams = vec![];
@@ -258,12 +416,11 @@ async fn main() -> eyre::Result<()> {
         let tmp_streams = device_manager.fork_streams();
         cublas_handles.push(device_manager.create_cublas(&tmp_streams));
         streams.push(tmp_streams);
-        results.push(distance_comparator.prepare_results());
-        batch_results.push(distance_comparator.prepare_results());
-        final_results.push(distance_comparator.prepare_final_results());
+        results.push(distance_comparator.lock().unwrap().prepare_results());
+        batch_results.push(distance_comparator.lock().unwrap().prepare_results());
+        final_results.push(distance_comparator.lock().unwrap().prepare_final_results());
     }
 
-    // Main Loop
     let mut previous_previous_stream_event = device_manager.create_events();
     let mut previous_stream_event = device_manager.create_events();
     let mut current_stream_event = device_manager.create_events();
@@ -277,30 +434,6 @@ async fn main() -> eyre::Result<()> {
     let start_timer = device_manager.create_events();
     let end_timer = device_manager.create_events();
 
-    let mut code_db_sizes = vec![];
-    let mut mask_db_sizes = vec![];
-    let mut query_db_sizes = vec![];
-    for i in 0..device_manager.device_count() {
-        code_db_sizes.push(
-            device_manager
-                .device(i)
-                .htod_copy(vec![(DB_SIZE / device_manager.device_count()) as u32; 1])
-                .unwrap(),
-        );
-        mask_db_sizes.push(
-            device_manager
-                .device(i)
-                .htod_copy(vec![(DB_SIZE / device_manager.device_count()) as u32; 1])
-                .unwrap(),
-        );
-        query_db_sizes.push(
-            device_manager
-                .device(i)
-                .htod_copy(vec![QUERIES as u32; 1])
-                .unwrap(),
-        );
-    }
-
     let current_db_size: Vec<usize> =
         vec![DB_SIZE / device_manager.device_count(); device_manager.device_count()];
     let query_db_size = vec![QUERIES; device_manager.device_count()];
@@ -311,19 +444,33 @@ async fn main() -> eyre::Result<()> {
 
     println!("All systems ready.");
 
-    // loop {
-    for _ in 0..N_BATCHES {
+    let mut total_time = Instant::now();
+    let mut batch_times = Duration::from_secs(0);
+
+    // Main loop
+    for _i in 0..N_BATCHES {
+        // Skip first iteration
+        if _i == 1 {
+            total_time = Instant::now();
+            batch_times = Duration::from_secs(0);
+        }
+        // loop {
         let now = Instant::now();
-        let batch = receive_batch(&client, &queue).await?;
+        let batch = receive_batch(party_id, &client, &queue).await?;
         println!("Received batch in {:?}", now.elapsed());
-        let (code_query, mask_query) = prepare_query_batch(batch);
+        batch_times += now.elapsed();
+
+        let code_query = prepare_query_shares(batch.query.code);
+        let mask_query = prepare_query_shares(batch.query.mask);
+        let code_query_insert = prepare_query_shares(batch.db.code);
+        let mask_query_insert = prepare_query_shares(batch.db.mask);
 
         let mut timers = vec![];
 
         let request_streams = &streams[request_counter % MAX_CONCURRENT_REQUESTS];
         let request_cublas_handles = &cublas_handles[request_counter % MAX_CONCURRENT_REQUESTS];
         let request_results = &results[request_counter % MAX_CONCURRENT_REQUESTS];
-        let request_batch_results = &batch_results[request_counter % MAX_CONCURRENT_REQUESTS];
+        let request_results_batch = &batch_results[request_counter % MAX_CONCURRENT_REQUESTS];
         let request_final_results = &final_results[request_counter % MAX_CONCURRENT_REQUESTS];
 
         // First stream doesn't need to wait on anyone
@@ -337,18 +484,26 @@ async fn main() -> eyre::Result<()> {
         // TODO: free all of this!
         let code_query = device_manager.htod_transfer_query(&code_query, request_streams);
         let mask_query = device_manager.htod_transfer_query(&mask_query, request_streams);
+        let code_query_insert =
+            device_manager.htod_transfer_query(&code_query_insert, request_streams);
+        let mask_query_insert =
+            device_manager.htod_transfer_query(&mask_query_insert, request_streams);
         let code_query_sums =
             codes_engine.query_sums(&code_query, request_streams, request_cublas_handles);
         let mask_query_sums =
             masks_engine.query_sums(&mask_query, request_streams, request_cublas_handles);
+        let code_query_insert_sums =
+            codes_engine.query_sums(&code_query_insert, request_streams, request_cublas_handles);
+        let mask_query_insert_sums =
+            masks_engine.query_sums(&mask_query_insert, request_streams, request_cublas_handles);
 
         // update the db size, skip this for the first two
         if request_counter > 2 {
             // We have two streams working concurrently, we'll await the stream before
             // previous one
-            let previous_streams = &streams[(request_counter - 2) % MAX_CONCURRENT_REQUESTS];
-            device_manager.await_event(previous_streams, &previous_previous_stream_event);
-            device_manager.await_streams(previous_streams);
+            let previous_previous_streams = &streams[(request_counter - 2) % MAX_CONCURRENT_REQUESTS];
+            device_manager.await_event(previous_previous_streams, &previous_previous_stream_event);
+            device_manager.await_streams(previous_previous_streams);
         }
 
         let current_db_size_stream = current_db_size_mutex
@@ -359,9 +514,11 @@ async fn main() -> eyre::Result<()> {
         // BLOCK 1: calculate individual dot products
         device_manager.await_event(request_streams, &current_dot_event);
 
+        // ---- START BATCH DEDUP ----
+
         batch_codes_engine.dot(
             &code_query,
-            &code_query,
+            &code_query_insert,
             &query_db_size,
             request_streams,
             request_cublas_handles,
@@ -369,7 +526,7 @@ async fn main() -> eyre::Result<()> {
 
         batch_masks_engine.dot(
             &mask_query,
-            &mask_query,
+            &mask_query_insert,
             &query_db_size,
             request_streams,
             request_cublas_handles,
@@ -377,28 +534,22 @@ async fn main() -> eyre::Result<()> {
 
         batch_codes_engine.dot_reduce(
             &code_query_sums,
-            &code_query_sums,
+            &code_query_insert_sums,
             &query_db_size,
             request_streams,
         );
 
         batch_masks_engine.dot_reduce(
             &mask_query_sums,
-            &mask_query_sums,
+            &mask_query_insert_sums,
             &query_db_size,
             request_streams,
         );
 
-        batch_codes_engine.exchange_results(&query_db_size, request_streams);
-        batch_masks_engine.exchange_results(&query_db_size, request_streams);
+        batch_codes_engine.reshare_results(&query_db_size, request_streams);
+        batch_masks_engine.reshare_results(&query_db_size, request_streams);
 
-        distance_comparator.reconstruct_and_compare(
-            &batch_codes_engine.results_peers,
-            &batch_masks_engine.results_peers,
-            &query_db_size,
-            request_streams,
-            device_ptrs(request_batch_results),
-        );
+        // ---- END BATCH DEDUP ----
 
         debug_record_event!(device_manager, request_streams, timers);
 
@@ -452,221 +603,270 @@ async fn main() -> eyre::Result<()> {
 
         debug_record_event!(device_manager, request_streams, timers);
 
-        codes_engine.exchange_results(&current_db_size_stream, request_streams);
-        masks_engine.exchange_results(&current_db_size_stream, request_streams);
+        codes_engine.reshare_results(&current_db_size_stream, request_streams);
+        masks_engine.reshare_results(&current_db_size_stream, request_streams);
 
         debug_record_event!(device_manager, request_streams, timers);
 
-        distance_comparator.reconstruct_and_compare(
-            &codes_engine.results_peers,
-            &masks_engine.results_peers,
-            &current_db_size_stream,
-            request_streams,
-            device_ptrs(request_results),
-        );
-
-        distance_comparator.dedup_results(
-            &device_ptrs(request_batch_results),
-            &device_ptrs(request_results),
-            &device_ptrs(request_final_results),
-            &device_ptrs(&code_db_sizes),
-            request_streams,
-        );
-
         device_manager.record_event(request_streams, &next_exchange_event);
 
-        // Start thread to wait for the results
-        let tmp_streams = request_streams
+        println!("phase 1 done");
+
+        // Convert a bunch of objects to device pointers to not have copies of memory
+        let thread_streams = request_streams
             .iter()
             .map(|s| s.stream as u64)
             .collect::<Vec<_>>();
-        let tmp_devs = distance_comparator.devs.clone();
-        let tmp_final_results = device_ptrs(request_final_results);
-        let tmp_code_db_sizes = device_ptrs(&code_db_sizes);
-        let tmp_code_db_slices = slice_tuples_to_ptrs(&code_db_slices);
-        let tmp_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
-        let tmp_evts = end_timer.iter().map(|e| *e as u64).collect::<Vec<_>>();
-        let mut shuffle_rng = shuffle_rng.clone();
-        let current_stream_event_tmp = current_stream_event
+        let thread_device_manager = device_manager.clone();
+        // let thread_devs = thread_device_manager.devices();
+        let thread_evts = end_timer.iter().map(|e| *e as u64).collect::<Vec<_>>();
+        let mut thread_shuffle_rng = shuffle_rng.clone();
+        let thread_current_stream_event = current_stream_event
             .iter()
             .map(|e| *e as u64)
             .collect::<Vec<_>>();
-        let current_db_size_mutex_clone = current_db_size_mutex
+        let thread_current_db_size_mutex = current_db_size_mutex
             .iter()
             .map(Arc::clone)
             .collect::<Vec<_>>();
+        let db_sizes_batch = query_db_size.clone();
+        let thread_request_results_batch = device_ptrs(&request_results_batch);
+        let thread_request_results = device_ptrs(&request_results);
+        let thread_request_final_results = device_ptrs(&request_final_results);
 
-        tokio::spawn(async move {
-            let mut host_results = vec![];
-            // Step 1: Fetch the uniqueness results for each query for each device
-            for i in 0..tmp_devs.len() {
-                tmp_devs[i].bind_to_thread().unwrap();
-                host_results.push(vec![u32::MAX; QUERIES / ROTATIONS]);
+        // Batch phase 1 results
+        let thread_code_results_batch = device_ptrs(&batch_codes_engine.results);
+        let thread_code_results_peer_batch = device_ptrs(&batch_codes_engine.results_peer);
+        let thread_mask_results_batch = device_ptrs(&batch_masks_engine.results);
+        let thread_mask_results_peer_batch = device_ptrs(&batch_masks_engine.results_peer);
 
-                unsafe {
-                    lib()
-                        .cuMemcpyDtoHAsync_v2(
-                            host_results[i].as_ptr() as *mut _,
-                            tmp_final_results[i],
-                            host_results[i].len() * std::mem::size_of::<u32>(),
-                            tmp_streams[i] as *mut _,
-                        )
-                        .result()
-                        .unwrap();
-                }
-            }
+        // DB phase 1 results
+        let thread_code_results = device_ptrs(&codes_engine.results);
+        let thread_code_results_peer = device_ptrs(&codes_engine.results_peer);
+        let thread_mask_results = device_ptrs(&masks_engine.results);
+        let thread_mask_results_peer = device_ptrs(&masks_engine.results_peer);
 
-            // Step 2: Evaluate the results across devices
-            let mut insertion_list = vec![];
-            for j in 0..host_results[0].len() {
-                let mut match_entry = u32::MAX;
-                for i in 0..tmp_devs.len() {
-                    if host_results[i][j] != u32::MAX {
-                        match_entry = host_results[i][j];
-                        break;
-                    }
-                }
+        let thread_phase2 = phase2.clone();
+        let thread_phase2_batch = phase2_batch.clone();
+        let thread_distance_comparator = distance_comparator.clone();
+        let thread_code_db_slices = slice_tuples_to_ptrs(&code_db_slices);
+        let thread_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
 
-                if match_entry == u32::MAX {
-                    insertion_list.push(j);
-                }
+        let handle = tokio::spawn(async move {
+            // Wait for Phase 1 to finish
+            await_streams(&thread_streams);
 
-                println!(
-                    "Query {}: unique={} [index: {}]",
-                    j,
-                    match_entry == u32::MAX,
-                    match_entry
-                );
-            }
+            let thread_devs = thread_device_manager.devices();
+            let mut thread_phase2_batch = thread_phase2_batch.lock().unwrap();
+            let mut thread_phase2 = thread_phase2.lock().unwrap();
+            let tmp_distance_comparator = thread_distance_comparator.lock().unwrap();
+            let (result_sizes, db_sizes): (Vec<_>, Vec<_>) = thread_current_db_size_mutex
+                .iter()
+                .map(|e| {
+                    let db_size = *e.lock().unwrap();
+                    (db_size * QUERIES, db_size)
+                })
+                .unzip();
 
-            let mut insertion_list = insertion_list
-                .chunks(QUERIES / ROTATIONS / tmp_devs.len())
+            let result_sizes_batch = db_sizes_batch
+                .iter()
+                .map(|&e| e * QUERIES)
                 .collect::<Vec<_>>();
-            insertion_list.shuffle(&mut shuffle_rng);
 
-            for i in 0..tmp_devs.len() {
-                tmp_devs[i].bind_to_thread().unwrap();
+            let mut code_dots_batch: Vec<ChunkShare<u16>> = device_ptrs_to_shares(
+                &thread_code_results_batch,
+                &thread_code_results_peer_batch,
+                &result_sizes_batch,
+                &thread_devs,
+            );
+            let mut mask_dots_batch: Vec<ChunkShare<u16>> = device_ptrs_to_shares(
+                &thread_mask_results_batch,
+                &thread_mask_results_peer_batch,
+                &result_sizes_batch,
+                &thread_devs,
+            );
 
+            let mut code_dots: Vec<ChunkShare<u16>> = device_ptrs_to_shares(
+                &thread_code_results,
+                &thread_code_results_peer,
+                &result_sizes,
+                &thread_devs,
+            );
+            let mut mask_dots: Vec<ChunkShare<u16>> = device_ptrs_to_shares(
+                &thread_mask_results,
+                &thread_mask_results_peer,
+                &result_sizes,
+                &thread_devs,
+            );
+
+            // We only use the default streams of the devices, therefore Phase 2's are never running concurrently
+            let streams = thread_phase2
+                .get_devices()
+                .iter()
+                .map(|d| *d.cu_stream() as u64)
+                .collect::<Vec<_>>();
+
+            // Phase 2 [Batch]: compare each result against threshold
+            thread_phase2_batch.compare_threshold_masked_many(&code_dots_batch, &mask_dots_batch);
+
+            // Phase 2 [Batch]: Reveal the binary results
+            let res = thread_phase2_batch.take_result_buffer();
+            let mut thread_request_results_slice_batch: Vec<CudaSlice<u32>> = device_ptrs_to_slices(
+                &thread_request_results_batch,
+                &vec![QUERIES; thread_devs.len()],
+                &thread_devs,
+            );
+
+            let chunk_size_batch = thread_phase2_batch.chunk_size();
+            open(
+                &mut thread_phase2_batch,
+                &res,
+                &tmp_distance_comparator,
+                &thread_request_results_slice_batch,
+                chunk_size_batch,
+                &db_sizes_batch,
+            );
+            thread_phase2_batch.return_result_buffer(res);
+
+            // Phase 2 [DB]: compare each result against threshold
+            thread_phase2.compare_threshold_masked_many(&code_dots, &mask_dots);
+
+            // Phase 2 [DB]: Reveal the binary results
+            let res = thread_phase2.take_result_buffer();
+            let mut thread_request_results_slice: Vec<CudaSlice<u32>> = device_ptrs_to_slices(
+                &thread_request_results,
+                &vec![QUERIES; thread_devs.len()],
+                &thread_devs,
+            );
+
+            let chunk_size = thread_phase2.chunk_size();
+            open(
+                &mut thread_phase2,
+                &res,
+                &tmp_distance_comparator,
+                &thread_request_results_slice,
+                chunk_size,
+                &db_sizes,
+            );
+            thread_phase2.return_result_buffer(res);
+
+            // Merge results and fetch matching indices
+            let host_results = tmp_distance_comparator.merge_results(
+                &thread_request_results_batch,
+                &thread_request_results,
+                &thread_request_final_results,
+                &streams,
+            );
+
+            // Evaluate the results across devices
+            let insertion_list = get_non_matching_indices(&host_results);
+            let mut insertion_list = insertion_list
+                .chunks(QUERIES / ROTATIONS / thread_devs.len())
+                .collect::<Vec<_>>();
+            insertion_list.shuffle(&mut thread_shuffle_rng);
+
+            // DEBUG
+            println!("Insertion list: {:?}", insertion_list);
+
+            for i in 0..thread_devs.len() {
+                thread_devs[i].bind_to_thread().unwrap();
                 if insertion_list.len() > i {
-                    let mut old_size = *current_db_size_mutex_clone[i].lock().unwrap() as u64;
+                    let mut old_db_size = *thread_current_db_size_mutex[i].lock().unwrap();
                     for insertion_idx in insertion_list[i] {
-                        unsafe {
-                            // Step 4: fetch and update db counters
-                            // Append to codes db
-                            result::memcpy_dtod_async(
-                                tmp_code_db_slices.0 .0[i] + old_size * IRIS_CODE_LENGTH as u64,
-                                code_query.0[i]
-                                    + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
+                        // Append to codes and masks db
+                        for (db, query, sums) in [
+                            (
+                                &thread_code_db_slices,
+                                &code_query_insert,
+                                &code_query_insert_sums,
+                            ),
+                            (
+                                &thread_mask_db_slices,
+                                &mask_query_insert,
+                                &mask_query_insert_sums,
+                            ),
+                        ] {
+                            dtod_at_offset(
+                                db.0 .0[i],
+                                old_db_size * IRIS_CODE_LENGTH,
+                                query.0[i],
+                                insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                                 IRIS_CODE_LENGTH,
-                                tmp_streams[i] as *mut _,
-                            )
-                            .unwrap();
+                                streams[i],
+                            );
 
-                            result::memcpy_dtod_async(
-                                tmp_code_db_slices.0 .1[i] + old_size * IRIS_CODE_LENGTH as u64,
-                                code_query.1[i]
-                                    + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
+                            dtod_at_offset(
+                                db.0 .1[i],
+                                old_db_size * IRIS_CODE_LENGTH,
+                                query.1[i],
+                                insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                                 IRIS_CODE_LENGTH,
-                                tmp_streams[i] as *mut _,
-                            )
-                            .unwrap();
+                                streams[i],
+                            );
 
-                            result::memcpy_dtod_async(
-                                tmp_code_db_slices.1 .0[i]
-                                    + (old_size * mem::size_of::<u32>() as u64),
-                                code_query_sums.0[i]
-                                    + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
+                            dtod_at_offset(
+                                db.1 .0[i],
+                                old_db_size * mem::size_of::<u32>(),
+                                sums.0[i],
+                                insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                                 mem::size_of::<u32>(),
-                                tmp_streams[i] as *mut _,
-                            )
-                            .unwrap();
+                                streams[i],
+                            );
 
-                            result::memcpy_dtod_async(
-                                tmp_code_db_slices.1 .1[i]
-                                    + (old_size * mem::size_of::<u32>() as u64),
-                                code_query_sums.1[i]
-                                    + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
+                            dtod_at_offset(
+                                db.1 .1[i],
+                                old_db_size * mem::size_of::<u32>(),
+                                sums.1[i],
+                                insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                                 mem::size_of::<u32>(),
-                                tmp_streams[i] as *mut _,
-                            )
-                            .unwrap();
-
-                            // Append to masks db
-                            result::memcpy_dtod_async(
-                                tmp_mask_db_slices.0 .0[i] + old_size * IRIS_CODE_LENGTH as u64,
-                                mask_query.0[i]
-                                    + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
-                                IRIS_CODE_LENGTH,
-                                tmp_streams[i] as *mut _,
-                            )
-                            .unwrap();
-
-                            result::memcpy_dtod_async(
-                                tmp_mask_db_slices.0 .1[i] + old_size * IRIS_CODE_LENGTH as u64,
-                                mask_query.1[i]
-                                    + (insertion_idx * IRIS_CODE_LENGTH * ROTATIONS) as u64,
-                                IRIS_CODE_LENGTH,
-                                tmp_streams[i] as *mut _,
-                            )
-                            .unwrap();
-
-                            result::memcpy_dtod_async(
-                                tmp_mask_db_slices.1 .0[i]
-                                    + (old_size * mem::size_of::<u32>() as u64),
-                                mask_query_sums.0[i]
-                                    + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
-                                mem::size_of::<u32>(),
-                                tmp_streams[i] as *mut _,
-                            )
-                            .unwrap();
-
-                            result::memcpy_dtod_async(
-                                tmp_mask_db_slices.1 .1[i]
-                                    + (old_size * mem::size_of::<u32>() as u64),
-                                mask_query_sums.1[i]
-                                    + (insertion_idx * ROTATIONS * mem::size_of::<u32>()) as u64,
-                                mem::size_of::<u32>(),
-                                tmp_streams[i] as *mut _,
-                            )
-                            .unwrap();
+                                streams[i],
+                            );
                         }
-                        old_size += 1;
+                        old_db_size += 1;
                     }
 
-                    unsafe {
-                        // Step 3: write new db sizes to device
-                        *current_db_size_mutex_clone[i].lock().unwrap() += insertion_list[i].len();
-                        println!(
-                            "Updating DB size on device {}: {:?}",
-                            i,
-                            *current_db_size_mutex_clone[i].lock().unwrap()
-                        );
+                    // Write new db sizes to device
+                    *thread_current_db_size_mutex[i].lock().unwrap() +=
+                        insertion_list[i].len() as usize;
 
-                        let tmp_host = [*current_db_size_mutex_clone[i].lock().unwrap() as u32; 1];
-                        lib()
-                            .cuMemcpyHtoDAsync_v2(
-                                tmp_code_db_sizes[i],
-                                tmp_host.as_ptr() as *mut _,
-                                mem::size_of::<u32>(),
-                                tmp_streams[i] as *mut _,
-                            )
-                            .result()
-                            .unwrap();
-                    }
+                    // DEBUG
+                    println!(
+                        "Updating DB size on device {}: {:?}",
+                        i,
+                        *thread_current_db_size_mutex[i].lock().unwrap()
+                    );
                 }
 
+                // Update Phase 2 chunk size to max all db sizes on all devices
+                let max_db_size = thread_current_db_size_mutex
+                    .iter()
+                    .map(|e| *e.lock().unwrap())
+                    .max()
+                    .unwrap();
+                let new_chunk_size = (QUERIES * max_db_size).div_ceil(2048) * 2048;
+                assert!(new_chunk_size <= phase2_chunk_size_max);
+                thread_phase2.set_chunk_size(new_chunk_size / 64);
+
+                // Emit stream finished event to unblock the stream after the following
                 unsafe {
-                    // Step 5: emit stream finished event to unblock the stream after the following
                     event::record(
-                        current_stream_event_tmp[i] as *mut _,
-                        tmp_streams[i] as *mut _,
+                        thread_current_stream_event[i] as *mut _,
+                        thread_streams[i] as *mut _,
                     )
                     .unwrap();
 
-                    // Emit debug event to measure time for e2e process
-                    event::record(tmp_evts[i] as *mut _, tmp_streams[i] as *mut _).unwrap();
+                    // DEBUG: emit event to measure time for e2e process
+                    event::record(thread_evts[i] as *mut _, thread_streams[i] as *mut _).unwrap();
                 }
             }
+
+            // Make sure to not call `Drop` on those
+            forget_vec!(code_dots);
+            forget_vec!(mask_dots);
+            forget_vec!(code_dots_batch);
+            forget_vec!(mask_dots_batch);
+            forget_vec!(thread_request_results_slice);
+            forget_vec!(thread_request_results_slice_batch);
         });
 
         // Prepare for next batch
@@ -682,7 +882,14 @@ async fn main() -> eyre::Result<()> {
         next_exchange_event = device_manager.create_events();
 
         println!("CPU time of one iteration {:?}", now.elapsed());
+
+        // Await the last one for benching
+        if _i == N_BATCHES - 1 {
+            handle.await?;
+        }
     }
+
+    println!("Total time for 9 iterations: {:?}", total_time.elapsed() - batch_times);
 
     sleep(Duration::from_secs(5)).await;
 

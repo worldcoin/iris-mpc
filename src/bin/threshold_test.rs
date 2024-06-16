@@ -157,6 +157,11 @@ async fn main() -> eyre::Result<()> {
     let url = args.get(2);
     let n_devices = CudaDevice::count().unwrap() as usize;
 
+    let url = match url {
+        Some(s) => Some(s.clone()),
+        None => None,
+    };
+
     // Get inputs
     let code_dots = sample_code_dots(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);
     let mask_dots = sample_mask_dots(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);
@@ -167,7 +172,13 @@ async fn main() -> eyre::Result<()> {
     println!("Random shared inputs generated!");
 
     // Get Circuit Party
-    let mut party = Circuits::new(party_id, INPUTS_PER_GPU_SIZE, url, Some(3001));
+    let mut party = Circuits::new(
+        party_id,
+        INPUTS_PER_GPU_SIZE,
+        INPUTS_PER_GPU_SIZE / 64,
+        url,
+        Some(3001),
+    );
     let devices = party.get_devices();
 
     // Import to GPU
@@ -181,7 +192,7 @@ async fn main() -> eyre::Result<()> {
         let mask_gpu = mask_gpu.clone();
 
         let now = Instant::now();
-        party.compare_threshold_masked_many(code_gpu, mask_gpu);
+        party.compare_threshold_masked_many(&code_gpu, &mask_gpu);
         party.synchronize_all();
         println!("compute time: {:?}", now.elapsed());
 

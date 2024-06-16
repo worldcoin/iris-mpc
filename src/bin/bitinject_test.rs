@@ -1,11 +1,19 @@
 use cudarc::driver::CudaDevice;
-use gpu_iris_mpc::threshold_ring::protocol::{ChunkShare, Circuits};
+use gpu_iris_mpc::threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits};
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{env, sync::Arc};
 use tokio::time::{self, Instant};
 
 const INPUTS_PER_GPU_SIZE: usize = 2048 * 2;
+
+fn to_view<T>(inp: &[ChunkShare<T>]) -> Vec<ChunkShareView<T>> {
+    let mut res = Vec::with_capacity(inp.len());
+    for inp in inp {
+        res.push(inp.as_view());
+    }
+    res
+}
 
 fn sample_bits<R: Rng>(size: usize, rng: &mut R) -> Vec<u64> {
     (0..size / 64).map(|_| rng.gen()).collect::<Vec<_>>()
@@ -74,7 +82,7 @@ fn real_result(input: Vec<u64>) -> Vec<u16> {
     res
 }
 
-fn open(party: &mut Circuits, x: &mut [ChunkShare<u16>]) -> Vec<u16> {
+fn open(party: &mut Circuits, x: &mut [ChunkShareView<u16>]) -> Vec<u16> {
     let n_devices = x.len();
     let mut a = Vec::with_capacity(n_devices);
     let mut b = Vec::with_capacity(n_devices);
@@ -87,10 +95,10 @@ fn open(party: &mut Circuits, x: &mut [ChunkShare<u16>]) -> Vec<u16> {
     }
     cudarc::nccl::result::group_start().unwrap();
     for (idx, res) in x.iter().enumerate() {
-        party.send_u16(&res.b, party.next_id(), idx);
+        party.send_view_u16(&res.b, party.next_id(), idx);
     }
     for (idx, res) in x.iter_mut().enumerate() {
-        party.receive_u16(&mut res.a, party.prev_id(), idx);
+        party.receive_view_u16(&mut res.a, party.prev_id(), idx);
     }
     cudarc::nccl::result::group_end().unwrap();
     for (idx, res) in x.iter_mut().enumerate() {
@@ -124,6 +132,11 @@ async fn main() -> eyre::Result<()> {
     let url = args.get(2);
     let n_devices = CudaDevice::count().unwrap() as usize;
 
+    let url = match url {
+        Some(s) => Some(s.clone()),
+        None => None,
+    };
+
     // Get inputs
     let input_bits = sample_bits(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);
 
@@ -132,21 +145,28 @@ async fn main() -> eyre::Result<()> {
     println!("Random shared inputs generated!");
 
     // Get Circuit Party
-    let mut party = Circuits::new(party_id, INPUTS_PER_GPU_SIZE / 2, url, Some(3001));
+    let mut party = Circuits::new(
+        party_id,
+        INPUTS_PER_GPU_SIZE / 2,
+        INPUTS_PER_GPU_SIZE / 128,
+        url,
+        Some(3001),
+    );
     let devices = party.get_devices();
 
     // Import to GPU
     let code_gpu = to_gpu(&input_bits_a, &input_bits_b, &devices);
-    let mut res = alloc_res(INPUTS_PER_GPU_SIZE, &devices);
+    let res_ = alloc_res(INPUTS_PER_GPU_SIZE, &devices);
+    let mut res = to_view(&res_);
     println!("Data is on GPUs!");
     println!("Starting tests...");
 
     for _ in 0..10 {
-        let code_gpu = code_gpu.clone();
-        let code_gpu_view = code_gpu.iter().map(|x| x.as_view()).collect::<Vec<_>>();
+        let code_gpu_ = code_gpu.clone();
+        let code_gpu = to_view(&code_gpu_);
 
         let now = Instant::now();
-        party.bit_inject_ot(&code_gpu_view, &mut res);
+        party.bit_inject_ot(&code_gpu, &mut res);
         party.synchronize_all();
         println!("compute time: {:?}", now.elapsed());
 

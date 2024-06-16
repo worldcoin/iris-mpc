@@ -1,5 +1,8 @@
 use cudarc::{
-    driver::{CudaDevice, CudaFunction, CudaSlice, DeviceSlice, LaunchAsync, LaunchConfig},
+    driver::{
+        result, CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DeviceSlice,
+        LaunchAsync, LaunchConfig,
+    },
     nvrtc::compile_ptx,
 };
 use std::sync::Arc;
@@ -58,20 +61,24 @@ impl ChaChaCudaRng {
     }
 
     pub fn fill_rng(&mut self) {
-        self.fill_rng_no_host_copy();
-
         assert!(self.rng_chunk.is_some() && self.output_buffer.is_some());
+
+        self.fill_rng_no_host_copy(
+            self.output_buffer.as_ref().unwrap().len() * std::mem::size_of::<u32>(),
+            &self.dev.fork_default_stream().unwrap(),
+        );
+
         self.dev
             .dtoh_sync_copy_into(
                 self.rng_chunk.as_ref().unwrap(),
-                self.output_buffer.as_mut().unwrap(),
+                &mut self.output_buffer.as_mut().unwrap(),
             )
             .unwrap();
     }
 
-    pub fn fill_rng_no_host_copy(&mut self) {
+    pub fn fill_rng_no_host_copy(&mut self, buf_size_bytes: usize, stream: &CudaStream) {
         assert!(self.rng_chunk.is_some());
-        let len = self.rng_chunk.as_ref().unwrap().len();
+        let len: usize = buf_size_bytes / 4;
         let num_ks_calls = len / 16; // we produce 16 u32s per kernel call
         let threads_per_block = 256; // todo sync with kernel
         let blocks_per_grid = (num_ks_calls + threads_per_block - 1) / threads_per_block;
@@ -80,11 +87,30 @@ impl ChaChaCudaRng {
             grid_dim:         (blocks_per_grid as u32, 1, 1),
             shared_mem_bytes: 0,
         };
-        let state_slice = self.dev.htod_sync_copy(&self.chacha_ctx.state).unwrap();
+
+        self.dev.bind_to_thread().unwrap();
+        let state_slice: CudaSlice<u32> = unsafe {
+            self.dev
+                .alloc(std::mem::size_of::<u32>() * self.chacha_ctx.state.len())
+                .unwrap()
+        };
+        unsafe {
+            result::memcpy_htod_async(
+                *state_slice.device_ptr(),
+                &self.chacha_ctx.state,
+                stream.stream,
+            )
+            .unwrap();
+        }
+
         unsafe {
             self.kernel
                 .clone()
-                .launch(cfg, (self.rng_chunk.as_mut().unwrap(), &state_slice, len))
+                .launch_on_stream(
+                    stream,
+                    cfg,
+                    (self.rng_chunk.as_mut().unwrap(), &state_slice, len),
+                )
                 .unwrap();
         }
         // increment the state counter of the ChaChaRng with the number of produced
