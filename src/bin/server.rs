@@ -45,7 +45,6 @@ const MAX_CONCURRENT_REQUESTS: usize = 5;
 const DB_CODE_FILE: &str = "codes.db";
 const DB_MASK_FILE: &str = "masks.db";
 const DEFAULT_PATH: &str = "/opt/dlami/nvme/";
-
 const KMS_KEY_IDS: [&str; 3] = [
     "077788e2-9eeb-4044-859b-34496cfd500b",
     "896353dc-5ea5-42d4-9e4e-f65dd8169dee",
