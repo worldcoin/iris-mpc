@@ -18,6 +18,7 @@ use gpu_iris_mpc::{
     },
     helpers::{
         device_ptrs, device_ptrs_to_slices,
+        kms_dh::derive_shared_secret,
         mmap::{read_mmap_file, write_mmap_file},
         sqs::{SMPCRequest, SQSMessage},
     },
@@ -44,6 +45,12 @@ const MAX_CONCURRENT_REQUESTS: usize = 5;
 const DB_CODE_FILE: &str = "codes.db";
 const DB_MASK_FILE: &str = "masks.db";
 const DEFAULT_PATH: &str = "/opt/dlami/nvme/";
+
+const KMS_KEY_IDS: [&str; 3] = [
+    "077788e2-9eeb-4044-859b-34496cfd500b",
+    "896353dc-5ea5-42d4-9e4e-f65dd8169dee",
+    "42bb01f5-8380-48b4-b1f1-929463a587fb",
+];
 
 macro_rules! debug_record_event {
     ($manager:expr, $streams:expr, $timers:expr) => {
@@ -273,18 +280,19 @@ async fn main() -> eyre::Result<()> {
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let client = Client::new(&shared_config);
 
-    let mut rng = StdRng::seed_from_u64(RNG_SEED);
-    let seed0 = rng.gen::<[u32; 8]>();
-    let seed1 = rng.gen::<[u32; 8]>();
-    let seed2 = rng.gen::<[u32; 8]>();
-
     // Init RNGs
-    let chacha_seeds = match party_id {
-        0 => (seed0, seed2),
-        1 => (seed1, seed0),
-        2 => (seed2, seed1),
+    let own_key_id = KMS_KEY_IDS[party_id];
+    let dh_pairs = match party_id {
+        0 => (1usize, 2usize),
+        1 => (2usize, 0usize),
+        2 => (0usize, 1usize),
         _ => unimplemented!(),
     };
+
+    let chacha_seeds = (
+        bytemuck::cast(derive_shared_secret(own_key_id, KMS_KEY_IDS[dh_pairs.0]).await?),
+        bytemuck::cast(derive_shared_secret(own_key_id, KMS_KEY_IDS[dh_pairs.1]).await?),
+    );
 
     // Generate or load DB
     let (codes_db, masks_db) = if metadata(&code_db_path).is_ok() && metadata(&mask_db_path).is_ok()
@@ -501,7 +509,8 @@ async fn main() -> eyre::Result<()> {
         if request_counter > 2 {
             // We have two streams working concurrently, we'll await the stream before
             // previous one
-            let previous_previous_streams = &streams[(request_counter - 2) % MAX_CONCURRENT_REQUESTS];
+            let previous_previous_streams =
+                &streams[(request_counter - 2) % MAX_CONCURRENT_REQUESTS];
             device_manager.await_event(previous_previous_streams, &previous_previous_stream_event);
             device_manager.await_streams(previous_previous_streams);
         }
@@ -699,7 +708,8 @@ async fn main() -> eyre::Result<()> {
                 &thread_devs,
             );
 
-            // We only use the default streams of the devices, therefore Phase 2's are never running concurrently
+            // We only use the default streams of the devices, therefore Phase 2's are never
+            // running concurrently
             let streams = thread_phase2
                 .get_devices()
                 .iter()
@@ -889,7 +899,10 @@ async fn main() -> eyre::Result<()> {
         }
     }
 
-    println!("Total time for 9 iterations: {:?}", total_time.elapsed() - batch_times);
+    println!(
+        "Total time for 9 iterations: {:?}",
+        total_time.elapsed() - batch_times
+    );
 
     sleep(Duration::from_secs(5)).await;
 

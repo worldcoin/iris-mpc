@@ -22,8 +22,8 @@ use time::OffsetDateTime;
 /// Unfortunately, this is not yet implemented in the AWS SDK for Rust, so we
 /// have to do it manually with the API and SigV4
 pub async fn derive_shared_secret(
-    own_key_id: String,
-    other_key_id: String,
+    own_key_id: &str,
+    other_key_id: &str,
 ) -> eyre::Result<[u8; 32]> {
     let shared_config = aws_config::from_env().load().await;
     let other_pub_key = get_public_key(other_key_id).await?;
@@ -64,7 +64,7 @@ pub async fn derive_shared_secret(
     let string = string_to_sign(&ts, &canonical_req, &scope)?;
     let signing_key = signing_key(&ts, &secret_key, &region, "kms")?;
     let key = hmac::Key::new(hmac::HMAC_SHA256, &signing_key);
-    let tag = ring::hmac::sign(&key, string.as_bytes());
+    let tag = hmac::sign(&key, string.as_bytes());
     let signature = hex::encode(tag);
     let auth_header = authorization_header(
         &access_key,
@@ -98,7 +98,7 @@ pub async fn derive_shared_secret(
     Ok(buffer)
 }
 
-async fn get_public_key(key_id: String) -> eyre::Result<String> {
+async fn get_public_key(key_id: &str) -> eyre::Result<String> {
     let shared_config = aws_config::from_env().load().await;
     let client = Client::new(&shared_config);
 
