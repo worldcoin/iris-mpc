@@ -399,6 +399,7 @@ async fn main() -> eyre::Result<()> {
         party_id,
         phase2_batch_chunk_size,
         phase2_batch_chunk_size,
+        chacha_seeds,
         bootstrap_url.clone(),
         Some(4004),
     )));
@@ -407,6 +408,7 @@ async fn main() -> eyre::Result<()> {
         party_id,
         phase2_chunk_size,
         phase2_chunk_size_max / 64,
+        chacha_seeds,
         bootstrap_url.clone(),
         Some(4005),
     )));

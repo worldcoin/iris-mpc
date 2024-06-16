@@ -348,6 +348,7 @@ impl Circuits {
         peer_id: usize,
         input_size: usize, // per GPU
         alloc_size: usize,
+        chacha_seeds: ([u32; 8], [u32; 8]),
         peer_url: Option<String>,
         server_port: Option<u16>,
     ) -> Self {
@@ -366,11 +367,10 @@ impl Circuits {
         for i in 0..n_devices {
             let dev = CudaDevice::new(i).unwrap();
             let kernel = Kernels::new(dev.clone(), ptx.clone());
-            // TODO seeds are not random yet :)
             let rng = ChaChaCudaCorrRng::init(
                 dev.clone(),
-                [peer_id as u32; 8],
-                [((peer_id + 2) % 3) as u32; 8],
+                chacha_seeds.0,
+                chacha_seeds.1,
             );
 
             devs.push(dev);
