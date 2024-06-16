@@ -177,6 +177,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-kms"
+version = "1.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da951fb0dd1a02728a91c58af8464098766f1a0600af932dd3f8361b23e1bfc9"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "http 0.2.12",
+ "once_cell",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-sns"
 version = "1.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -993,6 +1015,7 @@ version = "0.1.0"
 dependencies = [
  "atomic_float",
  "aws-config",
+ "aws-sdk-kms",
  "aws-sdk-sns",
  "aws-sdk-sqs",
  "axum",
@@ -1004,20 +1027,27 @@ dependencies = [
  "eyre",
  "float_eq",
  "hex",
+ "hmac",
+ "http 1.1.0",
  "itertools 0.12.1",
  "memmap2",
  "ndarray",
  "num",
  "num-traits",
  "once_cell",
+ "percent-encoding",
  "rand",
  "rayon",
  "reqwest",
+ "ring",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
+ "time",
  "tokio",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 
@@ -2486,6 +2516,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5dfd88e563464686c916c7e46e623e520ddc6d79fa6641390f2e3fa86e83e885"
 dependencies = [
  "deranged",
+ "itoa",
  "num-conv",
  "powerfmt",
  "serde",
