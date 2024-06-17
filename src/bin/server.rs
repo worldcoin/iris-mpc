@@ -34,7 +34,7 @@ use std::{
 use tokio::time::sleep;
 
 const REGION: &str = "eu-north-1";
-const DB_SIZE: usize = 8 * 250_000;
+const DB_SIZE: usize = 8 * 1_000;
 const DB_BUFFER: usize = 8 * 1_000;
 const QUERIES: usize = 31 * 32;
 const N_BATCHES: usize = 10;
