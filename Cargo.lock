@@ -1030,6 +1030,7 @@ dependencies = [
  "hmac",
  "http 1.1.0",
  "itertools 0.12.1",
+ "lazy_static",
  "memmap2",
  "ndarray",
  "num",

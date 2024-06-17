@@ -367,11 +367,7 @@ impl Circuits {
         for i in 0..n_devices {
             let dev = CudaDevice::new(i).unwrap();
             let kernel = Kernels::new(dev.clone(), ptx.clone());
-            let rng = ChaChaCudaCorrRng::init(
-                dev.clone(),
-                chacha_seeds.0,
-                chacha_seeds.1,
-            );
+            let rng = ChaChaCudaCorrRng::init(dev.clone(), chacha_seeds.0, chacha_seeds.1);
 
             devs.push(dev);
             kernels.push(kernel);

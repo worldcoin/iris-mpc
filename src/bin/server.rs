@@ -1,6 +1,7 @@
 #![allow(clippy::needless_range_loop)]
 use aws_sdk_sqs::{config::Region, Client};
 use clap::Parser;
+use core::sync::atomic::Ordering::SeqCst;
 use cudarc::driver::{
     result::{
         self,
@@ -25,11 +26,16 @@ use gpu_iris_mpc::{
     setup::{galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
+use lazy_static::lazy_static;
 use rand::{prelude::SliceRandom, rngs::StdRng, Rng, SeedableRng};
+use ring::{
+    digest::SHA256_OUTPUT_LEN,
+    hkdf::{self, Algorithm, Okm, Salt, HKDF_SHA256},
+};
 use std::{
     fs::metadata,
     mem,
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicUsize, Arc, Mutex},
     time::{Duration, Instant},
 };
 use tokio::time::sleep;
@@ -50,6 +56,11 @@ const KMS_KEY_IDS: [&str; 3] = [
     "896353dc-5ea5-42d4-9e4e-f65dd8169dee",
     "42bb01f5-8380-48b4-b1f1-929463a587fb",
 ];
+
+lazy_static! {
+    static ref KDF_NONCE: AtomicUsize = AtomicUsize::new(0);
+    static ref KDF_SALT: Salt = Salt::new(HKDF_SHA256, b"IRIS_MPC");
+}
 
 macro_rules! debug_record_event {
     ($manager:expr, $streams:expr, $timers:expr) => {
@@ -260,6 +271,24 @@ fn device_ptrs_to_shares<T>(
         .collect::<Vec<_>>()
 }
 
+/// Internal helper function to derive a new seed from the given seed and nonce.
+fn derive_seed(seed: [u32; 8], nonce: usize) -> eyre::Result<[u32; 8]> {
+    let pseudo_rand_key = KDF_SALT.extract(bytemuck::cast_slice(&seed));
+    let nonce = nonce.to_be_bytes();
+    let context = vec![nonce.as_slice()];
+    let output_key_material: Okm<Algorithm> =
+        pseudo_rand_key.expand(&context, HKDF_SHA256).unwrap();
+    let mut result = [0u8; SHA256_OUTPUT_LEN];
+    output_key_material.fill(&mut result).unwrap();
+    Ok(bytemuck::cast(result))
+}
+
+/// Applies a KDF to the given seeds to derive new seeds.
+fn next_chacha_seeds(seeds: ([u32; 8], [u32; 8])) -> eyre::Result<([u32; 8], [u32; 8])> {
+    let nonce = KDF_NONCE.fetch_add(1, SeqCst);
+    Ok((derive_seed(seeds.0, nonce)?, derive_seed(seeds.1, nonce)?))
+}
+
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     let Opt {
@@ -346,7 +375,7 @@ async fn main() -> eyre::Result<()> {
         device_manager.clone(),
         DB_SIZE + DB_BUFFER,
         QUERIES,
-        chacha_seeds,
+        next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(true),
         Some(4000),
@@ -357,7 +386,7 @@ async fn main() -> eyre::Result<()> {
         device_manager.clone(),
         DB_SIZE + DB_BUFFER,
         QUERIES,
-        chacha_seeds,
+        next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(true),
         Some(4001),
@@ -372,7 +401,7 @@ async fn main() -> eyre::Result<()> {
         device_manager.clone(),
         QUERIES * device_manager.device_count(),
         QUERIES,
-        chacha_seeds,
+        next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(true),
         Some(4002),
@@ -382,7 +411,7 @@ async fn main() -> eyre::Result<()> {
         device_manager.clone(),
         QUERIES * device_manager.device_count(),
         QUERIES,
-        chacha_seeds,
+        next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(true),
         Some(4003),
@@ -399,7 +428,7 @@ async fn main() -> eyre::Result<()> {
         party_id,
         phase2_batch_chunk_size,
         phase2_batch_chunk_size,
-        chacha_seeds,
+        next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(4004),
     )));
@@ -408,7 +437,7 @@ async fn main() -> eyre::Result<()> {
         party_id,
         phase2_chunk_size,
         phase2_chunk_size_max / 64,
-        chacha_seeds,
+        next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(4005),
     )));
