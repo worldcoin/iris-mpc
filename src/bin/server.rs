@@ -31,12 +31,12 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-use tokio::time::sleep;
+use tokio::{sync::mpsc, time::sleep};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
 const DB_BUFFER: usize = 8 * 1_000;
-const QUERIES: usize = 31 * 32;
+const N_QUERIES: usize = 32;
 const N_BATCHES: usize = 10;
 const RNG_SEED: u64 = 42;
 const SHUFFLE_SEED: u64 = 42;
@@ -44,6 +44,8 @@ const MAX_CONCURRENT_REQUESTS: usize = 5;
 const DB_CODE_FILE: &str = "codes.db";
 const DB_MASK_FILE: &str = "masks.db";
 const DEFAULT_PATH: &str = "/opt/dlami/nvme/";
+const RESULTS_QUEUE_GROUP_ID: &str = "IRIS_MPC_RESULTS";
+const QUERIES: usize = ROTATIONS * N_QUERIES;
 
 macro_rules! debug_record_event {
     ($manager:expr, $streams:expr, $timers:expr) => {
@@ -186,8 +188,8 @@ fn open(
     distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes);
 }
 
-fn get_non_matching_indices(host_results: &[Vec<u32>]) -> Vec<usize> {
-    let mut insertion_list = vec![];
+fn get_merged_results(host_results: &[Vec<u32>]) -> Vec<u32> {
+    let mut results = vec![];
     for j in 0..host_results[0].len() {
         let mut match_entry = u32::MAX;
         for i in 0..host_results.len() {
@@ -197,9 +199,7 @@ fn get_non_matching_indices(host_results: &[Vec<u32>]) -> Vec<usize> {
             }
         }
 
-        if match_entry == u32::MAX {
-            insertion_list.push(j);
-        }
+        results.push(match_entry);
 
         // DEBUG
         println!(
@@ -209,7 +209,7 @@ fn get_non_matching_indices(host_results: &[Vec<u32>]) -> Vec<usize> {
             match_entry
         );
     }
-    insertion_list
+    results
 }
 
 fn await_streams(streams: &[u64]) {
@@ -442,6 +442,23 @@ async fn main() -> eyre::Result<()> {
         .map(|&s| Arc::new(Mutex::new(s)))
         .collect::<Vec<_>>();
 
+    // Start thread that will be responsible for communicating back the results
+    let (tx, mut rx) = mpsc::channel::<Vec<u32>>(32); // TODO: pick some buffer value
+    let results_queue_url = queue.replace(".fifo", "-results.fifo"); // TODO: remove and make this part of config
+    let rx_client = client.clone();
+    tokio::spawn(async move {
+        while let Some(message) = rx.recv().await {
+            rx_client
+                .send_message()
+                .queue_url(&results_queue_url)
+                .message_body(serde_json::to_string(&message).unwrap())
+                .message_group_id(RESULTS_QUEUE_GROUP_ID)
+                .send()
+                .await
+                .unwrap();
+        }
+    });
+
     println!("All systems ready.");
 
     let mut total_time = Instant::now();
@@ -501,7 +518,8 @@ async fn main() -> eyre::Result<()> {
         if request_counter > 2 {
             // We have two streams working concurrently, we'll await the stream before
             // previous one
-            let previous_previous_streams = &streams[(request_counter - 2) % MAX_CONCURRENT_REQUESTS];
+            let previous_previous_streams =
+                &streams[(request_counter - 2) % MAX_CONCURRENT_REQUESTS];
             device_manager.await_event(previous_previous_streams, &previous_previous_stream_event);
             device_manager.await_streams(previous_previous_streams);
         }
@@ -652,6 +670,8 @@ async fn main() -> eyre::Result<()> {
         let thread_code_db_slices = slice_tuples_to_ptrs(&code_db_slices);
         let thread_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
 
+        let thread_sender = tx.clone();
+
         let handle = tokio::spawn(async move {
             // Wait for Phase 1 to finish
             await_streams(&thread_streams);
@@ -699,7 +719,8 @@ async fn main() -> eyre::Result<()> {
                 &thread_devs,
             );
 
-            // We only use the default streams of the devices, therefore Phase 2's are never running concurrently
+            // We only use the default streams of the devices, therefore Phase 2's are never
+            // running concurrently
             let streams = thread_phase2
                 .get_devices()
                 .iter()
@@ -759,7 +780,14 @@ async fn main() -> eyre::Result<()> {
             );
 
             // Evaluate the results across devices
-            let insertion_list = get_non_matching_indices(&host_results);
+            let merged_results = get_merged_results(&host_results);
+            let insertion_list = merged_results
+                .iter()
+                .enumerate()
+                .filter(|&(_idx, &num)| num == u32::MAX)
+                .map(|(idx, _num)| idx)
+                .collect::<Vec<_>>();
+
             let mut insertion_list = insertion_list
                 .chunks(QUERIES / ROTATIONS / thread_devs.len())
                 .collect::<Vec<_>>();
@@ -860,6 +888,9 @@ async fn main() -> eyre::Result<()> {
                 }
             }
 
+            // Pass to internal sender thread
+            thread_sender.try_send(merged_results).unwrap();
+
             // Make sure to not call `Drop` on those
             forget_vec!(code_dots);
             forget_vec!(mask_dots);
@@ -889,7 +920,10 @@ async fn main() -> eyre::Result<()> {
         }
     }
 
-    println!("Total time for 9 iterations: {:?}", total_time.elapsed() - batch_times);
+    println!(
+        "Total time for 9 iterations: {:?}",
+        total_time.elapsed() - batch_times
+    );
 
     sleep(Duration::from_secs(5)).await;
 
