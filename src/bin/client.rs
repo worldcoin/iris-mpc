@@ -9,7 +9,7 @@ use clap::Parser;
 use gpu_iris_mpc::{
     helpers::sqs::SMPCRequest,
     setup::{
-        galois_engine::degree2::GaloisRingIrisCodeShare,
+        galois_engine::degree4::GaloisRingIrisCodeShare,
         iris_db::{db::IrisDB, iris::IrisCode},
     },
 };
