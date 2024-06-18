@@ -278,9 +278,11 @@ fn derive_seed(seed: [u32; 8], nonce: usize) -> eyre::Result<[u32; 8]> {
     let context = vec![nonce.as_slice()];
     let output_key_material: Okm<Algorithm> =
         pseudo_rand_key.expand(&context, HKDF_SHA256).unwrap();
-    let mut result = [0u8; SHA256_OUTPUT_LEN];
-    output_key_material.fill(&mut result).unwrap();
-    Ok(bytemuck::cast(result))
+    let mut result = [0u32; 8];
+    output_key_material
+        .fill(bytemuck::cast_slice_mut(&mut result))
+        .unwrap();
+    Ok(result)
 }
 
 /// Applies a KDF to the given seeds to derive new seeds.
