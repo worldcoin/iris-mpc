@@ -157,9 +157,11 @@ pub mod degree2 {
     }
 
     impl ShamirGaloisRingShare {
-        pub fn encode_3(input: &GaloisRingElement) -> [ShamirGaloisRingShare; 3] {
-            let mut rng = rand::thread_rng();
-            let coefs = [*input, GaloisRingElement::random(&mut rng)];
+        pub fn encode_3<R: CryptoRng + Rng>(
+            input: &GaloisRingElement,
+            rng: &mut R,
+        ) -> [ShamirGaloisRingShare; 3] {
+            let coefs = [*input, GaloisRingElement::random(rng)];
             (1..=3)
                 .map(|i| {
                     let element = GaloisRingElement::EXCEPTIONAL_SEQUENCE[i];
@@ -172,7 +174,10 @@ pub mod degree2 {
                 .unwrap()
         }
 
-        pub fn encode_3_mat<R: Rng>(input: &[u16; 2], rng: &mut R) -> [ShamirGaloisRingShare; 3] {
+        pub fn encode_3_mat<R: CryptoRng + Rng>(
+            input: &[u16; 2],
+            rng: &mut R,
+        ) -> [ShamirGaloisRingShare; 3] {
             let invec = [input[0], input[1], rng.gen(), rng.gen()];
             let share1 = ShamirGaloisRingShare {
                 id: 1,
@@ -263,8 +268,8 @@ pub mod degree2 {
             let input1 = GaloisRingElement::random(&mut rand::thread_rng());
             let input2 = GaloisRingElement::random(&mut rand::thread_rng());
 
-            let shares1 = ShamirGaloisRingShare::encode_3(&input1);
-            let shares2 = ShamirGaloisRingShare::encode_3(&input2);
+            let shares1 = ShamirGaloisRingShare::encode_3(&input1, &mut thread_rng());
+            let shares2 = ShamirGaloisRingShare::encode_3(&input2, &mut thread_rng());
             let shares_mul = [
                 shares1[0] * shares2[0],
                 shares1[1] * shares2[1],
@@ -599,9 +604,11 @@ pub mod degree4 {
     }
 
     impl ShamirGaloisRingShare {
-        pub fn encode_3(input: &GaloisRingElement<Monomial>) -> [ShamirGaloisRingShare; 3] {
-            let mut rng = rand::thread_rng();
-            let coefs = [*input, GaloisRingElement::random(&mut rng)];
+        pub fn encode_3<R: CryptoRng + Rng>(
+            input: &GaloisRingElement<Monomial>,
+            rng: &mut R,
+        ) -> [ShamirGaloisRingShare; 3] {
+            let coefs = [*input, GaloisRingElement::random(rng)];
             (1..=3)
                 .map(|i| {
                     let element = GaloisRingElement::EXCEPTIONAL_SEQUENCE[i];
@@ -614,8 +621,10 @@ pub mod degree4 {
                 .unwrap()
         }
 
-        pub fn encode_3_mat(input: &[u16; 4]) -> [ShamirGaloisRingShare; 3] {
-            let mut rng = rand::thread_rng();
+        pub fn encode_3_mat<R: CryptoRng + Rng>(
+            input: &[u16; 4],
+            rng: &mut R,
+        ) -> [ShamirGaloisRingShare; 3] {
             let invec = [
                 input[0],
                 input[1],
@@ -717,8 +726,8 @@ pub mod degree4 {
             let input1 = GaloisRingElement::random(&mut rand::thread_rng());
             let input2 = GaloisRingElement::random(&mut rand::thread_rng());
 
-            let shares1 = ShamirGaloisRingShare::encode_3(&input1);
-            let shares2 = ShamirGaloisRingShare::encode_3(&input2);
+            let shares1 = ShamirGaloisRingShare::encode_3(&input1, &mut rand::thread_rng());
+            let shares2 = ShamirGaloisRingShare::encode_3(&input2, &mut rand::thread_rng());
             let shares_mul = [
                 shares1[0] * shares2[0],
                 shares1[1] * shares2[1],
@@ -735,8 +744,10 @@ pub mod degree4 {
             let input1 = GaloisRingElement::random(&mut rand::thread_rng());
             let input2 = GaloisRingElement::random(&mut rand::thread_rng());
 
-            let shares1 = ShamirGaloisRingShare::encode_3_mat(&input1.coefs);
-            let shares2 = ShamirGaloisRingShare::encode_3_mat(&input2.coefs);
+            let shares1 =
+                ShamirGaloisRingShare::encode_3_mat(&input1.coefs, &mut rand::thread_rng());
+            let shares2 =
+                ShamirGaloisRingShare::encode_3_mat(&input2.coefs, &mut rand::thread_rng());
             let shares_mul = [
                 shares1[0] * shares2[0],
                 shares1[1] * shares2[1],
