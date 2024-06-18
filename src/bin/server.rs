@@ -124,8 +124,8 @@ async fn receive_batch(
             let message: SQSMessage = serde_json::from_str(sns_message.body().unwrap())?;
             let message: SMPCRequest = serde_json::from_str(&message.message)?;
 
-            let mut iris_share = GaloisRingIrisCodeShare::new(party_id, message.get_iris_shares());
-            let mut mask_share = GaloisRingIrisCodeShare::new(party_id, message.get_mask_shares());
+            let mut iris_share = GaloisRingIrisCodeShare::new(party_id + 1, message.get_iris_shares());
+            let mut mask_share = GaloisRingIrisCodeShare::new(party_id + 1, message.get_mask_shares());
 
             batch_query.db.code.extend(iris_share.all_rotations());
             batch_query.db.mask.extend(mask_share.all_rotations());
