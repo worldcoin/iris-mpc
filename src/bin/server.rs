@@ -23,7 +23,7 @@ use gpu_iris_mpc::{
         mmap::{read_mmap_file, write_mmap_file},
         sqs::{SMPCRequest, SQSMessage},
     },
-    setup::{galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
+    setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use lazy_static::lazy_static;
@@ -130,8 +130,8 @@ async fn receive_batch(
             batch_query.db.code.extend(iris_share.all_rotations());
             batch_query.db.mask.extend(mask_share.all_rotations());
 
-            GaloisRingIrisCodeShare::preprocess_iris_code_query_share(party_id, &mut iris_share);
-            GaloisRingIrisCodeShare::preprocess_iris_code_query_share(party_id, &mut mask_share);
+            GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
+            GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut mask_share);
 
             batch_query.query.code.extend(iris_share.all_rotations());
             batch_query.query.mask.extend(mask_share.all_rotations());
