@@ -1,6 +1,10 @@
 //! Implementation of [AWS V4 Signing][link]
 //!
-//! Taken from here (with minor modifications): https://github.com/durch/rust-s3/blob/5fde256fff8e6f5130c3847153725c92705ac155/s3/src/signing.rs
+//! Taken from here (with minor modifications):
+//! <https://github.com/durch/rust-s3/blob/5fde256fff8e6f5130c3847153725c92705ac155/s3/src/signing.rs>
+//!
+//! [link]: https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-authenticating-requests.html
+
 use hmac::{Hmac, Mac};
 use http::HeaderMap;
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
