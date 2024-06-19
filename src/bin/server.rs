@@ -27,11 +27,8 @@ use gpu_iris_mpc::{
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use lazy_static::lazy_static;
-use rand::{prelude::SliceRandom, rngs::StdRng, Rng, SeedableRng};
-use ring::{
-    digest::SHA256_OUTPUT_LEN,
-    hkdf::{self, Algorithm, Okm, Salt, HKDF_SHA256},
-};
+use rand::{prelude::SliceRandom, rngs::StdRng, SeedableRng};
+use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{
     fs::metadata,
     mem,
