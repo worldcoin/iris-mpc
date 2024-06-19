@@ -1,16 +1,14 @@
-use eyre::{bail, Error};
-use itertools::izip;
-
+use super::packets::MaskShareMessage;
 use crate::{
     setup::id::PartyID,
     upgrade::{packets::TwoToThreeIrisCodeMessage, NewIrisShareSink},
 };
-
-use super::packets::MaskShareMessage;
+use eyre::{bail, Error};
+use itertools::izip;
 
 #[derive(Clone)]
 pub struct IrisCodeUpgrader<S> {
-    party_id: PartyID,
+    party_id:  PartyID,
     iris_sink: S,
 }
 
@@ -24,9 +22,10 @@ impl<S: NewIrisShareSink> IrisCodeUpgrader<S> {
     }
 
     /// Finalizes the upgrade protocol.
-    /// Takes 2 [TwoToThreeIrisCodeMessage] from the 3 parties and combines them into a final shamir share.
-    /// Also takes a [ShamirSharesMessage] with the masks.
-    /// Both the new shared code and mask are then stored in the [NewIrisShareSink].
+    /// Takes 2 [TwoToThreeIrisCodeMessage] from the 3 parties and combines them
+    /// into a final shamir share. Also takes a [ShamirSharesMessage] with
+    /// the masks. Both the new shared code and mask are then stored in the
+    /// [NewIrisShareSink].
     pub fn finalize(
         &self,
         iris_code_share_0: TwoToThreeIrisCodeMessage,

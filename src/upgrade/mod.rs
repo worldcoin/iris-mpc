@@ -1,9 +1,9 @@
-use std::fs::File;
-use std::io::{BufWriter, Write};
-
-use eyre::{bail, Result};
-
 use crate::IRIS_CODE_LENGTH;
+use eyre::{bail, Result};
+use std::{
+    fs::File,
+    io::{BufWriter, Write},
+};
 
 pub mod packets;
 pub mod upgrade;

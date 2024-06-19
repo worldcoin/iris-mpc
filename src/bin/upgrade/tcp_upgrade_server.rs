@@ -1,9 +1,3 @@
-use std::{
-    net::SocketAddr,
-    sync::{atomic::AtomicUsize, Arc},
-    time::{Duration, Instant},
-};
-
 use clap::Parser;
 use eyre::bail;
 use futures_concurrency::future::Join;
@@ -14,6 +8,11 @@ use gpu_iris_mpc::{
         upgrade::IrisCodeUpgrader,
         IrisShareTestFileSink,
     },
+};
+use std::{
+    net::SocketAddr,
+    sync::{atomic::AtomicUsize, Arc},
+    time::{Duration, Instant},
 };
 use tokio::{
     io::{AsyncReadExt, BufReader},
@@ -34,8 +33,7 @@ pub struct Args {
 }
 
 fn install_tracing() {
-    use tracing_subscriber::prelude::*;
-    use tracing_subscriber::{fmt, EnvFilter};
+    use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
     let fmt_layer = fmt::layer().with_target(true).with_line_number(true);
     let filter_layer = EnvFilter::try_from_default_env()
@@ -49,8 +47,8 @@ fn install_tracing() {
 }
 
 struct UpgradeTask {
-    msg1: TwoToThreeIrisCodeMessage,
-    msg2: TwoToThreeIrisCodeMessage,
+    msg1:  TwoToThreeIrisCodeMessage,
+    msg2:  TwoToThreeIrisCodeMessage,
     masks: MaskShareMessage,
 }
 
@@ -119,8 +117,9 @@ async fn main() -> eyre::Result<()> {
     tracing::info!("Doing a batch of {} elements", num_elements);
 
     // wrap into framed
-    // let mut client_stream1 = Framed::new(client_stream1, BincodeCodec::<ClientMessages>::new());
-    // let mut client_stream2 = Framed::new(client_stream2, BincodeCodec::<ClientMessages>::new());
+    // let mut client_stream1 = Framed::new(client_stream1,
+    // BincodeCodec::<ClientMessages>::new()); let mut client_stream2 =
+    // Framed::new(client_stream2, BincodeCodec::<ClientMessages>::new());
     let mut sending = Duration::default();
     let mut receiving = Duration::default();
     for i in start1..end1 {

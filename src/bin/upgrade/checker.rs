@@ -1,9 +1,11 @@
-use gpu_iris_mpc::setup::galois::degree4::basis::Monomial;
-use gpu_iris_mpc::setup::galois::degree4::{GaloisRingElement, ShamirGaloisRingShare};
-use gpu_iris_mpc::setup::id::PartyID;
+use gpu_iris_mpc::setup::{
+    galois::degree4::{basis::Monomial, GaloisRingElement, ShamirGaloisRingShare},
+    id::PartyID,
+};
 use itertools::{izip, Itertools};
 
-// quick checking script that recombines the shamir shares for a local server setup and prints the iris code share
+// quick checking script that recombines the shamir shares for a local server
+// setup and prints the iris code share
 
 fn main() {
     let args = std::env::args().collect::<Vec<_>>();

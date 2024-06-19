@@ -1,5 +1,3 @@
-use std::{array, net::SocketAddr};
-
 use clap::Parser;
 use futures_concurrency::future::Join;
 use gpu_iris_mpc::{
@@ -12,6 +10,7 @@ use gpu_iris_mpc::{
 };
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
+use std::{array, net::SocketAddr};
 use tokio::{
     io::{AsyncWriteExt, BufWriter},
     net::TcpStream,
@@ -43,15 +42,15 @@ struct MockOldDbParty2 {
     rng: ChaCha20Rng,
 }
 
-// Generate some random iris code shares by using the same rng seed and using X as one share and -X as the other share
+// Generate some random iris code shares by using the same rng seed and using X
+// as one share and -X as the other share
 
 fn old_dbs() -> (MockOldDbParty1, MockOldDbParty2) {
     let seed = [0u8; 32];
     let rng = ChaCha20Rng::from_seed(seed);
-    (
-        MockOldDbParty1 { rng: rng.clone() },
-        MockOldDbParty2 { rng },
-    )
+    (MockOldDbParty1 { rng: rng.clone() }, MockOldDbParty2 {
+        rng,
+    })
 }
 
 impl OldIrisShareSource for MockOldDbParty1 {
@@ -95,8 +94,7 @@ impl OldIrisShareSource for MockOldDbParty2 {
 }
 
 fn install_tracing() {
-    use tracing_subscriber::prelude::*;
-    use tracing_subscriber::{fmt, EnvFilter};
+    use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
     let fmt_layer = fmt::layer().with_target(true).with_line_number(true);
     let filter_layer = EnvFilter::try_from_default_env()

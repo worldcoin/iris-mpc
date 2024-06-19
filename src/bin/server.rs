@@ -31,10 +31,15 @@ use lazy_static::lazy_static;
 use rand::{prelude::SliceRandom, rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{
-    fs::metadata, mem, sync::{atomic::AtomicUsize, Arc, Mutex}, time::{Duration, Instant}
+    fs::metadata,
+    mem,
+    sync::{atomic::AtomicUsize, Arc, Mutex},
+    time::{Duration, Instant},
 };
 use tokio::{
-    runtime, task::{spawn_blocking, JoinHandle}, time::sleep
+    runtime,
+    task::{spawn_blocking, JoinHandle},
+    time::sleep,
 };
 
 const REGION: &str = "eu-north-1";
@@ -51,10 +56,12 @@ const MAX_BATCHES_BEFORE_REUSE: usize = 5;
 /// The number of batches that are launched concurrently.
 ///
 /// Code can run concurrently in:
-/// - requests `N` and `N - 1`, 
-/// - requests `N` and `N - MAX_CONCURRENT_BATCHES`, because the next request phase 1 awaits
-///   completion of the request `MAX_CONCURRENT_BATCHES` behind it, or
-/// - request `N` only, because phase 2 limits the critical section to one batch.
+/// - requests `N` and `N - 1`,
+/// - requests `N` and `N - MAX_CONCURRENT_BATCHES`, because the next request
+///   phase 1 awaits completion of the request `MAX_CONCURRENT_BATCHES` behind
+///   it, or
+/// - request `N` only, because phase 2 limits the critical section to one
+///   batch.
 const MAX_CONCURRENT_BATCHES: usize = 2;
 
 const DB_CODE_FILE: &str = "codes.db";
@@ -189,7 +196,10 @@ fn slice_tuples_to_ptrs(
         (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
         (Vec<CudaSlice<u32>>, Vec<CudaSlice<u32>>),
     ),
-) -> ((Vec<CUdeviceptr>, Vec<CUdeviceptr>), (Vec<CUdeviceptr>, Vec<CUdeviceptr>)) {
+) -> (
+    (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
+    (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
+) {
     (
         (device_ptrs(&tuple.0 .0), device_ptrs(&tuple.0 .1)),
         (device_ptrs(&tuple.1 .0), device_ptrs(&tuple.1 .1)),
@@ -255,8 +265,8 @@ fn get_non_matching_indices(host_results: &[Vec<u32>]) -> Vec<usize> {
 
 fn await_streams(streams: &mut [&mut CUstream_st]) {
     for i in 0..streams.len() {
-        // SAFETY: these streams have already been created, and the caller holds a reference to
-        // their CudaDevice, which makes sure they aren't dropped.
+        // SAFETY: these streams have already been created, and the caller holds a
+        // reference to their CudaDevice, which makes sure they aren't dropped.
         unsafe {
             synchronize(streams[i]).unwrap();
         }
@@ -515,10 +525,10 @@ async fn main() -> eyre::Result<()> {
 
     // Main loop
     for request_counter in 0..N_BATCHES {
-
         // **Tensor format of queries**
         //
-        // The functions `receive_batch` and `prepare_query_shares` will prepare the _query_ variables as `Vec<Vec<u8>>` formatted as follows:
+        // The functions `receive_batch` and `prepare_query_shares` will prepare the
+        // _query_ variables as `Vec<Vec<u8>>` formatted as follows:
         //
         // - The inner Vec is a flattening of these dimensions (inner to outer):
         //   - One u8 limb of one iris bit.
@@ -586,7 +596,7 @@ async fn main() -> eyre::Result<()> {
         if request_counter > MAX_CONCURRENT_BATCHES {
             // We have two streams working concurrently, we'll await the stream before
             // previous one.
-            // SAFETY: 
+            // SAFETY:
             let previous_previous_streams =
                 &streams[(request_counter - MAX_CONCURRENT_BATCHES) % MAX_BATCHES_BEFORE_REUSE];
             device_manager.await_event(previous_previous_streams, &previous_previous_stream_event);
@@ -700,24 +710,26 @@ async fn main() -> eyre::Result<()> {
         println!("phase 1 done");
 
         // SAFETY:
-        // - We are sending these streams and events to a single thread (without cloning them),
-        //   then dropping our references to them (without destroying them).
+        // - We are sending these streams and events to a single thread (without cloning
+        //   them), then dropping our references to them (without destroying them).
         // - These pointers are aligned, dereferencable, and initialized.
         // Unique usage:
-        // - Streams are re-used after MAX_BATCHES_BEFORE_REUSE threads, but we only launch
-        //   MAX_CONCURRENT_BATCHES threads at a time. So this reference performs the only accesses
-        //   to its memory across both C and Rust.
-        // - New current stream events are created for each batch. They are only re-used after
-        //   MAX_CONCURRENT_BATCHES, but we wait for the previous batch to finish before running
-        //   that code.
-        // - End events are re-used in each thread, but we only end one thread at a time.
+        // - Streams are re-used after MAX_BATCHES_BEFORE_REUSE threads, but we only
+        //   launch MAX_CONCURRENT_BATCHES threads at a time. So this reference performs
+        //   the only accesses to its memory across both C and Rust.
+        // - New current stream events are created for each batch. They are only re-used
+        //   after MAX_CONCURRENT_BATCHES, but we wait for the previous batch to finish
+        //   before running that code.
+        // - End events are re-used in each thread, but we only end one thread at a
+        //   time.
         assert!(MAX_BATCHES_BEFORE_REUSE > MAX_CONCURRENT_BATCHES);
         // into_iter() makes the Rust compiler check that the streams are not re-used.
         let mut thread_streams = request_streams
             .into_iter()
             .map(|s| unsafe { s.stream.as_mut().unwrap() })
             .collect::<Vec<_>>();
-        // The compiler can't tell that we wait for the previous batch before re-using these events.
+        // The compiler can't tell that we wait for the previous batch before re-using
+        // these events.
         let mut thread_current_stream_event = current_stream_event
             .iter()
             .map(|e| unsafe { e.as_mut().unwrap() })
@@ -750,7 +762,8 @@ async fn main() -> eyre::Result<()> {
         let thread_mask_results = device_ptrs(&masks_engine.results);
         let thread_mask_results_peer = device_ptrs(&masks_engine.results_peer);
 
-        // SAFETY: phase2 and phase2_batch are only used in one spawned threat at a time. 
+        // SAFETY: phase2 and phase2_batch are only used in one spawned threat at a
+        // time.
         let thread_phase2 = phase2.clone();
         let thread_phase2_batch = phase2_batch.clone();
         let thread_distance_comparator = distance_comparator.clone();
@@ -761,14 +774,17 @@ async fn main() -> eyre::Result<()> {
             // Wait for Phase 1 to finish
             await_streams(&mut thread_streams);
 
-            // Wait for Phase 2 of previous round to finish in order to not have them overlapping.
-            // SAFETY: waiting here makes sure we don't access these mutable streams or events
-            // concurrently:
-            // - CUstream: thread_streams (only re-used after MAX_BATCHES_BEFORE_REUSE batches),
+            // Wait for Phase 2 of previous round to finish in order to not have them
+            // overlapping. SAFETY: waiting here makes sure we don't access
+            // these mutable streams or events concurrently:
+            // - CUstream: thread_streams (only re-used after MAX_BATCHES_BEFORE_REUSE
+            //   batches),
             // - CUevent: thread_current_stream_event, thread_end_timer,
             // - Comm: phase2, phase2_batch.
             if previous_thread_handle.is_some() {
-                runtime::Handle::current().block_on(previous_thread_handle.unwrap()).unwrap();
+                runtime::Handle::current()
+                    .block_on(previous_thread_handle.unwrap())
+                    .unwrap();
             }
 
             let thread_devs = thread_device_manager.devices();
@@ -815,8 +831,8 @@ async fn main() -> eyre::Result<()> {
             );
 
             // SAFETY:
-            // - We only use the default streams of the devices, therefore Phase 2's are never
-            //   running concurrently.
+            // - We only use the default streams of the devices, therefore Phase 2's are
+            //   never running concurrently.
             // - These pointers are either NULL meaning default, or opaque CUDA handles.
             let phase2_streams = thread_phase2
                 .get_devices()

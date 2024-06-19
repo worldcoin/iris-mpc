@@ -1,24 +1,23 @@
+use crate::IRIS_CODE_LENGTH;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::IRIS_CODE_LENGTH;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TwoToThreeIrisCodeMessage {
-    pub id: u64,
+    pub id:       u64,
     pub party_id: u8,
-    pub from: u8,
+    pub from:     u8,
     #[serde(with = "BigArray")]
-    pub data: [u16; IRIS_CODE_LENGTH],
+    pub data:     [u16; IRIS_CODE_LENGTH],
 }
 impl Default for TwoToThreeIrisCodeMessage {
     fn default() -> Self {
         Self {
-            id: 0,
+            id:       0,
             party_id: 0,
-            from: 0,
-            data: [0; IRIS_CODE_LENGTH],
+            from:     0,
+            data:     [0; IRIS_CODE_LENGTH],
         }
     }
 }
@@ -44,19 +43,19 @@ impl TwoToThreeIrisCodeMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaskShareMessage {
-    pub id: u64,
+    pub id:       u64,
     pub party_id: u8,
-    pub from: u8,
+    pub from:     u8,
     #[serde(with = "BigArray")]
-    pub data: [u16; IRIS_CODE_LENGTH],
+    pub data:     [u16; IRIS_CODE_LENGTH],
 }
 impl Default for MaskShareMessage {
     fn default() -> Self {
         Self {
-            id: 0,
+            id:       0,
             party_id: 0,
-            from: 0,
-            data: [0; IRIS_CODE_LENGTH],
+            from:     0,
+            data:     [0; IRIS_CODE_LENGTH],
         }
     }
 }
