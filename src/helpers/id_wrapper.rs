@@ -5,18 +5,11 @@ use std::str::FromStr;
 pub struct IdWrapper(pub Id);
 
 impl FromStr for IdWrapper {
-    type Err = String;
+    type Err = hex::FromHexError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let bytes = hex::decode(s)
-            .unwrap()
-            .iter()
-            .map(|&c| c as i8)
-            .collect::<Vec<_>>();
-
-        let mut id = [0i8; 128];
-        id.copy_from_slice(&bytes);
-
+        let mut id: [std::ffi::c_char; 128] = [0; 128];
+        hex::decode_to_slice(s, bytemuck::cast_slice_mut(&mut id))?;
         Ok(IdWrapper(Id::uninit(id)))
     }
 }
