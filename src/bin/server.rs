@@ -693,7 +693,7 @@ async fn main() -> eyre::Result<()> {
         let thread_code_db_slices = slice_tuples_to_ptrs(&code_db_slices);
         let thread_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
 
-        let handle = tokio::spawn(async move {
+        let handle = tokio::task::spawn_blocking(move || {
             // Wait for Phase 1 to finish
             await_streams(&thread_streams);
 
