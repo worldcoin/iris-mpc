@@ -582,7 +582,6 @@ mod tests {
     const QUERY_SIZE: usize = 31;
     const DB_SIZE: usize = 8 * 1000;
     const RNG_SEED: u64 = 42;
-    const N_DEVICES: usize = 8;
 
     /// Helper to generate random ndarray
     fn random_ndarray<T>(array: Vec<u16>, n: usize, m: usize) -> Array2<T>
@@ -612,9 +611,10 @@ mod tests {
     fn check_matmul() {
         let db = random_vec(DB_SIZE, WIDTH, u16::MAX as u32);
         let query = random_vec(QUERY_SIZE, WIDTH, u16::MAX as u32);
-        let mut gpu_result = vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE];
         let device_manager = Arc::new(DeviceManager::init());
-        let db_sizes = vec![DB_SIZE / device_manager.device_count(); device_manager.device_count()];
+        let n_devices = device_manager.device_count();
+        let mut gpu_result = vec![0u16; DB_SIZE / n_devices * QUERY_SIZE];
+        let db_sizes = vec![DB_SIZE / n_devices; n_devices];
 
         let mut engine = ShareDB::init(
             0,
@@ -659,15 +659,15 @@ mod tests {
             }
         }
 
-        for device_idx in 0..N_DEVICES {
+        for device_idx in 0..n_devices {
             engine.fetch_results(&mut gpu_result, &db_sizes, device_idx);
             let selected_elements: Vec<u16> = vec_column_major
                 .chunks(DB_SIZE)
                 .flat_map(|chunk| {
                     chunk
                         .iter()
-                        .skip(DB_SIZE / N_DEVICES * device_idx)
-                        .take(DB_SIZE / N_DEVICES)
+                        .skip(DB_SIZE / n_devices * device_idx)
+                        .take(DB_SIZE / n_devices)
                 })
                 .cloned()
                 .collect();
@@ -681,19 +681,21 @@ mod tests {
     #[test]
     fn check_shared_matmul() {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
+        let device_manager = Arc::new(DeviceManager::init());
+        let n_devices = device_manager.device_count();
 
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
         let mut gpu_result = vec![
-            vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
-            vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
-            vec![0u16; DB_SIZE * QUERY_SIZE / N_DEVICES],
+            vec![0u16; DB_SIZE * QUERY_SIZE / n_devices],
+            vec![0u16; DB_SIZE * QUERY_SIZE / n_devices],
+            vec![0u16; DB_SIZE * QUERY_SIZE / n_devices],
         ];
 
-        let db_sizes = vec![DB_SIZE / N_DEVICES; N_DEVICES];
+        let db_sizes = vec![DB_SIZE / n_devices; n_devices];
 
         for i in 0..3 {
-            let device_manager = Arc::new(DeviceManager::init());
+            let device_manager = Arc::clone(&device_manager);
 
             let codes_db = db
                 .db
@@ -754,10 +756,10 @@ mod tests {
             engine.fetch_results(&mut gpu_result[i], &db_sizes, 0);
         }
 
-        for i in 0..DB_SIZE * QUERY_SIZE / N_DEVICES {
+        for i in 0..DB_SIZE * QUERY_SIZE / n_devices {
             assert_eq!(
                 (gpu_result[0][i] + gpu_result[1][i] + gpu_result[2][i]),
-                (db.db[i / (DB_SIZE / N_DEVICES)].mask & db.db[i % (DB_SIZE / N_DEVICES)].mask)
+                (db.db[i / (DB_SIZE / n_devices)].mask & db.db[i % (DB_SIZE / n_devices)].mask)
                     .count_ones() as u16
             );
         }
@@ -768,21 +770,23 @@ mod tests {
     #[test]
     fn check_shared_distances() {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
+        let device_manager = Arc::new(DeviceManager::init());
+        let n_devices = device_manager.device_count();
 
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
-        let db_sizes = vec![DB_SIZE / N_DEVICES; N_DEVICES];
+        let db_sizes = vec![DB_SIZE / n_devices; n_devices];
 
         let mut results_codes = [
-            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
-            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
-            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
+            vec![0u16; DB_SIZE / n_devices * QUERY_SIZE],
+            vec![0u16; DB_SIZE / n_devices * QUERY_SIZE],
+            vec![0u16; DB_SIZE / n_devices * QUERY_SIZE],
         ];
 
         let mut results_masks = [
-            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
-            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
-            vec![0u16; DB_SIZE / N_DEVICES * QUERY_SIZE],
+            vec![0u16; DB_SIZE / n_devices * QUERY_SIZE],
+            vec![0u16; DB_SIZE / n_devices * QUERY_SIZE],
+            vec![0u16; DB_SIZE / n_devices * QUERY_SIZE],
         ];
 
         for party_id in 0..3 {
@@ -951,7 +955,7 @@ mod tests {
         let reference_dists = db.calculate_distances(&db.db[0]);
 
         // TODO: check for all devices and the whole query
-        for i in 0..DB_SIZE / N_DEVICES {
+        for i in 0..DB_SIZE / n_devices {
             assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-6);
         }
     }
