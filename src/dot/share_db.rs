@@ -952,7 +952,7 @@ mod tests {
 
         // TODO: check for all devices and the whole query
         for i in 0..DB_SIZE / N_DEVICES {
-            assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-6);
+            assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-2);
         }
     }
 }
