@@ -37,14 +37,14 @@ pub mod degree2 {
                     coefs: [0; 12800],
                 },
             ];
+            let encode_mask_code = |i| {
+                let m = mask_code.get_bit(i) as u16;
+                let c = iris_code.get_bit(i) as u16;
+                m.wrapping_sub(2 * (c & m))
+            };
             for i in (0..12800).step_by(2) {
                 let element = GaloisRingElement {
-                    coefs: [
-                        (mask_code.get_bit(i) as u16
-                            - 2 * ((iris_code.get_bit(i) & mask_code.get_bit(i)) as u16)),
-                        (mask_code.get_bit(i + 1) as u16
-                            - 2 * ((iris_code.get_bit(i + 1) & mask_code.get_bit(i + 1)) as u16)),
-                    ],
+                    coefs: [encode_mask_code(i), encode_mask_code(i + 1)],
                 };
                 let share = ShamirGaloisRingShare::encode_3_mat(&element.coefs, rng);
                 for j in 0..3 {
@@ -246,16 +246,17 @@ pub mod degree4 {
                     coefs: [0; 12800],
                 },
             ];
+            let encode_mask_code = |i| {
+                let m = mask_code.get_bit(i) as u16;
+                let c = iris_code.get_bit(i) as u16;
+                m.wrapping_sub(2 * (c & m))
+            };
             for i in (0..12800).step_by(4) {
                 let element = GaloisRingElement::<basis::A>::from_coefs([
-                    (mask_code.get_bit(i) as u16
-                        - 2 * ((iris_code.get_bit(i) & mask_code.get_bit(i)) as u16)),
-                    (mask_code.get_bit(i + 1) as u16
-                        - 2 * ((iris_code.get_bit(i + 1) & mask_code.get_bit(i + 1)) as u16)),
-                    (mask_code.get_bit(i + 2) as u16
-                        - 2 * ((iris_code.get_bit(i + 2) & mask_code.get_bit(i + 2)) as u16)),
-                    (mask_code.get_bit(i + 3) as u16
-                        - 2 * ((iris_code.get_bit(i + 3) & mask_code.get_bit(i + 3)) as u16)),
+                    encode_mask_code(i),
+                    encode_mask_code(i + 1),
+                    encode_mask_code(i + 2),
+                    encode_mask_code(i + 3),
                 ]);
                 let element = element.to_monomial();
                 let share = ShamirGaloisRingShare::encode_3_mat(&element.coefs, rng);
