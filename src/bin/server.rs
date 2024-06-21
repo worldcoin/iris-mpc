@@ -1,6 +1,5 @@
 #![allow(clippy::needless_range_loop)]
 use aws_sdk_sqs::{config::Region, Client};
-use chacha20::ChaCha20;
 use clap::Parser;
 use core::sync::atomic::Ordering::SeqCst;
 use cudarc::driver::{
@@ -36,7 +35,7 @@ use std::{
     sync::{atomic::AtomicUsize, Arc, Mutex},
     time::{Duration, Instant},
 };
-use tokio::time::sleep;
+use tokio::{task::spawn_blocking, time::sleep};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
@@ -122,17 +121,32 @@ async fn receive_batch(
             let message: SQSMessage = serde_json::from_str(sns_message.body().unwrap())?;
             let message: SMPCRequest = serde_json::from_str(&message.message)?;
 
-            let mut iris_share = GaloisRingIrisCodeShare::new(party_id + 1, message.get_iris_shares());
-            let mut mask_share = GaloisRingIrisCodeShare::new(party_id + 1, message.get_mask_shares());
+            let (db_iris_shares, db_mask_shares, iris_shares, mask_shares) =
+                spawn_blocking(move || {
+                    let mut iris_share =
+                        GaloisRingIrisCodeShare::new(party_id + 1, message.get_iris_shares());
+                    let mut mask_share =
+                        GaloisRingIrisCodeShare::new(party_id + 1, message.get_mask_shares());
 
-            batch_query.db.code.extend(iris_share.all_rotations());
-            batch_query.db.mask.extend(mask_share.all_rotations());
+                    let db_iris_shares = iris_share.clone().all_rotations();
+                    let db_mask_shares = mask_share.clone().all_rotations();
 
-            GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
-            GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut mask_share);
+                    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
+                    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut mask_share);
 
-            batch_query.query.code.extend(iris_share.all_rotations());
-            batch_query.query.mask.extend(mask_share.all_rotations());
+                    (
+                        db_iris_shares,
+                        db_mask_shares,
+                        iris_share.all_rotations(),
+                        mask_share.all_rotations(),
+                    )
+                })
+                .await?;
+
+            batch_query.db.code.extend(db_iris_shares);
+            batch_query.db.mask.extend(db_mask_shares);
+            batch_query.query.code.extend(iris_shares);
+            batch_query.query.mask.extend(mask_shares);
 
             // TODO: we should only delete after processing
             client
@@ -492,16 +506,20 @@ async fn main() -> eyre::Result<()> {
             total_time = Instant::now();
             batch_times = Duration::from_secs(0);
         }
-        // loop {
         let now = Instant::now();
         let batch = receive_batch(party_id, &client, &queue).await?;
         println!("Received batch in {:?}", now.elapsed());
         batch_times += now.elapsed();
 
-        let code_query = prepare_query_shares(batch.query.code);
-        let mask_query = prepare_query_shares(batch.query.mask);
-        let code_query_insert = prepare_query_shares(batch.db.code);
-        let mask_query_insert = prepare_query_shares(batch.db.mask);
+        let (code_query, mask_query, code_query_insert, mask_query_insert) =
+            spawn_blocking(move || {
+                let code_query = prepare_query_shares(batch.query.code);
+                let mask_query = prepare_query_shares(batch.query.mask);
+                let code_query_insert = prepare_query_shares(batch.db.code);
+                let mask_query_insert = prepare_query_shares(batch.db.mask);
+                (code_query, mask_query, code_query_insert, mask_query_insert)
+            })
+            .await?;
 
         let mut timers = vec![];
 
@@ -691,7 +709,7 @@ async fn main() -> eyre::Result<()> {
         let thread_code_db_slices = slice_tuples_to_ptrs(&code_db_slices);
         let thread_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
 
-        let handle = tokio::task::spawn_blocking(move || {
+        let handle = spawn_blocking(move || {
             // Wait for Phase 1 to finish
             await_streams(&thread_streams);
 
@@ -930,7 +948,8 @@ async fn main() -> eyre::Result<()> {
     }
 
     println!(
-        "Total time for 9 iterations: {:?}",
+        "Total time for {} iterations: {:?}",
+        N_BATCHES - 1,
         total_time.elapsed() - batch_times
     );
 
