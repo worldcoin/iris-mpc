@@ -24,15 +24,12 @@ use gpu_iris_mpc::{
         mmap::{read_mmap_file, write_mmap_file},
         sqs::{SMPCRequest, SQSMessage},
     },
-    setup::{galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
+    setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use lazy_static::lazy_static;
-use rand::{prelude::SliceRandom, rngs::StdRng, Rng, SeedableRng};
-use ring::{
-    digest::SHA256_OUTPUT_LEN,
-    hkdf::{self, Algorithm, Okm, Salt, HKDF_SHA256},
-};
+use rand::{prelude::SliceRandom, rngs::StdRng, SeedableRng};
+use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{
     fs::metadata,
     mem,
@@ -125,14 +122,14 @@ async fn receive_batch(
             let message: SQSMessage = serde_json::from_str(sns_message.body().unwrap())?;
             let message: SMPCRequest = serde_json::from_str(&message.message)?;
 
-            let mut iris_share = GaloisRingIrisCodeShare::new(party_id, message.get_iris_shares());
-            let mut mask_share = GaloisRingIrisCodeShare::new(party_id, message.get_mask_shares());
+            let mut iris_share = GaloisRingIrisCodeShare::new(party_id + 1, message.get_iris_shares());
+            let mut mask_share = GaloisRingIrisCodeShare::new(party_id + 1, message.get_mask_shares());
 
             batch_query.db.code.extend(iris_share.all_rotations());
             batch_query.db.mask.extend(mask_share.all_rotations());
 
-            GaloisRingIrisCodeShare::preprocess_iris_code_query_share(party_id, &mut iris_share);
-            GaloisRingIrisCodeShare::preprocess_iris_code_query_share(party_id, &mut mask_share);
+            GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
+            GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut mask_share);
 
             batch_query.query.code.extend(iris_share.all_rotations());
             batch_query.query.mask.extend(mask_share.all_rotations());
