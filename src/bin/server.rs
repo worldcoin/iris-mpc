@@ -128,8 +128,8 @@ async fn receive_batch(
                     let mut mask_share =
                         GaloisRingIrisCodeShare::new(party_id + 1, message.get_mask_shares());
 
-                    let db_iris_shares = iris_share.clone().all_rotations();
-                    let db_mask_shares = mask_share.clone().all_rotations();
+                    let db_iris_shares = iris_share.all_rotations();
+                    let db_mask_shares = mask_share.all_rotations();
 
                     GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
                     GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut mask_share);
