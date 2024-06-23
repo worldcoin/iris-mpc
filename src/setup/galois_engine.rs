@@ -383,6 +383,7 @@ pub mod degree4 {
         use crate::setup::{
             galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::iris::IrisCodeArray,
         };
+        use float_eq::assert_float_eq;
         use rand::thread_rng;
 
         #[test]
@@ -421,6 +422,79 @@ pub mod degree4 {
                 let expected = (iris_db & iris_query).count_ones();
                 assert_eq!(dot, expected as u16);
             }
+        }
+
+        #[test]
+        fn hamming_distance_galois() {
+            let rng = &mut thread_rng();
+            let lines = include_str!("example-data/random_codes.txt")
+                .lines()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>();
+
+            let t1_code = IrisCodeArray::from_base64_string(lines[0]).unwrap();
+            let t1_mask = IrisCodeArray::from_base64_string(lines[1]).unwrap();
+            let t2_code = IrisCodeArray::from_base64_string(lines[2]).unwrap();
+            let t2_mask = IrisCodeArray::from_base64_string(lines[3]).unwrap();
+
+            let dist_0 = lines[4].parse::<f64>().unwrap();
+            let dist_15 = lines[5].parse::<f64>().unwrap();
+
+            let t1_code_shares = GaloisRingIrisCodeShare::encode_iris_code(&t1_code, &t1_mask, rng);
+            let t1_mask_shares = GaloisRingIrisCodeShare::encode_mask_code(&t1_code, rng);
+
+            let t2_code_shares = GaloisRingIrisCodeShare::encode_iris_code(&t2_code, &t2_mask, rng);
+            let t2_mask_shares = GaloisRingIrisCodeShare::encode_mask_code(&t2_code, rng);
+
+            let mut t2_code_shares_rotated = t2_code_shares
+                .iter()
+                .map(|share| share.all_rotations())
+                .collect::<Vec<_>>();
+
+            let mut t2_mask_shares_rotated = t2_mask_shares
+                .iter()
+                .map(|share| share.all_rotations())
+                .collect::<Vec<_>>();
+
+            let mut min_dist = f64::MAX;
+            for rot_idx in 0..31 {
+                t2_code_shares_rotated
+                    .iter_mut()
+                    .for_each(|share| share[rot_idx].preprocess_iris_code_query_share());
+
+                t2_mask_shares_rotated
+                    .iter_mut()
+                    .for_each(|share| share[rot_idx].preprocess_iris_code_query_share());
+
+                // dot product for codes
+                let mut dot_codes = [0; 3];
+                for i in 0..3 {
+                    dot_codes[i] = t1_code_shares[i].trick_dot(&t2_code_shares_rotated[i][rot_idx]);
+                }
+                let dot_codes = dot_codes.iter().fold(0u16, |acc, x| acc.wrapping_add(*x));
+
+                // dot product for masks
+                let mut dot_masks = [0; 3];
+                for i in 0..3 {
+                    dot_masks[i] = t1_mask_shares[i].trick_dot(&t2_mask_shares_rotated[i][rot_idx]);
+                }
+                let dot_masks = dot_masks.iter().fold(0u16, |acc, x| acc.wrapping_add(*x));
+
+                let res = 0.5f64 - (dot_codes as i16) as f64 / (2f64 * dot_masks as f64);
+
+                // Without rotations
+                if rot_idx == 15 {
+                    assert_float_eq!(dist_0, res, abs <= 1e-3);
+                }
+
+                if res < min_dist {
+                    min_dist = res;
+                }
+            }
+
+            // Minimum distance
+            assert_float_eq!(dist_15, min_dist, abs <= 1e-3);
         }
     }
 }

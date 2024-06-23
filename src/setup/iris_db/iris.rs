@@ -1,3 +1,5 @@
+use base64::{prelude::BASE64_STANDARD, Engine};
+use eyre::bail;
 use rand::{
     distributions::{Bernoulli, Distribution},
     Rng,
@@ -41,7 +43,7 @@ impl IrisCodeArray {
     pub fn get_bit(&self, i: usize) -> bool {
         let word = i / 64;
         let bit = i % 64;
-        (self.0[word] >> bit) & 1 == 1
+        (self.0[word] >> (63 - bit)) & 1 == 1
     }
     #[inline]
     pub fn flip_bit(&mut self, i: usize) {
@@ -66,6 +68,26 @@ impl IrisCodeArray {
     }
     pub fn as_raw_mut_slice(&mut self) -> &mut [u8] {
         bytemuck::cast_slice_mut(&mut self.0)
+    }
+
+    pub fn from_base64_string(s: &str) -> eyre::Result<Self> {
+        let decoded_bytes = BASE64_STANDARD.decode(s)?;
+        if decoded_bytes.len() % 8 != 0 {
+            bail!("Invalid length for u64 array");
+        }
+
+        Ok(Self(
+            decoded_bytes
+                .chunks_exact(8)
+                .map(|chunk| {
+                    let mut arr = [0u8; 8];
+                    arr.copy_from_slice(chunk);
+                    u64::from_be_bytes(arr)
+                })
+                .collect::<Vec<u64>>()
+                .try_into()
+                .map_err(|_| eyre::eyre!("Expected exactly 200 elements"))?,
+        ))
     }
 }
 
@@ -205,6 +227,10 @@ impl ExactSizeIterator for Bits<'_> {}
 
 #[cfg(test)]
 mod tests {
+    use super::IrisCodeArray;
+    use eyre::{Context, ContextCompat};
+    use std::collections::HashMap;
+
     #[test]
     fn bit_iter_eq_get_bit() {
         let mut rng = rand::thread_rng();
@@ -212,5 +238,42 @@ mod tests {
         for (i, bit) in iris.code.bits().enumerate() {
             assert_eq!(iris.code.get_bit(i), bit);
         }
+    }
+
+    #[test]
+    fn decode_from_string() {
+        let (code_str, rotations) =
+            parse_test_data(include_str!("../example-data/all_rotations.txt")).unwrap();
+        let code = IrisCodeArray::from_base64_string(code_str).unwrap();
+        let mut decoded = String::new();
+        for i in 0..IrisCodeArray::IRIS_CODE_SIZE {
+            decoded += &format!("{}", code.get_bit(i) as u8);
+        }
+        assert_eq!(
+            decoded,
+            *rotations.get(&0).unwrap(),
+            "Decoded bit string does not match expected"
+        );
+    }
+
+    pub fn parse_test_data(s: &str) -> eyre::Result<(&str, HashMap<i32, String>)> {
+        let lines = s.lines();
+        let mut lines = lines.map(|s| s.trim()).filter(|s| !s.is_empty());
+        let code: &str = lines.next().context("Missing code")?;
+        let mut rotations = HashMap::new();
+
+        for line in lines {
+            let mut parts = line.splitn(2, ':');
+            let rotation = parts
+                .next()
+                .context("Missing rotation number")?
+                .trim()
+                .parse()
+                .context("Invalid rotation")?;
+            let bit_str = parts.next().context("Missing bit string")?;
+            rotations.insert(rotation, bit_str.trim().replace(" ", "").to_string());
+        }
+
+        Ok((code, rotations))
     }
 }
