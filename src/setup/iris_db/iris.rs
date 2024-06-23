@@ -43,7 +43,7 @@ impl IrisCodeArray {
     pub fn get_bit(&self, i: usize) -> bool {
         let word = i / 64;
         let bit = i % 64;
-        (self.0[word] >> (63 - bit)) & 1 == 1
+        (self.0[word] >> bit) & 1 == 1
     }
     #[inline]
     pub fn flip_bit(&mut self, i: usize) {
@@ -82,7 +82,7 @@ impl IrisCodeArray {
                 .map(|chunk| {
                     let mut arr = [0u8; 8];
                     arr.copy_from_slice(chunk);
-                    u64::from_be_bytes(arr)
+                    u64::from_be_bytes(arr).reverse_bits()
                 })
                 .collect::<Vec<u64>>()
                 .try_into()
