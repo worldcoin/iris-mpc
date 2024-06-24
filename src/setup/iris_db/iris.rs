@@ -71,7 +71,7 @@ impl IrisCodeArray {
     }
 
     /// Decode from base64 string compatible with Open IRIS
-    pub fn decode_base64(s: &str) -> eyre::Result<Self> {
+    pub fn from_base64(s: &str) -> eyre::Result<Self> {
         let decoded_bytes = BASE64_STANDARD.decode(s)?;
         if decoded_bytes.len() % 8 != 0 {
             bail!("Invalid length for u64 array");
@@ -92,7 +92,7 @@ impl IrisCodeArray {
     }
 
     /// Encode to base64 string compatible with Open IRIS
-    pub fn encode_base64(&self) -> eyre::Result<String> {
+    pub fn to_base64(&self) -> eyre::Result<String> {
         Ok(BASE64_STANDARD.encode(
             self.0
                 .iter()
@@ -256,7 +256,7 @@ mod tests {
     fn decode_from_string() {
         let (code_str, rotations) =
             parse_test_data(include_str!("../example-data/all_rotations.txt")).unwrap();
-        let code = IrisCodeArray::decode_base64(code_str).unwrap();
+        let code = IrisCodeArray::from_base64(code_str).unwrap();
         let mut decoded_str = String::new();
         for i in 0..IrisCodeArray::IRIS_CODE_SIZE {
             decoded_str += &format!("{}", code.get_bit(i) as u8);
@@ -266,8 +266,7 @@ mod tests {
             *rotations.get(&0).unwrap(),
             "Decoded bit string does not match expected"
         );
-
-        assert_eq!(code_str, code.encode_base64().unwrap());
+        assert_eq!(code_str, code.to_base64().unwrap());
     }
 
     pub fn parse_test_data(s: &str) -> eyre::Result<(&str, HashMap<i32, String>)> {

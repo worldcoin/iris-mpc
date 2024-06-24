@@ -433,10 +433,10 @@ pub mod degree4 {
                 .filter(|s| !s.is_empty())
                 .collect::<Vec<_>>();
 
-            let t1_code = IrisCodeArray::decode_base64(lines[0]).unwrap();
-            let t1_mask = IrisCodeArray::decode_base64(lines[1]).unwrap();
-            let t2_code = IrisCodeArray::decode_base64(lines[2]).unwrap();
-            let t2_mask = IrisCodeArray::decode_base64(lines[3]).unwrap();
+            let t1_code = IrisCodeArray::from_base64(lines[0]).unwrap();
+            let t1_mask = IrisCodeArray::from_base64(lines[1]).unwrap();
+            let t2_code = IrisCodeArray::from_base64(lines[2]).unwrap();
+            let t2_mask = IrisCodeArray::from_base64(lines[3]).unwrap();
 
             let dist_0 = lines[4].parse::<f64>().unwrap();
             let dist_15 = lines[5].parse::<f64>().unwrap();
