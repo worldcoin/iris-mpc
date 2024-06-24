@@ -9,7 +9,7 @@ use clap::Parser;
 use gpu_iris_mpc::{
     helpers::sqs::SMPCRequest,
     setup::{
-        galois_engine::degree2::GaloisRingIrisCodeShare,
+        galois_engine::degree4::GaloisRingIrisCodeShare,
         iris_db::{db::IrisDB, iris::IrisCode},
     },
 };
@@ -17,7 +17,7 @@ use rand::{rngs::StdRng, SeedableRng};
 use serde_json::to_string;
 use uuid::Uuid;
 
-const N_QUERIES: usize = 32 * 10;
+const N_QUERIES: usize = 32 * 5;
 const REGION: &str = "eu-north-1";
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;

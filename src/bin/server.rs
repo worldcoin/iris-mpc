@@ -1,6 +1,7 @@
 #![allow(clippy::needless_range_loop)]
 use aws_sdk_sqs::{config::Region, Client};
 use clap::Parser;
+use core::sync::atomic::Ordering::SeqCst;
 use cudarc::driver::{
     result::{
         self,
@@ -18,20 +19,23 @@ use gpu_iris_mpc::{
     },
     helpers::{
         device_ptrs, device_ptrs_to_slices,
+        kms_dh::derive_shared_secret,
         mmap::{read_mmap_file, write_mmap_file},
         sqs::{SMPCRequest, SQSMessage},
     },
-    setup::{galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
+    setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
-use rand::{prelude::SliceRandom, rngs::StdRng, Rng, SeedableRng};
+use lazy_static::lazy_static;
+use rand::{prelude::SliceRandom, rngs::StdRng, SeedableRng};
+use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{
     fs::metadata,
     mem,
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicUsize, Arc, Mutex},
     time::{Duration, Instant},
 };
-use tokio::{sync::mpsc, time::sleep};
+use tokio::{sync::mpsc, task::spawn_blocking, time::sleep};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
@@ -46,6 +50,16 @@ const DB_MASK_FILE: &str = "masks.db";
 const DEFAULT_PATH: &str = "/opt/dlami/nvme/";
 const RESULTS_QUEUE_GROUP_ID: &str = "IRIS_MPC_RESULTS";
 const QUERIES: usize = ROTATIONS * N_QUERIES;
+const KMS_KEY_IDS: [&str; 3] = [
+    "077788e2-9eeb-4044-859b-34496cfd500b",
+    "896353dc-5ea5-42d4-9e4e-f65dd8169dee",
+    "42bb01f5-8380-48b4-b1f1-929463a587fb",
+];
+
+lazy_static! {
+    static ref KDF_NONCE: AtomicUsize = AtomicUsize::new(0);
+    static ref KDF_SALT: Salt = Salt::new(HKDF_SHA256, b"IRIS_MPC");
+}
 
 macro_rules! debug_record_event {
     ($manager:expr, $streams:expr, $timers:expr) => {
@@ -109,17 +123,32 @@ async fn receive_batch(
             let message: SQSMessage = serde_json::from_str(sns_message.body().unwrap())?;
             let message: SMPCRequest = serde_json::from_str(&message.message)?;
 
-            let mut iris_share = GaloisRingIrisCodeShare::new(party_id, message.get_iris_shares());
-            let mut mask_share = GaloisRingIrisCodeShare::new(party_id, message.get_mask_shares());
+            let (db_iris_shares, db_mask_shares, iris_shares, mask_shares) =
+                spawn_blocking(move || {
+                    let mut iris_share =
+                        GaloisRingIrisCodeShare::new(party_id + 1, message.get_iris_shares());
+                    let mut mask_share =
+                        GaloisRingIrisCodeShare::new(party_id + 1, message.get_mask_shares());
 
-            batch_query.db.code.extend(iris_share.all_rotations());
-            batch_query.db.mask.extend(mask_share.all_rotations());
+                    let db_iris_shares = iris_share.all_rotations();
+                    let db_mask_shares = mask_share.all_rotations();
 
-            GaloisRingIrisCodeShare::preprocess_iris_code_query_share(party_id, &mut iris_share);
-            GaloisRingIrisCodeShare::preprocess_iris_code_query_share(party_id, &mut mask_share);
+                    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
+                    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut mask_share);
 
-            batch_query.query.code.extend(iris_share.all_rotations());
-            batch_query.query.mask.extend(mask_share.all_rotations());
+                    (
+                        db_iris_shares,
+                        db_mask_shares,
+                        iris_share.all_rotations(),
+                        mask_share.all_rotations(),
+                    )
+                })
+                .await?;
+
+            batch_query.db.code.extend(db_iris_shares);
+            batch_query.db.mask.extend(db_mask_shares);
+            batch_query.query.code.extend(iris_shares);
+            batch_query.query.mask.extend(mask_shares);
 
             // TODO: we should only delete after processing
             client
@@ -254,6 +283,26 @@ fn device_ptrs_to_shares<T>(
         .collect::<Vec<_>>()
 }
 
+/// Internal helper function to derive a new seed from the given seed and nonce.
+fn derive_seed(seed: [u32; 8], nonce: usize) -> eyre::Result<[u32; 8]> {
+    let pseudo_rand_key = KDF_SALT.extract(bytemuck::cast_slice(&seed));
+    let nonce = nonce.to_be_bytes();
+    let context = vec![nonce.as_slice()];
+    let output_key_material: Okm<Algorithm> =
+        pseudo_rand_key.expand(&context, HKDF_SHA256).unwrap();
+    let mut result = [0u32; 8];
+    output_key_material
+        .fill(bytemuck::cast_slice_mut(&mut result))
+        .unwrap();
+    Ok(result)
+}
+
+/// Applies a KDF to the given seeds to derive new seeds.
+fn next_chacha_seeds(seeds: ([u32; 8], [u32; 8])) -> eyre::Result<([u32; 8], [u32; 8])> {
+    let nonce = KDF_NONCE.fetch_add(1, SeqCst);
+    Ok((derive_seed(seeds.0, nonce)?, derive_seed(seeds.1, nonce)?))
+}
+
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     let Opt {
@@ -273,18 +322,19 @@ async fn main() -> eyre::Result<()> {
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let client = Client::new(&shared_config);
 
-    let mut rng = StdRng::seed_from_u64(RNG_SEED);
-    let seed0 = rng.gen::<[u32; 8]>();
-    let seed1 = rng.gen::<[u32; 8]>();
-    let seed2 = rng.gen::<[u32; 8]>();
-
     // Init RNGs
-    let chacha_seeds = match party_id {
-        0 => (seed0, seed2),
-        1 => (seed1, seed0),
-        2 => (seed2, seed1),
+    let own_key_id = KMS_KEY_IDS[party_id];
+    let dh_pairs = match party_id {
+        0 => (1usize, 2usize),
+        1 => (2usize, 0usize),
+        2 => (0usize, 1usize),
         _ => unimplemented!(),
     };
+
+    let chacha_seeds = (
+        bytemuck::cast(derive_shared_secret(own_key_id, KMS_KEY_IDS[dh_pairs.0]).await?),
+        bytemuck::cast(derive_shared_secret(own_key_id, KMS_KEY_IDS[dh_pairs.1]).await?),
+    );
 
     // Generate or load DB
     let (codes_db, masks_db) = if metadata(&code_db_path).is_ok() && metadata(&mask_db_path).is_ok()
@@ -339,7 +389,7 @@ async fn main() -> eyre::Result<()> {
         device_manager.clone(),
         DB_SIZE + DB_BUFFER,
         QUERIES,
-        chacha_seeds,
+        next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(true),
         Some(4000),
@@ -350,7 +400,7 @@ async fn main() -> eyre::Result<()> {
         device_manager.clone(),
         DB_SIZE + DB_BUFFER,
         QUERIES,
-        chacha_seeds,
+        next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(true),
         Some(4001),
@@ -365,7 +415,7 @@ async fn main() -> eyre::Result<()> {
         device_manager.clone(),
         QUERIES * device_manager.device_count(),
         QUERIES,
-        chacha_seeds,
+        next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(true),
         Some(4002),
@@ -375,7 +425,7 @@ async fn main() -> eyre::Result<()> {
         device_manager.clone(),
         QUERIES * device_manager.device_count(),
         QUERIES,
-        chacha_seeds,
+        next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(true),
         Some(4003),
@@ -392,6 +442,7 @@ async fn main() -> eyre::Result<()> {
         party_id,
         phase2_batch_chunk_size,
         phase2_batch_chunk_size,
+        next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(4004),
     )));
@@ -400,6 +451,7 @@ async fn main() -> eyre::Result<()> {
         party_id,
         phase2_chunk_size,
         phase2_chunk_size_max / 64,
+        next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(4005),
     )));
@@ -471,16 +523,20 @@ async fn main() -> eyre::Result<()> {
             total_time = Instant::now();
             batch_times = Duration::from_secs(0);
         }
-        // loop {
         let now = Instant::now();
         let batch = receive_batch(party_id, &client, &queue).await?;
         println!("Received batch in {:?}", now.elapsed());
         batch_times += now.elapsed();
 
-        let code_query = prepare_query_shares(batch.query.code);
-        let mask_query = prepare_query_shares(batch.query.mask);
-        let code_query_insert = prepare_query_shares(batch.db.code);
-        let mask_query_insert = prepare_query_shares(batch.db.mask);
+        let (code_query, mask_query, code_query_insert, mask_query_insert) =
+            spawn_blocking(move || {
+                let code_query = prepare_query_shares(batch.query.code);
+                let mask_query = prepare_query_shares(batch.query.mask);
+                let code_query_insert = prepare_query_shares(batch.db.code);
+                let mask_query_insert = prepare_query_shares(batch.db.mask);
+                (code_query, mask_query, code_query_insert, mask_query_insert)
+            })
+            .await?;
 
         let mut timers = vec![];
 
@@ -672,7 +728,7 @@ async fn main() -> eyre::Result<()> {
 
         let thread_sender = tx.clone();
 
-        let handle = tokio::spawn(async move {
+        let handle = spawn_blocking(move || {
             // Wait for Phase 1 to finish
             await_streams(&thread_streams);
 
@@ -921,7 +977,8 @@ async fn main() -> eyre::Result<()> {
     }
 
     println!(
-        "Total time for 9 iterations: {:?}",
+        "Total time for {} iterations: {:?}",
+        N_BATCHES - 1,
         total_time.elapsed() - batch_times
     );
 

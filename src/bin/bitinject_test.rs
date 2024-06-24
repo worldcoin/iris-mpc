@@ -149,6 +149,7 @@ async fn main() -> eyre::Result<()> {
         party_id,
         INPUTS_PER_GPU_SIZE / 2,
         INPUTS_PER_GPU_SIZE / 128,
+        ([party_id as u32; 8], [((party_id + 2) % 3) as u32; 8]),
         url,
         Some(3001),
     );

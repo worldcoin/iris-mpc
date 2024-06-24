@@ -1,7 +1,9 @@
 use cudarc::driver::{CudaDevice, CudaSlice, DevicePtr};
 use std::sync::Arc;
 
+pub mod aws_sigv4;
 pub mod id_wrapper;
+pub mod kms_dh;
 pub mod mmap;
 pub mod sqs;
 
