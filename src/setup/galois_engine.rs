@@ -442,7 +442,8 @@ pub mod degree4 {
             let dist_15 = lines[5].parse::<f64>().unwrap();
 
             let mask = t1_mask & t2_mask;
-            let plain_distance = ((t1_code ^ t2_code) & mask).count_ones() as f64 / mask.count_ones() as f64;
+            let plain_distance =
+                ((t1_code ^ t2_code) & mask).count_ones() as f64 / mask.count_ones() as f64;
 
             let t1_code_shares = GaloisRingIrisCodeShare::encode_iris_code(&t1_code, &t1_mask, rng);
             let t1_mask_shares = GaloisRingIrisCodeShare::encode_mask_code(&t1_mask, rng);
