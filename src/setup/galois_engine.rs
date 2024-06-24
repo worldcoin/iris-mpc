@@ -441,11 +441,14 @@ pub mod degree4 {
             let dist_0 = lines[4].parse::<f64>().unwrap();
             let dist_15 = lines[5].parse::<f64>().unwrap();
 
+            let mask = t1_mask & t2_mask;
+            let plain_distance = ((t1_code ^ t2_code) & mask).count_ones() as f64 / mask.count_ones() as f64;
+
             let t1_code_shares = GaloisRingIrisCodeShare::encode_iris_code(&t1_code, &t1_mask, rng);
-            let t1_mask_shares = GaloisRingIrisCodeShare::encode_mask_code(&t1_code, rng);
+            let t1_mask_shares = GaloisRingIrisCodeShare::encode_mask_code(&t1_mask, rng);
 
             let t2_code_shares = GaloisRingIrisCodeShare::encode_iris_code(&t2_code, &t2_mask, rng);
-            let t2_mask_shares = GaloisRingIrisCodeShare::encode_mask_code(&t2_code, rng);
+            let t2_mask_shares = GaloisRingIrisCodeShare::encode_mask_code(&t2_mask, rng);
 
             let mut t2_code_shares_rotated = t2_code_shares
                 .iter()
@@ -485,7 +488,8 @@ pub mod degree4 {
 
                 // Without rotations
                 if rot_idx == 15 {
-                    assert_float_eq!(dist_0, res, abs <= 1e-3);
+                    assert_float_eq!(dist_0, res, abs <= 1e-6);
+                    assert_float_eq!(plain_distance, res, abs <= 1e-6);
                 }
 
                 if res < min_dist {
@@ -494,7 +498,7 @@ pub mod degree4 {
             }
 
             // Minimum distance
-            assert_float_eq!(dist_15, min_dist, abs <= 1e-3);
+            assert_float_eq!(dist_15, min_dist, abs <= 1e-6);
         }
     }
 }
