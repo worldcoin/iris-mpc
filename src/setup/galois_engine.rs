@@ -235,6 +235,7 @@ pub mod degree4 {
         },
         iris_db::iris::IrisCodeArray,
     };
+    use base64::{prelude::BASE64_STANDARD, Engine};
     use rand::{CryptoRng, Rng};
 
     #[derive(Debug, Clone)]
@@ -399,6 +400,16 @@ pub mod degree4 {
                 .chunks_exact_mut(Self::COLS * 4)
                 .for_each(|chunk| chunk.rotate_left(by * 4));
         }
+
+        pub fn to_base64(&self) -> String {
+            BASE64_STANDARD.encode(bytemuck::cast_slice(&self.coefs))
+        }
+
+        pub fn from_base64(id: usize, s: &str) -> eyre::Result<Self> {
+            let mut coefs = [0u16; 12800];
+            BASE64_STANDARD.decode_slice(s, bytemuck::cast_slice_mut(&mut coefs))?;
+            Ok(Self::new(id, coefs))
+        }
     }
 
     #[cfg(test)]
@@ -523,6 +534,18 @@ pub mod degree4 {
 
             // Minimum distance
             assert_float_eq!(dist_15, min_dist, abs <= 1e-6);
+        }
+
+        #[test]
+        fn base64_shares() {
+            let mut rng = thread_rng();
+            let code = IrisCodeArray::random_rng(&mut rng);
+            let shares = GaloisRingIrisCodeShare::encode_mask_code(&code, &mut rng);
+            for i in 0..3 {
+                let s = shares[i].to_base64();
+                let decoded = GaloisRingIrisCodeShare::from_base64(i + 1, &s).unwrap();
+                assert_eq!(shares[i].coefs, decoded.coefs);
+            }
         }
     }
 }
