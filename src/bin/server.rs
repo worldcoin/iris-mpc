@@ -1,4 +1,5 @@
 #![allow(clippy::needless_range_loop)]
+use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::{config::Region, Client};
 use clap::Parser;
 use core::sync::atomic::Ordering::SeqCst;
@@ -81,6 +82,9 @@ macro_rules! forget_vec {
 struct Opt {
     #[structopt(short, long)]
     queue: String,
+
+    #[structopt(short, long)]
+    results_topic_arn: String,
 
     #[structopt(short, long)]
     party_id: usize,
@@ -310,6 +314,7 @@ async fn main() -> eyre::Result<()> {
         party_id,
         bootstrap_url,
         path,
+        results_topic_arn,
     } = Opt::parse();
     let path = path.unwrap_or(DEFAULT_PATH.to_string());
 
@@ -320,7 +325,8 @@ async fn main() -> eyre::Result<()> {
 
     let region_provider = Region::new(REGION);
     let shared_config = aws_config::from_env().region(region_provider).load().await;
-    let client = Client::new(&shared_config);
+    let sqs_client = Client::new(&shared_config);
+    let sns_client = SNSClient::new(&shared_config);
 
     // Init RNGs
     let own_key_id = KMS_KEY_IDS[party_id];
@@ -496,15 +502,21 @@ async fn main() -> eyre::Result<()> {
 
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<Vec<u32>>(32); // TODO: pick some buffer value
-    let results_queue_url = queue.replace(".fifo", "-results.fifo"); // TODO: remove and make this part of config
-    let rx_client = client.clone();
+    let rx_sns_client = sns_client.clone();
     tokio::spawn(async move {
         while let Some(message) = rx.recv().await {
-            rx_client
-                .send_message()
-                .queue_url(&results_queue_url)
-                .message_body(serde_json::to_string(&message).unwrap())
-                .message_group_id(RESULTS_QUEUE_GROUP_ID)
+            rx_sns_client
+                .publish()
+                .topic_arn(&results_topic_arn)
+                .message(serde_json::to_string(&message).unwrap())
+                .message_attributes(
+                    "nodeId",
+                    MessageAttributeValue::builder()
+                        .set_string_value(Some(party_id.to_string()))
+                        .set_data_type(Some("String".to_string()))
+                        .build()
+                        .unwrap(),
+                )
                 .send()
                 .await
                 .unwrap();
@@ -524,7 +536,7 @@ async fn main() -> eyre::Result<()> {
             batch_times = Duration::from_secs(0);
         }
         let now = Instant::now();
-        let batch = receive_batch(party_id, &client, &queue).await?;
+        let batch = receive_batch(party_id, &sqs_client, &queue).await?;
         println!("Received batch in {:?}", now.elapsed());
         batch_times += now.elapsed();
 
