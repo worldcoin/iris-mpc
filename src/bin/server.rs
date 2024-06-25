@@ -49,7 +49,6 @@ const MAX_CONCURRENT_REQUESTS: usize = 5;
 const DB_CODE_FILE: &str = "codes.db";
 const DB_MASK_FILE: &str = "masks.db";
 const DEFAULT_PATH: &str = "/opt/dlami/nvme/";
-const RESULTS_QUEUE_GROUP_ID: &str = "IRIS_MPC_RESULTS";
 const QUERIES: usize = ROTATIONS * N_QUERIES;
 const KMS_KEY_IDS: [&str; 3] = [
     "077788e2-9eeb-4044-859b-34496cfd500b",
@@ -505,10 +504,10 @@ async fn main() -> eyre::Result<()> {
     let rx_sns_client = sns_client.clone();
     tokio::spawn(async move {
         while let Some(message) = rx.recv().await {
+            println!("Sending results back to SNS...");
             rx_sns_client
                 .publish()
                 .topic_arn(&results_topic_arn)
-                .message_group_id("IRIS_MPC_RESULTS")
                 .message(serde_json::to_string(&message).unwrap())
                 .message_attributes(
                     "nodeId",
@@ -521,6 +520,7 @@ async fn main() -> eyre::Result<()> {
                 .send()
                 .await
                 .unwrap();
+            println!("Sent!");
         }
     });
 
