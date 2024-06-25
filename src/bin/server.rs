@@ -508,6 +508,7 @@ async fn main() -> eyre::Result<()> {
             rx_sns_client
                 .publish()
                 .topic_arn(&results_topic_arn)
+                .message_group_id("IRIS_MPC_RESULTS")
                 .message(serde_json::to_string(&message).unwrap())
                 .message_attributes(
                     "nodeId",
