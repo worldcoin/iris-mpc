@@ -3,6 +3,7 @@ pub mod degree2 {
         galois::degree2::{GaloisRingElement, ShamirGaloisRingShare},
         iris_db::iris::IrisCodeArray,
     };
+    use base64::{prelude::BASE64_STANDARD, Engine};
     use rand::{CryptoRng, Rng};
 
     #[derive(Debug, Clone)]
@@ -154,6 +155,16 @@ pub mod degree2 {
                 .chunks_exact_mut(Self::COLS * 4)
                 .for_each(|chunk| chunk.rotate_left(by * 4));
         }
+
+        pub fn to_base64(&self) -> String {
+            BASE64_STANDARD.encode(bytemuck::cast_slice(&self.coefs))
+        }
+
+        pub fn from_base64(id: usize, s: &str) -> eyre::Result<Self> {
+            let mut coefs = [0u16; 12800];
+            BASE64_STANDARD.decode_slice(s, bytemuck::cast_slice_mut(&mut coefs))?;
+            Ok(Self::new(id, coefs))
+        }
     }
 
     #[cfg(test)]
@@ -199,6 +210,18 @@ pub mod degree2 {
                 let dot = dot.iter().fold(0u16, |acc, x| acc.wrapping_add(*x));
                 let expected = (iris_db & iris_query).count_ones();
                 assert_eq!(dot, expected as u16);
+            }
+        }
+
+        #[test]
+        fn base64_shares() {
+            let mut rng = thread_rng();
+            let code = IrisCodeArray::random_rng(&mut rng);
+            let shares = GaloisRingIrisCodeShare::encode_mask_code(&code, &mut rng);
+            for i in 0..3 {
+                let s = shares[i].to_base64();
+                let decoded = GaloisRingIrisCodeShare::from_base64(i + 1, &s).unwrap();
+                assert_eq!(shares[i].coefs, decoded.coefs);
             }
         }
     }
