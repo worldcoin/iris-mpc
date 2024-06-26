@@ -146,6 +146,7 @@ async fn main() -> eyre::Result<()> {
         // Receive responses
         let msg = sqs_client
             .receive_message()
+            .max_number_of_messages(10)
             .queue_url(response_queue_url.clone())
             .send()
             .await?;

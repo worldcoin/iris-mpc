@@ -1,5 +1,5 @@
 #![allow(clippy::needless_range_loop)]
-use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
+use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::{config::Region, Client};
 use clap::Parser;
 use core::sync::atomic::Ordering::SeqCst;
@@ -229,7 +229,6 @@ fn get_merged_results(host_results: &[Vec<u32>], db_sizes: &[usize]) -> Vec<u32>
             Some(res as u32)
         })
         .collect::<Vec<_>>();
-    println!("Cumulative sums: {:?}", cumsums);
 
     let mut results = vec![];
     for j in 0..host_results[0].len() {
