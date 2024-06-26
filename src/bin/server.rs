@@ -22,7 +22,7 @@ use gpu_iris_mpc::{
         device_ptrs, device_ptrs_to_slices,
         kms_dh::derive_shared_secret,
         mmap::{read_mmap_file, write_mmap_file},
-        sqs::{SMPCRequest, SQSMessage},
+        sqs::{ResultEvent, SMPCRequest, SQSMessage},
     },
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     threshold_ring::protocol::{ChunkShare, Circuits},
@@ -220,13 +220,23 @@ fn open(
     distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes);
 }
 
-fn get_merged_results(host_results: &[Vec<u32>]) -> Vec<u32> {
+fn get_merged_results(host_results: &[Vec<u32>], db_sizes: &[usize]) -> Vec<u32> {
+    let cumsums = db_sizes
+        .iter()
+        .scan(0, |acc, &x| {
+            let res = *acc;
+            *acc += x;
+            Some(res as u32)
+        })
+        .collect::<Vec<_>>();
+    println!("Cumulative sums: {:?}", cumsums);
+
     let mut results = vec![];
     for j in 0..host_results[0].len() {
         let mut match_entry = u32::MAX;
         for i in 0..host_results.len() {
             if host_results[i][j] != u32::MAX {
-                match_entry = host_results[i][j];
+                match_entry = cumsums[i] + host_results[i][j];
                 break;
             }
         }
@@ -504,23 +514,26 @@ async fn main() -> eyre::Result<()> {
     let rx_sns_client = sns_client.clone();
     tokio::spawn(async move {
         while let Some(message) = rx.recv().await {
-            println!("Sending results back to SNS...");
-            rx_sns_client
-                .publish()
-                .topic_arn(&results_topic_arn)
-                .message(serde_json::to_string(&message).unwrap())
-                .message_attributes(
-                    "nodeId",
-                    MessageAttributeValue::builder()
-                        .set_string_value(Some(party_id.to_string()))
-                        .set_data_type(Some("String".to_string()))
-                        .build()
-                        .unwrap(),
-                )
-                .send()
-                .await
-                .unwrap();
-            println!("Sent!");
+            for id in message {
+                // TODO: write each result to postgres
+
+                // Notify consumers about result
+                println!("Sending results back to SNS...");
+                let (db_index, is_match) = match id {
+                    u32::MAX => (None, false),
+                    _ => (Some(id), true),
+                };
+                let result_event =
+                    ResultEvent::new(party_id, db_index, is_match, "dummy".to_string(), 0); // TODO
+
+                rx_sns_client
+                    .publish()
+                    .topic_arn(&results_topic_arn)
+                    .message(serde_json::to_string(&result_event).unwrap())
+                    .send()
+                    .await
+                    .unwrap();
+            }
         }
     });
 
@@ -849,7 +862,7 @@ async fn main() -> eyre::Result<()> {
             );
 
             // Evaluate the results across devices
-            let merged_results = get_merged_results(&host_results);
+            let merged_results = get_merged_results(&host_results, &db_sizes);
             let insertion_list = merged_results
                 .iter()
                 .enumerate()

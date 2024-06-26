@@ -42,3 +42,30 @@ impl SMPCRequest {
         Self::decode_bytes(self.mask_code.as_bytes())
     }
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ResultEvent {
+    node_id:   usize,
+    db_index:  Option<u32>,
+    is_match:  bool,
+    signup_id: String,
+    serial_id: u32,
+}
+
+impl ResultEvent {
+    pub fn new(
+        node_id: usize,
+        db_index: Option<u32>,
+        is_match: bool,
+        signup_id: String,
+        serial_id: u32,
+    ) -> Self {
+        Self {
+            node_id,
+            db_index,
+            is_match,
+            signup_id,
+            serial_id,
+        }
+    }
+}

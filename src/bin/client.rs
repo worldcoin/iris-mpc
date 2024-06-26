@@ -4,10 +4,12 @@ use aws_sdk_sns::{
     types::{MessageAttributeValue, PublishBatchRequestEntry},
     Client,
 };
+use aws_sdk_sqs::Client as SqsClient;
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
+use eyre::ContextCompat;
 use gpu_iris_mpc::{
-    helpers::sqs::SMPCRequest,
+    helpers::sqs::{ResultEvent, SMPCRequest},
     setup::{
         galois_engine::degree4::GaloisRingIrisCodeShare,
         iris_db::{db::IrisDB, iris::IrisCode},
@@ -15,9 +17,11 @@ use gpu_iris_mpc::{
 };
 use rand::{rngs::StdRng, SeedableRng};
 use serde_json::to_string;
+use std::time::Duration;
+use tokio::time::sleep;
 use uuid::Uuid;
 
-const N_QUERIES: usize = 32 * 5;
+const N_QUERIES: usize = 32;
 const REGION: &str = "eu-north-1";
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;
@@ -26,7 +30,10 @@ const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 #[derive(Debug, Parser)]
 struct Opt {
     #[structopt(short, long)]
-    topic_arn: String,
+    request_topic_arn: String,
+
+    #[structopt(short, long)]
+    response_queue_url: String,
 
     #[structopt(short, long)]
     db_index: Option<usize>,
@@ -43,7 +50,8 @@ async fn main() -> eyre::Result<()> {
     tracing_subscriber::fmt::init();
 
     let Opt {
-        topic_arn,
+        request_topic_arn,
+        response_queue_url,
         db_index,
         rng_seed,
         n_repeat,
@@ -122,12 +130,38 @@ async fn main() -> eyre::Result<()> {
         // Send all messages in batch
         client
             .publish_batch()
-            .topic_arn(topic_arn.clone())
+            .topic_arn(request_topic_arn.clone())
             .set_publish_batch_request_entries(Some(messages))
             .send()
             .await?;
 
         println!("Enrollment request batch {} published.", query_idx);
+    }
+
+    let sqs_client = SqsClient::new(&shared_config);
+
+    loop {
+        sleep(Duration::from_secs(1)).await;
+
+        // Receive responses
+        let msg = sqs_client
+            .receive_message()
+            .queue_url(response_queue_url.clone())
+            .send()
+            .await?;
+
+        for msg in msg.messages.unwrap_or_default() {
+            let result: ResultEvent = serde_json::from_str(msg.body().context("No body found")?)?;
+
+            println!("Received response: {:?}", result);
+
+            sqs_client
+                .delete_message()
+                .queue_url(response_queue_url.clone())
+                .receipt_handle(msg.receipt_handle.unwrap())
+                .send()
+                .await?;
+        }
     }
 
     Ok(())
