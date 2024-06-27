@@ -12,6 +12,29 @@ AWS_REGION=eu-north-1 AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run 
 AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run --release --bin client -- --topic-arn arn:aws:sns:eu-north-1:xxx:mpc.fifo --db-index 2 --n-repeat 32
 ```
 
+### Dependencies
+
+Requires a NVIDIA graphics card with recent drivers and CUDA libraries.
+
+The following dependency versions have been confirmed to work:
+- nvidia-x11-550.78-6.9.6
+- cuda_nvrtc-12.2.140
+- libcublas-12.2.5.6
+
+Some Linux distributions have a (lib)cuda package 12.2 which depends on earlier versions of these packages.
+It might not work.
+
+## Testing
+
+To run the tests:
+```sh
+cargo test --release
+# Requires a significant amount of GPU memory
+cargo bench
+```
+
+If you are using `cargo test` with non-standard library paths, you might need [a workaround](https://github.com/worldcoin/gpu-iris-mpc/issues/25).
+
 ## Architecture
 ![architecture](mpc-architecture-v2.png)
 
