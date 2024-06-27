@@ -20,9 +20,8 @@ pub struct SQSMessage {
     pub unsubscribe_url:   String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SMPCRequest {
-    pub request_type: String,
     pub request_id:   String,
     pub iris_code:    String,
     pub mask_code:    String,
@@ -45,11 +44,11 @@ impl SMPCRequest {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ResultEvent {
-    node_id:   usize,
-    db_index:  Option<u32>,
-    is_match:  bool,
-    signup_id: String,
-    serial_id: u32,
+    pub node_id:   usize,
+    pub db_index:  Option<u32>,
+    pub is_match:  bool,
+    pub request_id: String,
+    pub serial_id: Option<u32>,
 }
 
 impl ResultEvent {
@@ -57,14 +56,14 @@ impl ResultEvent {
         node_id: usize,
         db_index: Option<u32>,
         is_match: bool,
-        signup_id: String,
-        serial_id: u32,
+        request_id: String,
+        serial_id: Option<u32>,
     ) -> Self {
         Self {
             node_id,
             db_index,
             is_match,
-            signup_id,
+            request_id,
             serial_id,
         }
     }

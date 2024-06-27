@@ -103,8 +103,9 @@ struct BatchQueryEntries {
 
 #[derive(Default)]
 struct BatchQuery {
-    pub query: BatchQueryEntries,
-    pub db:    BatchQueryEntries,
+    pub request_ids: Vec<String>,
+    pub query:       BatchQueryEntries,
+    pub db:          BatchQueryEntries,
 }
 
 async fn receive_batch(
@@ -125,6 +126,7 @@ async fn receive_batch(
         for sns_message in rcv_message_output.messages.unwrap_or_default() {
             let message: SQSMessage = serde_json::from_str(sns_message.body().unwrap())?;
             let message: SMPCRequest = serde_json::from_str(&message.message)?;
+            batch_query.request_ids.push(message.clone().request_id);
 
             let (db_iris_shares, db_mask_shares, iris_shares, mask_shares) =
                 spawn_blocking(move || {
@@ -509,21 +511,21 @@ async fn main() -> eyre::Result<()> {
         .collect::<Vec<_>>();
 
     // Start thread that will be responsible for communicating back the results
-    let (tx, mut rx) = mpsc::channel::<Vec<u32>>(32); // TODO: pick some buffer value
+    let (tx, mut rx) = mpsc::channel::<(Vec<u32>, Vec<String>)>(32); // TODO: pick some buffer value
     let rx_sns_client = sns_client.clone();
     tokio::spawn(async move {
-        while let Some(message) = rx.recv().await {
-            for id in message {
+        while let Some((message, request_ids)) = rx.recv().await {
+            for (i, &idx_result) in message.iter().enumerate() {
                 // TODO: write each result to postgres
 
                 // Notify consumers about result
                 println!("Sending results back to SNS...");
-                let (db_index, is_match) = match id {
+                let (db_index, is_match) = match idx_result {
                     u32::MAX => (None, false),
-                    _ => (Some(id), true),
+                    _ => (Some(idx_result), true),
                 };
                 let result_event =
-                    ResultEvent::new(party_id, db_index, is_match, "dummy".to_string(), 0); // TODO
+                    ResultEvent::new(party_id, db_index, is_match, request_ids[i].clone(), None);
 
                 rx_sns_client
                     .publish()
@@ -750,6 +752,7 @@ async fn main() -> eyre::Result<()> {
         let thread_distance_comparator = distance_comparator.clone();
         let thread_code_db_slices = slice_tuples_to_ptrs(&code_db_slices);
         let thread_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
+        let thread_request_ids = batch.request_ids.clone();
 
         let thread_sender = tx.clone();
 
@@ -970,7 +973,9 @@ async fn main() -> eyre::Result<()> {
             }
 
             // Pass to internal sender thread
-            thread_sender.try_send(merged_results).unwrap();
+            thread_sender
+                .try_send((merged_results, thread_request_ids))
+                .unwrap();
 
             // Make sure to not call `Drop` on those
             forget_vec!(code_dots);

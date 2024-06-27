@@ -15,9 +15,9 @@ use gpu_iris_mpc::{
         iris_db::{db::IrisDB, iris::IrisCode},
     },
 };
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use serde_json::to_string;
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 use tokio::time::sleep;
 use uuid::Uuid;
 
@@ -26,6 +26,7 @@ const REGION: &str = "eu-north-1";
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
+const N_OPTIONS: usize = 2;
 
 #[derive(Debug, Parser)]
 struct Opt {
@@ -43,6 +44,9 @@ struct Opt {
 
     #[structopt(short, long)]
     n_repeat: Option<usize>,
+
+    #[structopt(short, long)]
+    random: Option<bool>,
 }
 
 #[tokio::main]
@@ -55,6 +59,7 @@ async fn main() -> eyre::Result<()> {
         db_index,
         rng_seed,
         n_repeat,
+        random,
     } = Opt::parse();
 
     let mut rng = if let Some(rng_seed) = rng_seed {
@@ -71,17 +76,40 @@ async fn main() -> eyre::Result<()> {
 
     let db = IrisDB::new_random_par(DB_SIZE, &mut StdRng::seed_from_u64(RNG_SEED_SERVER));
 
+    let mut choice_rng = thread_rng();
+
+    let mut expected_results: HashMap<String, Option<u32>> = HashMap::new();
+
     // Prepare query
     for query_idx in 0..N_QUERIES {
-        let template = if let Some(db_index) = db_index {
-            if query_idx < n_repeat {
-                db.db[db_index].clone()
-            } else {
-                IrisCode::random_rng(&mut rng)
+        let request_id = Uuid::new_v4();
+
+        let template = if random.is_some() {
+            // Automatic random tests
+            match choice_rng.gen_range(0..N_OPTIONS) {
+                0 => {
+                    expected_results.insert(request_id.to_string(), None);
+                    IrisCode::random_rng(&mut rng)
+                }
+                1 => {
+                    let db_index = rng.gen_range(0..db.db.len());
+                    expected_results.insert(request_id.to_string(), Some(db_index as u32));
+                    db.db[db_index].clone()
+                }
+                _ => unreachable!(),
             }
         } else {
-            let mut rng = StdRng::seed_from_u64(1337); // TODO
-            IrisCode::random_rng(&mut rng)
+            // Manually passed cli arguments
+            if let Some(db_index) = db_index {
+                if query_idx < n_repeat {
+                    db.db[db_index].clone()
+                } else {
+                    IrisCode::random_rng(&mut rng)
+                }
+            } else {
+                let mut rng = StdRng::seed_from_u64(1337); // TODO
+                IrisCode::random_rng(&mut rng)
+            }
         };
 
         let shared_code = GaloisRingIrisCodeShare::encode_iris_code(
@@ -93,7 +121,6 @@ async fn main() -> eyre::Result<()> {
             &template.mask,
             &mut StdRng::seed_from_u64(RNG_SEED_SERVER),
         );
-        let request_id = Uuid::new_v4();
 
         let mut messages = vec![];
         for i in 0..3 {
@@ -104,7 +131,6 @@ async fn main() -> eyre::Result<()> {
                 general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_mask[i].coefs));
 
             let request_message = SMPCRequest {
-                request_type: ENROLLMENT_REQUEST_TYPE.to_string(),
                 request_id: request_id.to_string(),
                 iris_code,
                 mask_code,
@@ -139,10 +165,7 @@ async fn main() -> eyre::Result<()> {
     }
 
     let sqs_client = SqsClient::new(&shared_config);
-
-    loop {
-        sleep(Duration::from_secs(1)).await;
-
+    for _ in 0..N_QUERIES {
         // Receive responses
         let msg = sqs_client
             .receive_message()
@@ -154,7 +177,18 @@ async fn main() -> eyre::Result<()> {
         for msg in msg.messages.unwrap_or_default() {
             let result: ResultEvent = serde_json::from_str(msg.body().context("No body found")?)?;
 
-            println!("Received response: {:?}", result);
+            let expected_result = expected_results
+                .get(&result.request_id)
+                .context("unknown request_id")?;
+
+            assert_eq!(
+                result.db_index,
+                *expected_result,
+                "Result does not match, expected {:?}, got {:?}. \nFull result: {:?}",
+                *expected_result,
+                result.db_index,
+                result
+            );
 
             sqs_client
                 .delete_message()
