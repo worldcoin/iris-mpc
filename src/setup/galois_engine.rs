@@ -415,10 +415,12 @@ pub mod degree4 {
     #[cfg(test)]
     mod tests {
         use crate::setup::{
-            galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::iris::IrisCodeArray,
+            galois::degree4::basis::A, galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::iris::IrisCodeArray
         };
         use float_eq::assert_float_eq;
+        use http::header::REFERRER_POLICY;
         use rand::thread_rng;
+        use serde_json::Value;
 
         #[test]
         fn galois_dot_trick() {
@@ -546,6 +548,79 @@ pub mod degree4 {
                 let decoded = GaloisRingIrisCodeShare::from_base64(i + 1, &s).unwrap();
                 assert_eq!(shares[i].coefs, decoded.coefs);
             }
+        }
+
+        #[test]
+        fn check_pcp() {
+            let rng = &mut thread_rng();
+            let json: Value =
+                serde_json::from_str(include_str!("example-data/iris_code_shares_0.json")).unwrap();
+            let code_share0 = json.get("left_iris_code").unwrap().as_str().unwrap();
+            let mask_share0 = json.get("left_mask_code").unwrap().as_str().unwrap();
+
+            let json: Value =
+                serde_json::from_str(include_str!("example-data/iris_code_shares_1.json")).unwrap();
+            let code_share1 = json.get("left_iris_code").unwrap().as_str().unwrap();
+            let mask_share1 = json.get("left_mask_code").unwrap().as_str().unwrap();
+
+            let json: Value =
+                serde_json::from_str(include_str!("example-data/iris_code_shares_2.json")).unwrap();
+            let code_share2 = json.get("left_iris_code").unwrap().as_str().unwrap();
+            let mask_share2 = json.get("left_mask_code").unwrap().as_str().unwrap();
+
+            let json: Value =
+                serde_json::from_str(include_str!("example-data/iris_codes.json")).unwrap();
+            let ref_code = json.get("left_iris_code").unwrap().as_str().unwrap();
+            let ref_mask = json.get("left_mask_code").unwrap().as_str().unwrap();
+
+            let code_share0 = GaloisRingIrisCodeShare::from_base64(1, code_share0).unwrap();
+            let code_share1 = GaloisRingIrisCodeShare::from_base64(2, code_share1).unwrap();
+            let code_share2 = GaloisRingIrisCodeShare::from_base64(3, code_share2).unwrap();
+
+            let mask_share0 = GaloisRingIrisCodeShare::from_base64(1, mask_share0).unwrap();
+            let mask_share1 = GaloisRingIrisCodeShare::from_base64(2, mask_share1).unwrap();
+            let mask_share2 = GaloisRingIrisCodeShare::from_base64(3, mask_share2).unwrap();
+
+            let code_shares = [code_share0, code_share1, code_share2];
+            let mask_shares = [mask_share0, mask_share1, mask_share2];
+
+            let ref_code = IrisCodeArray::from_base64(ref_code).unwrap();
+            let ref_mask = IrisCodeArray::from_base64(ref_mask).unwrap();
+
+            let mut ref_code_shares =
+                GaloisRingIrisCodeShare::encode_iris_code(&ref_code, &ref_mask, rng);
+            let mut ref_mask_shares = GaloisRingIrisCodeShare::encode_mask_code(&ref_mask, rng);
+
+            ref_code_shares
+                .iter_mut()
+                .for_each(|share: &mut GaloisRingIrisCodeShare| {
+                    share.preprocess_iris_code_query_share()
+                });
+
+            ref_mask_shares
+                .iter_mut()
+                .for_each(|share: &mut GaloisRingIrisCodeShare| {
+                    share.preprocess_iris_code_query_share()
+                });
+
+            // dot product for codes
+            let mut dot_codes = [0; 3];
+            for i in 0..3 {
+                dot_codes[i] = code_shares[i].trick_dot(&ref_code_shares[i]);
+            }
+            let dot_codes = dot_codes.iter().fold(0u16, |acc, x| acc.wrapping_add(*x));
+
+            // dot product for masks
+            let mut dot_masks = [0; 3];
+            for i in 0..3 {
+                dot_masks[i] = mask_shares[i].trick_dot(&ref_mask_shares[i]);
+            }
+            let dot_masks = dot_masks.iter().fold(0u16, |acc, x| acc.wrapping_add(*x));
+
+            let res = 0.5f64 - (dot_codes as i16) as f64 / (2f64 * dot_masks as f64);
+
+            assert_float_eq!(0.0, res, abs <= 1e-6);
+
         }
     }
 }
