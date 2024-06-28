@@ -481,7 +481,6 @@ async fn main() -> eyre::Result<()> {
     let mut next_dot_event = device_manager.create_events();
     let mut current_exchange_event = device_manager.create_events();
     let mut next_exchange_event = device_manager.create_events();
-    let mut request_counter = 0;
     let mut timer_events = vec![];
     let start_timer = device_manager.create_events();
     let end_timer = device_manager.create_events();
@@ -500,9 +499,9 @@ async fn main() -> eyre::Result<()> {
     let mut batch_times = Duration::from_secs(0);
 
     // Main loop
-    for _i in 0..N_BATCHES {
+    for request_counter in 0..N_BATCHES {
         // Skip first iteration
-        if _i == 1 {
+        if request_counter == 1 {
             total_time = Instant::now();
             batch_times = Duration::from_secs(0);
         }
@@ -930,7 +929,6 @@ async fn main() -> eyre::Result<()> {
         // Prepare for next batch
         timer_events.push(timers);
 
-        request_counter += 1;
         previous_previous_stream_event = previous_stream_event;
         previous_stream_event = current_stream_event;
         current_stream_event = device_manager.create_events();
