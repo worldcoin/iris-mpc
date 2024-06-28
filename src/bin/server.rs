@@ -882,15 +882,25 @@ async fn main() -> eyre::Result<()> {
             // Calculate the new indices for the inserted queries
             let mut matches = vec![true; N_QUERIES];
             let total_db_size: usize = db_sizes.iter().sum();
-            insertion_list
-                .clone()
-                .iter()
-                .flatten()
-                .enumerate()
-                .for_each(|(i, &e)| {
-                    merged_results[e] = (total_db_size + i) as u32;
-                    matches[e] = false;
-                });
+
+            let mut last_index = total_db_size as u32;
+            let mut c: usize = 0;
+            let mut b = false;
+            loop {
+                for i in 0..insertion_list.len() {
+                    if c >= insertion_list[i].len() {
+                        b = true;
+                        break;
+                    }
+                    merged_results[insertion_list[i][c]] = last_index;
+                    matches[insertion_list[i][c]] = false;
+                    last_index += 1;
+                }
+                if b {
+                    break;
+                }
+                c += 1;
+            }
 
             // DEBUG
             println!("Insertion list: {:?}", insertion_list);
