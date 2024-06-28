@@ -17,8 +17,7 @@ use gpu_iris_mpc::{
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use serde_json::to_string;
-use std::{collections::HashMap, time::Duration};
-use tokio::time::sleep;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 const N_QUERIES: usize = 32;

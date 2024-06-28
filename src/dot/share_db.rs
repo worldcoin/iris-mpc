@@ -1,5 +1,5 @@
 use super::{
-    device_manager::{self, DeviceManager},
+    device_manager::DeviceManager,
     IRIS_CODE_LENGTH,
 };
 use crate::{
