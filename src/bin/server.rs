@@ -865,7 +865,7 @@ async fn main() -> eyre::Result<()> {
             insertion_list.shuffle(&mut thread_shuffle_rng);
 
             // Calculate the new indices for the inserted queries
-            let mut matches = vec![false; N_QUERIES];
+            let mut matches = vec![true; N_QUERIES];
             let total_db_size: usize = db_sizes.iter().sum();
             insertion_list
                 .clone()
@@ -874,7 +874,7 @@ async fn main() -> eyre::Result<()> {
                 .enumerate()
                 .for_each(|(i, &e)| {
                     merged_results[e] = (total_db_size + i) as u32;
-                    matches[e] = true;
+                    matches[e] = false;
                 });
 
             // DEBUG

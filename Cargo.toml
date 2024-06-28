@@ -57,3 +57,15 @@ harness = false
 [[bench]]
 name = "transpose"
 harness = false
+
+[profile.release]
+panic = 'abort'
+
+[profile.bench]
+panic = 'abort'
+
+[profile.dev]
+panic = 'abort'
+
+[profile.test]
+panic = 'abort'

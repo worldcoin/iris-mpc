@@ -21,12 +21,12 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{spawn, sync::Mutex, time::sleep};
 use uuid::Uuid;
 
-const N_QUERIES: usize = 32 * 3;
+const N_QUERIES: usize = 32 * 5;
 const REGION: &str = "eu-north-1";
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
-const N_OPTIONS: usize = 2;
+const N_OPTIONS: usize = 3;
 
 #[derive(Debug, Parser)]
 struct Opt {
@@ -108,8 +108,7 @@ async fn main() -> eyre::Result<()> {
 
                 if expected_result.is_none() {
                     // New insertion
-                    assert_eq!(result.is_match, true);
-                    println!("New insertion at index {}", result.db_index);
+                    assert_eq!(result.is_match, false);
                     let request = thread_requests
                         .lock()
                         .await
@@ -120,9 +119,9 @@ async fn main() -> eyre::Result<()> {
                         .lock()
                         .await
                         .insert(result.db_index, request);
+                    println!("Inserted iris code into response!");
                 } else {
                     // Existing entry
-                    assert_eq!(result.is_match, false);
                     assert_eq!(result.db_index, expected_result.unwrap());
                 }
 
@@ -144,8 +143,15 @@ async fn main() -> eyre::Result<()> {
 
         let template = if random.is_some() {
             // Automatic random tests
-            match choice_rng.gen_range(0..N_OPTIONS) {
+            let options = if responses.lock().await.len() == 0 {
+                2
+            } else {
+                3
+            };
+            println!("Options: {}", options);
+            match choice_rng.gen_range(0..options) {
                 0 => {
+                    println!("Sending new iris code");
                     expected_results
                         .lock()
                         .await
@@ -153,6 +159,7 @@ async fn main() -> eyre::Result<()> {
                     IrisCode::random_rng(&mut rng)
                 }
                 1 => {
+                    println!("Sending iris code from db");
                     let db_index = rng.gen_range(0..db.db.len());
                     expected_results
                         .lock()
@@ -161,9 +168,11 @@ async fn main() -> eyre::Result<()> {
                     db.db[db_index].clone()
                 }
                 2 => {
-                    let keys = responses.lock().await.keys().collect::<Vec<_>>();
+                    println!("Sending freshly inserted iris code");
+                    let tmp = responses.lock().await;
+                    let keys = tmp.keys().collect::<Vec<_>>();
                     let idx = rng.gen_range(0..keys.len());
-                    let iris_code = responses.lock().await.get(keys[idx]).unwrap().clone();
+                    let iris_code = tmp.get(keys[idx]).unwrap().clone();
                     expected_results
                         .lock()
                         .await
@@ -240,9 +249,11 @@ async fn main() -> eyre::Result<()> {
             .send()
             .await?;
 
-        println!("Enrollment request batch {} published.", query_idx);
+        // println!("Enrollment request batch {} published.", query_idx);
 
-        sleep(Duration::from_secs(1)).await;
+        if (query_idx + 1) % 32 == 0 {
+            sleep(Duration::from_secs(5)).await;
+        }
     }
 
     Ok(())
