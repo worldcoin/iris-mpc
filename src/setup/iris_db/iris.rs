@@ -269,6 +269,15 @@ mod tests {
         assert_eq!(code_str, code.to_base64().unwrap());
     }
 
+    #[test]
+    fn encode_decode() {
+        let mut rng = rand::thread_rng();
+        let iris = super::IrisCode::random_rng(&mut rng);
+        let code_str = iris.code.to_base64().unwrap();
+        let decoded = IrisCodeArray::from_base64(&code_str).unwrap();
+        assert_eq!(iris.code, decoded);
+    }
+
     pub fn parse_test_data(s: &str) -> eyre::Result<(&str, HashMap<i32, String>)> {
         let lines = s.lines();
         let mut lines = lines.map(|s| s.trim()).filter(|s| !s.is_empty());

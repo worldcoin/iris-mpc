@@ -415,10 +415,9 @@ pub mod degree4 {
     #[cfg(test)]
     mod tests {
         use crate::setup::{
-            galois::degree4::basis::A, galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::iris::IrisCodeArray
+            galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::iris::IrisCodeArray,
         };
         use float_eq::assert_float_eq;
-        use http::header::REFERRER_POLICY;
         use rand::thread_rng;
         use serde_json::Value;
 
@@ -620,7 +619,6 @@ pub mod degree4 {
             let res = 0.5f64 - (dot_codes as i16) as f64 / (2f64 * dot_masks as f64);
 
             assert_float_eq!(0.0, res, abs <= 1e-6);
-
         }
     }
 }
