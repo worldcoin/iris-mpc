@@ -859,10 +859,10 @@ async fn main() -> eyre::Result<()> {
                 .map(|(idx, _num)| idx)
                 .collect::<Vec<_>>();
 
-            let mut insertion_list = insertion_list
+            let insertion_list = insertion_list
                 .chunks(QUERIES / ROTATIONS / thread_devs.len())
+                .rev()
                 .collect::<Vec<_>>();
-            insertion_list.shuffle(&mut thread_shuffle_rng);
 
             // Calculate the new indices for the inserted queries
             let mut matches = vec![true; N_QUERIES];
