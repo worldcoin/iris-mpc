@@ -427,22 +427,21 @@ pub mod degree4 {
         #[allow(non_snake_case)]
         pub fn to_basis_A(&self) -> GaloisRingElement<basis::A> {
             // Multiplication with matrix (S)^-1
-            // [    1 50642 57413 17471]
-            // [    0     1 12965 20261]
-            // [    0     0 43505 23923]
-            // [    0     0     0     1]
+            // [    1     0     0     0]
+            // [ 7454     1     0     0]
+            // [35057 40342     1     0]
+            // [37176 61738  8525     1]
             GaloisRingElement {
                 coefs: [
-                    self.coefs[0]
-                        .wrapping_add(self.coefs[1].wrapping_mul(50642))
-                        .wrapping_add(self.coefs[2].wrapping_mul(57413))
-                        .wrapping_add(self.coefs[3].wrapping_mul(17471)),
-                    self.coefs[1]
-                        .wrapping_add(self.coefs[2].wrapping_mul(12965))
-                        .wrapping_add(self.coefs[3].wrapping_mul(20261)),
-                    (self.coefs[2].wrapping_mul(43505))
-                        .wrapping_add(self.coefs[3].wrapping_mul(23923)),
-                    self.coefs[3],
+                    self.coefs[0],
+                    self.coefs[1].wrapping_add(self.coefs[0].wrapping_mul(7454)),
+                    self.coefs[2]
+                        .wrapping_add(self.coefs[0].wrapping_mul(35057))
+                        .wrapping_add(self.coefs[1].wrapping_mul(40342)),
+                    self.coefs[3]
+                        .wrapping_add(self.coefs[0].wrapping_mul(37176))
+                        .wrapping_add(self.coefs[1].wrapping_mul(61738))
+                        .wrapping_add(self.coefs[2].wrapping_mul(8525)),
                 ],
                 basis: PhantomData,
             }
