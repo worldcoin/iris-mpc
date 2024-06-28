@@ -165,7 +165,7 @@ async fn main() -> eyre::Result<()> {
     }
 
     let sqs_client = SqsClient::new(&shared_config);
-    for _ in 0..N_QUERIES {
+    for _ in 0..N_QUERIES * 3 {
         // Receive responses
         let msg = sqs_client
             .receive_message()
