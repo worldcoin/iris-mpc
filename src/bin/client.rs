@@ -7,7 +7,7 @@ use aws_sdk_sns::{
 use aws_sdk_sqs::Client as SqsClient;
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
-use eyre::ContextCompat;
+use eyre::{Context, ContextCompat};
 use gpu_iris_mpc::{
     helpers::sqs::{ResultEvent, SMPCRequest},
     setup::{
@@ -17,10 +17,11 @@ use gpu_iris_mpc::{
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use serde_json::to_string;
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc, time::Duration};
+use tokio::{spawn, sync::Mutex, time::sleep};
 use uuid::Uuid;
 
-const N_QUERIES: usize = 32;
+const N_QUERIES: usize = 32 * 3;
 const REGION: &str = "eu-north-1";
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;
@@ -77,9 +78,65 @@ async fn main() -> eyre::Result<()> {
 
     let mut choice_rng = thread_rng();
 
-    let mut expected_results: HashMap<String, Option<u32>> = HashMap::new();
-    let mut requests: HashMap<String, IrisCode> = HashMap::new();
-    let mut responses: HashMap<u32, IrisCode> = HashMap::new();
+    let expected_results: Arc<Mutex<HashMap<String, Option<u32>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let requests: Arc<Mutex<HashMap<String, IrisCode>>> = Arc::new(Mutex::new(HashMap::new()));
+    let responses: Arc<Mutex<HashMap<u32, IrisCode>>> = Arc::new(Mutex::new(HashMap::new()));
+
+    let thread_expected_results = expected_results.clone();
+    let thread_requests = requests.clone();
+    let thread_responses = responses.clone();
+
+    spawn(async move {
+        let sqs_client = SqsClient::new(&shared_config);
+        loop {
+            // Receive responses
+            let msg = sqs_client
+                .receive_message()
+                .max_number_of_messages(10)
+                .queue_url(response_queue_url.clone())
+                .send()
+                .await
+                .context("Failed to receive message")?;
+
+            for msg in msg.messages.unwrap_or_default() {
+                let result: ResultEvent = serde_json::from_str(&msg.body.context("No body found")?)
+                    .context("Failed to parse message body")?;
+
+                let tmp = thread_expected_results.lock().await;
+                let expected_result = tmp.get(&result.request_id).context("unknown request_id")?;
+
+                if expected_result.is_none() {
+                    // New insertion
+                    assert_eq!(result.is_match, true);
+                    println!("New insertion at index {}", result.db_index);
+                    let request = thread_requests
+                        .lock()
+                        .await
+                        .get(&result.request_id)
+                        .unwrap()
+                        .clone();
+                    thread_responses
+                        .lock()
+                        .await
+                        .insert(result.db_index, request);
+                } else {
+                    // Existing entry
+                    assert_eq!(result.is_match, false);
+                    assert_eq!(result.db_index, expected_result.unwrap());
+                }
+
+                sqs_client
+                    .delete_message()
+                    .queue_url(response_queue_url.clone())
+                    .receipt_handle(msg.receipt_handle.unwrap())
+                    .send()
+                    .await
+                    .context("Failed to delete message")?;
+            }
+        }
+        eyre::Ok(())
+    });
 
     // Prepare query
     for query_idx in 0..N_QUERIES {
@@ -89,13 +146,29 @@ async fn main() -> eyre::Result<()> {
             // Automatic random tests
             match choice_rng.gen_range(0..N_OPTIONS) {
                 0 => {
-                    expected_results.insert(request_id.to_string(), None);
+                    expected_results
+                        .lock()
+                        .await
+                        .insert(request_id.to_string(), None);
                     IrisCode::random_rng(&mut rng)
                 }
                 1 => {
                     let db_index = rng.gen_range(0..db.db.len());
-                    expected_results.insert(request_id.to_string(), Some(db_index as u32));
+                    expected_results
+                        .lock()
+                        .await
+                        .insert(request_id.to_string(), Some(db_index as u32));
                     db.db[db_index].clone()
+                }
+                2 => {
+                    let keys = responses.lock().await.keys().collect::<Vec<_>>();
+                    let idx = rng.gen_range(0..keys.len());
+                    let iris_code = responses.lock().await.get(keys[idx]).unwrap().clone();
+                    expected_results
+                        .lock()
+                        .await
+                        .insert(request_id.to_string(), Some(*keys[idx]));
+                    iris_code
                 }
                 _ => unreachable!(),
             }
@@ -113,7 +186,10 @@ async fn main() -> eyre::Result<()> {
             }
         };
 
-        requests.insert(request_id.to_string(), template.clone());
+        requests
+            .lock()
+            .await
+            .insert(request_id.to_string(), template.clone());
 
         let shared_code = GaloisRingIrisCodeShare::encode_iris_code(
             &template.code,
@@ -165,42 +241,8 @@ async fn main() -> eyre::Result<()> {
             .await?;
 
         println!("Enrollment request batch {} published.", query_idx);
-    }
 
-    let sqs_client = SqsClient::new(&shared_config);
-    for _ in 0..N_QUERIES * 3 {
-        // Receive responses
-        let msg = sqs_client
-            .receive_message()
-            .max_number_of_messages(10)
-            .queue_url(response_queue_url.clone())
-            .send()
-            .await?;
-
-        for msg in msg.messages.unwrap_or_default() {
-            let result: ResultEvent = serde_json::from_str(msg.body().context("No body found")?)?;
-
-            let expected_result = expected_results
-                .get(&result.request_id)
-                .context("unknown request_id")?;
-
-            if expected_result.is_none() {
-                // New insertion
-                assert_eq!(result.is_match, true);
-                responses.insert(result.db_index, requests.get(&result.request_id).unwrap().clone());
-            } else {
-                // Query
-                assert_eq!(result.is_match, false);
-                assert_eq!(result.db_index, expected_result.unwrap());
-            }
-
-            sqs_client
-                .delete_message()
-                .queue_url(response_queue_url.clone())
-                .receipt_handle(msg.receipt_handle.unwrap())
-                .send()
-                .await?;
-        }
+        sleep(Duration::from_secs(1)).await;
     }
 
     Ok(())
