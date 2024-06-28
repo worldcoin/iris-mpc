@@ -222,22 +222,13 @@ fn open(
     distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes);
 }
 
-fn get_merged_results(host_results: &[Vec<u32>], db_sizes: &[usize]) -> Vec<u32> {
-    let cumsums = db_sizes
-        .iter()
-        .scan(0, |acc, &x| {
-            let res = *acc;
-            *acc += x;
-            Some(res as u32)
-        })
-        .collect::<Vec<_>>();
-
+fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
     let mut results = vec![];
     for j in 0..host_results[0].len() {
         let mut match_entry = u32::MAX;
         for i in 0..host_results.len() {
             if host_results[i][j] != u32::MAX {
-                match_entry = cumsums[i] + host_results[i][j];
+                match_entry = host_results[i][j] * n_devices as u32 + i as u32;
                 break;
             }
         }
@@ -422,8 +413,8 @@ async fn main() -> eyre::Result<()> {
         Some(4001),
     );
 
-    let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE, DB_SIZE + DB_BUFFER);
-    let mask_db_slices = masks_engine.load_db(&masks_db, DB_SIZE, DB_SIZE + DB_BUFFER);
+    let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE, DB_SIZE + DB_BUFFER, true);
+    let mask_db_slices = masks_engine.load_db(&masks_db, DB_SIZE, DB_SIZE + DB_BUFFER, true);
 
     // Engines for inflight queries
     let mut batch_codes_engine = ShareDB::init(
@@ -864,7 +855,7 @@ async fn main() -> eyre::Result<()> {
             );
 
             // Evaluate the results across devices
-            let merged_results = get_merged_results(&host_results, &db_sizes);
+            let merged_results = get_merged_results(&host_results, thread_devs.len());
             let insertion_list = merged_results
                 .iter()
                 .enumerate()
