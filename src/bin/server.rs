@@ -24,7 +24,10 @@ use gpu_iris_mpc::{
         mmap::{read_mmap_file, write_mmap_file},
         sqs::{ResultEvent, SMPCRequest, SQSMessage},
     },
-    setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
+    setup::{
+        galois_engine::degree4::GaloisRingIrisCodeShare,
+        iris_db::db::{self, IrisDB},
+    },
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use lazy_static::lazy_static;
@@ -306,6 +309,21 @@ fn derive_seed(seed: [u32; 8], nonce: usize) -> eyre::Result<[u32; 8]> {
 fn next_chacha_seeds(seeds: ([u32; 8], [u32; 8])) -> eyre::Result<([u32; 8], [u32; 8])> {
     let nonce = KDF_NONCE.fetch_add(1, SeqCst);
     Ok((derive_seed(seeds.0, nonce)?, derive_seed(seeds.1, nonce)?))
+}
+
+fn distribute_insertions(results: &[usize], db_sizes: &[usize]) -> Vec<Vec<usize>> {
+    let mut ret = vec![vec![]; db_sizes.len()];
+    let start = db_sizes
+        .iter()
+        .position(|&x| x == *db_sizes.iter().min().unwrap())
+        .unwrap();
+
+    let mut c = start;
+    for r in results {
+        ret[c].push(*r);
+        c = (c + 1) % db_sizes.len();
+    }
+    ret
 }
 
 #[tokio::main]
@@ -859,17 +877,14 @@ async fn main() -> eyre::Result<()> {
                 .map(|(idx, _num)| idx)
                 .collect::<Vec<_>>();
 
-            let insertion_list = insertion_list
-                .chunks(QUERIES / ROTATIONS / thread_devs.len())
-                .rev()
-                .collect::<Vec<_>>();
+            let insertion_list = distribute_insertions(&insertion_list, &db_sizes);
 
             // Calculate the new indices for the inserted queries
             let mut matches = vec![true; N_QUERIES];
             let total_db_size: usize = db_sizes.iter().sum();
             insertion_list
                 .clone()
-                .into_iter()
+                .iter()
                 .flatten()
                 .enumerate()
                 .for_each(|(i, &e)| {
@@ -884,7 +899,7 @@ async fn main() -> eyre::Result<()> {
                 thread_devs[i].bind_to_thread().unwrap();
                 if insertion_list.len() > i {
                     let mut old_db_size = *thread_current_db_size_mutex[i].lock().unwrap();
-                    for insertion_idx in insertion_list[i] {
+                    for insertion_idx in insertion_list[i].clone() {
                         // Append to codes and masks db
                         for (db, query, sums) in [
                             (
