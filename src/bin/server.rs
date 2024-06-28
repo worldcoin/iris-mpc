@@ -502,21 +502,17 @@ async fn main() -> eyre::Result<()> {
         .collect::<Vec<_>>();
 
     // Start thread that will be responsible for communicating back the results
-    let (tx, mut rx) = mpsc::channel::<(Vec<u32>, Vec<String>)>(32); // TODO: pick some buffer value
+    let (tx, mut rx) = mpsc::channel::<(Vec<u32>, Vec<String>, Vec<bool>)>(32); // TODO: pick some buffer value
     let rx_sns_client = sns_client.clone();
     tokio::spawn(async move {
-        while let Some((message, request_ids)) = rx.recv().await {
+        while let Some((message, request_ids, matches)) = rx.recv().await {
             for (i, &idx_result) in message.iter().enumerate() {
                 // TODO: write each result to postgres
 
                 // Notify consumers about result
                 println!("Sending results back to SNS...");
-                let (db_index, is_match) = match idx_result {
-                    u32::MAX => (None, false),
-                    _ => (Some(idx_result), true),
-                };
                 let result_event =
-                    ResultEvent::new(party_id, db_index, is_match, request_ids[i].clone(), None);
+                    ResultEvent::new(party_id, idx_result, matches[i], request_ids[i].clone());
 
                 rx_sns_client
                     .publish()
@@ -855,7 +851,7 @@ async fn main() -> eyre::Result<()> {
             );
 
             // Evaluate the results across devices
-            let merged_results = get_merged_results(&host_results, thread_devs.len());
+            let mut merged_results = get_merged_results(&host_results, thread_devs.len());
             let insertion_list = merged_results
                 .iter()
                 .enumerate()
@@ -867,6 +863,19 @@ async fn main() -> eyre::Result<()> {
                 .chunks(QUERIES / ROTATIONS / thread_devs.len())
                 .collect::<Vec<_>>();
             insertion_list.shuffle(&mut thread_shuffle_rng);
+
+            // Calculate the new indices for the inserted queries
+            let mut matches = vec![false; N_QUERIES];
+            let total_db_size: usize = db_sizes.iter().sum();
+            insertion_list
+                .clone()
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .for_each(|(i, &e)| {
+                    merged_results[e] = (total_db_size + i) as u32;
+                    matches[e] = true;
+                });
 
             // DEBUG
             println!("Insertion list: {:?}", insertion_list);
@@ -965,7 +974,7 @@ async fn main() -> eyre::Result<()> {
 
             // Pass to internal sender thread
             thread_sender
-                .try_send((merged_results, thread_request_ids))
+                .try_send((merged_results, thread_request_ids, matches))
                 .unwrap();
 
             // Make sure to not call `Drop` on those

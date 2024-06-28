@@ -78,6 +78,8 @@ async fn main() -> eyre::Result<()> {
     let mut choice_rng = thread_rng();
 
     let mut expected_results: HashMap<String, Option<u32>> = HashMap::new();
+    let mut requests: HashMap<String, IrisCode> = HashMap::new();
+    let mut responses: HashMap<u32, IrisCode> = HashMap::new();
 
     // Prepare query
     for query_idx in 0..N_QUERIES {
@@ -110,6 +112,8 @@ async fn main() -> eyre::Result<()> {
                 IrisCode::random_rng(&mut rng)
             }
         };
+
+        requests.insert(request_id.to_string(), template.clone());
 
         let shared_code = GaloisRingIrisCodeShare::encode_iris_code(
             &template.code,
@@ -180,14 +184,15 @@ async fn main() -> eyre::Result<()> {
                 .get(&result.request_id)
                 .context("unknown request_id")?;
 
-            assert_eq!(
-                result.db_index,
-                *expected_result,
-                "Result does not match, expected {:?}, got {:?}. \nFull result: {:?}",
-                *expected_result,
-                result.db_index,
-                result
-            );
+            if expected_result.is_none() {
+                // New insertion
+                assert_eq!(result.is_match, true);
+                responses.insert(result.db_index, requests.get(&result.request_id).unwrap().clone());
+            } else {
+                // Query
+                assert_eq!(result.is_match, false);
+                assert_eq!(result.db_index, expected_result.unwrap());
+            }
 
             sqs_client
                 .delete_message()

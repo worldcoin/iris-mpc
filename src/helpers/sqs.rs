@@ -45,26 +45,23 @@ impl SMPCRequest {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ResultEvent {
     pub node_id:   usize,
-    pub db_index:  Option<u32>,
+    pub db_index:  u32,
     pub is_match:  bool,
     pub request_id: String,
-    pub serial_id: Option<u32>,
 }
 
 impl ResultEvent {
     pub fn new(
         node_id: usize,
-        db_index: Option<u32>,
+        db_index: u32,
         is_match: bool,
         request_id: String,
-        serial_id: Option<u32>,
     ) -> Self {
         Self {
             node_id,
             db_index,
             is_match,
             request_id,
-            serial_id,
         }
     }
 }
