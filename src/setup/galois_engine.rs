@@ -554,23 +554,23 @@ pub mod degree4 {
             let rng = &mut thread_rng();
             let json: Value =
                 serde_json::from_str(include_str!("example-data/iris_code_shares_0.json")).unwrap();
-            let code_share0 = json.get("left_iris_code").unwrap().as_str().unwrap();
-            let mask_share0 = json.get("left_mask_code").unwrap().as_str().unwrap();
+            let code_share0 = json.as_array().unwrap()[0].get("left_iris_code").unwrap().as_str().unwrap();
+            let mask_share0 = json.as_array().unwrap()[0].get("left_mask_code").unwrap().as_str().unwrap();
 
             let json: Value =
                 serde_json::from_str(include_str!("example-data/iris_code_shares_1.json")).unwrap();
-            let code_share1 = json.get("left_iris_code").unwrap().as_str().unwrap();
-            let mask_share1 = json.get("left_mask_code").unwrap().as_str().unwrap();
+            let code_share1 = json.as_array().unwrap()[0].get("left_iris_code").unwrap().as_str().unwrap();
+            let mask_share1 = json.as_array().unwrap()[0].get("left_mask_code").unwrap().as_str().unwrap();
 
             let json: Value =
                 serde_json::from_str(include_str!("example-data/iris_code_shares_2.json")).unwrap();
-            let code_share2 = json.get("left_iris_code").unwrap().as_str().unwrap();
-            let mask_share2 = json.get("left_mask_code").unwrap().as_str().unwrap();
+            let code_share2 = json.as_array().unwrap()[0].get("left_iris_code").unwrap().as_str().unwrap();
+            let mask_share2 = json.as_array().unwrap()[0].get("left_mask_code").unwrap().as_str().unwrap();
 
             let json: Value =
                 serde_json::from_str(include_str!("example-data/iris_codes.json")).unwrap();
-            let ref_code = json.get("left_iris_code").unwrap().as_str().unwrap();
-            let ref_mask = json.get("left_mask_code").unwrap().as_str().unwrap();
+            let ref_code = json.as_array().unwrap()[0].get("left_iris_code").unwrap().as_str().unwrap();
+            let ref_mask = json.as_array().unwrap()[0].get("left_mask_code").unwrap().as_str().unwrap();
 
             let code_share0 = GaloisRingIrisCodeShare::from_base64(1, code_share0).unwrap();
             let code_share1 = GaloisRingIrisCodeShare::from_base64(2, code_share1).unwrap();
