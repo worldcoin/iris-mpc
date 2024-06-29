@@ -231,8 +231,9 @@ fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
     for j in 0..host_results[0].len() {
         let mut match_entry = u32::MAX;
         for i in 0..host_results.len() {
-            if host_results[i][j] < match_entry {
-                match_entry = host_results[i][j] * n_devices as u32 + i as u32;
+            let match_idx = host_results[i][j] * n_devices as u32 + i as u32;
+            if host_results[i][j] != u32::MAX && match_idx < match_entry {
+                match_entry = match_idx;
             }
         }
 
@@ -912,7 +913,7 @@ async fn main() -> eyre::Result<()> {
                 thread_devs[i].bind_to_thread().unwrap();
                 let mut old_db_size = *thread_current_db_size_mutex[i].lock().unwrap();
                 for insertion_idx in insertion_list[i].clone() {
-                    println!("Inserting query {} {:?} at {}", insertion_idx, thread_request_ids[insertion_idx], old_db_size);
+                    println!("Inserting query {} {:?} at {} on dev {}", insertion_idx, thread_request_ids[insertion_idx], old_db_size, i);
                     // Append to codes and masks db
                     for (db, query, sums) in [
                         (
