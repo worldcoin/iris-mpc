@@ -950,7 +950,7 @@ async fn main() -> eyre::Result<()> {
                             db.0 .0[i],
                             old_db_size * IRIS_CODE_LENGTH,
                             query.0[i],
-                            insertion_idx * IRIS_CODE_LENGTH * 15,
+                            IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                             IRIS_CODE_LENGTH,
                             streams[i],
                         );
@@ -959,7 +959,7 @@ async fn main() -> eyre::Result<()> {
                             db.0 .1[i],
                             old_db_size * IRIS_CODE_LENGTH,
                             query.1[i],
-                            insertion_idx * IRIS_CODE_LENGTH * 15,
+                            IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                             IRIS_CODE_LENGTH,
                             streams[i],
                         );
@@ -968,7 +968,8 @@ async fn main() -> eyre::Result<()> {
                             db.1 .0[i],
                             old_db_size * mem::size_of::<u32>(),
                             sums.0[i],
-                            insertion_idx * mem::size_of::<u32>() * 15,
+                            mem::size_of::<u32>() * 15
+                                + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                             mem::size_of::<u32>(),
                             streams[i],
                         );
@@ -977,7 +978,8 @@ async fn main() -> eyre::Result<()> {
                             db.1 .1[i],
                             old_db_size * mem::size_of::<u32>(),
                             sums.1[i],
-                            insertion_idx * mem::size_of::<u32>() * 15,
+                            mem::size_of::<u32>() * 15
+                                + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                             mem::size_of::<u32>(),
                             streams[i],
                         );
