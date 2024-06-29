@@ -915,6 +915,7 @@ async fn main() -> eyre::Result<()> {
                 while i < insertion_list.len() {
                     if c >= insertion_list[i].len() {
                         b += 1;
+                        i += 1;
                         continue;
                     }
                     merged_results[insertion_list[i][c]] = last_index;
