@@ -891,9 +891,8 @@ async fn main() -> eyre::Result<()> {
 
             let mut last_index = total_db_size as u32;
             let mut c: usize = 0;
-            let mut b: usize = 0;
-            while b < insertion_list.len() - 1 {
-                b = 0;
+            loop {
+                let mut b: usize = 0;
                 for i in 0..insertion_list.len() {
                     if c >= insertion_list[i].len() {
                         b += 1;
@@ -902,6 +901,9 @@ async fn main() -> eyre::Result<()> {
                     merged_results[insertion_list[i][c]] = last_index;
                     matches[insertion_list[i][c]] = false;
                     last_index += 1;
+                }
+                if b == insertion_list.len() - 1 {
+                    break;
                 }
                 c += 1;
             }
@@ -913,7 +915,10 @@ async fn main() -> eyre::Result<()> {
                 thread_devs[i].bind_to_thread().unwrap();
                 let mut old_db_size = *thread_current_db_size_mutex[i].lock().unwrap();
                 for insertion_idx in insertion_list[i].clone() {
-                    println!("Inserting query {} {:?} at {} on dev {}", insertion_idx, thread_request_ids[insertion_idx], old_db_size, i);
+                    println!(
+                        "Inserting query {} {:?} at {} on dev {}",
+                        insertion_idx, thread_request_ids[insertion_idx], old_db_size, i
+                    );
                     // Append to codes and masks db
                     for (db, query, sums) in [
                         (
