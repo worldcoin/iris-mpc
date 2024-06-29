@@ -912,7 +912,7 @@ async fn main() -> eyre::Result<()> {
                 thread_devs[i].bind_to_thread().unwrap();
                 let mut old_db_size = *thread_current_db_size_mutex[i].lock().unwrap();
                 for insertion_idx in insertion_list[i].clone() {
-                    println!("Inserting query {} {:?} at {}", insertion_idx, thread_request_ids, old_db_size);
+                    println!("Inserting query {} {:?} at {}", insertion_idx, thread_request_ids[insertion_idx], old_db_size);
                     // Append to codes and masks db
                     for (db, query, sums) in [
                         (
