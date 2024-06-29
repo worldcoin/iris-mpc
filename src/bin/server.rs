@@ -24,10 +24,7 @@ use gpu_iris_mpc::{
         mmap::{read_mmap_file, write_mmap_file},
         sqs::{ResultEvent, SMPCRequest, SQSMessage},
     },
-    setup::{
-        galois_engine::degree4::GaloisRingIrisCodeShare,
-        iris_db::db::IrisDB,
-    },
+    setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use lazy_static::lazy_static;
@@ -39,7 +36,12 @@ use std::{
     sync::{atomic::AtomicUsize, Arc, Mutex},
     time::{Duration, Instant},
 };
-use tokio::{runtime, sync::mpsc, task::{spawn_blocking, JoinHandle}, time::sleep};
+use tokio::{
+    runtime,
+    sync::mpsc,
+    task::{spawn_blocking, JoinHandle},
+    time::sleep,
+};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
@@ -760,9 +762,12 @@ async fn main() -> eyre::Result<()> {
             // Wait for Phase 1 to finish
             await_streams(&thread_streams);
 
-            // Wait for Phase 2 of previous round to finish in order to not have them overlapping
+            // Wait for Phase 2 of previous round to finish in order to not have them
+            // overlapping
             if previous_thread_handle.is_some() {
-                runtime::Handle::current().block_on(previous_thread_handle.unwrap()).unwrap();
+                runtime::Handle::current()
+                    .block_on(previous_thread_handle.unwrap())
+                    .unwrap();
             }
 
             let thread_devs = thread_device_manager.devices();
@@ -905,72 +910,70 @@ async fn main() -> eyre::Result<()> {
 
             for i in 0..thread_devs.len() {
                 thread_devs[i].bind_to_thread().unwrap();
-                if insertion_list.len() > i {
-                    let mut old_db_size = *thread_current_db_size_mutex[i].lock().unwrap();
-                    for insertion_idx in insertion_list[i].clone() {
-                        // Append to codes and masks db
-                        for (db, query, sums) in [
-                            (
-                                &thread_code_db_slices,
-                                &code_query_insert,
-                                &code_query_insert_sums,
-                            ),
-                            (
-                                &thread_mask_db_slices,
-                                &mask_query_insert,
-                                &mask_query_insert_sums,
-                            ),
-                        ] {
-                            dtod_at_offset(
-                                db.0 .0[i],
-                                old_db_size * IRIS_CODE_LENGTH,
-                                query.0[i],
-                                insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                                IRIS_CODE_LENGTH,
-                                streams[i],
-                            );
+                let mut old_db_size = *thread_current_db_size_mutex[i].lock().unwrap();
+                for insertion_idx in insertion_list[i].clone() {
+                    // Append to codes and masks db
+                    for (db, query, sums) in [
+                        (
+                            &thread_code_db_slices,
+                            &code_query_insert,
+                            &code_query_insert_sums,
+                        ),
+                        (
+                            &thread_mask_db_slices,
+                            &mask_query_insert,
+                            &mask_query_insert_sums,
+                        ),
+                    ] {
+                        dtod_at_offset(
+                            db.0 .0[i],
+                            old_db_size * IRIS_CODE_LENGTH,
+                            query.0[i],
+                            insertion_idx * IRIS_CODE_LENGTH * 15,
+                            IRIS_CODE_LENGTH,
+                            streams[i],
+                        );
 
-                            dtod_at_offset(
-                                db.0 .1[i],
-                                old_db_size * IRIS_CODE_LENGTH,
-                                query.1[i],
-                                insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                                IRIS_CODE_LENGTH,
-                                streams[i],
-                            );
+                        dtod_at_offset(
+                            db.0 .1[i],
+                            old_db_size * IRIS_CODE_LENGTH,
+                            query.1[i],
+                            insertion_idx * IRIS_CODE_LENGTH * 15,
+                            IRIS_CODE_LENGTH,
+                            streams[i],
+                        );
 
-                            dtod_at_offset(
-                                db.1 .0[i],
-                                old_db_size * mem::size_of::<u32>(),
-                                sums.0[i],
-                                insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                                mem::size_of::<u32>(),
-                                streams[i],
-                            );
+                        dtod_at_offset(
+                            db.1 .0[i],
+                            old_db_size * mem::size_of::<u32>(),
+                            sums.0[i],
+                            insertion_idx * mem::size_of::<u32>() * 15,
+                            mem::size_of::<u32>(),
+                            streams[i],
+                        );
 
-                            dtod_at_offset(
-                                db.1 .1[i],
-                                old_db_size * mem::size_of::<u32>(),
-                                sums.1[i],
-                                insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                                mem::size_of::<u32>(),
-                                streams[i],
-                            );
-                        }
-                        old_db_size += 1;
+                        dtod_at_offset(
+                            db.1 .1[i],
+                            old_db_size * mem::size_of::<u32>(),
+                            sums.1[i],
+                            insertion_idx * mem::size_of::<u32>() * 15,
+                            mem::size_of::<u32>(),
+                            streams[i],
+                        );
                     }
-
-                    // Write new db sizes to device
-                    *thread_current_db_size_mutex[i].lock().unwrap() +=
-                        insertion_list[i].len() as usize;
-
-                    // DEBUG
-                    println!(
-                        "Updating DB size on device {}: {:?}",
-                        i,
-                        *thread_current_db_size_mutex[i].lock().unwrap()
-                    );
+                    old_db_size += 1;
                 }
+
+                // Write new db sizes to device
+                *thread_current_db_size_mutex[i].lock().unwrap() +=
+                    insertion_list[i].len() as usize;
+
+                // DEBUG
+                println!(
+                    "Updating DB size on device {}: {:?}",
+                    i,
+                    *thread_current_db_size_mutex[i].lock().unwrap()
+                );
 
                 // Update Phase 2 chunk size to max all db sizes on all devices
                 let max_db_size = thread_current_db_size_mutex
