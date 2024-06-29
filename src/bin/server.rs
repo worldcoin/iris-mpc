@@ -39,7 +39,7 @@ use std::{
     sync::{atomic::AtomicUsize, Arc, Mutex},
     time::{Duration, Instant},
 };
-use tokio::{sync::mpsc, task::spawn_blocking, time::sleep};
+use tokio::{runtime, sync::mpsc, task::{spawn_blocking, JoinHandle}, time::sleep};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
@@ -498,11 +498,11 @@ async fn main() -> eyre::Result<()> {
     let mut previous_stream_event = device_manager.create_events();
     let mut current_stream_event = device_manager.create_events();
 
+    let mut previous_thread_handle: Option<JoinHandle<()>> = None;
     let mut current_dot_event = device_manager.create_events();
     let mut next_dot_event = device_manager.create_events();
     let mut current_exchange_event = device_manager.create_events();
     let mut next_exchange_event = device_manager.create_events();
-    let mut request_counter = 0;
     let mut timer_events = vec![];
     let start_timer = device_manager.create_events();
     let end_timer = device_manager.create_events();
@@ -545,9 +545,9 @@ async fn main() -> eyre::Result<()> {
     let mut batch_times = Duration::from_secs(0);
 
     // Main loop
-    for _i in 0..N_BATCHES {
+    for request_counter in 0..N_BATCHES {
         // Skip first iteration
-        if _i == 1 {
+        if request_counter == 1 {
             total_time = Instant::now();
             batch_times = Duration::from_secs(0);
         }
@@ -756,9 +756,14 @@ async fn main() -> eyre::Result<()> {
 
         let thread_sender = tx.clone();
 
-        let handle = spawn_blocking(move || {
+        previous_thread_handle = Some(spawn_blocking(move || {
             // Wait for Phase 1 to finish
             await_streams(&thread_streams);
+
+            // Wait for Phase 2 of previous round to finish in order to not have them overlapping
+            if previous_thread_handle.is_some() {
+                runtime::Handle::current().block_on(previous_thread_handle.unwrap()).unwrap();
+            }
 
             let thread_devs = thread_device_manager.devices();
             let mut thread_phase2_batch = thread_phase2_batch.lock().unwrap();
@@ -1002,12 +1007,11 @@ async fn main() -> eyre::Result<()> {
             forget_vec!(mask_dots_batch);
             forget_vec!(thread_request_results_slice);
             forget_vec!(thread_request_results_slice_batch);
-        });
+        }));
 
         // Prepare for next batch
         timer_events.push(timers);
 
-        request_counter += 1;
         previous_previous_stream_event = previous_stream_event;
         previous_stream_event = current_stream_event;
         current_stream_event = device_manager.create_events();
@@ -1017,12 +1021,10 @@ async fn main() -> eyre::Result<()> {
         next_exchange_event = device_manager.create_events();
 
         println!("CPU time of one iteration {:?}", now.elapsed());
-
-        // Await the last one for benching
-        if _i == N_BATCHES - 1 {
-            handle.await?;
-        }
     }
+
+    // Await the last thread for benching
+    previous_thread_handle.unwrap().await?;
 
     println!(
         "Total time for {} iterations: {:?}",
