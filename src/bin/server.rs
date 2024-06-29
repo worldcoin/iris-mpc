@@ -880,12 +880,13 @@ async fn main() -> eyre::Result<()> {
 
             let mut last_index = total_db_size as u32;
             let mut c: usize = 0;
-            let mut b = false;
-            while !b {
+            let mut b: usize = 0;
+            while b < insertion_list.len() - 1 {
+                b = 0;
                 for i in 0..insertion_list.len() {
                     if c >= insertion_list[i].len() {
-                        b = true;
-                        break;
+                        b += 1;
+                        continue;
                     }
                     merged_results[insertion_list[i][c]] = last_index;
                     matches[insertion_list[i][c]] = false;
