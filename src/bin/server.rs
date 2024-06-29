@@ -26,12 +26,12 @@ use gpu_iris_mpc::{
     },
     setup::{
         galois_engine::degree4::GaloisRingIrisCodeShare,
-        iris_db::db::{self, IrisDB},
+        iris_db::db::IrisDB,
     },
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use lazy_static::lazy_static;
-use rand::{prelude::SliceRandom, rngs::StdRng, SeedableRng};
+use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{
     fs::metadata,
@@ -47,7 +47,6 @@ const DB_BUFFER: usize = 8 * 1_000;
 const N_QUERIES: usize = 32;
 const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
-const SHUFFLE_SEED: u64 = 42;
 const MAX_CONCURRENT_REQUESTS: usize = 5;
 const DB_CODE_FILE: &str = "codes.db";
 const DB_MASK_FILE: &str = "masks.db";
@@ -230,9 +229,8 @@ fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
     for j in 0..host_results[0].len() {
         let mut match_entry = u32::MAX;
         for i in 0..host_results.len() {
-            if host_results[i][j] != u32::MAX {
+            if host_results[i][j] < match_entry {
                 match_entry = host_results[i][j] * n_devices as u32 + i as u32;
-                break;
             }
         }
 
@@ -339,8 +337,6 @@ async fn main() -> eyre::Result<()> {
 
     let code_db_path = format!("{}/{}", path, DB_CODE_FILE);
     let mask_db_path = format!("{}/{}", path, DB_MASK_FILE);
-
-    let shuffle_rng = StdRng::seed_from_u64(SHUFFLE_SEED);
 
     let region_provider = Region::new(REGION);
     let shared_config = aws_config::from_env().region(region_provider).load().await;
@@ -726,7 +722,6 @@ async fn main() -> eyre::Result<()> {
         let thread_device_manager = device_manager.clone();
         // let thread_devs = thread_device_manager.devices();
         let thread_evts = end_timer.iter().map(|e| *e as u64).collect::<Vec<_>>();
-        let mut thread_shuffle_rng = shuffle_rng.clone();
         let thread_current_stream_event = current_stream_event
             .iter()
             .map(|e| *e as u64)
@@ -886,7 +881,7 @@ async fn main() -> eyre::Result<()> {
             let mut last_index = total_db_size as u32;
             let mut c: usize = 0;
             let mut b = false;
-            loop {
+            while !b {
                 for i in 0..insertion_list.len() {
                     if c >= insertion_list[i].len() {
                         b = true;
@@ -895,9 +890,6 @@ async fn main() -> eyre::Result<()> {
                     merged_results[insertion_list[i][c]] = last_index;
                     matches[insertion_list[i][c]] = false;
                     last_index += 1;
-                }
-                if b {
-                    break;
                 }
                 c += 1;
             }
