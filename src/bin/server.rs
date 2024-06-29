@@ -770,7 +770,7 @@ async fn main() -> eyre::Result<()> {
                     .block_on(previous_thread_handle.unwrap())
                     .unwrap();
             }
-
+            println!("1");
             let thread_devs = thread_device_manager.devices();
             let mut thread_phase2_batch = thread_phase2_batch.lock().unwrap();
             let mut thread_phase2 = thread_phase2.lock().unwrap();
@@ -787,6 +787,8 @@ async fn main() -> eyre::Result<()> {
                 .iter()
                 .map(|&e| e * QUERIES)
                 .collect::<Vec<_>>();
+
+            println!("2");
 
             let mut code_dots_batch: Vec<ChunkShare<u16>> = device_ptrs_to_shares(
                 &thread_code_results_batch,
@@ -814,6 +816,8 @@ async fn main() -> eyre::Result<()> {
                 &thread_devs,
             );
 
+            println!("3");
+
             // We only use the default streams of the devices, therefore Phase 2's are never
             // running concurrently
             let streams = thread_phase2
@@ -824,6 +828,8 @@ async fn main() -> eyre::Result<()> {
 
             // Phase 2 [Batch]: compare each result against threshold
             thread_phase2_batch.compare_threshold_masked_many(&code_dots_batch, &mask_dots_batch);
+
+            println!("4");
 
             // Phase 2 [Batch]: Reveal the binary results
             let res = thread_phase2_batch.take_result_buffer();
@@ -843,6 +849,8 @@ async fn main() -> eyre::Result<()> {
                 &db_sizes_batch,
             );
             thread_phase2_batch.return_result_buffer(res);
+
+            println!("5");
 
             // Phase 2 [DB]: compare each result against threshold
             thread_phase2.compare_threshold_masked_many(&code_dots, &mask_dots);
@@ -874,6 +882,8 @@ async fn main() -> eyre::Result<()> {
                 &streams,
             );
 
+            println!("6");
+
             // Evaluate the results across devices
             let mut merged_results = get_merged_results(&host_results, thread_devs.len());
             let insertion_list = merged_results
@@ -900,10 +910,13 @@ async fn main() -> eyre::Result<()> {
                     }
                     merged_results[insertion_list[i][c]] = last_index;
                     matches[insertion_list[i][c]] = false;
-                    println!("Inserting query {:?} at {}", thread_request_ids[insertion_list[i][c]], last_index);
+                    println!(
+                        "Inserting query {:?} at {}",
+                        thread_request_ids[insertion_list[i][c]], last_index
+                    );
                     last_index += 1;
                 }
-                if b == insertion_list.len() - 1 {
+                if b >= insertion_list.len() - 1 {
                     break;
                 }
                 c += 1;
