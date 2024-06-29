@@ -901,9 +901,18 @@ async fn main() -> eyre::Result<()> {
 
             let mut last_index = total_db_size as u32;
             let mut c: usize = 0;
+            let mut min_index = 0;
+            let mut min_index_val = usize::MAX;
+            for i in 0..insertion_list.len() {
+                if insertion_list[i][0] < min_index_val {
+                    min_index_val = insertion_list[i][0];
+                    min_index = i;
+                }
+            }
             loop {
                 let mut b: usize = 0;
-                for i in 0..insertion_list.len() {
+                let mut i: usize = min_index;
+                while i < insertion_list.len() {
                     if c >= insertion_list[i].len() {
                         b += 1;
                         continue;
@@ -915,6 +924,7 @@ async fn main() -> eyre::Result<()> {
                         thread_request_ids[insertion_list[i][c]], last_index
                     );
                     last_index += 1;
+                    i += 1;
                 }
                 if b >= insertion_list.len() - 1 {
                     break;
