@@ -900,6 +900,7 @@ async fn main() -> eyre::Result<()> {
                     }
                     merged_results[insertion_list[i][c]] = last_index;
                     matches[insertion_list[i][c]] = false;
+                    println!("Inserting query {:?} at {}", thread_request_ids[insertion_list[i][c]], last_index);
                     last_index += 1;
                 }
                 if b == insertion_list.len() - 1 {
