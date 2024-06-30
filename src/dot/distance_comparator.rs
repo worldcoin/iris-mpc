@@ -1,7 +1,7 @@
 use super::ROTATIONS;
 use cudarc::{
     driver::{
-        result::{launch_kernel, memcpy_dtoh_sync},
+        result::{self, launch_kernel, memcpy_dtoh_sync},
         CudaDevice, CudaFunction, CudaSlice, CudaView, DeviceRepr, LaunchAsync, LaunchConfig,
     },
     nvrtc::compile_ptx,
@@ -13,13 +13,15 @@ const OPEN_RESULTS_FUNCTION: &str = "openResults";
 const MERGE_RESULTS_FUNCTION: &str = "mergeResults";
 
 pub struct DistanceComparator {
-    pub devs:           Vec<Arc<CudaDevice>>,
-    pub open_kernels:   Vec<CudaFunction>,
-    pub merge_kernels:  Vec<CudaFunction>,
-    pub query_length:   usize,
-    pub n_devices:      usize,
-    pub opened_results: Vec<CudaSlice<u32>>,
-    pub final_results:  Vec<CudaSlice<u32>>,
+    pub devs:                    Vec<Arc<CudaDevice>>,
+    pub open_kernels:            Vec<CudaFunction>,
+    pub merge_kernels:           Vec<CudaFunction>,
+    pub query_length:            usize,
+    pub n_devices:               usize,
+    pub opened_results:          Vec<CudaSlice<u32>>,
+    pub final_results:           Vec<CudaSlice<u32>>,
+    pub results_init_host:       Vec<u32>,
+    pub final_results_init_host: Vec<u32>,
 }
 
 impl DistanceComparator {
@@ -63,6 +65,8 @@ impl DistanceComparator {
             n_devices,
             opened_results,
             final_results,
+            results_init_host: vec![u32::MAX; query_length],
+            final_results_init_host: vec![u32::MAX; query_length / ROTATIONS],
         }
     }
 
@@ -164,16 +168,46 @@ impl DistanceComparator {
     }
 
     pub fn prepare_results(&self) -> Vec<CudaSlice<u32>> {
-        let results_uninit = vec![u32::MAX; self.query_length];
         (0..self.n_devices)
-            .map(|i| self.devs[i].htod_copy(results_uninit.clone()).unwrap())
+            .map(|i| {
+                self.devs[i]
+                    .htod_copy(self.results_init_host.clone())
+                    .unwrap()
+            })
             .collect::<Vec<_>>()
     }
 
     pub fn prepare_final_results(&self) -> Vec<CudaSlice<u32>> {
-        let results_uninit = vec![u32::MAX; self.query_length / ROTATIONS];
         (0..self.n_devices)
-            .map(|i| self.devs[i].htod_copy(results_uninit.clone()).unwrap())
+            .map(|i| {
+                self.devs[i]
+                    .htod_copy(self.final_results_init_host.clone())
+                    .unwrap()
+            })
             .collect::<Vec<_>>()
+    }
+
+    pub fn reset_results(&self, dst: &[u64], streams: &[u64]) {
+        for i in 0..self.n_devices {
+            self.devs[i].bind_to_thread().unwrap();
+            unsafe {
+                result::memcpy_htod_async(dst[i], &self.results_init_host, streams[i] as *mut _)
+            }
+            .unwrap();
+        }
+    }
+
+    pub fn reset_final_results(&self, dst: &[u64], streams: &[u64]) {
+        for i in 0..self.n_devices {
+            self.devs[i].bind_to_thread().unwrap();
+            unsafe {
+                result::memcpy_htod_async(
+                    dst[i],
+                    &self.final_results_init_host,
+                    streams[i] as *mut _,
+                )
+            }
+            .unwrap();
+        }
     }
 }

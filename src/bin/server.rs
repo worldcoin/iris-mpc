@@ -497,11 +497,6 @@ async fn main() -> eyre::Result<()> {
         final_results.push(distance_comparator.lock().unwrap().prepare_final_results());
     }
 
-    // DEBUG
-    for _ in 0..MAX_CONCURRENT_REQUESTS {
-        final_results.push(distance_comparator.lock().unwrap().prepare_final_results());
-    }
-
     let mut previous_previous_stream_event = device_manager.create_events();
     let mut previous_stream_event = device_manager.create_events();
     let mut current_stream_event = device_manager.create_events();
@@ -1042,6 +1037,16 @@ async fn main() -> eyre::Result<()> {
             thread_sender
                 .try_send((merged_results, thread_request_ids, matches))
                 .unwrap();
+
+            // Reset the results buffers for reuse
+            thread_distance_comparator
+                .lock()
+                .unwrap()
+                .reset_results(&thread_request_results, &thread_streams);
+            thread_distance_comparator
+                .lock()
+                .unwrap()
+                .reset_final_results(&thread_request_final_results, &thread_streams);
 
             // Make sure to not call `Drop` on those
             forget_vec!(code_dots);
