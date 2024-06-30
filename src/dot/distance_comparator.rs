@@ -1,7 +1,7 @@
 use super::ROTATIONS;
 use cudarc::{
     driver::{
-        result::{self, launch_kernel, memcpy_dtoh_sync},
+        result::{launch_kernel, memcpy_dtoh_sync},
         CudaDevice, CudaFunction, CudaSlice, CudaView, DeviceRepr, LaunchAsync, LaunchConfig,
     },
     nvrtc::compile_ptx,
@@ -34,6 +34,9 @@ impl DistanceComparator {
         let mut opened_results = vec![];
         let mut final_results = vec![];
 
+        let results_init_host = vec![u32::MAX; query_length];
+        let final_results_init_host = vec![u32::MAX; query_length / ROTATIONS];
+
         for i in 0..n_devices {
             let dev = CudaDevice::new(i).unwrap();
             dev.load_ptx(ptx.clone(), "", &[
@@ -46,11 +49,8 @@ impl DistanceComparator {
 
             let merge_results_function = dev.get_func("", MERGE_RESULTS_FUNCTION).unwrap();
 
-            let results_uninit = vec![u32::MAX; query_length];
-            opened_results.push(dev.htod_copy(results_uninit.clone()).unwrap());
-
-            let results_uninit = vec![u32::MAX; query_length / ROTATIONS];
-            final_results.push(dev.htod_copy(results_uninit.clone()).unwrap());
+            opened_results.push(dev.htod_copy(results_init_host.clone()).unwrap());
+            final_results.push(dev.htod_copy(final_results_init_host.clone()).unwrap());
 
             open_kernels.push(open_results_function);
             merge_kernels.push(merge_results_function);
@@ -65,8 +65,8 @@ impl DistanceComparator {
             n_devices,
             opened_results,
             final_results,
-            results_init_host: vec![u32::MAX; query_length],
-            final_results_init_host: vec![u32::MAX; query_length / ROTATIONS],
+            results_init_host,
+            final_results_init_host,
         }
     }
 

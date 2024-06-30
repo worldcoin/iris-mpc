@@ -63,7 +63,7 @@ const KMS_KEY_IDS: [&str; 3] = [
 lazy_static! {
     static ref KDF_NONCE: AtomicUsize = AtomicUsize::new(0);
     static ref KDF_SALT: Salt = Salt::new(HKDF_SHA256, b"IRIS_MPC");
-    static ref RESULTS_INIT_HOST: Vec<u32> =  vec![u32::MAX; N_QUERIES * ROTATIONS];
+    static ref RESULTS_INIT_HOST: Vec<u32> = vec![u32::MAX; N_QUERIES * ROTATIONS];
     static ref FINAL_RESULTS_INIT_HOST: Vec<u32> = vec![u32::MAX; N_QUERIES];
 }
 
@@ -329,27 +329,10 @@ fn distribute_insertions(results: &[usize], db_sizes: &[usize]) -> Vec<Vec<usize
     ret
 }
 
-fn reset_results(devs: &[Arc<CudaDevice>], dst: &[u64], streams: &[u64]) {
+fn reset_results(devs: &[Arc<CudaDevice>], dst: &[u64], src: &[u32], streams: &[u64]) {
     for i in 0..devs.len() {
         devs[i].bind_to_thread().unwrap();
-        unsafe {
-            result::memcpy_htod_async(dst[i], &RESULTS_INIT_HOST, streams[i] as *mut _)
-        }
-        .unwrap();
-    }
-}
-
-pub fn reset_final_results(devs: &[Arc<CudaDevice>], dst: &[u64], streams: &[u64]) {
-    for i in 0..devs.len() {
-        devs[i].bind_to_thread().unwrap();
-        unsafe {
-            result::memcpy_htod_async(
-                dst[i],
-                &FINAL_RESULTS_INIT_HOST,
-                streams[i] as *mut _,
-            )
-        }
-        .unwrap();
+        unsafe { result::memcpy_htod_async(dst[i], src, streams[i] as *mut _) }.unwrap();
     }
 }
 
@@ -795,7 +778,6 @@ async fn main() -> eyre::Result<()> {
                     .block_on(previous_thread_handle.unwrap())
                     .unwrap();
             }
-            println!("1");
             let thread_devs = thread_device_manager.devices();
             let mut thread_phase2_batch = thread_phase2_batch.lock().unwrap();
             let mut thread_phase2 = thread_phase2.lock().unwrap();
@@ -812,8 +794,6 @@ async fn main() -> eyre::Result<()> {
                 .iter()
                 .map(|&e| e * QUERIES)
                 .collect::<Vec<_>>();
-
-            println!("2");
 
             let mut code_dots_batch: Vec<ChunkShare<u16>> = device_ptrs_to_shares(
                 &thread_code_results_batch,
@@ -841,8 +821,6 @@ async fn main() -> eyre::Result<()> {
                 &thread_devs,
             );
 
-            println!("3");
-
             // We only use the default streams of the devices, therefore Phase 2's are never
             // running concurrently
             let streams = thread_phase2
@@ -853,8 +831,6 @@ async fn main() -> eyre::Result<()> {
 
             // Phase 2 [Batch]: compare each result against threshold
             thread_phase2_batch.compare_threshold_masked_many(&code_dots_batch, &mask_dots_batch);
-
-            println!("4");
 
             // Phase 2 [Batch]: Reveal the binary results
             let res = thread_phase2_batch.take_result_buffer();
@@ -874,8 +850,6 @@ async fn main() -> eyre::Result<()> {
                 &db_sizes_batch,
             );
             thread_phase2_batch.return_result_buffer(res);
-
-            println!("5");
 
             // Phase 2 [DB]: compare each result against threshold
             thread_phase2.compare_threshold_masked_many(&code_dots, &mask_dots);
@@ -906,8 +880,6 @@ async fn main() -> eyre::Result<()> {
                 &thread_request_final_results,
                 &streams,
             );
-
-            println!("6");
 
             // Evaluate the results across devices
             let mut merged_results = get_merged_results(&host_results, thread_devs.len());
@@ -1063,13 +1035,25 @@ async fn main() -> eyre::Result<()> {
                 .try_send((merged_results, thread_request_ids, matches))
                 .unwrap();
 
-            println!("THREAD DONE");
-
             // Reset the results buffers for reuse
-            reset_results(&thread_device_manager.devices(), &thread_request_results, &thread_streams);
-            reset_final_results(&thread_device_manager.devices(), &thread_request_final_results, &thread_streams);
-
-            println!("RESET DONE");
+            reset_results(
+                &thread_device_manager.devices(),
+                &thread_request_results,
+                &RESULTS_INIT_HOST,
+                &thread_streams,
+            );
+            reset_results(
+                &thread_device_manager.devices(),
+                &thread_request_results_batch,
+                &RESULTS_INIT_HOST,
+                &thread_streams,
+            );
+            reset_results(
+                &thread_device_manager.devices(),
+                &thread_request_final_results,
+                &FINAL_RESULTS_INIT_HOST,
+                &thread_streams,
+            );
 
             // Make sure to not call `Drop` on those
             forget_vec!(code_dots);

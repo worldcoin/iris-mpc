@@ -21,12 +21,11 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{spawn, sync::Mutex, time::sleep};
 use uuid::Uuid;
 
-const N_QUERIES: usize = 32 * 5;
+const N_QUERIES: usize = 32 * 20;
 const REGION: &str = "eu-north-1";
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
-const N_OPTIONS: usize = 3;
 
 #[derive(Debug, Parser)]
 struct Opt {
@@ -103,8 +102,15 @@ async fn main() -> eyre::Result<()> {
                 let result: ResultEvent = serde_json::from_str(&msg.body.context("No body found")?)
                     .context("Failed to parse message body")?;
 
+
+                println!("Received result: {:?}", result);
+
                 let tmp = thread_expected_results.lock().await;
-                let expected_result = tmp.get(&result.request_id).context("unknown request_id")?;
+                let expected_result = tmp.get(&result.request_id);
+                if expected_result.is_none() {
+                    continue;
+                }
+                let expected_result = expected_result.unwrap();
 
                 if expected_result.is_none() {
                     // New insertion
@@ -119,9 +125,10 @@ async fn main() -> eyre::Result<()> {
                         .lock()
                         .await
                         .insert(result.db_index, request);
-                    println!("Inserted iris code into response!");
                 } else {
                     // Existing entry
+                    println!("Expected: {:?} Got: {:?}", expected_result, result.db_index);
+                    assert_eq!(result.is_match, true);
                     assert_eq!(result.db_index, expected_result.unwrap());
                 }
 
@@ -148,7 +155,7 @@ async fn main() -> eyre::Result<()> {
             } else {
                 3
             };
-            println!("Options: {}", options);
+            println!("Options: {:?} {}", request_id, options);
             match choice_rng.gen_range(0..options) {
                 0 => {
                     println!("Sending new iris code");
@@ -252,7 +259,7 @@ async fn main() -> eyre::Result<()> {
         // println!("Enrollment request batch {} published.", query_idx);
 
         if (query_idx + 1) % 32 == 0 {
-            sleep(Duration::from_secs(5)).await;
+            sleep(Duration::from_secs(10)).await;
         }
     }
 
