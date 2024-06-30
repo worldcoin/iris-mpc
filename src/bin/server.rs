@@ -904,7 +904,7 @@ async fn main() -> eyre::Result<()> {
             let mut min_index = 0;
             let mut min_index_val = usize::MAX;
             for i in 0..insertion_list.len() {
-                if insertion_list[i][0] < min_index_val {
+                if insertion_list[i].len() > 0 && insertion_list[i][0] < min_index_val {
                     min_index_val = insertion_list[i][0];
                     min_index = i;
                 }
