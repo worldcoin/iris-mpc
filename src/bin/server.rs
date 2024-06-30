@@ -63,6 +63,8 @@ const KMS_KEY_IDS: [&str; 3] = [
 lazy_static! {
     static ref KDF_NONCE: AtomicUsize = AtomicUsize::new(0);
     static ref KDF_SALT: Salt = Salt::new(HKDF_SHA256, b"IRIS_MPC");
+    static ref RESULTS_INIT_HOST: Vec<u32> =  vec![u32::MAX; N_QUERIES * ROTATIONS];
+    static ref FINAL_RESULTS_INIT_HOST: Vec<u32> = vec![u32::MAX; N_QUERIES];
 }
 
 macro_rules! debug_record_event {
@@ -325,6 +327,30 @@ fn distribute_insertions(results: &[usize], db_sizes: &[usize]) -> Vec<Vec<usize
         c = (c + 1) % db_sizes.len();
     }
     ret
+}
+
+fn reset_results(devs: &[Arc<CudaDevice>], dst: &[u64], streams: &[u64]) {
+    for i in 0..devs.len() {
+        devs[i].bind_to_thread().unwrap();
+        unsafe {
+            result::memcpy_htod_async(dst[i], &RESULTS_INIT_HOST, streams[i] as *mut _)
+        }
+        .unwrap();
+    }
+}
+
+pub fn reset_final_results(devs: &[Arc<CudaDevice>], dst: &[u64], streams: &[u64]) {
+    for i in 0..devs.len() {
+        devs[i].bind_to_thread().unwrap();
+        unsafe {
+            result::memcpy_htod_async(
+                dst[i],
+                &FINAL_RESULTS_INIT_HOST,
+                streams[i] as *mut _,
+            )
+        }
+        .unwrap();
+    }
 }
 
 #[tokio::main]
@@ -723,7 +749,6 @@ async fn main() -> eyre::Result<()> {
             .map(|s| s.stream as u64)
             .collect::<Vec<_>>();
         let thread_device_manager = device_manager.clone();
-        // let thread_devs = thread_device_manager.devices();
         let thread_evts = end_timer.iter().map(|e| *e as u64).collect::<Vec<_>>();
         let thread_current_stream_event = current_stream_event
             .iter()
@@ -1038,15 +1063,13 @@ async fn main() -> eyre::Result<()> {
                 .try_send((merged_results, thread_request_ids, matches))
                 .unwrap();
 
+            println!("THREAD DONE");
+
             // Reset the results buffers for reuse
-            thread_distance_comparator
-                .lock()
-                .unwrap()
-                .reset_results(&thread_request_results, &thread_streams);
-            thread_distance_comparator
-                .lock()
-                .unwrap()
-                .reset_final_results(&thread_request_final_results, &thread_streams);
+            reset_results(&thread_device_manager.devices(), &thread_request_results, &thread_streams);
+            reset_final_results(&thread_device_manager.devices(), &thread_request_final_results, &thread_streams);
+
+            println!("RESET DONE");
 
             // Make sure to not call `Drop` on those
             forget_vec!(code_dots);

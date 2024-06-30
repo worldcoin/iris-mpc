@@ -186,28 +186,4 @@ impl DistanceComparator {
             })
             .collect::<Vec<_>>()
     }
-
-    pub fn reset_results(&self, dst: &[u64], streams: &[u64]) {
-        for i in 0..self.n_devices {
-            self.devs[i].bind_to_thread().unwrap();
-            unsafe {
-                result::memcpy_htod_async(dst[i], &self.results_init_host, streams[i] as *mut _)
-            }
-            .unwrap();
-        }
-    }
-
-    pub fn reset_final_results(&self, dst: &[u64], streams: &[u64]) {
-        for i in 0..self.n_devices {
-            self.devs[i].bind_to_thread().unwrap();
-            unsafe {
-                result::memcpy_htod_async(
-                    dst[i],
-                    &self.final_results_init_host,
-                    streams[i] as *mut _,
-                )
-            }
-            .unwrap();
-        }
-    }
 }
