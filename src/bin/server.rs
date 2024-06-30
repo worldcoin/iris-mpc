@@ -49,7 +49,7 @@ const DB_BUFFER: usize = 8 * 1_000;
 const N_QUERIES: usize = 32;
 const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
-const MAX_CONCURRENT_REQUESTS: usize = 10;
+const MAX_CONCURRENT_REQUESTS: usize = 5;
 const DB_CODE_FILE: &str = "codes.db";
 const DB_MASK_FILE: &str = "masks.db";
 const DEFAULT_PATH: &str = "/opt/dlami/nvme/";
@@ -494,6 +494,11 @@ async fn main() -> eyre::Result<()> {
         streams.push(tmp_streams);
         results.push(distance_comparator.lock().unwrap().prepare_results());
         batch_results.push(distance_comparator.lock().unwrap().prepare_results());
+        final_results.push(distance_comparator.lock().unwrap().prepare_final_results());
+    }
+
+    // DEBUG
+    for _ in 0..MAX_CONCURRENT_REQUESTS {
         final_results.push(distance_comparator.lock().unwrap().prepare_final_results());
     }
 
