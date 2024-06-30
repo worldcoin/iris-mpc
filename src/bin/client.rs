@@ -102,7 +102,6 @@ async fn main() -> eyre::Result<()> {
                 let result: ResultEvent = serde_json::from_str(&msg.body.context("No body found")?)
                     .context("Failed to parse message body")?;
 
-
                 println!("Received result: {:?}", result);
 
                 let tmp = thread_expected_results.lock().await;
@@ -155,7 +154,6 @@ async fn main() -> eyre::Result<()> {
             } else {
                 3
             };
-            println!("Options: {:?} {}", request_id, options);
             match choice_rng.gen_range(0..options) {
                 0 => {
                     println!("Sending new iris code");
@@ -259,9 +257,11 @@ async fn main() -> eyre::Result<()> {
         // println!("Enrollment request batch {} published.", query_idx);
 
         if (query_idx + 1) % 32 == 0 {
-            sleep(Duration::from_secs(10)).await;
+            sleep(Duration::from_secs(1)).await;
         }
     }
+
+    sleep(Duration::from_secs(5)).await;
 
     Ok(())
 }
