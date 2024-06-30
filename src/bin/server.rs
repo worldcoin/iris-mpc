@@ -911,18 +911,19 @@ async fn main() -> eyre::Result<()> {
             }
             loop {
                 let mut b: usize = 0;
-                let mut i: usize = min_index;
+                let mut i: usize = 0;
                 while i < insertion_list.len() {
-                    if c >= insertion_list[i].len() {
+                    let ii = (i + min_index) % insertion_list.len();
+                    if c >= insertion_list[ii].len() {
                         b += 1;
                         i += 1;
                         continue;
                     }
-                    merged_results[insertion_list[i][c]] = last_index;
-                    matches[insertion_list[i][c]] = false;
+                    merged_results[insertion_list[ii][c]] = last_index;
+                    matches[insertion_list[ii][c]] = false;
                     println!(
                         "Inserting query {:?} at {}",
-                        thread_request_ids[insertion_list[i][c]], last_index
+                        thread_request_ids[insertion_list[ii][c]], last_index
                     );
                     last_index += 1;
                     i += 1;
