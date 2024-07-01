@@ -682,14 +682,14 @@ async fn main() -> eyre::Result<()> {
         println!("phase 1 done");
 
         // SAFETY:
-        // - these pointers are aligned, dereferencable, and initialized.
-        // - we are sending these streams and events to a single thread (without cloning them),
+        // - We are sending these streams and events to a single thread (without cloning them),
         //   then dropping our references to them (without destroying them).
         // - Streams are re-used after MAX_STREAMS_IN_USE tasks, but we only launch
         //   MAX_CONCURRENT_LAUNCHES tasks at a time. So this reference performs the only accesses
         //   to its memory across both C and Rust.
         // - New events are created for each batch.
         // - into_iter() makes the Rust compiler check that the streams and events are not re-used.
+        // - These pointers are aligned, dereferencable, and initialized.
         assert!(MAX_STREAMS_IN_USE > MAX_CONCURRENT_LAUNCHES);
         let thread_streams = request_streams
             .into_iter()
@@ -781,12 +781,14 @@ async fn main() -> eyre::Result<()> {
                 &thread_devs,
             );
 
-            // We only use the default streams of the devices, therefore Phase 2's are never
-            // running concurrently
+            // SAFETY:
+            // - We only use the default streams of the devices, therefore Phase 2's are never
+            //   running concurrently.
+            // - These pointers are aligned, dereferencable, and initialized.
             let phase2_streams = thread_phase2
                 .get_devices()
                 .iter()
-                .map(|d| *d.cu_stream())
+                .map(|d| unsafe { d.cu_stream().as_mut().unwrap() })
                 .collect::<Vec<_>>();
 
             // Phase 2 [Batch]: compare each result against threshold
@@ -838,7 +840,7 @@ async fn main() -> eyre::Result<()> {
                 &thread_request_results_batch,
                 &thread_request_results,
                 &thread_request_final_results,
-                &phase2_streams,
+                &mut phase2_streams,
             );
 
             // Evaluate the results across devices
