@@ -19,10 +19,7 @@ use gpu_iris_mpc::{
         IRIS_CODE_LENGTH, ROTATIONS,
     },
     helpers::{
-        device_ptrs, device_ptrs_to_slices,
-        kms_dh::derive_shared_secret,
-        mmap::{read_mmap_file, write_mmap_file},
-        sqs::{ResultEvent, SMPCRequest, SQSMessage},
+        device_ptrs, device_ptrs_to_slices, kms_dh::derive_shared_secret, mmap::{read_mmap_file, write_mmap_file}, sqs::{ResultEvent, SMPCRequest, SQSMessage}
     },
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     threshold_ring::protocol::{ChunkShare, Circuits},
@@ -333,6 +330,36 @@ fn reset_results(devs: &[Arc<CudaDevice>], dst: &[u64], src: &[u32], streams: &[
     for i in 0..devs.len() {
         devs[i].bind_to_thread().unwrap();
         unsafe { result::memcpy_htod_async(dst[i], src, streams[i] as *mut _) }.unwrap();
+    }
+}
+
+pub fn calculate_insertion_indices(
+    merged_results: &mut [u32],
+    insertion_list: &[Vec<usize>],
+    db_sizes: &[usize],
+) -> Vec<bool> {
+    let mut matches = vec![true; N_QUERIES];
+    let mut last_index = db_sizes.iter().sum::<usize>() as u32;
+    let mut c: usize = 0;
+    let mut min_index = 0;
+    let mut min_index_val = usize::MAX;
+    for i in 0..insertion_list.len() {
+        if insertion_list[i].len() > 0 && insertion_list[i][0] < min_index_val {
+            min_index_val = insertion_list[i][0];
+            min_index = i;
+        }
+    }
+    loop {
+        for i in 0..insertion_list.len() {
+            let ii = (i + min_index) % insertion_list.len();
+            if c >= insertion_list[ii].len() {
+                return matches;
+            }
+            merged_results[insertion_list[ii][c]] = last_index;
+            matches[insertion_list[ii][c]] = false;
+            last_index += 1;
+        }
+        c += 1;
     }
 }
 
@@ -893,43 +920,8 @@ async fn main() -> eyre::Result<()> {
             let insertion_list = distribute_insertions(&insertion_list, &db_sizes);
 
             // Calculate the new indices for the inserted queries
-            let mut matches = vec![true; N_QUERIES];
-            let total_db_size: usize = db_sizes.iter().sum();
-
-            let mut last_index = total_db_size as u32;
-            let mut c: usize = 0;
-            let mut min_index = 0;
-            let mut min_index_val = usize::MAX;
-            for i in 0..insertion_list.len() {
-                if insertion_list[i].len() > 0 && insertion_list[i][0] < min_index_val {
-                    min_index_val = insertion_list[i][0];
-                    min_index = i;
-                }
-            }
-            loop {
-                let mut b: usize = 0;
-                let mut i: usize = 0;
-                while i < insertion_list.len() {
-                    let ii = (i + min_index) % insertion_list.len();
-                    if c >= insertion_list[ii].len() {
-                        b += 1;
-                        i += 1;
-                        continue;
-                    }
-                    merged_results[insertion_list[ii][c]] = last_index;
-                    matches[insertion_list[ii][c]] = false;
-                    println!(
-                        "Inserting query {:?} at {}",
-                        thread_request_ids[insertion_list[ii][c]], last_index
-                    );
-                    last_index += 1;
-                    i += 1;
-                }
-                if b >= insertion_list.len() - 1 {
-                    break;
-                }
-                c += 1;
-            }
+            let matches =
+                calculate_insertion_indices(&mut merged_results, &insertion_list, &db_sizes);
 
             // DEBUG
             println!("Insertion list: {:?}", insertion_list);
