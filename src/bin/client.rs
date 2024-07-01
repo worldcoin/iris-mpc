@@ -254,8 +254,6 @@ async fn main() -> eyre::Result<()> {
             .send()
             .await?;
 
-        // println!("Enrollment request batch {} published.", query_idx);
-
         if (query_idx + 1) % 32 == 0 {
             sleep(Duration::from_secs(1)).await;
         }
