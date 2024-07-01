@@ -187,7 +187,7 @@ fn slice_tuples_to_ptrs(
         (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
         (Vec<CudaSlice<u32>>, Vec<CudaSlice<u32>>),
     ),
-) -> ((Vec<u64>, Vec<u64>), (Vec<u64>, Vec<u64>)) {
+) -> ((Vec<&CUdeviceptr>, Vec<&CUdeviceptr>), (Vec<&CUdeviceptr>, Vec<&CUdeviceptr>)) {
     (
         (device_ptrs(&tuple.0 .0), device_ptrs(&tuple.0 .1)),
         (device_ptrs(&tuple.1 .0), device_ptrs(&tuple.1 .1)),
@@ -262,17 +262,17 @@ fn await_streams(streams: &mut [&mut CUstream_st]) {
 }
 
 fn dtod_at_offset(
-    dst: u64,
+    dst: &CUdeviceptr,
     dst_offset: usize,
-    src: u64,
+    src: &CUdeviceptr,
     src_offset: usize,
     len: usize,
     stream_ptr: CUstream,
 ) {
     unsafe {
         result::memcpy_dtod_async(
-            dst + dst_offset as u64,
-            src + src_offset as u64,
+            dst + dst_offset as CUdeviceptr,
+            src + src_offset as CUdeviceptr,
             len,
             stream_ptr,
         )
@@ -281,8 +281,8 @@ fn dtod_at_offset(
 }
 
 fn device_ptrs_to_shares<T>(
-    a: &[u64],
-    b: &[u64],
+    a: &[CUdeviceptr],
+    b: &[CUdeviceptr],
     lens: &[usize],
     devs: &[Arc<CudaDevice>],
 ) -> Vec<ChunkShare<T>> {
