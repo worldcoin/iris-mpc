@@ -38,9 +38,9 @@ pub fn preprocess_query(query: &[u16]) -> Vec<Vec<u8>> {
 #[allow(clippy::too_many_arguments)]
 pub fn gemm(
     handle: &CudaBlas,
-    a: &CUdeviceptr,
-    b: &CUdeviceptr,
-    c: &CUdeviceptr,
+    a: CUdeviceptr,
+    b: CUdeviceptr,
+    c: CUdeviceptr,
     a_offset: u64,
     b_offset: u64,
     c_offset: u64,
@@ -371,7 +371,7 @@ impl ShareDB {
 
     pub fn query_sums(
         &self,
-        query_ptrs: &(Vec<&CUdeviceptr>, Vec<&CUdeviceptr>),
+        query_ptrs: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
         streams: &[CudaStream],
         blass: &[CudaBlas],
     ) -> (Vec<CUdeviceptr>, Vec<CUdeviceptr>) {
@@ -403,8 +403,8 @@ impl ShareDB {
             gemm(
                 &blass[idx],
                 query0,
-                self.ones[idx].device_ptr(),
-                &query0_sum,
+                *self.ones[idx].device_ptr(),
+                query0_sum,
                 0,
                 0,
                 0,
@@ -417,8 +417,8 @@ impl ShareDB {
             gemm(
                 &blass[idx],
                 query1,
-                self.ones[idx].device_ptr(),
-                &query1_sum,
+                *self.ones[idx].device_ptr(),
+                query1_sum,
                 0,
                 0,
                 0,
@@ -437,8 +437,8 @@ impl ShareDB {
 
     pub fn dot(
         &mut self,
-        query_ptrs: &(Vec<&CUdeviceptr>, Vec<&CUdeviceptr>),
-        db: &(Vec<&CUdeviceptr>, Vec<&CUdeviceptr>),
+        query_ptrs: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
+        db: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
         db_sizes: &[usize],
         streams: &[CudaStream],
         blass: &[CudaBlas],
@@ -464,7 +464,7 @@ impl ShareDB {
                         &blass[idx],
                         *d,
                         *q,
-                        self.intermediate_results[idx].device_ptr(),
+                        *self.intermediate_results[idx].device_ptr(),
                         0,
                         0,
                         0,
@@ -481,8 +481,8 @@ impl ShareDB {
 
     pub fn dot_reduce(
         &mut self,
-        query_sums: &(Vec<&CUdeviceptr>, Vec<&CUdeviceptr>),
-        db_sums: &(Vec<&CUdeviceptr>, Vec<&CUdeviceptr>),
+        query_sums: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
+        db_sums: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
         db_sizes: &[usize],
         streams: &[CudaStream],
     ) {

@@ -89,7 +89,7 @@ impl DeviceManager {
         &self,
         preprocessed_query: &[Vec<u8>],
         streams: &[CudaStream],
-    ) -> (Vec<&CUdeviceptr>, Vec<&CUdeviceptr>) {
+    ) -> (Vec<CUdeviceptr>, Vec<CUdeviceptr>) {
         let mut query0_ptrs = vec![];
         let mut query1_ptrs = vec![];
         for idx in 0..self.device_count() {

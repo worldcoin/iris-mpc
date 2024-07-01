@@ -8,7 +8,7 @@ use cudarc::driver::{
         event::{self, elapsed},
         stream::synchronize,
     },
-    sys::{CUstream, CUstream_st},
+    sys::{CUdeviceptr, CUstream, CUstream_st},
     CudaDevice, CudaSlice,
 };
 use gpu_iris_mpc::{
@@ -187,7 +187,7 @@ fn slice_tuples_to_ptrs(
         (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
         (Vec<CudaSlice<u32>>, Vec<CudaSlice<u32>>),
     ),
-) -> ((Vec<&CUdeviceptr>, Vec<&CUdeviceptr>), (Vec<&CUdeviceptr>, Vec<&CUdeviceptr>)) {
+) -> ((Vec<CUdeviceptr>, Vec<CUdeviceptr>), (Vec<CUdeviceptr>, Vec<CUdeviceptr>)) {
     (
         (device_ptrs(&tuple.0 .0), device_ptrs(&tuple.0 .1)),
         (device_ptrs(&tuple.1 .0), device_ptrs(&tuple.1 .1)),
@@ -262,9 +262,9 @@ fn await_streams(streams: &mut [&mut CUstream_st]) {
 }
 
 fn dtod_at_offset(
-    dst: &CUdeviceptr,
+    dst: CUdeviceptr,
     dst_offset: usize,
-    src: &CUdeviceptr,
+    src: CUdeviceptr,
     src_offset: usize,
     len: usize,
     stream_ptr: CUstream,
