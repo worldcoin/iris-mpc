@@ -1,15 +1,20 @@
 #![allow(clippy::needless_range_loop)]
+
+mod batch;
+mod chacha_seeds;
+mod device;
+mod results;
 use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::{config::Region, Client};
+use batch::receive_batch;
+use chacha_seeds::next_chacha_seeds;
 use clap::Parser;
-use core::sync::atomic::Ordering::SeqCst;
 use cudarc::driver::{
-    result::{
-        self,
-        event::{self, elapsed},
-        stream::synchronize,
-    },
-    CudaDevice, CudaSlice,
+    result::event::{self, elapsed},
+    CudaSlice,
+};
+use device::{
+    await_streams, device_ptrs_to_shares, device_ptrs_to_slices, dtod_at_offset, reset_device_ptrs, slice_tuples_to_ptrs
 };
 use gpu_iris_mpc::{
     dot::{
@@ -19,21 +24,21 @@ use gpu_iris_mpc::{
         IRIS_CODE_LENGTH, ROTATIONS,
     },
     helpers::{
-        device_ptrs, device_ptrs_to_slices,
+        device_ptrs,
         kms_dh::derive_shared_secret,
         mmap::{read_mmap_file, write_mmap_file},
-        sqs::{ResultEvent, SMPCRequest, SQSMessage},
+        sqs::ResultEvent,
     },
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use lazy_static::lazy_static;
 use rand::{rngs::StdRng, SeedableRng};
-use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
+use results::{calculate_insertion_indices, distribute_insertions, get_merged_results};
 use std::{
     fs::metadata,
     mem,
-    sync::{atomic::AtomicUsize, Arc, Mutex},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use tokio::{
@@ -61,8 +66,6 @@ const KMS_KEY_IDS: [&str; 3] = [
 ];
 
 lazy_static! {
-    static ref KDF_NONCE: AtomicUsize = AtomicUsize::new(0);
-    static ref KDF_SALT: Salt = Salt::new(HKDF_SHA256, b"IRIS_MPC");
     static ref RESULTS_INIT_HOST: Vec<u32> = vec![u32::MAX; N_QUERIES * ROTATIONS];
     static ref FINAL_RESULTS_INIT_HOST: Vec<u32> = vec![u32::MAX; N_QUERIES];
 }
@@ -101,79 +104,6 @@ struct Opt {
     path: Option<String>,
 }
 
-#[derive(Default)]
-struct BatchQueryEntries {
-    pub code: Vec<GaloisRingIrisCodeShare>,
-    pub mask: Vec<GaloisRingIrisCodeShare>,
-}
-
-#[derive(Default)]
-struct BatchQuery {
-    pub request_ids: Vec<String>,
-    pub query:       BatchQueryEntries,
-    pub db:          BatchQueryEntries,
-}
-
-async fn receive_batch(
-    party_id: usize,
-    client: &Client,
-    queue_url: &String,
-) -> eyre::Result<BatchQuery> {
-    let mut batch_query = BatchQuery::default();
-
-    while batch_query.db.code.len() < QUERIES {
-        let rcv_message_output = client
-            .receive_message()
-            .max_number_of_messages(1i32)
-            .queue_url(queue_url)
-            .send()
-            .await?;
-
-        for sns_message in rcv_message_output.messages.unwrap_or_default() {
-            let message: SQSMessage = serde_json::from_str(sns_message.body().unwrap())?;
-            let message: SMPCRequest = serde_json::from_str(&message.message)?;
-            batch_query.request_ids.push(message.clone().request_id);
-
-            let (db_iris_shares, db_mask_shares, iris_shares, mask_shares) =
-                spawn_blocking(move || {
-                    let mut iris_share =
-                        GaloisRingIrisCodeShare::new(party_id + 1, message.get_iris_shares());
-                    let mut mask_share =
-                        GaloisRingIrisCodeShare::new(party_id + 1, message.get_mask_shares());
-
-                    let db_iris_shares = iris_share.all_rotations();
-                    let db_mask_shares = mask_share.all_rotations();
-
-                    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
-                    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut mask_share);
-
-                    (
-                        db_iris_shares,
-                        db_mask_shares,
-                        iris_share.all_rotations(),
-                        mask_share.all_rotations(),
-                    )
-                })
-                .await?;
-
-            batch_query.db.code.extend(db_iris_shares);
-            batch_query.db.mask.extend(db_mask_shares);
-            batch_query.query.code.extend(iris_shares);
-            batch_query.query.mask.extend(mask_shares);
-
-            // TODO: we should only delete after processing
-            client
-                .delete_message()
-                .queue_url(queue_url)
-                .receipt_handle(sns_message.receipt_handle.unwrap())
-                .send()
-                .await?;
-        }
-    }
-
-    Ok(batch_query)
-}
-
 fn prepare_query_shares(shares: Vec<GaloisRingIrisCodeShare>) -> Vec<Vec<u8>> {
     preprocess_query(
         &shares
@@ -181,19 +111,6 @@ fn prepare_query_shares(shares: Vec<GaloisRingIrisCodeShare>) -> Vec<Vec<u8>> {
             .map(|e| e.coefs)
             .flatten()
             .collect::<Vec<_>>(),
-    )
-}
-
-#[allow(clippy::type_complexity)]
-fn slice_tuples_to_ptrs(
-    tuple: &(
-        (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
-        (Vec<CudaSlice<u32>>, Vec<CudaSlice<u32>>),
-    ),
-) -> ((Vec<u64>, Vec<u64>), (Vec<u64>, Vec<u64>)) {
-    (
-        (device_ptrs(&tuple.0 .0), device_ptrs(&tuple.0 .1)),
-        (device_ptrs(&tuple.1 .0), device_ptrs(&tuple.1 .1)),
     )
 }
 
@@ -226,114 +143,6 @@ fn open(
     cudarc::nccl::result::group_end().unwrap();
 
     distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes);
-}
-
-fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
-    let mut results = vec![];
-    for j in 0..host_results[0].len() {
-        let mut match_entry = u32::MAX;
-        for i in 0..host_results.len() {
-            let match_idx = host_results[i][j] * n_devices as u32 + i as u32;
-            if host_results[i][j] != u32::MAX && match_idx < match_entry {
-                match_entry = match_idx;
-            }
-        }
-
-        results.push(match_entry);
-
-        // DEBUG
-        println!(
-            "Query {}: match={} [index: {}]",
-            j,
-            match_entry != u32::MAX,
-            match_entry
-        );
-    }
-    results
-}
-
-fn await_streams(streams: &[u64]) {
-    for i in 0..streams.len() {
-        unsafe {
-            synchronize(streams[i] as *mut _).unwrap();
-        }
-    }
-}
-
-fn dtod_at_offset(
-    dst: u64,
-    dst_offset: usize,
-    src: u64,
-    src_offset: usize,
-    len: usize,
-    stream_ptr: u64,
-) {
-    unsafe {
-        result::memcpy_dtod_async(
-            dst + dst_offset as u64,
-            src + src_offset as u64,
-            len,
-            stream_ptr as *mut _,
-        )
-        .unwrap();
-    }
-}
-
-fn device_ptrs_to_shares<T>(
-    a: &[u64],
-    b: &[u64],
-    lens: &[usize],
-    devs: &[Arc<CudaDevice>],
-) -> Vec<ChunkShare<T>> {
-    let a = device_ptrs_to_slices(a, lens, devs);
-    let b = device_ptrs_to_slices(b, lens, devs);
-
-    a.into_iter()
-        .zip(b.into_iter())
-        .map(|(a, b)| ChunkShare::new(a, b))
-        .collect::<Vec<_>>()
-}
-
-/// Internal helper function to derive a new seed from the given seed and nonce.
-fn derive_seed(seed: [u32; 8], nonce: usize) -> eyre::Result<[u32; 8]> {
-    let pseudo_rand_key = KDF_SALT.extract(bytemuck::cast_slice(&seed));
-    let nonce = nonce.to_be_bytes();
-    let context = vec![nonce.as_slice()];
-    let output_key_material: Okm<Algorithm> =
-        pseudo_rand_key.expand(&context, HKDF_SHA256).unwrap();
-    let mut result = [0u32; 8];
-    output_key_material
-        .fill(bytemuck::cast_slice_mut(&mut result))
-        .unwrap();
-    Ok(result)
-}
-
-/// Applies a KDF to the given seeds to derive new seeds.
-fn next_chacha_seeds(seeds: ([u32; 8], [u32; 8])) -> eyre::Result<([u32; 8], [u32; 8])> {
-    let nonce = KDF_NONCE.fetch_add(1, SeqCst);
-    Ok((derive_seed(seeds.0, nonce)?, derive_seed(seeds.1, nonce)?))
-}
-
-fn distribute_insertions(results: &[usize], db_sizes: &[usize]) -> Vec<Vec<usize>> {
-    let mut ret = vec![vec![]; db_sizes.len()];
-    let start = db_sizes
-        .iter()
-        .position(|&x| x == *db_sizes.iter().min().unwrap())
-        .unwrap();
-
-    let mut c = start;
-    for r in results {
-        ret[c].push(*r);
-        c = (c + 1) % db_sizes.len();
-    }
-    ret
-}
-
-fn reset_results(devs: &[Arc<CudaDevice>], dst: &[u64], src: &[u32], streams: &[u64]) {
-    for i in 0..devs.len() {
-        devs[i].bind_to_thread().unwrap();
-        unsafe { result::memcpy_htod_async(dst[i], src, streams[i] as *mut _) }.unwrap();
-    }
 }
 
 #[tokio::main]
@@ -883,53 +692,17 @@ async fn main() -> eyre::Result<()> {
 
             // Evaluate the results across devices
             let mut merged_results = get_merged_results(&host_results, thread_devs.len());
-            let insertion_list = merged_results
-                .iter()
-                .enumerate()
-                .filter(|&(_idx, &num)| num == u32::MAX)
-                .map(|(idx, _num)| idx)
-                .collect::<Vec<_>>();
-
-            let insertion_list = distribute_insertions(&insertion_list, &db_sizes);
-
-            // Calculate the new indices for the inserted queries
-            let mut matches = vec![true; N_QUERIES];
-            let total_db_size: usize = db_sizes.iter().sum();
-
-            let mut last_index = total_db_size as u32;
-            let mut c: usize = 0;
-            let mut min_index = 0;
-            let mut min_index_val = usize::MAX;
-            for i in 0..insertion_list.len() {
-                if insertion_list[i].len() > 0 && insertion_list[i][0] < min_index_val {
-                    min_index_val = insertion_list[i][0];
-                    min_index = i;
-                }
-            }
-            loop {
-                let mut b: usize = 0;
-                let mut i: usize = 0;
-                while i < insertion_list.len() {
-                    let ii = (i + min_index) % insertion_list.len();
-                    if c >= insertion_list[ii].len() {
-                        b += 1;
-                        i += 1;
-                        continue;
-                    }
-                    merged_results[insertion_list[ii][c]] = last_index;
-                    matches[insertion_list[ii][c]] = false;
-                    println!(
-                        "Inserting query {:?} at {}",
-                        thread_request_ids[insertion_list[ii][c]], last_index
-                    );
-                    last_index += 1;
-                    i += 1;
-                }
-                if b >= insertion_list.len() - 1 {
-                    break;
-                }
-                c += 1;
-            }
+            let insertion_list = distribute_insertions(
+                &merged_results
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_idx, &num)| num == u32::MAX)
+                    .map(|(idx, _num)| idx)
+                    .collect::<Vec<_>>(),
+                &db_sizes,
+            );
+            let matches =
+                calculate_insertion_indices(&mut merged_results, &insertion_list, &db_sizes);
 
             // DEBUG
             println!("Insertion list: {:?}", insertion_list);
@@ -1036,19 +809,19 @@ async fn main() -> eyre::Result<()> {
                 .unwrap();
 
             // Reset the results buffers for reuse
-            reset_results(
+            reset_device_ptrs(
                 &thread_device_manager.devices(),
                 &thread_request_results,
                 &RESULTS_INIT_HOST,
                 &thread_streams,
             );
-            reset_results(
+            reset_device_ptrs(
                 &thread_device_manager.devices(),
                 &thread_request_results_batch,
                 &RESULTS_INIT_HOST,
                 &thread_streams,
             );
-            reset_results(
+            reset_device_ptrs(
                 &thread_device_manager.devices(),
                 &thread_request_final_results,
                 &FINAL_RESULTS_INIT_HOST,
