@@ -692,8 +692,9 @@ async fn main() -> eyre::Result<()> {
         // - Streams are re-used after MAX_BATCHES_BEFORE_REUSE threads, but we only launch
         //   MAX_CONCURRENT_BATCHES threads at a time. So this reference performs the only accesses
         //   to its memory across both C and Rust.
-        // - New current stream events are created for each batch. They are only re-used after 2
-        //   batches, but we wait for the previous batch to finish before running that code.
+        // - New current stream events are created for each batch. They are only re-used after
+        //   MAX_CONCURRENT_BATCHES, but we wait for the previous batch to finish before running
+        //   that code.
         // - End events are re-used in each thread, but we only end one thread at a time.
         assert!(MAX_BATCHES_BEFORE_REUSE > MAX_CONCURRENT_BATCHES);
         // into_iter() makes the Rust compiler check that the streams are not re-used.
