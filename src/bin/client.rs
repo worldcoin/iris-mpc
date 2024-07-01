@@ -86,9 +86,9 @@ async fn main() -> eyre::Result<()> {
     let thread_requests = requests.clone();
     let thread_responses = responses.clone();
 
-    spawn(async move {
+    let recv_thread = spawn(async move {
         let sqs_client = SqsClient::new(&shared_config);
-        loop {
+        for _ in 0..N_QUERIES * 3 {
             // Receive responses
             let msg = sqs_client
                 .receive_message()
@@ -261,7 +261,8 @@ async fn main() -> eyre::Result<()> {
         }
     }
 
-    sleep(Duration::from_secs(5)).await;
+    // Receive all messages
+    recv_thread.await??;
 
     Ok(())
 }
