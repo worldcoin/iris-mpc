@@ -45,15 +45,17 @@ const N_BATCHES: usize = 10;
 const RNG_SEED: u64 = 42;
 const SHUFFLE_SEED: u64 = 42;
 
-/// The number of requests before a stream is re-used.
-const MAX_STREAMS_IN_USE: usize = 5;
+/// The number of batches before a stream is re-used.
+const MAX_BATCHES_BEFORE_REUSE: usize = 5;
 
-/// The number of requests that are launched concurrently.
+/// The number of batches that are launched concurrently.
 ///
-/// Note that some code is running in requests `N` and `N - 1`, and other code is running in requests
-/// `N` and `N - MAX_CONCURRENT_LAUNCHES`, because the next request awaits completion of the request
-/// `MAX_CONCURRENT_LAUNCHES` behind it. 
-const MAX_CONCURRENT_LAUNCHES: usize = 2;
+/// Code can run concurrently in:
+/// - requests `N` and `N - 1`, 
+/// - requests `N` and `N - MAX_CONCURRENT_BATCHES`, because the next request phase 1 awaits
+///   completion of the request `MAX_CONCURRENT_BATCHES` behind it, or
+/// - request `N` only, because phase 2 limits the critical section to one batch.
+const MAX_CONCURRENT_BATCHES: usize = 2;
 
 const DB_CODE_FILE: &str = "codes.db";
 const DB_MASK_FILE: &str = "masks.db";
@@ -476,7 +478,7 @@ async fn main() -> eyre::Result<()> {
     let mut results = vec![];
     let mut batch_results = vec![];
     let mut final_results = vec![];
-    for _ in 0..MAX_STREAMS_IN_USE {
+    for _ in 0..MAX_BATCHES_BEFORE_REUSE {
         let tmp_streams = device_manager.fork_streams();
         cublas_handles.push(device_manager.create_cublas(&tmp_streams));
         streams.push(tmp_streams);
@@ -535,11 +537,11 @@ async fn main() -> eyre::Result<()> {
 
         let mut timers = vec![];
 
-        let request_streams = &streams[request_counter % MAX_STREAMS_IN_USE];
-        let request_cublas_handles = &cublas_handles[request_counter % MAX_STREAMS_IN_USE];
-        let request_results = &results[request_counter % MAX_STREAMS_IN_USE];
-        let request_results_batch = &batch_results[request_counter % MAX_STREAMS_IN_USE];
-        let request_final_results = &final_results[request_counter % MAX_STREAMS_IN_USE];
+        let request_streams = &streams[request_counter % MAX_BATCHES_BEFORE_REUSE];
+        let request_cublas_handles = &cublas_handles[request_counter % MAX_BATCHES_BEFORE_REUSE];
+        let request_results = &results[request_counter % MAX_BATCHES_BEFORE_REUSE];
+        let request_results_batch = &batch_results[request_counter % MAX_BATCHES_BEFORE_REUSE];
+        let request_final_results = &final_results[request_counter % MAX_BATCHES_BEFORE_REUSE];
 
         // First stream doesn't need to wait on anyone
         if request_counter == 0 {
@@ -566,12 +568,12 @@ async fn main() -> eyre::Result<()> {
             masks_engine.query_sums(&mask_query_insert, request_streams, request_cublas_handles);
 
         // update the db size, skip this for the first two
-        if request_counter > MAX_CONCURRENT_LAUNCHES {
+        if request_counter > MAX_CONCURRENT_BATCHES {
             // We have two streams working concurrently, we'll await the stream before
             // previous one.
             // SAFETY: 
             let previous_previous_streams =
-                &streams[(request_counter - MAX_CONCURRENT_LAUNCHES) % MAX_STREAMS_IN_USE];
+                &streams[(request_counter - MAX_CONCURRENT_BATCHES) % MAX_BATCHES_BEFORE_REUSE];
             device_manager.await_event(previous_previous_streams, &previous_previous_stream_event);
             device_manager.await_streams(previous_previous_streams);
         }
@@ -687,13 +689,13 @@ async fn main() -> eyre::Result<()> {
         //   then dropping our references to them (without destroying them).
         // - These pointers are aligned, dereferencable, and initialized.
         // Unique usage:
-        // - Streams are re-used after MAX_STREAMS_IN_USE threads, but we only launch
-        //   MAX_CONCURRENT_LAUNCHES threads at a time. So this reference performs the only accesses
+        // - Streams are re-used after MAX_BATCHES_BEFORE_REUSE threads, but we only launch
+        //   MAX_CONCURRENT_BATCHES threads at a time. So this reference performs the only accesses
         //   to its memory across both C and Rust.
         // - New current stream events are created for each batch. They are only re-used after 2
         //   batches, but we wait for the previous batch to finish before running that code.
         // - End events are re-used in each thread, but we only end one thread at a time.
-        assert!(MAX_STREAMS_IN_USE > MAX_CONCURRENT_LAUNCHES);
+        assert!(MAX_BATCHES_BEFORE_REUSE > MAX_CONCURRENT_BATCHES);
         // into_iter() makes the Rust compiler check that the streams are not re-used.
         let mut thread_streams = request_streams
             .into_iter()
@@ -746,7 +748,7 @@ async fn main() -> eyre::Result<()> {
             // Wait for Phase 2 of previous round to finish in order to not have them overlapping.
             // SAFETY: waiting here makes sure we don't access these mutable streams or events
             // concurrently:
-            // - CUstream: thread_streams (only re-used after MAX_STREAMS_IN_USE batches),
+            // - CUstream: thread_streams (only re-used after MAX_BATCHES_BEFORE_REUSE batches),
             // - CUevent: thread_current_stream_event, thread_end_timer,
             // - Comm: phase2, phase2_batch.
             if previous_thread_handle.is_some() {
