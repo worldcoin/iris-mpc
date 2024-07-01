@@ -251,7 +251,7 @@ fn get_non_matching_indices(host_results: &[Vec<u32>]) -> Vec<usize> {
     insertion_list
 }
 
-fn await_streams(streams: &[&mut CUstream_st]) {
+fn await_streams(streams: &mut [&mut CUstream_st]) {
     for i in 0..streams.len() {
         // SAFETY: these streams have already been created, and the caller holds a reference to
         // their CudaDevice, which makes sure they aren't dropped.
@@ -496,7 +496,7 @@ async fn main() -> eyre::Result<()> {
     let mut next_exchange_event = device_manager.create_events();
     let mut timer_events = vec![];
     let start_timer = device_manager.create_events();
-    let end_timer;
+    let mut end_timer = device_manager.create_events();
 
     let current_db_size: Vec<usize> =
         vec![DB_SIZE / device_manager.device_count(); device_manager.device_count()];
@@ -568,7 +568,8 @@ async fn main() -> eyre::Result<()> {
         // update the db size, skip this for the first two
         if request_counter > MAX_CONCURRENT_LAUNCHES {
             // We have two streams working concurrently, we'll await the stream before
-            // previous one
+            // previous one.
+            // SAFETY: 
             let previous_previous_streams =
                 &streams[(request_counter - MAX_CONCURRENT_LAUNCHES) % MAX_STREAMS_IN_USE];
             device_manager.await_event(previous_previous_streams, &previous_previous_stream_event);
@@ -684,19 +685,27 @@ async fn main() -> eyre::Result<()> {
         // SAFETY:
         // - We are sending these streams and events to a single thread (without cloning them),
         //   then dropping our references to them (without destroying them).
-        // - Streams are re-used after MAX_STREAMS_IN_USE tasks, but we only launch
-        //   MAX_CONCURRENT_LAUNCHES tasks at a time. So this reference performs the only accesses
-        //   to its memory across both C and Rust.
-        // - New events are created for each batch.
-        // - into_iter() makes the Rust compiler check that the streams and events are not re-used.
         // - These pointers are aligned, dereferencable, and initialized.
+        // Unique usage:
+        // - Streams are re-used after MAX_STREAMS_IN_USE threads, but we only launch
+        //   MAX_CONCURRENT_LAUNCHES threads at a time. So this reference performs the only accesses
+        //   to its memory across both C and Rust.
+        // - New current stream events are created for each batch. They are only re-used after 2
+        //   batches, but we wait for the previous batch to finish before running that code.
+        // - End events are re-used in each thread, but we only end one thread at a time.
         assert!(MAX_STREAMS_IN_USE > MAX_CONCURRENT_LAUNCHES);
-        let thread_streams = request_streams
+        // into_iter() makes the Rust compiler check that the streams are not re-used.
+        let mut thread_streams = request_streams
             .into_iter()
             .map(|s| unsafe { s.stream.as_mut().unwrap() })
             .collect::<Vec<_>>();
-        let thread_current_stream_event = current_stream_event
-            .into_iter()
+        // The compiler can't tell that we wait for the previous batch before re-using these events.
+        let mut thread_current_stream_event = current_stream_event
+            .iter()
+            .map(|e| unsafe { e.as_mut().unwrap() })
+            .collect::<Vec<_>>();
+        let mut thread_end_timer = end_timer
+            .iter()
             .map(|e| unsafe { e.as_mut().unwrap() })
             .collect::<Vec<_>>();
 
@@ -731,9 +740,11 @@ async fn main() -> eyre::Result<()> {
 
         previous_thread_handle = Some(spawn_blocking(move || {
             // Wait for Phase 1 to finish
-            await_streams(&thread_streams);
+            await_streams(&mut thread_streams);
 
-            // Wait for Phase 2 of previous round to finish in order to not have them overlapping
+            // Wait for Phase 2 of previous round to finish in order to not have them overlapping.
+            // SAFETY: waiting here makes sure we don't access these mutable streams or events
+            // concurrently: thread_streams, thread_current_stream_event, thread_end_timer.
             if previous_thread_handle.is_some() {
                 runtime::Handle::current().block_on(previous_thread_handle.unwrap()).unwrap();
             }
@@ -785,7 +796,7 @@ async fn main() -> eyre::Result<()> {
             // - We only use the default streams of the devices, therefore Phase 2's are never
             //   running concurrently.
             // - These pointers are aligned, dereferencable, and initialized.
-            let phase2_streams = thread_phase2
+            let mut phase2_streams = thread_phase2
                 .get_devices()
                 .iter()
                 .map(|d| unsafe { d.cu_stream().as_mut().unwrap() })
@@ -853,12 +864,6 @@ async fn main() -> eyre::Result<()> {
             // DEBUG
             println!("Insertion list: {:?}", insertion_list);
 
-            // SAFETY: We create separate end timers for each batch, to avoid undefined behaviour
-            // (which can happen if the same timer is re-used in multiple threads.)
-            // Since previous timers are overwritten, only the final end timers are used to
-            // calculate the total time.
-            end_timer = thread_device_manager.create_events();
-
             for i in 0..thread_devs.len() {
                 thread_devs[i].bind_to_thread().unwrap();
                 if insertion_list.len() > i {
@@ -883,7 +888,7 @@ async fn main() -> eyre::Result<()> {
                                 query.0[i],
                                 insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                                 IRIS_CODE_LENGTH,
-                                phase2_streams[i],
+                                *&mut phase2_streams[i],
                             );
 
                             dtod_at_offset(
@@ -892,7 +897,7 @@ async fn main() -> eyre::Result<()> {
                                 query.1[i],
                                 insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                                 IRIS_CODE_LENGTH,
-                                phase2_streams[i],
+                                *&mut phase2_streams[i],
                             );
 
                             dtod_at_offset(
@@ -901,7 +906,7 @@ async fn main() -> eyre::Result<()> {
                                 sums.0[i],
                                 insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                                 mem::size_of::<u32>(),
-                                phase2_streams[i],
+                                *&mut phase2_streams[i],
                             );
 
                             dtod_at_offset(
@@ -910,7 +915,7 @@ async fn main() -> eyre::Result<()> {
                                 sums.1[i],
                                 insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                                 mem::size_of::<u32>(),
-                                phase2_streams[i],
+                                *&mut phase2_streams[i],
                             );
                         }
                         old_db_size += 1;
@@ -939,20 +944,22 @@ async fn main() -> eyre::Result<()> {
                 thread_phase2.set_chunk_size(new_chunk_size / 64);
 
                 // Emit stream finished event to unblock the stream after the following stream.
+                // Since previous timers are overwritten, only the final end timers are used to
+                // calculate the total time.
                 //
                 // SAFETY:
-                // - new events are created for each thread, so they are never null.
-                // - these streams have already been created, and we hold a reference to their
+                // - the events are created before launching the thread, so they are never null.
+                // - the streams have already been created, and we hold a reference to their
                 //   CudaDevice, which makes sure they aren't dropped.
                 unsafe {
                     event::record(
-                        thread_current_stream_event[i],
-                        thread_streams[i],
+                        *&mut thread_current_stream_event[i],
+                        *&mut thread_streams[i],
                     )
                     .unwrap();
 
                     // DEBUG: emit event to measure time for e2e process
-                    event::record(end_timer[i], thread_streams[i]).unwrap();
+                    event::record(*&mut thread_end_timer[i], *&mut thread_streams[i]).unwrap();
                 }
             }
 
@@ -1005,7 +1012,7 @@ async fn main() -> eyre::Result<()> {
     for i in 0..device_manager.device_count() {
         unsafe {
             device_manager.device(i).bind_to_thread().unwrap();
-            let total_time = elapsed(start_timer[i], end_timer[i]).unwrap();
+            let total_time = elapsed(start_timer[i], *&mut end_timer[i]).unwrap();
             println!("Total time: {:?}", total_time);
         }
     }
