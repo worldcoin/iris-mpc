@@ -732,6 +732,7 @@ async fn main() -> eyre::Result<()> {
         let thread_mask_results = device_ptrs(&masks_engine.results);
         let thread_mask_results_peer = device_ptrs(&masks_engine.results_peer);
 
+        // SAFETY: phase2 and phase2_batch are only used in one spawned threat at a time. 
         let thread_phase2 = phase2.clone();
         let thread_phase2_batch = phase2_batch.clone();
         let thread_distance_comparator = distance_comparator.clone();
@@ -744,7 +745,10 @@ async fn main() -> eyre::Result<()> {
 
             // Wait for Phase 2 of previous round to finish in order to not have them overlapping.
             // SAFETY: waiting here makes sure we don't access these mutable streams or events
-            // concurrently: thread_streams, thread_current_stream_event, thread_end_timer.
+            // concurrently:
+            // - CUstream: thread_streams (only re-used after MAX_STREAMS_IN_USE batches),
+            // - CUevent: thread_current_stream_event, thread_end_timer,
+            // - Comm: phase2, phase2_batch.
             if previous_thread_handle.is_some() {
                 runtime::Handle::current().block_on(previous_thread_handle.unwrap()).unwrap();
             }
