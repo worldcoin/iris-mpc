@@ -7,8 +7,7 @@ use axum::{routing::get, Router};
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
-        result::malloc_async, CudaFunction, CudaSlice, CudaStream, DevicePtr, LaunchAsync,
-        LaunchConfig,
+        result::malloc_async, sys::CUdeviceptr, CudaFunction, CudaSlice, CudaStream, DevicePtr, LaunchAsync, LaunchConfig
     },
     nccl::{self, result, Comm, Id, NcclType},
     nvrtc::compile_ptx,
@@ -39,9 +38,9 @@ pub fn preprocess_query(query: &[u16]) -> Vec<Vec<u8>> {
 #[allow(clippy::too_many_arguments)]
 pub fn gemm(
     handle: &CudaBlas,
-    a: u64,
-    b: u64,
-    c: u64,
+    a: CUdeviceptr,
+    b: CUdeviceptr,
+    c: CUdeviceptr,
     a_offset: u64,
     b_offset: u64,
     c_offset: u64,
@@ -372,10 +371,10 @@ impl ShareDB {
 
     pub fn query_sums(
         &self,
-        query_ptrs: &(Vec<u64>, Vec<u64>),
+        query_ptrs: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
         streams: &[CudaStream],
         blass: &[CudaBlas],
-    ) -> (Vec<u64>, Vec<u64>) {
+    ) -> (Vec<CUdeviceptr>, Vec<CUdeviceptr>) {
         let mut query1_sums = vec![];
         let mut query0_sums = vec![];
 
@@ -438,8 +437,8 @@ impl ShareDB {
 
     pub fn dot(
         &mut self,
-        query_ptrs: &(Vec<u64>, Vec<u64>),
-        db: &(Vec<u64>, Vec<u64>),
+        query_ptrs: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
+        db: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
         db_sizes: &[usize],
         streams: &[CudaStream],
         blass: &[CudaBlas],
@@ -482,8 +481,8 @@ impl ShareDB {
 
     pub fn dot_reduce(
         &mut self,
-        query_sums: &(Vec<u64>, Vec<u64>),
-        db_sums: &(Vec<u64>, Vec<u64>),
+        query_sums: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
+        db_sums: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
         db_sizes: &[usize],
         streams: &[CudaStream],
     ) {
