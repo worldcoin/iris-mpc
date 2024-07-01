@@ -19,7 +19,10 @@ use gpu_iris_mpc::{
         IRIS_CODE_LENGTH, ROTATIONS,
     },
     helpers::{
-        device_ptrs, device_ptrs_to_slices, kms_dh::derive_shared_secret, mmap::{read_mmap_file, write_mmap_file}, sqs::{ResultEvent, SMPCRequest, SQSMessage}
+        device_ptrs, device_ptrs_to_slices,
+        kms_dh::derive_shared_secret,
+        mmap::{read_mmap_file, write_mmap_file},
+        sqs::{ResultEvent, SMPCRequest, SQSMessage},
     },
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     threshold_ring::protocol::{ChunkShare, Circuits},

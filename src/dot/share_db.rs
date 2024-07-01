@@ -1,7 +1,4 @@
-use super::{
-    device_manager::DeviceManager,
-    IRIS_CODE_LENGTH,
-};
+use super::{device_manager::DeviceManager, IRIS_CODE_LENGTH};
 use crate::{
     helpers::id_wrapper::{http_root, IdWrapper},
     rng::chacha::ChaChaCudaRng,
