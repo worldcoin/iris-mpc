@@ -2,6 +2,7 @@ use super::ROTATIONS;
 use cudarc::{
     driver::{
         result::{launch_kernel, memcpy_dtoh_sync},
+        sys::CUstream_st,
         CudaDevice, CudaFunction, CudaSlice, CudaView, DeviceRepr, LaunchAsync, LaunchConfig,
     },
     nvrtc::compile_ptx,
@@ -113,7 +114,7 @@ impl DistanceComparator {
         match_results_self: &[u64],
         match_results: &[u64],
         final_results: &[u64],
-        streams: &[u64],
+        streams: &mut [&mut CUstream_st],
     ) -> Vec<Vec<u32>> {
         let num_elements = self.query_length / ROTATIONS;
         let threads_per_block = 256;

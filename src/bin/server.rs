@@ -9,6 +9,7 @@ use cudarc::driver::{
         event::{self, elapsed},
         stream::synchronize,
     },
+    sys::{CUdeviceptr, CUstream, CUstream_st},
     CudaDevice, CudaSlice,
 };
 use gpu_iris_mpc::{
@@ -31,10 +32,7 @@ use lazy_static::lazy_static;
 use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{
-    fs::metadata,
-    mem,
-    sync::{atomic::AtomicUsize, Arc, Mutex},
-    time::{Duration, Instant},
+    fs::metadata, mem, sync::{atomic::AtomicUsize, Arc, Mutex}, time::{Duration, Instant}
 };
 use tokio::{
     runtime,
@@ -49,7 +47,18 @@ const DB_BUFFER: usize = 8 * 1_000;
 const N_QUERIES: usize = 32;
 const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
-const MAX_CONCURRENT_REQUESTS: usize = 5;
+/// The number of batches before a stream is re-used.
+const MAX_BATCHES_BEFORE_REUSE: usize = 5;
+
+/// The number of batches that are launched concurrently.
+///
+/// Code can run concurrently in:
+/// - requests `N` and `N - 1`, 
+/// - requests `N` and `N - MAX_CONCURRENT_BATCHES`, because the next request phase 1 awaits
+///   completion of the request `MAX_CONCURRENT_BATCHES` behind it, or
+/// - request `N` only, because phase 2 limits the critical section to one batch.
+const MAX_CONCURRENT_BATCHES: usize = 2;
+
 const DB_CODE_FILE: &str = "codes.db";
 const DB_MASK_FILE: &str = "masks.db";
 const DEFAULT_PATH: &str = "/opt/dlami/nvme/";
@@ -190,7 +199,7 @@ fn slice_tuples_to_ptrs(
         (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
         (Vec<CudaSlice<u32>>, Vec<CudaSlice<u32>>),
     ),
-) -> ((Vec<u64>, Vec<u64>), (Vec<u64>, Vec<u64>)) {
+) -> ((Vec<CUdeviceptr>, Vec<CUdeviceptr>), (Vec<CUdeviceptr>, Vec<CUdeviceptr>)) {
     (
         (device_ptrs(&tuple.0 .0), device_ptrs(&tuple.0 .1)),
         (device_ptrs(&tuple.1 .0), device_ptrs(&tuple.1 .1)),
@@ -252,36 +261,38 @@ fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
     results
 }
 
-fn await_streams(streams: &[u64]) {
+fn await_streams(streams: &mut [&mut CUstream_st]) {
     for i in 0..streams.len() {
+        // SAFETY: these streams have already been created, and the caller holds a reference to
+        // their CudaDevice, which makes sure they aren't dropped.
         unsafe {
-            synchronize(streams[i] as *mut _).unwrap();
+            synchronize(streams[i]).unwrap();
         }
     }
 }
 
 fn dtod_at_offset(
-    dst: u64,
+    dst: CUdeviceptr,
     dst_offset: usize,
-    src: u64,
+    src: CUdeviceptr,
     src_offset: usize,
     len: usize,
-    stream_ptr: u64,
+    stream_ptr: CUstream,
 ) {
     unsafe {
         result::memcpy_dtod_async(
-            dst + dst_offset as u64,
-            src + src_offset as u64,
+            dst + dst_offset as CUdeviceptr,
+            src + src_offset as CUdeviceptr,
             len,
-            stream_ptr as *mut _,
+            stream_ptr,
         )
         .unwrap();
     }
 }
 
 fn device_ptrs_to_shares<T>(
-    a: &[u64],
-    b: &[u64],
+    a: &[CUdeviceptr],
+    b: &[CUdeviceptr],
     lens: &[usize],
     devs: &[Arc<CudaDevice>],
 ) -> Vec<ChunkShare<T>> {
@@ -329,10 +340,10 @@ fn distribute_insertions(results: &[usize], db_sizes: &[usize]) -> Vec<Vec<usize
     ret
 }
 
-fn reset_results(devs: &[Arc<CudaDevice>], dst: &[u64], src: &[u32], streams: &[u64]) {
+fn reset_results(devs: &[Arc<CudaDevice>], dst: &[u64], src: &[u32], streams: &mut [&mut CUstream_st]) {
     for i in 0..devs.len() {
         devs[i].bind_to_thread().unwrap();
-        unsafe { result::memcpy_htod_async(dst[i], src, streams[i] as *mut _) }.unwrap();
+        unsafe { result::memcpy_htod_async(dst[i], src, streams[i]) }.unwrap();
     }
 }
 
@@ -527,7 +538,7 @@ async fn main() -> eyre::Result<()> {
     let mut results = vec![];
     let mut batch_results = vec![];
     let mut final_results = vec![];
-    for _ in 0..MAX_CONCURRENT_REQUESTS {
+    for _ in 0..MAX_BATCHES_BEFORE_REUSE {
         let tmp_streams = device_manager.fork_streams();
         cublas_handles.push(device_manager.create_cublas(&tmp_streams));
         streams.push(tmp_streams);
@@ -547,7 +558,7 @@ async fn main() -> eyre::Result<()> {
     let mut next_exchange_event = device_manager.create_events();
     let mut timer_events = vec![];
     let start_timer = device_manager.create_events();
-    let end_timer = device_manager.create_events();
+    let mut end_timer = device_manager.create_events();
 
     let current_db_size: Vec<usize> =
         vec![DB_SIZE / device_manager.device_count(); device_manager.device_count()];
@@ -610,11 +621,11 @@ async fn main() -> eyre::Result<()> {
 
         let mut timers = vec![];
 
-        let request_streams = &streams[request_counter % MAX_CONCURRENT_REQUESTS];
-        let request_cublas_handles = &cublas_handles[request_counter % MAX_CONCURRENT_REQUESTS];
-        let request_results = &results[request_counter % MAX_CONCURRENT_REQUESTS];
-        let request_results_batch = &batch_results[request_counter % MAX_CONCURRENT_REQUESTS];
-        let request_final_results = &final_results[request_counter % MAX_CONCURRENT_REQUESTS];
+        let request_streams = &streams[request_counter % MAX_BATCHES_BEFORE_REUSE];
+        let request_cublas_handles = &cublas_handles[request_counter % MAX_BATCHES_BEFORE_REUSE];
+        let request_results = &results[request_counter % MAX_BATCHES_BEFORE_REUSE];
+        let request_results_batch = &batch_results[request_counter % MAX_BATCHES_BEFORE_REUSE];
+        let request_final_results = &final_results[request_counter % MAX_BATCHES_BEFORE_REUSE];
 
         // First stream doesn't need to wait on anyone
         if request_counter == 0 {
@@ -641,11 +652,12 @@ async fn main() -> eyre::Result<()> {
             masks_engine.query_sums(&mask_query_insert, request_streams, request_cublas_handles);
 
         // update the db size, skip this for the first two
-        if request_counter > 2 {
+        if request_counter > MAX_CONCURRENT_BATCHES {
             // We have two streams working concurrently, we'll await the stream before
-            // previous one
+            // previous one.
+            // SAFETY: 
             let previous_previous_streams =
-                &streams[(request_counter - 2) % MAX_CONCURRENT_REQUESTS];
+                &streams[(request_counter - MAX_CONCURRENT_BATCHES) % MAX_BATCHES_BEFORE_REUSE];
             device_manager.await_event(previous_previous_streams, &previous_previous_stream_event);
             device_manager.await_streams(previous_previous_streams);
         }
@@ -756,17 +768,35 @@ async fn main() -> eyre::Result<()> {
 
         println!("phase 1 done");
 
-        // Convert a bunch of objects to device pointers to not have copies of memory
-        let thread_streams = request_streams
-            .iter()
-            .map(|s| s.stream as u64)
+        // SAFETY:
+        // - We are sending these streams and events to a single thread (without cloning them),
+        //   then dropping our references to them (without destroying them).
+        // - These pointers are aligned, dereferencable, and initialized.
+        // Unique usage:
+        // - Streams are re-used after MAX_BATCHES_BEFORE_REUSE threads, but we only launch
+        //   MAX_CONCURRENT_BATCHES threads at a time. So this reference performs the only accesses
+        //   to its memory across both C and Rust.
+        // - New current stream events are created for each batch. They are only re-used after
+        //   MAX_CONCURRENT_BATCHES, but we wait for the previous batch to finish before running
+        //   that code.
+        // - End events are re-used in each thread, but we only end one thread at a time.
+        assert!(MAX_BATCHES_BEFORE_REUSE > MAX_CONCURRENT_BATCHES);
+        // into_iter() makes the Rust compiler check that the streams are not re-used.
+        let mut thread_streams = request_streams
+            .into_iter()
+            .map(|s| unsafe { s.stream.as_mut().unwrap() })
             .collect::<Vec<_>>();
+        // The compiler can't tell that we wait for the previous batch before re-using these events.
+        let mut thread_current_stream_event = current_stream_event
+            .iter()
+            .map(|e| unsafe { e.as_mut().unwrap() })
+            .collect::<Vec<_>>();
+        let mut thread_end_timer = end_timer
+            .iter()
+            .map(|e| unsafe { e.as_mut().unwrap() })
+            .collect::<Vec<_>>();
+
         let thread_device_manager = device_manager.clone();
-        let thread_evts = end_timer.iter().map(|e| *e as u64).collect::<Vec<_>>();
-        let thread_current_stream_event = current_stream_event
-            .iter()
-            .map(|e| *e as u64)
-            .collect::<Vec<_>>();
         let thread_current_db_size_mutex = current_db_size_mutex
             .iter()
             .map(Arc::clone)
@@ -788,6 +818,7 @@ async fn main() -> eyre::Result<()> {
         let thread_mask_results = device_ptrs(&masks_engine.results);
         let thread_mask_results_peer = device_ptrs(&masks_engine.results_peer);
 
+        // SAFETY: phase2 and phase2_batch are only used in one spawned threat at a time. 
         let thread_phase2 = phase2.clone();
         let thread_phase2_batch = phase2_batch.clone();
         let thread_distance_comparator = distance_comparator.clone();
@@ -799,10 +830,14 @@ async fn main() -> eyre::Result<()> {
 
         previous_thread_handle = Some(spawn_blocking(move || {
             // Wait for Phase 1 to finish
-            await_streams(&thread_streams);
+            await_streams(&mut thread_streams);
 
-            // Wait for Phase 2 of previous round to finish in order to not have them
-            // overlapping
+            // Wait for Phase 2 of previous round to finish in order to not have them overlapping.
+            // SAFETY: waiting here makes sure we don't access these mutable streams or events
+            // concurrently:
+            // - CUstream: thread_streams (only re-used after MAX_BATCHES_BEFORE_REUSE batches),
+            // - CUevent: thread_current_stream_event, thread_end_timer,
+            // - Comm: phase2, phase2_batch.
             if previous_thread_handle.is_some() {
                 runtime::Handle::current()
                     .block_on(previous_thread_handle.unwrap())
@@ -851,12 +886,14 @@ async fn main() -> eyre::Result<()> {
                 &thread_devs,
             );
 
-            // We only use the default streams of the devices, therefore Phase 2's are never
-            // running concurrently
-            let streams = thread_phase2
+            // SAFETY:
+            // - We only use the default streams of the devices, therefore Phase 2's are never
+            //   running concurrently.
+            // - These pointers are aligned, dereferencable, and initialized.
+            let mut phase2_streams = thread_phase2
                 .get_devices()
                 .iter()
-                .map(|d| *d.cu_stream() as u64)
+                .map(|d| unsafe { d.cu_stream().as_mut().unwrap() })
                 .collect::<Vec<_>>();
 
             // Phase 2 [Batch]: compare each result against threshold
@@ -908,7 +945,7 @@ async fn main() -> eyre::Result<()> {
                 &thread_request_results_batch,
                 &thread_request_results,
                 &thread_request_final_results,
-                &streams,
+                &mut phase2_streams,
             );
 
             // Evaluate the results across devices
@@ -956,7 +993,7 @@ async fn main() -> eyre::Result<()> {
                             query.0[i],
                             IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                             IRIS_CODE_LENGTH,
-                            streams[i],
+                            *&mut phase2_streams[i]
                         );
 
                         dtod_at_offset(
@@ -965,7 +1002,7 @@ async fn main() -> eyre::Result<()> {
                             query.1[i],
                             IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                             IRIS_CODE_LENGTH,
-                            streams[i],
+                            *&mut phase2_streams[i]
                         );
 
                         dtod_at_offset(
@@ -975,7 +1012,7 @@ async fn main() -> eyre::Result<()> {
                             mem::size_of::<u32>() * 15
                                 + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                             mem::size_of::<u32>(),
-                            streams[i],
+                            *&mut phase2_streams[i]
                         );
 
                         dtod_at_offset(
@@ -985,7 +1022,7 @@ async fn main() -> eyre::Result<()> {
                             mem::size_of::<u32>() * 15
                                 + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                             mem::size_of::<u32>(),
-                            streams[i],
+                            *&mut phase2_streams[i]
                         );
                     }
                     old_db_size += 1;
@@ -1012,16 +1049,23 @@ async fn main() -> eyre::Result<()> {
                 assert!(new_chunk_size <= phase2_chunk_size_max);
                 thread_phase2.set_chunk_size(new_chunk_size / 64);
 
-                // Emit stream finished event to unblock the stream after the following
+                // Emit stream finished event to unblock the stream after the following stream.
+                // Since previous timers are overwritten, only the final end timers are used to
+                // calculate the total time.
+                //
+                // SAFETY:
+                // - the events are created before launching the thread, so they are never null.
+                // - the streams have already been created, and we hold a reference to their
+                //   CudaDevice, which makes sure they aren't dropped.
                 unsafe {
                     event::record(
-                        thread_current_stream_event[i] as *mut _,
-                        thread_streams[i] as *mut _,
+                        *&mut thread_current_stream_event[i],
+                        *&mut thread_streams[i],
                     )
                     .unwrap();
 
                     // DEBUG: emit event to measure time for e2e process
-                    event::record(thread_evts[i] as *mut _, thread_streams[i] as *mut _).unwrap();
+                    event::record(*&mut thread_end_timer[i], *&mut thread_streams[i]).unwrap();
                 }
             }
 
@@ -1035,19 +1079,19 @@ async fn main() -> eyre::Result<()> {
                 &thread_device_manager.devices(),
                 &thread_request_results,
                 &RESULTS_INIT_HOST,
-                &thread_streams,
+                &mut phase2_streams,
             );
             reset_results(
                 &thread_device_manager.devices(),
                 &thread_request_results_batch,
                 &RESULTS_INIT_HOST,
-                &thread_streams,
+                &mut phase2_streams,
             );
             reset_results(
                 &thread_device_manager.devices(),
                 &thread_request_final_results,
                 &FINAL_RESULTS_INIT_HOST,
-                &thread_streams,
+                &mut phase2_streams,
             );
 
             // Make sure to not call `Drop` on those
@@ -1099,7 +1143,7 @@ async fn main() -> eyre::Result<()> {
     for i in 0..device_manager.device_count() {
         unsafe {
             device_manager.device(i).bind_to_thread().unwrap();
-            let total_time = elapsed(start_timer[i], end_timer[i]).unwrap();
+            let total_time = elapsed(start_timer[i], *&mut end_timer[i]).unwrap();
             println!("Total time: {:?}", total_time);
         }
     }
