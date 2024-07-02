@@ -514,6 +514,7 @@ async fn main() -> eyre::Result<()> {
         Some(true),
         Some(4000),
     );
+    check_tasks(&mut server_tasks);
 
     let mut masks_engine = ShareDB::init(
         party_id,
@@ -525,6 +526,7 @@ async fn main() -> eyre::Result<()> {
         Some(true),
         Some(4001),
     );
+    check_tasks(&mut server_tasks);
 
     let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE, DB_SIZE + DB_BUFFER, true);
     let mask_db_slices = masks_engine.load_db(&masks_db, DB_SIZE, DB_SIZE + DB_BUFFER, true);
@@ -540,6 +542,8 @@ async fn main() -> eyre::Result<()> {
         Some(true),
         Some(4002),
     );
+    check_tasks(&mut server_tasks);
+
     let mut batch_masks_engine = ShareDB::init(
         party_id,
         device_manager.clone(),
@@ -550,6 +554,7 @@ async fn main() -> eyre::Result<()> {
         Some(true),
         Some(4003),
     );
+    check_tasks(&mut server_tasks);
 
     // Phase 2 Setup
     let phase2_chunk_size =
@@ -566,6 +571,7 @@ async fn main() -> eyre::Result<()> {
         bootstrap_url.clone(),
         Some(4004),
     )));
+    check_tasks(&mut server_tasks);
 
     let phase2 = Arc::new(Mutex::new(Circuits::new(
         party_id,
@@ -575,6 +581,7 @@ async fn main() -> eyre::Result<()> {
         bootstrap_url.clone(),
         Some(4005),
     )));
+    check_tasks(&mut server_tasks);
 
     let distance_comparator = Arc::new(Mutex::new(DistanceComparator::init(QUERIES)));
 
@@ -655,6 +662,7 @@ async fn main() -> eyre::Result<()> {
         let batch = receive_batch(party_id, &sqs_client, &queue).await?;
         println!("Received batch in {:?}", now.elapsed());
         batch_times += now.elapsed();
+        check_tasks(&mut server_tasks);
 
         let (code_query, mask_query, code_query_insert, mask_query_insert) =
             spawn_blocking(move || {
@@ -668,6 +676,7 @@ async fn main() -> eyre::Result<()> {
 
         let mut timers = vec![];
 
+        // SAFETY: these streams can only safely be re-used after more than MAX_CONCURRENT_BATCHES.
         let request_streams = &streams[request_counter % MAX_BATCHES_BEFORE_REUSE];
         let request_cublas_handles = &cublas_handles[request_counter % MAX_BATCHES_BEFORE_REUSE];
         let request_results = &results[request_counter % MAX_BATCHES_BEFORE_REUSE];
@@ -702,7 +711,7 @@ async fn main() -> eyre::Result<()> {
         if request_counter > MAX_CONCURRENT_BATCHES {
             // We have two streams working concurrently, we'll await the stream before
             // previous one.
-            // SAFETY:
+            // SAFETY: these streams can only safely be re-used after more than MAX_CONCURRENT_BATCHES.
             let previous_previous_streams =
                 &streams[(request_counter - MAX_CONCURRENT_BATCHES) % MAX_BATCHES_BEFORE_REUSE];
             device_manager.await_event(previous_previous_streams, &previous_previous_stream_event);
