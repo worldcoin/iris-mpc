@@ -513,6 +513,7 @@ async fn main() -> eyre::Result<()> {
         bootstrap_url.clone(),
         Some(true),
         Some(4000),
+        Some(&mut server_tasks),
     );
     check_tasks(&mut server_tasks);
 
@@ -525,6 +526,7 @@ async fn main() -> eyre::Result<()> {
         bootstrap_url.clone(),
         Some(true),
         Some(4001),
+        Some(&mut server_tasks),
     );
     check_tasks(&mut server_tasks);
 
@@ -541,6 +543,7 @@ async fn main() -> eyre::Result<()> {
         bootstrap_url.clone(),
         Some(true),
         Some(4002),
+        Some(&mut server_tasks),
     );
     check_tasks(&mut server_tasks);
 
@@ -553,6 +556,7 @@ async fn main() -> eyre::Result<()> {
         bootstrap_url.clone(),
         Some(true),
         Some(4003),
+        Some(&mut server_tasks),
     );
     check_tasks(&mut server_tasks);
 
