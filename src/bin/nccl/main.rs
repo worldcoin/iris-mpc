@@ -65,13 +65,15 @@ async fn main() -> eyre::Result<()> {
     let n_devices = CudaDevice::count().unwrap() as usize;
     let party_id: usize = args[1].parse().unwrap();
 
+    let mut server_join_handle = None;
+
     if party_id == 0 {
-        tokio::spawn(async move {
+        server_join_handle = Some(tokio::spawn(async move {
             println!("starting server...");
             let app = Router::new().route("/:device_id", get(root));
             let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
             axum::serve(listener, app).await.unwrap();
-        });
+        }));
     };
 
     let mut devs = vec![];
@@ -143,6 +145,12 @@ async fn main() -> eyre::Result<()> {
                 throughput * 8f64
             );
         }
+    }
+
+    // Shut down the server, making sure it hasn't panicked or errored.
+    if let Some(handle) = server_join_handle {
+        handle.abort();
+        handle.await?;
     }
 
     Ok(())
