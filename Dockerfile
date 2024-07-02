@@ -33,6 +33,7 @@ COPY src ./src
 RUN	cargo build --release --target x86_64-unknown-linux-gnu
 
 FROM --platform=linux/amd64 build-image	as build-nccl
+ENV DEBIAN_FRONTEND=noninteractive
 RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
 	&& dpkg -i cuda-keyring_1.1-1_all.deb \
 	&& apt-get update \
@@ -40,6 +41,7 @@ RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86
 RUN git clone https://github.com/NVIDIA/nccl.git && cd nccl && make -j4 pkg.debian.build
 
 FROM --platform=linux/amd64	ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
 COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/nccl /bin/nccl
 COPY --from=build-nccl /src/nccl/build/pkg/deb/libnccl*.deb /tmp
 COPY --from=build-nccl /src/cuda-keyring_1.1-1_all.deb /tmp
