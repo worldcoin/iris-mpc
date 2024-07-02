@@ -40,7 +40,7 @@ use std::{
 use tokio::{
     runtime,
     sync::mpsc,
-    task::{spawn_blocking, JoinHandle},
+    task::{spawn_blocking, JoinHandle, JoinSet},
     time::sleep,
 };
 
@@ -394,6 +394,34 @@ pub fn calculate_insertion_indices(
     }
 }
 
+/// Panics if any of the `server_tasks` have finished unexpectedly, with or without a panic.
+/// Assumes that the tasks are ongoing, so any finish is an error.
+///
+/// Call this method after adding each new task, and before starting a new batch.
+#[track_caller]
+fn check_tasks(server_tasks: &mut JoinSet<()>) {
+    if let Some(finished_task) = server_tasks.try_join_next() {
+        finished_task.unwrap();
+        panic!("Server task unexpectedly finished without an error");
+    }
+}
+
+/// Panics if any of the `server_tasks` have finished with a panic or hang.
+/// (Ignores tasks that have finished normally).
+///
+/// When exiting the program, call `server_tasks.abort_all()` and wait for the tasks to finish,
+/// then call this function.
+#[track_caller]
+fn check_tasks_finished(server_tasks: &mut JoinSet<()>) {
+    if let Some(finished_task) = server_tasks.try_join_next() {
+        finished_task.unwrap();
+    }
+
+    if !server_tasks.is_empty() {
+        panic!("{} server tasks hung even when aborted", server_tasks.len());
+    }    
+}
+
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     let Opt {
@@ -473,6 +501,7 @@ async fn main() -> eyre::Result<()> {
     println!("Starting engines...");
 
     let device_manager = Arc::new(DeviceManager::init());
+    let mut server_tasks: JoinSet<()>  = JoinSet::new();
 
     // Phase 1 Setup
     let mut codes_engine = ShareDB::init(
@@ -609,6 +638,7 @@ async fn main() -> eyre::Result<()> {
         }
     });
 
+    check_tasks(&mut server_tasks);
     println!("All systems ready.");
 
     let mut total_time = Instant::now();
@@ -1121,6 +1151,8 @@ async fn main() -> eyre::Result<()> {
         }));
 
         // Prepare for next batch
+        check_tasks(&mut server_tasks);
+
         timer_events.push(timers);
 
         previous_previous_stream_event = previous_stream_event;
@@ -1143,6 +1175,10 @@ async fn main() -> eyre::Result<()> {
         total_time.elapsed() - batch_times
     );
 
+    // Clean up server tasks, then wait for them to finish
+    check_tasks(&mut server_tasks);
+    server_tasks.abort_all();
+
     sleep(Duration::from_secs(5)).await;
 
     for timers in timer_events {
@@ -1164,6 +1200,8 @@ async fn main() -> eyre::Result<()> {
             println!("Total time: {:?}", total_time);
         }
     }
+
+    check_tasks_finished(&mut server_tasks);
 
     Ok(())
 }
