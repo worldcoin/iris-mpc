@@ -354,12 +354,12 @@ pub fn calculate_insertion_indices(
     }
     loop {
         for i in 0..insertion_list.len() {
-            let ii = (i + min_index) % insertion_list.len();
-            if c >= insertion_list[ii].len() {
+            let _i = (i + min_index) % insertion_list.len();
+            if c >= insertion_list[_i].len() {
                 return matches;
             }
-            merged_results[insertion_list[ii][c]] = last_index;
-            matches[insertion_list[ii][c]] = false;
+            merged_results[insertion_list[_i][c]] = last_index;
+            matches[insertion_list[_i][c]] = false;
             last_index += 1;
         }
         c += 1;
