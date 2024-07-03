@@ -352,7 +352,7 @@ fn reset_results(
     devs: &[Arc<CudaDevice>],
     dst: &[u64],
     src: &[u32],
-    streams: &mut [&mut CUstream_st],
+    streams: &mut [*mut CUstream_st],
 ) {
     for i in 0..devs.len() {
         devs[i].bind_to_thread().unwrap();
@@ -914,7 +914,7 @@ async fn main() -> eyre::Result<()> {
             let mut phase2_streams = thread_phase2
                 .get_devices()
                 .iter()
-                .map(|d| unsafe { d.cu_stream().as_mut().unwrap() })
+                .map(|d| *d.cu_stream())
                 .collect::<Vec<_>>();
 
             // Phase 2 [Batch]: compare each result against threshold
@@ -966,7 +966,7 @@ async fn main() -> eyre::Result<()> {
                 &thread_request_results_batch,
                 &thread_request_results,
                 &thread_request_final_results,
-                &mut phase2_streams,
+                &phase2_streams,
             );
 
             // Evaluate the results across devices
@@ -991,10 +991,6 @@ async fn main() -> eyre::Result<()> {
                 thread_devs[i].bind_to_thread().unwrap();
                 let mut old_db_size = *thread_current_db_size_mutex[i].lock().unwrap();
                 for insertion_idx in insertion_list[i].clone() {
-                    println!(
-                        "Inserting query {} {:?} at {} on dev {}",
-                        insertion_idx, thread_request_ids[insertion_idx], old_db_size, i
-                    );
                     // Append to codes and masks db
                     for (db, query, sums) in [
                         (
