@@ -448,47 +448,47 @@ async fn main() -> eyre::Result<()> {
     );
 
     // Generate or load DB
-    let (mut codes_db, mut masks_db) = if metadata(&code_db_path).is_ok() && metadata(&mask_db_path).is_ok()
-    {
-        (
-            read_mmap_file(&code_db_path)?,
-            read_mmap_file(&mask_db_path)?,
-        )
-    } else {
-        let mut rng = StdRng::seed_from_u64(RNG_SEED);
-        let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
+    let (mut codes_db, mut masks_db) =
+        if metadata(&code_db_path).is_ok() && metadata(&mask_db_path).is_ok() {
+            (
+                read_mmap_file(&code_db_path)?,
+                read_mmap_file(&mask_db_path)?,
+            )
+        } else {
+            let mut rng = StdRng::seed_from_u64(RNG_SEED);
+            let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
-        let codes_db = db
-            .db
-            .iter()
-            .map(|iris| {
-                GaloisRingIrisCodeShare::encode_iris_code(
-                    &iris.code,
-                    &iris.mask,
-                    &mut StdRng::seed_from_u64(RNG_SEED),
-                )[party_id]
-                    .coefs
-            })
-            .flatten()
-            .collect::<Vec<_>>();
+            let codes_db = db
+                .db
+                .iter()
+                .map(|iris| {
+                    GaloisRingIrisCodeShare::encode_iris_code(
+                        &iris.code,
+                        &iris.mask,
+                        &mut StdRng::seed_from_u64(RNG_SEED),
+                    )[party_id]
+                        .coefs
+                })
+                .flatten()
+                .collect::<Vec<_>>();
 
-        let masks_db = db
-            .db
-            .iter()
-            .map(|iris| {
-                GaloisRingIrisCodeShare::encode_mask_code(
-                    &iris.mask,
-                    &mut StdRng::seed_from_u64(RNG_SEED),
-                )[party_id]
-                    .coefs
-            })
-            .flatten()
-            .collect::<Vec<_>>();
+            let masks_db = db
+                .db
+                .iter()
+                .map(|iris| {
+                    GaloisRingIrisCodeShare::encode_mask_code(
+                        &iris.mask,
+                        &mut StdRng::seed_from_u64(RNG_SEED),
+                    )[party_id]
+                        .coefs
+                })
+                .flatten()
+                .collect::<Vec<_>>();
 
-        write_mmap_file(&code_db_path, &codes_db)?;
-        write_mmap_file(&mask_db_path, &masks_db)?;
-        (codes_db, masks_db)
-    };
+            write_mmap_file(&code_db_path, &codes_db)?;
+            write_mmap_file(&mask_db_path, &masks_db)?;
+            (codes_db, masks_db)
+        };
 
     // Load DB from persistent storage.
     for iris in store.lock().unwrap().iter_irises() {
@@ -894,8 +894,7 @@ async fn main() -> eyre::Result<()> {
         let thread_request_ids = batch.request_ids.clone();
 
         let thread_sender = tx.clone();
-
-        let store = store.clone(); // Arc pointer for the closure below.
+        let store = Arc::clone(&store);
 
         previous_thread_handle = Some(spawn_blocking(move || {
             // Wait for Phase 1 to finish
