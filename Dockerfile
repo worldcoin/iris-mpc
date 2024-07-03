@@ -15,9 +15,9 @@ RUN apt-get update && apt-get install -y \
     wget
 
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
-ENV PATH    "/root/.cargo/bin:${PATH}"
+ENV PATH "/root/.cargo/bin:${PATH}"
 ENV RUSTUP_HOME "/root/.rustup"
-ENV CARGO_HOME  "/root/.cargo"
+ENV CARGO_HOME "/root/.cargo"
 RUN rustup component add cargo
 RUN cargo install cargo-build-deps \
     && cargo install cargo-edit
