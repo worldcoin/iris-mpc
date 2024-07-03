@@ -58,6 +58,10 @@ harness = false
 name = "transpose"
 harness = false
 
+[[bench]]
+name = "memcpy"
+harness = false
+
 [profile.release]
 panic = 'abort'
 

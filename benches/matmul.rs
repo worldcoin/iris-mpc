@@ -22,8 +22,8 @@ const DB_SIZE: usize = 8 * 300_000;
 const QUERY_SIZE: usize = 930;
 const WIDTH: usize = 12800;
 
-fn bench_memcpy(c: &mut Criterion) {
-    let mut group = c.benchmark_group("bench_memcpy");
+fn bench_matmul(c: &mut Criterion) {
+    let mut group = c.benchmark_group("bench_matmul");
 
     let db = random_vec(DB_SIZE, WIDTH, P as u32);
     let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
@@ -71,5 +71,5 @@ fn bench_memcpy(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_memcpy);
+criterion_group!(benches, bench_matmul);
 criterion_main!(benches);
