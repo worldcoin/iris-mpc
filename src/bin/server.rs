@@ -1,4 +1,5 @@
 #![allow(clippy::needless_range_loop)]
+
 use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::{config::Region, Client};
 use clap::Parser;
@@ -134,7 +135,7 @@ struct BatchQueryEntries {
 struct BatchMetadata {
     node_id: String,
     trace_id: String,
-    parent_trace_id: String,
+    span_id: String,
 }
 
 #[derive(Default)]
@@ -167,10 +168,10 @@ async fn receive_batch(
             let message_attributes = sqs_message.message_attributes.unwrap_or_default();
 
             batch_query.request_ids.push(message.clone().request_id);
-            batch_query.metadata.push(BatchMetadata{
+            batch_query.metadata.push(BatchMetadata {
                 node_id: message_attributes.get("nodeId").unwrap().string_value().unwrap().clone().parse()?,
                 trace_id: message_attributes.get(TRACE_ID_MESSAGE_ATTRIBUTE_NAME).unwrap().string_value().unwrap().clone().parse()?,
-                parent_trace_id: message_attributes.get(SPAN_ID_MESSAGE_ATTRIBUTE_NAME).unwrap().string_value().unwrap().clone().parse()?,
+                span_id: message_attributes.get(SPAN_ID_MESSAGE_ATTRIBUTE_NAME).unwrap().string_value().unwrap().clone().parse()?,
             });
 
             let (db_iris_shares, db_mask_shares, iris_shares, mask_shares) =
@@ -319,7 +320,7 @@ fn dtod_at_offset(
             len,
             stream_ptr,
         )
-        .unwrap();
+            .unwrap();
     }
 }
 
@@ -700,8 +701,8 @@ async fn main() -> eyre::Result<()> {
             tracing::info!(
                 "Started processing share",
                 node_id = tracing_payload.node_id,
-                trace_id = tracing_payload.trace_id,
-                parent_trace_id = tracing_payload.parent_trace_id
+                dd.trace_id tracing_payload.trace_id,
+                dd.span_id = tracing_payload.span_id,
             );
         }
 
@@ -941,8 +942,8 @@ async fn main() -> eyre::Result<()> {
                 tracing::info!(
                     "Phase 1 finished",
                     node_id = tracing_payload.node_id,
-                    trace_id = tracing_payload.trace_id,
-                    parent_trace_id = tracing_payload.parent_trace_id
+                    dd.trace_id tracing_payload.trace_id,
+                    dd.span_id = tracing_payload.span_id,
                 );
             }
 
@@ -976,8 +977,8 @@ async fn main() -> eyre::Result<()> {
                 tracing::info!(
                     "Phase 2 finished",
                     node_id = tracing_payload.node_id,
-                    trace_id = tracing_payload.trace_id,
-                    parent_trace_id = tracing_payload.parent_trace_id
+                    dd.trace_id tracing_payload.trace_id,
+                    dd.span_id = tracing_payload.span_id,
                 );
             }
 
@@ -1039,8 +1040,8 @@ async fn main() -> eyre::Result<()> {
                 tracing::info!(
                     "Phase 2 finished",
                     node_id = tracing_payload.node_id,
-                    trace_id = tracing_payload.trace_id,
-                    parent_trace_id = tracing_payload.parent_trace_id
+                    dd.trace_id tracing_payload.trace_id,
+                    dd.span_id = tracing_payload.span_id,
                 );
             }
 
