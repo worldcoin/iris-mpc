@@ -57,3 +57,17 @@ harness = false
 [[bench]]
 name = "transpose"
 harness = false
+
+# Abort on panics rather than unwinding.
+# This improves performance and makes panic propagation more reliable.
+[profile.release]
+panic = 'abort'
+
+[profile.bench]
+panic = 'abort'
+
+[profile.dev]
+panic = 'abort'
+
+[profile.test]
+panic = 'abort'
