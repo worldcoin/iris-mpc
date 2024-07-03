@@ -32,17 +32,26 @@ use lazy_static::lazy_static;
 use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{
+    path::PathBuf,
     fs::metadata,
     mem,
     sync::{atomic::AtomicUsize, Arc, Mutex},
     time::{Duration, Instant},
 };
+use telemetry_batteries::metrics::statsd::StatsdBattery;
+use telemetry_batteries::tracing::datadog::DatadogBattery;
+use telemetry_batteries::tracing::TracingShutdownHandle;
 use tokio::{
     runtime,
     sync::mpsc,
     task::{spawn_blocking, JoinHandle},
     time::sleep,
 };
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+
+use gpu_iris_mpc::config;
+use gpu_iris_mpc::helpers::tracing::{TRACE_ID_MESSAGE_ATTRIBUTE_NAME, SPAN_ID_MESSAGE_ATTRIBUTE_NAME};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
@@ -122,10 +131,18 @@ struct BatchQueryEntries {
 }
 
 #[derive(Default)]
+struct BatchMetadata {
+    node_id: String,
+    trace_id: String,
+    parent_trace_id: String,
+}
+
+#[derive(Default)]
 struct BatchQuery {
     pub request_ids: Vec<String>,
-    pub query:       BatchQueryEntries,
-    pub db:          BatchQueryEntries,
+    pub metadata: Vec<BatchMetadata>,
+    pub query: BatchQueryEntries,
+    pub db: BatchQueryEntries,
 }
 
 async fn receive_batch(
@@ -138,15 +155,23 @@ async fn receive_batch(
     while batch_query.db.code.len() < QUERIES {
         let rcv_message_output = client
             .receive_message()
-            .max_number_of_messages(1i32)
+            .max_number_of_messages(10i32)
             .queue_url(queue_url)
             .send()
             .await?;
 
-        for sns_message in rcv_message_output.messages.unwrap_or_default() {
-            let message: SQSMessage = serde_json::from_str(sns_message.body().unwrap())?;
+        for sqs_message in rcv_message_output.messages.unwrap_or_default() {
+            let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())?;
             let message: SMPCRequest = serde_json::from_str(&message.message)?;
+
+            let message_attributes = sqs_message.message_attributes.unwrap_or_default();
+
             batch_query.request_ids.push(message.clone().request_id);
+            batch_query.metadata.push(BatchMetadata{
+                node_id: message_attributes.get("nodeId").unwrap().string_value().unwrap().clone().parse()?,
+                trace_id: message_attributes.get(TRACE_ID_MESSAGE_ATTRIBUTE_NAME).unwrap().string_value().unwrap().clone().parse()?,
+                parent_trace_id: message_attributes.get(SPAN_ID_MESSAGE_ATTRIBUTE_NAME).unwrap().string_value().unwrap().clone().parse()?,
+            });
 
             let (db_iris_shares, db_mask_shares, iris_shares, mask_shares) =
                 spawn_blocking(move || {
@@ -168,7 +193,7 @@ async fn receive_batch(
                         mask_share.all_rotations(),
                     )
                 })
-                .await?;
+                    .await?;
 
             batch_query.db.code.extend(db_iris_shares);
             batch_query.db.mask.extend(db_mask_shares);
@@ -179,7 +204,7 @@ async fn receive_batch(
             client
                 .delete_message()
                 .queue_url(queue_url)
-                .receipt_handle(sns_message.receipt_handle.unwrap())
+                .receipt_handle(sqs_message.receipt_handle.unwrap())
                 .send()
                 .await?;
         }
@@ -209,8 +234,8 @@ fn slice_tuples_to_ptrs(
     (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
 ) {
     (
-        (device_ptrs(&tuple.0 .0), device_ptrs(&tuple.0 .1)),
-        (device_ptrs(&tuple.1 .0), device_ptrs(&tuple.1 .1)),
+        (device_ptrs(&tuple.0.0), device_ptrs(&tuple.0.1)),
+        (device_ptrs(&tuple.1.0), device_ptrs(&tuple.1.1)),
     )
 }
 
@@ -394,8 +419,49 @@ pub fn calculate_insertion_indices(
     }
 }
 
+#[derive(Parser)]
+#[clap(version)]
+pub struct Args {
+    #[clap(short, long, env)]
+    config: Option<PathBuf>,
+}
+
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
+    dotenvy::dotenv().ok();
+
+    let args = Args::parse();
+
+    let config = config::load_config("SMPC", args.config.as_deref())?;
+
+    let _tracing_shutdown_handle = if let Some(service) = &config.service {
+        let tracing_shutdown_handle = DatadogBattery::init(
+            service.traces_endpoint.as_deref(),
+            &service.service_name,
+            None,
+            true,
+        );
+
+        if let Some(metrics_config) = &service.metrics {
+            StatsdBattery::init(
+                &metrics_config.host,
+                metrics_config.port,
+                metrics_config.queue_size,
+                metrics_config.buffer_size,
+                Some(&metrics_config.prefix),
+            )?;
+        }
+
+        tracing_shutdown_handle
+    } else {
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer().pretty().compact())
+            .with(tracing_subscriber::EnvFilter::from_default_env())
+            .init();
+
+        TracingShutdownHandle
+    };
+
     let Opt {
         queue,
         party_id,
@@ -588,6 +654,7 @@ async fn main() -> eyre::Result<()> {
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<(Vec<u32>, Vec<String>, Vec<bool>)>(32); // TODO: pick some buffer value
     let rx_sns_client = sns_client.clone();
+
     tokio::spawn(async move {
         while let Some((message, request_ids, matches)) = rx.recv().await {
             for (i, &idx_result) in message.iter().enumerate() {
@@ -622,7 +689,23 @@ async fn main() -> eyre::Result<()> {
             batch_times = Duration::from_secs(0);
         }
         let now = Instant::now();
+
+        //This batch can consist of N sets of iris_share + mask
+        //It also includes a vector of request ids, mapping to the sets above
         let batch = receive_batch(party_id, &sqs_client, &queue).await?;
+
+        // Iterate over a list of tracing payloads, and create logs with mappings to payloads
+        // Log at least a "start" event using a log with trace.id and parent.trace.id
+        for tracing_payload in batch.metadata.iter() {
+            tracing::info!(
+                "Started processing share",
+                node_id = tracing_payload.node_id,
+                trace_id = tracing_payload.trace_id,
+                parent_trace_id = tracing_payload.parent_trace_id
+            );
+        }
+
+        // start trace span - with single TraceId and single ParentTraceID
         println!("Received batch in {:?}", now.elapsed());
         batch_times += now.elapsed();
 
@@ -634,7 +717,7 @@ async fn main() -> eyre::Result<()> {
                 let mask_query_insert = prepare_query_shares(batch.db.mask);
                 (code_query, mask_query, code_query_insert, mask_query_insert)
             })
-            .await?;
+                .await?;
 
         let mut timers = vec![];
 
@@ -729,8 +812,8 @@ async fn main() -> eyre::Result<()> {
         codes_engine.dot(
             &code_query,
             &(
-                device_ptrs(&code_db_slices.0 .0),
-                device_ptrs(&code_db_slices.0 .1),
+                device_ptrs(&code_db_slices.0.0),
+                device_ptrs(&code_db_slices.0.1),
             ),
             &current_db_size_stream,
             request_streams,
@@ -740,8 +823,8 @@ async fn main() -> eyre::Result<()> {
         masks_engine.dot(
             &mask_query,
             &(
-                device_ptrs(&mask_db_slices.0 .0),
-                device_ptrs(&mask_db_slices.0 .1),
+                device_ptrs(&mask_db_slices.0.0),
+                device_ptrs(&mask_db_slices.0.1),
             ),
             &current_db_size_stream,
             request_streams,
@@ -756,8 +839,8 @@ async fn main() -> eyre::Result<()> {
         codes_engine.dot_reduce(
             &code_query_sums,
             &(
-                device_ptrs(&code_db_slices.1 .0),
-                device_ptrs(&code_db_slices.1 .1),
+                device_ptrs(&code_db_slices.1.0),
+                device_ptrs(&code_db_slices.1.1),
             ),
             &current_db_size_stream,
             request_streams,
@@ -765,8 +848,8 @@ async fn main() -> eyre::Result<()> {
         masks_engine.dot_reduce(
             &mask_query_sums,
             &(
-                device_ptrs(&mask_db_slices.1 .0),
-                device_ptrs(&mask_db_slices.1 .1),
+                device_ptrs(&mask_db_slices.1.0),
+                device_ptrs(&mask_db_slices.1.1),
             ),
             &current_db_size_stream,
             request_streams,
@@ -852,6 +935,17 @@ async fn main() -> eyre::Result<()> {
             // Wait for Phase 1 to finish
             await_streams(&mut thread_streams);
 
+            // Iterate over a list of tracing payloads, and create logs with mappings to payloads
+            // Log at least a "start" event using a log with trace.id and parent.trace.id
+            for tracing_payload in batch.metadata.iter() {
+                tracing::info!(
+                    "Phase 1 finished",
+                    node_id = tracing_payload.node_id,
+                    trace_id = tracing_payload.trace_id,
+                    parent_trace_id = tracing_payload.parent_trace_id
+                );
+            }
+
             // Wait for Phase 2 of previous round to finish in order to not have them
             // overlapping. SAFETY: waiting here makes sure we don't access
             // these mutable streams or events concurrently:
@@ -875,6 +969,17 @@ async fn main() -> eyre::Result<()> {
                     (db_size * QUERIES, db_size)
                 })
                 .unzip();
+
+            // Iterate over a list of tracing payloads, and create logs with mappings to payloads
+            // Log at least a "start" event using a log with trace.id and parent.trace.id
+            for tracing_payload in batch.metadata.iter() {
+                tracing::info!(
+                    "Phase 2 finished",
+                    node_id = tracing_payload.node_id,
+                    trace_id = tracing_payload.trace_id,
+                    parent_trace_id = tracing_payload.parent_trace_id
+                );
+            }
 
             let result_sizes_batch = db_sizes_batch
                 .iter()
@@ -927,6 +1032,17 @@ async fn main() -> eyre::Result<()> {
                 &vec![QUERIES; thread_devs.len()],
                 &thread_devs,
             );
+
+            // Iterate over a list of tracing payloads, and create logs with mappings to payloads
+            // Log at least a "start" event using a log with trace.id and parent.trace.id
+            for tracing_payload in batch.metadata.iter() {
+                tracing::info!(
+                    "Phase 2 finished",
+                    node_id = tracing_payload.node_id,
+                    trace_id = tracing_payload.trace_id,
+                    parent_trace_id = tracing_payload.parent_trace_id
+                );
+            }
 
             let chunk_size_batch = thread_phase2_batch.chunk_size();
             open(
@@ -1009,7 +1125,7 @@ async fn main() -> eyre::Result<()> {
                         ),
                     ] {
                         dtod_at_offset(
-                            db.0 .0[i],
+                            db.0.0[i],
                             old_db_size * IRIS_CODE_LENGTH,
                             query.0[i],
                             IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
@@ -1018,7 +1134,7 @@ async fn main() -> eyre::Result<()> {
                         );
 
                         dtod_at_offset(
-                            db.0 .1[i],
+                            db.0.1[i],
                             old_db_size * IRIS_CODE_LENGTH,
                             query.1[i],
                             IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
@@ -1027,7 +1143,7 @@ async fn main() -> eyre::Result<()> {
                         );
 
                         dtod_at_offset(
-                            db.1 .0[i],
+                            db.1.0[i],
                             old_db_size * mem::size_of::<u32>(),
                             sums.0[i],
                             mem::size_of::<u32>() * 15
@@ -1037,7 +1153,7 @@ async fn main() -> eyre::Result<()> {
                         );
 
                         dtod_at_offset(
-                            db.1 .1[i],
+                            db.1.1[i],
                             old_db_size * mem::size_of::<u32>(),
                             sums.1[i],
                             mem::size_of::<u32>() * 15
@@ -1083,7 +1199,7 @@ async fn main() -> eyre::Result<()> {
                         *&mut thread_current_stream_event[i],
                         *&mut thread_streams[i],
                     )
-                    .unwrap();
+                        .unwrap();
 
                     // DEBUG: emit event to measure time for e2e process
                     event::record(*&mut thread_end_timer[i], *&mut thread_streams[i]).unwrap();
@@ -1136,6 +1252,8 @@ async fn main() -> eyre::Result<()> {
         next_exchange_event = device_manager.create_events();
 
         println!("CPU time of one iteration {:?}", now.elapsed());
+
+        // wrap up span context
     }
 
     // Await the last thread for benching
