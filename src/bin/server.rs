@@ -802,11 +802,11 @@ async fn main() -> eyre::Result<()> {
             // SAFETY:
             // - We only use the default streams of the devices, therefore Phase 2's are never
             //   running concurrently.
-            // - These pointers are aligned, dereferencable, and initialized.
-            let mut phase2_streams = thread_phase2
+            // - These pointers are either NULL meaning default, or opaque CUDA handles.
+            let phase2_streams = thread_phase2
                 .get_devices()
                 .iter()
-                .map(|d| unsafe { d.cu_stream().as_mut().unwrap() })
+                .map(|d| *d.cu_stream())
                 .collect::<Vec<_>>();
 
             // Phase 2 [Batch]: compare each result against threshold
@@ -858,7 +858,7 @@ async fn main() -> eyre::Result<()> {
                 &thread_request_results_batch,
                 &thread_request_results,
                 &thread_request_final_results,
-                &mut phase2_streams,
+                &phase2_streams,
             );
 
             // Evaluate the results across devices
@@ -895,7 +895,7 @@ async fn main() -> eyre::Result<()> {
                                 query.0[i],
                                 insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                                 IRIS_CODE_LENGTH,
-                                *&mut phase2_streams[i],
+                                phase2_streams[i],
                             );
 
                             dtod_at_offset(
@@ -904,7 +904,7 @@ async fn main() -> eyre::Result<()> {
                                 query.1[i],
                                 insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                                 IRIS_CODE_LENGTH,
-                                *&mut phase2_streams[i],
+                                phase2_streams[i],
                             );
 
                             dtod_at_offset(
@@ -913,7 +913,7 @@ async fn main() -> eyre::Result<()> {
                                 sums.0[i],
                                 insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                                 mem::size_of::<u32>(),
-                                *&mut phase2_streams[i],
+                                phase2_streams[i],
                             );
 
                             dtod_at_offset(
@@ -922,7 +922,7 @@ async fn main() -> eyre::Result<()> {
                                 sums.1[i],
                                 insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                                 mem::size_of::<u32>(),
-                                *&mut phase2_streams[i],
+                                phase2_streams[i],
                             );
                         }
                         old_db_size += 1;
