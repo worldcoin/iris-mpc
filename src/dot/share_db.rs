@@ -7,7 +7,8 @@ use axum::{routing::get, Router};
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
-        result::malloc_async, sys::CUdeviceptr, CudaFunction, CudaSlice, CudaStream, DevicePtr, LaunchAsync, LaunchConfig
+        result::malloc_async, sys::CUdeviceptr, CudaFunction, CudaSlice, CudaStream, DevicePtr,
+        LaunchAsync, LaunchConfig,
     },
     nccl::{self, result, Comm, Id, NcclType},
     nvrtc::compile_ptx,
