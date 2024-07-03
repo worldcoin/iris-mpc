@@ -515,6 +515,19 @@ async fn main() -> eyre::Result<()> {
 
     // Main loop
     for request_counter in 0..N_BATCHES {
+
+        // **Tensor format of queries**
+        //
+        // The functions `receive_batch` and `prepare_query_shares` will prepare the _query_ variables as `Vec<Vec<u8>>` formatted as follows:
+        //
+        // - The inner Vec is a flattening of these dimensions (inner to outer):
+        //   - One u8 limb of one iris bit.
+        //   - One code: 12800 coefficients.
+        //   - One query: all rotated variants of a code.
+        //   - One batch: many queries.
+        // - The outer Vec is the dimension of the Galois Ring (2):
+        //   - A decomposition of each iris bit into two u8 limbs.
+
         // Skip first iteration
         if request_counter == 1 {
             total_time = Instant::now();
@@ -527,8 +540,10 @@ async fn main() -> eyre::Result<()> {
 
         let (code_query, mask_query, code_query_insert, mask_query_insert) =
             spawn_blocking(move || {
+                // *Query* variant including Lagrange interpolation.
                 let code_query = prepare_query_shares(batch.query.code);
                 let mask_query = prepare_query_shares(batch.query.mask);
+                // *Storage* variant (no interpolation).
                 let code_query_insert = prepare_query_shares(batch.db.code);
                 let mask_query_insert = prepare_query_shares(batch.db.mask);
                 (code_query, mask_query, code_query_insert, mask_query_insert)
