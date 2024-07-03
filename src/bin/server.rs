@@ -26,6 +26,7 @@ use gpu_iris_mpc::{
         sqs::{ResultEvent, SMPCRequest, SQSMessage},
     },
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
+    store::Store,
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use lazy_static::lazy_static;
@@ -124,8 +125,9 @@ struct BatchQueryEntries {
 #[derive(Default)]
 struct BatchQuery {
     pub request_ids: Vec<String>,
-    pub query:       BatchQueryEntries,
-    pub db:          BatchQueryEntries,
+    pub query: BatchQueryEntries,
+    pub db: BatchQueryEntries,
+    pub store: BatchQueryEntries,
 }
 
 async fn receive_batch(
@@ -148,28 +150,44 @@ async fn receive_batch(
             let message: SMPCRequest = serde_json::from_str(&message.message)?;
             batch_query.request_ids.push(message.clone().request_id);
 
-            let (db_iris_shares, db_mask_shares, iris_shares, mask_shares) =
-                spawn_blocking(move || {
-                    let mut iris_share =
-                        GaloisRingIrisCodeShare::new(party_id + 1, message.get_iris_shares());
-                    let mut mask_share =
-                        GaloisRingIrisCodeShare::new(party_id + 1, message.get_mask_shares());
+            let (
+                store_iris_shares,
+                store_mask_shares,
+                db_iris_shares,
+                db_mask_shares,
+                iris_shares,
+                mask_shares,
+            ) = spawn_blocking(move || {
+                let mut iris_share =
+                    GaloisRingIrisCodeShare::new(party_id + 1, message.get_iris_shares());
+                let mut mask_share =
+                    GaloisRingIrisCodeShare::new(party_id + 1, message.get_mask_shares());
 
-                    let db_iris_shares = iris_share.all_rotations();
-                    let db_mask_shares = mask_share.all_rotations();
+                // Original for storage.
+                let store_iris_shares = iris_share.clone();
+                let store_mask_shares = mask_share.clone();
 
-                    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
-                    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut mask_share);
+                // With rotations for in-memory database.
+                let db_iris_shares = iris_share.all_rotations();
+                let db_mask_shares = mask_share.all_rotations();
 
-                    (
-                        db_iris_shares,
-                        db_mask_shares,
-                        iris_share.all_rotations(),
-                        mask_share.all_rotations(),
-                    )
-                })
-                .await?;
+                // With Lagrange interpolation.
+                GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
+                GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut mask_share);
 
+                (
+                    store_iris_shares,
+                    store_mask_shares,
+                    db_iris_shares,
+                    db_mask_shares,
+                    iris_share.all_rotations(),
+                    mask_share.all_rotations(),
+                )
+            })
+            .await?;
+
+            batch_query.store.code.push(store_iris_shares);
+            batch_query.store.mask.push(store_mask_shares);
             batch_query.db.code.extend(db_iris_shares);
             batch_query.db.mask.extend(db_mask_shares);
             batch_query.query.code.extend(iris_shares);
@@ -413,6 +431,7 @@ async fn main() -> eyre::Result<()> {
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);
+    let store = Arc::new(Mutex::new(Store::new()));
 
     // Init RNGs
     let own_key_id = KMS_KEY_IDS[party_id];
@@ -429,7 +448,7 @@ async fn main() -> eyre::Result<()> {
     );
 
     // Generate or load DB
-    let (codes_db, masks_db) = if metadata(&code_db_path).is_ok() && metadata(&mask_db_path).is_ok()
+    let (mut codes_db, mut masks_db) = if metadata(&code_db_path).is_ok() && metadata(&mask_db_path).is_ok()
     {
         (
             read_mmap_file(&code_db_path)?,
@@ -470,6 +489,12 @@ async fn main() -> eyre::Result<()> {
         write_mmap_file(&mask_db_path, &masks_db)?;
         (codes_db, masks_db)
     };
+
+    // Load DB from persistent storage.
+    for iris in store.lock().unwrap().iter_irises() {
+        codes_db.extend(iris.code());
+        masks_db.extend(iris.mask());
+    }
 
     println!("Starting engines...");
 
@@ -640,7 +665,7 @@ async fn main() -> eyre::Result<()> {
         println!("Received batch in {:?}", now.elapsed());
         batch_times += now.elapsed();
 
-        let (code_query, mask_query, code_query_insert, mask_query_insert) =
+        let (code_query, mask_query, code_query_insert, mask_query_insert, query_store) =
             spawn_blocking(move || {
                 // *Query* variant including Lagrange interpolation.
                 let code_query = prepare_query_shares(batch.query.code);
@@ -648,7 +673,13 @@ async fn main() -> eyre::Result<()> {
                 // *Storage* variant (no interpolation).
                 let code_query_insert = prepare_query_shares(batch.db.code);
                 let mask_query_insert = prepare_query_shares(batch.db.mask);
-                (code_query, mask_query, code_query_insert, mask_query_insert)
+                (
+                    code_query,
+                    mask_query,
+                    code_query_insert,
+                    mask_query_insert,
+                    batch.store,
+                )
             })
             .await?;
 
@@ -864,6 +895,8 @@ async fn main() -> eyre::Result<()> {
 
         let thread_sender = tx.clone();
 
+        let store = store.clone(); // Arc pointer for the closure below.
+
         previous_thread_handle = Some(spawn_blocking(move || {
             // Wait for Phase 1 to finish
             await_streams(&mut thread_streams);
@@ -994,6 +1027,21 @@ async fn main() -> eyre::Result<()> {
                 .map(|(idx, _num)| idx)
                 .collect::<Vec<_>>();
 
+            // Insert non-matching queries into the persistent store.
+            {
+                let codes_and_masks: Vec<(&[u16], &[u16])> = insertion_list
+                    .iter()
+                    .map(|&query_idx| {
+                        let code = &query_store.code[query_idx].coefs[..];
+                        let mask = &query_store.mask[query_idx].coefs[..];
+                        (code, mask)
+                    })
+                    .collect();
+                let store = store.lock().unwrap();
+                store.insert_irises(&codes_and_masks);
+            }
+
+            // Spread the insertions across devices.
             let insertion_list = distribute_insertions(&insertion_list, &db_sizes);
 
             // Calculate the new indices for the inserted queries
