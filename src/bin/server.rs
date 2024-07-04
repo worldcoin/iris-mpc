@@ -26,13 +26,11 @@ use gpu_iris_mpc::{
         kms_dh::derive_shared_secret,
         mmap::{read_mmap_file, write_mmap_file},
         sqs::{ResultEvent, SMPCRequest, SQSMessage},
-        sqs::{ResultEvent, SMPCRequest, SQSMessage},
     },
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use lazy_static::lazy_static;
-use rand::{rngs::StdRng, SeedableRng};
 use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{
@@ -64,8 +62,6 @@ const DB_SIZE: usize = 8 * 1_000;
 const DB_BUFFER: usize = 8 * 1_000;
 const N_QUERIES: usize = 32;
 const N_BATCHES: usize = 100;
-const N_QUERIES: usize = 32;
-const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
 /// The number of batches before a stream is re-used.
 const MAX_BATCHES_BEFORE_REUSE: usize = 5;
@@ -90,7 +86,6 @@ const MAX_CONCURRENT_BATCHES: usize = 2;
 const DB_CODE_FILE: &str = "codes.db";
 const DB_MASK_FILE: &str = "masks.db";
 const DEFAULT_PATH: &str = "/opt/dlami/nvme/";
-const QUERIES: usize = ROTATIONS * N_QUERIES;
 const QUERIES: usize = ROTATIONS * N_QUERIES;
 const KMS_KEY_IDS: [&str; 3] = [
     "077788e2-9eeb-4044-859b-34496cfd500b",
