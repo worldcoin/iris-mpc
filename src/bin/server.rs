@@ -577,6 +577,7 @@ async fn main() -> eyre::Result<()> {
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(4004),
+        Some(&mut server_tasks),
     )));
     check_tasks(&mut server_tasks);
 
@@ -587,6 +588,7 @@ async fn main() -> eyre::Result<()> {
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(4005),
+        Some(&mut server_tasks),
     )));
     check_tasks(&mut server_tasks);
 
@@ -631,7 +633,7 @@ async fn main() -> eyre::Result<()> {
     // Start task that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<(Vec<u32>, Vec<String>, Vec<bool>)>(32); // TODO: pick some buffer value
     let rx_sns_client = sns_client.clone();
-    server_tasks.spawn(async move {
+    let _result_sender_abort = server_tasks.spawn(async move {
         while let Some((message, request_ids, matches)) = rx.recv().await {
             for (i, &idx_result) in message.iter().enumerate() {
                 // TODO: write each result to postgres
@@ -651,8 +653,8 @@ async fn main() -> eyre::Result<()> {
             }
         }
     });
-
     check_tasks(&mut server_tasks);
+
     println!("All systems ready.");
 
     let mut total_time = Instant::now();
