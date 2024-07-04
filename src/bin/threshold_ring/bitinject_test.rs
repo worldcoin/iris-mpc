@@ -1,5 +1,8 @@
 use cudarc::driver::{CudaDevice, CudaStream};
-use gpu_iris_mpc::threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits};
+use gpu_iris_mpc::{
+    helpers::{dtoh_async, htod_async},
+    threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
+};
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{env, sync::Arc};
@@ -59,8 +62,8 @@ fn to_gpu(
         a.chunks(INPUTS_PER_GPU_SIZE / 64),
         b.chunks(INPUTS_PER_GPU_SIZE / 64)
     ) {
-        let a_ = Circuits::htod_async(a, dev, stream).unwrap();
-        let b_ = Circuits::htod_async(b, dev, stream).unwrap();
+        let a_ = htod_async(a, dev, stream).unwrap();
+        let b_ = htod_async(b, dev, stream).unwrap();
         result.push(ChunkShare::new(a_, b_));
     }
 
@@ -96,8 +99,8 @@ fn open(party: &mut Circuits, x: &mut [ChunkShareView<u16>], streams: &[CudaStre
 
     let devices = party.get_devices();
     for (idx, res) in x.iter().enumerate() {
-        a.push(Circuits::dtoh_async(&res.a, &devices[idx], &streams[idx]).unwrap());
-        b.push(Circuits::dtoh_async(&res.b, &devices[idx], &streams[idx]).unwrap());
+        a.push(dtoh_async(&res.a, &devices[idx], &streams[idx]).unwrap());
+        b.push(dtoh_async(&res.b, &devices[idx], &streams[idx]).unwrap());
     }
     cudarc::nccl::result::group_start().unwrap();
     for (idx, res) in x.iter().enumerate() {
@@ -112,7 +115,7 @@ fn open(party: &mut Circuits, x: &mut [ChunkShareView<u16>], streams: &[CudaStre
     }
     cudarc::nccl::result::group_end().unwrap();
     for (idx, res) in x.iter_mut().enumerate() {
-        c.push(Circuits::dtoh_async(&res.a, &devices[idx], &streams[idx]).unwrap())
+        c.push(dtoh_async(&res.a, &devices[idx], &streams[idx]).unwrap())
     }
 
     let mut result = Vec::with_capacity(n_devices * INPUTS_PER_GPU_SIZE);
