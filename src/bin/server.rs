@@ -174,15 +174,15 @@ async fn receive_batch(
                 let mut batch_metadata = BatchMetadata::default();
 
                 if let Some(node_id) = message_attributes.get(NODE_ID_MESSAGE_ATTRIBUTE_NAME) {
-                    let node_id = node_id.string_value().unwrap().clone();
+                    let node_id = node_id.string_value().unwrap();
                     batch_metadata.node_id = node_id.to_string();
                 }
                 if let Some(trace_id) = message_attributes.get(TRACE_ID_MESSAGE_ATTRIBUTE_NAME) {
-                    let trace_id = trace_id.string_value().unwrap().clone();
+                    let trace_id = trace_id.string_value().unwrap();
                     batch_metadata.trace_id = trace_id.to_string();
                 }
                 if let Some(span_id) = message_attributes.get(SPAN_ID_MESSAGE_ATTRIBUTE_NAME) {
-                    let span_id = span_id.string_value().unwrap().clone();
+                    let span_id = span_id.string_value().unwrap();
                     batch_metadata.span_id = span_id.to_string();
                 }
 
