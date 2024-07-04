@@ -212,6 +212,7 @@ async fn main() -> eyre::Result<()> {
         let mut x = to_view(&x_);
         let correction_ = party.allocate_buffer::<u16>(INPUTS_PER_GPU_SIZE * 2);
         let mut correction = to_view(&correction_);
+        party.synchronize_all();
         let mask_gpu = mask_gpu.clone();
 
         let now = Instant::now();
