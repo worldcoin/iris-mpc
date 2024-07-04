@@ -1,5 +1,5 @@
 use cudarc::driver::CudaDevice;
-use gpu_iris_mpc::threshold_ring::protocol::{ChunkShare, Circuits};
+use gpu_iris_mpc::{helpers::task_monitor::TaskMonitor, threshold_ring::protocol::{ChunkShare, Circuits}};
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{env, sync::Arc};
@@ -93,6 +93,7 @@ async fn main() -> eyre::Result<()> {
     };
 
     // Get Circuit Party
+    let mut server_tasks = TaskMonitor::new();
     let mut party = Circuits::new(
         party_id,
         INPUTS_PER_GPU_SIZE,
@@ -100,11 +101,15 @@ async fn main() -> eyre::Result<()> {
         ([party_id as u32; 8], [((party_id + 2) % 3) as u32; 8]),
         url,
         Some(3001),
+        Some(&mut server_tasks),
     );
     let devices = party.get_devices();
+    server_tasks.check_tasks();
 
     println!("Starting tests...");
     for i in 0..=n_devices {
+        server_tasks.check_tasks();
+
         println!("Test: {}", i);
         let mut inputs = vec![0; CHUNK_SIZE * n_devices];
         if i < n_devices {
@@ -142,6 +147,8 @@ async fn main() -> eyre::Result<()> {
         }
     }
 
+    server_tasks.abort_all();
     time::sleep(time::Duration::from_secs(5)).await;
+    server_tasks.check_tasks_finished();
     Ok(())
 }

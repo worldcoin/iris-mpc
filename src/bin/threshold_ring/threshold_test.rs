@@ -1,7 +1,6 @@
 use cudarc::driver::CudaDevice;
 use gpu_iris_mpc::{
-    setup::iris_db::iris::{IrisCodeArray, MATCH_THRESHOLD_RATIO},
-    threshold_ring::protocol::{ChunkShare, Circuits},
+    helpers::task_monitor::TaskMonitor, setup::iris_db::iris::{IrisCodeArray, MATCH_THRESHOLD_RATIO}, threshold_ring::protocol::{ChunkShare, Circuits}
 };
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -172,6 +171,7 @@ async fn main() -> eyre::Result<()> {
     println!("Random shared inputs generated!");
 
     // Get Circuit Party
+    let mut server_tasks = TaskMonitor::new();
     let mut party = Circuits::new(
         party_id,
         INPUTS_PER_GPU_SIZE,
@@ -179,8 +179,10 @@ async fn main() -> eyre::Result<()> {
         ([party_id as u32; 8], [((party_id + 2) % 3) as u32; 8]),
         url,
         Some(3001),
+        Some(&mut server_tasks),
     );
     let devices = party.get_devices();
+    server_tasks.check_tasks();
 
     // Import to GPU
     let code_gpu = to_gpu(&code_share_a, &code_share_b, &devices);
@@ -189,6 +191,8 @@ async fn main() -> eyre::Result<()> {
     println!("Starting tests...");
 
     for _ in 0..10 {
+        server_tasks.check_tasks();
+
         let code_gpu = code_gpu.clone();
         let mask_gpu = mask_gpu.clone();
 
@@ -216,6 +220,8 @@ async fn main() -> eyre::Result<()> {
         }
     }
 
+    server_tasks.abort_all();
     time::sleep(time::Duration::from_secs(5)).await;
+    server_tasks.check_tasks_finished();
     Ok(())
 }
