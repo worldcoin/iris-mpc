@@ -400,6 +400,7 @@ pub fn calculate_insertion_indices(
 /// Call this method after adding each new task, and before starting a new batch.
 #[track_caller]
 fn check_tasks(server_tasks: &mut JoinSet<()>) {
+    // Any finished task is an error, so we just need to check for the first one.
     if let Some(finished_task) = server_tasks.try_join_next() {
         finished_task.unwrap();
         panic!("Server task unexpectedly finished without an error");
@@ -413,11 +414,13 @@ fn check_tasks(server_tasks: &mut JoinSet<()>) {
 /// then call this function.
 #[track_caller]
 fn check_tasks_finished(server_tasks: &mut JoinSet<()>) {
-    if let Some(finished_task) = server_tasks.try_join_next() {
+    // Any hung task is an error, so we need to check they've all finished.
+    while let Some(finished_task) = server_tasks.try_join_next() {
         finished_task.unwrap();
     }
 
     if !server_tasks.is_empty() {
+        // If this panics, try waiting for longer between the abort and this function call.
         panic!("{} server tasks hung even when aborted", server_tasks.len());
     }    
 }
