@@ -54,6 +54,7 @@ extern "C" __global__ void mergeResults(unsigned int *matchResultsSelf, unsigned
             }
         }
 
+        // If there is a match in the db, we return the db index
         if (match)
             return;
 
@@ -62,7 +63,7 @@ extern "C" __global__ void mergeResults(unsigned int *matchResultsSelf, unsigned
         int oldIdx = idx * (2 * ROTATIONS + 1) + ROTATIONS;
         if (matchResultsSelf[oldIdx] != UINT_MAX && oldIdx != matchResultsSelf[oldIdx])
         {
-            finalResults[idx] = matchResultsSelf[oldIdx];
+            finalResults[idx] = UINT_MAX - 1; // Set to UINT_MAX - 1 to indicate that the match is in the query itself
             return;
         }
 

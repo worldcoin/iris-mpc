@@ -14,13 +14,15 @@ const OPEN_RESULTS_FUNCTION: &str = "openResults";
 const MERGE_RESULTS_FUNCTION: &str = "mergeResults";
 
 pub struct DistanceComparator {
-    pub devs:           Vec<Arc<CudaDevice>>,
-    pub open_kernels:   Vec<CudaFunction>,
-    pub merge_kernels:  Vec<CudaFunction>,
-    pub query_length:   usize,
-    pub n_devices:      usize,
-    pub opened_results: Vec<CudaSlice<u32>>,
-    pub final_results:  Vec<CudaSlice<u32>>,
+    pub devs:                    Vec<Arc<CudaDevice>>,
+    pub open_kernels:            Vec<CudaFunction>,
+    pub merge_kernels:           Vec<CudaFunction>,
+    pub query_length:            usize,
+    pub n_devices:               usize,
+    pub opened_results:          Vec<CudaSlice<u32>>,
+    pub final_results:           Vec<CudaSlice<u32>>,
+    pub results_init_host:       Vec<u32>,
+    pub final_results_init_host: Vec<u32>,
 }
 
 impl DistanceComparator {
@@ -32,6 +34,9 @@ impl DistanceComparator {
         let n_devices = CudaDevice::count().unwrap() as usize;
         let mut opened_results = vec![];
         let mut final_results = vec![];
+
+        let results_init_host = vec![u32::MAX; query_length];
+        let final_results_init_host = vec![u32::MAX; query_length / ROTATIONS];
 
         for i in 0..n_devices {
             let dev = CudaDevice::new(i).unwrap();
@@ -45,11 +50,8 @@ impl DistanceComparator {
 
             let merge_results_function = dev.get_func("", MERGE_RESULTS_FUNCTION).unwrap();
 
-            let results_uninit = vec![u32::MAX; query_length];
-            opened_results.push(dev.htod_copy(results_uninit.clone()).unwrap());
-
-            let results_uninit = vec![u32::MAX; query_length / ROTATIONS];
-            final_results.push(dev.htod_copy(results_uninit.clone()).unwrap());
+            opened_results.push(dev.htod_copy(results_init_host.clone()).unwrap());
+            final_results.push(dev.htod_copy(final_results_init_host.clone()).unwrap());
 
             open_kernels.push(open_results_function);
             merge_kernels.push(merge_results_function);
@@ -64,6 +66,8 @@ impl DistanceComparator {
             n_devices,
             opened_results,
             final_results,
+            results_init_host,
+            final_results_init_host,
         }
     }
 
@@ -165,16 +169,22 @@ impl DistanceComparator {
     }
 
     pub fn prepare_results(&self) -> Vec<CudaSlice<u32>> {
-        let results_uninit = vec![u32::MAX; self.query_length];
         (0..self.n_devices)
-            .map(|i| self.devs[i].htod_copy(results_uninit.clone()).unwrap())
+            .map(|i| {
+                self.devs[i]
+                    .htod_copy(self.results_init_host.clone())
+                    .unwrap()
+            })
             .collect::<Vec<_>>()
     }
 
     pub fn prepare_final_results(&self) -> Vec<CudaSlice<u32>> {
-        let results_uninit = vec![u32::MAX; self.query_length / ROTATIONS];
         (0..self.n_devices)
-            .map(|i| self.devs[i].htod_copy(results_uninit.clone()).unwrap())
+            .map(|i| {
+                self.devs[i]
+                    .htod_copy(self.final_results_init_host.clone())
+                    .unwrap()
+            })
             .collect::<Vec<_>>()
     }
 }

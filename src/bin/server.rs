@@ -1,4 +1,5 @@
 #![allow(clippy::needless_range_loop)]
+use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::{config::Region, Client};
 use clap::Parser;
 use core::sync::atomic::Ordering::SeqCst;
@@ -22,44 +23,51 @@ use gpu_iris_mpc::{
         device_ptrs, device_ptrs_to_slices,
         kms_dh::derive_shared_secret,
         mmap::{read_mmap_file, write_mmap_file},
-        sqs::{SMPCRequest, SQSMessage},
+        sqs::{ResultEvent, SMPCRequest, SQSMessage},
     },
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use lazy_static::lazy_static;
-use rand::{prelude::SliceRandom, rngs::StdRng, SeedableRng};
+use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{
-    fs::metadata, mem, sync::{atomic::AtomicUsize, Arc, Mutex}, time::{Duration, Instant}
+    fs::metadata,
+    mem,
+    sync::{atomic::AtomicUsize, Arc, Mutex},
+    time::{Duration, Instant},
 };
 use tokio::{
-    runtime, task::{spawn_blocking, JoinHandle}, time::sleep
+    runtime,
+    sync::mpsc,
+    task::{spawn_blocking, JoinHandle},
+    time::sleep,
 };
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
 const DB_BUFFER: usize = 8 * 1_000;
-const QUERIES: usize = 31 * 32;
-const N_BATCHES: usize = 10;
+const N_QUERIES: usize = 32;
+const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
-const SHUFFLE_SEED: u64 = 42;
-
 /// The number of batches before a stream is re-used.
 const MAX_BATCHES_BEFORE_REUSE: usize = 5;
 
 /// The number of batches that are launched concurrently.
 ///
 /// Code can run concurrently in:
-/// - requests `N` and `N - 1`, 
-/// - requests `N` and `N - MAX_CONCURRENT_BATCHES`, because the next request phase 1 awaits
-///   completion of the request `MAX_CONCURRENT_BATCHES` behind it, or
-/// - request `N` only, because phase 2 limits the critical section to one batch.
+/// - requests `N` and `N - 1`,
+/// - requests `N` and `N - MAX_CONCURRENT_BATCHES`, because the next request
+///   phase 1 awaits completion of the request `MAX_CONCURRENT_BATCHES` behind
+///   it, or
+/// - request `N` only, because phase 2 limits the critical section to one
+///   batch.
 const MAX_CONCURRENT_BATCHES: usize = 2;
 
 const DB_CODE_FILE: &str = "codes.db";
 const DB_MASK_FILE: &str = "masks.db";
 const DEFAULT_PATH: &str = "/opt/dlami/nvme/";
+const QUERIES: usize = ROTATIONS * N_QUERIES;
 const KMS_KEY_IDS: [&str; 3] = [
     "077788e2-9eeb-4044-859b-34496cfd500b",
     "896353dc-5ea5-42d4-9e4e-f65dd8169dee",
@@ -69,6 +77,8 @@ const KMS_KEY_IDS: [&str; 3] = [
 lazy_static! {
     static ref KDF_NONCE: AtomicUsize = AtomicUsize::new(0);
     static ref KDF_SALT: Salt = Salt::new(HKDF_SHA256, b"IRIS_MPC");
+    static ref RESULTS_INIT_HOST: Vec<u32> = vec![u32::MAX; N_QUERIES * ROTATIONS];
+    static ref FINAL_RESULTS_INIT_HOST: Vec<u32> = vec![u32::MAX; N_QUERIES];
 }
 
 macro_rules! debug_record_event {
@@ -93,6 +103,9 @@ struct Opt {
     queue: String,
 
     #[structopt(short, long)]
+    results_topic_arn: String,
+
+    #[structopt(short, long)]
     party_id: usize,
 
     #[structopt(short, long)]
@@ -110,8 +123,9 @@ struct BatchQueryEntries {
 
 #[derive(Default)]
 struct BatchQuery {
-    pub query: BatchQueryEntries,
-    pub db:    BatchQueryEntries,
+    pub request_ids: Vec<String>,
+    pub query:       BatchQueryEntries,
+    pub db:          BatchQueryEntries,
 }
 
 async fn receive_batch(
@@ -132,6 +146,7 @@ async fn receive_batch(
         for sns_message in rcv_message_output.messages.unwrap_or_default() {
             let message: SQSMessage = serde_json::from_str(sns_message.body().unwrap())?;
             let message: SMPCRequest = serde_json::from_str(&message.message)?;
+            batch_query.request_ids.push(message.clone().request_id);
 
             let (db_iris_shares, db_mask_shares, iris_shares, mask_shares) =
                 spawn_blocking(move || {
@@ -189,7 +204,10 @@ fn slice_tuples_to_ptrs(
         (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
         (Vec<CudaSlice<u32>>, Vec<CudaSlice<u32>>),
     ),
-) -> ((Vec<CUdeviceptr>, Vec<CUdeviceptr>), (Vec<CUdeviceptr>, Vec<CUdeviceptr>)) {
+) -> (
+    (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
+    (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
+) {
     (
         (device_ptrs(&tuple.0 .0), device_ptrs(&tuple.0 .1)),
         (device_ptrs(&tuple.1 .0), device_ptrs(&tuple.1 .1)),
@@ -227,20 +245,18 @@ fn open(
     distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes);
 }
 
-fn get_non_matching_indices(host_results: &[Vec<u32>]) -> Vec<usize> {
-    let mut insertion_list = vec![];
+fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
+    let mut results = vec![];
     for j in 0..host_results[0].len() {
         let mut match_entry = u32::MAX;
         for i in 0..host_results.len() {
-            if host_results[i][j] != u32::MAX {
-                match_entry = host_results[i][j];
-                break;
+            let match_idx = host_results[i][j] * n_devices as u32 + i as u32;
+            if host_results[i][j] != u32::MAX && match_idx < match_entry {
+                match_entry = match_idx;
             }
         }
 
-        if match_entry == u32::MAX {
-            insertion_list.push(j);
-        }
+        results.push(match_entry);
 
         // DEBUG
         println!(
@@ -250,13 +266,13 @@ fn get_non_matching_indices(host_results: &[Vec<u32>]) -> Vec<usize> {
             match_entry
         );
     }
-    insertion_list
+    results
 }
 
 fn await_streams(streams: &mut [&mut CUstream_st]) {
     for i in 0..streams.len() {
-        // SAFETY: these streams have already been created, and the caller holds a reference to
-        // their CudaDevice, which makes sure they aren't dropped.
+        // SAFETY: these streams have already been created, and the caller holds a
+        // reference to their CudaDevice, which makes sure they aren't dropped.
         unsafe {
             synchronize(streams[i]).unwrap();
         }
@@ -317,6 +333,68 @@ fn next_chacha_seeds(seeds: ([u32; 8], [u32; 8])) -> eyre::Result<([u32; 8], [u3
     Ok((derive_seed(seeds.0, nonce)?, derive_seed(seeds.1, nonce)?))
 }
 
+fn distribute_insertions(results: &[usize], db_sizes: &[usize]) -> Vec<Vec<usize>> {
+    let mut ret = vec![vec![]; db_sizes.len()];
+    let start = db_sizes
+        .iter()
+        .position(|&x| x == *db_sizes.iter().min().unwrap())
+        .unwrap();
+
+    let mut c = start;
+    for &r in results {
+        ret[c].push(r);
+        c = (c + 1) % db_sizes.len();
+    }
+    ret
+}
+
+fn reset_results(
+    devs: &[Arc<CudaDevice>],
+    dst: &[CUdeviceptr],
+    src: &[u32],
+    streams: &mut [*mut CUstream_st],
+) {
+    for i in 0..devs.len() {
+        devs[i].bind_to_thread().unwrap();
+        // SAFETY: we don't access these mutable streams concurrently
+        unsafe { result::memcpy_htod_async(dst[i], src, streams[i]) }.unwrap();
+    }
+}
+
+pub fn calculate_insertion_indices(
+    merged_results: &mut [u32],
+    insertion_list: &[Vec<usize>],
+    db_sizes: &[usize],
+) -> Vec<bool> {
+    let mut matches = vec![true; N_QUERIES];
+    let mut last_db_index = db_sizes.iter().sum::<usize>() as u32;
+    let (mut min_index, mut min_index_val) = (0, usize::MAX);
+    for (i, list) in insertion_list.iter().enumerate() {
+        if let Some(&first_val) = list.first() {
+            if first_val < min_index_val {
+                min_index_val = first_val;
+                min_index = i;
+            }
+        }
+    }
+    let mut c: usize = 0;
+    loop {
+        for i in 0..insertion_list.len() {
+            let idx = (i + min_index) % insertion_list.len();
+
+            if c >= insertion_list[idx].len() {
+                return matches;
+            }
+
+            let insert_idx = insertion_list[idx][c];
+            merged_results[insert_idx] = last_db_index;
+            matches[insert_idx] = false;
+            last_db_index += 1;
+        }
+        c += 1;
+    }
+}
+
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     let Opt {
@@ -324,17 +402,17 @@ async fn main() -> eyre::Result<()> {
         party_id,
         bootstrap_url,
         path,
+        results_topic_arn,
     } = Opt::parse();
     let path = path.unwrap_or(DEFAULT_PATH.to_string());
 
     let code_db_path = format!("{}/{}", path, DB_CODE_FILE);
     let mask_db_path = format!("{}/{}", path, DB_MASK_FILE);
 
-    let shuffle_rng = StdRng::seed_from_u64(SHUFFLE_SEED);
-
     let region_provider = Region::new(REGION);
     let shared_config = aws_config::from_env().region(region_provider).load().await;
-    let client = Client::new(&shared_config);
+    let sqs_client = Client::new(&shared_config);
+    let sns_client = SNSClient::new(&shared_config);
 
     // Init RNGs
     let own_key_id = KMS_KEY_IDS[party_id];
@@ -420,8 +498,8 @@ async fn main() -> eyre::Result<()> {
         Some(4001),
     );
 
-    let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE, DB_SIZE + DB_BUFFER);
-    let mask_db_slices = masks_engine.load_db(&masks_db, DB_SIZE, DB_SIZE + DB_BUFFER);
+    let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE, DB_SIZE + DB_BUFFER, true);
+    let mask_db_slices = masks_engine.load_db(&masks_db, DB_SIZE, DB_SIZE + DB_BUFFER, true);
 
     // Engines for inflight queries
     let mut batch_codes_engine = ShareDB::init(
@@ -508,6 +586,30 @@ async fn main() -> eyre::Result<()> {
         .map(|&s| Arc::new(Mutex::new(s)))
         .collect::<Vec<_>>();
 
+    // Start thread that will be responsible for communicating back the results
+    let (tx, mut rx) = mpsc::channel::<(Vec<u32>, Vec<String>, Vec<bool>)>(32); // TODO: pick some buffer value
+    let rx_sns_client = sns_client.clone();
+    tokio::spawn(async move {
+        while let Some((message, request_ids, matches)) = rx.recv().await {
+            for (i, &idx_result) in message.iter().enumerate() {
+                // TODO: write each result to postgres
+
+                // Notify consumers about result
+                println!("Sending results back to SNS...");
+                let result_event =
+                    ResultEvent::new(party_id, idx_result, matches[i], request_ids[i].clone());
+
+                rx_sns_client
+                    .publish()
+                    .topic_arn(&results_topic_arn)
+                    .message(serde_json::to_string(&result_event).unwrap())
+                    .send()
+                    .await
+                    .unwrap();
+            }
+        }
+    });
+
     println!("All systems ready.");
 
     let mut total_time = Instant::now();
@@ -534,7 +636,7 @@ async fn main() -> eyre::Result<()> {
             batch_times = Duration::from_secs(0);
         }
         let now = Instant::now();
-        let batch = receive_batch(party_id, &client, &queue).await?;
+        let batch = receive_batch(party_id, &sqs_client, &queue).await?;
         println!("Received batch in {:?}", now.elapsed());
         batch_times += now.elapsed();
 
@@ -586,7 +688,7 @@ async fn main() -> eyre::Result<()> {
         if request_counter > MAX_CONCURRENT_BATCHES {
             // We have two streams working concurrently, we'll await the stream before
             // previous one.
-            // SAFETY: 
+            // SAFETY:
             let previous_previous_streams =
                 &streams[(request_counter - MAX_CONCURRENT_BATCHES) % MAX_BATCHES_BEFORE_REUSE];
             device_manager.await_event(previous_previous_streams, &previous_previous_stream_event);
@@ -700,24 +802,26 @@ async fn main() -> eyre::Result<()> {
         println!("phase 1 done");
 
         // SAFETY:
-        // - We are sending these streams and events to a single thread (without cloning them),
-        //   then dropping our references to them (without destroying them).
+        // - We are sending these streams and events to a single thread (without cloning
+        //   them), then dropping our references to them (without destroying them).
         // - These pointers are aligned, dereferencable, and initialized.
         // Unique usage:
-        // - Streams are re-used after MAX_BATCHES_BEFORE_REUSE threads, but we only launch
-        //   MAX_CONCURRENT_BATCHES threads at a time. So this reference performs the only accesses
-        //   to its memory across both C and Rust.
-        // - New current stream events are created for each batch. They are only re-used after
-        //   MAX_CONCURRENT_BATCHES, but we wait for the previous batch to finish before running
-        //   that code.
-        // - End events are re-used in each thread, but we only end one thread at a time.
+        // - Streams are re-used after MAX_BATCHES_BEFORE_REUSE threads, but we only
+        //   launch MAX_CONCURRENT_BATCHES threads at a time. So this reference performs
+        //   the only accesses to its memory across both C and Rust.
+        // - New current stream events are created for each batch. They are only re-used
+        //   after MAX_CONCURRENT_BATCHES, but we wait for the previous batch to finish
+        //   before running that code.
+        // - End events are re-used in each thread, but we only end one thread at a
+        //   time.
         assert!(MAX_BATCHES_BEFORE_REUSE > MAX_CONCURRENT_BATCHES);
         // into_iter() makes the Rust compiler check that the streams are not re-used.
         let mut thread_streams = request_streams
             .into_iter()
             .map(|s| unsafe { s.stream.as_mut().unwrap() })
             .collect::<Vec<_>>();
-        // The compiler can't tell that we wait for the previous batch before re-using these events.
+        // The compiler can't tell that we wait for the previous batch before re-using
+        // these events.
         let mut thread_current_stream_event = current_stream_event
             .iter()
             .map(|e| unsafe { e.as_mut().unwrap() })
@@ -728,7 +832,6 @@ async fn main() -> eyre::Result<()> {
             .collect::<Vec<_>>();
 
         let thread_device_manager = device_manager.clone();
-        let mut thread_shuffle_rng = shuffle_rng.clone();
         let thread_current_db_size_mutex = current_db_size_mutex
             .iter()
             .map(Arc::clone)
@@ -750,27 +853,33 @@ async fn main() -> eyre::Result<()> {
         let thread_mask_results = device_ptrs(&masks_engine.results);
         let thread_mask_results_peer = device_ptrs(&masks_engine.results_peer);
 
-        // SAFETY: phase2 and phase2_batch are only used in one spawned threat at a time. 
+        // SAFETY: phase2 and phase2_batch are only used in one spawned threat at a
+        // time.
         let thread_phase2 = phase2.clone();
         let thread_phase2_batch = phase2_batch.clone();
         let thread_distance_comparator = distance_comparator.clone();
         let thread_code_db_slices = slice_tuples_to_ptrs(&code_db_slices);
         let thread_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
+        let thread_request_ids = batch.request_ids.clone();
+
+        let thread_sender = tx.clone();
 
         previous_thread_handle = Some(spawn_blocking(move || {
             // Wait for Phase 1 to finish
             await_streams(&mut thread_streams);
 
-            // Wait for Phase 2 of previous round to finish in order to not have them overlapping.
-            // SAFETY: waiting here makes sure we don't access these mutable streams or events
-            // concurrently:
-            // - CUstream: thread_streams (only re-used after MAX_BATCHES_BEFORE_REUSE batches),
+            // Wait for Phase 2 of previous round to finish in order to not have them
+            // overlapping. SAFETY: waiting here makes sure we don't access
+            // these mutable streams or events concurrently:
+            // - CUstream: thread_streams (only re-used after MAX_BATCHES_BEFORE_REUSE
+            //   batches),
             // - CUevent: thread_current_stream_event, thread_end_timer,
             // - Comm: phase2, phase2_batch.
             if previous_thread_handle.is_some() {
-                runtime::Handle::current().block_on(previous_thread_handle.unwrap()).unwrap();
+                runtime::Handle::current()
+                    .block_on(previous_thread_handle.unwrap())
+                    .unwrap();
             }
-
             let thread_devs = thread_device_manager.devices();
             let mut thread_phase2_batch = thread_phase2_batch.lock().unwrap();
             let mut thread_phase2 = thread_phase2.lock().unwrap();
@@ -815,10 +924,10 @@ async fn main() -> eyre::Result<()> {
             );
 
             // SAFETY:
-            // - We only use the default streams of the devices, therefore Phase 2's are never
-            //   running concurrently.
-            // - These pointers are either NULL meaning default, or opaque CUDA handles.
-            let phase2_streams = thread_phase2
+            // - We only use the default streams of the devices, therefore Phase 2's are
+            //   never running concurrently.
+            // - These pointers are aligned, dereferencable, and initialized.
+            let mut phase2_streams = thread_phase2
                 .get_devices()
                 .iter()
                 .map(|d| *d.cu_stream())
@@ -877,83 +986,91 @@ async fn main() -> eyre::Result<()> {
             );
 
             // Evaluate the results across devices
-            let insertion_list = get_non_matching_indices(&host_results);
-            let mut insertion_list = insertion_list
-                .chunks(QUERIES / ROTATIONS / thread_devs.len())
+            let mut merged_results = get_merged_results(&host_results, thread_devs.len());
+            let insertion_list = merged_results
+                .iter()
+                .enumerate()
+                .filter(|&(_idx, &num)| num == u32::MAX)
+                .map(|(idx, _num)| idx)
                 .collect::<Vec<_>>();
-            insertion_list.shuffle(&mut thread_shuffle_rng);
+
+            let insertion_list = distribute_insertions(&insertion_list, &db_sizes);
+
+            // Calculate the new indices for the inserted queries
+            let matches =
+                calculate_insertion_indices(&mut merged_results, &insertion_list, &db_sizes);
 
             // DEBUG
             println!("Insertion list: {:?}", insertion_list);
 
             for i in 0..thread_devs.len() {
                 thread_devs[i].bind_to_thread().unwrap();
-                if insertion_list.len() > i {
-                    let mut old_db_size = *thread_current_db_size_mutex[i].lock().unwrap();
-                    for insertion_idx in insertion_list[i] {
-                        // Append to codes and masks db
-                        for (db, query, sums) in [
-                            (
-                                &thread_code_db_slices,
-                                &code_query_insert,
-                                &code_query_insert_sums,
-                            ),
-                            (
-                                &thread_mask_db_slices,
-                                &mask_query_insert,
-                                &mask_query_insert_sums,
-                            ),
-                        ] {
-                            dtod_at_offset(
-                                db.0 .0[i],
-                                old_db_size * IRIS_CODE_LENGTH,
-                                query.0[i],
-                                insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                                IRIS_CODE_LENGTH,
-                                phase2_streams[i],
-                            );
+                let mut old_db_size = *thread_current_db_size_mutex[i].lock().unwrap();
+                for insertion_idx in insertion_list[i].clone() {
+                    // Append to codes and masks db
+                    for (db, query, sums) in [
+                        (
+                            &thread_code_db_slices,
+                            &code_query_insert,
+                            &code_query_insert_sums,
+                        ),
+                        (
+                            &thread_mask_db_slices,
+                            &mask_query_insert,
+                            &mask_query_insert_sums,
+                        ),
+                    ] {
+                        dtod_at_offset(
+                            db.0 .0[i],
+                            old_db_size * IRIS_CODE_LENGTH,
+                            query.0[i],
+                            IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                            IRIS_CODE_LENGTH,
+                            *&mut phase2_streams[i],
+                        );
 
-                            dtod_at_offset(
-                                db.0 .1[i],
-                                old_db_size * IRIS_CODE_LENGTH,
-                                query.1[i],
-                                insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                                IRIS_CODE_LENGTH,
-                                phase2_streams[i],
-                            );
+                        dtod_at_offset(
+                            db.0 .1[i],
+                            old_db_size * IRIS_CODE_LENGTH,
+                            query.1[i],
+                            IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                            IRIS_CODE_LENGTH,
+                            *&mut phase2_streams[i],
+                        );
 
-                            dtod_at_offset(
-                                db.1 .0[i],
-                                old_db_size * mem::size_of::<u32>(),
-                                sums.0[i],
-                                insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                                mem::size_of::<u32>(),
-                                phase2_streams[i],
-                            );
+                        dtod_at_offset(
+                            db.1 .0[i],
+                            old_db_size * mem::size_of::<u32>(),
+                            sums.0[i],
+                            mem::size_of::<u32>() * 15
+                                + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                            mem::size_of::<u32>(),
+                            *&mut phase2_streams[i],
+                        );
 
-                            dtod_at_offset(
-                                db.1 .1[i],
-                                old_db_size * mem::size_of::<u32>(),
-                                sums.1[i],
-                                insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                                mem::size_of::<u32>(),
-                                phase2_streams[i],
-                            );
-                        }
-                        old_db_size += 1;
+                        dtod_at_offset(
+                            db.1 .1[i],
+                            old_db_size * mem::size_of::<u32>(),
+                            sums.1[i],
+                            mem::size_of::<u32>() * 15
+                                + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                            mem::size_of::<u32>(),
+                            *&mut phase2_streams[i],
+                        );
                     }
-
-                    // Write new db sizes to device
-                    *thread_current_db_size_mutex[i].lock().unwrap() +=
-                        insertion_list[i].len() as usize;
-
-                    // DEBUG
-                    println!(
-                        "Updating DB size on device {}: {:?}",
-                        i,
-                        *thread_current_db_size_mutex[i].lock().unwrap()
-                    );
+                    old_db_size += 1;
                 }
+
+                // Write new db sizes to device
+                *thread_current_db_size_mutex[i].lock().unwrap() +=
+                    insertion_list[i].len() as usize;
+
+                // DEBUG
+                println!(
+                    "Updating DB size on device {}: {:?}",
+                    i,
+                    *thread_current_db_size_mutex[i].lock().unwrap()
+                );
 
                 // Update Phase 2 chunk size to max all db sizes on all devices
                 let max_db_size = thread_current_db_size_mutex
@@ -984,6 +1101,31 @@ async fn main() -> eyre::Result<()> {
                     event::record(*&mut thread_end_timer[i], *&mut thread_streams[i]).unwrap();
                 }
             }
+
+            // Pass to internal sender thread
+            thread_sender
+                .try_send((merged_results, thread_request_ids, matches))
+                .unwrap();
+
+            // Reset the results buffers for reuse
+            reset_results(
+                &thread_device_manager.devices(),
+                &thread_request_results,
+                &RESULTS_INIT_HOST,
+                &mut phase2_streams,
+            );
+            reset_results(
+                &thread_device_manager.devices(),
+                &thread_request_results_batch,
+                &RESULTS_INIT_HOST,
+                &mut phase2_streams,
+            );
+            reset_results(
+                &thread_device_manager.devices(),
+                &thread_request_final_results,
+                &FINAL_RESULTS_INIT_HOST,
+                &mut phase2_streams,
+            );
 
             // Make sure to not call `Drop` on those
             forget_vec!(code_dots);
