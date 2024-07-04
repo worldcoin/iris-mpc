@@ -14,20 +14,17 @@ use cudarc::driver::{
     CudaDevice, CudaSlice,
 };
 use gpu_iris_mpc::{
-    dot::{
+    config::Config, dot::{
         device_manager::DeviceManager,
         distance_comparator::DistanceComparator,
         share_db::{preprocess_query, ShareDB},
         IRIS_CODE_LENGTH, ROTATIONS,
-    },
-    helpers::{
+    }, helpers::{
         device_ptrs, device_ptrs_to_slices,
         kms_dh::derive_shared_secret,
         mmap::{read_mmap_file, write_mmap_file},
         sqs::{ResultEvent, SMPCRequest, SQSMessage},
-    },
-    setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
-    threshold_ring::protocol::{ChunkShare, Circuits},
+    }, setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB}, threshold_ring::protocol::{ChunkShare, Circuits}
 };
 use lazy_static::lazy_static;
 use rand::{rngs::StdRng, SeedableRng};
@@ -168,13 +165,24 @@ async fn receive_batch(
                 let message: SMPCRequest = serde_json::from_str(&message.message)?;
 
                 let message_attributes = sqs_message.message_attributes.unwrap_or_default();
+                
+                let mut batch_metadata = BatchMetadata::default();
+
+                if let  Some(node_id) = message_attributes.get(NODE_ID_MESSAGE_ATTRIBUTE_NAME) {
+                    let node_id = node_id.string_value().unwrap().clone();
+                    batch_metadata.node_id = node_id.to_string();
+                } 
+                if let  Some(trace_id) = message_attributes.get(TRACE_ID_MESSAGE_ATTRIBUTE_NAME) {
+                    let trace_id = trace_id.string_value().unwrap().clone();
+                    batch_metadata.trace_id = trace_id.to_string();
+                }
+                if let  Some(span_id) = message_attributes.get(SPAN_ID_MESSAGE_ATTRIBUTE_NAME) {
+                    let span_id = span_id.string_value().unwrap().clone();
+                    batch_metadata.span_id = span_id.to_string();
+                }
 
                 batch_query.request_ids.push(message.clone().request_id);
-                batch_query.metadata.push(BatchMetadata {
-                    node_id: message_attributes.get(NODE_ID_MESSAGE_ATTRIBUTE_NAME).unwrap().string_value().unwrap().clone().parse()?,
-                    trace_id: message_attributes.get(TRACE_ID_MESSAGE_ATTRIBUTE_NAME).unwrap().string_value().unwrap().clone().parse()?,
-                    span_id: message_attributes.get(SPAN_ID_MESSAGE_ATTRIBUTE_NAME).unwrap().string_value().unwrap().clone().parse()?,
-                });
+                batch_query.metadata.push(batch_metadata);
 
                 let (db_iris_shares, db_mask_shares, iris_shares, mask_shares) =
                     spawn_blocking(move || {
@@ -436,7 +444,7 @@ async fn main() -> eyre::Result<()> {
 
     let args = Args::parse();
 
-    let config = config::load_config("SMPC", args.config.as_deref())?;
+    let config: Config = config::load_config("SMPC", args.config.as_deref())?;
 
     let _tracing_shutdown_handle = if let Some(service) = &config.service {
         let tracing_shutdown_handle = DatadogBattery::init(
@@ -702,10 +710,10 @@ async fn main() -> eyre::Result<()> {
         // Log at least a "start" event using a log with trace.id and parent.trace.id
         for tracing_payload in batch.metadata.iter() {
             tracing::info!(
-                "Started processing share",
                 node_id = tracing_payload.node_id,
                 dd.trace_id = tracing_payload.trace_id,
                 dd.span_id = tracing_payload.span_id,
+                "Started processing share",
             );
         }
 
@@ -943,10 +951,10 @@ async fn main() -> eyre::Result<()> {
             // Log at least a "start" event using a log with trace.id and parent.trace.id
             for tracing_payload in batch.metadata.iter() {
                 tracing::info!(
-                    "Phase 1 finished",
                     node_id = tracing_payload.node_id,
                     dd.trace_id = tracing_payload.trace_id,
                     dd.span_id = tracing_payload.span_id,
+                    "Phase 1 finished",
                 );
             }
 
@@ -978,10 +986,10 @@ async fn main() -> eyre::Result<()> {
             // Log at least a "start" event using a log with trace.id and parent.trace.id
             for tracing_payload in batch.metadata.iter() {
                 tracing::info!(
-                    "Phase 2 finished",
                     node_id = tracing_payload.node_id,
                     dd.trace_id = tracing_payload.trace_id,
                     dd.span_id = tracing_payload.span_id,
+                    "Phase 2 finished",
                 );
             }
 
@@ -1041,10 +1049,10 @@ async fn main() -> eyre::Result<()> {
             // Log at least a "start" event using a log with trace.id and parent.trace.id
             for tracing_payload in batch.metadata.iter() {
                 tracing::info!(
-                    "Phase 2 finished",
                     node_id = tracing_payload.node_id,
                     dd.trace_id = tracing_payload.trace_id,
                     dd.span_id = tracing_payload.span_id,
+                    "Phase 2 finished",
                 );
             }
 

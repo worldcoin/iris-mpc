@@ -66,4 +66,15 @@ pub struct ServiceConfig {
     pub service_name: String,
     // Traces
     pub traces_endpoint: Option<String>,
+    // Metrics
+    pub metrics: Option<MetricsConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsConfig {
+    pub host: String,
+    pub port: u16,
+    pub queue_size: usize,
+    pub buffer_size: usize,
+    pub prefix: String,
 }
