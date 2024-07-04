@@ -53,7 +53,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 use gpu_iris_mpc::config;
-use gpu_iris_mpc::helpers::tracing::{
+use gpu_iris_mpc::helpers::aws::{
     NODE_ID_MESSAGE_ATTRIBUTE_NAME, SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
 };
 

@@ -9,7 +9,7 @@ use aws_sdk_sqs::Client as SqsClient;
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use eyre::{Context, ContextCompat};
-use gpu_iris_mpc::helpers::tracing::{
+use gpu_iris_mpc::helpers::aws::{
     construct_message_attributes, NODE_ID_MESSAGE_ATTRIBUTE_NAME,
 };
 use gpu_iris_mpc::{
