@@ -1,3 +1,4 @@
+use crate::helpers::htod_on_stream_sync;
 use cudarc::{
     driver::{
         CudaDevice, CudaFunction, CudaStream, CudaViewMut, DeviceSlice, LaunchAsync, LaunchConfig,
@@ -55,8 +56,9 @@ impl ChaChaCudaCorrRng {
             grid_dim:         (blocks_per_grid as u32, 1, 1),
             shared_mem_bytes: 0,
         };
-        let state_slice1 = self.dev.htod_sync_copy(&self.chacha_ctx1.state).unwrap();
-        let state_slice2 = self.dev.htod_sync_copy(&self.chacha_ctx2.state).unwrap();
+
+        let state_slice1 = htod_on_stream_sync(&self.chacha_ctx1.state, &self.dev, stream).unwrap();
+        let state_slice2 = htod_on_stream_sync(&self.chacha_ctx2.state, &self.dev, stream).unwrap();
         unsafe {
             self.kernels[0]
                 .clone()
@@ -95,7 +97,8 @@ impl ChaChaCudaCorrRng {
             grid_dim:         (blocks_per_grid as u32, 1, 1),
             shared_mem_bytes: 0,
         };
-        let state_slice1 = self.dev.htod_sync_copy(&self.chacha_ctx1.state).unwrap();
+
+        let state_slice1 = htod_on_stream_sync(&self.chacha_ctx1.state, &self.dev, stream).unwrap();
         unsafe {
             self.kernels[0]
                 .clone()
@@ -121,7 +124,7 @@ impl ChaChaCudaCorrRng {
             grid_dim:         (blocks_per_grid as u32, 1, 1),
             shared_mem_bytes: 0,
         };
-        let state_slice2 = self.dev.htod_sync_copy(&self.chacha_ctx2.state).unwrap();
+        let state_slice2 = htod_on_stream_sync(&self.chacha_ctx2.state, &self.dev, stream).unwrap();
         unsafe {
             self.kernels[0]
                 .clone()
