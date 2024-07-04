@@ -6,8 +6,9 @@ use crate::{
 use axum::{routing::get, Router};
 use cudarc::{
     driver::{
+        result::{memcpy_dtoh_async, memcpy_htod_async},
         CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, CudaViewMut, DevicePtr,
-        DeviceSlice, LaunchAsync, LaunchConfig,
+        DevicePtrMut, DeviceRepr, DeviceSlice, DriverError, LaunchAsync, LaunchConfig,
     },
     nccl::{result, Comm, Id},
     nvrtc::{self, Ptx},
@@ -337,6 +338,32 @@ pub struct Circuits {
 
 impl Circuits {
     const BITS: usize = 16 + B_BITS;
+
+    pub fn dtoh_async<T: Default + Clone>(
+        input: &CudaView<T>,
+        device: &Arc<CudaDevice>,
+        stream: &CudaStream,
+    ) -> Result<Vec<T>, DriverError> {
+        device.bind_to_thread()?;
+        let mut buf = vec![T::default(); input.len()];
+        unsafe {
+            memcpy_dtoh_async(&mut buf, *input.device_ptr(), stream.stream)?;
+        }
+        Ok(buf)
+    }
+
+    pub fn htod_async<T: DeviceRepr>(
+        input: &[T],
+        device: &Arc<CudaDevice>,
+        stream: &CudaStream,
+    ) -> Result<CudaSlice<T>, DriverError> {
+        device.bind_to_thread()?;
+        let mut buf = unsafe { device.alloc(input.len()) }?;
+        unsafe {
+            memcpy_htod_async(*buf.device_ptr_mut(), input, stream.stream)?;
+        }
+        Ok(buf)
+    }
 
     pub fn synchronize_all(&self) {
         for dev in self.devs.iter() {
