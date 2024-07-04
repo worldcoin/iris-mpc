@@ -6,3 +6,5 @@ pub mod setup;
 pub mod threshold_field;
 pub mod threshold_ring;
 pub mod store;
+
+pub mod config;
