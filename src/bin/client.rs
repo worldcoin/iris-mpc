@@ -14,6 +14,7 @@ use gpu_iris_mpc::helpers::aws::{
 };
 use gpu_iris_mpc::{
     helpers::sqs::{ResultEvent, SMPCRequest},
+    helpers::sqs::{ResultEvent, SMPCRequest},
     setup::{
         galois_engine::degree4::GaloisRingIrisCodeShare,
         iris_db::{db::IrisDB, iris::IrisCode},

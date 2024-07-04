@@ -63,6 +63,8 @@ harness = false
 name = "transpose"
 harness = false
 
+# Abort on panics rather than unwinding.
+# This improves performance and makes panic propagation more reliable.
 [profile.release]
 panic = 'abort'
 

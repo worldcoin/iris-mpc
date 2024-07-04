@@ -26,11 +26,13 @@ use gpu_iris_mpc::{
         kms_dh::derive_shared_secret,
         mmap::{read_mmap_file, write_mmap_file},
         sqs::{ResultEvent, SMPCRequest, SQSMessage},
+        sqs::{ResultEvent, SMPCRequest, SQSMessage},
     },
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use lazy_static::lazy_static;
+use rand::{rngs::StdRng, SeedableRng};
 use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{
@@ -62,6 +64,8 @@ const DB_SIZE: usize = 8 * 1_000;
 const DB_BUFFER: usize = 8 * 1_000;
 const N_QUERIES: usize = 32;
 const N_BATCHES: usize = 100;
+const N_QUERIES: usize = 32;
+const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
 /// The number of batches before a stream is re-used.
 const MAX_BATCHES_BEFORE_REUSE: usize = 5;
@@ -75,11 +79,18 @@ const MAX_BATCHES_BEFORE_REUSE: usize = 5;
 ///   it, or
 /// - request `N` only, because phase 2 limits the critical section to one
 ///   batch.
+/// - requests `N` and `N - 1`,
+/// - requests `N` and `N - MAX_CONCURRENT_BATCHES`, because the next request
+///   phase 1 awaits completion of the request `MAX_CONCURRENT_BATCHES` behind
+///   it, or
+/// - request `N` only, because phase 2 limits the critical section to one
+///   batch.
 const MAX_CONCURRENT_BATCHES: usize = 2;
 
 const DB_CODE_FILE: &str = "codes.db";
 const DB_MASK_FILE: &str = "masks.db";
 const DEFAULT_PATH: &str = "/opt/dlami/nvme/";
+const QUERIES: usize = ROTATIONS * N_QUERIES;
 const QUERIES: usize = ROTATIONS * N_QUERIES;
 const KMS_KEY_IDS: [&str; 3] = [
     "077788e2-9eeb-4044-859b-34496cfd500b",
@@ -700,6 +711,19 @@ async fn main() -> eyre::Result<()> {
 
     // Main loop
     for request_counter in 0..N_BATCHES {
+
+        // **Tensor format of queries**
+        //
+        // The functions `receive_batch` and `prepare_query_shares` will prepare the _query_ variables as `Vec<Vec<u8>>` formatted as follows:
+        //
+        // - The inner Vec is a flattening of these dimensions (inner to outer):
+        //   - One u8 limb of one iris bit.
+        //   - One code: 12800 coefficients.
+        //   - One query: all rotated variants of a code.
+        //   - One batch: many queries.
+        // - The outer Vec is the dimension of the Galois Ring (2):
+        //   - A decomposition of each iris bit into two u8 limbs.
+
         // Skip first iteration
         if request_counter == 1 {
             total_time = Instant::now();
@@ -728,8 +752,10 @@ async fn main() -> eyre::Result<()> {
 
         let (code_query, mask_query, code_query_insert, mask_query_insert) =
             spawn_blocking(move || {
+                // *Query* variant including Lagrange interpolation.
                 let code_query = prepare_query_shares(batch.query.code);
                 let mask_query = prepare_query_shares(batch.query.mask);
+                // *Storage* variant (no interpolation).
                 let code_query_insert = prepare_query_shares(batch.db.code);
                 let mask_query_insert = prepare_query_shares(batch.db.mask);
                 (code_query, mask_query, code_query_insert, mask_query_insert)
@@ -947,6 +973,9 @@ async fn main() -> eyre::Result<()> {
         let thread_request_ids = batch.request_ids.clone();
 
         let thread_sender = tx.clone();
+        let thread_request_ids = batch.request_ids.clone();
+
+        let thread_sender = tx.clone();
 
         previous_thread_handle = Some(spawn_blocking(move || {
             // Wait for Phase 1 to finish
@@ -1032,11 +1061,13 @@ async fn main() -> eyre::Result<()> {
             // SAFETY:
             // - We only use the default streams of the devices, therefore Phase 2's are
             //   never running concurrently.
+            // - We only use the default streams of the devices, therefore Phase 2's are
+            //   never running concurrently.
             // - These pointers are aligned, dereferencable, and initialized.
             let mut phase2_streams = thread_phase2
                 .get_devices()
                 .iter()
-                .map(|d| unsafe { d.cu_stream().as_mut().unwrap() })
+                .map(|d| *d.cu_stream())
                 .collect::<Vec<_>>();
 
             // Phase 2 [Batch]: compare each result against threshold
@@ -1099,7 +1130,7 @@ async fn main() -> eyre::Result<()> {
                 &thread_request_results_batch,
                 &thread_request_results,
                 &thread_request_final_results,
-                &mut phase2_streams,
+                &phase2_streams,
             );
 
             // Evaluate the results across devices
@@ -1109,7 +1140,19 @@ async fn main() -> eyre::Result<()> {
                 .enumerate()
                 .filter(|&(_idx, &num)| num == u32::MAX)
                 .map(|(idx, _num)| idx)
+            let mut merged_results = get_merged_results(&host_results, thread_devs.len());
+            let insertion_list = merged_results
+                .iter()
+                .enumerate()
+                .filter(|&(_idx, &num)| num == u32::MAX)
+                .map(|(idx, _num)| idx)
                 .collect::<Vec<_>>();
+
+            let insertion_list = distribute_insertions(&insertion_list, &db_sizes);
+
+            // Calculate the new indices for the inserted queries
+            let matches =
+                calculate_insertion_indices(&mut merged_results, &insertion_list, &db_sizes);
 
             let insertion_list = distribute_insertions(&insertion_list, &db_sizes);
 
