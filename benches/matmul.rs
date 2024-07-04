@@ -42,7 +42,7 @@ fn bench_memcpy(c: &mut Criterion) {
     let preprocessed_query = preprocess_query(&query);
     let streams = device_manager.fork_streams();
     let blass = device_manager.create_cublas(&streams);
-    let db_slices = engine.load_db(&db, DB_SIZE, DB_SIZE);
+    let db_slices = engine.load_db(&db, DB_SIZE, DB_SIZE, false);
     let db_sizes = vec![DB_SIZE; 8];
 
     group.throughput(Throughput::Elements((DB_SIZE * QUERY_SIZE / 31) as u64));

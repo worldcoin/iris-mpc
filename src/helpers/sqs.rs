@@ -20,12 +20,11 @@ pub struct SQSMessage {
     pub unsubscribe_url:   String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SMPCRequest {
-    pub request_type: String,
-    pub request_id:   String,
-    pub iris_code:    String,
-    pub mask_code:    String,
+    pub request_id: String,
+    pub iris_code:  String,
+    pub mask_code:  String,
 }
 
 impl SMPCRequest {
@@ -40,5 +39,24 @@ impl SMPCRequest {
     }
     pub fn get_mask_shares(&self) -> [u16; IrisCodeArray::IRIS_CODE_SIZE] {
         Self::decode_bytes(self.mask_code.as_bytes())
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ResultEvent {
+    pub node_id:    usize,
+    pub db_index:   u32,
+    pub is_match:   bool,
+    pub request_id: String,
+}
+
+impl ResultEvent {
+    pub fn new(node_id: usize, db_index: u32, is_match: bool, request_id: String) -> Self {
+        Self {
+            node_id,
+            db_index,
+            is_match,
+            request_id,
+        }
     }
 }
