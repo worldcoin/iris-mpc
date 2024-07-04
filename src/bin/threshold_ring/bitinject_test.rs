@@ -1,4 +1,4 @@
-use cudarc::driver::CudaDevice;
+use cudarc::driver::{CudaDevice, CudaStream};
 use gpu_iris_mpc::threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits};
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -82,7 +82,7 @@ fn real_result(input: Vec<u64>) -> Vec<u16> {
     res
 }
 
-fn open(party: &mut Circuits, x: &mut [ChunkShareView<u16>]) -> Vec<u16> {
+fn open(party: &mut Circuits, x: &mut [ChunkShareView<u16>], streams: &[CudaStream]) -> Vec<u16> {
     let n_devices = x.len();
     let mut a = Vec::with_capacity(n_devices);
     let mut b = Vec::with_capacity(n_devices);
@@ -95,10 +95,14 @@ fn open(party: &mut Circuits, x: &mut [ChunkShareView<u16>]) -> Vec<u16> {
     }
     cudarc::nccl::result::group_start().unwrap();
     for (idx, res) in x.iter().enumerate() {
-        party.send_view_u16(&res.b, party.next_id(), idx);
+        party
+            .send_view_u16(&res.b, party.next_id(), idx, streams)
+            .unwrap();
     }
     for (idx, res) in x.iter_mut().enumerate() {
-        party.receive_view_u16(&mut res.a, party.prev_id(), idx);
+        party
+            .receive_view_u16(&mut res.a, party.prev_id(), idx, streams)
+            .unwrap();
     }
     cudarc::nccl::result::group_end().unwrap();
     for (idx, res) in x.iter_mut().enumerate() {
@@ -132,10 +136,7 @@ async fn main() -> eyre::Result<()> {
     let url = args.get(2);
     let n_devices = CudaDevice::count().unwrap() as usize;
 
-    let url = match url {
-        Some(s) => Some(s.clone()),
-        None => None,
-    };
+    let url = url.cloned();
 
     // Get inputs
     let input_bits = sample_bits(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);
@@ -154,6 +155,10 @@ async fn main() -> eyre::Result<()> {
         Some(3001),
     );
     let devices = party.get_devices();
+    let streams = devices
+        .iter()
+        .map(|dev| dev.fork_default_stream().unwrap())
+        .collect::<Vec<_>>();
 
     // Import to GPU
     let code_gpu = to_gpu(&input_bits_a, &input_bits_b, &devices);
@@ -167,12 +172,12 @@ async fn main() -> eyre::Result<()> {
         let code_gpu = to_view(&code_gpu_);
 
         let now = Instant::now();
-        party.bit_inject_ot(&code_gpu, &mut res);
+        party.bit_inject_ot(&code_gpu, &mut res, &streams);
         party.synchronize_all();
         println!("compute time: {:?}", now.elapsed());
 
         let now = Instant::now();
-        let result = open(&mut party, &mut res);
+        let result = open(&mut party, &mut res, &streams);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
 
         let mut correct = true;

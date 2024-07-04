@@ -6,8 +6,8 @@ use crate::{
 use axum::{routing::get, Router};
 use cudarc::{
     driver::{
-        CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, CudaViewMut, DeviceSlice,
-        LaunchAsync, LaunchConfig,
+        CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, CudaViewMut, DevicePtr,
+        DeviceSlice, LaunchAsync, LaunchConfig,
     },
     nccl::{result, Comm, Id},
     nvrtc::{self, Ptx},
@@ -490,63 +490,150 @@ impl Circuits {
         }
     }
 
-    pub fn send_u16(&mut self, send: &CudaSlice<u16>, peer_id: usize, idx: usize) {
+    pub fn send_u16(
+        &mut self,
+        send: &CudaSlice<u16>,
+        peer_id: usize,
+        idx: usize,
+        streams: &[CudaStream],
+    ) -> Result<result::NcclStatus, result::NcclError> {
         // We have to transmute since u16 is not sendable
-        let send_trans: CudaView<u8> = // the transmute_mut is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
-        unsafe { send.transmute(send.len() * 2).unwrap() };
-        self.send_view(&send_trans, peer_id, idx);
+        let send_trans: CudaView<u8> = // the transmute_mut is safe because we
+        // know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
+         unsafe { send.transmute(send.len() * 2).unwrap() };
+        self.send_view(&send_trans, peer_id, idx, streams)
     }
 
-    pub fn receive_u16(&mut self, receive: &mut CudaSlice<u16>, peer_id: usize, idx: usize) {
+    pub fn receive_u16(
+        &mut self,
+        receive: &mut CudaSlice<u16>,
+        peer_id: usize,
+        idx: usize,
+        streams: &[CudaStream],
+    ) -> Result<result::NcclStatus, result::NcclError> {
         // We have to transmute since u16 is not receivable
-        let mut receive_trans: CudaView<u8> = // the transmute_mut is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
-        unsafe { receive.transmute(receive.len() * 2).unwrap() };
-        self.receive_view(&mut receive_trans, peer_id, idx);
+        let mut receive_trans: CudaView<u8> = // the transmute_mut is safe
+    // because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
+    unsafe { receive.transmute(receive.len() * 2).unwrap()
+    };
+        self.receive_view(&mut receive_trans, peer_id, idx, streams)
     }
 
-    pub fn send_view_u16(&mut self, send: &CudaView<u16>, peer_id: usize, idx: usize) {
+    pub fn send_view_u16(
+        &mut self,
+        send: &CudaView<u16>,
+        peer_id: usize,
+        idx: usize,
+        streams: &[CudaStream],
+    ) -> Result<result::NcclStatus, result::NcclError> {
         // We have to transmute since u16 is not sendable
-        let send_trans: CudaView<u8> = // the transmute_mut is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
-        unsafe { send.transmute(send.len() * 2).unwrap() };
-        self.send_view(&send_trans, peer_id, idx);
+        let send_trans: CudaView<u8> = // the transmute_mut is safe because we
+    // know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
+         unsafe { send.transmute(send.len() * 2).unwrap() };
+        self.send_view(&send_trans, peer_id, idx, streams)
     }
 
-    pub fn receive_view_u16(&mut self, receive: &mut CudaView<u16>, peer_id: usize, idx: usize) {
+    pub fn receive_view_u16(
+        &mut self,
+        receive: &mut CudaView<u16>,
+        peer_id: usize,
+        idx: usize,
+        streams: &[CudaStream],
+    ) -> Result<result::NcclStatus, result::NcclError> {
         // We have to transmute since u16 is not receivable
-        let mut receive_trans: CudaView<u8> = // the transmute_mut is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
-        unsafe { receive.transmute(receive.len() * 2).unwrap() };
-        self.receive_view(&mut receive_trans, peer_id, idx);
+        let mut receive_trans: CudaView<u8> = // the transmute_mut
+    // is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
+        unsafe { receive.transmute(receive.len() *
+    2).unwrap() };
+        self.receive_view(&mut receive_trans, peer_id, idx, streams)
     }
 
-    pub fn send_view<T>(&mut self, send: &CudaView<T>, peer_id: usize, idx: usize)
+    pub fn send_view<T>(
+        &mut self,
+        send: &CudaView<T>,
+        peer_id: usize,
+        idx: usize,
+        streams: &[CudaStream],
+    ) -> Result<result::NcclStatus, result::NcclError>
     where
         T: cudarc::nccl::NcclType,
     {
-        self.comms[idx].0.send_view(send, peer_id as i32).unwrap();
+        unsafe {
+            result::send(
+                *send.device_ptr() as *mut _,
+                send.len(),
+                T::as_nccl_type(),
+                peer_id as i32,
+                self.comms[idx].0.comm.0,
+                streams[idx].stream as *mut _,
+            )
+        }
     }
 
-    pub fn receive_view<T>(&mut self, receive: &mut CudaView<T>, peer_id: usize, idx: usize)
+    pub fn receive_view<T>(
+        &mut self,
+        receive: &mut CudaView<T>,
+        peer_id: usize,
+        idx: usize,
+        streams: &[CudaStream],
+    ) -> Result<result::NcclStatus, result::NcclError>
     where
         T: cudarc::nccl::NcclType,
     {
-        self.comms[idx]
-            .0
-            .recv_view(receive, peer_id as i32)
-            .unwrap();
+        unsafe {
+            result::recv(
+                *receive.device_ptr() as *mut _,
+                receive.len(),
+                T::as_nccl_type(),
+                peer_id as i32,
+                self.comms[idx].0.comm.0,
+                streams[idx].stream as *mut _,
+            )
+        }
     }
 
-    pub fn send<T>(&mut self, send: &CudaSlice<T>, peer_id: usize, idx: usize)
+    pub fn send<T>(
+        &mut self,
+        send: &CudaSlice<T>,
+        peer_id: usize,
+        idx: usize,
+        streams: &[CudaStream],
+    ) -> Result<result::NcclStatus, result::NcclError>
     where
         T: cudarc::nccl::NcclType,
     {
-        self.comms[idx].0.send(send, peer_id as i32).unwrap();
+        unsafe {
+            result::send(
+                *send.device_ptr() as *mut _,
+                send.len(),
+                T::as_nccl_type(),
+                peer_id as i32,
+                self.comms[idx].0.comm.0,
+                streams[idx].stream as *mut _,
+            )
+        }
     }
 
-    pub fn receive<T>(&mut self, receive: &mut CudaSlice<T>, peer_id: usize, idx: usize)
+    pub fn receive<T>(
+        &mut self,
+        receive: &mut CudaSlice<T>,
+        peer_id: usize,
+        idx: usize,
+        streams: &[CudaStream],
+    ) -> Result<result::NcclStatus, result::NcclError>
     where
         T: cudarc::nccl::NcclType,
     {
-        self.comms[idx].0.recv(receive, peer_id as i32).unwrap();
+        unsafe {
+            result::recv(
+                *receive.device_ptr() as *mut _,
+                receive.len(),
+                T::as_nccl_type(),
+                peer_id as i32,
+                self.comms[idx].0.comm.0,
+                streams[idx].stream as *mut _,
+            )
+        }
     }
 
     // Fill randomness using the correlated RNG
@@ -627,15 +714,28 @@ impl Circuits {
     }
 
     // Keep in mind: group needs to be open!
-    fn packed_and_many_send(&mut self, res: &ChunkShareView<u64>, bits: usize, idx: usize) {
+    fn packed_and_many_send(
+        &mut self,
+        res: &ChunkShareView<u64>,
+        bits: usize,
+        idx: usize,
+        streams: &[CudaStream],
+    ) {
         let send = res.a.slice(0..bits * self.chunk_size);
-        self.send_view(&send, self.next_id, idx);
+        self.send_view(&send, self.next_id, idx, streams).unwrap();
     }
 
     // Keep in mind: group needs to be open!
-    fn packed_and_many_receive(&mut self, res: &mut ChunkShareView<u64>, bits: usize, idx: usize) {
+    fn packed_and_many_receive(
+        &mut self,
+        res: &mut ChunkShareView<u64>,
+        bits: usize,
+        idx: usize,
+        streams: &[CudaStream],
+    ) {
         let mut rcv = res.b.slice(0..bits * self.chunk_size);
-        self.receive_view(&mut rcv, self.prev_id, idx);
+        self.receive_view(&mut rcv, self.prev_id, idx, streams)
+            .unwrap();
     }
 
     fn assign_view(
@@ -727,41 +827,52 @@ impl Circuits {
     }
 
     #[allow(unused)]
-    fn packed_send_receive(&mut self, res: &mut [ChunkShare<u64>], bits: usize) {
+    fn packed_send_receive(
+        &mut self,
+        res: &mut [ChunkShare<u64>],
+        bits: usize,
+        streams: &[CudaStream],
+    ) {
         debug_assert_eq!(res.len(), self.n_devices);
 
         result::group_start().unwrap();
         for (idx, res) in res.iter().enumerate() {
-            self.packed_and_many_send(&res.as_view(), bits, idx);
+            self.packed_and_many_send(&res.as_view(), bits, idx, streams);
         }
         for (idx, res) in res.iter_mut().enumerate() {
-            self.packed_and_many_receive(&mut res.as_view(), bits, idx);
+            self.packed_and_many_receive(&mut res.as_view(), bits, idx, streams);
         }
         result::group_end().unwrap();
     }
 
-    fn packed_send_receive_view(&mut self, res: &mut [ChunkShareView<u64>], bits: usize) {
+    fn packed_send_receive_view(
+        &mut self,
+        res: &mut [ChunkShareView<u64>],
+        bits: usize,
+        streams: &[CudaStream],
+    ) {
         debug_assert_eq!(res.len(), self.n_devices);
 
         result::group_start().unwrap();
         for (idx, res) in res.iter().enumerate() {
-            self.packed_and_many_send(res, bits, idx);
+            self.packed_and_many_send(res, bits, idx, streams);
         }
         for (idx, res) in res.iter_mut().enumerate() {
-            self.packed_and_many_receive(res, bits, idx);
+            self.packed_and_many_receive(res, bits, idx, streams);
         }
         result::group_end().unwrap();
     }
 
-    fn send_receive_view(&mut self, res: &mut [ChunkShareView<u64>]) {
+    fn send_receive_view(&mut self, res: &mut [ChunkShareView<u64>], streams: &[CudaStream]) {
         debug_assert_eq!(res.len(), self.n_devices);
 
         result::group_start().unwrap();
         for (idx, res) in res.iter().enumerate() {
-            self.send_view(&res.a, self.next_id, idx);
+            self.send_view(&res.a, self.next_id, idx, streams).unwrap();
         }
         for (idx, res) in res.iter_mut().enumerate() {
-            self.receive_view(&mut res.b, self.prev_id, idx);
+            self.receive_view(&mut res.b, self.prev_id, idx, streams)
+                .unwrap();
         }
         result::group_end().unwrap();
     }
@@ -923,8 +1034,8 @@ impl Circuits {
 
         result::group_start().unwrap();
         for (idx, (m0, m1)) in izip!(&m0, &m1).enumerate() {
-            self.send_view_u16(m0, self.prev_id, idx);
-            self.send_view_u16(m1, self.prev_id, idx);
+            self.send_view_u16(m0, self.prev_id, idx, streams).unwrap();
+            self.send_view_u16(m1, self.prev_id, idx, streams).unwrap();
         }
         result::group_end().unwrap();
 
@@ -947,9 +1058,12 @@ impl Circuits {
 
         result::group_start().unwrap();
         for (idx, (m0, m1, wc)) in izip!(&mut m0, &mut m1, &mut wc).enumerate() {
-            self.receive_view_u16(m0, self.next_id, idx);
-            self.receive_view_u16(wc, self.prev_id, idx);
-            self.receive_view_u16(m1, self.next_id, idx);
+            self.receive_view_u16(m0, self.next_id, idx, streams)
+                .unwrap();
+            self.receive_view_u16(wc, self.prev_id, idx, streams)
+                .unwrap();
+            self.receive_view_u16(m1, self.next_id, idx, streams)
+                .unwrap();
         }
         result::group_end().unwrap();
 
@@ -991,7 +1105,8 @@ impl Circuits {
         // Reshare to Helper
         result::group_start().unwrap();
         for (idx, res) in outp.iter().enumerate() {
-            self.send_view_u16(&res.b, self.prev_id, idx);
+            self.send_view_u16(&res.b, self.prev_id, idx, streams)
+                .unwrap();
         }
         result::group_end().unwrap();
 
@@ -1054,12 +1169,13 @@ impl Circuits {
 
         result::group_start().unwrap();
         for (idx, wc) in wc.iter().enumerate() {
-            self.send_view_u16(wc, self.next_id, idx);
+            self.send_view_u16(wc, self.next_id, idx, streams).unwrap();
         }
         result::group_end().unwrap();
         result::group_start().unwrap();
         for (idx, res) in outp.iter_mut().enumerate() {
-            self.receive_view_u16(&mut res.a, self.next_id, idx);
+            self.receive_view_u16(&mut res.a, self.next_id, idx, streams)
+                .unwrap();
         }
         result::group_end().unwrap();
 
@@ -1302,7 +1418,7 @@ impl Circuits {
             c.push(d);
         }
 
-        self.transpose_pack_u16_with_len(&shares, &mut x1, K, streams);
+        self.transpose_pack_u16_with_len(shares, &mut x1, K, streams);
         self.lift_split(shares, xa, &mut x1, &mut x2, &mut x3, streams);
         self.binary_add_3_get_two_carries(&mut c, &mut x1, &mut x2, &mut x3, streams);
         self.bit_inject_ot(&c, injected, streams);
@@ -1356,7 +1472,7 @@ impl Circuits {
             carry.push(c);
         }
         // Send/Receive full adders
-        self.packed_send_receive_view(&mut carry, K);
+        self.packed_send_receive_view(&mut carry, K, streams);
         // Postprocess xor
         for (idx, (c, x3)) in izip!(&mut carry, x3).enumerate() {
             self.packed_xor_assign_many(c, x3, K, idx, streams);
@@ -1380,7 +1496,7 @@ impl Circuits {
             carry.push(c);
         }
         // Send/Receive
-        self.send_receive_view(&mut carry);
+        self.send_receive_view(&mut carry, streams);
 
         for k in 1..K - 1 {
             for (idx, (a, b, c)) in izip!(&mut a, &mut b, carry.iter_mut()).enumerate() {
@@ -1399,12 +1515,14 @@ impl Circuits {
             for (idx, a) in a.iter().enumerate() {
                 // Unused space used for temparary storage
                 let tmp_c = a.get_offset(0, self.chunk_size);
-                self.send_view(&tmp_c.a, self.next_id, idx);
+                self.send_view(&tmp_c.a, self.next_id, idx, streams)
+                    .unwrap();
             }
             for (idx, a) in a.iter_mut().enumerate() {
                 // Unused space used for temparary storage
                 let mut tmp_c = a.get_offset(0, self.chunk_size);
-                self.receive_view(&mut tmp_c.b, self.prev_id, idx);
+                self.receive_view(&mut tmp_c.b, self.prev_id, idx, streams)
+                    .unwrap();
             }
             result::group_end().unwrap();
             // Postprocess xor
@@ -1428,12 +1546,14 @@ impl Circuits {
         for (idx, c) in c.iter().enumerate() {
             // Unused space used for temparary storage
             let tmp_c = c.get_offset(1, self.chunk_size);
-            self.send_view(&tmp_c.a, self.next_id, idx);
+            self.send_view(&tmp_c.a, self.next_id, idx, streams)
+                .unwrap();
         }
         for (idx, c) in c.iter_mut().enumerate() {
             // Unused space used for temparary storage
             let mut tmp_c = c.get_offset(1, self.chunk_size);
-            self.receive_view(&mut tmp_c.b, self.prev_id, idx);
+            self.receive_view(&mut tmp_c.b, self.prev_id, idx, streams)
+                .unwrap();
         }
         result::group_end().unwrap();
 
@@ -1496,7 +1616,7 @@ impl Circuits {
             self.packed_and_many_pre(x1x3, x2x3, c, Self::BITS - 1, idx, streams);
         }
         // Send/Receive full adders
-        self.packed_send_receive_view(&mut carry, Self::BITS - 1);
+        self.packed_send_receive_view(&mut carry, Self::BITS - 1, streams);
         // Postprocess xor
         for (idx, (c, x3)) in izip!(&mut carry, x3).enumerate() {
             self.packed_xor_assign_many(c, x3, Self::BITS - 1, idx, streams);
@@ -1520,7 +1640,7 @@ impl Circuits {
             carry.push(c);
         }
         // Send/Receive
-        self.send_receive_view(&mut carry);
+        self.send_receive_view(&mut carry, streams);
 
         for k in 1..Self::BITS - 2 {
             for (idx, (a, b, c)) in izip!(&mut a, &mut b, carry.iter_mut()).enumerate() {
@@ -1539,12 +1659,14 @@ impl Circuits {
             for (idx, a) in a.iter().enumerate() {
                 // Unused space used for temparary storage
                 let tmp_c = a.get_offset(0, self.chunk_size);
-                self.send_view(&tmp_c.a, self.next_id, idx);
+                self.send_view(&tmp_c.a, self.next_id, idx, streams)
+                    .unwrap();
             }
             for (idx, a) in a.iter_mut().enumerate() {
                 // Unused space used for temparary storage
                 let mut tmp_c = a.get_offset(0, self.chunk_size);
-                self.receive_view(&mut tmp_c.b, self.prev_id, idx);
+                self.receive_view(&mut tmp_c.b, self.prev_id, idx, streams)
+                    .unwrap();
             }
             result::group_end().unwrap();
             // Postprocess xor
@@ -1595,11 +1717,12 @@ impl Circuits {
             result::group_start().unwrap();
             for (idx, bit) in bits.iter().enumerate() {
                 let a = bit.get_offset(0, num);
-                self.send_view(&a.a, self.next_id, idx);
+                self.send_view(&a.a, self.next_id, idx, streams).unwrap();
             }
             for (idx, bit) in bits.iter_mut().enumerate() {
                 let mut a = bit.get_offset(0, num);
-                self.receive_view(&mut a.b, self.prev_id, idx);
+                self.receive_view(&mut a.b, self.prev_id, idx, streams)
+                    .unwrap();
             }
             result::group_end().unwrap();
 
@@ -1638,8 +1761,9 @@ impl Circuits {
             // Reshare
             result::group_start().unwrap();
             let mut a = bit.get_offset(0, num);
-            self.send_view(&a.a, self.next_id, idx);
-            self.receive_view(&mut a.b, self.prev_id, idx);
+            self.send_view(&a.a, self.next_id, idx, streams).unwrap();
+            self.receive_view(&mut a.b, self.prev_id, idx, streams)
+                .unwrap();
             result::group_end().unwrap();
 
             num += mod_;
@@ -1712,8 +1836,9 @@ impl Circuits {
             let bytes = (current_bitsize + 7) / 8;
             rand_offset = rand_offset.slice(bytes..); // Advance randomness
             result::group_start().unwrap();
-            self.send_view(&res.a, self.next_id, 0);
-            self.receive_view(&mut res.b, self.prev_id, 0);
+            self.send_view(&res.a, self.next_id, 0, streams).unwrap();
+            self.receive_view(&mut res.b, self.prev_id, 0, streams)
+                .unwrap();
             result::group_end().unwrap();
         }
     }

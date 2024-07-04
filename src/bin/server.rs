@@ -10,7 +10,7 @@ use cudarc::driver::{
         stream::synchronize,
     },
     sys::{CUdeviceptr, CUstream, CUstream_st},
-    CudaDevice, CudaSlice,
+    CudaDevice, CudaSlice, CudaStream,
 };
 use gpu_iris_mpc::{
     dot::{
@@ -221,6 +221,7 @@ fn open(
     results_ptrs: &[CudaSlice<u32>],
     chunk_size: usize,
     db_sizes: &[usize],
+    streams: &[CudaStream],
 ) {
     let n_devices = x.len();
     let mut a = Vec::with_capacity(n_devices);
@@ -231,13 +232,17 @@ fn open(
     for (idx, res) in x.iter().enumerate() {
         // Result is in bit 0
         let res = res.get_offset(0, chunk_size);
-        party.send_view(&res.b, party.next_id(), idx);
+        party
+            .send_view(&res.b, party.next_id(), idx, streams)
+            .unwrap();
         a.push(res.a);
         b.push(res.b);
     }
     for (idx, res) in x.iter().enumerate() {
         let mut res = res.get_offset(1, chunk_size);
-        party.receive_view(&mut res.a, party.prev_id(), idx);
+        party
+            .receive_view(&mut res.a, party.prev_id(), idx, streams)
+            .unwrap();
         c.push(res.a);
     }
     cudarc::nccl::result::group_end().unwrap();
@@ -963,6 +968,7 @@ async fn main() -> eyre::Result<()> {
                 &thread_request_results_slice_batch,
                 chunk_size_batch,
                 &db_sizes_batch,
+                &phase2_streams2,
             );
             thread_phase2_batch.return_result_buffer(res);
 
@@ -985,6 +991,7 @@ async fn main() -> eyre::Result<()> {
                 &thread_request_results_slice,
                 chunk_size,
                 &db_sizes,
+                &phase2_streams2,
             );
             thread_phase2.return_result_buffer(res);
 

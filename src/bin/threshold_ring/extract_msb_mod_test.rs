@@ -1,4 +1,4 @@
-use cudarc::driver::CudaDevice;
+use cudarc::driver::{CudaDevice, CudaStream};
 use gpu_iris_mpc::{
     setup::iris_db::iris::IrisCodeArray,
     threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
@@ -103,7 +103,7 @@ fn real_result_msb(input: Vec<u16>) -> Vec<u64> {
     pack_with_device_padding(res)
 }
 
-fn open(party: &mut Circuits, x: &[ChunkShare<u64>]) -> Vec<u64> {
+fn open(party: &mut Circuits, x: &[ChunkShare<u64>], streams: &[CudaStream]) -> Vec<u64> {
     let n_devices = x.len();
     let mut a = Vec::with_capacity(n_devices);
     let mut b = Vec::with_capacity(n_devices);
@@ -113,13 +113,17 @@ fn open(party: &mut Circuits, x: &[ChunkShare<u64>]) -> Vec<u64> {
     for (idx, res) in x.iter().enumerate() {
         // Result is in bit 0
         let res = res.get_offset(0, CHUNK_SIZE);
-        party.send_view(&res.b, party.next_id(), idx);
+        party
+            .send_view(&res.b, party.next_id(), idx, streams)
+            .unwrap();
         a.push(res.a);
         b.push(res.b);
     }
     for (idx, res) in x.iter().enumerate() {
         let mut res = res.get_offset(1, CHUNK_SIZE);
-        party.receive_view(&mut res.a, party.prev_id(), idx);
+        party
+            .receive_view(&mut res.a, party.prev_id(), idx, streams)
+            .unwrap();
         c.push(res.a);
     }
     cudarc::nccl::result::group_end().unwrap();
@@ -155,10 +159,7 @@ async fn main() -> eyre::Result<()> {
     let url = args.get(2);
     let n_devices = CudaDevice::count().unwrap() as usize;
 
-    let url = match url {
-        Some(s) => Some(s.clone()),
-        None => None,
-    };
+    let url = url.cloned();
 
     // Get inputs
     let code_dots = sample_dots(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);
@@ -176,6 +177,10 @@ async fn main() -> eyre::Result<()> {
         Some(3000),
     );
     let devices = party.get_devices();
+    let streams = devices
+        .iter()
+        .map(|dev| dev.fork_default_stream().unwrap())
+        .collect::<Vec<_>>();
 
     // Import to GPU
     let code_gpu = to_gpu(&code_share_a, &code_share_b, &devices);
@@ -191,15 +196,15 @@ async fn main() -> eyre::Result<()> {
         let code_gpu = code_gpu.clone();
 
         let now = Instant::now();
-        party.lift_mul_sub(&mut x, &correction, &code_gpu);
+        party.lift_mul_sub(&mut x, &correction, &code_gpu, &streams);
         println!("lift time: {:?}", now.elapsed());
-        party.extract_msb(&mut x);
+        party.extract_msb(&mut x, &streams);
         party.synchronize_all();
         println!("extract time: {:?}", now.elapsed());
 
         let res = party.take_result_buffer();
         let now = Instant::now();
-        let result = open(&mut party, &res);
+        let result = open(&mut party, &res, &streams);
         party.return_result_buffer(res);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
 

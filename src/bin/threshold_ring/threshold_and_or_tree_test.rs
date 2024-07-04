@@ -1,4 +1,4 @@
-use cudarc::driver::CudaDevice;
+use cudarc::driver::{CudaDevice, CudaStream};
 use gpu_iris_mpc::{
     setup::iris_db::iris::{IrisCodeArray, MATCH_THRESHOLD_RATIO},
     threshold_ring::protocol::{ChunkShare, Circuits},
@@ -88,12 +88,16 @@ fn real_result_msb_reduce(code_input: Vec<u16>, mask_input: Vec<u16>) -> bool {
     res
 }
 
-fn open(party: &mut Circuits, result: &mut ChunkShare<u64>) -> bool {
+fn open(party: &mut Circuits, result: &mut ChunkShare<u64>, streams: &[CudaStream]) -> bool {
     let res = result.get_offset(0, 1);
     let mut res_helper = result.get_offset(1, 1);
     cudarc::nccl::result::group_start().expect("group start should work");
-    party.send_view(&res.b, party.next_id(), 0);
-    party.receive_view(&mut res_helper.a, party.prev_id(), 0);
+    party
+        .send_view(&res.b, party.next_id(), 0, streams)
+        .unwrap();
+    party
+        .receive_view(&mut res_helper.a, party.prev_id(), 0, streams)
+        .unwrap();
     cudarc::nccl::result::group_end().expect("group end should work");
 
     let dev = party.get_devices()[0].clone();
@@ -127,10 +131,7 @@ async fn main() -> eyre::Result<()> {
     let url = args.get(2);
     let n_devices = CudaDevice::count().unwrap() as usize;
 
-    let url = match url {
-        Some(s) => Some(s.clone()),
-        None => None,
-    };
+    let url = url.cloned();
 
     // Get inputs
     let code_dots = sample_code_dots(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);
@@ -151,6 +152,10 @@ async fn main() -> eyre::Result<()> {
         Some(3001),
     );
     let devices = party.get_devices();
+    let streams = devices
+        .iter()
+        .map(|dev| dev.fork_default_stream().unwrap())
+        .collect::<Vec<_>>();
 
     // Import to GPU
     let code_gpu = to_gpu(&code_share_a, &code_share_b, &devices);
@@ -163,13 +168,13 @@ async fn main() -> eyre::Result<()> {
         let mask_gpu = mask_gpu.clone();
 
         let now = Instant::now();
-        party.compare_threshold_masked_many_with_or_tree(&code_gpu, &mask_gpu);
+        party.compare_threshold_masked_many_with_or_tree(&code_gpu, &mask_gpu, &streams);
         party.synchronize_all();
         println!("compute time: {:?}", now.elapsed());
 
         let mut res = party.take_result_buffer();
         let now = Instant::now();
-        let result = open(&mut party, &mut res[0]);
+        let result = open(&mut party, &mut res[0], &streams);
         party.return_result_buffer(res);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
 

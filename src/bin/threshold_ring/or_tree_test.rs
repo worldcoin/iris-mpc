@@ -1,4 +1,4 @@
-use cudarc::driver::CudaDevice;
+use cudarc::driver::{CudaDevice, CudaStream};
 use gpu_iris_mpc::threshold_ring::protocol::{ChunkShare, Circuits};
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -48,12 +48,16 @@ fn to_gpu(a: &[u64], b: &[u64], devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<u
     result
 }
 
-fn open(party: &mut Circuits, result: &mut ChunkShare<u64>) -> bool {
+fn open(party: &mut Circuits, result: &mut ChunkShare<u64>, streams: &[CudaStream]) -> bool {
     let res = result.get_offset(0, 1);
     let mut res_helper = result.get_offset(1, 1);
     cudarc::nccl::result::group_start().expect("group start should work");
-    party.send_view(&res.b, party.next_id(), 0);
-    party.receive_view(&mut res_helper.a, party.prev_id(), 0);
+    party
+        .send_view(&res.b, party.next_id(), 0, streams)
+        .unwrap();
+    party
+        .receive_view(&mut res_helper.a, party.prev_id(), 0, streams)
+        .unwrap();
     cudarc::nccl::result::group_end().expect("group end should work");
 
     let dev = party.get_devices()[0].clone();
@@ -87,10 +91,7 @@ async fn main() -> eyre::Result<()> {
     let url = args.get(2);
     let n_devices = CudaDevice::count().unwrap() as usize;
 
-    let url = match url {
-        Some(s) => Some(s.clone()),
-        None => None,
-    };
+    let url = url.cloned();
 
     // Get Circuit Party
     let mut party = Circuits::new(
@@ -102,6 +103,10 @@ async fn main() -> eyre::Result<()> {
         Some(3001),
     );
     let devices = party.get_devices();
+    let streams = devices
+        .iter()
+        .map(|dev| dev.fork_default_stream().unwrap())
+        .collect::<Vec<_>>();
 
     println!("Starting tests...");
     for i in 0..=n_devices {
@@ -120,13 +125,13 @@ async fn main() -> eyre::Result<()> {
         println!("Data is on GPUs!");
 
         let now = Instant::now();
-        party.or_reduce_result(&mut share_gpu);
+        party.or_reduce_result(&mut share_gpu, &streams);
         party.synchronize_all();
         println!("compute time: {:?}", now.elapsed());
 
         let now = Instant::now();
         // Result is in the first bit of the first GPU
-        let result = open(&mut party, &mut share_gpu[0]);
+        let result = open(&mut party, &mut share_gpu[0], &streams);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
 
         if i == n_devices {
