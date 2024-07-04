@@ -1,5 +1,8 @@
 use cudarc::driver::{CudaDevice, CudaStream};
-use gpu_iris_mpc::threshold_ring::protocol::{ChunkShare, Circuits};
+use gpu_iris_mpc::{
+    helpers::{dtoh_on_stream_sync, htod_on_stream_sync},
+    threshold_ring::protocol::{ChunkShare, Circuits},
+};
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{env, sync::Arc};
@@ -34,14 +37,19 @@ fn rep_share_vec_bin<R: Rng>(value: &[u64], id: usize, rng: &mut R) -> (Vec<u64>
     (a, b)
 }
 
-fn to_gpu(a: &[u64], b: &[u64], devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<u64>> {
+fn to_gpu(
+    a: &[u64],
+    b: &[u64],
+    devices: &[Arc<CudaDevice>],
+    streams: &[CudaStream],
+) -> Vec<ChunkShare<u64>> {
     debug_assert_eq!(a.len(), b.len());
 
     let mut result = Vec::with_capacity(devices.len());
 
-    for (dev, a, b) in izip!(devices, a.chunks(CHUNK_SIZE), b.chunks(CHUNK_SIZE)) {
-        let a_ = dev.htod_sync_copy(a).unwrap();
-        let b_ = dev.htod_sync_copy(b).unwrap();
+    for (dev, stream, a, b) in izip!(devices, streams, a.chunks(CHUNK_SIZE), b.chunks(CHUNK_SIZE)) {
+        let a_ = htod_on_stream_sync(a, dev, stream).unwrap();
+        let b_ = htod_on_stream_sync(b, dev, stream).unwrap();
         result.push(ChunkShare::new(a_, b_));
     }
 
@@ -61,10 +69,11 @@ fn open(party: &mut Circuits, result: &mut ChunkShare<u64>, streams: &[CudaStrea
     cudarc::nccl::result::group_end().expect("group end should work");
 
     let dev = party.get_devices()[0].clone();
+    let stream = &streams[0];
 
-    let a = dev.dtoh_sync_copy(&res.a).expect("copy a works");
-    let b = dev.dtoh_sync_copy(&res.b).expect("copy b works");
-    let c = dev.dtoh_sync_copy(&res_helper.a).expect("copy c works");
+    let a = dtoh_on_stream_sync(&res.a, &dev, stream).unwrap();
+    let b = dtoh_on_stream_sync(&res.b, &dev, stream).unwrap();
+    let c = dtoh_on_stream_sync(&res_helper.a, &dev, stream).unwrap();
     assert_eq!(a.len(), 1);
     assert_eq!(b.len(), 1);
     assert_eq!(c.len(), 1);
@@ -121,7 +130,7 @@ async fn main() -> eyre::Result<()> {
         let (share_a, share_b) = rep_share_vec_bin(&inputs, party_id, &mut rng);
 
         // Import to GPU
-        let mut share_gpu = to_gpu(&share_a, &share_b, &devices);
+        let mut share_gpu = to_gpu(&share_a, &share_b, &devices, &streams);
         println!("Data is on GPUs!");
 
         let now = Instant::now();
