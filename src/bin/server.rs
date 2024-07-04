@@ -350,12 +350,13 @@ fn distribute_insertions(results: &[usize], db_sizes: &[usize]) -> Vec<Vec<usize
 
 fn reset_results(
     devs: &[Arc<CudaDevice>],
-    dst: &[u64],
+    dst: &[CUdeviceptr],
     src: &[u32],
     streams: &mut [*mut CUstream_st],
 ) {
     for i in 0..devs.len() {
         devs[i].bind_to_thread().unwrap();
+        // SAFETY: we don't access these mutable streams concurrently
         unsafe { result::memcpy_htod_async(dst[i], src, streams[i]) }.unwrap();
     }
 }
