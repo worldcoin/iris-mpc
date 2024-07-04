@@ -6,8 +6,8 @@ use crate::{
 use axum::{routing::get, Router};
 use cudarc::{
     driver::{
-        CudaDevice, CudaFunction, CudaSlice, CudaView, CudaViewMut, DeviceSlice, LaunchAsync,
-        LaunchConfig,
+        CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, CudaViewMut, DeviceSlice,
+        LaunchAsync, LaunchConfig,
     },
     nccl::{result, Comm, Id},
     nvrtc::{self, Ptx},
@@ -593,6 +593,7 @@ impl Circuits {
         res: &mut ChunkShareView<u64>,
         bits: usize,
         idx: usize,
+        streams: &[CudaStream],
     ) {
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
@@ -608,7 +609,8 @@ impl Circuits {
             self.kernels[idx]
                 .and
                 .clone()
-                .launch(
+                .launch_on_stream(
+                    &streams[idx],
                     cfg,
                     (
                         &res.a,
@@ -773,6 +775,7 @@ impl Circuits {
         x2: &ChunkShareView<u64>,
         bits: usize,
         idx: usize,
+        streams: &[CudaStream],
     ) {
         let cfg = Self::launch_config_from_elements_and_threads(
             self.chunk_size as u32 * bits as u32,
@@ -783,7 +786,8 @@ impl Circuits {
             self.kernels[idx]
                 .xor_assign
                 .clone()
-                .launch(
+                .launch_on_stream(
+                    &streams[idx],
                     cfg.to_owned(),
                     (&x1.a, &x1.b, &x2.a, &x2.b, self.chunk_size * bits),
                 )
@@ -797,6 +801,7 @@ impl Circuits {
         res: &mut ChunkShareView<u64>,
         bits: usize,
         idx: usize,
+        streams: &[CudaStream],
     ) {
         let cfg = Self::launch_config_from_elements_and_threads(
             self.chunk_size as u32 * bits as u32,
@@ -807,7 +812,8 @@ impl Circuits {
             self.kernels[idx]
                 .xor
                 .clone()
-                .launch(
+                .launch_on_stream(
+                    &streams[idx],
                     cfg.to_owned(),
                     (
                         &res.a,
@@ -834,6 +840,7 @@ impl Circuits {
         &mut self,
         inp: &[ChunkShareView<u64>],
         outp: &mut [ChunkShareView<u16>],
+        streams: &[CudaStream],
     ) {
         let m0_ = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_1);
         let m1_ = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_2);
@@ -871,7 +878,8 @@ impl Circuits {
                 self.kernels[idx]
                     .ot_sender
                     .clone()
-                    .launch(
+                    .launch_on_stream(
+                        &streams[idx],
                         cfg,
                         (
                             &res.a,
@@ -906,6 +914,7 @@ impl Circuits {
         &mut self,
         inp: &[ChunkShareView<u64>],
         outp: &mut [ChunkShareView<u16>],
+        streams: &[CudaStream],
     ) {
         let m0_ = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_1);
         let m1_ = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_2);
@@ -939,7 +948,8 @@ impl Circuits {
                 self.kernels[idx]
                     .ot_receiver
                     .clone()
-                    .launch(
+                    .launch_on_stream(
+                        &streams[idx],
                         cfg,
                         (
                             &res.a,
@@ -972,6 +982,7 @@ impl Circuits {
         &mut self,
         inp: &[ChunkShareView<u64>],
         outp: &mut [ChunkShareView<u16>],
+        streams: &[CudaStream],
     ) {
         let wc_ = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_3);
         let wc = Buffers::get_single_buffer_chunk(&wc_, self.chunk_size * 128);
@@ -1002,7 +1013,8 @@ impl Circuits {
                 self.kernels[idx]
                     .ot_helper
                     .clone()
-                    .launch(
+                    .launch_on_stream(
+                        &streams[idx],
                         cfg,
                         (
                             &res.b,
@@ -1032,11 +1044,16 @@ impl Circuits {
         Buffers::return_single_buffer(&mut self.buffers.single_u16_128c_3, wc_);
     }
 
-    pub fn bit_inject_ot(&mut self, inp: &[ChunkShareView<u64>], outp: &mut [ChunkShareView<u16>]) {
+    pub fn bit_inject_ot(
+        &mut self,
+        inp: &[ChunkShareView<u64>],
+        outp: &mut [ChunkShareView<u16>],
+        streams: &[CudaStream],
+    ) {
         match self.peer_id {
-            0 => self.bit_inject_ot_helper(inp, outp),
-            1 => self.bit_inject_ot_receiver(inp, outp),
-            2 => self.bit_inject_ot_sender(inp, outp),
+            0 => self.bit_inject_ot_helper(inp, outp, streams),
+            1 => self.bit_inject_ot_receiver(inp, outp, streams),
+            2 => self.bit_inject_ot_sender(inp, outp, streams),
             _ => unreachable!(),
         }
     }
@@ -1046,6 +1063,7 @@ impl Circuits {
         inp: &[ChunkShare<u16>],
         outp: &mut [ChunkShareView<u64>],
         bitlen: usize,
+        streams: &[CudaStream],
     ) {
         debug_assert_eq!(self.n_devices, inp.len());
         debug_assert_eq!(self.n_devices, outp.len());
@@ -1060,7 +1078,8 @@ impl Circuits {
                 self.kernels[idx]
                     .transpose_16x64
                     .clone()
-                    .launch(
+                    .launch_on_stream(
+                        &streams[idx],
                         cfg,
                         (
                             &outp.a,
@@ -1081,6 +1100,7 @@ impl Circuits {
         inp: &[ChunkShareView<u32>],
         outp: &mut [ChunkShareView<u64>],
         bitlen: usize,
+        streams: &[CudaStream],
     ) {
         debug_assert_eq!(self.n_devices, inp.len());
         debug_assert_eq!(self.n_devices, outp.len());
@@ -1095,7 +1115,8 @@ impl Circuits {
                 self.kernels[idx]
                     .transpose_32x64
                     .clone()
-                    .launch(
+                    .launch_on_stream(
+                        &streams[idx],
                         cfg,
                         (
                             &outp.a,
@@ -1117,6 +1138,7 @@ impl Circuits {
         out2: &mut [ChunkShareView<u64>],
         out3: &mut [ChunkShareView<u64>],
         bits: usize,
+        streams: &[CudaStream],
     ) {
         let cfg = Self::launch_config_from_elements_and_threads(
             self.chunk_size as u32 * 64,
@@ -1129,7 +1151,8 @@ impl Circuits {
                 self.kernels[idx]
                     .split
                     .clone()
-                    .launch(
+                    .launch_on_stream(
+                        &streams[idx],
                         cfg,
                         (
                             &x1.a,
@@ -1154,6 +1177,7 @@ impl Circuits {
         inout1: &mut [ChunkShareView<u64>],
         out2: &mut [ChunkShareView<u64>],
         out3: &mut [ChunkShareView<u64>],
+        streams: &[CudaStream],
     ) {
         let cfg = Self::launch_config_from_elements_and_threads(
             self.chunk_size as u32 * 64,
@@ -1166,7 +1190,8 @@ impl Circuits {
                 self.kernels[idx]
                     .lift_split
                     .clone()
-                    .launch(
+                    .launch_on_stream(
+                        &streams[idx],
                         cfg,
                         (
                             &inp.a,
@@ -1193,6 +1218,7 @@ impl Circuits {
         mask_lifted: &mut [ChunkShareView<u32>],
         mask_correction: &[ChunkShareView<u16>],
         code: &[ChunkShare<u16>],
+        streams: &[CudaStream],
     ) {
         debug_assert_eq!(self.n_devices, mask_lifted.len());
         debug_assert_eq!(self.n_devices, mask_correction.len());
@@ -1208,7 +1234,8 @@ impl Circuits {
                 self.kernels[idx]
                     .lift_mul_sub
                     .clone()
-                    .launch(
+                    .launch_on_stream(
+                        &streams[idx],
                         cfg,
                         (
                             &m.a,
@@ -1232,6 +1259,7 @@ impl Circuits {
         shares: &[ChunkShare<u16>],
         xa: &mut [ChunkShareView<u32>],
         injected: &mut [ChunkShareView<u16>],
+        streams: &[CudaStream],
     ) {
         const K: usize = 16;
         let mut x1 = Vec::with_capacity(self.n_devices);
@@ -1252,10 +1280,10 @@ impl Circuits {
             c.push(d);
         }
 
-        self.transpose_pack_u16_with_len(&shares, &mut x1, K);
-        self.lift_split(shares, xa, &mut x1, &mut x2, &mut x3);
-        self.binary_add_3_get_two_carries(&mut c, &mut x1, &mut x2, &mut x3);
-        self.bit_inject_ot(&c, injected);
+        self.transpose_pack_u16_with_len(&shares, &mut x1, K, streams);
+        self.lift_split(shares, xa, &mut x1, &mut x2, &mut x3, streams);
+        self.binary_add_3_get_two_carries(&mut c, &mut x1, &mut x2, &mut x3, streams);
+        self.bit_inject_ot(&c, injected, streams);
 
         Buffers::return_buffer(&mut self.buffers.u64_32c_1, buffer1);
         Buffers::return_buffer(&mut self.buffers.u64_32c_2, buffer2);
@@ -1268,6 +1296,7 @@ impl Circuits {
         x1: &mut [ChunkShareView<u64>],
         x2: &mut [ChunkShareView<u64>],
         x3: &mut [ChunkShareView<u64>],
+        streams: &[CudaStream],
     ) {
         const K: usize = 16;
         debug_assert_eq!(self.n_devices, c.len());
@@ -1287,7 +1316,7 @@ impl Circuits {
 
             // First full adder to get 2 * c1 and s1
             let x2x3 = x2;
-            self.packed_xor_assign_many(x2x3, x3, K, idx);
+            self.packed_xor_assign_many(x2x3, x3, K, idx, streams);
             // Don't need first bit for s
             self.packed_xor_many(
                 &x1.get_range(self.chunk_size, K * self.chunk_size),
@@ -1295,11 +1324,12 @@ impl Circuits {
                 &mut s_,
                 K - 1,
                 idx,
+                streams,
             );
             // 2 * c1
             let x1x3 = x1;
-            self.packed_xor_assign_many(x1x3, x3, K, idx);
-            self.packed_and_many_pre(x1x3, x2x3, &mut c, K, idx);
+            self.packed_xor_assign_many(x1x3, x3, K, idx, streams);
+            self.packed_and_many_pre(x1x3, x2x3, &mut c, K, idx, streams);
             s.push(s_);
             carry.push(c);
         }
@@ -1307,7 +1337,7 @@ impl Circuits {
         self.packed_send_receive_view(&mut carry, K);
         // Postprocess xor
         for (idx, (c, x3)) in izip!(&mut carry, x3).enumerate() {
-            self.packed_xor_assign_many(c, x3, K, idx);
+            self.packed_xor_assign_many(c, x3, K, idx, streams);
         }
 
         // Add 2c + s via a ripple carry adder
@@ -1388,7 +1418,7 @@ impl Circuits {
         Buffers::return_buffer(&mut self.buffers.u64_32c_3, buffer1);
     }
 
-    pub fn extract_msb(&mut self, x: &mut [ChunkShareView<u32>]) {
+    pub fn extract_msb(&mut self, x: &mut [ChunkShareView<u32>], streams: &[CudaStream]) {
         let x1_ = Buffers::take_buffer(&mut self.buffers.u64_32c_1);
         let x2_ = Buffers::take_buffer(&mut self.buffers.u64_32c_2);
         let x3_ = Buffers::take_buffer(&mut self.buffers.u64_32c_3);
@@ -1396,9 +1426,9 @@ impl Circuits {
         let mut x2 = Buffers::get_buffer_chunk(&x2_, 32 * self.chunk_size);
         let mut x3 = Buffers::get_buffer_chunk(&x3_, 32 * self.chunk_size);
 
-        self.transpose_pack_u32_with_len(x, &mut x1, Self::BITS);
-        self.split(&mut x1, &mut x2, &mut x3, Self::BITS);
-        self.binary_add_3_get_msb(&mut x1, &mut x2, &mut x3);
+        self.transpose_pack_u32_with_len(x, &mut x1, Self::BITS, streams);
+        self.split(&mut x1, &mut x2, &mut x3, Self::BITS, streams);
+        self.binary_add_3_get_msb(&mut x1, &mut x2, &mut x3, streams);
 
         Buffers::return_buffer(&mut self.buffers.u64_32c_1, x1_);
         Buffers::return_buffer(&mut self.buffers.u64_32c_2, x2_);
@@ -1412,6 +1442,7 @@ impl Circuits {
         x1: &mut [ChunkShareView<u64>],
         x2: &mut [ChunkShareView<u64>],
         x3: &mut [ChunkShareView<u64>],
+        streams: &[CudaStream],
     ) {
         debug_assert_eq!(self.n_devices, x1.len());
         debug_assert_eq!(self.n_devices, x2.len());
@@ -1427,7 +1458,7 @@ impl Circuits {
         {
             // First full adder to get 2 * c1 and s1
             let x2x3 = x2;
-            self.packed_xor_assign_many(x2x3, x3, Self::BITS, idx);
+            self.packed_xor_assign_many(x2x3, x3, Self::BITS, idx, streams);
             // Don't need first bit for s
             self.packed_xor_many(
                 &x1.get_range(self.chunk_size, Self::BITS * self.chunk_size),
@@ -1435,17 +1466,18 @@ impl Circuits {
                 s,
                 Self::BITS - 1,
                 idx,
+                streams,
             );
             // 2 * c1
             let x1x3 = x1;
-            self.packed_xor_assign_many(x1x3, x3, Self::BITS - 1, idx);
-            self.packed_and_many_pre(x1x3, x2x3, c, Self::BITS - 1, idx);
+            self.packed_xor_assign_many(x1x3, x3, Self::BITS - 1, idx, streams);
+            self.packed_and_many_pre(x1x3, x2x3, c, Self::BITS - 1, idx, streams);
         }
         // Send/Receive full adders
         self.packed_send_receive_view(&mut carry, Self::BITS - 1);
         // Postprocess xor
         for (idx, (c, x3)) in izip!(&mut carry, x3).enumerate() {
-            self.packed_xor_assign_many(c, x3, Self::BITS - 1, idx);
+            self.packed_xor_assign_many(c, x3, Self::BITS - 1, idx, streams);
         }
 
         // Add 2c + s via a ripple carry adder
@@ -1613,7 +1645,7 @@ impl Circuits {
         self.assign_view(&mut des, &c.as_view(), 0);
     }
 
-    fn collapse_u64(&mut self, input: &mut ChunkShare<u64>) {
+    fn collapse_u64(&mut self, input: &mut ChunkShare<u64>, streams: &[CudaStream]) {
         let mut res = input.get_offset(0, 1);
         let helper = input.get_offset(1, 1);
 
@@ -1633,7 +1665,8 @@ impl Circuits {
                 self.kernels[0]
                     .collapse_u64_helper
                     .clone()
-                    .launch(
+                    .launch_on_stream(
+                        &streams[0],
                         cfg,
                         (
                             &res.a,
@@ -1656,7 +1689,7 @@ impl Circuits {
     }
 
     // Result is in the first bit of the first GPU
-    pub fn or_reduce_result(&mut self, result: &mut [ChunkShare<u64>]) {
+    pub fn or_reduce_result(&mut self, result: &mut [ChunkShare<u64>], streams: &[CudaStream]) {
         let mut bits = Vec::with_capacity(self.n_devices);
         for r in result.iter() {
             // Result is in the first bit of the input
@@ -1671,7 +1704,7 @@ impl Circuits {
         }
 
         // Result is in lowest u64 bits on the first GPU
-        self.collapse_u64(&mut result[0]);
+        self.collapse_u64(&mut result[0], streams);
         // Result is in the first bit of the first GPU
     }
 
@@ -1681,6 +1714,7 @@ impl Circuits {
         &mut self,
         code_dots: &[ChunkShare<u16>],
         mask_dots: &[ChunkShare<u16>],
+        streams: &[CudaStream],
     ) {
         debug_assert_eq!(self.n_devices, code_dots.len());
         debug_assert_eq!(self.n_devices, mask_dots.len());
@@ -1690,9 +1724,9 @@ impl Circuits {
         let mut x = Buffers::get_buffer_chunk(&x_, 64 * self.chunk_size);
         let mut corrections = Buffers::get_buffer_chunk(&corrections_, 128 * self.chunk_size);
 
-        self.lift_mpc(mask_dots, &mut x, &mut corrections);
-        self.lift_mul_sub(&mut x, &corrections, code_dots);
-        self.extract_msb(&mut x);
+        self.lift_mpc(mask_dots, &mut x, &mut corrections, streams);
+        self.lift_mul_sub(&mut x, &corrections, code_dots, streams);
+        self.extract_msb(&mut x, streams);
 
         Buffers::return_buffer(&mut self.buffers.u32_64c_1, x_);
         Buffers::return_buffer(&mut self.buffers.u16_128c_1, corrections_);
@@ -1707,10 +1741,11 @@ impl Circuits {
         &mut self,
         code_dots: &[ChunkShare<u16>],
         mask_dots: &[ChunkShare<u16>],
+        streams: &[CudaStream],
     ) {
-        self.compare_threshold_masked_many(code_dots, mask_dots);
+        self.compare_threshold_masked_many(code_dots, mask_dots, streams);
         let mut result = self.take_result_buffer();
-        self.or_reduce_result(&mut result);
+        self.or_reduce_result(&mut result, streams);
         // Result is in the first bit of the first GPU
 
         self.return_result_buffer(result);

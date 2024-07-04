@@ -617,10 +617,10 @@ async fn main() -> eyre::Result<()> {
 
     // Main loop
     for request_counter in 0..N_BATCHES {
-
         // **Tensor format of queries**
         //
-        // The functions `receive_batch` and `prepare_query_shares` will prepare the _query_ variables as `Vec<Vec<u8>>` formatted as follows:
+        // The functions `receive_batch` and `prepare_query_shares` will prepare the
+        // _query_ variables as `Vec<Vec<u8>>` formatted as follows:
         //
         // - The inner Vec is a flattening of these dimensions (inner to outer):
         //   - One u8 limb of one iris bit.
@@ -933,8 +933,19 @@ async fn main() -> eyre::Result<()> {
                 .map(|d| *d.cu_stream())
                 .collect::<Vec<_>>();
 
+            // same as above but CudaStreams instead of CUstream_st
+            let phase2_streams2 = thread_phase2
+                .get_devices()
+                .iter()
+                .map(|d| d.fork_default_stream().unwrap())
+                .collect::<Vec<_>>();
+
             // Phase 2 [Batch]: compare each result against threshold
-            thread_phase2_batch.compare_threshold_masked_many(&code_dots_batch, &mask_dots_batch);
+            thread_phase2_batch.compare_threshold_masked_many(
+                &code_dots_batch,
+                &mask_dots_batch,
+                &phase2_streams2,
+            );
 
             // Phase 2 [Batch]: Reveal the binary results
             let res = thread_phase2_batch.take_result_buffer();
@@ -956,7 +967,7 @@ async fn main() -> eyre::Result<()> {
             thread_phase2_batch.return_result_buffer(res);
 
             // Phase 2 [DB]: compare each result against threshold
-            thread_phase2.compare_threshold_masked_many(&code_dots, &mask_dots);
+            thread_phase2.compare_threshold_masked_many(&code_dots, &mask_dots, &phase2_streams2);
 
             // Phase 2 [DB]: Reveal the binary results
             let res = thread_phase2.take_result_buffer();
