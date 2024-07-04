@@ -133,6 +133,9 @@ struct Opt {
 
     #[structopt(short, long)]
     path: Option<String>,
+
+    #[clap(short, long, env)]
+    config: Option<PathBuf>,
 }
 
 #[derive(Default)]
@@ -460,20 +463,20 @@ pub fn calculate_insertion_indices(
     }
 }
 
-#[derive(Parser)]
-#[clap(version)]
-pub struct Args {
-    #[clap(short, long, env)]
-    config: Option<PathBuf>,
-}
-
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     dotenvy::dotenv().ok();
 
-    let args = Args::parse();
+    let Opt {
+        queue,
+        party_id,
+        bootstrap_url,
+        path,
+        results_topic_arn,
+        config,
+    } = Opt::parse();
 
-    let config: Config = config::load_config("SMPC", args.config.as_deref())?;
+    let config: Config = config::load_config("SMPC", config.as_deref())?;
 
     let _tracing_shutdown_handle = if let Some(service) = &config.service {
         let tracing_shutdown_handle = DatadogBattery::init(
@@ -503,13 +506,6 @@ async fn main() -> eyre::Result<()> {
         TracingShutdownHandle
     };
 
-    let Opt {
-        queue,
-        party_id,
-        bootstrap_url,
-        path,
-        results_topic_arn,
-    } = Opt::parse();
     let path = path.unwrap_or(DEFAULT_PATH.to_string());
 
     let code_db_path = format!("{}/{}", path, DB_CODE_FILE);
