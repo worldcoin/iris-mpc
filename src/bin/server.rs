@@ -1179,7 +1179,6 @@ async fn main() -> eyre::Result<()> {
     );
 
     // Clean up server tasks, then wait for them to finish
-    server_tasks.check_tasks();
     server_tasks.abort_all();
 
     sleep(Duration::from_secs(5)).await;

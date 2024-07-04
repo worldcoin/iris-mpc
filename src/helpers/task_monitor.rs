@@ -4,12 +4,12 @@ use std::{ops::{Deref, DerefMut}, panic};
 
 use tokio::task::{JoinError, JoinSet};
 
-/// A long-running async task monitor which cancels all its tasks when dropped.
+/// A long-running async task monitor which checks all its tasks for panics or hangs when dropped.
 /// Designed for ongoing tasks which run until the program exits.
 ///
 /// Create with `new()`, and monitor for panics or exits regularly with `check_tasks()`.
 ///
-/// When exiting the program, `abort()`, wait, then check for hangs with `check_tasks_finished()`.
+/// When exiting the program, `abort_all()`, wait, then check for hangs with `check_tasks_finished()`.
 #[derive(Debug, Default)]
 pub struct TaskMonitor {
     pub tasks: JoinSet<()>,
@@ -31,6 +31,21 @@ impl DerefMut for TaskMonitor {
     }
 }
 
+impl Drop for TaskMonitor {
+    // As a last-ditch effort, check for hangs or panics before the program exits.
+    fn drop(&mut self) {
+        // When the program exits or the task set is dropped, we can't check for cancellations and
+        // early exits, because other drops might have already cancelled or finished tasks.
+        self.tasks.abort_all();
+
+        // Check for hangs and panics.
+        //
+        // If there is a hang (or hang panic) here, try calling abort_all() and waiting before
+        // dropping the TaskMonitor. Or call `check_tasks_finished_ignoring_hangs()` here instead.
+        self.check_tasks_finished();
+    }
+}
+
 impl TaskMonitor {
     /// Create a new task monitor.
     pub fn new() -> Self {
@@ -42,7 +57,6 @@ impl TaskMonitor {
     ///
     /// Call this method after adding each new task, and before starting a new batch or
     /// long-running operation.
-    #[track_caller]
     pub fn check_tasks(&mut self) {
         // Any finished task is an error, so we just need to check for the first one.
         if let Some(finished_task) = self.tasks.try_join_next() {
@@ -51,21 +65,43 @@ impl TaskMonitor {
         }
     }
 
+    /// Checks for panics, cancellations, or early finishes, then aborts all tasks.
+    ///
+    /// # Panics
+    ///
+    /// If there is already a task panic, cancellation, or early finish.
+    pub fn abort_all(&mut self) {
+        self.check_tasks();
+
+        self.tasks.abort_all();
+    }
+
     /// Panics if any of the `server_tasks` have finished with a panic or hang.
     /// (Ignores tasks that have finished normally or were cancelled).
     ///
     /// When exiting the program, call `abort_all()`, wait for the tasks to finish,
     /// then call this function.
-    #[track_caller]
     pub fn check_tasks_finished(&mut self) {
         // Any hung task is an error, so we need to check they've all finished.
         while let Some(finished_task) = self.tasks.try_join_next() {
+            // If there is a hang (or hang panic) here, try calling abort_all() and waiting before
+            // dropping the TaskMonitor.
             TaskMonitor::resume_panic(finished_task);
         }
 
         if !self.tasks.is_empty() {
             // If this panics, try waiting for longer between the abort and this function call.
             panic!("{} monitored tasks hung even when aborted", self.tasks.len());
+        }
+    }
+
+    /// Like `check_tasks_finished()`, but ignores hangs.
+    pub fn check_tasks_finished_ignoring_hangs(&mut self) {
+        // Any hung task is an error, so we need to check they've all finished.
+        while let Some(finished_task) = self.tasks.try_join_next() {
+            // If there is a hang (or hang panic) here, try calling abort_all() and waiting before
+            // dropping the TaskMonitor.
+            TaskMonitor::resume_panic(finished_task);
         }
     }
 
