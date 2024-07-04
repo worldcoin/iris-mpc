@@ -1,8 +1,7 @@
 use cudarc::driver::{
-    result::{memcpy_dtoh_async, memcpy_htod_async},
+    result::{memcpy_dtoh_async, memcpy_htod_async, stream},
     sys::CUdeviceptr,
-    CudaDevice, CudaSlice, CudaStream, CudaView, DevicePtr, DevicePtrMut, DeviceRepr, DeviceSlice,
-    DriverError,
+    CudaDevice, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceRepr, DriverError,
 };
 use std::sync::Arc;
 
@@ -32,8 +31,7 @@ pub fn device_ptrs_to_slices<T>(
         .collect()
 }
 
-pub fn dtoh_async<T: Default + Clone, U: DevicePtr<T>>(
-    // input: &CudaView<T>,
+pub fn dtoh_on_stream_sync<T: Default + Clone, U: DevicePtr<T>>(
     input: &U,
     device: &Arc<CudaDevice>,
     stream: &CudaStream,
@@ -43,11 +41,12 @@ pub fn dtoh_async<T: Default + Clone, U: DevicePtr<T>>(
     unsafe {
         memcpy_dtoh_async(&mut buf, *input.device_ptr(), stream.stream)?;
     }
+    unsafe { stream::synchronize(stream.stream).unwrap() }
 
     Ok(buf)
 }
 
-pub fn htod_async<T: DeviceRepr>(
+pub fn htod_on_stream_sync<T: DeviceRepr>(
     input: &[T],
     device: &Arc<CudaDevice>,
     stream: &CudaStream,
@@ -57,5 +56,6 @@ pub fn htod_async<T: DeviceRepr>(
     unsafe {
         memcpy_htod_async(*buf.device_ptr_mut(), input, stream.stream)?;
     }
+    unsafe { stream::synchronize(stream.stream).unwrap() }
     Ok(buf)
 }

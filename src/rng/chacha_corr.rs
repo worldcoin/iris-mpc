@@ -210,6 +210,7 @@ impl ChaChaCtx {
 mod tests {
 
     use super::*;
+    use crate::helpers::dtoh_on_stream_sync;
     use itertools::izip;
 
     #[test]
@@ -219,12 +220,12 @@ mod tests {
         let mut rng = ChaChaCudaCorrRng::init(dev.clone(), [0u32; 8], [1u32; 8]);
         let mut buf = dev.alloc_zeros(1024 * 1024).unwrap();
         rng.fill_rng_into(&mut buf.slice_mut(..), &stream);
-        let data = dev.dtoh_sync_copy(&buf).unwrap();
+        let data = dtoh_on_stream_sync(&buf, &dev, &stream).unwrap();
         let zeros = data.iter().filter(|x| x == &&0).count();
         // we would expect no 0s in the output buffer even 1 is 1/4096;
         assert!(zeros <= 1);
         rng.fill_rng_into(&mut buf.slice_mut(..), &stream);
-        let data2 = dev.dtoh_sync_copy(&buf).unwrap();
+        let data2 = dtoh_on_stream_sync(&buf, &dev, &stream).unwrap();
         assert!(data != data2);
     }
 
@@ -241,12 +242,11 @@ mod tests {
 
         let mut buf = dev.alloc_zeros(1024 * 1024).unwrap();
         rng1.fill_rng_into(&mut buf.slice_mut(..), &stream);
-        let data1 = dev.dtoh_sync_copy(&buf).unwrap();
+        let data1 = dtoh_on_stream_sync(&buf, &dev, &stream).unwrap();
         rng2.fill_rng_into(&mut buf.slice_mut(..), &stream);
-        let data2 = dev.dtoh_sync_copy(&buf).unwrap();
+        let data2 = dtoh_on_stream_sync(&buf, &dev, &stream).unwrap();
         rng3.fill_rng_into(&mut buf.slice_mut(..), &stream);
-        let data3 = dev.dtoh_sync_copy(&buf).unwrap();
-
+        let data3 = dtoh_on_stream_sync(&buf, &dev, &stream).unwrap();
         for (a, b, c) in izip!(data1, data2, data3) {
             assert_eq!(a ^ b ^ c, 0);
         }
