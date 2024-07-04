@@ -7,6 +7,7 @@ pub mod kms_dh;
 pub mod mmap;
 pub mod sqs;
 pub mod task_monitor;
+pub mod aws;
 
 pub fn device_ptrs<T>(slice: &[CudaSlice<T>]) -> Vec<CUdeviceptr> {
     slice.iter().map(|s| *s.device_ptr()).collect()

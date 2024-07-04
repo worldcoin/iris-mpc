@@ -4,10 +4,14 @@ use aws_sdk_sns::{
     types::{MessageAttributeValue, PublishBatchRequestEntry},
     Client,
 };
+
 use aws_sdk_sqs::Client as SqsClient;
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use eyre::{Context, ContextCompat};
+use gpu_iris_mpc::helpers::aws::{
+    construct_message_attributes, NODE_ID_MESSAGE_ATTRIBUTE_NAME,
+};
 use gpu_iris_mpc::{
     helpers::sqs::{ResultEvent, SMPCRequest},
     setup::{
@@ -229,18 +233,21 @@ async fn main() -> eyre::Result<()> {
                 mask_code,
             };
 
+            let mut message_attributes = construct_message_attributes()?;
+            message_attributes.insert(
+                NODE_ID_MESSAGE_ATTRIBUTE_NAME.to_string(),
+                MessageAttributeValue::builder()
+                    .data_type("String")
+                    .string_value(i.to_string())
+                    .build()?,
+            );
+
             messages.push(
                 PublishBatchRequestEntry::builder()
                     .message(to_string(&request_message)?)
                     .id(sns_id.to_string())
                     .message_group_id(ENROLLMENT_REQUEST_TYPE)
-                    .message_attributes(
-                        "nodeId",
-                        MessageAttributeValue::builder()
-                            .set_string_value(Some(i.to_string()))
-                            .set_data_type(Some("String".to_string()))
-                            .build()?,
-                    )
+                    .set_message_attributes(Some(message_attributes))
                     .build()
                     .unwrap(),
             );
