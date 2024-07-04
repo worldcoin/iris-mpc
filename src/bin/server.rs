@@ -628,10 +628,10 @@ async fn main() -> eyre::Result<()> {
         .map(|&s| Arc::new(Mutex::new(s)))
         .collect::<Vec<_>>();
 
-    // Start thread that will be responsible for communicating back the results
+    // Start task that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<(Vec<u32>, Vec<String>, Vec<bool>)>(32); // TODO: pick some buffer value
     let rx_sns_client = sns_client.clone();
-    tokio::spawn(async move {
+    server_tasks.spawn(async move {
         while let Some((message, request_ids, matches)) = rx.recv().await {
             for (i, &idx_result) in message.iter().enumerate() {
                 // TODO: write each result to postgres
