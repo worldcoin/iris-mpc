@@ -1,5 +1,6 @@
 use cudarc::driver::{CudaDevice, CudaStream};
 use gpu_iris_mpc::{
+    helpers::{dtoh_on_stream_sync, htod_on_stream_sync},
     setup::iris_db::iris::IrisCodeArray,
     threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
 };
@@ -50,18 +51,24 @@ fn rep_share_vec<R: Rng>(value: &[u16], id: usize, rng: &mut R) -> (Vec<u16>, Ve
     (a, b)
 }
 
-fn to_gpu(a: &[u16], b: &[u16], devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<u16>> {
+fn to_gpu(
+    a: &[u16],
+    b: &[u16],
+    devices: &[Arc<CudaDevice>],
+    streams: &[CudaStream],
+) -> Vec<ChunkShare<u16>> {
     debug_assert_eq!(a.len(), b.len());
 
     let mut result = Vec::with_capacity(devices.len());
 
-    for (dev, a, b) in izip!(
+    for (dev, stream, a, b) in izip!(
         devices,
+        streams,
         a.chunks(INPUTS_PER_GPU_SIZE),
         b.chunks(INPUTS_PER_GPU_SIZE)
     ) {
-        let a_ = dev.htod_sync_copy(a).unwrap();
-        let b_ = dev.htod_sync_copy(b).unwrap();
+        let a_ = htod_on_stream_sync(a, dev, stream).unwrap();
+        let b_ = htod_on_stream_sync(b, dev, stream).unwrap();
         result.push(ChunkShare::new(a_, b_));
     }
 
@@ -88,10 +95,10 @@ fn open(
 
     let devices = party.get_devices();
     for (idx, (res, corr)) in izip!(x.iter(), corrections.iter()).enumerate() {
-        res_a.push(devices[idx].dtoh_sync_copy(&res.a).unwrap());
-        res_b.push(devices[idx].dtoh_sync_copy(&res.b).unwrap());
-        corr_a.push(devices[idx].dtoh_sync_copy(&corr.a).unwrap());
-        corr_b.push(devices[idx].dtoh_sync_copy(&corr.b).unwrap());
+        res_a.push(dtoh_on_stream_sync(&res.a, &devices[idx], &streams[idx]).unwrap());
+        res_b.push(dtoh_on_stream_sync(&res.b, &devices[idx], &streams[idx]).unwrap());
+        corr_a.push(dtoh_on_stream_sync(&corr.a, &devices[idx], &streams[idx]).unwrap());
+        corr_b.push(dtoh_on_stream_sync(&corr.b, &devices[idx], &streams[idx]).unwrap());
     }
     cudarc::nccl::result::group_start().unwrap();
     for (idx, (res, corr)) in izip!(x.iter(), corrections.iter()).enumerate() {
@@ -112,8 +119,8 @@ fn open(
     }
     cudarc::nccl::result::group_end().unwrap();
     for (idx, (res, corr)) in izip!(x, corrections).enumerate() {
-        res_c.push(devices[idx].dtoh_sync_copy(&res.a).unwrap());
-        corr_c.push(devices[idx].dtoh_sync_copy(&corr.a).unwrap());
+        res_c.push(dtoh_on_stream_sync(&res.a, &devices[idx], &streams[idx]).unwrap());
+        corr_c.push(dtoh_on_stream_sync(&corr.a, &devices[idx], &streams[idx]).unwrap());
     }
 
     let mut result = Vec::with_capacity(n_devices * INPUTS_PER_GPU_SIZE);
@@ -195,7 +202,7 @@ async fn main() -> eyre::Result<()> {
         .collect::<Vec<_>>();
 
     // Import to GPU
-    let mask_gpu = to_gpu(&mask_share_a, &mask_share_b, &devices);
+    let mask_gpu = to_gpu(&mask_share_a, &mask_share_b, &devices, &streams);
     println!("Data is on GPUs!");
     println!("Starting tests...");
 
