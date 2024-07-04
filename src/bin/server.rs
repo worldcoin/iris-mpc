@@ -431,7 +431,7 @@ async fn main() -> eyre::Result<()> {
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);
-    let store = Arc::new(Mutex::new(Store::new()));
+    let store = Arc::new(Mutex::new(Store::new_from_env().await?));
 
     // Init RNGs
     let own_key_id = KMS_KEY_IDS[party_id];
@@ -491,7 +491,7 @@ async fn main() -> eyre::Result<()> {
         };
 
     // Load DB from persistent storage.
-    for iris in store.lock().unwrap().iter_irises() {
+    for iris in store.lock().unwrap().iter_irises().await? {
         codes_db.extend(iris.code());
         masks_db.extend(iris.mask());
     }
@@ -642,7 +642,6 @@ async fn main() -> eyre::Result<()> {
 
     // Main loop
     for request_counter in 0..N_BATCHES {
-
         // **Tensor format of queries**
         //
         // The functions `receive_batch` and `prepare_query_shares` will prepare the _query_ variables as `Vec<Vec<u8>>` formatted as follows:
@@ -1037,7 +1036,7 @@ async fn main() -> eyre::Result<()> {
                     })
                     .collect();
                 let store = store.lock().unwrap();
-                store.insert_irises(&codes_and_masks);
+                store.insert_irises(&codes_and_masks); // TODO: await and errors.
             }
 
             // Spread the insertions across devices.

@@ -1,3 +1,5 @@
+use eyre::Result;
+
 pub struct StoredIris {}
 
 impl StoredIris {
@@ -13,16 +15,17 @@ impl StoredIris {
 pub struct Store {}
 
 impl Store {
-    pub fn new() -> Self {
-        Store {}
+    pub async fn new_from_env() -> Result<Self> {
+        Ok(Store {})
     }
 
-    pub fn iter_irises(&self) -> impl Iterator<Item = &StoredIris> {
+    pub async fn iter_irises(&self) -> Result<impl Iterator<Item = &StoredIris>> {
         // TODO
-        vec![].into_iter()
+        Ok(vec![].into_iter())
     }
 
-    pub fn insert_irises(&self, _codes_and_masks: &[(&[u16], &[u16])]) {
+    pub async fn insert_irises(&self, _codes_and_masks: &[(&[u16], &[u16])]) -> Result<()> {
         // TODO
+        Ok(())
     }
 }
