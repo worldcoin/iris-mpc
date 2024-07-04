@@ -4,6 +4,9 @@ on:
   release:
     types:
       - 'published'
+  push:
+    branches:
+      - 'fix/change_username_docker_push'
 
 env:
   REGISTRY: ghcr.io
