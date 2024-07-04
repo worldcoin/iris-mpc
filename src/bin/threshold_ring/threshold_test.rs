@@ -199,12 +199,12 @@ async fn main() -> eyre::Result<()> {
 
         let now = Instant::now();
         party.compare_threshold_masked_many(&code_gpu, &mask_gpu, &streams);
-        party.synchronize_all();
         println!("compute time: {:?}", now.elapsed());
 
         let res = party.take_result_buffer();
         let now = Instant::now();
         let result = open(&mut party, &res, &streams);
+        party.synchronize_streams(&streams);
         party.return_result_buffer(res);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
 

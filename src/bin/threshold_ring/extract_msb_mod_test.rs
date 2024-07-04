@@ -199,12 +199,12 @@ async fn main() -> eyre::Result<()> {
         party.lift_mul_sub(&mut x, &correction, &code_gpu, &streams);
         println!("lift time: {:?}", now.elapsed());
         party.extract_msb(&mut x, &streams);
-        party.synchronize_all();
         println!("extract time: {:?}", now.elapsed());
 
         let res = party.take_result_buffer();
         let now = Instant::now();
         let result = open(&mut party, &res, &streams);
+        party.synchronize_streams(&streams);
         party.return_result_buffer(res);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
 

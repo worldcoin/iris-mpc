@@ -209,11 +209,11 @@ async fn main() -> eyre::Result<()> {
 
         let now = Instant::now();
         party.lift_mpc(&mask_gpu, &mut x, &mut correction, &streams);
-        party.synchronize_all();
         println!("compute time: {:?}", now.elapsed());
 
         let now = Instant::now();
         let result = open(&mut party, &mut x, &mut correction, &streams);
+        party.synchronize_streams(&streams);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
 
         let mut correct = true;

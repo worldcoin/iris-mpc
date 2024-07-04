@@ -126,12 +126,12 @@ async fn main() -> eyre::Result<()> {
 
         let now = Instant::now();
         party.or_reduce_result(&mut share_gpu, &streams);
-        party.synchronize_all();
         println!("compute time: {:?}", now.elapsed());
 
         let now = Instant::now();
         // Result is in the first bit of the first GPU
         let result = open(&mut party, &mut share_gpu[0], &streams);
+        party.synchronize_streams(&streams);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
 
         if i == n_devices {
