@@ -21,7 +21,7 @@ use serde_json::to_string;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{spawn, sync::Mutex, time::sleep};
 use uuid::Uuid;
-use gpu_iris_mpc::helpers::tracing::construct_message_attributes;
+use gpu_iris_mpc::helpers::tracing::{construct_message_attributes, NODE_ID_MESSAGE_ATTRIBUTE_NAME};
 
 const N_QUERIES: usize = 32 * 20;
 const REGION: &str = "eu-north-1";
@@ -233,11 +233,11 @@ async fn main() -> eyre::Result<()> {
 
             let mut message_attributes = construct_message_attributes()?;
             message_attributes.insert(
-                "nodeId".to_string(),
+                NODE_ID_MESSAGE_ATTRIBUTE_NAME.to_string(),
                 MessageAttributeValue::builder()
-                    .set_string_value(Some(i.to_string()))
-                    .set_data_type(Some("String".to_string()))
-                    .build()?,
+                .data_type("String")
+                .string_value(i.to_string())
+                .build()?
             );
 
             messages.push(

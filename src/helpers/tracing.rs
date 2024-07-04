@@ -1,19 +1,13 @@
 use std::collections::HashMap;
-use std::fmt::Debug;
 
-use aws_config::Region;
-use aws_sdk_sns::types::{MessageAttributeValue};
-use eyre::Context;
+use aws_sdk_sns::types::MessageAttributeValue;
 use opentelemetry::trace::{
     SpanContext, SpanId, TraceFlags, TraceId, TraceState,
 };
-use serde::Serialize;
 
-use crate::config::AwsConfig;
-
-const DEQUEUE_WAIT_TIME_SECONDS: i32 = 1;
 pub const TRACE_ID_MESSAGE_ATTRIBUTE_NAME: &str = "TraceID";
 pub const SPAN_ID_MESSAGE_ATTRIBUTE_NAME: &str = "SpanID";
+pub const NODE_ID_MESSAGE_ATTRIBUTE_NAME: &str = "NodeID";
 
 pub fn construct_message_attributes() -> eyre::Result<HashMap<String, MessageAttributeValue>> {
     let (trace_id, span_id) = telemetry_batteries::tracing::extract_span_ids();

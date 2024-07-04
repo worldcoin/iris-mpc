@@ -52,7 +52,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 use gpu_iris_mpc::config;
-use gpu_iris_mpc::helpers::tracing::{TRACE_ID_MESSAGE_ATTRIBUTE_NAME, SPAN_ID_MESSAGE_ATTRIBUTE_NAME};
+use gpu_iris_mpc::helpers::tracing::{TRACE_ID_MESSAGE_ATTRIBUTE_NAME, SPAN_ID_MESSAGE_ATTRIBUTE_NAME, NODE_ID_MESSAGE_ATTRIBUTE_NAME};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
@@ -161,53 +161,56 @@ async fn receive_batch(
             .send()
             .await?;
 
-        for sqs_message in rcv_message_output.messages.unwrap_or_default() {
-            let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())?;
-            let message: SMPCRequest = serde_json::from_str(&message.message)?;
 
-            let message_attributes = sqs_message.message_attributes.unwrap_or_default();
+        if let Some(messages)  = rcv_message_output.messages{
+            for sqs_message in messages{
+                let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())?;
+                let message: SMPCRequest = serde_json::from_str(&message.message)?;
 
-            batch_query.request_ids.push(message.clone().request_id);
-            batch_query.metadata.push(BatchMetadata {
-                node_id: message_attributes.get("nodeId").unwrap().string_value().unwrap().clone().parse()?,
-                trace_id: message_attributes.get(TRACE_ID_MESSAGE_ATTRIBUTE_NAME).unwrap().string_value().unwrap().clone().parse()?,
-                span_id: message_attributes.get(SPAN_ID_MESSAGE_ATTRIBUTE_NAME).unwrap().string_value().unwrap().clone().parse()?,
-            });
+                let message_attributes = sqs_message.message_attributes.unwrap_or_default();
 
-            let (db_iris_shares, db_mask_shares, iris_shares, mask_shares) =
-                spawn_blocking(move || {
-                    let mut iris_share =
-                        GaloisRingIrisCodeShare::new(party_id + 1, message.get_iris_shares());
-                    let mut mask_share =
-                        GaloisRingIrisCodeShare::new(party_id + 1, message.get_mask_shares());
+                batch_query.request_ids.push(message.clone().request_id);
+                batch_query.metadata.push(BatchMetadata {
+                    node_id: message_attributes.get(NODE_ID_MESSAGE_ATTRIBUTE_NAME).unwrap().string_value().unwrap().clone().parse()?,
+                    trace_id: message_attributes.get(TRACE_ID_MESSAGE_ATTRIBUTE_NAME).unwrap().string_value().unwrap().clone().parse()?,
+                    span_id: message_attributes.get(SPAN_ID_MESSAGE_ATTRIBUTE_NAME).unwrap().string_value().unwrap().clone().parse()?,
+                });
 
-                    let db_iris_shares = iris_share.all_rotations();
-                    let db_mask_shares = mask_share.all_rotations();
+                let (db_iris_shares, db_mask_shares, iris_shares, mask_shares) =
+                    spawn_blocking(move || {
+                        let mut iris_share =
+                            GaloisRingIrisCodeShare::new(party_id + 1, message.get_iris_shares());
+                        let mut mask_share =
+                            GaloisRingIrisCodeShare::new(party_id + 1, message.get_mask_shares());
 
-                    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
-                    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut mask_share);
+                        let db_iris_shares = iris_share.all_rotations();
+                        let db_mask_shares = mask_share.all_rotations();
 
-                    (
-                        db_iris_shares,
-                        db_mask_shares,
-                        iris_share.all_rotations(),
-                        mask_share.all_rotations(),
-                    )
-                })
+                        GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
+                        GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut mask_share);
+
+                        (
+                            db_iris_shares,
+                            db_mask_shares,
+                            iris_share.all_rotations(),
+                            mask_share.all_rotations(),
+                        )
+                    })
+                        .await?;
+
+                batch_query.db.code.extend(db_iris_shares);
+                batch_query.db.mask.extend(db_mask_shares);
+                batch_query.query.code.extend(iris_shares);
+                batch_query.query.mask.extend(mask_shares);
+
+                // TODO: we should only delete after processing
+                client
+                    .delete_message()
+                    .queue_url(queue_url)
+                    .receipt_handle(sqs_message.receipt_handle.unwrap())
+                    .send()
                     .await?;
-
-            batch_query.db.code.extend(db_iris_shares);
-            batch_query.db.mask.extend(db_mask_shares);
-            batch_query.query.code.extend(iris_shares);
-            batch_query.query.mask.extend(mask_shares);
-
-            // TODO: we should only delete after processing
-            client
-                .delete_message()
-                .queue_url(queue_url)
-                .receipt_handle(sqs_message.receipt_handle.unwrap())
-                .send()
-                .await?;
+                }
         }
     }
 
@@ -701,7 +704,7 @@ async fn main() -> eyre::Result<()> {
             tracing::info!(
                 "Started processing share",
                 node_id = tracing_payload.node_id,
-                dd.trace_id tracing_payload.trace_id,
+                dd.trace_id = tracing_payload.trace_id,
                 dd.span_id = tracing_payload.span_id,
             );
         }
@@ -942,7 +945,7 @@ async fn main() -> eyre::Result<()> {
                 tracing::info!(
                     "Phase 1 finished",
                     node_id = tracing_payload.node_id,
-                    dd.trace_id tracing_payload.trace_id,
+                    dd.trace_id = tracing_payload.trace_id,
                     dd.span_id = tracing_payload.span_id,
                 );
             }
@@ -977,7 +980,7 @@ async fn main() -> eyre::Result<()> {
                 tracing::info!(
                     "Phase 2 finished",
                     node_id = tracing_payload.node_id,
-                    dd.trace_id tracing_payload.trace_id,
+                    dd.trace_id = tracing_payload.trace_id,
                     dd.span_id = tracing_payload.span_id,
                 );
             }
@@ -1040,7 +1043,7 @@ async fn main() -> eyre::Result<()> {
                 tracing::info!(
                     "Phase 2 finished",
                     node_id = tracing_payload.node_id,
-                    dd.trace_id tracing_payload.trace_id,
+                    dd.trace_id = tracing_payload.trace_id,
                     dd.span_id = tracing_payload.span_id,
                 );
             }
