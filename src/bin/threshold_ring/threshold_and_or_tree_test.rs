@@ -1,5 +1,6 @@
 use cudarc::driver::{CudaDevice, CudaStream};
 use gpu_iris_mpc::{
+    helpers::{dtoh_on_stream_sync, htod_on_stream_sync},
     setup::iris_db::iris::{IrisCodeArray, MATCH_THRESHOLD_RATIO},
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
@@ -58,18 +59,24 @@ fn rep_share_vec<R: Rng>(value: &[u16], id: usize, rng: &mut R) -> (Vec<u16>, Ve
     (a, b)
 }
 
-fn to_gpu(a: &[u16], b: &[u16], devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<u16>> {
+fn to_gpu(
+    a: &[u16],
+    b: &[u16],
+    devices: &[Arc<CudaDevice>],
+    streams: &[CudaStream],
+) -> Vec<ChunkShare<u16>> {
     debug_assert_eq!(a.len(), b.len());
 
     let mut result = Vec::with_capacity(devices.len());
 
-    for (dev, a, b) in izip!(
+    for (dev, stream, a, b) in izip!(
         devices,
+        streams,
         a.chunks(INPUTS_PER_GPU_SIZE),
         b.chunks(INPUTS_PER_GPU_SIZE)
     ) {
-        let a_ = dev.htod_sync_copy(a).unwrap();
-        let b_ = dev.htod_sync_copy(b).unwrap();
+        let a_ = htod_on_stream_sync(a, dev, stream).unwrap();
+        let b_ = htod_on_stream_sync(b, dev, stream).unwrap();
         result.push(ChunkShare::new(a_, b_));
     }
 
@@ -101,10 +108,11 @@ fn open(party: &mut Circuits, result: &mut ChunkShare<u64>, streams: &[CudaStrea
     cudarc::nccl::result::group_end().expect("group end should work");
 
     let dev = party.get_devices()[0].clone();
+    let stream = &streams[0];
 
-    let a = dev.dtoh_sync_copy(&res.a).expect("copy a works");
-    let b = dev.dtoh_sync_copy(&res.b).expect("copy b works");
-    let c = dev.dtoh_sync_copy(&res_helper.a).expect("copy c works");
+    let a = dtoh_on_stream_sync(&res.a, &dev, stream).unwrap();
+    let b = dtoh_on_stream_sync(&res.b, &dev, stream).unwrap();
+    let c = dtoh_on_stream_sync(&res_helper.a, &dev, stream).unwrap();
     assert_eq!(a.len(), 1);
     assert_eq!(b.len(), 1);
     assert_eq!(c.len(), 1);
@@ -158,8 +166,8 @@ async fn main() -> eyre::Result<()> {
         .collect::<Vec<_>>();
 
     // Import to GPU
-    let code_gpu = to_gpu(&code_share_a, &code_share_b, &devices);
-    let mask_gpu = to_gpu(&mask_share_a, &mask_share_b, &devices);
+    let code_gpu = to_gpu(&code_share_a, &code_share_b, &devices, &streams);
+    let mask_gpu = to_gpu(&mask_share_a, &mask_share_b, &devices, &streams);
     println!("Data is on GPUs!");
     println!("Starting tests...");
 
