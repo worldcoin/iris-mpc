@@ -1,8 +1,5 @@
 use cudarc::driver::{CudaDevice, CudaStream};
-use gpu_iris_mpc::{
-    helpers::{dtoh_async, htod_async},
-    threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
-};
+use gpu_iris_mpc::threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits};
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{env, sync::Arc};
@@ -46,24 +43,18 @@ fn rep_share_vec<R: Rng>(value: &[u64], id: usize, rng: &mut R) -> (Vec<u64>, Ve
     (a, b)
 }
 
-fn to_gpu(
-    a: &[u64],
-    b: &[u64],
-    devices: &[Arc<CudaDevice>],
-    streams: &[CudaStream],
-) -> Vec<ChunkShare<u64>> {
+fn to_gpu(a: &[u64], b: &[u64], devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<u64>> {
     debug_assert_eq!(a.len(), b.len());
 
     let mut result = Vec::with_capacity(devices.len());
 
-    for (dev, stream, a, b) in izip!(
+    for (dev, a, b) in izip!(
         devices,
-        streams,
         a.chunks(INPUTS_PER_GPU_SIZE / 64),
         b.chunks(INPUTS_PER_GPU_SIZE / 64)
     ) {
-        let a_ = htod_async(a, dev, stream).unwrap();
-        let b_ = htod_async(b, dev, stream).unwrap();
+        let a_ = dev.htod_sync_copy(a).unwrap();
+        let b_ = dev.htod_sync_copy(b).unwrap();
         result.push(ChunkShare::new(a_, b_));
     }
 
@@ -99,8 +90,8 @@ fn open(party: &mut Circuits, x: &mut [ChunkShareView<u16>], streams: &[CudaStre
 
     let devices = party.get_devices();
     for (idx, res) in x.iter().enumerate() {
-        a.push(dtoh_async(&res.a, &devices[idx], &streams[idx]).unwrap());
-        b.push(dtoh_async(&res.b, &devices[idx], &streams[idx]).unwrap());
+        a.push(devices[idx].dtoh_sync_copy(&res.a).unwrap());
+        b.push(devices[idx].dtoh_sync_copy(&res.b).unwrap());
     }
     cudarc::nccl::result::group_start().unwrap();
     for (idx, res) in x.iter().enumerate() {
@@ -115,7 +106,7 @@ fn open(party: &mut Circuits, x: &mut [ChunkShareView<u16>], streams: &[CudaStre
     }
     cudarc::nccl::result::group_end().unwrap();
     for (idx, res) in x.iter_mut().enumerate() {
-        c.push(dtoh_async(&res.a, &devices[idx], &streams[idx]).unwrap())
+        c.push(devices[idx].dtoh_sync_copy(&res.a).unwrap())
     }
 
     let mut result = Vec::with_capacity(n_devices * INPUTS_PER_GPU_SIZE);
@@ -170,7 +161,7 @@ async fn main() -> eyre::Result<()> {
         .collect::<Vec<_>>();
 
     // Import to GPU
-    let code_gpu = to_gpu(&input_bits_a, &input_bits_b, &devices, &streams);
+    let code_gpu = to_gpu(&input_bits_a, &input_bits_b, &devices);
     let res_ = alloc_res(INPUTS_PER_GPU_SIZE, &devices);
     let mut res = to_view(&res_);
     println!("Data is on GPUs!");
