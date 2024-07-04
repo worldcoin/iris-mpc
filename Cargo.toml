@@ -58,6 +58,57 @@ harness = false
 name = "transpose"
 harness = false
 
+# Binaries that aren't located directly in `src/bin` (or `src/bin/*/main.rs`)
+# threshold_field
+[[bin]]
+name = "field_bitinject_test"
+path = "src/bin/threshold_field/bitinject_test.rs"
+
+[[bin]]
+name = "field_extract_msb_mod_test"
+path = "src/bin/threshold_field/extract_msb_mod_test.rs"
+
+[[bin]]
+name = "field_lift_test"
+path = "src/bin/threshold_field/lift_test.rs"
+
+[[bin]]
+name = "field_or_tree_test"
+path = "src/bin/threshold_field/or_tree_test.rs"
+
+[[bin]]
+name = "field_threshold_and_or_tree_test"
+path = "src/bin/threshold_field/threshold_and_or_tree_test.rs"
+
+[[bin]]
+name = "field_threshold_test"
+path = "src/bin/threshold_field/threshold_test.rs"
+
+# threshold_ring
+[[bin]]
+name = "ring_bitinject_test"
+path = "src/bin/threshold_ring/bitinject_test.rs"
+
+[[bin]]
+name = "ring_extract_msb_mod_test"
+path = "src/bin/threshold_ring/extract_msb_mod_test.rs"
+
+[[bin]]
+name = "ring_lift_test"
+path = "src/bin/threshold_ring/lift_test.rs"
+
+[[bin]]
+name = "ring_or_tree_test"
+path = "src/bin/threshold_ring/or_tree_test.rs"
+
+[[bin]]
+name = "ring_threshold_and_or_tree_test"
+path = "src/bin/threshold_ring/threshold_and_or_tree_test.rs"
+
+[[bin]]
+name = "ring_threshold_test"
+path = "src/bin/threshold_ring/threshold_test.rs"
+
 # Abort on panics rather than unwinding.
 # This improves performance and makes panic propagation more reliable.
 [profile.release]
