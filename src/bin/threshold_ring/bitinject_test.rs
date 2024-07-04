@@ -170,7 +170,7 @@ async fn main() -> eyre::Result<()> {
         .collect::<Vec<_>>();
 
     // Import to GPU
-    let code_gpu = to_gpu(&input_bits_a, &input_bits_b, &devices);
+    let code_gpu = to_gpu(&input_bits_a, &input_bits_b, &devices, &streams);
     let res_ = alloc_res(INPUTS_PER_GPU_SIZE, &devices);
     let mut res = to_view(&res_);
     println!("Data is on GPUs!");
