@@ -26,6 +26,7 @@ use gpu_iris_mpc::{
         kms_dh::derive_shared_secret,
         mmap::{read_mmap_file, write_mmap_file},
         sqs::{ResultEvent, SMPCRequest, SQSMessage},
+        task_monitor::TaskMonitor,
     },
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     store::Store,
@@ -583,6 +584,7 @@ async fn main() -> eyre::Result<()> {
     println!("Starting engines...");
 
     let device_manager = Arc::new(DeviceManager::init());
+    let mut server_tasks  = TaskMonitor::new();
 
     // Phase 1 Setup
     let mut codes_engine = ShareDB::init(
@@ -594,7 +596,9 @@ async fn main() -> eyre::Result<()> {
         bootstrap_url.clone(),
         Some(true),
         Some(4000),
+        Some(&mut server_tasks),
     );
+    server_tasks.check_tasks();
 
     let mut masks_engine = ShareDB::init(
         party_id,
@@ -605,7 +609,9 @@ async fn main() -> eyre::Result<()> {
         bootstrap_url.clone(),
         Some(true),
         Some(4001),
+        Some(&mut server_tasks),
     );
+    server_tasks.check_tasks();
 
     let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE, DB_SIZE + DB_BUFFER, true);
     let mask_db_slices = masks_engine.load_db(&masks_db, DB_SIZE, DB_SIZE + DB_BUFFER, true);
@@ -620,7 +626,10 @@ async fn main() -> eyre::Result<()> {
         bootstrap_url.clone(),
         Some(true),
         Some(4002),
+        Some(&mut server_tasks),
     );
+    server_tasks.check_tasks();
+
     let mut batch_masks_engine = ShareDB::init(
         party_id,
         device_manager.clone(),
@@ -630,7 +639,9 @@ async fn main() -> eyre::Result<()> {
         bootstrap_url.clone(),
         Some(true),
         Some(4003),
+        Some(&mut server_tasks),
     );
+    server_tasks.check_tasks();
 
     // Phase 2 Setup
     let phase2_chunk_size =
@@ -646,7 +657,9 @@ async fn main() -> eyre::Result<()> {
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(4004),
+        Some(&mut server_tasks),
     )));
+    server_tasks.check_tasks();
 
     let phase2 = Arc::new(Mutex::new(Circuits::new(
         party_id,
@@ -655,7 +668,9 @@ async fn main() -> eyre::Result<()> {
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(4005),
+        Some(&mut server_tasks),
     )));
+    server_tasks.check_tasks();
 
     let distance_comparator = Arc::new(Mutex::new(DistanceComparator::init(QUERIES)));
 
@@ -699,7 +714,7 @@ async fn main() -> eyre::Result<()> {
     let (tx, mut rx) = mpsc::channel::<(Vec<u32>, Vec<String>, Vec<bool>, BatchQueryEntries)>(32); // TODO: pick some buffer value
     let rx_sns_client = sns_client.clone();
 
-    tokio::spawn(async move {
+    let _result_sender_abort = server_tasks.spawn(async move {
         while let Some((merged_results, request_ids, matches, query_store)) = rx.recv().await {
             for (i, &idx_result) in merged_results.iter().enumerate() {
                 // Insert non-matching queries into the persistent store.
@@ -740,6 +755,7 @@ async fn main() -> eyre::Result<()> {
             }
         }
     });
+    server_tasks.check_tasks();
 
     println!("All systems ready.");
 
@@ -785,6 +801,7 @@ async fn main() -> eyre::Result<()> {
         // start trace span - with single TraceId and single ParentTraceID
         println!("Received batch in {:?}", now.elapsed());
         batch_times += now.elapsed();
+        server_tasks.check_tasks();
 
         let (code_query, mask_query, code_query_insert, mask_query_insert, query_store) =
             spawn_blocking(move || {
@@ -806,6 +823,7 @@ async fn main() -> eyre::Result<()> {
 
         let mut timers = vec![];
 
+        // SAFETY: these streams can only safely be re-used after more than MAX_CONCURRENT_BATCHES.
         let request_streams = &streams[request_counter % MAX_BATCHES_BEFORE_REUSE];
         let request_cublas_handles = &cublas_handles[request_counter % MAX_BATCHES_BEFORE_REUSE];
         let request_results = &results[request_counter % MAX_BATCHES_BEFORE_REUSE];
@@ -840,7 +858,7 @@ async fn main() -> eyre::Result<()> {
         if request_counter > MAX_CONCURRENT_BATCHES {
             // We have two streams working concurrently, we'll await the stream before
             // previous one.
-            // SAFETY:
+            // SAFETY: these streams can only safely be re-used after more than MAX_CONCURRENT_BATCHES.
             let previous_previous_streams =
                 &streams[(request_counter - MAX_CONCURRENT_BATCHES) % MAX_BATCHES_BEFORE_REUSE];
             device_manager.await_event(previous_previous_streams, &previous_previous_stream_event);
@@ -1100,8 +1118,6 @@ async fn main() -> eyre::Result<()> {
             // SAFETY:
             // - We only use the default streams of the devices, therefore Phase 2's are
             //   never running concurrently.
-            // - We only use the default streams of the devices, therefore Phase 2's are
-            //   never running concurrently.
             // - These pointers are aligned, dereferencable, and initialized.
             let mut phase2_streams = thread_phase2
                 .get_devices()
@@ -1327,6 +1343,8 @@ async fn main() -> eyre::Result<()> {
         }));
 
         // Prepare for next batch
+        server_tasks.check_tasks();
+
         timer_events.push(timers);
 
         previous_previous_stream_event = previous_stream_event;
@@ -1351,6 +1369,9 @@ async fn main() -> eyre::Result<()> {
         total_time.elapsed() - batch_times
     );
 
+    // Clean up server tasks, then wait for them to finish
+    server_tasks.abort_all();
+
     sleep(Duration::from_secs(5)).await;
 
     for timers in timer_events {
@@ -1372,6 +1393,8 @@ async fn main() -> eyre::Result<()> {
             println!("Total time: {:?}", total_time);
         }
     }
+
+    server_tasks.check_tasks_finished();
 
     Ok(())
 }

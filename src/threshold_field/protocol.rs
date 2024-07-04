@@ -15,6 +15,7 @@ use cudarc::{
     nvrtc::{self, Ptx},
 };
 use itertools::izip;
+use tokio::task::{AbortHandle, JoinSet};
 use std::{
     rc::Rc,
     str::FromStr,
@@ -351,6 +352,7 @@ pub struct Circuits {
     kernels:    Vec<Kernels>,
     buffers:    Buffers,
     rngs:       Vec<ChaChaCudaCorrRng>,
+    pub server_abort:     Option<AbortHandle>,
 }
 
 impl Circuits {
@@ -367,6 +369,7 @@ impl Circuits {
         input_size: usize, // per GPU
         peer_url: Option<&String>,
         server_port: Option<u16>,
+        server_task_set: Option<&mut JoinSet<()>>,
     ) -> Self {
         // For the transpose, inputs should be multiple of 64 bits
         debug_assert!(input_size % 64 == 0);
@@ -396,7 +399,7 @@ impl Circuits {
             rngs.push(rng);
         }
 
-        let comms = Self::instantiate_network(peer_id, peer_url, server_port, &devs);
+        let (comms, server_abort) = Self::instantiate_network(peer_id, peer_url, server_port, &devs, server_task_set);
 
         let buffers = Buffers::new(&devs, chunk_size);
 
@@ -411,6 +414,7 @@ impl Circuits {
             kernels,
             buffers,
             rngs,
+            server_abort,
         }
     }
 
@@ -427,7 +431,8 @@ impl Circuits {
         peer_url: Option<&String>,
         server_port: Option<u16>,
         devices: &[Arc<CudaDevice>],
-    ) -> Vec<Rc<Comm>> {
+        server_task_set: Option<&mut JoinSet<()>>,
+    ) -> (Vec<Rc<Comm>>, Option<AbortHandle>) {
         let n_devices = devices.len();
         let mut comms = Vec::with_capacity(n_devices);
         let mut ids = Vec::with_capacity(n_devices);
@@ -436,9 +441,12 @@ impl Circuits {
         }
 
         // Start HTTP server to exchange NCCL commIds
+        let mut server_abort = None;
         if peer_id == 0 {
+            let server_task_set = server_task_set.expect("task set must be supplied to peer_id 0 for remote connection monitoring");
+
             let ids = ids.clone();
-            tokio::spawn(async move {
+            server_abort = Some(server_task_set.spawn(async move {
                 println!("Starting server on port {}...", server_port.unwrap());
                 let app = Router::new().route("/:device_id", get(move |req| http_root(ids, req)));
                 let listener =
@@ -446,7 +454,7 @@ impl Circuits {
                         .await
                         .unwrap();
                 axum::serve(listener, app).await.unwrap();
-            });
+            }));
         }
 
         for i in 0..n_devices {
@@ -473,7 +481,7 @@ impl Circuits {
                 Comm::from_rank(devices[i].clone(), peer_id, 3, id).unwrap(),
             ));
         }
-        comms
+        (comms, server_abort)
     }
 
     pub fn next_id(&self) -> usize {

@@ -42,7 +42,7 @@ sha2 = "0.10"
 telemetry-batteries = { git = "https://github.com/worldcoin/telemetry-batteries.git", rev = "802a4f39f358e077b11c8429b4c65f3e45b85959" }
 thiserror = "1.0"
 time = { version = "^0.3.6", features = ["formatting", "macros"] }
-tokio = { version = "1", features = ["full", "rt-multi-thread"] }
+tokio = { version = "1.36", features = ["full", "rt-multi-thread"] }
 tracing-subscriber = { version = "0.3.15", features = ["env-filter"] }
 url = "2"
 uuid = { version = "1.8.0", features = ["v4"] }
@@ -63,16 +63,62 @@ harness = false
 name = "transpose"
 harness = false
 
+# Binaries that aren't located directly in `src/bin` (or `src/bin/*/main.rs`)
+# threshold_field
+[[bin]]
+name = "field_bitinject_test"
+path = "src/bin/threshold_field/bitinject_test.rs"
+
+[[bin]]
+name = "field_extract_msb_mod_test"
+path = "src/bin/threshold_field/extract_msb_mod_test.rs"
+
+[[bin]]
+name = "field_lift_test"
+path = "src/bin/threshold_field/lift_test.rs"
+
+[[bin]]
+name = "field_or_tree_test"
+path = "src/bin/threshold_field/or_tree_test.rs"
+
+[[bin]]
+name = "field_threshold_and_or_tree_test"
+path = "src/bin/threshold_field/threshold_and_or_tree_test.rs"
+
+[[bin]]
+name = "field_threshold_test"
+path = "src/bin/threshold_field/threshold_test.rs"
+
+# threshold_ring
+[[bin]]
+name = "ring_bitinject_test"
+path = "src/bin/threshold_ring/bitinject_test.rs"
+
+[[bin]]
+name = "ring_extract_msb_mod_test"
+path = "src/bin/threshold_ring/extract_msb_mod_test.rs"
+
+[[bin]]
+name = "ring_lift_test"
+path = "src/bin/threshold_ring/lift_test.rs"
+
+[[bin]]
+name = "ring_or_tree_test"
+path = "src/bin/threshold_ring/or_tree_test.rs"
+
+[[bin]]
+name = "ring_threshold_and_or_tree_test"
+path = "src/bin/threshold_ring/threshold_and_or_tree_test.rs"
+
+[[bin]]
+name = "ring_threshold_test"
+path = "src/bin/threshold_ring/threshold_test.rs"
+
 # Abort on panics rather than unwinding.
 # This improves performance and makes panic propagation more reliable.
+# bench gets its setting from release, and test from dev.
 [profile.release]
 panic = 'abort'
 
-[profile.bench]
-panic = 'abort'
-
 [profile.dev]
-panic = 'abort'
-
-[profile.test]
 panic = 'abort'

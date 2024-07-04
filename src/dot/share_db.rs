@@ -14,6 +14,7 @@ use cudarc::{
     nvrtc::compile_ptx,
 };
 use rayon::prelude::*;
+use tokio::task::{AbortHandle, JoinSet};
 use std::{ffi::c_void, mem, str::FromStr, sync::Arc, thread, time::Duration};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
@@ -149,6 +150,7 @@ pub struct ShareDB {
     intermediate_results: Vec<CudaSlice<i32>>,
     pub results:          Vec<CudaSlice<u8>>,
     pub results_peer:     Vec<CudaSlice<u8>>,
+    pub server_abort:     Option<AbortHandle>,
 }
 
 impl ShareDB {
@@ -162,6 +164,7 @@ impl ShareDB {
         peer_url: Option<String>,
         is_remote: Option<bool>,
         server_port: Option<u16>,
+        sever_task_set: Option<&mut JoinSet<()>>,
     ) -> Self {
         let n_devices = device_manager.device_count();
         let ptx = compile_ptx(PTX_SRC).unwrap();
@@ -227,6 +230,7 @@ impl ShareDB {
 
         // Init NCCL comms
         let mut comms = vec![];
+        let mut server_abort = None;
         if is_remote {
             let mut ids = vec![];
             for _ in 0..n_devices {
@@ -235,8 +239,10 @@ impl ShareDB {
 
             // Start HTTP server to exchange NCCL commIds
             if peer_id == 0 {
+                let sever_task_set = sever_task_set.expect("task set must be supplied to peer_id 0 for remote connection monitoring");
+
                 let ids = ids.clone();
-                tokio::spawn(async move {
+                server_abort = Some(sever_task_set.spawn(async move {
                     println!("Starting server on port {}...", server_port.unwrap());
                     let app =
                         Router::new().route("/:device_id", get(move |req| http_root(ids, req)));
@@ -245,7 +251,7 @@ impl ShareDB {
                             .await
                             .unwrap();
                     axum::serve(listener, app).await.unwrap();
-                });
+                }));
             } else {
                 thread::sleep(Duration::from_secs(2));
             }
@@ -290,6 +296,7 @@ impl ShareDB {
             ones,
             results,
             results_peer,
+            server_abort,
         }
     }
 
@@ -681,6 +688,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let preprocessed_query = preprocess_query(&query);
         let streams = device_manager.fork_streams();
@@ -784,6 +792,7 @@ mod tests {
                 DB_SIZE,
                 QUERY_SIZE,
                 ([0u32; 8], [0u32; 8]),
+                None,
                 None,
                 None,
                 None,
@@ -913,6 +922,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             );
             let mut masks_engine = ShareDB::init(
                 party_id,
@@ -920,6 +930,7 @@ mod tests {
                 DB_SIZE,
                 QUERY_SIZE,
                 ([0u32; 8], [0u32; 8]),
+                None,
                 None,
                 None,
                 None,
