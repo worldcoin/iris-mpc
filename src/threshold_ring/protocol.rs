@@ -643,6 +643,7 @@ impl Circuits {
         des: &mut ChunkShareView<u64>,
         src: &ChunkShareView<u64>,
         idx: usize,
+        streams: &[CudaStream],
     ) {
         debug_assert_eq!(src.len(), des.len());
         let cfg = Self::launch_config_from_elements_and_threads(
@@ -654,7 +655,11 @@ impl Circuits {
             self.kernels[idx]
                 .assign
                 .clone()
-                .launch(cfg, (&des.a, &des.b, &src.a, &src.b, src.len() as i32))
+                .launch_on_stream(
+                    &streams[idx],
+                    cfg,
+                    (&des.a, &des.b, &src.a, &src.b, src.len() as i32),
+                )
                 .unwrap();
         }
     }
@@ -665,6 +670,7 @@ impl Circuits {
         x2: &ChunkShareView<u64>,
         res: &mut ChunkShareView<u64>,
         idx: usize,
+        streams: &[CudaStream],
     ) {
         let cfg = Self::launch_config_from_elements_and_threads(
             self.chunk_size as u32,
@@ -680,7 +686,8 @@ impl Circuits {
             self.kernels[idx]
                 .and
                 .clone()
-                .launch(
+                .launch_on_stream(
+                    &streams[idx],
                     cfg,
                     (&res.a, &x1.a, &x1.b, &x2.a, &x2.b, &rand, self.chunk_size),
                 )
@@ -693,6 +700,7 @@ impl Circuits {
         x1: &mut ChunkShareView<u64>,
         x2: &ChunkShareView<u64>,
         idx: usize,
+        streams: &[CudaStream],
     ) {
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
@@ -709,7 +717,11 @@ impl Circuits {
             self.kernels[idx]
                 .or_assign
                 .clone()
-                .launch(cfg, (&x1.a, &x1.b, &x2.a, &x2.b, &rand, x1.len()))
+                .launch_on_stream(
+                    &streams[idx],
+                    cfg,
+                    (&x1.a, &x1.b, &x2.a, &x2.b, &rand, x1.len()),
+                )
                 .unwrap();
         }
     }
@@ -754,7 +766,13 @@ impl Circuits {
         result::group_end().unwrap();
     }
 
-    fn xor_assign_many(&self, x1: &mut ChunkShareView<u64>, x2: &ChunkShareView<u64>, idx: usize) {
+    fn xor_assign_many(
+        &self,
+        x1: &mut ChunkShareView<u64>,
+        x2: &ChunkShareView<u64>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) {
         let cfg = Self::launch_config_from_elements_and_threads(
             self.chunk_size as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
@@ -764,7 +782,11 @@ impl Circuits {
             self.kernels[idx]
                 .xor_assign
                 .clone()
-                .launch(cfg, (&x1.a, &x1.b, &x2.a, &x2.b, self.chunk_size))
+                .launch_on_stream(
+                    &streams[idx],
+                    cfg,
+                    (&x1.a, &x1.b, &x2.a, &x2.b, self.chunk_size),
+                )
                 .unwrap();
         }
     }
@@ -1354,7 +1376,7 @@ impl Circuits {
             let mut c = c.get_offset(0, self.chunk_size);
             let a = a.get_offset(0, self.chunk_size);
             let b = b.get_offset(0, self.chunk_size);
-            self.and_many_pre(&a, &b, &mut c, idx);
+            self.and_many_pre(&a, &b, &mut c, idx, streams);
             carry.push(c);
         }
         // Send/Receive
@@ -1368,9 +1390,9 @@ impl Circuits {
                 let mut a = a.get_offset(k, self.chunk_size);
                 let mut b = b.get_offset(k, self.chunk_size);
 
-                self.xor_assign_many(&mut a, c, idx);
-                self.xor_assign_many(&mut b, c, idx);
-                self.and_many_pre(&a, &b, &mut tmp_c, idx);
+                self.xor_assign_many(&mut a, c, idx, streams);
+                self.xor_assign_many(&mut b, c, idx, streams);
+                self.and_many_pre(&a, &b, &mut tmp_c, idx, streams);
             }
             // Send/Receive
             result::group_start().unwrap();
@@ -1389,7 +1411,7 @@ impl Circuits {
             for (idx, (c, a)) in izip!(carry.iter_mut(), &a).enumerate() {
                 // Unused space used for temparary storage
                 let tmp_c = a.get_offset(0, self.chunk_size);
-                self.xor_assign_many(c, &tmp_c, idx);
+                self.xor_assign_many(c, &tmp_c, idx, streams);
             }
         }
 
@@ -1398,8 +1420,8 @@ impl Circuits {
             let mut c1 = c.get_offset(0, self.chunk_size);
             let mut c2 = c.get_offset(1, self.chunk_size);
             let b = b.get_offset(K - 1, self.chunk_size);
-            self.and_many_pre(&b, &c1, &mut c2, idx);
-            self.xor_assign_many(&mut c1, &b, idx);
+            self.and_many_pre(&b, &c1, &mut c2, idx, streams);
+            self.xor_assign_many(&mut c1, &b, idx, streams);
         }
         // Send/Receive
         result::group_start().unwrap();
@@ -1494,7 +1516,7 @@ impl Circuits {
             let mut c = c.get_offset(0, self.chunk_size);
             let a = a.get_offset(0, self.chunk_size);
             let b = b.get_offset(0, self.chunk_size);
-            self.and_many_pre(&a, &b, &mut c, idx);
+            self.and_many_pre(&a, &b, &mut c, idx, streams);
             carry.push(c);
         }
         // Send/Receive
@@ -1508,9 +1530,9 @@ impl Circuits {
                 let mut a = a.get_offset(k, self.chunk_size);
                 let mut b = b.get_offset(k, self.chunk_size);
 
-                self.xor_assign_many(&mut a, c, idx);
-                self.xor_assign_many(&mut b, c, idx);
-                self.and_many_pre(&a, &b, &mut tmp_c, idx);
+                self.xor_assign_many(&mut a, c, idx, streams);
+                self.xor_assign_many(&mut b, c, idx, streams);
+                self.and_many_pre(&a, &b, &mut tmp_c, idx, streams);
             }
             // Send/Receive
             result::group_start().unwrap();
@@ -1529,7 +1551,7 @@ impl Circuits {
             for (idx, (c, a)) in izip!(carry.iter_mut(), &a).enumerate() {
                 // Unused space used for temparary storage
                 let tmp_c = a.get_offset(0, self.chunk_size);
-                self.xor_assign_many(c, &tmp_c, idx);
+                self.xor_assign_many(c, &tmp_c, idx, streams);
             }
         }
 
@@ -1537,8 +1559,8 @@ impl Circuits {
         for (idx, (a, b, c)) in izip!(&a, &b, &mut carry).enumerate() {
             let a = a.get_offset(Self::BITS - 2, self.chunk_size);
             let b = b.get_offset(Self::BITS - 2, self.chunk_size);
-            self.xor_assign_many(c, &a, idx);
-            self.xor_assign_many(c, &b, idx);
+            self.xor_assign_many(c, &a, idx, streams);
+            self.xor_assign_many(c, &b, idx, streams);
         }
 
         Buffers::return_buffer(&mut self.buffers.u64_31c_1, s_);
@@ -1549,7 +1571,7 @@ impl Circuits {
 
     // Input has size ChunkSize
     // Result is in lowest u64 of the input
-    fn or_tree_on_gpus(&mut self, bits: &mut [ChunkShareView<u64>]) {
+    fn or_tree_on_gpus(&mut self, bits: &mut [ChunkShareView<u64>], streams: &[CudaStream]) {
         debug_assert_eq!(self.n_devices, bits.len());
         debug_assert!(self.chunk_size <= bits[0].len());
 
@@ -1561,11 +1583,11 @@ impl Circuits {
             for (idx, bit) in bits.iter().enumerate() {
                 let mut a = bit.get_offset(0, num);
                 let b = bit.get_offset(1, num);
-                self.or_many_pre_assign(&mut a, &b, idx);
+                self.or_many_pre_assign(&mut a, &b, idx, streams);
                 if mod_ != 0 {
                     let src = bit.get_offset(2 * num, 1);
                     let mut des = bit.get_offset(num, 1);
-                    self.assign_view(&mut des, &src, idx);
+                    self.assign_view(&mut des, &src, idx, streams);
                 }
             }
 
@@ -1587,7 +1609,13 @@ impl Circuits {
 
     // Same as or_tree_on_gpus, but on one GPU only
     // Result is in lowest u64 of the input
-    fn or_tree_on_gpu(&mut self, bits: &mut [ChunkShareView<u64>], size: usize, idx: usize) {
+    fn or_tree_on_gpu(
+        &mut self,
+        bits: &mut [ChunkShareView<u64>],
+        size: usize,
+        idx: usize,
+        streams: &[CudaStream],
+    ) {
         debug_assert_eq!(self.n_devices, bits.len());
         debug_assert!(size <= bits[idx].len());
 
@@ -1600,11 +1628,11 @@ impl Circuits {
 
             let mut a = bit.get_offset(0, num);
             let b = bit.get_offset(1, num);
-            self.or_many_pre_assign(&mut a, &b, idx);
+            self.or_many_pre_assign(&mut a, &b, idx, streams);
             if mod_ != 0 {
                 let src = bit.get_offset(2 * num, 1);
                 let mut des = bit.get_offset(num, 1);
-                self.assign_view(&mut des, &src, idx);
+                self.assign_view(&mut des, &src, idx, streams);
             }
 
             // Reshare
@@ -1618,7 +1646,7 @@ impl Circuits {
         }
     }
 
-    fn collect_graphic_result(&mut self, bits: &mut [ChunkShareView<u64>]) {
+    fn collect_graphic_result(&mut self, bits: &mut [ChunkShareView<u64>], streams: &[CudaStream]) {
         debug_assert!(self.n_devices <= self.chunk_size);
         let dev0 = &self.devs[0];
         let bit0 = &bits[0];
@@ -1629,6 +1657,7 @@ impl Circuits {
         for (dev, bit) in izip!(self.get_devices(), bits.iter()).skip(1) {
             let src = bit.get_range(0, 1);
 
+            // TODO: copies on streams?
             let mut a_ = dev.dtoh_sync_copy(&src.a).unwrap();
             let mut b_ = dev.dtoh_sync_copy(&src.b).unwrap();
 
@@ -1638,11 +1667,12 @@ impl Circuits {
 
         // Put results onto first GPU
         let mut des = bit0.get_range(1, self.n_devices);
+        // TODO: copies on streams?
         let a = dev0.htod_sync_copy(&a).unwrap();
         let b = dev0.htod_sync_copy(&b).unwrap();
         let c = ChunkShare::new(a, b);
 
-        self.assign_view(&mut des, &c.as_view(), 0);
+        self.assign_view(&mut des, &c.as_view(), 0, streams);
     }
 
     fn collapse_u64(&mut self, input: &mut ChunkShare<u64>, streams: &[CudaStream]) {
@@ -1696,11 +1726,11 @@ impl Circuits {
             bits.push(r.get_offset(0, self.chunk_size));
         }
 
-        self.or_tree_on_gpus(&mut bits);
+        self.or_tree_on_gpus(&mut bits, streams);
         if self.n_devices > 1 {
             // We have to collaps to one GPU
-            self.collect_graphic_result(&mut bits);
-            self.or_tree_on_gpu(&mut bits, self.n_devices, 0);
+            self.collect_graphic_result(&mut bits, streams);
+            self.or_tree_on_gpu(&mut bits, self.n_devices, 0, streams);
         }
 
         // Result is in lowest u64 bits on the first GPU
