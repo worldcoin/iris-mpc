@@ -398,9 +398,9 @@ fn distribute_insertions(results: &[usize], db_sizes: &[usize]) -> Vec<Vec<usize
 
 fn reset_results(
     devs: &[Arc<CudaDevice>],
-    dst: &[u64],
+    dst: &[CUdeviceptr],
     src: &[u32],
-    streams: &mut [&mut CUstream_st],
+    streams: &mut [*mut CUstream_st],
 ) {
     for i in 0..devs.len() {
         devs[i].bind_to_thread().unwrap();
@@ -966,11 +966,8 @@ async fn main() -> eyre::Result<()> {
         let thread_code_db_slices = slice_tuples_to_ptrs(&code_db_slices);
         let thread_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
         let thread_request_ids = batch.request_ids.clone();
-
         let thread_sender = tx.clone();
-        let thread_request_ids = batch.request_ids.clone();
 
-        let thread_sender = tx.clone();
 
         previous_thread_handle = Some(spawn_blocking(move || {
             // Wait for Phase 1 to finish
@@ -1135,12 +1132,6 @@ async fn main() -> eyre::Result<()> {
                 .enumerate()
                 .filter(|&(_idx, &num)| num == u32::MAX)
                 .map(|(idx, _num)| idx)
-            let mut merged_results = get_merged_results(&host_results, thread_devs.len());
-            let insertion_list = merged_results
-                .iter()
-                .enumerate()
-                .filter(|&(_idx, &num)| num == u32::MAX)
-                .map(|(idx, _num)| idx)
                 .collect::<Vec<_>>();
 
             let insertion_list = distribute_insertions(&insertion_list, &db_sizes);
@@ -1149,23 +1140,11 @@ async fn main() -> eyre::Result<()> {
             let matches =
                 calculate_insertion_indices(&mut merged_results, &insertion_list, &db_sizes);
 
-            let insertion_list = distribute_insertions(&insertion_list, &db_sizes);
-
-            // Calculate the new indices for the inserted queries
-            let matches =
-                calculate_insertion_indices(&mut merged_results, &insertion_list, &db_sizes);
-
-            // DEBUG
-            println!("Insertion list: {:?}", insertion_list);
 
             for i in 0..thread_devs.len() {
                 thread_devs[i].bind_to_thread().unwrap();
                 let mut old_db_size = *thread_current_db_size_mutex[i].lock().unwrap();
                 for insertion_idx in insertion_list[i].clone() {
-                    println!(
-                        "Inserting query {} {:?} at {} on dev {}",
-                        insertion_idx, thread_request_ids[insertion_idx], old_db_size, i
-                    );
                     // Append to codes and masks db
                     for (db, query, sums) in [
                         (
