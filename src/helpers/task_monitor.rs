@@ -1,6 +1,6 @@
 //! Long-running async task monitoring.
 
-use std::panic;
+use std::{ops::{Deref, DerefMut}, panic};
 
 use tokio::task::{JoinError, JoinSet};
 
@@ -13,6 +13,22 @@ use tokio::task::{JoinError, JoinSet};
 #[derive(Debug, Default)]
 pub struct TaskMonitor {
     pub tasks: JoinSet<()>,
+}
+
+// Instead of writing trivial wrappers for all the useful JoinSet methods, we can just Deref to
+// the inner JoinSet.
+impl Deref for TaskMonitor {
+    type Target = JoinSet<()>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.tasks
+    }
+}
+
+impl DerefMut for TaskMonitor {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.tasks
+    }
 }
 
 impl TaskMonitor {
@@ -33,11 +49,6 @@ impl TaskMonitor {
             finished_task.expect("Monitored task was panicked or cancelled");
             panic!("Monitored task unexpectedly finished without an error");
         }
-    }
-
-    /// Aborts all tasks, but doesn't wait for them to finish.
-    pub fn abort_all(&mut self) {
-        self.tasks.abort_all();
     }
 
     /// Panics if any of the `server_tasks` have finished with a panic or hang.

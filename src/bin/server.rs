@@ -24,6 +24,7 @@ use gpu_iris_mpc::{
         kms_dh::derive_shared_secret,
         mmap::{read_mmap_file, write_mmap_file},
         sqs::{ResultEvent, SMPCRequest, SQSMessage},
+        task_monitor::TaskMonitor,
     },
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     threshold_ring::protocol::{ChunkShare, Circuits},
@@ -40,7 +41,7 @@ use std::{
 use tokio::{
     runtime,
     sync::mpsc,
-    task::{spawn_blocking, JoinHandle, JoinSet},
+    task::{spawn_blocking, JoinHandle},
     time::sleep,
 };
 
@@ -394,37 +395,6 @@ pub fn calculate_insertion_indices(
     }
 }
 
-/// Panics if any of the `server_tasks` have finished unexpectedly, with or without a panic.
-/// Assumes that the tasks are ongoing, so any finish is an error.
-///
-/// Call this method after adding each new task, and before starting a new batch.
-#[track_caller]
-fn check_tasks(server_tasks: &mut JoinSet<()>) {
-    // Any finished task is an error, so we just need to check for the first one.
-    if let Some(finished_task) = server_tasks.try_join_next() {
-        finished_task.unwrap();
-        panic!("Server task unexpectedly finished without an error");
-    }
-}
-
-/// Panics if any of the `server_tasks` have finished with a panic or hang.
-/// (Ignores tasks that have finished normally).
-///
-/// When exiting the program, call `server_tasks.abort_all()` and wait for the tasks to finish,
-/// then call this function.
-#[track_caller]
-fn check_tasks_finished(server_tasks: &mut JoinSet<()>) {
-    // Any hung task is an error, so we need to check they've all finished.
-    while let Some(finished_task) = server_tasks.try_join_next() {
-        finished_task.unwrap();
-    }
-
-    if !server_tasks.is_empty() {
-        // If this panics, try waiting for longer between the abort and this function call.
-        panic!("{} server tasks hung even when aborted", server_tasks.len());
-    }    
-}
-
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     let Opt {
@@ -504,7 +474,7 @@ async fn main() -> eyre::Result<()> {
     println!("Starting engines...");
 
     let device_manager = Arc::new(DeviceManager::init());
-    let mut server_tasks: JoinSet<()>  = JoinSet::new();
+    let mut server_tasks  = TaskMonitor::new();
 
     // Phase 1 Setup
     let mut codes_engine = ShareDB::init(
@@ -518,7 +488,7 @@ async fn main() -> eyre::Result<()> {
         Some(4000),
         Some(&mut server_tasks),
     );
-    check_tasks(&mut server_tasks);
+    server_tasks.check_tasks();
 
     let mut masks_engine = ShareDB::init(
         party_id,
@@ -531,7 +501,7 @@ async fn main() -> eyre::Result<()> {
         Some(4001),
         Some(&mut server_tasks),
     );
-    check_tasks(&mut server_tasks);
+    server_tasks.check_tasks();
 
     let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE, DB_SIZE + DB_BUFFER, true);
     let mask_db_slices = masks_engine.load_db(&masks_db, DB_SIZE, DB_SIZE + DB_BUFFER, true);
@@ -548,7 +518,7 @@ async fn main() -> eyre::Result<()> {
         Some(4002),
         Some(&mut server_tasks),
     );
-    check_tasks(&mut server_tasks);
+    server_tasks.check_tasks();
 
     let mut batch_masks_engine = ShareDB::init(
         party_id,
@@ -561,7 +531,7 @@ async fn main() -> eyre::Result<()> {
         Some(4003),
         Some(&mut server_tasks),
     );
-    check_tasks(&mut server_tasks);
+    server_tasks.check_tasks();
 
     // Phase 2 Setup
     let phase2_chunk_size =
@@ -579,7 +549,7 @@ async fn main() -> eyre::Result<()> {
         Some(4004),
         Some(&mut server_tasks),
     )));
-    check_tasks(&mut server_tasks);
+    server_tasks.check_tasks();
 
     let phase2 = Arc::new(Mutex::new(Circuits::new(
         party_id,
@@ -590,7 +560,7 @@ async fn main() -> eyre::Result<()> {
         Some(4005),
         Some(&mut server_tasks),
     )));
-    check_tasks(&mut server_tasks);
+    server_tasks.check_tasks();
 
     let distance_comparator = Arc::new(Mutex::new(DistanceComparator::init(QUERIES)));
 
@@ -653,7 +623,7 @@ async fn main() -> eyre::Result<()> {
             }
         }
     });
-    check_tasks(&mut server_tasks);
+    server_tasks.check_tasks();
 
     println!("All systems ready.");
 
@@ -684,7 +654,7 @@ async fn main() -> eyre::Result<()> {
         let batch = receive_batch(party_id, &sqs_client, &queue).await?;
         println!("Received batch in {:?}", now.elapsed());
         batch_times += now.elapsed();
-        check_tasks(&mut server_tasks);
+        server_tasks.check_tasks();
 
         let (code_query, mask_query, code_query_insert, mask_query_insert) =
             spawn_blocking(move || {
@@ -1184,7 +1154,7 @@ async fn main() -> eyre::Result<()> {
         }));
 
         // Prepare for next batch
-        check_tasks(&mut server_tasks);
+        server_tasks.check_tasks();
 
         timer_events.push(timers);
 
@@ -1209,7 +1179,7 @@ async fn main() -> eyre::Result<()> {
     );
 
     // Clean up server tasks, then wait for them to finish
-    check_tasks(&mut server_tasks);
+    server_tasks.check_tasks();
     server_tasks.abort_all();
 
     sleep(Duration::from_secs(5)).await;
@@ -1234,7 +1204,7 @@ async fn main() -> eyre::Result<()> {
         }
     }
 
-    check_tasks_finished(&mut server_tasks);
+    server_tasks.check_tasks_finished();
 
     Ok(())
 }
