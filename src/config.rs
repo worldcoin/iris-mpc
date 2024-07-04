@@ -1,11 +1,8 @@
-use std::path::Path;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
-pub fn load_config<T>(
-    prefix: &str,
-    config_path: Option<&Path>,
-) -> eyre::Result<T>
+pub fn load_config<T>(prefix: &str, config_path: Option<&Path>) -> eyre::Result<T>
 where
     T: DeserializeOwned,
 {

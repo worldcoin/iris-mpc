@@ -9,6 +9,9 @@ use aws_sdk_sqs::Client as SqsClient;
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use eyre::{Context, ContextCompat};
+use gpu_iris_mpc::helpers::tracing::{
+    construct_message_attributes, NODE_ID_MESSAGE_ATTRIBUTE_NAME,
+};
 use gpu_iris_mpc::{
     helpers::sqs::{ResultEvent, SMPCRequest},
     setup::{
@@ -21,7 +24,6 @@ use serde_json::to_string;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{spawn, sync::Mutex, time::sleep};
 use uuid::Uuid;
-use gpu_iris_mpc::helpers::tracing::{construct_message_attributes, NODE_ID_MESSAGE_ATTRIBUTE_NAME};
 
 const N_QUERIES: usize = 32 * 20;
 const REGION: &str = "eu-north-1";
@@ -235,9 +237,9 @@ async fn main() -> eyre::Result<()> {
             message_attributes.insert(
                 NODE_ID_MESSAGE_ATTRIBUTE_NAME.to_string(),
                 MessageAttributeValue::builder()
-                .data_type("String")
-                .string_value(i.to_string())
-                .build()?
+                    .data_type("String")
+                    .string_value(i.to_string())
+                    .build()?,
             );
 
             messages.push(

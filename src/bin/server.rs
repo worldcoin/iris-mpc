@@ -14,25 +14,29 @@ use cudarc::driver::{
     CudaDevice, CudaSlice,
 };
 use gpu_iris_mpc::{
-    config::Config, dot::{
+    config::Config,
+    dot::{
         device_manager::DeviceManager,
         distance_comparator::DistanceComparator,
         share_db::{preprocess_query, ShareDB},
         IRIS_CODE_LENGTH, ROTATIONS,
-    }, helpers::{
+    },
+    helpers::{
         device_ptrs, device_ptrs_to_slices,
         kms_dh::derive_shared_secret,
         mmap::{read_mmap_file, write_mmap_file},
         sqs::{ResultEvent, SMPCRequest, SQSMessage},
-    }, setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB}, threshold_ring::protocol::{ChunkShare, Circuits}
+    },
+    setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
+    threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use lazy_static::lazy_static;
 use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{
-    path::PathBuf,
     fs::metadata,
     mem,
+    path::PathBuf,
     sync::{atomic::AtomicUsize, Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -49,7 +53,9 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 use gpu_iris_mpc::config;
-use gpu_iris_mpc::helpers::tracing::{TRACE_ID_MESSAGE_ATTRIBUTE_NAME, SPAN_ID_MESSAGE_ATTRIBUTE_NAME, NODE_ID_MESSAGE_ATTRIBUTE_NAME};
+use gpu_iris_mpc::helpers::tracing::{
+    NODE_ID_MESSAGE_ATTRIBUTE_NAME, SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
+};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
@@ -158,25 +164,24 @@ async fn receive_batch(
             .send()
             .await?;
 
-
-        if let Some(messages)  = rcv_message_output.messages{
-            for sqs_message in messages{
+        if let Some(messages) = rcv_message_output.messages {
+            for sqs_message in messages {
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())?;
                 let message: SMPCRequest = serde_json::from_str(&message.message)?;
 
                 let message_attributes = sqs_message.message_attributes.unwrap_or_default();
-                
+
                 let mut batch_metadata = BatchMetadata::default();
 
-                if let  Some(node_id) = message_attributes.get(NODE_ID_MESSAGE_ATTRIBUTE_NAME) {
+                if let Some(node_id) = message_attributes.get(NODE_ID_MESSAGE_ATTRIBUTE_NAME) {
                     let node_id = node_id.string_value().unwrap().clone();
                     batch_metadata.node_id = node_id.to_string();
-                } 
-                if let  Some(trace_id) = message_attributes.get(TRACE_ID_MESSAGE_ATTRIBUTE_NAME) {
+                }
+                if let Some(trace_id) = message_attributes.get(TRACE_ID_MESSAGE_ATTRIBUTE_NAME) {
                     let trace_id = trace_id.string_value().unwrap().clone();
                     batch_metadata.trace_id = trace_id.to_string();
                 }
-                if let  Some(span_id) = message_attributes.get(SPAN_ID_MESSAGE_ATTRIBUTE_NAME) {
+                if let Some(span_id) = message_attributes.get(SPAN_ID_MESSAGE_ATTRIBUTE_NAME) {
                     let span_id = span_id.string_value().unwrap().clone();
                     batch_metadata.span_id = span_id.to_string();
                 }
@@ -204,7 +209,7 @@ async fn receive_batch(
                             mask_share.all_rotations(),
                         )
                     })
-                        .await?;
+                    .await?;
 
                 batch_query.db.code.extend(db_iris_shares);
                 batch_query.db.mask.extend(db_mask_shares);
@@ -218,7 +223,7 @@ async fn receive_batch(
                     .receipt_handle(sqs_message.receipt_handle.unwrap())
                     .send()
                     .await?;
-                }
+            }
         }
     }
 
@@ -246,8 +251,8 @@ fn slice_tuples_to_ptrs(
     (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
 ) {
     (
-        (device_ptrs(&tuple.0.0), device_ptrs(&tuple.0.1)),
-        (device_ptrs(&tuple.1.0), device_ptrs(&tuple.1.1)),
+        (device_ptrs(&tuple.0 .0), device_ptrs(&tuple.0 .1)),
+        (device_ptrs(&tuple.1 .0), device_ptrs(&tuple.1 .1)),
     )
 }
 
@@ -331,7 +336,7 @@ fn dtod_at_offset(
             len,
             stream_ptr,
         )
-            .unwrap();
+        .unwrap();
     }
 }
 
@@ -729,7 +734,7 @@ async fn main() -> eyre::Result<()> {
                 let mask_query_insert = prepare_query_shares(batch.db.mask);
                 (code_query, mask_query, code_query_insert, mask_query_insert)
             })
-                .await?;
+            .await?;
 
         let mut timers = vec![];
 
@@ -824,8 +829,8 @@ async fn main() -> eyre::Result<()> {
         codes_engine.dot(
             &code_query,
             &(
-                device_ptrs(&code_db_slices.0.0),
-                device_ptrs(&code_db_slices.0.1),
+                device_ptrs(&code_db_slices.0 .0),
+                device_ptrs(&code_db_slices.0 .1),
             ),
             &current_db_size_stream,
             request_streams,
@@ -835,8 +840,8 @@ async fn main() -> eyre::Result<()> {
         masks_engine.dot(
             &mask_query,
             &(
-                device_ptrs(&mask_db_slices.0.0),
-                device_ptrs(&mask_db_slices.0.1),
+                device_ptrs(&mask_db_slices.0 .0),
+                device_ptrs(&mask_db_slices.0 .1),
             ),
             &current_db_size_stream,
             request_streams,
@@ -851,8 +856,8 @@ async fn main() -> eyre::Result<()> {
         codes_engine.dot_reduce(
             &code_query_sums,
             &(
-                device_ptrs(&code_db_slices.1.0),
-                device_ptrs(&code_db_slices.1.1),
+                device_ptrs(&code_db_slices.1 .0),
+                device_ptrs(&code_db_slices.1 .1),
             ),
             &current_db_size_stream,
             request_streams,
@@ -860,8 +865,8 @@ async fn main() -> eyre::Result<()> {
         masks_engine.dot_reduce(
             &mask_query_sums,
             &(
-                device_ptrs(&mask_db_slices.1.0),
-                device_ptrs(&mask_db_slices.1.1),
+                device_ptrs(&mask_db_slices.1 .0),
+                device_ptrs(&mask_db_slices.1 .1),
             ),
             &current_db_size_stream,
             request_streams,
@@ -1137,7 +1142,7 @@ async fn main() -> eyre::Result<()> {
                         ),
                     ] {
                         dtod_at_offset(
-                            db.0.0[i],
+                            db.0 .0[i],
                             old_db_size * IRIS_CODE_LENGTH,
                             query.0[i],
                             IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
@@ -1146,7 +1151,7 @@ async fn main() -> eyre::Result<()> {
                         );
 
                         dtod_at_offset(
-                            db.0.1[i],
+                            db.0 .1[i],
                             old_db_size * IRIS_CODE_LENGTH,
                             query.1[i],
                             IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
@@ -1155,7 +1160,7 @@ async fn main() -> eyre::Result<()> {
                         );
 
                         dtod_at_offset(
-                            db.1.0[i],
+                            db.1 .0[i],
                             old_db_size * mem::size_of::<u32>(),
                             sums.0[i],
                             mem::size_of::<u32>() * 15
@@ -1165,7 +1170,7 @@ async fn main() -> eyre::Result<()> {
                         );
 
                         dtod_at_offset(
-                            db.1.1[i],
+                            db.1 .1[i],
                             old_db_size * mem::size_of::<u32>(),
                             sums.1[i],
                             mem::size_of::<u32>() * 15
@@ -1211,7 +1216,7 @@ async fn main() -> eyre::Result<()> {
                         *&mut thread_current_stream_event[i],
                         *&mut thread_streams[i],
                     )
-                        .unwrap();
+                    .unwrap();
 
                     // DEBUG: emit event to measure time for e2e process
                     event::record(*&mut thread_end_timer[i], *&mut thread_streams[i]).unwrap();
