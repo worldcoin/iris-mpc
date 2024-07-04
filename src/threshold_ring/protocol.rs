@@ -6,7 +6,7 @@ use crate::{
 use axum::{routing::get, Router};
 use cudarc::{
     driver::{
-        result::{memcpy_dtoh_async, memcpy_htod_async},
+        result::{memcpy_dtoh_async, memcpy_htod_async, stream},
         CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, CudaViewMut, DevicePtr,
         DevicePtrMut, DeviceRepr, DeviceSlice, DriverError, LaunchAsync, LaunchConfig,
     },
@@ -368,6 +368,13 @@ impl Circuits {
     pub fn synchronize_all(&self) {
         for dev in self.devs.iter() {
             dev.synchronize().unwrap();
+        }
+    }
+
+    pub fn synchronize_streams(&self, streams: &[CudaStream]) {
+        for (dev, stream) in izip!(self.devs.iter(), streams.iter()) {
+            dev.bind_to_thread().unwrap();
+            unsafe { stream::synchronize(stream.stream).unwrap() }
         }
     }
 

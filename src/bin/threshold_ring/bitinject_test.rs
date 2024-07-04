@@ -179,13 +179,12 @@ async fn main() -> eyre::Result<()> {
 
         let now = Instant::now();
         party.bit_inject_ot(&code_gpu, &mut res, &streams);
-        party.synchronize_all();
         println!("compute time: {:?}", now.elapsed());
 
         let now = Instant::now();
         let result = open(&mut party, &mut res, &streams);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
-
+        party.synchronize_streams(&streams);
         let mut correct = true;
         for (i, (r, r_)) in izip!(&result, &real_result).enumerate() {
             if r != r_ {
