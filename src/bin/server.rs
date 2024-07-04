@@ -28,6 +28,7 @@ use gpu_iris_mpc::{
         sqs::{ResultEvent, SMPCRequest, SQSMessage},
     },
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
+    store::Store,
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use lazy_static::lazy_static;
@@ -153,6 +154,7 @@ struct BatchQuery {
     pub metadata: Vec<BatchMetadata>,
     pub query: BatchQueryEntries,
     pub db: BatchQueryEntries,
+    pub store: BatchQueryEntries,
 }
 
 async fn receive_batch(
@@ -195,32 +197,48 @@ async fn receive_batch(
                 batch_query.request_ids.push(message.clone().request_id);
                 batch_query.metadata.push(batch_metadata);
 
-                let (db_iris_shares, db_mask_shares, iris_shares, mask_shares) =
-                    spawn_blocking(move || {
-                        let mut iris_share =
-                            GaloisRingIrisCodeShare::new(party_id + 1, message.get_iris_shares());
-                        let mut mask_share =
-                            GaloisRingIrisCodeShare::new(party_id + 1, message.get_mask_shares());
+            let (
+                store_iris_shares,
+                store_mask_shares,
+                db_iris_shares,
+                db_mask_shares,
+                iris_shares,
+                mask_shares,
+            ) = spawn_blocking(move || {
+                let mut iris_share =
+                    GaloisRingIrisCodeShare::new(party_id + 1, message.get_iris_shares());
+                let mut mask_share =
+                    GaloisRingIrisCodeShare::new(party_id + 1, message.get_mask_shares());
 
-                        let db_iris_shares = iris_share.all_rotations();
-                        let db_mask_shares = mask_share.all_rotations();
+                // Original for storage.
+                let store_iris_shares = iris_share.clone();
+                let store_mask_shares = mask_share.clone();
 
-                        GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
-                        GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut mask_share);
+                // With rotations for in-memory database.
+                let db_iris_shares = iris_share.all_rotations();
+                let db_mask_shares = mask_share.all_rotations();
 
-                        (
-                            db_iris_shares,
-                            db_mask_shares,
-                            iris_share.all_rotations(),
-                            mask_share.all_rotations(),
-                        )
-                    })
-                    .await?;
+                // With Lagrange interpolation.
+                GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
+                GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut mask_share);
 
-                batch_query.db.code.extend(db_iris_shares);
-                batch_query.db.mask.extend(db_mask_shares);
-                batch_query.query.code.extend(iris_shares);
-                batch_query.query.mask.extend(mask_shares);
+                (
+                    store_iris_shares,
+                    store_mask_shares,
+                    db_iris_shares,
+                    db_mask_shares,
+                    iris_share.all_rotations(),
+                    mask_share.all_rotations(),
+                )
+            })
+            .await?;
+
+            batch_query.store.code.push(store_iris_shares);
+            batch_query.store.mask.push(store_mask_shares);
+            batch_query.db.code.extend(db_iris_shares);
+            batch_query.db.mask.extend(db_mask_shares);
+            batch_query.query.code.extend(iris_shares);
+            batch_query.query.mask.extend(mask_shares);
 
                 // TODO: we should only delete after processing
                 client
@@ -501,6 +519,7 @@ async fn main() -> eyre::Result<()> {
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);
+    let store = Store::new_from_env().await?;
 
     // Init RNGs
     let own_key_id = KMS_KEY_IDS[party_id];
@@ -517,47 +536,53 @@ async fn main() -> eyre::Result<()> {
     );
 
     // Generate or load DB
-    let (codes_db, masks_db) = if metadata(&code_db_path).is_ok() && metadata(&mask_db_path).is_ok()
-    {
-        (
-            read_mmap_file(&code_db_path)?,
-            read_mmap_file(&mask_db_path)?,
-        )
-    } else {
-        let mut rng = StdRng::seed_from_u64(RNG_SEED);
-        let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
+    let (mut codes_db, mut masks_db) =
+        if metadata(&code_db_path).is_ok() && metadata(&mask_db_path).is_ok() {
+            (
+                read_mmap_file(&code_db_path)?,
+                read_mmap_file(&mask_db_path)?,
+            )
+        } else {
+            let mut rng = StdRng::seed_from_u64(RNG_SEED);
+            let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
-        let codes_db = db
-            .db
-            .iter()
-            .map(|iris| {
-                GaloisRingIrisCodeShare::encode_iris_code(
-                    &iris.code,
-                    &iris.mask,
-                    &mut StdRng::seed_from_u64(RNG_SEED),
-                )[party_id]
-                    .coefs
-            })
-            .flatten()
-            .collect::<Vec<_>>();
+            let codes_db = db
+                .db
+                .iter()
+                .map(|iris| {
+                    GaloisRingIrisCodeShare::encode_iris_code(
+                        &iris.code,
+                        &iris.mask,
+                        &mut StdRng::seed_from_u64(RNG_SEED),
+                    )[party_id]
+                        .coefs
+                })
+                .flatten()
+                .collect::<Vec<_>>();
 
-        let masks_db = db
-            .db
-            .iter()
-            .map(|iris| {
-                GaloisRingIrisCodeShare::encode_mask_code(
-                    &iris.mask,
-                    &mut StdRng::seed_from_u64(RNG_SEED),
-                )[party_id]
-                    .coefs
-            })
-            .flatten()
-            .collect::<Vec<_>>();
+            let masks_db = db
+                .db
+                .iter()
+                .map(|iris| {
+                    GaloisRingIrisCodeShare::encode_mask_code(
+                        &iris.mask,
+                        &mut StdRng::seed_from_u64(RNG_SEED),
+                    )[party_id]
+                        .coefs
+                })
+                .flatten()
+                .collect::<Vec<_>>();
 
-        write_mmap_file(&code_db_path, &codes_db)?;
-        write_mmap_file(&mask_db_path, &masks_db)?;
-        (codes_db, masks_db)
-    };
+            write_mmap_file(&code_db_path, &codes_db)?;
+            write_mmap_file(&mask_db_path, &masks_db)?;
+            (codes_db, masks_db)
+        };
+
+    // Load DB from persistent storage.
+    for iris in store.iter_irises().await? {
+        codes_db.extend(iris.code());
+        masks_db.extend(iris.mask());
+    }
 
     println!("Starting engines...");
 
@@ -675,13 +700,34 @@ async fn main() -> eyre::Result<()> {
         .collect::<Vec<_>>();
 
     // Start thread that will be responsible for communicating back the results
-    let (tx, mut rx) = mpsc::channel::<(Vec<u32>, Vec<String>, Vec<bool>)>(32); // TODO: pick some buffer value
+    let (tx, mut rx) = mpsc::channel::<(Vec<u32>, Vec<String>, Vec<bool>, BatchQueryEntries)>(32); // TODO: pick some buffer value
     let rx_sns_client = sns_client.clone();
 
     tokio::spawn(async move {
-        while let Some((message, request_ids, matches)) = rx.recv().await {
-            for (i, &idx_result) in message.iter().enumerate() {
-                // TODO: write each result to postgres
+        while let Some((merged_results, request_ids, matches, query_store)) = rx.recv().await {
+            for (i, &idx_result) in merged_results.iter().enumerate() {
+                // Insert non-matching queries into the persistent store.
+                {
+                    let codes_and_masks: Vec<(&[u16], &[u16])> = matches
+                        .iter()
+                        .enumerate()
+                        .filter_map(
+                            // Find the indices of non-matching queries in the batch.
+                            |(query_idx, is_match)| if !is_match { Some(query_idx) } else { None },
+                        )
+                        .map(|query_idx| {
+                            // Get the original vectors from `receive_batch`.
+                            let code = &query_store.code[query_idx].coefs[..];
+                            let mask = &query_store.mask[query_idx].coefs[..];
+                            (code, mask)
+                        })
+                        .collect();
+
+                    store
+                        .insert_irises(&codes_and_masks)
+                        .await
+                        .expect("failed to persist queries");
+                }
 
                 // Notify consumers about result
                 println!("Sending results back to SNS...");
@@ -706,7 +752,6 @@ async fn main() -> eyre::Result<()> {
 
     // Main loop
     for request_counter in 0..N_BATCHES {
-
         // **Tensor format of queries**
         //
         // The functions `receive_batch` and `prepare_query_shares` will prepare the _query_ variables as `Vec<Vec<u8>>` formatted as follows:
@@ -745,7 +790,7 @@ async fn main() -> eyre::Result<()> {
         println!("Received batch in {:?}", now.elapsed());
         batch_times += now.elapsed();
 
-        let (code_query, mask_query, code_query_insert, mask_query_insert) =
+        let (code_query, mask_query, code_query_insert, mask_query_insert, query_store) =
             spawn_blocking(move || {
                 // *Query* variant including Lagrange interpolation.
                 let code_query = prepare_query_shares(batch.query.code);
@@ -753,7 +798,13 @@ async fn main() -> eyre::Result<()> {
                 // *Storage* variant (no interpolation).
                 let code_query_insert = prepare_query_shares(batch.db.code);
                 let mask_query_insert = prepare_query_shares(batch.db.mask);
-                (code_query, mask_query, code_query_insert, mask_query_insert)
+                (
+                    code_query,
+                    mask_query,
+                    code_query_insert,
+                    mask_query_insert,
+                    batch.store,
+                )
             })
             .await?;
 
@@ -1118,6 +1169,7 @@ async fn main() -> eyre::Result<()> {
             thread_phase2.return_result_buffer(res);
 
             // Merge results and fetch matching indices
+            // Format: host_results[device_index][query_index]
             let host_results = tmp_distance_comparator.merge_results(
                 &thread_request_results_batch,
                 &thread_request_results,
@@ -1126,7 +1178,10 @@ async fn main() -> eyre::Result<()> {
             );
 
             // Evaluate the results across devices
+            // Format: merged_results[query_index]
             let mut merged_results = get_merged_results(&host_results, thread_devs.len());
+
+            // List the indices of the queries that did not match.
             let insertion_list = merged_results
                 .iter()
                 .enumerate()
@@ -1134,6 +1189,7 @@ async fn main() -> eyre::Result<()> {
                 .map(|(idx, _num)| idx)
                 .collect::<Vec<_>>();
 
+            // Spread the insertions across devices.
             let insertion_list = distribute_insertions(&insertion_list, &db_sizes);
 
             // Calculate the new indices for the inserted queries
@@ -1242,7 +1298,7 @@ async fn main() -> eyre::Result<()> {
 
             // Pass to internal sender thread
             thread_sender
-                .try_send((merged_results, thread_request_ids, matches))
+                .try_send((merged_results, thread_request_ids, matches, query_store))
                 .unwrap();
 
             // Reset the results buffers for reuse
