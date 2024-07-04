@@ -1,5 +1,8 @@
 use crate::{
-    helpers::id_wrapper::{http_root, IdWrapper},
+    helpers::{
+        dtoh_on_stream_sync, htod_on_stream_sync,
+        id_wrapper::{http_root, IdWrapper},
+    },
     rng::chacha_corr::ChaChaCudaCorrRng,
     threshold_ring::cuda::PTX_SRC,
 };
@@ -1782,17 +1785,17 @@ impl Circuits {
     fn collect_graphic_result(&mut self, bits: &mut [ChunkShareView<u64>], streams: &[CudaStream]) {
         debug_assert!(self.n_devices <= self.chunk_size);
         let dev0 = &self.devs[0];
+        let stream0 = &streams[0];
         let bit0 = &bits[0];
 
         // Get results onto CPU
         let mut a = Vec::with_capacity(self.n_devices - 1);
         let mut b = Vec::with_capacity(self.n_devices - 1);
-        for (dev, bit) in izip!(self.get_devices(), bits.iter()).skip(1) {
+        for (dev, stream, bit) in izip!(self.get_devices(), streams, bits.iter()).skip(1) {
             let src = bit.get_range(0, 1);
 
-            // TODO: copies on streams?
-            let mut a_ = dev.dtoh_sync_copy(&src.a).unwrap();
-            let mut b_ = dev.dtoh_sync_copy(&src.b).unwrap();
+            let mut a_ = dtoh_on_stream_sync(&src.a, &dev, stream).unwrap();
+            let mut b_ = dtoh_on_stream_sync(&src.b, &dev, stream).unwrap();
 
             a.push(a_.pop().unwrap());
             b.push(b_.pop().unwrap());
@@ -1800,9 +1803,8 @@ impl Circuits {
 
         // Put results onto first GPU
         let mut des = bit0.get_range(1, self.n_devices);
-        // TODO: copies on streams?
-        let a = dev0.htod_sync_copy(&a).unwrap();
-        let b = dev0.htod_sync_copy(&b).unwrap();
+        let a = htod_on_stream_sync(&a, dev0, stream0).unwrap();
+        let b = htod_on_stream_sync(&b, dev0, stream0).unwrap();
         let c = ChunkShare::new(a, b);
 
         self.assign_view(&mut des, &c.as_view(), 0, streams);

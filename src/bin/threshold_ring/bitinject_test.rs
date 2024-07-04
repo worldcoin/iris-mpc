@@ -62,8 +62,8 @@ fn to_gpu(
         a.chunks(INPUTS_PER_GPU_SIZE / 64),
         b.chunks(INPUTS_PER_GPU_SIZE / 64)
     ) {
-        let a_ = htod_on_stream_sync(a, dev, &stream).unwrap();
-        let b_ = htod_on_stream_sync(b, dev, &stream).unwrap();
+        let a_ = htod_on_stream_sync(a, dev, stream).unwrap();
+        let b_ = htod_on_stream_sync(b, dev, stream).unwrap();
         result.push(ChunkShare::new(a_, b_));
     }
 
