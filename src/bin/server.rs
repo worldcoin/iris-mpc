@@ -431,7 +431,7 @@ async fn main() -> eyre::Result<()> {
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);
-    let store = Arc::new(Mutex::new(Store::new_from_env().await?));
+    let store = Store::new_from_env().await?;
 
     // Init RNGs
     let own_key_id = KMS_KEY_IDS[party_id];
@@ -491,7 +491,7 @@ async fn main() -> eyre::Result<()> {
         };
 
     // Load DB from persistent storage.
-    for iris in store.lock().unwrap().iter_irises().await? {
+    for iris in store.iter_irises().await? {
         codes_db.extend(iris.code());
         masks_db.extend(iris.mask());
     }
@@ -612,12 +612,33 @@ async fn main() -> eyre::Result<()> {
         .collect::<Vec<_>>();
 
     // Start thread that will be responsible for communicating back the results
-    let (tx, mut rx) = mpsc::channel::<(Vec<u32>, Vec<String>, Vec<bool>)>(32); // TODO: pick some buffer value
+    let (tx, mut rx) = mpsc::channel::<(Vec<u32>, Vec<String>, Vec<bool>, BatchQueryEntries)>(32); // TODO: pick some buffer value
     let rx_sns_client = sns_client.clone();
     tokio::spawn(async move {
-        while let Some((message, request_ids, matches)) = rx.recv().await {
-            for (i, &idx_result) in message.iter().enumerate() {
-                // TODO: write each result to postgres
+        while let Some((merged_results, request_ids, matches, query_store)) = rx.recv().await {
+            for (i, &idx_result) in merged_results.iter().enumerate() {
+                // Insert non-matching queries into the persistent store.
+                {
+                    let codes_and_masks: Vec<(&[u16], &[u16])> = matches
+                        .iter()
+                        .enumerate()
+                        .filter_map(
+                            // Find the indices of non-matching queries in the batch.
+                            |(query_idx, is_match)| if !is_match { Some(query_idx) } else { None },
+                        )
+                        .map(|query_idx| {
+                            // Get the original vectors from `receive_batch`.
+                            let code = &query_store.code[query_idx].coefs[..];
+                            let mask = &query_store.mask[query_idx].coefs[..];
+                            (code, mask)
+                        })
+                        .collect();
+
+                    store
+                        .insert_irises(&codes_and_masks)
+                        .await
+                        .expect("failed to persist queries");
+                }
 
                 // Notify consumers about result
                 println!("Sending results back to SNS...");
@@ -893,7 +914,6 @@ async fn main() -> eyre::Result<()> {
         let thread_request_ids = batch.request_ids.clone();
 
         let thread_sender = tx.clone();
-        let store = Arc::clone(&store);
 
         previous_thread_handle = Some(spawn_blocking(move || {
             // Wait for Phase 1 to finish
@@ -1009,6 +1029,7 @@ async fn main() -> eyre::Result<()> {
             thread_phase2.return_result_buffer(res);
 
             // Merge results and fetch matching indices
+            // Format: host_results[device_index][query_index]
             let host_results = tmp_distance_comparator.merge_results(
                 &thread_request_results_batch,
                 &thread_request_results,
@@ -1017,27 +1038,16 @@ async fn main() -> eyre::Result<()> {
             );
 
             // Evaluate the results across devices
+            // Format: merged_results[query_index]
             let mut merged_results = get_merged_results(&host_results, thread_devs.len());
+
+            // List the indices of the queries that did not match.
             let insertion_list = merged_results
                 .iter()
                 .enumerate()
                 .filter(|&(_idx, &num)| num == u32::MAX)
                 .map(|(idx, _num)| idx)
                 .collect::<Vec<_>>();
-
-            // Insert non-matching queries into the persistent store.
-            {
-                let codes_and_masks: Vec<(&[u16], &[u16])> = insertion_list
-                    .iter()
-                    .map(|&query_idx| {
-                        let code = &query_store.code[query_idx].coefs[..];
-                        let mask = &query_store.mask[query_idx].coefs[..];
-                        (code, mask)
-                    })
-                    .collect();
-                let store = store.lock().unwrap();
-                store.insert_irises(&codes_and_masks); // TODO: await and errors.
-            }
 
             // Spread the insertions across devices.
             let insertion_list = distribute_insertions(&insertion_list, &db_sizes);
@@ -1150,7 +1160,7 @@ async fn main() -> eyre::Result<()> {
 
             // Pass to internal sender thread
             thread_sender
-                .try_send((merged_results, thread_request_ids, matches))
+                .try_send((merged_results, thread_request_ids, matches, query_store))
                 .unwrap();
 
             // Reset the results buffers for reuse
