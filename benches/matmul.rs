@@ -38,6 +38,7 @@ fn bench_memcpy(c: &mut Criterion) {
         None,
         None,
         None,
+        None,
     );
     let preprocessed_query = preprocess_query(&query);
     let streams = device_manager.fork_streams();
