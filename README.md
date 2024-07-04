@@ -28,6 +28,7 @@ It might not work.
 
 To run the tests:
 ```sh
+docker-compose up -d
 cargo test --release
 # Requires a significant amount of GPU memory
 cargo bench
