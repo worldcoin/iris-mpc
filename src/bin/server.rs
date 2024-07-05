@@ -171,7 +171,7 @@ async fn receive_batch(
     while batch_query.db.code.len() < QUERIES {
         let rcv_message_output = client
             .receive_message()
-            .max_number_of_messages(10i32)
+            .max_number_of_messages(1)
             .queue_url(queue_url)
             .send()
             .await?;
