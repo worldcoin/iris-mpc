@@ -1,6 +1,8 @@
-use cudarc::driver::CudaDevice;
+use cudarc::driver::{CudaDevice, CudaStream};
 use gpu_iris_mpc::{
-    helpers::task_monitor::TaskMonitor, setup::iris_db::iris::{IrisCodeArray, MATCH_THRESHOLD_RATIO}, threshold_ring::protocol::{ChunkShare, Circuits}
+    helpers::{dtoh_on_stream_sync, htod_on_stream_sync, task_monitor::TaskMonitor},
+    setup::iris_db::iris::{IrisCodeArray, MATCH_THRESHOLD_RATIO},
+    threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -59,18 +61,24 @@ fn rep_share_vec<R: Rng>(value: &[u16], id: usize, rng: &mut R) -> (Vec<u16>, Ve
     (a, b)
 }
 
-fn to_gpu(a: &[u16], b: &[u16], devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<u16>> {
+fn to_gpu(
+    a: &[u16],
+    b: &[u16],
+    devices: &[Arc<CudaDevice>],
+    streams: &[CudaStream],
+) -> Vec<ChunkShare<u16>> {
     debug_assert_eq!(a.len(), b.len());
 
     let mut result = Vec::with_capacity(devices.len());
 
-    for (dev, a, b) in izip!(
+    for (dev, stream, a, b) in izip!(
         devices,
+        streams,
         a.chunks(INPUTS_PER_GPU_SIZE),
         b.chunks(INPUTS_PER_GPU_SIZE)
     ) {
-        let a_ = dev.htod_sync_copy(a).unwrap();
-        let b_ = dev.htod_sync_copy(b).unwrap();
+        let a_ = htod_on_stream_sync(a, dev, stream).unwrap();
+        let b_ = htod_on_stream_sync(b, dev, stream).unwrap();
         result.push(ChunkShare::new(a_, b_));
     }
 
@@ -104,7 +112,7 @@ fn real_result_msb(code_input: Vec<u16>, mask_input: Vec<u16>) -> Vec<u64> {
     pack_with_device_padding(res)
 }
 
-fn open(party: &mut Circuits, x: &[ChunkShare<u64>]) -> Vec<u64> {
+fn open(party: &mut Circuits, x: &[ChunkShare<u64>], streams: &[CudaStream]) -> Vec<u64> {
     let n_devices = x.len();
     let mut a = Vec::with_capacity(n_devices);
     let mut b = Vec::with_capacity(n_devices);
@@ -114,23 +122,27 @@ fn open(party: &mut Circuits, x: &[ChunkShare<u64>]) -> Vec<u64> {
     for (idx, res) in x.iter().enumerate() {
         // Result is in bit 0
         let res = res.get_offset(0, CHUNK_SIZE);
-        party.send_view(&res.b, party.next_id(), idx);
+        party
+            .send_view(&res.b, party.next_id(), idx, streams)
+            .unwrap();
         a.push(res.a);
         b.push(res.b);
     }
     for (idx, res) in x.iter().enumerate() {
         let mut res = res.get_offset(1, CHUNK_SIZE);
-        party.receive_view(&mut res.a, party.prev_id(), idx);
+        party
+            .receive_view(&mut res.a, party.prev_id(), idx, streams)
+            .unwrap();
         c.push(res.a);
     }
     cudarc::nccl::result::group_end().unwrap();
 
     let mut result = Vec::with_capacity(n_devices * CHUNK_SIZE);
     let devices = party.get_devices();
-    for (dev, a, b, c) in izip!(devices, a, b, c) {
-        let mut a = dev.dtoh_sync_copy(&a).unwrap();
-        let b = dev.dtoh_sync_copy(&b).unwrap();
-        let c = dev.dtoh_sync_copy(&c).unwrap();
+    for (dev, stream, a, b, c) in izip!(devices, streams, a, b, c) {
+        let mut a = dtoh_on_stream_sync(&a, &dev, stream).unwrap();
+        let b = dtoh_on_stream_sync(&b, &dev, stream).unwrap();
+        let c = dtoh_on_stream_sync(&c, &dev, stream).unwrap();
         for (a, b, c) in izip!(a.iter_mut(), b, c) {
             *a ^= b ^ c;
         }
@@ -156,10 +168,7 @@ async fn main() -> eyre::Result<()> {
     let url = args.get(2);
     let n_devices = CudaDevice::count().unwrap() as usize;
 
-    let url = match url {
-        Some(s) => Some(s.clone()),
-        None => None,
-    };
+    let url = url.cloned();
 
     // Get inputs
     let code_dots = sample_code_dots(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);
@@ -182,11 +191,15 @@ async fn main() -> eyre::Result<()> {
         Some(&mut server_tasks),
     );
     let devices = party.get_devices();
+    let streams = devices
+        .iter()
+        .map(|dev| dev.fork_default_stream().unwrap())
+        .collect::<Vec<_>>();
     server_tasks.check_tasks();
 
     // Import to GPU
-    let code_gpu = to_gpu(&code_share_a, &code_share_b, &devices);
-    let mask_gpu = to_gpu(&mask_share_a, &mask_share_b, &devices);
+    let code_gpu = to_gpu(&code_share_a, &code_share_b, &devices, &streams);
+    let mask_gpu = to_gpu(&mask_share_a, &mask_share_b, &devices, &streams);
     println!("Data is on GPUs!");
     println!("Starting tests...");
 
@@ -197,13 +210,13 @@ async fn main() -> eyre::Result<()> {
         let mask_gpu = mask_gpu.clone();
 
         let now = Instant::now();
-        party.compare_threshold_masked_many(&code_gpu, &mask_gpu);
-        party.synchronize_all();
+        party.compare_threshold_masked_many(&code_gpu, &mask_gpu, &streams);
         println!("compute time: {:?}", now.elapsed());
 
         let res = party.take_result_buffer();
         let now = Instant::now();
-        let result = open(&mut party, &res);
+        let result = open(&mut party, &res, &streams);
+        party.synchronize_streams(&streams);
         party.return_result_buffer(res);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
 

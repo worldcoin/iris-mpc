@@ -1,9 +1,6 @@
-use std::collections::HashMap;
-
 use aws_sdk_sns::types::MessageAttributeValue;
-use opentelemetry::trace::{
-    SpanContext, SpanId, TraceFlags, TraceId, TraceState,
-};
+use opentelemetry::trace::{SpanContext, SpanId, TraceFlags, TraceId, TraceState};
+use std::collections::HashMap;
 
 pub const TRACE_ID_MESSAGE_ATTRIBUTE_NAME: &str = "TraceID";
 pub const SPAN_ID_MESSAGE_ATTRIBUTE_NAME: &str = "SpanID";
@@ -37,17 +34,14 @@ pub fn construct_message_attributes() -> eyre::Result<HashMap<String, MessageAtt
     Ok(message_attributes)
 }
 
-// This would only ever be leveraged if the code had isolated flows for every message, leaving for now, maybe it will happen in the future
+// This would only ever be leveraged if the code had isolated flows for every
+// message, leaving for now, maybe it will happen in the future
 pub fn trace_from_message_attributes(
     message_attributes: &HashMap<String, MessageAttributeValue>,
     receipt_handle: &str,
 ) -> eyre::Result<()> {
-    if let Some(trace_id) =
-        message_attributes.get(TRACE_ID_MESSAGE_ATTRIBUTE_NAME)
-    {
-        if let Some(span_id) =
-            message_attributes.get(SPAN_ID_MESSAGE_ATTRIBUTE_NAME)
-        {
+    if let Some(trace_id) = message_attributes.get(TRACE_ID_MESSAGE_ATTRIBUTE_NAME) {
+        if let Some(span_id) = message_attributes.get(SPAN_ID_MESSAGE_ATTRIBUTE_NAME) {
             let trace_id = trace_id
                 .string_value()
                 .expect("Could not parse TraceID")
