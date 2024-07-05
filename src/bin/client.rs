@@ -33,22 +33,22 @@ const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 
 #[derive(Debug, Parser)]
 struct Opt {
-    #[structopt(short, long)]
+    #[arg(short, long, env)]
     request_topic_arn: String,
 
-    #[structopt(short, long)]
+    #[arg(short, long, env)]
     response_queue_url: String,
 
-    #[structopt(short, long)]
+    #[arg(short, long, env)]
     db_index: Option<usize>,
 
-    #[structopt(short, long)]
+    #[arg(short, long, env)]
     rng_seed: Option<u64>,
 
-    #[structopt(short, long)]
+    #[arg(short, long, env)]
     n_repeat: Option<usize>,
 
-    #[structopt(short, long)]
+    #[arg(short, long, env)]
     random: Option<bool>,
 }
 
@@ -96,7 +96,7 @@ async fn main() -> eyre::Result<()> {
             // Receive responses
             let msg = sqs_client
                 .receive_message()
-                .max_number_of_messages(10)
+                .max_number_of_messages(1)
                 .queue_url(response_queue_url.clone())
                 .send()
                 .await
