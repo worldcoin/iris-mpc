@@ -2,7 +2,6 @@ use super::ROTATIONS;
 use cudarc::{
     driver::{
         result::{launch_kernel, memcpy_dtoh_sync},
-        sys::CUstream,
         CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, DeviceRepr, LaunchAsync,
         LaunchConfig,
     },
