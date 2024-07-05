@@ -1,7 +1,10 @@
 use super::ROTATIONS;
 use cudarc::{
     driver::{
-        result::{launch_kernel, memcpy_dtoh_sync}, sys::CUstream, CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, DeviceRepr, LaunchAsync, LaunchConfig
+        result::{launch_kernel, memcpy_dtoh_sync},
+        sys::CUstream,
+        CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, DeviceRepr, LaunchAsync,
+        LaunchConfig,
     },
     nvrtc::compile_ptx,
 };
@@ -114,7 +117,7 @@ impl DistanceComparator {
         match_results_self: &[u64],
         match_results: &[u64],
         final_results: &[u64],
-        streams: &[CUstream],
+        streams: &[CudaStream],
     ) {
         let num_elements = self.query_length / ROTATIONS;
         let threads_per_block = 256;
@@ -145,7 +148,7 @@ impl DistanceComparator {
                     cfg.grid_dim,
                     cfg.block_dim,
                     cfg.shared_mem_bytes,
-                    streams[i],
+                    streams[i].stream,
                     &mut params,
                 )
                 .unwrap();

@@ -14,8 +14,8 @@ use cudarc::{
     nvrtc::compile_ptx,
 };
 use rayon::prelude::*;
-use tokio::task::{AbortHandle, JoinSet};
 use std::{ffi::c_void, mem, str::FromStr, sync::Arc, thread, time::Duration};
+use tokio::task::{AbortHandle, JoinSet};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const REDUCE_FUNCTION_NAME: &str = "matmul_correct_and_reduce";
@@ -239,7 +239,9 @@ impl ShareDB {
 
             // Start HTTP server to exchange NCCL commIds
             if peer_id == 0 {
-                let sever_task_set = sever_task_set.expect("task set must be supplied to peer_id 0 for remote connection monitoring");
+                let sever_task_set = sever_task_set.expect(
+                    "task set must be supplied to peer_id 0 for remote connection monitoring",
+                );
 
                 let ids = ids.clone();
                 server_abort = Some(sever_task_set.spawn(async move {

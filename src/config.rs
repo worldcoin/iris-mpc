@@ -1,5 +1,4 @@
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::path::Path;
 
 pub fn load_config<T>(prefix: &str, config_path: Option<&Path>) -> eyre::Result<T>
@@ -60,18 +59,18 @@ pub struct AwsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceConfig {
     // Service name - used for logging, metrics and tracing
-    pub service_name: String,
+    pub service_name:    String,
     // Traces
     pub traces_endpoint: Option<String>,
     // Metrics
-    pub metrics: Option<MetricsConfig>,
+    pub metrics:         Option<MetricsConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricsConfig {
-    pub host: String,
-    pub port: u16,
-    pub queue_size: usize,
+    pub host:        String,
+    pub port:        u16,
+    pub queue_size:  usize,
     pub buffer_size: usize,
-    pub prefix: String,
+    pub prefix:      String,
 }
