@@ -317,7 +317,7 @@ fn open(
     }
     cudarc::nccl::result::group_end().unwrap();
 
-    distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes);
+    distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, &streams);
 }
 
 fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
@@ -1142,10 +1142,7 @@ async fn main() -> eyre::Result<()> {
                 .map(|d| d.fork_default_stream().unwrap())
                 .collect::<Vec<_>>();
 
-            let mut phase2_streams = phase2_streams2
-                .iter()
-                .map(|s| s.stream)
-                .collect::<Vec<_>>();
+            let mut phase2_streams = phase2_streams2.iter().map(|s| s.stream).collect::<Vec<_>>();
 
             // Phase 2 [Batch]: compare each result against threshold
             thread_phase2_batch.compare_threshold_masked_many(
