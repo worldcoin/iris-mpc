@@ -1129,17 +1129,22 @@ async fn main() -> eyre::Result<()> {
             // - We only use the default streams of the devices, therefore Phase 2's are
             //   never running concurrently.
             // - These pointers are aligned, dereferencable, and initialized.
-            let mut phase2_streams = thread_phase2
-                .get_devices()
-                .iter()
-                .map(|d| *d.cu_stream())
-                .collect::<Vec<_>>();
+            // let mut phase2_streams = thread_phase2
+            //     .get_devices()
+            //     .iter()
+            //     .map(|d| *d.cu_stream())
+            //     .collect::<Vec<_>>();
 
             // same as above but CudaStreams instead of CUstream_st
             let phase2_streams2 = thread_phase2
                 .get_devices()
                 .iter()
                 .map(|d| d.fork_default_stream().unwrap())
+                .collect::<Vec<_>>();
+
+            let mut phase2_streams = phase2_streams2
+                .iter()
+                .map(|s| s.stream)
                 .collect::<Vec<_>>();
 
             // Phase 2 [Batch]: compare each result against threshold
