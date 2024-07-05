@@ -14,6 +14,7 @@ use cudarc::driver::{
     CudaDevice, CudaSlice, CudaStream,
 };
 use gpu_iris_mpc::{
+    config,
     config::Config,
     dot::{
         device_manager::DeviceManager,
@@ -22,6 +23,10 @@ use gpu_iris_mpc::{
         IRIS_CODE_LENGTH, ROTATIONS,
     },
     helpers::{
+        aws::{
+            NODE_ID_MESSAGE_ATTRIBUTE_NAME, SPAN_ID_MESSAGE_ATTRIBUTE_NAME,
+            TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
+        },
         device_ptrs, device_ptrs_to_slices,
         kms_dh::derive_shared_secret,
         mmap::{read_mmap_file, write_mmap_file},
@@ -42,22 +47,17 @@ use std::{
     sync::{atomic::AtomicUsize, Arc, Mutex},
     time::{Duration, Instant},
 };
-use telemetry_batteries::metrics::statsd::StatsdBattery;
-use telemetry_batteries::tracing::datadog::DatadogBattery;
-use telemetry_batteries::tracing::TracingShutdownHandle;
+use telemetry_batteries::{
+    metrics::statsd::StatsdBattery,
+    tracing::{datadog::DatadogBattery, TracingShutdownHandle},
+};
 use tokio::{
     runtime,
     sync::mpsc,
     task::{spawn_blocking, JoinHandle},
     time::sleep,
 };
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-
-use gpu_iris_mpc::config;
-use gpu_iris_mpc::helpers::aws::{
-    NODE_ID_MESSAGE_ATTRIBUTE_NAME, SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
-};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
@@ -147,18 +147,18 @@ struct BatchQueryEntries {
 
 #[derive(Default)]
 struct BatchMetadata {
-    node_id: String,
+    node_id:  String,
     trace_id: String,
-    span_id: String,
+    span_id:  String,
 }
 
 #[derive(Default)]
 struct BatchQuery {
     pub request_ids: Vec<String>,
-    pub metadata: Vec<BatchMetadata>,
-    pub query: BatchQueryEntries,
-    pub db: BatchQueryEntries,
-    pub store: BatchQueryEntries,
+    pub metadata:    Vec<BatchMetadata>,
+    pub query:       BatchQueryEntries,
+    pub db:          BatchQueryEntries,
+    pub store:       BatchQueryEntries,
 }
 
 async fn receive_batch(
@@ -201,48 +201,48 @@ async fn receive_batch(
                 batch_query.request_ids.push(message.clone().request_id);
                 batch_query.metadata.push(batch_metadata);
 
-            let (
-                store_iris_shares,
-                store_mask_shares,
-                db_iris_shares,
-                db_mask_shares,
-                iris_shares,
-                mask_shares,
-            ) = spawn_blocking(move || {
-                let mut iris_share =
-                    GaloisRingIrisCodeShare::new(party_id + 1, message.get_iris_shares());
-                let mut mask_share =
-                    GaloisRingIrisCodeShare::new(party_id + 1, message.get_mask_shares());
-
-                // Original for storage.
-                let store_iris_shares = iris_share.clone();
-                let store_mask_shares = mask_share.clone();
-
-                // With rotations for in-memory database.
-                let db_iris_shares = iris_share.all_rotations();
-                let db_mask_shares = mask_share.all_rotations();
-
-                // With Lagrange interpolation.
-                GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
-                GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut mask_share);
-
-                (
+                let (
                     store_iris_shares,
                     store_mask_shares,
                     db_iris_shares,
                     db_mask_shares,
-                    iris_share.all_rotations(),
-                    mask_share.all_rotations(),
-                )
-            })
-            .await?;
+                    iris_shares,
+                    mask_shares,
+                ) = spawn_blocking(move || {
+                    let mut iris_share =
+                        GaloisRingIrisCodeShare::new(party_id + 1, message.get_iris_shares());
+                    let mut mask_share =
+                        GaloisRingIrisCodeShare::new(party_id + 1, message.get_mask_shares());
 
-            batch_query.store.code.push(store_iris_shares);
-            batch_query.store.mask.push(store_mask_shares);
-            batch_query.db.code.extend(db_iris_shares);
-            batch_query.db.mask.extend(db_mask_shares);
-            batch_query.query.code.extend(iris_shares);
-            batch_query.query.mask.extend(mask_shares);
+                    // Original for storage.
+                    let store_iris_shares = iris_share.clone();
+                    let store_mask_shares = mask_share.clone();
+
+                    // With rotations for in-memory database.
+                    let db_iris_shares = iris_share.all_rotations();
+                    let db_mask_shares = mask_share.all_rotations();
+
+                    // With Lagrange interpolation.
+                    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
+                    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut mask_share);
+
+                    (
+                        store_iris_shares,
+                        store_mask_shares,
+                        db_iris_shares,
+                        db_mask_shares,
+                        iris_share.all_rotations(),
+                        mask_share.all_rotations(),
+                    )
+                })
+                .await?;
+
+                batch_query.store.code.push(store_iris_shares);
+                batch_query.store.mask.push(store_mask_shares);
+                batch_query.db.code.extend(db_iris_shares);
+                batch_query.db.mask.extend(db_mask_shares);
+                batch_query.query.code.extend(iris_shares);
+                batch_query.query.mask.extend(mask_shares);
 
                 // TODO: we should only delete after processing
                 client
@@ -589,7 +589,7 @@ async fn main() -> eyre::Result<()> {
     println!("Starting engines...");
 
     let device_manager = Arc::new(DeviceManager::init());
-    let mut server_tasks  = TaskMonitor::new();
+    let mut server_tasks = TaskMonitor::new();
 
     // Phase 1 Setup
     let mut codes_engine = ShareDB::init(
@@ -789,12 +789,13 @@ async fn main() -> eyre::Result<()> {
         }
         let now = Instant::now();
 
-        //This batch can consist of N sets of iris_share + mask
-        //It also includes a vector of request ids, mapping to the sets above
+        // This batch can consist of N sets of iris_share + mask
+        // It also includes a vector of request ids, mapping to the sets above
         let batch = receive_batch(party_id, &sqs_client, &queue).await?;
 
-        // Iterate over a list of tracing payloads, and create logs with mappings to payloads
-        // Log at least a "start" event using a log with trace.id and parent.trace.id
+        // Iterate over a list of tracing payloads, and create logs with mappings to
+        // payloads Log at least a "start" event using a log with trace.id and
+        // parent.trace.id
         for tracing_payload in batch.metadata.iter() {
             tracing::info!(
                 node_id = tracing_payload.node_id,
@@ -829,7 +830,8 @@ async fn main() -> eyre::Result<()> {
 
         let mut timers = vec![];
 
-        // SAFETY: these streams can only safely be re-used after more than MAX_CONCURRENT_BATCHES.
+        // SAFETY: these streams can only safely be re-used after more than
+        // MAX_CONCURRENT_BATCHES.
         let request_streams = &streams[request_counter % MAX_BATCHES_BEFORE_REUSE];
         let request_cublas_handles = &cublas_handles[request_counter % MAX_BATCHES_BEFORE_REUSE];
         let request_results = &results[request_counter % MAX_BATCHES_BEFORE_REUSE];
@@ -864,7 +866,8 @@ async fn main() -> eyre::Result<()> {
         if request_counter > MAX_CONCURRENT_BATCHES {
             // We have two streams working concurrently, we'll await the stream before
             // previous one.
-            // SAFETY: these streams can only safely be re-used after more than MAX_CONCURRENT_BATCHES.
+            // SAFETY: these streams can only safely be re-used after more than
+            // MAX_CONCURRENT_BATCHES.
             let previous_previous_streams =
                 &streams[(request_counter - MAX_CONCURRENT_BATCHES) % MAX_BATCHES_BEFORE_REUSE];
             device_manager.await_event(previous_previous_streams, &previous_previous_stream_event);
@@ -1039,13 +1042,13 @@ async fn main() -> eyre::Result<()> {
         let thread_request_ids = batch.request_ids.clone();
         let thread_sender = tx.clone();
 
-
         previous_thread_handle = Some(spawn_blocking(move || {
             // Wait for Phase 1 to finish
             await_streams(&mut thread_streams);
 
-            // Iterate over a list of tracing payloads, and create logs with mappings to payloads
-            // Log at least a "start" event using a log with trace.id and parent.trace.id
+            // Iterate over a list of tracing payloads, and create logs with mappings to
+            // payloads Log at least a "start" event using a log with trace.id
+            // and parent.trace.id
             for tracing_payload in batch.metadata.iter() {
                 tracing::info!(
                     node_id = tracing_payload.node_id,
@@ -1079,8 +1082,9 @@ async fn main() -> eyre::Result<()> {
                 })
                 .unzip();
 
-            // Iterate over a list of tracing payloads, and create logs with mappings to payloads
-            // Log at least a "start" event using a log with trace.id and parent.trace.id
+            // Iterate over a list of tracing payloads, and create logs with mappings to
+            // payloads Log at least a "start" event using a log with trace.id
+            // and parent.trace.id
             for tracing_payload in batch.metadata.iter() {
                 tracing::info!(
                     node_id = tracing_payload.node_id,
@@ -1153,8 +1157,9 @@ async fn main() -> eyre::Result<()> {
                 &thread_devs,
             );
 
-            // Iterate over a list of tracing payloads, and create logs with mappings to payloads
-            // Log at least a "start" event using a log with trace.id and parent.trace.id
+            // Iterate over a list of tracing payloads, and create logs with mappings to
+            // payloads Log at least a "start" event using a log with trace.id
+            // and parent.trace.id
             for tracing_payload in batch.metadata.iter() {
                 tracing::info!(
                     node_id = tracing_payload.node_id,
@@ -1201,12 +1206,21 @@ async fn main() -> eyre::Result<()> {
 
             // Merge results and fetch matching indices
             // Format: host_results[device_index][query_index]
-            let host_results = tmp_distance_comparator.merge_results(
+            tmp_distance_comparator.merge_results(
                 &thread_request_results_batch,
                 &thread_request_results,
                 &thread_request_final_results,
                 &phase2_streams,
             );
+
+            for s in &phase2_streams {
+                unsafe {
+                    synchronize(*s).unwrap();
+                }
+            }
+
+            let host_results =
+                tmp_distance_comparator.fetch_final_results(&thread_request_final_results);
 
             // Evaluate the results across devices
             // Format: merged_results[query_index]
@@ -1226,7 +1240,6 @@ async fn main() -> eyre::Result<()> {
             // Calculate the new indices for the inserted queries
             let matches =
                 calculate_insertion_indices(&mut merged_results, &insertion_list, &db_sizes);
-
 
             for i in 0..thread_devs.len() {
                 thread_devs[i].bind_to_thread().unwrap();

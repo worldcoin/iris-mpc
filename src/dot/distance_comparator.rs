@@ -115,7 +115,7 @@ impl DistanceComparator {
         match_results: &[u64],
         final_results: &[u64],
         streams: &[CUstream],
-    ) -> Vec<Vec<u32>> {
+    ) {
         let num_elements = self.query_length / ROTATIONS;
         let threads_per_block = 256;
         let blocks_per_grid = num_elements.div_ceil(threads_per_block);
@@ -151,8 +151,6 @@ impl DistanceComparator {
                 .unwrap();
             }
         }
-
-        self.fetch_final_results(final_results)
     }
 
     pub fn fetch_final_results(&self, final_results_ptrs: &[u64]) -> Vec<Vec<u32>> {
