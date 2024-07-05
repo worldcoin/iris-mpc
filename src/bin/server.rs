@@ -427,11 +427,11 @@ fn reset_results(
     devs: &[Arc<CudaDevice>],
     dst: &[CUdeviceptr],
     src: &[u32],
-    streams: &mut [*mut CUstream_st],
+    streams: &[CudaStream],
 ) {
     for i in 0..devs.len() {
         devs[i].bind_to_thread().unwrap();
-        unsafe { result::memcpy_htod_async(dst[i], src, streams[i]) }.unwrap();
+        unsafe { result::memcpy_htod_async(dst[i], src, streams[i].stream) }.unwrap();
     }
 }
 
@@ -1125,30 +1125,18 @@ async fn main() -> eyre::Result<()> {
                 &thread_devs,
             );
 
-            // SAFETY:
-            // - We only use the default streams of the devices, therefore Phase 2's are
-            //   never running concurrently.
-            // - These pointers are aligned, dereferencable, and initialized.
-            // let mut phase2_streams = thread_phase2
-            //     .get_devices()
-            //     .iter()
-            //     .map(|d| *d.cu_stream())
-            //     .collect::<Vec<_>>();
-
-            // same as above but CudaStreams instead of CUstream_st
-            let phase2_streams2 = thread_phase2
+            // TODO: use phase 1 streams here
+            let mut phase2_streams = thread_phase2
                 .get_devices()
                 .iter()
                 .map(|d| d.fork_default_stream().unwrap())
                 .collect::<Vec<_>>();
 
-            let mut phase2_streams = phase2_streams2.iter().map(|s| s.stream).collect::<Vec<_>>();
-
             // Phase 2 [Batch]: compare each result against threshold
             thread_phase2_batch.compare_threshold_masked_many(
                 &code_dots_batch,
                 &mask_dots_batch,
-                &phase2_streams2,
+                &phase2_streams,
             );
 
             // Phase 2 [Batch]: Reveal the binary results
@@ -1179,12 +1167,12 @@ async fn main() -> eyre::Result<()> {
                 &thread_request_results_slice_batch,
                 chunk_size_batch,
                 &db_sizes_batch,
-                &phase2_streams2,
+                &phase2_streams,
             );
             thread_phase2_batch.return_result_buffer(res);
 
             // Phase 2 [DB]: compare each result against threshold
-            thread_phase2.compare_threshold_masked_many(&code_dots, &mask_dots, &phase2_streams2);
+            thread_phase2.compare_threshold_masked_many(&code_dots, &mask_dots, &phase2_streams);
 
             // Phase 2 [DB]: Reveal the binary results
             let res = thread_phase2.take_result_buffer();
@@ -1202,7 +1190,7 @@ async fn main() -> eyre::Result<()> {
                 &thread_request_results_slice,
                 chunk_size,
                 &db_sizes,
-                &phase2_streams2,
+                &phase2_streams,
             );
             thread_phase2.return_result_buffer(res);
 
@@ -1215,11 +1203,7 @@ async fn main() -> eyre::Result<()> {
                 &phase2_streams,
             );
 
-            for s in &phase2_streams {
-                unsafe {
-                    synchronize(*s).unwrap();
-                }
-            }
+            thread_device_manager.await_streams(&phase2_streams);
 
             let host_results =
                 tmp_distance_comparator.fetch_final_results(&thread_request_final_results);
@@ -1266,7 +1250,7 @@ async fn main() -> eyre::Result<()> {
                             query.0[i],
                             IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                             IRIS_CODE_LENGTH,
-                            *&mut phase2_streams[i],
+                            phase2_streams[i].stream,
                         );
 
                         dtod_at_offset(
@@ -1275,7 +1259,7 @@ async fn main() -> eyre::Result<()> {
                             query.1[i],
                             IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                             IRIS_CODE_LENGTH,
-                            *&mut phase2_streams[i],
+                            phase2_streams[i].stream,
                         );
 
                         dtod_at_offset(
@@ -1285,7 +1269,7 @@ async fn main() -> eyre::Result<()> {
                             mem::size_of::<u32>() * 15
                                 + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                             mem::size_of::<u32>(),
-                            *&mut phase2_streams[i],
+                            phase2_streams[i].stream,
                         );
 
                         dtod_at_offset(
@@ -1295,7 +1279,7 @@ async fn main() -> eyre::Result<()> {
                             mem::size_of::<u32>() * 15
                                 + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                             mem::size_of::<u32>(),
-                            *&mut phase2_streams[i],
+                            phase2_streams[i].stream,
                         );
                     }
                     old_db_size += 1;

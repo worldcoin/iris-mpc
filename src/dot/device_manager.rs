@@ -48,7 +48,6 @@ impl DeviceManager {
 
     pub fn await_streams(&self, streams: &[CudaStream]) {
         for i in 0..self.devices.len() {
-            self.devices[i].bind_to_thread().unwrap();
             unsafe { synchronize(streams[i].stream).unwrap() }
         }
     }
