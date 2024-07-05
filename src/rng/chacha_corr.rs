@@ -1,18 +1,20 @@
-use crate::helpers::htod_on_stream_sync;
 use cudarc::{
     driver::{
-        CudaDevice, CudaFunction, CudaStream, CudaViewMut, DeviceSlice, LaunchAsync, LaunchConfig,
+        CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaViewMut, DeviceSlice, LaunchAsync,
+        LaunchConfig,
     },
     nvrtc::compile_ptx,
 };
 use std::sync::Arc;
 
 pub struct ChaChaCudaCorrRng {
-    dev:         Arc<CudaDevice>,
-    kernels:     [CudaFunction; 2],
+    // dev:            Arc<CudaDevice>,
+    kernels:        [CudaFunction; 2],
+    state1_gpu_buf: CudaSlice<u32>,
+    state2_gpu_buf: CudaSlice<u32>,
     /// the current state of the chacha rng
-    chacha_ctx1: ChaChaCtx,
-    chacha_ctx2: ChaChaCtx,
+    chacha_ctx1:    ChaChaCtx,
+    chacha_ctx2:    ChaChaCtx,
 }
 
 const CHACHA_PTX_SRC: &str = include_str!("chacha.cu");
@@ -36,12 +38,18 @@ impl ChaChaCudaCorrRng {
         let kernel2 = dev
             .get_func(CHACHA_FUNCTION_NAME, CHACHA2_FUNCTION_NAME)
             .unwrap();
+        let chacha_ctx1 = ChaChaCtx::init(seed1, 0, 0);
+        let chacha_ctx2 = ChaChaCtx::init(seed2, 0, 0);
+
+        let state1_gpu_buf = dev.htod_sync_copy(chacha_ctx1.state.as_ref()).unwrap();
+        let state2_gpu_buf = dev.htod_sync_copy(chacha_ctx2.state.as_ref()).unwrap();
 
         Self {
-            dev,
             kernels: [kernel1, kernel2],
-            chacha_ctx1: ChaChaCtx::init(seed1, 0, 0),
-            chacha_ctx2: ChaChaCtx::init(seed2, 0, 0),
+            chacha_ctx1,
+            chacha_ctx2,
+            state1_gpu_buf,
+            state2_gpu_buf,
         }
     }
 
@@ -57,12 +65,20 @@ impl ChaChaCudaCorrRng {
             shared_mem_bytes: 0,
         };
 
-        let state_slice1 = htod_on_stream_sync(&self.chacha_ctx1.state, &self.dev, stream).unwrap();
-        let state_slice2 = htod_on_stream_sync(&self.chacha_ctx2.state, &self.dev, stream).unwrap();
         unsafe {
             self.kernels[0]
                 .clone()
-                .launch_on_stream(stream, cfg, (&mut *buf, &state_slice1, len))
+                .launch_on_stream(
+                    stream,
+                    cfg,
+                    (
+                        &mut *buf,
+                        &self.state1_gpu_buf,
+                        self.chacha_ctx1.state[12], // counter part1
+                        self.chacha_ctx1.state[13], // counter part2
+                        len,
+                    ),
+                )
                 .unwrap();
         }
         // increment the state counter of the ChaChaRng with the number of produced
@@ -75,7 +91,17 @@ impl ChaChaCudaCorrRng {
         unsafe {
             self.kernels[1]
                 .clone()
-                .launch_on_stream(stream, cfg, (buf, &state_slice2, len))
+                .launch_on_stream(
+                    stream,
+                    cfg,
+                    (
+                        buf,
+                        &self.state2_gpu_buf,
+                        self.chacha_ctx2.state[12], // counter part1
+                        self.chacha_ctx2.state[13], // counter part2
+                        len,
+                    ),
+                )
                 .unwrap();
         }
         // increment the state counter of the ChaChaRng with the number of produced
@@ -98,11 +124,20 @@ impl ChaChaCudaCorrRng {
             shared_mem_bytes: 0,
         };
 
-        let state_slice1 = htod_on_stream_sync(&self.chacha_ctx1.state, &self.dev, stream).unwrap();
         unsafe {
             self.kernels[0]
                 .clone()
-                .launch_on_stream(stream, cfg, (&mut *buf, &state_slice1, len))
+                .launch_on_stream(
+                    stream,
+                    cfg,
+                    (
+                        &mut *buf,
+                        &self.state1_gpu_buf,
+                        self.chacha_ctx1.state[12], // counter part1
+                        self.chacha_ctx1.state[13], // counter part2
+                        len,
+                    ),
+                )
                 .unwrap();
         }
         // increment the state counter of the ChaChaRng with the number of produced
@@ -124,11 +159,20 @@ impl ChaChaCudaCorrRng {
             grid_dim:         (blocks_per_grid as u32, 1, 1),
             shared_mem_bytes: 0,
         };
-        let state_slice2 = htod_on_stream_sync(&self.chacha_ctx2.state, &self.dev, stream).unwrap();
         unsafe {
             self.kernels[0]
                 .clone()
-                .launch_on_stream(stream, cfg, (&mut *buf, &state_slice2, len))
+                .launch_on_stream(
+                    stream,
+                    cfg,
+                    (
+                        &mut *buf,
+                        &self.state2_gpu_buf,
+                        self.chacha_ctx2.state[12], // counter part1
+                        self.chacha_ctx2.state[13], // counter part2
+                        len,
+                    ),
+                )
                 .unwrap();
         }
         // increment the state counter of the ChaChaRng with the number of produced
