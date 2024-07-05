@@ -16,8 +16,8 @@ use cudarc::{
     nvrtc::{self, Ptx},
 };
 use itertools::izip;
-use tokio::task::{AbortHandle, JoinSet};
 use std::{str::FromStr, sync::Arc, thread, time::Duration};
+use tokio::task::{AbortHandle, JoinSet};
 
 pub(crate) const B_BITS: usize = 16;
 
@@ -327,17 +327,17 @@ pub struct SendableRcComm(Arc<Comm>);
 unsafe impl Send for SendableRcComm {}
 
 pub struct Circuits {
-    peer_id:    usize,
-    next_id:    usize,
-    prev_id:    usize,
-    chunk_size: usize,
-    n_devices:  usize,
-    devs:       Vec<Arc<CudaDevice>>,
-    comms:      Vec<SendableRcComm>,
-    kernels:    Vec<Kernels>,
-    buffers:    Buffers,
-    rngs:       Vec<ChaChaCudaCorrRng>,
-    pub server_abort:     Option<AbortHandle>,
+    peer_id:          usize,
+    next_id:          usize,
+    prev_id:          usize,
+    chunk_size:       usize,
+    n_devices:        usize,
+    devs:             Vec<Arc<CudaDevice>>,
+    comms:            Vec<SendableRcComm>,
+    kernels:          Vec<Kernels>,
+    buffers:          Buffers,
+    rngs:             Vec<ChaChaCudaCorrRng>,
+    pub server_abort: Option<AbortHandle>,
 }
 
 impl Circuits {
@@ -387,7 +387,8 @@ impl Circuits {
             rngs.push(rng);
         }
 
-        let (comms, server_abort) = Self::instantiate_network(peer_id, peer_url, server_port, &devs, server_task_set);
+        let (comms, server_abort) =
+            Self::instantiate_network(peer_id, peer_url, server_port, &devs, server_task_set);
 
         let buffers = Buffers::new(&devs, alloc_size);
 
@@ -441,7 +442,8 @@ impl Circuits {
         // Start HTTP server to exchange NCCL commIds
         let mut server_abort = None;
         if peer_id == 0 {
-            let server_task_set = server_task_set.expect("task set must be supplied to peer_id 0 for remote connection monitoring");
+            let server_task_set = server_task_set
+                .expect("task set must be supplied to peer_id 0 for remote connection monitoring");
 
             let ids = ids.clone();
             server_abort = Some(server_task_set.spawn(async move {
