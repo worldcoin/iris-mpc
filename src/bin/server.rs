@@ -10,7 +10,7 @@ use cudarc::driver::{
         event::{self, elapsed},
         stream::synchronize,
     },
-    sys::{self, CUdeviceptr, CUstream, CUstream_st},
+    sys::{CUdeviceptr, CUstream, CUstream_st},
     CudaDevice, CudaSlice, CudaStream,
 };
 use gpu_iris_mpc::{
@@ -64,7 +64,7 @@ const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 150_000;
 const DB_BUFFER: usize = 8 * 1_000;
 const N_QUERIES: usize = 32;
-const N_BATCHES: usize = 10;
+const N_BATCHES: usize = 20;
 const RNG_SEED: u64 = 42;
 /// The number of batches before a stream is re-used.
 const MAX_BATCHES_BEFORE_REUSE: usize = 5;
