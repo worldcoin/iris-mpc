@@ -870,8 +870,7 @@ async fn main() -> eyre::Result<()> {
         let mask_query_insert_sums =
             masks_engine.query_sums(&mask_query_insert, request_streams, request_cublas_handles);
 
-        // update the db size, skip this for the first two
-        if request_counter > MAX_CONCURRENT_BATCHES {
+        if request_counter >= MAX_CONCURRENT_BATCHES{
             // We have two streams working concurrently, we'll await the stream before
             // previous one.
             // SAFETY: these streams can only safely be re-used after more than

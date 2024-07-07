@@ -24,7 +24,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{spawn, sync::Mutex, time::sleep};
 use uuid::Uuid;
 
-const N_QUERIES: usize = 32 * 10;
+const N_QUERIES: usize = 32 * 20;
 const REGION: &str = "eu-north-1";
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;
