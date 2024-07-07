@@ -67,7 +67,7 @@ const N_QUERIES: usize = 32;
 const N_BATCHES: usize = 20;
 const RNG_SEED: u64 = 42;
 /// The number of batches before a stream is re-used.
-const MAX_BATCHES_BEFORE_REUSE: usize = 5;
+const MAX_BATCHES_BEFORE_REUSE: usize = 20;
 
 /// The number of batches that are launched concurrently.
 ///
