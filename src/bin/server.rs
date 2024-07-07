@@ -806,14 +806,14 @@ async fn main() -> eyre::Result<()> {
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id and
         // parent.trace.id
-        for tracing_payload in batch.metadata.iter() {
-            tracing::info!(
-                node_id = tracing_payload.node_id,
-                dd.trace_id = tracing_payload.trace_id,
-                dd.span_id = tracing_payload.span_id,
-                "Started processing share",
-            );
-        }
+        // for tracing_payload in batch.metadata.iter() {
+        //     tracing::info!(
+        //         node_id = tracing_payload.node_id,
+        //         dd.trace_id = tracing_payload.trace_id,
+        //         dd.span_id = tracing_payload.span_id,
+        //         "Started processing share",
+        //     );
+        // }
 
         // start trace span - with single TraceId and single ParentTraceID
         println!("Received batch in {:?}", now.elapsed());
@@ -1057,14 +1057,14 @@ async fn main() -> eyre::Result<()> {
             // Iterate over a list of tracing payloads, and create logs with mappings to
             // payloads Log at least a "start" event using a log with trace.id
             // and parent.trace.id
-            for tracing_payload in batch.metadata.iter() {
-                tracing::info!(
-                    node_id = tracing_payload.node_id,
-                    dd.trace_id = tracing_payload.trace_id,
-                    dd.span_id = tracing_payload.span_id,
-                    "Phase 1 finished",
-                );
-            }
+            // for tracing_payload in batch.metadata.iter() {
+            //     tracing::info!(
+            //         node_id = tracing_payload.node_id,
+            //         dd.trace_id = tracing_payload.trace_id,
+            //         dd.span_id = tracing_payload.span_id,
+            //         "Phase 1 finished",
+            //     );
+            // }
 
             // Wait for Phase 2 of previous round to finish in order to not have them
             // overlapping. SAFETY: waiting here makes sure we don't access
@@ -1093,14 +1093,14 @@ async fn main() -> eyre::Result<()> {
             // Iterate over a list of tracing payloads, and create logs with mappings to
             // payloads Log at least a "start" event using a log with trace.id
             // and parent.trace.id
-            for tracing_payload in batch.metadata.iter() {
-                tracing::info!(
-                    node_id = tracing_payload.node_id,
-                    dd.trace_id = tracing_payload.trace_id,
-                    dd.span_id = tracing_payload.span_id,
-                    "Phase 2 finished",
-                );
-            }
+            // for tracing_payload in batch.metadata.iter() {
+            //     tracing::info!(
+            //         node_id = tracing_payload.node_id,
+            //         dd.trace_id = tracing_payload.trace_id,
+            //         dd.span_id = tracing_payload.span_id,
+            //         "Phase 2 finished",
+            //     );
+            // }
 
             let result_sizes_batch = db_sizes_batch
                 .iter()
