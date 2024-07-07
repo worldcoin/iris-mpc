@@ -260,9 +260,9 @@ async fn main() -> eyre::Result<()> {
             .send()
             .await?;
 
-        if (query_idx + 1) % 32 == 0 {
-            sleep(Duration::from_secs(1)).await;
-        }
+        // if (query_idx + 1) % 32 == 0 {
+        //     sleep(Duration::from_secs(1)).await;
+        // }
     }
 
     // Receive all messages

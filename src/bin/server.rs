@@ -10,7 +10,7 @@ use cudarc::driver::{
         event::{self, elapsed},
         stream::synchronize,
     },
-    sys::{CUdeviceptr, CUstream, CUstream_st},
+    sys::{self, CUdeviceptr, CUstream, CUstream_st},
     CudaDevice, CudaSlice, CudaStream,
 };
 use gpu_iris_mpc::{
@@ -41,6 +41,7 @@ use lazy_static::lazy_static;
 use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{
+    collections::HashMap,
     fs::metadata,
     mem,
     path::PathBuf,
@@ -60,10 +61,10 @@ use tokio::{
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
-const DB_SIZE: usize = 8 * 1_000;
+const DB_SIZE: usize = 8 * 150_000;
 const DB_BUFFER: usize = 8 * 1_000;
 const N_QUERIES: usize = 32;
-const N_BATCHES: usize = 100;
+const N_BATCHES: usize = 10;
 const RNG_SEED: u64 = 42;
 /// The number of batches before a stream is re-used.
 const MAX_BATCHES_BEFORE_REUSE: usize = 5;
@@ -100,14 +101,24 @@ lazy_static! {
     static ref KDF_SALT: Salt = Salt::new(HKDF_SHA256, b"IRIS_MPC");
     static ref RESULTS_INIT_HOST: Vec<u32> = vec![u32::MAX; N_QUERIES * ROTATIONS];
     static ref FINAL_RESULTS_INIT_HOST: Vec<u32> = vec![u32::MAX; N_QUERIES];
+    static ref DEBUG_EVENTS: Mutex<HashMap<usize, Vec<Vec<u64>>>> = Mutex::new(HashMap::new());
 }
 
 macro_rules! debug_record_event {
-    ($manager:expr, $streams:expr, $timers:expr) => {
+    ($manager:expr, $key:expr, $streams:expr) => {{
+        let mut events_map = DEBUG_EVENTS.lock().unwrap();
+        let mut value = if let Some(v) = events_map.get(&$key) {
+            v.clone()
+        } else {
+            vec![vec![]; 8]
+        };
         let evts = $manager.create_events();
         $manager.record_event($streams, &evts);
-        $timers.push(evts);
-    };
+        for i in 0..evts.len() {
+            value[i].push(evts[i] as *mut _ as u64);
+        }
+        events_map.insert($key, value);
+    }};
 }
 
 macro_rules! forget_vec {
@@ -703,7 +714,6 @@ async fn main() -> eyre::Result<()> {
     let mut next_dot_event = device_manager.create_events();
     let mut current_exchange_event = device_manager.create_events();
     let mut next_exchange_event = device_manager.create_events();
-    let mut timer_events = vec![];
     let start_timer = device_manager.create_events();
     let mut end_timer = device_manager.create_events();
 
@@ -828,8 +838,6 @@ async fn main() -> eyre::Result<()> {
             })
             .await?;
 
-        let mut timers = vec![];
-
         // SAFETY: these streams can only safely be re-used after more than
         // MAX_CONCURRENT_BATCHES.
         let request_streams = &streams[request_counter % MAX_BATCHES_BEFORE_REUSE];
@@ -883,6 +891,7 @@ async fn main() -> eyre::Result<()> {
         device_manager.await_event(request_streams, &current_dot_event);
 
         // ---- START BATCH DEDUP ----
+        debug_record_event!(device_manager, request_counter, request_streams);
 
         batch_codes_engine.dot(
             &code_query,
@@ -918,8 +927,7 @@ async fn main() -> eyre::Result<()> {
         batch_masks_engine.reshare_results(&query_db_size, request_streams);
 
         // ---- END BATCH DEDUP ----
-
-        debug_record_event!(device_manager, request_streams, timers);
+        debug_record_event!(device_manager, request_counter, request_streams);
 
         codes_engine.dot(
             &code_query,
@@ -943,7 +951,7 @@ async fn main() -> eyre::Result<()> {
             request_cublas_handles,
         );
 
-        debug_record_event!(device_manager, request_streams, timers);
+        debug_record_event!(device_manager, request_counter, request_streams);
 
         // BLOCK 2: calculate final dot product result, exchange and compare
         device_manager.await_event(request_streams, &current_exchange_event);
@@ -969,12 +977,12 @@ async fn main() -> eyre::Result<()> {
 
         device_manager.record_event(request_streams, &next_dot_event);
 
-        debug_record_event!(device_manager, request_streams, timers);
+        debug_record_event!(device_manager, request_counter, request_streams);
 
         codes_engine.reshare_results(&current_db_size_stream, request_streams);
         masks_engine.reshare_results(&current_db_size_stream, request_streams);
 
-        debug_record_event!(device_manager, request_streams, timers);
+        debug_record_event!(device_manager, request_counter, request_streams);
 
         device_manager.record_event(request_streams, &next_exchange_event);
 
@@ -1132,6 +1140,8 @@ async fn main() -> eyre::Result<()> {
                 .map(|d| d.fork_default_stream().unwrap())
                 .collect::<Vec<_>>();
 
+            debug_record_event!(thread_device_manager, request_counter, &phase2_streams);
+
             // Phase 2 [Batch]: compare each result against threshold
             thread_phase2_batch.compare_threshold_masked_many(
                 &code_dots_batch,
@@ -1150,14 +1160,16 @@ async fn main() -> eyre::Result<()> {
             // Iterate over a list of tracing payloads, and create logs with mappings to
             // payloads Log at least a "start" event using a log with trace.id
             // and parent.trace.id
-            for tracing_payload in batch.metadata.iter() {
-                tracing::info!(
-                    node_id = tracing_payload.node_id,
-                    dd.trace_id = tracing_payload.trace_id,
-                    dd.span_id = tracing_payload.span_id,
-                    "Phase 2 finished",
-                );
-            }
+            // for tracing_payload in batch.metadata.iter() {
+            //     tracing::info!(
+            //         node_id = tracing_payload.node_id,
+            //         dd.trace_id = tracing_payload.trace_id,
+            //         dd.span_id = tracing_payload.span_id,
+            //         "Phase 2 finished",
+            //     );
+            // }
+
+            debug_record_event!(thread_device_manager, request_counter, &phase2_streams);
 
             let chunk_size_batch = thread_phase2_batch.chunk_size();
             open(
@@ -1171,6 +1183,8 @@ async fn main() -> eyre::Result<()> {
             );
             thread_phase2_batch.return_result_buffer(res);
 
+            debug_record_event!(thread_device_manager, request_counter, &phase2_streams);
+
             // Phase 2 [DB]: compare each result against threshold
             thread_phase2.compare_threshold_masked_many(&code_dots, &mask_dots, &phase2_streams);
 
@@ -1181,6 +1195,8 @@ async fn main() -> eyre::Result<()> {
                 &vec![QUERIES; thread_devs.len()],
                 &thread_devs,
             );
+
+            debug_record_event!(thread_device_manager, request_counter, &phase2_streams);
 
             let chunk_size = thread_phase2.chunk_size();
             open(
@@ -1194,6 +1210,8 @@ async fn main() -> eyre::Result<()> {
             );
             thread_phase2.return_result_buffer(res);
 
+            debug_record_event!(thread_device_manager, request_counter, &phase2_streams);
+
             // Merge results and fetch matching indices
             // Format: host_results[device_index][query_index]
             tmp_distance_comparator.merge_results(
@@ -1202,6 +1220,8 @@ async fn main() -> eyre::Result<()> {
                 &thread_request_final_results,
                 &phase2_streams,
             );
+
+            debug_record_event!(thread_device_manager, request_counter, &phase2_streams);
 
             thread_device_manager.await_streams(&phase2_streams);
 
@@ -1363,8 +1383,6 @@ async fn main() -> eyre::Result<()> {
         // Prepare for next batch
         server_tasks.check_tasks();
 
-        timer_events.push(timers);
-
         previous_previous_stream_event = previous_stream_event;
         previous_stream_event = current_stream_event;
         current_stream_event = device_manager.create_events();
@@ -1392,15 +1410,19 @@ async fn main() -> eyre::Result<()> {
 
     sleep(Duration::from_secs(5)).await;
 
-    for timers in timer_events {
-        unsafe {
-            device_manager.device(0).bind_to_thread().unwrap();
-            let dot_time = elapsed(timers[0][0], timers[1][0]).unwrap();
-            let exchange_time = elapsed(timers[2][0], timers[3][0]).unwrap();
-            println!(
-                "Dot time: {:?}, Exchange time: {:?}",
-                dot_time, exchange_time
-            );
+    {
+        let debug_events = DEBUG_EVENTS.lock().unwrap();
+        for i in 1..N_BATCHES {
+            let value = debug_events.get(&i).unwrap();
+            let mut total_time = 0f32;
+            println!("Results for batch {}:", i);
+            for j in 0..value[0].len() - 1 {
+                let elapsed =
+                    unsafe { elapsed(value[0][j] as *mut _, value[0][j + 1] as *mut _).unwrap() };
+                println!("  - Time for span {}: {:?}", j, elapsed);
+                total_time += elapsed;
+            }
+            println!("  == Total time for batch {}: {:?}", i, total_time);
         }
     }
 
