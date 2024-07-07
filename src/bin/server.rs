@@ -1142,11 +1142,11 @@ async fn main() -> eyre::Result<()> {
             debug_record_event!(thread_device_manager, request_counter, &phase2_streams);
 
             // Phase 2 [Batch]: compare each result against threshold
-            // thread_phase2_batch.compare_threshold_masked_many(
-            //     &code_dots_batch,
-            //     &mask_dots_batch,
-            //     &phase2_streams,
-            // );
+            thread_phase2_batch.compare_threshold_masked_many(
+                &code_dots_batch,
+                &mask_dots_batch,
+                &phase2_streams,
+            );
 
             // Phase 2 [Batch]: Reveal the binary results
             let res = thread_phase2_batch.take_result_buffer();
