@@ -14,7 +14,7 @@ axum = "0.7.5"
 base64 = "0.22.1"
 bytemuck = "1.15"
 clap = { version = "~4.4", features = ["derive"] }
-cudarc = { git = "https://github.com/rw0x0/cudarc.git", rev = "origin/transmute", features = [
+cudarc = { git = "https://github.com/philsippl/cudarc.git", rev = "b824f30", features = [
     "cuda-12020",
 ] }
 eyre = "0.6.12"
@@ -50,16 +50,20 @@ criterion = "0.5"
 #name = "chacha"
 #harness = false
 
-[[bench]]
-name = "matmul"
-harness = false
+#[[bench]]
+#name = "matmul"
+#harness = false
+
+#[[bench]]
+#name = "transpose"
+#harness = false
+
+#[[bench]]
+#name = "memcpy"
+#harness = false
 
 [[bench]]
-name = "transpose"
-harness = false
-
-[[bench]]
-name = "memcpy"
+name = "unified_mem"
 harness = false
 
 [profile.release]
