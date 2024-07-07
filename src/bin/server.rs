@@ -61,7 +61,7 @@ use tokio::{
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
-const DB_SIZE: usize = 8 * 150_000;
+const DB_SIZE: usize = 8 * 1_000;
 const DB_BUFFER: usize = 8 * 1_000;
 const N_QUERIES: usize = 32;
 const N_BATCHES: usize = 20;
@@ -1142,11 +1142,11 @@ async fn main() -> eyre::Result<()> {
             debug_record_event!(thread_device_manager, request_counter, &phase2_streams);
 
             // Phase 2 [Batch]: compare each result against threshold
-            thread_phase2_batch.compare_threshold_masked_many(
-                &code_dots_batch,
-                &mask_dots_batch,
-                &phase2_streams,
-            );
+            // thread_phase2_batch.compare_threshold_masked_many(
+            //     &code_dots_batch,
+            //     &mask_dots_batch,
+            //     &phase2_streams,
+            // );
 
             // Phase 2 [Batch]: Reveal the binary results
             let res = thread_phase2_batch.take_result_buffer();
