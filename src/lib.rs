@@ -5,5 +5,4 @@ pub mod rng;
 pub mod setup;
 pub mod store;
 pub mod threshold_ring;
-
 pub mod config;

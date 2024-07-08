@@ -1,0 +1,136 @@
+use clap::Parser;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+
+use crate::config::json_wrapper::{JsonStrWrapper};
+
+#[derive(Debug, Parser)]
+pub struct Opt {
+    #[structopt(long)]
+    requests_queue_url: String,
+
+    #[structopt(long)]
+    results_topic_arn: String,
+
+    #[structopt(long)]
+    party_id: usize,
+
+    #[structopt(long)]
+    bootstrap_url: Option<String>,
+
+    #[structopt(long)]
+    path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Config {
+    #[serde(default)]
+    pub environment: String,
+
+    #[serde(default)]
+    pub party_id: usize,
+
+    #[serde(default)]
+    pub requests_queue_url: String,
+
+    #[serde(default)]
+    pub results_topic_arn: Option<String>,
+
+    #[serde(default)]
+    pub path: String,
+
+    #[serde(default)]
+    pub kms_key_ids: JsonStrWrapper<Vec<String>>,
+
+    #[serde(default)]
+    pub bootstrap_url: Option<String>,
+
+    #[serde(default)]
+    pub service: Option<ServiceConfig>,
+
+    #[serde(default)]
+    pub database: Option<DbConfig>,
+
+    #[serde(default)]
+    pub aws: Option<AwsConfig>,
+}
+
+impl Config {
+    pub fn load_config<T>(prefix: &str) -> eyre::Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        let mut settings = config::Config::builder();
+        let settings = settings
+            .add_source(
+                config::Environment::with_prefix(prefix)
+                    .separator("__")
+                    .try_parsing(true),
+            )
+            .build()?;
+
+        let config = settings.try_deserialize::<T>()?;
+
+        Ok(config)
+    }
+
+    pub fn overwrite_defaults_with_cli_args(&mut self, opts: Opt) {
+        if let Some(requests_queue_url) = opts.requests_queue_url {
+            self.requests_queue_url = requests_queue_url;
+        }
+
+        if let Some(results_topic_arn) = opts.results_topic_arn {
+            self.results_topic_arn = Some(results_topic_arn);
+        }
+
+        if let Some(party_id) = opts.party_id {
+            self.party_id = party_id.to_string();
+        }
+
+        if let Some(bootstrap_url) = opts.bootstrap_url {
+            self.bootstrap_url = Some(bootstrap_url);
+        }
+
+        if let Some(path) = opts.path {
+            self.path = path;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DbConfig {
+    pub url: String,
+
+    #[serde(default)]
+    pub migrate: bool,
+
+    #[serde(default)]
+    pub create: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AwsConfig {
+    /// Useful when using something like LocalStack
+    pub endpoint: Option<String>,
+
+    #[serde(default)]
+    pub region: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceConfig {
+    // Service name - used for logging, metrics and tracing
+    pub service_name: String,
+    // Traces
+    pub traces_endpoint: Option<String>,
+    // Metrics
+    pub metrics: Option<MetricsConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsConfig {
+    pub host: String,
+    pub port: u16,
+    pub queue_size: usize,
+    pub buffer_size: usize,
+    pub prefix: String,
+}

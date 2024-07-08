@@ -14,8 +14,7 @@ use cudarc::driver::{
     CudaDevice, CudaSlice, CudaStream,
 };
 use gpu_iris_mpc::{
-    config,
-    config::Config,
+    config::config::{Config, Opt},
     dot::{
         device_manager::DeviceManager,
         distance_comparator::DistanceComparator,
@@ -59,6 +58,7 @@ use tokio::{
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
 const DB_BUFFER: usize = 8 * 1_000;
@@ -87,13 +87,12 @@ const MAX_CONCURRENT_BATCHES: usize = 2;
 
 const DB_CODE_FILE: &str = "codes.db";
 const DB_MASK_FILE: &str = "masks.db";
-const DEFAULT_PATH: &str = "/opt/dlami/nvme/";
 const QUERIES: usize = ROTATIONS * N_QUERIES;
-const KMS_KEY_IDS: [&str; 3] = [
-    "077788e2-9eeb-4044-859b-34496cfd500b",
-    "896353dc-5ea5-42d4-9e4e-f65dd8169dee",
-    "42bb01f5-8380-48b4-b1f1-929463a587fb",
-];
+// const KMS_KEY_IDS: [&str; 3] = [
+//     "077788e2-9eeb-4044-859b-34496cfd500b",
+//     "896353dc-5ea5-42d4-9e4e-f65dd8169dee",
+//     "42bb01f5-8380-48b4-b1f1-929463a587fb",
+// ];
 
 lazy_static! {
     static ref KDF_NONCE: AtomicUsize = AtomicUsize::new(0);
@@ -118,27 +117,6 @@ macro_rules! forget_vec {
     };
 }
 
-#[derive(Debug, Parser)]
-struct Opt {
-    #[structopt(short, long)]
-    queue: String,
-
-    #[structopt(short, long)]
-    results_topic_arn: String,
-
-    #[structopt(short, long)]
-    party_id: usize,
-
-    #[structopt(short, long)]
-    bootstrap_url: Option<String>,
-
-    #[structopt(short, long)]
-    path: Option<String>,
-
-    #[clap(short, long, env)]
-    config: Option<PathBuf>,
-}
-
 #[derive(Default)]
 struct BatchQueryEntries {
     pub code: Vec<GaloisRingIrisCodeShare>,
@@ -147,18 +125,18 @@ struct BatchQueryEntries {
 
 #[derive(Default)]
 struct BatchMetadata {
-    node_id:  String,
+    node_id: String,
     trace_id: String,
-    span_id:  String,
+    span_id: String,
 }
 
 #[derive(Default)]
 struct BatchQuery {
     pub request_ids: Vec<String>,
-    pub metadata:    Vec<BatchMetadata>,
-    pub query:       BatchQueryEntries,
-    pub db:          BatchQueryEntries,
-    pub store:       BatchQueryEntries,
+    pub metadata: Vec<BatchMetadata>,
+    pub query: BatchQueryEntries,
+    pub db: BatchQueryEntries,
+    pub store: BatchQueryEntries,
 }
 
 async fn receive_batch(
@@ -235,7 +213,7 @@ async fn receive_batch(
                         mask_share.all_rotations(),
                     )
                 })
-                .await?;
+                    .await?;
 
                 batch_query.store.code.push(store_iris_shares);
                 batch_query.store.mask.push(store_mask_shares);
@@ -279,8 +257,8 @@ fn slice_tuples_to_ptrs(
     (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
 ) {
     (
-        (device_ptrs(&tuple.0 .0), device_ptrs(&tuple.0 .1)),
-        (device_ptrs(&tuple.1 .0), device_ptrs(&tuple.1 .1)),
+        (device_ptrs(&tuple.0.0), device_ptrs(&tuple.0.1)),
+        (device_ptrs(&tuple.1.0), device_ptrs(&tuple.1.1)),
     )
 }
 
@@ -369,7 +347,7 @@ fn dtod_at_offset(
             len,
             stream_ptr,
         )
-        .unwrap();
+            .unwrap();
     }
 }
 
@@ -472,17 +450,8 @@ pub fn calculate_insertion_indices(
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     dotenvy::dotenv().ok();
-
-    let Opt {
-        queue,
-        party_id,
-        bootstrap_url,
-        path,
-        results_topic_arn,
-        config,
-    } = Opt::parse();
-
-    let config: Config = config::load_config("SMPC", config.as_deref())?;
+    let mut config: Config = Config::load_config("SMPC").unwrap();
+    config.overwrite_defaults_with_cli_args(Opt::parse());
 
     let _tracing_shutdown_handle = if let Some(service) = &config.service {
         let tracing_shutdown_handle = DatadogBattery::init(
@@ -512,7 +481,15 @@ async fn main() -> eyre::Result<()> {
         TracingShutdownHandle
     };
 
-    let path = path.unwrap_or(DEFAULT_PATH.to_string());
+    let Config {
+        path,
+        party_id,
+        results_topic_arn,
+        requests_queue_url,
+        bootstrap_url,
+        kms_key_ids,
+        ..
+    } = config;
 
     let code_db_path = format!("{}/{}", path, DB_CODE_FILE);
     let mask_db_path = format!("{}/{}", path, DB_MASK_FILE);
@@ -524,7 +501,7 @@ async fn main() -> eyre::Result<()> {
     let store = Store::new_from_env().await?;
 
     // Init RNGs
-    let own_key_id = KMS_KEY_IDS[party_id];
+    let own_key_id = kms_key_ids[party_id];
     let dh_pairs = match party_id {
         0 => (1usize, 2usize),
         1 => (2usize, 0usize),
@@ -533,8 +510,8 @@ async fn main() -> eyre::Result<()> {
     };
 
     let chacha_seeds = (
-        bytemuck::cast(derive_shared_secret(own_key_id, KMS_KEY_IDS[dh_pairs.0]).await?),
-        bytemuck::cast(derive_shared_secret(own_key_id, KMS_KEY_IDS[dh_pairs.1]).await?),
+        bytemuck::cast(derive_shared_secret(own_key_id, kms_key_ids[dh_pairs.0]).await?),
+        bytemuck::cast(derive_shared_secret(own_key_id, kms_key_ids[dh_pairs.1]).await?),
     );
 
     // Generate or load DB
@@ -791,7 +768,7 @@ async fn main() -> eyre::Result<()> {
 
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
-        let batch = receive_batch(party_id, &sqs_client, &queue).await?;
+        let batch = receive_batch(party_id, &sqs_client, &requests_queue_url).await?;
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id and
@@ -826,7 +803,7 @@ async fn main() -> eyre::Result<()> {
                     batch.store,
                 )
             })
-            .await?;
+                .await?;
 
         let mut timers = vec![];
 
@@ -924,8 +901,8 @@ async fn main() -> eyre::Result<()> {
         codes_engine.dot(
             &code_query,
             &(
-                device_ptrs(&code_db_slices.0 .0),
-                device_ptrs(&code_db_slices.0 .1),
+                device_ptrs(&code_db_slices.0.0),
+                device_ptrs(&code_db_slices.0.1),
             ),
             &current_db_size_stream,
             request_streams,
@@ -935,8 +912,8 @@ async fn main() -> eyre::Result<()> {
         masks_engine.dot(
             &mask_query,
             &(
-                device_ptrs(&mask_db_slices.0 .0),
-                device_ptrs(&mask_db_slices.0 .1),
+                device_ptrs(&mask_db_slices.0.0),
+                device_ptrs(&mask_db_slices.0.1),
             ),
             &current_db_size_stream,
             request_streams,
@@ -951,8 +928,8 @@ async fn main() -> eyre::Result<()> {
         codes_engine.dot_reduce(
             &code_query_sums,
             &(
-                device_ptrs(&code_db_slices.1 .0),
-                device_ptrs(&code_db_slices.1 .1),
+                device_ptrs(&code_db_slices.1.0),
+                device_ptrs(&code_db_slices.1.1),
             ),
             &current_db_size_stream,
             request_streams,
@@ -960,8 +937,8 @@ async fn main() -> eyre::Result<()> {
         masks_engine.dot_reduce(
             &mask_query_sums,
             &(
-                device_ptrs(&mask_db_slices.1 .0),
-                device_ptrs(&mask_db_slices.1 .1),
+                device_ptrs(&mask_db_slices.1.0),
+                device_ptrs(&mask_db_slices.1.1),
             ),
             &current_db_size_stream,
             request_streams,
@@ -1245,7 +1222,7 @@ async fn main() -> eyre::Result<()> {
                         ),
                     ] {
                         dtod_at_offset(
-                            db.0 .0[i],
+                            db.0.0[i],
                             old_db_size * IRIS_CODE_LENGTH,
                             query.0[i],
                             IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
@@ -1254,7 +1231,7 @@ async fn main() -> eyre::Result<()> {
                         );
 
                         dtod_at_offset(
-                            db.0 .1[i],
+                            db.0.1[i],
                             old_db_size * IRIS_CODE_LENGTH,
                             query.1[i],
                             IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
@@ -1263,7 +1240,7 @@ async fn main() -> eyre::Result<()> {
                         );
 
                         dtod_at_offset(
-                            db.1 .0[i],
+                            db.1.0[i],
                             old_db_size * mem::size_of::<u32>(),
                             sums.0[i],
                             mem::size_of::<u32>() * 15
@@ -1273,7 +1250,7 @@ async fn main() -> eyre::Result<()> {
                         );
 
                         dtod_at_offset(
-                            db.1 .1[i],
+                            db.1.1[i],
                             old_db_size * mem::size_of::<u32>(),
                             sums.1[i],
                             mem::size_of::<u32>() * 15
@@ -1319,7 +1296,7 @@ async fn main() -> eyre::Result<()> {
                         *&mut thread_current_stream_event[i],
                         *&mut thread_streams[i],
                     )
-                    .unwrap();
+                        .unwrap();
 
                     // DEBUG: emit event to measure time for e2e process
                     event::record(*&mut thread_end_timer[i], *&mut thread_streams[i]).unwrap();
