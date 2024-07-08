@@ -113,9 +113,9 @@ impl DistanceComparator {
 
     pub fn merge_results(
         &self,
-        match_results_self: &[u64],
-        match_results: &[u64],
-        final_results: &[u64],
+        match_results_self: &[CudaSlice<u32>],
+        match_results: &[CudaSlice<u32>],
+        final_results: &[CudaSlice<u32>],
         streams: &[CudaStream],
     ) {
         let num_elements = self.query_length / ROTATIONS;
@@ -128,29 +128,20 @@ impl DistanceComparator {
         };
 
         for i in 0..self.n_devices {
-            self.devs[i].bind_to_thread().unwrap();
-
-            let params = [
-                match_results_self[i],
-                match_results[i],
-                final_results[i],
-                (self.query_length / ROTATIONS) as u64,
-            ];
-
             unsafe {
-                let mut params = params
-                    .iter()
-                    .map(|x| x.as_kernel_param())
-                    .collect::<Vec<_>>();
-                launch_kernel(
-                    self.merge_kernels[i].cu_function,
-                    cfg.grid_dim,
-                    cfg.block_dim,
-                    cfg.shared_mem_bytes,
-                    streams[i].stream,
-                    &mut params,
-                )
-                .unwrap();
+                self.merge_kernels[i]
+                    .clone()
+                    .launch_on_stream(
+                        &streams[i],
+                        cfg,
+                        (
+                            &match_results_self[i],
+                            &match_results[i],
+                            &final_results[i],
+                            (self.query_length / ROTATIONS) as u64,
+                        ),
+                    )
+                    .unwrap();
             }
         }
     }

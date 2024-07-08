@@ -1,14 +1,18 @@
 use super::{device_manager::DeviceManager, IRIS_CODE_LENGTH};
 use crate::{
-    helpers::id_wrapper::{http_root, IdWrapper},
+    helpers::{
+        device_ptrs_to_shares,
+        id_wrapper::{http_root, IdWrapper},
+    },
     rng::chacha::ChaChaCudaRng,
+    threshold_ring::protocol::{self, ChunkShare},
 };
 use axum::{routing::get, Router};
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
-        result::malloc_async, sys::CUdeviceptr, CudaFunction, CudaSlice, CudaStream, DevicePtr,
-        LaunchAsync, LaunchConfig,
+        result::malloc_async, sys::CUdeviceptr, CudaDevice, CudaFunction, CudaSlice, CudaStream,
+        DevicePtr, LaunchAsync, LaunchConfig,
     },
     nccl::{self, result, Comm, Id, NcclType},
     nvrtc::compile_ptx,
@@ -627,6 +631,32 @@ impl ShareDB {
                 .dtoh_sync_copy_into(&res_trans.unwrap(), results)
                 .unwrap();
         }
+    }
+
+    pub fn result_chunk_shares(
+        &self,
+        db_sizes: &[usize],
+    ) -> Vec<ChunkShare<u16>> {
+        let results_ptrs = self
+            .results
+            .iter()
+            .map(|x| *x.device_ptr())
+            .collect::<Vec<_>>();
+        let results_peer_ptrs = self
+            .results_peer
+            .iter()
+            .map(|x| *x.device_ptr())
+            .collect::<Vec<_>>();
+
+        device_ptrs_to_shares(
+            &results_ptrs,
+            &results_peer_ptrs,
+            &db_sizes
+                .iter()
+                .map(|e| e * self.query_length)
+                .collect::<Vec<_>>(),
+            self.device_manager.devices(),
+        )
     }
 }
 

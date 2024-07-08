@@ -11,7 +11,7 @@ use cudarc::driver::{
         stream::synchronize,
     },
     sys::{CUdeviceptr, CUstream, CUstream_st},
-    CudaDevice, CudaSlice, CudaStream,
+    CudaDevice, CudaSlice, CudaStream, DevicePtr,
 };
 use gpu_iris_mpc::{
     config,
@@ -427,11 +427,11 @@ fn reset_results(
     devs: &[Arc<CudaDevice>],
     dst: &[CUdeviceptr],
     src: &[u32],
-    streams: &[CudaStream],
+    streams: &mut [&mut CUstream_st],
 ) {
     for i in 0..devs.len() {
         devs[i].bind_to_thread().unwrap();
-        unsafe { result::memcpy_htod_async(dst[i], src, streams[i].stream) }.unwrap();
+        unsafe { result::memcpy_htod_async(dst[i], src, streams[i]) }.unwrap();
     }
 }
 
@@ -468,6 +468,13 @@ pub fn calculate_insertion_indices(
         c += 1;
     }
 }
+
+// pub fn slices_to_shares<T>(a: Vec<CudaSlice<T>>, b: Vec<CudaSlice<T>>) ->
+// Vec<ChunkShare<T>> {     a.into_iter()
+//         .zip(b.into_iter())
+//         .map(|(a, b)| ChunkShare::new(unsafe {a.transmute(a.len() /
+// 2).unwrap()}, b))         .collect::<Vec<_>>()
+// }
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
@@ -655,7 +662,7 @@ async fn main() -> eyre::Result<()> {
         (QUERIES * (DB_SIZE + DB_BUFFER) / device_manager.device_count()).div_ceil(2048) * 2048;
     let phase2_batch_chunk_size = (QUERIES * QUERIES).div_ceil(2048) * 2048;
 
-    let phase2_batch = Arc::new(Mutex::new(Circuits::new(
+    let mut phase2_batch = Circuits::new(
         party_id,
         phase2_batch_chunk_size,
         phase2_batch_chunk_size,
@@ -663,7 +670,7 @@ async fn main() -> eyre::Result<()> {
         bootstrap_url.clone(),
         Some(4004),
         Some(&mut server_tasks),
-    )));
+    );
     server_tasks.check_tasks();
 
     let phase2 = Arc::new(Mutex::new(Circuits::new(
@@ -978,7 +985,56 @@ async fn main() -> eyre::Result<()> {
 
         device_manager.record_event(request_streams, &next_exchange_event);
 
-        println!("phase 1 done");
+        // Phase 2 [Batch]
+        let db_sizes_batch = vec![QUERIES; device_manager.device_count()];
+        let mut code_dots_batch = batch_codes_engine.result_chunk_shares(&db_sizes_batch);
+        let mut mask_dots_batch = batch_masks_engine.result_chunk_shares(&db_sizes_batch);
+        phase2_batch.compare_threshold_masked_many(
+            &code_dots_batch,
+            &mask_dots_batch,
+            &request_streams,
+        );
+        let res = phase2_batch.take_result_buffer();
+        let chunk_size = phase2_batch.chunk_size();
+        open(
+            &mut phase2_batch,
+            &res,
+            &distance_comparator.lock().unwrap(),
+            &request_results,
+            chunk_size,
+            &db_sizes_batch,
+            &request_streams,
+        );
+        phase2_batch.return_result_buffer(res);
+
+        // Phase 2 [DB]
+        let mut code_dots = codes_engine.result_chunk_shares(&current_db_size_stream);
+        let mut mask_dots = masks_engine.result_chunk_shares(&current_db_size_stream);
+        {
+            let mut phase2 = phase2.lock().unwrap();
+            phase2.compare_threshold_masked_many(&code_dots, &mask_dots, &request_streams);
+            let res = phase2.take_result_buffer();
+            let chunk_size = phase2.chunk_size();
+            open(
+                &mut phase2,
+                &res,
+                &distance_comparator.lock().unwrap(),
+                &request_results,
+                chunk_size,
+                &current_db_size_stream,
+                &request_streams,
+            );
+            phase2.return_result_buffer(res);
+        }
+
+        // Merge results and fetch matching indices
+        // Format: host_results[device_index][query_index]
+        distance_comparator.lock().unwrap().merge_results(
+            &request_results_batch,
+            &request_results,
+            &request_final_results,
+            &request_streams,
+        );
 
         // SAFETY:
         // - We are sending these streams and events to a single thread (without cloning
@@ -1015,72 +1071,29 @@ async fn main() -> eyre::Result<()> {
             .iter()
             .map(Arc::clone)
             .collect::<Vec<_>>();
-        let db_sizes_batch = query_db_size.clone();
         let thread_request_results_batch = device_ptrs(&request_results_batch);
         let thread_request_results = device_ptrs(&request_results);
         let thread_request_final_results = device_ptrs(&request_final_results);
 
-        // Batch phase 1 results
-        let thread_code_results_batch = device_ptrs(&batch_codes_engine.results);
-        let thread_code_results_peer_batch = device_ptrs(&batch_codes_engine.results_peer);
-        let thread_mask_results_batch = device_ptrs(&batch_masks_engine.results);
-        let thread_mask_results_peer_batch = device_ptrs(&batch_masks_engine.results_peer);
-
-        // DB phase 1 results
-        let thread_code_results = device_ptrs(&codes_engine.results);
-        let thread_code_results_peer = device_ptrs(&codes_engine.results_peer);
-        let thread_mask_results = device_ptrs(&masks_engine.results);
-        let thread_mask_results_peer = device_ptrs(&masks_engine.results_peer);
-
-        // SAFETY: phase2 and phase2_batch are only used in one spawned threat at a
-        // time.
-        let thread_phase2 = phase2.clone();
-        let thread_phase2_batch = phase2_batch.clone();
         let thread_distance_comparator = distance_comparator.clone();
+
         let thread_code_db_slices = slice_tuples_to_ptrs(&code_db_slices);
         let thread_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
         let thread_request_ids = batch.request_ids.clone();
         let thread_sender = tx.clone();
+        let thread_phase2 = phase2.clone();
 
         previous_thread_handle = Some(spawn_blocking(move || {
-            // Wait for Phase 1 to finish
-            await_streams(&mut thread_streams);
-
-            // Iterate over a list of tracing payloads, and create logs with mappings to
-            // payloads Log at least a "start" event using a log with trace.id
-            // and parent.trace.id
-            for tracing_payload in batch.metadata.iter() {
-                tracing::info!(
-                    node_id = tracing_payload.node_id,
-                    dd.trace_id = tracing_payload.trace_id,
-                    dd.span_id = tracing_payload.span_id,
-                    "Phase 1 finished",
-                );
-            }
-
-            // Wait for Phase 2 of previous round to finish in order to not have them
-            // overlapping. SAFETY: waiting here makes sure we don't access
-            // these mutable streams or events concurrently:
-            // - CUstream: thread_streams (only re-used after MAX_BATCHES_BEFORE_REUSE
-            //   batches),
-            // - CUevent: thread_current_stream_event, thread_end_timer,
-            // - Comm: phase2, phase2_batch.
             if previous_thread_handle.is_some() {
                 runtime::Handle::current()
                     .block_on(previous_thread_handle.unwrap())
                     .unwrap();
             }
+
+            // Wait for protocol to finish
+            await_streams(&mut thread_streams);
+
             let thread_devs = thread_device_manager.devices();
-            let mut thread_phase2_batch = thread_phase2_batch.lock().unwrap();
-            let mut thread_phase2 = thread_phase2.lock().unwrap();
-            let tmp_distance_comparator = thread_distance_comparator.lock().unwrap();
-            let (result_sizes, db_sizes): (Vec<_>, Vec<_>) = thread_current_db_size_mutex
-                .iter()
-                .map(|e| {
-                    let db_size = *e.lock().unwrap();
-                    (db_size * QUERIES, db_size)
-                })
-                .unzip();
 
             // Iterate over a list of tracing payloads, and create logs with mappings to
             // payloads Log at least a "start" event using a log with trace.id
@@ -1090,123 +1103,14 @@ async fn main() -> eyre::Result<()> {
                     node_id = tracing_payload.node_id,
                     dd.trace_id = tracing_payload.trace_id,
                     dd.span_id = tracing_payload.span_id,
-                    "Phase 2 finished",
+                    "Protocol finished",
                 );
             }
 
-            let result_sizes_batch = db_sizes_batch
-                .iter()
-                .map(|&e| e * QUERIES)
-                .collect::<Vec<_>>();
-
-            let mut code_dots_batch: Vec<ChunkShare<u16>> = device_ptrs_to_shares(
-                &thread_code_results_batch,
-                &thread_code_results_peer_batch,
-                &result_sizes_batch,
-                &thread_devs,
-            );
-            let mut mask_dots_batch: Vec<ChunkShare<u16>> = device_ptrs_to_shares(
-                &thread_mask_results_batch,
-                &thread_mask_results_peer_batch,
-                &result_sizes_batch,
-                &thread_devs,
-            );
-
-            let mut code_dots: Vec<ChunkShare<u16>> = device_ptrs_to_shares(
-                &thread_code_results,
-                &thread_code_results_peer,
-                &result_sizes,
-                &thread_devs,
-            );
-            let mut mask_dots: Vec<ChunkShare<u16>> = device_ptrs_to_shares(
-                &thread_mask_results,
-                &thread_mask_results_peer,
-                &result_sizes,
-                &thread_devs,
-            );
-
-            // TODO: use phase 1 streams here
-            let mut phase2_streams = thread_phase2
-                .get_devices()
-                .iter()
-                .map(|d| d.fork_default_stream().unwrap())
-                .collect::<Vec<_>>();
-
-            // Phase 2 [Batch]: compare each result against threshold
-            thread_phase2_batch.compare_threshold_masked_many(
-                &code_dots_batch,
-                &mask_dots_batch,
-                &phase2_streams,
-            );
-
-            // Phase 2 [Batch]: Reveal the binary results
-            let res = thread_phase2_batch.take_result_buffer();
-            let mut thread_request_results_slice_batch: Vec<CudaSlice<u32>> = device_ptrs_to_slices(
-                &thread_request_results_batch,
-                &vec![QUERIES; thread_devs.len()],
-                &thread_devs,
-            );
-
-            // Iterate over a list of tracing payloads, and create logs with mappings to
-            // payloads Log at least a "start" event using a log with trace.id
-            // and parent.trace.id
-            for tracing_payload in batch.metadata.iter() {
-                tracing::info!(
-                    node_id = tracing_payload.node_id,
-                    dd.trace_id = tracing_payload.trace_id,
-                    dd.span_id = tracing_payload.span_id,
-                    "Phase 2 finished",
-                );
-            }
-
-            let chunk_size_batch = thread_phase2_batch.chunk_size();
-            open(
-                &mut thread_phase2_batch,
-                &res,
-                &tmp_distance_comparator,
-                &thread_request_results_slice_batch,
-                chunk_size_batch,
-                &db_sizes_batch,
-                &phase2_streams,
-            );
-            thread_phase2_batch.return_result_buffer(res);
-
-            // Phase 2 [DB]: compare each result against threshold
-            thread_phase2.compare_threshold_masked_many(&code_dots, &mask_dots, &phase2_streams);
-
-            // Phase 2 [DB]: Reveal the binary results
-            let res = thread_phase2.take_result_buffer();
-            let mut thread_request_results_slice: Vec<CudaSlice<u32>> = device_ptrs_to_slices(
-                &thread_request_results,
-                &vec![QUERIES; thread_devs.len()],
-                &thread_devs,
-            );
-
-            let chunk_size = thread_phase2.chunk_size();
-            open(
-                &mut thread_phase2,
-                &res,
-                &tmp_distance_comparator,
-                &thread_request_results_slice,
-                chunk_size,
-                &db_sizes,
-                &phase2_streams,
-            );
-            thread_phase2.return_result_buffer(res);
-
-            // Merge results and fetch matching indices
-            // Format: host_results[device_index][query_index]
-            tmp_distance_comparator.merge_results(
-                &thread_request_results_batch,
-                &thread_request_results,
-                &thread_request_final_results,
-                &phase2_streams,
-            );
-
-            thread_device_manager.await_streams(&phase2_streams);
-
-            let host_results =
-                tmp_distance_comparator.fetch_final_results(&thread_request_final_results);
+            let host_results = thread_distance_comparator
+                .lock()
+                .unwrap()
+                .fetch_final_results(&thread_request_final_results);
 
             // Evaluate the results across devices
             // Format: merged_results[query_index]
@@ -1221,6 +1125,7 @@ async fn main() -> eyre::Result<()> {
                 .collect::<Vec<_>>();
 
             // Spread the insertions across devices.
+            let db_sizes = thread_current_db_size_mutex.iter().map(|e| *e.lock().unwrap()).collect::<Vec<_>>();
             let insertion_list = distribute_insertions(&insertion_list, &db_sizes);
 
             // Calculate the new indices for the inserted queries
@@ -1250,7 +1155,7 @@ async fn main() -> eyre::Result<()> {
                             query.0[i],
                             IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                             IRIS_CODE_LENGTH,
-                            phase2_streams[i].stream,
+                            &mut *thread_streams[i],
                         );
 
                         dtod_at_offset(
@@ -1259,7 +1164,7 @@ async fn main() -> eyre::Result<()> {
                             query.1[i],
                             IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                             IRIS_CODE_LENGTH,
-                            phase2_streams[i].stream,
+                            &mut *thread_streams[i],
                         );
 
                         dtod_at_offset(
@@ -1269,7 +1174,7 @@ async fn main() -> eyre::Result<()> {
                             mem::size_of::<u32>() * 15
                                 + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                             mem::size_of::<u32>(),
-                            phase2_streams[i].stream,
+                            &mut *thread_streams[i],
                         );
 
                         dtod_at_offset(
@@ -1279,7 +1184,7 @@ async fn main() -> eyre::Result<()> {
                             mem::size_of::<u32>() * 15
                                 + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                             mem::size_of::<u32>(),
-                            phase2_streams[i].stream,
+                            &mut *thread_streams[i],
                         );
                     }
                     old_db_size += 1;
@@ -1304,7 +1209,7 @@ async fn main() -> eyre::Result<()> {
                     .unwrap();
                 let new_chunk_size = (QUERIES * max_db_size).div_ceil(2048) * 2048;
                 assert!(new_chunk_size <= phase2_chunk_size_max);
-                thread_phase2.set_chunk_size(new_chunk_size / 64);
+                thread_phase2.lock().unwrap().set_chunk_size(new_chunk_size / 64);
 
                 // Emit stream finished event to unblock the stream after the following stream.
                 // Since previous timers are overwritten, only the final end timers are used to
@@ -1336,29 +1241,27 @@ async fn main() -> eyre::Result<()> {
                 &thread_device_manager.devices(),
                 &thread_request_results,
                 &RESULTS_INIT_HOST,
-                &mut phase2_streams,
+                &mut thread_streams,
             );
             reset_results(
                 &thread_device_manager.devices(),
                 &thread_request_results_batch,
                 &RESULTS_INIT_HOST,
-                &mut phase2_streams,
+                &mut thread_streams,
             );
             reset_results(
                 &thread_device_manager.devices(),
                 &thread_request_final_results,
                 &FINAL_RESULTS_INIT_HOST,
-                &mut phase2_streams,
+                &mut thread_streams,
             );
-
-            // Make sure to not call `Drop` on those
-            forget_vec!(code_dots);
-            forget_vec!(mask_dots);
-            forget_vec!(code_dots_batch);
-            forget_vec!(mask_dots_batch);
-            forget_vec!(thread_request_results_slice);
-            forget_vec!(thread_request_results_slice_batch);
         }));
+
+        // Make sure to not call `Drop` on those
+        forget_vec!(code_dots);
+        forget_vec!(mask_dots);
+        forget_vec!(code_dots_batch);
+        forget_vec!(mask_dots_batch);
 
         // Prepare for next batch
         server_tasks.check_tasks();

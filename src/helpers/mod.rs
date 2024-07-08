@@ -5,6 +5,8 @@ use cudarc::driver::{
 };
 use std::sync::Arc;
 
+use crate::threshold_ring::protocol::ChunkShare;
+
 pub mod aws;
 pub mod aws_sigv4;
 pub mod id_wrapper;
@@ -69,4 +71,19 @@ pub fn htod_on_stream_sync<T: DeviceRepr>(
         buf
     };
     Ok(buf)
+}
+
+pub fn device_ptrs_to_shares<T>(
+    a: &[CUdeviceptr],
+    b: &[CUdeviceptr],
+    lens: &[usize],
+    devs: &[Arc<CudaDevice>],
+) -> Vec<ChunkShare<T>> {
+    let a = device_ptrs_to_slices(a, lens, devs);
+    let b = device_ptrs_to_slices(b, lens, devs);
+
+    a.into_iter()
+        .zip(b.into_iter())
+        .map(|(a, b)| ChunkShare::new(a, b))
+        .collect::<Vec<_>>()
 }
