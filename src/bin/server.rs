@@ -494,7 +494,10 @@ async fn main() -> eyre::Result<()> {
     let store = Store::new_from_env().await?;
 
     // Init RNGs
-    let own_key_id = kms_key_ids.0.get(party_id).unwrap();
+    let own_key_id = kms_key_ids
+        .0
+        .get(party_id)
+        .expect("Expected value not found in kms_key_ids");
     let dh_pairs = match party_id {
         0 => (1usize, 2usize),
         1 => (2usize, 0usize),
