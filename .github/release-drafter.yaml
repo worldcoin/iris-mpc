@@ -1,0 +1,62 @@
+name-template: "v$RESOLVED_VERSION"
+tag-template: "v$RESOLVED_VERSION"
+filter-by-commitish: true
+
+categories:
+  - title: "Features"
+    labels:
+      - "feature"
+      - "enhancement"
+  - title: "Bug Fixes"
+    labels:
+      - "fix"
+      - "bugfix"
+      - "bug"
+      - "patch"
+  - title: "Maintenance"
+    label: "chore"
+
+version-resolver:
+  major:
+    labels:
+      - "major"
+      - "breaking"
+  minor:
+    labels:
+      - "minor"
+      - "feature"
+      - "enhancement"
+  patch:
+    labels:
+      - "patch"
+      - "fix"
+  default: patch
+
+template: |
+  ## Changes
+
+  $CHANGES
+
+autolabeler:
+  - label: "chore"
+    files:
+      - "*.md"
+
+  - label: "patch"
+    branch:
+      - '/fix\/.+/'
+    title:
+      - "/fix/i"
+
+  - label: "enhancement"
+    branch:
+      - '/feat\/.+/'
+      - "/INFRA-[0-9]{1,4}/"
+    body:
+      - "/INFRA-[0-9]{1,4}/"
+
+  - label: "breaking"
+    branch:
+      - '/breaking\/.+/'
+    body:
+      - "/BREAKING/"

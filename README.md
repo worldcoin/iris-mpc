@@ -1,5 +1,14 @@
 # gpu-iris-mpc
 
+## How to release
+
+New releases are created automagically by [Release Drafter GH action](https://github.com/worldcoin//gpu-iris-mpc/actions/workflows/release.yaml).
+
+Type of release bump is made of commits (tags feat/bugfix/etc...).
+
+Release is created as draft, so you have to edit it manually and change it to final.
+
+
 ## Setup
 - Node PoC implementation in `src/bin/server.rs`
 - Example client in `src/bin/client.rs`
