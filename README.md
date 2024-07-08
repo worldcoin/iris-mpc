@@ -8,6 +8,8 @@ Type of release bump is made of commits (tags feat/bugfix/etc...).
 
 Release is created as draft, so you have to edit it manually and change it to final.
 
+After release creation the build image is starting with tag with release number.
+
 
 ## Setup
 - Node PoC implementation in `src/bin/server.rs`
