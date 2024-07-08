@@ -266,6 +266,7 @@ async fn main() -> eyre::Result<()> {
     }
 
     // Receive all messages
+    sleep(Duration::from_secs(5)).await;
     recv_thread.await??;
 
     Ok(())

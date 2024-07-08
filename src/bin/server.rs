@@ -1103,7 +1103,10 @@ async fn main() -> eyre::Result<()> {
                 .collect::<Vec<_>>();
 
             // Spread the insertions across devices.
-            let db_sizes = thread_current_db_size_mutex.iter().map(|e| *e.lock().unwrap()).collect::<Vec<_>>();
+            let db_sizes = thread_current_db_size_mutex
+                .iter()
+                .map(|e| *e.lock().unwrap())
+                .collect::<Vec<_>>();
             let insertion_list = distribute_insertions(&insertion_list, &db_sizes);
 
             // Calculate the new indices for the inserted queries
@@ -1187,7 +1190,10 @@ async fn main() -> eyre::Result<()> {
                     .unwrap();
                 let new_chunk_size = (QUERIES * max_db_size).div_ceil(2048) * 2048;
                 assert!(new_chunk_size <= phase2_chunk_size_max);
-                thread_phase2.lock().unwrap().set_chunk_size(new_chunk_size / 64);
+                thread_phase2
+                    .lock()
+                    .unwrap()
+                    .set_chunk_size(new_chunk_size / 64);
 
                 // Emit stream finished event to unblock the stream after the following stream.
                 // Since previous timers are overwritten, only the final end timers are used to
@@ -1240,7 +1246,6 @@ async fn main() -> eyre::Result<()> {
             forget_vec!(code_dots_batch);
             forget_vec!(mask_dots_batch);
         }));
-
 
         // Prepare for next batch
         server_tasks.check_tasks();

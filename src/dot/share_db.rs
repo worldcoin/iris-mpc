@@ -633,10 +633,7 @@ impl ShareDB {
         }
     }
 
-    pub fn result_chunk_shares(
-        &self,
-        db_sizes: &[usize],
-    ) -> Vec<ChunkShare<u16>> {
+    pub fn result_chunk_shares(&self, db_sizes: &[usize]) -> Vec<ChunkShare<u16>> {
         let results_ptrs = self
             .results
             .iter()

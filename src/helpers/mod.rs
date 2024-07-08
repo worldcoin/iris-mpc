@@ -1,11 +1,10 @@
+use crate::threshold_ring::protocol::ChunkShare;
 use cudarc::driver::{
     result::{memcpy_dtoh_async, memcpy_htod_async, stream},
     sys::CUdeviceptr,
     CudaDevice, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceRepr, DriverError,
 };
 use std::sync::Arc;
-
-use crate::threshold_ring::protocol::ChunkShare;
 
 pub mod aws;
 pub mod aws_sigv4;
