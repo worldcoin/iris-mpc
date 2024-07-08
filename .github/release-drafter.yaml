@@ -51,9 +51,9 @@ autolabeler:
   - label: "enhancement"
     branch:
       - '/feat\/.+/'
-      - "/INFRA-[0-9]{1,4}/"
+      - "/TBD-[0-9]{1,4}/"
     body:
-      - "/INFRA-[0-9]{1,4}/"
+      - "/TBD-[0-9]{1,4}/"
 
   - label: "breaking"
     branch:
