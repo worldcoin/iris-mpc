@@ -64,7 +64,7 @@ const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
 const DB_BUFFER: usize = 8 * 1_000;
 const N_QUERIES: usize = 32;
-const N_BATCHES: usize = 20;
+const N_BATCHES: usize = 10;
 const RNG_SEED: u64 = 42;
 /// The number of batches before a stream is re-used.
 const MAX_BATCHES_BEFORE_REUSE: usize = 20;
@@ -669,7 +669,7 @@ async fn main() -> eyre::Result<()> {
     let phase2_batch = Arc::new(Mutex::new(Circuits::new(
         party_id,
         phase2_batch_chunk_size,
-        phase2_batch_chunk_size,
+        phase2_batch_chunk_size / 64,
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(4004),
@@ -869,6 +869,8 @@ async fn main() -> eyre::Result<()> {
             codes_engine.query_sums(&code_query_insert, request_streams, request_cublas_handles);
         let mask_query_insert_sums =
             masks_engine.query_sums(&mask_query_insert, request_streams, request_cublas_handles);
+
+        debug_record_event!(device_manager, request_counter, request_streams);
 
         if request_counter >= MAX_CONCURRENT_BATCHES{
             // We have two streams working concurrently, we'll await the stream before
