@@ -14,7 +14,7 @@ use cudarc::driver::{
     CudaDevice, CudaSlice, CudaStream,
 };
 use gpu_iris_mpc::{
-    config::config::{Config, Opt},
+    config::config::{Config, Opt, ServersConfig},
     dot::{
         device_manager::DeviceManager,
         distance_comparator::DistanceComparator,
@@ -570,6 +570,15 @@ async fn main() -> eyre::Result<()> {
     let device_manager = Arc::new(DeviceManager::init());
     let mut server_tasks = TaskMonitor::new();
 
+    let ServersConfig {
+        codes_engine_port,
+        masks_engine_port,
+        batch_codes_engine_port,
+        batch_masks_engine_port,
+        phase_2_port,
+        phase_2_batch_port,
+    } = config.servers;
+
     // Phase 1 Setup
     let mut codes_engine = ShareDB::init(
         party_id,
@@ -579,7 +588,7 @@ async fn main() -> eyre::Result<()> {
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(true),
-        Some(4000),
+        Some(codes_engine_port),
         Some(&mut server_tasks),
     );
     server_tasks.check_tasks();
@@ -592,7 +601,7 @@ async fn main() -> eyre::Result<()> {
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(true),
-        Some(4001),
+        Some(masks_engine_port),
         Some(&mut server_tasks),
     );
     server_tasks.check_tasks();
@@ -609,7 +618,7 @@ async fn main() -> eyre::Result<()> {
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(true),
-        Some(4002),
+        Some(batch_codes_engine_port),
         Some(&mut server_tasks),
     );
     server_tasks.check_tasks();
@@ -622,7 +631,7 @@ async fn main() -> eyre::Result<()> {
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(true),
-        Some(4003),
+        Some(batch_masks_engine_port),
         Some(&mut server_tasks),
     );
     server_tasks.check_tasks();
@@ -640,7 +649,7 @@ async fn main() -> eyre::Result<()> {
         phase2_batch_chunk_size,
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
-        Some(4004),
+        Some(phase_2_batch_port),
         Some(&mut server_tasks),
     )));
     server_tasks.check_tasks();
@@ -651,7 +660,7 @@ async fn main() -> eyre::Result<()> {
         phase2_chunk_size_max / 64,
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
-        Some(4005),
+        Some(phase_2_port),
         Some(&mut server_tasks),
     )));
     server_tasks.check_tasks();

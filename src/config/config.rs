@@ -44,6 +44,9 @@ pub struct Config {
     pub bootstrap_url: Option<String>,
 
     #[serde(default)]
+    pub servers: ServersConfig,
+
+    #[serde(default)]
     pub service: Option<ServiceConfig>,
 
     #[serde(default)]
@@ -131,4 +134,14 @@ pub struct MetricsConfig {
     pub queue_size:  usize,
     pub buffer_size: usize,
     pub prefix:      String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ServersConfig {
+    pub codes_engine_port:       u16,
+    pub masks_engine_port:       u16,
+    pub batch_codes_engine_port: u16,
+    pub batch_masks_engine_port: u16,
+    pub phase_2_batch_port:      u16,
+    pub phase_2_port:            u16,
 }
