@@ -1,7 +1,7 @@
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
-use crate::config::json_wrapper::{JsonStrWrapper};
+use crate::config::json_wrapper::JsonStrWrapper;
 
 #[derive(Debug, Parser)]
 pub struct Opt {

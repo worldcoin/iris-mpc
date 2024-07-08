@@ -34,10 +34,7 @@ impl<T> Serialize for JsonStrWrapper<T>
 where
     T: Serialize,
 {
-    fn serialize<S: serde::Serializer>(
-        &self,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serde_json::to_string(&self.0)
             .map_err(serde::ser::Error::custom)?
             .serialize(serializer)
@@ -50,9 +47,7 @@ where
     // Deserialize<'de> here?
     T: DeserializeOwned,
 {
-    fn deserialize<D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = Cow::<'static, str>::deserialize(deserializer)?;
 
         serde_json::from_str(&s)
@@ -81,8 +76,7 @@ mod tests {
 
         assert_eq!(s, "\"[1,2,3]\"");
 
-        let wrapper: JsonStrWrapper<Vec<u32>> =
-            serde_json::from_str(&s).unwrap();
+        let wrapper: JsonStrWrapper<Vec<u32>> = serde_json::from_str(&s).unwrap();
 
         assert_eq!(wrapper.0, vec![1, 2, 3]);
     }
@@ -95,8 +89,7 @@ mod tests {
 
         assert_eq!(s, Value::String("[1,2,3]".to_string()));
 
-        let wrapper: JsonStrWrapper<Vec<u32>> =
-            serde_json::from_value(s).unwrap();
+        let wrapper: JsonStrWrapper<Vec<u32>> = serde_json::from_value(s).unwrap();
 
         assert_eq!(wrapper.0, vec![1, 2, 3]);
     }
