@@ -17,3 +17,7 @@ jobs:
         run: rustup component add rustfmt
       - name: Run Rustfmt
         run: cargo fmt -- --check
+      - name: Install Rust clippy for for checking clippy errors
+        run: rustup component add clippy
+      - name: Run Rust Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings --no-deps
