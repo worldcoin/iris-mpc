@@ -2,7 +2,7 @@ use cudarc::{
     cublas::CudaBlas,
     driver::{
         result::{
-            self, event, malloc_async, memcpy_htod_async,
+            self, event, free_async, malloc_async, memcpy_htod_async,
             stream::{synchronize, wait_event},
         },
         sys::{CUdeviceptr, CUevent, CUevent_flags},
@@ -109,6 +109,19 @@ impl DeviceManager {
             query1_ptrs.push(query1);
         }
         (query0_ptrs, query1_ptrs)
+    }
+
+    pub fn device_delete_query(
+        &self,
+        streams: &[CudaStream],
+        (q0, q1): &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
+    ) -> eyre::Result<()> {
+        for idx in 0..self.device_count() {
+            self.device(idx).bind_to_thread()?;
+            unsafe { free_async(q0[idx], streams[idx].stream).unwrap() };
+            unsafe { free_async(q1[idx], streams[idx].stream).unwrap() };
+        }
+        Ok(())
     }
 
     pub fn device(&self, index: usize) -> Arc<CudaDevice> {
