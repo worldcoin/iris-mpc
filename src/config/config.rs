@@ -1,7 +1,6 @@
+use crate::config::json_wrapper::JsonStrWrapper;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
-
-use crate::config::json_wrapper::JsonStrWrapper;
 
 #[derive(Debug, Parser)]
 pub struct Opt {
@@ -118,18 +117,18 @@ pub struct AwsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceConfig {
     // Service name - used for logging, metrics and tracing
-    pub service_name: String,
+    pub service_name:    String,
     // Traces
     pub traces_endpoint: Option<String>,
     // Metrics
-    pub metrics: Option<MetricsConfig>,
+    pub metrics:         Option<MetricsConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricsConfig {
-    pub host: String,
-    pub port: u16,
-    pub queue_size: usize,
+    pub host:        String,
+    pub port:        u16,
+    pub queue_size:  usize,
     pub buffer_size: usize,
-    pub prefix: String,
+    pub prefix:      String,
 }

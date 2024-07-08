@@ -1,9 +1,5 @@
-use std::borrow::Cow;
-use std::fmt;
-use std::str::FromStr;
-
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::{borrow::Cow, fmt, str::FromStr};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct JsonStrWrapper<T>(pub T);
@@ -64,9 +60,8 @@ impl<T> From<T> for JsonStrWrapper<T> {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::Value;
-
     use super::*;
+    use serde_json::Value;
 
     #[test]
     fn json() {
