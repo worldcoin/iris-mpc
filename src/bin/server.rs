@@ -207,7 +207,7 @@ async fn receive_batch(
                         mask_share.all_rotations(),
                     )
                 })
-                    .await?;
+                .await?;
 
                 batch_query.store.code.push(store_iris_shares);
                 batch_query.store.mask.push(store_mask_shares);
@@ -251,8 +251,8 @@ fn slice_tuples_to_ptrs(
     (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
 ) {
     (
-        (device_ptrs(&tuple.0.0), device_ptrs(&tuple.0.1)),
-        (device_ptrs(&tuple.1.0), device_ptrs(&tuple.1.1)),
+        (device_ptrs(&tuple.0 .0), device_ptrs(&tuple.0 .1)),
+        (device_ptrs(&tuple.1 .0), device_ptrs(&tuple.1 .1)),
     )
 }
 
@@ -341,7 +341,7 @@ fn dtod_at_offset(
             len,
             stream_ptr,
         )
-            .unwrap();
+        .unwrap();
     }
 }
 
@@ -806,7 +806,7 @@ async fn main() -> eyre::Result<()> {
                     batch.store,
                 )
             })
-                .await?;
+            .await?;
 
         let mut timers = vec![];
 
@@ -904,8 +904,8 @@ async fn main() -> eyre::Result<()> {
         codes_engine.dot(
             &code_query,
             &(
-                device_ptrs(&code_db_slices.0.0),
-                device_ptrs(&code_db_slices.0.1),
+                device_ptrs(&code_db_slices.0 .0),
+                device_ptrs(&code_db_slices.0 .1),
             ),
             &current_db_size_stream,
             request_streams,
@@ -915,8 +915,8 @@ async fn main() -> eyre::Result<()> {
         masks_engine.dot(
             &mask_query,
             &(
-                device_ptrs(&mask_db_slices.0.0),
-                device_ptrs(&mask_db_slices.0.1),
+                device_ptrs(&mask_db_slices.0 .0),
+                device_ptrs(&mask_db_slices.0 .1),
             ),
             &current_db_size_stream,
             request_streams,
@@ -931,8 +931,8 @@ async fn main() -> eyre::Result<()> {
         codes_engine.dot_reduce(
             &code_query_sums,
             &(
-                device_ptrs(&code_db_slices.1.0),
-                device_ptrs(&code_db_slices.1.1),
+                device_ptrs(&code_db_slices.1 .0),
+                device_ptrs(&code_db_slices.1 .1),
             ),
             &current_db_size_stream,
             request_streams,
@@ -940,8 +940,8 @@ async fn main() -> eyre::Result<()> {
         masks_engine.dot_reduce(
             &mask_query_sums,
             &(
-                device_ptrs(&mask_db_slices.1.0),
-                device_ptrs(&mask_db_slices.1.1),
+                device_ptrs(&mask_db_slices.1 .0),
+                device_ptrs(&mask_db_slices.1 .1),
             ),
             &current_db_size_stream,
             request_streams,
@@ -1225,7 +1225,7 @@ async fn main() -> eyre::Result<()> {
                         ),
                     ] {
                         dtod_at_offset(
-                            db.0.0[i],
+                            db.0 .0[i],
                             old_db_size * IRIS_CODE_LENGTH,
                             query.0[i],
                             IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
@@ -1234,7 +1234,7 @@ async fn main() -> eyre::Result<()> {
                         );
 
                         dtod_at_offset(
-                            db.0.1[i],
+                            db.0 .1[i],
                             old_db_size * IRIS_CODE_LENGTH,
                             query.1[i],
                             IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
@@ -1243,7 +1243,7 @@ async fn main() -> eyre::Result<()> {
                         );
 
                         dtod_at_offset(
-                            db.1.0[i],
+                            db.1 .0[i],
                             old_db_size * mem::size_of::<u32>(),
                             sums.0[i],
                             mem::size_of::<u32>() * 15
@@ -1253,7 +1253,7 @@ async fn main() -> eyre::Result<()> {
                         );
 
                         dtod_at_offset(
-                            db.1.1[i],
+                            db.1 .1[i],
                             old_db_size * mem::size_of::<u32>(),
                             sums.1[i],
                             mem::size_of::<u32>() * 15
@@ -1299,7 +1299,7 @@ async fn main() -> eyre::Result<()> {
                         *&mut thread_current_stream_event[i],
                         *&mut thread_streams[i],
                     )
-                        .unwrap();
+                    .unwrap();
 
                     // DEBUG: emit event to measure time for e2e process
                     event::record(*&mut thread_end_timer[i], *&mut thread_streams[i]).unwrap();
