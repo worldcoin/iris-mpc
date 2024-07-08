@@ -1,18 +1,18 @@
 use clap::Parser;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 use crate::config::json_wrapper::{JsonStrWrapper};
 
 #[derive(Debug, Parser)]
 pub struct Opt {
     #[structopt(long)]
-    requests_queue_url: String,
+    requests_queue_url: Option<String>,
 
     #[structopt(long)]
-    results_topic_arn: String,
+    results_topic_arn: Option<String>,
 
     #[structopt(long)]
-    party_id: usize,
+    party_id: Option<usize>,
 
     #[structopt(long)]
     bootstrap_url: Option<String>,
@@ -33,7 +33,7 @@ pub struct Config {
     pub requests_queue_url: String,
 
     #[serde(default)]
-    pub results_topic_arn: Option<String>,
+    pub results_topic_arn: String,
 
     #[serde(default)]
     pub path: String,
@@ -55,11 +55,8 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn load_config<T>(prefix: &str) -> eyre::Result<T>
-    where
-        T: DeserializeOwned,
-    {
-        let mut settings = config::Config::builder();
+    pub fn load_config(prefix: &str) -> eyre::Result<Config> {
+        let settings = config::Config::builder();
         let settings = settings
             .add_source(
                 config::Environment::with_prefix(prefix)
@@ -68,7 +65,9 @@ impl Config {
             )
             .build()?;
 
-        let config = settings.try_deserialize::<T>()?;
+        let config: Config = settings.try_deserialize::<Config>()?;
+
+        println!("Debug config: {config:?}");
 
         Ok(config)
     }
@@ -79,11 +78,11 @@ impl Config {
         }
 
         if let Some(results_topic_arn) = opts.results_topic_arn {
-            self.results_topic_arn = Some(results_topic_arn);
+            self.results_topic_arn = results_topic_arn;
         }
 
         if let Some(party_id) = opts.party_id {
-            self.party_id = party_id.to_string();
+            self.party_id = party_id;
         }
 
         if let Some(bootstrap_url) = opts.bootstrap_url {

@@ -42,7 +42,6 @@ use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{
     fs::metadata,
     mem,
-    path::PathBuf,
     sync::{atomic::AtomicUsize, Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -88,11 +87,6 @@ const MAX_CONCURRENT_BATCHES: usize = 2;
 const DB_CODE_FILE: &str = "codes.db";
 const DB_MASK_FILE: &str = "masks.db";
 const QUERIES: usize = ROTATIONS * N_QUERIES;
-// const KMS_KEY_IDS: [&str; 3] = [
-//     "077788e2-9eeb-4044-859b-34496cfd500b",
-//     "896353dc-5ea5-42d4-9e4e-f65dd8169dee",
-//     "42bb01f5-8380-48b4-b1f1-929463a587fb",
-// ];
 
 lazy_static! {
     static ref KDF_NONCE: AtomicUsize = AtomicUsize::new(0);
@@ -501,7 +495,7 @@ async fn main() -> eyre::Result<()> {
     let store = Store::new_from_env().await?;
 
     // Init RNGs
-    let own_key_id = kms_key_ids[party_id];
+    let own_key_id = kms_key_ids.0.get(party_id).unwrap();
     let dh_pairs = match party_id {
         0 => (1usize, 2usize),
         1 => (2usize, 0usize),
@@ -509,9 +503,18 @@ async fn main() -> eyre::Result<()> {
         _ => unimplemented!(),
     };
 
+    let dh_pair_0: &str = match kms_key_ids.0.get(dh_pairs.0) {
+        Some(str) => str,
+        None => unimplemented!(),
+    };
+    let dh_pair_1: &str = match kms_key_ids.0.get(dh_pairs.1) {
+        Some(str) => str,
+        None => unimplemented!(),
+    };
+
     let chacha_seeds = (
-        bytemuck::cast(derive_shared_secret(own_key_id, kms_key_ids[dh_pairs.0]).await?),
-        bytemuck::cast(derive_shared_secret(own_key_id, kms_key_ids[dh_pairs.1]).await?),
+        bytemuck::cast(derive_shared_secret(own_key_id, dh_pair_0).await?),
+        bytemuck::cast(derive_shared_secret(own_key_id, dh_pair_1).await?),
     );
 
     // Generate or load DB
