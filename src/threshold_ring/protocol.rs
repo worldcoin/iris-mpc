@@ -215,6 +215,7 @@ struct Buffers {
     single_u16_128c_1: Option<Vec<CudaSlice<u16>>>,
     single_u16_128c_2: Option<Vec<CudaSlice<u16>>>,
     single_u16_128c_3: Option<Vec<CudaSlice<u16>>>,
+    chunk_size:        usize,
 }
 
 impl Buffers {
@@ -244,6 +245,7 @@ impl Buffers {
             single_u16_128c_1,
             single_u16_128c_2,
             single_u16_128c_3,
+            chunk_size,
         }
     }
 
@@ -369,10 +371,10 @@ impl Circuits {
         device_manager: Arc<DeviceManager>,
     ) -> Self {
         // For the transpose, inputs should be multiple of 64 bits
-        debug_assert!(input_size % 64 == 0);
+        assert!(input_size % 64 == 0);
         // Chunk size is the number of u64 elements per bit in the binary circuits
         let chunk_size = input_size / 64;
-        debug_assert!(alloc_size >= chunk_size);
+        assert!(alloc_size >= chunk_size);
         let n_devices = device_manager.device_count();
 
         let mut devs = Vec::with_capacity(n_devices);
@@ -412,6 +414,7 @@ impl Circuits {
 
     // TODO: have different chunk sizes for each gpu
     pub fn set_chunk_size(&mut self, chunk_size: usize) {
+        assert!(chunk_size <= self.buffers.chunk_size);
         self.chunk_size = chunk_size;
     }
 
@@ -1898,6 +1901,9 @@ impl Circuits {
     ) {
         debug_assert_eq!(self.n_devices, code_dots.len());
         debug_assert_eq!(self.n_devices, mask_dots.len());
+        for chunk in code_dots.iter().chain(mask_dots.iter()) {
+            debug_assert!(chunk.len() % 64 == 0);
+        }
 
         let x_ = Buffers::take_buffer(&mut self.buffers.u32_64c_1);
         let corrections_ = Buffers::take_buffer(&mut self.buffers.u16_128c_1);
