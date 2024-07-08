@@ -57,7 +57,6 @@ use tokio::{
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
 const DB_BUFFER: usize = 8 * 1_000;
@@ -503,14 +502,14 @@ async fn main() -> eyre::Result<()> {
         _ => unimplemented!(),
     };
 
-    let dh_pair_0: &str = match kms_key_ids.0.get(dh_pairs.0) {
-        Some(str) => str,
-        None => unimplemented!(),
-    };
-    let dh_pair_1: &str = match kms_key_ids.0.get(dh_pairs.1) {
-        Some(str) => str,
-        None => unimplemented!(),
-    };
+    let dh_pair_0: &str = kms_key_ids
+        .0
+        .get(dh_pairs.0)
+        .expect("Expected value not found in kms_key_ids");
+    let dh_pair_1: &str = kms_key_ids
+        .0
+        .get(dh_pairs.1)
+        .expect("Expected value not found in kms_key_ids");
 
     let chacha_seeds = (
         bytemuck::cast(derive_shared_secret(own_key_id, dh_pair_0).await?),
