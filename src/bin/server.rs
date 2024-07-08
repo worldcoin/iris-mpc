@@ -964,26 +964,26 @@ async fn main() -> eyre::Result<()> {
         device_manager.record_event(request_streams, &next_exchange_event);
 
         // Phase 2 [Batch]
-        // let db_sizes_batch = vec![QUERIES; device_manager.device_count()];
-        // let mut code_dots_batch = batch_codes_engine.result_chunk_shares(&db_sizes_batch);
-        // let mut mask_dots_batch = batch_masks_engine.result_chunk_shares(&db_sizes_batch);
-        // phase2_batch.compare_threshold_masked_many(
-        //     &code_dots_batch,
-        //     &mask_dots_batch,
-        //     &request_streams,
-        // );
-        // let res = phase2_batch.take_result_buffer();
-        // let chunk_size = phase2_batch.chunk_size();
-        // open(
-        //     &mut phase2_batch,
-        //     &res,
-        //     &distance_comparator.lock().unwrap(),
-        //     &request_results,
-        //     chunk_size,
-        //     &db_sizes_batch,
-        //     &request_streams,
-        // );
-        // phase2_batch.return_result_buffer(res);
+        let db_sizes_batch = vec![QUERIES; device_manager.device_count()];
+        let mut code_dots_batch = batch_codes_engine.result_chunk_shares(&db_sizes_batch);
+        let mut mask_dots_batch = batch_masks_engine.result_chunk_shares(&db_sizes_batch);
+        phase2_batch.compare_threshold_masked_many(
+            &code_dots_batch,
+            &mask_dots_batch,
+            &request_streams,
+        );
+        let res = phase2_batch.take_result_buffer();
+        let chunk_size = phase2_batch.chunk_size();
+        open(
+            &mut phase2_batch,
+            &res,
+            &distance_comparator.lock().unwrap(),
+            &request_results_batch,
+            chunk_size,
+            &db_sizes_batch,
+            &request_streams,
+        );
+        phase2_batch.return_result_buffer(res);
 
         // Phase 2 [DB]
         let mut code_dots = codes_engine.result_chunk_shares(&current_db_size_stream);
@@ -1233,13 +1233,14 @@ async fn main() -> eyre::Result<()> {
                 &FINAL_RESULTS_INIT_HOST,
                 &mut thread_streams,
             );
+
+            // Make sure to not call `Drop` on those
+            forget_vec!(code_dots);
+            forget_vec!(mask_dots);
+            forget_vec!(code_dots_batch);
+            forget_vec!(mask_dots_batch);
         }));
 
-        // Make sure to not call `Drop` on those
-        // forget_vec!(code_dots);
-        // forget_vec!(mask_dots);
-        // forget_vec!(code_dots_batch);
-        // forget_vec!(mask_dots_batch);
 
         // Prepare for next batch
         server_tasks.check_tasks();
