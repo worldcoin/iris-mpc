@@ -11,7 +11,7 @@ use cudarc::driver::{
         stream::synchronize,
     },
     sys::{CUdeviceptr, CUstream, CUstream_st},
-    CudaDevice, CudaSlice, CudaStream, DevicePtr,
+    CudaDevice, CudaSlice, CudaStream,
 };
 use gpu_iris_mpc::{
     config,
@@ -373,21 +373,6 @@ fn dtod_at_offset(
     }
 }
 
-fn device_ptrs_to_shares<T>(
-    a: &[CUdeviceptr],
-    b: &[CUdeviceptr],
-    lens: &[usize],
-    devs: &[Arc<CudaDevice>],
-) -> Vec<ChunkShare<T>> {
-    let a = device_ptrs_to_slices(a, lens, devs);
-    let b = device_ptrs_to_slices(b, lens, devs);
-
-    a.into_iter()
-        .zip(b.into_iter())
-        .map(|(a, b)| ChunkShare::new(a, b))
-        .collect::<Vec<_>>()
-}
-
 /// Internal helper function to derive a new seed from the given seed and nonce.
 fn derive_seed(seed: [u32; 8], nonce: usize) -> eyre::Result<[u32; 8]> {
     let pseudo_rand_key = KDF_SALT.extract(bytemuck::cast_slice(&seed));
@@ -468,13 +453,6 @@ pub fn calculate_insertion_indices(
         c += 1;
     }
 }
-
-// pub fn slices_to_shares<T>(a: Vec<CudaSlice<T>>, b: Vec<CudaSlice<T>>) ->
-// Vec<ChunkShare<T>> {     a.into_iter()
-//         .zip(b.into_iter())
-//         .map(|(a, b)| ChunkShare::new(unsafe {a.transmute(a.len() /
-// 2).unwrap()}, b))         .collect::<Vec<_>>()
-// }
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
@@ -665,7 +643,7 @@ async fn main() -> eyre::Result<()> {
     let mut phase2_batch = Circuits::new(
         party_id,
         phase2_batch_chunk_size,
-        phase2_batch_chunk_size,
+        phase2_batch_chunk_size / 64,
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(4004),
@@ -1258,10 +1236,10 @@ async fn main() -> eyre::Result<()> {
         }));
 
         // Make sure to not call `Drop` on those
-        forget_vec!(code_dots);
-        forget_vec!(mask_dots);
-        forget_vec!(code_dots_batch);
-        forget_vec!(mask_dots_batch);
+        // forget_vec!(code_dots);
+        // forget_vec!(mask_dots);
+        // forget_vec!(code_dots_batch);
+        // forget_vec!(mask_dots_batch);
 
         // Prepare for next batch
         server_tasks.check_tasks();
