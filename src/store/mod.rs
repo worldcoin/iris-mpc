@@ -100,16 +100,14 @@ impl Store {
     pub async fn insert_irises(&self, codes_and_masks: &[(&[u16], &[u16])]) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
-        for (code, mask) in codes_and_masks {
-            sqlx::query("INSERT INTO irises (code, mask) VALUES ($1, $2)")
-                .bind(cast_slice::<u16, u8>(code))
-                .bind(cast_slice::<u16, u8>(mask))
-                .execute(&mut *tx)
-                .await?;
-        }
+        let mut query = sqlx::QueryBuilder::new("INSERT INTO irises (code, mask) ");
+        query.push_values(codes_and_masks, |mut query, (code, mask)| {
+            query.push_bind(cast_slice::<u16, u8>(code));
+            query.push_bind(cast_slice::<u16, u8>(mask));
+        });
 
+        query.build().execute(&mut *tx).await?;
         tx.commit().await?;
-
         Ok(())
     }
 }
@@ -161,6 +159,23 @@ mod tests {
         sqlx::query(&format!("DROP SCHEMA \"{}\" CASCADE", schema_name))
             .execute(&store.pool)
             .await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_many() -> Result<()> {
+        let count = 1 << 14;
+
+        dotenvy::from_filename(DOTENV_TEST)?;
+        let schema_name = temporary_name();
+        let store = Store::new(&Store::env_url()?, &schema_name).await?;
+
+        let codes_and_masks = vec![(&[123 as u16; 12800][..], &[456 as u16; 12800][..]); count];
+        store.insert_irises(&codes_and_masks).await?;
+
+        let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
+        assert_eq!(got.len(), count);
 
         Ok(())
     }
