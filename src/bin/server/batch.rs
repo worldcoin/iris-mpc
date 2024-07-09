@@ -15,8 +15,8 @@ pub struct BatchQueryEntries {
 #[derive(Default)]
 pub struct BatchQuery {
     pub request_ids: Vec<String>,
-    pub query:       BatchQueryEntries,
-    pub db:          BatchQueryEntries,
+    pub query: BatchQueryEntries,
+    pub db: BatchQueryEntries,
 }
 
 /// Receive batch of queries from SQS

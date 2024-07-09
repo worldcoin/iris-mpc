@@ -2,6 +2,7 @@
 
 mod batch;
 mod chacha_seeds;
+mod db;
 mod device;
 mod results;
 use aws_sdk_sns::Client as SNSClient;
@@ -14,7 +15,8 @@ use cudarc::driver::{
     CudaSlice,
 };
 use device::{
-    await_streams, device_ptrs_to_shares, device_ptrs_to_slices, dtod_at_offset, reset_device_ptrs, slice_tuples_to_ptrs
+    await_streams, device_ptrs_to_shares, device_ptrs_to_slices, dtod_at_offset, reset_device_ptrs,
+    slice_tuples_to_ptrs,
 };
 use gpu_iris_mpc::{
     dot::{
@@ -404,12 +406,12 @@ async fn main() -> eyre::Result<()> {
 
         // Transfer queries to device
         // TODO: free all of this!
-        let code_query = device_manager.htod_transfer_query(&code_query, request_streams);
-        let mask_query = device_manager.htod_transfer_query(&mask_query, request_streams);
+        let code_query = device_manager.htod_transfer_query(&code_query, request_streams)?;
+        let mask_query = device_manager.htod_transfer_query(&mask_query, request_streams)?;
         let code_query_insert =
-            device_manager.htod_transfer_query(&code_query_insert, request_streams);
+            device_manager.htod_transfer_query(&code_query_insert, request_streams)?;
         let mask_query_insert =
-            device_manager.htod_transfer_query(&mask_query_insert, request_streams);
+            device_manager.htod_transfer_query(&mask_query_insert, request_streams)?;
         let code_query_sums =
             codes_engine.query_sums(&code_query, request_streams, request_cublas_handles);
         let mask_query_sums =

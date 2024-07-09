@@ -138,17 +138,17 @@ fn chunking<T: Clone>(
 }
 
 pub struct ShareDB {
-    peer_id:              usize,
-    is_remote:            bool,
-    query_length:         usize,
-    device_manager:       Arc<DeviceManager>,
-    kernels:              Vec<CudaFunction>,
-    rngs:                 Vec<(ChaChaCudaRng, ChaChaCudaRng)>,
-    comms:                Vec<Arc<Comm>>,
-    ones:                 Vec<CudaSlice<u8>>,
+    peer_id: usize,
+    is_remote: bool,
+    query_length: usize,
+    device_manager: Arc<DeviceManager>,
+    kernels: Vec<CudaFunction>,
+    rngs: Vec<(ChaChaCudaRng, ChaChaCudaRng)>,
+    comms: Vec<Arc<Comm>>,
+    ones: Vec<CudaSlice<u8>>,
     intermediate_results: Vec<CudaSlice<i32>>,
-    pub results:          Vec<CudaSlice<u8>>,
-    pub results_peer:     Vec<CudaSlice<u8>>,
+    pub results: Vec<CudaSlice<u8>>,
+    pub results_peer: Vec<CudaSlice<u8>>,
 }
 
 impl ShareDB {
@@ -552,8 +552,8 @@ impl ShareDB {
             let threads_per_block = 256;
             let blocks_per_grid = num_elements.div_ceil(threads_per_block);
             let cfg = LaunchConfig {
-                block_dim:        (threads_per_block as u32, 1, 1),
-                grid_dim:         (blocks_per_grid as u32, 1, 1),
+                block_dim: (threads_per_block as u32, 1, 1),
+                grid_dim: (blocks_per_grid as u32, 1, 1),
                 shared_mem_bytes: 0,
             };
 
@@ -664,7 +664,7 @@ mod tests {
 
     /// Test to verify the matmul operation for random matrices in the field
     #[test]
-    fn check_matmul() {
+    fn check_matmul() -> eyre::Result<()> {
         let db = random_vec(DB_SIZE, WIDTH, u16::MAX as u32);
         let query = random_vec(QUERY_SIZE, WIDTH, u16::MAX as u32);
         let device_manager = Arc::new(DeviceManager::init());
@@ -685,7 +685,8 @@ mod tests {
         let preprocessed_query = preprocess_query(&query);
         let streams = device_manager.fork_streams();
         let blass = device_manager.create_cublas(&streams);
-        let preprocessed_query = device_manager.htod_transfer_query(&preprocessed_query, &streams);
+        let preprocessed_query =
+            device_manager.htod_transfer_query(&preprocessed_query, &streams)?;
         let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
         let db_slices = engine.load_db(&db, DB_SIZE, DB_SIZE, false);
 
@@ -730,12 +731,14 @@ mod tests {
 
             assert_eq!(selected_elements, gpu_result);
         }
+
+        Ok(())
     }
 
     /// Checks that the result of a matmul of the original data equals the
     /// reconstructed result of individual matmuls on the shamir shares.
     #[test]
-    fn check_shared_matmul() {
+    fn check_shared_matmul() -> eyre::Result<()> {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let device_manager = Arc::new(DeviceManager::init());
         let n_devices = device_manager.device_count();
@@ -792,7 +795,7 @@ mod tests {
             let streams = device_manager.fork_streams();
             let blass = device_manager.create_cublas(&streams);
             let preprocessed_query =
-                device_manager.htod_transfer_query(&preprocessed_query, &streams);
+                device_manager.htod_transfer_query(&preprocessed_query, &streams)?;
             let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
             let db_slices = engine.load_db(&codes_db, DB_SIZE, DB_SIZE, false);
             engine.dot(
@@ -819,12 +822,14 @@ mod tests {
                     .count_ones() as u16
             );
         }
+
+        Ok(())
     }
 
     /// Calculates the distances between a query and a shamir secret shared db
     /// and checks the result against reference plain implementation.
     #[test]
-    fn check_shared_distances() {
+    fn check_shared_distances() -> eyre::Result<()> {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let device_manager = Arc::new(DeviceManager::init());
         let n_devices = device_manager.device_count();
@@ -930,8 +935,8 @@ mod tests {
 
             let streams = device_manager.fork_streams();
             let blass = device_manager.create_cublas(&streams);
-            let code_query = device_manager.htod_transfer_query(&code_query, &streams);
-            let mask_query = device_manager.htod_transfer_query(&mask_query, &streams);
+            let code_query = device_manager.htod_transfer_query(&code_query, &streams)?;
+            let mask_query = device_manager.htod_transfer_query(&mask_query, &streams)?;
             let code_query_sums = codes_engine.query_sums(&code_query, &streams, &blass);
             let mask_query_sums = masks_engine.query_sums(&mask_query, &streams, &blass);
             let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE, DB_SIZE, false);
@@ -1014,5 +1019,7 @@ mod tests {
         for i in 0..DB_SIZE / n_devices {
             assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-6);
         }
+
+        Ok(())
     }
 }

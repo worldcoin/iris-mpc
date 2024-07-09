@@ -6,7 +6,7 @@ use cudarc::{
             stream::{synchronize, wait_event},
         },
         sys::{CUevent, CUevent_flags},
-        CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceRepr,
+        CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceRepr, DriverError,
     },
 };
 use std::sync::Arc;
@@ -89,27 +89,25 @@ impl DeviceManager {
         &self,
         preprocessed_query: &[Vec<u8>],
         streams: &[CudaStream],
-    ) -> (Vec<u64>, Vec<u64>) {
+    ) -> Result<(Vec<u64>, Vec<u64>), DriverError> {
         let mut query0_ptrs = vec![];
         let mut query1_ptrs = vec![];
         for idx in 0..self.device_count() {
-            self.device(idx).bind_to_thread().unwrap();
-            let query0 =
-                unsafe { malloc_async(streams[idx].stream, preprocessed_query[0].len()).unwrap() };
+            self.device(idx).bind_to_thread()?;
+            let query0 = unsafe { malloc_async(streams[idx].stream, preprocessed_query[0].len())? };
             unsafe {
-                memcpy_htod_async(query0, &preprocessed_query[0], streams[idx].stream).unwrap();
+                memcpy_htod_async(query0, &preprocessed_query[0], streams[idx].stream)?;
             }
 
-            let query1 =
-                unsafe { malloc_async(streams[idx].stream, preprocessed_query[1].len()).unwrap() };
+            let query1 = unsafe { malloc_async(streams[idx].stream, preprocessed_query[1].len())? };
             unsafe {
-                memcpy_htod_async(query1, &preprocessed_query[1], streams[idx].stream).unwrap();
+                memcpy_htod_async(query1, &preprocessed_query[1], streams[idx].stream)?;
             }
 
             query0_ptrs.push(query0);
             query1_ptrs.push(query1);
         }
-        (query0_ptrs, query1_ptrs)
+        Ok((query0_ptrs, query1_ptrs))
     }
 
     pub fn device(&self, index: usize) -> Arc<CudaDevice> {
