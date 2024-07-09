@@ -18,7 +18,6 @@ pub struct DistanceComparator {
     pub open_kernels:            Vec<CudaFunction>,
     pub merge_kernels:           Vec<CudaFunction>,
     pub query_length:            usize,
-    pub devices_count:           usize,
     pub opened_results:          Vec<CudaSlice<u32>>,
     pub final_results:           Vec<CudaSlice<u32>>,
     pub results_init_host:       Vec<u32>,
@@ -62,7 +61,6 @@ impl DistanceComparator {
             open_kernels,
             merge_kernels,
             query_length,
-            devices_count,
             opened_results,
             final_results,
             results_init_host,
@@ -79,7 +77,7 @@ impl DistanceComparator {
         db_sizes: &[usize],
         streams: &[CudaStream],
     ) {
-        for i in 0..self.devices_count {
+        for i in 0..self.device_manager.device_count() {
             let num_elements = (db_sizes[i] * self.query_length).div_ceil(64);
             let threads_per_block = 256;
             let blocks_per_grid = num_elements.div_ceil(threads_per_block);
@@ -126,7 +124,7 @@ impl DistanceComparator {
             shared_mem_bytes: 0,
         };
 
-        for i in 0..self.devices_count {
+        for i in 0..self.device_manager.device_count() {
             self.device_manager.device(i).bind_to_thread().unwrap();
 
             let params = [
@@ -156,7 +154,7 @@ impl DistanceComparator {
 
     pub fn fetch_final_results(&self, final_results_ptrs: &[u64]) -> Vec<Vec<u32>> {
         let mut results = vec![];
-        for i in 0..self.devices_count {
+        for i in 0..self.device_manager.device_count() {
             self.device_manager.device(i).bind_to_thread().unwrap();
             let mut tmp = vec![0u32; self.query_length / ROTATIONS];
             unsafe {
@@ -168,7 +166,7 @@ impl DistanceComparator {
     }
 
     pub fn prepare_results(&self) -> Vec<CudaSlice<u32>> {
-        (0..self.devices_count)
+        (0..self.device_manager.device_count())
             .map(|i| {
                 self.device_manager
                     .device(i)
@@ -179,7 +177,7 @@ impl DistanceComparator {
     }
 
     pub fn prepare_final_results(&self) -> Vec<CudaSlice<u32>> {
-        (0..self.devices_count)
+        (0..self.device_manager.device_count())
             .map(|i| {
                 self.device_manager
                     .device(i)
