@@ -1,10 +1,10 @@
-name: Lint
+name: Lint Clippy
 
 on:
   push:
 
 jobs:
-  lint:
+  lint-clippy:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -13,10 +13,6 @@ jobs:
         run: rustup toolchain install nightly
       - name: Set Rust nightly as default
         run: rustup default nightly
-      - name: Install Rustfmt for formatting
-        run: rustup component add rustfmt
-      - name: Run Rustfmt
-        run: cargo fmt -- --check
       - name: Install Rust clippy for checking clippy errors
         run: rustup component add clippy
       - name: Run Rust Clippy
