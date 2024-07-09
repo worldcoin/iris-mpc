@@ -126,7 +126,6 @@ mod tests {
 
     use super::*;
     use futures::TryStreamExt;
-    use std::time;
     use tokio;
 
     #[tokio::test]
@@ -156,10 +155,7 @@ mod tests {
         }
 
         // Clean up on success.
-        sqlx::query(&format!("DROP SCHEMA \"{}\" CASCADE", schema_name))
-            .execute(&store.pool)
-            .await?;
-
+        cleanup(&store, &schema_name).await?;
         Ok(())
     }
 
@@ -177,16 +173,19 @@ mod tests {
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), count);
 
+        cleanup(&store, &schema_name).await?;
         Ok(())
     }
 
     fn temporary_name() -> String {
-        format!(
-            "test_smpc_{}",
-            time::SystemTime::now()
-                .duration_since(time::UNIX_EPOCH)
-                .unwrap()
-                .as_micros()
-        )
+        format!("test_smpc_{}", rand::random::<u32>())
+    }
+
+    async fn cleanup(store: &Store, schema_name: &str) -> Result<()> {
+        assert!(schema_name.starts_with("test_smpc_"));
+        sqlx::query(&format!("DROP SCHEMA \"{}\" CASCADE", schema_name))
+            .execute(&store.pool)
+            .await?;
+        Ok(())
     }
 }
