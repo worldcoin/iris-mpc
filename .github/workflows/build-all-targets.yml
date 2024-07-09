@@ -4,7 +4,7 @@ on:
   push:
 
 jobs:
-  build-all:
+  build-tests:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -13,5 +13,18 @@ jobs:
         run: rustup toolchain install nightly
       - name: Set Rust nightly as default
         run: rustup default nightly
-      - name: Build All Targets
-        run: cargo build --release --all-features --all-targets
+      # Building tests in release mode checks warnings and compiler errors that depend on optimisations
+      - name: Build Tests
+        run: cargo build --release --all-features --tests
+  build-bins:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install Rust nightly
+        run: rustup toolchain install nightly
+      - name: Set Rust nightly as default
+        run: rustup default nightly
+      # Docker CI already builds binaries in release mode, so we can run faster by building in dev mode here
+      - name: Build Binaries
+        run: cargo build --all-features --lib --bins --benches --examples
