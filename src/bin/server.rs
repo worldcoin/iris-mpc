@@ -32,7 +32,7 @@ use gpu_iris_mpc::{
         sqs::{ResultEvent, SMPCRequest, SQSMessage},
         task_monitor::TaskMonitor,
     },
-    setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
+    setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB, shamir::P},
     store::Store,
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
@@ -636,6 +636,10 @@ async fn main() -> eyre::Result<()> {
     // Phase 2 Setup
     let phase2_chunk_size =
         (QUERIES * DB_SIZE / device_manager.device_count()).div_ceil(2048) * 2048;
+    println!("QUERSIES: {}", QUERIES);
+    println!("DB_SIZE: {}", DB_SIZE);
+    println!("Devices: {}", device_manager.device_count());
+    println!("Chunk size: {}", phase2_chunk_size);
     let phase2_chunk_size_max =
         (QUERIES * (DB_SIZE + DB_BUFFER) / device_manager.device_count()).div_ceil(2048) * 2048;
     let phase2_batch_chunk_size = (QUERIES * QUERIES).div_ceil(2048) * 2048; // Not divided by GPU_COUNT since we do the work on all GPUs for simplicity
