@@ -642,7 +642,8 @@ async fn main() -> eyre::Result<()> {
     println!("Chunk size: {}", phase2_chunk_size);
     let phase2_chunk_size_max =
         (QUERIES * (DB_SIZE + DB_BUFFER) / device_manager.device_count()).div_ceil(2048) * 2048;
-    let phase2_batch_chunk_size = (QUERIES * QUERIES).div_ceil(2048) * 2048; // Not divided by GPU_COUNT since we do the work on all GPUs for simplicity
+    let phase2_batch_chunk_size = QUERIES * QUERIES; // Not divided by GPU_COUNT since we do the work on all GPUs for simplicity
+    assert_eq!(phase2_batch_chunk_size % 64, 0);
 
     let phase2_batch = Arc::new(Mutex::new(Circuits::new(
         party_id,
