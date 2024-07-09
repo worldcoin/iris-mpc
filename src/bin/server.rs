@@ -43,6 +43,7 @@ use static_assertions::const_assert;
 use std::{
     fs::metadata,
     mem,
+    ops::IndexMut,
     sync::{atomic::AtomicUsize, Arc, Mutex},
     time::{Duration, Instant},
 };
