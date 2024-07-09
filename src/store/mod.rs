@@ -1,7 +1,7 @@
 use bytemuck::cast_slice;
 use eyre::{eyre, Result};
 use futures::Stream;
-use sqlx::{postgres::PgPoolOptions, Executor, PgPool};
+use sqlx::{migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool};
 use std::env;
 
 #[allow(non_upper_case_globals)]
@@ -11,6 +11,8 @@ const SMPC__DATABASE__URL: &str = "SMPC__DATABASE__URL";
 const SMPC__PARTY_ID: &str = "SMPC__PARTY_ID";
 
 const POOL_SIZE: u32 = 5;
+
+static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 fn sql_switch_schema(schema_name: &str) -> Result<String> {
     sanitize_identifier(schema_name)?;
@@ -22,14 +24,6 @@ fn sql_switch_schema(schema_name: &str) -> Result<String> {
         schema_name, schema_name
     ))
 }
-
-const CREATE_TABLE_IRISES: &str = "
-    CREATE TABLE IF NOT EXISTS irises (
-        id BIGSERIAL PRIMARY KEY,
-        code BYTEA,
-        mask BYTEA
-    );
-";
 
 #[derive(sqlx::FromRow, Debug, Default)]
 pub struct StoredIris {
@@ -88,7 +82,7 @@ impl Store {
             .await?;
 
         // Create the schema on the first startup.
-        sqlx::query(CREATE_TABLE_IRISES).execute(&pool).await?;
+        MIGRATOR.run(&pool).await?;
 
         Ok(Store { pool })
     }

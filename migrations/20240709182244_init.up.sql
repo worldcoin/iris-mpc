@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS irises (
+    id BIGSERIAL PRIMARY KEY,
+    code BYTEA,
+    mask BYTEA
+);
