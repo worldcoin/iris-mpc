@@ -1,7 +1,9 @@
 use cudarc::driver::{CudaDevice, CudaStream};
 use gpu_iris_mpc::{
-    dot::device_manager::DeviceManager,
-    helpers::{dtoh_on_stream_sync, htod_on_stream_sync, task_monitor::TaskMonitor},
+    helpers::{
+        device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync,
+        task_monitor::TaskMonitor,
+    },
     setup::iris_db::iris::{IrisCodeArray, MATCH_THRESHOLD_RATIO},
     threshold_ring::protocol::{ChunkShare, Circuits},
 };

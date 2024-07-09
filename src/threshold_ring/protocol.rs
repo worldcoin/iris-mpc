@@ -1,6 +1,6 @@
 use crate::{
-    dot::device_manager::DeviceManager,
     helpers::{
+        device_manager::DeviceManager,
         dtoh_on_stream_sync, htod_on_stream_sync,
         id_wrapper::{http_root, IdWrapper},
     },

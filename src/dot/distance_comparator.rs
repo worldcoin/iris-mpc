@@ -1,5 +1,5 @@
 use super::ROTATIONS;
-use crate::dot::device_manager::DeviceManager;
+use crate::helpers::device_manager::DeviceManager;
 use cudarc::{
     driver::{
         result::{launch_kernel, memcpy_dtoh_sync},

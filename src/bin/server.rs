@@ -16,7 +16,6 @@ use cudarc::driver::{
 use gpu_iris_mpc::{
     config::{Config, Opt, ServersConfig},
     dot::{
-        device_manager::DeviceManager,
         distance_comparator::DistanceComparator,
         share_db::{preprocess_query, ShareDB},
         IRIS_CODE_LENGTH, ROTATIONS,
@@ -26,6 +25,7 @@ use gpu_iris_mpc::{
             NODE_ID_MESSAGE_ATTRIBUTE_NAME, SPAN_ID_MESSAGE_ATTRIBUTE_NAME,
             TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
         },
+        device_manager::DeviceManager,
         device_ptrs, device_ptrs_to_slices,
         kms_dh::derive_shared_secret,
         mmap::{read_mmap_file, write_mmap_file},
