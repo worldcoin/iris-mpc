@@ -14,7 +14,7 @@ use cudarc::driver::{
     CudaDevice, CudaSlice, CudaStream,
 };
 use gpu_iris_mpc::{
-    config::config::{Config, Opt, ServersConfig},
+    config::{Config, Opt, ServersConfig},
     dot::{
         device_manager::DeviceManager,
         distance_comparator::DistanceComparator,
