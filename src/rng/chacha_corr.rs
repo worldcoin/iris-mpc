@@ -262,6 +262,8 @@ mod tests {
 
     #[test]
     fn test_chacha_rng() {
+        // This call to CudaDevice::new is only used in context of a test - not used in
+        // the server binary
         let dev = CudaDevice::new(0).unwrap();
         let stream = dev.fork_default_stream().unwrap();
         let mut rng = ChaChaCudaCorrRng::init(dev.clone(), [0u32; 8], [1u32; 8]);
@@ -278,6 +280,8 @@ mod tests {
 
     #[test]
     fn test_correlation() {
+        // This call to CudaDevice::new is only used in context of a test - not used in
+        // the server binary
         let dev = CudaDevice::new(0).unwrap();
         let stream = dev.fork_default_stream().unwrap();
         let seed1 = [0u32; 8];
