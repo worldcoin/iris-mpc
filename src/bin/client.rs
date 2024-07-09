@@ -9,7 +9,10 @@ use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use eyre::{Context, ContextCompat};
 use gpu_iris_mpc::{
-    helpers::sqs::{ResultEvent, SMPCRequest},
+    helpers::{
+        aws::{construct_message_attributes, NODE_ID_MESSAGE_ATTRIBUTE_NAME},
+        sqs::{ResultEvent, SMPCRequest},
+    },
     setup::{
         galois_engine::degree4::GaloisRingIrisCodeShare,
         iris_db::{db::IrisDB, iris::IrisCode},
@@ -29,22 +32,22 @@ const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 
 #[derive(Debug, Parser)]
 struct Opt {
-    #[structopt(short, long)]
+    #[arg(short, long, env)]
     request_topic_arn: String,
 
-    #[structopt(short, long)]
+    #[arg(short, long, env)]
     response_queue_url: String,
 
-    #[structopt(short, long)]
+    #[arg(short, long, env)]
     db_index: Option<usize>,
 
-    #[structopt(short, long)]
+    #[arg(short, long, env)]
     rng_seed: Option<u64>,
 
-    #[structopt(short, long)]
+    #[arg(short, long, env)]
     n_repeat: Option<usize>,
 
-    #[structopt(short, long)]
+    #[arg(short, long, env)]
     random: Option<bool>,
 }
 
@@ -92,7 +95,7 @@ async fn main() -> eyre::Result<()> {
             // Receive responses
             let msg = sqs_client
                 .receive_message()
-                .max_number_of_messages(10)
+                .max_number_of_messages(1)
                 .queue_url(response_queue_url.clone())
                 .send()
                 .await
@@ -229,18 +232,21 @@ async fn main() -> eyre::Result<()> {
                 mask_code,
             };
 
+            let mut message_attributes = construct_message_attributes()?;
+            message_attributes.insert(
+                NODE_ID_MESSAGE_ATTRIBUTE_NAME.to_string(),
+                MessageAttributeValue::builder()
+                    .data_type("String")
+                    .string_value(i.to_string())
+                    .build()?,
+            );
+
             messages.push(
                 PublishBatchRequestEntry::builder()
                     .message(to_string(&request_message)?)
                     .id(sns_id.to_string())
                     .message_group_id(ENROLLMENT_REQUEST_TYPE)
-                    .message_attributes(
-                        "nodeId",
-                        MessageAttributeValue::builder()
-                            .set_string_value(Some(i.to_string()))
-                            .set_data_type(Some("String".to_string()))
-                            .build()?,
-                    )
+                    .set_message_attributes(Some(message_attributes))
                     .build()
                     .unwrap(),
             );

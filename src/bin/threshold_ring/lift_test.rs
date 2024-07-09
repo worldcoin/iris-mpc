@@ -1,5 +1,6 @@
-use cudarc::driver::CudaDevice;
+use cudarc::driver::{CudaDevice, CudaStream};
 use gpu_iris_mpc::{
+    helpers::{dtoh_on_stream_sync, htod_on_stream_sync, task_monitor::TaskMonitor},
     setup::iris_db::iris::IrisCodeArray,
     threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
 };
@@ -50,18 +51,24 @@ fn rep_share_vec<R: Rng>(value: &[u16], id: usize, rng: &mut R) -> (Vec<u16>, Ve
     (a, b)
 }
 
-fn to_gpu(a: &[u16], b: &[u16], devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<u16>> {
+fn to_gpu(
+    a: &[u16],
+    b: &[u16],
+    devices: &[Arc<CudaDevice>],
+    streams: &[CudaStream],
+) -> Vec<ChunkShare<u16>> {
     debug_assert_eq!(a.len(), b.len());
 
     let mut result = Vec::with_capacity(devices.len());
 
-    for (dev, a, b) in izip!(
+    for (dev, stream, a, b) in izip!(
         devices,
+        streams,
         a.chunks(INPUTS_PER_GPU_SIZE),
         b.chunks(INPUTS_PER_GPU_SIZE)
     ) {
-        let a_ = dev.htod_sync_copy(a).unwrap();
-        let b_ = dev.htod_sync_copy(b).unwrap();
+        let a_ = htod_on_stream_sync(a, dev, stream).unwrap();
+        let b_ = htod_on_stream_sync(b, dev, stream).unwrap();
         result.push(ChunkShare::new(a_, b_));
     }
 
@@ -76,6 +83,7 @@ fn open(
     party: &mut Circuits,
     x: &mut [ChunkShareView<u32>],
     corrections: &mut [ChunkShareView<u16>],
+    streams: &[CudaStream],
 ) -> Vec<u32> {
     let n_devices = x.len();
     let mut res_a = Vec::with_capacity(n_devices);
@@ -87,24 +95,32 @@ fn open(
 
     let devices = party.get_devices();
     for (idx, (res, corr)) in izip!(x.iter(), corrections.iter()).enumerate() {
-        res_a.push(devices[idx].dtoh_sync_copy(&res.a).unwrap());
-        res_b.push(devices[idx].dtoh_sync_copy(&res.b).unwrap());
-        corr_a.push(devices[idx].dtoh_sync_copy(&corr.a).unwrap());
-        corr_b.push(devices[idx].dtoh_sync_copy(&corr.b).unwrap());
+        res_a.push(dtoh_on_stream_sync(&res.a, &devices[idx], &streams[idx]).unwrap());
+        res_b.push(dtoh_on_stream_sync(&res.b, &devices[idx], &streams[idx]).unwrap());
+        corr_a.push(dtoh_on_stream_sync(&corr.a, &devices[idx], &streams[idx]).unwrap());
+        corr_b.push(dtoh_on_stream_sync(&corr.b, &devices[idx], &streams[idx]).unwrap());
     }
     cudarc::nccl::result::group_start().unwrap();
     for (idx, (res, corr)) in izip!(x.iter(), corrections.iter()).enumerate() {
-        party.send_view(&res.b, party.next_id(), idx);
-        party.send_view_u16(&corr.b, party.next_id(), idx);
+        party
+            .send_view(&res.b, party.next_id(), idx, streams)
+            .unwrap();
+        party
+            .send_view_u16(&corr.b, party.next_id(), idx, streams)
+            .unwrap();
     }
     for (idx, (res, corr)) in izip!(x.iter_mut(), corrections.iter_mut()).enumerate() {
-        party.receive_view(&mut res.a, party.prev_id(), idx);
-        party.receive_view_u16(&mut corr.a, party.prev_id(), idx);
+        party
+            .receive_view(&mut res.a, party.prev_id(), idx, streams)
+            .unwrap();
+        party
+            .receive_view_u16(&mut corr.a, party.prev_id(), idx, streams)
+            .unwrap();
     }
     cudarc::nccl::result::group_end().unwrap();
     for (idx, (res, corr)) in izip!(x, corrections).enumerate() {
-        res_c.push(devices[idx].dtoh_sync_copy(&res.a).unwrap());
-        corr_c.push(devices[idx].dtoh_sync_copy(&corr.a).unwrap());
+        res_c.push(dtoh_on_stream_sync(&res.a, &devices[idx], &streams[idx]).unwrap());
+        corr_c.push(dtoh_on_stream_sync(&corr.a, &devices[idx], &streams[idx]).unwrap());
     }
 
     let mut result = Vec::with_capacity(n_devices * INPUTS_PER_GPU_SIZE);
@@ -161,10 +177,7 @@ async fn main() -> eyre::Result<()> {
     let url = args.get(2);
     let n_devices = CudaDevice::count().unwrap() as usize;
 
-    let url = match url {
-        Some(s) => Some(s.clone()),
-        None => None,
-    };
+    let url = url.cloned();
 
     // Get inputs
     let mask_dots = sample_mask_dots(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);
@@ -174,6 +187,7 @@ async fn main() -> eyre::Result<()> {
     println!("Random shared inputs generated!");
 
     // Get Circuit Party
+    let mut server_tasks = TaskMonitor::new();
     let mut party = Circuits::new(
         party_id,
         INPUTS_PER_GPU_SIZE,
@@ -181,15 +195,23 @@ async fn main() -> eyre::Result<()> {
         ([party_id as u32; 8], [((party_id + 2) % 3) as u32; 8]),
         url,
         Some(3001),
+        Some(&mut server_tasks),
     );
     let devices = party.get_devices();
+    let streams = devices
+        .iter()
+        .map(|dev| dev.fork_default_stream().unwrap())
+        .collect::<Vec<_>>();
+    server_tasks.check_tasks();
 
     // Import to GPU
-    let mask_gpu = to_gpu(&mask_share_a, &mask_share_b, &devices);
+    let mask_gpu = to_gpu(&mask_share_a, &mask_share_b, &devices, &streams);
     println!("Data is on GPUs!");
     println!("Starting tests...");
 
     for _ in 0..10 {
+        server_tasks.check_tasks();
+
         // Simulate Masks to be zero for this test
         let x_ = party.allocate_buffer::<u32>(INPUTS_PER_GPU_SIZE);
         let mut x = to_view(&x_);
@@ -198,12 +220,12 @@ async fn main() -> eyre::Result<()> {
         let mask_gpu = mask_gpu.clone();
 
         let now = Instant::now();
-        party.lift_mpc(&mask_gpu, &mut x, &mut correction);
-        party.synchronize_all();
+        party.lift_mpc(&mask_gpu, &mut x, &mut correction, &streams);
         println!("compute time: {:?}", now.elapsed());
 
         let now = Instant::now();
-        let result = open(&mut party, &mut x, &mut correction);
+        let result = open(&mut party, &mut x, &mut correction, &streams);
+        party.synchronize_streams(&streams);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
 
         let mut correct = true;
@@ -219,6 +241,8 @@ async fn main() -> eyre::Result<()> {
         }
     }
 
+    server_tasks.abort_all();
     time::sleep(time::Duration::from_secs(5)).await;
+    server_tasks.check_tasks_finished();
     Ok(())
 }
