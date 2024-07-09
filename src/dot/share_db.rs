@@ -155,6 +155,7 @@ pub struct ShareDB {
 
 impl ShareDB {
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::arc_with_non_send_sync)]
     pub fn init(
         peer_id: usize,
         device_manager: Arc<DeviceManager>,
@@ -537,7 +538,7 @@ impl ShareDB {
                         db_sizes[idx],
                         self.query_length,
                         IRIS_CODE_LENGTH,
-                        1 << 8 * (i + j),
+                        1 << (8 * (i + j)),
                         if i + j == 0 { 0 } else { 1 },
                     );
                 }
@@ -721,7 +722,7 @@ mod tests {
         let mut vec_column_major: Vec<u16> = Vec::new();
         for col in 0..c_nda.ncols() {
             for row in c_nda.column(col) {
-                vec_column_major.push(*row as u16);
+                vec_column_major.push(*row);
             }
         }
 
@@ -752,7 +753,7 @@ mod tests {
 
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
-        let mut gpu_result = vec![
+        let mut gpu_result = [
             vec![0u16; DB_SIZE * QUERY_SIZE / n_devices],
             vec![0u16; DB_SIZE * QUERY_SIZE / n_devices],
             vec![0u16; DB_SIZE * QUERY_SIZE / n_devices],
@@ -766,26 +767,24 @@ mod tests {
             let codes_db = db
                 .db
                 .iter()
-                .map(|iris| {
+                .flat_map(|iris| {
                     GaloisRingIrisCodeShare::encode_mask_code(
                         &iris.mask,
                         &mut StdRng::seed_from_u64(RNG_SEED),
                     )[i]
                         .coefs
                 })
-                .flatten()
                 .collect::<Vec<_>>();
 
             let querys = db.db[0..QUERY_SIZE]
                 .iter()
-                .map(|iris| {
+                .flat_map(|iris| {
                     let shares = GaloisRingIrisCodeShare::encode_mask_code(
                         &iris.mask,
                         &mut StdRng::seed_from_u64(RNG_SEED),
                     );
                     GaloisRingIrisCodeShare::preprocess_iris_code_query_shares(shares)[i].coefs
                 })
-                .flatten()
                 .collect::<Vec<_>>();
 
             let mut engine = ShareDB::init(
@@ -861,7 +860,7 @@ mod tests {
             let codes_db = db
                 .db
                 .iter()
-                .map(|iris| {
+                .flat_map(|iris| {
                     GaloisRingIrisCodeShare::encode_iris_code(
                         &iris.code,
                         &iris.mask,
@@ -869,26 +868,24 @@ mod tests {
                     )[party_id]
                         .coefs
                 })
-                .flatten()
                 .collect::<Vec<_>>();
 
             let masks_db = db
                 .db
                 .iter()
-                .map(|iris| {
+                .flat_map(|iris| {
                     GaloisRingIrisCodeShare::encode_mask_code(
                         &iris.mask,
                         &mut StdRng::seed_from_u64(RNG_SEED),
                     )[party_id]
                         .coefs
                 })
-                .flatten()
                 .collect::<Vec<_>>();
 
             // Queries
             let code_queries = db.db[0..QUERY_SIZE]
                 .iter()
-                .map(|iris| {
+                .flat_map(|iris| {
                     let shares = GaloisRingIrisCodeShare::encode_iris_code(
                         &iris.code,
                         &iris.mask,
@@ -897,12 +894,11 @@ mod tests {
                     GaloisRingIrisCodeShare::preprocess_iris_code_query_shares(shares)[party_id]
                         .coefs
                 })
-                .flatten()
                 .collect::<Vec<_>>();
 
             let mask_queries = db.db[0..QUERY_SIZE]
                 .iter()
-                .map(|iris| {
+                .flat_map(|iris| {
                     let shares = GaloisRingIrisCodeShare::encode_mask_code(
                         &iris.mask,
                         &mut StdRng::seed_from_u64(RNG_SEED),
@@ -910,7 +906,6 @@ mod tests {
                     GaloisRingIrisCodeShare::preprocess_iris_code_query_shares(shares)[party_id]
                         .coefs
                 })
-                .flatten()
                 .collect::<Vec<_>>();
 
             let device_manager = Arc::new(DeviceManager::init());
