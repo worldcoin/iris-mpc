@@ -204,6 +204,8 @@ mod tests {
 
     #[test]
     fn test_chacha_rng() {
+        // This call to CudaDevice::new is only used in context of a test - not used in
+        // the server binary
         let mut rng = ChaChaCudaRng::init(1024 * 1024, CudaDevice::new(0).unwrap(), [0u32; 8]);
         rng.fill_rng();
         let zeros = rng.data().unwrap().iter().filter(|x| x == &&0).count();

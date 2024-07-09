@@ -663,6 +663,7 @@ async fn main() -> eyre::Result<()> {
         bootstrap_url.clone(),
         Some(4004),
         Some(&mut server_tasks),
+        device_manager.clone(),
     )));
     server_tasks.check_tasks();
 
@@ -674,10 +675,14 @@ async fn main() -> eyre::Result<()> {
         bootstrap_url.clone(),
         Some(4005),
         Some(&mut server_tasks),
+        device_manager.clone(),
     )));
     server_tasks.check_tasks();
 
-    let distance_comparator = Arc::new(Mutex::new(DistanceComparator::init(QUERIES)));
+    let distance_comparator = Arc::new(Mutex::new(DistanceComparator::init(
+        QUERIES,
+        device_manager.clone(),
+    )));
 
     // Prepare streams etc.
     let mut streams = vec![];

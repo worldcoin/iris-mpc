@@ -91,6 +91,8 @@ async fn main() -> eyre::Result<()> {
             IdWrapper::from_str(&res.text().unwrap()).unwrap().0
         };
 
+        // This call to CudaDevice::new is only used in context of a benchmark - not
+        // used in the server binary
         let dev = CudaDevice::new(i).unwrap();
         let slice: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
         let slice1: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
