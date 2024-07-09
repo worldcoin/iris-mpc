@@ -4,7 +4,8 @@ on:
   push:
 
 jobs:
-  lint-rustfmt:
+  # TODO: change this to lint-rustfmt once we've updated required jobs
+  lint:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
