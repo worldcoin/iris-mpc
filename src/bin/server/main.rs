@@ -2,7 +2,6 @@
 
 mod batch;
 mod chacha_seeds;
-mod db;
 mod device;
 mod results;
 use aws_sdk_sns::Client as SNSClient;
@@ -300,7 +299,7 @@ async fn main() -> eyre::Result<()> {
         Some(4005),
     )));
 
-    let distance_comparator = Arc::new(Mutex::new(DistanceComparator::init(QUERIES)));
+    let distance_comparator = Arc::new(Mutex::new(DistanceComparator::init(QUERIES)?));
 
     // Prepare streams etc.
     let mut streams = vec![];
@@ -312,9 +311,14 @@ async fn main() -> eyre::Result<()> {
         let tmp_streams = device_manager.fork_streams();
         cublas_handles.push(device_manager.create_cublas(&tmp_streams));
         streams.push(tmp_streams);
-        results.push(distance_comparator.lock().unwrap().prepare_results());
-        batch_results.push(distance_comparator.lock().unwrap().prepare_results());
-        final_results.push(distance_comparator.lock().unwrap().prepare_final_results());
+        results.push(distance_comparator.lock().unwrap().prepare_results()?);
+        batch_results.push(distance_comparator.lock().unwrap().prepare_results()?);
+        final_results.push(
+            distance_comparator
+                .lock()
+                .unwrap()
+                .prepare_final_results()?,
+        );
     }
 
     let mut previous_previous_stream_event = device_manager.create_events();
@@ -685,12 +689,14 @@ async fn main() -> eyre::Result<()> {
             thread_phase2.return_result_buffer(res);
 
             // Merge results and fetch matching indices
-            let host_results = tmp_distance_comparator.merge_results(
-                &thread_request_results_batch,
-                &thread_request_results,
-                &thread_request_final_results,
-                &streams,
-            );
+            let host_results = tmp_distance_comparator
+                .merge_results(
+                    &thread_request_results_batch,
+                    &thread_request_results,
+                    &thread_request_final_results,
+                    &streams,
+                )
+                .expect("TODO: propagate errore");
 
             // Evaluate the results across devices
             let mut merged_results = get_merged_results(&host_results, thread_devs.len());

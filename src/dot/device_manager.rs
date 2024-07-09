@@ -127,7 +127,7 @@ impl DeviceManager {
         src: Vec<T>,
         dst: &mut CudaSlice<T>,
         index: usize,
-    ) -> Result<(), result::DriverError> {
+    ) -> Result<(), DriverError> {
         self.device(index).bind_to_thread()?;
         unsafe { result::memcpy_htod_sync(*dst.device_ptr(), src.as_ref())? };
         Ok(())
