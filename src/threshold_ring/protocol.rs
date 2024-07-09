@@ -1240,7 +1240,13 @@ impl Circuits {
             DEFAULT_LAUNCH_CONFIG_THREADS,
         );
 
+        println!(
+            "Calling transpose_pack_u16_with_len with chunk_size: {}",
+            self.chunk_size
+        );
+
         for (idx, (inp, outp)) in izip!(inp, outp).enumerate() {
+            println!("Idx: {}, size: {}", idx, inp.a.len());
             unsafe {
                 self.kernels[idx]
                     .transpose_16x64
