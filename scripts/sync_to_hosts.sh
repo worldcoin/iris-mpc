@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 
+# Check if username is provided as a parameter
+if [ -z "$1" ]; then
+    echo "No username provided."
+    echo "Usage: $0 <username>"
+    exit 1
+fi
+
+# Assign the provided username to a variable
+USER_NAME=$1
+
 # Define the target directory
-USER_NAME="wojciech-sromek"
 TARGET_DIR="/home/ubuntu/${USER_NAME}"
 
 # Define the hosts, order is important, indices are used to identify .env files
