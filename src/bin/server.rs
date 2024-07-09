@@ -14,8 +14,7 @@ use cudarc::driver::{
     CudaDevice, CudaSlice, CudaStream,
 };
 use gpu_iris_mpc::{
-    config,
-    config::Config,
+    config::{Config, Opt, ServersConfig},
     dot::{
         device_manager::DeviceManager,
         distance_comparator::DistanceComparator,
@@ -45,7 +44,6 @@ use std::{
     fs::metadata,
     mem,
     ops::IndexMut,
-    path::PathBuf,
     sync::{atomic::AtomicUsize, Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -89,13 +87,7 @@ const MAX_CONCURRENT_BATCHES: usize = 2;
 
 const DB_CODE_FILE: &str = "codes.db";
 const DB_MASK_FILE: &str = "masks.db";
-const DEFAULT_PATH: &str = "/opt/dlami/nvme/";
 const QUERIES: usize = ROTATIONS * N_QUERIES;
-const KMS_KEY_IDS: [&str; 3] = [
-    "077788e2-9eeb-4044-859b-34496cfd500b",
-    "896353dc-5ea5-42d4-9e4e-f65dd8169dee",
-    "42bb01f5-8380-48b4-b1f1-929463a587fb",
-];
 
 lazy_static! {
     static ref KDF_NONCE: AtomicUsize = AtomicUsize::new(0);
@@ -118,27 +110,6 @@ macro_rules! forget_vec {
             std::mem::forget(item);
         }
     };
-}
-
-#[derive(Debug, Parser)]
-struct Opt {
-    #[structopt(short, long)]
-    queue: String,
-
-    #[structopt(short, long)]
-    results_topic_arn: String,
-
-    #[structopt(short, long)]
-    party_id: usize,
-
-    #[structopt(short, long)]
-    bootstrap_url: Option<String>,
-
-    #[structopt(short, long)]
-    path: Option<String>,
-
-    #[clap(short, long, env)]
-    config: Option<PathBuf>,
 }
 
 #[derive(Default)]
@@ -468,17 +439,8 @@ pub fn calculate_insertion_indices(
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     dotenvy::dotenv().ok();
-
-    let Opt {
-        queue,
-        party_id,
-        bootstrap_url,
-        path,
-        results_topic_arn,
-        config,
-    } = Opt::parse();
-
-    let config: Config = config::load_config("SMPC", config.as_deref())?;
+    let mut config: Config = Config::load_config("SMPC").unwrap();
+    config.overwrite_defaults_with_cli_args(Opt::parse());
 
     let _tracing_shutdown_handle = if let Some(service) = &config.service {
         let tracing_shutdown_handle = DatadogBattery::init(
@@ -508,7 +470,15 @@ async fn main() -> eyre::Result<()> {
         TracingShutdownHandle
     };
 
-    let path = path.unwrap_or(DEFAULT_PATH.to_string());
+    let Config {
+        path,
+        party_id,
+        results_topic_arn,
+        requests_queue_url,
+        bootstrap_url,
+        kms_key_ids,
+        ..
+    } = config;
 
     let code_db_path = format!("{}/{}", path, DB_CODE_FILE);
     let mask_db_path = format!("{}/{}", path, DB_MASK_FILE);
@@ -520,7 +490,10 @@ async fn main() -> eyre::Result<()> {
     let store = Store::new_from_env().await?;
 
     // Init RNGs
-    let own_key_id = KMS_KEY_IDS[party_id];
+    let own_key_id = kms_key_ids
+        .0
+        .get(party_id)
+        .expect("Expected value not found in kms_key_ids");
     let dh_pairs = match party_id {
         0 => (1usize, 2usize),
         1 => (2usize, 0usize),
@@ -528,9 +501,18 @@ async fn main() -> eyre::Result<()> {
         _ => unimplemented!(),
     };
 
+    let dh_pair_0: &str = kms_key_ids
+        .0
+        .get(dh_pairs.0)
+        .expect("Expected value not found in kms_key_ids");
+    let dh_pair_1: &str = kms_key_ids
+        .0
+        .get(dh_pairs.1)
+        .expect("Expected value not found in kms_key_ids");
+
     let chacha_seeds = (
-        bytemuck::cast(derive_shared_secret(own_key_id, KMS_KEY_IDS[dh_pairs.0]).await?),
-        bytemuck::cast(derive_shared_secret(own_key_id, KMS_KEY_IDS[dh_pairs.1]).await?),
+        bytemuck::cast(derive_shared_secret(own_key_id, dh_pair_0).await?),
+        bytemuck::cast(derive_shared_secret(own_key_id, dh_pair_1).await?),
     );
 
     // Generate or load DB
@@ -585,6 +567,15 @@ async fn main() -> eyre::Result<()> {
     let device_manager = Arc::new(DeviceManager::init());
     let mut server_tasks = TaskMonitor::new();
 
+    let ServersConfig {
+        codes_engine_port,
+        masks_engine_port,
+        batch_codes_engine_port,
+        batch_masks_engine_port,
+        phase_2_port,
+        phase_2_batch_port,
+    } = config.servers;
+
     // Phase 1 Setup
     let mut codes_engine = ShareDB::init(
         party_id,
@@ -594,7 +585,7 @@ async fn main() -> eyre::Result<()> {
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(true),
-        Some(4000),
+        Some(codes_engine_port),
         Some(&mut server_tasks),
     );
     server_tasks.check_tasks();
@@ -607,7 +598,7 @@ async fn main() -> eyre::Result<()> {
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(true),
-        Some(4001),
+        Some(masks_engine_port),
         Some(&mut server_tasks),
     );
     server_tasks.check_tasks();
@@ -624,7 +615,7 @@ async fn main() -> eyre::Result<()> {
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(true),
-        Some(4002),
+        Some(batch_codes_engine_port),
         Some(&mut server_tasks),
     );
     server_tasks.check_tasks();
@@ -637,7 +628,7 @@ async fn main() -> eyre::Result<()> {
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(true),
-        Some(4003),
+        Some(batch_masks_engine_port),
         Some(&mut server_tasks),
     );
     server_tasks.check_tasks();
@@ -655,7 +646,7 @@ async fn main() -> eyre::Result<()> {
         phase2_batch_chunk_size,
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
-        Some(4004),
+        Some(phase_2_batch_port),
         Some(&mut server_tasks),
     )));
     server_tasks.check_tasks();
@@ -666,7 +657,7 @@ async fn main() -> eyre::Result<()> {
         phase2_chunk_size_max / 64,
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
-        Some(4005),
+        Some(phase_2_port),
         Some(&mut server_tasks),
     )));
     server_tasks.check_tasks();
@@ -785,7 +776,7 @@ async fn main() -> eyre::Result<()> {
 
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
-        let batch = receive_batch(party_id, &sqs_client, &queue).await?;
+        let batch = receive_batch(party_id, &sqs_client, &requests_queue_url).await?;
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id and
