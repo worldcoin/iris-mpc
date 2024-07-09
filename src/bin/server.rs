@@ -14,8 +14,7 @@ use cudarc::driver::{
     CudaDevice, CudaSlice, CudaStream,
 };
 use gpu_iris_mpc::{
-    config,
-    config::Config,
+    config::{Config, Opt, ServersConfig},
     dot::{
         device_manager::DeviceManager,
         distance_comparator::DistanceComparator,
@@ -40,10 +39,11 @@ use gpu_iris_mpc::{
 use lazy_static::lazy_static;
 use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
+use static_assertions::const_assert;
 use std::{
     fs::metadata,
     mem,
-    path::PathBuf,
+    ops::IndexMut,
     sync::{atomic::AtomicUsize, Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -87,13 +87,7 @@ const MAX_CONCURRENT_BATCHES: usize = 2;
 
 const DB_CODE_FILE: &str = "codes.db";
 const DB_MASK_FILE: &str = "masks.db";
-const DEFAULT_PATH: &str = "/opt/dlami/nvme/";
 const QUERIES: usize = ROTATIONS * N_QUERIES;
-const KMS_KEY_IDS: [&str; 3] = [
-    "077788e2-9eeb-4044-859b-34496cfd500b",
-    "896353dc-5ea5-42d4-9e4e-f65dd8169dee",
-    "42bb01f5-8380-48b4-b1f1-929463a587fb",
-];
 
 lazy_static! {
     static ref KDF_NONCE: AtomicUsize = AtomicUsize::new(0);
@@ -116,27 +110,6 @@ macro_rules! forget_vec {
             std::mem::forget(item);
         }
     };
-}
-
-#[derive(Debug, Parser)]
-struct Opt {
-    #[structopt(short, long)]
-    queue: String,
-
-    #[structopt(short, long)]
-    results_topic_arn: String,
-
-    #[structopt(short, long)]
-    party_id: usize,
-
-    #[structopt(short, long)]
-    bootstrap_url: Option<String>,
-
-    #[structopt(short, long)]
-    path: Option<String>,
-
-    #[clap(short, long, env)]
-    config: Option<PathBuf>,
 }
 
 #[derive(Default)]
@@ -259,13 +232,7 @@ async fn receive_batch(
 }
 
 fn prepare_query_shares(shares: Vec<GaloisRingIrisCodeShare>) -> Vec<Vec<u8>> {
-    preprocess_query(
-        &shares
-            .into_iter()
-            .map(|e| e.coefs)
-            .flatten()
-            .collect::<Vec<_>>(),
-    )
+    preprocess_query(&shares.into_iter().flat_map(|e| e.coefs).collect::<Vec<_>>())
 }
 
 #[allow(clippy::type_complexity)]
@@ -317,7 +284,7 @@ fn open(
     }
     cudarc::nccl::result::group_end().unwrap();
 
-    distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, &streams);
+    distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, streams);
 }
 
 fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
@@ -383,7 +350,7 @@ fn device_ptrs_to_shares<T>(
     let b = device_ptrs_to_slices(b, lens, devs);
 
     a.into_iter()
-        .zip(b.into_iter())
+        .zip(b)
         .map(|(a, b)| ChunkShare::new(a, b))
         .collect::<Vec<_>>()
 }
@@ -472,17 +439,8 @@ pub fn calculate_insertion_indices(
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     dotenvy::dotenv().ok();
-
-    let Opt {
-        queue,
-        party_id,
-        bootstrap_url,
-        path,
-        results_topic_arn,
-        config,
-    } = Opt::parse();
-
-    let config: Config = config::load_config("SMPC", config.as_deref())?;
+    let mut config: Config = Config::load_config("SMPC").unwrap();
+    config.overwrite_defaults_with_cli_args(Opt::parse());
 
     let _tracing_shutdown_handle = if let Some(service) = &config.service {
         let tracing_shutdown_handle = DatadogBattery::init(
@@ -512,7 +470,15 @@ async fn main() -> eyre::Result<()> {
         TracingShutdownHandle
     };
 
-    let path = path.unwrap_or(DEFAULT_PATH.to_string());
+    let Config {
+        path,
+        party_id,
+        results_topic_arn,
+        requests_queue_url,
+        bootstrap_url,
+        kms_key_ids,
+        ..
+    } = config;
 
     let code_db_path = format!("{}/{}", path, DB_CODE_FILE);
     let mask_db_path = format!("{}/{}", path, DB_MASK_FILE);
@@ -524,7 +490,10 @@ async fn main() -> eyre::Result<()> {
     let store = Store::new_from_env().await?;
 
     // Init RNGs
-    let own_key_id = KMS_KEY_IDS[party_id];
+    let own_key_id = kms_key_ids
+        .0
+        .get(party_id)
+        .expect("Expected value not found in kms_key_ids");
     let dh_pairs = match party_id {
         0 => (1usize, 2usize),
         1 => (2usize, 0usize),
@@ -532,9 +501,18 @@ async fn main() -> eyre::Result<()> {
         _ => unimplemented!(),
     };
 
+    let dh_pair_0: &str = kms_key_ids
+        .0
+        .get(dh_pairs.0)
+        .expect("Expected value not found in kms_key_ids");
+    let dh_pair_1: &str = kms_key_ids
+        .0
+        .get(dh_pairs.1)
+        .expect("Expected value not found in kms_key_ids");
+
     let chacha_seeds = (
-        bytemuck::cast(derive_shared_secret(own_key_id, KMS_KEY_IDS[dh_pairs.0]).await?),
-        bytemuck::cast(derive_shared_secret(own_key_id, KMS_KEY_IDS[dh_pairs.1]).await?),
+        bytemuck::cast(derive_shared_secret(own_key_id, dh_pair_0).await?),
+        bytemuck::cast(derive_shared_secret(own_key_id, dh_pair_1).await?),
     );
 
     // Generate or load DB
@@ -551,7 +529,7 @@ async fn main() -> eyre::Result<()> {
             let codes_db = db
                 .db
                 .iter()
-                .map(|iris| {
+                .flat_map(|iris| {
                     GaloisRingIrisCodeShare::encode_iris_code(
                         &iris.code,
                         &iris.mask,
@@ -559,20 +537,18 @@ async fn main() -> eyre::Result<()> {
                     )[party_id]
                         .coefs
                 })
-                .flatten()
                 .collect::<Vec<_>>();
 
             let masks_db = db
                 .db
                 .iter()
-                .map(|iris| {
+                .flat_map(|iris| {
                     GaloisRingIrisCodeShare::encode_mask_code(
                         &iris.mask,
                         &mut StdRng::seed_from_u64(RNG_SEED),
                     )[party_id]
                         .coefs
                 })
-                .flatten()
                 .collect::<Vec<_>>();
 
             write_mmap_file(&code_db_path, &codes_db)?;
@@ -591,6 +567,15 @@ async fn main() -> eyre::Result<()> {
     let device_manager = Arc::new(DeviceManager::init());
     let mut server_tasks = TaskMonitor::new();
 
+    let ServersConfig {
+        codes_engine_port,
+        masks_engine_port,
+        batch_codes_engine_port,
+        batch_masks_engine_port,
+        phase_2_port,
+        phase_2_batch_port,
+    } = config.servers;
+
     // Phase 1 Setup
     let mut codes_engine = ShareDB::init(
         party_id,
@@ -600,7 +585,7 @@ async fn main() -> eyre::Result<()> {
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(true),
-        Some(4000),
+        Some(codes_engine_port),
         Some(&mut server_tasks),
     );
     server_tasks.check_tasks();
@@ -613,7 +598,7 @@ async fn main() -> eyre::Result<()> {
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(true),
-        Some(4001),
+        Some(masks_engine_port),
         Some(&mut server_tasks),
     );
     server_tasks.check_tasks();
@@ -630,7 +615,7 @@ async fn main() -> eyre::Result<()> {
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(true),
-        Some(4002),
+        Some(batch_codes_engine_port),
         Some(&mut server_tasks),
     );
     server_tasks.check_tasks();
@@ -643,7 +628,7 @@ async fn main() -> eyre::Result<()> {
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(true),
-        Some(4003),
+        Some(batch_masks_engine_port),
         Some(&mut server_tasks),
     );
     server_tasks.check_tasks();
@@ -661,7 +646,7 @@ async fn main() -> eyre::Result<()> {
         phase2_batch_chunk_size,
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
-        Some(4004),
+        Some(phase_2_batch_port),
         Some(&mut server_tasks),
     )));
     server_tasks.check_tasks();
@@ -672,7 +657,7 @@ async fn main() -> eyre::Result<()> {
         phase2_chunk_size_max / 64,
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
-        Some(4005),
+        Some(phase_2_port),
         Some(&mut server_tasks),
     )));
     server_tasks.check_tasks();
@@ -705,7 +690,7 @@ async fn main() -> eyre::Result<()> {
     let mut next_exchange_event = device_manager.create_events();
     let mut timer_events = vec![];
     let start_timer = device_manager.create_events();
-    let mut end_timer = device_manager.create_events();
+    let end_timer = device_manager.create_events();
 
     let current_db_size: Vec<usize> =
         vec![DB_SIZE / device_manager.device_count(); device_manager.device_count()];
@@ -791,7 +776,7 @@ async fn main() -> eyre::Result<()> {
 
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
-        let batch = receive_batch(party_id, &sqs_client, &queue).await?;
+        let batch = receive_batch(party_id, &sqs_client, &requests_queue_url).await?;
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id and
@@ -995,10 +980,11 @@ async fn main() -> eyre::Result<()> {
         //   before running that code.
         // - End events are re-used in each thread, but we only end one thread at a
         //   time.
-        assert!(MAX_BATCHES_BEFORE_REUSE > MAX_CONCURRENT_BATCHES);
+        const_assert!(MAX_BATCHES_BEFORE_REUSE > MAX_CONCURRENT_BATCHES);
+
         // into_iter() makes the Rust compiler check that the streams are not re-used.
         let mut thread_streams = request_streams
-            .into_iter()
+            .iter()
             .map(|s| unsafe { s.stream.as_mut().unwrap() })
             .collect::<Vec<_>>();
         // The compiler can't tell that we wait for the previous batch before re-using
@@ -1018,9 +1004,9 @@ async fn main() -> eyre::Result<()> {
             .map(Arc::clone)
             .collect::<Vec<_>>();
         let db_sizes_batch = query_db_size.clone();
-        let thread_request_results_batch = device_ptrs(&request_results_batch);
-        let thread_request_results = device_ptrs(&request_results);
-        let thread_request_final_results = device_ptrs(&request_final_results);
+        let thread_request_results_batch = device_ptrs(request_results_batch);
+        let thread_request_results = device_ptrs(request_results);
+        let thread_request_final_results = device_ptrs(request_final_results);
 
         // Batch phase 1 results
         let thread_code_results_batch = device_ptrs(&batch_codes_engine.results);
@@ -1067,10 +1053,8 @@ async fn main() -> eyre::Result<()> {
             //   batches),
             // - CUevent: thread_current_stream_event, thread_end_timer,
             // - Comm: phase2, phase2_batch.
-            if previous_thread_handle.is_some() {
-                runtime::Handle::current()
-                    .block_on(previous_thread_handle.unwrap())
-                    .unwrap();
+            if let Some(phandle) = previous_thread_handle {
+                runtime::Handle::current().block_on(phandle).unwrap();
             }
             let thread_devs = thread_device_manager.devices();
             let mut thread_phase2_batch = thread_phase2_batch.lock().unwrap();
@@ -1105,30 +1089,30 @@ async fn main() -> eyre::Result<()> {
                 &thread_code_results_batch,
                 &thread_code_results_peer_batch,
                 &result_sizes_batch,
-                &thread_devs,
+                thread_devs,
             );
             let mut mask_dots_batch: Vec<ChunkShare<u16>> = device_ptrs_to_shares(
                 &thread_mask_results_batch,
                 &thread_mask_results_peer_batch,
                 &result_sizes_batch,
-                &thread_devs,
+                thread_devs,
             );
 
             let mut code_dots: Vec<ChunkShare<u16>> = device_ptrs_to_shares(
                 &thread_code_results,
                 &thread_code_results_peer,
                 &result_sizes,
-                &thread_devs,
+                thread_devs,
             );
             let mut mask_dots: Vec<ChunkShare<u16>> = device_ptrs_to_shares(
                 &thread_mask_results,
                 &thread_mask_results_peer,
                 &result_sizes,
-                &thread_devs,
+                thread_devs,
             );
 
             // TODO: use phase 1 streams here
-            let mut phase2_streams = thread_phase2
+            let phase2_streams = thread_phase2
                 .get_devices()
                 .iter()
                 .map(|d| d.fork_default_stream().unwrap())
@@ -1146,7 +1130,7 @@ async fn main() -> eyre::Result<()> {
             let mut thread_request_results_slice_batch: Vec<CudaSlice<u32>> = device_ptrs_to_slices(
                 &thread_request_results_batch,
                 &vec![QUERIES; thread_devs.len()],
-                &thread_devs,
+                thread_devs,
             );
 
             // Iterate over a list of tracing payloads, and create logs with mappings to
@@ -1181,7 +1165,7 @@ async fn main() -> eyre::Result<()> {
             let mut thread_request_results_slice: Vec<CudaSlice<u32>> = device_ptrs_to_slices(
                 &thread_request_results,
                 &vec![QUERIES; thread_devs.len()],
-                &thread_devs,
+                thread_devs,
             );
 
             let chunk_size = thread_phase2.chunk_size();
@@ -1318,13 +1302,14 @@ async fn main() -> eyre::Result<()> {
                 //   CudaDevice, which makes sure they aren't dropped.
                 unsafe {
                     event::record(
-                        *&mut thread_current_stream_event[i],
-                        *&mut thread_streams[i],
+                        *thread_current_stream_event.index_mut(i),
+                        *thread_streams.index_mut(i),
                     )
                     .unwrap();
 
                     // DEBUG: emit event to measure time for e2e process
-                    event::record(*&mut thread_end_timer[i], *&mut thread_streams[i]).unwrap();
+                    event::record(*thread_end_timer.index_mut(i), *thread_streams.index_mut(i))
+                        .unwrap();
                 }
             }
 
@@ -1335,22 +1320,22 @@ async fn main() -> eyre::Result<()> {
 
             // Reset the results buffers for reuse
             reset_results(
-                &thread_device_manager.devices(),
+                thread_device_manager.devices(),
                 &thread_request_results,
                 &RESULTS_INIT_HOST,
-                &mut phase2_streams,
+                &phase2_streams,
             );
             reset_results(
-                &thread_device_manager.devices(),
+                thread_device_manager.devices(),
                 &thread_request_results_batch,
                 &RESULTS_INIT_HOST,
-                &mut phase2_streams,
+                &phase2_streams,
             );
             reset_results(
-                &thread_device_manager.devices(),
+                thread_device_manager.devices(),
                 &thread_request_final_results,
                 &FINAL_RESULTS_INIT_HOST,
-                &mut phase2_streams,
+                &phase2_streams,
             );
 
             // Make sure to not call `Drop` on those
@@ -1409,7 +1394,7 @@ async fn main() -> eyre::Result<()> {
     for i in 0..device_manager.device_count() {
         unsafe {
             device_manager.device(i).bind_to_thread().unwrap();
-            let total_time = elapsed(start_timer[i], *&mut end_timer[i]).unwrap();
+            let total_time = elapsed(start_timer[i], end_timer[i]).unwrap();
             println!("Total time: {:?}", total_time);
         }
     }
