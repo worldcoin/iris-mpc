@@ -638,7 +638,14 @@ async fn main() -> eyre::Result<()> {
         (QUERIES * DB_SIZE / device_manager.device_count()).div_ceil(2048) * 2048;
     let phase2_chunk_size_max =
         (QUERIES * (DB_SIZE + DB_BUFFER) / device_manager.device_count()).div_ceil(2048) * 2048;
-    let phase2_batch_chunk_size = (QUERIES * QUERIES).div_ceil(2048) * 2048; // Not divided by GPU_COUNT since we do the work on all GPUs for simplicity
+
+    // Not divided by GPU_COUNT since we do the work on all GPUs for simplicity,
+    // also not padded to 2048 since we only require it to be a multiple of 64
+    let phase2_batch_chunk_size = QUERIES * QUERIES;
+    assert!(
+        phase2_batch_chunk_size % 64 == 0,
+        "Batch chunk size must be a multiple of 64"
+    );
 
     let phase2_batch = Arc::new(Mutex::new(Circuits::new(
         party_id,
