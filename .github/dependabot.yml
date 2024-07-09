@@ -8,4 +8,17 @@ updates:
   - package-ecosystem: "cargo" # See documentation for possible values
     directory: "/" # Location of package manifests
     schedule:
+      # TODO: change to weekly, and delete the detailed schedule
       interval: "daily"
+      # Used to get an immediate test
+      time: "5:00"
+      timezone: "Etc/UTC"
+      
+  - package-ecosystem: "github-actions" # See documentation for possible values
+    directory: "/" # Location of package manifests
+    schedule:
+      # TODO: change to weekly, and delete the detailed schedule
+      interval: "daily"
+      # Used to get an immediate test
+      time: "5:00"
+      timezone: "Etc/UTC"
