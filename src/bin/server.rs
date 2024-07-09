@@ -873,6 +873,7 @@ async fn main() -> eyre::Result<()> {
             &code_query,
             &code_query_insert,
             &query_db_size,
+            0,
             request_streams,
             request_cublas_handles,
         );
@@ -881,6 +882,7 @@ async fn main() -> eyre::Result<()> {
             &mask_query,
             &mask_query_insert,
             &query_db_size,
+            0,
             request_streams,
             request_cublas_handles,
         );
@@ -889,6 +891,7 @@ async fn main() -> eyre::Result<()> {
             &code_query_sums,
             &code_query_insert_sums,
             &query_db_size,
+            &query_db_size,
             request_streams,
         );
 
@@ -896,74 +899,13 @@ async fn main() -> eyre::Result<()> {
             &mask_query_sums,
             &mask_query_insert_sums,
             &query_db_size,
+            &query_db_size,
             request_streams,
         );
 
         batch_codes_engine.reshare_results(&query_db_size, request_streams);
         batch_masks_engine.reshare_results(&query_db_size, request_streams);
 
-        // ---- END BATCH DEDUP ----
-
-        debug_record_event!(device_manager, request_streams, timers);
-
-        codes_engine.dot(
-            &code_query,
-            &(
-                device_ptrs(&code_db_slices.0 .0),
-                device_ptrs(&code_db_slices.0 .1),
-            ),
-            &current_db_size_stream,
-            request_streams,
-            request_cublas_handles,
-        );
-
-        masks_engine.dot(
-            &mask_query,
-            &(
-                device_ptrs(&mask_db_slices.0 .0),
-                device_ptrs(&mask_db_slices.0 .1),
-            ),
-            &current_db_size_stream,
-            request_streams,
-            request_cublas_handles,
-        );
-
-        debug_record_event!(device_manager, request_streams, timers);
-
-        // BLOCK 2: calculate final dot product result, exchange and compare
-        device_manager.await_event(request_streams, &current_exchange_event);
-
-        codes_engine.dot_reduce(
-            &code_query_sums,
-            &(
-                device_ptrs(&code_db_slices.1 .0),
-                device_ptrs(&code_db_slices.1 .1),
-            ),
-            &current_db_size_stream,
-            request_streams,
-        );
-        masks_engine.dot_reduce(
-            &mask_query_sums,
-            &(
-                device_ptrs(&mask_db_slices.1 .0),
-                device_ptrs(&mask_db_slices.1 .1),
-            ),
-            &current_db_size_stream,
-            request_streams,
-        );
-
-        device_manager.record_event(request_streams, &next_dot_event);
-
-        debug_record_event!(device_manager, request_streams, timers);
-
-        codes_engine.reshare_results(&current_db_size_stream, request_streams);
-        masks_engine.reshare_results(&current_db_size_stream, request_streams);
-
-        debug_record_event!(device_manager, request_streams, timers);
-
-        device_manager.record_event(request_streams, &next_exchange_event);
-
-        // Phase 2 [Batch]
         let db_sizes_batch = vec![QUERIES; device_manager.device_count()];
         let mut code_dots_batch = batch_codes_engine.result_chunk_shares(&db_sizes_batch);
         let mut mask_dots_batch = batch_masks_engine.result_chunk_shares(&db_sizes_batch);
@@ -984,6 +926,69 @@ async fn main() -> eyre::Result<()> {
             &request_streams,
         );
         phase2_batch.return_result_buffer(res);
+
+        // ---- END BATCH DEDUP ----
+
+        // debug_record_event!(device_manager, request_streams, timers);
+
+        codes_engine.dot(
+            &code_query,
+            &(
+                device_ptrs(&code_db_slices.0 .0),
+                device_ptrs(&code_db_slices.0 .1),
+            ),
+            &current_db_size_stream,
+            0,
+            request_streams,
+            request_cublas_handles,
+        );
+
+        masks_engine.dot(
+            &mask_query,
+            &(
+                device_ptrs(&mask_db_slices.0 .0),
+                device_ptrs(&mask_db_slices.0 .1),
+            ),
+            &current_db_size_stream,
+            0,
+            request_streams,
+            request_cublas_handles,
+        );
+
+        // BLOCK 2: calculate final dot product result, exchange and compare
+        device_manager.await_event(request_streams, &current_exchange_event);
+
+        codes_engine.dot_reduce(
+            &code_query_sums,
+            &(
+                device_ptrs(&code_db_slices.1 .0),
+                device_ptrs(&code_db_slices.1 .1),
+            ),
+            &current_db_size_stream,
+            &current_db_size_stream,
+            request_streams,
+        );
+        masks_engine.dot_reduce(
+            &mask_query_sums,
+            &(
+                device_ptrs(&mask_db_slices.1 .0),
+                device_ptrs(&mask_db_slices.1 .1),
+            ),
+            &current_db_size_stream,
+            &current_db_size_stream,
+            request_streams,
+        );
+
+        device_manager.record_event(request_streams, &next_dot_event);
+
+        debug_record_event!(device_manager, request_streams, timers);
+
+        codes_engine.reshare_results(&current_db_size_stream, request_streams);
+        masks_engine.reshare_results(&current_db_size_stream, request_streams);
+
+        debug_record_event!(device_manager, request_streams, timers);
+
+        device_manager.record_event(request_streams, &next_exchange_event);
 
         // Phase 2 [DB]
         let mut code_dots = codes_engine.result_chunk_shares(&current_db_size_stream);

@@ -162,7 +162,7 @@ impl ShareDB {
     pub fn init(
         peer_id: usize,
         device_manager: Arc<DeviceManager>,
-        max_db_length: usize,
+        chunk_size: usize,
         query_length: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
         peer_url: Option<String>,
@@ -197,7 +197,7 @@ impl ShareDB {
         let mut intermediate_results = vec![];
         let mut results = vec![];
         let mut results_peer = vec![];
-        let results_len = max_db_length / n_devices * query_length;
+        let results_len = chunk_size * query_length;
 
         for idx in 0..n_devices {
             unsafe {
@@ -219,7 +219,7 @@ impl ShareDB {
 
         // Init RNGs
         let rng_buf_size: usize =
-            (max_db_length / n_devices * query_length * mem::size_of::<u16>()).div_ceil(64) * 64;
+            (chunk_size * query_length * mem::size_of::<u16>()).div_ceil(64) * 64;
         let mut rngs = vec![];
         for idx in 0..n_devices {
             let (seed0, seed1) = chacha_seeds;
@@ -509,7 +509,8 @@ impl ShareDB {
         &mut self,
         query_ptrs: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
         db: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
-        db_sizes: &[usize],
+        chunk_sizes: &[usize],
+        offset: usize,
         streams: &[CudaStream],
         blass: &[CudaBlas],
     ) {
@@ -520,7 +521,7 @@ impl ShareDB {
 
             // Prepare randomness to mask results
             if self.is_remote {
-                let len: usize = (db_sizes[idx] * self.query_length).div_ceil(64) * 64;
+                let len: usize = (chunk_sizes[idx] * self.query_length).div_ceil(64) * 64;
                 self.rngs[idx].0.fill_rng_no_host_copy(len, &streams[idx]);
                 self.rngs[idx].1.fill_rng_no_host_copy(len, &streams[idx]);
             }
@@ -532,13 +533,13 @@ impl ShareDB {
                     }
                     gemm(
                         &blass[idx],
-                        *d,
+                        *d + offset as u64,
                         *q,
                         *self.intermediate_results[idx].device_ptr(),
                         0,
                         0,
                         0,
-                        db_sizes[idx],
+                        chunk_sizes[idx],
                         self.query_length,
                         IRIS_CODE_LENGTH,
                         1 << 8 * (i + j),
@@ -554,6 +555,7 @@ impl ShareDB {
         query_sums: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
         db_sums: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
         db_sizes: &[usize],
+        chunk_sizes: &[usize],
         streams: &[CudaStream],
     ) {
         for idx in 0..self.device_manager.device_count() {
@@ -561,7 +563,7 @@ impl ShareDB {
                 self.rngs[idx].0.cuda_slice().is_some() && self.rngs[idx].1.cuda_slice().is_some()
             );
 
-            let num_elements = db_sizes[idx] * self.query_length;
+            let num_elements = chunk_sizes[idx] * self.query_length;
             let threads_per_block = 256;
             let blocks_per_grid = num_elements.div_ceil(threads_per_block);
             let cfg = LaunchConfig {
@@ -584,7 +586,7 @@ impl ShareDB {
                             query_sums.0[idx],
                             query_sums.1[idx],
                             db_sizes[idx] as u64,
-                            (db_sizes[idx] * self.query_length) as u64,
+                            (chunk_sizes[idx] * self.query_length) as u64,
                             self.rngs[idx].0.cuda_slice().unwrap(),
                             self.rngs[idx].1.cuda_slice().unwrap(),
                         ),
@@ -730,12 +732,14 @@ mod tests {
             &preprocessed_query,
             &(device_ptrs(&db_slices.0 .0), device_ptrs(&db_slices.0 .1)),
             &db_sizes,
+            0,
             &streams,
             &blass,
         );
         engine.dot_reduce(
             &query_sums,
             &(device_ptrs(&db_slices.1 .0), device_ptrs(&db_slices.1 .1)),
+            &db_sizes,
             &db_sizes,
             &streams,
         );
@@ -837,12 +841,14 @@ mod tests {
                 &preprocessed_query,
                 &(device_ptrs(&db_slices.0 .0), device_ptrs(&db_slices.0 .1)),
                 &db_sizes,
+                0,
                 &streams,
                 &blass,
             );
             engine.dot_reduce(
                 &query_sums,
                 &(device_ptrs(&db_slices.1 .0), device_ptrs(&db_slices.1 .1)),
+                &db_sizes,
                 &db_sizes,
                 &streams,
             );
@@ -984,6 +990,7 @@ mod tests {
                     device_ptrs(&code_db_slices.0 .1),
                 ),
                 &db_sizes,
+                0,
                 &streams,
                 &blass,
             );
@@ -994,6 +1001,7 @@ mod tests {
                     device_ptrs(&mask_db_slices.0 .1),
                 ),
                 &db_sizes,
+                0,
                 &streams,
                 &blass,
             );
@@ -1005,6 +1013,7 @@ mod tests {
                     device_ptrs(&code_db_slices.1 .1),
                 ),
                 &db_sizes,
+                &db_sizes,
                 &streams,
             );
             masks_engine.dot_reduce(
@@ -1013,6 +1022,7 @@ mod tests {
                     device_ptrs(&mask_db_slices.1 .0),
                     device_ptrs(&mask_db_slices.1 .1),
                 ),
+                &db_sizes,
                 &db_sizes,
                 &streams,
             );
