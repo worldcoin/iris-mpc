@@ -77,7 +77,7 @@ impl ChaChaCudaRng {
         self.dev
             .dtoh_sync_copy_into(
                 self.rng_chunk.as_ref().unwrap(),
-                &mut self.output_buffer.as_mut().unwrap(),
+                self.output_buffer.as_mut().unwrap(),
             )
             .unwrap();
     }
