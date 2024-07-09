@@ -1,6 +1,6 @@
 use bytemuck::cast_slice;
 use eyre::{eyre, Result};
-use futures::StreamExt;
+use futures::Stream;
 use sqlx::{postgres::PgPoolOptions, Executor, PgPool};
 use std::env;
 
@@ -31,7 +31,7 @@ const CREATE_TABLE_IRISES: &str = "
     );
 ";
 
-#[derive(sqlx::FromRow, Debug)]
+#[derive(sqlx::FromRow, Debug, Default)]
 pub struct StoredIris {
     #[allow(dead_code)]
     id: i64, // BIGSERIAL
@@ -93,18 +93,8 @@ impl Store {
         Ok(Store { pool })
     }
 
-    pub async fn iter_irises(&self) -> Result<impl Iterator<Item = StoredIris>> {
-        let mut rows = sqlx::query_as::<_, StoredIris>("SELECT * FROM irises").fetch(&self.pool);
-
-        let mut items = Vec::new();
-
-        while let Some(row) = rows.next().await {
-            if let Ok(row) = row {
-                items.push(row);
-            }
-        }
-
-        Ok(items.into_iter())
+    pub async fn stream_irises(&self) -> impl Stream<Item = Result<StoredIris, sqlx::Error>> + '_ {
+        sqlx::query_as::<_, StoredIris>("SELECT * FROM irises").fetch(&self.pool)
     }
 
     pub async fn insert_irises(&self, codes_and_masks: &[(&[u16], &[u16])]) -> Result<()> {
@@ -137,6 +127,7 @@ mod tests {
     const DOTENV_TEST: &str = ".env.test";
 
     use super::*;
+    use futures::TryStreamExt;
     use std::time;
     use tokio;
 
@@ -149,7 +140,7 @@ mod tests {
 
         let store = Store::new(&Store::env_url()?, &schema_name).await?;
 
-        let got = store.iter_irises().await?.collect::<Vec<_>>();
+        let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), 0);
 
         let codes_and_masks: &[(&[u16], &[u16]); 2] = &[
@@ -158,7 +149,7 @@ mod tests {
         ];
         store.insert_irises(codes_and_masks).await?;
 
-        let got = store.iter_irises().await?.collect::<Vec<_>>();
+        let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
 
         assert_eq!(got.len(), 2);
         for i in 0..2 {

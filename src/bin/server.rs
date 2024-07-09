@@ -13,6 +13,7 @@ use cudarc::driver::{
     sys::{CUdeviceptr, CUstream, CUstream_st},
     CudaDevice, CudaSlice, CudaStream,
 };
+use futures::StreamExt;
 use gpu_iris_mpc::{
     config::{Config, Opt, ServersConfig},
     dot::{
@@ -557,7 +558,8 @@ async fn main() -> eyre::Result<()> {
         };
 
     // Load DB from persistent storage.
-    for iris in store.iter_irises().await? {
+    while let Some(iris) = store.stream_irises().await.next().await {
+        let iris = iris?;
         codes_db.extend(iris.code());
         masks_db.extend(iris.mask());
     }
