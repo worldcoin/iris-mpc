@@ -40,6 +40,7 @@ use gpu_iris_mpc::{
 use lazy_static::lazy_static;
 use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
+use static_assertions::const_assert;
 use std::{
     fs::metadata,
     mem,
@@ -986,8 +987,7 @@ async fn main() -> eyre::Result<()> {
         //   before running that code.
         // - End events are re-used in each thread, but we only end one thread at a
         //   time.
-        // (Dragos) Commented assert here since it's going to be optimized by the
-        // compiler assert!(MAX_BATCHES_BEFORE_REUSE > MAX_CONCURRENT_BATCHES);
+        const_assert!(MAX_BATCHES_BEFORE_REUSE > MAX_CONCURRENT_BATCHES);
 
         // into_iter() makes the Rust compiler check that the streams are not re-used.
         let mut thread_streams = request_streams
