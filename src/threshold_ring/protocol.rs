@@ -357,6 +357,7 @@ impl Circuits {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         peer_id: usize,
         input_size: usize, // per GPU
