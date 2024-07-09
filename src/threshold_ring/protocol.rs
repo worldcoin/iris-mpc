@@ -374,6 +374,7 @@ impl Circuits {
         assert!(input_size % 64 == 0);
         // Chunk size is the number of u64 elements per bit in the binary circuits
         let chunk_size = input_size / 64;
+        println!("Chunk size set to {}", chunk_size);
         assert!(alloc_size >= chunk_size);
         let n_devices = device_manager.device_count();
 
@@ -415,6 +416,7 @@ impl Circuits {
     // TODO: have different chunk sizes for each gpu
     pub fn set_chunk_size(&mut self, chunk_size: usize) {
         assert!(chunk_size <= self.buffers.chunk_size);
+        println!("Chunk size updated to {}", chunk_size);
         self.chunk_size = chunk_size;
     }
 
