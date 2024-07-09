@@ -427,6 +427,7 @@ impl Circuits {
         Buffers::return_buffer(&mut self.buffers.u64_32c_1, src);
     }
 
+    #[allow(clippy::arc_with_non_send_sync)]
     pub fn instantiate_network(
         peer_id: usize,
         peer_url: Option<String>,

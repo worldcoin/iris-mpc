@@ -116,7 +116,7 @@ async fn main() -> eyre::Result<()> {
 
                 if expected_result.is_none() {
                     // New insertion
-                    assert_eq!(result.is_match, false);
+                    assert!(!result.is_match);
                     let request = thread_requests
                         .lock()
                         .await
@@ -130,7 +130,7 @@ async fn main() -> eyre::Result<()> {
                 } else {
                     // Existing entry
                     println!("Expected: {:?} Got: {:?}", expected_result, result.db_index);
-                    assert_eq!(result.is_match, true);
+                    assert!(result.is_match);
                     assert_eq!(result.db_index, expected_result.unwrap());
                 }
 

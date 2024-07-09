@@ -96,8 +96,7 @@ impl IrisCodeArray {
         Ok(BASE64_STANDARD.encode(
             self.0
                 .iter()
-                .map(|&x| x.reverse_bits().to_be_bytes())
-                .flatten()
+                .flat_map(|&x| x.reverse_bits().to_be_bytes())
                 .collect::<Vec<_>>(),
         ))
     }

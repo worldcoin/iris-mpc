@@ -1,9 +1,10 @@
-name: Lint
+name: Lint Rustfmt
 
 on:
   push:
 
 jobs:
+  # TODO: change this to lint-rustfmt once we've updated required jobs
   lint:
     runs-on: ubuntu-latest
     steps:
