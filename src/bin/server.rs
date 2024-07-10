@@ -832,22 +832,20 @@ async fn main() -> eyre::Result<()> {
 
         // Transfer queries to device
         // TODO: free all of this!
-        let code_query = device_manager.htod_transfer_query(&code_query, request_streams);
+        let code_query = device_manager.custom_htod_transfer_query(&code_query, request_streams)?;
         let mask_query = device_manager.htod_transfer_query(&mask_query, request_streams);
         let code_query_insert =
             device_manager.htod_transfer_query(&code_query_insert, request_streams);
         let mask_query_insert =
             device_manager.htod_transfer_query(&mask_query_insert, request_streams);
         let code_query_sums =
-            codes_engine.query_sums(&code_query, request_streams, request_cublas_handles);
+            codes_engine.custom_query_sums(&code_query, request_streams, request_cublas_handles);
         let mask_query_sums =
             masks_engine.query_sums(&mask_query, request_streams, request_cublas_handles);
         let code_query_insert_sums =
             codes_engine.query_sums(&code_query_insert, request_streams, request_cublas_handles);
         let mask_query_insert_sums =
             masks_engine.query_sums(&mask_query_insert, request_streams, request_cublas_handles);
-
-        device_manager.device_delete_query(request_streams, &code_query)?;
 
         // update the db size, skip this for the first two
         if request_counter > MAX_CONCURRENT_BATCHES {
@@ -871,7 +869,7 @@ async fn main() -> eyre::Result<()> {
 
         // ---- START BATCH DEDUP ----
 
-        batch_codes_engine.dot(
+        batch_codes_engine.custom_dot(
             &code_query,
             &code_query_insert,
             &query_db_size,
@@ -908,7 +906,7 @@ async fn main() -> eyre::Result<()> {
 
         debug_record_event!(device_manager, request_streams, timers);
 
-        codes_engine.dot(
+        codes_engine.custom_dot(
             &code_query,
             &(
                 device_ptrs(&code_db_slices.0 .0),

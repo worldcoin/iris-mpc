@@ -502,6 +502,72 @@ impl ShareDB {
         (query0_sums, query1_sums)
     }
 
+    pub fn custom_query_sums(
+        &self,
+        query_ptrs: &(Vec<CudaSlice<u8>>, Vec<CudaSlice<u8>>),
+        streams: &[CudaStream],
+        blass: &[CudaBlas],
+    ) -> (Vec<CUdeviceptr>, Vec<CUdeviceptr>) {
+        let mut query1_sums = vec![];
+        let mut query0_sums = vec![];
+
+        for idx in 0..self.device_manager.device_count() {
+            self.device_manager.device(idx).bind_to_thread().unwrap();
+
+            let query0 = &query_ptrs.0[idx];
+            let query1 = &query_ptrs.1[idx];
+
+            let query0_sum = unsafe {
+                malloc_async(
+                    streams[idx].stream,
+                    self.query_length * mem::size_of::<u32>(),
+                )
+                .unwrap()
+            };
+
+            let query1_sum = unsafe {
+                malloc_async(
+                    streams[idx].stream,
+                    self.query_length * mem::size_of::<u32>(),
+                )
+                .unwrap()
+            };
+
+            gemm(
+                &blass[idx],
+                *query0.device_ptr(),
+                *self.ones[idx].device_ptr(),
+                query0_sum,
+                0,
+                0,
+                0,
+                self.query_length,
+                1,
+                IRIS_CODE_LENGTH,
+                1,
+                0,
+            );
+            gemm(
+                &blass[idx],
+                *query1.device_ptr(),
+                *self.ones[idx].device_ptr(),
+                query1_sum,
+                0,
+                0,
+                0,
+                self.query_length,
+                1,
+                IRIS_CODE_LENGTH,
+                1,
+                0,
+            );
+
+            query0_sums.push(query0_sum);
+            query1_sums.push(query1_sum);
+        }
+        (query0_sums, query1_sums)
+    }
+
     pub fn dot(
         &mut self,
         query_ptrs: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
@@ -531,6 +597,50 @@ impl ShareDB {
                         &blass[idx],
                         *d,
                         *q,
+                        *self.intermediate_results[idx].device_ptr(),
+                        0,
+                        0,
+                        0,
+                        db_sizes[idx],
+                        self.query_length,
+                        IRIS_CODE_LENGTH,
+                        1 << (8 * (i + j)),
+                        if i + j == 0 { 0 } else { 1 },
+                    );
+                }
+            }
+        }
+    }
+
+    pub fn custom_dot(
+        &mut self,
+        queries: &(Vec<CudaSlice<u8>>, Vec<CudaSlice<u8>>),
+        db: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
+        db_sizes: &[usize],
+        streams: &[CudaStream],
+        blass: &[CudaBlas],
+    ) {
+        for idx in 0..self.device_manager.device_count() {
+            self.device_manager.device(idx).bind_to_thread().unwrap();
+            let query0 = &queries.0[idx];
+            let query1 = &queries.1[idx];
+
+            // Prepare randomness to mask results
+            if self.is_remote {
+                let len: usize = (db_sizes[idx] * self.query_length).div_ceil(64) * 64;
+                self.rngs[idx].0.fill_rng_no_host_copy(len, &streams[idx]);
+                self.rngs[idx].1.fill_rng_no_host_copy(len, &streams[idx]);
+            }
+
+            for (i, d) in [db.0[idx], db.1[idx]].iter().enumerate() {
+                for (j, q) in [query0, query1].iter().enumerate() {
+                    if i + j >= LIMBS {
+                        continue;
+                    }
+                    gemm(
+                        &blass[idx],
+                        *d,
+                        *q.device_ptr(),
                         *self.intermediate_results[idx].device_ptr(),
                         0,
                         0,

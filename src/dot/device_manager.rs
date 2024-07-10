@@ -2,7 +2,7 @@ use cudarc::{
     cublas::CudaBlas,
     driver::{
         result::{
-            self, event, free_async, malloc_async, memcpy_htod_async,
+            self, event, malloc_async, memcpy_htod_async,
             stream::{synchronize, wait_event},
         },
         sys::{CUdeviceptr, CUevent, CUevent_flags},
@@ -111,17 +111,41 @@ impl DeviceManager {
         (query0_ptrs, query1_ptrs)
     }
 
-    pub fn device_delete_query(
+    pub fn custom_htod_transfer_query(
         &self,
+        preprocessed_query: &[Vec<u8>],
         streams: &[CudaStream],
-        (q0, q1): &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
-    ) -> eyre::Result<()> {
+    ) -> eyre::Result<(Vec<CudaSlice<u8>>, Vec<CudaSlice<u8>>)> {
+        let mut slices0 = vec![];
+        let mut slices1 = vec![];
         for idx in 0..self.device_count() {
-            self.device(idx).bind_to_thread()?;
-            unsafe { free_async(q0[idx], streams[idx].stream).unwrap() };
-            unsafe { free_async(q1[idx], streams[idx].stream).unwrap() };
+            let device = self.device(idx);
+            device.bind_to_thread().unwrap();
+
+            let query0 =
+                unsafe { malloc_async(streams[idx].stream, preprocessed_query[0].len()).unwrap() };
+
+            let slice0 =
+                unsafe { device.upgrade_device_ptr::<u8>(query0, preprocessed_query[0].len()) };
+
+            unsafe {
+                memcpy_htod_async(query0, &preprocessed_query[0], streams[idx].stream).unwrap();
+            }
+
+            let query1 =
+                unsafe { malloc_async(streams[idx].stream, preprocessed_query[1].len()).unwrap() };
+
+            let slice1 =
+                unsafe { device.upgrade_device_ptr::<u8>(query0, preprocessed_query[0].len()) };
+
+            unsafe {
+                memcpy_htod_async(query1, &preprocessed_query[1], streams[idx].stream).unwrap();
+            }
+
+            slices0.push(slice0);
+            slices1.push(slice1);
         }
-        Ok(())
+        Ok((slices0, slices1))
     }
 
     pub fn device(&self, index: usize) -> Arc<CudaDevice> {
