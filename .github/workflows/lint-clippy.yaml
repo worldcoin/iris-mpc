@@ -3,17 +3,24 @@ name: Lint Clippy
 on:
   push:
 
+permissions:
+  # Leaving clippy annotations on commits...
+  contents: write
+  # And on PRs
+  pull-requests: write
+  # Updating commit and PR statuses
+  checks: write
+
 jobs:
-  lint-clippy:
+  clippy:
+    name: Check Rust Lints
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Install Rust nightly
-        run: rustup toolchain install nightly
-      - name: Set Rust nightly as default
-        run: rustup default nightly
-      - name: Install Rust clippy for checking clippy errors
-        run: rustup component add clippy
-      - name: Run Rust Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings --no-deps
+      - uses: actions/checkout@v4
+
+      - name: Clippy Lints
+        uses: actions-rs/clippy-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --all-targets --all-features -- -D warnings --no-deps
+          toolchain: nightly
