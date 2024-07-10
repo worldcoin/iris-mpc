@@ -127,20 +127,24 @@ where
 }
 
 struct Kernels {
-    pub(crate) and:                 CudaFunction,
-    pub(crate) or_assign:           CudaFunction,
-    pub(crate) xor:                 CudaFunction,
-    pub(crate) xor_assign:          CudaFunction,
-    pub(crate) split:               CudaFunction,
-    pub(crate) lift_split:          CudaFunction,
-    pub(crate) lift_mul_sub:        CudaFunction,
-    pub(crate) transpose_32x64:     CudaFunction,
-    pub(crate) transpose_16x64:     CudaFunction,
-    pub(crate) ot_sender:           CudaFunction,
-    pub(crate) ot_receiver:         CudaFunction,
-    pub(crate) ot_helper:           CudaFunction,
-    pub(crate) assign:              CudaFunction,
-    pub(crate) collapse_u64_helper: CudaFunction,
+    pub(crate) and:                   CudaFunction,
+    pub(crate) or_assign:             CudaFunction,
+    pub(crate) xor:                   CudaFunction,
+    pub(crate) xor_assign:            CudaFunction,
+    #[cfg(feature = "otp_encrypt")]
+    pub(crate) single_xor_assign_u16: CudaFunction,
+    #[cfg(feature = "otp_encrypt")]
+    pub(crate) single_xor_assign_u64: CudaFunction,
+    pub(crate) split:                 CudaFunction,
+    pub(crate) lift_split:            CudaFunction,
+    pub(crate) lift_mul_sub:          CudaFunction,
+    pub(crate) transpose_32x64:       CudaFunction,
+    pub(crate) transpose_16x64:       CudaFunction,
+    pub(crate) ot_sender:             CudaFunction,
+    pub(crate) ot_receiver:           CudaFunction,
+    pub(crate) ot_helper:             CudaFunction,
+    pub(crate) assign:                CudaFunction,
+    pub(crate) collapse_u64_helper:   CudaFunction,
 }
 
 impl Kernels {
@@ -150,6 +154,8 @@ impl Kernels {
         dev.load_ptx(ptx.clone(), Self::MOD_NAME, &[
             "shared_xor",
             "shared_xor_assign",
+            "xor_assign_u16",
+            "xor_assign_u64",
             "shared_and_pre",
             "shared_or_pre_assign",
             "split",
@@ -170,6 +176,10 @@ impl Kernels {
             .unwrap();
         let xor = dev.get_func(Self::MOD_NAME, "shared_xor").unwrap();
         let xor_assign = dev.get_func(Self::MOD_NAME, "shared_xor_assign").unwrap();
+        #[cfg(feature = "otp_encrypt")]
+        let single_xor_assign_u16 = dev.get_func(Self::MOD_NAME, "xor_assign_u16").unwrap();
+        #[cfg(feature = "otp_encrypt")]
+        let single_xor_assign_u64 = dev.get_func(Self::MOD_NAME, "xor_assign_u64").unwrap();
         let split = dev.get_func(Self::MOD_NAME, "split").unwrap();
         let lift_split = dev.get_func(Self::MOD_NAME, "lift_split").unwrap();
         let lift_mul_sub = dev.get_func(Self::MOD_NAME, "shared_lift_mul_sub").unwrap();
@@ -190,6 +200,10 @@ impl Kernels {
             or_assign,
             xor,
             xor_assign,
+            #[cfg(feature = "otp_encrypt")]
+            single_xor_assign_u16,
+            #[cfg(feature = "otp_encrypt")]
+            single_xor_assign_u64,
             split,
             lift_split,
             lift_mul_sub,
@@ -670,6 +684,31 @@ impl Circuits {
     }
 
     // Fill randomness using the correlated RNG
+    #[cfg(feature = "otp_encrypt")]
+    fn fill_my_rand_u64(&mut self, rand: &mut CudaSlice<u64>, idx: usize, streams: &[CudaStream]) {
+        let rng = &mut self.rngs[idx];
+        let mut rand_trans: CudaViewMut<u32> =
+              // the transmute_mut is safe because we know that one u64 is 2 u32s, and the buffer is aligned properly for the transmute
+                  unsafe { rand.transmute_mut(rand.len() * 2).unwrap() };
+        rng.fill_my_rng_into(&mut rand_trans, &streams[idx]);
+    }
+
+    // Fill randomness using the correlated RNG
+    #[cfg(feature = "otp_encrypt")]
+    fn fill_their_rand_u64(
+        &mut self,
+        rand: &mut CudaSlice<u64>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) {
+        let rng = &mut self.rngs[idx];
+        let mut rand_trans: CudaViewMut<u32> =
+                  // the transmute_mut is safe because we know that one u64 is 2 u32s, and the buffer is aligned properly for the transmute
+                      unsafe { rand.transmute_mut(rand.len() * 2).unwrap() };
+        rng.fill_their_rng_into(&mut rand_trans, &streams[idx]);
+    }
+
+    // Fill randomness using the correlated RNG
     fn fill_my_rng_into_u16<'a>(
         &mut self,
         rand: &'a mut CudaSlice<u32>,
@@ -852,23 +891,103 @@ impl Circuits {
         }
     }
 
-    #[allow(unused)]
-    fn packed_send_receive(
+    #[cfg(feature = "otp_encrypt")]
+    fn otp_encrypt_my_rng_u16(
         &mut self,
-        res: &mut [ChunkShare<u64>],
-        bits: usize,
+        input: &CudaView<u16>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) -> CudaSlice<u32> {
+        let data_len = input.len();
+        debug_assert_eq!(data_len & 1, 0);
+        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
+        let mut rand_u16 = self.fill_my_rng_into_u16(&mut rand, idx, streams);
+        self.single_xor_assign_u16(&mut rand_u16, input, idx, data_len, streams);
+        rand
+    }
+
+    #[cfg(feature = "otp_encrypt")]
+    fn otp_encrypt_their_rng_u16(
+        &mut self,
+        input: &CudaView<u16>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) -> CudaSlice<u32> {
+        let data_len = input.len();
+        debug_assert_eq!(data_len & 1, 0);
+        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
+        let mut rand_u16 = self.fill_their_rng_into_u16(&mut rand, idx, streams);
+        self.single_xor_assign_u16(&mut rand_u16, input, idx, data_len, streams);
+        rand
+    }
+
+    #[cfg(feature = "otp_encrypt")]
+    fn otp_decrypt_my_rng_u16(
+        &mut self,
+        input: &mut CudaView<u16>,
+        idx: usize,
         streams: &[CudaStream],
     ) {
-        debug_assert_eq!(res.len(), self.n_devices);
+        let data_len = input.len();
+        debug_assert_eq!(data_len & 1, 0);
+        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
+        let rand_u16 = self.fill_my_rng_into_u16(&mut rand, idx, streams);
+        self.single_xor_assign_u16(input, &rand_u16, idx, data_len, streams);
+    }
 
-        result::group_start().unwrap();
-        for (idx, res) in res.iter().enumerate() {
-            self.packed_and_many_send(&res.as_view(), bits, idx, streams);
-        }
-        for (idx, res) in res.iter_mut().enumerate() {
-            self.packed_and_many_receive(&mut res.as_view(), bits, idx, streams);
-        }
-        result::group_end().unwrap();
+    #[cfg(feature = "otp_encrypt")]
+    fn otp_decrypt_their_rng_u16(
+        &mut self,
+        input: &mut CudaView<u16>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) {
+        let data_len = input.len();
+        debug_assert_eq!(data_len & 1, 0);
+        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
+        let rand_u16 = self.fill_their_rng_into_u16(&mut rand, idx, streams);
+        self.single_xor_assign_u16(input, &rand_u16, idx, data_len, streams);
+    }
+
+    #[cfg(feature = "otp_encrypt")]
+    fn otp_encrypt_my_rng_u64(
+        &mut self,
+        input: &ChunkShareView<u64>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) -> CudaSlice<u64> {
+        let data_len = input.len();
+        let rand_size = (data_len + 7) / 8; // Multiple of 16 u32
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(rand_size * 8).unwrap() };
+        self.fill_my_rand_u64(&mut rand, idx, streams);
+        self.single_xor_assign_u64(
+            &mut rand.slice(..data_len),
+            &input.a,
+            idx,
+            data_len,
+            streams,
+        );
+        rand
+    }
+
+    #[cfg(feature = "otp_encrypt")]
+    fn otp_decrypt_their_rng_u64(
+        &mut self,
+        inout: &mut ChunkShareView<u64>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) {
+        let data_len = inout.len();
+        let rand_size = (data_len + 7) / 8; // Multiple of 16 u32
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(rand_size * 8).unwrap() };
+        self.fill_their_rand_u64(&mut rand, idx, streams);
+        self.single_xor_assign_u64(
+            &mut inout.b,
+            &rand.slice(..data_len),
+            idx,
+            data_len,
+            streams,
+        );
     }
 
     fn packed_send_receive_view(
@@ -903,15 +1022,62 @@ impl Circuits {
         result::group_end().unwrap();
     }
 
-    fn xor_assign_many(
+    #[cfg(feature = "otp_encrypt")]
+    fn single_xor_assign_u16(
+        &self,
+        x1: &mut CudaView<u16>,
+        x2: &CudaView<u16>,
+        idx: usize,
+        size: usize,
+        streams: &[CudaStream],
+    ) {
+        let cfg = Self::launch_config_from_elements_and_threads(
+            size as u32,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+        );
+
+        unsafe {
+            self.kernels[idx]
+                .single_xor_assign_u16
+                .clone()
+                .launch_on_stream(&streams[idx], cfg, (&*x1, x2, size))
+                .unwrap();
+        }
+    }
+
+    #[cfg(feature = "otp_encrypt")]
+    fn single_xor_assign_u64(
+        &self,
+        x1: &mut CudaView<u64>,
+        x2: &CudaView<u64>,
+        idx: usize,
+        size: usize,
+        streams: &[CudaStream],
+    ) {
+        let cfg = Self::launch_config_from_elements_and_threads(
+            size as u32,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+        );
+
+        unsafe {
+            self.kernels[idx]
+                .single_xor_assign_u64
+                .clone()
+                .launch_on_stream(&streams[idx], cfg, (&*x1, x2, size))
+                .unwrap();
+        }
+    }
+
+    fn xor_assign_u64(
         &self,
         x1: &mut ChunkShareView<u64>,
         x2: &ChunkShareView<u64>,
         idx: usize,
+        size: usize,
         streams: &[CudaStream],
     ) {
         let cfg = Self::launch_config_from_elements_and_threads(
-            self.chunk_size as u32,
+            size as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
         );
 
@@ -919,13 +1085,19 @@ impl Circuits {
             self.kernels[idx]
                 .xor_assign
                 .clone()
-                .launch_on_stream(
-                    &streams[idx],
-                    cfg,
-                    (&x1.a, &x1.b, &x2.a, &x2.b, self.chunk_size),
-                )
+                .launch_on_stream(&streams[idx], cfg, (&x1.a, &x1.b, &x2.a, &x2.b, size))
                 .unwrap();
         }
+    }
+
+    fn xor_assign_many(
+        &self,
+        x1: &mut ChunkShareView<u64>,
+        x2: &ChunkShareView<u64>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) {
+        self.xor_assign_u64(x1, x2, idx, self.chunk_size, streams);
     }
 
     fn packed_xor_assign_many(
