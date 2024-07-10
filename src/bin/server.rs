@@ -66,7 +66,7 @@ const DB_BUFFER: usize = 8 * 1_000;
 const N_QUERIES: usize = 32;
 const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
-const DB_CHUNK_SIZE: usize = 500;
+const DB_CHUNK_SIZE: usize = 1000;
 /// The number of batches before a stream is re-used.
 const MAX_BATCHES_BEFORE_REUSE: usize = 5;
 
@@ -942,7 +942,7 @@ async fn main() -> eyre::Result<()> {
                 .collect::<Vec<_>>();
             let offset = db_idx * DB_CHUNK_SIZE;
 
-            let chunk_size2 = vec![1000usize; 8];
+            let chunk_size2 = vec![500usize; 8];
 
             println!("chunks: {:?}, offset: {}", chunk_size, offset);
 
