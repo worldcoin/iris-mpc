@@ -66,7 +66,7 @@ const DB_BUFFER: usize = 8 * 1_000;
 const N_QUERIES: usize = 32;
 const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
-const DB_CHUNK_SIZE: usize = 100;
+const DB_CHUNK_SIZE: usize = 1000;
 /// The number of batches before a stream is re-used.
 const MAX_BATCHES_BEFORE_REUSE: usize = 5;
 
