@@ -1,5 +1,6 @@
 use crate::{
     helpers::{
+        device_manager::DeviceManager,
         dtoh_on_stream_sync, htod_on_stream_sync,
         id_wrapper::{http_root, IdWrapper},
     },
@@ -356,6 +357,7 @@ impl Circuits {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         peer_id: usize,
         input_size: usize, // per GPU
@@ -364,13 +366,14 @@ impl Circuits {
         peer_url: Option<String>,
         server_port: Option<u16>,
         server_task_set: Option<&mut JoinSet<()>>,
+        device_manager: Arc<DeviceManager>,
     ) -> Self {
         // For the transpose, inputs should be multiple of 64 bits
         debug_assert!(input_size % 64 == 0);
         // Chunk size is the number of u64 elements per bit in the binary circuits
         let chunk_size = input_size / 64;
         debug_assert!(alloc_size >= chunk_size);
-        let n_devices = CudaDevice::count().unwrap() as usize;
+        let n_devices = device_manager.device_count();
 
         let mut devs = Vec::with_capacity(n_devices);
         let mut kernels = Vec::with_capacity(n_devices);
@@ -378,7 +381,7 @@ impl Circuits {
 
         let ptx = nvrtc::compile_ptx(PTX_SRC).unwrap();
         for i in 0..n_devices {
-            let dev = CudaDevice::new(i).unwrap();
+            let dev = device_manager.device(i);
             let kernel = Kernels::new(dev.clone(), ptx.clone());
             let rng = ChaChaCudaCorrRng::init(dev.clone(), chacha_seeds.0, chacha_seeds.1);
 

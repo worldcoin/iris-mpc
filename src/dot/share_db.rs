@@ -1,6 +1,9 @@
-use super::{device_manager::DeviceManager, IRIS_CODE_LENGTH};
+use super::IRIS_CODE_LENGTH;
 use crate::{
-    helpers::id_wrapper::{http_root, IdWrapper},
+    helpers::{
+        device_manager::DeviceManager,
+        id_wrapper::{http_root, IdWrapper},
+    },
     rng::chacha::ChaChaCudaRng,
 };
 use axum::{routing::get, Router};
@@ -745,8 +748,7 @@ impl ShareDB {
 mod tests {
     use super::{preprocess_query, ShareDB};
     use crate::{
-        dot::device_manager::DeviceManager,
-        helpers::device_ptrs,
+        helpers::{device_manager::DeviceManager, device_ptrs},
         setup::{galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     };
     use float_eq::assert_float_eq;
@@ -754,6 +756,7 @@ mod tests {
     use num_traits::FromPrimitive;
     use rand::{rngs::StdRng, Rng, SeedableRng};
     use std::sync::Arc;
+
     const WIDTH: usize = 12_800;
     const QUERY_SIZE: usize = 31;
     const DB_SIZE: usize = 8 * 1000;
