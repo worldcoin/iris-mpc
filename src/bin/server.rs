@@ -938,9 +938,11 @@ async fn main() -> eyre::Result<()> {
         loop {
             let chunk_size = current_db_size_stream
                 .iter()
-                .map(|s| min(s - DB_CHUNK_SIZE * db_idx, chunk_size))
+                .map(|s| min(s - DB_CHUNK_SIZE * db_idx, DB_CHUNK_SIZE))
                 .collect::<Vec<_>>();
             let offset = db_idx * DB_CHUNK_SIZE;
+
+            println!("chunks: {:?}, offset: {}", chunk_size, offset);
 
             // debug_record_event!(device_manager, request_streams, timers);
 
