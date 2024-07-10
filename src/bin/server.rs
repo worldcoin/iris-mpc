@@ -940,6 +940,10 @@ async fn main() -> eyre::Result<()> {
                 .iter()
                 .map(|s| min(s - DB_CHUNK_SIZE * db_idx, DB_CHUNK_SIZE))
                 .collect::<Vec<_>>();
+            let chunk_size2 = current_db_size_stream
+                .iter()
+                .map(|s| min(s - 100 * db_idx, 100))
+                .collect::<Vec<_>>();
             let offset = db_idx * DB_CHUNK_SIZE;
 
             println!("chunks: {:?}, offset: {}", chunk_size, offset);
@@ -952,7 +956,7 @@ async fn main() -> eyre::Result<()> {
                     device_ptrs(&code_db_slices.0 .0),
                     device_ptrs(&code_db_slices.0 .1),
                 ),
-                &chunk_size,
+                &chunk_size2,
                 offset,
                 request_streams,
                 request_cublas_handles,
@@ -964,7 +968,7 @@ async fn main() -> eyre::Result<()> {
                     device_ptrs(&mask_db_slices.0 .0),
                     device_ptrs(&mask_db_slices.0 .1),
                 ),
-                &chunk_size,
+                &chunk_size2,
                 offset,
                 request_streams,
                 request_cublas_handles,
