@@ -1032,13 +1032,15 @@ async fn main() -> eyre::Result<()> {
             forget_vec!(code_dots);
             forget_vec!(mask_dots);
 
-            db_idx += 1;
-            if db_idx * DB_CHUNK_SIZE >= DB_SIZE / device_manager.device_count() {
-                break;
-            }
 
-            // DEBUG: remove
-            device_manager.await_streams(&request_streams);
+            break;
+            // db_idx += 1;
+            // if db_idx * DB_CHUNK_SIZE >= DB_SIZE / device_manager.device_count() {
+            //     break;
+            // }
+
+            // // DEBUG: remove
+            // device_manager.await_streams(&request_streams);
         }
 
         // Merge results and fetch matching indices

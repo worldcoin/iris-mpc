@@ -533,10 +533,10 @@ impl ShareDB {
                     }
                     gemm(
                         &blass[idx],
-                        *d + (offset * IRIS_CODE_LENGTH) as u64,
+                        *d,
                         *q,
                         *self.intermediate_results[idx].device_ptr(),
-                        0,
+                        (offset * IRIS_CODE_LENGTH) as u64,
                         0,
                         0,
                         chunk_sizes[idx],
