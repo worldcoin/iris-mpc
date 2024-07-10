@@ -66,7 +66,7 @@ const DB_BUFFER: usize = 8 * 1_000;
 const N_QUERIES: usize = 32;
 const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
-const DB_CHUNK_SIZE: usize = 1000;
+const DB_CHUNK_SIZE: usize = 500;
 /// The number of batches before a stream is re-used.
 const MAX_BATCHES_BEFORE_REUSE: usize = 5;
 
@@ -940,10 +940,6 @@ async fn main() -> eyre::Result<()> {
                 .iter()
                 .map(|s| min(s - DB_CHUNK_SIZE * db_idx, DB_CHUNK_SIZE))
                 .collect::<Vec<_>>();
-            let chunk_size2 = current_db_size_stream
-                .iter()
-                .map(|s| min(s - 100 * db_idx, 100))
-                .collect::<Vec<_>>();
             let offset = db_idx * DB_CHUNK_SIZE;
 
             println!("chunks: {:?}, offset: {}", chunk_size, offset);
@@ -956,7 +952,7 @@ async fn main() -> eyre::Result<()> {
                     device_ptrs(&code_db_slices.0 .0),
                     device_ptrs(&code_db_slices.0 .1),
                 ),
-                &chunk_size2,
+                &chunk_size,
                 offset,
                 request_streams,
                 request_cublas_handles,
@@ -968,7 +964,7 @@ async fn main() -> eyre::Result<()> {
                     device_ptrs(&mask_db_slices.0 .0),
                     device_ptrs(&mask_db_slices.0 .1),
                 ),
-                &chunk_size2,
+                &chunk_size,
                 offset,
                 request_streams,
                 request_cublas_handles,
@@ -984,7 +980,7 @@ async fn main() -> eyre::Result<()> {
                     device_ptrs(&code_db_slices.1 .1),
                 ),
                 &current_db_size_stream,
-                &chunk_size2,
+                &chunk_size,
                 offset,
                 request_streams,
             );
@@ -995,7 +991,7 @@ async fn main() -> eyre::Result<()> {
                     device_ptrs(&mask_db_slices.1 .1),
                 ),
                 &current_db_size_stream,
-                &chunk_size2,
+                &chunk_size,
                 offset,
                 request_streams,
             );
@@ -1035,7 +1031,6 @@ async fn main() -> eyre::Result<()> {
             // Don't drop those
             forget_vec!(code_dots);
             forget_vec!(mask_dots);
-
 
             break;
             // db_idx += 1;
