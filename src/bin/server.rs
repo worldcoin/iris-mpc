@@ -37,13 +37,11 @@ use gpu_iris_mpc::{
     store::Store,
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
-use http::StatusCode;
 use lazy_static::lazy_static;
 use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use static_assertions::const_assert;
 use std::{
-    error::Error,
     fs::metadata,
     mem,
     ops::IndexMut,
