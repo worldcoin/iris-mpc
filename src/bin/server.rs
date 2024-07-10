@@ -954,7 +954,7 @@ async fn main() -> eyre::Result<()> {
                     device_ptrs(&code_db_slices.0 .0),
                     device_ptrs(&code_db_slices.0 .1),
                 ),
-                &chunk_size,
+                &chunk_size2,
                 offset,
                 request_streams,
                 request_cublas_handles,
@@ -966,7 +966,7 @@ async fn main() -> eyre::Result<()> {
                     device_ptrs(&mask_db_slices.0 .0),
                     device_ptrs(&mask_db_slices.0 .1),
                 ),
-                &chunk_size,
+                &chunk_size2,
                 offset,
                 request_streams,
                 request_cublas_handles,
@@ -982,7 +982,7 @@ async fn main() -> eyre::Result<()> {
                     device_ptrs(&code_db_slices.1 .1),
                 ),
                 &current_db_size_stream,
-                &chunk_size2,
+                &chunk_size,
                 offset,
                 request_streams,
             );
@@ -993,7 +993,7 @@ async fn main() -> eyre::Result<()> {
                     device_ptrs(&mask_db_slices.1 .1),
                 ),
                 &current_db_size_stream,
-                &chunk_size2,
+                &chunk_size,
                 offset,
                 request_streams,
             );
@@ -1002,16 +1002,16 @@ async fn main() -> eyre::Result<()> {
 
             debug_record_event!(device_manager, request_streams, timers);
 
-            codes_engine.reshare_results(&chunk_size2, request_streams);
-            masks_engine.reshare_results(&chunk_size2, request_streams);
+            codes_engine.reshare_results(&chunk_size, request_streams);
+            masks_engine.reshare_results(&chunk_size, request_streams);
 
             debug_record_event!(device_manager, request_streams, timers);
 
             device_manager.record_event(request_streams, &next_exchange_event);
 
             // Phase 2 [DB]
-            let mut code_dots = codes_engine.result_chunk_shares(&chunk_size2);
-            let mut mask_dots = masks_engine.result_chunk_shares(&chunk_size2);
+            let mut code_dots = codes_engine.result_chunk_shares(&chunk_size);
+            let mut mask_dots = masks_engine.result_chunk_shares(&chunk_size);
             {
                 let mut phase2 = phase2.lock().unwrap();
                 phase2.compare_threshold_masked_many(&code_dots, &mask_dots, &request_streams);
@@ -1023,7 +1023,7 @@ async fn main() -> eyre::Result<()> {
                     &distance_comparator.lock().unwrap(),
                     &request_results,
                     phase2_chunk_size,
-                    &chunk_size2,
+                    &chunk_size,
                     offset,
                     &request_streams,
                 );
