@@ -759,8 +759,8 @@ async fn main() -> eyre::Result<()> {
 
     let health_check_server_handle = Some(tokio::spawn(async move {
         let app = Router::new().route("/health", get(|| async { (StatusCode::OK, "OK") }));
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-        axum::serve(listener, app).await.unwrap();
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+        axum::serve(listener, app).await?;
     }));
 
     let mut total_time = Instant::now();
@@ -1414,7 +1414,7 @@ async fn main() -> eyre::Result<()> {
     server_tasks.check_tasks_finished();
 
     if let Some(handle) = health_check_server_handle {
-        handle.await.unwrap();
+        handle.await?;
     }
 
     Ok(())
