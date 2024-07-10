@@ -566,8 +566,9 @@ async fn main() -> eyre::Result<()> {
     println!("Starting engines...");
 
     let device_manager = Arc::new(DeviceManager::init());
-    // All ongoing server tasks should be launched using server_tasks.spawn() or spawn_blocking().
-    // This makes sure they are regularly monitored for errors.
+    // All ongoing server tasks should be launched using server_tasks.spawn() or
+    // spawn_blocking(). This makes sure they are regularly monitored for
+    // errors.
     let mut server_tasks = TaskMonitor::new();
 
     let ServersConfig {
@@ -1417,9 +1418,9 @@ async fn main() -> eyre::Result<()> {
         }
     }
 
-    // We spawned all ongoing tasks into `server_tasks`, so they are checked regularly for panics,
-    // errors, and early exits. Now the server is done, and the tasks have been cancelled, we can
-    // check for any hangs.
+    // We spawned all ongoing tasks into `server_tasks`, so they are checked
+    // regularly for panics, errors, and early exits. Now the server is done,
+    // and the tasks have been cancelled, we can check for any hangs.
     server_tasks.check_tasks_finished();
 
     Ok(())
