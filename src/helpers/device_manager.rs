@@ -5,16 +5,35 @@ use cudarc::{
             self, event, malloc_async, memcpy_htod_async,
             stream::{synchronize, wait_event},
         },
-        sys::{CUdeviceptr, CUevent, CUevent_flags},
+        sys::{CUdeviceptr, CUevent, CUevent_flags, CUevent_wait_flags, CUstream},
         CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceRepr,
     },
 };
-use std::sync::Arc;
+use std::{marker::PhantomData, sync::Arc};
+use tokio::task;
 
 #[derive(Clone)]
 pub struct DeviceManager {
     devices: Vec<Arc<CudaDevice>>,
 }
+
+#[derive(Clone)]
+struct CUeventWrapper {
+    event:   CUevent,
+    _marker: PhantomData<*mut ()>, // PhantomData to make it `!Send` by default
+}
+
+unsafe impl Send for CUeventWrapper {}
+unsafe impl Sync for CUeventWrapper {}
+
+#[derive(Clone)]
+struct CUstreamWrapper {
+    stream:  CUstream,
+    _marker: PhantomData<*mut ()>, // PhantomData to make it `!Send` by default
+}
+
+unsafe impl Send for CUstreamWrapper {}
+unsafe impl Sync for CUstreamWrapper {}
 
 impl DeviceManager {
     pub fn init() -> Self {
@@ -46,42 +65,53 @@ impl DeviceManager {
             .collect::<Vec<_>>()
     }
 
-    pub fn await_streams(&self, streams: &[CudaStream]) {
-        for i in 0..self.devices.len() {
-            unsafe { synchronize(streams[i].stream).unwrap() }
-        }
-    }
-
-    pub fn create_events(&self) -> Vec<CUevent> {
+    pub fn create_events(&self) -> Vec<Arc<CUeventWrapper>> {
         let mut events = vec![];
         for idx in 0..self.devices.len() {
             self.devices[idx].bind_to_thread().unwrap();
-            events.push(event::create(CUevent_flags::CU_EVENT_DEFAULT).unwrap());
+            let event = event::create(CUevent_flags::CU_EVENT_DEFAULT).unwrap();
+            events.push(Arc::new(CUeventWrapper {
+                event,
+                _marker: PhantomData,
+            }));
         }
         events
     }
 
-    pub fn record_event(&self, streams: &[CudaStream], events: &[CUevent]) {
-        for idx in 0..self.devices.len() {
-            unsafe {
-                self.devices[idx].bind_to_thread().unwrap();
-                event::record(events[idx], streams[idx].stream).unwrap();
-            };
-        }
+    pub async fn await_event(&self, streams: &[CUstreamWrapper], events: &[Arc<CUeventWrapper>]) {
+        let tasks: Vec<_> = (0..self.devices.len())
+            .map(|idx| {
+                let device = self.devices[idx].clone();
+                let stream = streams[idx].clone();
+                let event = events[idx].clone(); // Clone Arc to share the event safely
+                tokio::task::spawn_blocking(move || unsafe {
+                    device.bind_to_thread().unwrap();
+                    cudarc::driver::sys::wait_event(
+                        stream.stream,
+                        event.event,
+                        cudarc::driver::sys::CUevent_wait_flags::CU_EVENT_WAIT_DEFAULT,
+                    )
+                    .unwrap();
+                })
+            })
+            .collect();
+
+        // Await all tasks
+        futures::future::join_all(tasks).await;
     }
 
-    pub fn await_event(&self, streams: &[CudaStream], events: &[CUevent]) {
-        for idx in 0..self.devices.len() {
-            unsafe {
-                self.devices[idx].bind_to_thread().unwrap();
-                wait_event(
-                    streams[idx].stream,
-                    events[idx],
-                    cudarc::driver::sys::CUevent_wait_flags::CU_EVENT_WAIT_DEFAULT,
-                )
-                .unwrap();
-            };
-        }
+    pub async fn await_streams(&self, streams: &[CUstreamWrapper]) {
+        let tasks: Vec<_> = (0..self.devices.len())
+            .map(|i| {
+                let stream = streams[i].clone();
+                tokio::task::spawn_blocking(move || unsafe {
+                    cudarc::driver::sys::synchronize(stream.stream).unwrap();
+                })
+            })
+            .collect();
+
+        // Await all tasks
+        futures::future::join_all(tasks).await;
     }
 
     pub fn htod_transfer_query(
