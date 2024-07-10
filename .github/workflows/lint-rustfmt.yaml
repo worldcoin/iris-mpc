@@ -3,6 +3,10 @@ name: Lint Rustfmt
 on:
   push:
 
+concurrency:
+  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  cancel-in-progress: true
+
 jobs:
   # TODO: change this to lint-rustfmt once we've updated required jobs
   lint:
