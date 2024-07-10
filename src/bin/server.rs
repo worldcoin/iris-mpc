@@ -121,18 +121,18 @@ struct BatchQueryEntries {
 
 #[derive(Default)]
 struct BatchMetadata {
-    node_id: String,
+    node_id:  String,
     trace_id: String,
-    span_id: String,
+    span_id:  String,
 }
 
 #[derive(Default)]
 struct BatchQuery {
     pub request_ids: Vec<String>,
-    pub metadata: Vec<BatchMetadata>,
-    pub query: BatchQueryEntries,
-    pub db: BatchQueryEntries,
-    pub store: BatchQueryEntries,
+    pub metadata:    Vec<BatchMetadata>,
+    pub query:       BatchQueryEntries,
+    pub db:          BatchQueryEntries,
+    pub store:       BatchQueryEntries,
 }
 
 async fn receive_batch(
