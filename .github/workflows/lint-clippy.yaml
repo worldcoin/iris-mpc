@@ -17,10 +17,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
       - name: Install Rust nightly
         run: rustup toolchain install nightly
-
+      - name: Set Rust nightly as default
+        run: rustup default nightly
+      - name: Install Rust clippy for checking clippy errors
+        run: rustup component add clippy
       - name: Clippy Lints
         uses: actions-rs/clippy-check@v1
         with:
