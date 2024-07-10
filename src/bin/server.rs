@@ -121,18 +121,18 @@ struct BatchQueryEntries {
 
 #[derive(Default)]
 struct BatchMetadata {
-    node_id:  String,
+    node_id: String,
     trace_id: String,
-    span_id:  String,
+    span_id: String,
 }
 
 #[derive(Default)]
 struct BatchQuery {
     pub request_ids: Vec<String>,
-    pub metadata:    Vec<BatchMetadata>,
-    pub query:       BatchQueryEntries,
-    pub db:          BatchQueryEntries,
-    pub store:       BatchQueryEntries,
+    pub metadata: Vec<BatchMetadata>,
+    pub query: BatchQueryEntries,
+    pub db: BatchQueryEntries,
+    pub store: BatchQueryEntries,
 }
 
 async fn receive_batch(
@@ -566,6 +566,8 @@ async fn main() -> eyre::Result<()> {
     println!("Starting engines...");
 
     let device_manager = Arc::new(DeviceManager::init());
+    // All ongoing server tasks should be launched using server_tasks.spawn() or spawn_blocking().
+    // This makes sure they are regularly monitored for errors.
     let mut server_tasks = TaskMonitor::new();
 
     let ServersConfig {
@@ -756,13 +758,16 @@ async fn main() -> eyre::Result<()> {
     println!("All systems ready.");
     println!("Starting healthcheck server.");
 
-    let health_check_server_handle = Some(tokio::spawn(async move {
+    let _health_check_abort = server_tasks.spawn(async move {
         let app = Router::new().route("/health", get(|| async {})); // implicit 200 return
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
-        axum::serve(listener, app).await?;
-
-        eyre::Result::<()>::Ok(())
-    }));
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+            .await
+            .expect("healthcheck listener bind error");
+        axum::serve(listener, app)
+            .await
+            .expect("healthcheck listener server launch error");
+    });
+    server_tasks.check_tasks();
 
     let mut total_time = Instant::now();
     let mut batch_times = Duration::from_secs(0);
@@ -1412,11 +1417,10 @@ async fn main() -> eyre::Result<()> {
         }
     }
 
+    // We spawned all ongoing tasks into `server_tasks`, so they are checked regularly for panics,
+    // errors, and early exits. Now the server is done, and the tasks have been cancelled, we can
+    // check for any hangs.
     server_tasks.check_tasks_finished();
-
-    if let Some(handle) = health_check_server_handle {
-        handle.await??;
-    }
 
     Ok(())
 }
