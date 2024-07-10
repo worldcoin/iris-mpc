@@ -977,6 +977,45 @@ impl Circuits {
     }
 
     #[cfg(feature = "otp_encrypt")]
+    fn send_receive_view_with_offset_single_gpu(
+        &mut self,
+        res: &mut ChunkShareView<u64>,
+        range: Range<usize>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) {
+        let send_bufs =
+            self.otp_encrypt_my_rng_u64(&res.get_range(range.start, range.end), idx, streams);
+
+        result::group_start().unwrap();
+        self.send(&send_bufs, self.next_id, idx, streams).unwrap();
+        let mut rcv = res.b.slice(range.to_owned());
+        self.receive_view(&mut rcv, self.prev_id, idx, streams)
+            .unwrap();
+        result::group_end().unwrap();
+        self.otp_decrypt_their_rng_u64(&mut res.get_range(range.start, range.end), idx, streams);
+    }
+
+    #[cfg(not(feature = "otp_encrypt"))]
+    fn send_receive_view_with_offset_single_gpu(
+        &mut self,
+        res: &mut ChunkShareView<u64>,
+        range: Range<usize>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) {
+        result::group_start().unwrap();
+        let send = res.a.slice(range.to_owned());
+        self.send_view(&send, self.next_id, idx, streams).unwrap();
+
+        let mut rcv = res.b.slice(range.to_owned());
+        self.receive_view(&mut rcv, self.prev_id, idx, streams)
+            .unwrap();
+
+        result::group_end().unwrap();
+    }
+
+    #[cfg(feature = "otp_encrypt")]
     fn send_receive_view_with_offset(
         &mut self,
         res: &mut [ChunkShareView<u64>],
@@ -1070,6 +1109,37 @@ impl Circuits {
             self.receive_view(&mut res.b, self.prev_id, idx, streams)
                 .unwrap();
         }
+        result::group_end().unwrap();
+    }
+
+    #[cfg(feature = "otp_encrypt")]
+    fn send_receive_view_single_gpu(
+        &mut self,
+        res: &mut ChunkShareView<u64>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) {
+        let send_bufs = self.otp_encrypt_my_rng_u64(res, idx, streams);
+
+        result::group_start().unwrap();
+        self.send(&send_bufs, self.next_id, idx, streams).unwrap();
+        self.receive_view(&mut res.b, self.prev_id, idx, streams)
+            .unwrap();
+        result::group_end().unwrap();
+        self.otp_decrypt_their_rng_u64(res, idx, streams);
+    }
+
+    #[cfg(not(feature = "otp_encrypt"))]
+    fn send_receive_view_single_gpu(
+        &mut self,
+        res: &mut ChunkShareView<u64>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) {
+        result::group_start().unwrap();
+        self.send_view(&res.a, self.next_id, idx, streams).unwrap();
+        self.receive_view(&mut res.b, self.prev_id, idx, streams)
+            .unwrap();
         result::group_end().unwrap();
     }
 
@@ -2036,12 +2106,7 @@ impl Circuits {
             }
 
             // Reshare
-            result::group_start().unwrap();
-            let mut a = bit.get_offset(0, num);
-            self.send_view(&a.a, self.next_id, idx, streams).unwrap();
-            self.receive_view(&mut a.b, self.prev_id, idx, streams)
-                .unwrap();
-            result::group_end().unwrap();
+            self.send_receive_view_with_offset_single_gpu(bit, 0..num, idx, streams);
 
             num += mod_;
         }
@@ -2111,11 +2176,7 @@ impl Circuits {
             }
             let bytes = (current_bitsize + 7) / 8;
             rand_offset = rand_offset.slice(bytes..); // Advance randomness
-            result::group_start().unwrap();
-            self.send_view(&res.a, self.next_id, 0, streams).unwrap();
-            self.receive_view(&mut res.b, self.prev_id, 0, streams)
-                .unwrap();
-            result::group_end().unwrap();
+            self.send_receive_view_single_gpu(&mut res, 0, streams)
         }
     }
 

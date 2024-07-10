@@ -54,7 +54,7 @@ static_assertions = "1.1.0"
 criterion = "0.5"
 
 [features]
-default = ["otp_encrypt"]
+default = []
 otp_encrypt = []
 
 #[[bench]]
