@@ -43,6 +43,7 @@ use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use static_assertions::const_assert;
 use std::{
+    error::Error,
     fs::metadata,
     mem,
     ops::IndexMut,
@@ -758,9 +759,11 @@ async fn main() -> eyre::Result<()> {
     println!("Starting healthcheck server.");
 
     let health_check_server_handle = Some(tokio::spawn(async move {
-        let app = Router::new().route("/health", get(|| async { (StatusCode::OK, "OK") }));
+        let app = Router::new().route("/health", get(|| async {})); // implicit 200 return
         let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
         axum::serve(listener, app).await?;
+
+        eyre::Result::<()>::Ok(())
     }));
 
     let mut total_time = Instant::now();
@@ -1414,7 +1417,7 @@ async fn main() -> eyre::Result<()> {
     server_tasks.check_tasks_finished();
 
     if let Some(handle) = health_check_server_handle {
-        handle.await?;
+        handle.await??;
     }
 
     Ok(())
