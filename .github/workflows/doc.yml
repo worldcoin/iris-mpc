@@ -3,6 +3,10 @@ name: Check Doc Syntax
 on:
   push:
 
+concurrency:
+  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  cancel-in-progress: true
+
 jobs:
   doc:
     runs-on: ubuntu-latest
