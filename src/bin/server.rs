@@ -984,7 +984,7 @@ async fn main() -> eyre::Result<()> {
                     device_ptrs(&code_db_slices.1 .1),
                 ),
                 &current_db_size_stream,
-                &chunk_size,
+                &chunk_size2,
                 offset,
                 request_streams,
             );
@@ -995,7 +995,7 @@ async fn main() -> eyre::Result<()> {
                     device_ptrs(&mask_db_slices.1 .1),
                 ),
                 &current_db_size_stream,
-                &chunk_size,
+                &chunk_size2,
                 offset,
                 request_streams,
             );
