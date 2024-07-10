@@ -66,7 +66,7 @@ const DB_BUFFER: usize = 8 * 1_000;
 const N_QUERIES: usize = 32;
 const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
-const DB_CHUNK_SIZE: usize = 1000;
+const DB_CHUNK_SIZE: usize = 256;
 /// The number of batches before a stream is re-used.
 const MAX_BATCHES_BEFORE_REUSE: usize = 5;
 
@@ -638,7 +638,7 @@ async fn main() -> eyre::Result<()> {
 
     // Phase 2 Setup
     let phase2_chunk_size =
-        (QUERIES * 100).div_ceil(2048) * 2048;
+        (QUERIES * DB_CHUNK_SIZE).div_ceil(2048) * 2048;
     let phase2_chunk_size_max =
         (QUERIES * (DB_SIZE + DB_BUFFER) / device_manager.device_count()).div_ceil(2048) * 2048;
     let phase2_batch_chunk_size = (QUERIES * QUERIES).div_ceil(2048) * 2048;
@@ -942,8 +942,6 @@ async fn main() -> eyre::Result<()> {
                 .collect::<Vec<_>>();
             let offset = db_idx * DB_CHUNK_SIZE;
 
-            let chunk_size2 = vec![500usize; 8];
-
             println!("chunks: {:?}, offset: {}", chunk_size, offset);
 
             // debug_record_event!(device_manager, request_streams, timers);
@@ -1010,8 +1008,8 @@ async fn main() -> eyre::Result<()> {
             device_manager.record_event(request_streams, &next_exchange_event);
 
             // Phase 2 [DB]
-            let mut code_dots = codes_engine.result_chunk_shares(&chunk_size2);
-            let mut mask_dots = masks_engine.result_chunk_shares(&chunk_size2);
+            let mut code_dots = codes_engine.result_chunk_shares(&chunk_size);
+            let mut mask_dots = masks_engine.result_chunk_shares(&chunk_size);
             {
                 let mut phase2 = phase2.lock().unwrap();
                 phase2.compare_threshold_masked_many(&code_dots, &mask_dots, &request_streams);
@@ -1023,7 +1021,7 @@ async fn main() -> eyre::Result<()> {
                     &distance_comparator.lock().unwrap(),
                     &request_results,
                     phase2_chunk_size,
-                    &chunk_size2,
+                    &chunk_size,
                     offset,
                     &request_streams,
                 );
