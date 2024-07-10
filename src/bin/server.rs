@@ -761,8 +761,6 @@ async fn main() -> eyre::Result<()> {
         let app = Router::new().route("/health", get(|| async { (StatusCode::OK, "OK") }));
         let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
         axum::serve(listener, app).await.unwrap();
-
-        println!("Healthcheck server started.");
     }));
 
     let mut total_time = Instant::now();
