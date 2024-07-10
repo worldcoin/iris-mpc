@@ -4,12 +4,12 @@ use futures::Stream;
 use sqlx::{migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool};
 use std::env;
 
-#[allow(non_upper_case_globals)]
-const SMPC__DATABASE__URL: &str = "SMPC__DATABASE__URL";
+// Environment variables.
+const DATABASE_URL: &str = "DATABASE_URL";
+const ENVIRONMENT: &str = "SMPC__ENVIRONMENT";
+const PARTY_ID: &str = "SMPC__PARTY_ID";
 
-#[allow(non_upper_case_globals)]
-const SMPC__PARTY_ID: &str = "SMPC__PARTY_ID";
-
+const SCHEMA_PREFIX: &str = "smpc";
 const POOL_SIZE: u32 = 5;
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
@@ -29,8 +29,8 @@ fn sql_switch_schema(schema_name: &str) -> Result<String> {
 pub struct StoredIris {
     #[allow(dead_code)]
     id: i64, // BIGSERIAL
-    code: Vec<u8>,
-    mask: Vec<u8>,
+    code: Vec<u8>, // BYTEA
+    mask: Vec<u8>, // BYTEA
 }
 
 impl StoredIris {
@@ -48,19 +48,20 @@ pub struct Store {
 }
 
 impl Store {
-    /// Connect to a database based on env-vars SMPC__DATABASE__URL and SMPC__PARTY_ID.
+    /// Connect to a database based on env-vars DATABASE_URL, SMPC__ENVIRONMENT, and SMPC__PARTY_ID.
     pub async fn new_from_env() -> Result<Self> {
         Ok(Self::new(&Self::env_url()?, &Self::env_schema_name()?).await?)
     }
 
     fn env_url() -> Result<String> {
-        env::var(SMPC__DATABASE__URL).map_err(|_| eyre!("Missing env-var {}", SMPC__DATABASE__URL))
+        env::var(DATABASE_URL).map_err(|_| eyre!("Missing env-var {}", DATABASE_URL))
     }
 
     fn env_schema_name() -> Result<String> {
-        let party_id =
-            env::var(SMPC__PARTY_ID).map_err(|_| eyre!("Missing env-var {}", SMPC__PARTY_ID))?;
-        Ok(format!("smpc_{}", party_id))
+        let environment =
+            env::var(ENVIRONMENT).map_err(|_| eyre!("Missing env-var {}", ENVIRONMENT))?;
+        let party_id = env::var(PARTY_ID).map_err(|_| eyre!("Missing env-var {}", PARTY_ID))?;
+        Ok(format!("{}_{}_{}", SCHEMA_PREFIX, environment, party_id))
     }
 
     pub async fn new(url: &str, schema_name: &str) -> Result<Self> {
@@ -171,12 +172,20 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_env_vars() -> Result<()> {
+        dotenvy::from_filename(DOTENV_TEST)?;
+        assert!(Store::env_url()?.starts_with("postgres://"));
+        assert!(Store::env_schema_name()?.starts_with(&format!("{}_test", SCHEMA_PREFIX)));
+        Ok(())
+    }
+
     fn temporary_name() -> String {
-        format!("test_smpc_{}", rand::random::<u32>())
+        format!("smpc_test{}_0", rand::random::<u32>())
     }
 
     async fn cleanup(store: &Store, schema_name: &str) -> Result<()> {
-        assert!(schema_name.starts_with("test_smpc_"));
+        assert!(schema_name.starts_with("smpc_test"));
         sqlx::query(&format!("DROP SCHEMA \"{}\" CASCADE", schema_name))
             .execute(&store.pool)
             .await?;
