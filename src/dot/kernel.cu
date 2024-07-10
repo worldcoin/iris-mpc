@@ -2,6 +2,15 @@
 #define ROTATIONS 15
 #define IRIS_CODE_LENGTH 12800
 
+#define U8 unsigned char
+
+extern "C" __global__ void xor_assign_u8(U8 *lhs, U8 *rhs, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        *lhs ^= *rhs;
+    }
+}
+
 extern "C" __global__ void matmul_correct_and_reduce(int *c, unsigned short *output, int *a0Sums, int *a1Sums, int *b0Sums, int *b1Sums, size_t numRows, size_t numElements, unsigned short *rngMasks0, unsigned short *rngMasks1)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
