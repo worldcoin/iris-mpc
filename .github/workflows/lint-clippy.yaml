@@ -10,9 +10,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Install Rust nightly
-        run: rustup toolchain install nightly
+        run: rustup toolchain install nightly-2024-07-10
       - name: Set Rust nightly as default
-        run: rustup default nightly
+        run: rustup default nightly-2024-07-10
       - name: Install Rust clippy for checking clippy errors
         run: rustup component add clippy
       - name: Run Rust Clippy
