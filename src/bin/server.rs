@@ -638,7 +638,7 @@ async fn main() -> eyre::Result<()> {
 
     // Phase 2 Setup
     let phase2_chunk_size =
-        (QUERIES * DB_CHUNK_SIZE).div_ceil(2048) * 2048;
+        (QUERIES * 100).div_ceil(2048) * 2048;
     let phase2_chunk_size_max =
         (QUERIES * (DB_SIZE + DB_BUFFER) / device_manager.device_count()).div_ceil(2048) * 2048;
     let phase2_batch_chunk_size = (QUERIES * QUERIES).div_ceil(2048) * 2048;
@@ -954,7 +954,7 @@ async fn main() -> eyre::Result<()> {
                     device_ptrs(&code_db_slices.0 .0),
                     device_ptrs(&code_db_slices.0 .1),
                 ),
-                &chunk_size2,
+                &chunk_size,
                 offset,
                 request_streams,
                 request_cublas_handles,
@@ -966,7 +966,7 @@ async fn main() -> eyre::Result<()> {
                     device_ptrs(&mask_db_slices.0 .0),
                     device_ptrs(&mask_db_slices.0 .1),
                 ),
-                &chunk_size2,
+                &chunk_size,
                 offset,
                 request_streams,
                 request_cublas_handles,
@@ -1023,7 +1023,7 @@ async fn main() -> eyre::Result<()> {
                     &distance_comparator.lock().unwrap(),
                     &request_results,
                     phase2_chunk_size,
-                    &chunk_size,
+                    &chunk_size2,
                     offset,
                     &request_streams,
                 );
