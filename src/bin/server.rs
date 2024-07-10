@@ -1010,8 +1010,8 @@ async fn main() -> eyre::Result<()> {
             device_manager.record_event(request_streams, &next_exchange_event);
 
             // Phase 2 [DB]
-            let mut code_dots = codes_engine.result_chunk_shares(&chunk_size);
-            let mut mask_dots = masks_engine.result_chunk_shares(&chunk_size);
+            let mut code_dots = codes_engine.result_chunk_shares(&chunk_size2);
+            let mut mask_dots = masks_engine.result_chunk_shares(&chunk_size2);
             {
                 let mut phase2 = phase2.lock().unwrap();
                 phase2.compare_threshold_masked_many(&code_dots, &mask_dots, &request_streams);
