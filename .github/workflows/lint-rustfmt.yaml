@@ -1,0 +1,20 @@
+name: Lint Rustfmt
+
+on:
+  push:
+
+jobs:
+  # TODO: change this to lint-rustfmt once we've updated required jobs
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install Rust nightly
+        run: rustup toolchain install nightly
+      - name: Set Rust nightly as default
+        run: rustup default nightly
+      - name: Install Rustfmt for formatting
+        run: rustup component add rustfmt
+      - name: Run Rustfmt
+        run: cargo fmt -- --check

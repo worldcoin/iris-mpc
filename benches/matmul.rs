@@ -1,10 +1,7 @@
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use gpu_iris_mpc::{
-    dot::{
-        device_manager::DeviceManager,
-        share_db::{preprocess_query, ShareDB},
-    },
-    helpers::device_ptrs,
+    dot::share_db::{preprocess_query, ShareDB},
+    helpers::{device_manager::DeviceManager, device_ptrs},
     setup::shamir::P,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -38,11 +35,12 @@ fn bench_memcpy(c: &mut Criterion) {
         None,
         None,
         None,
+        None,
     );
     let preprocessed_query = preprocess_query(&query);
     let streams = device_manager.fork_streams();
     let blass = device_manager.create_cublas(&streams);
-    let db_slices = engine.load_db(&db, DB_SIZE, DB_SIZE);
+    let db_slices = engine.load_db(&db, DB_SIZE, DB_SIZE, false);
     let db_sizes = vec![DB_SIZE; 8];
 
     group.throughput(Throughput::Elements((DB_SIZE * QUERY_SIZE / 31) as u64));

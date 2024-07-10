@@ -1,0 +1,19 @@
+version: '3'
+services:
+  dev_db:
+    image: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+
+  dev_db_ui:
+    depends_on:
+      - dev_db
+    image: dpage/pgadmin4
+    ports:
+      - "15432:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: "postgres@postgres.postgres"
+      PGADMIN_DEFAULT_PASSWORD: "postgres"

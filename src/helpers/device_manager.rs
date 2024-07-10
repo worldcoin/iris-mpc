@@ -5,7 +5,7 @@ use cudarc::{
             self, event, malloc_async, memcpy_htod_async,
             stream::{synchronize, wait_event},
         },
-        sys::{CUevent, CUevent_flags},
+        sys::{CUdeviceptr, CUevent, CUevent_flags},
         CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceRepr,
     },
 };
@@ -48,7 +48,6 @@ impl DeviceManager {
 
     pub fn await_streams(&self, streams: &[CudaStream]) {
         for i in 0..self.devices.len() {
-            self.devices[i].bind_to_thread().unwrap();
             unsafe { synchronize(streams[i].stream).unwrap() }
         }
     }
@@ -89,7 +88,7 @@ impl DeviceManager {
         &self,
         preprocessed_query: &[Vec<u8>],
         streams: &[CudaStream],
-    ) -> (Vec<u64>, Vec<u64>) {
+    ) -> (Vec<CUdeviceptr>, Vec<CUdeviceptr>) {
         let mut query0_ptrs = vec![];
         let mut query1_ptrs = vec![];
         for idx in 0..self.device_count() {

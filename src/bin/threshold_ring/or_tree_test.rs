@@ -1,5 +1,11 @@
-use cudarc::driver::CudaDevice;
-use gpu_iris_mpc::threshold_ring::protocol::{ChunkShare, Circuits};
+use cudarc::driver::{CudaDevice, CudaStream};
+use gpu_iris_mpc::{
+    helpers::{
+        device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync,
+        task_monitor::TaskMonitor,
+    },
+    threshold_ring::protocol::{ChunkShare, Circuits},
+};
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{env, sync::Arc};
@@ -34,33 +40,43 @@ fn rep_share_vec_bin<R: Rng>(value: &[u64], id: usize, rng: &mut R) -> (Vec<u64>
     (a, b)
 }
 
-fn to_gpu(a: &[u64], b: &[u64], devices: &[Arc<CudaDevice>]) -> Vec<ChunkShare<u64>> {
+fn to_gpu(
+    a: &[u64],
+    b: &[u64],
+    devices: &[Arc<CudaDevice>],
+    streams: &[CudaStream],
+) -> Vec<ChunkShare<u64>> {
     debug_assert_eq!(a.len(), b.len());
 
     let mut result = Vec::with_capacity(devices.len());
 
-    for (dev, a, b) in izip!(devices, a.chunks(CHUNK_SIZE), b.chunks(CHUNK_SIZE)) {
-        let a_ = dev.htod_sync_copy(a).unwrap();
-        let b_ = dev.htod_sync_copy(b).unwrap();
+    for (dev, stream, a, b) in izip!(devices, streams, a.chunks(CHUNK_SIZE), b.chunks(CHUNK_SIZE)) {
+        let a_ = htod_on_stream_sync(a, dev, stream).unwrap();
+        let b_ = htod_on_stream_sync(b, dev, stream).unwrap();
         result.push(ChunkShare::new(a_, b_));
     }
 
     result
 }
 
-fn open(party: &mut Circuits, result: &mut ChunkShare<u64>) -> bool {
+fn open(party: &mut Circuits, result: &mut ChunkShare<u64>, streams: &[CudaStream]) -> bool {
     let res = result.get_offset(0, 1);
     let mut res_helper = result.get_offset(1, 1);
     cudarc::nccl::result::group_start().expect("group start should work");
-    party.send_view(&res.b, party.next_id(), 0);
-    party.receive_view(&mut res_helper.a, party.prev_id(), 0);
+    party
+        .send_view(&res.b, party.next_id(), 0, streams)
+        .unwrap();
+    party
+        .receive_view(&mut res_helper.a, party.prev_id(), 0, streams)
+        .unwrap();
     cudarc::nccl::result::group_end().expect("group end should work");
 
     let dev = party.get_devices()[0].clone();
+    let stream = &streams[0];
 
-    let a = dev.dtoh_sync_copy(&res.a).expect("copy a works");
-    let b = dev.dtoh_sync_copy(&res.b).expect("copy b works");
-    let c = dev.dtoh_sync_copy(&res_helper.a).expect("copy c works");
+    let a = dtoh_on_stream_sync(&res.a, &dev, stream).unwrap();
+    let b = dtoh_on_stream_sync(&res.b, &dev, stream).unwrap();
+    let c = dtoh_on_stream_sync(&res_helper.a, &dev, stream).unwrap();
     assert_eq!(a.len(), 1);
     assert_eq!(b.len(), 1);
     assert_eq!(c.len(), 1);
@@ -87,12 +103,11 @@ async fn main() -> eyre::Result<()> {
     let url = args.get(2);
     let n_devices = CudaDevice::count().unwrap() as usize;
 
-    let url = match url {
-        Some(s) => Some(s.clone()),
-        None => None,
-    };
+    let url = url.cloned();
 
     // Get Circuit Party
+    let device_manager = Arc::new(DeviceManager::init());
+    let mut server_tasks = TaskMonitor::new();
     let mut party = Circuits::new(
         party_id,
         INPUTS_PER_GPU_SIZE,
@@ -100,11 +115,20 @@ async fn main() -> eyre::Result<()> {
         ([party_id as u32; 8], [((party_id + 2) % 3) as u32; 8]),
         url,
         Some(3001),
+        Some(&mut server_tasks),
+        device_manager.clone(),
     );
     let devices = party.get_devices();
+    let streams = devices
+        .iter()
+        .map(|dev| dev.fork_default_stream().unwrap())
+        .collect::<Vec<_>>();
+    server_tasks.check_tasks();
 
     println!("Starting tests...");
     for i in 0..=n_devices {
+        server_tasks.check_tasks();
+
         println!("Test: {}", i);
         let mut inputs = vec![0; CHUNK_SIZE * n_devices];
         if i < n_devices {
@@ -116,17 +140,17 @@ async fn main() -> eyre::Result<()> {
         let (share_a, share_b) = rep_share_vec_bin(&inputs, party_id, &mut rng);
 
         // Import to GPU
-        let mut share_gpu = to_gpu(&share_a, &share_b, &devices);
+        let mut share_gpu = to_gpu(&share_a, &share_b, &devices, &streams);
         println!("Data is on GPUs!");
 
         let now = Instant::now();
-        party.or_reduce_result(&mut share_gpu);
-        party.synchronize_all();
+        party.or_reduce_result(&mut share_gpu, &streams);
         println!("compute time: {:?}", now.elapsed());
 
         let now = Instant::now();
         // Result is in the first bit of the first GPU
-        let result = open(&mut party, &mut share_gpu[0]);
+        let result = open(&mut party, &mut share_gpu[0], &streams);
+        party.synchronize_streams(&streams);
         println!("Open and transfer to CPU time: {:?}", now.elapsed());
 
         if i == n_devices {
@@ -142,6 +166,8 @@ async fn main() -> eyre::Result<()> {
         }
     }
 
+    server_tasks.abort_all();
     time::sleep(time::Duration::from_secs(5)).await;
+    server_tasks.check_tasks_finished();
     Ok(())
 }

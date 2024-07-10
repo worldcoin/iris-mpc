@@ -1,20 +1,24 @@
-use super::{device_manager::DeviceManager, IRIS_CODE_LENGTH};
+use super::IRIS_CODE_LENGTH;
 use crate::{
-    helpers::id_wrapper::{http_root, IdWrapper},
+    helpers::{
+        device_manager::DeviceManager,
+        id_wrapper::{http_root, IdWrapper},
+    },
     rng::chacha::ChaChaCudaRng,
 };
 use axum::{routing::get, Router};
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
-        result::malloc_async, CudaFunction, CudaSlice, CudaStream, DevicePtr, LaunchAsync,
-        LaunchConfig,
+        result::malloc_async, sys::CUdeviceptr, CudaFunction, CudaSlice, CudaStream, DevicePtr,
+        LaunchAsync, LaunchConfig,
     },
     nccl::{self, result, Comm, Id, NcclType},
     nvrtc::compile_ptx,
 };
 use rayon::prelude::*;
 use std::{ffi::c_void, mem, str::FromStr, sync::Arc, thread, time::Duration};
+use tokio::task::{AbortHandle, JoinSet};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const REDUCE_FUNCTION_NAME: &str = "matmul_correct_and_reduce";
@@ -39,9 +43,9 @@ pub fn preprocess_query(query: &[u16]) -> Vec<Vec<u8>> {
 #[allow(clippy::too_many_arguments)]
 pub fn gemm(
     handle: &CudaBlas,
-    a: u64,
-    b: u64,
-    c: u64,
+    a: CUdeviceptr,
+    b: CUdeviceptr,
+    c: CUdeviceptr,
     a_offset: u64,
     b_offset: u64,
     c_offset: u64,
@@ -115,6 +119,28 @@ fn receive_stream<T: NcclType>(
     }
 }
 
+fn chunking<T: Clone>(
+    slice: &[T],
+    n_chunks: usize,
+    chunk_size: usize,
+    element_size: usize,
+    alternating: bool,
+) -> Vec<Vec<T>> {
+    if alternating {
+        let mut result = vec![Vec::new(); n_chunks];
+
+        for (i, chunk) in slice.chunks(element_size).enumerate() {
+            result[i % n_chunks].extend_from_slice(chunk);
+        }
+        result
+    } else {
+        slice
+            .chunks(chunk_size)
+            .map(|chunk| chunk.to_vec())
+            .collect()
+    }
+}
+
 pub struct ShareDB {
     peer_id:              usize,
     is_remote:            bool,
@@ -127,10 +153,12 @@ pub struct ShareDB {
     intermediate_results: Vec<CudaSlice<i32>>,
     pub results:          Vec<CudaSlice<u8>>,
     pub results_peer:     Vec<CudaSlice<u8>>,
+    pub server_abort:     Option<AbortHandle>,
 }
 
 impl ShareDB {
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::arc_with_non_send_sync)]
     pub fn init(
         peer_id: usize,
         device_manager: Arc<DeviceManager>,
@@ -140,6 +168,7 @@ impl ShareDB {
         peer_url: Option<String>,
         is_remote: Option<bool>,
         server_port: Option<u16>,
+        sever_task_set: Option<&mut JoinSet<()>>,
     ) -> Self {
         let n_devices = device_manager.device_count();
         let ptx = compile_ptx(PTX_SRC).unwrap();
@@ -205,6 +234,7 @@ impl ShareDB {
 
         // Init NCCL comms
         let mut comms = vec![];
+        let mut server_abort = None;
         if is_remote {
             let mut ids = vec![];
             for _ in 0..n_devices {
@@ -213,8 +243,12 @@ impl ShareDB {
 
             // Start HTTP server to exchange NCCL commIds
             if peer_id == 0 {
+                let sever_task_set = sever_task_set.expect(
+                    "task set must be supplied to peer_id 0 for remote connection monitoring",
+                );
+
                 let ids = ids.clone();
-                tokio::spawn(async move {
+                server_abort = Some(sever_task_set.spawn(async move {
                     println!("Starting server on port {}...", server_port.unwrap());
                     let app =
                         Router::new().route("/:device_id", get(move |req| http_root(ids, req)));
@@ -223,7 +257,7 @@ impl ShareDB {
                             .await
                             .unwrap();
                     axum::serve(listener, app).await.unwrap();
-                });
+                }));
             } else {
                 thread::sleep(Duration::from_secs(2));
             }
@@ -268,6 +302,7 @@ impl ShareDB {
             ones,
             results,
             results_peer,
+            server_abort,
         }
     }
 
@@ -277,6 +312,7 @@ impl ShareDB {
         db_entries: &[u16],
         db_length: usize, // TODO: should handle different sizes for each device
         max_db_length: usize,
+        alternating_chunks: bool,
     ) -> (
         (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
         (Vec<CudaSlice<u32>>, Vec<CudaSlice<u32>>),
@@ -311,8 +347,24 @@ impl ShareDB {
         let chunk_size = db_length / self.device_manager.device_count();
         let max_size = max_db_length / self.device_manager.device_count();
 
-        let db1_sums = a1_sums
-            .chunks(chunk_size)
+        // DB sums
+        let db1_sums = chunking(
+            &a1_sums,
+            self.device_manager.device_count(),
+            chunk_size,
+            1,
+            alternating_chunks,
+        );
+        let db0_sums = chunking(
+            &a0_sums,
+            self.device_manager.device_count(),
+            chunk_size,
+            1,
+            alternating_chunks,
+        );
+
+        let db1_sums = db1_sums
+            .iter()
             .enumerate()
             .map(|(idx, chunk)| {
                 let mut slice = unsafe { self.device_manager.device(idx).alloc(max_size).unwrap() };
@@ -322,8 +374,8 @@ impl ShareDB {
                 slice
             })
             .collect::<Vec<_>>();
-        let db0_sums = a0_sums
-            .chunks(chunk_size)
+        let db0_sums = db0_sums
+            .iter()
             .enumerate()
             .map(|(idx, chunk)| {
                 let mut slice = unsafe { self.device_manager.device(idx).alloc(max_size).unwrap() };
@@ -334,8 +386,25 @@ impl ShareDB {
             })
             .collect::<Vec<_>>();
 
-        let db1 = a1_host
-            .chunks(chunk_size * IRIS_CODE_LENGTH)
+        // DB codes
+        let db1 = chunking(
+            &a1_host,
+            self.device_manager.device_count(),
+            chunk_size * IRIS_CODE_LENGTH,
+            IRIS_CODE_LENGTH,
+            alternating_chunks,
+        );
+
+        let db0 = chunking(
+            &a0_host,
+            self.device_manager.device_count(),
+            chunk_size * IRIS_CODE_LENGTH,
+            IRIS_CODE_LENGTH,
+            alternating_chunks,
+        );
+
+        let db1 = db1
+            .iter()
             .enumerate()
             .map(|(idx, chunk)| {
                 let mut slice = unsafe {
@@ -350,8 +419,8 @@ impl ShareDB {
                 slice
             })
             .collect::<Vec<_>>();
-        let db0 = a0_host
-            .chunks(chunk_size * IRIS_CODE_LENGTH)
+        let db0 = db0
+            .iter()
             .enumerate()
             .map(|(idx, chunk)| {
                 let mut slice = unsafe {
@@ -372,10 +441,10 @@ impl ShareDB {
 
     pub fn query_sums(
         &self,
-        query_ptrs: &(Vec<u64>, Vec<u64>),
+        query_ptrs: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
         streams: &[CudaStream],
         blass: &[CudaBlas],
-    ) -> (Vec<u64>, Vec<u64>) {
+    ) -> (Vec<CUdeviceptr>, Vec<CUdeviceptr>) {
         let mut query1_sums = vec![];
         let mut query0_sums = vec![];
 
@@ -438,8 +507,8 @@ impl ShareDB {
 
     pub fn dot(
         &mut self,
-        query_ptrs: &(Vec<u64>, Vec<u64>),
-        db: &(Vec<u64>, Vec<u64>),
+        query_ptrs: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
+        db: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
         db_sizes: &[usize],
         streams: &[CudaStream],
         blass: &[CudaBlas],
@@ -472,7 +541,7 @@ impl ShareDB {
                         db_sizes[idx],
                         self.query_length,
                         IRIS_CODE_LENGTH,
-                        1 << 8 * (i + j),
+                        1 << (8 * (i + j)),
                         if i + j == 0 { 0 } else { 1 },
                     );
                 }
@@ -482,8 +551,8 @@ impl ShareDB {
 
     pub fn dot_reduce(
         &mut self,
-        query_sums: &(Vec<u64>, Vec<u64>),
-        db_sums: &(Vec<u64>, Vec<u64>),
+        query_sums: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
+        db_sums: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
         db_sizes: &[usize],
         streams: &[CudaStream],
     ) {
@@ -569,8 +638,7 @@ impl ShareDB {
 mod tests {
     use super::{preprocess_query, ShareDB};
     use crate::{
-        dot::device_manager::DeviceManager,
-        helpers::device_ptrs,
+        helpers::{device_manager::DeviceManager, device_ptrs},
         setup::{galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     };
     use float_eq::assert_float_eq;
@@ -578,6 +646,7 @@ mod tests {
     use num_traits::FromPrimitive;
     use rand::{rngs::StdRng, Rng, SeedableRng};
     use std::sync::Arc;
+
     const WIDTH: usize = 12_800;
     const QUERY_SIZE: usize = 31;
     const DB_SIZE: usize = 8 * 1000;
@@ -625,13 +694,14 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let preprocessed_query = preprocess_query(&query);
         let streams = device_manager.fork_streams();
         let blass = device_manager.create_cublas(&streams);
         let preprocessed_query = device_manager.htod_transfer_query(&preprocessed_query, &streams);
         let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
-        let db_slices = engine.load_db(&db, DB_SIZE, DB_SIZE);
+        let db_slices = engine.load_db(&db, DB_SIZE, DB_SIZE, false);
 
         engine.dot(
             &preprocessed_query,
@@ -655,7 +725,7 @@ mod tests {
         let mut vec_column_major: Vec<u16> = Vec::new();
         for col in 0..c_nda.ncols() {
             for row in c_nda.column(col) {
-                vec_column_major.push(*row as u16);
+                vec_column_major.push(*row);
             }
         }
 
@@ -686,7 +756,7 @@ mod tests {
 
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
-        let mut gpu_result = vec![
+        let mut gpu_result = [
             vec![0u16; DB_SIZE * QUERY_SIZE / n_devices],
             vec![0u16; DB_SIZE * QUERY_SIZE / n_devices],
             vec![0u16; DB_SIZE * QUERY_SIZE / n_devices],
@@ -700,26 +770,24 @@ mod tests {
             let codes_db = db
                 .db
                 .iter()
-                .map(|iris| {
+                .flat_map(|iris| {
                     GaloisRingIrisCodeShare::encode_mask_code(
                         &iris.mask,
                         &mut StdRng::seed_from_u64(RNG_SEED),
                     )[i]
                         .coefs
                 })
-                .flatten()
                 .collect::<Vec<_>>();
 
             let querys = db.db[0..QUERY_SIZE]
                 .iter()
-                .map(|iris| {
+                .flat_map(|iris| {
                     let shares = GaloisRingIrisCodeShare::encode_mask_code(
                         &iris.mask,
                         &mut StdRng::seed_from_u64(RNG_SEED),
                     );
                     GaloisRingIrisCodeShare::preprocess_iris_code_query_shares(shares)[i].coefs
                 })
-                .flatten()
                 .collect::<Vec<_>>();
 
             let mut engine = ShareDB::init(
@@ -731,6 +799,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             );
             let preprocessed_query = preprocess_query(&querys);
             let streams = device_manager.fork_streams();
@@ -738,7 +807,7 @@ mod tests {
             let preprocessed_query =
                 device_manager.htod_transfer_query(&preprocessed_query, &streams);
             let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
-            let db_slices = engine.load_db(&codes_db, DB_SIZE, DB_SIZE);
+            let db_slices = engine.load_db(&codes_db, DB_SIZE, DB_SIZE, false);
             engine.dot(
                 &preprocessed_query,
                 &(device_ptrs(&db_slices.0 .0), device_ptrs(&db_slices.0 .1)),
@@ -794,7 +863,7 @@ mod tests {
             let codes_db = db
                 .db
                 .iter()
-                .map(|iris| {
+                .flat_map(|iris| {
                     GaloisRingIrisCodeShare::encode_iris_code(
                         &iris.code,
                         &iris.mask,
@@ -802,26 +871,24 @@ mod tests {
                     )[party_id]
                         .coefs
                 })
-                .flatten()
                 .collect::<Vec<_>>();
 
             let masks_db = db
                 .db
                 .iter()
-                .map(|iris| {
+                .flat_map(|iris| {
                     GaloisRingIrisCodeShare::encode_mask_code(
                         &iris.mask,
                         &mut StdRng::seed_from_u64(RNG_SEED),
                     )[party_id]
                         .coefs
                 })
-                .flatten()
                 .collect::<Vec<_>>();
 
             // Queries
             let code_queries = db.db[0..QUERY_SIZE]
                 .iter()
-                .map(|iris| {
+                .flat_map(|iris| {
                     let shares = GaloisRingIrisCodeShare::encode_iris_code(
                         &iris.code,
                         &iris.mask,
@@ -830,12 +897,11 @@ mod tests {
                     GaloisRingIrisCodeShare::preprocess_iris_code_query_shares(shares)[party_id]
                         .coefs
                 })
-                .flatten()
                 .collect::<Vec<_>>();
 
             let mask_queries = db.db[0..QUERY_SIZE]
                 .iter()
-                .map(|iris| {
+                .flat_map(|iris| {
                     let shares = GaloisRingIrisCodeShare::encode_mask_code(
                         &iris.mask,
                         &mut StdRng::seed_from_u64(RNG_SEED),
@@ -843,7 +909,6 @@ mod tests {
                     GaloisRingIrisCodeShare::preprocess_iris_code_query_shares(shares)[party_id]
                         .coefs
                 })
-                .flatten()
                 .collect::<Vec<_>>();
 
             let device_manager = Arc::new(DeviceManager::init());
@@ -857,6 +922,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             );
             let mut masks_engine = ShareDB::init(
                 party_id,
@@ -864,6 +930,7 @@ mod tests {
                 DB_SIZE,
                 QUERY_SIZE,
                 ([0u32; 8], [0u32; 8]),
+                None,
                 None,
                 None,
                 None,
@@ -878,8 +945,8 @@ mod tests {
             let mask_query = device_manager.htod_transfer_query(&mask_query, &streams);
             let code_query_sums = codes_engine.query_sums(&code_query, &streams, &blass);
             let mask_query_sums = masks_engine.query_sums(&mask_query, &streams, &blass);
-            let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE, DB_SIZE);
-            let mask_db_slices = codes_engine.load_db(&masks_db, DB_SIZE, DB_SIZE);
+            let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE, DB_SIZE, false);
+            let mask_db_slices = codes_engine.load_db(&masks_db, DB_SIZE, DB_SIZE, false);
 
             codes_engine.dot(
                 &code_query,

@@ -57,9 +57,9 @@ pub async fn derive_shared_secret(own_key_id: &str, other_key_id: &str) -> eyre:
         &headers,
         &hex::encode(digest(&SHA256, json_string.as_bytes())),
     )?;
-    let scope = scope_string_with_service(&ts, &region, "kms")?;
+    let scope = scope_string_with_service(&ts, region, "kms")?;
     let string = string_to_sign(&ts, &canonical_req, &scope)?;
-    let signing_key = signing_key(&ts, &secret_key, &region, "kms")?;
+    let signing_key = signing_key(&ts, &secret_key, region, "kms")?;
     let key = hmac::Key::new(hmac::HMAC_SHA256, &signing_key);
     let tag = hmac::sign(&key, string.as_bytes());
     let signature = hex::encode(tag);

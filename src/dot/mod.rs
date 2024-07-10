@@ -1,4 +1,3 @@
-pub mod device_manager;
 pub mod distance_comparator;
 pub mod share_db;
 
