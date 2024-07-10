@@ -41,6 +41,7 @@ use lazy_static::lazy_static;
 use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{
+    cmp::{max, min},
     fs::metadata,
     mem,
     path::PathBuf,
@@ -65,6 +66,7 @@ const DB_BUFFER: usize = 8 * 1_000;
 const N_QUERIES: usize = 32;
 const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
+const DB_CHUNK_SIZE: usize = 100;
 /// The number of batches before a stream is re-used.
 const MAX_BATCHES_BEFORE_REUSE: usize = 5;
 
@@ -291,6 +293,7 @@ fn open(
     results_ptrs: &[CudaSlice<u32>],
     chunk_size: usize,
     db_sizes: &[usize],
+    offset: usize,
     streams: &[CudaStream],
 ) {
     let n_devices = x.len();
@@ -317,7 +320,7 @@ fn open(
     }
     cudarc::nccl::result::group_end().unwrap();
 
-    distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, &streams);
+    distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, offset, &streams);
 }
 
 fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
@@ -892,6 +895,7 @@ async fn main() -> eyre::Result<()> {
             &code_query_insert_sums,
             &query_db_size,
             &query_db_size,
+            0,
             request_streams,
         );
 
@@ -900,6 +904,7 @@ async fn main() -> eyre::Result<()> {
             &mask_query_insert_sums,
             &query_db_size,
             &query_db_size,
+            0,
             request_streams,
         );
 
@@ -923,91 +928,115 @@ async fn main() -> eyre::Result<()> {
             &request_results_batch,
             chunk_size,
             &db_sizes_batch,
+            0,
             &request_streams,
         );
         phase2_batch.return_result_buffer(res);
 
         // ---- END BATCH DEDUP ----
+        let mut db_idx = 0;
+        loop {
+            let chunk_size = current_db_size_stream
+                .iter()
+                .map(|s| min(s - DB_CHUNK_SIZE * db_idx, chunk_size))
+                .collect::<Vec<_>>();
+            let offset = db_idx * DB_CHUNK_SIZE;
 
-        // debug_record_event!(device_manager, request_streams, timers);
+            // debug_record_event!(device_manager, request_streams, timers);
 
-        codes_engine.dot(
-            &code_query,
-            &(
-                device_ptrs(&code_db_slices.0 .0),
-                device_ptrs(&code_db_slices.0 .1),
-            ),
-            &current_db_size_stream,
-            0,
-            request_streams,
-            request_cublas_handles,
-        );
-
-        masks_engine.dot(
-            &mask_query,
-            &(
-                device_ptrs(&mask_db_slices.0 .0),
-                device_ptrs(&mask_db_slices.0 .1),
-            ),
-            &current_db_size_stream,
-            0,
-            request_streams,
-            request_cublas_handles,
-        );
-
-        // BLOCK 2: calculate final dot product result, exchange and compare
-        device_manager.await_event(request_streams, &current_exchange_event);
-
-        codes_engine.dot_reduce(
-            &code_query_sums,
-            &(
-                device_ptrs(&code_db_slices.1 .0),
-                device_ptrs(&code_db_slices.1 .1),
-            ),
-            &current_db_size_stream,
-            &current_db_size_stream,
-            request_streams,
-        );
-        masks_engine.dot_reduce(
-            &mask_query_sums,
-            &(
-                device_ptrs(&mask_db_slices.1 .0),
-                device_ptrs(&mask_db_slices.1 .1),
-            ),
-            &current_db_size_stream,
-            &current_db_size_stream,
-            request_streams,
-        );
-
-        device_manager.record_event(request_streams, &next_dot_event);
-
-        debug_record_event!(device_manager, request_streams, timers);
-
-        codes_engine.reshare_results(&current_db_size_stream, request_streams);
-        masks_engine.reshare_results(&current_db_size_stream, request_streams);
-
-        debug_record_event!(device_manager, request_streams, timers);
-
-        device_manager.record_event(request_streams, &next_exchange_event);
-
-        // Phase 2 [DB]
-        let mut code_dots = codes_engine.result_chunk_shares(&current_db_size_stream);
-        let mut mask_dots = masks_engine.result_chunk_shares(&current_db_size_stream);
-        {
-            let mut phase2 = phase2.lock().unwrap();
-            phase2.compare_threshold_masked_many(&code_dots, &mask_dots, &request_streams);
-            let res = phase2.take_result_buffer();
-            let chunk_size = phase2.chunk_size();
-            open(
-                &mut phase2,
-                &res,
-                &distance_comparator.lock().unwrap(),
-                &request_results,
-                chunk_size,
-                &current_db_size_stream,
-                &request_streams,
+            codes_engine.dot(
+                &code_query,
+                &(
+                    device_ptrs(&code_db_slices.0 .0),
+                    device_ptrs(&code_db_slices.0 .1),
+                ),
+                &chunk_size,
+                offset,
+                request_streams,
+                request_cublas_handles,
             );
-            phase2.return_result_buffer(res);
+
+            masks_engine.dot(
+                &mask_query,
+                &(
+                    device_ptrs(&mask_db_slices.0 .0),
+                    device_ptrs(&mask_db_slices.0 .1),
+                ),
+                &chunk_size,
+                offset,
+                request_streams,
+                request_cublas_handles,
+            );
+
+            // BLOCK 2: calculate final dot product result, exchange and compare
+            device_manager.await_event(request_streams, &current_exchange_event);
+
+            codes_engine.dot_reduce(
+                &code_query_sums,
+                &(
+                    device_ptrs(&code_db_slices.1 .0),
+                    device_ptrs(&code_db_slices.1 .1),
+                ),
+                &current_db_size_stream,
+                &chunk_size,
+                offset,
+                request_streams,
+            );
+            masks_engine.dot_reduce(
+                &mask_query_sums,
+                &(
+                    device_ptrs(&mask_db_slices.1 .0),
+                    device_ptrs(&mask_db_slices.1 .1),
+                ),
+                &current_db_size_stream,
+                &chunk_size,
+                offset,
+                request_streams,
+            );
+
+            device_manager.record_event(request_streams, &next_dot_event);
+
+            debug_record_event!(device_manager, request_streams, timers);
+
+            codes_engine.reshare_results(&chunk_size, request_streams);
+            masks_engine.reshare_results(&chunk_size, request_streams);
+
+            debug_record_event!(device_manager, request_streams, timers);
+
+            device_manager.record_event(request_streams, &next_exchange_event);
+
+            // Phase 2 [DB]
+            let mut code_dots = codes_engine.result_chunk_shares(&chunk_size);
+            let mut mask_dots = masks_engine.result_chunk_shares(&chunk_size);
+            {
+                let mut phase2 = phase2.lock().unwrap();
+                phase2.compare_threshold_masked_many(&code_dots, &mask_dots, &request_streams);
+                let res = phase2.take_result_buffer();
+                let phase2_chunk_size = phase2.chunk_size();
+                open(
+                    &mut phase2,
+                    &res,
+                    &distance_comparator.lock().unwrap(),
+                    &request_results,
+                    phase2_chunk_size,
+                    &chunk_size,
+                    offset,
+                    &request_streams,
+                );
+                phase2.return_result_buffer(res);
+            }
+
+            // Don't drop those
+            forget_vec!(code_dots);
+            forget_vec!(mask_dots);
+
+            db_idx += 1;
+            if db_idx * DB_CHUNK_SIZE >= DB_SIZE / device_manager.device_count() {
+                break;
+            }
+
+            // DEBUG: remove
+            device_manager.await_streams(&request_streams);
         }
 
         // Merge results and fetch matching indices
@@ -1246,8 +1275,6 @@ async fn main() -> eyre::Result<()> {
             );
 
             // Make sure to not call `Drop` on those
-            forget_vec!(code_dots);
-            forget_vec!(mask_dots);
             forget_vec!(code_dots_batch);
             forget_vec!(mask_dots_batch);
         }));

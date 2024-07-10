@@ -556,6 +556,7 @@ impl ShareDB {
         db_sums: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
         db_sizes: &[usize],
         chunk_sizes: &[usize],
+        offset: usize,
         streams: &[CudaStream],
     ) {
         for idx in 0..self.device_manager.device_count() {
@@ -587,6 +588,7 @@ impl ShareDB {
                             query_sums.1[idx],
                             db_sizes[idx] as u64,
                             (chunk_sizes[idx] * self.query_length) as u64,
+                            offset as u64,
                             self.rngs[idx].0.cuda_slice().unwrap(),
                             self.rngs[idx].1.cuda_slice().unwrap(),
                         ),
@@ -741,6 +743,7 @@ mod tests {
             &(device_ptrs(&db_slices.1 .0), device_ptrs(&db_slices.1 .1)),
             &db_sizes,
             &db_sizes,
+            0,
             &streams,
         );
         device_manager.await_streams(&streams);
@@ -850,6 +853,7 @@ mod tests {
                 &(device_ptrs(&db_slices.1 .0), device_ptrs(&db_slices.1 .1)),
                 &db_sizes,
                 &db_sizes,
+                0,
                 &streams,
             );
             device_manager.await_streams(&streams);
@@ -1014,6 +1018,7 @@ mod tests {
                 ),
                 &db_sizes,
                 &db_sizes,
+                0,
                 &streams,
             );
             masks_engine.dot_reduce(
@@ -1024,6 +1029,7 @@ mod tests {
                 ),
                 &db_sizes,
                 &db_sizes,
+                0,
                 &streams,
             );
 
