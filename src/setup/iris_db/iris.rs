@@ -34,9 +34,9 @@ impl IrisCodeArray {
     }
     pub fn bits(&self) -> Bits<'_> {
         Bits {
-            code:    self,
+            code: self,
             current: 0,
-            index:   0,
+            index: 0,
         }
     }
     #[inline]
@@ -204,9 +204,9 @@ impl IrisCode {
 }
 
 pub struct Bits<'a> {
-    code:    &'a IrisCodeArray,
+    code: &'a IrisCodeArray,
     current: u64,
-    index:   usize,
+    index: usize,
 }
 
 impl Iterator for Bits<'_> {
@@ -283,7 +283,7 @@ mod tests {
                 .parse()
                 .context("Invalid rotation")?;
             let bit_str = parts.next().context("Missing bit string")?;
-            rotations.insert(rotation, bit_str.trim().replace(" ", "").to_string());
+            rotations.insert(rotation, bit_str.trim().replace(' ', "").to_string());
         }
 
         Ok((code, rotations))
