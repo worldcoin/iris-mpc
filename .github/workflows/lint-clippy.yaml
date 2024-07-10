@@ -3,6 +3,10 @@ name: Lint Clippy
 on:
   push:
 
+concurrency:
+  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  cancel-in-progress: true
+
 permissions:
   # Leaving clippy annotations on commits...
   contents: write
