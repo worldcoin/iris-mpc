@@ -12,11 +12,14 @@ permissions:
   checks: write
 
 jobs:
-  clippy:
+  lint-clippy:
     name: Check Rust Lints
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        run: rustup toolchain install nightly
 
       - name: Clippy Lints
         uses: actions-rs/clippy-check@v1
