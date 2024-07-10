@@ -17,7 +17,9 @@ use cudarc::{
     nvrtc::{self, Ptx},
 };
 use itertools::izip;
-use std::{str::FromStr, sync::Arc, thread, time::Duration};
+#[cfg(feature = "otp_encrypt")]
+use itertools::Itertools;
+use std::{ops::Range, str::FromStr, sync::Arc, thread, time::Duration};
 use tokio::task::{AbortHandle, JoinSet};
 
 pub(crate) const B_BITS: usize = 16;
@@ -778,31 +780,6 @@ impl Circuits {
         }
     }
 
-    // Keep in mind: group needs to be open!
-    fn packed_and_many_send(
-        &mut self,
-        res: &ChunkShareView<u64>,
-        bits: usize,
-        idx: usize,
-        streams: &[CudaStream],
-    ) {
-        let send = res.a.slice(0..bits * self.chunk_size);
-        self.send_view(&send, self.next_id, idx, streams).unwrap();
-    }
-
-    // Keep in mind: group needs to be open!
-    fn packed_and_many_receive(
-        &mut self,
-        res: &mut ChunkShareView<u64>,
-        bits: usize,
-        idx: usize,
-        streams: &[CudaStream],
-    ) {
-        let mut rcv = res.b.slice(0..bits * self.chunk_size);
-        self.receive_view(&mut rcv, self.prev_id, idx, streams)
-            .unwrap();
-    }
-
     fn assign_view(
         &mut self,
         des: &mut ChunkShareView<u64>,
@@ -996,18 +973,92 @@ impl Circuits {
         bits: usize,
         streams: &[CudaStream],
     ) {
+        self.send_receive_view_with_offset(res, 0..bits * self.chunk_size, streams)
+    }
+
+    #[cfg(feature = "otp_encrypt")]
+    fn send_receive_view_with_offset(
+        &mut self,
+        res: &mut [ChunkShareView<u64>],
+        range: Range<usize>,
+        streams: &[CudaStream],
+    ) {
+        debug_assert_eq!(res.len(), self.n_devices);
+
+        let send_bufs = res
+            .iter()
+            .enumerate()
+            .map(|(idx, res)| {
+                self.otp_encrypt_my_rng_u64(&res.get_range(range.start, range.end), idx, streams)
+            })
+            .collect_vec();
+
+        result::group_start().unwrap();
+        for (idx, res) in send_bufs.iter().enumerate() {
+            self.send(res, self.next_id, idx, streams).unwrap();
+        }
+        for (idx, res) in res.iter_mut().enumerate() {
+            let mut rcv = res.b.slice(range.to_owned());
+            self.receive_view(&mut rcv, self.prev_id, idx, streams)
+                .unwrap();
+        }
+        result::group_end().unwrap();
+        for (idx, res) in res.iter_mut().enumerate() {
+            self.otp_decrypt_their_rng_u64(
+                &mut res.get_range(range.start, range.end),
+                idx,
+                streams,
+            );
+        }
+    }
+
+    #[cfg(not(feature = "otp_encrypt"))]
+    fn send_receive_view_with_offset(
+        &mut self,
+        res: &mut [ChunkShareView<u64>],
+        range: Range<usize>,
+        streams: &[CudaStream],
+    ) {
         debug_assert_eq!(res.len(), self.n_devices);
 
         result::group_start().unwrap();
         for (idx, res) in res.iter().enumerate() {
-            self.packed_and_many_send(res, bits, idx, streams);
+            let send = res.a.slice(range.to_owned());
+            self.send_view(&send, self.next_id, idx, streams).unwrap();
         }
         for (idx, res) in res.iter_mut().enumerate() {
-            self.packed_and_many_receive(res, bits, idx, streams);
+            let mut rcv = res.b.slice(range.to_owned());
+            self.receive_view(&mut rcv, self.prev_id, idx, streams)
+                .unwrap();
         }
         result::group_end().unwrap();
     }
 
+    #[cfg(feature = "otp_encrypt")]
+    fn send_receive_view(&mut self, res: &mut [ChunkShareView<u64>], streams: &[CudaStream]) {
+        debug_assert_eq!(res.len(), self.n_devices);
+
+        let send_bufs = res
+            .iter()
+            .enumerate()
+            .map(|(idx, res)| self.otp_encrypt_my_rng_u64(res, idx, streams))
+            .collect_vec();
+
+        result::group_start().unwrap();
+        for (idx, res) in send_bufs.iter().enumerate() {
+            self.send(res, self.next_id, idx, streams).unwrap();
+        }
+        for (idx, res) in res.iter_mut().enumerate() {
+            self.receive_view(&mut res.b, self.prev_id, idx, streams)
+                .unwrap();
+        }
+        result::group_end().unwrap();
+        for (idx, res) in res.iter_mut().enumerate() {
+            self.otp_decrypt_their_rng_u64(res, idx, streams);
+        }
+    }
+
+    #[cfg(not(feature = "otp_encrypt"))]
     fn send_receive_view(&mut self, res: &mut [ChunkShareView<u64>], streams: &[CudaStream]) {
         debug_assert_eq!(res.len(), self.n_devices);
 
@@ -1709,20 +1760,7 @@ impl Circuits {
                 self.and_many_pre(&a, &b, &mut tmp_c, idx, streams);
             }
             // Send/Receive
-            result::group_start().unwrap();
-            for (idx, a) in a.iter().enumerate() {
-                // Unused space used for temparary storage
-                let tmp_c = a.get_offset(0, self.chunk_size);
-                self.send_view(&tmp_c.a, self.next_id, idx, streams)
-                    .unwrap();
-            }
-            for (idx, a) in a.iter_mut().enumerate() {
-                // Unused space used for temparary storage
-                let mut tmp_c = a.get_offset(0, self.chunk_size);
-                self.receive_view(&mut tmp_c.b, self.prev_id, idx, streams)
-                    .unwrap();
-            }
-            result::group_end().unwrap();
+            self.send_receive_view_with_offset(&mut a, 0..self.chunk_size, streams);
             // Postprocess xor
             for (idx, (c, a)) in izip!(carry.iter_mut(), &a).enumerate() {
                 // Unused space used for temparary storage
@@ -1740,20 +1778,7 @@ impl Circuits {
             self.xor_assign_many(&mut c1, &b, idx, streams);
         }
         // Send/Receive
-        result::group_start().unwrap();
-        for (idx, c) in c.iter().enumerate() {
-            // Unused space used for temparary storage
-            let tmp_c = c.get_offset(1, self.chunk_size);
-            self.send_view(&tmp_c.a, self.next_id, idx, streams)
-                .unwrap();
-        }
-        for (idx, c) in c.iter_mut().enumerate() {
-            // Unused space used for temparary storage
-            let mut tmp_c = c.get_offset(1, self.chunk_size);
-            self.receive_view(&mut tmp_c.b, self.prev_id, idx, streams)
-                .unwrap();
-        }
-        result::group_end().unwrap();
+        self.send_receive_view_with_offset(c, self.chunk_size..2 * self.chunk_size, streams);
 
         Buffers::return_buffer(&mut self.buffers.u64_32c_3, buffer1);
     }
@@ -1853,20 +1878,7 @@ impl Circuits {
                 self.and_many_pre(&a, &b, &mut tmp_c, idx, streams);
             }
             // Send/Receive
-            result::group_start().unwrap();
-            for (idx, a) in a.iter().enumerate() {
-                // Unused space used for temparary storage
-                let tmp_c = a.get_offset(0, self.chunk_size);
-                self.send_view(&tmp_c.a, self.next_id, idx, streams)
-                    .unwrap();
-            }
-            for (idx, a) in a.iter_mut().enumerate() {
-                // Unused space used for temparary storage
-                let mut tmp_c = a.get_offset(0, self.chunk_size);
-                self.receive_view(&mut tmp_c.b, self.prev_id, idx, streams)
-                    .unwrap();
-            }
-            result::group_end().unwrap();
+            self.send_receive_view_with_offset(&mut a, 0..self.chunk_size, streams);
             // Postprocess xor
             for (idx, (c, a)) in izip!(carry.iter_mut(), &a).enumerate() {
                 // Unused space used for temparary storage
@@ -1912,17 +1924,7 @@ impl Circuits {
             }
 
             // Reshare
-            result::group_start().unwrap();
-            for (idx, bit) in bits.iter().enumerate() {
-                let a = bit.get_offset(0, num);
-                self.send_view(&a.a, self.next_id, idx, streams).unwrap();
-            }
-            for (idx, bit) in bits.iter_mut().enumerate() {
-                let mut a = bit.get_offset(0, num);
-                self.receive_view(&mut a.b, self.prev_id, idx, streams)
-                    .unwrap();
-            }
-            result::group_end().unwrap();
+            self.send_receive_view_with_offset(bits, 0..num, streams);
 
             num += mod_;
         }
