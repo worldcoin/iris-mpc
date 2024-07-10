@@ -1281,12 +1281,36 @@ impl Circuits {
             }
         }
 
-        result::group_start().unwrap();
-        for (idx, (m0, m1)) in izip!(&m0, &m1).enumerate() {
-            self.send_view_u16(m0, self.prev_id, idx, streams).unwrap();
-            self.send_view_u16(m1, self.prev_id, idx, streams).unwrap();
+        // OTP encrypt
+        #[cfg(feature = "otp_encrypt")]
+        {
+            let m0 = m0
+                .into_iter()
+                .enumerate()
+                .map(|(idx, m0)| self.otp_encrypt_their_rng_u16(&m0, idx, streams))
+                .collect_vec();
+            let m1 = m1
+                .into_iter()
+                .enumerate()
+                .map(|(idx, m1)| self.otp_encrypt_their_rng_u16(&m1, idx, streams))
+                .collect_vec();
+
+            result::group_start().unwrap();
+            for (idx, (m0, m1)) in izip!(&m0, &m1).enumerate() {
+                self.send(m0, self.prev_id, idx, streams).unwrap();
+                self.send(m1, self.prev_id, idx, streams).unwrap();
+            }
+            result::group_end().unwrap();
         }
-        result::group_end().unwrap();
+        #[cfg(not(feature = "otp_encrypt"))]
+        {
+            result::group_start().unwrap();
+            for (idx, (m0, m1)) in izip!(&m0, &m1).enumerate() {
+                self.send_view_u16(m0, self.prev_id, idx, streams).unwrap();
+                self.send_view_u16(m1, self.prev_id, idx, streams).unwrap();
+            }
+            result::group_end().unwrap();
+        }
 
         Buffers::return_single_buffer(&mut self.buffers.single_u16_128c_1, m0_);
         Buffers::return_single_buffer(&mut self.buffers.single_u16_128c_2, m1_);
@@ -1305,6 +1329,9 @@ impl Circuits {
         let mut m1 = Buffers::get_single_buffer_chunk(&m1_, self.chunk_size * 128);
         let mut wc = Buffers::get_single_buffer_chunk(&wc_, self.chunk_size * 128);
 
+        #[cfg(feature = "otp_encrypt")]
+        let mut send = Vec::with_capacity(inp.len());
+
         result::group_start().unwrap();
         for (idx, (m0, m1, wc)) in izip!(&mut m0, &mut m1, &mut wc).enumerate() {
             self.receive_view_u16(m0, self.next_id, idx, streams)
@@ -1316,13 +1343,28 @@ impl Circuits {
         }
         result::group_end().unwrap();
 
-        for (idx, (inp, res, m0, m1, wc)) in izip!(inp, outp.iter_mut(), &m0, &m1, &wc).enumerate()
+        for (idx, (inp, res, m0, m1, wc)) in izip!(
+            inp,
+            outp.iter_mut(),
+            m0.iter_mut(),
+            m1.iter_mut(),
+            wc.iter_mut()
+        )
+        .enumerate()
         {
             // SAFETY: Only unsafe because memory is not initialized. But, we fill
             // afterwards.
             let mut rand_ca_alloc =
                 unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
             let rand_ca = self.fill_my_rng_into_u16(&mut rand_ca_alloc, idx, streams);
+
+            // OTP decrypt
+            #[cfg(feature = "otp_encrypt")]
+            {
+                self.otp_decrypt_my_rng_u16(m0, idx, streams);
+                self.otp_decrypt_their_rng_u16(wc, idx, streams);
+                self.otp_decrypt_my_rng_u16(m1, idx, streams);
+            }
 
             let cfg = Self::launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64 * 2,
@@ -1340,22 +1382,34 @@ impl Circuits {
                             &res.a,
                             &res.b,
                             &inp.b,
-                            m0,
-                            m1,
+                            &*m0,
+                            &*m1,
                             &rand_ca,
-                            wc,
+                            &*wc,
                             2 * self.chunk_size,
                         ),
                     )
                     .unwrap();
             }
+            // OTP encrypt
+            #[cfg(feature = "otp_encrypt")]
+            send.push(self.otp_encrypt_their_rng_u16(&res.b, idx, streams));
         }
 
         // Reshare to Helper
         result::group_start().unwrap();
-        for (idx, res) in outp.iter().enumerate() {
-            self.send_view_u16(&res.b, self.prev_id, idx, streams)
-                .unwrap();
+        #[cfg(feature = "otp_encrypt")]
+        {
+            for (idx, send) in send.iter().enumerate() {
+                self.send(send, self.prev_id, idx, streams).unwrap();
+            }
+        }
+        #[cfg(not(feature = "otp_encrypt"))]
+        {
+            for (idx, res) in outp.iter().enumerate() {
+                self.send_view_u16(&res.b, self.prev_id, idx, streams)
+                    .unwrap();
+            }
         }
         result::group_end().unwrap();
 
@@ -1372,6 +1426,9 @@ impl Circuits {
     ) {
         let wc_ = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_3);
         let wc = Buffers::get_single_buffer_chunk(&wc_, self.chunk_size * 128);
+
+        #[cfg(feature = "otp_encrypt")]
+        let mut send = Vec::with_capacity(inp.len());
 
         for (idx, (inp, res, wc)) in izip!(inp, outp.iter_mut(), &wc).enumerate() {
             // SAFETY: Only unsafe because memory is not initialized. But, we fill
@@ -1414,11 +1471,24 @@ impl Circuits {
                     )
                     .unwrap();
             }
+
+            // OTP encrypt
+            #[cfg(feature = "otp_encrypt")]
+            send.push(self.otp_encrypt_my_rng_u16(wc, idx, streams));
         }
 
         result::group_start().unwrap();
-        for (idx, wc) in wc.iter().enumerate() {
-            self.send_view_u16(wc, self.next_id, idx, streams).unwrap();
+        #[cfg(feature = "otp_encrypt")]
+        {
+            for (idx, send) in send.iter().enumerate() {
+                self.send(send, self.next_id, idx, streams).unwrap();
+            }
+        }
+        #[cfg(not(feature = "otp_encrypt"))]
+        {
+            for (idx, wc) in wc.iter().enumerate() {
+                self.send_view_u16(wc, self.next_id, idx, streams).unwrap();
+            }
         }
         result::group_end().unwrap();
         result::group_start().unwrap();
@@ -1427,6 +1497,13 @@ impl Circuits {
                 .unwrap();
         }
         result::group_end().unwrap();
+        // OTP decrypt
+        #[cfg(feature = "otp_encrypt")]
+        {
+            for (idx, res) in outp.iter_mut().enumerate() {
+                self.otp_decrypt_my_rng_u16(&mut res.a, idx, streams);
+            }
+        }
 
         Buffers::return_single_buffer(&mut self.buffers.single_u16_128c_3, wc_);
     }
