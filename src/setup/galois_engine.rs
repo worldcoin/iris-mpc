@@ -1,3 +1,5 @@
+pub type CompactGaloisRingShares = Vec<Vec<u8>>;
+
 pub mod degree2 {
     use crate::setup::{
         galois::degree2::{GaloisRingElement, ShamirGaloisRingShare},

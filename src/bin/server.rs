@@ -29,10 +29,14 @@ use gpu_iris_mpc::{
         device_ptrs, device_ptrs_to_slices,
         kms_dh::derive_shared_secret,
         mmap::{read_mmap_file, write_mmap_file},
+        query_processor::CompactQuery,
         sqs::{ResultEvent, SMPCRequest, SQSMessage},
         task_monitor::TaskMonitor,
     },
-    setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
+    setup::{
+        galois_engine::{degree4::GaloisRingIrisCodeShare, CompactGaloisRingShares},
+        iris_db::db::IrisDB,
+    },
     store::Store,
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
@@ -231,7 +235,7 @@ async fn receive_batch(
     Ok(batch_query)
 }
 
-fn prepare_query_shares(shares: Vec<GaloisRingIrisCodeShare>) -> Vec<Vec<u8>> {
+fn prepare_query_shares(shares: Vec<GaloisRingIrisCodeShare>) -> CompactGaloisRingShares {
     preprocess_query(&shares.into_iter().flat_map(|e| e.coefs).collect::<Vec<_>>())
 }
 
@@ -800,23 +804,24 @@ async fn main() -> eyre::Result<()> {
         batch_times += now.elapsed();
         server_tasks.check_tasks();
 
-        let (code_query, mask_query, code_query_insert, mask_query_insert, query_store) =
-            spawn_blocking(move || {
-                // *Query* variant including Lagrange interpolation.
-                let code_query = prepare_query_shares(batch.query.code);
-                let mask_query = prepare_query_shares(batch.query.mask);
-                // *Storage* variant (no interpolation).
-                let code_query_insert = prepare_query_shares(batch.db.code);
-                let mask_query_insert = prepare_query_shares(batch.db.mask);
-                (
+        let (compact_query, query_store) = spawn_blocking(move || {
+            // *Query* variant including Lagrange interpolation.
+            let code_query = prepare_query_shares(batch.query.code);
+            let mask_query = prepare_query_shares(batch.query.mask);
+            // *Storage* variant (no interpolation).
+            let code_query_insert = prepare_query_shares(batch.db.code);
+            let mask_query_insert = prepare_query_shares(batch.db.mask);
+            (
+                CompactQuery {
                     code_query,
                     mask_query,
                     code_query_insert,
                     mask_query_insert,
-                    batch.store,
-                )
-            })
-            .await?;
+                },
+                batch.store,
+            )
+        })
+        .await?;
 
         let mut timers = vec![];
 
@@ -837,12 +842,18 @@ async fn main() -> eyre::Result<()> {
 
         // Transfer queries to device
         // TODO: free all of this!
-        let code_query = device_manager.custom_htod_transfer_query(&code_query, request_streams)?;
-        let mask_query = device_manager.htod_transfer_query(&mask_query, request_streams);
+        let code_query = device_manager
+            .custom_htod_transfer_query(&compact_query.code_query, request_streams)?;
+        let mask_query =
+            device_manager.htod_transfer_query(&compact_query.mask_query, request_streams);
         let code_query_insert =
-            device_manager.htod_transfer_query(&code_query_insert, request_streams);
+            device_manager.htod_transfer_query(&compact_query.code_query_insert, request_streams);
         let mask_query_insert =
-            device_manager.htod_transfer_query(&mask_query_insert, request_streams);
+            device_manager.htod_transfer_query(&compact_query.mask_query_insert, request_streams);
+
+        let device_compact_queries =
+            compact_query.htod_transfer(&device_manager, request_streams)?;
+
         let code_query_sums =
             codes_engine.custom_query_sums(&code_query, request_streams, request_cublas_handles);
         let mask_query_sums =
