@@ -2,6 +2,7 @@
 
 use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::{config::Region, Client};
+use axum::{routing::get, Router};
 use clap::Parser;
 use core::sync::atomic::Ordering::SeqCst;
 use cudarc::driver::{
@@ -36,6 +37,7 @@ use gpu_iris_mpc::{
     store::Store,
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
+use http::StatusCode;
 use lazy_static::lazy_static;
 use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
@@ -753,6 +755,15 @@ async fn main() -> eyre::Result<()> {
     server_tasks.check_tasks();
 
     println!("All systems ready.");
+    println!("Starting healthcheck server.");
+
+    let health_check_server_handle = Some(tokio::spawn(async move {
+        let app = Router::new().route("/health", get(|| async { (StatusCode::OK, "OK") }));
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+        axum::serve(listener, app).await.unwrap();
+
+        println!("Healthcheck server started.");
+    }));
 
     let mut total_time = Instant::now();
     let mut batch_times = Duration::from_secs(0);
@@ -1403,6 +1414,10 @@ async fn main() -> eyre::Result<()> {
     }
 
     server_tasks.check_tasks_finished();
+
+    if let Some(handle) = health_check_server_handle {
+        handle.await.unwrap();
+    }
 
     Ok(())
 }
