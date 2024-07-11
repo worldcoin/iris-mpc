@@ -61,8 +61,8 @@ fn generate_or_load_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+#[tokio::test]
+async fn e2e_test() -> Result<()> {
     let db0 = generate_or_load_db(0)?;
     let db1 = generate_or_load_db(1)?;
     let db2 = generate_or_load_db(2)?;
