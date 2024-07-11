@@ -216,6 +216,7 @@ async fn main() -> eyre::Result<()> {
 
         let now = Instant::now();
         party.compare_threshold_masked_many(&code_gpu, &mask_gpu, &streams);
+        party.synchronize_streams(&streams);
         println!("compute time: {:?}", now.elapsed());
 
         let res = party.take_result_buffer();
