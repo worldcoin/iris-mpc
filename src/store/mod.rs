@@ -1,9 +1,8 @@
+use crate::config::Config;
 use bytemuck::cast_slice;
 use eyre::{eyre, Result};
 use futures::Stream;
 use sqlx::{migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool};
-
-use crate::config::Config;
 
 const APP_NAME: &str = "SMPC";
 const POOL_SIZE: u32 = 5;
@@ -24,7 +23,7 @@ fn sql_switch_schema(schema_name: &str) -> Result<String> {
 #[derive(sqlx::FromRow, Debug, Default)]
 pub struct StoredIris {
     #[allow(dead_code)]
-    id: i64, // BIGSERIAL
+    id:   i64, // BIGSERIAL
     code: Vec<u8>, // BYTEA
     mask: Vec<u8>, // BYTEA
 }
@@ -51,11 +50,11 @@ impl Store {
             .as_ref()
             .ok_or(eyre!("Missing database config"))?;
         let schema_name = format!("{}_{}_{}", APP_NAME, config.environment, config.party_id);
-        Ok(Self::new(&db_config.url, &schema_name).await?)
+        Self::new(&db_config.url, &schema_name).await
     }
 
     pub async fn new(url: &str, schema_name: &str) -> Result<Self> {
-        let connect_sql = sql_switch_schema(&schema_name)?;
+        let connect_sql = sql_switch_schema(schema_name)?;
 
         let pool = PgPoolOptions::new()
             .max_connections(POOL_SIZE)
