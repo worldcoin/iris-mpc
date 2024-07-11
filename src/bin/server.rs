@@ -1108,10 +1108,7 @@ async fn main() -> eyre::Result<()> {
 
             let result_sizes_batch = db_sizes_batch
                 .iter()
-                .map(|&e| {
-                    println!("batch db_size: {}", e);
-                    e * QUERIES
-                })
+                .map(|&e| e * QUERIES)
                 .collect::<Vec<_>>();
 
             let mut code_dots_batch: Vec<ChunkShare<u16>> = device_ptrs_to_shares(
