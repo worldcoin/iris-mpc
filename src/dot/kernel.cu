@@ -7,7 +7,7 @@
 extern "C" __global__ void xor_assign_u8(U8 *lhs, U8 *rhs, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
-        *lhs ^= *rhs;
+        lhs[i] ^= rhs[i];
     }
 }
 
