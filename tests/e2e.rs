@@ -93,18 +93,14 @@ async fn e2e_test() -> Result<()> {
     let (tx1, rx1) = oneshot::channel();
     let (tx2, rx2) = oneshot::channel();
 
-    let device_manager0 = Arc::new(
-        DeviceManager::init_with_device_offset_and_limit(0, 2)
-            .map_err(|e| eyre::eyre!("wanted 2 devices starting at 0, only have {e}"))?,
-    );
-    let device_manager1 = Arc::new(
-        DeviceManager::init_with_device_offset_and_limit(2, 2)
-            .map_err(|e| eyre::eyre!("wanted 2 devices starting at 0, only have {e}"))?,
-    );
-    let device_manager2 = Arc::new(
-        DeviceManager::init_with_device_offset_and_limit(4, 2)
-            .map_err(|e| eyre::eyre!("wanted 2 devices starting at 0, only have {e}"))?,
-    );
+    let device_manager = DeviceManager::init();
+    let mut device_managers = device_manager
+        .split_into_n_chunks(3)
+        .expect("have at least 3 devices");
+    let device_manager2 = Arc::new(device_managers.pop().unwrap());
+    let device_manager1 = Arc::new(device_managers.pop().unwrap());
+    let device_manager0 = Arc::new(device_managers.pop().unwrap());
+
     let actor0_task = tokio::task::spawn_blocking(move || {
         let actor = match ServerActor::new_with_device_manager(
             0,
