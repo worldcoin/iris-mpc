@@ -872,66 +872,66 @@ async fn main() -> eyre::Result<()> {
 
         // ---- START BATCH DEDUP ----
 
-        batch_codes_engine.dot(
-            &code_query,
-            &code_query_insert,
-            &query_db_size,
-            0,
-            request_streams,
-            request_cublas_handles,
-        );
+        // batch_codes_engine.dot(
+        //     &code_query,
+        //     &code_query_insert,
+        //     &query_db_size,
+        //     0,
+        //     request_streams,
+        //     request_cublas_handles,
+        // );
 
-        batch_masks_engine.dot(
-            &mask_query,
-            &mask_query_insert,
-            &query_db_size,
-            0,
-            request_streams,
-            request_cublas_handles,
-        );
+        // batch_masks_engine.dot(
+        //     &mask_query,
+        //     &mask_query_insert,
+        //     &query_db_size,
+        //     0,
+        //     request_streams,
+        //     request_cublas_handles,
+        // );
 
-        batch_codes_engine.dot_reduce(
-            &code_query_sums,
-            &code_query_insert_sums,
-            &query_db_size,
-            &query_db_size,
-            0,
-            request_streams,
-        );
+        // batch_codes_engine.dot_reduce(
+        //     &code_query_sums,
+        //     &code_query_insert_sums,
+        //     &query_db_size,
+        //     &query_db_size,
+        //     0,
+        //     request_streams,
+        // );
 
-        batch_masks_engine.dot_reduce(
-            &mask_query_sums,
-            &mask_query_insert_sums,
-            &query_db_size,
-            &query_db_size,
-            0,
-            request_streams,
-        );
+        // batch_masks_engine.dot_reduce(
+        //     &mask_query_sums,
+        //     &mask_query_insert_sums,
+        //     &query_db_size,
+        //     &query_db_size,
+        //     0,
+        //     request_streams,
+        // );
 
-        batch_codes_engine.reshare_results(&query_db_size, request_streams);
-        batch_masks_engine.reshare_results(&query_db_size, request_streams);
+        // batch_codes_engine.reshare_results(&query_db_size, request_streams);
+        // batch_masks_engine.reshare_results(&query_db_size, request_streams);
 
-        let db_sizes_batch = vec![QUERIES; device_manager.device_count()];
-        let mut code_dots_batch = batch_codes_engine.result_chunk_shares(&db_sizes_batch);
-        let mut mask_dots_batch = batch_masks_engine.result_chunk_shares(&db_sizes_batch);
-        phase2_batch.compare_threshold_masked_many(
-            &code_dots_batch,
-            &mask_dots_batch,
-            &request_streams,
-        );
-        let res = phase2_batch.take_result_buffer();
-        let chunk_size = phase2_batch.chunk_size();
-        open(
-            &mut phase2_batch,
-            &res,
-            &distance_comparator.lock().unwrap(),
-            &request_results_batch,
-            chunk_size,
-            &db_sizes_batch,
-            0,
-            &request_streams,
-        );
-        phase2_batch.return_result_buffer(res);
+        // let db_sizes_batch = vec![QUERIES; device_manager.device_count()];
+        // let mut code_dots_batch = batch_codes_engine.result_chunk_shares(&db_sizes_batch);
+        // let mut mask_dots_batch = batch_masks_engine.result_chunk_shares(&db_sizes_batch);
+        // phase2_batch.compare_threshold_masked_many(
+        //     &code_dots_batch,
+        //     &mask_dots_batch,
+        //     &request_streams,
+        // );
+        // let res = phase2_batch.take_result_buffer();
+        // let chunk_size = phase2_batch.chunk_size();
+        // open(
+        //     &mut phase2_batch,
+        //     &res,
+        //     &distance_comparator.lock().unwrap(),
+        //     &request_results_batch,
+        //     chunk_size,
+        //     &db_sizes_batch,
+        //     0,
+        //     &request_streams,
+        // );
+        // phase2_batch.return_result_buffer(res);
 
         // ---- END BATCH DEDUP ----
         let mut db_idx = 0;
