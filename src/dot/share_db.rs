@@ -764,7 +764,7 @@ impl ShareDB {
         #[cfg(feature = "otp_encrypt")]
         for idx in 0..self.device_manager.device_count() {
             let len = db_sizes[idx] * self.query_length * 2;
-            // self.otp_decrypt_rng_result(len, idx, streams);
+            self.otp_decrypt_rng_result(len, idx, streams);
         }
     }
 
