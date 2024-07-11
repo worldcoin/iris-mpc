@@ -5,11 +5,7 @@ use crate::{
 };
 use cudarc::{
     cublas::CudaBlas,
-    driver::{
-        result::{malloc_async, memcpy_htod_async},
-        sys::CUdeviceptr,
-        CudaSlice, CudaStream,
-    },
+    driver::{sys::CUdeviceptr, CudaSlice, CudaStream},
 };
 
 pub type CudaSliceTuple = (Vec<CudaSlice<u8>>, Vec<CudaSlice<u8>>);

@@ -11,14 +11,12 @@ use axum::{routing::get, Router};
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
-        result::malloc_async,
-        sys::{CUDA_ARRAY3D_DESCRIPTOR_v2, CUdeviceptr},
-        CudaFunction, CudaSlice, CudaStream, DevicePtr, LaunchAsync, LaunchConfig,
+        result::malloc_async, sys::CUdeviceptr, CudaFunction, CudaSlice, CudaStream, DevicePtr,
+        LaunchAsync, LaunchConfig,
     },
     nccl::{self, result, Comm, Id, NcclType},
     nvrtc::compile_ptx,
 };
-use ndarray::Slice;
 use rayon::prelude::*;
 use std::{ffi::c_void, mem, str::FromStr, sync::Arc, thread, time::Duration};
 use tokio::task::{AbortHandle, JoinSet};

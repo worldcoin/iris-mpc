@@ -239,22 +239,6 @@ fn prepare_query_shares(shares: Vec<GaloisRingIrisCodeShare>) -> CompactGaloisRi
     preprocess_query(&shares.into_iter().flat_map(|e| e.coefs).collect::<Vec<_>>())
 }
 
-#[allow(clippy::type_complexity)]
-fn slice_tuples_to_ptrs(
-    tuple: &(
-        (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
-        (Vec<CudaSlice<u32>>, Vec<CudaSlice<u32>>),
-    ),
-) -> (
-    (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
-    (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
-) {
-    (
-        (device_ptrs(&tuple.0 .0), device_ptrs(&tuple.0 .1)),
-        (device_ptrs(&tuple.1 .0), device_ptrs(&tuple.1 .1)),
-    )
-}
-
 fn open(
     party: &mut Circuits,
     x: &[ChunkShare<u64>],
