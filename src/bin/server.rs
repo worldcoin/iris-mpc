@@ -637,8 +637,7 @@ async fn main() -> eyre::Result<()> {
     server_tasks.check_tasks();
 
     // Phase 2 Setup
-    let phase2_chunk_size =
-        (QUERIES * DB_CHUNK_SIZE).div_ceil(2048) * 2048;
+    let phase2_chunk_size: usize = QUERIES * DB_CHUNK_SIZE;
     let phase2_chunk_size_max =
         (QUERIES * (DB_SIZE + DB_BUFFER) / device_manager.device_count()).div_ceil(2048) * 2048;
     let phase2_batch_chunk_size = (QUERIES * QUERIES).div_ceil(2048) * 2048;
