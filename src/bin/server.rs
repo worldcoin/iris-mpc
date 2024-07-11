@@ -4,7 +4,6 @@ use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{routing::get, Router};
 use clap::Parser;
-use eyre::Context;
 use core::sync::atomic::Ordering::SeqCst;
 use cudarc::driver::{
     result::{
@@ -15,6 +14,7 @@ use cudarc::driver::{
     sys::{CUdeviceptr, CUstream, CUstream_st},
     CudaDevice, CudaSlice, CudaStream,
 };
+use eyre::Context;
 use gpu_iris_mpc::{
     config::{Config, Opt, ServersConfig},
     dot::{

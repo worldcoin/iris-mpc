@@ -1,11 +1,10 @@
 //! Long-running async task monitoring.
 
+use eyre::Result;
 use std::{
     ops::{Deref, DerefMut},
     panic,
 };
-
-use eyre::Result;
 use tokio::task::{JoinError, JoinSet};
 
 /// A long-running async task monitor which checks all its tasks for panics or
@@ -134,20 +133,23 @@ impl TaskMonitor {
             Self::resume_panic(finished_task);
         }
 
-        // If this assertion triggers, there could be a bug in JoinSet::join_next(), or we could be
-        // (incorrectly and unsafely) adding tasks while waiting for them to finish.  
+        // If this assertion triggers, there could be a bug in JoinSet::join_next(), or
+        // we could be (incorrectly and unsafely) adding tasks while waiting for
+        // them to finish.
         assert!(self.tasks.is_empty());
     }
 
     /// If `result` is a task panic, resume that panic.
     /// If `result` is an `eyre::Report`, panic with that error.
-    /// 
+    ///
     /// Ignores `Ok` task exits and cancelled tasks.
     #[track_caller]
     pub fn resume_panic(result: Result<Result<()>, JoinError>) {
         match result {
-            Err(join_err) => if !join_err.is_cancelled() {
-                panic::resume_unwind(join_err.into_panic());
+            Err(join_err) => {
+                if !join_err.is_cancelled() {
+                    panic::resume_unwind(join_err.into_panic());
+                }
             }
             Ok(Err(report_err)) => panic!("{:?}", report_err),
             Ok(Ok(())) => { /* Task finished with Ok or was cancelled */ }
