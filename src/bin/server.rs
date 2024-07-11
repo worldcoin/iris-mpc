@@ -1084,8 +1084,7 @@ async fn main() -> eyre::Result<()> {
                 .iter()
                 .map(|e| {
                     let db_size = *e.lock().unwrap();
-                    println!("db_size: {}", db_size);
-                    (db_size * QUERIES, db_size)
+                    ((db_size * QUERIES).div_ceil(64) * 64, db_size)
                 })
                 .unzip();
 
