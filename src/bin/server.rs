@@ -471,6 +471,8 @@ async fn main() -> eyre::Result<()> {
         TracingShutdownHandle
     };
 
+    let store = Store::new_from_config(&config).await?;
+
     let Config {
         path,
         party_id,
@@ -488,7 +490,6 @@ async fn main() -> eyre::Result<()> {
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);
-    let store = Store::new_from_env().await?;
 
     // Init RNGs
     let own_key_id = kms_key_ids

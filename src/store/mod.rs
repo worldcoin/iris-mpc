@@ -2,14 +2,10 @@ use bytemuck::cast_slice;
 use eyre::{eyre, Result};
 use futures::Stream;
 use sqlx::{migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool};
-use std::env;
 
-// Environment variables.
-const DATABASE_URL: &str = "DATABASE_URL";
-const ENVIRONMENT: &str = "SMPC__ENVIRONMENT";
-const PARTY_ID: &str = "SMPC__PARTY_ID";
+use crate::config::Config;
 
-const SCHEMA_PREFIX: &str = "smpc";
+const APP_NAME: &str = "SMPC";
 const POOL_SIZE: u32 = 5;
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
@@ -48,20 +44,14 @@ pub struct Store {
 }
 
 impl Store {
-    /// Connect to a database based on env-vars DATABASE_URL, SMPC__ENVIRONMENT, and SMPC__PARTY_ID.
-    pub async fn new_from_env() -> Result<Self> {
-        Ok(Self::new(&Self::env_url()?, &Self::env_schema_name()?).await?)
-    }
-
-    fn env_url() -> Result<String> {
-        env::var(DATABASE_URL).map_err(|_| eyre!("Missing env-var {}", DATABASE_URL))
-    }
-
-    fn env_schema_name() -> Result<String> {
-        let environment =
-            env::var(ENVIRONMENT).map_err(|_| eyre!("Missing env-var {}", ENVIRONMENT))?;
-        let party_id = env::var(PARTY_ID).map_err(|_| eyre!("Missing env-var {}", PARTY_ID))?;
-        Ok(format!("{}_{}_{}", SCHEMA_PREFIX, environment, party_id))
+    /// Connect to a database based on Config URL, environment, and party_id.
+    pub async fn new_from_config(config: &Config) -> Result<Self> {
+        let db_config = config
+            .database
+            .as_ref()
+            .ok_or(eyre!("Missing database config"))?;
+        let schema_name = format!("{}_{}_{}", APP_NAME, config.environment, config.party_id);
+        Ok(Self::new(&db_config.url, &schema_name).await?)
     }
 
     pub async fn new(url: &str, schema_name: &str) -> Result<Self> {
@@ -125,12 +115,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_store() -> Result<()> {
-        dotenvy::from_filename(DOTENV_TEST)?;
-
         // Create a unique schema for this test.
         let schema_name = temporary_name();
-
-        let store = Store::new(&Store::env_url()?, &schema_name).await?;
+        let store = Store::new(&test_db_url()?, &schema_name).await?;
 
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), 0);
@@ -158,9 +145,8 @@ mod tests {
     async fn test_insert_many() -> Result<()> {
         let count = 1 << 14;
 
-        dotenvy::from_filename(DOTENV_TEST)?;
         let schema_name = temporary_name();
-        let store = Store::new(&Store::env_url()?, &schema_name).await?;
+        let store = Store::new(&test_db_url()?, &schema_name).await?;
 
         let codes_and_masks = vec![(&[123 as u16; 12800][..], &[456 as u16; 12800][..]); count];
         store.insert_irises(&codes_and_masks).await?;
@@ -172,12 +158,12 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_env_vars() -> Result<()> {
+    fn test_db_url() -> Result<String> {
         dotenvy::from_filename(DOTENV_TEST)?;
-        assert!(Store::env_url()?.starts_with("postgres://"));
-        assert!(Store::env_schema_name()?.starts_with(&format!("{}_test", SCHEMA_PREFIX)));
-        Ok(())
+        Ok(Config::load_config(APP_NAME)?
+            .database
+            .ok_or(eyre!("Missing database config"))?
+            .url)
     }
 
     fn temporary_name() -> String {
