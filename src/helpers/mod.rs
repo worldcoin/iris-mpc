@@ -1,6 +1,7 @@
+use crate::threshold_ring::protocol::ChunkShare;
 use cudarc::driver::{
-    result::{memcpy_dtoh_async, memcpy_htod_async, stream},
-    sys::CUdeviceptr,
+    result::{self, memcpy_dtoh_async, memcpy_htod_async, stream},
+    sys::{CUdeviceptr, CUstream, CUstream_st},
     CudaDevice, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceRepr, DriverError,
 };
 use std::sync::Arc;
@@ -32,6 +33,66 @@ pub fn device_ptrs_to_slices<T>(
             host_buf:      None,
         })
         .collect()
+}
+
+#[allow(clippy::type_complexity)]
+pub fn slice_tuples_to_ptrs(
+    tuple: &(
+        (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
+        (Vec<CudaSlice<u32>>, Vec<CudaSlice<u32>>),
+    ),
+) -> (
+    (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
+    (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
+) {
+    (
+        (device_ptrs(&tuple.0 .0), device_ptrs(&tuple.0 .1)),
+        (device_ptrs(&tuple.1 .0), device_ptrs(&tuple.1 .1)),
+    )
+}
+
+pub fn await_streams(streams: &mut [&mut CUstream_st]) {
+    for i in 0..streams.len() {
+        // SAFETY: these streams have already been created, and the caller holds a
+        // reference to their CudaDevice, which makes sure they aren't dropped.
+        unsafe {
+            stream::synchronize(streams[i]).unwrap();
+        }
+    }
+}
+
+pub fn device_ptrs_to_shares<T>(
+    a: &[CUdeviceptr],
+    b: &[CUdeviceptr],
+    lens: &[usize],
+    devs: &[Arc<CudaDevice>],
+) -> Vec<ChunkShare<T>> {
+    let a = device_ptrs_to_slices(a, lens, devs);
+    let b = device_ptrs_to_slices(b, lens, devs);
+
+    a.into_iter()
+        .zip(b)
+        .map(|(a, b)| ChunkShare::new(a, b))
+        .collect::<Vec<_>>()
+}
+
+pub fn dtod_at_offset(
+    dst: CUdeviceptr,
+    dst_offset: usize,
+    src: CUdeviceptr,
+    src_offset: usize,
+    len: usize,
+    stream_ptr: CUstream,
+) {
+    unsafe {
+        result::memcpy_dtod_async(
+            dst + dst_offset as CUdeviceptr,
+            src + src_offset as CUdeviceptr,
+            len,
+            stream_ptr,
+        )
+        .unwrap();
+    }
 }
 
 pub fn dtoh_on_stream_sync<T: Default + Clone, U: DevicePtr<T>>(

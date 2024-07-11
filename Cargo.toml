@@ -49,6 +49,7 @@ uuid = { version = "1.10.0", features = ["v4"] }
 tracing = "0.1.40"
 dotenvy = "0.15.7"
 static_assertions = "1.1.0"
+futures = "0.3.30"
 
 [dev-dependencies]
 criterion = "0.5"
