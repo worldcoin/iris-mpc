@@ -8,12 +8,12 @@ use crate::{
 };
 use axum::{routing::get, Router};
 #[cfg(feature = "otp_encrypt")]
-use cudarc::driver::CudaView;
+use cudarc::driver::{CudaView, DeviceSlice};
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
         result::malloc_async, sys::CUdeviceptr, CudaFunction, CudaSlice, CudaStream, DevicePtr,
-        DeviceSlice, LaunchAsync, LaunchConfig,
+        LaunchAsync, LaunchConfig,
     },
     nccl::{self, result, Comm, Id, NcclType},
     nvrtc::compile_ptx,
