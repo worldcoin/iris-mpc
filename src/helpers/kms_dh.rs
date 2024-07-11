@@ -29,13 +29,3 @@ pub async fn derive_shared_secret(own_key_id: &str, other_key_id: &str) -> eyre:
 
     Ok(array)
 }
-
-async fn get_public_key(key_id: &str) -> eyre::Result<String> {
-    let shared_config = aws_config::from_env().load().await;
-
-    let client = Client::new(&shared_config);
-
-    let res = client.get_public_key().key_id(key_id).send().await?;
-
-    Ok(BASE64_STANDARD.encode(res.public_key().context("No public key found")?))
-}
