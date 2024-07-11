@@ -613,7 +613,7 @@ async fn main() -> eyre::Result<()> {
     let mut batch_codes_engine = ShareDB::init(
         party_id,
         device_manager.clone(),
-        QUERIES * device_manager.device_count(),
+        QUERIES,
         QUERIES,
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
@@ -626,7 +626,7 @@ async fn main() -> eyre::Result<()> {
     let mut batch_masks_engine = ShareDB::init(
         party_id,
         device_manager.clone(),
-        QUERIES * device_manager.device_count(),
+        QUERIES,
         QUERIES,
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
