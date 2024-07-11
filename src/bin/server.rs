@@ -635,17 +635,23 @@ async fn main() -> eyre::Result<()> {
     server_tasks.check_tasks();
 
     // Phase 2 Setup
-    let phase2_chunk_size =
-        (QUERIES * DB_SIZE / device_manager.device_count()).div_ceil(2048) * 2048;
-    let phase2_chunk_size_max =
-        (QUERIES * (DB_SIZE + DB_BUFFER) / device_manager.device_count()).div_ceil(2048) * 2048;
+    let phase2_chunk_size = QUERIES * DB_SIZE / device_manager.device_count();
+    let phase2_chunk_size_max = QUERIES * (DB_SIZE + DB_BUFFER) / device_manager.device_count();
 
     // Not divided by GPU_COUNT since we do the work on all GPUs for simplicity,
     // also not padded to 2048 since we only require it to be a multiple of 64
     let phase2_batch_chunk_size = QUERIES * QUERIES;
     assert!(
         phase2_batch_chunk_size % 64 == 0,
-        "Batch chunk size must be a multiple of 64"
+        "Phase2 batch chunk size must be a multiple of 64"
+    );
+    assert!(
+        phase2_chunk_size % 64 == 0,
+        "Phase2 chunk size must be a multiple of 64"
+    );
+    assert!(
+        phase2_chunk_size_max % 64 == 0,
+        "Phase2 MAX chunk size must be a multiple of 64"
     );
 
     let phase2_batch = Arc::new(Mutex::new(Circuits::new(
@@ -1311,7 +1317,7 @@ async fn main() -> eyre::Result<()> {
                     .map(|e| *e.lock().unwrap())
                     .max()
                     .unwrap();
-                let new_chunk_size = (QUERIES * max_db_size).div_ceil(2048) * 2048;
+                let new_chunk_size = (QUERIES * max_db_size).div_ceil(64) * 64;
                 assert!(new_chunk_size <= phase2_chunk_size_max);
                 thread_phase2.set_chunk_size(new_chunk_size / 64);
 
