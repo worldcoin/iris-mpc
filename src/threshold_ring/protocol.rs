@@ -73,12 +73,12 @@ impl<T> ChunkShare<T> {
     }
 
     pub fn is_empty(&self) -> bool {
-        debug_assert_eq!(self.a.is_empty(), self.b.is_empty());
+        assert_eq!(self.a.is_empty(), self.b.is_empty());
         self.a.is_empty()
     }
 
     pub fn len(&self) -> usize {
-        debug_assert_eq!(self.a.len(), self.b.len());
+        assert_eq!(self.a.len(), self.b.len());
         self.a.len()
     }
 }
@@ -104,12 +104,12 @@ impl<'a, T> ChunkShareView<'a, T> {
     }
 
     pub fn is_empty(&self) -> bool {
-        debug_assert_eq!(self.a.is_empty(), self.b.is_empty());
+        assert_eq!(self.a.is_empty(), self.b.is_empty());
         self.a.is_empty()
     }
 
     pub fn len(&self) -> usize {
-        debug_assert_eq!(self.a.len(), self.b.len());
+        assert_eq!(self.a.len(), self.b.len());
         self.a.len()
     }
 }
@@ -276,7 +276,7 @@ impl Buffers {
     }
 
     fn take_buffer<T>(inp: &mut Option<Vec<ChunkShare<T>>>) -> Vec<ChunkShare<T>> {
-        debug_assert!(inp.is_some());
+        assert!(inp.is_some());
         std::mem::take(inp).unwrap()
     }
 
@@ -289,12 +289,12 @@ impl Buffers {
     }
 
     fn return_buffer<T>(des: &mut Option<Vec<ChunkShare<T>>>, src: Vec<ChunkShare<T>>) {
-        debug_assert!(des.is_none());
+        assert!(des.is_none());
         *des = Some(src);
     }
 
     fn take_single_buffer<T>(inp: &mut Option<Vec<CudaSlice<T>>>) -> Vec<CudaSlice<T>> {
-        debug_assert!(inp.is_some());
+        assert!(inp.is_some());
         std::mem::take(inp).unwrap()
     }
 
@@ -307,21 +307,21 @@ impl Buffers {
     }
 
     fn return_single_buffer<T>(des: &mut Option<Vec<CudaSlice<T>>>, src: Vec<CudaSlice<T>>) {
-        debug_assert!(des.is_none());
+        assert!(des.is_none());
         *des = Some(src);
     }
 
     fn check_buffers(&self) {
-        debug_assert!(self.u32_64c_1.is_some());
-        debug_assert!(self.u64_32c_1.is_some());
-        debug_assert!(self.u64_32c_2.is_some());
-        debug_assert!(self.u64_32c_3.is_some());
-        debug_assert!(self.u64_31c_1.is_some());
-        debug_assert!(self.u64_31c_2.is_some());
-        debug_assert!(self.u16_128c_1.is_some());
-        debug_assert!(self.single_u16_128c_1.is_some());
-        debug_assert!(self.single_u16_128c_2.is_some());
-        debug_assert!(self.single_u16_128c_3.is_some());
+        assert!(self.u32_64c_1.is_some());
+        assert!(self.u64_32c_1.is_some());
+        assert!(self.u64_32c_2.is_some());
+        assert!(self.u64_32c_3.is_some());
+        assert!(self.u64_31c_1.is_some());
+        assert!(self.u64_31c_2.is_some());
+        assert!(self.u16_128c_1.is_some());
+        assert!(self.single_u16_128c_1.is_some());
+        assert!(self.single_u16_128c_2.is_some());
+        assert!(self.single_u16_128c_3.is_some());
     }
 }
 
@@ -774,7 +774,7 @@ impl Circuits {
         idx: usize,
         streams: &[CudaStream],
     ) {
-        debug_assert_eq!(src.len(), des.len());
+        assert_eq!(src.len(), des.len());
         let cfg = Self::launch_config_from_elements_and_threads(
             src.len() as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
@@ -862,7 +862,7 @@ impl Circuits {
         bits: usize,
         streams: &[CudaStream],
     ) {
-        debug_assert_eq!(res.len(), self.n_devices);
+        assert_eq!(res.len(), self.n_devices);
 
         result::group_start().unwrap();
         for (idx, res) in res.iter().enumerate() {
@@ -880,7 +880,7 @@ impl Circuits {
         bits: usize,
         streams: &[CudaStream],
     ) {
-        debug_assert_eq!(res.len(), self.n_devices);
+        assert_eq!(res.len(), self.n_devices);
 
         result::group_start().unwrap();
         for (idx, res) in res.iter().enumerate() {
@@ -893,7 +893,7 @@ impl Circuits {
     }
 
     fn send_receive_view(&mut self, res: &mut [ChunkShareView<u64>], streams: &[CudaStream]) {
-        debug_assert_eq!(res.len(), self.n_devices);
+        assert_eq!(res.len(), self.n_devices);
 
         result::group_start().unwrap();
         for (idx, res) in res.iter().enumerate() {
@@ -1232,8 +1232,8 @@ impl Circuits {
         bitlen: usize,
         streams: &[CudaStream],
     ) {
-        debug_assert_eq!(self.n_devices, inp.len());
-        debug_assert_eq!(self.n_devices, outp.len());
+        assert_eq!(self.n_devices, inp.len());
+        assert_eq!(self.n_devices, outp.len());
 
         let cfg = Self::launch_config_from_elements_and_threads(
             self.chunk_size as u32 * 2,
@@ -1269,8 +1269,8 @@ impl Circuits {
         bitlen: usize,
         streams: &[CudaStream],
     ) {
-        debug_assert_eq!(self.n_devices, inp.len());
-        debug_assert_eq!(self.n_devices, outp.len());
+        assert_eq!(self.n_devices, inp.len());
+        assert_eq!(self.n_devices, outp.len());
 
         let cfg = Self::launch_config_from_elements_and_threads(
             self.chunk_size as u32 * 2,
@@ -1387,9 +1387,9 @@ impl Circuits {
         code: &[ChunkShare<u16>],
         streams: &[CudaStream],
     ) {
-        debug_assert_eq!(self.n_devices, mask_lifted.len());
-        debug_assert_eq!(self.n_devices, mask_correction.len());
-        debug_assert_eq!(self.n_devices, code.len());
+        assert_eq!(self.n_devices, mask_lifted.len());
+        assert_eq!(self.n_devices, mask_correction.len());
+        assert_eq!(self.n_devices, code.len());
 
         for (idx, (m, mc, c)) in izip!(mask_lifted, mask_correction, code).enumerate() {
             let cfg = Self::launch_config_from_elements_and_threads(
@@ -1466,10 +1466,10 @@ impl Circuits {
         streams: &[CudaStream],
     ) {
         const K: usize = 16;
-        debug_assert_eq!(self.n_devices, c.len());
-        debug_assert_eq!(self.n_devices, x1.len());
-        debug_assert_eq!(self.n_devices, x2.len());
-        debug_assert_eq!(self.n_devices, x3.len());
+        assert_eq!(self.n_devices, c.len());
+        assert_eq!(self.n_devices, x1.len());
+        assert_eq!(self.n_devices, x2.len());
+        assert_eq!(self.n_devices, x3.len());
 
         // Reuse buffer
         let mut s = Vec::with_capacity(self.n_devices);
@@ -1615,9 +1615,9 @@ impl Circuits {
         x3: &mut [ChunkShareView<u64>],
         streams: &[CudaStream],
     ) {
-        debug_assert_eq!(self.n_devices, x1.len());
-        debug_assert_eq!(self.n_devices, x2.len());
-        debug_assert_eq!(self.n_devices, x3.len());
+        assert_eq!(self.n_devices, x1.len());
+        assert_eq!(self.n_devices, x2.len());
+        assert_eq!(self.n_devices, x3.len());
 
         let s_ = Buffers::take_buffer(&mut self.buffers.u64_31c_1);
         let carry_ = Buffers::take_buffer(&mut self.buffers.u64_31c_2);
@@ -1723,8 +1723,8 @@ impl Circuits {
     // Input has size ChunkSize
     // Result is in lowest u64 of the input
     fn or_tree_on_gpus(&mut self, bits: &mut [ChunkShareView<u64>], streams: &[CudaStream]) {
-        debug_assert_eq!(self.n_devices, bits.len());
-        debug_assert!(self.chunk_size <= bits[0].len());
+        assert_eq!(self.n_devices, bits.len());
+        assert!(self.chunk_size <= bits[0].len());
 
         let mut num = self.chunk_size;
         while num > 1 {
@@ -1768,8 +1768,8 @@ impl Circuits {
         idx: usize,
         streams: &[CudaStream],
     ) {
-        debug_assert_eq!(self.n_devices, bits.len());
-        debug_assert!(size <= bits[idx].len());
+        assert_eq!(self.n_devices, bits.len());
+        assert!(size <= bits[idx].len());
 
         let bit = &mut bits[idx];
 
@@ -1800,7 +1800,7 @@ impl Circuits {
     }
 
     fn collect_graphic_result(&mut self, bits: &mut [ChunkShareView<u64>], streams: &[CudaStream]) {
-        debug_assert!(self.n_devices <= self.chunk_size);
+        assert!(self.n_devices <= self.chunk_size);
         let dev0 = &self.devs[0];
         let stream0 = &streams[0];
         let bit0 = &bits[0];
@@ -1899,10 +1899,10 @@ impl Circuits {
         mask_dots: &[ChunkShare<u16>],
         streams: &[CudaStream],
     ) {
-        debug_assert_eq!(self.n_devices, code_dots.len());
-        debug_assert_eq!(self.n_devices, mask_dots.len());
+        assert_eq!(self.n_devices, code_dots.len());
+        assert_eq!(self.n_devices, mask_dots.len());
         for chunk in code_dots.iter().chain(mask_dots.iter()) {
-            debug_assert!(chunk.len() % 64 == 0);
+            assert!(chunk.len() % 64 == 0);
         }
 
         let x_ = Buffers::take_buffer(&mut self.buffers.u32_64c_1);
