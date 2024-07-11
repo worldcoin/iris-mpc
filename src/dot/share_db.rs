@@ -681,7 +681,7 @@ impl ShareDB {
         idx: usize,
         streams: &[CudaStream],
     ) -> CudaSlice<u32> {
-        debug_assert_eq!(len & 3, 0);
+        assert_eq!(len & 3, 0);
         let mut rand = unsafe {
             self.device_manager
                 .device(idx)
@@ -701,7 +701,7 @@ impl ShareDB {
 
     #[cfg(feature = "otp_encrypt")]
     fn otp_decrypt_rng_result(&mut self, len: usize, idx: usize, streams: &[CudaStream]) {
-        debug_assert_eq!(len & 3, 0);
+        assert_eq!(len & 3, 0);
         let mut rand = unsafe {
             self.device_manager
                 .device(idx)
