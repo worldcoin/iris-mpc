@@ -1084,6 +1084,7 @@ async fn main() -> eyre::Result<()> {
                 .iter()
                 .map(|e| {
                     let db_size = *e.lock().unwrap();
+                    println!("db_size: {}", db_size);
                     (db_size * QUERIES, db_size)
                 })
                 .unzip();
@@ -1102,7 +1103,10 @@ async fn main() -> eyre::Result<()> {
 
             let result_sizes_batch = db_sizes_batch
                 .iter()
-                .map(|&e| e * QUERIES)
+                .map(|&e| {
+                    println!("batch db_size: {}", e);
+                    e * QUERIES
+                })
                 .collect::<Vec<_>>();
 
             let mut code_dots_batch: Vec<ChunkShare<u16>> = device_ptrs_to_shares(

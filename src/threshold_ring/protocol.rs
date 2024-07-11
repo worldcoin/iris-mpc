@@ -1903,7 +1903,9 @@ impl Circuits {
     ) {
         assert_eq!(self.n_devices, code_dots.len());
         assert_eq!(self.n_devices, mask_dots.len());
+        println!("Chunk size: {}", self.chunk_size);
         for chunk in code_dots.iter().chain(mask_dots.iter()) {
+            println!("Input sizes: {}", chunk.len());
             assert!(chunk.len() % 64 == 0);
         }
 
