@@ -635,16 +635,29 @@ async fn main() -> eyre::Result<()> {
     server_tasks.check_tasks();
 
     // Phase 2 Setup
-    let phase2_chunk_size =
-        (QUERIES * DB_SIZE / device_manager.device_count()).div_ceil(2048) * 2048;
-    let phase2_chunk_size_max =
-        (QUERIES * (DB_SIZE + DB_BUFFER) / device_manager.device_count()).div_ceil(2048) * 2048;
-    let phase2_batch_chunk_size = (QUERIES * QUERIES).div_ceil(2048) * 2048;
+    let phase2_chunk_size = QUERIES * DB_SIZE / device_manager.device_count();
+    let phase2_chunk_size_max = QUERIES * (DB_SIZE + DB_BUFFER) / device_manager.device_count();
+
+    // Not divided by GPU_COUNT since we do the work on all GPUs for simplicity,
+    // also not padded to 2048 since we only require it to be a multiple of 64
+    let phase2_batch_chunk_size = QUERIES * QUERIES;
+    assert!(
+        phase2_batch_chunk_size % 64 == 0,
+        "Phase2 batch chunk size must be a multiple of 64"
+    );
+    assert!(
+        phase2_chunk_size % 64 == 0,
+        "Phase2 chunk size must be a multiple of 64"
+    );
+    assert!(
+        phase2_chunk_size_max % 64 == 0,
+        "Phase2 MAX chunk size must be a multiple of 64"
+    );
 
     let phase2_batch = Arc::new(Mutex::new(Circuits::new(
         party_id,
         phase2_batch_chunk_size,
-        phase2_batch_chunk_size,
+        phase2_batch_chunk_size / 64,
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
         Some(phase_2_batch_port),
@@ -1077,7 +1090,7 @@ async fn main() -> eyre::Result<()> {
                 .iter()
                 .map(|e| {
                     let db_size = *e.lock().unwrap();
-                    (db_size * QUERIES, db_size)
+                    ((db_size * QUERIES).div_ceil(64) * 64, db_size)
                 })
                 .unzip();
 
@@ -1301,7 +1314,7 @@ async fn main() -> eyre::Result<()> {
                     .map(|e| *e.lock().unwrap())
                     .max()
                     .unwrap();
-                let new_chunk_size = (QUERIES * max_db_size).div_ceil(2048) * 2048;
+                let new_chunk_size = (QUERIES * max_db_size).div_ceil(64) * 64;
                 assert!(new_chunk_size <= phase2_chunk_size_max);
                 thread_phase2.set_chunk_size(new_chunk_size / 64);
 
