@@ -1,6 +1,4 @@
 use aws_sdk_kms::{types::KeyAgreementAlgorithmSpec, Client};
-use base64::{prelude::BASE64_STANDARD, Engine};
-use eyre::ContextCompat;
 
 /// Derive a shared secret from two KMS keys
 pub async fn derive_shared_secret(own_key_id: &str, other_key_id: &str) -> eyre::Result<[u8; 32]> {
