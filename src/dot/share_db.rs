@@ -539,7 +539,7 @@ impl ShareDB {
                         (offset * IRIS_CODE_LENGTH) as u64,
                         0,
                         0,
-                        chunk_sizes[idx],
+                        1000,
                         self.query_length,
                         IRIS_CODE_LENGTH,
                         1 << 8 * (i + j),
