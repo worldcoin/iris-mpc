@@ -76,7 +76,12 @@ pub fn device_ptrs_to_shares<T>(
         .collect::<Vec<_>>()
 }
 
-pub fn dtod_at_offset(
+/// Copy a slice between on-device buffers with respective offsets.
+/// # Safety
+///
+/// The caller must ensure that the `dst` and `src` pointers are valid
+/// with the respective offsets
+pub unsafe fn dtod_at_offset(
     dst: CUdeviceptr,
     dst_offset: usize,
     src: CUdeviceptr,

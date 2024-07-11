@@ -94,6 +94,11 @@ const MAX_CONCURRENT_BATCHES: usize = 2;
 
 const QUERIES: usize = ROTATIONS * N_QUERIES;
 
+type DbSlices = (
+    (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
+    (Vec<CudaSlice<u32>>, Vec<CudaSlice<u32>>),
+);
+
 pub struct ServerActor {
     job_queue: mpsc::Receiver<ServerJob>,
     device_manager: Arc<DeviceManager>,
@@ -107,14 +112,8 @@ pub struct ServerActor {
     phase2_batch: Arc<Mutex<Circuits>>,
     distance_comparator: Arc<Mutex<DistanceComparator>>,
     // DB slices
-    code_db_slices: (
-        (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
-        (Vec<CudaSlice<u32>>, Vec<CudaSlice<u32>>),
-    ),
-    mask_db_slices: (
-        (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
-        (Vec<CudaSlice<u32>>, Vec<CudaSlice<u32>>),
-    ),
+    code_db_slices: DbSlices,
+    mask_db_slices: DbSlices,
     streams: Vec<Vec<CudaStream>>,
     cublas_handles: Vec<Vec<CudaBlas>>,
     results: Vec<Vec<CudaSlice<u32>>>,
@@ -221,8 +220,8 @@ impl ServerActor {
         );
         server_tasks.check_tasks();
 
-        let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE, DB_SIZE + DB_BUFFER, true);
-        let mask_db_slices = masks_engine.load_db(&masks_db, DB_SIZE, DB_SIZE + DB_BUFFER, true);
+        let code_db_slices = codes_engine.load_db(codes_db, DB_SIZE, DB_SIZE + DB_BUFFER, true);
+        let mask_db_slices = masks_engine.load_db(masks_db, DB_SIZE, DB_SIZE + DB_BUFFER, true);
 
         // Engines for inflight queries
         let batch_codes_engine = ShareDB::init(
@@ -879,43 +878,49 @@ impl ServerActor {
                             &mask_query_insert_sums,
                         ),
                     ] {
-                        helpers::dtod_at_offset(
-                            db.0 .0[i],
-                            old_db_size * IRIS_CODE_LENGTH,
-                            query.0[i],
-                            IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                            IRIS_CODE_LENGTH,
-                            phase2_streams[i].stream,
-                        );
+                        // SAFETY: the pointers are valid, and the streams are valid. and we only
+                        // call this block on one thread at a time.
+                        unsafe {
+                            helpers::dtod_at_offset(
+                                db.0 .0[i],
+                                old_db_size * IRIS_CODE_LENGTH,
+                                query.0[i],
+                                IRIS_CODE_LENGTH * 15
+                                    + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                                IRIS_CODE_LENGTH,
+                                phase2_streams[i].stream,
+                            );
 
-                        helpers::dtod_at_offset(
-                            db.0 .1[i],
-                            old_db_size * IRIS_CODE_LENGTH,
-                            query.1[i],
-                            IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                            IRIS_CODE_LENGTH,
-                            phase2_streams[i].stream,
-                        );
+                            helpers::dtod_at_offset(
+                                db.0 .1[i],
+                                old_db_size * IRIS_CODE_LENGTH,
+                                query.1[i],
+                                IRIS_CODE_LENGTH * 15
+                                    + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                                IRIS_CODE_LENGTH,
+                                phase2_streams[i].stream,
+                            );
 
-                        helpers::dtod_at_offset(
-                            db.1 .0[i],
-                            old_db_size * mem::size_of::<u32>(),
-                            sums.0[i],
-                            mem::size_of::<u32>() * 15
-                                + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                            mem::size_of::<u32>(),
-                            phase2_streams[i].stream,
-                        );
+                            helpers::dtod_at_offset(
+                                db.1 .0[i],
+                                old_db_size * mem::size_of::<u32>(),
+                                sums.0[i],
+                                mem::size_of::<u32>() * 15
+                                    + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                                mem::size_of::<u32>(),
+                                phase2_streams[i].stream,
+                            );
 
-                        helpers::dtod_at_offset(
-                            db.1 .1[i],
-                            old_db_size * mem::size_of::<u32>(),
-                            sums.1[i],
-                            mem::size_of::<u32>() * 15
-                                + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                            mem::size_of::<u32>(),
-                            phase2_streams[i].stream,
-                        );
+                            helpers::dtod_at_offset(
+                                db.1 .1[i],
+                                old_db_size * mem::size_of::<u32>(),
+                                sums.1[i],
+                                mem::size_of::<u32>() * 15
+                                    + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                                mem::size_of::<u32>(),
+                                phase2_streams[i].stream,
+                            );
+                        }
                     }
                     old_db_size += 1;
                 }
