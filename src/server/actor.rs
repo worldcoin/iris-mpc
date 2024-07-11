@@ -6,7 +6,11 @@ use crate::{
         share_db::{preprocess_query, ShareDB},
         IRIS_CODE_LENGTH, ROTATIONS,
     },
-    helpers::{self, device_manager::DeviceManager, task_monitor::TaskMonitor},
+    helpers::{
+        self,
+        device_manager::{self, DeviceManager},
+        task_monitor::TaskMonitor,
+    },
     setup::galois_engine::degree4::GaloisRingIrisCodeShare,
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
@@ -148,7 +152,14 @@ impl ServerActor {
         masks_db: &[u16],
         job_queue_size: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
-        let device_manager = Arc::new(DeviceManager::init());
+        let device_manager = DeviceManager::init();
+        let device_manager = device_manager.split_into_n_chunks(3);
+        let device_manager = match device_manager {
+            Ok(devices) => devices[0].clone(),
+            Err(device_manager) => device_manager,
+        };
+        dbg!(device_manager.device_count());
+        let device_manager = Arc::new(device_manager);
         Self::new_with_device_manager(
             party_id,
             config,
