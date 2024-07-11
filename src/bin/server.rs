@@ -274,7 +274,14 @@ async fn main() -> eyre::Result<()> {
     // channel
     let (tx, rx) = oneshot::channel();
     let actor_task = tokio::task::spawn_blocking(move || {
-        let actor = match ServerActor::new(config, chacha_seeds, &codes_db, &masks_db, 8) {
+        let actor = match ServerActor::new(
+            config.party_id,
+            config.servers,
+            chacha_seeds,
+            &codes_db,
+            &masks_db,
+            8,
+        ) {
             Ok((actor, handle)) => {
                 tx.send(Ok(handle)).unwrap();
                 actor

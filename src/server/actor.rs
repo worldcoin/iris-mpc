@@ -1,6 +1,6 @@
 use super::{BatchQuery, ServerJob, ServerJobResult};
 use crate::{
-    config::{Config, ServersConfig},
+    config::ServersConfig,
     dot::{
         distance_comparator::DistanceComparator,
         share_db::{preprocess_query, ShareDB},
@@ -141,22 +141,53 @@ const FINAL_RESULTS_INIT_HOST: [u32; N_QUERIES] = [u32::MAX; N_QUERIES];
 
 impl ServerActor {
     pub fn new(
-        config: Config,
+        party_id: usize,
+        config: ServersConfig,
         chacha_seeds: ([u32; 8], [u32; 8]),
         codes_db: &[u16],
         masks_db: &[u16],
         job_queue_size: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
+        let device_manager = Arc::new(DeviceManager::init());
+        Self::new_with_device_manager(
+            party_id,
+            config,
+            chacha_seeds,
+            codes_db,
+            masks_db,
+            device_manager,
+            job_queue_size,
+        )
+    }
+    pub fn new_with_device_manager(
+        party_id: usize,
+        config: ServersConfig,
+        chacha_seeds: ([u32; 8], [u32; 8]),
+        codes_db: &[u16],
+        masks_db: &[u16],
+        device_manager: Arc<DeviceManager>,
+        job_queue_size: usize,
+    ) -> eyre::Result<(Self, ServerActorHandle)> {
         let (tx, rx) = mpsc::channel(job_queue_size);
-        let actor = Self::init(config, chacha_seeds, codes_db, masks_db, rx)?;
+        let actor = Self::init(
+            party_id,
+            config,
+            chacha_seeds,
+            codes_db,
+            masks_db,
+            device_manager,
+            rx,
+        )?;
         Ok((actor, ServerActorHandle { job_queue: tx }))
     }
 
     fn init(
-        config: Config,
+        party_id: usize,
+        config: ServersConfig,
         chacha_seeds: ([u32; 8], [u32; 8]),
         codes_db: &[u16],
         masks_db: &[u16],
+        device_manager: Arc<DeviceManager>,
         job_queue: mpsc::Receiver<ServerJob>,
     ) -> eyre::Result<Self> {
         let mut kdf_nonce = 0;
@@ -173,16 +204,8 @@ impl ServerActor {
                 ))
             };
 
-        let Config {
-            party_id,
-            bootstrap_url,
-            servers,
-            ..
-        } = config;
-
         println!("Starting engines...");
 
-        let device_manager = Arc::new(DeviceManager::init());
         let mut server_tasks = TaskMonitor::new();
         let ServersConfig {
             codes_engine_port,
@@ -191,7 +214,8 @@ impl ServerActor {
             batch_masks_engine_port,
             phase_2_port,
             phase_2_batch_port,
-        } = servers;
+            bootstrap_url,
+        } = config;
 
         // Phase 1 Setup
         let codes_engine = ShareDB::init(

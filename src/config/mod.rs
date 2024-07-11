@@ -43,9 +43,6 @@ pub struct Config {
     pub kms_key_ids: JsonStrWrapper<Vec<String>>,
 
     #[serde(default)]
-    pub bootstrap_url: Option<String>,
-
-    #[serde(default)]
     pub servers: ServersConfig,
 
     #[serde(default)]
@@ -91,7 +88,7 @@ impl Config {
         }
 
         if let Some(bootstrap_url) = opts.bootstrap_url {
-            self.bootstrap_url = Some(bootstrap_url);
+            self.servers.bootstrap_url = Some(bootstrap_url);
         }
 
         if let Some(path) = opts.path {
@@ -147,4 +144,6 @@ pub struct ServersConfig {
     pub batch_masks_engine_port: u16,
     pub phase_2_batch_port:      u16,
     pub phase_2_port:            u16,
+    #[serde(default)]
+    pub bootstrap_url:           Option<String>,
 }

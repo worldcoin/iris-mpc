@@ -25,6 +25,20 @@ impl DeviceManager {
         Self { devices }
     }
 
+    /// Creates a new DeviceManager with the specified device offset and limit.
+    /// If the offset is greater than the number of devices, the function will
+    /// return an error that returns the number of available devices.
+    pub fn init_with_device_offset_and_limit(offset: usize, limit: usize) -> Result<Self, usize> {
+        if (CudaDevice::count().unwrap() as usize) < offset + limit {
+            return Err(CudaDevice::count().unwrap() as usize);
+        }
+        let mut devices = vec![];
+        for i in offset..offset + limit {
+            devices.push(CudaDevice::new(i as usize).unwrap());
+        }
+        Ok(Self { devices })
+    }
+
     pub fn fork_streams(&self) -> Vec<CudaStream> {
         self.devices
             .iter()
