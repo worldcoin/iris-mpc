@@ -13,6 +13,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      - name: Cache build products
+        uses: Swatinem/rust-cache@v2.7.3
+        with:
+          # Split the test and bench caches, the have different debug settings
+          key: "test"
       - name: Install Rust nightly
         run: rustup toolchain install nightly
       - name: Set Rust nightly as default
@@ -25,6 +30,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      - name: Cache build products
+        uses: Swatinem/rust-cache@v2.7.3
+        with:
+          # Split the test and bench caches, the have different debug settings
+          key: "bench"
       - name: Install Rust nightly
         run: rustup toolchain install nightly
       - name: Set Rust nightly as default
