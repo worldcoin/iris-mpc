@@ -66,7 +66,7 @@ const DB_BUFFER: usize = 8 * 1_000;
 const N_QUERIES: usize = 32;
 const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
-const DB_CHUNK_SIZE: usize = 256;
+const DB_CHUNK_SIZE: usize = 512;
 /// The number of batches before a stream is re-used.
 const MAX_BATCHES_BEFORE_REUSE: usize = 5;
 
@@ -942,6 +942,8 @@ async fn main() -> eyre::Result<()> {
                 .collect::<Vec<_>>();
             let offset = db_idx * DB_CHUNK_SIZE;
 
+            let chunk_size2 = vec![1000usize;8];
+
             println!("chunks: {:?}, offset: {}", chunk_size, offset);
 
             // debug_record_event!(device_manager, request_streams, timers);
@@ -980,7 +982,7 @@ async fn main() -> eyre::Result<()> {
                     device_ptrs(&code_db_slices.1 .1),
                 ),
                 &current_db_size_stream,
-                &chunk_size,
+                &chunk_size2,
                 offset,
                 request_streams,
             );
@@ -991,7 +993,7 @@ async fn main() -> eyre::Result<()> {
                     device_ptrs(&mask_db_slices.1 .1),
                 ),
                 &current_db_size_stream,
-                &chunk_size,
+                &chunk_size2,
                 offset,
                 request_streams,
             );
