@@ -1,6 +1,9 @@
 use cudarc::driver::{CudaDevice, CudaStream};
 use gpu_iris_mpc::{
-    helpers::{dtoh_on_stream_sync, htod_on_stream_sync, task_monitor::TaskMonitor},
+    helpers::{
+        device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync,
+        task_monitor::TaskMonitor,
+    },
     threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
 };
 use itertools::izip;
@@ -155,6 +158,7 @@ async fn main() -> eyre::Result<()> {
     println!("Random shared inputs generated!");
 
     // Get Circuit Party
+    let device_manager = Arc::new(DeviceManager::init());
     let mut server_tasks = TaskMonitor::new();
     let mut party = Circuits::new(
         party_id,
@@ -164,6 +168,7 @@ async fn main() -> eyre::Result<()> {
         url,
         Some(3001),
         Some(&mut server_tasks),
+        device_manager.clone(),
     );
     let devices = party.get_devices();
     let streams = devices

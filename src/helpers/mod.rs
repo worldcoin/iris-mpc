@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 pub mod aws;
 pub mod aws_sigv4;
+pub mod device_manager;
 pub mod id_wrapper;
 pub mod kms_dh;
 pub mod mmap;
