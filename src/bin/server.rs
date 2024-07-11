@@ -4,6 +4,7 @@ use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{routing::get, Router};
 use clap::Parser;
+use eyre::Context;
 use core::sync::atomic::Ordering::SeqCst;
 use cudarc::driver::{
     result::{
@@ -749,7 +750,7 @@ async fn main() -> eyre::Result<()> {
                     store
                         .insert_irises(&codes_and_masks)
                         .await
-                        .expect("failed to persist queries");
+                        .wrap_err("failed to persist queries")?;
                 }
 
                 // Notify consumers about result
@@ -762,10 +763,11 @@ async fn main() -> eyre::Result<()> {
                     .topic_arn(&results_topic_arn)
                     .message(serde_json::to_string(&result_event).unwrap())
                     .send()
-                    .await
-                    .unwrap();
+                    .await?;
             }
         }
+
+        Ok(())
     });
     server_tasks.check_tasks();
 
@@ -776,10 +778,12 @@ async fn main() -> eyre::Result<()> {
         let app = Router::new().route("/health", get(|| async {})); // implicit 200 return
         let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
             .await
-            .expect("healthcheck listener bind error");
+            .wrap_err("healthcheck listener bind error")?;
         axum::serve(listener, app)
             .await
-            .expect("healthcheck listener server launch error");
+            .wrap_err("healthcheck listener server launch error")?;
+
+        Ok(())
     });
     server_tasks.check_tasks();
 

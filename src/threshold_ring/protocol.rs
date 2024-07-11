@@ -3,6 +3,7 @@ use crate::{
         device_manager::DeviceManager,
         dtoh_on_stream_sync, htod_on_stream_sync,
         id_wrapper::{http_root, IdWrapper},
+        task_monitor::TaskMonitor,
     },
     rng::chacha_corr::ChaChaCudaCorrRng,
     threshold_ring::cuda::PTX_SRC,
@@ -18,7 +19,7 @@ use cudarc::{
 };
 use itertools::izip;
 use std::{str::FromStr, sync::Arc, thread, time::Duration};
-use tokio::task::{AbortHandle, JoinSet};
+use tokio::task::AbortHandle;
 
 pub(crate) const B_BITS: usize = 16;
 
@@ -367,7 +368,7 @@ impl Circuits {
         chacha_seeds: ([u32; 8], [u32; 8]),
         peer_url: Option<String>,
         server_port: Option<u16>,
-        server_task_set: Option<&mut JoinSet<()>>,
+        server_task_set: Option<&mut TaskMonitor>,
         device_manager: Arc<DeviceManager>,
     ) -> Self {
         // For the transpose, inputs should be multiple of 64 bits
@@ -437,7 +438,7 @@ impl Circuits {
         peer_url: Option<String>,
         server_port: Option<u16>,
         devices: &[Arc<CudaDevice>],
-        server_task_set: Option<&mut JoinSet<()>>,
+        server_task_set: Option<&mut TaskMonitor>,
     ) -> (Vec<SendableRcComm>, Option<AbortHandle>) {
         let n_devices = devices.len();
         let mut comms = Vec::with_capacity(n_devices);
@@ -458,9 +459,9 @@ impl Circuits {
                 let app = Router::new().route("/:device_id", get(move |req| http_root(ids, req)));
                 let listener =
                     tokio::net::TcpListener::bind(format!("0.0.0.0:{}", server_port.unwrap()))
-                        .await
-                        .unwrap();
-                axum::serve(listener, app).await.unwrap();
+                        .await?;
+                axum::serve(listener, app).await?;
+                Ok(())
             }));
         }
 
