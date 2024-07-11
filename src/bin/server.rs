@@ -2,6 +2,7 @@
 
 use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::{config::Region, Client};
+use axum::{routing::get, Router};
 use clap::Parser;
 use core::sync::atomic::Ordering::SeqCst;
 use cudarc::driver::{
@@ -760,6 +761,15 @@ async fn main() -> eyre::Result<()> {
     server_tasks.check_tasks();
 
     println!("All systems ready.");
+    println!("Starting healthcheck server.");
+
+    let health_check_server_handle = Some(tokio::spawn(async move {
+        let app = Router::new().route("/health", get(|| async {})); // implicit 200 return
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+        axum::serve(listener, app).await?;
+
+        eyre::Result::<()>::Ok(())
+    }));
 
     let mut total_time = Instant::now();
     let mut batch_times = Duration::from_secs(0);
@@ -1410,6 +1420,10 @@ async fn main() -> eyre::Result<()> {
     }
 
     server_tasks.check_tasks_finished();
+
+    if let Some(handle) = health_check_server_handle {
+        handle.await??;
+    }
 
     Ok(())
 }
