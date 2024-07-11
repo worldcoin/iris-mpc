@@ -139,9 +139,9 @@ checksum = "0c4b4d0bd25bd0b74681c0ad21497610ce1b7c91b1022cd21c80c6fbdd9476b0"
 
 [[package]]
 name = "aws-config"
-version = "1.5.2"
+version = "1.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d93c287bea7af470c96d21e1dcf4b207ac760932477ebdf47720232047991685"
+checksum = "caf6cfe2881cb1fcbba9ae946fb9a6480d3b7a714ca84c74925014a89ef3387a"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
