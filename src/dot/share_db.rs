@@ -216,7 +216,7 @@ impl ShareDB {
         let mut intermediate_results = vec![];
         let mut results = vec![];
         let mut results_peer = vec![];
-        let results_len = max_db_length / n_devices * query_length;
+        let results_len = (max_db_length / n_devices * query_length).div_ceil(64) * 64;
 
         for idx in 0..n_devices {
             unsafe {
