@@ -73,10 +73,7 @@ panic = 'abort'
 [profile.dev]
 panic = 'abort'
 
-[profile.test]
-panic = 'abort'
-
-
+# Only binaries in src/bin/*.rs and src/bin/*/main.rs are detected automatically
 [[bin]]
 name = "bitinject_test"
 path = "src/bin/threshold_ring/bitinject_test.rs"
