@@ -725,6 +725,14 @@ impl ShareDB {
         #[cfg(feature = "otp_encrypt")]
         let send_bufs = (0..self.device_manager.device_count())
             .map(|idx| {
+                println!(
+                    "idx: {}, size: {}, result_size: {}, peer_result_size: {}",
+                    idx,
+                    db_sizes[idx] * self.query_length * 2,
+                    self.results[idx].len(),
+                    self.results_peer[idx].len()
+                );
+
                 let len = db_sizes[idx] * self.query_length * 2;
                 self.otp_encrypt_rng_result(len, idx, streams)
             })
