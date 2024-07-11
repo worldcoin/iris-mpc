@@ -738,11 +738,13 @@ impl ShareDB {
         nccl::group_start().unwrap();
         for idx in 0..self.device_manager.device_count() {
             let len = db_sizes[idx] * self.query_length * 2;
-            assert_eq!(len, self.results[idx].len());
-            assert_eq!(len, self.results_peer[idx].len());
+            #[cfg(feature = "otp_encrypt")]
+            let send_len = len >> 2;
+            #[cfg(not(feature = "otp_encrypt"))]
+            let send_len = len;
             send_stream(
                 &send[idx],
-                send[idx].len(),
+                send_len,
                 next_peer,
                 &self.comms[idx],
                 &streams[idx],
