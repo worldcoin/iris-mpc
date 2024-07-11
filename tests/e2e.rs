@@ -105,7 +105,7 @@ async fn e2e_test() -> Result<()> {
         DeviceManager::init_with_device_offset_and_limit(4, 2)
             .map_err(|e| eyre::eyre!("wanted 2 devices starting at 0, only have {e}"))?,
     );
-    let actor0_task = std::thread::spawn(move || {
+    let actor0_task = tokio::task::spawn_blocking(move || {
         let actor = match ServerActor::new_with_device_manager(
             0,
             config0,
@@ -126,7 +126,7 @@ async fn e2e_test() -> Result<()> {
         };
         actor.run();
     });
-    let actor1_task = std::thread::spawn(move || {
+    let actor1_task = tokio::task::spawn_blocking(move || {
         let actor = match ServerActor::new_with_device_manager(
             1,
             config1,
@@ -147,7 +147,7 @@ async fn e2e_test() -> Result<()> {
         };
         actor.run();
     });
-    let actor2_task = std::thread::spawn(move || {
+    let actor2_task = tokio::task::spawn_blocking(move || {
         let actor = match ServerActor::new_with_device_manager(
             2,
             config2,
@@ -301,9 +301,9 @@ async fn e2e_test() -> Result<()> {
     drop(handle1);
     drop(handle2);
 
-    actor0_task.join().unwrap();
-    actor1_task.join().unwrap();
-    actor2_task.join().unwrap();
+    actor0_task.await.unwrap();
+    actor1_task.await.unwrap();
+    actor2_task.await.unwrap();
 
     Ok(())
 }
