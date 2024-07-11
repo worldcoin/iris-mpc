@@ -1278,8 +1278,8 @@ async fn main() -> eyre::Result<()> {
             );
 
             // Make sure to not call `Drop` on those
-            forget_vec!(code_dots_batch);
-            forget_vec!(mask_dots_batch);
+            // forget_vec!(code_dots_batch);
+            // forget_vec!(mask_dots_batch);
         }));
 
         // Prepare for next batch
