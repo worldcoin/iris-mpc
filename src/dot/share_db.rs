@@ -150,6 +150,7 @@ pub struct SlicedProcessedDatabase {
 }
 
 impl SlicedProcessedDatabase {
+    #[allow(clippy::type_complexity)]
     pub fn slice_tuples_to_ptrs(
         &self,
     ) -> (
@@ -931,14 +932,20 @@ mod tests {
 
         engine.dot(
             &preprocessed_query,
-            &(device_ptrs(&db_slices.0 .0), device_ptrs(&db_slices.0 .1)),
+            &(
+                device_ptrs(&db_slices.code_gr0),
+                device_ptrs(&db_slices.code_gr1),
+            ),
             &db_sizes,
             &streams,
             &blass,
         );
         engine.dot_reduce(
             &query_sums,
-            &(device_ptrs(&db_slices.1 .0), device_ptrs(&db_slices.1 .1)),
+            &(
+                device_ptrs(&db_slices.code_sums_gr0),
+                device_ptrs(&db_slices.code_sums_gr1),
+            ),
             &db_sizes,
             &streams,
         );
@@ -1036,14 +1043,20 @@ mod tests {
             let db_slices = engine.load_db(&codes_db, DB_SIZE, DB_SIZE, false);
             engine.dot(
                 &preprocessed_query,
-                &(device_ptrs(&db_slices.0 .0), device_ptrs(&db_slices.0 .1)),
+                &(
+                    device_ptrs(&db_slices.code_gr0),
+                    device_ptrs(&db_slices.code_gr1),
+                ),
                 &db_sizes,
                 &streams,
                 &blass,
             );
             engine.dot_reduce(
                 &query_sums,
-                &(device_ptrs(&db_slices.1 .0), device_ptrs(&db_slices.1 .1)),
+                &(
+                    device_ptrs(&db_slices.code_sums_gr0),
+                    device_ptrs(&db_slices.code_sums_gr1),
+                ),
                 &db_sizes,
                 &streams,
             );
@@ -1177,8 +1190,8 @@ mod tests {
             codes_engine.dot(
                 &code_query,
                 &(
-                    device_ptrs(&code_db_slices.0 .0),
-                    device_ptrs(&code_db_slices.0 .1),
+                    device_ptrs(&code_db_slices.code_gr0),
+                    device_ptrs(&code_db_slices.code_gr1),
                 ),
                 &db_sizes,
                 &streams,
@@ -1187,8 +1200,8 @@ mod tests {
             masks_engine.dot(
                 &mask_query,
                 &(
-                    device_ptrs(&mask_db_slices.0 .0),
-                    device_ptrs(&mask_db_slices.0 .1),
+                    device_ptrs(&mask_db_slices.code_gr0),
+                    device_ptrs(&mask_db_slices.code_gr1),
                 ),
                 &db_sizes,
                 &streams,
@@ -1198,8 +1211,8 @@ mod tests {
             codes_engine.dot_reduce(
                 &code_query_sums,
                 &(
-                    device_ptrs(&code_db_slices.1 .0),
-                    device_ptrs(&code_db_slices.1 .1),
+                    device_ptrs(&code_db_slices.code_sums_gr0),
+                    device_ptrs(&code_db_slices.code_sums_gr1),
                 ),
                 &db_sizes,
                 &streams,
@@ -1207,8 +1220,8 @@ mod tests {
             masks_engine.dot_reduce(
                 &mask_query_sums,
                 &(
-                    device_ptrs(&mask_db_slices.1 .0),
-                    device_ptrs(&mask_db_slices.1 .1),
+                    device_ptrs(&mask_db_slices.code_sums_gr0),
+                    device_ptrs(&mask_db_slices.code_sums_gr1),
                 ),
                 &db_sizes,
                 &streams,

@@ -1,3 +1,4 @@
+use super::query_processor::CudaSliceMatrixTupleU8;
 use cudarc::{
     cublas::CudaBlas,
     driver::{
@@ -115,7 +116,7 @@ impl DeviceManager {
         &self,
         preprocessed_query: &[Vec<u8>],
         streams: &[CudaStream],
-    ) -> eyre::Result<(Vec<CudaSlice<u8>>, Vec<CudaSlice<u8>>)> {
+    ) -> eyre::Result<CudaSliceMatrixTupleU8> {
         let mut slices0 = vec![];
         let mut slices1 = vec![];
         for idx in 0..self.device_count() {

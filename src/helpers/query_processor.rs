@@ -8,7 +8,8 @@ use cudarc::{
     driver::{sys::CUdeviceptr, CudaSlice, CudaStream},
 };
 
-pub type CudaSliceTuple = (Vec<CudaSlice<u8>>, Vec<CudaSlice<u8>>);
+pub type CudaSliceMatrixTuple<T> = (Vec<CudaSlice<T>>, Vec<CudaSlice<T>>);
+pub type CudaSliceMatrixTupleU8 = CudaSliceMatrixTuple<u8>;
 
 pub struct CompactQuery {
     pub code_query:        CompactGaloisRingShares,
@@ -35,10 +36,10 @@ impl CompactQuery {
 }
 
 pub struct DeviceCompactQuery {
-    code_query:            CudaSliceTuple,
-    mask_query:            CudaSliceTuple,
-    pub code_query_insert: CudaSliceTuple,
-    pub mask_query_insert: CudaSliceTuple,
+    code_query:            CudaSliceMatrixTupleU8,
+    mask_query:            CudaSliceMatrixTupleU8,
+    pub code_query_insert: CudaSliceMatrixTupleU8,
+    pub mask_query_insert: CudaSliceMatrixTupleU8,
 }
 
 impl DeviceCompactQuery {
@@ -76,7 +77,7 @@ impl DeviceCompactQuery {
         code_engine.custom_dot(
             &self.code_query,
             &self.code_query_insert,
-            &db_sizes,
+            db_sizes,
             streams,
             blass,
         );
@@ -84,7 +85,7 @@ impl DeviceCompactQuery {
         mask_engine.custom_dot(
             &self.mask_query,
             &self.mask_query_insert,
-            &db_sizes,
+            db_sizes,
             streams,
             blass,
         );
@@ -101,7 +102,7 @@ impl DeviceCompactQuery {
         engine.custom_dot2(
             &self.code_query,
             &(&sliced_database.code_gr0, &sliced_database.code_gr1),
-            &database_sizes,
+            database_sizes,
             streams,
             blass,
         );
@@ -118,7 +119,7 @@ impl DeviceCompactQuery {
         engine.custom_dot2(
             &self.mask_query,
             &(&sliced_database.code_gr0, &sliced_database.code_gr1),
-            &database_sizes,
+            database_sizes,
             streams,
             blass,
         );
@@ -139,19 +140,9 @@ impl DeviceCompactSums {
         db_sizes: &[usize],
         streams: &[CudaStream],
     ) {
-        code_engine.dot_reduce(
-            &self.code_query,
-            &self.code_query_insert,
-            &db_sizes,
-            &streams,
-        );
+        code_engine.dot_reduce(&self.code_query, &self.code_query_insert, db_sizes, streams);
 
-        mask_engine.dot_reduce(
-            &self.mask_query,
-            &self.mask_query_insert,
-            &db_sizes,
-            &streams,
-        );
+        mask_engine.dot_reduce(&self.mask_query, &self.mask_query_insert, db_sizes, streams);
     }
 
     pub fn compute_dot_reducer_against_db(
@@ -169,7 +160,7 @@ impl DeviceCompactSums {
                 device_ptrs(&sliced_code_db.code_sums_gr0),
                 device_ptrs(&sliced_code_db.code_sums_gr1),
             ),
-            &database_sizes,
+            database_sizes,
             streams,
         );
         mask_engine.dot_reduce(
@@ -178,7 +169,7 @@ impl DeviceCompactSums {
                 device_ptrs(&sliced_mask_db.code_sums_gr0),
                 device_ptrs(&sliced_mask_db.code_sums_gr1),
             ),
-            &database_sizes,
+            database_sizes,
             streams,
         );
     }

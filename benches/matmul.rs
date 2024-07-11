@@ -53,14 +53,20 @@ fn bench_memcpy(c: &mut Criterion) {
             let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
             engine.dot(
                 &preprocessed_query,
-                &(device_ptrs(&db_slices.0 .0), device_ptrs(&db_slices.0 .1)),
+                &(
+                    device_ptrs(&db_slices.code_gr0),
+                    device_ptrs(&db_slices.code_gr1),
+                ),
                 &db_sizes,
                 &streams,
                 &blass,
             );
             engine.dot_reduce(
                 &query_sums,
-                &(device_ptrs(&db_slices.1 .0), device_ptrs(&db_slices.1 .1)),
+                &(
+                    device_ptrs(&db_slices.code_sums_gr0),
+                    device_ptrs(&db_slices.code_sums_gr1),
+                ),
                 &db_sizes,
                 &streams,
             );
