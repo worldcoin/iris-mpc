@@ -42,6 +42,7 @@ pub struct DeviceCompactQuery {
     pub mask_query_insert: CudaSliceMatrixTupleU8,
 }
 
+// TODO(Dragos) need to make query_sums allocate slices instead.
 impl DeviceCompactQuery {
     pub fn query_sums(
         &self,
@@ -91,34 +92,30 @@ impl DeviceCompactQuery {
         );
     }
 
-    pub fn code_dot_product_against_db(
+    // TODO(Dragos) function signature can be compressed if there's a large refactor
+    // of server.rs to place the 2 engines into one struct and DBs into a single
+    // struct.
+    #[allow(clippy::too_many_arguments)]
+    pub fn dot_products_against_db(
         &self,
-        engine: &mut ShareDB,
-        sliced_database: &SlicedProcessedDatabase,
+        code_engine: &mut ShareDB,
+        mask_engine: &mut ShareDB,
+        sliced_code_db: &SlicedProcessedDatabase,
+        sliced_mask_db: &SlicedProcessedDatabase,
         database_sizes: &[usize],
         streams: &[CudaStream],
         blass: &[CudaBlas],
     ) {
-        engine.custom_dot2(
+        code_engine.custom_dot2(
             &self.code_query,
-            &(&sliced_database.code_gr0, &sliced_database.code_gr1),
+            &(&sliced_code_db.code_gr0, &sliced_code_db.code_gr1),
             database_sizes,
             streams,
             blass,
         );
-    }
-
-    pub fn mask_dot_product_against_db(
-        &self,
-        engine: &mut ShareDB,
-        sliced_database: &SlicedProcessedDatabase,
-        database_sizes: &[usize],
-        streams: &[CudaStream],
-        blass: &[CudaBlas],
-    ) {
-        engine.custom_dot2(
+        mask_engine.custom_dot2(
             &self.mask_query,
-            &(&sliced_database.code_gr0, &sliced_database.code_gr1),
+            &(&sliced_mask_db.code_gr0, &sliced_mask_db.code_gr1),
             database_sizes,
             streams,
             blass,
@@ -141,7 +138,6 @@ impl DeviceCompactSums {
         streams: &[CudaStream],
     ) {
         code_engine.dot_reduce(&self.code_query, &self.code_query_insert, db_sizes, streams);
-
         mask_engine.dot_reduce(&self.mask_query, &self.mask_query_insert, db_sizes, streams);
     }
 

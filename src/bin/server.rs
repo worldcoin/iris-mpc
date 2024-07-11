@@ -879,15 +879,10 @@ async fn main() -> eyre::Result<()> {
 
         debug_record_event!(device_manager, request_streams, timers);
 
-        compact_device_queries.code_dot_product_against_db(
+        compact_device_queries.dot_products_against_db(
             &mut codes_engine,
-            &code_db_slices,
-            &current_db_size_stream,
-            request_streams,
-            request_cublas_handles,
-        );
-        compact_device_queries.mask_dot_product_against_db(
             &mut masks_engine,
+            &code_db_slices,
             &mask_db_slices,
             &current_db_size_stream,
             request_streams,
