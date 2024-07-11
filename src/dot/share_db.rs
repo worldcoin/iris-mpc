@@ -8,12 +8,12 @@ use crate::{
 };
 use axum::{routing::get, Router};
 #[cfg(feature = "otp_encrypt")]
-use cudarc::driver::{CudaView, DeviceSlice};
+use cudarc::driver::CudaView;
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
         result::malloc_async, sys::CUdeviceptr, CudaFunction, CudaSlice, CudaStream, DevicePtr,
-        LaunchAsync, LaunchConfig,
+        DeviceSlice, LaunchAsync, LaunchConfig,
     },
     nccl::{self, result, Comm, Id, NcclType},
     nvrtc::compile_ptx,
@@ -737,6 +737,9 @@ impl ShareDB {
 
         nccl::group_start().unwrap();
         for idx in 0..self.device_manager.device_count() {
+            let len = db_sizes[idx] * self.query_length * 2;
+            assert_eq!(len, self.results[idx].len());
+            assert_eq!(len, self.results_peer[idx].len());
             send_stream(
                 &send[idx],
                 send[idx].len(),
@@ -746,7 +749,6 @@ impl ShareDB {
             )
             .unwrap();
 
-            let len = self.results_peer[idx].len();
             receive_stream(
                 &mut self.results_peer[idx],
                 len,
