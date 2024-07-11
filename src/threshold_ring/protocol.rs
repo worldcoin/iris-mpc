@@ -713,7 +713,8 @@ impl Circuits {
     ) {
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
-        let mut rand = unsafe { self.devs[idx].alloc::<u64>(self.chunk_size * bits).unwrap() };
+        let size = (self.chunk_size * bits + 7) / 8;
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(size * 8).unwrap() };
         self.fill_rand_u64(&mut rand, idx, streams);
 
         let cfg = Self::launch_config_from_elements_and_threads(
@@ -808,7 +809,8 @@ impl Circuits {
 
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
-        let mut rand = unsafe { self.devs[idx].alloc::<u64>(self.chunk_size).unwrap() };
+        let size = (self.chunk_size + 7) / 8;
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(size * 8).unwrap() };
         self.fill_rand_u64(&mut rand, idx, streams);
 
         unsafe {
@@ -833,8 +835,8 @@ impl Circuits {
     ) {
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
-        let size = (x1.len() + 15) / 16;
-        let mut rand = unsafe { self.devs[idx].alloc::<u64>(size * 16).unwrap() };
+        let size = (x1.len() + 7) / 8;
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(size * 8).unwrap() };
         self.fill_rand_u64(&mut rand, idx, streams);
 
         let cfg = Self::launch_config_from_elements_and_threads(
