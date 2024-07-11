@@ -842,26 +842,15 @@ async fn main() -> eyre::Result<()> {
 
         // Transfer queries to device
         // TODO: free all of this!
-        let code_query = device_manager
-            .custom_htod_transfer_query(&compact_query.code_query, request_streams)?;
-        let mask_query =
-            device_manager.htod_transfer_query(&compact_query.mask_query, request_streams);
-        let code_query_insert =
-            device_manager.htod_transfer_query(&compact_query.code_query_insert, request_streams);
-        let mask_query_insert =
-            device_manager.htod_transfer_query(&compact_query.mask_query_insert, request_streams);
-
-        let device_compact_queries =
+        let compact_device_queries =
             compact_query.htod_transfer(&device_manager, request_streams)?;
 
-        let code_query_sums =
-            codes_engine.custom_query_sums(&code_query, request_streams, request_cublas_handles);
-        let mask_query_sums =
-            masks_engine.query_sums(&mask_query, request_streams, request_cublas_handles);
-        let code_query_insert_sums =
-            codes_engine.query_sums(&code_query_insert, request_streams, request_cublas_handles);
-        let mask_query_insert_sums =
-            masks_engine.query_sums(&mask_query_insert, request_streams, request_cublas_handles);
+        let compact_device_sums = compact_device_queries.query_sums(
+            &codes_engine,
+            &masks_engine,
+            request_streams,
+            request_cublas_handles,
+        )?;
 
         // update the db size, skip this for the first two
         if request_counter > MAX_CONCURRENT_BATCHES {
@@ -884,33 +873,17 @@ async fn main() -> eyre::Result<()> {
         device_manager.await_event(request_streams, &current_dot_event);
 
         // ---- START BATCH DEDUP ----
-
-        batch_codes_engine.custom_dot(
-            &code_query,
-            &code_query_insert,
+        compact_device_queries.compute_dot_products(
+            &mut batch_codes_engine,
+            &mut batch_masks_engine,
             &query_db_size,
             request_streams,
             request_cublas_handles,
         );
 
-        batch_masks_engine.dot(
-            &mask_query,
-            &mask_query_insert,
-            &query_db_size,
-            request_streams,
-            request_cublas_handles,
-        );
-
-        batch_codes_engine.dot_reduce(
-            &code_query_sums,
-            &code_query_insert_sums,
-            &query_db_size,
-            request_streams,
-        );
-
-        batch_masks_engine.dot_reduce(
-            &mask_query_sums,
-            &mask_query_insert_sums,
+        compact_device_sums.compute_dot_reducers(
+            &mut batch_codes_engine,
+            &mut batch_masks_engine,
             &query_db_size,
             request_streams,
         );
@@ -922,26 +895,19 @@ async fn main() -> eyre::Result<()> {
 
         debug_record_event!(device_manager, request_streams, timers);
 
-        codes_engine.custom_dot(
-            &code_query,
-            &(
-                device_ptrs(&code_db_slices.0 .0),
-                device_ptrs(&code_db_slices.0 .1),
-            ),
+        compact_device_queries.code_dot_product_against_db(
+            &mut codes_engine,
+            &code_db_slices,
             &current_db_size_stream,
-            request_streams,
-            request_cublas_handles,
+            &request_streams,
+            &request_cublas_handles,
         );
-
-        masks_engine.dot(
-            &mask_query,
-            &(
-                device_ptrs(&mask_db_slices.0 .0),
-                device_ptrs(&mask_db_slices.0 .1),
-            ),
+        compact_device_queries.mask_dot_product_against_db(
+            &mut masks_engine,
+            &mask_db_slices,
             &current_db_size_stream,
-            request_streams,
-            request_cublas_handles,
+            &request_streams,
+            &request_cublas_handles,
         );
 
         debug_record_event!(device_manager, request_streams, timers);
@@ -949,23 +915,13 @@ async fn main() -> eyre::Result<()> {
         // BLOCK 2: calculate final dot product result, exchange and compare
         device_manager.await_event(request_streams, &current_exchange_event);
 
-        codes_engine.dot_reduce(
-            &code_query_sums,
-            &(
-                device_ptrs(&code_db_slices.1 .0),
-                device_ptrs(&code_db_slices.1 .1),
-            ),
+        compact_device_sums.compute_dot_reducer_against_db(
+            &mut codes_engine,
+            &mut masks_engine,
+            &code_db_slices,
+            &mask_db_slices,
             &current_db_size_stream,
-            request_streams,
-        );
-        masks_engine.dot_reduce(
-            &mask_query_sums,
-            &(
-                device_ptrs(&mask_db_slices.1 .0),
-                device_ptrs(&mask_db_slices.1 .1),
-            ),
-            &current_db_size_stream,
-            request_streams,
+            &request_streams,
         );
 
         device_manager.record_event(request_streams, &next_dot_event);
@@ -1039,8 +995,8 @@ async fn main() -> eyre::Result<()> {
         let thread_phase2 = phase2.clone();
         let thread_phase2_batch = phase2_batch.clone();
         let thread_distance_comparator = distance_comparator.clone();
-        let thread_code_db_slices = slice_tuples_to_ptrs(&code_db_slices);
-        let thread_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
+        let thread_code_db_slices = code_db_slices.slice_tuples_to_ptrs();
+        let thread_mask_db_slices = mask_db_slices.slice_tuples_to_ptrs();
         let thread_request_ids = batch.request_ids.clone();
         let thread_sender = tx.clone();
 
@@ -1235,13 +1191,19 @@ async fn main() -> eyre::Result<()> {
                     for (db, query, sums) in [
                         (
                             &thread_code_db_slices,
-                            &code_query_insert,
-                            &code_query_insert_sums,
+                            &(
+                                device_ptrs(&compact_device_queries.code_query_insert.0),
+                                device_ptrs(&compact_device_queries.code_query_insert.1),
+                            ),
+                            &compact_device_sums.code_query_insert,
                         ),
                         (
                             &thread_mask_db_slices,
-                            &mask_query_insert,
-                            &mask_query_insert_sums,
+                            &(
+                                device_ptrs(&compact_device_queries.mask_query_insert.0),
+                                device_ptrs(&compact_device_queries.mask_query_insert.1),
+                            ),
+                            &compact_device_sums.mask_query_insert,
                         ),
                     ] {
                         dtod_at_offset(

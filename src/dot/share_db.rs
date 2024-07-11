@@ -2,6 +2,7 @@ use super::IRIS_CODE_LENGTH;
 use crate::{
     helpers::{
         device_manager::DeviceManager,
+        device_ptrs,
         id_wrapper::{http_root, IdWrapper},
     },
     rng::chacha::ChaChaCudaRng,
@@ -10,12 +11,14 @@ use axum::{routing::get, Router};
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
-        result::malloc_async, sys::CUdeviceptr, CudaFunction, CudaSlice, CudaStream, DevicePtr,
-        LaunchAsync, LaunchConfig,
+        result::malloc_async,
+        sys::{CUDA_ARRAY3D_DESCRIPTOR_v2, CUdeviceptr},
+        CudaFunction, CudaSlice, CudaStream, DevicePtr, LaunchAsync, LaunchConfig,
     },
     nccl::{self, result, Comm, Id, NcclType},
     nvrtc::compile_ptx,
 };
+use ndarray::Slice;
 use rayon::prelude::*;
 use std::{ffi::c_void, mem, str::FromStr, sync::Arc, thread, time::Duration};
 use tokio::task::{AbortHandle, JoinSet};
@@ -138,6 +141,30 @@ fn chunking<T: Clone>(
             .chunks(chunk_size)
             .map(|chunk| chunk.to_vec())
             .collect()
+    }
+}
+
+pub struct SlicedProcessedDatabase {
+    pub code_gr0:      Vec<CudaSlice<i8>>,
+    pub code_gr1:      Vec<CudaSlice<i8>>,
+    pub code_sums_gr0: Vec<CudaSlice<u32>>,
+    pub code_sums_gr1: Vec<CudaSlice<u32>>,
+}
+
+impl SlicedProcessedDatabase {
+    pub fn slice_tuples_to_ptrs(
+        &self,
+    ) -> (
+        (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
+        (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
+    ) {
+        (
+            (device_ptrs(&self.code_gr0), device_ptrs(&self.code_gr1)),
+            (
+                device_ptrs(&self.code_sums_gr0),
+                device_ptrs(&self.code_sums_gr1),
+            ),
+        )
     }
 }
 
@@ -313,10 +340,7 @@ impl ShareDB {
         db_length: usize, // TODO: should handle different sizes for each device
         max_db_length: usize,
         alternating_chunks: bool,
-    ) -> (
-        (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
-        (Vec<CudaSlice<u32>>, Vec<CudaSlice<u32>>),
-    ) {
+    ) -> SlicedProcessedDatabase {
         let mut a1_host = db_entries
             .par_iter()
             .map(|&x: &u16| (x >> 8) as i8)
@@ -436,7 +460,12 @@ impl ShareDB {
             })
             .collect::<Vec<_>>();
 
-        ((db0, db1), (db0_sums, db1_sums))
+        SlicedProcessedDatabase {
+            code_gr0:      db0,
+            code_gr1:      db1,
+            code_sums_gr0: db0_sums,
+            code_sums_gr1: db1_sums,
+        }
     }
 
     pub fn query_sums(
@@ -615,10 +644,10 @@ impl ShareDB {
         }
     }
 
-    pub fn custom_dot(
+    pub fn custom_dot<T, U>(
         &mut self,
-        queries: &(Vec<CudaSlice<u8>>, Vec<CudaSlice<u8>>),
-        db: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
+        queries: &(Vec<CudaSlice<T>>, Vec<CudaSlice<T>>),
+        db: &(Vec<CudaSlice<U>>, Vec<CudaSlice<U>>),
         db_sizes: &[usize],
         streams: &[CudaStream],
         blass: &[CudaBlas],
@@ -635,14 +664,58 @@ impl ShareDB {
                 self.rngs[idx].1.fill_rng_no_host_copy(len, &streams[idx]);
             }
 
-            for (i, d) in [db.0[idx], db.1[idx]].iter().enumerate() {
+            for (i, d) in [&db.0[idx], &db.1[idx]].iter().enumerate() {
                 for (j, q) in [query0, query1].iter().enumerate() {
                     if i + j >= LIMBS {
                         continue;
                     }
                     gemm(
                         &blass[idx],
-                        *d,
+                        *d.device_ptr(),
+                        *q.device_ptr(),
+                        *self.intermediate_results[idx].device_ptr(),
+                        0,
+                        0,
+                        0,
+                        db_sizes[idx],
+                        self.query_length,
+                        IRIS_CODE_LENGTH,
+                        1 << (8 * (i + j)),
+                        if i + j == 0 { 0 } else { 1 },
+                    );
+                }
+            }
+        }
+    }
+
+    pub fn custom_dot2(
+        &mut self,
+        queries: &(Vec<CudaSlice<u8>>, Vec<CudaSlice<u8>>),
+        db: &(&Vec<CudaSlice<i8>>, &Vec<CudaSlice<i8>>),
+        db_sizes: &[usize],
+        streams: &[CudaStream],
+        blass: &[CudaBlas],
+    ) {
+        for idx in 0..self.device_manager.device_count() {
+            self.device_manager.device(idx).bind_to_thread().unwrap();
+            let query0 = &queries.0[idx];
+            let query1 = &queries.1[idx];
+
+            // Prepare randomness to mask results
+            if self.is_remote {
+                let len: usize = (db_sizes[idx] * self.query_length).div_ceil(64) * 64;
+                self.rngs[idx].0.fill_rng_no_host_copy(len, &streams[idx]);
+                self.rngs[idx].1.fill_rng_no_host_copy(len, &streams[idx]);
+            }
+
+            for (i, d) in [&db.0[idx], &db.1[idx]].iter().enumerate() {
+                for (j, q) in [query0, query1].iter().enumerate() {
+                    if i + j >= LIMBS {
+                        continue;
+                    }
+                    gemm(
+                        &blass[idx],
+                        *d.device_ptr(),
                         *q.device_ptr(),
                         *self.intermediate_results[idx].device_ptr(),
                         0,
@@ -693,6 +766,51 @@ impl ShareDB {
                             db_sums.1[idx],
                             query_sums.0[idx],
                             query_sums.1[idx],
+                            db_sizes[idx] as u64,
+                            (db_sizes[idx] * self.query_length) as u64,
+                            self.rngs[idx].0.cuda_slice().unwrap(),
+                            self.rngs[idx].1.cuda_slice().unwrap(),
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
+    pub fn custom_dot_reduce(
+        &mut self,
+        query_sums: &(Vec<CudaSlice<u8>>, Vec<CudaSlice<u8>>),
+        db_sums: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
+        db_sizes: &[usize],
+        streams: &[CudaStream],
+    ) {
+        for idx in 0..self.device_manager.device_count() {
+            assert!(
+                self.rngs[idx].0.cuda_slice().is_some() && self.rngs[idx].1.cuda_slice().is_some()
+            );
+
+            let num_elements = db_sizes[idx] * self.query_length;
+            let threads_per_block = 256;
+            let blocks_per_grid = num_elements.div_ceil(threads_per_block);
+            let cfg = LaunchConfig {
+                block_dim:        (threads_per_block as u32, 1, 1),
+                grid_dim:         (blocks_per_grid as u32, 1, 1),
+                shared_mem_bytes: 0,
+            };
+
+            unsafe {
+                self.kernels[idx]
+                    .clone()
+                    .launch_on_stream(
+                        &streams[idx],
+                        cfg,
+                        (
+                            &self.intermediate_results[idx],
+                            &mut self.results[idx],
+                            db_sums.0[idx],
+                            db_sums.1[idx],
+                            *query_sums.0[idx].device_ptr(),
+                            *query_sums.1[idx].device_ptr(),
                             db_sizes[idx] as u64,
                             (db_sizes[idx] * self.query_length) as u64,
                             self.rngs[idx].0.cuda_slice().unwrap(),
