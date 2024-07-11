@@ -726,7 +726,7 @@ impl ShareDB {
         let send_bufs = (0..self.device_manager.device_count())
             .map(|idx| {
                 let len = db_sizes[idx] * self.query_length * 2;
-                self.otp_encrypt_rng_result(len, idx, streams)
+                // self.otp_encrypt_rng_result(len, idx, streams)
             })
             .collect_vec();
 
