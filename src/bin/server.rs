@@ -583,7 +583,7 @@ async fn main() -> eyre::Result<()> {
     let mut codes_engine = ShareDB::init(
         party_id,
         device_manager.clone(),
-        DB_SIZE + DB_BUFFER,
+        DB_CHUNK_SIZE,
         QUERIES,
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
@@ -596,7 +596,7 @@ async fn main() -> eyre::Result<()> {
     let mut masks_engine = ShareDB::init(
         party_id,
         device_manager.clone(),
-        DB_SIZE + DB_BUFFER,
+        DB_CHUNK_SIZE,
         QUERIES,
         next_chacha_seeds(chacha_seeds)?,
         bootstrap_url.clone(),
@@ -942,8 +942,6 @@ async fn main() -> eyre::Result<()> {
                 .collect::<Vec<_>>();
             let offset = db_idx * DB_CHUNK_SIZE;
 
-            let chunk_size2 = vec![1000usize;8];
-
             println!("chunks: {:?}, offset: {}", chunk_size, offset);
 
             // debug_record_event!(device_manager, request_streams, timers);
@@ -982,7 +980,7 @@ async fn main() -> eyre::Result<()> {
                     device_ptrs(&code_db_slices.1 .1),
                 ),
                 &current_db_size_stream,
-                &chunk_size2,
+                &chunk_size,
                 offset,
                 request_streams,
             );
@@ -993,7 +991,7 @@ async fn main() -> eyre::Result<()> {
                     device_ptrs(&mask_db_slices.1 .1),
                 ),
                 &current_db_size_stream,
-                &chunk_size2,
+                &chunk_size,
                 offset,
                 request_streams,
             );
