@@ -8,20 +8,6 @@ use cudarc::{
     driver::{CudaSlice, CudaStream},
 };
 
-pub type CudaSliceMatrixTuple<T> = (Vec<CudaSlice<T>>, Vec<CudaSlice<T>>);
-pub type RefCudaSliceMatrixTuple<'a, T> = (&'a Vec<CudaSlice<T>>, &'a Vec<CudaSlice<T>>);
-pub type CudaSliceMatrixTupleU8 = CudaSliceMatrixTuple<u8>;
-pub type CudaSliceMatrixTupleU32 = CudaSliceMatrixTuple<u32>;
-
-// pub struct NgCudaVec1DSlicer<T> {
-//     pub entry: Vec<CudaSlice<T>>,
-// }
-
-// impl<T> AsRef<NgCudaVec1DSlicer<T>> for NgCudaVec1DSlicer<T> {
-//     fn as_ref(&self) -> &NgCudaVec1DSlicer<T> {
-//         self
-//     }
-// }
 pub struct NgCudaVec2DSlicer<T> {
     pub entry_0: Vec<CudaSlice<T>>,
     pub entry_1: Vec<CudaSlice<T>>,
@@ -43,8 +29,6 @@ impl<T> NgCudaVec2DSlicer<T> {
 pub type NgCudaVec2DSlicerU32 = NgCudaVec2DSlicer<u32>;
 pub type NgCudaVec2DSlicerU8 = NgCudaVec2DSlicer<u8>;
 pub type NgCudaVec2DSlicerI8 = NgCudaVec2DSlicer<i8>;
-
-pub type RefCudaSliceMatrixTupleU32<'a> = RefCudaSliceMatrixTuple<'a, u32>;
 
 pub struct CompactQuery {
     pub code_query:        CompactGaloisRingShares,
