@@ -4,6 +4,9 @@ use crate::{
         device_manager::DeviceManager,
         device_ptrs,
         id_wrapper::{http_root, IdWrapper},
+        query_processor::{
+            NgCudaVec2DSlicer, NgCudaVec2DSlicerI8, NgCudaVec2DSlicerU32, NgCudaVec2DSlicerU8,
+        },
     },
     rng::chacha::ChaChaCudaRng,
 };
@@ -143,10 +146,8 @@ fn chunking<T: Clone>(
 }
 
 pub struct SlicedProcessedDatabase {
-    pub code_gr0:      Vec<CudaSlice<i8>>,
-    pub code_gr1:      Vec<CudaSlice<i8>>,
-    pub code_sums_gr0: Vec<CudaSlice<u32>>,
-    pub code_sums_gr1: Vec<CudaSlice<u32>>,
+    pub code_gr:      NgCudaVec2DSlicerI8,
+    pub code_sums_gr: NgCudaVec2DSlicerU32,
 }
 
 impl SlicedProcessedDatabase {
@@ -158,10 +159,13 @@ impl SlicedProcessedDatabase {
         (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
     ) {
         (
-            (device_ptrs(&self.code_gr0), device_ptrs(&self.code_gr1)),
             (
-                device_ptrs(&self.code_sums_gr0),
-                device_ptrs(&self.code_sums_gr1),
+                device_ptrs(self.code_gr.get0_ref()),
+                device_ptrs(self.code_gr.get1_ref()),
+            ),
+            (
+                device_ptrs(self.code_sums_gr.get0_ref()),
+                device_ptrs(self.code_sums_gr.get1_ref()),
             ),
         )
     }
@@ -460,10 +464,14 @@ impl ShareDB {
             .collect::<Vec<_>>();
 
         SlicedProcessedDatabase {
-            code_gr0:      db0,
-            code_gr1:      db1,
-            code_sums_gr0: db0_sums,
-            code_sums_gr1: db1_sums,
+            code_gr:      NgCudaVec2DSlicerI8 {
+                entry_0: db0,
+                entry_1: db1,
+            },
+            code_sums_gr: NgCudaVec2DSlicerU32 {
+                entry_0: db0_sums,
+                entry_1: db1_sums,
+            },
         }
     }
 
@@ -535,18 +543,19 @@ impl ShareDB {
 
     pub fn custom_query_sums(
         &self,
-        query_ptrs: &(Vec<CudaSlice<u8>>, Vec<CudaSlice<u8>>),
+        query_ptrs: &NgCudaVec2DSlicerU8,
         streams: &[CudaStream],
         blass: &[CudaBlas],
-    ) -> (Vec<CUdeviceptr>, Vec<CUdeviceptr>) {
+    ) -> NgCudaVec2DSlicerU32 {
         let mut query1_sums = vec![];
         let mut query0_sums = vec![];
 
         for idx in 0..self.device_manager.device_count() {
-            self.device_manager.device(idx).bind_to_thread().unwrap();
+            let device = self.device_manager.device(idx);
+            device.bind_to_thread().unwrap();
 
-            let query0 = &query_ptrs.0[idx];
-            let query1 = &query_ptrs.1[idx];
+            let query0 = &query_ptrs.entry_0[idx];
+            let query1 = &query_ptrs.entry_1[idx];
 
             let query0_sum = unsafe {
                 malloc_async(
@@ -555,6 +564,8 @@ impl ShareDB {
                 )
                 .unwrap()
             };
+            let slice0_sum =
+                unsafe { device.upgrade_device_ptr::<u32>(query0_sum, self.query_length) };
 
             let query1_sum = unsafe {
                 malloc_async(
@@ -563,12 +574,14 @@ impl ShareDB {
                 )
                 .unwrap()
             };
+            let slice1_sum =
+                unsafe { device.upgrade_device_ptr::<u32>(query1_sum, self.query_length) };
 
             gemm(
                 &blass[idx],
                 *query0.device_ptr(),
                 *self.ones[idx].device_ptr(),
-                query0_sum,
+                *slice0_sum.device_ptr(),
                 0,
                 0,
                 0,
@@ -582,7 +595,7 @@ impl ShareDB {
                 &blass[idx],
                 *query1.device_ptr(),
                 *self.ones[idx].device_ptr(),
-                query1_sum,
+                *slice1_sum.device_ptr(),
                 0,
                 0,
                 0,
@@ -593,10 +606,13 @@ impl ShareDB {
                 0,
             );
 
-            query0_sums.push(query0_sum);
-            query1_sums.push(query1_sum);
+            query0_sums.push(slice0_sum);
+            query1_sums.push(slice1_sum);
         }
-        (query0_sums, query1_sums)
+        NgCudaVec2DSlicer {
+            entry_0: query0_sums,
+            entry_1: query1_sums,
+        }
     }
 
     pub fn dot(
@@ -645,16 +661,16 @@ impl ShareDB {
 
     pub fn custom_dot<T, U>(
         &mut self,
-        queries: &(Vec<CudaSlice<T>>, Vec<CudaSlice<T>>),
-        db: &(Vec<CudaSlice<U>>, Vec<CudaSlice<U>>),
+        queries: &NgCudaVec2DSlicer<T>,
+        db: &NgCudaVec2DSlicer<U>,
         db_sizes: &[usize],
         streams: &[CudaStream],
         blass: &[CudaBlas],
     ) {
         for idx in 0..self.device_manager.device_count() {
             self.device_manager.device(idx).bind_to_thread().unwrap();
-            let query0 = &queries.0[idx];
-            let query1 = &queries.1[idx];
+            let query0 = &queries.entry_0[idx];
+            let query1 = &queries.entry_1[idx];
 
             // Prepare randomness to mask results
             if self.is_remote {
@@ -663,7 +679,10 @@ impl ShareDB {
                 self.rngs[idx].1.fill_rng_no_host_copy(len, &streams[idx]);
             }
 
-            for (i, d) in [&db.0[idx], &db.1[idx]].iter().enumerate() {
+            for (i, d) in [&db.get0_ref()[idx], &db.get1_ref()[idx]]
+                .iter()
+                .enumerate()
+            {
                 for (j, q) in [query0, query1].iter().enumerate() {
                     if i + j >= LIMBS {
                         continue;
@@ -778,8 +797,8 @@ impl ShareDB {
 
     pub fn custom_dot_reduce(
         &mut self,
-        query_sums: &(Vec<CudaSlice<u8>>, Vec<CudaSlice<u8>>),
-        db_sums: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
+        query_sums: &NgCudaVec2DSlicerU32,
+        db_sums: &NgCudaVec2DSlicerU32,
         db_sizes: &[usize],
         streams: &[CudaStream],
     ) {
@@ -806,10 +825,10 @@ impl ShareDB {
                         (
                             &self.intermediate_results[idx],
                             &mut self.results[idx],
-                            db_sums.0[idx],
-                            db_sums.1[idx],
-                            *query_sums.0[idx].device_ptr(),
-                            *query_sums.1[idx].device_ptr(),
+                            *db_sums.get0_ref()[idx].device_ptr(),
+                            *db_sums.get1_ref()[idx].device_ptr(),
+                            *query_sums.get0_ref()[idx].device_ptr(),
+                            *query_sums.get1_ref()[idx].device_ptr(),
                             db_sizes[idx] as u64,
                             (db_sizes[idx] * self.query_length) as u64,
                             self.rngs[idx].0.cuda_slice().unwrap(),
@@ -865,7 +884,7 @@ impl ShareDB {
 mod tests {
     use super::{preprocess_query, ShareDB};
     use crate::{
-        helpers::{device_manager::DeviceManager, device_ptrs},
+        helpers::device_manager::DeviceManager,
         setup::{galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     };
     use float_eq::assert_float_eq;
@@ -926,29 +945,20 @@ mod tests {
         let preprocessed_query = preprocess_query(&query);
         let streams = device_manager.fork_streams();
         let blass = device_manager.create_cublas(&streams);
-        let preprocessed_query = device_manager.htod_transfer_query(&preprocessed_query, &streams);
-        let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
+        let preprocessed_query = device_manager
+            .custom_htod_transfer_query(&preprocessed_query, &streams)
+            .unwrap();
+        let query_sums = engine.custom_query_sums(&preprocessed_query, &streams, &blass);
         let db_slices = engine.load_db(&db, DB_SIZE, DB_SIZE, false);
 
-        engine.dot(
+        engine.custom_dot(
             &preprocessed_query,
-            &(
-                device_ptrs(&db_slices.code_gr0),
-                device_ptrs(&db_slices.code_gr1),
-            ),
+            &db_slices.code_gr,
             &db_sizes,
             &streams,
             &blass,
         );
-        engine.dot_reduce(
-            &query_sums,
-            &(
-                device_ptrs(&db_slices.code_sums_gr0),
-                device_ptrs(&db_slices.code_sums_gr1),
-            ),
-            &db_sizes,
-            &streams,
-        );
+        engine.custom_dot_reduce(&query_sums, &db_slices.code_sums_gr, &db_sizes, &streams);
         device_manager.await_streams(&streams);
 
         let a_nda = random_ndarray::<u16>(db.clone(), DB_SIZE, WIDTH);
@@ -1037,29 +1047,19 @@ mod tests {
             let preprocessed_query = preprocess_query(&querys);
             let streams = device_manager.fork_streams();
             let blass = device_manager.create_cublas(&streams);
-            let preprocessed_query =
-                device_manager.htod_transfer_query(&preprocessed_query, &streams);
-            let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
+            let preprocessed_query = device_manager
+                .custom_htod_transfer_query(&preprocessed_query, &streams)
+                .unwrap();
+            let query_sums = engine.custom_query_sums(&preprocessed_query, &streams, &blass);
             let db_slices = engine.load_db(&codes_db, DB_SIZE, DB_SIZE, false);
-            engine.dot(
+            engine.custom_dot(
                 &preprocessed_query,
-                &(
-                    device_ptrs(&db_slices.code_gr0),
-                    device_ptrs(&db_slices.code_gr1),
-                ),
+                &db_slices.code_gr,
                 &db_sizes,
                 &streams,
                 &blass,
             );
-            engine.dot_reduce(
-                &query_sums,
-                &(
-                    device_ptrs(&db_slices.code_sums_gr0),
-                    device_ptrs(&db_slices.code_sums_gr1),
-                ),
-                &db_sizes,
-                &streams,
-            );
+            engine.custom_dot_reduce(&query_sums, &db_slices.code_sums_gr, &db_sizes, &streams);
             device_manager.await_streams(&streams);
             engine.fetch_results(&mut gpu_result[i], &db_sizes, 0);
         }
@@ -1180,49 +1180,41 @@ mod tests {
 
             let streams = device_manager.fork_streams();
             let blass = device_manager.create_cublas(&streams);
-            let code_query = device_manager.htod_transfer_query(&code_query, &streams);
-            let mask_query = device_manager.htod_transfer_query(&mask_query, &streams);
-            let code_query_sums = codes_engine.query_sums(&code_query, &streams, &blass);
-            let mask_query_sums = masks_engine.query_sums(&mask_query, &streams, &blass);
+            let code_query = device_manager
+                .custom_htod_transfer_query(&code_query, &streams)
+                .unwrap();
+            let mask_query = device_manager
+                .custom_htod_transfer_query(&mask_query, &streams)
+                .unwrap();
+            let code_query_sums = codes_engine.custom_query_sums(&code_query, &streams, &blass);
+            let mask_query_sums = masks_engine.custom_query_sums(&mask_query, &streams, &blass);
             let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE, DB_SIZE, false);
             let mask_db_slices = codes_engine.load_db(&masks_db, DB_SIZE, DB_SIZE, false);
 
-            codes_engine.dot(
+            codes_engine.custom_dot(
                 &code_query,
-                &(
-                    device_ptrs(&code_db_slices.code_gr0),
-                    device_ptrs(&code_db_slices.code_gr1),
-                ),
+                &code_db_slices.code_gr,
                 &db_sizes,
                 &streams,
                 &blass,
             );
-            masks_engine.dot(
+            masks_engine.custom_dot(
                 &mask_query,
-                &(
-                    device_ptrs(&mask_db_slices.code_gr0),
-                    device_ptrs(&mask_db_slices.code_gr1),
-                ),
+                &mask_db_slices.code_gr,
                 &db_sizes,
                 &streams,
                 &blass,
             );
 
-            codes_engine.dot_reduce(
+            codes_engine.custom_dot_reduce(
                 &code_query_sums,
-                &(
-                    device_ptrs(&code_db_slices.code_sums_gr0),
-                    device_ptrs(&code_db_slices.code_sums_gr1),
-                ),
+                &code_db_slices.code_sums_gr,
                 &db_sizes,
                 &streams,
             );
-            masks_engine.dot_reduce(
+            masks_engine.custom_dot_reduce(
                 &mask_query_sums,
-                &(
-                    device_ptrs(&mask_db_slices.code_sums_gr0),
-                    device_ptrs(&mask_db_slices.code_sums_gr1),
-                ),
+                &mask_db_slices.code_sums_gr,
                 &db_sizes,
                 &streams,
             );

@@ -1,15 +1,50 @@
 use crate::{
     dot::share_db::{ShareDB, SlicedProcessedDatabase},
-    helpers::{device_manager::DeviceManager, device_ptrs},
+    helpers::device_manager::DeviceManager,
     setup::galois_engine::CompactGaloisRingShares,
 };
 use cudarc::{
     cublas::CudaBlas,
-    driver::{sys::CUdeviceptr, CudaSlice, CudaStream},
+    driver::{CudaSlice, CudaStream},
 };
 
 pub type CudaSliceMatrixTuple<T> = (Vec<CudaSlice<T>>, Vec<CudaSlice<T>>);
+pub type RefCudaSliceMatrixTuple<'a, T> = (&'a Vec<CudaSlice<T>>, &'a Vec<CudaSlice<T>>);
 pub type CudaSliceMatrixTupleU8 = CudaSliceMatrixTuple<u8>;
+pub type CudaSliceMatrixTupleU32 = CudaSliceMatrixTuple<u32>;
+
+// pub struct NgCudaVec1DSlicer<T> {
+//     pub entry: Vec<CudaSlice<T>>,
+// }
+
+// impl<T> AsRef<NgCudaVec1DSlicer<T>> for NgCudaVec1DSlicer<T> {
+//     fn as_ref(&self) -> &NgCudaVec1DSlicer<T> {
+//         self
+//     }
+// }
+pub struct NgCudaVec2DSlicer<T> {
+    pub entry_0: Vec<CudaSlice<T>>,
+    pub entry_1: Vec<CudaSlice<T>>,
+}
+
+impl<T> NgCudaVec2DSlicer<T> {
+    pub fn get0_ref(&self) -> &Vec<CudaSlice<T>> {
+        &self.entry_0
+    }
+    pub fn get1_ref(&self) -> &Vec<CudaSlice<T>> {
+        &self.entry_1
+    }
+
+    pub fn as_tuple_refs(&self) -> (&Vec<CudaSlice<T>>, &Vec<CudaSlice<T>>) {
+        (&self.entry_0, &self.entry_0)
+    }
+}
+
+pub type NgCudaVec2DSlicerU32 = NgCudaVec2DSlicer<u32>;
+pub type NgCudaVec2DSlicerU8 = NgCudaVec2DSlicer<u8>;
+pub type NgCudaVec2DSlicerI8 = NgCudaVec2DSlicer<i8>;
+
+pub type RefCudaSliceMatrixTupleU32<'a> = RefCudaSliceMatrixTuple<'a, u32>;
 
 pub struct CompactQuery {
     pub code_query:        CompactGaloisRingShares,
@@ -36,10 +71,10 @@ impl CompactQuery {
 }
 
 pub struct DeviceCompactQuery {
-    code_query:            CudaSliceMatrixTupleU8,
-    mask_query:            CudaSliceMatrixTupleU8,
-    pub code_query_insert: CudaSliceMatrixTupleU8,
-    pub mask_query_insert: CudaSliceMatrixTupleU8,
+    code_query:            NgCudaVec2DSlicerU8,
+    mask_query:            NgCudaVec2DSlicerU8,
+    pub code_query_insert: NgCudaVec2DSlicerU8,
+    pub mask_query_insert: NgCudaVec2DSlicerU8,
 }
 
 // TODO(Dragos) need to make query_sums allocate slices instead.
@@ -106,16 +141,16 @@ impl DeviceCompactQuery {
         streams: &[CudaStream],
         blass: &[CudaBlas],
     ) {
-        code_engine.custom_dot2(
+        code_engine.custom_dot(
             &self.code_query,
-            &(&sliced_code_db.code_gr0, &sliced_code_db.code_gr1),
+            &sliced_code_db.code_gr,
             database_sizes,
             streams,
             blass,
         );
-        mask_engine.custom_dot2(
+        mask_engine.custom_dot(
             &self.mask_query,
-            &(&sliced_mask_db.code_gr0, &sliced_mask_db.code_gr1),
+            &sliced_mask_db.code_gr,
             database_sizes,
             streams,
             blass,
@@ -123,10 +158,10 @@ impl DeviceCompactQuery {
     }
 }
 pub struct DeviceCompactSums {
-    code_query:            (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
-    mask_query:            (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
-    pub code_query_insert: (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
-    pub mask_query_insert: (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
+    code_query:            NgCudaVec2DSlicerU32,
+    mask_query:            NgCudaVec2DSlicerU32,
+    pub code_query_insert: NgCudaVec2DSlicerU32,
+    pub mask_query_insert: NgCudaVec2DSlicerU32,
 }
 
 impl DeviceCompactSums {
@@ -137,8 +172,8 @@ impl DeviceCompactSums {
         db_sizes: &[usize],
         streams: &[CudaStream],
     ) {
-        code_engine.dot_reduce(&self.code_query, &self.code_query_insert, db_sizes, streams);
-        mask_engine.dot_reduce(&self.mask_query, &self.mask_query_insert, db_sizes, streams);
+        code_engine.custom_dot_reduce(&self.code_query, &self.code_query_insert, db_sizes, streams);
+        mask_engine.custom_dot_reduce(&self.mask_query, &self.mask_query_insert, db_sizes, streams);
     }
 
     pub fn compute_dot_reducer_against_db(
@@ -150,21 +185,16 @@ impl DeviceCompactSums {
         database_sizes: &[usize],
         streams: &[CudaStream],
     ) {
-        code_engine.dot_reduce(
+        // cloning is cheap as they're just pointers
+        code_engine.custom_dot_reduce(
             &self.code_query,
-            &(
-                device_ptrs(&sliced_code_db.code_sums_gr0),
-                device_ptrs(&sliced_code_db.code_sums_gr1),
-            ),
+            &sliced_code_db.code_sums_gr,
             database_sizes,
             streams,
         );
-        mask_engine.dot_reduce(
+        mask_engine.custom_dot_reduce(
             &self.mask_query,
-            &(
-                device_ptrs(&sliced_mask_db.code_sums_gr0),
-                device_ptrs(&sliced_mask_db.code_sums_gr1),
-            ),
+            &sliced_mask_db.code_sums_gr,
             database_sizes,
             streams,
         );

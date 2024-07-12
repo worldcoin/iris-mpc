@@ -11,7 +11,7 @@ use cudarc::driver::{
         stream::synchronize,
     },
     sys::{CUdeviceptr, CUstream, CUstream_st},
-    CudaDevice, CudaSlice, CudaStream,
+    CudaDevice, CudaSlice, CudaStream, DevicePtr,
 };
 use gpu_iris_mpc::{
     config::{Config, Opt, ServersConfig},
@@ -1171,16 +1171,16 @@ async fn main() -> eyre::Result<()> {
                         (
                             &thread_code_db_slices,
                             &(
-                                device_ptrs(&compact_device_queries.code_query_insert.0),
-                                device_ptrs(&compact_device_queries.code_query_insert.1),
+                                device_ptrs(compact_device_queries.code_query_insert.get0_ref()),
+                                device_ptrs(compact_device_queries.code_query_insert.get1_ref()),
                             ),
                             &compact_device_sums.code_query_insert,
                         ),
                         (
                             &thread_mask_db_slices,
                             &(
-                                device_ptrs(&compact_device_queries.mask_query_insert.0),
-                                device_ptrs(&compact_device_queries.mask_query_insert.1),
+                                device_ptrs(compact_device_queries.mask_query_insert.get0_ref()),
+                                device_ptrs(compact_device_queries.mask_query_insert.get1_ref()),
                             ),
                             &compact_device_sums.mask_query_insert,
                         ),
@@ -1206,7 +1206,7 @@ async fn main() -> eyre::Result<()> {
                         dtod_at_offset(
                             db.1 .0[i],
                             old_db_size * mem::size_of::<u32>(),
-                            sums.0[i],
+                            *sums.get0_ref()[i].device_ptr(),
                             mem::size_of::<u32>() * 15
                                 + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                             mem::size_of::<u32>(),
@@ -1216,7 +1216,7 @@ async fn main() -> eyre::Result<()> {
                         dtod_at_offset(
                             db.1 .1[i],
                             old_db_size * mem::size_of::<u32>(),
-                            sums.1[i],
+                            *sums.get0_ref()[i].device_ptr(),
                             mem::size_of::<u32>() * 15
                                 + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                             mem::size_of::<u32>(),

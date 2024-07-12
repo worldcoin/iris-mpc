@@ -1,4 +1,4 @@
-use super::query_processor::CudaSliceMatrixTupleU8;
+use super::query_processor::NgCudaVec2DSlicerU8;
 use cudarc::{
     cublas::CudaBlas,
     driver::{
@@ -116,7 +116,7 @@ impl DeviceManager {
         &self,
         preprocessed_query: &[Vec<u8>],
         streams: &[CudaStream],
-    ) -> eyre::Result<CudaSliceMatrixTupleU8> {
+    ) -> eyre::Result<NgCudaVec2DSlicerU8> {
         let mut slices0 = vec![];
         let mut slices1 = vec![];
         for idx in 0..self.device_count() {
@@ -146,7 +146,10 @@ impl DeviceManager {
             slices0.push(slice0);
             slices1.push(slice1);
         }
-        Ok((slices0, slices1))
+        Ok(NgCudaVec2DSlicerU8 {
+            entry_0: slices0,
+            entry_1: slices1,
+        })
     }
 
     pub fn device(&self, index: usize) -> Arc<CudaDevice> {
