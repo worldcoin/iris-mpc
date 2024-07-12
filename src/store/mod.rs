@@ -147,7 +147,7 @@ mod tests {
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
 
-        let codes_and_masks = vec![(&[123 as u16; 12800][..], &[456 as u16; 12800][..]); count];
+        let codes_and_masks = vec![(&[123_u16; 12800][..], &[456_u16; 12800][..]); count];
         store.insert_irises(&codes_and_masks).await?;
 
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
