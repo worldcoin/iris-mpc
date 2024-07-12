@@ -75,6 +75,7 @@ impl ServerActorHandle {
 
 const DB_SIZE: usize = 8 * 1_000;
 const DB_BUFFER: usize = 8 * 1_000;
+const DB_CHUNK_SIZE: usize = 1000;
 const N_QUERIES: usize = 32;
 /// The number of batches before a stream is re-used.
 const MAX_BATCHES_BEFORE_REUSE: usize = 5;
@@ -113,7 +114,7 @@ pub struct ServerActor {
     batch_codes_engine: ShareDB,
     batch_masks_engine: ShareDB,
     phase2: Arc<Mutex<Circuits>>,
-    phase2_batch: Arc<Mutex<Circuits>>,
+    phase2_batch: Circuits,
     distance_comparator: Arc<Mutex<DistanceComparator>>,
     // DB slices
     code_db_slices: DbSlices,
@@ -586,19 +587,19 @@ impl ServerActor {
             &mask_dots_batch,
             &request_streams,
         );
-        let res = phase2_batch.take_result_buffer();
-        let chunk_size = phase2_batch.chunk_size();
+        let res = self.phase2_batch.take_result_buffer();
+        let chunk_size = self.phase2_batch.chunk_size();
         open(
-            &mut phase2_batch,
+            &mut self.phase2_batch,
             &res,
-            &distance_comparator.lock().unwrap(),
+            &self.distance_comparator.lock().unwrap(),
             &request_results_batch,
             chunk_size,
             &db_sizes_batch,
             0,
             &request_streams,
         );
-        phase2_batch.return_result_buffer(res);
+        self.phase2_batch.return_result_buffer(res);
 
         // ---- END BATCH DEDUP ----
         let mut db_idx = 0;
@@ -638,7 +639,7 @@ impl ServerActor {
             );
 
             // BLOCK 2: calculate final dot product result, exchange and compare
-            self.device_manager.await_event(request_streams, &current_exchange_event);
+            self.device_manager.await_event(request_streams, &self.current_exchange_event);
 
             self.codes_engine.dot_reduce(
                 &code_query_sums,
@@ -685,7 +686,7 @@ impl ServerActor {
                 open(
                     &mut phase2,
                     &res,
-                    &distance_comparator.lock().unwrap(),
+                    &self.distance_comparator.lock().unwrap(),
                     &request_results,
                     phase2_chunk_size,
                     &chunk_size,
@@ -711,7 +712,7 @@ impl ServerActor {
 
         // Merge results and fetch matching indices
         // Format: host_results[device_index][query_index]
-        distance_comparator.lock().unwrap().merge_results(
+        self.distance_comparator.lock().unwrap().merge_results(
             &request_results_batch,
             &request_results,
             &request_final_results,
