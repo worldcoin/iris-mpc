@@ -6,7 +6,7 @@ use cudarc::{
             self, event, malloc_async, memcpy_htod_async,
             stream::{synchronize, wait_event},
         },
-        sys::{CUdeviceptr, CUevent, CUevent_flags},
+        sys::{CUevent, CUevent_flags},
         CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceRepr,
     },
 };
@@ -86,33 +86,6 @@ impl DeviceManager {
     }
 
     pub fn htod_transfer_query(
-        &self,
-        preprocessed_query: &[Vec<u8>],
-        streams: &[CudaStream],
-    ) -> (Vec<CUdeviceptr>, Vec<CUdeviceptr>) {
-        let mut query0_ptrs = vec![];
-        let mut query1_ptrs = vec![];
-        for idx in 0..self.device_count() {
-            self.device(idx).bind_to_thread().unwrap();
-            let query0 =
-                unsafe { malloc_async(streams[idx].stream, preprocessed_query[0].len()).unwrap() };
-            unsafe {
-                memcpy_htod_async(query0, &preprocessed_query[0], streams[idx].stream).unwrap();
-            }
-
-            let query1 =
-                unsafe { malloc_async(streams[idx].stream, preprocessed_query[1].len()).unwrap() };
-            unsafe {
-                memcpy_htod_async(query1, &preprocessed_query[1], streams[idx].stream).unwrap();
-            }
-
-            query0_ptrs.push(query0);
-            query1_ptrs.push(query1);
-        }
-        (query0_ptrs, query1_ptrs)
-    }
-
-    pub fn custom_htod_transfer_query(
         &self,
         preprocessed_query: &[Vec<u8>],
         streams: &[CudaStream],

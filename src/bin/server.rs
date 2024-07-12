@@ -825,7 +825,6 @@ async fn main() -> eyre::Result<()> {
         }
 
         // Transfer queries to device
-        // TODO: free all of this!
         let compact_device_queries =
             compact_query.htod_transfer(&device_manager, request_streams)?;
 

@@ -747,7 +747,7 @@ mod tests {
         let streams = device_manager.fork_streams();
         let blass = device_manager.create_cublas(&streams);
         let preprocessed_query = device_manager
-            .custom_htod_transfer_query(&preprocessed_query, &streams)
+            .htod_transfer_query(&preprocessed_query, &streams)
             .unwrap();
         let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
         let db_slices = engine.load_db(&db, DB_SIZE, DB_SIZE, false);
@@ -849,7 +849,7 @@ mod tests {
             let streams = device_manager.fork_streams();
             let blass = device_manager.create_cublas(&streams);
             let preprocessed_query = device_manager
-                .custom_htod_transfer_query(&preprocessed_query, &streams)
+                .htod_transfer_query(&preprocessed_query, &streams)
                 .unwrap();
             let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
             let db_slices = engine.load_db(&codes_db, DB_SIZE, DB_SIZE, false);
@@ -982,10 +982,10 @@ mod tests {
             let streams = device_manager.fork_streams();
             let blass = device_manager.create_cublas(&streams);
             let code_query = device_manager
-                .custom_htod_transfer_query(&code_query, &streams)
+                .htod_transfer_query(&code_query, &streams)
                 .unwrap();
             let mask_query = device_manager
-                .custom_htod_transfer_query(&mask_query, &streams)
+                .htod_transfer_query(&mask_query, &streams)
                 .unwrap();
             let code_query_sums = codes_engine.query_sums(&code_query, &streams, &blass);
             let mask_query_sums = masks_engine.query_sums(&mask_query, &streams, &blass);
