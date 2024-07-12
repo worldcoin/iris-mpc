@@ -21,7 +21,7 @@ use cudarc::{
             self,
             event::{self, elapsed},
         },
-        sys::{CUdeviceptr, CUevent_st},
+        sys::{CUdeviceptr, CUevent_st, CUstream_st},
         CudaDevice, CudaSlice, CudaStream,
     },
 };
@@ -1087,11 +1087,11 @@ fn reset_results(
     devs: &[Arc<CudaDevice>],
     dst: &[CUdeviceptr],
     src: &[u32],
-    streams: &[CudaStream],
+    streams: &mut [&mut CUstream_st],
 ) {
     for i in 0..devs.len() {
         devs[i].bind_to_thread().unwrap();
-        unsafe { result::memcpy_htod_async(dst[i], src, streams[i].stream) }.unwrap();
+        unsafe { result::memcpy_htod_async(dst[i], src, streams[i]) }.unwrap();
     }
 }
 
