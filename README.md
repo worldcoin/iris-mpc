@@ -8,9 +8,9 @@
 #### Running the E2E test binary (single machine)
 
 ```
-NCCL_P2P_DISABLE=1 NCCL_NET=Socket cargo test --release e2e
+NCCL_P2P_DIRECT_DISABLE=1 NCCL_NET=Socket cargo test --release e2e
 # run with compute sanitizer (a bit of preprocessing to get the test binary name)
-cargo test --release e2e --no-run 2>&1 | grep "Executable tests/e2e.rs" | sed "s/.*(\(.*\))/\1/" | NCCL_P2P_DISABLE=1 NCCL_NET=Socket xargs compute-sanitizer --tool=memcheck
+cargo test --release e2e --no-run 2>&1 | grep "Executable tests/e2e.rs" | sed "s/.*(\(.*\))/\1/" | NCCL_P2P_DIRECT_DISABLE=1 NCCL_NET=Socket xargs compute-sanitizer --tool=memcheck
 ```
 
 #### Running the server without config override
