@@ -75,6 +75,7 @@ impl DistanceComparator {
         results3: &[CudaView<u64>],
         results_ptrs: &[CudaSlice<u32>],
         db_sizes: &[usize],
+        offset: usize,
         streams: &[CudaStream],
     ) {
         for i in 0..self.device_manager.device_count() {
@@ -101,6 +102,7 @@ impl DistanceComparator {
                             &results_ptrs[i],
                             db_sizes[i],
                             self.query_length,
+                            offset as u64,
                         ),
                     )
                     .unwrap();
