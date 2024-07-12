@@ -1,10 +1,9 @@
 use super::IRIS_CODE_LENGTH;
 use crate::{
     helpers::{
-        device_manager::DeviceManager,
-        id_wrapper::{http_root, IdWrapper},
+        device_manager::DeviceManager, device_ptrs_to_shares, id_wrapper::{http_root, IdWrapper}
     },
-    rng::chacha::ChaChaCudaRng,
+    rng::chacha::ChaChaCudaRng, threshold_ring::protocol::ChunkShare,
 };
 use axum::{routing::get, Router};
 use cudarc::{
@@ -509,7 +508,8 @@ impl ShareDB {
         &mut self,
         query_ptrs: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
         db: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
-        db_sizes: &[usize],
+        chunk_sizes: &[usize],
+        offset: usize,
         streams: &[CudaStream],
         blass: &[CudaBlas],
     ) {
@@ -520,7 +520,7 @@ impl ShareDB {
 
             // Prepare randomness to mask results
             if self.is_remote {
-                let len: usize = (db_sizes[idx] * self.query_length).div_ceil(64) * 64;
+                let len: usize = (chunk_sizes[idx] * self.query_length).div_ceil(64) * 64;
                 self.rngs[idx].0.fill_rng_no_host_copy(len, &streams[idx]);
                 self.rngs[idx].1.fill_rng_no_host_copy(len, &streams[idx]);
             }
@@ -535,10 +535,10 @@ impl ShareDB {
                         *d,
                         *q,
                         *self.intermediate_results[idx].device_ptr(),
+                        (offset * IRIS_CODE_LENGTH) as u64,
                         0,
                         0,
-                        0,
-                        db_sizes[idx],
+                        chunk_sizes[idx],
                         self.query_length,
                         IRIS_CODE_LENGTH,
                         1 << (8 * (i + j)),
@@ -554,6 +554,8 @@ impl ShareDB {
         query_sums: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
         db_sums: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
         db_sizes: &[usize],
+        chunk_sizes: &[usize],
+        offset: usize,
         streams: &[CudaStream],
     ) {
         for idx in 0..self.device_manager.device_count() {
@@ -561,7 +563,7 @@ impl ShareDB {
                 self.rngs[idx].0.cuda_slice().is_some() && self.rngs[idx].1.cuda_slice().is_some()
             );
 
-            let num_elements = db_sizes[idx] * self.query_length;
+            let num_elements = chunk_sizes[idx] * self.query_length;
             let threads_per_block = 256;
             let blocks_per_grid = num_elements.div_ceil(threads_per_block);
             let cfg = LaunchConfig {
@@ -584,7 +586,8 @@ impl ShareDB {
                             query_sums.0[idx],
                             query_sums.1[idx],
                             db_sizes[idx] as u64,
-                            (db_sizes[idx] * self.query_length) as u64,
+                            (chunk_sizes[idx] * self.query_length) as u64,
+                            offset as u64,
                             self.rngs[idx].0.cuda_slice().unwrap(),
                             self.rngs[idx].1.cuda_slice().unwrap(),
                         ),
@@ -631,6 +634,29 @@ impl ShareDB {
                 .dtoh_sync_copy_into(&res_trans.unwrap(), results)
                 .unwrap();
         }
+    }
+
+    pub fn result_chunk_shares(&self, db_sizes: &[usize]) -> Vec<ChunkShare<u16>> {
+        let results_ptrs = self
+            .results
+            .iter()
+            .map(|x| *x.device_ptr())
+            .collect::<Vec<_>>();
+        let results_peer_ptrs = self
+            .results_peer
+            .iter()
+            .map(|x| *x.device_ptr())
+            .collect::<Vec<_>>();
+
+        device_ptrs_to_shares(
+            &results_ptrs,
+            &results_peer_ptrs,
+            &db_sizes
+                .iter()
+                .map(|e| e * self.query_length)
+                .collect::<Vec<_>>(),
+            self.device_manager.devices(),
+        )
     }
 }
 

@@ -2,23 +2,26 @@
 #define ROTATIONS 15
 #define IRIS_CODE_LENGTH 12800
 
-extern "C" __global__ void matmul_correct_and_reduce(int *c, unsigned short *output, int *a0Sums, int *a1Sums, int *b0Sums, int *b1Sums, size_t numRows, size_t numElements, unsigned short *rngMasks0, unsigned short *rngMasks1)
+extern "C" __global__ void matmul_correct_and_reduce(int *c, unsigned short *output, int *a0Sums, int *a1Sums, int *b0Sums, int *b1Sums, size_t numRows, size_t numElements, size_t offset, unsigned short *rngMasks0, unsigned short *rngMasks1)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
     {
-        int s0 = a0Sums[idx % numRows] + b0Sums[idx / numRows];
-        int s1 = a1Sums[idx % numRows] + b1Sums[idx / numRows];
+        size_t sumIdx = idx + offset;
+        int s0 = a0Sums[sumIdx % numRows] + b0Sums[sumIdx / numRows];
+        int s1 = a1Sums[sumIdx % numRows] + b1Sums[sumIdx / numRows];
         output[idx] = c[idx] + (s0 << 7) + ((s0 + s1) << 15) + rngMasks0[idx] - rngMasks1[idx];
     }
 }
 
-extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned int *output, size_t dbLength, size_t queryLength)
+extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned int *output, size_t dbLength, size_t queryLength, size_t offset)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < (dbLength * queryLength + 63) / 64)
     {
         unsigned long long result = result1[idx] ^ result2[idx] ^ result3[idx];
+        idx += offset;
+        
         for (int i = 0; i < 64; i++)
         {
             unsigned int queryIdx = (idx * 64 + i) / dbLength;
