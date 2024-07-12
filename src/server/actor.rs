@@ -79,7 +79,7 @@ impl ServerActorHandle {
 
 const DB_SIZE: usize = 2 * 1_000;
 const DB_BUFFER: usize = 2 * 1_000;
-const DB_CHUNK_SIZE: usize = 1000;
+const DB_CHUNK_SIZE: usize = 512;
 const N_QUERIES: usize = 32;
 /// The number of batches before a stream is re-used.
 const MAX_BATCHES_BEFORE_REUSE: usize = 5;
@@ -291,7 +291,7 @@ impl ServerActor {
         server_tasks.check_tasks();
 
         // Phase 2 Setup
-        let phase2_chunk_size = QUERIES * DB_SIZE / device_manager.device_count();
+        let phase2_chunk_size = QUERIES * DB_CHUNK_SIZE;
         let phase2_chunk_size_max = QUERIES * (DB_SIZE + DB_BUFFER) / device_manager.device_count();
 
         // Not divided by GPU_COUNT since we do the work on all GPUs for simplicity,
@@ -426,18 +426,18 @@ impl ServerActor {
         // Clean up server tasks, then wait for them to finish
         self.server_tasks.abort_all();
 
-        std::thread::sleep(Duration::from_secs(5));
-        for timers in self.timer_events {
-            unsafe {
-                self.device_manager.device(0).bind_to_thread().unwrap();
-                let dot_time = elapsed(timers[0][0], timers[1][0]).unwrap();
-                let exchange_time = elapsed(timers[2][0], timers[3][0]).unwrap();
-                println!(
-                    "Dot time: {:?}, Exchange time: {:?}",
-                    dot_time, exchange_time
-                );
-            }
-        }
+        std::thread::sleep(Duration::from_secs(1));
+        // for timers in self.timer_events {
+        //     unsafe {
+        //         self.device_manager.device(0).bind_to_thread().unwrap();
+        //         let dot_time = elapsed(timers[0][0], timers[1][0]).unwrap();
+        //         let exchange_time = elapsed(timers[2][0], timers[3][0]).unwrap();
+        //         println!(
+        //             "Dot time: {:?}, Exchange time: {:?}",
+        //             dot_time, exchange_time
+        //         );
+        //     }
+        // }
 
         for i in 0..self.device_manager.device_count() {
             unsafe {
