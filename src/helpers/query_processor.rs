@@ -185,7 +185,6 @@ impl DeviceCompactSums {
         database_sizes: &[usize],
         streams: &[CudaStream],
     ) {
-        // cloning is cheap as they're just pointers
         code_engine.custom_dot_reduce(
             &self.code_query,
             &sliced_code_db.code_sums_gr,

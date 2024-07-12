@@ -137,7 +137,7 @@ impl DeviceManager {
                 unsafe { malloc_async(streams[idx].stream, preprocessed_query[1].len()).unwrap() };
 
             let slice1 =
-                unsafe { device.upgrade_device_ptr::<u8>(query0, preprocessed_query[0].len()) };
+                unsafe { device.upgrade_device_ptr::<u8>(query1, preprocessed_query[1].len()) };
 
             unsafe {
                 memcpy_htod_async(query1, &preprocessed_query[1], streams[idx].stream).unwrap();
