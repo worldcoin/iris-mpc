@@ -1015,6 +1015,7 @@ fn open(
     results_ptrs: &[CudaSlice<u32>],
     chunk_size: usize,
     db_sizes: &[usize],
+    offset: usize,
     streams: &[CudaStream],
 ) {
     let n_devices = x.len();
@@ -1041,7 +1042,7 @@ fn open(
     }
     cudarc::nccl::result::group_end().unwrap();
 
-    distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, streams);
+    distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, offset, &streams);
 }
 
 fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
