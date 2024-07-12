@@ -87,18 +87,10 @@ impl DeviceCompactQuery {
         blass: &[CudaBlas],
     ) -> eyre::Result<DeviceCompactSums> {
         Ok(DeviceCompactSums {
-            code_query:        code_engine.custom_query_sums(&self.code_query, streams, blass),
-            mask_query:        mask_engine.custom_query_sums(&self.mask_query, streams, blass),
-            code_query_insert: code_engine.custom_query_sums(
-                &self.code_query_insert,
-                streams,
-                blass,
-            ),
-            mask_query_insert: mask_engine.custom_query_sums(
-                &self.mask_query_insert,
-                streams,
-                blass,
-            ),
+            code_query:        code_engine.query_sums(&self.code_query, streams, blass),
+            mask_query:        mask_engine.query_sums(&self.mask_query, streams, blass),
+            code_query_insert: code_engine.query_sums(&self.code_query_insert, streams, blass),
+            mask_query_insert: mask_engine.query_sums(&self.mask_query_insert, streams, blass),
         })
     }
 
@@ -110,7 +102,7 @@ impl DeviceCompactQuery {
         streams: &[CudaStream],
         blass: &[CudaBlas],
     ) {
-        code_engine.custom_dot(
+        code_engine.dot(
             &self.code_query,
             &self.code_query_insert,
             db_sizes,
@@ -118,7 +110,7 @@ impl DeviceCompactQuery {
             blass,
         );
 
-        mask_engine.custom_dot(
+        mask_engine.dot(
             &self.mask_query,
             &self.mask_query_insert,
             db_sizes,
@@ -141,14 +133,14 @@ impl DeviceCompactQuery {
         streams: &[CudaStream],
         blass: &[CudaBlas],
     ) {
-        code_engine.custom_dot(
+        code_engine.dot(
             &self.code_query,
             &sliced_code_db.code_gr,
             database_sizes,
             streams,
             blass,
         );
-        mask_engine.custom_dot(
+        mask_engine.dot(
             &self.mask_query,
             &sliced_mask_db.code_gr,
             database_sizes,
@@ -172,8 +164,8 @@ impl DeviceCompactSums {
         db_sizes: &[usize],
         streams: &[CudaStream],
     ) {
-        code_engine.custom_dot_reduce(&self.code_query, &self.code_query_insert, db_sizes, streams);
-        mask_engine.custom_dot_reduce(&self.mask_query, &self.mask_query_insert, db_sizes, streams);
+        code_engine.dot_reduce(&self.code_query, &self.code_query_insert, db_sizes, streams);
+        mask_engine.dot_reduce(&self.mask_query, &self.mask_query_insert, db_sizes, streams);
     }
 
     pub fn compute_dot_reducer_against_db(
@@ -185,13 +177,13 @@ impl DeviceCompactSums {
         database_sizes: &[usize],
         streams: &[CudaStream],
     ) {
-        code_engine.custom_dot_reduce(
+        code_engine.dot_reduce(
             &self.code_query,
             &sliced_code_db.code_sums_gr,
             database_sizes,
             streams,
         );
-        mask_engine.custom_dot_reduce(
+        mask_engine.dot_reduce(
             &self.mask_query,
             &sliced_mask_db.code_sums_gr,
             database_sizes,

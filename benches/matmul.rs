@@ -51,15 +51,15 @@ fn bench_memcpy(c: &mut Criterion) {
             let preprocessed_query = device_manager
                 .custom_htod_transfer_query(&preprocessed_query, &streams)
                 .unwrap();
-            let query_sums = engine.custom_query_sums(&preprocessed_query, &streams, &blass);
-            engine.custom_dot(
+            let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
+            engine.dot(
                 &preprocessed_query,
                 &db_slices.code_gr,
                 &db_sizes,
                 &streams,
                 &blass,
             );
-            engine.custom_dot_reduce(&query_sums, &db_slices.code_sums_gr, &db_sizes, &streams);
+            engine.dot_reduce(&query_sums, &db_slices.code_sums_gr, &db_sizes, &streams);
             device_manager.await_streams(&streams);
         });
     });

@@ -475,7 +475,7 @@ impl ShareDB {
         }
     }
 
-    pub fn custom_query_sums(
+    pub fn query_sums(
         &self,
         query_ptrs: &NgCudaVec2DSlicerU8,
         streams: &[CudaStream],
@@ -549,7 +549,7 @@ impl ShareDB {
         }
     }
 
-    pub fn custom_dot<T, U>(
+    pub fn dot<T, U>(
         &mut self,
         queries: &NgCudaVec2DSlicer<T>,
         db: &NgCudaVec2DSlicer<U>,
@@ -596,7 +596,7 @@ impl ShareDB {
         }
     }
 
-    pub fn custom_dot_reduce(
+    pub fn dot_reduce(
         &mut self,
         query_sums: &NgCudaVec2DSlicerU32,
         db_sums: &NgCudaVec2DSlicerU32,
@@ -749,17 +749,17 @@ mod tests {
         let preprocessed_query = device_manager
             .custom_htod_transfer_query(&preprocessed_query, &streams)
             .unwrap();
-        let query_sums = engine.custom_query_sums(&preprocessed_query, &streams, &blass);
+        let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
         let db_slices = engine.load_db(&db, DB_SIZE, DB_SIZE, false);
 
-        engine.custom_dot(
+        engine.dot(
             &preprocessed_query,
             &db_slices.code_gr,
             &db_sizes,
             &streams,
             &blass,
         );
-        engine.custom_dot_reduce(&query_sums, &db_slices.code_sums_gr, &db_sizes, &streams);
+        engine.dot_reduce(&query_sums, &db_slices.code_sums_gr, &db_sizes, &streams);
         device_manager.await_streams(&streams);
 
         let a_nda = random_ndarray::<u16>(db.clone(), DB_SIZE, WIDTH);
@@ -851,16 +851,16 @@ mod tests {
             let preprocessed_query = device_manager
                 .custom_htod_transfer_query(&preprocessed_query, &streams)
                 .unwrap();
-            let query_sums = engine.custom_query_sums(&preprocessed_query, &streams, &blass);
+            let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
             let db_slices = engine.load_db(&codes_db, DB_SIZE, DB_SIZE, false);
-            engine.custom_dot(
+            engine.dot(
                 &preprocessed_query,
                 &db_slices.code_gr,
                 &db_sizes,
                 &streams,
                 &blass,
             );
-            engine.custom_dot_reduce(&query_sums, &db_slices.code_sums_gr, &db_sizes, &streams);
+            engine.dot_reduce(&query_sums, &db_slices.code_sums_gr, &db_sizes, &streams);
             device_manager.await_streams(&streams);
             engine.fetch_results(&mut gpu_result[i], &db_sizes, 0);
         }
@@ -987,19 +987,19 @@ mod tests {
             let mask_query = device_manager
                 .custom_htod_transfer_query(&mask_query, &streams)
                 .unwrap();
-            let code_query_sums = codes_engine.custom_query_sums(&code_query, &streams, &blass);
-            let mask_query_sums = masks_engine.custom_query_sums(&mask_query, &streams, &blass);
+            let code_query_sums = codes_engine.query_sums(&code_query, &streams, &blass);
+            let mask_query_sums = masks_engine.query_sums(&mask_query, &streams, &blass);
             let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE, DB_SIZE, false);
             let mask_db_slices = codes_engine.load_db(&masks_db, DB_SIZE, DB_SIZE, false);
 
-            codes_engine.custom_dot(
+            codes_engine.dot(
                 &code_query,
                 &code_db_slices.code_gr,
                 &db_sizes,
                 &streams,
                 &blass,
             );
-            masks_engine.custom_dot(
+            masks_engine.dot(
                 &mask_query,
                 &mask_db_slices.code_gr,
                 &db_sizes,
@@ -1007,13 +1007,13 @@ mod tests {
                 &blass,
             );
 
-            codes_engine.custom_dot_reduce(
+            codes_engine.dot_reduce(
                 &code_query_sums,
                 &code_db_slices.code_sums_gr,
                 &db_sizes,
                 &streams,
             );
-            masks_engine.custom_dot_reduce(
+            masks_engine.dot_reduce(
                 &mask_query_sums,
                 &mask_db_slices.code_sums_gr,
                 &db_sizes,
