@@ -733,6 +733,7 @@ mod tests {
             &preprocessed_query,
             &(device_ptrs(&db_slices.0 .0), device_ptrs(&db_slices.0 .1)),
             &db_sizes,
+            0,
             &streams,
             &blass,
         );
@@ -740,6 +741,8 @@ mod tests {
             &query_sums,
             &(device_ptrs(&db_slices.1 .0), device_ptrs(&db_slices.1 .1)),
             &db_sizes,
+            &db_sizes,
+            0,
             &streams,
         );
         device_manager.await_streams(&streams);
@@ -838,6 +841,7 @@ mod tests {
                 &preprocessed_query,
                 &(device_ptrs(&db_slices.0 .0), device_ptrs(&db_slices.0 .1)),
                 &db_sizes,
+                0,
                 &streams,
                 &blass,
             );
@@ -845,6 +849,8 @@ mod tests {
                 &query_sums,
                 &(device_ptrs(&db_slices.1 .0), device_ptrs(&db_slices.1 .1)),
                 &db_sizes,
+                &db_sizes,
+                0,
                 &streams,
             );
             device_manager.await_streams(&streams);
@@ -981,6 +987,7 @@ mod tests {
                     device_ptrs(&code_db_slices.0 .1),
                 ),
                 &db_sizes,
+                0,
                 &streams,
                 &blass,
             );
@@ -991,6 +998,7 @@ mod tests {
                     device_ptrs(&mask_db_slices.0 .1),
                 ),
                 &db_sizes,
+                0,
                 &streams,
                 &blass,
             );
@@ -1002,6 +1010,8 @@ mod tests {
                     device_ptrs(&code_db_slices.1 .1),
                 ),
                 &db_sizes,
+                &db_sizes,
+                0,
                 &streams,
             );
             masks_engine.dot_reduce(
@@ -1011,6 +1021,8 @@ mod tests {
                     device_ptrs(&mask_db_slices.1 .1),
                 ),
                 &db_sizes,
+                &db_sizes,
+                0,
                 &streams,
             );
 

@@ -29,13 +29,17 @@ use futures::{Future, FutureExt};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use static_assertions::const_assert;
 use std::{
+    cmp::min,
     mem,
     ops::IndexMut,
     sync::{Arc, Mutex},
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::{
+    runtime,
+    sync::{mpsc, oneshot},
+};
 
 macro_rules! debug_record_event {
     ($manager:expr, $streams:expr, $timers:expr) => {
@@ -306,7 +310,7 @@ impl ServerActor {
             "Phase2 MAX chunk size must be a multiple of 64"
         );
 
-        let phase2_batch = Arc::new(Mutex::new(Circuits::new(
+        let phase2_batch = Circuits::new(
             party_id,
             phase2_batch_chunk_size,
             phase2_batch_chunk_size / 64,
@@ -315,7 +319,7 @@ impl ServerActor {
             Some(phase_2_batch_port),
             Some(&mut server_tasks),
             device_manager.clone(),
-        )));
+        );
         server_tasks.check_tasks();
 
         let phase2 = Arc::new(Mutex::new(Circuits::new(
@@ -576,8 +580,10 @@ impl ServerActor {
             request_streams,
         );
 
-        self.batch_codes_engine.reshare_results(&self.query_db_size, request_streams);
-        self.batch_masks_engine.reshare_results(&self.query_db_size, request_streams);
+        self.batch_codes_engine
+            .reshare_results(&self.query_db_size, request_streams);
+        self.batch_masks_engine
+            .reshare_results(&self.query_db_size, request_streams);
 
         let db_sizes_batch = vec![QUERIES; self.device_manager.device_count()];
         let mut code_dots_batch = self.batch_codes_engine.result_chunk_shares(&db_sizes_batch);
@@ -639,7 +645,8 @@ impl ServerActor {
             );
 
             // BLOCK 2: calculate final dot product result, exchange and compare
-            self.device_manager.await_event(request_streams, &self.current_exchange_event);
+            self.device_manager
+                .await_event(request_streams, &self.current_exchange_event);
 
             self.codes_engine.dot_reduce(
                 &code_query_sums,
@@ -664,22 +671,26 @@ impl ServerActor {
                 request_streams,
             );
 
-            self.device_manager.record_event(request_streams, &self.next_dot_event);
+            self.device_manager
+                .record_event(request_streams, &self.next_dot_event);
 
             debug_record_event!(self.device_manager, request_streams, timers);
 
-            self.codes_engine.reshare_results(&chunk_size, request_streams);
-            self.masks_engine.reshare_results(&chunk_size, request_streams);
+            self.codes_engine
+                .reshare_results(&chunk_size, request_streams);
+            self.masks_engine
+                .reshare_results(&chunk_size, request_streams);
 
             debug_record_event!(self.device_manager, request_streams, timers);
 
-            self.device_manager.record_event(request_streams, &self.next_exchange_event);
+            self.device_manager
+                .record_event(request_streams, &self.next_exchange_event);
 
             // Phase 2 [DB]
             let mut code_dots = self.codes_engine.result_chunk_shares(&chunk_size);
             let mut mask_dots = self.masks_engine.result_chunk_shares(&chunk_size);
             {
-                let mut phase2 = phase2.lock().unwrap();
+                let mut phase2 = self.phase2.lock().unwrap();
                 phase2.compare_threshold_masked_many(&code_dots, &mask_dots, &request_streams);
                 let res = phase2.take_result_buffer();
                 let phase2_chunk_size = phase2.chunk_size();
@@ -702,8 +713,8 @@ impl ServerActor {
 
             break;
             // db_idx += 1;
-            // if db_idx * DB_CHUNK_SIZE >= DB_SIZE / device_manager.device_count() {
-            //     break;
+            // if db_idx * DB_CHUNK_SIZE >= DB_SIZE /
+            // device_manager.device_count() {     break;
             // }
 
             // // DEBUG: remove
@@ -740,41 +751,44 @@ impl ServerActor {
             .collect::<Vec<_>>();
         // The compiler can't tell that we wait for the previous batch before re-using
         // these events.
-        let mut thread_current_stream_event = current_stream_event
+        let mut thread_current_stream_event = self
+            .current_stream_event
             .iter()
             .map(|e| unsafe { e.as_mut().unwrap() })
             .collect::<Vec<_>>();
-        let mut thread_end_timer = end_timer
+        let mut thread_end_timer = self
+            .end_timer
             .iter()
             .map(|e| unsafe { e.as_mut().unwrap() })
             .collect::<Vec<_>>();
 
-        let thread_device_manager = device_manager.clone();
-        let thread_current_db_size_mutex = current_db_size_mutex
+        let thread_device_manager = self.device_manager.clone();
+        let thread_current_db_size_mutex = self
+            .current_db_size_mutex
             .iter()
             .map(Arc::clone)
             .collect::<Vec<_>>();
-        let thread_request_results_batch = device_ptrs(&request_results_batch);
-        let thread_request_results = device_ptrs(&request_results);
-        let thread_request_final_results = device_ptrs(&request_final_results);
+        let thread_request_results_batch = helpers::device_ptrs(&request_results_batch);
+        let thread_request_results = helpers::device_ptrs(&request_results);
+        let thread_request_final_results = helpers::device_ptrs(&request_final_results);
 
-        let thread_distance_comparator = distance_comparator.clone();
+        let thread_distance_comparator = self.distance_comparator.clone();
 
-        let thread_code_db_slices = slice_tuples_to_ptrs(&code_db_slices);
-        let thread_mask_db_slices = slice_tuples_to_ptrs(&mask_db_slices);
+        let thread_phase2 = self.phase2.clone();
+        let thread_code_db_slices = helpers::slice_tuples_to_ptrs(&self.code_db_slices);
+        let thread_mask_db_slices = helpers::slice_tuples_to_ptrs(&self.mask_db_slices);
         let thread_request_ids = batch.request_ids.clone();
-        let thread_sender = tx.clone();
-        let thread_phase2 = phase2.clone();
+        let thread_sender = return_channel;
+        let thread_prev_handle = self.previous_thread_handle.take();
+        let phase2_chunk_size_max = self.phase2_chunk_size_max;
 
-        previous_thread_handle = Some(spawn_blocking(move || {
-            if previous_thread_handle.is_some() {
-                runtime::Handle::current()
-                    .block_on(previous_thread_handle.unwrap())
-                    .unwrap();
-            }
-
+        self.previous_thread_handle = Some(thread::spawn(move || {
             // Wait for protocol to finish
-            await_streams(&mut thread_streams);
+            helpers::await_streams(&mut thread_streams);
+
+            if let Some(phandle) = thread_prev_handle {
+                phandle.join().unwrap();
+            }
 
             let thread_devs = thread_device_manager.devices();
 
@@ -835,43 +849,47 @@ impl ServerActor {
                             &mask_query_insert_sums,
                         ),
                     ] {
-                        helpers::dtod_at_offset(
-                            db.0 .0[i],
-                            old_db_size * IRIS_CODE_LENGTH,
-                            query.0[i],
-                            IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                            IRIS_CODE_LENGTH,
-                            &mut *thread_streams[i],
-                        );
+                        unsafe {
+                            helpers::dtod_at_offset(
+                                db.0 .0[i],
+                                old_db_size * IRIS_CODE_LENGTH,
+                                query.0[i],
+                                IRIS_CODE_LENGTH * 15
+                                    + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                                IRIS_CODE_LENGTH,
+                                &mut *thread_streams[i],
+                            );
 
-                        helpers::dtod_at_offset(
-                            db.0 .1[i],
-                            old_db_size * IRIS_CODE_LENGTH,
-                            query.1[i],
-                            IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                            IRIS_CODE_LENGTH,
-                            &mut *thread_streams[i],
-                        );
+                            helpers::dtod_at_offset(
+                                db.0 .1[i],
+                                old_db_size * IRIS_CODE_LENGTH,
+                                query.1[i],
+                                IRIS_CODE_LENGTH * 15
+                                    + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                                IRIS_CODE_LENGTH,
+                                &mut *thread_streams[i],
+                            );
 
-                        helpers::dtod_at_offset(
-                            db.1 .0[i],
-                            old_db_size * mem::size_of::<u32>(),
-                            sums.0[i],
-                            mem::size_of::<u32>() * 15
-                                + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                            mem::size_of::<u32>(),
-                            &mut *thread_streams[i],
-                        );
+                            helpers::dtod_at_offset(
+                                db.1 .0[i],
+                                old_db_size * mem::size_of::<u32>(),
+                                sums.0[i],
+                                mem::size_of::<u32>() * 15
+                                    + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                                mem::size_of::<u32>(),
+                                &mut *thread_streams[i],
+                            );
 
-                        helpers::dtod_at_offset(
-                            db.1 .1[i],
-                            old_db_size * mem::size_of::<u32>(),
-                            sums.1[i],
-                            mem::size_of::<u32>() * 15
-                                + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                            mem::size_of::<u32>(),
-                            &mut *thread_streams[i],
-                        );
+                            helpers::dtod_at_offset(
+                                db.1 .1[i],
+                                old_db_size * mem::size_of::<u32>(),
+                                sums.1[i],
+                                mem::size_of::<u32>() * 15
+                                    + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                                mem::size_of::<u32>(),
+                                &mut *thread_streams[i],
+                            );
+                        }
                     }
                     old_db_size += 1;
                 }
@@ -922,7 +940,12 @@ impl ServerActor {
 
             // Pass to internal sender thread
             thread_sender
-                .try_send((merged_results, thread_request_ids, matches, query_store))
+                .send(ServerJobResult {
+                    merged_results,
+                    thread_request_ids,
+                    matches,
+                    store: query_store,
+                })
                 .unwrap();
 
             // Reset the results buffers for reuse
