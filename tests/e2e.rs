@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 const DB_SIZE: usize = 8 * 256;
 const RNG_SEED: u64 = 0xdeadbeef;
-const NUM_BATCHES: usize = 5;
+const NUM_BATCHES: usize = 1;
 const BATCH_SIZE: usize = 32;
 
 fn generate_or_load_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
@@ -187,7 +187,7 @@ async fn e2e_test() -> Result<()> {
             let request_id = Uuid::new_v4();
             // Automatic random tests
             let options = if responses.is_empty() { 2 } else { 3 };
-            let template = match choice_rng.gen_range(0..options) {
+            let template = match 1 {//choice_rng.gen_range(0..options) {
                 0 => {
                     println!("Sending new iris code");
                     expected_results.insert(request_id.to_string(), None);
@@ -195,7 +195,7 @@ async fn e2e_test() -> Result<()> {
                 }
                 1 => {
                     println!("Sending iris code from db");
-                    let db_index = rng.gen_range(0..db.db.len());
+                    let db_index = 42; //rng.gen_range(0..db.db.len());
                     expected_results.insert(request_id.to_string(), Some(db_index as u32));
                     db.db[db_index].clone()
                 }

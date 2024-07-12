@@ -77,8 +77,8 @@ impl ServerActorHandle {
     }
 }
 
-const DB_SIZE: usize = 8 * 1_000;
-const DB_BUFFER: usize = 8 * 1_000;
+const DB_SIZE: usize = 2 * 1_000;
+const DB_BUFFER: usize = 2 * 1_000;
 const DB_CHUNK_SIZE: usize = 1000;
 const N_QUERIES: usize = 32;
 /// The number of batches before a stream is re-used.
