@@ -7,9 +7,8 @@ extern "C" __global__ void matmul_correct_and_reduce(int *c, unsigned short *out
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
     {
-        size_t sumIdx = idx + offset;
-        int s0 = a0Sums[sumIdx % numRows] + b0Sums[sumIdx / numRows];
-        int s1 = a1Sums[sumIdx % numRows] + b1Sums[sumIdx / numRows];
+        int s0 = a0Sums[offset + (idx % numRows)] + b0Sums[offset + (idx / numRows)];
+        int s1 = a1Sums[offset + (idx % numRows)] + b1Sums[offset + (idx / numRows)];
         output[idx] = c[idx] + (s0 << 7) + ((s0 + s1) << 15) + rngMasks0[idx] - rngMasks1[idx];
     }
 }
@@ -20,8 +19,6 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
     if (idx < (dbLength * queryLength + 63) / 64)
     {
         unsigned long long result = result1[idx] ^ result2[idx] ^ result3[idx];
-        idx += offset;
-        
         for (int i = 0; i < 64; i++)
         {
             unsigned int queryIdx = (idx * 64 + i) / dbLength;
@@ -29,12 +26,12 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
             bool match = (result & (1ULL << i));
 
             // Check if we are out of bounds for the query or db
-            if (queryIdx >= queryLength || dbIdx >= dbLength)
+            if (queryIdx > queryLength || dbIdx > dbLength)
                 return;
 
             // return db element with smallest index
             if (match)
-                atomicMin(&output[queryIdx], dbIdx);
+                atomicMin(&output[queryIdx], dbIdx + offset);
         }
     }
 }

@@ -303,7 +303,7 @@ async fn main() -> eyre::Result<()> {
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
             merged_results,
-            thread_request_ids: request_ids,
+            request_ids,
             matches,
             store: query_store,
         }) = rx.recv().await

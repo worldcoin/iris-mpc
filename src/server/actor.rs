@@ -6,40 +6,28 @@ use crate::{
         share_db::{preprocess_query, ShareDB},
         IRIS_CODE_LENGTH, ROTATIONS,
     },
-    helpers::{
-        self,
-        device_manager::{self, DeviceManager},
-        task_monitor::TaskMonitor,
-    },
+    helpers::{self, device_manager::DeviceManager, task_monitor::TaskMonitor},
     setup::galois_engine::degree4::GaloisRingIrisCodeShare,
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use cudarc::{
     cublas::CudaBlas,
     driver::{
-        result::{
-            self,
-            event::{self, elapsed},
-        },
-        sys::{CUdeviceptr, CUevent_st, CUstream_st},
-        CudaDevice, CudaSlice, CudaStream,
+        result::{self, event::elapsed},
+        sys::CUevent_st,
+        CudaDevice, CudaSlice, CudaStream, DevicePtr,
     },
 };
 use futures::{Future, FutureExt};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
-use static_assertions::const_assert;
 use std::{
-    cmp::min,
+    cmp::{max, min},
     mem,
-    ops::IndexMut,
     sync::{Arc, Mutex},
-    thread::{self, JoinHandle},
+    thread::JoinHandle,
     time::{Duration, Instant},
 };
-use tokio::{
-    runtime,
-    sync::{mpsc, oneshot},
-};
+use tokio::sync::{mpsc, oneshot};
 
 macro_rules! debug_record_event {
     ($manager:expr, $streams:expr, $timers:expr) => {
@@ -79,28 +67,8 @@ impl ServerActorHandle {
 
 const DB_SIZE: usize = 2 * 1_000;
 const DB_BUFFER: usize = 2 * 1_000;
-const DB_CHUNK_SIZE: usize = 512;
+const DB_CHUNK_SIZE: usize = 256;
 const N_QUERIES: usize = 32;
-/// The number of batches before a stream is re-used.
-const MAX_BATCHES_BEFORE_REUSE: usize = 5;
-
-/// The number of batches that are launched concurrently.
-///
-/// Code can run concurrently in:
-/// - requests `N` and `N - 1`,
-/// - requests `N` and `N - MAX_CONCURRENT_BATCHES`, because the next request
-///   phase 1 awaits completion of the request `MAX_CONCURRENT_BATCHES` behind
-///   it, or
-/// - request `N` only, because phase 2 limits the critical section to one
-///   batch.
-/// - requests `N` and `N - 1`,
-/// - requests `N` and `N - MAX_CONCURRENT_BATCHES`, because the next request
-///   phase 1 awaits completion of the request `MAX_CONCURRENT_BATCHES` behind
-///   it, or
-/// - request `N` only, because phase 2 limits the critical section to one
-///   batch.
-const MAX_CONCURRENT_BATCHES: usize = 2;
-
 const QUERIES: usize = ROTATIONS * N_QUERIES;
 
 type DbSlices = (
@@ -109,40 +77,37 @@ type DbSlices = (
 );
 
 pub struct ServerActor {
-    job_queue: mpsc::Receiver<ServerJob>,
-    device_manager: Arc<DeviceManager>,
-    server_tasks: TaskMonitor,
+    job_queue:              mpsc::Receiver<ServerJob>,
+    device_manager:         Arc<DeviceManager>,
+    server_tasks:           TaskMonitor,
     // engines
-    codes_engine: ShareDB,
-    masks_engine: ShareDB,
-    batch_codes_engine: ShareDB,
-    batch_masks_engine: ShareDB,
-    phase2: Arc<Mutex<Circuits>>,
-    phase2_batch: Circuits,
-    distance_comparator: Arc<Mutex<DistanceComparator>>,
+    codes_engine:           ShareDB,
+    masks_engine:           ShareDB,
+    batch_codes_engine:     ShareDB,
+    batch_masks_engine:     ShareDB,
+    phase2:                 Arc<Mutex<Circuits>>,
+    phase2_batch:           Circuits,
+    distance_comparator:    Arc<Mutex<DistanceComparator>>,
     // DB slices
-    code_db_slices: DbSlices,
-    mask_db_slices: DbSlices,
-    streams: Vec<Vec<CudaStream>>,
-    cublas_handles: Vec<Vec<CudaBlas>>,
-    results: Vec<Vec<CudaSlice<u32>>>,
-    batch_results: Vec<Vec<CudaSlice<u32>>>,
-    final_results: Vec<Vec<CudaSlice<u32>>>,
-    current_dot_event: Vec<*mut CUevent_st>,
-    next_dot_event: Vec<*mut CUevent_st>,
+    code_db_slices:         DbSlices,
+    mask_db_slices:         DbSlices,
+    streams:                Vec<Vec<CudaStream>>,
+    cublas_handles:         Vec<Vec<CudaBlas>>,
+    results:                Vec<CudaSlice<u32>>,
+    batch_results:          Vec<CudaSlice<u32>>,
+    final_results:          Vec<CudaSlice<u32>>,
+    current_dot_event:      Vec<*mut CUevent_st>,
+    next_dot_event:         Vec<*mut CUevent_st>,
     current_exchange_event: Vec<*mut CUevent_st>,
-    next_exchange_event: Vec<*mut CUevent_st>,
-    start_timer: Vec<*mut CUevent_st>,
-    end_timer: Vec<*mut CUevent_st>,
-    timer_events: Vec<Vec<Vec<*mut CUevent_st>>>,
-    previous_stream_event: Vec<*mut CUevent_st>,
-    previous_previous_stream_event: Vec<*mut CUevent_st>,
-    current_stream_event: Vec<*mut CUevent_st>,
-    current_db_size_mutex: Vec<Arc<Mutex<usize>>>,
-    query_db_size: Vec<usize>,
-    previous_thread_handle: Option<JoinHandle<()>>,
-    phase2_chunk_size_max: usize,
-    request_counter: usize,
+    next_exchange_event:    Vec<*mut CUevent_st>,
+    current_phase2_event:   Vec<*mut CUevent_st>,
+    next_phase2_event:      Vec<*mut CUevent_st>,
+    start_timer:            Vec<*mut CUevent_st>,
+    end_timer:              Vec<*mut CUevent_st>,
+    timer_events:           Vec<Vec<Vec<*mut CUevent_st>>>,
+    current_db_size_mutex:  Vec<Arc<Mutex<usize>>>,
+    query_db_size:          Vec<usize>,
+    phase2_chunk_size_max:  usize,
 }
 
 const RESULTS_INIT_HOST: [u32; N_QUERIES * ROTATIONS] = [u32::MAX; N_QUERIES * ROTATIONS];
@@ -341,27 +306,22 @@ impl ServerActor {
         // Prepare streams etc.
         let mut streams = vec![];
         let mut cublas_handles = vec![];
-        let mut results = vec![];
-        let mut batch_results = vec![];
-        let mut final_results = vec![];
-        for _ in 0..MAX_BATCHES_BEFORE_REUSE {
+        for _ in 0..2 {
             let tmp_streams = device_manager.fork_streams();
             cublas_handles.push(device_manager.create_cublas(&tmp_streams));
             streams.push(tmp_streams);
-            results.push(distance_comparator.lock().unwrap().prepare_results());
-            batch_results.push(distance_comparator.lock().unwrap().prepare_results());
-            final_results.push(distance_comparator.lock().unwrap().prepare_final_results());
         }
 
-        let previous_previous_stream_event = device_manager.create_events();
-        let previous_stream_event = device_manager.create_events();
-        let current_stream_event = device_manager.create_events();
+        let final_results = distance_comparator.lock().unwrap().prepare_final_results();
+        let results = distance_comparator.lock().unwrap().prepare_results();
+        let batch_results = distance_comparator.lock().unwrap().prepare_results();
 
-        let previous_thread_handle: Option<JoinHandle<()>> = None;
         let current_dot_event = device_manager.create_events();
         let next_dot_event = device_manager.create_events();
         let current_exchange_event = device_manager.create_events();
         let next_exchange_event = device_manager.create_events();
+        let current_phase2_event = device_manager.create_events();
+        let next_phase2_event = device_manager.create_events();
         let timer_events = vec![];
         let start_timer = device_manager.create_events();
         let end_timer = device_manager.create_events();
@@ -396,17 +356,14 @@ impl ServerActor {
             next_dot_event,
             current_exchange_event,
             next_exchange_event,
+            current_phase2_event,
+            next_phase2_event,
             start_timer,
             end_timer,
             timer_events,
-            previous_stream_event,
-            previous_previous_stream_event,
-            current_stream_event,
             current_db_size_mutex,
             query_db_size,
-            previous_thread_handle,
             phase2_chunk_size_max,
-            request_counter: 0,
         })
     }
 
@@ -420,9 +377,6 @@ impl ServerActor {
         }
 
         // await the last thread for phase 2
-        if let Some(handle) = self.previous_thread_handle {
-            handle.join().unwrap();
-        }
         // Clean up server tasks, then wait for them to finish
         self.server_tasks.abort_all();
 
@@ -439,13 +393,13 @@ impl ServerActor {
         //     }
         // }
 
-        for i in 0..self.device_manager.device_count() {
-            unsafe {
-                self.device_manager.device(i).bind_to_thread().unwrap();
-                let total_time = elapsed(self.start_timer[i], self.end_timer[i]).unwrap();
-                println!("Total time: {:?}", total_time);
-            }
-        }
+        // for i in 0..self.device_manager.device_count() {
+        //     unsafe {
+        //         self.device_manager.device(i).bind_to_thread().unwrap();
+        //         let total_time = elapsed(self.start_timer[i], self.end_timer[i]).unwrap();
+        //         println!("Total time: {:?}", total_time);
+        //     }
+        // }
 
         self.server_tasks.check_tasks_finished();
     }
@@ -464,93 +418,55 @@ impl ServerActor {
         let mask_query_insert = prepare_query_shares(batch.db.mask);
         let query_store = batch.store;
 
-        let mut timers = vec![];
+        // let mut timers = vec![];
 
-        // SAFETY: these streams can only safely be re-used after more than
-        // MAX_CONCURRENT_BATCHES.
-        let request_streams = &self.streams[self.request_counter % MAX_BATCHES_BEFORE_REUSE];
-        let request_cublas_handles =
-            &self.cublas_handles[self.request_counter % MAX_BATCHES_BEFORE_REUSE];
-        let request_results = &self.results[self.request_counter % MAX_BATCHES_BEFORE_REUSE];
-        let request_results_batch =
-            &self.batch_results[self.request_counter % MAX_BATCHES_BEFORE_REUSE];
-        let request_final_results =
-            &self.final_results[self.request_counter % MAX_BATCHES_BEFORE_REUSE];
+        let batch_streams = &self.streams[0];
+        let batch_cublas = &self.cublas_handles[0];
 
-        // First stream doesn't need to wait on anyone
-        if self.request_counter == 0 {
-            self.device_manager
-                .record_event(request_streams, &self.current_dot_event);
-            self.device_manager
-                .record_event(request_streams, &self.current_exchange_event);
-            self.device_manager
-                .record_event(request_streams, &self.start_timer);
-        }
+        self.device_manager
+            .record_event(&self.streams[0], &self.start_timer);
+
         // Transfer queries to device
         // TODO: free all of this!
         let code_query = self
             .device_manager
-            .htod_transfer_query(&code_query, request_streams);
+            .htod_transfer_query(&code_query, batch_streams);
         let mask_query = self
             .device_manager
-            .htod_transfer_query(&mask_query, request_streams);
+            .htod_transfer_query(&mask_query, batch_streams);
         let code_query_insert = self
             .device_manager
-            .htod_transfer_query(&code_query_insert, request_streams);
+            .htod_transfer_query(&code_query_insert, batch_streams);
         let mask_query_insert = self
             .device_manager
-            .htod_transfer_query(&mask_query_insert, request_streams);
+            .htod_transfer_query(&mask_query_insert, batch_streams);
         let code_query_sums =
             self.codes_engine
-                .query_sums(&code_query, request_streams, request_cublas_handles);
+                .query_sums(&code_query, batch_streams, batch_cublas);
         let mask_query_sums =
             self.masks_engine
-                .query_sums(&mask_query, request_streams, request_cublas_handles);
-        let code_query_insert_sums = self.codes_engine.query_sums(
-            &code_query_insert,
-            request_streams,
-            request_cublas_handles,
-        );
-        let mask_query_insert_sums = self.masks_engine.query_sums(
-            &mask_query_insert,
-            request_streams,
-            request_cublas_handles,
-        );
+                .query_sums(&mask_query, batch_streams, batch_cublas);
+        let code_query_insert_sums =
+            self.codes_engine
+                .query_sums(&code_query_insert, batch_streams, batch_cublas);
+        let mask_query_insert_sums =
+            self.masks_engine
+                .query_sums(&mask_query_insert, batch_streams, batch_cublas);
 
-        // update the db size, skip this for the first two
-        if self.request_counter > MAX_CONCURRENT_BATCHES {
-            // We have two streams working concurrently, we'll await the stream before
-            // previous one.
-            // SAFETY: these streams can only safely be re-used after more than
-            // MAX_CONCURRENT_BATCHES.
-            let previous_previous_streams = &self.streams
-                [(self.request_counter - MAX_CONCURRENT_BATCHES) % MAX_BATCHES_BEFORE_REUSE];
-            self.device_manager.await_event(
-                previous_previous_streams,
-                &self.previous_previous_stream_event,
-            );
-            self.device_manager.await_streams(previous_previous_streams);
-        }
-
-        let current_db_size_stream = self
+        let mut current_db_sizes = self
             .current_db_size_mutex
             .iter()
             .map(|e| *e.lock().unwrap())
             .collect::<Vec<_>>();
 
-        // BLOCK 1: calculate individual dot products
-        self.device_manager
-            .await_event(request_streams, &self.current_dot_event);
-
         // ---- START BATCH DEDUP ----
-
         self.batch_codes_engine.dot(
             &code_query,
             &code_query_insert,
             &self.query_db_size,
             0,
-            request_streams,
-            request_cublas_handles,
+            batch_streams,
+            batch_cublas,
         );
 
         self.batch_masks_engine.dot(
@@ -558,8 +474,8 @@ impl ServerActor {
             &mask_query_insert,
             &self.query_db_size,
             0,
-            request_streams,
-            request_cublas_handles,
+            batch_streams,
+            batch_cublas,
         );
 
         self.batch_codes_engine.dot_reduce(
@@ -568,7 +484,7 @@ impl ServerActor {
             &self.query_db_size,
             &self.query_db_size,
             0,
-            request_streams,
+            batch_streams,
         );
 
         self.batch_masks_engine.dot_reduce(
@@ -577,21 +493,22 @@ impl ServerActor {
             &self.query_db_size,
             &self.query_db_size,
             0,
-            request_streams,
+            batch_streams,
         );
 
         self.batch_codes_engine
-            .reshare_results(&self.query_db_size, request_streams);
+            .reshare_results(&self.query_db_size, batch_streams);
         self.batch_masks_engine
-            .reshare_results(&self.query_db_size, request_streams);
+            .reshare_results(&self.query_db_size, batch_streams);
 
         let db_sizes_batch = vec![QUERIES; self.device_manager.device_count()];
+        // TODO: remove
         let mut code_dots_batch = self.batch_codes_engine.result_chunk_shares(&db_sizes_batch);
         let mut mask_dots_batch = self.batch_masks_engine.result_chunk_shares(&db_sizes_batch);
         self.phase2_batch.compare_threshold_masked_many(
             &code_dots_batch,
             &mask_dots_batch,
-            &request_streams,
+            &batch_streams,
         );
         let res = self.phase2_batch.take_result_buffer();
         let chunk_size = self.phase2_batch.chunk_size();
@@ -599,27 +516,52 @@ impl ServerActor {
             &mut self.phase2_batch,
             &res,
             &self.distance_comparator.lock().unwrap(),
-            &request_results_batch,
+            &self.batch_results,
             chunk_size,
             &db_sizes_batch,
             0,
-            &request_streams,
+            &batch_streams,
         );
         self.phase2_batch.return_result_buffer(res);
 
+        forget_vec!(code_dots_batch);
+        forget_vec!(mask_dots_batch);
         // ---- END BATCH DEDUP ----
-        let mut db_idx = 0;
+
+        // Create new initial events
+        self.current_dot_event = self.device_manager.create_events();
+        self.next_dot_event = self.device_manager.create_events();
+        self.current_exchange_event = self.device_manager.create_events();
+        self.next_exchange_event = self.device_manager.create_events();
+        self.current_phase2_event = self.device_manager.create_events();
+        self.next_phase2_event = self.device_manager.create_events();
+
+        // ---- START DATABASE DEDUP ----
+        let mut db_chunk_idx = 0;
         loop {
-            let chunk_size = current_db_size_stream
+            let request_streams = &self.streams[db_chunk_idx % 2];
+            let request_cublas_handles = &self.cublas_handles[db_chunk_idx % 2];
+
+            let offset = db_chunk_idx * DB_CHUNK_SIZE;
+            let chunk_size = current_db_sizes
                 .iter()
-                .map(|s| min(s - DB_CHUNK_SIZE * db_idx, DB_CHUNK_SIZE))
+                .map(|s| max(0, min(s - DB_CHUNK_SIZE * db_chunk_idx, DB_CHUNK_SIZE)))
                 .collect::<Vec<_>>();
-            let offset = db_idx * DB_CHUNK_SIZE;
 
             println!("chunks: {:?}, offset: {}", chunk_size, offset);
 
-            // debug_record_event!(device_manager, request_streams, timers);
+            // First stream doesn't need to wait
+            if db_chunk_idx == 0 {
+                self.device_manager
+                    .record_event(request_streams, &self.current_dot_event);
+                self.device_manager
+                    .record_event(request_streams, &self.current_exchange_event);
+            }
 
+            self.device_manager
+                .await_event(request_streams, &self.current_dot_event);
+
+            // ---- START PHASE 1 ----
             self.codes_engine.dot(
                 &code_query,
                 &(
@@ -644,7 +586,6 @@ impl ServerActor {
                 request_cublas_handles,
             );
 
-            // BLOCK 2: calculate final dot product result, exchange and compare
             self.device_manager
                 .await_event(request_streams, &self.current_exchange_event);
 
@@ -654,7 +595,7 @@ impl ServerActor {
                     helpers::device_ptrs(&self.code_db_slices.1 .0),
                     helpers::device_ptrs(&self.code_db_slices.1 .1),
                 ),
-                &current_db_size_stream,
+                &current_db_sizes,
                 &chunk_size,
                 offset,
                 request_streams,
@@ -665,7 +606,7 @@ impl ServerActor {
                     helpers::device_ptrs(&self.mask_db_slices.1 .0),
                     helpers::device_ptrs(&self.mask_db_slices.1 .1),
                 ),
-                &current_db_size_stream,
+                &current_db_sizes,
                 &chunk_size,
                 offset,
                 request_streams,
@@ -674,19 +615,20 @@ impl ServerActor {
             self.device_manager
                 .record_event(request_streams, &self.next_dot_event);
 
-            debug_record_event!(self.device_manager, request_streams, timers);
-
             self.codes_engine
                 .reshare_results(&chunk_size, request_streams);
             self.masks_engine
                 .reshare_results(&chunk_size, request_streams);
 
-            debug_record_event!(self.device_manager, request_streams, timers);
-
             self.device_manager
                 .record_event(request_streams, &self.next_exchange_event);
+            // ---- END PHASE 1 ----
 
-            // Phase 2 [DB]
+            self.device_manager
+                .await_event(request_streams, &self.current_phase2_event);
+
+            // ---- START PHASE 2 ----
+            // TODO: remove
             let mut code_dots = self.codes_engine.result_chunk_shares(&chunk_size);
             let mut mask_dots = self.masks_engine.result_chunk_shares(&chunk_size);
             {
@@ -698,7 +640,7 @@ impl ServerActor {
                     &mut phase2,
                     &res,
                     &self.distance_comparator.lock().unwrap(),
-                    &request_results,
+                    &self.results,
                     phase2_chunk_size,
                     &chunk_size,
                     offset,
@@ -706,285 +648,208 @@ impl ServerActor {
                 );
                 phase2.return_result_buffer(res);
             }
+            self.device_manager
+                .record_event(request_streams, &self.next_phase2_event);
 
-            // Don't drop those
             forget_vec!(code_dots);
             forget_vec!(mask_dots);
+            // ---- END PHASE 2 ----
 
-            break;
-            // db_idx += 1;
-            // if db_idx * DB_CHUNK_SIZE >= DB_SIZE /
-            // device_manager.device_count() {     break;
-            // }
+            // Update events for synchronization
+            self.current_dot_event = self.next_dot_event.clone();
+            self.next_dot_event = self.device_manager.create_events();
+            self.current_exchange_event = self.next_exchange_event.clone();
+            self.next_exchange_event = self.device_manager.create_events();
+            self.current_phase2_event = self.next_phase2_event.clone();
+            self.next_phase2_event = self.device_manager.create_events();
 
-            // // DEBUG: remove
-            // device_manager.await_streams(&request_streams);
+            // Increment chunk index
+            db_chunk_idx += 1;
+
+            // Break if we reached the end of the database
+            if db_chunk_idx * DB_CHUNK_SIZE >= *current_db_sizes.iter().max().unwrap() {
+                break;
+            }
+            
+            self.device_manager.await_streams(request_streams);
         }
+
+        // ---- END DATABASE DEDUP ----
+
+        // Wait for protocol to finish
+        self.device_manager.await_streams(&self.streams[0]);
+        self.device_manager.await_streams(&self.streams[1]);
+
+        // ---- START RESULT PROCESSING ----
 
         // Merge results and fetch matching indices
         // Format: host_results[device_index][query_index]
         self.distance_comparator.lock().unwrap().merge_results(
-            &request_results_batch,
-            &request_results,
-            &request_final_results,
-            &request_streams,
+            &self.batch_results,
+            &self.results,
+            &self.final_results,
+            &self.streams[0],
         );
 
-        // SAFETY:
-        // - We are sending these streams and events to a single thread (without cloning
-        //   them), then dropping our references to them (without destroying them).
-        // - These pointers are aligned, dereferencable, and initialized.
-        // Unique usage:
-        // - Streams are re-used after MAX_BATCHES_BEFORE_REUSE threads, but we only
-        //   launch MAX_CONCURRENT_BATCHES threads at a time. So this reference performs
-        //   the only accesses to its memory across both C and Rust.
-        // - New current stream events are created for each batch. They are only re-used
-        //   after MAX_CONCURRENT_BATCHES, but we wait for the previous batch to finish
-        //   before running that code.
-        // - End events are re-used in each thread, but we only end one thread at a
-        //   time.
-        assert!(MAX_BATCHES_BEFORE_REUSE > MAX_CONCURRENT_BATCHES);
-        // into_iter() makes the Rust compiler check that the streams are not re-used.
-        let mut thread_streams = request_streams
-            .into_iter()
-            .map(|s| unsafe { s.stream.as_mut().unwrap() })
-            .collect::<Vec<_>>();
-        // The compiler can't tell that we wait for the previous batch before re-using
-        // these events.
-        let mut thread_current_stream_event = self
-            .current_stream_event
+        // Iterate over a list of tracing payloads, and create logs with mappings to
+        // payloads Log at least a "start" event using a log with trace.id
+        // and parent.trace.id
+        // for tracing_payload in batch.metadata.iter() {
+        //     tracing::info!(
+        //         node_id = tracing_payload.node_id,
+        //         dd.trace_id = tracing_payload.trace_id,
+        //         dd.span_id = tracing_payload.span_id,
+        //         "Protocol finished",
+        //     );
+        // }
+
+        self.device_manager.await_streams(&self.streams[0]);
+
+        // Fetch the final results (blocking)
+        let host_results = self
+            .distance_comparator
+            .lock()
+            .unwrap()
+            .fetch_final_results(&self.final_results);
+
+        // Evaluate the results across devices
+        // Format: merged_results[query_index]
+        let mut merged_results =
+            get_merged_results(&host_results, self.device_manager.device_count());
+
+        // List the indices of the queries that did not match.
+        let insertion_list = merged_results
             .iter()
-            .map(|e| unsafe { e.as_mut().unwrap() })
-            .collect::<Vec<_>>();
-        let mut thread_end_timer = self
-            .end_timer
-            .iter()
-            .map(|e| unsafe { e.as_mut().unwrap() })
+            .enumerate()
+            .filter(|&(_idx, &num)| num == u32::MAX)
+            .map(|(idx, _num)| idx)
             .collect::<Vec<_>>();
 
-        let thread_device_manager = self.device_manager.clone();
-        let thread_current_db_size_mutex = self
-            .current_db_size_mutex
-            .iter()
-            .map(Arc::clone)
-            .collect::<Vec<_>>();
-        let thread_request_results_batch = helpers::device_ptrs(&request_results_batch);
-        let thread_request_results = helpers::device_ptrs(&request_results);
-        let thread_request_final_results = helpers::device_ptrs(&request_final_results);
+        // Spread the insertions across devices.
+        let insertion_list = distribute_insertions(&insertion_list, &current_db_sizes);
 
-        let thread_distance_comparator = self.distance_comparator.clone();
+        // Calculate the new indices for the inserted queries
+        let matches =
+            calculate_insertion_indices(&mut merged_results, &insertion_list, &current_db_sizes);
 
-        let thread_phase2 = self.phase2.clone();
-        let thread_code_db_slices = helpers::slice_tuples_to_ptrs(&self.code_db_slices);
-        let thread_mask_db_slices = helpers::slice_tuples_to_ptrs(&self.mask_db_slices);
-        let thread_request_ids = batch.request_ids.clone();
-        let thread_sender = return_channel;
-        let thread_prev_handle = self.previous_thread_handle.take();
-        let phase2_chunk_size_max = self.phase2_chunk_size_max;
+        for i in 0..self.device_manager.device_count() {
+            self.device_manager.device(i).bind_to_thread().unwrap();
+            for insertion_idx in insertion_list[i].clone() {
+                // Append to codes and masks db
+                for (db, query, sums) in [
+                    (
+                        &self.code_db_slices,
+                        &code_query_insert,
+                        &code_query_insert_sums,
+                    ),
+                    (
+                        &self.mask_db_slices,
+                        &mask_query_insert,
+                        &mask_query_insert_sums,
+                    ),
+                ] {
+                    unsafe {
+                        helpers::dtod_at_offset(
+                            *db.0 .0[i].device_ptr(),
+                            current_db_sizes[i] * IRIS_CODE_LENGTH,
+                            query.0[i],
+                            IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                            IRIS_CODE_LENGTH,
+                            self.streams[1][i].stream,
+                        );
 
-        self.previous_thread_handle = Some(thread::spawn(move || {
-            // Wait for protocol to finish
-            helpers::await_streams(&mut thread_streams);
+                        helpers::dtod_at_offset(
+                            *db.0 .1[i].device_ptr(),
+                            current_db_sizes[i] * IRIS_CODE_LENGTH,
+                            query.1[i],
+                            IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                            IRIS_CODE_LENGTH,
+                            self.streams[1][i].stream,
+                        );
 
-            if let Some(phandle) = thread_prev_handle {
-                phandle.join().unwrap();
-            }
+                        helpers::dtod_at_offset(
+                            *db.1 .0[i].device_ptr(),
+                            current_db_sizes[i] * mem::size_of::<u32>(),
+                            sums.0[i],
+                            mem::size_of::<u32>() * 15
+                                + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                            mem::size_of::<u32>(),
+                            self.streams[1][i].stream,
+                        );
 
-            let thread_devs = thread_device_manager.devices();
-
-            // Iterate over a list of tracing payloads, and create logs with mappings to
-            // payloads Log at least a "start" event using a log with trace.id
-            // and parent.trace.id
-            for tracing_payload in batch.metadata.iter() {
-                tracing::info!(
-                    node_id = tracing_payload.node_id,
-                    dd.trace_id = tracing_payload.trace_id,
-                    dd.span_id = tracing_payload.span_id,
-                    "Protocol finished",
-                );
-            }
-
-            let host_results = thread_distance_comparator
-                .lock()
-                .unwrap()
-                .fetch_final_results(&thread_request_final_results);
-
-            // Evaluate the results across devices
-            // Format: merged_results[query_index]
-            let mut merged_results = get_merged_results(&host_results, thread_devs.len());
-
-            // List the indices of the queries that did not match.
-            let insertion_list = merged_results
-                .iter()
-                .enumerate()
-                .filter(|&(_idx, &num)| num == u32::MAX)
-                .map(|(idx, _num)| idx)
-                .collect::<Vec<_>>();
-
-            // Spread the insertions across devices.
-            let db_sizes = thread_current_db_size_mutex
-                .iter()
-                .map(|e| *e.lock().unwrap())
-                .collect::<Vec<_>>();
-            let insertion_list = distribute_insertions(&insertion_list, &db_sizes);
-
-            // Calculate the new indices for the inserted queries
-            let matches =
-                calculate_insertion_indices(&mut merged_results, &insertion_list, &db_sizes);
-
-            for i in 0..thread_devs.len() {
-                thread_devs[i].bind_to_thread().unwrap();
-                let mut old_db_size = *thread_current_db_size_mutex[i].lock().unwrap();
-                for insertion_idx in insertion_list[i].clone() {
-                    // Append to codes and masks db
-                    for (db, query, sums) in [
-                        (
-                            &thread_code_db_slices,
-                            &code_query_insert,
-                            &code_query_insert_sums,
-                        ),
-                        (
-                            &thread_mask_db_slices,
-                            &mask_query_insert,
-                            &mask_query_insert_sums,
-                        ),
-                    ] {
-                        unsafe {
-                            helpers::dtod_at_offset(
-                                db.0 .0[i],
-                                old_db_size * IRIS_CODE_LENGTH,
-                                query.0[i],
-                                IRIS_CODE_LENGTH * 15
-                                    + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                                IRIS_CODE_LENGTH,
-                                &mut *thread_streams[i],
-                            );
-
-                            helpers::dtod_at_offset(
-                                db.0 .1[i],
-                                old_db_size * IRIS_CODE_LENGTH,
-                                query.1[i],
-                                IRIS_CODE_LENGTH * 15
-                                    + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                                IRIS_CODE_LENGTH,
-                                &mut *thread_streams[i],
-                            );
-
-                            helpers::dtod_at_offset(
-                                db.1 .0[i],
-                                old_db_size * mem::size_of::<u32>(),
-                                sums.0[i],
-                                mem::size_of::<u32>() * 15
-                                    + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                                mem::size_of::<u32>(),
-                                &mut *thread_streams[i],
-                            );
-
-                            helpers::dtod_at_offset(
-                                db.1 .1[i],
-                                old_db_size * mem::size_of::<u32>(),
-                                sums.1[i],
-                                mem::size_of::<u32>() * 15
-                                    + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                                mem::size_of::<u32>(),
-                                &mut *thread_streams[i],
-                            );
-                        }
+                        helpers::dtod_at_offset(
+                            *db.1 .1[i].device_ptr(),
+                            current_db_sizes[i] * mem::size_of::<u32>(),
+                            sums.1[i],
+                            mem::size_of::<u32>() * 15
+                                + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                            mem::size_of::<u32>(),
+                            self.streams[1][i].stream,
+                        );
                     }
-                    old_db_size += 1;
                 }
-
-                // Write new db sizes to device
-                *thread_current_db_size_mutex[i].lock().unwrap() +=
-                    insertion_list[i].len() as usize;
-
-                // DEBUG
-                println!(
-                    "Updating DB size on device {}: {:?}",
-                    i,
-                    *thread_current_db_size_mutex[i].lock().unwrap()
-                );
-
-                // Update Phase 2 chunk size to max all db sizes on all devices
-                let max_db_size = thread_current_db_size_mutex
-                    .iter()
-                    .map(|e| *e.lock().unwrap())
-                    .max()
-                    .unwrap();
-                let new_chunk_size = (QUERIES * max_db_size).div_ceil(2048) * 2048;
-                assert!(new_chunk_size <= phase2_chunk_size_max);
-                thread_phase2
-                    .lock()
-                    .unwrap()
-                    .set_chunk_size(new_chunk_size / 64);
-
-                // Emit stream finished event to unblock the stream after the following stream.
-                // Since previous timers are overwritten, only the final end timers are used to
-                // calculate the total time.
-                //
-                // SAFETY:
-                // - the events are created before launching the thread, so they are never null.
-                // - the streams have already been created, and we hold a reference to their
-                //   CudaDevice, which makes sure they aren't dropped.
-                unsafe {
-                    event::record(
-                        *&mut thread_current_stream_event[i],
-                        *&mut thread_streams[i],
-                    )
-                    .unwrap();
-
-                    // DEBUG: emit event to measure time for e2e process
-                    event::record(*&mut thread_end_timer[i], *&mut thread_streams[i]).unwrap();
-                }
+                current_db_sizes[i] += 1;
             }
 
-            // Pass to internal sender thread
-            thread_sender
-                .send(ServerJobResult {
-                    merged_results,
-                    thread_request_ids,
-                    matches,
-                    store: query_store,
-                })
-                .unwrap();
+            // Write new db sizes to device
+            *self.current_db_size_mutex[i].lock().unwrap() += insertion_list[i].len() as usize;
 
-            // Reset the results buffers for reuse
-            reset_results(
-                &thread_device_manager.devices(),
-                &thread_request_results,
-                &RESULTS_INIT_HOST,
-                &mut thread_streams,
-            );
-            reset_results(
-                &thread_device_manager.devices(),
-                &thread_request_results_batch,
-                &RESULTS_INIT_HOST,
-                &mut thread_streams,
-            );
-            reset_results(
-                &thread_device_manager.devices(),
-                &thread_request_final_results,
-                &FINAL_RESULTS_INIT_HOST,
-                &mut thread_streams,
+            // DEBUG
+            println!(
+                "Updating DB size on device {}: {:?}",
+                i,
+                *self.current_db_size_mutex[i].lock().unwrap()
             );
 
-            // Make sure to not call `Drop` on those
-            // forget_vec!(code_dots_batch);
-            // forget_vec!(mask_dots_batch);
-        }));
+            //     // DEBUG: emit event to measure time for e2e process
+            //     event::record(*&mut thread_end_timer[i], *&mut
+            // thread_streams[i]).unwrap(); }
+        }
+
+        // Update Phase 2 chunk size to max all db sizes on all devices
+        let new_chunk_size = (QUERIES * current_db_sizes.iter().max().unwrap()).div_ceil(64) * 64;
+        assert!(new_chunk_size <= self.phase2_chunk_size_max);
+        self.phase2
+            .lock()
+            .unwrap()
+            .set_chunk_size(new_chunk_size / 64);
+
+        // Pass to internal sender thread
+        return_channel
+            .send(ServerJobResult {
+                merged_results,
+                request_ids: batch.request_ids,
+                matches,
+                store: query_store,
+            })
+            .unwrap();
+
+        // Reset the results buffers for reuse
+        reset_results(
+            &self.device_manager.devices(),
+            &self.results,
+            &RESULTS_INIT_HOST,
+            &self.streams[1],
+        );
+        reset_results(
+            &self.device_manager.devices(),
+            &self.batch_results,
+            &RESULTS_INIT_HOST,
+            &self.streams[1],
+        );
+        reset_results(
+            &self.device_manager.devices(),
+            &self.final_results,
+            &FINAL_RESULTS_INIT_HOST,
+            &self.streams[1],
+        );
 
         // Prepare for next batch
         self.server_tasks.check_tasks();
 
-        self.timer_events.push(timers);
-
-        self.previous_previous_stream_event = self.previous_stream_event.clone();
-        self.previous_stream_event = self.current_stream_event.clone();
-        self.current_stream_event = self.device_manager.create_events();
-        self.current_dot_event = self.next_dot_event.clone();
-        self.current_exchange_event = self.next_exchange_event.clone();
-        self.next_dot_event = self.device_manager.create_events();
-        self.next_exchange_event = self.device_manager.create_events();
+        // self.previous_previous_stream_event = self.previous_stream_event.clone();
+        // self.previous_stream_event = self.current_stream_event.clone();
+        // self.current_stream_event = self.device_manager.create_events();
 
         println!("CPU time of one iteration {:?}", now.elapsed());
     }
@@ -1086,13 +951,13 @@ fn distribute_insertions(results: &[usize], db_sizes: &[usize]) -> Vec<Vec<usize
 
 fn reset_results(
     devs: &[Arc<CudaDevice>],
-    dst: &[CUdeviceptr],
+    dst: &[CudaSlice<u32>],
     src: &[u32],
-    streams: &mut [&mut CUstream_st],
+    streams: &[CudaStream],
 ) {
     for i in 0..devs.len() {
         devs[i].bind_to_thread().unwrap();
-        unsafe { result::memcpy_htod_async(dst[i], src, streams[i]) }.unwrap();
+        unsafe { result::memcpy_htod_async(*dst[i].device_ptr(), src, streams[i].stream) }.unwrap();
     }
 }
 

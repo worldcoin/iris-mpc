@@ -145,15 +145,15 @@ impl DistanceComparator {
         }
     }
 
-    pub fn fetch_final_results(&self, final_results_ptrs: &[u64]) -> Vec<Vec<u32>> {
+    pub fn fetch_final_results(&self, final_results_ptrs: &[CudaSlice<u32>]) -> Vec<Vec<u32>> {
         let mut results = vec![];
         for i in 0..self.device_manager.device_count() {
-            self.device_manager.device(i).bind_to_thread().unwrap();
-            let mut tmp = vec![0u32; self.query_length / ROTATIONS];
-            unsafe {
-                memcpy_dtoh_sync(&mut tmp, final_results_ptrs[i]).unwrap();
-            }
-            results.push(tmp);
+            results.push(
+                self.device_manager
+                    .device(i)
+                    .dtoh_sync_copy(&final_results_ptrs[i])
+                    .unwrap(),
+            );
         }
         results
     }

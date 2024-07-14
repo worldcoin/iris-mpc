@@ -585,7 +585,7 @@ impl ShareDB {
                             db_sums.1[idx],
                             query_sums.0[idx],
                             query_sums.1[idx],
-                            db_sizes[idx] as u64,
+                            chunk_sizes[idx] as u64,
                             (chunk_sizes[idx] * self.query_length) as u64,
                             offset as u64,
                             self.rngs[idx].0.cuda_slice().unwrap(),
@@ -636,6 +636,7 @@ impl ShareDB {
         }
     }
 
+    // TODO: this is very hacky
     pub fn result_chunk_shares(&self, db_sizes: &[usize]) -> Vec<ChunkShare<u16>> {
         let results_ptrs = self
             .results

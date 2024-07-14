@@ -9,18 +9,18 @@ use gpu_iris_mpc::{
     },
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
-use std::{collections::HashMap, fs, sync::Arc};
+use std::{collections::HashMap, fs, sync::Arc, thread::sleep, time::Duration};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-const DB_SIZE: usize = 8 * 256;
+const DB_SIZE: usize = 2 * 1000;
 const RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 1;
 const BATCH_SIZE: usize = 32;
 
 fn generate_or_load_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
-    let code_db_path = format!("/tmp/code_db{party_id}");
-    let mask_db_path = format!("/tmp/mask_db{party_id}");
+    let code_db_path = format!("/tmp/code_db_ps{party_id}");
+    let mask_db_path = format!("/tmp/mask_db_ps{party_id}");
     if fs::metadata(&code_db_path).is_ok() && fs::metadata(&mask_db_path).is_ok() {
         Ok((
             mmap::read_mmap_file(&code_db_path)?,
@@ -187,7 +187,7 @@ async fn e2e_test() -> Result<()> {
             let request_id = Uuid::new_v4();
             // Automatic random tests
             let options = if responses.is_empty() { 2 } else { 3 };
-            let template = match 1 {//choice_rng.gen_range(0..options) {
+            let template = match choice_rng.gen_range(0..options) {
                 0 => {
                     println!("Sending new iris code");
                     expected_results.insert(request_id.to_string(), None);
@@ -268,29 +268,31 @@ async fn e2e_test() -> Result<()> {
         let res2 = res2_fut.await;
 
         // go over results and check if correct
-        // for res in [res0, res1, res2].iter() {
-        //     let ServerJobResult {
-        //         thread_request_ids,
-        //         matches,
-        //         merged_results,
-        //         ..
-        //     } = res;
-        //     for ((req_id, &was_match), &idx) in thread_request_ids
-        //         .iter()
-        //         .zip(matches.iter())
-        //         .zip(merged_results.iter())
-        //     {
-        //         let expected_idx = expected_results.get(req_id).unwrap();
-        //         if let Some(expected_idx) = expected_idx {
-        //             assert!(was_match);
-        //             assert_eq!(expected_idx, &idx);
-        //         } else {
-        //             assert!(!was_match);
-        //             let request = requests.get(req_id).unwrap().clone();
-        //             responses.insert(idx, request);
-        //         }
-        //     }
-        // }
+        for res in [res0, res1, res2].iter() {
+            let ServerJobResult {
+                request_ids: thread_request_ids,
+                matches,
+                merged_results,
+                ..
+            } = res;
+            for ((req_id, &was_match), &idx) in thread_request_ids
+                .iter()
+                .zip(matches.iter())
+                .zip(merged_results.iter())
+            {
+                let expected_idx = expected_results.get(req_id).unwrap();
+                if let Some(expected_idx) = expected_idx {
+                    assert!(was_match);
+                    assert_eq!(expected_idx, &idx);
+                } else {
+                    assert!(!was_match);
+                    let request = requests.get(req_id).unwrap().clone();
+                    responses.insert(idx, request);
+                }
+            }
+        }
+
+        sleep(Duration::from_secs(1));
     }
 
     drop(handle0);
