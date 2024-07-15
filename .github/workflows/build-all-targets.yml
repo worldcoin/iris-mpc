@@ -3,15 +3,42 @@ name: Build All Targets
 on:
   push:
 
+concurrency:
+  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  cancel-in-progress: true
+
 jobs:
-  build-all:
+  build-tests:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      - name: Cache build products
+        uses: Swatinem/rust-cache@v2.7.3
+        with:
+          # Split the test and bench caches, the have different debug settings
+          key: "test"
       - name: Install Rust nightly
         run: rustup toolchain install nightly
       - name: Set Rust nightly as default
         run: rustup default nightly
-      - name: Build All Targets
-        run: cargo build --release --all-features --all-targets
+      # Building tests in release mode checks warnings and compiler errors that depend on optimisations
+      - name: Build Tests
+        run: cargo build --release --all-features --tests
+  build-bins:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Cache build products
+        uses: Swatinem/rust-cache@v2.7.3
+        with:
+          # Split the test and bench caches, the have different debug settings
+          key: "bench"
+      - name: Install Rust nightly
+        run: rustup toolchain install nightly
+      - name: Set Rust nightly as default
+        run: rustup default nightly
+      # Docker CI already builds binaries in release mode, so we can run faster by building in dev mode here
+      - name: Build Binaries
+        run: cargo build --all-features --lib --bins --benches --examples
