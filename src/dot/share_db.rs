@@ -7,6 +7,8 @@ use crate::{
     rng::chacha::ChaChaCudaRng,
 };
 use axum::{routing::get, Router};
+#[cfg(feature = "otp_encrypt")]
+use cudarc::driver::{CudaView, DeviceSlice};
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
@@ -16,12 +18,16 @@ use cudarc::{
     nccl::{self, result, Comm, Id, NcclType},
     nvrtc::compile_ptx,
 };
+#[cfg(feature = "otp_encrypt")]
+use itertools::Itertools;
 use rayon::prelude::*;
 use std::{ffi::c_void, mem, str::FromStr, sync::Arc, thread, time::Duration};
 use tokio::task::{AbortHandle, JoinSet};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const REDUCE_FUNCTION_NAME: &str = "matmul_correct_and_reduce";
+#[cfg(feature = "otp_encrypt")]
+const XOR_ASSIGN_U8_NAME: &str = "xor_assign_u8";
 const LIMBS: usize = 2;
 
 pub fn preprocess_query(query: &[u16]) -> Vec<Vec<u8>> {
@@ -142,18 +148,20 @@ fn chunking<T: Clone>(
 }
 
 pub struct ShareDB {
-    peer_id:              usize,
-    is_remote:            bool,
-    query_length:         usize,
-    device_manager:       Arc<DeviceManager>,
-    kernels:              Vec<CudaFunction>,
-    rngs:                 Vec<(ChaChaCudaRng, ChaChaCudaRng)>,
-    comms:                Vec<Arc<Comm>>,
-    ones:                 Vec<CudaSlice<u8>>,
-    intermediate_results: Vec<CudaSlice<i32>>,
-    pub results:          Vec<CudaSlice<u8>>,
-    pub results_peer:     Vec<CudaSlice<u8>>,
-    pub server_abort:     Option<AbortHandle>,
+    peer_id:               usize,
+    is_remote:             bool,
+    query_length:          usize,
+    device_manager:        Arc<DeviceManager>,
+    kernels:               Vec<CudaFunction>,
+    #[cfg(feature = "otp_encrypt")]
+    xor_assign_u8_kernels: Vec<CudaFunction>,
+    rngs:                  Vec<(ChaChaCudaRng, ChaChaCudaRng)>,
+    comms:                 Vec<Arc<Comm>>,
+    ones:                  Vec<CudaSlice<u8>>,
+    intermediate_results:  Vec<CudaSlice<i32>>,
+    pub results:           Vec<CudaSlice<u8>>,
+    pub results_peer:      Vec<CudaSlice<u8>>,
+    pub server_abort:      Option<AbortHandle>,
 }
 
 impl ShareDB {
@@ -186,6 +194,17 @@ impl ShareDB {
 
             kernels.push(function);
         }
+
+        #[cfg(feature = "otp_encrypt")]
+        let xor_assign_u8_kernels = (0..n_devices)
+            .map(|i| {
+                let dev = device_manager.device(i);
+                dev.load_ptx(ptx.clone(), XOR_ASSIGN_U8_NAME, &[XOR_ASSIGN_U8_NAME])
+                    .unwrap();
+                dev.get_func(XOR_ASSIGN_U8_NAME, XOR_ASSIGN_U8_NAME)
+                    .unwrap()
+            })
+            .collect_vec();
 
         let ones = vec![1u8; IRIS_CODE_LENGTH];
         let ones = (0..n_devices)
@@ -296,6 +315,8 @@ impl ShareDB {
             query_length,
             device_manager,
             kernels,
+            #[cfg(feature = "otp_encrypt")]
+            xor_assign_u8_kernels,
             rngs,
             comms,
             intermediate_results,
@@ -594,15 +615,136 @@ impl ShareDB {
         }
     }
 
+    #[cfg(feature = "otp_encrypt")]
+    fn single_xor_assign_u8(
+        &self,
+        x1: &mut CudaView<u8>,
+        x2: &CudaView<u8>,
+        idx: usize,
+        size: usize,
+        streams: &[CudaStream],
+    ) {
+        let threads_per_block = 256;
+        let blocks_per_grid = size.div_ceil(threads_per_block);
+        let cfg = LaunchConfig {
+            block_dim:        (threads_per_block as u32, 1, 1),
+            grid_dim:         (blocks_per_grid as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        unsafe {
+            self.xor_assign_u8_kernels[idx]
+                .clone()
+                .launch_on_stream(&streams[idx], cfg, (&*x1, x2, size))
+                .unwrap();
+        }
+    }
+
+    // Fill randomness using my RNG
+    #[cfg(feature = "otp_encrypt")]
+    fn fill_my_rng_into_u8<'a>(
+        &mut self,
+        rand: &'a mut CudaSlice<u32>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) -> CudaView<'a, u8> {
+        self.rngs[idx]
+            .0
+            .fill_rng_into(&mut rand.slice_mut(..), &streams[idx]);
+        let rand_trans: CudaView<u8> =
+    // the transmute_mut is safe because we know that one u32 is 4 u8s, and the buffer is aligned properly for the transmute
+        unsafe { rand.transmute(rand.len() * 4).unwrap() };
+        rand_trans
+    }
+
+    // Fill randomness using the their RNG
+    #[cfg(feature = "otp_encrypt")]
+    fn fill_their_rng_into_u8<'a>(
+        &mut self,
+        rand: &'a mut CudaSlice<u32>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) -> CudaView<'a, u8> {
+        self.rngs[idx]
+            .1
+            .fill_rng_into(&mut rand.slice_mut(..), &streams[idx]);
+        let rand_trans: CudaView<u8> =
+        // the transmute_mut is safe because we know that one u32 is 4 u8s, and the buffer is aligned properly for the transmute
+            unsafe { rand.transmute(rand.len() * 4).unwrap() };
+        rand_trans
+    }
+
+    #[cfg(feature = "otp_encrypt")]
+    fn otp_encrypt_rng_result(
+        &mut self,
+        len: usize,
+        idx: usize,
+        streams: &[CudaStream],
+    ) -> CudaSlice<u32> {
+        assert_eq!(len & 3, 0);
+        let mut rand = unsafe {
+            self.device_manager
+                .device(idx)
+                .alloc::<u32>(len >> 2)
+                .unwrap()
+        };
+        let mut rand_u8 = self.fill_my_rng_into_u8(&mut rand, idx, streams);
+        self.single_xor_assign_u8(
+            &mut rand_u8,
+            &self.results[idx].slice(..),
+            idx,
+            len,
+            streams,
+        );
+        rand
+    }
+
+    #[cfg(feature = "otp_encrypt")]
+    fn otp_decrypt_rng_result(&mut self, len: usize, idx: usize, streams: &[CudaStream]) {
+        assert_eq!(len & 3, 0);
+        let mut rand = unsafe {
+            self.device_manager
+                .device(idx)
+                .alloc::<u32>(len >> 2)
+                .unwrap()
+        };
+        let rand_u8 = self.fill_their_rng_into_u8(&mut rand, idx, streams);
+        self.single_xor_assign_u8(
+            &mut self.results_peer[idx].slice(..),
+            &rand_u8,
+            idx,
+            len,
+            streams,
+        );
+    }
+
     pub fn reshare_results(&mut self, db_sizes: &[usize], streams: &[CudaStream]) {
         let next_peer = (self.peer_id + 1) % 3;
         let prev_peer = (self.peer_id + 2) % 3;
 
+        #[cfg(feature = "otp_encrypt")]
+        let send_bufs = (0..self.device_manager.device_count())
+            .map(|idx| {
+                let len = db_sizes[idx] * self.query_length * 2;
+                self.otp_encrypt_rng_result(len, idx, streams)
+            })
+            .collect_vec();
+
+        #[cfg(feature = "otp_encrypt")]
+        let send = &send_bufs;
+        #[cfg(not(feature = "otp_encrypt"))]
+        let send = &self.results;
+
         nccl::group_start().unwrap();
         for idx in 0..self.device_manager.device_count() {
+            let len = db_sizes[idx] * self.query_length * 2;
+            #[cfg(feature = "otp_encrypt")]
+            let send_len = len >> 2;
+            #[cfg(not(feature = "otp_encrypt"))]
+            let send_len = len;
             send_stream(
-                &self.results[idx],
-                db_sizes[idx] * self.query_length * 2,
+                &send[idx],
+                send_len,
                 next_peer,
                 &self.comms[idx],
                 &streams[idx],
@@ -611,7 +753,7 @@ impl ShareDB {
 
             receive_stream(
                 &mut self.results_peer[idx],
-                db_sizes[idx] * self.query_length * 2,
+                len,
                 prev_peer,
                 &self.comms[idx],
                 &streams[idx],
@@ -619,6 +761,11 @@ impl ShareDB {
             .unwrap();
         }
         nccl::group_end().unwrap();
+        #[cfg(feature = "otp_encrypt")]
+        for idx in 0..self.device_manager.device_count() {
+            let len = db_sizes[idx] * self.query_length * 2;
+            self.otp_decrypt_rng_result(len, idx, streams);
+        }
     }
 
     pub fn fetch_results(&self, results: &mut [u16], db_sizes: &[usize], device_id: usize) {

@@ -53,6 +53,11 @@ futures = "0.3.30"
 
 [dev-dependencies]
 criterion = "0.5"
+
+[features]
+default = []
+otp_encrypt = []
+
 #[[bench]]
 #name = "chacha"
 #harness = false
