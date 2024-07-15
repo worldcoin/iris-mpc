@@ -1,7 +1,7 @@
 use eyre::Result;
 use gpu_iris_mpc::{
     config::ServersConfig,
-    helpers::{device_manager::DeviceManager, mmap},
+    helpers::device_manager::DeviceManager,
     server::{BatchQuery, ServerActor, ServerJobResult},
     setup::{
         galois_engine::degree4::GaloisRingIrisCodeShare,
@@ -9,7 +9,7 @@ use gpu_iris_mpc::{
     },
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
-use std::{collections::HashMap, fs, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
@@ -18,54 +18,43 @@ const RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 5;
 const BATCH_SIZE: usize = 32;
 
-fn generate_or_load_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
-    let code_db_path = format!("/tmp/code_db{party_id}");
-    let mask_db_path = format!("/tmp/mask_db{party_id}");
-    if fs::metadata(&code_db_path).is_ok() && fs::metadata(&mask_db_path).is_ok() {
-        Ok((
-            mmap::read_mmap_file(&code_db_path)?,
-            mmap::read_mmap_file(&mask_db_path)?,
-        ))
-    } else {
-        let mut rng = StdRng::seed_from_u64(RNG_SEED);
-        let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
+fn generate_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
+    let mut rng = StdRng::seed_from_u64(RNG_SEED);
+    let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
-        let codes_db = db
-            .db
-            .iter()
-            .flat_map(|iris| {
-                GaloisRingIrisCodeShare::encode_iris_code(
-                    &iris.code,
-                    &iris.mask,
-                    &mut StdRng::seed_from_u64(RNG_SEED),
-                )[party_id]
-                    .coefs
-            })
-            .collect::<Vec<_>>();
+    let codes_db = db
+        .db
+        .iter()
+        .flat_map(|iris| {
+            GaloisRingIrisCodeShare::encode_iris_code(
+                &iris.code,
+                &iris.mask,
+                &mut StdRng::seed_from_u64(RNG_SEED),
+            )[party_id]
+                .coefs
+        })
+        .collect::<Vec<_>>();
 
-        let masks_db = db
-            .db
-            .iter()
-            .flat_map(|iris| {
-                GaloisRingIrisCodeShare::encode_mask_code(
-                    &iris.mask,
-                    &mut StdRng::seed_from_u64(RNG_SEED),
-                )[party_id]
-                    .coefs
-            })
-            .collect::<Vec<_>>();
-        mmap::write_mmap_file(&code_db_path, &codes_db)?;
-        mmap::write_mmap_file(&mask_db_path, &masks_db)?;
+    let masks_db = db
+        .db
+        .iter()
+        .flat_map(|iris| {
+            GaloisRingIrisCodeShare::encode_mask_code(
+                &iris.mask,
+                &mut StdRng::seed_from_u64(RNG_SEED),
+            )[party_id]
+                .coefs
+        })
+        .collect::<Vec<_>>();
 
-        Ok((codes_db, masks_db))
-    }
+    Ok((codes_db, masks_db))
 }
 
 #[tokio::test]
 async fn e2e_test() -> Result<()> {
-    let db0 = generate_or_load_db(0)?;
-    let db1 = generate_or_load_db(1)?;
-    let db2 = generate_or_load_db(2)?;
+    let db0 = generate_db(0)?;
+    let db1 = generate_db(1)?;
+    let db2 = generate_db(2)?;
 
     let config0 = ServersConfig {
         codes_engine_port:       10001,
