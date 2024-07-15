@@ -428,6 +428,9 @@ async fn main() -> eyre::Result<()> {
     actor_task.await.unwrap();
     // Clean up server tasks, then wait for them to finish
     background_tasks.abort_all();
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    // Check for background task hangs and shutdown panics
+    background_tasks.check_tasks_finished();
 
     if let Some(handle) = health_check_server_handle {
         handle.await??;
