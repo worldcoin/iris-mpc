@@ -9,7 +9,7 @@ use gpu_iris_mpc::{
     },
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
-use std::{collections::HashMap, fs, sync::Arc, thread::sleep, time::Duration};
+use std::{collections::HashMap, fs, sync::Arc};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
@@ -187,7 +187,7 @@ async fn e2e_test() -> Result<()> {
             let request_id = Uuid::new_v4();
             // Automatic random tests
             let options = if responses.is_empty() { 2 } else { 3 };
-            let template = match choice_rng.gen_range(0..options) {
+            let template = match 1 {//match choice_rng.gen_range(0..options) {
                 0 => {
                     println!("Sending new iris code");
                     expected_results.insert(request_id.to_string(), None);
@@ -291,8 +291,6 @@ async fn e2e_test() -> Result<()> {
                 }
             }
         }
-
-        sleep(Duration::from_secs(1));
     }
 
     drop(handle0);

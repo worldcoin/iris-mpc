@@ -2,21 +2,23 @@
 #define ROTATIONS 15
 #define IRIS_CODE_LENGTH 12800
 
-extern "C" __global__ void matmul_correct_and_reduce(int *c, unsigned short *output, int *a0Sums, int *a1Sums, int *b0Sums, int *b1Sums, size_t numRows, size_t numElements, size_t offset, unsigned short *rngMasks0, unsigned short *rngMasks1)
+extern "C" __global__ void matmul_correct_and_reduce(int *c, unsigned short *output, int *a0Sums, int *a1Sums, int *b0Sums, int *b1Sums, size_t dbLength, size_t numElements, size_t offset, unsigned short *rngMasks0, unsigned short *rngMasks1)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
     {
-        int s0 = a0Sums[offset + (idx % numRows)] + b0Sums[offset + (idx / numRows)];
-        int s1 = a1Sums[offset + (idx % numRows)] + b1Sums[offset + (idx / numRows)];
+        unsigned int queryIdx = idx / dbLength;
+        unsigned int dbIdx = idx % dbLength;
+        int s0 = a0Sums[offset + dbIdx] + b0Sums[queryIdx];
+        int s1 = a1Sums[offset + dbIdx] + b1Sums[queryIdx];
         output[idx] = c[idx] + (s0 << 7) + ((s0 + s1) << 15) + rngMasks0[idx] - rngMasks1[idx];
     }
 }
 
-extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned int *output, size_t dbLength, size_t queryLength, size_t offset)
+extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned int *output, size_t dbLength, size_t queryLength, size_t offset, size_t numElements)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < (dbLength * queryLength + 63) / 64)
+    if (idx < numElements)
     {
         unsigned long long result = result1[idx] ^ result2[idx] ^ result3[idx];
         for (int i = 0; i < 64; i++)
@@ -26,8 +28,9 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
             bool match = (result & (1ULL << i));
 
             // Check if we are out of bounds for the query or db
-            if (queryIdx > queryLength || dbIdx > dbLength)
-                return;
+            if (queryIdx >= queryLength || dbIdx >= dbLength) {
+                continue;
+            }
 
             // return db element with smallest index
             if (match)

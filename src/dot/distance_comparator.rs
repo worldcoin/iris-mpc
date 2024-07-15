@@ -2,8 +2,7 @@ use super::ROTATIONS;
 use crate::helpers::device_manager::DeviceManager;
 use cudarc::{
     driver::{
-        result::{launch_kernel, memcpy_dtoh_sync},
-        CudaFunction, CudaSlice, CudaStream, CudaView, DeviceRepr, LaunchAsync, LaunchConfig,
+        CudaFunction, CudaSlice, CudaStream, CudaView, LaunchAsync, LaunchConfig,
     },
     nvrtc::compile_ptx,
 };
@@ -102,7 +101,8 @@ impl DistanceComparator {
                             &results_ptrs[i],
                             db_sizes[i],
                             self.query_length,
-                            offset as u64,
+                            offset,
+                            num_elements,
                         ),
                     )
                     .unwrap();

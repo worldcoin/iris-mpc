@@ -196,7 +196,7 @@ impl ShareDB {
         let mut intermediate_results = vec![];
         let mut results = vec![];
         let mut results_peer = vec![];
-        let results_len = (max_db_length / n_devices * query_length).div_ceil(64) * 64;
+        let results_len = (max_db_length * query_length).div_ceil(64) * 64;
 
         for idx in 0..n_devices {
             unsafe {
@@ -218,7 +218,7 @@ impl ShareDB {
 
         // Init RNGs
         let rng_buf_size: usize =
-            (max_db_length / n_devices * query_length * mem::size_of::<u16>()).div_ceil(64) * 64;
+            (max_db_length * query_length * mem::size_of::<u16>()).div_ceil(64) * 64;
         let mut rngs = vec![];
         for idx in 0..n_devices {
             let (seed0, seed1) = chacha_seeds;
@@ -435,6 +435,10 @@ impl ShareDB {
             })
             .collect::<Vec<_>>();
 
+        for dev in self.device_manager.devices() {
+            dev.synchronize().unwrap();
+        }
+
         ((db0, db1), (db0_sums, db1_sums))
     }
 
@@ -553,7 +557,6 @@ impl ShareDB {
         &mut self,
         query_sums: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
         db_sums: &(Vec<CUdeviceptr>, Vec<CUdeviceptr>),
-        db_sizes: &[usize],
         chunk_sizes: &[usize],
         offset: usize,
         streams: &[CudaStream],
@@ -742,7 +745,6 @@ mod tests {
             &query_sums,
             &(device_ptrs(&db_slices.1 .0), device_ptrs(&db_slices.1 .1)),
             &db_sizes,
-            &db_sizes,
             0,
             &streams,
         );
@@ -849,7 +851,6 @@ mod tests {
             engine.dot_reduce(
                 &query_sums,
                 &(device_ptrs(&db_slices.1 .0), device_ptrs(&db_slices.1 .1)),
-                &db_sizes,
                 &db_sizes,
                 0,
                 &streams,
@@ -1011,7 +1012,6 @@ mod tests {
                     device_ptrs(&code_db_slices.1 .1),
                 ),
                 &db_sizes,
-                &db_sizes,
                 0,
                 &streams,
             );
@@ -1021,7 +1021,6 @@ mod tests {
                     device_ptrs(&mask_db_slices.1 .0),
                     device_ptrs(&mask_db_slices.1 .1),
                 ),
-                &db_sizes,
                 &db_sizes,
                 0,
                 &streams,
