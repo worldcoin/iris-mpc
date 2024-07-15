@@ -274,7 +274,7 @@ async fn main() -> eyre::Result<()> {
     // since it blocks a lot and is `!Send`, we get back the handle via the oneshot
     // channel
     let (tx, rx) = oneshot::channel();
-    let actor_task = background_tasks.spawn_blocking(move || {
+    background_tasks.spawn_blocking(move || {
         let actor = match ServerActor::new(
             config.party_id,
             config.servers,
