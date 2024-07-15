@@ -269,11 +269,12 @@ async fn main() -> eyre::Result<()> {
         masks_db.extend(iris.mask());
     }
 
+    let mut background_tasks = TaskMonitor::new();
     // a bit convoluted, but we need to create the actor on the thread already,
     // since it blocks a lot and is `!Send`, we get back the handle via the oneshot
     // channel
     let (tx, rx) = oneshot::channel();
-    let actor_task = tokio::task::spawn_blocking(move || {
+    let actor_task = background_tasks.spawn_blocking(move || {
         let actor = match ServerActor::new(
             config.party_id,
             config.servers,
@@ -293,12 +294,12 @@ async fn main() -> eyre::Result<()> {
         };
         actor.run();
     });
+    background_tasks.check_tasks();
     let mut handle = rx.await??;
 
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
     let rx_sns_client = sns_client.clone();
-    let mut background_tasks = TaskMonitor::new();
 
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
@@ -424,8 +425,6 @@ async fn main() -> eyre::Result<()> {
         total_time.elapsed() - batch_times
     );
 
-    // wait for actor task to finish
-    actor_task.await.unwrap();
     // Clean up server tasks, then wait for them to finish
     background_tasks.abort_all();
     tokio::time::sleep(Duration::from_secs(5)).await;
