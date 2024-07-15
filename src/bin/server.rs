@@ -4,6 +4,7 @@ use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{routing::get, Router};
 use clap::Parser;
+use futures::StreamExt;
 use gpu_iris_mpc::{
     config::{Config, Opt},
     dot::ROTATIONS,
@@ -178,6 +179,8 @@ async fn main() -> eyre::Result<()> {
         TracingShutdownHandle
     };
 
+    let store = Store::new_from_config(&config).await?;
+
     let Config {
         path,
         party_id,
@@ -194,7 +197,6 @@ async fn main() -> eyre::Result<()> {
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);
-    let store = Store::new_from_env().await?;
 
     // Init RNGs
     let own_key_id = kms_key_ids
@@ -264,7 +266,8 @@ async fn main() -> eyre::Result<()> {
         };
 
     // Load DB from persistent storage.
-    for iris in store.iter_irises().await? {
+    while let Some(iris) = store.stream_irises().await.next().await {
+        let iris = iris?;
         codes_db.extend(iris.code());
         masks_db.extend(iris.mask());
     }
