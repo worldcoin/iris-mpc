@@ -3,6 +3,7 @@ pub mod json_wrapper;
 use crate::config::json_wrapper::JsonStrWrapper;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 #[derive(Debug, Parser)]
 pub struct Opt {
@@ -97,7 +98,7 @@ impl Config {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct DbConfig {
     pub url: String,
 
@@ -106,6 +107,16 @@ pub struct DbConfig {
 
     #[serde(default)]
     pub create: bool,
+}
+
+impl fmt::Debug for DbConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DbConfig")
+            .field("url", &"********") // Mask the URL
+            .field("migrate", &self.migrate)
+            .field("create", &self.create)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
