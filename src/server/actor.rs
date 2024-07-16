@@ -12,12 +12,11 @@ use crate::{
 };
 use cudarc::{
     cublas::CudaBlas,
-    driver::{result, sys::CUevent_st, CudaDevice, CudaSlice, CudaStream, DevicePtr},
+    driver::{result, CudaDevice, CudaSlice, CudaStream, DevicePtr},
 };
 use futures::{Future, FutureExt};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{
-    cmp::{max, min},
     mem,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -92,9 +91,6 @@ pub struct ServerActor {
     results:               Vec<CudaSlice<u32>>,
     batch_results:         Vec<CudaSlice<u32>>,
     final_results:         Vec<CudaSlice<u32>>,
-    start_timer:           Vec<*mut CUevent_st>,
-    end_timer:             Vec<*mut CUevent_st>,
-    timer_events:          Vec<Vec<Vec<*mut CUevent_st>>>,
     current_db_size_mutex: Vec<Arc<Mutex<usize>>>,
     query_db_size:         Vec<usize>,
 }
@@ -290,10 +286,6 @@ impl ServerActor {
         let results = distance_comparator.prepare_results();
         let batch_results = distance_comparator.prepare_results();
 
-        let timer_events = vec![];
-        let start_timer = device_manager.create_events(false);
-        let end_timer = device_manager.create_events(false);
-
         let current_db_size: Vec<usize> =
             vec![DB_SIZE / device_manager.device_count(); device_manager.device_count()];
         let query_db_size = vec![QUERIES; device_manager.device_count()];
@@ -324,9 +316,6 @@ impl ServerActor {
             results,
             batch_results,
             final_results,
-            start_timer,
-            end_timer,
-            timer_events,
             current_db_size_mutex,
             query_db_size,
         })
@@ -346,25 +335,6 @@ impl ServerActor {
         self.server_tasks.abort_all();
 
         std::thread::sleep(Duration::from_secs(1));
-        // for timers in self.timer_events {
-        //     unsafe {
-        //         self.device_manager.device(0).bind_to_thread().unwrap();
-        //         let dot_time = elapsed(timers[0][0], timers[1][0]).unwrap();
-        //         let exchange_time = elapsed(timers[2][0], timers[3][0]).unwrap();
-        //         println!(
-        //             "Dot time: {:?}, Exchange time: {:?}",
-        //             dot_time, exchange_time
-        //         );
-        //     }
-        // }
-
-        // for i in 0..self.device_manager.device_count() {
-        //     unsafe {
-        //         self.device_manager.device(i).bind_to_thread().unwrap();
-        //         let total_time = elapsed(self.start_timer[i],
-        // self.end_timer[i]).unwrap();         println!("Total time: {:?}",
-        // total_time);     }
-        // }
 
         self.server_tasks.check_tasks_finished();
     }
@@ -383,13 +353,8 @@ impl ServerActor {
         let mask_query_insert = prepare_query_shares(batch.db.mask);
         let query_store = batch.store;
 
-        // let mut timers = vec![];
-
         let batch_streams = &self.streams[0];
         let batch_cublas = &self.cublas_handles[0];
-
-        self.device_manager
-            .record_event(&self.streams[0], &self.start_timer);
 
         // Transfer queries to device
         // TODO: free all of this!
@@ -471,7 +436,7 @@ impl ServerActor {
         self.phase2_batch.compare_threshold_masked_many(
             &code_dots_batch,
             &mask_dots_batch,
-            &batch_streams,
+            batch_streams,
         );
         let res = self.phase2_batch.take_result_buffer();
         let chunk_size = self.phase2_batch.chunk_size();
@@ -483,7 +448,7 @@ impl ServerActor {
             chunk_size,
             &db_sizes_batch,
             0,
-            &batch_streams,
+            batch_streams,
         );
         self.phase2_batch.return_result_buffer(res);
 
@@ -508,7 +473,7 @@ impl ServerActor {
             let offset = db_chunk_idx * DB_CHUNK_SIZE;
             let chunk_size = current_db_sizes
                 .iter()
-                .map(|s| max(0, min(s - DB_CHUNK_SIZE * db_chunk_idx, DB_CHUNK_SIZE)))
+                .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(0, DB_CHUNK_SIZE))
                 .collect::<Vec<_>>();
 
             println!("chunks: {:?}, offset: {}", chunk_size, offset);
@@ -596,7 +561,7 @@ impl ServerActor {
             let mut mask_dots = self.masks_engine.result_chunk_shares(&chunk_size);
             {
                 self.phase2
-                    .compare_threshold_masked_many(&code_dots, &mask_dots, &request_streams);
+                    .compare_threshold_masked_many(&code_dots, &mask_dots, request_streams);
                 let res = self.phase2.take_result_buffer();
                 open(
                     &mut self.phase2,
@@ -606,7 +571,7 @@ impl ServerActor {
                     QUERIES * chunk_size.iter().max().unwrap() / 64,
                     &chunk_size,
                     offset,
-                    &request_streams,
+                    request_streams,
                 );
                 self.phase2.return_result_buffer(res);
             }
@@ -764,10 +729,6 @@ impl ServerActor {
                 i,
                 *self.current_db_size_mutex[i].lock().unwrap()
             );
-
-            //     // DEBUG: emit event to measure time for e2e process
-            //     event::record(*&mut thread_end_timer[i], *&mut
-            // thread_streams[i]).unwrap(); }
         }
 
         // Pass to internal sender thread
@@ -782,19 +743,19 @@ impl ServerActor {
 
         // Reset the results buffers for reuse
         reset_results(
-            &self.device_manager.devices(),
+            self.device_manager.devices(),
             &self.results,
             &RESULTS_INIT_HOST,
             &self.streams[0],
         );
         reset_results(
-            &self.device_manager.devices(),
+            self.device_manager.devices(),
             &self.batch_results,
             &RESULTS_INIT_HOST,
             &self.streams[0],
         );
         reset_results(
-            &self.device_manager.devices(),
+            self.device_manager.devices(),
             &self.final_results,
             &FINAL_RESULTS_INIT_HOST,
             &self.streams[0],
@@ -825,6 +786,7 @@ fn prepare_query_shares(shares: Vec<GaloisRingIrisCodeShare>) -> Vec<Vec<u8>> {
     preprocess_query(&shares.into_iter().flat_map(|e| e.coefs).collect::<Vec<_>>())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn open(
     party: &mut Circuits,
     x: &[ChunkShare<u64>],
@@ -860,7 +822,7 @@ fn open(
     }
     cudarc::nccl::result::group_end().unwrap();
 
-    distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, offset, &streams);
+    distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, offset, streams);
 }
 
 fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {

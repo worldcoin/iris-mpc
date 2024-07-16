@@ -65,6 +65,7 @@ impl DistanceComparator {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn open_results(
         &self,
         results1: &[CudaView<u64>],
