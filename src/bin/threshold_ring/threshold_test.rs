@@ -191,7 +191,7 @@ async fn main() -> eyre::Result<()> {
         INPUTS_PER_GPU_SIZE / 64,
         ([party_id as u32; 8], [((party_id + 2) % 3) as u32; 8]),
         url,
-        Some(3001),
+        Some(9001),
         Some(&mut server_tasks),
         device_manager.clone(),
     );
@@ -216,6 +216,7 @@ async fn main() -> eyre::Result<()> {
 
         let now = Instant::now();
         party.compare_threshold_masked_many(&code_gpu, &mask_gpu, &streams);
+        party.synchronize_streams(&streams);
         println!("compute time: {:?}", now.elapsed());
 
         let res = party.take_result_buffer();

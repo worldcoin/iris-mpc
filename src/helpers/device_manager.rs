@@ -12,7 +12,7 @@ use cudarc::{
 };
 use std::sync::Arc;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DeviceManager {
     devices: Vec<Arc<CudaDevice>>,
 }
@@ -24,6 +24,24 @@ impl DeviceManager {
             devices.push(CudaDevice::new(i as usize).unwrap());
         }
         Self { devices }
+    }
+
+    /// Splits the devices into n chunks, returning a device manager for each
+    /// chunk.
+    /// If too few devices are present, returns the original device manager.
+    pub fn split_into_n_chunks(self, n: usize) -> Result<Vec<DeviceManager>, DeviceManager> {
+        let n_devices = self.devices.len();
+        let chunk_size = n_devices / n;
+        if chunk_size == 0 {
+            return Err(self);
+        }
+        let mut ret = vec![];
+        for i in 0..n {
+            ret.push(DeviceManager {
+                devices: self.devices[i * chunk_size..(i + 1) * chunk_size].to_vec(),
+            });
+        }
+        Ok(ret)
     }
 
     pub fn fork_streams(&self) -> Vec<CudaStream> {
