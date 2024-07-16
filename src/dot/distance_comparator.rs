@@ -1,9 +1,7 @@
 use super::ROTATIONS;
 use crate::helpers::device_manager::DeviceManager;
 use cudarc::{
-    driver::{
-        CudaFunction, CudaSlice, CudaStream, CudaView, LaunchAsync, LaunchConfig,
-    },
+    driver::{CudaFunction, CudaSlice, CudaStream, CudaView, LaunchAsync, LaunchConfig},
     nvrtc::compile_ptx,
 };
 use std::sync::Arc;

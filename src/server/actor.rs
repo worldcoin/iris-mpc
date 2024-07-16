@@ -111,14 +111,7 @@ impl ServerActor {
         masks_db: &[u16],
         job_queue_size: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
-        let device_manager = DeviceManager::init();
-        let device_manager = device_manager.split_into_n_chunks(3);
-        let device_manager = match device_manager {
-            Ok(devices) => devices[0].clone(),
-            Err(device_manager) => device_manager,
-        };
-        dbg!(device_manager.device_count());
-        let device_manager = Arc::new(device_manager);
+        let device_manager = Arc::new(DeviceManager::init());
         Self::new_with_device_manager(
             party_id,
             config,

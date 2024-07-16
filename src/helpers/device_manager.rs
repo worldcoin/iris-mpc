@@ -77,7 +77,7 @@ impl DeviceManager {
         } else {
             CUevent_flags::CU_EVENT_DEFAULT
         };
-        
+
         let mut events = vec![];
         for idx in 0..self.devices.len() {
             self.devices[idx].bind_to_thread().unwrap();

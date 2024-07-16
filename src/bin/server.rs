@@ -4,6 +4,8 @@ use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{routing::get, Router};
 use clap::Parser;
+use eyre::Context;
+use futures::StreamExt;
 use gpu_iris_mpc::{
     config::{Config, Opt},
     dot::ROTATIONS,
@@ -178,6 +180,8 @@ async fn main() -> eyre::Result<()> {
         TracingShutdownHandle
     };
 
+    let store = Store::new_from_config(&config).await?;
+
     let Config {
         path,
         party_id,
@@ -194,7 +198,6 @@ async fn main() -> eyre::Result<()> {
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);
-    let store = Store::new_from_env().await?;
 
     // Init RNGs
     let own_key_id = kms_key_ids
@@ -264,16 +267,18 @@ async fn main() -> eyre::Result<()> {
         };
 
     // Load DB from persistent storage.
-    for iris in store.iter_irises().await? {
+    while let Some(iris) = store.stream_irises().await.next().await {
+        let iris = iris?;
         codes_db.extend(iris.code());
         masks_db.extend(iris.mask());
     }
 
+    let mut background_tasks = TaskMonitor::new();
     // a bit convoluted, but we need to create the actor on the thread already,
     // since it blocks a lot and is `!Send`, we get back the handle via the oneshot
     // channel
     let (tx, rx) = oneshot::channel();
-    let actor_task = tokio::task::spawn_blocking(move || {
+    background_tasks.spawn_blocking(move || {
         let actor = match ServerActor::new(
             config.party_id,
             config.servers,
@@ -288,17 +293,18 @@ async fn main() -> eyre::Result<()> {
             }
             Err(e) => {
                 tx.send(Err(e)).unwrap();
-                return;
+                return Ok(());
             }
         };
         actor.run();
+        Ok(())
     });
+    background_tasks.check_tasks();
     let mut handle = rx.await??;
 
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
     let rx_sns_client = sns_client.clone();
-    let mut background_tasks = TaskMonitor::new();
 
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
@@ -329,7 +335,7 @@ async fn main() -> eyre::Result<()> {
                     store
                         .insert_irises(&codes_and_masks)
                         .await
-                        .expect("failed to persist queries");
+                        .wrap_err("failed to persist queries")?;
                 }
 
                 // Notify consumers about result
@@ -342,23 +348,29 @@ async fn main() -> eyre::Result<()> {
                     .topic_arn(&results_topic_arn)
                     .message(serde_json::to_string(&result_event).unwrap())
                     .send()
-                    .await
-                    .unwrap();
+                    .await?;
             }
         }
+
+        Ok(())
     });
     background_tasks.check_tasks();
 
     println!("All systems ready.");
     println!("Starting healthcheck server.");
 
-    let health_check_server_handle = Some(tokio::spawn(async move {
+    let _health_check_abort = background_tasks.spawn(async move {
         let app = Router::new().route("/health", get(|| async {})); // implicit 200 return
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
-        axum::serve(listener, app).await?;
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+            .await
+            .wrap_err("healthcheck listener bind error")?;
+        axum::serve(listener, app)
+            .await
+            .wrap_err("healthcheck listener server launch error")?;
 
-        eyre::Result::<()>::Ok(())
-    }));
+        Ok(())
+    });
+    background_tasks.check_tasks();
 
     let mut total_time = Instant::now();
     let mut batch_times = Duration::from_secs(0);
@@ -424,14 +436,11 @@ async fn main() -> eyre::Result<()> {
         total_time.elapsed() - batch_times
     );
 
-    // wait for actor task to finish
-    actor_task.await.unwrap();
     // Clean up server tasks, then wait for them to finish
     background_tasks.abort_all();
-
-    if let Some(handle) = health_check_server_handle {
-        handle.await??;
-    }
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    // Check for background task hangs and shutdown panics
+    background_tasks.check_tasks_finished();
 
     Ok(())
 }

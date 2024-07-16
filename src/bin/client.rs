@@ -110,6 +110,11 @@ async fn main() -> eyre::Result<()> {
                 let tmp = thread_expected_results.lock().await;
                 let expected_result = tmp.get(&result.request_id);
                 if expected_result.is_none() {
+                    eprintln!(
+                        "No expected result found for request_id: {}, the SQS message is likely \
+                         stale, clear the queue",
+                        result.request_id
+                    );
                     continue;
                 }
                 let expected_result = expected_result.unwrap();
@@ -149,6 +154,7 @@ async fn main() -> eyre::Result<()> {
     // Prepare query
     for query_idx in 0..N_QUERIES {
         let request_id = Uuid::new_v4();
+        println!("Building request: {}", request_id);
 
         let template = if random.is_some() {
             // Automatic random tests
