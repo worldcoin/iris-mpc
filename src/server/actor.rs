@@ -10,7 +10,6 @@ use crate::{
     setup::galois_engine::degree4::GaloisRingIrisCodeShare,
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
-use aws_sdk_sns::operation::list_endpoints_by_platform_application::ListEndpointsByPlatformApplicationOutput;
 use cudarc::{
     cublas::CudaBlas,
     driver::{result, sys::CUevent_st, CudaDevice, CudaSlice, CudaStream, DevicePtr},
@@ -21,11 +20,11 @@ use std::{
     cmp::{max, min},
     mem,
     sync::{Arc, Mutex},
-    thread::sleep,
     time::{Duration, Instant},
 };
 use tokio::sync::{mpsc, oneshot};
 
+#[allow(unused)]
 macro_rules! debug_record_event {
     ($manager:expr, $streams:expr, $timers:expr) => {
         let evts = $manager.create_events();
@@ -62,10 +61,10 @@ impl ServerActorHandle {
     }
 }
 
-const DB_SIZE: usize = 8 * 1_000;
-const DB_BUFFER: usize = 8 * 1_000;
-const DB_CHUNK_SIZE: usize = 512;
-const N_QUERIES: usize = 32;
+const DB_SIZE: usize = 2 * 1_000;
+const DB_BUFFER: usize = 2 * 1_000;
+const DB_CHUNK_SIZE: usize = 100;
+const N_QUERIES: usize = 64;
 const QUERIES: usize = ROTATIONS * N_QUERIES;
 
 type DbSlices = (
@@ -506,8 +505,6 @@ impl ServerActor {
         let mut next_exchange_event = self.device_manager.create_events(false);
         let mut current_phase2_event = self.device_manager.create_events(false);
         let mut next_phase2_event = self.device_manager.create_events(false);
-        let protocol_finished_0 = self.device_manager.create_events(true);
-        let protocol_finished_1 = self.device_manager.create_events(true);
 
         // ---- START DATABASE DEDUP ----
         let mut db_chunk_idx = 0;
@@ -640,25 +637,18 @@ impl ServerActor {
 
             // Break if we reached the end of the database
             if db_chunk_idx * DB_CHUNK_SIZE >= *current_db_sizes.iter().max().unwrap() {
-                // Record the end of the protocol
-                // self.device_manager
-                //     .record_event(&self.streams[0], &protocol_finished_0);
-                // self.device_manager
-                //     .record_event(&self.streams[1], &protocol_finished_1);
                 break;
             }
 
-            // self.device_manager.await_streams(&self.streams[0]);
-            // self.device_manager.await_streams(&self.streams[1]);
-            // break;
+            // TODO: Fix for phase 2 blocking after a few iterations
+            if db_chunk_idx % 2 == 1 {
+                self.device_manager.await_streams(&self.streams[0]);
+                self.device_manager.await_streams(&self.streams[1]);
+            }
         }
         // ---- END DATABASE DEDUP ----
 
         // Wait for protocol to finish
-        // self.device_manager
-        //     .await_event(&self.streams[0], &protocol_finished_0);
-        // self.device_manager
-        //     .await_event(&self.streams[1], &protocol_finished_1);
         self.device_manager.await_streams(&self.streams[0]);
         self.device_manager.await_streams(&self.streams[1]);
 
