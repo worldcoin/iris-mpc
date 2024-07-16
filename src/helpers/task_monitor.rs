@@ -1,5 +1,6 @@
 //! Long-running async task monitoring.
 
+use eyre::Result;
 use std::{
     ops::{Deref, DerefMut},
     panic,
@@ -17,13 +18,13 @@ use tokio::task::{JoinError, JoinSet};
 /// `check_tasks_finished()`.
 #[derive(Debug, Default)]
 pub struct TaskMonitor {
-    pub tasks: JoinSet<()>,
+    pub tasks: JoinSet<Result<()>>,
 }
 
 // Instead of writing trivial wrappers for all the useful JoinSet methods, we
 // can just Deref to the inner JoinSet.
 impl Deref for TaskMonitor {
-    type Target = JoinSet<()>;
+    type Target = JoinSet<Result<()>>;
 
     fn deref(&self) -> &Self::Target {
         &self.tasks
@@ -68,8 +69,7 @@ impl TaskMonitor {
     pub fn check_tasks(&mut self) {
         // Any finished task is an error, so we just need to check for the first one.
         if let Some(finished_task) = self.tasks.try_join_next() {
-            finished_task.expect("Monitored task was panicked or cancelled");
-            panic!("Monitored task unexpectedly finished without an error");
+            Self::panic_with_task_status(finished_task);
         }
     }
 
@@ -95,7 +95,7 @@ impl TaskMonitor {
         while let Some(finished_task) = self.tasks.try_join_next() {
             // If there is a hang (or hang panic) here, try calling abort_all() and waiting
             // before dropping the TaskMonitor.
-            TaskMonitor::resume_panic(finished_task);
+            Self::resume_panic(finished_task);
         }
 
         if !self.tasks.is_empty() {
@@ -114,15 +114,14 @@ impl TaskMonitor {
         while let Some(finished_task) = self.tasks.try_join_next() {
             // If there is a hang (or hang panic) here, try calling abort_all() and waiting
             // before dropping the TaskMonitor.
-            TaskMonitor::resume_panic(finished_task);
+            Self::resume_panic(finished_task);
         }
     }
 
     /// Panics if any of the `server_tasks` have finished with a panic.
-    /// (Ignores tasks that have finished normally).
+    /// (Ignores tasks that have finished normally or were cancelled).
     ///
-    /// When exiting the program, call `abort_all()`, wait for the tasks to
-    /// finish, then call this function.
+    /// When exiting the program, call this function, which calls `abort_all()`.
     ///
     /// This function can't detect hangs: it hangs if any task does not finish
     /// when aborted.
@@ -131,19 +130,40 @@ impl TaskMonitor {
 
         // Any hung task is an error, so we need to check they've all finished.
         while let Some(finished_task) = self.tasks.join_next().await {
-            TaskMonitor::resume_panic(finished_task);
+            Self::resume_panic(finished_task);
         }
 
+        // If this assertion triggers, there could be a bug in JoinSet::join_next(), or
+        // we could be (incorrectly and unsafely) adding tasks while waiting for
+        // them to finish.
         assert!(self.tasks.is_empty());
     }
 
-    /// If `err` is a task panic, resume that panic.
+    /// If `result` is a task panic, resume that panic.
+    /// If `result` is an `eyre::Report`, panic with that error.
+    ///
+    /// Ignores `Ok` task exits and cancelled tasks.
     #[track_caller]
-    pub fn resume_panic(err: Result<(), JoinError>) {
-        if let Err(err) = err {
-            if !err.is_cancelled() {
-                panic::resume_unwind(err.into_panic());
+    pub fn resume_panic(result: Result<Result<()>, JoinError>) {
+        match result {
+            Err(join_err) => {
+                if !join_err.is_cancelled() {
+                    panic::resume_unwind(join_err.into_panic());
+                }
             }
+            Ok(Err(report_err)) => panic!("{:?}", report_err),
+            Ok(Ok(())) => { /* Task finished with Ok or was cancelled */ }
         }
+    }
+
+    /// Panics with a message containing the task exit status.
+    /// Panics even if the task exits with `Ok`, or was cancelled.
+    #[track_caller]
+    pub fn panic_with_task_status(result: Result<Result<()>, JoinError>) {
+        result
+            .expect("Monitored task was panicked or cancelled")
+            .expect("Monitored task returned an error");
+
+        panic!("Monitored task unexpectedly finished without an error");
     }
 }

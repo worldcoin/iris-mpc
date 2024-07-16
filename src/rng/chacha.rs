@@ -1,6 +1,7 @@
 use cudarc::{
     driver::{
-        CudaDevice, CudaFunction, CudaSlice, CudaStream, DeviceSlice, LaunchAsync, LaunchConfig,
+        CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaViewMut, DeviceSlice, LaunchAsync,
+        LaunchConfig,
     },
     nvrtc::compile_ptx,
 };
@@ -102,6 +103,42 @@ impl ChaChaCudaRng {
                     cfg,
                     (
                         self.rng_chunk.as_mut().unwrap(),
+                        &self.state_gpu_buf,
+                        self.chacha_ctx.state[12], // first part of counter
+                        self.chacha_ctx.state[13], // second part of counter
+                        len,
+                    ),
+                )
+                .unwrap();
+        }
+        // increment the state counter of the ChaChaRng with the number of produced
+        // blocks
+        let mut counter = self.chacha_ctx.get_counter();
+        counter += num_ks_calls as u64; // one call to KS produces 16 u32, so we increase the counter by the number of
+                                        // KS calls
+        self.chacha_ctx.set_counter(counter);
+    }
+
+    pub fn fill_rng_into(&mut self, buf: &mut CudaViewMut<u32>, stream: &CudaStream) {
+        let len = buf.len();
+        assert!(len % 16 == 0, "buffer length must be a multiple of 16");
+        let num_ks_calls = len / 16; // we produce 16 u32s per kernel call
+        let threads_per_block = 256; // todo sync with kernel
+        let blocks_per_grid = (num_ks_calls + threads_per_block - 1) / threads_per_block;
+        let cfg = LaunchConfig {
+            block_dim:        (threads_per_block as u32, 1, 1),
+            grid_dim:         (blocks_per_grid as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        unsafe {
+            self.kernel
+                .clone()
+                .launch_on_stream(
+                    stream,
+                    cfg,
+                    (
+                        &mut *buf,
                         &self.state_gpu_buf,
                         self.chacha_ctx.state[12], // first part of counter
                         self.chacha_ctx.state[13], // second part of counter

@@ -44,4 +44,6 @@ RUN apt-get update && apt-get install -y libssl-dev ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 RUN dpkg -i /tmp/libnccl*.deb
+
+USER 65534
 ENTRYPOINT ["/bin/server"]
