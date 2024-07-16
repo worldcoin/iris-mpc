@@ -4,6 +4,7 @@ use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{routing::get, Router};
 use clap::Parser;
+use eyre::Context;
 use futures::StreamExt;
 use gpu_iris_mpc::{
     config::{Config, Opt},
@@ -292,10 +293,11 @@ async fn main() -> eyre::Result<()> {
             }
             Err(e) => {
                 tx.send(Err(e)).unwrap();
-                return;
+                return Ok(());
             }
         };
         actor.run();
+        Ok(())
     });
     background_tasks.check_tasks();
     let mut handle = rx.await??;
@@ -333,7 +335,7 @@ async fn main() -> eyre::Result<()> {
                     store
                         .insert_irises(&codes_and_masks)
                         .await
-                        .expect("failed to persist queries");
+                        .wrap_err("failed to persist queries")?;
                 }
 
                 // Notify consumers about result
@@ -346,23 +348,29 @@ async fn main() -> eyre::Result<()> {
                     .topic_arn(&results_topic_arn)
                     .message(serde_json::to_string(&result_event).unwrap())
                     .send()
-                    .await
-                    .unwrap();
+                    .await?;
             }
         }
+
+        Ok(())
     });
     background_tasks.check_tasks();
 
     println!("All systems ready.");
     println!("Starting healthcheck server.");
 
-    let health_check_server_handle = Some(tokio::spawn(async move {
+    let _health_check_abort = background_tasks.spawn(async move {
         let app = Router::new().route("/health", get(|| async {})); // implicit 200 return
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
-        axum::serve(listener, app).await?;
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+            .await
+            .wrap_err("healthcheck listener bind error")?;
+        axum::serve(listener, app)
+            .await
+            .wrap_err("healthcheck listener server launch error")?;
 
-        eyre::Result::<()>::Ok(())
-    }));
+        Ok(())
+    });
+    background_tasks.check_tasks();
 
     let mut total_time = Instant::now();
     let mut batch_times = Duration::from_secs(0);
@@ -433,10 +441,6 @@ async fn main() -> eyre::Result<()> {
     tokio::time::sleep(Duration::from_secs(5)).await;
     // Check for background task hangs and shutdown panics
     background_tasks.check_tasks_finished();
-
-    if let Some(handle) = health_check_server_handle {
-        handle.await??;
-    }
 
     Ok(())
 }

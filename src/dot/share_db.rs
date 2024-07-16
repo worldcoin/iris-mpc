@@ -3,6 +3,7 @@ use crate::{
     helpers::{
         device_manager::DeviceManager,
         id_wrapper::{http_root, IdWrapper},
+        task_monitor::TaskMonitor,
     },
     rng::chacha::ChaChaCudaRng,
 };
@@ -22,7 +23,7 @@ use cudarc::{
 use itertools::Itertools;
 use rayon::prelude::*;
 use std::{ffi::c_void, mem, str::FromStr, sync::Arc, thread, time::Duration};
-use tokio::task::{AbortHandle, JoinSet};
+use tokio::task::AbortHandle;
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const REDUCE_FUNCTION_NAME: &str = "matmul_correct_and_reduce";
@@ -176,7 +177,7 @@ impl ShareDB {
         peer_url: Option<String>,
         is_remote: Option<bool>,
         server_port: Option<u16>,
-        sever_task_set: Option<&mut JoinSet<()>>,
+        sever_task_set: Option<&mut TaskMonitor>,
     ) -> Self {
         let n_devices = device_manager.device_count();
         let ptx = compile_ptx(PTX_SRC).unwrap();
@@ -273,9 +274,9 @@ impl ShareDB {
                         Router::new().route("/:device_id", get(move |req| http_root(ids, req)));
                     let listener =
                         tokio::net::TcpListener::bind(format!("0.0.0.0:{}", server_port.unwrap()))
-                            .await
-                            .unwrap();
-                    axum::serve(listener, app).await.unwrap();
+                            .await?;
+                    axum::serve(listener, app).await?;
+                    Ok(())
                 }));
             } else {
                 thread::sleep(Duration::from_secs(2));
