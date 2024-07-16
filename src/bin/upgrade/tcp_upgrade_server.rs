@@ -5,8 +5,7 @@ use gpu_iris_mpc::{
     setup::id::PartyID,
     upgrade::{
         packets::{MaskShareMessage, TwoToThreeIrisCodeMessage},
-        upgrade::IrisCodeUpgrader,
-        IrisShareTestFileSink,
+        IrisCodeUpgrader, IrisShareTestFileSink,
     },
 };
 use std::{
@@ -198,8 +197,7 @@ async fn main_task_loop(
             Some(x) => x,
             None => break,
         };
-        let up = upgrader.clone();
-        tokio::task::spawn_blocking(move || up.finalize(msg1, msg2, masks)).await??;
+        upgrader.finalize(msg1, msg2, masks).await?;
         finished_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
     Ok(())

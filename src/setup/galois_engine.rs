@@ -332,6 +332,7 @@ pub mod degree4 {
             }
             shares
         }
+        #[allow(clippy::assertions_on_constants)]
         pub fn reencode_extended_iris_code<R: CryptoRng + Rng>(
             iris_code: &[u16; IRIS_CODE_LENGTH],
             rng: &mut R,
@@ -361,7 +362,7 @@ pub mod degree4 {
                 let element = element.to_monomial();
                 let share = ShamirGaloisRingShare::encode_3_mat(&element.coefs, rng);
                 for j in 0..3 {
-                    shares[j].coefs[i + 0] = share[j].y.coefs[0];
+                    shares[j].coefs[i] = share[j].y.coefs[0];
                     shares[j].coefs[i + 1] = share[j].y.coefs[1];
                     shares[j].coefs[i + 2] = share[j].y.coefs[2];
                     shares[j].coefs[i + 3] = share[j].y.coefs[3];

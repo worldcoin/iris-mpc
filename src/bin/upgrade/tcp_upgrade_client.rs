@@ -32,6 +32,9 @@ pub struct Args {
 
     #[clap(long)]
     pub party_id: u8,
+
+    #[clap(long, default_value = "false")]
+    pub mock: bool,
 }
 
 struct MockOldDbParty1 {
@@ -54,7 +57,7 @@ fn old_dbs() -> (MockOldDbParty1, MockOldDbParty2) {
 }
 
 impl OldIrisShareSource for MockOldDbParty1 {
-    fn load_code_share(&self, share_id: u64) -> std::io::Result<[u16; IRIS_CODE_LENGTH]> {
+    async fn load_code_share(&self, share_id: u64) -> std::io::Result<[u16; IRIS_CODE_LENGTH]> {
         let mut rng = self.rng.clone();
         rng.set_word_pos(share_id as u128 * 12800);
         let mut res = [0u16; IRIS_CODE_LENGTH];
@@ -64,7 +67,7 @@ impl OldIrisShareSource for MockOldDbParty1 {
         Ok(res)
     }
 
-    fn load_mask(&self, _share_id: u64) -> std::io::Result<[bool; IRIS_CODE_LENGTH]> {
+    async fn load_mask(&self, _share_id: u64) -> std::io::Result<[bool; IRIS_CODE_LENGTH]> {
         let mut res = [false; IRIS_CODE_LENGTH];
         res.iter_mut().enumerate().for_each(|(i, x)| {
             *x = (1 - (i % 3)) != 0;
@@ -74,7 +77,7 @@ impl OldIrisShareSource for MockOldDbParty1 {
 }
 
 impl OldIrisShareSource for MockOldDbParty2 {
-    fn load_code_share(&self, share_id: u64) -> std::io::Result<[u16; IRIS_CODE_LENGTH]> {
+    async fn load_code_share(&self, share_id: u64) -> std::io::Result<[u16; IRIS_CODE_LENGTH]> {
         let mut rng = self.rng.clone();
         rng.set_word_pos(share_id as u128 * 12800);
         let mut res = [0u16; IRIS_CODE_LENGTH];
@@ -84,7 +87,7 @@ impl OldIrisShareSource for MockOldDbParty2 {
         Ok(res)
     }
 
-    fn load_mask(&self, _share_id: u64) -> std::io::Result<[bool; IRIS_CODE_LENGTH]> {
+    async fn load_mask(&self, _share_id: u64) -> std::io::Result<[bool; IRIS_CODE_LENGTH]> {
         let mut res = [false; IRIS_CODE_LENGTH];
         res.iter_mut().enumerate().for_each(|(i, x)| {
             *x = (1 - (i % 3)) != 0;
@@ -145,7 +148,7 @@ async fn main() -> eyre::Result<()> {
     for id in 0..args.db_size {
         tracing::trace!("Processing id: {}", id);
         let [a, b, c] = if args.party_id == 0 {
-            let shares = db1.load_code_share(id)?;
+            let shares = db1.load_code_share(id).await?;
             let galois_shared_iris_code =
                 GaloisRingIrisCodeShare::reencode_extended_iris_code(&shares, &mut rng);
             [
@@ -154,7 +157,7 @@ async fn main() -> eyre::Result<()> {
                 galois_shared_iris_code[2].coefs,
             ]
         } else {
-            let shares = db2.load_code_share(id)?;
+            let shares = db2.load_code_share(id).await?;
             let galois_shared_iris_code =
                 GaloisRingIrisCodeShare::reencode_extended_iris_code(&shares, &mut rng);
             [
@@ -194,7 +197,7 @@ async fn main() -> eyre::Result<()> {
         c?;
 
         if args.party_id == 0 {
-            let masks = db1.load_mask(id)?;
+            let masks = db1.load_mask(id).await?;
             let extended_masks = array::from_fn(|i| masks[i] as u16);
             let [ma, mb, mc] = {
                 let galois_shared_iris_code =
