@@ -63,7 +63,7 @@ impl ServerActorHandle {
 
 const DB_SIZE: usize = 2 * 1_000;
 const DB_BUFFER: usize = 2 * 1_000;
-const DB_CHUNK_SIZE: usize = 100;
+const DB_CHUNK_SIZE: usize = 512;
 const N_QUERIES: usize = 64;
 const QUERIES: usize = ROTATIONS * N_QUERIES;
 
@@ -640,7 +640,8 @@ impl ServerActor {
                 break;
             }
 
-            // TODO: Fix for phase 2 blocking after a few iterations
+            // FIX: removing this sync causes invalid results.
+            // However, it should not be necessary to sync here.
             if db_chunk_idx % 2 == 1 {
                 self.device_manager.await_streams(&self.streams[0]);
                 self.device_manager.await_streams(&self.streams[1]);
@@ -725,7 +726,7 @@ impl ServerActor {
                             query.0[i],
                             IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                             IRIS_CODE_LENGTH,
-                            self.streams[1][i].stream,
+                            self.streams[0][i].stream,
                         );
 
                         helpers::dtod_at_offset(
@@ -734,7 +735,7 @@ impl ServerActor {
                             query.1[i],
                             IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                             IRIS_CODE_LENGTH,
-                            self.streams[1][i].stream,
+                            self.streams[0][i].stream,
                         );
 
                         helpers::dtod_at_offset(
@@ -744,7 +745,7 @@ impl ServerActor {
                             mem::size_of::<u32>() * 15
                                 + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                             mem::size_of::<u32>(),
-                            self.streams[1][i].stream,
+                            self.streams[0][i].stream,
                         );
 
                         helpers::dtod_at_offset(
@@ -754,7 +755,7 @@ impl ServerActor {
                             mem::size_of::<u32>() * 15
                                 + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                             mem::size_of::<u32>(),
-                            self.streams[1][i].stream,
+                            self.streams[0][i].stream,
                         );
                     }
                 }
@@ -791,27 +792,23 @@ impl ServerActor {
             &self.device_manager.devices(),
             &self.results,
             &RESULTS_INIT_HOST,
-            &self.streams[1],
+            &self.streams[0],
         );
         reset_results(
             &self.device_manager.devices(),
             &self.batch_results,
             &RESULTS_INIT_HOST,
-            &self.streams[1],
+            &self.streams[0],
         );
         reset_results(
             &self.device_manager.devices(),
             &self.final_results,
             &FINAL_RESULTS_INIT_HOST,
-            &self.streams[1],
+            &self.streams[0],
         );
 
         // Prepare for next batch
         self.server_tasks.check_tasks();
-
-        // self.previous_previous_stream_event = self.previous_stream_event.clone();
-        // self.previous_stream_event = self.current_stream_event.clone();
-        // self.current_stream_event = self.device_manager.create_events();
 
         println!("CPU time of one iteration {:?}", now.elapsed());
     }
@@ -849,7 +846,7 @@ fn open(
     let mut a = Vec::with_capacity(n_devices);
     let mut b = Vec::with_capacity(n_devices);
     let mut c = Vec::with_capacity(n_devices);
-    party.set_chunk_size(chunk_size);
+    // party.set_chunk_size(chunk_size);
 
     cudarc::nccl::result::group_start().unwrap();
     for (idx, res) in x.iter().enumerate() {
@@ -870,7 +867,6 @@ fn open(
     }
     cudarc::nccl::result::group_end().unwrap();
 
-    println!("offset: {}", offset);
     distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, offset, &streams);
 }
 
