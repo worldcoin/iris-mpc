@@ -166,7 +166,7 @@ async fn main() -> eyre::Result<()> {
         INPUTS_PER_GPU_SIZE / 128,
         ([party_id as u32; 8], [((party_id + 2) % 3) as u32; 8]),
         url,
-        Some(3001),
+        Some(9001),
         Some(&mut server_tasks),
         device_manager.clone(),
     );
