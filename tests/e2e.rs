@@ -1,7 +1,7 @@
 use eyre::Result;
 use gpu_iris_mpc::{
     config::ServersConfig,
-    helpers::{device_manager::DeviceManager, mmap},
+    helpers::device_manager::DeviceManager,
     server::{BatchQuery, ServerActor, ServerJobResult},
     setup::{
         galois_engine::degree4::GaloisRingIrisCodeShare,

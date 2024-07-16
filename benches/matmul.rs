@@ -55,6 +55,7 @@ fn bench_memcpy(c: &mut Criterion) {
                 &preprocessed_query,
                 &(device_ptrs(&db_slices.0 .0), device_ptrs(&db_slices.0 .1)),
                 &db_sizes,
+                0,
                 &streams,
                 &blass,
             );
@@ -62,6 +63,7 @@ fn bench_memcpy(c: &mut Criterion) {
                 &query_sums,
                 &(device_ptrs(&db_slices.1 .0), device_ptrs(&db_slices.1 .1)),
                 &db_sizes,
+                0,
                 &streams,
             );
             device_manager.await_streams(&streams);
