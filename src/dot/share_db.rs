@@ -1,9 +1,15 @@
-use super::{device_manager::DeviceManager, IRIS_CODE_LENGTH};
+use super::IRIS_CODE_LENGTH;
 use crate::{
-    helpers::id_wrapper::{http_root, IdWrapper},
+    helpers::{
+        device_manager::DeviceManager,
+        id_wrapper::{http_root, IdWrapper},
+        task_monitor::TaskMonitor,
+    },
     rng::chacha::ChaChaCudaRng,
 };
 use axum::{routing::get, Router};
+#[cfg(feature = "otp_encrypt")]
+use cudarc::driver::{CudaView, DeviceSlice};
 use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
@@ -13,11 +19,16 @@ use cudarc::{
     nccl::{self, result, Comm, Id, NcclType},
     nvrtc::compile_ptx,
 };
+#[cfg(feature = "otp_encrypt")]
+use itertools::Itertools;
 use rayon::prelude::*;
 use std::{ffi::c_void, mem, str::FromStr, sync::Arc, thread, time::Duration};
+use tokio::task::AbortHandle;
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const REDUCE_FUNCTION_NAME: &str = "matmul_correct_and_reduce";
+#[cfg(feature = "otp_encrypt")]
+const XOR_ASSIGN_U8_NAME: &str = "xor_assign_u8";
 const LIMBS: usize = 2;
 
 pub fn preprocess_query(query: &[u16]) -> Vec<Vec<u8>> {
@@ -138,21 +149,25 @@ fn chunking<T: Clone>(
 }
 
 pub struct ShareDB {
-    peer_id:              usize,
-    is_remote:            bool,
-    query_length:         usize,
-    device_manager:       Arc<DeviceManager>,
-    kernels:              Vec<CudaFunction>,
-    rngs:                 Vec<(ChaChaCudaRng, ChaChaCudaRng)>,
-    comms:                Vec<Arc<Comm>>,
-    ones:                 Vec<CudaSlice<u8>>,
-    intermediate_results: Vec<CudaSlice<i32>>,
-    pub results:          Vec<CudaSlice<u8>>,
-    pub results_peer:     Vec<CudaSlice<u8>>,
+    peer_id:               usize,
+    is_remote:             bool,
+    query_length:          usize,
+    device_manager:        Arc<DeviceManager>,
+    kernels:               Vec<CudaFunction>,
+    #[cfg(feature = "otp_encrypt")]
+    xor_assign_u8_kernels: Vec<CudaFunction>,
+    rngs:                  Vec<(ChaChaCudaRng, ChaChaCudaRng)>,
+    comms:                 Vec<Arc<Comm>>,
+    ones:                  Vec<CudaSlice<u8>>,
+    intermediate_results:  Vec<CudaSlice<i32>>,
+    pub results:           Vec<CudaSlice<u8>>,
+    pub results_peer:      Vec<CudaSlice<u8>>,
+    pub server_abort:      Option<AbortHandle>,
 }
 
 impl ShareDB {
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::arc_with_non_send_sync)]
     pub fn init(
         peer_id: usize,
         device_manager: Arc<DeviceManager>,
@@ -162,6 +177,7 @@ impl ShareDB {
         peer_url: Option<String>,
         is_remote: Option<bool>,
         server_port: Option<u16>,
+        sever_task_set: Option<&mut TaskMonitor>,
     ) -> Self {
         let n_devices = device_manager.device_count();
         let ptx = compile_ptx(PTX_SRC).unwrap();
@@ -180,6 +196,17 @@ impl ShareDB {
             kernels.push(function);
         }
 
+        #[cfg(feature = "otp_encrypt")]
+        let xor_assign_u8_kernels = (0..n_devices)
+            .map(|i| {
+                let dev = device_manager.device(i);
+                dev.load_ptx(ptx.clone(), XOR_ASSIGN_U8_NAME, &[XOR_ASSIGN_U8_NAME])
+                    .unwrap();
+                dev.get_func(XOR_ASSIGN_U8_NAME, XOR_ASSIGN_U8_NAME)
+                    .unwrap()
+            })
+            .collect_vec();
+
         let ones = vec![1u8; IRIS_CODE_LENGTH];
         let ones = (0..n_devices)
             .map(|idx| device_manager.device(idx).htod_sync_copy(&ones).unwrap())
@@ -190,7 +217,7 @@ impl ShareDB {
         let mut intermediate_results = vec![];
         let mut results = vec![];
         let mut results_peer = vec![];
-        let results_len = max_db_length / n_devices * query_length;
+        let results_len = (max_db_length / n_devices * query_length).div_ceil(64) * 64;
 
         for idx in 0..n_devices {
             unsafe {
@@ -227,6 +254,7 @@ impl ShareDB {
 
         // Init NCCL comms
         let mut comms = vec![];
+        let mut server_abort = None;
         if is_remote {
             let mut ids = vec![];
             for _ in 0..n_devices {
@@ -235,17 +263,21 @@ impl ShareDB {
 
             // Start HTTP server to exchange NCCL commIds
             if peer_id == 0 {
+                let sever_task_set = sever_task_set.expect(
+                    "task set must be supplied to peer_id 0 for remote connection monitoring",
+                );
+
                 let ids = ids.clone();
-                tokio::spawn(async move {
+                server_abort = Some(sever_task_set.spawn(async move {
                     println!("Starting server on port {}...", server_port.unwrap());
                     let app =
                         Router::new().route("/:device_id", get(move |req| http_root(ids, req)));
                     let listener =
                         tokio::net::TcpListener::bind(format!("0.0.0.0:{}", server_port.unwrap()))
-                            .await
-                            .unwrap();
-                    axum::serve(listener, app).await.unwrap();
-                });
+                            .await?;
+                    axum::serve(listener, app).await?;
+                    Ok(())
+                }));
             } else {
                 thread::sleep(Duration::from_secs(2));
             }
@@ -284,12 +316,15 @@ impl ShareDB {
             query_length,
             device_manager,
             kernels,
+            #[cfg(feature = "otp_encrypt")]
+            xor_assign_u8_kernels,
             rngs,
             comms,
             intermediate_results,
             ones,
             results,
             results_peer,
+            server_abort,
         }
     }
 
@@ -528,7 +563,7 @@ impl ShareDB {
                         db_sizes[idx],
                         self.query_length,
                         IRIS_CODE_LENGTH,
-                        1 << 8 * (i + j),
+                        1 << (8 * (i + j)),
                         if i + j == 0 { 0 } else { 1 },
                     );
                 }
@@ -581,15 +616,136 @@ impl ShareDB {
         }
     }
 
+    #[cfg(feature = "otp_encrypt")]
+    fn single_xor_assign_u8(
+        &self,
+        x1: &mut CudaView<u8>,
+        x2: &CudaView<u8>,
+        idx: usize,
+        size: usize,
+        streams: &[CudaStream],
+    ) {
+        let threads_per_block = 256;
+        let blocks_per_grid = size.div_ceil(threads_per_block);
+        let cfg = LaunchConfig {
+            block_dim:        (threads_per_block as u32, 1, 1),
+            grid_dim:         (blocks_per_grid as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        unsafe {
+            self.xor_assign_u8_kernels[idx]
+                .clone()
+                .launch_on_stream(&streams[idx], cfg, (&*x1, x2, size))
+                .unwrap();
+        }
+    }
+
+    // Fill randomness using my RNG
+    #[cfg(feature = "otp_encrypt")]
+    fn fill_my_rng_into_u8<'a>(
+        &mut self,
+        rand: &'a mut CudaSlice<u32>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) -> CudaView<'a, u8> {
+        self.rngs[idx]
+            .0
+            .fill_rng_into(&mut rand.slice_mut(..), &streams[idx]);
+        let rand_trans: CudaView<u8> =
+    // the transmute_mut is safe because we know that one u32 is 4 u8s, and the buffer is aligned properly for the transmute
+        unsafe { rand.transmute(rand.len() * 4).unwrap() };
+        rand_trans
+    }
+
+    // Fill randomness using the their RNG
+    #[cfg(feature = "otp_encrypt")]
+    fn fill_their_rng_into_u8<'a>(
+        &mut self,
+        rand: &'a mut CudaSlice<u32>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) -> CudaView<'a, u8> {
+        self.rngs[idx]
+            .1
+            .fill_rng_into(&mut rand.slice_mut(..), &streams[idx]);
+        let rand_trans: CudaView<u8> =
+        // the transmute_mut is safe because we know that one u32 is 4 u8s, and the buffer is aligned properly for the transmute
+            unsafe { rand.transmute(rand.len() * 4).unwrap() };
+        rand_trans
+    }
+
+    #[cfg(feature = "otp_encrypt")]
+    fn otp_encrypt_rng_result(
+        &mut self,
+        len: usize,
+        idx: usize,
+        streams: &[CudaStream],
+    ) -> CudaSlice<u32> {
+        assert_eq!(len & 3, 0);
+        let mut rand = unsafe {
+            self.device_manager
+                .device(idx)
+                .alloc::<u32>(len >> 2)
+                .unwrap()
+        };
+        let mut rand_u8 = self.fill_my_rng_into_u8(&mut rand, idx, streams);
+        self.single_xor_assign_u8(
+            &mut rand_u8,
+            &self.results[idx].slice(..),
+            idx,
+            len,
+            streams,
+        );
+        rand
+    }
+
+    #[cfg(feature = "otp_encrypt")]
+    fn otp_decrypt_rng_result(&mut self, len: usize, idx: usize, streams: &[CudaStream]) {
+        assert_eq!(len & 3, 0);
+        let mut rand = unsafe {
+            self.device_manager
+                .device(idx)
+                .alloc::<u32>(len >> 2)
+                .unwrap()
+        };
+        let rand_u8 = self.fill_their_rng_into_u8(&mut rand, idx, streams);
+        self.single_xor_assign_u8(
+            &mut self.results_peer[idx].slice(..),
+            &rand_u8,
+            idx,
+            len,
+            streams,
+        );
+    }
+
     pub fn reshare_results(&mut self, db_sizes: &[usize], streams: &[CudaStream]) {
         let next_peer = (self.peer_id + 1) % 3;
         let prev_peer = (self.peer_id + 2) % 3;
 
+        #[cfg(feature = "otp_encrypt")]
+        let send_bufs = (0..self.device_manager.device_count())
+            .map(|idx| {
+                let len = db_sizes[idx] * self.query_length * 2;
+                self.otp_encrypt_rng_result(len, idx, streams)
+            })
+            .collect_vec();
+
+        #[cfg(feature = "otp_encrypt")]
+        let send = &send_bufs;
+        #[cfg(not(feature = "otp_encrypt"))]
+        let send = &self.results;
+
         nccl::group_start().unwrap();
         for idx in 0..self.device_manager.device_count() {
+            let len = db_sizes[idx] * self.query_length * 2;
+            #[cfg(feature = "otp_encrypt")]
+            let send_len = len >> 2;
+            #[cfg(not(feature = "otp_encrypt"))]
+            let send_len = len;
             send_stream(
-                &self.results[idx],
-                db_sizes[idx] * self.query_length * 2,
+                &send[idx],
+                send_len,
                 next_peer,
                 &self.comms[idx],
                 &streams[idx],
@@ -598,7 +754,7 @@ impl ShareDB {
 
             receive_stream(
                 &mut self.results_peer[idx],
-                db_sizes[idx] * self.query_length * 2,
+                len,
                 prev_peer,
                 &self.comms[idx],
                 &streams[idx],
@@ -606,6 +762,11 @@ impl ShareDB {
             .unwrap();
         }
         nccl::group_end().unwrap();
+        #[cfg(feature = "otp_encrypt")]
+        for idx in 0..self.device_manager.device_count() {
+            let len = db_sizes[idx] * self.query_length * 2;
+            self.otp_decrypt_rng_result(len, idx, streams);
+        }
     }
 
     pub fn fetch_results(&self, results: &mut [u16], db_sizes: &[usize], device_id: usize) {
@@ -625,8 +786,7 @@ impl ShareDB {
 mod tests {
     use super::{preprocess_query, ShareDB};
     use crate::{
-        dot::device_manager::DeviceManager,
-        helpers::device_ptrs,
+        helpers::{device_manager::DeviceManager, device_ptrs},
         setup::{galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     };
     use float_eq::assert_float_eq;
@@ -634,6 +794,7 @@ mod tests {
     use num_traits::FromPrimitive;
     use rand::{rngs::StdRng, Rng, SeedableRng};
     use std::sync::Arc;
+
     const WIDTH: usize = 12_800;
     const QUERY_SIZE: usize = 31;
     const DB_SIZE: usize = 8 * 1000;
@@ -681,6 +842,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let preprocessed_query = preprocess_query(&query);
         let streams = device_manager.fork_streams();
@@ -711,7 +873,7 @@ mod tests {
         let mut vec_column_major: Vec<u16> = Vec::new();
         for col in 0..c_nda.ncols() {
             for row in c_nda.column(col) {
-                vec_column_major.push(*row as u16);
+                vec_column_major.push(*row);
             }
         }
 
@@ -742,7 +904,7 @@ mod tests {
 
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
-        let mut gpu_result = vec![
+        let mut gpu_result = [
             vec![0u16; DB_SIZE * QUERY_SIZE / n_devices],
             vec![0u16; DB_SIZE * QUERY_SIZE / n_devices],
             vec![0u16; DB_SIZE * QUERY_SIZE / n_devices],
@@ -756,26 +918,24 @@ mod tests {
             let codes_db = db
                 .db
                 .iter()
-                .map(|iris| {
+                .flat_map(|iris| {
                     GaloisRingIrisCodeShare::encode_mask_code(
                         &iris.mask,
                         &mut StdRng::seed_from_u64(RNG_SEED),
                     )[i]
                         .coefs
                 })
-                .flatten()
                 .collect::<Vec<_>>();
 
             let querys = db.db[0..QUERY_SIZE]
                 .iter()
-                .map(|iris| {
+                .flat_map(|iris| {
                     let shares = GaloisRingIrisCodeShare::encode_mask_code(
                         &iris.mask,
                         &mut StdRng::seed_from_u64(RNG_SEED),
                     );
                     GaloisRingIrisCodeShare::preprocess_iris_code_query_shares(shares)[i].coefs
                 })
-                .flatten()
                 .collect::<Vec<_>>();
 
             let mut engine = ShareDB::init(
@@ -784,6 +944,7 @@ mod tests {
                 DB_SIZE,
                 QUERY_SIZE,
                 ([0u32; 8], [0u32; 8]),
+                None,
                 None,
                 None,
                 None,
@@ -850,7 +1011,7 @@ mod tests {
             let codes_db = db
                 .db
                 .iter()
-                .map(|iris| {
+                .flat_map(|iris| {
                     GaloisRingIrisCodeShare::encode_iris_code(
                         &iris.code,
                         &iris.mask,
@@ -858,26 +1019,24 @@ mod tests {
                     )[party_id]
                         .coefs
                 })
-                .flatten()
                 .collect::<Vec<_>>();
 
             let masks_db = db
                 .db
                 .iter()
-                .map(|iris| {
+                .flat_map(|iris| {
                     GaloisRingIrisCodeShare::encode_mask_code(
                         &iris.mask,
                         &mut StdRng::seed_from_u64(RNG_SEED),
                     )[party_id]
                         .coefs
                 })
-                .flatten()
                 .collect::<Vec<_>>();
 
             // Queries
             let code_queries = db.db[0..QUERY_SIZE]
                 .iter()
-                .map(|iris| {
+                .flat_map(|iris| {
                     let shares = GaloisRingIrisCodeShare::encode_iris_code(
                         &iris.code,
                         &iris.mask,
@@ -886,12 +1045,11 @@ mod tests {
                     GaloisRingIrisCodeShare::preprocess_iris_code_query_shares(shares)[party_id]
                         .coefs
                 })
-                .flatten()
                 .collect::<Vec<_>>();
 
             let mask_queries = db.db[0..QUERY_SIZE]
                 .iter()
-                .map(|iris| {
+                .flat_map(|iris| {
                     let shares = GaloisRingIrisCodeShare::encode_mask_code(
                         &iris.mask,
                         &mut StdRng::seed_from_u64(RNG_SEED),
@@ -899,7 +1057,6 @@ mod tests {
                     GaloisRingIrisCodeShare::preprocess_iris_code_query_shares(shares)[party_id]
                         .coefs
                 })
-                .flatten()
                 .collect::<Vec<_>>();
 
             let device_manager = Arc::new(DeviceManager::init());
@@ -913,6 +1070,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             );
             let mut masks_engine = ShareDB::init(
                 party_id,
@@ -920,6 +1078,7 @@ mod tests {
                 DB_SIZE,
                 QUERY_SIZE,
                 ([0u32; 8], [0u32; 8]),
+                None,
                 None,
                 None,
                 None,

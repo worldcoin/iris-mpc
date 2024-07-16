@@ -1,10 +1,7 @@
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use gpu_iris_mpc::{
-    dot::{
-        device_manager::DeviceManager,
-        share_db::{preprocess_query, ShareDB},
-    },
-    helpers::device_ptrs,
+    dot::share_db::{preprocess_query, ShareDB},
+    helpers::{device_manager::DeviceManager, device_ptrs},
     setup::shamir::P,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -35,6 +32,7 @@ fn bench_memcpy(c: &mut Criterion) {
         DB_SIZE,
         QUERY_SIZE,
         ([0u32; 8], [0u32; 8]),
+        None,
         None,
         None,
         None,

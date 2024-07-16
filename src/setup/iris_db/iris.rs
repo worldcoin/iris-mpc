@@ -96,8 +96,7 @@ impl IrisCodeArray {
         Ok(BASE64_STANDARD.encode(
             self.0
                 .iter()
-                .map(|&x| x.reverse_bits().to_be_bytes())
-                .flatten()
+                .flat_map(|&x| x.reverse_bits().to_be_bytes())
                 .collect::<Vec<_>>(),
         ))
     }
@@ -284,7 +283,7 @@ mod tests {
                 .parse()
                 .context("Invalid rotation")?;
             let bit_str = parts.next().context("Missing bit string")?;
-            rotations.insert(rotation, bit_str.trim().replace(" ", "").to_string());
+            rotations.insert(rotation, bit_str.trim().replace(' ', "").to_string());
         }
 
         Ok((code, rotations))

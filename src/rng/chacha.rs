@@ -1,7 +1,7 @@
 use cudarc::{
     driver::{
-        result, CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtr, DeviceSlice,
-        LaunchAsync, LaunchConfig,
+        CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaViewMut, DeviceSlice, LaunchAsync,
+        LaunchConfig,
     },
     nvrtc::compile_ptx,
 };
@@ -14,6 +14,8 @@ pub struct ChaChaCudaRng {
     output_buffer: Option<Vec<u32>>,
     /// the current state of the chacha rng
     chacha_ctx:    ChaChaCtx,
+    // the current state of the chacha rng on the device
+    state_gpu_buf: CudaSlice<u32>,
 }
 
 const CHACHA_PTX_SRC: &str = include_str!("chacha.cu");
@@ -36,13 +38,17 @@ impl ChaChaCudaRng {
             .get_func(CHACHA_FUNCTION_NAME, CHACHA_FUNCTION_NAME)
             .unwrap();
 
+        let chacha_ctx = ChaChaCtx::init(seed, 0, 0);
+        let state_gpu_buf = dev.htod_sync_copy(chacha_ctx.state.as_ref()).unwrap();
+
         if buf_size_bytes == 0 {
             return Self {
                 dev,
                 kernel,
                 rng_chunk: None,
                 output_buffer: None,
-                chacha_ctx: ChaChaCtx::init(seed, 0, 0),
+                chacha_ctx,
+                state_gpu_buf,
             };
         }
         let buf = vec![0u32; buf_size_bytes / 4];
@@ -53,7 +59,8 @@ impl ChaChaCudaRng {
             kernel,
             rng_chunk: Some(rng_chunk),
             output_buffer: Some(buf),
-            chacha_ctx: ChaChaCtx::init(seed, 0, 0),
+            chacha_ctx,
+            state_gpu_buf,
         }
     }
     pub fn init_empty(dev: Arc<CudaDevice>, seed: [u32; 8]) -> Self {
@@ -71,7 +78,7 @@ impl ChaChaCudaRng {
         self.dev
             .dtoh_sync_copy_into(
                 self.rng_chunk.as_ref().unwrap(),
-                &mut self.output_buffer.as_mut().unwrap(),
+                self.output_buffer.as_mut().unwrap(),
             )
             .unwrap();
     }
@@ -88,20 +95,41 @@ impl ChaChaCudaRng {
             shared_mem_bytes: 0,
         };
 
-        self.dev.bind_to_thread().unwrap();
-        let state_slice: CudaSlice<u32> = unsafe {
-            self.dev
-                .alloc(std::mem::size_of::<u32>() * self.chacha_ctx.state.len())
-                .unwrap()
-        };
         unsafe {
-            result::memcpy_htod_async(
-                *state_slice.device_ptr(),
-                &self.chacha_ctx.state,
-                stream.stream,
-            )
-            .unwrap();
+            self.kernel
+                .clone()
+                .launch_on_stream(
+                    stream,
+                    cfg,
+                    (
+                        self.rng_chunk.as_mut().unwrap(),
+                        &self.state_gpu_buf,
+                        self.chacha_ctx.state[12], // first part of counter
+                        self.chacha_ctx.state[13], // second part of counter
+                        len,
+                    ),
+                )
+                .unwrap();
         }
+        // increment the state counter of the ChaChaRng with the number of produced
+        // blocks
+        let mut counter = self.chacha_ctx.get_counter();
+        counter += num_ks_calls as u64; // one call to KS produces 16 u32, so we increase the counter by the number of
+                                        // KS calls
+        self.chacha_ctx.set_counter(counter);
+    }
+
+    pub fn fill_rng_into(&mut self, buf: &mut CudaViewMut<u32>, stream: &CudaStream) {
+        let len = buf.len();
+        assert!(len % 16 == 0, "buffer length must be a multiple of 16");
+        let num_ks_calls = len / 16; // we produce 16 u32s per kernel call
+        let threads_per_block = 256; // todo sync with kernel
+        let blocks_per_grid = (num_ks_calls + threads_per_block - 1) / threads_per_block;
+        let cfg = LaunchConfig {
+            block_dim:        (threads_per_block as u32, 1, 1),
+            grid_dim:         (blocks_per_grid as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
 
         unsafe {
             self.kernel
@@ -109,7 +137,13 @@ impl ChaChaCudaRng {
                 .launch_on_stream(
                     stream,
                     cfg,
-                    (self.rng_chunk.as_mut().unwrap(), &state_slice, len),
+                    (
+                        &mut *buf,
+                        &self.state_gpu_buf,
+                        self.chacha_ctx.state[12], // first part of counter
+                        self.chacha_ctx.state[13], // second part of counter
+                        len,
+                    ),
                 )
                 .unwrap();
         }
@@ -207,6 +241,8 @@ mod tests {
 
     #[test]
     fn test_chacha_rng() {
+        // This call to CudaDevice::new is only used in context of a test - not used in
+        // the server binary
         let mut rng = ChaChaCudaRng::init(1024 * 1024, CudaDevice::new(0).unwrap(), [0u32; 8]);
         rng.fill_rng();
         let zeros = rng.data().unwrap().iter().filter(|x| x == &&0).count();

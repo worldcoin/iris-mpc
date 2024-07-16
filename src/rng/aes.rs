@@ -24,6 +24,8 @@ impl AesCudaRng {
         let ptx = compile_ptx(AES_PTX_SRC).unwrap();
 
         for i in 0..n_devices {
+            // This call to CudaDevice::new is only used in context of a benchmark - not
+            // used in the server binary
             let dev = CudaDevice::new(i).unwrap();
             dev.load_ptx(ptx.clone(), AES_FUNCTION_NAME, &[AES_FUNCTION_NAME])
                 .unwrap();

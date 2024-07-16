@@ -72,6 +72,7 @@
  * the chacha12_block function
  */
 extern "C" __global__ void chacha12(uint32_t *d_ciphertext, uint32_t *d_state,
+                                    uint32_t state12, uint32_t state13,
                                     size_t len) {
   // 16 bytes of state per thread + first 16 bytes hold a copy of the global
   // state, which speeds up the subsequent reads (we would need 2 reads from
@@ -83,7 +84,13 @@ extern "C" __global__ void chacha12(uint32_t *d_ciphertext, uint32_t *d_state,
   // copy global state into shared memory
   // only the first 16 threads copy the global state
   if (threadIdx.x < 16) {
-    state[threadIdx.x] = d_state[threadIdx.x];
+    if (threadIdx.x == 12) {
+      state[threadIdx.x] = state12;
+    } else if (threadIdx.x == 13) {
+      state[threadIdx.x] = state13;
+    } else {
+      state[threadIdx.x] = d_state[threadIdx.x];
+    }
   }
   // sync threads to make sure the global state is copied
   __syncthreads();
@@ -144,7 +151,8 @@ extern "C" __global__ void chacha12(uint32_t *d_ciphertext, uint32_t *d_state,
 }
 
 extern "C" __global__ void chacha12_xor(uint32_t *d_ciphertext,
-                                        uint32_t *d_state, size_t len) {
+                                        uint32_t *d_state, uint32_t state12,
+                                        uint32_t state13, size_t len) {
   // 16 bytes of state per thread + first 16 bytes hold a copy of the global
   // state, which speeds up the subsequent reads (we would need 2 reads from
   // global state, which is slower than 1 global read + 1 shared write and 2
@@ -155,7 +163,13 @@ extern "C" __global__ void chacha12_xor(uint32_t *d_ciphertext,
   // copy global state into shared memory
   // only the first 16 threads copy the global state
   if (threadIdx.x < 16) {
-    state[threadIdx.x] = d_state[threadIdx.x];
+    if (threadIdx.x == 12) {
+      state[threadIdx.x] = state12;
+    } else if (threadIdx.x == 13) {
+      state[threadIdx.x] = state13;
+    } else {
+      state[threadIdx.x] = d_state[threadIdx.x];
+    }
   }
   // sync threads to make sure the global state is copied
   __syncthreads();
