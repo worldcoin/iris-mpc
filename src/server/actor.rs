@@ -3,10 +3,13 @@ use crate::{
     config::ServersConfig,
     dot::{
         distance_comparator::DistanceComparator,
-        share_db::{preprocess_query, ShareDB},
+        share_db::{preprocess_query, ShareDB, SlicedProcessedDatabase},
         IRIS_CODE_LENGTH, ROTATIONS,
     },
-    helpers::{self, device_manager::DeviceManager, task_monitor::TaskMonitor},
+    helpers::{
+        self, device_manager::DeviceManager, query_processor::CompactQuery,
+        task_monitor::TaskMonitor,
+    },
     setup::galois_engine::degree4::GaloisRingIrisCodeShare,
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
@@ -94,11 +97,6 @@ const MAX_CONCURRENT_BATCHES: usize = 2;
 
 const QUERIES: usize = ROTATIONS * N_QUERIES;
 
-type DbSlices = (
-    (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
-    (Vec<CudaSlice<u32>>, Vec<CudaSlice<u32>>),
-);
-
 pub struct ServerActor {
     job_queue: mpsc::Receiver<ServerJob>,
     device_manager: Arc<DeviceManager>,
@@ -112,8 +110,8 @@ pub struct ServerActor {
     phase2_batch: Arc<Mutex<Circuits>>,
     distance_comparator: Arc<Mutex<DistanceComparator>>,
     // DB slices
-    code_db_slices: DbSlices,
-    mask_db_slices: DbSlices,
+    code_db_slices: SlicedProcessedDatabase,
+    mask_db_slices: SlicedProcessedDatabase,
     streams: Vec<Vec<CudaStream>>,
     cublas_handles: Vec<Vec<CudaBlas>>,
     results: Vec<Vec<CudaSlice<u32>>>,
@@ -400,7 +398,7 @@ impl ServerActor {
                 batch,
                 return_channel,
             } = job;
-            self.process_batch_query(batch, return_channel);
+            let _ = self.process_batch_query(batch, return_channel);
         }
 
         // await the last thread for phase 2
@@ -438,14 +436,22 @@ impl ServerActor {
         &mut self,
         batch: BatchQuery,
         return_channel: oneshot::Sender<ServerJobResult>,
-    ) {
+    ) -> eyre::Result<()> {
         let now = Instant::now();
         // *Query* variant including Lagrange interpolation.
-        let code_query = prepare_query_shares(batch.query.code);
-        let mask_query = prepare_query_shares(batch.query.mask);
-        // *Storage* variant (no interpolation).
-        let code_query_insert = prepare_query_shares(batch.db.code);
-        let mask_query_insert = prepare_query_shares(batch.db.mask);
+        let compact_query = {
+            let code_query = prepare_query_shares(batch.query.code);
+            let mask_query = prepare_query_shares(batch.query.mask);
+            // *Storage* variant (no interpolation).
+            let code_query_insert = prepare_query_shares(batch.db.code);
+            let mask_query_insert = prepare_query_shares(batch.db.mask);
+            CompactQuery {
+                code_query,
+                mask_query,
+                code_query_insert,
+                mask_query_insert,
+            }
+        };
         let query_store = batch.store;
 
         let mut timers = vec![];
@@ -471,35 +477,15 @@ impl ServerActor {
                 .record_event(request_streams, &self.start_timer);
         }
         // Transfer queries to device
-        // TODO: free all of this!
-        let code_query = self
-            .device_manager
-            .htod_transfer_query(&code_query, request_streams);
-        let mask_query = self
-            .device_manager
-            .htod_transfer_query(&mask_query, request_streams);
-        let code_query_insert = self
-            .device_manager
-            .htod_transfer_query(&code_query_insert, request_streams);
-        let mask_query_insert = self
-            .device_manager
-            .htod_transfer_query(&mask_query_insert, request_streams);
-        let code_query_sums =
-            self.codes_engine
-                .query_sums(&code_query, request_streams, request_cublas_handles);
-        let mask_query_sums =
-            self.masks_engine
-                .query_sums(&mask_query, request_streams, request_cublas_handles);
-        let code_query_insert_sums = self.codes_engine.query_sums(
-            &code_query_insert,
+        let compact_device_queries =
+            compact_query.htod_transfer(&self.device_manager, request_streams)?;
+
+        let compact_device_sums = compact_device_queries.query_sums(
+            &self.codes_engine,
+            &self.masks_engine,
             request_streams,
             request_cublas_handles,
-        );
-        let mask_query_insert_sums = self.masks_engine.query_sums(
-            &mask_query_insert,
-            request_streams,
-            request_cublas_handles,
-        );
+        )?;
 
         // update the db size, skip this for the first two
         if self.request_counter > MAX_CONCURRENT_BATCHES {
@@ -528,32 +514,17 @@ impl ServerActor {
 
         // ---- START BATCH DEDUP ----
 
-        self.batch_codes_engine.dot(
-            &code_query,
-            &code_query_insert,
+        compact_device_queries.compute_dot_products(
+            &mut self.batch_codes_engine,
+            &mut self.batch_masks_engine,
             &self.query_db_size,
             request_streams,
             request_cublas_handles,
         );
 
-        self.batch_masks_engine.dot(
-            &mask_query,
-            &mask_query_insert,
-            &self.query_db_size,
-            request_streams,
-            request_cublas_handles,
-        );
-
-        self.batch_codes_engine.dot_reduce(
-            &code_query_sums,
-            &code_query_insert_sums,
-            &self.query_db_size,
-            request_streams,
-        );
-
-        self.batch_masks_engine.dot_reduce(
-            &mask_query_sums,
-            &mask_query_insert_sums,
+        compact_device_sums.compute_dot_reducers(
+            &mut self.batch_codes_engine,
+            &mut self.batch_masks_engine,
             &self.query_db_size,
             request_streams,
         );
@@ -566,23 +537,11 @@ impl ServerActor {
         // ---- END BATCH DEDUP ----
         debug_record_event!(self.device_manager, request_streams, timers);
 
-        self.codes_engine.dot(
-            &code_query,
-            &(
-                helpers::device_ptrs(&self.code_db_slices.0 .0),
-                helpers::device_ptrs(&self.code_db_slices.0 .1),
-            ),
-            &current_db_size_stream,
-            request_streams,
-            request_cublas_handles,
-        );
-
-        self.masks_engine.dot(
-            &mask_query,
-            &(
-                helpers::device_ptrs(&self.mask_db_slices.0 .0),
-                helpers::device_ptrs(&self.mask_db_slices.0 .1),
-            ),
+        compact_device_queries.dot_products_against_db(
+            &mut self.codes_engine,
+            &mut self.masks_engine,
+            &self.code_db_slices,
+            &self.mask_db_slices,
             &current_db_size_stream,
             request_streams,
             request_cublas_handles,
@@ -594,21 +553,11 @@ impl ServerActor {
         self.device_manager
             .await_event(request_streams, &self.current_exchange_event);
 
-        self.codes_engine.dot_reduce(
-            &code_query_sums,
-            &(
-                helpers::device_ptrs(&self.code_db_slices.1 .0),
-                helpers::device_ptrs(&self.code_db_slices.1 .1),
-            ),
-            &current_db_size_stream,
-            request_streams,
-        );
-        self.masks_engine.dot_reduce(
-            &mask_query_sums,
-            &(
-                helpers::device_ptrs(&self.mask_db_slices.1 .0),
-                helpers::device_ptrs(&self.mask_db_slices.1 .1),
-            ),
+        compact_device_sums.compute_dot_reducer_against_db(
+            &mut self.codes_engine,
+            &mut self.masks_engine,
+            &self.code_db_slices,
+            &self.mask_db_slices,
             &current_db_size_stream,
             request_streams,
         );
@@ -693,8 +642,8 @@ impl ServerActor {
         let thread_phase2 = self.phase2.clone();
         let thread_phase2_batch = self.phase2_batch.clone();
         let thread_distance_comparator = self.distance_comparator.clone();
-        let thread_code_db_slices = helpers::slice_tuples_to_ptrs(&self.code_db_slices);
-        let thread_mask_db_slices = helpers::slice_tuples_to_ptrs(&self.mask_db_slices);
+        let thread_code_db_slices = self.code_db_slices.slice_tuples_to_ptrs();
+        let thread_mask_db_slices = self.mask_db_slices.slice_tuples_to_ptrs();
         let thread_request_ids = batch.request_ids.clone();
         let thread_sender = return_channel;
         let thread_prev_handle = self.previous_thread_handle.take();
@@ -893,13 +842,13 @@ impl ServerActor {
                     for (db, query, sums) in [
                         (
                             &thread_code_db_slices,
-                            &code_query_insert,
-                            &code_query_insert_sums,
+                            &compact_device_queries.code_query_insert,
+                            &compact_device_sums.code_query_insert,
                         ),
                         (
                             &thread_mask_db_slices,
-                            &mask_query_insert,
-                            &mask_query_insert_sums,
+                            &compact_device_queries.mask_query_insert,
+                            &compact_device_sums.mask_query_insert,
                         ),
                     ] {
                         // SAFETY: the pointers are valid, and the streams are valid. and we only
@@ -908,7 +857,7 @@ impl ServerActor {
                             helpers::dtod_at_offset(
                                 db.0 .0[i],
                                 old_db_size * IRIS_CODE_LENGTH,
-                                query.0[i],
+                                query.limb_0[i].cu_device_ptr,
                                 IRIS_CODE_LENGTH * 15
                                     + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                                 IRIS_CODE_LENGTH,
@@ -918,7 +867,7 @@ impl ServerActor {
                             helpers::dtod_at_offset(
                                 db.0 .1[i],
                                 old_db_size * IRIS_CODE_LENGTH,
-                                query.1[i],
+                                query.limb_1[i].cu_device_ptr,
                                 IRIS_CODE_LENGTH * 15
                                     + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                                 IRIS_CODE_LENGTH,
@@ -928,7 +877,7 @@ impl ServerActor {
                             helpers::dtod_at_offset(
                                 db.1 .0[i],
                                 old_db_size * mem::size_of::<u32>(),
-                                sums.0[i],
+                                sums.limb_0[i].cu_device_ptr,
                                 mem::size_of::<u32>() * 15
                                     + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                                 mem::size_of::<u32>(),
@@ -938,7 +887,7 @@ impl ServerActor {
                             helpers::dtod_at_offset(
                                 db.1 .1[i],
                                 old_db_size * mem::size_of::<u32>(),
-                                sums.1[i],
+                                sums.limb_1[i].cu_device_ptr,
                                 mem::size_of::<u32>() * 15
                                     + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                                 mem::size_of::<u32>(),
@@ -1043,6 +992,7 @@ impl ServerActor {
         self.next_exchange_event = self.device_manager.create_events();
 
         println!("CPU time of one iteration {:?}", now.elapsed());
+        Ok(())
     }
 }
 
