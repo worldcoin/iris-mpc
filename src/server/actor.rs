@@ -516,6 +516,7 @@ impl ServerActor {
                 request_cublas_handles,
             );
 
+            // wait for the exchange result buffers to be ready
             self.device_manager
                 .await_event(request_streams, &current_exchange_event);
 
@@ -548,8 +549,6 @@ impl ServerActor {
             self.masks_engine
                 .reshare_results(&chunk_size, request_streams);
 
-            self.device_manager
-                .record_event(request_streams, &next_exchange_event);
             // ---- END PHASE 1 ----
 
             self.device_manager
@@ -562,6 +561,12 @@ impl ServerActor {
             {
                 self.phase2
                     .compare_threshold_masked_many(&code_dots, &mask_dots, request_streams);
+                // we can now record the exchange event since the phase 2 is no longer using the
+                // code_dots/mask_dots which are just reinterpretations of the exchange result
+                // buffers
+                self.device_manager
+                    .record_event(request_streams, &next_exchange_event);
+
                 let res = self.phase2.take_result_buffer();
                 open(
                     &mut self.phase2,
@@ -596,13 +601,6 @@ impl ServerActor {
             // Break if we reached the end of the database
             if db_chunk_idx * DB_CHUNK_SIZE >= *current_db_sizes.iter().max().unwrap() {
                 break;
-            }
-
-            // FIX: removing this sync causes invalid results.
-            // However, it should not be necessary to sync here.
-            if db_chunk_idx % 2 == 1 {
-                self.device_manager.await_streams(&self.streams[0]);
-                self.device_manager.await_streams(&self.streams[1]);
             }
         }
         // ---- END DATABASE DEDUP ----
