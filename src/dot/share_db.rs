@@ -4,7 +4,7 @@ use crate::{
         device_manager::DeviceManager,
         id_wrapper::{http_root, IdWrapper},
         query_processor::{
-            NgCudaVec2DSlicer, NgCudaVec2DSlicerI8, NgCudaVec2DSlicerU32, NgCudaVec2DSlicerU8,
+            CudaVec2DSlicer, CudaVec2DSlicerI8, CudaVec2DSlicerU32, CudaVec2DSlicerU8,
             StreamAwareCudaSlice,
         },
         task_monitor::TaskMonitor,
@@ -153,8 +153,8 @@ fn chunking<T: Clone>(
 }
 
 pub struct SlicedProcessedDatabase {
-    pub code_gr:      NgCudaVec2DSlicerI8,
-    pub code_sums_gr: NgCudaVec2DSlicerU32,
+    pub code_gr:      CudaVec2DSlicerI8,
+    pub code_sums_gr: CudaVec2DSlicerU32,
 }
 
 impl SlicedProcessedDatabase {
@@ -490,11 +490,11 @@ impl ShareDB {
             .collect::<Vec<_>>();
 
         SlicedProcessedDatabase {
-            code_gr:      NgCudaVec2DSlicerI8 {
+            code_gr:      CudaVec2DSlicerI8 {
                 limb_0: db0,
                 limb_1: db1,
             },
-            code_sums_gr: NgCudaVec2DSlicerU32 {
+            code_sums_gr: CudaVec2DSlicerU32 {
                 limb_0: db0_sums,
                 limb_1: db1_sums,
             },
@@ -503,10 +503,10 @@ impl ShareDB {
 
     pub fn query_sums(
         &self,
-        query_ptrs: &NgCudaVec2DSlicerU8,
+        query_ptrs: &CudaVec2DSlicerU8,
         streams: &[CudaStream],
         blass: &[CudaBlas],
-    ) -> NgCudaVec2DSlicerU32 {
+    ) -> CudaVec2DSlicerU32 {
         let mut query1_sums = vec![];
         let mut query0_sums = vec![];
 
@@ -576,7 +576,7 @@ impl ShareDB {
             query0_sums.push(slice0_sum);
             query1_sums.push(slice1_sum);
         }
-        NgCudaVec2DSlicer {
+        CudaVec2DSlicer {
             limb_0: query0_sums,
             limb_1: query1_sums,
         }
@@ -584,8 +584,8 @@ impl ShareDB {
 
     pub fn dot<T, U>(
         &mut self,
-        queries: &NgCudaVec2DSlicer<T>,
-        db: &NgCudaVec2DSlicer<U>,
+        queries: &CudaVec2DSlicer<T>,
+        db: &CudaVec2DSlicer<U>,
         db_sizes: &[usize],
         streams: &[CudaStream],
         blass: &[CudaBlas],
@@ -631,8 +631,8 @@ impl ShareDB {
 
     pub fn dot_reduce(
         &mut self,
-        query_sums: &NgCudaVec2DSlicerU32,
-        db_sums: &NgCudaVec2DSlicerU32,
+        query_sums: &CudaVec2DSlicerU32,
+        db_sums: &CudaVec2DSlicerU32,
         db_sizes: &[usize],
         streams: &[CudaStream],
     ) {

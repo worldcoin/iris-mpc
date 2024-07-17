@@ -1,4 +1,4 @@
-use super::query_processor::{NgCudaVec2DSlicerU8, StreamAwareCudaSlice};
+use super::query_processor::{CudaVec2DSlicerU8, StreamAwareCudaSlice};
 use cudarc::{
     cublas::CudaBlas,
     driver::{
@@ -107,7 +107,7 @@ impl DeviceManager {
         &self,
         preprocessed_query: &[Vec<u8>],
         streams: &[CudaStream],
-    ) -> eyre::Result<NgCudaVec2DSlicerU8> {
+    ) -> eyre::Result<CudaVec2DSlicerU8> {
         let mut slices0 = vec![];
         let mut slices1 = vec![];
         for idx in 0..self.device_count() {
@@ -143,7 +143,7 @@ impl DeviceManager {
             slices0.push(slice0);
             slices1.push(slice1);
         }
-        Ok(NgCudaVec2DSlicerU8 {
+        Ok(CudaVec2DSlicerU8 {
             limb_0: slices0,
             limb_1: slices1,
         })

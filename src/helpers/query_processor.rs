@@ -68,12 +68,12 @@ impl<T> Drop for StreamAwareCudaSlice<T> {
     }
 }
 
-pub struct NgCudaVec2DSlicer<T> {
+pub struct CudaVec2DSlicer<T> {
     pub limb_0: Vec<StreamAwareCudaSlice<T>>,
     pub limb_1: Vec<StreamAwareCudaSlice<T>>,
 }
 
-impl<T> NgCudaVec2DSlicer<T> {
+impl<T> CudaVec2DSlicer<T> {
     pub fn get0_ref(&self) -> &Vec<StreamAwareCudaSlice<T>> {
         &self.limb_0
     }
@@ -86,9 +86,9 @@ impl<T> NgCudaVec2DSlicer<T> {
     }
 }
 
-pub type NgCudaVec2DSlicerU32 = NgCudaVec2DSlicer<u32>;
-pub type NgCudaVec2DSlicerU8 = NgCudaVec2DSlicer<u8>;
-pub type NgCudaVec2DSlicerI8 = NgCudaVec2DSlicer<i8>;
+pub type CudaVec2DSlicerU32 = CudaVec2DSlicer<u32>;
+pub type CudaVec2DSlicerU8 = CudaVec2DSlicer<u8>;
+pub type CudaVec2DSlicerI8 = CudaVec2DSlicer<i8>;
 
 pub struct CompactQuery {
     pub code_query:        CompactGaloisRingShares,
@@ -113,10 +113,10 @@ impl CompactQuery {
 }
 
 pub struct DeviceCompactQuery {
-    code_query:            NgCudaVec2DSlicerU8,
-    mask_query:            NgCudaVec2DSlicerU8,
-    pub code_query_insert: NgCudaVec2DSlicerU8,
-    pub mask_query_insert: NgCudaVec2DSlicerU8,
+    code_query:            CudaVec2DSlicerU8,
+    mask_query:            CudaVec2DSlicerU8,
+    pub code_query_insert: CudaVec2DSlicerU8,
+    pub mask_query_insert: CudaVec2DSlicerU8,
 }
 
 // TODO(Dragos) need to make query_sums allocate slices instead.
@@ -192,10 +192,10 @@ impl DeviceCompactQuery {
     }
 }
 pub struct DeviceCompactSums {
-    code_query:            NgCudaVec2DSlicerU32,
-    mask_query:            NgCudaVec2DSlicerU32,
-    pub code_query_insert: NgCudaVec2DSlicerU32,
-    pub mask_query_insert: NgCudaVec2DSlicerU32,
+    code_query:            CudaVec2DSlicerU32,
+    mask_query:            CudaVec2DSlicerU32,
+    pub code_query_insert: CudaVec2DSlicerU32,
+    pub mask_query_insert: CudaVec2DSlicerU32,
 }
 
 impl DeviceCompactSums {
