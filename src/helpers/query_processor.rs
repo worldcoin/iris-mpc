@@ -43,11 +43,23 @@ impl<T> StreamAwareCudaSlice<T> {
 
 impl<T> From<CudaSlice<T>> for StreamAwareCudaSlice<T> {
     fn from(value: CudaSlice<T>) -> Self {
-        let res = StreamAwareCudaSlice {
-            stream:        *value.device().cu_stream(),
-            cu_device_ptr: *value.device_ptr(),
-            len:           value.len,
-            host_buf:      None,
+        let mut value = value;
+        let res = {
+            if let Some(host_buf) = std::mem::take(&mut value.host_buf) {
+                StreamAwareCudaSlice {
+                    stream:        *value.device().cu_stream(),
+                    cu_device_ptr: *value.device_ptr(),
+                    len:           value.len,
+                    host_buf:      Some(host_buf),
+                }
+            } else {
+                StreamAwareCudaSlice {
+                    stream:        *value.device().cu_stream(),
+                    cu_device_ptr: *value.device_ptr(),
+                    len:           value.len,
+                    host_buf:      None,
+                }
+            }
         };
         // forgetting the slice is ok since we are going to free up the memory using the
         // `StreamAwareCudaSlice` destructor.
