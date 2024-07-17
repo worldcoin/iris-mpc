@@ -491,12 +491,12 @@ impl ShareDB {
 
         SlicedProcessedDatabase {
             code_gr:      NgCudaVec2DSlicerI8 {
-                entry_0: db0,
-                entry_1: db1,
+                limb_0: db0,
+                limb_1: db1,
             },
             code_sums_gr: NgCudaVec2DSlicerU32 {
-                entry_0: db0_sums,
-                entry_1: db1_sums,
+                limb_0: db0_sums,
+                limb_1: db1_sums,
             },
         }
     }
@@ -514,8 +514,8 @@ impl ShareDB {
             let device = self.device_manager.device(idx);
             device.bind_to_thread().unwrap();
 
-            let query0 = &query_ptrs.entry_0[idx];
-            let query1 = &query_ptrs.entry_1[idx];
+            let query0 = &query_ptrs.limb_0[idx];
+            let query1 = &query_ptrs.limb_1[idx];
 
             let query0_sum = unsafe {
                 malloc_async(
@@ -577,8 +577,8 @@ impl ShareDB {
             query1_sums.push(slice1_sum);
         }
         NgCudaVec2DSlicer {
-            entry_0: query0_sums,
-            entry_1: query1_sums,
+            limb_0: query0_sums,
+            limb_1: query1_sums,
         }
     }
 
@@ -592,8 +592,8 @@ impl ShareDB {
     ) {
         for idx in 0..self.device_manager.device_count() {
             self.device_manager.device(idx).bind_to_thread().unwrap();
-            let query0 = &queries.entry_0[idx];
-            let query1 = &queries.entry_1[idx];
+            let query0 = &queries.limb_0[idx];
+            let query1 = &queries.limb_1[idx];
 
             // Prepare randomness to mask results
             if self.is_remote {

@@ -144,8 +144,8 @@ impl DeviceManager {
             slices1.push(slice1);
         }
         Ok(NgCudaVec2DSlicerU8 {
-            entry_0: slices0,
-            entry_1: slices1,
+            limb_0: slices0,
+            limb_1: slices1,
         })
     }
 

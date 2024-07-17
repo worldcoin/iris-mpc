@@ -69,20 +69,20 @@ impl<T> Drop for StreamAwareCudaSlice<T> {
 }
 
 pub struct NgCudaVec2DSlicer<T> {
-    pub entry_0: Vec<StreamAwareCudaSlice<T>>,
-    pub entry_1: Vec<StreamAwareCudaSlice<T>>,
+    pub limb_0: Vec<StreamAwareCudaSlice<T>>,
+    pub limb_1: Vec<StreamAwareCudaSlice<T>>,
 }
 
 impl<T> NgCudaVec2DSlicer<T> {
     pub fn get0_ref(&self) -> &Vec<StreamAwareCudaSlice<T>> {
-        &self.entry_0
+        &self.limb_0
     }
     pub fn get1_ref(&self) -> &Vec<StreamAwareCudaSlice<T>> {
-        &self.entry_1
+        &self.limb_1
     }
 
     pub fn as_tuple_refs(&self) -> (&Vec<StreamAwareCudaSlice<T>>, &Vec<StreamAwareCudaSlice<T>>) {
-        (&self.entry_0, &self.entry_0)
+        (&self.limb_0, &self.limb_0)
     }
 }
 
