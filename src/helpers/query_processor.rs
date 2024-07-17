@@ -119,7 +119,6 @@ pub struct DeviceCompactQuery {
     pub mask_query_insert: CudaVec2DSlicerU8,
 }
 
-// TODO(Dragos) need to make query_sums allocate slices instead.
 impl DeviceCompactQuery {
     pub fn query_sums(
         &self,
