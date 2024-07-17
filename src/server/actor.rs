@@ -477,7 +477,6 @@ impl ServerActor {
                 .record_event(request_streams, &self.start_timer);
         }
         // Transfer queries to device
-        // TODO: free all of this!
         let compact_device_queries =
             compact_query.htod_transfer(&self.device_manager, request_streams)?;
 
