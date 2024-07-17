@@ -12,6 +12,7 @@ pub mod device_manager;
 pub mod id_wrapper;
 pub mod kms_dh;
 pub mod mmap;
+pub mod query_processor;
 pub mod sqs;
 pub mod task_monitor;
 
@@ -33,22 +34,6 @@ pub fn device_ptrs_to_slices<T>(
             host_buf:      None,
         })
         .collect()
-}
-
-#[allow(clippy::type_complexity)]
-pub fn slice_tuples_to_ptrs(
-    tuple: &(
-        (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
-        (Vec<CudaSlice<u32>>, Vec<CudaSlice<u32>>),
-    ),
-) -> (
-    (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
-    (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
-) {
-    (
-        (device_ptrs(&tuple.0 .0), device_ptrs(&tuple.0 .1)),
-        (device_ptrs(&tuple.1 .0), device_ptrs(&tuple.1 .1)),
-    )
 }
 
 pub fn await_streams(streams: &mut [&mut CUstream_st]) {
