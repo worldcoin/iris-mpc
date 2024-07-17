@@ -78,7 +78,7 @@ impl Store {
     }
 
     pub async fn stream_irises(&self) -> impl Stream<Item = Result<StoredIris, sqlx::Error>> + '_ {
-        sqlx::query_as::<_, StoredIris>("SELECT * FROM irises").fetch(&self.pool)
+        sqlx::query_as::<_, StoredIris>("SELECT * FROM irises ORDER BY id").fetch(&self.pool)
     }
 
     pub async fn insert_irises(&self, codes_and_masks: &[(&[u16], &[u16])]) -> Result<()> {
@@ -152,6 +152,7 @@ mod tests {
 
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), count);
+        assert_sorted_by_id(&got);
 
         cleanup(&store, &schema_name).await?;
         Ok(())
@@ -167,6 +168,13 @@ mod tests {
 
     fn temporary_name() -> String {
         format!("smpc_test{}_0", rand::random::<u32>())
+    }
+
+    fn assert_sorted_by_id(vec: &[StoredIris]) {
+        assert!(
+            vec.windows(2).all(|w| w[0].id <= w[1].id),
+            "Vector is not sorted by id"
+        );
     }
 
     async fn cleanup(store: &Store, schema_name: &str) -> Result<()> {
