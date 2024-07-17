@@ -8,6 +8,7 @@ use gpu_iris_mpc::{
     },
     IRIS_CODE_LENGTH,
 };
+use mpc_uniqueness_check::db::Db;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use std::{array, net::SocketAddr};
@@ -35,65 +36,6 @@ pub struct Args {
 
     #[clap(long, default_value = "false")]
     pub mock: bool,
-}
-
-struct MockOldDbParty1 {
-    rng: ChaCha20Rng,
-}
-
-struct MockOldDbParty2 {
-    rng: ChaCha20Rng,
-}
-
-// Generate some random iris code shares by using the same rng seed and using X
-// as one share and -X as the other share
-
-fn old_dbs() -> (MockOldDbParty1, MockOldDbParty2) {
-    let seed = [0u8; 32];
-    let rng = ChaCha20Rng::from_seed(seed);
-    (MockOldDbParty1 { rng: rng.clone() }, MockOldDbParty2 {
-        rng,
-    })
-}
-
-impl OldIrisShareSource for MockOldDbParty1 {
-    async fn load_code_share(&self, share_id: u64) -> std::io::Result<[u16; IRIS_CODE_LENGTH]> {
-        let mut rng = self.rng.clone();
-        rng.set_word_pos(share_id as u128 * 12800);
-        let mut res = [0u16; IRIS_CODE_LENGTH];
-        res.iter_mut().enumerate().for_each(|(i, x)| {
-            *x = rng.gen::<u16>().wrapping_add((1 - (i % 3)) as u16);
-        });
-        Ok(res)
-    }
-
-    async fn load_mask(&self, _share_id: u64) -> std::io::Result<[bool; IRIS_CODE_LENGTH]> {
-        let mut res = [false; IRIS_CODE_LENGTH];
-        res.iter_mut().enumerate().for_each(|(i, x)| {
-            *x = (1 - (i % 3)) != 0;
-        });
-        Ok(res)
-    }
-}
-
-impl OldIrisShareSource for MockOldDbParty2 {
-    async fn load_code_share(&self, share_id: u64) -> std::io::Result<[u16; IRIS_CODE_LENGTH]> {
-        let mut rng = self.rng.clone();
-        rng.set_word_pos(share_id as u128 * 12800);
-        let mut res = [0u16; IRIS_CODE_LENGTH];
-        res.iter_mut().for_each(|x| {
-            *x = 0u16.wrapping_sub(rng.gen::<u16>());
-        });
-        Ok(res)
-    }
-
-    async fn load_mask(&self, _share_id: u64) -> std::io::Result<[bool; IRIS_CODE_LENGTH]> {
-        let mut res = [false; IRIS_CODE_LENGTH];
-        res.iter_mut().enumerate().for_each(|(i, x)| {
-            *x = (1 - (i % 3)) != 0;
-        });
-        Ok(res)
-    }
 }
 
 fn install_tracing() {
@@ -244,4 +186,81 @@ async fn main() -> eyre::Result<()> {
     tracing::info!("Processing done!");
 
     Ok(())
+}
+
+// Real v1 databases
+
+struct V1Database {
+    db: Db,
+}
+
+impl OldIrisShareSource for V1Database {
+    async fn load_code_share(&self, share_id: u64) -> std::io::Result<[u16; IRIS_CODE_LENGTH]> {
+        self.db.fetch_masks(share_id)
+    }
+
+    async fn load_mask(&self, share_id: u64) -> std::io::Result<[bool; IRIS_CODE_LENGTH]> {
+        self.db.load_mask(share_id)
+    }
+}
+
+// Mocking old databases
+
+struct MockOldDbParty1 {
+    rng: ChaCha20Rng,
+}
+
+struct MockOldDbParty2 {
+    rng: ChaCha20Rng,
+}
+
+// Generate some random iris code shares by using the same rng seed and using X
+// as one share and -X as the other share
+
+fn old_dbs() -> (MockOldDbParty1, MockOldDbParty2) {
+    let seed = [0u8; 32];
+    let rng = ChaCha20Rng::from_seed(seed);
+    (MockOldDbParty1 { rng: rng.clone() }, MockOldDbParty2 {
+        rng,
+    })
+}
+
+impl OldIrisShareSource for MockOldDbParty1 {
+    async fn load_code_share(&self, share_id: u64) -> std::io::Result<[u16; IRIS_CODE_LENGTH]> {
+        let mut rng = self.rng.clone();
+        rng.set_word_pos(share_id as u128 * 12800);
+        let mut res = [0u16; IRIS_CODE_LENGTH];
+        res.iter_mut().enumerate().for_each(|(i, x)| {
+            *x = rng.gen::<u16>().wrapping_add((1 - (i % 3)) as u16);
+        });
+        Ok(res)
+    }
+
+    async fn load_mask(&self, _share_id: u64) -> std::io::Result<[bool; IRIS_CODE_LENGTH]> {
+        let mut res = [false; IRIS_CODE_LENGTH];
+        res.iter_mut().enumerate().for_each(|(i, x)| {
+            *x = (1 - (i % 3)) != 0;
+        });
+        Ok(res)
+    }
+}
+
+impl OldIrisShareSource for MockOldDbParty2 {
+    async fn load_code_share(&self, share_id: u64) -> std::io::Result<[u16; IRIS_CODE_LENGTH]> {
+        let mut rng = self.rng.clone();
+        rng.set_word_pos(share_id as u128 * 12800);
+        let mut res = [0u16; IRIS_CODE_LENGTH];
+        res.iter_mut().for_each(|x| {
+            *x = 0u16.wrapping_sub(rng.gen::<u16>());
+        });
+        Ok(res)
+    }
+
+    async fn load_mask(&self, _share_id: u64) -> std::io::Result<[bool; IRIS_CODE_LENGTH]> {
+        let mut res = [false; IRIS_CODE_LENGTH];
+        res.iter_mut().enumerate().for_each(|(i, x)| {
+            *x = (1 - (i % 3)) != 0;
+        });
+        Ok(res)
+    }
 }
