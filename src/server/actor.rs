@@ -858,7 +858,7 @@ impl ServerActor {
                             helpers::dtod_at_offset(
                                 db.0 .0[i],
                                 old_db_size * IRIS_CODE_LENGTH,
-                                query.get0_ref()[i].cu_device_ptr,
+                                query.limb_0[i].cu_device_ptr,
                                 IRIS_CODE_LENGTH * 15
                                     + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                                 IRIS_CODE_LENGTH,
@@ -868,7 +868,7 @@ impl ServerActor {
                             helpers::dtod_at_offset(
                                 db.0 .1[i],
                                 old_db_size * IRIS_CODE_LENGTH,
-                                query.get1_ref()[i].cu_device_ptr,
+                                query.limb_1[i].cu_device_ptr,
                                 IRIS_CODE_LENGTH * 15
                                     + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                                 IRIS_CODE_LENGTH,
@@ -878,7 +878,7 @@ impl ServerActor {
                             helpers::dtod_at_offset(
                                 db.1 .0[i],
                                 old_db_size * mem::size_of::<u32>(),
-                                sums.get0_ref()[i].cu_device_ptr,
+                                sums.limb_0[i].cu_device_ptr,
                                 mem::size_of::<u32>() * 15
                                     + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                                 mem::size_of::<u32>(),
@@ -888,7 +888,7 @@ impl ServerActor {
                             helpers::dtod_at_offset(
                                 db.1 .1[i],
                                 old_db_size * mem::size_of::<u32>(),
-                                sums.get1_ref()[i].cu_device_ptr,
+                                sums.limb_1[i].cu_device_ptr,
                                 mem::size_of::<u32>() * 15
                                     + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                                 mem::size_of::<u32>(),

@@ -167,12 +167,12 @@ impl SlicedProcessedDatabase {
     ) {
         (
             (
-                custom_device_ptrs(self.code_gr.get0_ref()),
-                custom_device_ptrs(self.code_gr.get1_ref()),
+                custom_device_ptrs(self.code_gr.limb_0.as_ref()),
+                custom_device_ptrs(self.code_gr.limb_1.as_ref()),
             ),
             (
-                custom_device_ptrs(self.code_sums_gr.get0_ref()),
-                custom_device_ptrs(self.code_sums_gr.get1_ref()),
+                custom_device_ptrs(self.code_sums_gr.limb_0.as_ref()),
+                custom_device_ptrs(self.code_sums_gr.limb_1.as_ref()),
             ),
         )
     }
@@ -602,10 +602,7 @@ impl ShareDB {
                 self.rngs[idx].1.fill_rng_no_host_copy(len, &streams[idx]);
             }
 
-            for (i, d) in [&db.get0_ref()[idx], &db.get1_ref()[idx]]
-                .iter()
-                .enumerate()
-            {
+            for (i, d) in [&db.limb_0[idx], &db.limb_1[idx]].iter().enumerate() {
                 for (j, q) in [query0, query1].iter().enumerate() {
                     if i + j >= LIMBS {
                         continue;
@@ -659,10 +656,10 @@ impl ShareDB {
                         (
                             &self.intermediate_results[idx],
                             &mut self.results[idx],
-                            *db_sums.get0_ref()[idx].device_ptr(),
-                            *db_sums.get1_ref()[idx].device_ptr(),
-                            *query_sums.get0_ref()[idx].device_ptr(),
-                            *query_sums.get1_ref()[idx].device_ptr(),
+                            *db_sums.limb_0[idx].device_ptr(),
+                            *db_sums.limb_1[idx].device_ptr(),
+                            *query_sums.limb_0[idx].device_ptr(),
+                            *query_sums.limb_1[idx].device_ptr(),
                             db_sizes[idx] as u64,
                             (db_sizes[idx] * self.query_length) as u64,
                             self.rngs[idx].0.cuda_slice().unwrap(),

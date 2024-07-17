@@ -73,19 +73,6 @@ pub struct CudaVec2DSlicer<T> {
     pub limb_1: Vec<StreamAwareCudaSlice<T>>,
 }
 
-impl<T> CudaVec2DSlicer<T> {
-    pub fn get0_ref(&self) -> &Vec<StreamAwareCudaSlice<T>> {
-        &self.limb_0
-    }
-    pub fn get1_ref(&self) -> &Vec<StreamAwareCudaSlice<T>> {
-        &self.limb_1
-    }
-
-    pub fn as_tuple_refs(&self) -> (&Vec<StreamAwareCudaSlice<T>>, &Vec<StreamAwareCudaSlice<T>>) {
-        (&self.limb_0, &self.limb_0)
-    }
-}
-
 pub type CudaVec2DSlicerU32 = CudaVec2DSlicer<u32>;
 pub type CudaVec2DSlicerU8 = CudaVec2DSlicer<u8>;
 pub type CudaVec2DSlicerI8 = CudaVec2DSlicer<i8>;
