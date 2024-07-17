@@ -14,7 +14,7 @@ env:
 jobs:
   docker:
     runs-on:
-      labels: ubuntu-22.04-64core
+      labels: gpu
     permissions:
       packages: write
       contents: read

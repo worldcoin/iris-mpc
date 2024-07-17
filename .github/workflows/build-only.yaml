@@ -13,7 +13,7 @@ concurrency:
 jobs:
   docker:
     runs-on:
-      labels: ["gpu"]
+      labels: gpu
     steps:
       - name: Checkout
         uses: actions/checkout@v4
