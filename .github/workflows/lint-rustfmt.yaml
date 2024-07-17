@@ -10,7 +10,7 @@ concurrency:
 jobs:
   # TODO: change this to lint-rustfmt once we've updated required jobs
   lint:
-    runs-on: ubuntu-latest
+    runs-on: gpu
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
