@@ -117,7 +117,7 @@ impl DeviceManager {
             let query0 =
                 unsafe { malloc_async(streams[idx].stream, preprocessed_query[0].len()).unwrap() };
 
-            let slice0 = StreamAwareCudaSlice::<u8>::upgrade_device_with_stream(
+            let slice0 = StreamAwareCudaSlice::<u8>::upgrade_ptr_stream(
                 query0,
                 streams[idx].stream,
                 preprocessed_query[0].len(),
@@ -130,7 +130,7 @@ impl DeviceManager {
             let query1 =
                 unsafe { malloc_async(streams[idx].stream, preprocessed_query[1].len()).unwrap() };
 
-            let slice1 = StreamAwareCudaSlice::<u8>::upgrade_device_with_stream(
+            let slice1 = StreamAwareCudaSlice::<u8>::upgrade_ptr_stream(
                 query1,
                 streams[idx].stream,
                 preprocessed_query[1].len(),

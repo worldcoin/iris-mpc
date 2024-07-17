@@ -31,11 +31,7 @@ impl<T> StreamAwareCudaSlice<T> {
         &self.cu_device_ptr
     }
 
-    pub fn upgrade_device_with_stream(
-        cu_device_ptr: CUdeviceptr,
-        cu_stream: CUstream,
-        len: usize,
-    ) -> Self {
+    pub fn upgrade_ptr_stream(cu_device_ptr: CUdeviceptr, cu_stream: CUstream, len: usize) -> Self {
         StreamAwareCudaSlice {
             cu_device_ptr,
             len,

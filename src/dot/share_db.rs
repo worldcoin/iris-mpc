@@ -524,7 +524,7 @@ impl ShareDB {
                 )
                 .unwrap()
             };
-            let slice0_sum = StreamAwareCudaSlice::<u32>::upgrade_device_with_stream(
+            let slice0_sum = StreamAwareCudaSlice::<u32>::upgrade_ptr_stream(
                 query0_sum,
                 streams[idx].stream,
                 self.query_length,
@@ -538,7 +538,7 @@ impl ShareDB {
                 .unwrap()
             };
 
-            let slice1_sum = StreamAwareCudaSlice::<u32>::upgrade_device_with_stream(
+            let slice1_sum = StreamAwareCudaSlice::<u32>::upgrade_ptr_stream(
                 query1_sum,
                 streams[idx].stream,
                 self.query_length,
