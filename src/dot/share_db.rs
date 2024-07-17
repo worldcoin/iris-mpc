@@ -2,10 +2,10 @@ use super::IRIS_CODE_LENGTH;
 use crate::{
     helpers::{
         device_manager::DeviceManager,
-        device_ptrs,
         id_wrapper::{http_root, IdWrapper},
         query_processor::{
-            NgCudaVec2DSlicer, NgCudaVec2DSlicerI8, NgCudaVec2DSlicerU32, NgCudaVec2DSlicerU8,
+            MemoryAwareSlice, NgCudaVec2DSlicer, NgCudaVec2DSlicerI8, NgCudaVec2DSlicerU32,
+            NgCudaVec2DSlicerU8,
         },
     },
     rng::chacha::ChaChaCudaRng,
@@ -166,15 +166,19 @@ impl SlicedProcessedDatabase {
     ) {
         (
             (
-                device_ptrs(self.code_gr.get0_ref()),
-                device_ptrs(self.code_gr.get1_ref()),
+                custom_device_ptrs(self.code_gr.get0_ref()),
+                custom_device_ptrs(self.code_gr.get1_ref()),
             ),
             (
-                device_ptrs(self.code_sums_gr.get0_ref()),
-                device_ptrs(self.code_sums_gr.get1_ref()),
+                custom_device_ptrs(self.code_sums_gr.get0_ref()),
+                custom_device_ptrs(self.code_sums_gr.get1_ref()),
             ),
         )
     }
+}
+
+fn custom_device_ptrs<T>(slice: &[MemoryAwareSlice<T>]) -> Vec<CUdeviceptr> {
+    slice.iter().map(|s| *s.device_ptr()).collect()
 }
 
 pub struct ShareDB {
@@ -419,7 +423,7 @@ impl ShareDB {
                 self.device_manager
                     .htod_copy_into(chunk.to_vec(), &mut slice, idx)
                     .unwrap();
-                slice
+                MemoryAwareSlice::from(slice)
             })
             .collect::<Vec<_>>();
         let db0_sums = db0_sums
@@ -430,7 +434,7 @@ impl ShareDB {
                 self.device_manager
                     .htod_copy_into(chunk.to_vec(), &mut slice, idx)
                     .unwrap();
-                slice
+                MemoryAwareSlice::from(slice)
             })
             .collect::<Vec<_>>();
 
@@ -464,7 +468,7 @@ impl ShareDB {
                 self.device_manager
                     .htod_copy_into(chunk.to_vec(), &mut slice, idx)
                     .unwrap();
-                slice
+                MemoryAwareSlice::from(slice)
             })
             .collect::<Vec<_>>();
         let db0 = db0
@@ -480,7 +484,7 @@ impl ShareDB {
                 self.device_manager
                     .htod_copy_into(chunk.to_vec(), &mut slice, idx)
                     .unwrap();
-                slice
+                MemoryAwareSlice::from(slice)
             })
             .collect::<Vec<_>>();
 
@@ -519,8 +523,11 @@ impl ShareDB {
                 )
                 .unwrap()
             };
-            let slice0_sum =
-                unsafe { device.upgrade_device_ptr::<u32>(query0_sum, self.query_length) };
+            let slice0_sum = MemoryAwareSlice::<u32>::upgrade_device_with_stream(
+                query0_sum,
+                streams[idx].stream,
+                self.query_length,
+            );
 
             let query1_sum = unsafe {
                 malloc_async(
@@ -529,8 +536,12 @@ impl ShareDB {
                 )
                 .unwrap()
             };
-            let slice1_sum =
-                unsafe { device.upgrade_device_ptr::<u32>(query1_sum, self.query_length) };
+
+            let slice1_sum = MemoryAwareSlice::<u32>::upgrade_device_with_stream(
+                query1_sum,
+                streams[idx].stream,
+                self.query_length,
+            );
 
             gemm(
                 &blass[idx],

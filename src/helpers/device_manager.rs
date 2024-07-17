@@ -1,4 +1,4 @@
-use super::query_processor::NgCudaVec2DSlicerU8;
+use super::query_processor::{MemoryAwareSlice, NgCudaVec2DSlicerU8};
 use cudarc::{
     cublas::CudaBlas,
     driver::{
@@ -117,8 +117,11 @@ impl DeviceManager {
             let query0 =
                 unsafe { malloc_async(streams[idx].stream, preprocessed_query[0].len()).unwrap() };
 
-            let slice0 =
-                unsafe { device.upgrade_device_ptr::<u8>(query0, preprocessed_query[0].len()) };
+            let slice0 = MemoryAwareSlice::<u8>::upgrade_device_with_stream(
+                query0,
+                streams[idx].stream,
+                preprocessed_query[0].len(),
+            );
 
             unsafe {
                 memcpy_htod_async(query0, &preprocessed_query[0], streams[idx].stream).unwrap();
@@ -127,8 +130,11 @@ impl DeviceManager {
             let query1 =
                 unsafe { malloc_async(streams[idx].stream, preprocessed_query[1].len()).unwrap() };
 
-            let slice1 =
-                unsafe { device.upgrade_device_ptr::<u8>(query1, preprocessed_query[1].len()) };
+            let slice1 = MemoryAwareSlice::<u8>::upgrade_device_with_stream(
+                query1,
+                streams[idx].stream,
+                preprocessed_query[1].len(),
+            );
 
             unsafe {
                 memcpy_htod_async(query1, &preprocessed_query[1], streams[idx].stream).unwrap();

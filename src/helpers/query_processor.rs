@@ -5,23 +5,80 @@ use crate::{
 };
 use cudarc::{
     cublas::CudaBlas,
-    driver::{CudaSlice, CudaStream},
+    driver::{
+        result::free_async,
+        sys::{CUdeviceptr, CUstream},
+        CudaSlice, CudaStream, DevicePtr,
+    },
+};
+use std::{
+    marker::{Send, Sync},
+    pin::Pin,
 };
 
+pub struct MemoryAwareSlice<T> {
+    pub cu_device_ptr: CUdeviceptr,
+    pub len:           usize,
+    pub stream:        CUstream,
+    pub host_buf:      Option<Pin<Vec<T>>>,
+}
+
+unsafe impl<T: Send> Send for MemoryAwareSlice<T> {}
+unsafe impl<T: Sync> Sync for MemoryAwareSlice<T> {}
+
+impl<T> MemoryAwareSlice<T> {
+    pub fn device_ptr(&self) -> &CUdeviceptr {
+        &self.cu_device_ptr
+    }
+
+    pub fn upgrade_device_with_stream(
+        cu_device_ptr: CUdeviceptr,
+        cu_stream: CUstream,
+        len: usize,
+    ) -> Self {
+        MemoryAwareSlice {
+            cu_device_ptr,
+            len,
+            stream: cu_stream,
+            host_buf: None,
+        }
+    }
+}
+
+impl<T> From<CudaSlice<T>> for MemoryAwareSlice<T> {
+    fn from(value: CudaSlice<T>) -> Self {
+        let stream = *value.device().cu_stream();
+        MemoryAwareSlice {
+            cu_device_ptr: *value.device_ptr(),
+            len: value.len,
+            stream,
+            host_buf: None,
+        }
+    }
+}
+
+impl<T> Drop for MemoryAwareSlice<T> {
+    fn drop(&mut self) {
+        // unsafe {
+        //     free_async(self.cu_device_ptr, self.stream).unwrap();
+        // }
+    }
+}
+
 pub struct NgCudaVec2DSlicer<T> {
-    pub entry_0: Vec<CudaSlice<T>>,
-    pub entry_1: Vec<CudaSlice<T>>,
+    pub entry_0: Vec<MemoryAwareSlice<T>>,
+    pub entry_1: Vec<MemoryAwareSlice<T>>,
 }
 
 impl<T> NgCudaVec2DSlicer<T> {
-    pub fn get0_ref(&self) -> &Vec<CudaSlice<T>> {
+    pub fn get0_ref(&self) -> &Vec<MemoryAwareSlice<T>> {
         &self.entry_0
     }
-    pub fn get1_ref(&self) -> &Vec<CudaSlice<T>> {
+    pub fn get1_ref(&self) -> &Vec<MemoryAwareSlice<T>> {
         &self.entry_1
     }
 
-    pub fn as_tuple_refs(&self) -> (&Vec<CudaSlice<T>>, &Vec<CudaSlice<T>>) {
+    pub fn as_tuple_refs(&self) -> (&Vec<MemoryAwareSlice<T>>, &Vec<MemoryAwareSlice<T>>) {
         (&self.entry_0, &self.entry_0)
     }
 }
