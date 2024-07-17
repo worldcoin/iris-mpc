@@ -4,8 +4,8 @@ use crate::{
         device_manager::DeviceManager,
         id_wrapper::{http_root, IdWrapper},
         query_processor::{
-            MemoryAwareSlice, NgCudaVec2DSlicer, NgCudaVec2DSlicerI8, NgCudaVec2DSlicerU32,
-            NgCudaVec2DSlicerU8,
+            NgCudaVec2DSlicer, NgCudaVec2DSlicerI8, NgCudaVec2DSlicerU32, NgCudaVec2DSlicerU8,
+            StreamAwareCudaSlice,
         },
     },
     rng::chacha::ChaChaCudaRng,
@@ -177,7 +177,7 @@ impl SlicedProcessedDatabase {
     }
 }
 
-fn custom_device_ptrs<T>(slice: &[MemoryAwareSlice<T>]) -> Vec<CUdeviceptr> {
+fn custom_device_ptrs<T>(slice: &[StreamAwareCudaSlice<T>]) -> Vec<CUdeviceptr> {
     slice.iter().map(|s| *s.device_ptr()).collect()
 }
 
@@ -423,7 +423,7 @@ impl ShareDB {
                 self.device_manager
                     .htod_copy_into(chunk.to_vec(), &mut slice, idx)
                     .unwrap();
-                MemoryAwareSlice::from(slice)
+                StreamAwareCudaSlice::from(slice)
             })
             .collect::<Vec<_>>();
         let db0_sums = db0_sums
@@ -434,7 +434,7 @@ impl ShareDB {
                 self.device_manager
                     .htod_copy_into(chunk.to_vec(), &mut slice, idx)
                     .unwrap();
-                MemoryAwareSlice::from(slice)
+                StreamAwareCudaSlice::from(slice)
             })
             .collect::<Vec<_>>();
 
@@ -468,7 +468,7 @@ impl ShareDB {
                 self.device_manager
                     .htod_copy_into(chunk.to_vec(), &mut slice, idx)
                     .unwrap();
-                MemoryAwareSlice::from(slice)
+                StreamAwareCudaSlice::from(slice)
             })
             .collect::<Vec<_>>();
         let db0 = db0
@@ -484,7 +484,7 @@ impl ShareDB {
                 self.device_manager
                     .htod_copy_into(chunk.to_vec(), &mut slice, idx)
                     .unwrap();
-                MemoryAwareSlice::from(slice)
+                StreamAwareCudaSlice::from(slice)
             })
             .collect::<Vec<_>>();
 
@@ -523,7 +523,7 @@ impl ShareDB {
                 )
                 .unwrap()
             };
-            let slice0_sum = MemoryAwareSlice::<u32>::upgrade_device_with_stream(
+            let slice0_sum = StreamAwareCudaSlice::<u32>::upgrade_device_with_stream(
                 query0_sum,
                 streams[idx].stream,
                 self.query_length,
@@ -537,7 +537,7 @@ impl ShareDB {
                 .unwrap()
             };
 
-            let slice1_sum = MemoryAwareSlice::<u32>::upgrade_device_with_stream(
+            let slice1_sum = StreamAwareCudaSlice::<u32>::upgrade_device_with_stream(
                 query1_sum,
                 streams[idx].stream,
                 self.query_length,

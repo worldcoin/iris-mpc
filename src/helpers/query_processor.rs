@@ -16,17 +16,17 @@ use std::{
     pin::Pin,
 };
 
-pub struct MemoryAwareSlice<T> {
+pub struct StreamAwareCudaSlice<T> {
     pub cu_device_ptr: CUdeviceptr,
     pub len:           usize,
     pub stream:        CUstream,
     pub host_buf:      Option<Pin<Vec<T>>>,
 }
 
-unsafe impl<T: Send> Send for MemoryAwareSlice<T> {}
-unsafe impl<T: Sync> Sync for MemoryAwareSlice<T> {}
+unsafe impl<T: Send> Send for StreamAwareCudaSlice<T> {}
+unsafe impl<T: Sync> Sync for StreamAwareCudaSlice<T> {}
 
-impl<T> MemoryAwareSlice<T> {
+impl<T> StreamAwareCudaSlice<T> {
     pub fn device_ptr(&self) -> &CUdeviceptr {
         &self.cu_device_ptr
     }
@@ -36,7 +36,7 @@ impl<T> MemoryAwareSlice<T> {
         cu_stream: CUstream,
         len: usize,
     ) -> Self {
-        MemoryAwareSlice {
+        StreamAwareCudaSlice {
             cu_device_ptr,
             len,
             stream: cu_stream,
@@ -45,40 +45,43 @@ impl<T> MemoryAwareSlice<T> {
     }
 }
 
-impl<T> From<CudaSlice<T>> for MemoryAwareSlice<T> {
+impl<T> From<CudaSlice<T>> for StreamAwareCudaSlice<T> {
     fn from(value: CudaSlice<T>) -> Self {
-        let stream = *value.device().cu_stream();
-        MemoryAwareSlice {
+        let res = StreamAwareCudaSlice {
+            stream:        *value.device().cu_stream(),
             cu_device_ptr: *value.device_ptr(),
-            len: value.len,
-            stream,
-            host_buf: None,
+            len:           value.len,
+            host_buf:      None,
+        };
+        // forgetting the slice is ok since we are going to free up the memory using the
+        // `StreamAwareCudaSlice` destructor.
+        std::mem::forget(value);
+        res
+    }
+}
+
+impl<T> Drop for StreamAwareCudaSlice<T> {
+    fn drop(&mut self) {
+        unsafe {
+            free_async(self.cu_device_ptr, self.stream).unwrap();
         }
     }
 }
 
-impl<T> Drop for MemoryAwareSlice<T> {
-    fn drop(&mut self) {
-        // unsafe {
-        //     free_async(self.cu_device_ptr, self.stream).unwrap();
-        // }
-    }
-}
-
 pub struct NgCudaVec2DSlicer<T> {
-    pub entry_0: Vec<MemoryAwareSlice<T>>,
-    pub entry_1: Vec<MemoryAwareSlice<T>>,
+    pub entry_0: Vec<StreamAwareCudaSlice<T>>,
+    pub entry_1: Vec<StreamAwareCudaSlice<T>>,
 }
 
 impl<T> NgCudaVec2DSlicer<T> {
-    pub fn get0_ref(&self) -> &Vec<MemoryAwareSlice<T>> {
+    pub fn get0_ref(&self) -> &Vec<StreamAwareCudaSlice<T>> {
         &self.entry_0
     }
-    pub fn get1_ref(&self) -> &Vec<MemoryAwareSlice<T>> {
+    pub fn get1_ref(&self) -> &Vec<StreamAwareCudaSlice<T>> {
         &self.entry_1
     }
 
-    pub fn as_tuple_refs(&self) -> (&Vec<MemoryAwareSlice<T>>, &Vec<MemoryAwareSlice<T>>) {
+    pub fn as_tuple_refs(&self) -> (&Vec<StreamAwareCudaSlice<T>>, &Vec<StreamAwareCudaSlice<T>>) {
         (&self.entry_0, &self.entry_0)
     }
 }
