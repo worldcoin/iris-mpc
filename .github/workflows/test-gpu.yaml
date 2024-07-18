@@ -21,8 +21,11 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          wget -q https://developer.download.nvidia.com/compute/cuda/12.1.0/local_installers/cuda_12.1.0_530.30.02_linux.run
-          sudo sh cuda_12.1.0_530.30.02_linux.run
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.0-1_all.deb
+          sudo dpkg -i cuda-keyring_1.0-1_all.deb
+          sudo apt-get update
+          sudo apt-get autoremove
+          sudo apt-get -y install cuda
           cd nccl
           make -j4 pkg.debian.build
           sudo dpkg -i build/pkg/deb/libnccl*.deb
