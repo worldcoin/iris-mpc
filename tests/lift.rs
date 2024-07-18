@@ -180,7 +180,7 @@ async fn test_lift() -> eyre::Result<()> {
         .parse()
         .expect("PARTY_ID must be a valid usize");
     let url = env::var("PEER_URL")?;
-    let n_devices = CudaDevice::count().unwrap() as usize;
+    let n_devices = CudaDevice::count()? as usize;
 
     // Get inputs
     let mask_dots = sample_mask_dots(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);

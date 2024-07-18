@@ -149,7 +149,7 @@ async fn test_bitinject() -> eyre::Result<()> {
         .parse()
         .expect("PARTY_ID must be a valid usize");
     let url = env::var("PEER_URL")?;
-    let n_devices = CudaDevice::count().unwrap() as usize;
+    let n_devices = CudaDevice::count()? as usize;
 
     // Get inputs
     let input_bits = sample_bits(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);

@@ -103,7 +103,7 @@ async fn main() -> eyre::Result<()> {
         .parse()
         .expect("PARTY_ID must be a valid usize");
     let url = env::var("PEER_URL")?;
-    let n_devices = CudaDevice::count().unwrap() as usize;
+    let n_devices = CudaDevice::count()? as usize;
 
     // Get Circuit Party
     let device_manager = Arc::new(DeviceManager::init());

@@ -171,7 +171,7 @@ async fn test_threshold() -> eyre::Result<()> {
         .parse()
         .expect("PARTY_ID must be a valid usize");
     let url = env::var("PEER_URL")?;
-    let n_devices = CudaDevice::count().unwrap() as usize;
+    let n_devices = CudaDevice::count()? as usize;
 
     // Get inputs
     let code_dots = sample_code_dots(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);
