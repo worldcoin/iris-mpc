@@ -41,7 +41,7 @@ pub struct Config {
     pub path: String,
 
     #[serde(default)]
-    pub kms_key_ids: JsonStrWrapper<Vec<String>>,
+    pub kms_key_arns: JsonStrWrapper<Vec<String>>,
 
     #[serde(default)]
     pub servers: ServersConfig,
