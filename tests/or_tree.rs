@@ -87,8 +87,8 @@ fn open(party: &mut Circuits, result: &mut ChunkShare<u64>, streams: &[CudaStrea
     result == 1
 }
 
-#[allow(clippy::assertions_on_constants)]
-#[tokio::main(worker_threads = 1)]
+#[tokio::test]
+#[ignore]
 async fn main() -> eyre::Result<()> {
     assert!(
         INPUTS_PER_GPU_SIZE % (2048) == 0,
@@ -98,12 +98,12 @@ async fn main() -> eyre::Result<()> {
     // TODO
     let mut rng = StdRng::seed_from_u64(42);
 
-    let args = env::args().collect::<Vec<_>>();
-    let party_id: usize = args[1].parse().unwrap();
-    let url = args.get(2);
+    let party_id: usize = env::var("PARTY_ID")
+        .expect("PARTY_ID environment variable not set")
+        .parse()
+        .expect("PARTY_ID must be a valid usize");
+    let url = env::var("PEER_URL")?;
     let n_devices = CudaDevice::count().unwrap() as usize;
-
-    let url = url.cloned();
 
     // Get Circuit Party
     let device_manager = Arc::new(DeviceManager::init());
@@ -113,7 +113,7 @@ async fn main() -> eyre::Result<()> {
         INPUTS_PER_GPU_SIZE,
         INPUTS_PER_GPU_SIZE / 64,
         ([party_id as u32; 8], [((party_id + 2) % 3) as u32; 8]),
-        url,
+        Some(url),
         Some(9001),
         Some(&mut server_tasks),
         device_manager.clone(),

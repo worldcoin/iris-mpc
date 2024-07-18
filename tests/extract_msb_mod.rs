@@ -153,23 +153,24 @@ fn open(party: &mut Circuits, x: &[ChunkShare<u64>], streams: &[CudaStream]) -> 
     result
 }
 
-#[allow(clippy::assertions_on_constants)]
-#[tokio::main]
-async fn main() -> eyre::Result<()> {
+#[tokio::test]
+#[ignore]
+async fn test_extract_msb_mod() -> eyre::Result<()> {
     assert!(
         INPUTS_PER_GPU_SIZE % (2048) == 0,
         // Mod 16 for randomness, mod 64 for chunk size
         "Inputs per GPU size must be a multiple of 2048"
     );
+
     // TODO
     let mut rng = StdRng::seed_from_u64(42);
 
-    let args = env::args().collect::<Vec<_>>();
-    let party_id: usize = args[1].parse().unwrap();
-    let url = args.get(2);
+    let party_id: usize = env::var("PARTY_ID")
+        .expect("PARTY_ID environment variable not set")
+        .parse()
+        .expect("PARTY_ID must be a valid usize");
+    let url = env::var("PEER_URL")?;
     let n_devices = CudaDevice::count().unwrap() as usize;
-
-    let url = url.cloned();
 
     // Get inputs
     let code_dots = sample_dots(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);
@@ -185,7 +186,7 @@ async fn main() -> eyre::Result<()> {
         INPUTS_PER_GPU_SIZE,
         INPUTS_PER_GPU_SIZE / 64,
         ([party_id as u32; 8], [((party_id + 2) % 3) as u32; 8]),
-        url,
+        Some(url),
         Some(9001),
         Some(&mut server_tasks),
         device_manager.clone(),

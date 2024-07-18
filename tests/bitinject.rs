@@ -133,22 +133,23 @@ fn open(party: &mut Circuits, x: &mut [ChunkShareView<u16>], streams: &[CudaStre
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_bitinject() -> eyre::Result<()> {
     assert!(
         INPUTS_PER_GPU_SIZE % (2048) == 0,
         // Mod 16 for randomness, mod 64 for chunk size
         "Inputs per GPU size must be a multiple of 2048"
     );
+
     // TODO
     let mut rng = StdRng::seed_from_u64(42);
 
-    // NOTE: update to use env args
-    let args = env::args().collect::<Vec<_>>();
-    let party_id: usize = args[1].parse().unwrap();
-    let url = args.get(2);
+    let party_id: usize = env::var("PARTY_ID")
+        .expect("PARTY_ID environment variable not set")
+        .parse()
+        .expect("PARTY_ID must be a valid usize");
+    let url = env::var("PEER_URL")?;
     let n_devices = CudaDevice::count().unwrap() as usize;
-
-    let url = url.cloned();
 
     // Get inputs
     let input_bits = sample_bits(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);
@@ -165,7 +166,7 @@ async fn test_bitinject() -> eyre::Result<()> {
         INPUTS_PER_GPU_SIZE / 2,
         INPUTS_PER_GPU_SIZE / 128,
         ([party_id as u32; 8], [((party_id + 2) % 3) as u32; 8]),
-        url,
+        Some(url),
         Some(9001),
         Some(&mut server_tasks),
         device_manager.clone(),
