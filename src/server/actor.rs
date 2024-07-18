@@ -561,7 +561,7 @@ impl ServerActor {
             let mut code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
             let mut mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
             {
-                self.phase2.set_chunk_size(max_chunk_size);
+                self.phase2.set_chunk_size(max_chunk_size * QUERIES);
                 self.phase2
                     .compare_threshold_masked_many(&code_dots, &mask_dots, request_streams);
                 // we can now record the exchange event since the phase 2 is no longer using the
@@ -576,7 +576,7 @@ impl ServerActor {
                     &res,
                     &self.distance_comparator,
                     &self.results,
-                    QUERIES * chunk_size.iter().max().unwrap() / 64,
+                    max_chunk_size * QUERIES / 64,
                     &chunk_size,
                     offset,
                     request_streams,
