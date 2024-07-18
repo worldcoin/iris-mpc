@@ -269,6 +269,7 @@ async fn main() -> eyre::Result<()> {
         codes_db.extend(iris.code());
         masks_db.extend(iris.mask());
     }
+    store_height = store_height.div_ceil(N_QUERIES as u64) * N_QUERIES as u64;
 
     let mut background_tasks = TaskMonitor::new();
     // a bit convoluted, but we need to create the actor on the thread already,
@@ -415,7 +416,11 @@ async fn main() -> eyre::Result<()> {
 
             // Plan at which database height this batch will be inserted.
             batch.store_height = store_height;
-            store_height += batch.request_ids.len() as u64;
+            store_height += N_QUERIES as u64;
+            assert!(
+                batch.request_ids.len() <= N_QUERIES,
+                "a batch has N_QUERIES by construction"
+            );
             batch
         };
 
