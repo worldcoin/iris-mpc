@@ -9,6 +9,7 @@ use gpu_iris_mpc::{
 };
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
+use static_assertions::const_assert;
 use std::{env, sync::Arc};
 use tokio::time::{self, Instant};
 
@@ -156,10 +157,9 @@ fn open(party: &mut Circuits, x: &[ChunkShare<u64>], streams: &[CudaStream]) -> 
 #[tokio::test]
 #[ignore]
 async fn test_extract_msb_mod() -> eyre::Result<()> {
-    assert!(
+    const_assert!(
         INPUTS_PER_GPU_SIZE % (2048) == 0,
         // Mod 16 for randomness, mod 64 for chunk size
-        "Inputs per GPU size must be a multiple of 2048"
     );
 
     // TODO
