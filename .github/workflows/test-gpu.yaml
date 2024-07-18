@@ -42,7 +42,17 @@ jobs:
           sudo apt update
           sudo apt install -y libnccl2 libnccl-dev
         shell: bash
-      
+
+      - name: Set up CUDA environment
+        run: |
+          echo "/usr/local/cuda-12.2/lib64" | sudo tee /etc/ld.so.conf.d/cuda.conf
+          sudo ldconfig
+          export PATH=/usr/local/cuda-12.2/bin:$PATH
+          export LD_LIBRARY_PATH=/usr/local/cuda-12.2/lib64:$LD_LIBRARY_PATH
+          echo 'export PATH=/usr/local/cuda-12.2/bin:$PATH' >> $GITHUB_ENV
+          echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.2/lib64:$LD_LIBRARY_PATH' >> $GITHUB_ENV
+        shell: bash
+
       - name: Cache Rust build
         uses: actions/cache@v3
         id: cache-rust
@@ -62,8 +72,7 @@ jobs:
 
       - name: E2E Tests
         run: |
-          export LD_LIBRARY_PATH=/usr/local/cuda-12.2/lib64:$LD_LIBRARY_PATH
-          export CUDA_HOME=/usr/local/cuda-12.2
+          source ~/.bashrc
           /usr/local/cuda-12.2/bin/nvcc --version
           cargo test --release e2e
         shell: bash
