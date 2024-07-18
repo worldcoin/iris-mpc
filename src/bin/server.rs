@@ -87,6 +87,9 @@ async fn receive_batch(
                 }
 
                 batch_query.request_ids.push(message.clone().request_id);
+                batch_query
+                    .sqs_receipt_handles
+                    .push(sqs_message.receipt_handle.unwrap());
                 batch_query.metadata.push(batch_metadata);
 
                 let (
@@ -131,14 +134,6 @@ async fn receive_batch(
                 batch_query.db.mask.extend(db_mask_shares);
                 batch_query.query.code.extend(iris_shares);
                 batch_query.query.mask.extend(mask_shares);
-
-                // TODO: we should only delete after processing
-                client
-                    .delete_message()
-                    .queue_url(queue_url)
-                    .receipt_handle(sqs_message.receipt_handle.unwrap())
-                    .send()
-                    .await?;
             }
         }
     }
@@ -305,11 +300,14 @@ async fn main() -> eyre::Result<()> {
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
     let rx_sns_client = sns_client.clone();
+    let sqs_client_bg = sqs_client.clone();
+    let queue_url_bg = requests_queue_url.clone();
 
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
             merged_results,
             thread_request_ids: request_ids,
+            sqs_receipt_handles,
             matches,
             store: query_store,
         }) = rx.recv().await
@@ -349,6 +347,16 @@ async fn main() -> eyre::Result<()> {
                     .message(serde_json::to_string(&result_event).unwrap())
                     .send()
                     .await?;
+
+                // Tell SQS that we are done with these requests.
+                for sqs_receipt_handle in sqs_receipt_handles.iter() {
+                    sqs_client_bg
+                        .delete_message()
+                        .queue_url(&queue_url_bg)
+                        .receipt_handle(sqs_receipt_handle)
+                        .send()
+                        .await?;
+                }
             }
         }
 
