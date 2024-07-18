@@ -558,7 +558,9 @@ impl ServerActor {
             // TODO: remove
             let mut code_dots = self.codes_engine.result_chunk_shares(&chunk_size);
             let mut mask_dots = self.masks_engine.result_chunk_shares(&chunk_size);
+            let max_chunk_size = chunk_size.iter().max().copied().unwrap();
             {
+                self.phase2.set_chunk_size(max_chunk_size);
                 self.phase2
                     .compare_threshold_masked_many(&code_dots, &mask_dots, request_streams);
                 // we can now record the exchange event since the phase 2 is no longer using the
@@ -799,7 +801,6 @@ fn open(
     let mut a = Vec::with_capacity(n_devices);
     let mut b = Vec::with_capacity(n_devices);
     let mut c = Vec::with_capacity(n_devices);
-    // party.set_chunk_size(chunk_size);
 
     cudarc::nccl::result::group_start().unwrap();
     for (idx, res) in x.iter().enumerate() {
