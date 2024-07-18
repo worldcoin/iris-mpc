@@ -16,7 +16,7 @@ bytemuck = "1.16"
 config = "0.14.0"
 clap = { version = "4.5.9", features = ["derive", "env"] }
 cudarc = { git = "https://github.com/rw0x0/cudarc.git", rev = "origin/transmute", features = [
-    "cuda-12020",
+    "cuda-12010",
 ] }
 eyre = "0.6.12"
 float_eq = "1.0.1"
