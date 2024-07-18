@@ -27,8 +27,7 @@ jobs:
           echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.1/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
           source ~/.bashrc
           /usr/local/cuda-12.1/bin/nvcc --version
-          git clone https://github.com/NVIDIA/nccl.git && cd nccl && make -j4 pkg.debian.build
-          dpkg -i /tmp/libnccl*.deb
+          sudo apt-get install -y libnccl2 libnccl-dev
         shell: bash
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@master
