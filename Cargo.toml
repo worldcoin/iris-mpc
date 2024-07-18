@@ -42,7 +42,7 @@ sha2 = "0.10"
 telemetry-batteries = { git = "https://github.com/worldcoin/telemetry-batteries.git", rev = "802a4f39f358e077b11c8429b4c65f3e45b85959" }
 thiserror = "1.0"
 time = { version = "^0.3.6", features = ["formatting", "macros"] }
-tokio = { version = "1.36", features = ["full", "rt-multi-thread"] }
+tokio = { version = "1.38", features = ["full", "rt-multi-thread"] }
 tracing-subscriber = { version = "0.3.15", features = ["env-filter"] }
 url = "2"
 uuid = { version = "1.10.0", features = ["v4"] }

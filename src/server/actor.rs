@@ -3,10 +3,13 @@ use crate::{
     config::ServersConfig,
     dot::{
         distance_comparator::DistanceComparator,
-        share_db::{preprocess_query, ShareDB},
+        share_db::{preprocess_query, ShareDB, SlicedProcessedDatabase},
         IRIS_CODE_LENGTH, ROTATIONS,
     },
-    helpers::{self, device_manager::DeviceManager, task_monitor::TaskMonitor},
+    helpers::{
+        self, device_manager::DeviceManager, query_processor::CompactQuery,
+        task_monitor::TaskMonitor,
+    },
     setup::galois_engine::degree4::GaloisRingIrisCodeShare,
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
@@ -66,11 +69,6 @@ const DB_CHUNK_SIZE: usize = 512;
 const N_QUERIES: usize = 64;
 const QUERIES: usize = ROTATIONS * N_QUERIES;
 
-type DbSlices = (
-    (Vec<CudaSlice<i8>>, Vec<CudaSlice<i8>>),
-    (Vec<CudaSlice<u32>>, Vec<CudaSlice<u32>>),
-);
-
 pub struct ServerActor {
     job_queue:             mpsc::Receiver<ServerJob>,
     device_manager:        Arc<DeviceManager>,
@@ -84,8 +82,8 @@ pub struct ServerActor {
     phase2_batch:          Circuits,
     distance_comparator:   DistanceComparator,
     // DB slices
-    code_db_slices:        DbSlices,
-    mask_db_slices:        DbSlices,
+    code_db_slices:        SlicedProcessedDatabase,
+    mask_db_slices:        SlicedProcessedDatabase,
     streams:               Vec<Vec<CudaStream>>,
     cublas_handles:        Vec<Vec<CudaBlas>>,
     results:               Vec<CudaSlice<u32>>,
@@ -327,7 +325,7 @@ impl ServerActor {
                 batch,
                 return_channel,
             } = job;
-            self.process_batch_query(batch, return_channel);
+            let _ = self.process_batch_query(batch, return_channel);
         }
 
         // await the last thread for phase 2
@@ -343,45 +341,37 @@ impl ServerActor {
         &mut self,
         batch: BatchQuery,
         return_channel: oneshot::Sender<ServerJobResult>,
-    ) {
+    ) -> eyre::Result<()> {
         let now = Instant::now();
         // *Query* variant including Lagrange interpolation.
-        let code_query = prepare_query_shares(batch.query.code);
-        let mask_query = prepare_query_shares(batch.query.mask);
-        // *Storage* variant (no interpolation).
-        let code_query_insert = prepare_query_shares(batch.db.code);
-        let mask_query_insert = prepare_query_shares(batch.db.mask);
+        let compact_query = {
+            let code_query = prepare_query_shares(batch.query.code);
+            let mask_query = prepare_query_shares(batch.query.mask);
+            // *Storage* variant (no interpolation).
+            let code_query_insert = prepare_query_shares(batch.db.code);
+            let mask_query_insert = prepare_query_shares(batch.db.mask);
+            CompactQuery {
+                code_query,
+                mask_query,
+                code_query_insert,
+                mask_query_insert,
+            }
+        };
         let query_store = batch.store;
 
         let batch_streams = &self.streams[0];
         let batch_cublas = &self.cublas_handles[0];
 
         // Transfer queries to device
-        // TODO: free all of this!
-        let code_query = self
-            .device_manager
-            .htod_transfer_query(&code_query, batch_streams);
-        let mask_query = self
-            .device_manager
-            .htod_transfer_query(&mask_query, batch_streams);
-        let code_query_insert = self
-            .device_manager
-            .htod_transfer_query(&code_query_insert, batch_streams);
-        let mask_query_insert = self
-            .device_manager
-            .htod_transfer_query(&mask_query_insert, batch_streams);
-        let code_query_sums =
-            self.codes_engine
-                .query_sums(&code_query, batch_streams, batch_cublas);
-        let mask_query_sums =
-            self.masks_engine
-                .query_sums(&mask_query, batch_streams, batch_cublas);
-        let code_query_insert_sums =
-            self.codes_engine
-                .query_sums(&code_query_insert, batch_streams, batch_cublas);
-        let mask_query_insert_sums =
-            self.masks_engine
-                .query_sums(&mask_query_insert, batch_streams, batch_cublas);
+        let compact_device_queries =
+            compact_query.htod_transfer(&self.device_manager, &batch_streams)?;
+
+        let compact_device_sums = compact_device_queries.query_sums(
+            &self.codes_engine,
+            &self.masks_engine,
+            &batch_streams,
+            &batch_cublas,
+        )?;
 
         let mut current_db_sizes = self
             .current_db_size_mutex
@@ -390,35 +380,18 @@ impl ServerActor {
             .collect::<Vec<_>>();
 
         // ---- START BATCH DEDUP ----
-        self.batch_codes_engine.dot(
-            &code_query,
-            &code_query_insert,
+        compact_device_queries.compute_dot_products(
+            &mut self.batch_codes_engine,
+            &mut self.batch_masks_engine,
             &self.query_db_size,
             0,
             batch_streams,
             batch_cublas,
         );
 
-        self.batch_masks_engine.dot(
-            &mask_query,
-            &mask_query_insert,
-            &self.query_db_size,
-            0,
-            batch_streams,
-            batch_cublas,
-        );
-
-        self.batch_codes_engine.dot_reduce(
-            &code_query_sums,
-            &code_query_insert_sums,
-            &self.query_db_size,
-            0,
-            batch_streams,
-        );
-
-        self.batch_masks_engine.dot_reduce(
-            &mask_query_sums,
-            &mask_query_insert_sums,
+        compact_device_sums.compute_dot_reducers(
+            &mut self.batch_codes_engine,
+            &mut self.batch_masks_engine,
             &self.query_db_size,
             0,
             batch_streams,
@@ -492,27 +465,14 @@ impl ServerActor {
                 .await_event(request_streams, &current_dot_event);
 
             // ---- START PHASE 1 ----
-            self.codes_engine.dot(
-                &code_query,
-                &(
-                    helpers::device_ptrs(&self.code_db_slices.0 .0),
-                    helpers::device_ptrs(&self.code_db_slices.0 .1),
-                ),
+            compact_device_queries.dot_products_against_db(
+                &mut self.codes_engine,
+                &mut self.masks_engine,
+                &self.code_db_slices,
+                &self.mask_db_slices,
                 &chunk_size,
                 offset,
-                request_streams,
-                request_cublas_handles,
-            );
-
-            self.masks_engine.dot(
-                &mask_query,
-                &(
-                    helpers::device_ptrs(&self.mask_db_slices.0 .0),
-                    helpers::device_ptrs(&self.mask_db_slices.0 .1),
-                ),
-                &chunk_size,
-                offset,
-                request_streams,
+                &request_streams,
                 request_cublas_handles,
             );
 
@@ -520,25 +480,14 @@ impl ServerActor {
             self.device_manager
                 .await_event(request_streams, &current_exchange_event);
 
-            self.codes_engine.dot_reduce(
-                &code_query_sums,
-                &(
-                    helpers::device_ptrs(&self.code_db_slices.1 .0),
-                    helpers::device_ptrs(&self.code_db_slices.1 .1),
-                ),
+            compact_device_sums.compute_dot_reducer_against_db(
+                &mut self.codes_engine,
+                &mut self.masks_engine,
+                &self.code_db_slices,
+                &self.mask_db_slices,
                 &chunk_size,
                 offset,
-                request_streams,
-            );
-            self.masks_engine.dot_reduce(
-                &mask_query_sums,
-                &(
-                    helpers::device_ptrs(&self.mask_db_slices.1 .0),
-                    helpers::device_ptrs(&self.mask_db_slices.1 .1),
-                ),
-                &chunk_size,
-                offset,
-                request_streams,
+                &request_streams,
             );
 
             self.device_manager
@@ -674,38 +623,38 @@ impl ServerActor {
                 for (db, query, sums) in [
                     (
                         &self.code_db_slices,
-                        &code_query_insert,
-                        &code_query_insert_sums,
+                        &compact_device_queries.code_query_insert,
+                        &compact_device_sums.code_query_insert,
                     ),
                     (
                         &self.mask_db_slices,
-                        &mask_query_insert,
-                        &mask_query_insert_sums,
+                        &compact_device_queries.mask_query_insert,
+                        &compact_device_sums.mask_query_insert,
                     ),
                 ] {
                     unsafe {
                         helpers::dtod_at_offset(
-                            *db.0 .0[i].device_ptr(),
+                            *db.code_gr.limb_0[i].device_ptr(),
                             current_db_sizes[i] * IRIS_CODE_LENGTH,
-                            query.0[i],
+                            *query.limb_0[i].device_ptr(),
                             IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                             IRIS_CODE_LENGTH,
                             self.streams[0][i].stream,
                         );
 
                         helpers::dtod_at_offset(
-                            *db.0 .1[i].device_ptr(),
+                            *db.code_gr.limb_1[i].device_ptr(),
                             current_db_sizes[i] * IRIS_CODE_LENGTH,
-                            query.1[i],
+                            *query.limb_1[i].device_ptr(),
                             IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                             IRIS_CODE_LENGTH,
                             self.streams[0][i].stream,
                         );
 
                         helpers::dtod_at_offset(
-                            *db.1 .0[i].device_ptr(),
+                            *db.code_sums_gr.limb_0[i].device_ptr(),
                             current_db_sizes[i] * mem::size_of::<u32>(),
-                            sums.0[i],
+                            *sums.limb_0[i].device_ptr(),
                             mem::size_of::<u32>() * 15
                                 + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                             mem::size_of::<u32>(),
@@ -713,9 +662,9 @@ impl ServerActor {
                         );
 
                         helpers::dtod_at_offset(
-                            *db.1 .1[i].device_ptr(),
+                            *db.code_sums_gr.limb_1[i].device_ptr(),
                             current_db_sizes[i] * mem::size_of::<u32>(),
-                            sums.1[i],
+                            *sums.limb_1[i].device_ptr(),
                             mem::size_of::<u32>() * 15
                                 + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                             mem::size_of::<u32>(),
@@ -742,6 +691,7 @@ impl ServerActor {
             .send(ServerJobResult {
                 merged_results,
                 request_ids: batch.request_ids,
+                sqs_receipt_handles: batch.sqs_receipt_handles,
                 matches,
                 store: query_store,
             })
@@ -771,6 +721,7 @@ impl ServerActor {
         self.server_tasks.check_tasks();
 
         println!("CPU time of one iteration {:?}", now.elapsed());
+        Ok(())
     }
 }
 

@@ -6,6 +6,9 @@ on:
       - "main"
     paths:
       - Dockerfile.nccl
+      - .github/workflows/build-and-push-nccl.yaml
+
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -39,8 +42,8 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.release.tag_name }},
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
