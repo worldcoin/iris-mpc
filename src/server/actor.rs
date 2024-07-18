@@ -364,13 +364,13 @@ impl ServerActor {
 
         // Transfer queries to device
         let compact_device_queries =
-            compact_query.htod_transfer(&self.device_manager, &batch_streams)?;
+            compact_query.htod_transfer(&self.device_manager, batch_streams)?;
 
         let compact_device_sums = compact_device_queries.query_sums(
             &self.codes_engine,
             &self.masks_engine,
-            &batch_streams,
-            &batch_cublas,
+            batch_streams,
+            batch_cublas,
         )?;
 
         let mut current_db_sizes = self
@@ -472,7 +472,7 @@ impl ServerActor {
                 &self.mask_db_slices,
                 &chunk_size,
                 offset,
-                &request_streams,
+                request_streams,
                 request_cublas_handles,
             );
 
@@ -487,7 +487,7 @@ impl ServerActor {
                 &self.mask_db_slices,
                 &chunk_size,
                 offset,
-                &request_streams,
+                request_streams,
             );
 
             self.device_manager

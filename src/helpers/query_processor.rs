@@ -223,6 +223,7 @@ impl DeviceCompactSums {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn compute_dot_reducer_against_db(
         &self,
         code_engine: &mut ShareDB,
