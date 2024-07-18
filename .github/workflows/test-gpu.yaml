@@ -18,8 +18,8 @@ jobs:
         uses: actions/cache@v3
         id: cache-cuda-nccl
         with:
-          path: /usr/local/cuda-12.1
-          key: cuda-nccl-${{ runner.os }}-12.1
+          path: /usr/local/cuda-12.2
+          key: cuda-nccl-${{ runner.os }}-12.2
           restore-keys: |
             cuda-nccl-${{ runner.os }}-
 
@@ -33,10 +33,10 @@ jobs:
         run: |
           wget -q https://developer.download.nvidia.com/compute/cuda/12.2.0/local_installers/cuda_12.2.0_535.54.03_linux.run
           sudo sh cuda_12.2.0_535.54.03_linux.run  --silent --toolkit
-          echo 'export PATH=/usr/local/cuda-12.1/bin:$PATH' >> ~/.bashrc
-          echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.1/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
+          echo 'export PATH=/usr/local/cuda-12.2/bin:$PATH' >> ~/.bashrc
+          echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.2/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
           source ~/.bashrc
-          /usr/local/cuda-12.1/bin/nvcc --version
+          /usr/local/cuda-12.2/bin/nvcc --version
           wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.0-1_all.deb
           sudo dpkg -i cuda-keyring_1.0-1_all.deb
           sudo apt update
@@ -62,9 +62,9 @@ jobs:
 
       - name: E2E Tests
         run: |
-          export LD_LIBRARY_PATH=/usr/local/cuda-12.1/lib64:$LD_LIBRARY_PATH
-          export CUDA_HOME=/usr/local/cuda-12.1
-          /usr/local/cuda-12.1/bin/nvcc --version
+          export LD_LIBRARY_PATH=/usr/local/cuda-12.2/lib64:$LD_LIBRARY_PATH
+          export CUDA_HOME=/usr/local/cuda-12.2
+          /usr/local/cuda-12.2/bin/nvcc --version
           cargo test --release e2e
         shell: bash
         env:
