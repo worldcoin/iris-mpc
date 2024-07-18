@@ -35,7 +35,8 @@ jobs:
       - name: E2E Tests
         run: |
           ls -al /usr/local/cuda*
-          export LD_LIBRARY_PATH=/usr/local/cuda-12.2/lib64:$LD_LIBRARY_PATH
+          ll -al /usr/lib/x86_64-linux-gnu/libcuda*
+          export LD_LIBRARY_PATH=/usr/local/cuda-12.2/lib64:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
           export CUDA_HOME=/usr/local/cuda-12.2
           /usr/local/cuda-12.2/bin/nvcc --version
           cargo test --release e2e
