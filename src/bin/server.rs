@@ -306,7 +306,7 @@ async fn main() -> eyre::Result<()> {
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
             merged_results,
-            thread_request_ids: request_ids,
+            request_ids,
             sqs_receipt_handles,
             matches,
             store: query_store,

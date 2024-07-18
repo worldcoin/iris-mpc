@@ -67,15 +67,22 @@ impl DeviceManager {
 
     pub fn await_streams(&self, streams: &[CudaStream]) {
         for i in 0..self.devices.len() {
+            self.devices[i].bind_to_thread().unwrap();
             unsafe { synchronize(streams[i].stream).unwrap() }
         }
     }
 
-    pub fn create_events(&self) -> Vec<CUevent> {
+    pub fn create_events(&self, blocking_sync: bool) -> Vec<CUevent> {
+        let flags = if blocking_sync {
+            CUevent_flags::CU_EVENT_BLOCKING_SYNC
+        } else {
+            CUevent_flags::CU_EVENT_DEFAULT
+        };
+
         let mut events = vec![];
         for idx in 0..self.devices.len() {
             self.devices[idx].bind_to_thread().unwrap();
-            events.push(event::create(CUevent_flags::CU_EVENT_DEFAULT).unwrap());
+            events.push(event::create(flags).unwrap());
         }
         events
     }
