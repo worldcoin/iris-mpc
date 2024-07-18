@@ -53,7 +53,7 @@ env:
   - name: SMPC__PATH
     value: "/data/"
 
-  - name: SMPC__KMS_KEY_IDS
+  - name: SMPC__KMS_KEY_ARNS
     valueFrom:
       secretKeyRef:
         key: KMS_KEYS

@@ -172,14 +172,14 @@ fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
 }
 
 async fn initialize_chacha_seeds(
-    kms_key_ids: JsonStrWrapper<Vec<String>>,
+    kms_key_arns: JsonStrWrapper<Vec<String>>,
     party_id: usize,
 ) -> eyre::Result<([u32; 8], [u32; 8])> {
     // Init RNGs
-    let own_key_id = kms_key_ids
+    let own_key_arn = kms_key_arns
         .0
         .get(party_id)
-        .expect("Expected value not found in kms_key_ids");
+        .expect("Expected value not found in kms_key_arns");
     let dh_pairs = match party_id {
         0 => (1usize, 2usize),
         1 => (2usize, 0usize),
@@ -187,18 +187,18 @@ async fn initialize_chacha_seeds(
         _ => unimplemented!(),
     };
 
-    let dh_pair_0: &str = kms_key_ids
+    let dh_pair_0: &str = kms_key_arns
         .0
         .get(dh_pairs.0)
-        .expect("Expected value not found in kms_key_ids");
-    let dh_pair_1: &str = kms_key_ids
+        .expect("Expected value not found in kms_key_arns");
+    let dh_pair_1: &str = kms_key_arns
         .0
         .get(dh_pairs.1)
-        .expect("Expected value not found in kms_key_ids");
+        .expect("Expected value not found in kms_key_arns");
 
     let chacha_seeds = (
-        bytemuck::cast(derive_shared_secret(own_key_id, dh_pair_0).await?),
-        bytemuck::cast(derive_shared_secret(own_key_id, dh_pair_1).await?),
+        bytemuck::cast(derive_shared_secret(own_key_arn, dh_pair_0).await?),
+        bytemuck::cast(derive_shared_secret(own_key_arn, dh_pair_1).await?),
     );
 
     Ok(chacha_seeds)
@@ -277,7 +277,7 @@ async fn main() -> eyre::Result<()> {
     let sns_client = SNSClient::new(&shared_config);
 
     let party_id = config.party_id;
-    let chacha_seeds = initialize_chacha_seeds(config.kms_key_ids, party_id).await?;
+    let chacha_seeds = initialize_chacha_seeds(config.kms_key_arns, party_id).await?;
 
     let (codes_db, masks_db) = initialize_iris_dbs(&config.path, party_id, &store).await?;
 
