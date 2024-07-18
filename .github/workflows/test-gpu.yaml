@@ -22,7 +22,8 @@ jobs:
           wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update
-          sudo apt-get install -y cuda-compiler-12-1 cuda-cudart-12-1 cuda-cupti-12-1 cuda-libraries-12-1 cuda-nvcc-12-1 cuda-nvml-dev-12-1 cuda-nvrtc-12-1 cuda-driver-dev-12-1 cuda-drivers
+          sudo apt-get install -y cuda-12-1
+          sudo apt-get install -y cuda-drivers-555
           sudo apt-get install -y git build-essential devscripts debhelper fakeroot
           git clone https://github.com/NVIDIA/nccl.git
           cd nccl
