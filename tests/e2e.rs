@@ -9,7 +9,7 @@ use gpu_iris_mpc::{
     },
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, env, sync::Arc};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
@@ -52,6 +52,9 @@ fn generate_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
 
 #[tokio::test]
 async fn e2e_test() -> Result<()> {
+    env::set_var("NCCL_P2P_DIRECT_DISABLE", "1");
+    env::set_var("NCCL_NET", "Socket");
+
     let db0 = generate_db(0)?;
     let db1 = generate_db(1)?;
     let db2 = generate_db(2)?;
