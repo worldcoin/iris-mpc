@@ -79,28 +79,3 @@ panic = 'abort'
 
 [profile.dev]
 panic = 'abort'
-
-# Only binaries in src/bin/*.rs and src/bin/*/main.rs are detected automatically
-[[bin]]
-name = "bitinject_test"
-path = "src/bin/threshold_ring/bitinject_test.rs"
-
-[[bin]]
-name = "extract_msb_mod_test"
-path = "src/bin/threshold_ring/extract_msb_mod_test.rs"
-
-[[bin]]
-name = "lift_test"
-path = "src/bin/threshold_ring/lift_test.rs"
-
-[[bin]]
-name = "or_tree_test"
-path = "src/bin/threshold_ring/or_tree_test.rs"
-
-[[bin]]
-name = "threshold_and_or_tree_test"
-path = "src/bin/threshold_ring/threshold_and_or_tree_test.rs"
-
-[[bin]]
-name = "threshold_test"
-path = "src/bin/threshold_ring/threshold_test.rs"

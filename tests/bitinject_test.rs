@@ -132,9 +132,8 @@ fn open(party: &mut Circuits, x: &mut [ChunkShareView<u16>], streams: &[CudaStre
     result
 }
 
-#[allow(clippy::assertions_on_constants)]
-#[tokio::main(worker_threads = 1)]
-async fn main() -> eyre::Result<()> {
+#[tokio::test]
+async fn test_bitinject() -> eyre::Result<()> {
     assert!(
         INPUTS_PER_GPU_SIZE % (2048) == 0,
         // Mod 16 for randomness, mod 64 for chunk size
@@ -143,6 +142,7 @@ async fn main() -> eyre::Result<()> {
     // TODO
     let mut rng = StdRng::seed_from_u64(42);
 
+    // NOTE: update to use env args
     let args = env::args().collect::<Vec<_>>();
     let party_id: usize = args[1].parse().unwrap();
     let url = args.get(2);
