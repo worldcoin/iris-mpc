@@ -71,13 +71,13 @@ async fn e2e_test() -> Result<()> {
     let db2 = generate_db(2)?;
 
     let config0 = ServersConfig {
-        codes_engine_port: 10001,
-        masks_engine_port: 10002,
+        codes_engine_port:       10001,
+        masks_engine_port:       10002,
         batch_codes_engine_port: 10003,
         batch_masks_engine_port: 10004,
-        phase_2_batch_port: 10005,
-        phase_2_port: 10006,
-        bootstrap_url: None,
+        phase_2_batch_port:      10005,
+        phase_2_port:            10006,
+        bootstrap_url:           None,
     };
     let config1 = ServersConfig {
         bootstrap_url: Some("localhost".to_string()),
