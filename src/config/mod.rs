@@ -3,6 +3,7 @@ pub mod json_wrapper;
 use crate::config::json_wrapper::JsonStrWrapper;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 #[derive(Debug, Parser)]
 pub struct Opt {
@@ -41,9 +42,6 @@ pub struct Config {
 
     #[serde(default)]
     pub kms_key_ids: JsonStrWrapper<Vec<String>>,
-
-    #[serde(default)]
-    pub bootstrap_url: Option<String>,
 
     #[serde(default)]
     pub servers: ServersConfig,
@@ -91,7 +89,7 @@ impl Config {
         }
 
         if let Some(bootstrap_url) = opts.bootstrap_url {
-            self.bootstrap_url = Some(bootstrap_url);
+            self.servers.bootstrap_url = Some(bootstrap_url);
         }
 
         if let Some(path) = opts.path {
@@ -100,7 +98,7 @@ impl Config {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct DbConfig {
     pub url: String,
 
@@ -109,6 +107,16 @@ pub struct DbConfig {
 
     #[serde(default)]
     pub create: bool,
+}
+
+impl fmt::Debug for DbConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DbConfig")
+            .field("url", &"********") // Mask the URL
+            .field("migrate", &self.migrate)
+            .field("create", &self.create)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -147,4 +155,6 @@ pub struct ServersConfig {
     pub batch_masks_engine_port: u16,
     pub phase_2_batch_port:      u16,
     pub phase_2_port:            u16,
+    #[serde(default)]
+    pub bootstrap_url:           Option<String>,
 }

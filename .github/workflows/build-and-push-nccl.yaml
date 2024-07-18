@@ -1,17 +1,15 @@
 name: Build and push docker image
 
 on:
-  release:
-    types:
-      - 'published'
-
-concurrency:
-  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
-  cancel-in-progress: true
+  push:
+    branches:
+      - "main"
+    paths:
+      - Dockerfile.nccl
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: ${{ github.repository }}-nccl
 
 jobs:
   docker:
@@ -46,3 +44,4 @@ jobs:
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          file: Dockerfile.nccl

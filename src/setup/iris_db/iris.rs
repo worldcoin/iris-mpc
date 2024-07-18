@@ -283,7 +283,7 @@ mod tests {
                 .parse()
                 .context("Invalid rotation")?;
             let bit_str = parts.next().context("Missing bit string")?;
-            rotations.insert(rotation, bit_str.trim().replace(" ", "").to_string());
+            rotations.insert(rotation, bit_str.trim().replace(' ', "").to_string());
         }
 
         Ok((code, rotations))

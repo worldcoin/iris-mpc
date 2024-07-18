@@ -3,6 +3,18 @@ name: Lint Clippy
 on:
   push:
 
+concurrency:
+  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  cancel-in-progress: true
+
+permissions:
+  # Leaving clippy annotations on commits...
+  contents: write
+  # And on PRs
+  pull-requests: write
+  # Updating commit and PR statuses
+  checks: write
+
 jobs:
   lint-clippy:
     runs-on: ubuntu-latest
@@ -15,5 +27,9 @@ jobs:
         run: rustup default nightly-2024-07-10
       - name: Install Rust clippy for checking clippy errors
         run: rustup component add clippy
-      - name: Run Rust Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings --no-deps
+      - name: Clippy Lints
+        uses: actions-rs/clippy-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --all-targets --all-features -- -D warnings --no-deps
+          toolchain: nightly

@@ -1,3 +1,5 @@
+pub type CompactGaloisRingShares = Vec<Vec<u8>>;
+
 pub mod degree2 {
     use crate::setup::{
         galois::degree2::{GaloisRingElement, ShamirGaloisRingShare},
@@ -238,7 +240,7 @@ pub mod degree4 {
     use base64::{prelude::BASE64_STANDARD, Engine};
     use rand::{CryptoRng, Rng};
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     pub struct GaloisRingIrisCodeShare {
         pub id:    usize,
         pub coefs: [u16; 12800],
