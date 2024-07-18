@@ -34,7 +34,7 @@ jobs:
 
       - name: E2E Tests
         run: |
-          ls -al /usr/lib/x86_64-unknown-linux-gnu/libcuda.*
+          ls -al /usr/lib
           export LD_LIBRARY_PATH=/usr/local/cuda-12.2/lib64:/usr/lib/x86_64-unknown-linux-gnu:$LD_LIBRARY_PATH
           export CUDA_HOME=/usr/local/cuda-12.2
           /usr/local/cuda-12.2/bin/nvcc --version
