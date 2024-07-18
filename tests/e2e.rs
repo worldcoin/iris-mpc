@@ -13,7 +13,7 @@ use std::{collections::HashMap, env, sync::Arc};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-const DB_SIZE: usize = 2 * 1000;
+const DB_SIZE: usize = 8 * 1000;
 const RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 5;
 const BATCH_SIZE: usize = 64;
