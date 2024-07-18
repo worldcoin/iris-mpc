@@ -7,7 +7,7 @@ ENV LD_LIBRARY_PATH=/usr/local/cuda-12.2/lib64:$LD_LIBRARY_PATH
 
 # Install dependencies
 RUN apt-get update && \
-    apt-get install -y gcc pkg-config libssl-dev wget sudo && \
+    apt-get install -y gcc pkg-config libssl-dev curl wget sudo && \
     rm -rf /var/lib/apt/lists/*
 
 # Download and install the CUDA toolkit
