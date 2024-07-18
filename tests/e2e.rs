@@ -11,6 +11,7 @@ use gpu_iris_mpc::{
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use std::{collections::HashMap, env, sync::Arc};
 use tokio::sync::oneshot;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
 const DB_SIZE: usize = 8 * 1000;
@@ -50,8 +51,18 @@ fn generate_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
     Ok((codes_db, masks_db))
 }
 
+fn install_tracing() {
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+}
+
 #[tokio::test]
 async fn e2e_test() -> Result<()> {
+    install_tracing();
     env::set_var("NCCL_P2P_DIRECT_DISABLE", "1");
     env::set_var("NCCL_NET", "Socket");
 
@@ -60,13 +71,13 @@ async fn e2e_test() -> Result<()> {
     let db2 = generate_db(2)?;
 
     let config0 = ServersConfig {
-        codes_engine_port:       10001,
-        masks_engine_port:       10002,
+        codes_engine_port: 10001,
+        masks_engine_port: 10002,
         batch_codes_engine_port: 10003,
         batch_masks_engine_port: 10004,
-        phase_2_batch_port:      10005,
-        phase_2_port:            10006,
-        bootstrap_url:           None,
+        phase_2_batch_port: 10005,
+        phase_2_port: 10006,
+        bootstrap_url: None,
     };
     let config1 = ServersConfig {
         bootstrap_url: Some("localhost".to_string()),

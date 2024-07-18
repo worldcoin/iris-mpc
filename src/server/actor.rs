@@ -70,27 +70,27 @@ const N_QUERIES: usize = 64;
 const QUERIES: usize = ROTATIONS * N_QUERIES;
 
 pub struct ServerActor {
-    job_queue:             mpsc::Receiver<ServerJob>,
-    device_manager:        Arc<DeviceManager>,
-    server_tasks:          TaskMonitor,
+    job_queue: mpsc::Receiver<ServerJob>,
+    device_manager: Arc<DeviceManager>,
+    server_tasks: TaskMonitor,
     // engines
-    codes_engine:          ShareDB,
-    masks_engine:          ShareDB,
-    batch_codes_engine:    ShareDB,
-    batch_masks_engine:    ShareDB,
-    phase2:                Circuits,
-    phase2_batch:          Circuits,
-    distance_comparator:   DistanceComparator,
+    codes_engine: ShareDB,
+    masks_engine: ShareDB,
+    batch_codes_engine: ShareDB,
+    batch_masks_engine: ShareDB,
+    phase2: Circuits,
+    phase2_batch: Circuits,
+    distance_comparator: DistanceComparator,
     // DB slices
-    code_db_slices:        SlicedProcessedDatabase,
-    mask_db_slices:        SlicedProcessedDatabase,
-    streams:               Vec<Vec<CudaStream>>,
-    cublas_handles:        Vec<Vec<CudaBlas>>,
-    results:               Vec<CudaSlice<u32>>,
-    batch_results:         Vec<CudaSlice<u32>>,
-    final_results:         Vec<CudaSlice<u32>>,
+    code_db_slices: SlicedProcessedDatabase,
+    mask_db_slices: SlicedProcessedDatabase,
+    streams: Vec<Vec<CudaStream>>,
+    cublas_handles: Vec<Vec<CudaBlas>>,
+    results: Vec<CudaSlice<u32>>,
+    batch_results: Vec<CudaSlice<u32>>,
+    final_results: Vec<CudaSlice<u32>>,
     current_db_size_mutex: Vec<Arc<Mutex<usize>>>,
-    query_db_size:         Vec<usize>,
+    query_db_size: Vec<usize>,
 }
 
 const RESULTS_INIT_HOST: [u32; N_QUERIES * ROTATIONS] = [u32::MAX; N_QUERIES * ROTATIONS];
@@ -161,7 +161,7 @@ impl ServerActor {
                 ))
             };
 
-        println!("Starting engines...");
+        tracing::info!("Starting engines...");
 
         let mut server_tasks = TaskMonitor::new();
         let ServersConfig {
@@ -449,7 +449,7 @@ impl ServerActor {
                 .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(0, DB_CHUNK_SIZE))
                 .collect::<Vec<_>>();
 
-            println!("chunks: {:?}, offset: {}", chunk_size, offset);
+            tracing::debug!("chunks: {:?}, offset: {}", chunk_size, offset);
 
             // First stream doesn't need to wait
             if db_chunk_idx == 0 {
@@ -679,7 +679,7 @@ impl ServerActor {
             *self.current_db_size_mutex[i].lock().unwrap() += insertion_list[i].len() as usize;
 
             // DEBUG
-            println!(
+            tracing::debug!(
                 "Updating DB size on device {}: {:?}",
                 i,
                 *self.current_db_size_mutex[i].lock().unwrap()
@@ -720,7 +720,7 @@ impl ServerActor {
         // Prepare for next batch
         self.server_tasks.check_tasks();
 
-        println!("CPU time of one iteration {:?}", now.elapsed());
+        tracing::info!("CPU time of one iteration {:?}", now.elapsed());
         Ok(())
     }
 }
@@ -795,7 +795,7 @@ fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
         results.push(match_entry);
 
         // DEBUG
-        println!(
+        tracing::debug!(
             "Query {}: match={} [index: {}]",
             j,
             match_entry != u32::MAX,
