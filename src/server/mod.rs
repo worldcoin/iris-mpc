@@ -37,7 +37,7 @@ pub struct ServerJob {
 #[derive(Debug, Clone)]
 pub struct ServerJobResult {
     pub merged_results:      Vec<u32>,
-    pub thread_request_ids:  Vec<String>,
+    pub request_ids:         Vec<String>,
     pub sqs_receipt_handles: Vec<String>,
     pub store_height:        u64,
     pub matches:             Vec<bool>,

@@ -56,10 +56,11 @@ fn bench_memcpy(c: &mut Criterion) {
                 &preprocessed_query,
                 &db_slices.code_gr,
                 &db_sizes,
+                0,
                 &streams,
                 &blass,
             );
-            engine.dot_reduce(&query_sums, &db_slices.code_sums_gr, &db_sizes, &streams);
+            engine.dot_reduce(&query_sums, &db_slices.code_sums_gr, &db_sizes, 0, &streams);
             device_manager.await_streams(&streams);
         });
     });

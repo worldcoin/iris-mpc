@@ -135,6 +135,7 @@ impl DeviceCompactQuery {
         code_engine: &mut ShareDB,
         mask_engine: &mut ShareDB,
         db_sizes: &[usize],
+        offset: usize,
         streams: &[CudaStream],
         blass: &[CudaBlas],
     ) {
@@ -142,6 +143,7 @@ impl DeviceCompactQuery {
             &self.code_query,
             &self.code_query_insert,
             db_sizes,
+            offset,
             streams,
             blass,
         );
@@ -150,6 +152,7 @@ impl DeviceCompactQuery {
             &self.mask_query,
             &self.mask_query_insert,
             db_sizes,
+            offset,
             streams,
             blass,
         );
@@ -166,6 +169,7 @@ impl DeviceCompactQuery {
         sliced_code_db: &SlicedProcessedDatabase,
         sliced_mask_db: &SlicedProcessedDatabase,
         database_sizes: &[usize],
+        offset: usize,
         streams: &[CudaStream],
         blass: &[CudaBlas],
     ) {
@@ -173,6 +177,7 @@ impl DeviceCompactQuery {
             &self.code_query,
             &sliced_code_db.code_gr,
             database_sizes,
+            offset,
             streams,
             blass,
         );
@@ -180,6 +185,7 @@ impl DeviceCompactQuery {
             &self.mask_query,
             &sliced_mask_db.code_gr,
             database_sizes,
+            offset,
             streams,
             blass,
         );
@@ -198,12 +204,26 @@ impl DeviceCompactSums {
         code_engine: &mut ShareDB,
         mask_engine: &mut ShareDB,
         db_sizes: &[usize],
+        offset: usize,
         streams: &[CudaStream],
     ) {
-        code_engine.dot_reduce(&self.code_query, &self.code_query_insert, db_sizes, streams);
-        mask_engine.dot_reduce(&self.mask_query, &self.mask_query_insert, db_sizes, streams);
+        code_engine.dot_reduce(
+            &self.code_query,
+            &self.code_query_insert,
+            db_sizes,
+            offset,
+            streams,
+        );
+        mask_engine.dot_reduce(
+            &self.mask_query,
+            &self.mask_query_insert,
+            db_sizes,
+            offset,
+            streams,
+        );
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn compute_dot_reducer_against_db(
         &self,
         code_engine: &mut ShareDB,
@@ -211,18 +231,21 @@ impl DeviceCompactSums {
         sliced_code_db: &SlicedProcessedDatabase,
         sliced_mask_db: &SlicedProcessedDatabase,
         database_sizes: &[usize],
+        offset: usize,
         streams: &[CudaStream],
     ) {
         code_engine.dot_reduce(
             &self.code_query,
             &sliced_code_db.code_sums_gr,
             database_sizes,
+            offset,
             streams,
         );
         mask_engine.dot_reduce(
             &self.mask_query,
             &sliced_mask_db.code_sums_gr,
             database_sizes,
+            offset,
             streams,
         );
     }

@@ -1,6 +1,6 @@
 # Application Upgrade Documentation
 
-This document provides a step-by-step guide on how to upgrade the application deployed using ArgoCD. The application configuration is located in the `deploy/stage/mpc1-stage`, `deploy/stage/mpc2-stage`, and `deploy/stage/mpc3-stage` directories. Each directory contains a `values-gpu-iris-mpc.yaml` file, which includes the deployment configuration for the respective clusters: `mpc1-stage`, `mpc2-stage`, and `mpc3-stage`.
+This document provides a step-by-step guide on how to upgrade the application deployed using ArgoCD. The application configuration is located in the `deploy/stage/mpc1-stage`, `deploy/stage/mpc2-stage`, and `deploy/stage/mpc3-stage` directories. Each directory contains a `values-gpu-iris-mpc.yaml` file, which includes the deployment configuration for the respective clusters: `mpc1-stage`, `mpc2-stage`, and `mpc3-stage`, and common value file placed in `deploy/stage/values-common-gpu-iris-mpc.yaml`
 
 ## Prerequisites
 
@@ -22,51 +22,15 @@ cd gpu-iris-mpc
 
 For each cluster (`mpc1-stage`, `mpc2-stage`, `mpc3-stage`), you need to update the `values-gpu-iris-mpc.yaml` file with the new image URL.
 
-#### Update `mpc1-stage`
+#### Update deployment
 
-1. Navigate to the `mpc1-stage` directory:
-
-    ```sh
-    cd deploy/stage/mpc1-stage
-    ```
-
-2. Open the `values-gpu-iris-mpc.yaml` file in a text editor and locate the `image:` parameter.
-
-3. Update the `image:` parameter with the new image URL:
-
-    ```yaml
-    image: <new-image-url>
-    ```
-
-4. Save the file.
-
-#### Update `mpc2-stage`
-
-1. Navigate to the `mpc2-stage` directory:
+1. Navigate to the `deploy/stage` directory:
 
     ```sh
-    cd deploy/stage/mpc2-stage
+    cd deploy/stage/
     ```
 
-2. Open the `values-gpu-iris-mpc.yaml` file and locate the `image:` parameter.
-
-3. Update the `image:` parameter with the new image URL:
-
-    ```yaml
-    image: <new-image-url>
-    ```
-
-4. Save the file.
-
-#### Update `mpc3-stage`
-
-1. Navigate to the `mpc3-stage` directory:
-
-    ```sh
-    cd deploy/stage/mpc3-stage
-    ```
-
-2. Open the `values-gpu-iris-mpc.yaml` file and locate the `image:` parameter.
+2. Open the `values-common-gpu-iris-mpc.yaml` file in a text editor and locate the `image:` parameter.
 
 3. Update the `image:` parameter with the new image URL:
 
@@ -83,15 +47,13 @@ After updating the image URL in all necessary files, commit the changes and crea
 1. Stage the changes:
 
     ```sh
-    git add deploy/stage/mpc1-stage/values-gpu-iris-mpc.yaml
-    git add deploy/stage/mpc2-stage/values-gpu-iris-mpc.yaml
-    git add deploy/stage/mpc3-stage/values-gpu-iris-mpc.yaml
+    git add deploy/stage/values-common-gpu-iris-mpc.yaml
     ```
 
 2. Commit the changes with a meaningful message:
 
     ```sh
-    git commit -m "Update image URL for mpc1-stage, mpc2-stage, and mpc3-stage"
+    git commit -m "Update image URL for gpu-iris-mpc deployment"
     ```
 
 3. Push the changes to a new branch:
