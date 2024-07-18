@@ -1,18 +1,15 @@
-name: Build and push NCCL docker image
+name: Build and push base docker image
 
 on:
   push:
-    branches:
-      - "main"
     paths:
-      - Dockerfile.nccl
-      - .github/workflows/build-and-push-nccl.yaml
-
-  workflow_dispatch:
+      - .github/workflows/build-and-push-base.yaml
+      - Dockerfile.base
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}-nccl
+  IMAGE_NAME: ${{ github.repository }}-base
+  VERSION: 1.0.0
 
 jobs:
   docker:
@@ -42,9 +39,8 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          file: Dockerfile.nccl
+          file: Dockerfile.base
