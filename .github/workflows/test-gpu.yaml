@@ -37,7 +37,7 @@ jobs:
         with:
           toolchain: nightly
       - name: E2E Tests
-        run: cargo test --release e2e
+        run: CUDA_HOME=/usr/local/cuda-12.1 cargo test --release e2e
         shell: bash
         env:
           NCCL_P2P_DIRECT_DISABLE: 1
