@@ -1,10 +1,7 @@
 use super::ROTATIONS;
 use crate::helpers::device_manager::DeviceManager;
 use cudarc::{
-    driver::{
-        result::{launch_kernel, memcpy_dtoh_sync},
-        CudaFunction, CudaSlice, CudaStream, CudaView, DeviceRepr, LaunchAsync, LaunchConfig,
-    },
+    driver::{CudaFunction, CudaSlice, CudaStream, CudaView, LaunchAsync, LaunchConfig},
     nvrtc::compile_ptx,
 };
 use std::sync::Arc;
@@ -68,6 +65,7 @@ impl DistanceComparator {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn open_results(
         &self,
         results1: &[CudaView<u64>],
@@ -75,6 +73,7 @@ impl DistanceComparator {
         results3: &[CudaView<u64>],
         results_ptrs: &[CudaSlice<u32>],
         db_sizes: &[usize],
+        offset: usize,
         streams: &[CudaStream],
     ) {
         for i in 0..self.device_manager.device_count() {
@@ -101,6 +100,8 @@ impl DistanceComparator {
                             &results_ptrs[i],
                             db_sizes[i],
                             self.query_length,
+                            offset,
+                            num_elements,
                         ),
                     )
                     .unwrap();
@@ -110,9 +111,9 @@ impl DistanceComparator {
 
     pub fn merge_results(
         &self,
-        match_results_self: &[u64],
-        match_results: &[u64],
-        final_results: &[u64],
+        match_results_self: &[CudaSlice<u32>],
+        match_results: &[CudaSlice<u32>],
+        final_results: &[CudaSlice<u32>],
         streams: &[CudaStream],
     ) {
         let num_elements = self.query_length / ROTATIONS;
@@ -125,42 +126,33 @@ impl DistanceComparator {
         };
 
         for i in 0..self.device_manager.device_count() {
-            self.device_manager.device(i).bind_to_thread().unwrap();
-
-            let params = [
-                match_results_self[i],
-                match_results[i],
-                final_results[i],
-                (self.query_length / ROTATIONS) as u64,
-            ];
-
             unsafe {
-                let mut params = params
-                    .iter()
-                    .map(|x| x.as_kernel_param())
-                    .collect::<Vec<_>>();
-                launch_kernel(
-                    self.merge_kernels[i].cu_function,
-                    cfg.grid_dim,
-                    cfg.block_dim,
-                    cfg.shared_mem_bytes,
-                    streams[i].stream,
-                    &mut params,
-                )
-                .unwrap();
+                self.merge_kernels[i]
+                    .clone()
+                    .launch_on_stream(
+                        &streams[i],
+                        cfg,
+                        (
+                            &match_results_self[i],
+                            &match_results[i],
+                            &final_results[i],
+                            (self.query_length / ROTATIONS) as u64,
+                        ),
+                    )
+                    .unwrap();
             }
         }
     }
 
-    pub fn fetch_final_results(&self, final_results_ptrs: &[u64]) -> Vec<Vec<u32>> {
+    pub fn fetch_final_results(&self, final_results_ptrs: &[CudaSlice<u32>]) -> Vec<Vec<u32>> {
         let mut results = vec![];
         for i in 0..self.device_manager.device_count() {
-            self.device_manager.device(i).bind_to_thread().unwrap();
-            let mut tmp = vec![0u32; self.query_length / ROTATIONS];
-            unsafe {
-                memcpy_dtoh_sync(&mut tmp, final_results_ptrs[i]).unwrap();
-            }
-            results.push(tmp);
+            results.push(
+                self.device_manager
+                    .device(i)
+                    .dtoh_sync_copy(&final_results_ptrs[i])
+                    .unwrap(),
+            );
         }
         results
     }
