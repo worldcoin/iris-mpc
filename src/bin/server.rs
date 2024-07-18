@@ -267,8 +267,10 @@ async fn main() -> eyre::Result<()> {
         };
 
     // Load DB from persistent storage.
+    let mut store_height = 0;
     while let Some(iris) = store.stream_irises().await.next().await {
         let iris = iris?;
+        store_height = store_height.max(iris.id() + 1);
         codes_db.extend(iris.code());
         masks_db.extend(iris.mask());
     }
@@ -310,6 +312,7 @@ async fn main() -> eyre::Result<()> {
         while let Some(ServerJobResult {
             merged_results,
             thread_request_ids: request_ids,
+            store_height,
             matches,
             store: query_store,
         }) = rx.recv().await
@@ -333,7 +336,7 @@ async fn main() -> eyre::Result<()> {
                         .collect();
 
                     store
-                        .insert_irises(&codes_and_masks)
+                        .insert_irises(store_height, &codes_and_masks)
                         .await
                         .wrap_err("failed to persist queries")?;
                 }
@@ -399,7 +402,14 @@ async fn main() -> eyre::Result<()> {
 
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
-        let batch = receive_batch(party_id, &sqs_client, &requests_queue_url).await?;
+        let batch = {
+            let mut batch = receive_batch(party_id, &sqs_client, &requests_queue_url).await?;
+
+            // Plan at which database height this batch will be inserted.
+            batch.store_height = store_height;
+            store_height += batch.request_ids.len() as u64;
+            batch
+        };
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id and

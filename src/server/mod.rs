@@ -19,11 +19,12 @@ pub struct BatchMetadata {
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BatchQuery {
-    pub request_ids: Vec<String>,
-    pub metadata:    Vec<BatchMetadata>,
-    pub query:       BatchQueryEntries,
-    pub db:          BatchQueryEntries,
-    pub store:       BatchQueryEntries,
+    pub request_ids:  Vec<String>,
+    pub store_height: u64,
+    pub metadata:     Vec<BatchMetadata>,
+    pub query:        BatchQueryEntries,
+    pub db:           BatchQueryEntries,
+    pub store:        BatchQueryEntries,
 }
 
 #[derive(Debug)]
@@ -36,6 +37,7 @@ pub struct ServerJob {
 pub struct ServerJobResult {
     pub merged_results:     Vec<u32>,
     pub thread_request_ids: Vec<String>,
+    pub store_height:       u64,
     pub matches:            Vec<bool>,
     pub store:              BatchQueryEntries,
 }

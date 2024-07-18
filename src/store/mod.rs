@@ -22,13 +22,16 @@ fn sql_switch_schema(schema_name: &str) -> Result<String> {
 
 #[derive(sqlx::FromRow, Debug, Default)]
 pub struct StoredIris {
-    #[allow(dead_code)]
-    id:   i64, // BIGSERIAL
+    id:   i64,     // BIGSERIAL, non-negative.
     code: Vec<u8>, // BYTEA
     mask: Vec<u8>, // BYTEA
 }
 
 impl StoredIris {
+    pub fn id(&self) -> u64 {
+        self.id as u64
+    }
+
     pub fn code(&self) -> &[u16] {
         cast_slice(&self.code)
     }
@@ -81,14 +84,24 @@ impl Store {
         sqlx::query_as::<_, StoredIris>("SELECT * FROM irises").fetch(&self.pool)
     }
 
-    pub async fn insert_irises(&self, codes_and_masks: &[(&[u16], &[u16])]) -> Result<()> {
+    /// Insert irises into the database.
+    /// `next_id` is the next available ID greater than any existing one.
+    pub async fn insert_irises(
+        &self,
+        next_id: u64,
+        codes_and_masks: &[(&[u16], &[u16])],
+    ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
-        let mut query = sqlx::QueryBuilder::new("INSERT INTO irises (code, mask) ");
-        query.push_values(codes_and_masks, |mut query, (code, mask)| {
-            query.push_bind(cast_slice::<u16, u8>(code));
-            query.push_bind(cast_slice::<u16, u8>(mask));
-        });
+        let mut query = sqlx::QueryBuilder::new("INSERT INTO irises (id, code, mask) ");
+        query.push_values(
+            codes_and_masks.iter().enumerate(),
+            |mut query, (i, (code, mask))| {
+                query.push_bind(next_id as i64 + i as i64);
+                query.push_bind(cast_slice::<u16, u8>(code));
+                query.push_bind(cast_slice::<u16, u8>(mask));
+            },
+        );
 
         query.build().execute(&mut *tx).await?;
         tx.commit().await?;
@@ -121,16 +134,18 @@ mod tests {
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), 0);
 
+        let next_id = 123;
         let codes_and_masks: &[(&[u16], &[u16]); 2] = &[
             (&[1, 2, 3, 4], &[5, 6, 7, 8]),
             (&[9, 10, 11, 12], &[13, 14, 15, 16]),
         ];
-        store.insert_irises(codes_and_masks).await?;
+        store.insert_irises(next_id, codes_and_masks).await?;
 
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
 
         assert_eq!(got.len(), 2);
         for i in 0..2 {
+            assert_eq!(got[i].id(), next_id + i as u64);
             assert_eq!(got[i].code(), codes_and_masks[i].0);
             assert_eq!(got[i].mask(), codes_and_masks[i].1);
         }
@@ -148,7 +163,7 @@ mod tests {
         let store = Store::new(&test_db_url()?, &schema_name).await?;
 
         let codes_and_masks = vec![(&[123_u16; 12800][..], &[456_u16; 12800][..]); count];
-        store.insert_irises(&codes_and_masks).await?;
+        store.insert_irises(0, &codes_and_masks).await?;
 
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), count);
