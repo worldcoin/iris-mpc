@@ -17,18 +17,29 @@ jobs:
         uses: r7kamura/rust-problem-matchers@v1
       - name: Install apt dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+      - name: Cache CUDA installer
+        id: cache-cuda
+        uses: actions/cache@v3
+        with:
+          path: cuda_12.1.0_530.30.02_linux.run
+          key: ${{ runner.os }}-cuda-${{ hashFiles('cuda_12.1.0_530.30.02_linux.run') }}
+          restore-keys: |
+            ${{ runner.os }}-cuda-
+      - name: Download CUDA installer
+        if: steps.cache-cuda.outputs.cache-hit != 'true'
+        run: wget -q https://developer.download.nvidia.com/compute/cuda/12.1.0/local_installers/cuda_12.1.0_530.30.02_linux.run
       - name: Install CUDA and NCCL dependencies
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          wget -q https://developer.download.nvidia.com/compute/cuda/12.1.0/local_installers/cuda_12.1.0_530.30.02_linux.run
           sudo sh cuda_12.1.0_530.30.02_linux.run --silent --toolkit
           echo 'export PATH=/usr/local/cuda-12.1/bin:$PATH' >> ~/.bashrc
           echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.1/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
           source ~/.bashrc
           /usr/local/cuda-12.1/bin/nvcc --version
-          sudo apt-get update
-          sudo apt-get install -y libnccl2 libnccl-dev
+          wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.0-1_all.deb
+          sudo dpkg -i cuda-keyring_1.0-1_all.deb
+          sudo apt install -y libnccl2 libnccl-dev
         shell: bash
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@master
