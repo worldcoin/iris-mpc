@@ -15,8 +15,8 @@ This document provides a step-by-step guide on how to upgrade the application de
 First, clone the repository to your local machine if you haven't already:
 
 ```sh
-git clone <repository-url>
-cd <repository-directory>
+git clone git@github.com:worldcoin/gpu-iris-mpc.git
+cd gpu-iris-mpc
 ```
 ### 2. Update the Image in Configuration Files
 
