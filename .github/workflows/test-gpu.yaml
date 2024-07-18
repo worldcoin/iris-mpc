@@ -62,10 +62,10 @@ jobs:
 
       - name: E2E Tests
         run: |
-        export LD_LIBRARY_PATH=/usr/local/cuda-12.1/lib64:$LD_LIBRARY_PATH
-        export CUDA_HOME=/usr/local/cuda-12.1
-        /usr/local/cuda-12.1/bin/nvcc --version
-        cargo test --release e2e
+          export LD_LIBRARY_PATH=/usr/local/cuda-12.1/lib64:$LD_LIBRARY_PATH
+          export CUDA_HOME=/usr/local/cuda-12.1
+          /usr/local/cuda-12.1/bin/nvcc --version
+          cargo test --release e2e
         shell: bash
         env:
           NCCL_P2P_DIRECT_DISABLE: 1
