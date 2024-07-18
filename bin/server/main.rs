@@ -7,7 +7,7 @@ use clap::Parser;
 use eyre::Context;
 use futures::StreamExt;
 use gpu_iris_mpc::{
-    config::{Config, Opt},
+    config::{json_wrapper::JsonStrWrapper, Config, Opt},
     dot::ROTATIONS,
     helpers::{
         aws::{
@@ -141,13 +141,8 @@ async fn receive_batch(
     Ok(batch_query)
 }
 
-#[tokio::main]
-async fn main() -> eyre::Result<()> {
-    dotenvy::dotenv().ok();
-    let mut config: Config = Config::load_config("SMPC").unwrap();
-    config.overwrite_defaults_with_cli_args(Opt::parse());
-
-    let _tracing_shutdown_handle = if let Some(service) = &config.service {
+fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
+    if let Some(service) = &config.service {
         let tracing_shutdown_handle = DatadogBattery::init(
             service.traces_endpoint.as_deref(),
             &service.service_name,
@@ -165,35 +160,21 @@ async fn main() -> eyre::Result<()> {
             )?;
         }
 
-        tracing_shutdown_handle
+        Ok(tracing_shutdown_handle)
     } else {
         tracing_subscriber::registry()
             .with(tracing_subscriber::fmt::layer().pretty().compact())
             .with(tracing_subscriber::EnvFilter::from_default_env())
             .init();
 
-        TracingShutdownHandle
-    };
+        Ok(TracingShutdownHandle)
+    }
+}
 
-    let store = Store::new_from_config(&config).await?;
-
-    let Config {
-        path,
-        party_id,
-        results_topic_arn,
-        requests_queue_url,
-        kms_key_arns,
-        ..
-    } = config.clone();
-
-    let code_db_path = format!("{}/{}", path, DB_CODE_FILE);
-    let mask_db_path = format!("{}/{}", path, DB_MASK_FILE);
-
-    let region_provider = Region::new(REGION);
-    let shared_config = aws_config::from_env().region(region_provider).load().await;
-    let sqs_client = Client::new(&shared_config);
-    let sns_client = SNSClient::new(&shared_config);
-
+async fn initialize_chacha_seeds(
+    kms_key_arns: JsonStrWrapper<Vec<String>>,
+    party_id: usize,
+) -> eyre::Result<([u32; 8], [u32; 8])> {
     // Init RNGs
     let own_key_arn = kms_key_arns
         .0
@@ -220,6 +201,16 @@ async fn main() -> eyre::Result<()> {
         bytemuck::cast(derive_shared_secret(own_key_arn, dh_pair_1).await?),
     );
 
+    Ok(chacha_seeds)
+}
+
+async fn initialize_iris_dbs(
+    path: &str,
+    party_id: usize,
+    store: &Store,
+) -> eyre::Result<(Vec<u16>, Vec<u16>)> {
+    let code_db_path = format!("{}/{}", path, DB_CODE_FILE);
+    let mask_db_path = format!("{}/{}", path, DB_MASK_FILE);
     // Generate or load DB
     let (mut codes_db, mut masks_db) =
         if metadata(&code_db_path).is_ok() && metadata(&mask_db_path).is_ok() {
@@ -268,6 +259,28 @@ async fn main() -> eyre::Result<()> {
         masks_db.extend(iris.mask());
     }
 
+    Ok((codes_db, masks_db))
+}
+#[tokio::main]
+async fn main() -> eyre::Result<()> {
+    dotenvy::dotenv().ok();
+    let mut config: Config = Config::load_config("SMPC").unwrap();
+    config.overwrite_defaults_with_cli_args(Opt::parse());
+
+    let _tracing_shutdown_handle = initialize_tracing(&config)?;
+    let store = Store::new_from_config(&config).await?;
+
+    // TODO: probably move into separate function
+    let region_provider = Region::new(REGION);
+    let shared_config = aws_config::from_env().region(region_provider).load().await;
+    let sqs_client = Client::new(&shared_config);
+    let sns_client = SNSClient::new(&shared_config);
+
+    let party_id = config.party_id;
+    let chacha_seeds = initialize_chacha_seeds(config.kms_key_arns, party_id).await?;
+
+    let (codes_db, masks_db) = initialize_iris_dbs(&config.path, party_id, &store).await?;
+
     let mut background_tasks = TaskMonitor::new();
     // a bit convoluted, but we need to create the actor on the thread already,
     // since it blocks a lot and is `!Send`, we get back the handle via the oneshot
@@ -301,7 +314,7 @@ async fn main() -> eyre::Result<()> {
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
     let rx_sns_client = sns_client.clone();
     let sqs_client_bg = sqs_client.clone();
-    let queue_url_bg = requests_queue_url.clone();
+    let queue_url_bg = config.requests_queue_url.clone();
 
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
@@ -343,7 +356,7 @@ async fn main() -> eyre::Result<()> {
 
                 rx_sns_client
                     .publish()
-                    .topic_arn(&results_topic_arn)
+                    .topic_arn(&config.results_topic_arn)
                     .message(serde_json::to_string(&result_event).unwrap())
                     .send()
                     .await?;
@@ -407,7 +420,7 @@ async fn main() -> eyre::Result<()> {
 
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
-        let batch = receive_batch(party_id, &sqs_client, &requests_queue_url).await?;
+        let batch = receive_batch(party_id, &sqs_client, &config.requests_queue_url).await?;
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id and
