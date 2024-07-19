@@ -18,7 +18,7 @@ jobs:
         run: nvidia-smi
 
       - name: Increase shared memory size
-        run: cat /etc/fstab
+        run: df -h | grep shm
 
 #
 #      - name: Install OpenSSL && pkg-config
