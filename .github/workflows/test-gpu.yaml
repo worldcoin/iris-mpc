@@ -31,7 +31,7 @@ jobs:
           sudo apt install -y libnccl2 libnccl-dev
 
       - name: Find libs
-        run: find /usr -name libnvrtc.so && find /usr -name libcuda.so
+        run: find /usr -name "libnvrtc*" && find /usr -name libcuda.so
 
       - name: Cache Rust build
         uses: actions/cache@v3
