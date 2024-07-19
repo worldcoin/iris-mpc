@@ -12,6 +12,7 @@ jobs:
     runs-on: gpu
     container:
       image: ubuntu:latest
+      options: --gpus all
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
