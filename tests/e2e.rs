@@ -63,7 +63,7 @@ fn install_tracing() {
 #[tokio::test]
 async fn e2e_test() -> Result<()> {
     install_tracing();
-    env::set_var("NCCL_P2P_DIRECT_DISABLE", "1");
+    env::set_var("NCCL_P2P_LEVEL", "LOC");
     env::set_var("NCCL_NET", "Socket");
 
     let db0 = generate_db(0)?;
