@@ -15,8 +15,7 @@ jobs:
         uses: actions/checkout@v4
 
       - run: ls -al /usr/lib
-      - run: ls -al /usr/local/cuda-12.2/lib64
-      - run: ls -al /usr/local/cuda-12.2/lib64/stubs
+      - run: find / -name "libcuda*"
 
 #      - name: Cache Rust build
 #        uses: actions/cache@v3
