@@ -1,7 +1,7 @@
 use eyre::Result;
 use gpu_iris_mpc::{
     config::ServersConfig,
-    helpers::device_manager::DeviceManager,
+    helpers::{self, device_manager::DeviceManager},
     server::{BatchQuery, ServerActor, ServerJobResult},
     setup::{
         galois_engine::degree4::GaloisRingIrisCodeShare,
@@ -11,7 +11,6 @@ use gpu_iris_mpc::{
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use std::{collections::HashMap, env, sync::Arc};
 use tokio::sync::oneshot;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
 const DB_SIZE: usize = 8 * 1000;
@@ -51,18 +50,9 @@ fn generate_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
     Ok((codes_db, masks_db))
 }
 
-fn install_tracing() {
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-}
-
 #[tokio::test]
 async fn e2e_test() -> Result<()> {
-    install_tracing();
+    helpers::install_tracing();
     env::set_var("NCCL_P2P_DIRECT_DISABLE", "1");
     env::set_var("NCCL_NET", "Socket");
 
