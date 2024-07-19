@@ -10,15 +10,11 @@ concurrency:
 jobs:
   e2e:
     runs-on: gpu
-    container:
-      image: ubuntu:latest
-      options: --gpus all
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - run: find /usr -name "libcuda*"
-
       - run: sleep 300
 
 #      - name: Cache Rust build
