@@ -600,8 +600,8 @@ impl ServerActor {
                 chunk = db_chunk_idx,
                 "finished chunk"
             );
-            self.device_manager.await_streams(&self.streams[0]);
-            self.device_manager.await_streams(&self.streams[1]);
+            self.device_manager
+                .await_streams(&self.streams[(db_chunk_idx + 1) % 2]); // await other stream
 
             // Break if we reached the end of the database
             if db_chunk_idx * DB_CHUNK_SIZE >= *current_db_sizes.iter().max().unwrap() {
