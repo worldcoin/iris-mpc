@@ -15,6 +15,7 @@ jobs:
         uses: actions/checkout@v4
 
       - run: find /usr -name "libcuda*"
+      - run: nvidia-smi
       - run: sleep 300
 
 #      - name: Cache Rust build
