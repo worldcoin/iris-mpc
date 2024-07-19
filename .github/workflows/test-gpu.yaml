@@ -10,6 +10,8 @@ concurrency:
 jobs:
   e2e:
     runs-on: gpu
+    container:
+      image: ubuntu:latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
