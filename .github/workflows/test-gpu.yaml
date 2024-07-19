@@ -18,6 +18,8 @@ jobs:
 
       - run: find /usr -name "libcuda*"
 
+      - run: sleep 300
+
 #      - name: Cache Rust build
 #        uses: actions/cache@v3
 #        id: cache-rust
