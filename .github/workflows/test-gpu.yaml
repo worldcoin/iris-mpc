@@ -21,7 +21,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
 
       - name: Find libs
-        run: find /usr -name libnvrtc.so && find /user -name libcuda.so
+        run: find /usr -name libnvrtc.so && find /usr -name libcuda.so
 
       - name: Install CUDA and NCCL dependencies
         if: steps.cache-cuda-nccl.outputs.cache-hit != 'true'
