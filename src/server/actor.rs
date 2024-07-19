@@ -63,8 +63,8 @@ impl ServerActorHandle {
     }
 }
 
-const DB_SIZE: usize = 2 * 1_000;
-const DB_BUFFER: usize = 2 * 1_000;
+const DB_SIZE: usize = 8 * 1_000;
+const DB_BUFFER: usize = 8 * 1_000;
 const DB_CHUNK_SIZE: usize = 512;
 const N_QUERIES: usize = 64;
 const QUERIES: usize = ROTATIONS * N_QUERIES;
@@ -73,6 +73,7 @@ pub struct ServerActor {
     job_queue:             mpsc::Receiver<ServerJob>,
     device_manager:        Arc<DeviceManager>,
     server_tasks:          TaskMonitor,
+    party_id:              usize,
     // engines
     codes_engine:          ShareDB,
     masks_engine:          ShareDB,
@@ -161,7 +162,7 @@ impl ServerActor {
                 ))
             };
 
-        println!("Starting engines...");
+        tracing::info!("Starting engines...");
 
         let mut server_tasks = TaskMonitor::new();
         let ServersConfig {
@@ -297,6 +298,7 @@ impl ServerActor {
         }
 
         Ok(Self {
+            party_id,
             job_queue,
             device_manager,
             server_tasks,
@@ -380,6 +382,7 @@ impl ServerActor {
             .collect::<Vec<_>>();
 
         // ---- START BATCH DEDUP ----
+        tracing::debug!(party_id = self.party_id, "Starting batch deduplication");
         compact_device_queries.compute_dot_products(
             &mut self.batch_codes_engine,
             &mut self.batch_masks_engine,
@@ -427,6 +430,7 @@ impl ServerActor {
 
         forget_vec!(code_dots_batch);
         forget_vec!(mask_dots_batch);
+        tracing::debug!(party_id = self.party_id, "Finished batch deduplication");
         // ---- END BATCH DEDUP ----
 
         // Create new initial events
@@ -438,8 +442,14 @@ impl ServerActor {
         let mut next_phase2_event = self.device_manager.create_events(false);
 
         // ---- START DATABASE DEDUP ----
+        tracing::debug!(party_id = self.party_id, "Start DB deduplication");
         let mut db_chunk_idx = 0;
         loop {
+            tracing::debug!(
+                party_id = self.party_id,
+                chunk = db_chunk_idx,
+                "starting chunk"
+            );
             let request_streams = &self.streams[db_chunk_idx % 2];
             let request_cublas_handles = &self.cublas_handles[db_chunk_idx % 2];
 
@@ -449,7 +459,7 @@ impl ServerActor {
                 .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(0, DB_CHUNK_SIZE))
                 .collect::<Vec<_>>();
 
-            println!("chunks: {:?}, offset: {}", chunk_size, offset);
+            tracing::debug!("chunks: {:?}, offset: {}", chunk_size, offset);
 
             // First stream doesn't need to wait
             if db_chunk_idx == 0 {
@@ -461,6 +471,11 @@ impl ServerActor {
                     .record_event(request_streams, &current_phase2_event);
             }
 
+            tracing::debug!(
+                party_id = self.party_id,
+                chunk = db_chunk_idx,
+                "waiting for dot-event"
+            );
             self.device_manager
                 .await_event(request_streams, &current_dot_event);
 
@@ -477,6 +492,11 @@ impl ServerActor {
             );
 
             // wait for the exchange result buffers to be ready
+            tracing::debug!(
+                party_id = self.party_id,
+                chunk = db_chunk_idx,
+                "waiting for exchange-event"
+            );
             self.device_manager
                 .await_event(request_streams, &current_exchange_event);
 
@@ -490,6 +510,11 @@ impl ServerActor {
                 request_streams,
             );
 
+            tracing::debug!(
+                party_id = self.party_id,
+                chunk = db_chunk_idx,
+                "recording dot-event"
+            );
             self.device_manager
                 .record_event(request_streams, &next_dot_event);
 
@@ -500,6 +525,11 @@ impl ServerActor {
 
             // ---- END PHASE 1 ----
 
+            tracing::debug!(
+                party_id = self.party_id,
+                chunk = db_chunk_idx,
+                "waiting for phase2-event"
+            );
             self.device_manager
                 .await_event(request_streams, &current_phase2_event);
 
@@ -521,6 +551,11 @@ impl ServerActor {
                 // we can now record the exchange event since the phase 2 is no longer using the
                 // code_dots/mask_dots which are just reinterpretations of the exchange result
                 // buffers
+                tracing::debug!(
+                    party_id = self.party_id,
+                    chunk = db_chunk_idx,
+                    "recording exchange-event"
+                );
                 self.device_manager
                     .record_event(request_streams, &next_exchange_event);
 
@@ -537,6 +572,11 @@ impl ServerActor {
                 );
                 self.phase2.return_result_buffer(res);
             }
+            tracing::debug!(
+                party_id = self.party_id,
+                chunk = db_chunk_idx,
+                "recording phase2-event"
+            );
             self.device_manager
                 .record_event(request_streams, &next_phase2_event);
 
@@ -555,6 +595,14 @@ impl ServerActor {
             // Increment chunk index
             db_chunk_idx += 1;
 
+            tracing::debug!(
+                party_id = self.party_id,
+                chunk = db_chunk_idx,
+                "finished chunk"
+            );
+            self.device_manager
+                .await_streams(&self.streams[(db_chunk_idx + 1) % 2]); // await other stream
+
             // Break if we reached the end of the database
             if db_chunk_idx * DB_CHUNK_SIZE >= *current_db_sizes.iter().max().unwrap() {
                 break;
@@ -563,8 +611,10 @@ impl ServerActor {
         // ---- END DATABASE DEDUP ----
 
         // Wait for protocol to finish
+        tracing::debug!(party_id = self.party_id, "waiting for batch work to finish");
         self.device_manager.await_streams(&self.streams[0]);
         self.device_manager.await_streams(&self.streams[1]);
+        tracing::debug!(party_id = self.party_id, "batch work finished");
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id
@@ -679,7 +729,7 @@ impl ServerActor {
             *self.current_db_size_mutex[i].lock().unwrap() += insertion_list[i].len() as usize;
 
             // DEBUG
-            println!(
+            tracing::debug!(
                 "Updating DB size on device {}: {:?}",
                 i,
                 *self.current_db_size_mutex[i].lock().unwrap()
@@ -720,7 +770,7 @@ impl ServerActor {
         // Prepare for next batch
         self.server_tasks.check_tasks();
 
-        println!("CPU time of one iteration {:?}", now.elapsed());
+        tracing::info!("CPU time of one iteration {:?}", now.elapsed());
         Ok(())
     }
 }
@@ -795,7 +845,7 @@ fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
         results.push(match_entry);
 
         // DEBUG
-        println!(
+        tracing::debug!(
             "Query {}: match={} [index: {}]",
             j,
             match_entry != u32::MAX,
