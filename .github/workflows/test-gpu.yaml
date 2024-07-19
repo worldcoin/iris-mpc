@@ -16,9 +16,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - run: ls -al /usr/lib
-      - run: nvidia-smi
-      - run: ls -al /usr/lib/x86_64-linux-gnu/
+      - run: ls -al /usr/lib64
 
 #      - name: Cache Rust build
 #        uses: actions/cache@v3
