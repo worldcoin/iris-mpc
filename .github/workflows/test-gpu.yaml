@@ -14,35 +14,26 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - run: find /usr -name "libcuda*"
-      - run: nvidia-smi
-      - run: sleep 300
+      - name: Cache Rust build
+        uses: actions/cache@v3
+        id: cache-rust
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            rust-build-${{ runner.os }}-
 
-#      - name: Cache Rust build
-#        uses: actions/cache@v3
-#        id: cache-rust
-#        with:
-#          path: |
-#            ~/.cargo/registry
-#            ~/.cargo/git
-#            target
-#          key: rust-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-#          restore-keys: |
-#            rust-build-${{ runner.os }}-
-#
-#      - name: Install Rust nightly
-#        uses: dtolnay/rust-toolchain@master
-#        with:
-#          toolchain: nightly
-#
-#      - name: E2E Tests
-#        run: |
-#          ls -al /usr/lib
-#          export LD_LIBRARY_PATH=/usr/local/cuda-12.2/lib64:/usr/lib/x86_64-unknown-linux-gnu:$LD_LIBRARY_PATH
-#          export CUDA_HOME=/usr/local/cuda-12.2
-#          /usr/local/cuda-12.2/bin/nvcc --version
-#          cargo test --release e2e
-#        shell: bash
-#        env:
-#          NCCL_P2P_DIRECT_DISABLE: 1
-#          NCCL_NET: Socket
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: E2E Tests
+        run: cargo test --release e2e
+        shell: bash
+        env:
+          NCCL_P2P_DIRECT_DISABLE: 1
+          NCCL_NET: Socket
