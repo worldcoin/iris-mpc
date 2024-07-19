@@ -16,7 +16,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - run: ls -al /usr/lib64
+      - run: find /usr -name "libcuda*"
 
 #      - name: Cache Rust build
 #        uses: actions/cache@v3
