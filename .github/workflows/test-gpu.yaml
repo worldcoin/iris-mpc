@@ -25,17 +25,10 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-               #          wget -q https://developer.download.nvidia.com/compute/cuda/12.2.0/local_installers/cuda_12.2.0_535.183.01_linux.run
-               #          sudo sh cuda_12.2.0_535.183.01_linux.run --silent --toolkit
-               #          echo 'export PATH=/usr/local/cuda-12.2/bin:$PATH' >> ~/.bashrc
-               #          echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.2/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
-               #          source ~/.bashrc
-               #          /usr/local/cuda-12.2/bin/nvcc --version
-                 wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb
-                 sudo dpkg -i cuda-keyring_1.1-1_all.deb
-                 sudo apt update
-          #               sudo apt install -y cuda-toolkit-12-2 libnccl2 libnccl-dev
-               sudo apt install -y cuda-nvrtc-12-2 cuda-nvrtc-dev-12-2 libnccl2 libnccl-dev
+          wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt update      
+          sudo apt install -y cuda-nvrtc-12-2 cuda-nvrtc-dev-12-2 libnccl2 libnccl-dev
 
       - name: Find libs
         run: find /usr -name "libnvrtc*" && find /usr -name libcuda.so
