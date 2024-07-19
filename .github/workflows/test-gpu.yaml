@@ -28,8 +28,7 @@ jobs:
           wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt update      
-          sudo apt install -y cuda-nvrtc-12-2 cuda-nvrtc-dev-12-2 libnccl2 libnccl-dev
-          echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.2/targets/x86_64-linux/lib:$LD_LIBRARY_PATH' >> ~/.bashrc
+          sudo apt install -y cuda-toolkit-12-2 libnccl2 libnccl-dev
 
       - name: Find libs
         run: find /usr -name "libnvrtc*" && find /usr -name libcuda.so
