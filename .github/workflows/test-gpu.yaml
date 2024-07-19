@@ -46,7 +46,7 @@ jobs:
             rust-build-${{ runner.os }}-
 
       - name: Find libs
-        run: find /usr -name libnvrtc.so && find /usr -name libcuda.so
+        run: find /usr -name "libnvrtc*" && find /usr -name libcuda.so
 
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@master
