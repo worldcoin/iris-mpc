@@ -10,7 +10,6 @@ use gpu_iris_mpc::{
     config::{json_wrapper::JsonStrWrapper, Config, Opt},
     dot::ROTATIONS,
     helpers::{
-        self,
         aws::{
             NODE_ID_MESSAGE_ATTRIBUTE_NAME, SPAN_ID_MESSAGE_ATTRIBUTE_NAME,
             TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
@@ -264,7 +263,6 @@ async fn initialize_iris_dbs(
 }
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
-    helpers::install_tracing();
     dotenvy::dotenv().ok();
     let mut config: Config = Config::load_config("SMPC").unwrap();
     config.overwrite_defaults_with_cli_args(Opt::parse());

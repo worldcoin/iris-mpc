@@ -5,7 +5,6 @@ use cudarc::driver::{
     CudaDevice, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceRepr, DriverError,
 };
 use std::sync::Arc;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 pub mod aws;
 pub mod aws_sigv4;
@@ -122,13 +121,4 @@ pub fn htod_on_stream_sync<T: DeviceRepr>(
         buf
     };
     Ok(buf)
-}
-
-pub fn install_tracing() {
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
 }
