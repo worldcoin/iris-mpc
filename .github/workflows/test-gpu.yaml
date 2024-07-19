@@ -20,6 +20,18 @@ jobs:
       - name: Install OpenSSL && pkg-config
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
 
+      - name: Install CUDA and NCCL dependencies
+        run: |
+          wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y cuda
+          sudo apt-get install -y git build-essential devscripts debhelper fakeroot
+          git clone https://github.com/NVIDIA/nccl.git
+          cd nccl
+          make -j24 pkg.debian.build 
+          sudo dpkg -i build/pkg/deb/libnccl*.deb
+
       - name: Cache Rust build
         uses: actions/cache@v3
         id: cache-rust
