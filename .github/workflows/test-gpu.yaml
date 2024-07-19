@@ -12,6 +12,7 @@ jobs:
     runs-on: gpu
     container:
       image: nvidia/cuda:12.2.2-runtime-ubuntu22.04
+      options: --gpus 3
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
