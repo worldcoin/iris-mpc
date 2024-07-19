@@ -18,7 +18,7 @@ jobs:
         run: nvidia-smi
 
       - name: Increase shared memory size
-        run: sudo sh -c 'echo "tmpfs /dev/shm tmpfs defaults,size=2G 0 0" > /etc/fstab && sudo mount -o remount /dev/shm'
+        run: echo "tmpfs /dev/shm tmpfs defaults,size=2G 0 0" > /etc/fstab && mount -o remount /dev/shm'
 
 #
 #      - name: Install OpenSSL && pkg-config
