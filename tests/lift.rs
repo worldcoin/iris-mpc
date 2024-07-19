@@ -165,7 +165,7 @@ fn open(
     result
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore]
 async fn test_lift() -> eyre::Result<()> {
     const_assert!(
