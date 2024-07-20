@@ -40,7 +40,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
-const N_QUERIES: usize = 32;
+const N_QUERIES: usize = 64;
 const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
 /// The number of batches before a stream is re-used.
@@ -66,6 +66,13 @@ async fn receive_batch(
 
         if let Some(messages) = rcv_message_output.messages {
             for sqs_message in messages {
+                client
+                    .delete_message()
+                    .queue_url(queue_url)
+                    .receipt_handle(sqs_message.receipt_handle().unwrap())
+                    .send()
+                    .await?;
+
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())?;
                 let message: SMPCRequest = serde_json::from_str(&message.message)?;
 
@@ -362,14 +369,14 @@ async fn main() -> eyre::Result<()> {
                     .await?;
 
                 // Tell SQS that we are done with these requests.
-                for sqs_receipt_handle in sqs_receipt_handles.iter() {
-                    sqs_client_bg
-                        .delete_message()
-                        .queue_url(&queue_url_bg)
-                        .receipt_handle(sqs_receipt_handle)
-                        .send()
-                        .await?;
-                }
+                // for sqs_receipt_handle in sqs_receipt_handles.iter() {
+                //     sqs_client_bg
+                //         .delete_message()
+                //         .queue_url(&queue_url_bg)
+                //         .receipt_handle(sqs_receipt_handle)
+                //         .send()
+                //         .await?;
+                // }
             }
         }
 
