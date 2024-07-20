@@ -71,6 +71,14 @@ harness = false
 name = "transpose"
 harness = false
 
+[[bin]]
+name = "server"
+path = "bin/server/main.rs"
+
+[[bin]]
+name = "client"
+path = "bin/client.rs"
+
 # Abort on panics rather than unwinding.
 # This improves performance and makes panic propagation more reliable.
 # bench gets its setting from release, and test from dev.
