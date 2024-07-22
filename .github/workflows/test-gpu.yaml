@@ -9,8 +9,6 @@ concurrency:
 
 jobs:
   e2e:
-    container:
-      options: --shm-size=2gb
     runs-on: gpu
     steps:
       - name: Checkout code
