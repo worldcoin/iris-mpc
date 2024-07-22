@@ -18,7 +18,7 @@ jobs:
         run: nvidia-smi
 
       - name: Increase shared memory size
-        run: sudo mount -o remount,size=8G /dev/shm
+        run: ls -al /run/nvidia/mps
 
 #
 #      - name: Install OpenSSL && pkg-config
