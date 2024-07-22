@@ -27,15 +27,15 @@ use std::{
     fs::metadata,
     time::{Duration, Instant},
 };
-use telemetry_batteries::{
-    metrics::statsd::StatsdBattery,
-    tracing::{datadog::DatadogBattery, TracingShutdownHandle},
-};
+// use telemetry_batteries::{
+//     metrics::statsd::StatsdBattery,
+//     tracing::{datadog::DatadogBattery, TracingShutdownHandle},
+// };
 use tokio::{
     sync::{mpsc, oneshot},
     task::spawn_blocking,
 };
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
@@ -147,35 +147,35 @@ async fn receive_batch(
     Ok(batch_query)
 }
 
-fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
-    // if let Some(service) = &config.service {
-    //     let tracing_shutdown_handle = DatadogBattery::init(
-    //         service.traces_endpoint.as_deref(),
-    //         &service.service_name,
-    //         None,
-    //         true,
-    //     );
+// fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
+//     if let Some(service) = &config.service {
+//         let tracing_shutdown_handle = DatadogBattery::init(
+//             service.traces_endpoint.as_deref(),
+//             &service.service_name,
+//             None,
+//             true,
+//         );
 
-    //     if let Some(metrics_config) = &service.metrics {
-    //         StatsdBattery::init(
-    //             &metrics_config.host,
-    //             metrics_config.port,
-    //             metrics_config.queue_size,
-    //             metrics_config.buffer_size,
-    //             Some(&metrics_config.prefix),
-    //         )?;
-    //     }
+//         if let Some(metrics_config) = &service.metrics {
+//             StatsdBattery::init(
+//                 &metrics_config.host,
+//                 metrics_config.port,
+//                 metrics_config.queue_size,
+//                 metrics_config.buffer_size,
+//                 Some(&metrics_config.prefix),
+//             )?;
+//         }
 
-    //     Ok(tracing_shutdown_handle)
-    // } else {
-        tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer().pretty().compact())
-            .with(tracing_subscriber::EnvFilter::from_default_env())
-            .init();
+//         Ok(tracing_shutdown_handle)
+//     } else {
+//         tracing_subscriber::registry()
+//             .with(tracing_subscriber::fmt::layer().pretty().compact())
+//             .with(tracing_subscriber::EnvFilter::from_default_env())
+//             .init();
 
-        Ok(TracingShutdownHandle)
-    // }
-}
+//         Ok(TracingShutdownHandle)
+//     }
+// }
 
 async fn initialize_chacha_seeds(
     kms_key_arns: JsonStrWrapper<Vec<String>>,
@@ -269,11 +269,17 @@ async fn initialize_iris_dbs(
 }
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
+    tracing_subscriber::fmt()
+    .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
+    .init();
+
+    tracing::info!("START");
+
     dotenvy::dotenv().ok();
     let mut config: Config = Config::load_config("SMPC").unwrap();
     config.overwrite_defaults_with_cli_args(Opt::parse());
 
-    let _tracing_shutdown_handle = initialize_tracing(&config)?;
+    // let _tracing_shutdown_handle = initialize_tracing(&config)?;
     let store = Store::new_from_config(&config).await?;
 
     // TODO: probably move into separate function
