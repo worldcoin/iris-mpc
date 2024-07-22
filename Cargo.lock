@@ -1537,6 +1537,7 @@ dependencies = [
  "hex",
  "hmac",
  "http 1.1.0",
+ "indicatif",
  "itertools 0.13.0",
  "lazy_static",
  "memmap2",

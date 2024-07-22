@@ -1,17 +1,21 @@
 use clap::Parser;
+use eyre::ContextCompat;
+use futures::{Stream, StreamExt};
 use futures_concurrency::future::Join;
 use gpu_iris_mpc::{
     setup::galois_engine::degree4::GaloisRingIrisCodeShare,
     upgrade::{
+        db::Db,
         packets::{MaskShareMessage, TwoToThreeIrisCodeMessage},
         OldIrisShareSource,
     },
     IRIS_CODE_LENGTH,
 };
-use mpc_uniqueness_check::db::Db;
+use indicatif::{ProgressBar, ProgressStyle};
+use mpc_uniqueness_check::{bits::Bits, distance::EncodedBits};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-use std::{array, net::SocketAddr};
+use std::{array, net::SocketAddr, pin::Pin};
 use tokio::{
     io::{AsyncWriteExt, BufWriter},
     net::TcpStream,
@@ -61,8 +65,6 @@ async fn main() -> eyre::Result<()> {
         panic!("Party id must be 0, 1");
     }
 
-    let (db1, db2) = old_dbs();
-
     let mut server1 = BufWriter::new(TcpStream::connect(args.server1).await?);
     let mut server2 = BufWriter::new(TcpStream::connect(args.server2).await?);
     let mut server3 = BufWriter::new(TcpStream::connect(args.server3).await?);
@@ -87,21 +89,60 @@ async fn main() -> eyre::Result<()> {
 
     let mut rng = ChaCha20Rng::from_entropy();
 
-    for id in 0..args.db_size {
+    let (db0, db1) = old_dbs();
+    let db = V1Database {
+        db: Db::new("sqlite://:memory:").await?,
+    };
+    let (mut shares_stream, mut mask_stream): (
+        Pin<Box<dyn Stream<Item = eyre::Result<(u64, EncodedBits)>>>>,
+        Pin<Box<dyn Stream<Item = eyre::Result<(u64, Bits)>>>>,
+    ) = if args.mock {
+        match args.party_id {
+            0 => (
+                Box::pin(db0.stream_shares(0..args.db_size)?),
+                Box::pin(db0.stream_masks(0..args.db_size)?),
+            ),
+            1 => (
+                Box::pin(db1.stream_shares(0..args.db_size)?),
+                Box::pin(db1.stream_masks(0..args.db_size)?),
+            ),
+            _ => unreachable!(),
+        }
+    } else {
+        (
+            Box::pin(db.stream_shares(0..args.db_size)?),
+            Box::pin(db.stream_masks(0..args.db_size)?),
+        )
+    };
+
+    let num_iris_codes = end - start;
+
+    let pb = ProgressBar::new(num_iris_codes).with_message("Migrating iris codes and masks");
+    let pb_style = ProgressStyle::default_bar()
+        .template(
+            "{spinner:.green} {msg} [{elapsed_precise}] [{wide_bar:.green}] {pos:>7}/{len:7} \
+             ({eta})",
+        )
+        .expect("Could not create progress bar");
+    pb.set_style(pb_style);
+
+    while let Some(share_res) = shares_stream.next().await {
+        let (share_id, share) = share_res?;
+        let (mask_id, mask) = mask_stream
+            .next()
+            .await
+            .context("mask stream ended before share stream did")??;
+        eyre::ensure!(
+            share_id == mask_id,
+            "Share and mask streams out of sync: {} != {}",
+            share_id,
+            mask_id
+        );
+        let id = share_id;
         tracing::trace!("Processing id: {}", id);
-        let [a, b, c] = if args.party_id == 0 {
-            let shares = db1.load_code_share(id).await?;
+        let [a, b, c] = {
             let galois_shared_iris_code =
-                GaloisRingIrisCodeShare::reencode_extended_iris_code(&shares, &mut rng);
-            [
-                galois_shared_iris_code[0].coefs,
-                galois_shared_iris_code[1].coefs,
-                galois_shared_iris_code[2].coefs,
-            ]
-        } else {
-            let shares = db2.load_code_share(id).await?;
-            let galois_shared_iris_code =
-                GaloisRingIrisCodeShare::reencode_extended_iris_code(&shares, &mut rng);
+                GaloisRingIrisCodeShare::reencode_extended_iris_code(&share.0, &mut rng);
             [
                 galois_shared_iris_code[0].coefs,
                 galois_shared_iris_code[1].coefs,
@@ -139,8 +180,7 @@ async fn main() -> eyre::Result<()> {
         c?;
 
         if args.party_id == 0 {
-            let masks = db1.load_mask(id).await?;
-            let extended_masks = array::from_fn(|i| masks[i] as u16);
+            let extended_masks = array::from_fn(|i| mask[i] as u16);
             let [ma, mb, mc] = {
                 let galois_shared_iris_code =
                     GaloisRingIrisCodeShare::reencode_extended_iris_code(&extended_masks, &mut rng);
@@ -195,12 +235,32 @@ struct V1Database {
 }
 
 impl OldIrisShareSource for V1Database {
-    async fn load_code_share(&self, share_id: u64) -> std::io::Result<[u16; IRIS_CODE_LENGTH]> {
-        self.db.fetch_masks(share_id)
+    async fn load_code_share(&self, share_id: u64) -> eyre::Result<EncodedBits> {
+        self.db.fetch_share(share_id).await.map(|(_, x)| x)
     }
 
-    async fn load_mask(&self, share_id: u64) -> std::io::Result<[bool; IRIS_CODE_LENGTH]> {
-        self.db.load_mask(share_id)
+    async fn load_mask(&self, share_id: u64) -> eyre::Result<Bits> {
+        self.db.fetch_mask(share_id).await.map(|(_, x)| x)
+    }
+
+    fn stream_shares(
+        &self,
+        share_id_range: std::ops::Range<u64>,
+    ) -> eyre::Result<impl futures::Stream<Item = eyre::Result<(u64, EncodedBits)>>> {
+        Ok(self.db.stream_shares(share_id_range).map(|x| match x {
+            Ok((idx, share)) => Ok((u64::try_from(idx).expect("share_id fits into u64"), share)),
+            Err(e) => Err(e.into()),
+        }))
+    }
+
+    fn stream_masks(
+        &self,
+        share_id_range: std::ops::Range<u64>,
+    ) -> eyre::Result<impl futures::Stream<Item = eyre::Result<(u64, Bits)>>> {
+        Ok(self.db.stream_masks(share_id_range).map(|x| match x {
+            Ok((idx, share)) => Ok((u64::try_from(idx).expect("share_id fits into u64"), share)),
+            Err(e) => Err(e.into()),
+        }))
     }
 }
 
@@ -226,41 +286,109 @@ fn old_dbs() -> (MockOldDbParty1, MockOldDbParty2) {
 }
 
 impl OldIrisShareSource for MockOldDbParty1 {
-    async fn load_code_share(&self, share_id: u64) -> std::io::Result<[u16; IRIS_CODE_LENGTH]> {
+    async fn load_code_share(&self, share_id: u64) -> eyre::Result<EncodedBits> {
         let mut rng = self.rng.clone();
         rng.set_word_pos(share_id as u128 * 12800);
         let mut res = [0u16; IRIS_CODE_LENGTH];
         res.iter_mut().enumerate().for_each(|(i, x)| {
             *x = rng.gen::<u16>().wrapping_add((1 - (i % 3)) as u16);
         });
+        Ok(EncodedBits(res))
+    }
+
+    async fn load_mask(&self, _share_id: u64) -> eyre::Result<Bits> {
+        let mut res = Bits::default();
+        (0..IRIS_CODE_LENGTH).for_each(|i| {
+            res.set(i, (1 - (i % 3)) != 0);
+        });
         Ok(res)
     }
 
-    async fn load_mask(&self, _share_id: u64) -> std::io::Result<[bool; IRIS_CODE_LENGTH]> {
-        let mut res = [false; IRIS_CODE_LENGTH];
-        res.iter_mut().enumerate().for_each(|(i, x)| {
-            *x = (1 - (i % 3)) != 0;
-        });
-        Ok(res)
+    fn stream_shares(
+        &self,
+        share_id_range: std::ops::Range<u64>,
+    ) -> eyre::Result<impl futures::Stream<Item = eyre::Result<(u64, EncodedBits)>>> {
+        Ok(futures::stream::poll_fn(move |_| {
+            for id in share_id_range.clone() {
+                let mut rng = self.rng.clone();
+                rng.set_word_pos(id as u128 * 12800);
+                let mut res = [0u16; IRIS_CODE_LENGTH];
+                res.iter_mut().enumerate().for_each(|(i, x)| {
+                    *x = rng.gen::<u16>().wrapping_add((1 - (i % 3)) as u16);
+                });
+                return futures::task::Poll::Ready(Some(Ok((id, EncodedBits(res)))));
+            }
+            futures::task::Poll::Ready(None)
+        }))
+    }
+
+    fn stream_masks(
+        &self,
+        share_id_range: std::ops::Range<u64>,
+    ) -> eyre::Result<impl futures::Stream<Item = eyre::Result<(u64, Bits)>>> {
+        Ok(futures::stream::poll_fn(move |_| {
+            for id in share_id_range.clone() {
+                let mut res = Bits::default();
+                (0..IRIS_CODE_LENGTH).for_each(|i| {
+                    res.set(i, (1 - (i % 3)) != 0);
+                });
+                return futures::task::Poll::Ready(Some(Ok((id, res))));
+            }
+            futures::task::Poll::Ready(None)
+        }))
     }
 }
 
 impl OldIrisShareSource for MockOldDbParty2 {
-    async fn load_code_share(&self, share_id: u64) -> std::io::Result<[u16; IRIS_CODE_LENGTH]> {
+    async fn load_code_share(&self, share_id: u64) -> eyre::Result<EncodedBits> {
         let mut rng = self.rng.clone();
         rng.set_word_pos(share_id as u128 * 12800);
         let mut res = [0u16; IRIS_CODE_LENGTH];
         res.iter_mut().for_each(|x| {
             *x = 0u16.wrapping_sub(rng.gen::<u16>());
         });
+        Ok(EncodedBits(res))
+    }
+
+    async fn load_mask(&self, _share_id: u64) -> eyre::Result<Bits> {
+        let mut res = Bits::default();
+        (0..IRIS_CODE_LENGTH).for_each(|i| {
+            res.set(i, (1 - (i % 3)) != 0);
+        });
         Ok(res)
     }
 
-    async fn load_mask(&self, _share_id: u64) -> std::io::Result<[bool; IRIS_CODE_LENGTH]> {
-        let mut res = [false; IRIS_CODE_LENGTH];
-        res.iter_mut().enumerate().for_each(|(i, x)| {
-            *x = (1 - (i % 3)) != 0;
-        });
-        Ok(res)
+    fn stream_shares(
+        &self,
+        share_id_range: std::ops::Range<u64>,
+    ) -> eyre::Result<impl futures::Stream<Item = eyre::Result<(u64, EncodedBits)>>> {
+        Ok(futures::stream::poll_fn(move |_| {
+            for id in share_id_range.clone() {
+                let mut rng = self.rng.clone();
+                rng.set_word_pos(id as u128 * 12800);
+                let mut res = [0u16; IRIS_CODE_LENGTH];
+                res.iter_mut().for_each(|x| {
+                    *x = 0u16.wrapping_sub(rng.gen::<u16>());
+                });
+                return futures::task::Poll::Ready(Some(Ok((id, EncodedBits(res)))));
+            }
+            futures::task::Poll::Ready(None)
+        }))
+    }
+
+    fn stream_masks(
+        &self,
+        share_id_range: std::ops::Range<u64>,
+    ) -> eyre::Result<impl futures::Stream<Item = eyre::Result<(u64, Bits)>>> {
+        Ok(futures::stream::poll_fn(move |_| {
+            for id in share_id_range.clone() {
+                let mut res = Bits::default();
+                (0..IRIS_CODE_LENGTH).for_each(|i| {
+                    res.set(i, (1 - (i % 3)) != 0);
+                });
+                return futures::task::Poll::Ready(Some(Ok((id, res))));
+            }
+            futures::task::Poll::Ready(None)
+        }))
     }
 }

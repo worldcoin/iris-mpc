@@ -56,6 +56,7 @@ static_assertions = "1.1.0"
 futures = "0.3.30"
 
 mpc-uniqueness-check = { package = "mpc", git = "https://github.com/worldcoin/mpc-uniqueness-check", rev = "4d38402" }
+indicatif = "0.17.8"
 
 [dev-dependencies]
 criterion = "0.5"
