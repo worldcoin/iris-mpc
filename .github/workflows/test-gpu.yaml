@@ -57,7 +57,7 @@ jobs:
           toolchain: nightly
 
       - name: E2E Tests
-        run: cargo test --release
+        run: cargo test --release e2e
         shell: bash
         env:
           NCCL_DEBUG: info
