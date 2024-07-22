@@ -27,9 +27,5 @@ jobs:
         run: rustup default nightly-2024-07-10
       - name: Install Rust clippy for checking clippy errors
         run: rustup component add clippy
-      - name: Clippy Lints
-        uses: actions-rs/clippy-check@v1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          args: --all-targets --all-features -- -D warnings --no-deps
-          toolchain: nightly
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings --no-deps
