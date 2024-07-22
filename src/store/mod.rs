@@ -29,12 +29,16 @@ pub struct StoredIris {
 }
 
 impl StoredIris {
-    pub fn code(&self) -> &[u16] {
-        cast_slice(&self.code)
+    pub fn code_iter(&self) -> impl Iterator<Item = u16> + '_ {
+        self.code
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes(chunk.try_into().expect("Chunk should have 2 bytes")))
     }
 
-    pub fn mask(&self) -> &[u16] {
-        cast_slice(&self.mask)
+    pub fn mask_iter(&self) -> impl Iterator<Item = u16> + '_ {
+        self.mask
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes(chunk.try_into().expect("Chunk should have 2 bytes")))
     }
 }
 
@@ -110,6 +114,7 @@ mod tests {
 
     use super::*;
     use futures::TryStreamExt;
+    use itertools::Itertools;
     use tokio;
 
     #[tokio::test]
@@ -131,8 +136,8 @@ mod tests {
 
         assert_eq!(got.len(), 2);
         for i in 0..2 {
-            assert_eq!(got[i].code(), codes_and_masks[i].0);
-            assert_eq!(got[i].mask(), codes_and_masks[i].1);
+            assert_eq!(got[i].code_iter().collect_vec(), codes_and_masks[i].0);
+            assert_eq!(got[i].mask_iter().collect_vec(), codes_and_masks[i].1);
         }
 
         // Clean up on success.

@@ -255,8 +255,8 @@ async fn initialize_iris_dbs(
     // Load DB from persistent storage.
     while let Some(iris) = store.stream_irises().await.next().await {
         let iris = iris?;
-        codes_db.extend(iris.code());
-        masks_db.extend(iris.mask());
+        codes_db.extend(iris.code_iter());
+        masks_db.extend(iris.mask_iter());
     }
 
     Ok((codes_db, masks_db))
