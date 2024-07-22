@@ -1,3 +1,5 @@
+pub mod sync;
+
 use crate::config::Config;
 use bytemuck::cast_slice;
 use eyre::{eyre, Result};

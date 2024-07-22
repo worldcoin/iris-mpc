@@ -20,7 +20,13 @@ use cudarc::{
 use itertools::izip;
 #[cfg(feature = "otp_encrypt")]
 use itertools::Itertools;
-use std::{ops::Range, str::FromStr, sync::Arc, thread, time::Duration};
+use std::{
+    ops::{Deref, Range},
+    str::FromStr,
+    sync::Arc,
+    thread,
+    time::Duration,
+};
 use tokio::task::AbortHandle;
 
 pub(crate) const B_BITS: usize = 16;
@@ -345,6 +351,14 @@ impl Buffers {
 pub struct SendableRcComm(Arc<Comm>);
 
 unsafe impl Send for SendableRcComm {}
+
+impl Deref for SendableRcComm {
+    type Target = Arc<Comm>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 pub struct Circuits {
     peer_id:          usize,

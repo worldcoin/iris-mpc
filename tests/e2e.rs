@@ -1,16 +1,18 @@
 use eyre::Result;
 use gpu_iris_mpc::{
     config::ServersConfig,
-    helpers::device_manager::DeviceManager,
+    helpers::{device_manager::DeviceManager, task_monitor::TaskMonitor},
     server::{BatchQuery, ServerActor, ServerJobResult},
     setup::{
         galois_engine::degree4::GaloisRingIrisCodeShare,
         iris_db::{db::IrisDB, iris::IrisCode},
     },
+    store::sync::Syncer,
 };
+use itertools::Itertools;
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use std::{collections::HashMap, env, sync::Arc};
-use tokio::sync::oneshot;
+use tokio::{sync::oneshot, task::JoinSet};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
@@ -60,6 +62,28 @@ fn install_tracing() {
         .init();
 }
 
+async fn simulate_sync(syncers: &[Arc<Syncer>], sync_states: &[u64]) -> Result<()> {
+    /* TODO: find a way around Comm single-threadedness.
+    let sync_task = |i, syncer: Arc<Syncer>, state| {
+        move || {
+            let common_state = syncer.sync(state).unwrap();
+            (i, common_state)
+        }
+    };
+
+    let mut tasks = JoinSet::new();
+    for i in 0..3 {
+        tasks.spawn_blocking(sync_task(i, syncers[i].clone(), sync_states[i]));
+    }
+    let mut common_states = vec![0u64; 3];
+    while let Some(res) = tasks.join_next().await {
+        let (i, common_state) = res?;
+        common_states[i] = common_state;
+    }
+    */
+    Ok(())
+}
+
 #[tokio::test]
 async fn e2e_test() -> Result<()> {
     install_tracing();
@@ -77,6 +101,7 @@ async fn e2e_test() -> Result<()> {
         batch_masks_engine_port: 10004,
         phase_2_batch_port:      10005,
         phase_2_port:            10006,
+        sync_port:               10007,
         bootstrap_url:           None,
     };
     let config1 = ServersConfig {
@@ -103,6 +128,24 @@ async fn e2e_test() -> Result<()> {
     let device_manager2 = Arc::new(device_managers.pop().unwrap());
     let device_manager1 = Arc::new(device_managers.pop().unwrap());
     let device_manager0 = Arc::new(device_managers.pop().unwrap());
+
+    let syncers = (0..3)
+        .zip([&config0, &config1, &config2])
+        .zip([&device_manager0, &device_manager1, &device_manager2])
+        .map(|((party_id, config), device_manager)| {
+            Syncer::new(
+                party_id,
+                config.bootstrap_url.clone(),
+                config.sync_port,
+                device_manager.device(0),
+            )
+        })
+        .collect_vec();
+
+    let sync_state = db0.0.len() as u64;
+    for syncer in syncers.iter() {
+        syncer.sync(sync_state).unwrap();
+    }
 
     let actor0_task = tokio::task::spawn_blocking(move || {
         let actor = match ServerActor::new_with_device_manager(
