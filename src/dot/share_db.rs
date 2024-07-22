@@ -324,8 +324,8 @@ impl ShareDB {
                 } else {
                     let peer_url = peer_url.clone().unwrap();
                     std::thread::spawn(move || {
-                        println!("Waiting for master server to start...");
                         loop {
+                            println!("Waiting for master server to start...");
                             let res = reqwest::blocking::get(format!(
                                 "http://{}:{}/{}",
                                 peer_url,
