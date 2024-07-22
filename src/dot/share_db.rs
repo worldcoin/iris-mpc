@@ -324,14 +324,18 @@ impl ShareDB {
                 } else {
                     let peer_url = peer_url.clone().unwrap();
                     std::thread::spawn(move || {
-                        let res = reqwest::blocking::get(format!(
-                            "http://{}:{}/{}",
-                            peer_url,
-                            server_port.unwrap(),
-                            i
-                        ))
-                        .unwrap();
-                        IdWrapper::from_str(&res.text().unwrap()).unwrap().0
+                        loop {
+                            let res = reqwest::blocking::get(format!(
+                                "http://{}:{}/{}",
+                                peer_url,
+                                server_port.unwrap(),
+                                i
+                            ));
+                            if res.is_ok() {
+                                return IdWrapper::from_str(&res.unwrap().text().unwrap()).unwrap().0;
+                            }
+                            thread::sleep(Duration::from_secs(1));
+                        }
                     })
                     .join()
                     .unwrap()
