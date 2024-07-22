@@ -42,11 +42,11 @@ sha2 = "0.10"
 telemetry-batteries = { git = "https://github.com/worldcoin/telemetry-batteries.git", rev = "802a4f39f358e077b11c8429b4c65f3e45b85959" }
 thiserror = "1.0"
 time = { version = "^0.3.6", features = ["formatting", "macros"] }
-tokio = { version = "1.36", features = ["full", "rt-multi-thread"] }
+tokio = { version = "1.38", features = ["full", "rt-multi-thread"] }
 tracing-subscriber = { version = "0.3.15", features = ["env-filter"] }
 url = "2"
 uuid = { version = "1.10.0", features = ["v4"] }
-sqlx = { version = "0.7", features = ["runtime-tokio", "postgres"] }
+sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "postgres"] }
 tracing = "0.1.40"
 dotenvy = "0.15.7"
 static_assertions = "1.1.0"
@@ -79,28 +79,3 @@ panic = 'abort'
 
 [profile.dev]
 panic = 'abort'
-
-# Only binaries in src/bin/*.rs and src/bin/*/main.rs are detected automatically
-[[bin]]
-name = "bitinject_test"
-path = "src/bin/threshold_ring/bitinject_test.rs"
-
-[[bin]]
-name = "extract_msb_mod_test"
-path = "src/bin/threshold_ring/extract_msb_mod_test.rs"
-
-[[bin]]
-name = "lift_test"
-path = "src/bin/threshold_ring/lift_test.rs"
-
-[[bin]]
-name = "or_tree_test"
-path = "src/bin/threshold_ring/or_tree_test.rs"
-
-[[bin]]
-name = "threshold_and_or_tree_test"
-path = "src/bin/threshold_ring/threshold_and_or_tree_test.rs"
-
-[[bin]]
-name = "threshold_test"
-path = "src/bin/threshold_ring/threshold_test.rs"

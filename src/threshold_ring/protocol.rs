@@ -482,7 +482,7 @@ impl Circuits {
         }
 
         if peer_id != 0 {
-            thread::sleep(Duration::from_secs(5));
+            thread::sleep(Duration::from_secs(1));
         }
 
         for i in 0..n_devices {

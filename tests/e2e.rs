@@ -9,14 +9,15 @@ use gpu_iris_mpc::{
     },
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, env, sync::Arc};
 use tokio::sync::oneshot;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
 const DB_SIZE: usize = 8 * 1000;
 const RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 5;
-const BATCH_SIZE: usize = 32;
+const BATCH_SIZE: usize = 64;
 
 fn generate_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
     let mut rng = StdRng::seed_from_u64(RNG_SEED);
@@ -50,8 +51,21 @@ fn generate_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
     Ok((codes_db, masks_db))
 }
 
+fn install_tracing() {
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+}
+
 #[tokio::test]
 async fn e2e_test() -> Result<()> {
+    install_tracing();
+    env::set_var("NCCL_P2P_LEVEL", "LOC");
+    env::set_var("NCCL_NET", "Socket");
+
     let db0 = generate_db(0)?;
     let db1 = generate_db(1)?;
     let db2 = generate_db(2)?;
@@ -259,7 +273,7 @@ async fn e2e_test() -> Result<()> {
         // go over results and check if correct
         for res in [res0, res1, res2].iter() {
             let ServerJobResult {
-                thread_request_ids,
+                request_ids: thread_request_ids,
                 matches,
                 merged_results,
                 ..
