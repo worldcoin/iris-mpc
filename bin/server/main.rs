@@ -450,10 +450,10 @@ async fn main() -> eyre::Result<()> {
         batch_times += now.elapsed();
         background_tasks.check_tasks();
 
-        // let result_future = handle.submit_batch_query(batch).await;
+        let result_future = handle.submit_batch_query(batch).await;
 
         // await the result
-        // let result = result_future.await;
+        let result = result_future.await;
         // tx.send(result).await.unwrap();
         println!("CPU time of one iteration {:?}", now.elapsed());
 
