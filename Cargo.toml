@@ -79,7 +79,3 @@ panic = 'abort'
 
 [profile.dev]
 panic = 'abort'
-
-[[bin]]
-name = "server"
-path = "bin/server/main.rs"
