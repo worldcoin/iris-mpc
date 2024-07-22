@@ -9,6 +9,8 @@ concurrency:
 
 jobs:
   e2e:
+    container:
+      options: --shm-size=2gb
     runs-on: gpu
     steps:
       - name: Checkout code
@@ -18,7 +20,7 @@ jobs:
         run: nvidia-smi
 
       - name: Increase shared memory size
-        run: ls -al /run/nvidia/mps
+        run: df -h
 
 #
 #      - name: Install OpenSSL && pkg-config
