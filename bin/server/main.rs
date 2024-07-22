@@ -41,7 +41,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 250_000;
 const N_QUERIES: usize = 64;
-const N_BATCHES: usize = 100;
+const N_BATCHES: usize = 10;
 const RNG_SEED: u64 = 42;
 /// The number of batches before a stream is re-used.
 
