@@ -63,3 +63,4 @@ jobs:
           NCCL_DEBUG: info
           NCCL_P2P_LEVEL: LOC
           NCCL_NET: Socket
+          NCCL_P2P_DIRECT_DISABLE: 1
