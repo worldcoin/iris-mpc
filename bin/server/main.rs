@@ -148,33 +148,33 @@ async fn receive_batch(
 }
 
 fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
-    if let Some(service) = &config.service {
-        let tracing_shutdown_handle = DatadogBattery::init(
-            service.traces_endpoint.as_deref(),
-            &service.service_name,
-            None,
-            true,
-        );
+    // if let Some(service) = &config.service {
+    //     let tracing_shutdown_handle = DatadogBattery::init(
+    //         service.traces_endpoint.as_deref(),
+    //         &service.service_name,
+    //         None,
+    //         true,
+    //     );
 
-        if let Some(metrics_config) = &service.metrics {
-            StatsdBattery::init(
-                &metrics_config.host,
-                metrics_config.port,
-                metrics_config.queue_size,
-                metrics_config.buffer_size,
-                Some(&metrics_config.prefix),
-            )?;
-        }
+    //     if let Some(metrics_config) = &service.metrics {
+    //         StatsdBattery::init(
+    //             &metrics_config.host,
+    //             metrics_config.port,
+    //             metrics_config.queue_size,
+    //             metrics_config.buffer_size,
+    //             Some(&metrics_config.prefix),
+    //         )?;
+    //     }
 
-        Ok(tracing_shutdown_handle)
-    } else {
+    //     Ok(tracing_shutdown_handle)
+    // } else {
         tracing_subscriber::registry()
             .with(tracing_subscriber::fmt::layer().pretty().compact())
             .with(tracing_subscriber::EnvFilter::from_default_env())
             .init();
 
         Ok(TracingShutdownHandle)
-    }
+    // }
 }
 
 async fn initialize_chacha_seeds(
