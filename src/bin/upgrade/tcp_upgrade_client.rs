@@ -90,9 +90,11 @@ async fn main() -> eyre::Result<()> {
     let mut rng = ChaCha20Rng::from_entropy();
 
     let (db0, db1) = old_dbs();
-    let db = V1Database {
-        db: Db::new("sqlite://:memory:").await?,
-    };
+
+    // need this to maybe store the PG db or otherwise the borrow checker complains
+    #[allow(unused_assignments)]
+    let mut maybe_db = None;
+
     let (mut shares_stream, mut mask_stream): (
         Pin<Box<dyn Stream<Item = eyre::Result<(u64, EncodedBits)>>>>,
         Pin<Box<dyn Stream<Item = eyre::Result<(u64, Bits)>>>>,
@@ -109,9 +111,13 @@ async fn main() -> eyre::Result<()> {
             _ => unreachable!(),
         }
     } else {
+        maybe_db = Some(V1Database {
+            db: Db::new("sqlite://:memory:").await?,
+        });
+
         (
-            Box::pin(db.stream_shares(0..args.db_size)?),
-            Box::pin(db.stream_masks(0..args.db_size)?),
+            Box::pin(maybe_db.as_ref().unwrap().stream_shares(0..args.db_size)?),
+            Box::pin(maybe_db.as_ref().unwrap().stream_masks(0..args.db_size)?),
         )
     };
 
@@ -125,6 +131,8 @@ async fn main() -> eyre::Result<()> {
         )
         .expect("Could not create progress bar");
     pb.set_style(pb_style);
+
+    let mut cur = start;
 
     while let Some(share_res) = shares_stream.next().await {
         let (share_id, share) = share_res?;
@@ -222,8 +230,12 @@ async fn main() -> eyre::Result<()> {
             c?;
         }
         tracing::trace!("Finished id: {}", id);
+        let diff = share_id - cur;
+        cur = share_id;
+        pb.inc(diff + 1);
     }
     tracing::info!("Processing done!");
+    pb.finish();
 
     Ok(())
 }
@@ -308,15 +320,17 @@ impl OldIrisShareSource for MockOldDbParty1 {
         &self,
         share_id_range: std::ops::Range<u64>,
     ) -> eyre::Result<impl futures::Stream<Item = eyre::Result<(u64, EncodedBits)>>> {
+        let mut id = share_id_range.start;
         Ok(futures::stream::poll_fn(move |_| {
-            for id in share_id_range.clone() {
+            if id < share_id_range.end {
                 let mut rng = self.rng.clone();
                 rng.set_word_pos(id as u128 * 12800);
                 let mut res = [0u16; IRIS_CODE_LENGTH];
                 res.iter_mut().enumerate().for_each(|(i, x)| {
                     *x = rng.gen::<u16>().wrapping_add((1 - (i % 3)) as u16);
                 });
-                return futures::task::Poll::Ready(Some(Ok((id, EncodedBits(res)))));
+                id += 1;
+                return futures::task::Poll::Ready(Some(Ok((id - 1, EncodedBits(res)))));
             }
             futures::task::Poll::Ready(None)
         }))
@@ -326,15 +340,18 @@ impl OldIrisShareSource for MockOldDbParty1 {
         &self,
         share_id_range: std::ops::Range<u64>,
     ) -> eyre::Result<impl futures::Stream<Item = eyre::Result<(u64, Bits)>>> {
+        let mut id = share_id_range.start;
         Ok(futures::stream::poll_fn(move |_| {
-            for id in share_id_range.clone() {
-                let mut res = Bits::default();
-                (0..IRIS_CODE_LENGTH).for_each(|i| {
-                    res.set(i, (1 - (i % 3)) != 0);
-                });
-                return futures::task::Poll::Ready(Some(Ok((id, res))));
+            if id >= share_id_range.end {
+                return futures::task::Poll::Ready(None);
             }
-            futures::task::Poll::Ready(None)
+
+            let mut res = Bits::default();
+            (0..IRIS_CODE_LENGTH).for_each(|i| {
+                res.set(i, (1 - (i % 3)) != 0);
+            });
+            id += 1;
+            futures::task::Poll::Ready(Some(Ok((id - 1, res))))
         }))
     }
 }
@@ -362,15 +379,17 @@ impl OldIrisShareSource for MockOldDbParty2 {
         &self,
         share_id_range: std::ops::Range<u64>,
     ) -> eyre::Result<impl futures::Stream<Item = eyre::Result<(u64, EncodedBits)>>> {
+        let mut id = share_id_range.start;
         Ok(futures::stream::poll_fn(move |_| {
-            for id in share_id_range.clone() {
+            if id < share_id_range.end {
                 let mut rng = self.rng.clone();
                 rng.set_word_pos(id as u128 * 12800);
                 let mut res = [0u16; IRIS_CODE_LENGTH];
                 res.iter_mut().for_each(|x| {
                     *x = 0u16.wrapping_sub(rng.gen::<u16>());
                 });
-                return futures::task::Poll::Ready(Some(Ok((id, EncodedBits(res)))));
+                id += 1;
+                return futures::task::Poll::Ready(Some(Ok((id - 1, EncodedBits(res)))));
             }
             futures::task::Poll::Ready(None)
         }))
@@ -380,15 +399,18 @@ impl OldIrisShareSource for MockOldDbParty2 {
         &self,
         share_id_range: std::ops::Range<u64>,
     ) -> eyre::Result<impl futures::Stream<Item = eyre::Result<(u64, Bits)>>> {
+        let mut id = share_id_range.start;
         Ok(futures::stream::poll_fn(move |_| {
-            for id in share_id_range.clone() {
-                let mut res = Bits::default();
-                (0..IRIS_CODE_LENGTH).for_each(|i| {
-                    res.set(i, (1 - (i % 3)) != 0);
-                });
-                return futures::task::Poll::Ready(Some(Ok((id, res))));
+            if id >= share_id_range.end {
+                return futures::task::Poll::Ready(None);
             }
-            futures::task::Poll::Ready(None)
+
+            let mut res = Bits::default();
+            (0..IRIS_CODE_LENGTH).for_each(|i| {
+                res.set(i, (1 - (i % 3)) != 0);
+            });
+            id += 1;
+            futures::task::Poll::Ready(Some(Ok((id - 1, res))))
         }))
     }
 }
