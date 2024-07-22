@@ -6,9 +6,10 @@ use std::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum Eye {
-    Left,
-    Right,
+    Left  = 0,
+    Right = 1,
 }
 
 impl FromStr for Eye {

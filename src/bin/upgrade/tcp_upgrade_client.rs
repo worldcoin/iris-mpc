@@ -5,7 +5,8 @@ use futures_concurrency::future::Join;
 use gpu_iris_mpc::{
     setup::galois_engine::degree4::GaloisRingIrisCodeShare,
     upgrade::{
-        db::Db,
+        config::Eye,
+        db::V1Db,
         packets::{MaskShareMessage, TwoToThreeIrisCodeMessage},
         OldIrisShareSource,
     },
@@ -37,6 +38,9 @@ pub struct Args {
 
     #[clap(long)]
     pub party_id: u8,
+
+    #[clap(long)]
+    pub eye: Eye,
 
     #[clap(long, default_value = "false")]
     pub mock: bool,
@@ -71,6 +75,9 @@ async fn main() -> eyre::Result<()> {
     server1.write_u8(args.party_id).await?;
     server2.write_u8(args.party_id).await?;
     server3.write_u8(args.party_id).await?;
+    server1.write_u8(args.eye as u8).await?;
+    server2.write_u8(args.eye as u8).await?;
+    server3.write_u8(args.eye as u8).await?;
     let start = 0u64;
     let end = args.db_size;
     server1.write_u64(start).await?;
@@ -112,7 +119,7 @@ async fn main() -> eyre::Result<()> {
         }
     } else {
         maybe_db = Some(V1Database {
-            db: Db::new("sqlite://:memory:").await?,
+            db: V1Db::new("sqlite://:memory:").await?,
         });
 
         (
@@ -243,7 +250,7 @@ async fn main() -> eyre::Result<()> {
 // Real v1 databases
 
 struct V1Database {
-    db: Db,
+    db: V1Db,
 }
 
 impl OldIrisShareSource for V1Database {

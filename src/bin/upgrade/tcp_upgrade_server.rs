@@ -4,6 +4,7 @@ use futures_concurrency::future::Join;
 use gpu_iris_mpc::{
     setup::id::PartyID,
     upgrade::{
+        config::Eye,
         packets::{MaskShareMessage, TwoToThreeIrisCodeMessage},
         IrisCodeUpgrader, IrisShareTestFileSink,
     },
@@ -29,6 +30,9 @@ pub struct Args {
 
     #[clap(long, default_value = "8")]
     pub threads: usize,
+
+    #[clap(long)]
+    pub eye: Eye,
 }
 
 fn install_tracing() {
@@ -97,6 +101,18 @@ async fn main() -> eyre::Result<()> {
         bail!("Invalid client ids: {}, {}", id1, id2);
     };
 
+    let eye1 = client_stream1.read_u8().await?;
+    let eye2 = client_stream2.read_u8().await?;
+    if eye1 != args.eye as u8 || eye2 != args.eye as u8 {
+        bail!(
+            "Invalid eye: client1: {}, client2: {}, we want: {:?}={}",
+            eye1,
+            eye2,
+            args.eye,
+            args.eye as u8
+        );
+    }
+
     // exclusive ranges
     let start1 = client_stream1.read_u64().await?;
     let end1 = client_stream1.read_u64().await?;
@@ -115,10 +131,6 @@ async fn main() -> eyre::Result<()> {
     let num_elements = end1.checked_sub(start1).unwrap();
     tracing::info!("Doing a batch of {} elements", num_elements);
 
-    // wrap into framed
-    // let mut client_stream1 = Framed::new(client_stream1,
-    // BincodeCodec::<ClientMessages>::new()); let mut client_stream2 =
-    // Framed::new(client_stream2, BincodeCodec::<ClientMessages>::new());
     let mut sending = Duration::default();
     let mut receiving = Duration::default();
     for i in start1..end1 {

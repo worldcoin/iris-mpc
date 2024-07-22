@@ -2,11 +2,11 @@ use futures::Stream;
 use mpc_uniqueness_check::{bits::Bits, encoded_bits::EncodedBits};
 use sqlx::Postgres;
 
-pub struct Db {
+pub struct V1Db {
     pool: sqlx::Pool<Postgres>,
 }
 
-impl Db {
+impl V1Db {
     pub async fn new(url: &str) -> eyre::Result<Self> {
         tracing::info!("Connecting to database");
 
