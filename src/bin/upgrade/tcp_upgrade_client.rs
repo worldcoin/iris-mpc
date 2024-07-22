@@ -5,7 +5,7 @@ use futures_concurrency::future::Join;
 use gpu_iris_mpc::{
     setup::galois_engine::degree4::GaloisRingIrisCodeShare,
     upgrade::{
-        config::Eye,
+        config::UpgradeClientConfig,
         db::V1Db,
         packets::{MaskShareMessage, TwoToThreeIrisCodeMessage},
         OldIrisShareSource,
@@ -16,35 +16,11 @@ use indicatif::{ProgressBar, ProgressStyle};
 use mpc_uniqueness_check::{bits::Bits, distance::EncodedBits};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-use std::{array, net::SocketAddr, pin::Pin};
+use std::{array, pin::Pin};
 use tokio::{
     io::{AsyncWriteExt, BufWriter},
     net::TcpStream,
 };
-
-#[derive(Debug, Parser)]
-pub struct Args {
-    #[clap(long)]
-    pub server1: SocketAddr,
-
-    #[clap(long)]
-    pub server2: SocketAddr,
-
-    #[clap(long)]
-    pub server3: SocketAddr,
-
-    #[clap(long)]
-    pub db_size: u64,
-
-    #[clap(long)]
-    pub party_id: u8,
-
-    #[clap(long)]
-    pub eye: Eye,
-
-    #[clap(long, default_value = "false")]
-    pub mock: bool,
-}
 
 fn install_tracing() {
     use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -63,12 +39,13 @@ fn install_tracing() {
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     install_tracing();
-    let args = Args::parse();
+    let args = UpgradeClientConfig::parse();
 
     if args.party_id > 1 {
         panic!("Party id must be 0, 1");
     }
 
+    tracing::info!("Connecting to servers and syncing migration task parameters...");
     let mut server1 = BufWriter::new(TcpStream::connect(args.server1).await?);
     let mut server2 = BufWriter::new(TcpStream::connect(args.server2).await?);
     let mut server3 = BufWriter::new(TcpStream::connect(args.server3).await?);
@@ -78,8 +55,9 @@ async fn main() -> eyre::Result<()> {
     server1.write_u8(args.eye as u8).await?;
     server2.write_u8(args.eye as u8).await?;
     server3.write_u8(args.eye as u8).await?;
-    let start = 0u64;
-    let end = args.db_size;
+    let start = args.db_start;
+    let end = args.db_end;
+    let db_range = start..end;
     server1.write_u64(start).await?;
     server2.write_u64(start).await?;
     server3.write_u64(start).await?;
@@ -108,12 +86,12 @@ async fn main() -> eyre::Result<()> {
     ) = if args.mock {
         match args.party_id {
             0 => (
-                Box::pin(db0.stream_shares(0..args.db_size)?),
-                Box::pin(db0.stream_masks(0..args.db_size)?),
+                Box::pin(db0.stream_shares(db_range.clone())?),
+                Box::pin(db0.stream_masks(db_range)?),
             ),
             1 => (
-                Box::pin(db1.stream_shares(0..args.db_size)?),
-                Box::pin(db1.stream_masks(0..args.db_size)?),
+                Box::pin(db1.stream_shares(db_range.clone())?),
+                Box::pin(db1.stream_masks(db_range)?),
             ),
             _ => unreachable!(),
         }
@@ -123,8 +101,8 @@ async fn main() -> eyre::Result<()> {
         });
 
         (
-            Box::pin(maybe_db.as_ref().unwrap().stream_shares(0..args.db_size)?),
-            Box::pin(maybe_db.as_ref().unwrap().stream_masks(0..args.db_size)?),
+            Box::pin(maybe_db.as_ref().unwrap().stream_shares(db_range.clone())?),
+            Box::pin(maybe_db.as_ref().unwrap().stream_masks(db_range)?),
         )
     };
 

@@ -4,13 +4,12 @@ use futures_concurrency::future::Join;
 use gpu_iris_mpc::{
     setup::id::PartyID,
     upgrade::{
-        config::Eye,
+        config::UpgradeServerConfig,
         packets::{MaskShareMessage, TwoToThreeIrisCodeMessage},
         IrisCodeUpgrader, IrisShareTestFileSink,
     },
 };
 use std::{
-    net::SocketAddr,
     sync::{atomic::AtomicUsize, Arc},
     time::{Duration, Instant},
 };
@@ -19,21 +18,6 @@ use tokio::{
     sync::mpsc,
     task::JoinSet,
 };
-
-#[derive(Debug, Parser)]
-pub struct Args {
-    #[clap(long)]
-    pub bind_addr: SocketAddr,
-
-    #[clap(long)]
-    pub party_id: PartyID,
-
-    #[clap(long, default_value = "8")]
-    pub threads: usize,
-
-    #[clap(long)]
-    pub eye: Eye,
-}
 
 fn install_tracing() {
     use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -58,7 +42,7 @@ struct UpgradeTask {
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     install_tracing();
-    let args = Args::parse();
+    let args = UpgradeServerConfig::parse();
 
     println!("Client bind address: {}", args.bind_addr);
 

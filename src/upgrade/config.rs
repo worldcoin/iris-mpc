@@ -1,7 +1,8 @@
 use crate::setup::id::PartyID;
+use clap::Parser;
 use std::{
     fmt::{self, Formatter},
-    os::unix::net::SocketAddr,
+    net::SocketAddr,
     str::FromStr,
 };
 
@@ -24,44 +25,75 @@ impl FromStr for Eye {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Parser)]
 pub struct UpgradeServerConfig {
-    pub eye:       Eye,
+    #[clap(long)]
     pub bind_addr: SocketAddr,
-    pub db_url:    String,
-    pub party_id:  PartyID,
+
+    #[clap(long)]
+    pub db_url: String,
+
+    #[clap(long)]
+    pub party_id: PartyID,
+
+    #[clap(long, default_value = "8")]
+    pub threads: usize,
+
+    #[clap(long)]
+    pub eye: Eye,
 }
 
 impl std::fmt::Debug for UpgradeServerConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("UpgradeServerConfig")
-            .field("eye", &self.eye)
             .field("bind_addr", &self.bind_addr)
             .field("db_url", &"<redacted>")
             .field("party_id", &self.party_id)
+            .field("threads", &self.threads)
+            .field("eye", &self.eye)
             .finish()
     }
 }
 
-#[derive(Clone)]
+#[derive(Parser)]
 pub struct UpgradeClientConfig {
-    pub eye:      Eye,
-    pub servers:  [SocketAddr; 3],
-    pub db_url:   String,
-    pub party_id: PartyID,
-    pub start_id: u64,
-    pub end_id:   u64,
+    #[clap(long)]
+    pub server1: SocketAddr,
+
+    #[clap(long)]
+    pub server2: SocketAddr,
+
+    #[clap(long)]
+    pub server3: SocketAddr,
+
+    #[clap(long)]
+    pub db_start: u64,
+
+    #[clap(long)]
+    pub db_end: u64,
+
+    #[clap(long)]
+    pub party_id: u8,
+
+    #[clap(long)]
+    pub eye: Eye,
+
+    #[clap(long, default_value = "false")]
+    pub mock: bool,
 }
 
 impl std::fmt::Debug for UpgradeClientConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("UpgradeClientConfig")
-            .field("eye", &self.eye)
-            .field("servers", &self.servers)
+            .field("server1", &self.server1)
+            .field("server2", &self.server2)
+            .field("server3", &self.server3)
             .field("db_url", &"<redacted>")
+            .field("db_start", &self.db_start)
+            .field("db_end", &self.db_end)
             .field("party_id", &self.party_id)
-            .field("start_id", &self.start_id)
-            .field("end_id", &self.end_id)
+            .field("eye", &self.eye)
+            .field("mock", &self.mock)
             .finish()
     }
 }
