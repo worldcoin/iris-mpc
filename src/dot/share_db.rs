@@ -315,7 +315,7 @@ impl ShareDB {
                     Ok(())
                 }));
             } else {
-                thread::sleep(Duration::from_secs(10));
+                thread::sleep(Duration::from_secs(1));
             }
 
             for i in 0..n_devices {
