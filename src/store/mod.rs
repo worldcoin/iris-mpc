@@ -179,6 +179,7 @@ mod tests {
 
         assert_eq!(got.len(), 3);
         for i in 0..3 {
+            assert_eq!(got[i].id, i as i64);
             assert_eq!(got[i].left_code(), codes_and_masks[i].left_code);
             assert_eq!(got[i].left_mask(), codes_and_masks[i].left_mask);
             assert_eq!(got[i].right_code(), codes_and_masks[i].right_code);
@@ -208,7 +209,7 @@ mod tests {
 
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), count);
-        assert_sorted_by_id(&got);
+        assert_contiguous_id(&got);
 
         cleanup(&store, &schema_name).await?;
         Ok(())
@@ -226,10 +227,10 @@ mod tests {
         format!("smpc_test{}_0", rand::random::<u32>())
     }
 
-    fn assert_sorted_by_id(vec: &[StoredIris]) {
+    fn assert_contiguous_id(vec: &[StoredIris]) {
         assert!(
-            vec.windows(2).all(|w| w[0].id <= w[1].id),
-            "Vector is not sorted by id"
+            vec.iter().enumerate().all(|(i, row)| row.id == i as i64),
+            "IDs must be contiguous and in order"
         );
     }
 
