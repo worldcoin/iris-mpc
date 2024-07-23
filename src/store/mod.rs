@@ -127,7 +127,7 @@ fn sanitize_identifier(input: &str) -> Result<()> {
 }
 
 fn cast_u8_to_u16(s: &[u8]) -> &[u16] {
-    if s.len() == 0 {
+    if s.is_empty() {
         &[] // A literal empty &[u8] may be unaligned.
     } else {
         cast_slice(s)
