@@ -190,7 +190,7 @@ async fn e2e_test() -> Result<()> {
             let request_id = Uuid::new_v4();
             // Automatic random tests
             let options = if responses.is_empty() { 2 } else { 3 };
-            let template = match 1 { //match choice_rng.gen_range(0..options) {
+            let template = match 0 { //match choice_rng.gen_range(0..options) {
                 0 => {
                     println!("Sending new iris code");
                     expected_results.insert(request_id.to_string(), None);
