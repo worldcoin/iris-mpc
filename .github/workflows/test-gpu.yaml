@@ -121,11 +121,11 @@ jobs:
         run: cargo test --release e2e --no-run
 
       - name: Build e2e test and grab executable name
-        run: echo TEST_NAME=$(cargo test --release e2e --no-run 2>&1 | grep "Executable tests/e2e.rs" | sed "s/.*(\(.*\))/\1/") >> $GITHUB_OUTPUT
+        run: echo TEST_NAME=$(cargo --color=never test --release e2e --no-run 2>&1 | grep "Executable tests/e2e.rs" | sed "s/.*(\(.*\))/\1/") >> $GITHUB_OUTPUT
         id: build-e2e
 
       - name: E2E Tests w/ compute-sanitizer
-        run: compute-sanitizer --tool=memcheck ${{ steps.build-e2e.outputs.TEST_NAME }} --nocapture
+        run: /usr/local/cuda-12.2/bin/compute-sanitizer --tool=memcheck ${{ steps.build-e2e.outputs.TEST_NAME }} --nocapture
         env:
           NCCL_DEBUG: info
           NCCL_P2P_LEVEL: LOC
