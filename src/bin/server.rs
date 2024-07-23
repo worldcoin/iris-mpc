@@ -20,7 +20,7 @@ use gpu_iris_mpc::{
     },
     server::{BatchMetadata, BatchQuery, ServerActor, ServerJobResult},
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
-    store::Store,
+    store::{Store, StoredIrisRef},
 };
 use rand::{rngs::StdRng, SeedableRng};
 use std::time::{Duration, Instant};
@@ -235,8 +235,8 @@ async fn initialize_iris_dbs(party_id: usize, store: &Store) -> eyre::Result<(Ve
     // Load DB from persistent storage.
     while let Some(iris) = store.stream_irises().await.next().await {
         let iris = iris?;
-        codes_db.extend(iris.code());
-        masks_db.extend(iris.mask());
+        codes_db.extend(iris.left_code());
+        masks_db.extend(iris.left_mask());
     }
 
     Ok((codes_db, masks_db))
@@ -308,7 +308,7 @@ async fn main() -> eyre::Result<()> {
             for (i, &idx_result) in merged_results.iter().enumerate() {
                 // Insert non-matching queries into the persistent store.
                 {
-                    let codes_and_masks: Vec<(&[u16], &[u16])> = matches
+                    let codes_and_masks: Vec<StoredIrisRef> = matches
                         .iter()
                         .enumerate()
                         .filter_map(
@@ -319,7 +319,13 @@ async fn main() -> eyre::Result<()> {
                             // Get the original vectors from `receive_batch`.
                             let code = &query_store.code[query_idx].coefs[..];
                             let mask = &query_store.mask[query_idx].coefs[..];
-                            (code, mask)
+                            StoredIrisRef {
+                                left_code:  code,
+                                left_mask:  mask,
+                                // TODO: second eye.
+                                right_code: &[],
+                                right_mask: &[],
+                            }
                         })
                         .collect();
 
