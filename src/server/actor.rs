@@ -699,34 +699,34 @@ impl ServerActor {
                             self.streams[0][i].stream,
                         );
 
-                        helpers::dtod_at_offset(
-                            *db.code_gr.limb_1[i].device_ptr(),
-                            current_db_sizes[i] * IRIS_CODE_LENGTH,
-                            *query.limb_1[i].device_ptr(),
-                            IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                            IRIS_CODE_LENGTH,
-                            self.streams[0][i].stream,
-                        );
+                        // helpers::dtod_at_offset(
+                        //     *db.code_gr.limb_1[i].device_ptr(),
+                        //     current_db_sizes[i] * IRIS_CODE_LENGTH,
+                        //     *query.limb_1[i].device_ptr(),
+                        //     IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                        //     IRIS_CODE_LENGTH,
+                        //     self.streams[0][i].stream,
+                        // );
 
-                        helpers::dtod_at_offset(
-                            *db.code_sums_gr.limb_0[i].device_ptr(),
-                            current_db_sizes[i] * mem::size_of::<u32>(),
-                            *sums.limb_0[i].device_ptr(),
-                            mem::size_of::<u32>() * 15
-                                + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                            mem::size_of::<u32>(),
-                            self.streams[0][i].stream,
-                        );
+                        // helpers::dtod_at_offset(
+                        //     *db.code_sums_gr.limb_0[i].device_ptr(),
+                        //     current_db_sizes[i] * mem::size_of::<u32>(),
+                        //     *sums.limb_0[i].device_ptr(),
+                        //     mem::size_of::<u32>() * 15
+                        //         + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                        //     mem::size_of::<u32>(),
+                        //     self.streams[0][i].stream,
+                        // );
 
-                        helpers::dtod_at_offset(
-                            *db.code_sums_gr.limb_1[i].device_ptr(),
-                            current_db_sizes[i] * mem::size_of::<u32>(),
-                            *sums.limb_1[i].device_ptr(),
-                            mem::size_of::<u32>() * 15
-                                + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                            mem::size_of::<u32>(),
-                            self.streams[0][i].stream,
-                        );
+                        // helpers::dtod_at_offset(
+                        //     *db.code_sums_gr.limb_1[i].device_ptr(),
+                        //     current_db_sizes[i] * mem::size_of::<u32>(),
+                        //     *sums.limb_1[i].device_ptr(),
+                        //     mem::size_of::<u32>() * 15
+                        //         + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                        //     mem::size_of::<u32>(),
+                        //     self.streams[0][i].stream,
+                        // );
                     }
                 }
                 current_db_sizes[i] += 1;
