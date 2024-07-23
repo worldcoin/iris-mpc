@@ -3,10 +3,11 @@ use eyre::bail;
 use futures_concurrency::future::Join;
 use gpu_iris_mpc::{
     setup::id::PartyID,
+    store::Store,
     upgrade::{
-        config::UpgradeServerConfig,
+        config::{Eye, UpgradeServerConfig},
         packets::{MaskShareMessage, TwoToThreeIrisCodeMessage},
-        IrisCodeUpgrader, IrisShareTestFileSink,
+        IrisCodeUpgrader, NewIrisShareSink,
     },
 };
 use std::{
@@ -50,13 +51,16 @@ async fn main() -> eyre::Result<()> {
     let finished_counter = Arc::new(AtomicUsize::new(0));
     let mut senders = Vec::with_capacity(args.threads);
 
+    let sink = IrisShareDbSink::new(Store::new(&args.db_url, "upgrade").await?, args.eye);
+
     for _ in 0..args.threads {
         let (sender, receiver) = mpsc::channel(32);
         let finished_counter = Arc::clone(&finished_counter);
 
+        let sink = sink.clone();
         senders.push(sender);
         processing_tasks.spawn(async move {
-            match main_task_loop(args.party_id, receiver, finished_counter).await {
+            match main_task_loop(args.party_id, receiver, finished_counter, sink).await {
                 Ok(_) => Ok(()),
                 Err(e) => {
                     tracing::error!("Error in processing task: {:?}", e);
@@ -168,15 +172,17 @@ async fn main() -> eyre::Result<()> {
         sending += start.elapsed();
     }
 
-    tracing::info!("Receiving took: {}s", receiving.as_secs_f64());
-    tracing::info!("Sending took: {}s", sending.as_secs_f64());
+    tracing::debug!("Receiving took: {}s", receiving.as_secs_f64());
+    tracing::debug!("Sending took: {}s", sending.as_secs_f64());
     // close all senders
     drop(senders);
 
+    tracing::info!("Waiting for remaining tasks to finish...");
     // wait for all tasks should be done, cleanup
     while let Some(r) = processing_tasks.join_next().await {
         r??;
     }
+    tracing::info!("All tasks finished");
 
     Ok(())
 }
@@ -185,8 +191,8 @@ async fn main_task_loop(
     party_id: PartyID,
     mut receiver: mpsc::Receiver<UpgradeTask>,
     finished_counter: Arc<AtomicUsize>,
+    sink: IrisShareDbSink,
 ) -> eyre::Result<()> {
-    let sink = IrisShareTestFileSink::new(format!("./out{}", party_id as u8).into())?;
     let upgrader = IrisCodeUpgrader::new(party_id, sink);
     loop {
         let UpgradeTask { msg1, msg2, masks } = match receiver.recv().await {
@@ -197,4 +203,39 @@ async fn main_task_loop(
         finished_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
     Ok(())
+}
+
+#[derive(Clone)]
+struct IrisShareDbSink {
+    store: Store,
+    eye:   Eye,
+}
+
+impl IrisShareDbSink {
+    pub fn new(store: Store, eye: Eye) -> Self {
+        Self { store, eye }
+    }
+}
+
+impl NewIrisShareSink for IrisShareDbSink {
+    async fn store_code_mask_share(
+        &self,
+        share_id: u64,
+        code_share: &[u16; gpu_iris_mpc::IRIS_CODE_LENGTH],
+        mask_share: &[u16; gpu_iris_mpc::IRIS_CODE_LENGTH],
+    ) -> eyre::Result<()> {
+        let id = i64::try_from(share_id).expect("id fits into i64");
+        match self.eye {
+            Eye::Left => {
+                self.store
+                    .insert_or_update_left_iris(id, code_share, mask_share)
+                    .await
+            }
+            Eye::Right => {
+                self.store
+                    .insert_or_update_right_iris(id, code_share, mask_share)
+                    .await
+            }
+        }
+    }
 }

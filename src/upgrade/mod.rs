@@ -35,16 +35,12 @@ pub trait OldIrisShareSource {
 
 #[allow(async_fn_in_trait)]
 pub trait NewIrisShareSink {
-    async fn store_code_share(
+    async fn store_code_mask_share(
         &self,
         share_id: u64,
-        share: &[u16; IRIS_CODE_LENGTH],
-    ) -> std::io::Result<()>;
-    async fn store_mask_share(
-        &self,
-        share_id: u64,
-        share: &[u16; IRIS_CODE_LENGTH],
-    ) -> std::io::Result<()>;
+        code_share: &[u16; IRIS_CODE_LENGTH],
+        mask_share: &[u16; IRIS_CODE_LENGTH],
+    ) -> eyre::Result<()>;
 }
 
 #[derive(Debug, Clone)]
@@ -62,32 +58,27 @@ impl IrisShareTestFileSink {
 }
 
 impl NewIrisShareSink for IrisShareTestFileSink {
-    async fn store_code_share(
+    async fn store_code_mask_share(
         &self,
         share_id: u64,
-        share: &[u16; IRIS_CODE_LENGTH],
-    ) -> std::io::Result<()> {
+        code_share: &[u16; IRIS_CODE_LENGTH],
+        mask_share: &[u16; IRIS_CODE_LENGTH],
+    ) -> eyre::Result<()> {
         let mut file = BufWriter::new(File::create(
             self.path.join(format!("code_share_{}", share_id)),
         )?);
-        for s in share {
+        for s in code_share {
             writeln!(file, "{}", s)?;
         }
-        file.flush()
-    }
-
-    async fn store_mask_share(
-        &self,
-        share_id: u64,
-        share: &[u16; IRIS_CODE_LENGTH],
-    ) -> std::io::Result<()> {
+        file.flush()?;
         let mut file = BufWriter::new(File::create(
             self.path.join(format!("mask_share_{}", share_id)),
         )?);
-        for s in share {
+        for s in mask_share {
             writeln!(file, "{}", s)?;
         }
-        file.flush()
+        file.flush()?;
+        Ok(())
     }
 }
 
@@ -144,8 +135,9 @@ impl<S: NewIrisShareSink> IrisCodeUpgrader<S> {
             *a = a.wrapping_add(*b);
         }
 
-        self.iris_sink.store_code_share(id, &result).await?;
-        self.iris_sink.store_mask_share(id, &mask).await?;
+        self.iris_sink
+            .store_code_mask_share(id, &result, &mask)
+            .await?;
         Ok(())
     }
 }

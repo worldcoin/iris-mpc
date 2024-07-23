@@ -56,6 +56,7 @@ pub struct StoredIrisRef<'a> {
     pub right_mask: &'a [u16],
 }
 
+#[derive(Clone)]
 pub struct Store {
     pool: PgPool,
 }
