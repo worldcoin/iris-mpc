@@ -3,6 +3,7 @@ pub mod json_wrapper;
 use crate::config::json_wrapper::JsonStrWrapper;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 #[derive(Debug, Parser)]
 pub struct Opt {
@@ -17,9 +18,6 @@ pub struct Opt {
 
     #[structopt(long)]
     bootstrap_url: Option<String>,
-
-    #[structopt(long)]
-    path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,10 +35,7 @@ pub struct Config {
     pub results_topic_arn: String,
 
     #[serde(default)]
-    pub path: String,
-
-    #[serde(default)]
-    pub kms_key_ids: JsonStrWrapper<Vec<String>>,
+    pub kms_key_arns: JsonStrWrapper<Vec<String>>,
 
     #[serde(default)]
     pub servers: ServersConfig,
@@ -90,14 +85,10 @@ impl Config {
         if let Some(bootstrap_url) = opts.bootstrap_url {
             self.servers.bootstrap_url = Some(bootstrap_url);
         }
-
-        if let Some(path) = opts.path {
-            self.path = path;
-        }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct DbConfig {
     pub url: String,
 
@@ -106,6 +97,16 @@ pub struct DbConfig {
 
     #[serde(default)]
     pub create: bool,
+}
+
+impl fmt::Debug for DbConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DbConfig")
+            .field("url", &"********") // Mask the URL
+            .field("migrate", &self.migrate)
+            .field("create", &self.create)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

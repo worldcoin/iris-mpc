@@ -7,7 +7,7 @@ use clap::Parser;
 use eyre::Context;
 use futures::StreamExt;
 use gpu_iris_mpc::{
-    config::{Config, Opt},
+    config::{json_wrapper::JsonStrWrapper, Config, Opt},
     dot::ROTATIONS,
     helpers::{
         aws::{
@@ -15,19 +15,15 @@ use gpu_iris_mpc::{
             TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
         },
         kms_dh::derive_shared_secret,
-        mmap::{read_mmap_file, write_mmap_file},
         sqs::{ResultEvent, SMPCRequest, SQSMessage},
         task_monitor::TaskMonitor,
     },
     server::{BatchMetadata, BatchQuery, ServerActor, ServerJobResult},
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
-    store::Store,
+    store::{Store, StoredIrisRef},
 };
 use rand::{rngs::StdRng, SeedableRng};
-use std::{
-    fs::metadata,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 use telemetry_batteries::{
     metrics::statsd::StatsdBattery,
     tracing::{datadog::DatadogBattery, TracingShutdownHandle},
@@ -45,8 +41,6 @@ const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
 /// The number of batches before a stream is re-used.
 
-const DB_CODE_FILE: &str = "codes.db";
-const DB_MASK_FILE: &str = "masks.db";
 const QUERIES: usize = ROTATIONS * N_QUERIES;
 
 async fn receive_batch(
@@ -87,6 +81,9 @@ async fn receive_batch(
                 }
 
                 batch_query.request_ids.push(message.clone().request_id);
+                batch_query
+                    .sqs_receipt_handles
+                    .push(sqs_message.receipt_handle.unwrap());
                 batch_query.metadata.push(batch_metadata);
 
                 let (
@@ -131,14 +128,6 @@ async fn receive_batch(
                 batch_query.db.mask.extend(db_mask_shares);
                 batch_query.query.code.extend(iris_shares);
                 batch_query.query.mask.extend(mask_shares);
-
-                // TODO: we should only delete after processing
-                client
-                    .delete_message()
-                    .queue_url(queue_url)
-                    .receipt_handle(sqs_message.receipt_handle.unwrap())
-                    .send()
-                    .await?;
             }
         }
     }
@@ -146,13 +135,8 @@ async fn receive_batch(
     Ok(batch_query)
 }
 
-#[tokio::main]
-async fn main() -> eyre::Result<()> {
-    dotenvy::dotenv().ok();
-    let mut config: Config = Config::load_config("SMPC").unwrap();
-    config.overwrite_defaults_with_cli_args(Opt::parse());
-
-    let _tracing_shutdown_handle = if let Some(service) = &config.service {
+fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
+    if let Some(service) = &config.service {
         let tracing_shutdown_handle = DatadogBattery::init(
             service.traces_endpoint.as_deref(),
             &service.service_name,
@@ -170,40 +154,26 @@ async fn main() -> eyre::Result<()> {
             )?;
         }
 
-        tracing_shutdown_handle
+        Ok(tracing_shutdown_handle)
     } else {
         tracing_subscriber::registry()
             .with(tracing_subscriber::fmt::layer().pretty().compact())
             .with(tracing_subscriber::EnvFilter::from_default_env())
             .init();
 
-        TracingShutdownHandle
-    };
+        Ok(TracingShutdownHandle)
+    }
+}
 
-    let store = Store::new_from_config(&config).await?;
-
-    let Config {
-        path,
-        party_id,
-        results_topic_arn,
-        requests_queue_url,
-        kms_key_ids,
-        ..
-    } = config.clone();
-
-    let code_db_path = format!("{}/{}", path, DB_CODE_FILE);
-    let mask_db_path = format!("{}/{}", path, DB_MASK_FILE);
-
-    let region_provider = Region::new(REGION);
-    let shared_config = aws_config::from_env().region(region_provider).load().await;
-    let sqs_client = Client::new(&shared_config);
-    let sns_client = SNSClient::new(&shared_config);
-
+async fn initialize_chacha_seeds(
+    kms_key_arns: JsonStrWrapper<Vec<String>>,
+    party_id: usize,
+) -> eyre::Result<([u32; 8], [u32; 8])> {
     // Init RNGs
-    let own_key_id = kms_key_ids
+    let own_key_arn = kms_key_arns
         .0
         .get(party_id)
-        .expect("Expected value not found in kms_key_ids");
+        .expect("Expected value not found in kms_key_arns");
     let dh_pairs = match party_id {
         0 => (1usize, 2usize),
         1 => (2usize, 0usize),
@@ -211,67 +181,85 @@ async fn main() -> eyre::Result<()> {
         _ => unimplemented!(),
     };
 
-    let dh_pair_0: &str = kms_key_ids
+    let dh_pair_0: &str = kms_key_arns
         .0
         .get(dh_pairs.0)
-        .expect("Expected value not found in kms_key_ids");
-    let dh_pair_1: &str = kms_key_ids
+        .expect("Expected value not found in kms_key_arns");
+    let dh_pair_1: &str = kms_key_arns
         .0
         .get(dh_pairs.1)
-        .expect("Expected value not found in kms_key_ids");
+        .expect("Expected value not found in kms_key_arns");
 
     let chacha_seeds = (
-        bytemuck::cast(derive_shared_secret(own_key_id, dh_pair_0).await?),
-        bytemuck::cast(derive_shared_secret(own_key_id, dh_pair_1).await?),
+        bytemuck::cast(derive_shared_secret(own_key_arn, dh_pair_0).await?),
+        bytemuck::cast(derive_shared_secret(own_key_arn, dh_pair_1).await?),
     );
 
+    Ok(chacha_seeds)
+}
+
+async fn initialize_iris_dbs(party_id: usize, store: &Store) -> eyre::Result<(Vec<u16>, Vec<u16>)> {
     // Generate or load DB
-    let (mut codes_db, mut masks_db) =
-        if metadata(&code_db_path).is_ok() && metadata(&mask_db_path).is_ok() {
-            (
-                read_mmap_file(&code_db_path)?,
-                read_mmap_file(&mask_db_path)?,
-            )
-        } else {
-            let mut rng = StdRng::seed_from_u64(RNG_SEED);
-            let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
+    let (mut codes_db, mut masks_db) = {
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+        let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
-            let codes_db = db
-                .db
-                .iter()
-                .flat_map(|iris| {
-                    GaloisRingIrisCodeShare::encode_iris_code(
-                        &iris.code,
-                        &iris.mask,
-                        &mut StdRng::seed_from_u64(RNG_SEED),
-                    )[party_id]
-                        .coefs
-                })
-                .collect::<Vec<_>>();
+        let codes_db = db
+            .db
+            .iter()
+            .flat_map(|iris| {
+                GaloisRingIrisCodeShare::encode_iris_code(
+                    &iris.code,
+                    &iris.mask,
+                    &mut StdRng::seed_from_u64(RNG_SEED),
+                )[party_id]
+                    .coefs
+            })
+            .collect::<Vec<_>>();
 
-            let masks_db = db
-                .db
-                .iter()
-                .flat_map(|iris| {
-                    GaloisRingIrisCodeShare::encode_mask_code(
-                        &iris.mask,
-                        &mut StdRng::seed_from_u64(RNG_SEED),
-                    )[party_id]
-                        .coefs
-                })
-                .collect::<Vec<_>>();
+        let masks_db = db
+            .db
+            .iter()
+            .flat_map(|iris| {
+                GaloisRingIrisCodeShare::encode_mask_code(
+                    &iris.mask,
+                    &mut StdRng::seed_from_u64(RNG_SEED),
+                )[party_id]
+                    .coefs
+            })
+            .collect::<Vec<_>>();
 
-            write_mmap_file(&code_db_path, &codes_db)?;
-            write_mmap_file(&mask_db_path, &masks_db)?;
-            (codes_db, masks_db)
-        };
+        (codes_db, masks_db)
+    };
 
     // Load DB from persistent storage.
     while let Some(iris) = store.stream_irises().await.next().await {
         let iris = iris?;
-        codes_db.extend(iris.code());
-        masks_db.extend(iris.mask());
+        codes_db.extend(iris.left_code());
+        masks_db.extend(iris.left_mask());
     }
+
+    Ok((codes_db, masks_db))
+}
+#[tokio::main]
+async fn main() -> eyre::Result<()> {
+    dotenvy::dotenv().ok();
+    let mut config: Config = Config::load_config("SMPC").unwrap();
+    config.overwrite_defaults_with_cli_args(Opt::parse());
+
+    let _tracing_shutdown_handle = initialize_tracing(&config)?;
+    let store = Store::new_from_config(&config).await?;
+
+    // TODO: probably move into separate function
+    let region_provider = Region::new(REGION);
+    let shared_config = aws_config::from_env().region(region_provider).load().await;
+    let sqs_client = Client::new(&shared_config);
+    let sns_client = SNSClient::new(&shared_config);
+
+    let party_id = config.party_id;
+    let chacha_seeds = initialize_chacha_seeds(config.kms_key_arns, party_id).await?;
+
+    let (codes_db, masks_db) = initialize_iris_dbs(party_id, &store).await?;
 
     let mut background_tasks = TaskMonitor::new();
     // a bit convoluted, but we need to create the actor on the thread already,
@@ -305,11 +293,14 @@ async fn main() -> eyre::Result<()> {
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
     let rx_sns_client = sns_client.clone();
+    let sqs_client_bg = sqs_client.clone();
+    let queue_url_bg = config.requests_queue_url.clone();
 
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
             merged_results,
-            thread_request_ids: request_ids,
+            request_ids,
+            sqs_receipt_handles,
             matches,
             store: query_store,
         }) = rx.recv().await
@@ -317,7 +308,7 @@ async fn main() -> eyre::Result<()> {
             for (i, &idx_result) in merged_results.iter().enumerate() {
                 // Insert non-matching queries into the persistent store.
                 {
-                    let codes_and_masks: Vec<(&[u16], &[u16])> = matches
+                    let codes_and_masks: Vec<StoredIrisRef> = matches
                         .iter()
                         .enumerate()
                         .filter_map(
@@ -328,7 +319,13 @@ async fn main() -> eyre::Result<()> {
                             // Get the original vectors from `receive_batch`.
                             let code = &query_store.code[query_idx].coefs[..];
                             let mask = &query_store.mask[query_idx].coefs[..];
-                            (code, mask)
+                            StoredIrisRef {
+                                left_code:  code,
+                                left_mask:  mask,
+                                // TODO: second eye.
+                                right_code: &[],
+                                right_mask: &[],
+                            }
                         })
                         .collect();
 
@@ -345,10 +342,20 @@ async fn main() -> eyre::Result<()> {
 
                 rx_sns_client
                     .publish()
-                    .topic_arn(&results_topic_arn)
+                    .topic_arn(&config.results_topic_arn)
                     .message(serde_json::to_string(&result_event).unwrap())
                     .send()
                     .await?;
+
+                // Tell SQS that we are done with these requests.
+                for sqs_receipt_handle in sqs_receipt_handles.iter() {
+                    sqs_client_bg
+                        .delete_message()
+                        .queue_url(&queue_url_bg)
+                        .receipt_handle(sqs_receipt_handle)
+                        .send()
+                        .await?;
+                }
             }
         }
 
@@ -399,7 +406,7 @@ async fn main() -> eyre::Result<()> {
 
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
-        let batch = receive_batch(party_id, &sqs_client, &requests_queue_url).await?;
+        let batch = receive_batch(party_id, &sqs_client, &config.requests_queue_url).await?;
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id and

@@ -1,0 +1,68 @@
+persistentStorage:
+  enabled: true
+  size: 10Gi
+  volumeID: aws://eu-north-1c/vol-03227d9fc2aac0773
+
+env:
+  - name: SMPC__ENVIRONMENT
+    value: "stage"
+
+  - name: SMPC__SERVICE__SERVICE_NAME
+    value: "smpcv2-server"
+
+  - name: SMPC__DATABASE__URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_URL
+        name: application
+
+  - name: SMPC__DATABASE__MIGRATE
+    value: "true"
+
+  - name: SMPC__DATABASE__CREATE
+    value: "true"
+
+  - name: SMPC__AWS__REGION
+    value: "eu-north-1"
+
+  - name: SMPC__SERVERS__CODES_ENGINE_PORT
+    value: "4000"
+
+  - name: SMPC__SERVERS__MASKS_ENGINE_PORT
+    value: "4001"
+
+  - name: SMPC__SERVERS__BATCH_CODES_ENGINE_PORT
+    value: "4002"
+
+  - name: SMPC__SERVERS__BATCH_MASKS_ENGINE_PORT
+    value: "4003"
+
+  - name: SMPC__SERVERS__PHASE_2_BATCH_PORT
+    value: "4004"
+
+  - name: SMPC__SERVERS__PHASE_2_PORT
+    value: "4005"
+
+  - name: SMPC__REQUESTS_QUEUE_URL
+    valueFrom:
+      secretKeyRef:
+        key: SQS_URL
+        name: application
+
+  - name: SMPC__RESULTS_TOPIC_ARN
+    valueFrom:
+      secretKeyRef:
+        key: SNS_RESULTS_ARN
+        name: application
+
+  - name: SMPC__PATH
+    value: "/data/"
+
+  - name: SMPC__KMS_KEY_ARNS
+    valueFrom:
+      secretKeyRef:
+        key: KMS_KEYS
+        name: application
+
+  - name: SMPC__PARTY_ID
+    value: "1"
