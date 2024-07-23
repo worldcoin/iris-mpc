@@ -215,6 +215,29 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_migrations_round_trip() -> Result<()> {
+        let schema_name = temporary_name();
+        let store = Store::new(&test_db_url()?, &schema_name).await?;
+
+        let iris = StoredIrisRef {
+            left_code:  &[123_u16; 12800],
+            left_mask:  &[456_u16; 12800],
+            right_code: &[789_u16; 12800],
+            right_mask: &[101_u16; 12800],
+        };
+        store.insert_irises(&[iris]).await?;
+
+        MIGRATOR.undo(&store.pool, 0).await?;
+        MIGRATOR.run(&store.pool).await?;
+
+        let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
+        assert_eq!(got.len(), 0);
+
+        cleanup(&store, &schema_name).await?;
+        Ok(())
+    }
+
     fn test_db_url() -> Result<String> {
         dotenvy::from_filename(DOTENV_TEST)?;
         Ok(Config::load_config(APP_NAME)?
