@@ -109,10 +109,16 @@ jobs:
       - name: Find libs
         run: find /usr -name "libnvrtc*" && find /usr -name libcuda.so
 
+      - name: Find compute-sanitizer
+        run: find /usr -name "compute-sanitizer"
+
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
+
+      - name: Build e2e test
+        run: cargo test --release e2e --no-run
 
       - name: Build e2e test and grab executable name
         run: echo TEST_NAME=$(cargo test --release e2e --no-run 2>&1 | grep "Executable tests/e2e.rs" | sed "s/.*(\(.*\))/\1/") >> $GITHUB_OUTPUT
