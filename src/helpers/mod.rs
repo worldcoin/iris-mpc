@@ -11,7 +11,6 @@ pub mod aws_sigv4;
 pub mod device_manager;
 pub mod id_wrapper;
 pub mod kms_dh;
-pub mod mmap;
 pub mod query_processor;
 pub mod sqs;
 pub mod task_monitor;

@@ -23,19 +23,37 @@ fn sql_switch_schema(schema_name: &str) -> Result<String> {
 #[derive(sqlx::FromRow, Debug, Default)]
 pub struct StoredIris {
     #[allow(dead_code)]
-    id:   i64, // BIGSERIAL
-    code: Vec<u8>, // BYTEA
-    mask: Vec<u8>, // BYTEA
+    id:         i64, // BIGSERIAL
+    left_code:  Vec<u8>, // BYTEA
+    left_mask:  Vec<u8>, // BYTEA
+    right_code: Vec<u8>, // BYTEA
+    right_mask: Vec<u8>, // BYTEA
 }
 
 impl StoredIris {
-    pub fn code(&self) -> &[u16] {
-        cast_slice(&self.code)
+    pub fn left_code(&self) -> &[u16] {
+        cast_u8_to_u16(&self.left_code)
     }
 
-    pub fn mask(&self) -> &[u16] {
-        cast_slice(&self.mask)
+    pub fn left_mask(&self) -> &[u16] {
+        cast_u8_to_u16(&self.left_mask)
     }
+
+    pub fn right_code(&self) -> &[u16] {
+        cast_u8_to_u16(&self.right_code)
+    }
+
+    pub fn right_mask(&self) -> &[u16] {
+        cast_u8_to_u16(&self.right_mask)
+    }
+}
+
+#[derive(Clone)]
+pub struct StoredIrisRef<'a> {
+    pub left_code:  &'a [u16],
+    pub left_mask:  &'a [u16],
+    pub right_code: &'a [u16],
+    pub right_mask: &'a [u16],
 }
 
 pub struct Store {
@@ -81,13 +99,17 @@ impl Store {
         sqlx::query_as::<_, StoredIris>("SELECT * FROM irises ORDER BY id").fetch(&self.pool)
     }
 
-    pub async fn insert_irises(&self, codes_and_masks: &[(&[u16], &[u16])]) -> Result<()> {
+    pub async fn insert_irises(&self, codes_and_masks: &[StoredIrisRef<'_>]) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
-        let mut query = sqlx::QueryBuilder::new("INSERT INTO irises (code, mask) ");
-        query.push_values(codes_and_masks, |mut query, (code, mask)| {
-            query.push_bind(cast_slice::<u16, u8>(code));
-            query.push_bind(cast_slice::<u16, u8>(mask));
+        let mut query = sqlx::QueryBuilder::new(
+            "INSERT INTO irises (left_code, left_mask, right_code, right_mask)",
+        );
+        query.push_values(codes_and_masks, |mut query, iris| {
+            query.push_bind(cast_slice::<u16, u8>(iris.left_code));
+            query.push_bind(cast_slice::<u16, u8>(iris.left_mask));
+            query.push_bind(cast_slice::<u16, u8>(iris.right_code));
+            query.push_bind(cast_slice::<u16, u8>(iris.right_mask));
         });
 
         query.build().execute(&mut *tx).await?;
@@ -101,6 +123,14 @@ fn sanitize_identifier(input: &str) -> Result<()> {
         Ok(())
     } else {
         Err(eyre!("Invalid SQL identifier"))
+    }
+}
+
+fn cast_u8_to_u16(s: &[u8]) -> &[u16] {
+    if s.is_empty() {
+        &[] // A literal empty &[u8] may be unaligned.
+    } else {
+        cast_slice(s)
     }
 }
 
@@ -121,19 +151,39 @@ mod tests {
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), 0);
 
-        let codes_and_masks: &[(&[u16], &[u16]); 2] = &[
-            (&[1, 2, 3, 4], &[5, 6, 7, 8]),
-            (&[9, 10, 11, 12], &[13, 14, 15, 16]),
+        let codes_and_masks = &[
+            StoredIrisRef {
+                left_code:  &[1, 2, 3, 4],
+                left_mask:  &[5, 6, 7, 8],
+                right_code: &[9, 10, 11, 12],
+                right_mask: &[13, 14, 15, 16],
+            },
+            StoredIrisRef {
+                left_code:  &[1117, 18, 19, 20],
+                left_mask:  &[21, 1122, 23, 24],
+                right_code: &[25, 26, 1127, 28],
+                right_mask: &[29, 30, 31, 1132],
+            },
+            StoredIrisRef {
+                left_code:  &[17, 18, 19, 20],
+                left_mask:  &[21, 22, 23, 24],
+                // Empty is allowed until stereo is implemented.
+                right_code: &[],
+                right_mask: &[],
+            },
         ];
-        store.insert_irises(codes_and_masks).await?;
+        store.insert_irises(&codes_and_masks[0..2]).await?;
+        store.insert_irises(&codes_and_masks[2..3]).await?;
 
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
 
-        assert_eq!(got.len(), 2);
-        for i in 0..2 {
+        assert_eq!(got.len(), 3);
+        for i in 0..3 {
             assert_eq!(got[i].id, i as i64);
-            assert_eq!(got[i].code(), codes_and_masks[i].0);
-            assert_eq!(got[i].mask(), codes_and_masks[i].1);
+            assert_eq!(got[i].left_code(), codes_and_masks[i].left_code);
+            assert_eq!(got[i].left_mask(), codes_and_masks[i].left_mask);
+            assert_eq!(got[i].right_code(), codes_and_masks[i].right_code);
+            assert_eq!(got[i].right_mask(), codes_and_masks[i].right_mask);
         }
 
         // Clean up on success.
@@ -143,12 +193,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_many() -> Result<()> {
-        let count = 1 << 14;
+        let count = 1 << 13;
 
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
 
-        let codes_and_masks = vec![(&[123_u16; 12800][..], &[456_u16; 12800][..]); count];
+        let iris = StoredIrisRef {
+            left_code:  &[123_u16; 12800],
+            left_mask:  &[456_u16; 12800],
+            right_code: &[789_u16; 12800],
+            right_mask: &[101_u16; 12800],
+        };
+        let codes_and_masks = vec![iris; count];
         store.insert_irises(&codes_and_masks).await?;
 
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
