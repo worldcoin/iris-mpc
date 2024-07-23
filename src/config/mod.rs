@@ -18,9 +18,6 @@ pub struct Opt {
 
     #[structopt(long)]
     bootstrap_url: Option<String>,
-
-    #[structopt(long)]
-    path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,9 +33,6 @@ pub struct Config {
 
     #[serde(default)]
     pub results_topic_arn: String,
-
-    #[serde(default)]
-    pub path: String,
 
     #[serde(default)]
     pub kms_key_arns: JsonStrWrapper<Vec<String>>,
@@ -90,10 +84,6 @@ impl Config {
 
         if let Some(bootstrap_url) = opts.bootstrap_url {
             self.servers.bootstrap_url = Some(bootstrap_url);
-        }
-
-        if let Some(path) = opts.path {
-            self.path = path;
         }
     }
 }
