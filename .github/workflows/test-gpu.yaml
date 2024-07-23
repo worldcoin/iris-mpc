@@ -89,7 +89,7 @@ jobs:
           wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt update
-          sudo apt install -y cuda-toolkit-12-2 libnccl2 libnccl-dev
+          sudo apt install -y cuda-toolkit-12-2 cuda-command-line-tools-12-2 libnccl2 libnccl-dev
 
       - name: Find libs
         run: find /usr -name "libnvrtc*" && find /usr -name libcuda.so
@@ -115,12 +115,13 @@ jobs:
           toolchain: nightly
 
       - name: Build e2e test and grab executable name
-        run: echo 'TEST_NAME=$(cargo test --release e2e --no-run 2>&1 | grep "Executable tests/e2e.rs" | sed "s/.*(\(.*\))/\1/")' >> $GITHUB_OUTPUT
+        run: echo TEST_NAME=$(cargo test --release e2e --no-run 2>&1 | grep "Executable tests/e2e.rs" | sed "s/.*(\(.*\))/\1/") >> $GITHUB_OUTPUT
         shell: bash
         id: build-e2e
 
       - name: E2E Tests w/ compute-sanitizer
         run: compute-sanitizer --tool=memcheck ${{ steps.build-e2e.outputs.TEST_NAME }} --nocapture
+        shell: bash
         env:
           NCCL_DEBUG: info
           NCCL_P2P_LEVEL: LOC
