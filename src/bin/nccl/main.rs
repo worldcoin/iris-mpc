@@ -11,6 +11,7 @@ use cudarc::{
     driver::{CudaDevice, CudaSlice},
     nccl::{Comm, Id},
 };
+use gpu_iris_mpc::helpers::id_wrapper::IdWrapper;
 use once_cell::sync::Lazy;
 use std::{env, str::FromStr, time::Instant};
 
@@ -19,38 +20,6 @@ static COMM_ID: Lazy<Vec<Id>> = Lazy::new(|| {
         .map(|_| Id::new().unwrap())
         .collect::<Vec<_>>()
 });
-
-struct IdWrapper(Id);
-
-impl FromStr for IdWrapper {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let bytes = hex::decode(s)
-            .unwrap()
-            .iter()
-            .map(|&c| c as i8)
-            .collect::<Vec<_>>();
-
-        let mut id = [0i8; 128];
-        id.copy_from_slice(&bytes);
-
-        Ok(IdWrapper(Id::uninit(id)))
-    }
-}
-
-impl std::fmt::Display for IdWrapper {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = hex::encode(
-            self.0
-                .internal()
-                .iter()
-                .map(|&c| c as u8)
-                .collect::<Vec<_>>(),
-        );
-        write!(f, "{}", s)
-    }
-}
 
 const DUMMY_DATA_LEN: usize = 5 * (1 << 30);
 
