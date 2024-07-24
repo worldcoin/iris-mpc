@@ -7,7 +7,7 @@ use gpu_iris_mpc::{
         galois_engine::degree4::GaloisRingIrisCodeShare,
         iris_db::{db::IrisDB, iris::IrisCode},
     },
-    store::sync::Syncer,
+    store::sync::{SyncState, Syncer},
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use std::{collections::HashMap, env, sync::Arc};
@@ -63,7 +63,7 @@ fn install_tracing() {
 
 // Simulate a sync between all parties by running each party in its own thread.
 async fn simulate_sync(
-    x: &[(
+    parties: &[(
         usize,
         &ServersConfig,
         &Arc<DeviceManager>,
@@ -81,7 +81,10 @@ async fn simulate_sync(
                     device_manager.device(0),
                 );
 
-                let common_state = syncer.sync(db_len as u64).unwrap();
+                let my_state = SyncState {
+                    db_len: db_len as u64,
+                };
+                let common_state = syncer.sync(&my_state).unwrap();
                 syncer.stop();
                 common_state
             }
@@ -89,10 +92,12 @@ async fn simulate_sync(
 
     // Run parties in parallel.
     let mut tasks = JoinSet::new();
-    for &(i, config, devman, db) in x {
+    for &(i, config, devman, db) in parties {
         tasks.spawn_blocking(sync_task(i, config.clone(), devman.clone(), db.0.len()));
     }
-    let expected_state = x[0].3 .0.len() as u64;
+    let expected_state = SyncState {
+        db_len: parties[0].3 .0.len() as u64,
+    };
     while let Some(common_state) = tasks.join_next().await {
         assert_eq!(common_state?, expected_state);
     }

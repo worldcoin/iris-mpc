@@ -6,7 +6,10 @@ use cudarc::{driver::CudaDevice, nccl::Comm};
 use eyre::{eyre, Result};
 use std::{sync::Arc, time::Duration};
 
-pub type State = u64;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncState {
+    pub db_len: u64,
+}
 
 pub struct Syncer {
     comm:         SendableRcComm,
@@ -36,7 +39,7 @@ impl Syncer {
         }
     }
 
-    pub fn sync(&self, state: State) -> Result<State> {
+    pub fn sync(&self, state: &SyncState) -> Result<SyncState> {
         sync(&self.comm, state)
     }
 
@@ -47,10 +50,10 @@ impl Syncer {
     }
 }
 
-fn sync(comm: &Comm, state: State) -> Result<u64> {
+fn sync(comm: &Comm, state: &SyncState) -> Result<SyncState> {
     let dev = comm.device();
 
-    let my_state = comm.device().htod_copy(vec![state]).unwrap();
+    let my_state = comm.device().htod_copy(vec![state.db_len]).unwrap();
 
     let mut all_states = comm.device().alloc_zeros(comm.world_size()).unwrap();
 
@@ -61,7 +64,9 @@ fn sync(comm: &Comm, state: State) -> Result<u64> {
     println!("all_states: {:?}", all_states);
 
     let common_state = *all_states.iter().min().unwrap();
-    Ok(common_state)
+    Ok(SyncState {
+        db_len: common_state,
+    })
 }
 
 #[cfg(test)]
@@ -78,20 +83,23 @@ mod tests {
     async fn test_sync() -> Result<()> {
         let n_parties = 3.min(CudaDevice::count()? as usize);
         let net_id = Id::new().unwrap();
-        let expected_state = 123;
+        let expected_state = SyncState { db_len: 123 };
 
-        let sync_task = |i, my_state| {
+        let sync_task = |i| {
             move || {
+                let my_state = SyncState {
+                    db_len: expected_state.db_len + i as u64,
+                };
                 let device = CudaDevice::new(i).unwrap();
                 let comm = Comm::from_rank(device, i, n_parties, net_id).unwrap();
-                let common_state = sync(&comm, my_state).unwrap();
+                let common_state = sync(&comm, &my_state).unwrap();
                 common_state
             }
         };
 
         let mut tasks = JoinSet::new();
         for i in 0..n_parties {
-            tasks.spawn_blocking(sync_task(i, expected_state + i as u64));
+            tasks.spawn_blocking(sync_task(i));
         }
 
         while let Some(common_state) = tasks.join_next().await {

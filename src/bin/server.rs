@@ -21,7 +21,10 @@ use gpu_iris_mpc::{
     },
     server::{BatchMetadata, BatchQuery, ServerActor, ServerJobResult},
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
-    store::{sync::Syncer, Store, StoredIrisRef},
+    store::{
+        sync::{SyncState, Syncer},
+        Store, StoredIrisRef,
+    },
 };
 use rand::{rngs::StdRng, SeedableRng};
 use std::{
@@ -258,11 +261,14 @@ fn startup_sync(
         device_manager.device(0),
     );
 
-    let common_state = syncer.sync(db_len as u64).unwrap();
-    if common_state != db_len as u64 {
+    let my_state = SyncState {
+        db_len: db_len as u64,
+    };
+    let common_state = syncer.sync(&my_state).unwrap();
+    if common_state != my_state {
         return Err(eyre!(
-            "Databases are out-of-sync! Our state: {}. Common state: {}.",
-            db_len,
+            "Databases are out-of-sync! \nOur state: {:?} \nCommon state: {:?}.",
+            my_state,
             common_state
         ));
     }
