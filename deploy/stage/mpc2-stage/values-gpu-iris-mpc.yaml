@@ -1,4 +1,10 @@
 env:
+  - name: NCCL_DEBUG
+    value: "info"
+
+  - name: RUST_BACKTRACE
+    value: "1"
+    
   - name: SMPC__ENVIRONMENT
     value: "stage"
 
