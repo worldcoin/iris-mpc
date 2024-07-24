@@ -605,7 +605,8 @@ impl ServerActor {
             self.device_manager.await_streams(request_streams);
 
             // self.device_manager
-            //     .await_streams(&self.streams[(db_chunk_idx + 1) % 2]); // await other stream
+            //     .await_streams(&self.streams[(db_chunk_idx + 1) % 2]); // await other
+            // stream
 
             // Break if we reached the end of the database
             if db_chunk_idx * DB_CHUNK_SIZE >= *current_db_sizes.iter().max().unwrap() {
@@ -699,34 +700,34 @@ impl ServerActor {
                             self.streams[0][i].stream,
                         );
 
-                        // helpers::dtod_at_offset(
-                        //     *db.code_gr.limb_1[i].device_ptr(),
-                        //     current_db_sizes[i] * IRIS_CODE_LENGTH,
-                        //     *query.limb_1[i].device_ptr(),
-                        //     IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                        //     IRIS_CODE_LENGTH,
-                        //     self.streams[0][i].stream,
-                        // );
+                        helpers::dtod_at_offset(
+                            *db.code_gr.limb_1[i].device_ptr(),
+                            current_db_sizes[i] * IRIS_CODE_LENGTH,
+                            *query.limb_1[i].device_ptr(),
+                            IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                            IRIS_CODE_LENGTH,
+                            self.streams[0][i].stream,
+                        );
 
-                        // helpers::dtod_at_offset(
-                        //     *db.code_sums_gr.limb_0[i].device_ptr(),
-                        //     current_db_sizes[i] * mem::size_of::<u32>(),
-                        //     *sums.limb_0[i].device_ptr(),
-                        //     mem::size_of::<u32>() * 15
-                        //         + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                        //     mem::size_of::<u32>(),
-                        //     self.streams[0][i].stream,
-                        // );
+                        helpers::dtod_at_offset(
+                            *db.code_sums_gr.limb_0[i].device_ptr(),
+                            current_db_sizes[i] * mem::size_of::<u32>(),
+                            *sums.limb_0[i].device_ptr(),
+                            mem::size_of::<u32>() * 15
+                                + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                            mem::size_of::<u32>(),
+                            self.streams[0][i].stream,
+                        );
 
-                        // helpers::dtod_at_offset(
-                        //     *db.code_sums_gr.limb_1[i].device_ptr(),
-                        //     current_db_sizes[i] * mem::size_of::<u32>(),
-                        //     *sums.limb_1[i].device_ptr(),
-                        //     mem::size_of::<u32>() * 15
-                        //         + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                        //     mem::size_of::<u32>(),
-                        //     self.streams[0][i].stream,
-                        // );
+                        helpers::dtod_at_offset(
+                            *db.code_sums_gr.limb_1[i].device_ptr(),
+                            current_db_sizes[i] * mem::size_of::<u32>(),
+                            *sums.limb_1[i].device_ptr(),
+                            mem::size_of::<u32>() * 15
+                                + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                            mem::size_of::<u32>(),
+                            self.streams[0][i].stream,
+                        );
                     }
                 }
                 current_db_sizes[i] += 1;
@@ -776,6 +777,7 @@ impl ServerActor {
 
         // Prepare for next batch
         self.server_tasks.check_tasks();
+        self.device_manager.await_streams(&self.streams[0]);
 
         tracing::info!("CPU time of one iteration {:?}", now.elapsed());
         Ok(())
