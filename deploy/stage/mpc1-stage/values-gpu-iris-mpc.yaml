@@ -1,8 +1,3 @@
-persistentStorage:
-  enabled: true
-  size: 10Gi
-  volumeID: aws://eu-north-1c/vol-03227d9fc2aac0773
-
 env:
   - name: SMPC__ENVIRONMENT
     value: "stage"

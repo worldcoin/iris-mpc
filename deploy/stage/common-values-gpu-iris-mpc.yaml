@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/gpu-iris-mpc:v0.1.6-alpha"
+image: "ghcr.io/worldcoin/gpu-iris-mpc:e71bbbf4c017bd278e20870144046840f77f206c"
 
 environment: stage
 replicaCount: 1
@@ -11,6 +11,24 @@ datadog:
 
 ports:
   - containerPort: 3000
+    name: http
+    protocol: TCP
+  - containerPort: 4000
+    name: http
+    protocol: TCP
+  - containerPort: 4001
+    name: http
+    protocol: TCP
+  - containerPort: 4002
+    name: http
+    protocol: TCP
+  - containerPort: 4003
+    name: http
+    protocol: TCP
+  - containerPort: 4004
+    name: http
+    protocol: TCP
+  - containerPort: 4005
     name: http
     protocol: TCP
 
