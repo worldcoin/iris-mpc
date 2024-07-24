@@ -80,6 +80,7 @@ async fn main() -> eyre::Result<()> {
     #[allow(unused_assignments)]
     let mut maybe_db = None;
 
+    #[allow(clippy::type_complexity)]
     let (mut shares_stream, mut mask_stream): (
         Pin<Box<dyn Stream<Item = eyre::Result<(u64, EncodedBits)>>>>,
         Pin<Box<dyn Stream<Item = eyre::Result<(u64, Bits)>>>>,
