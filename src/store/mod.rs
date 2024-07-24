@@ -46,6 +46,9 @@ impl StoredIris {
     pub fn right_mask(&self) -> &[u16] {
         cast_u8_to_u16(&self.right_mask)
     }
+    pub fn id(&self) -> i64 {
+        self.id
+    }
 }
 
 #[derive(Clone)]

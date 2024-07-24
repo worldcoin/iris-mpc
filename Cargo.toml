@@ -97,3 +97,7 @@ path = "src/bin/upgrade/tcp_upgrade_server.rs"
 [[bin]]
 name = "upgrade-client"
 path = "src/bin/upgrade/tcp_upgrade_client.rs"
+
+[[bin]]
+name = "seed-v1-dbs"
+path = "src/bin/upgrade/seed_v1_dbs.rs"

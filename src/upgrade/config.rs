@@ -80,6 +80,9 @@ pub struct UpgradeClientConfig {
 
     #[clap(long, default_value = "false")]
     pub mock: bool,
+
+    #[clap(long)]
+    pub db_url: String,
 }
 
 impl std::fmt::Debug for UpgradeClientConfig {

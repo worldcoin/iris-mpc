@@ -97,7 +97,7 @@ async fn main() -> eyre::Result<()> {
         }
     } else {
         maybe_db = Some(V1Database {
-            db: V1Db::new("sqlite://:memory:").await?,
+            db: V1Db::new(&args.db_url).await?,
         });
 
         (
@@ -217,7 +217,7 @@ async fn main() -> eyre::Result<()> {
         tracing::trace!("Finished id: {}", id);
         let diff = share_id - cur;
         cur = share_id;
-        pb.inc(diff + 1);
+        pb.inc(diff);
     }
     tracing::info!("Processing done!");
     pb.finish();
