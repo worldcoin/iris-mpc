@@ -4,15 +4,13 @@ use crate::{
 };
 use cudarc::{driver::CudaDevice, nccl::Comm};
 use eyre::{eyre, Result};
-use std::sync::Arc;
-use tokio::task::AbortHandle;
+use std::{sync::Arc, time::Duration};
 
 pub type State = u64;
 
 pub struct Syncer {
     comm:         SendableRcComm,
     task_monitor: TaskMonitor,
-    server_abort: Option<AbortHandle>,
 }
 
 impl Syncer {
@@ -23,18 +21,18 @@ impl Syncer {
         device: Arc<CudaDevice>,
     ) -> Self {
         let mut task_monitor = TaskMonitor::new();
-        let (mut comms, server_abort) = Circuits::instantiate_network(
+        let (mut comms, _server_abort) = Circuits::instantiate_network(
             peer_id,
             peer_url,
             Some(server_port),
             &[device],
             Some(&mut task_monitor),
         );
+        task_monitor.check_tasks();
 
         Self {
             comm: comms.pop().unwrap(),
             task_monitor,
-            server_abort,
         }
     }
 
@@ -42,8 +40,10 @@ impl Syncer {
         sync(&self.comm, state)
     }
 
-    pub fn abort(&mut self) {
+    pub fn stop(&mut self) {
         self.task_monitor.abort_all();
+        std::thread::sleep(Duration::from_secs(1));
+        self.task_monitor.check_tasks_finished();
     }
 }
 

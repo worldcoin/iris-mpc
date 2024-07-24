@@ -1,18 +1,14 @@
 use eyre::Result;
 use gpu_iris_mpc::{
     config::ServersConfig,
-    helpers::{device_manager::DeviceManager, task_monitor::TaskMonitor},
+    helpers::device_manager::DeviceManager,
     server::{BatchQuery, ServerActor, ServerJobResult},
     setup::{
         galois_engine::degree4::GaloisRingIrisCodeShare,
-        iris_db::{
-            db::{self, IrisDB},
-            iris::IrisCode,
-        },
+        iris_db::{db::IrisDB, iris::IrisCode},
     },
     store::sync::Syncer,
 };
-use itertools::Itertools;
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use std::{collections::HashMap, env, sync::Arc};
 use tokio::{sync::oneshot, task::JoinSet};
@@ -65,6 +61,7 @@ fn install_tracing() {
         .init();
 }
 
+// Simulate a sync between all parties by running each party in its own thread.
 async fn simulate_sync(
     x: &[(
         usize,
@@ -76,6 +73,7 @@ async fn simulate_sync(
     let sync_task =
         |party_id, config: ServersConfig, device_manager: Arc<DeviceManager>, db_len| {
             move || {
+                // Each party sends and receives the state.
                 let mut syncer = Syncer::new(
                     party_id,
                     config.bootstrap_url,
@@ -84,11 +82,12 @@ async fn simulate_sync(
                 );
 
                 let common_state = syncer.sync(db_len as u64).unwrap();
+                syncer.stop();
                 common_state
             }
         };
 
-    // Simulate nodes as threads.
+    // Run parties in parallel.
     let mut tasks = JoinSet::new();
     for &(i, config, devman, db) in x {
         tasks.spawn_blocking(sync_task(i, config.clone(), devman.clone(), db.0.len()));
