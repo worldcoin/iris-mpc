@@ -22,7 +22,7 @@ use gpu_iris_mpc::{
     server::{BatchMetadata, BatchQuery, ServerActor, ServerJobResult},
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     store::{
-        sync::{SyncState, Syncer},
+        sync::{SyncResult, SyncState, Syncer},
         Store, StoredIrisRef,
     },
 };
@@ -254,17 +254,6 @@ async fn initialize_iris_dbs(
     Ok((codes_db, masks_db, store_len))
 }
 
-enum SyncResult {
-    InSync,
-    OutOfSync(OutOfSync),
-}
-#[derive(Debug)]
-struct OutOfSync {
-    #[allow(dead_code)]
-    my_state:     SyncState,
-    common_state: SyncState,
-}
-
 fn startup_sync(
     config: &Config,
     device_manager: &DeviceManager,
@@ -280,18 +269,11 @@ fn startup_sync(
     let my_state = SyncState {
         db_len: db_len as u64,
     };
-    let common_state = syncer.sync(&my_state)?;
-
-    if common_state != my_state {
-        return Ok(SyncResult::OutOfSync(OutOfSync {
-            my_state,
-            common_state,
-        }));
-    }
+    let result = syncer.sync(&my_state)?;
 
     // Not using the syncer anymore, stop it.
     syncer.stop();
-    Ok(SyncResult::InSync)
+    Ok(result)
 }
 
 #[tokio::main]
