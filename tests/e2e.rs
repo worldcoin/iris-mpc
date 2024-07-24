@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 const DB_SIZE: usize = 8 * 1000;
 const RNG_SEED: u64 = 0xdeadbeef;
-const NUM_BATCHES: usize = 1;
+const NUM_BATCHES: usize = 2;
 const BATCH_SIZE: usize = 64;
 
 fn generate_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
