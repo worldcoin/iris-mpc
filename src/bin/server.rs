@@ -205,7 +205,10 @@ async fn initialize_chacha_seeds(
     Ok(chacha_seeds)
 }
 
-async fn initialize_iris_dbs(party_id: usize, store: &Store) -> eyre::Result<(Vec<u16>, Vec<u16>)> {
+async fn initialize_iris_dbs(
+    party_id: usize,
+    store: &Store,
+) -> eyre::Result<(Vec<u16>, Vec<u16>, usize)> {
     // Generate or load DB
     let (mut codes_db, mut masks_db) = {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
@@ -240,20 +243,33 @@ async fn initialize_iris_dbs(party_id: usize, store: &Store) -> eyre::Result<(Ve
     };
 
     // Load DB from persistent storage.
+    let random_len = codes_db.len();
     while let Some(iris) = store.stream_irises().await.next().await {
         let iris = iris?;
         codes_db.extend(iris.left_code());
         masks_db.extend(iris.left_mask());
     }
+    let store_len = codes_db.len() - random_len;
 
-    Ok((codes_db, masks_db))
+    Ok((codes_db, masks_db, store_len))
+}
+
+enum SyncResult {
+    InSync,
+    OutOfSync(OutOfSync),
+}
+#[derive(Debug)]
+struct OutOfSync {
+    #[allow(dead_code)]
+    my_state:     SyncState,
+    common_state: SyncState,
 }
 
 fn startup_sync(
     config: &Config,
     device_manager: &DeviceManager,
     db_len: usize,
-) -> eyre::Result<()> {
+) -> eyre::Result<SyncResult> {
     let mut syncer = Syncer::new(
         config.party_id,
         config.servers.bootstrap_url.clone(),
@@ -264,18 +280,18 @@ fn startup_sync(
     let my_state = SyncState {
         db_len: db_len as u64,
     };
-    let common_state = syncer.sync(&my_state).unwrap();
+    let common_state = syncer.sync(&my_state)?;
+
     if common_state != my_state {
-        return Err(eyre!(
-            "Databases are out-of-sync! \nOur state: {:?} \nCommon state: {:?}.",
+        return Ok(SyncResult::OutOfSync(OutOfSync {
             my_state,
-            common_state
-        ));
+            common_state,
+        }));
     }
 
     // Not using the syncer anymore, stop it.
     syncer.stop();
-    Ok(())
+    Ok(SyncResult::InSync)
 }
 
 #[tokio::main]
@@ -296,11 +312,16 @@ async fn main() -> eyre::Result<()> {
     let party_id = config.party_id;
     let chacha_seeds = initialize_chacha_seeds(&config.kms_key_arns, party_id).await?;
 
-    let (codes_db, masks_db) = initialize_iris_dbs(party_id, &store).await?;
+    let (codes_db, masks_db, store_len) = initialize_iris_dbs(party_id, &store).await?;
 
     let device_manager = Arc::new(DeviceManager::init());
 
-    startup_sync(&config, &device_manager, codes_db.len())?;
+    let sync_result = startup_sync(&config, &device_manager, store_len)?;
+    if let SyncResult::OutOfSync(oos) = sync_result {
+        eprintln!("Databases are out-of-sync: {:?}", oos);
+        store.rollback(oos.common_state.db_len as usize).await?;
+        return Err(eyre!("Rolled back to common state. Restarting…"));
+    }
 
     let mut background_tasks = TaskMonitor::new();
     // a bit convoluted, but we need to create the actor on the thread already,
