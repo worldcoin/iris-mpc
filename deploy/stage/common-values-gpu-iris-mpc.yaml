@@ -13,6 +13,24 @@ ports:
   - containerPort: 3000
     name: http
     protocol: TCP
+  - containerPort: 4000
+    name: http
+    protocol: TCP
+  - containerPort: 4001
+    name: http
+    protocol: TCP
+  - containerPort: 4002
+    name: http
+    protocol: TCP
+  - containerPort: 4003
+    name: http
+    protocol: TCP
+  - containerPort: 4004
+    name: http
+    protocol: TCP
+  - containerPort: 4005
+    name: http
+    protocol: TCP
 
 livenessProbe:
   httpGet:
