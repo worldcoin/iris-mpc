@@ -769,6 +769,11 @@ impl ServerActor {
         // Prepare for next batch
         self.server_tasks.check_tasks();
         self.device_manager.await_streams(&self.streams[0]);
+        self.device_manager.await_streams(&self.streams[1]);
+
+        for dev in self.device_manager.devices() {
+            dev.synchronize().unwrap();
+        }
 
         tracing::info!("CPU time of one iteration {:?}", now.elapsed());
         Ok(())

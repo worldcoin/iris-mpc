@@ -8,19 +8,20 @@ use gpu_iris_mpc::{
         iris_db::{db::IrisDB, iris::IrisCode},
     },
 };
-use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{collections::HashMap, env, sync::Arc};
 use tokio::sync::oneshot;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
 const DB_SIZE: usize = 8 * 1000;
-const RNG_SEED: u64 = 0xdeadbeef;
+const DB_RNG_SEED: u64 = 0xdeadbeef;
+const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 3;
 const BATCH_SIZE: usize = 64;
 
 fn generate_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
-    let mut rng = StdRng::seed_from_u64(RNG_SEED);
+    let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
     let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
     let codes_db = db
@@ -30,7 +31,7 @@ fn generate_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
             GaloisRingIrisCodeShare::encode_iris_code(
                 &iris.code,
                 &iris.mask,
-                &mut StdRng::seed_from_u64(RNG_SEED),
+                &mut StdRng::seed_from_u64(DB_RNG_SEED),
             )[party_id]
                 .coefs
         })
@@ -42,7 +43,7 @@ fn generate_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
         .flat_map(|iris| {
             GaloisRingIrisCodeShare::encode_mask_code(
                 &iris.mask,
-                &mut StdRng::seed_from_u64(RNG_SEED),
+                &mut StdRng::seed_from_u64(DB_RNG_SEED),
             )[party_id]
                 .coefs
         })
@@ -173,10 +174,9 @@ async fn e2e_test() -> Result<()> {
 
     // make a test query and send it to server
 
-    let db = IrisDB::new_random_par(DB_SIZE, &mut StdRng::seed_from_u64(RNG_SEED));
+    let db = IrisDB::new_random_par(DB_SIZE, &mut StdRng::seed_from_u64(DB_RNG_SEED));
 
-    let mut choice_rng = thread_rng();
-    let mut rng = thread_rng();
+    let mut rng = StdRng::seed_from_u64(INTERNAL_RNG_SEED);
 
     let mut expected_results: HashMap<String, Option<u32>> = HashMap::new();
     let mut requests: HashMap<String, IrisCode> = HashMap::new();
@@ -190,7 +190,7 @@ async fn e2e_test() -> Result<()> {
             let request_id = Uuid::new_v4();
             // Automatic random tests
             let options = if responses.is_empty() { 2 } else { 3 };
-            let template = match choice_rng.gen_range(0..2) {
+            let template = match rng.gen_range(0..2) {
                 0 => {
                     println!("Sending new iris code");
                     expected_results.insert(request_id.to_string(), None);
