@@ -3,8 +3,8 @@ env:
     value: "info"
 
   - name: RUST_BACKTRACE
-    value: "1"
-    
+    value: "full"
+
   - name: SMPC__ENVIRONMENT
     value: "stage"
 
