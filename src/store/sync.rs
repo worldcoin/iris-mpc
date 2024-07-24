@@ -41,6 +41,10 @@ impl Syncer {
     pub fn sync(&self, state: State) -> Result<State> {
         sync(&self.comm, state)
     }
+
+    pub fn abort(&mut self) {
+        self.task_monitor.abort_all();
+    }
 }
 
 fn sync(comm: &Comm, state: State) -> Result<u64> {
@@ -76,7 +80,7 @@ mod tests {
         let net_id = Id::new().unwrap();
         let expected_state = 123;
 
-        let exchange_task = |i, my_state| {
+        let sync_task = |i, my_state| {
             move || {
                 let device = CudaDevice::new(i).unwrap();
                 let comm = Comm::from_rank(device, i, n_parties, net_id).unwrap();
@@ -87,7 +91,7 @@ mod tests {
 
         let mut tasks = JoinSet::new();
         for i in 0..n_parties {
-            tasks.spawn_blocking(exchange_task(i, expected_state + i as u64));
+            tasks.spawn_blocking(sync_task(i, expected_state + i as u64));
         }
 
         while let Some(common_state) = tasks.join_next().await {

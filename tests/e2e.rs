@@ -5,7 +5,10 @@ use gpu_iris_mpc::{
     server::{BatchQuery, ServerActor, ServerJobResult},
     setup::{
         galois_engine::degree4::GaloisRingIrisCodeShare,
-        iris_db::{db::IrisDB, iris::IrisCode},
+        iris_db::{
+            db::{self, IrisDB},
+            iris::IrisCode,
+        },
     },
     store::sync::Syncer,
 };
@@ -62,25 +65,39 @@ fn install_tracing() {
         .init();
 }
 
-async fn simulate_sync(syncers: &[Arc<Syncer>], sync_states: &[u64]) -> Result<()> {
-    /* TODO: find a way around Comm single-threadedness.
-    let sync_task = |i, syncer: Arc<Syncer>, state| {
-        move || {
-            let common_state = syncer.sync(state).unwrap();
-            (i, common_state)
-        }
-    };
+async fn simulate_sync(
+    x: &[(
+        usize,
+        &ServersConfig,
+        &Arc<DeviceManager>,
+        &(Vec<u16>, Vec<u16>),
+    )],
+) -> Result<()> {
+    let sync_task =
+        |party_id, config: ServersConfig, device_manager: Arc<DeviceManager>, db_len| {
+            move || {
+                let mut syncer = Syncer::new(
+                    party_id,
+                    config.bootstrap_url,
+                    config.sync_port,
+                    device_manager.device(0),
+                );
 
+                let common_state = syncer.sync(db_len as u64).unwrap();
+                common_state
+            }
+        };
+
+    // Simulate nodes as threads.
     let mut tasks = JoinSet::new();
-    for i in 0..3 {
-        tasks.spawn_blocking(sync_task(i, syncers[i].clone(), sync_states[i]));
+    for &(i, config, devman, db) in x {
+        tasks.spawn_blocking(sync_task(i, config.clone(), devman.clone(), db.0.len()));
     }
-    let mut common_states = vec![0u64; 3];
-    while let Some(res) = tasks.join_next().await {
-        let (i, common_state) = res?;
-        common_states[i] = common_state;
+    let expected_state = x[0].3 .0.len() as u64;
+    while let Some(common_state) = tasks.join_next().await {
+        assert_eq!(common_state?, expected_state);
     }
-    */
+
     Ok(())
 }
 
@@ -90,7 +107,7 @@ async fn e2e_test() -> Result<()> {
     env::set_var("NCCL_P2P_LEVEL", "LOC");
     env::set_var("NCCL_NET", "Socket");
 
-    let db0 = generate_db(0)?;
+    let db0: (Vec<u16>, Vec<u16>) = generate_db(0)?;
     let db1 = generate_db(1)?;
     let db2 = generate_db(2)?;
 
@@ -129,23 +146,12 @@ async fn e2e_test() -> Result<()> {
     let device_manager1 = Arc::new(device_managers.pop().unwrap());
     let device_manager0 = Arc::new(device_managers.pop().unwrap());
 
-    let syncers = (0..3)
-        .zip([&config0, &config1, &config2])
-        .zip([&device_manager0, &device_manager1, &device_manager2])
-        .map(|((party_id, config), device_manager)| {
-            Syncer::new(
-                party_id,
-                config.bootstrap_url.clone(),
-                config.sync_port,
-                device_manager.device(0),
-            )
-        })
-        .collect_vec();
-
-    let sync_state = db0.0.len() as u64;
-    for syncer in syncers.iter() {
-        syncer.sync(sync_state).unwrap();
-    }
+    simulate_sync(&[
+        (0, &config0, &device_manager0, &db0),
+        (1, &config1, &device_manager1, &db1),
+        (2, &config2, &device_manager2, &db2),
+    ])
+    .await?;
 
     let actor0_task = tokio::task::spawn_blocking(move || {
         let actor = match ServerActor::new_with_device_manager(
