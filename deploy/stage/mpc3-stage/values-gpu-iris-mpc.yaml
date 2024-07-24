@@ -20,6 +20,9 @@ env:
   - name: SMPC__AWS__REGION
     value: "eu-north-1"
 
+  - name: SMPC__SERVERS__BOOTSTRAP_URL
+    value: "10.15.48.156"
+
   - name: SMPC__SERVERS__CODES_ENGINE_PORT
     value: "4000"
 
