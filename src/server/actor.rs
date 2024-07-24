@@ -440,8 +440,8 @@ impl ServerActor {
                 chunk = db_chunk_idx,
                 "starting chunk"
             );
-            let request_streams = &self.streams[db_chunk_idx % 2];
-            let request_cublas_handles = &self.cublas_handles[db_chunk_idx % 2];
+            let request_streams = &self.streams[0];
+            let request_cublas_handles = &self.cublas_handles[0];
 
             let offset = db_chunk_idx * DB_CHUNK_SIZE;
             let chunk_size = self
