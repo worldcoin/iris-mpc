@@ -70,10 +70,10 @@ impl<T> From<CudaSlice<T>> for StreamAwareCudaSlice<T> {
 
 impl<T> Drop for StreamAwareCudaSlice<T> {
     fn drop(&mut self) {
-        tracing::warn!("Dropping StreamAwareCudaSlice");
-        unsafe {
-            free_async(self.cu_device_ptr, self.stream).unwrap();
-        }
+        // tracing::warn!("Dropping StreamAwareCudaSlice");
+        // unsafe {
+        //     free_async(self.cu_device_ptr, self.stream).unwrap();
+        // }
     }
 }
 
