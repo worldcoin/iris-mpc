@@ -1,6 +1,6 @@
 use crate::threshold_ring::protocol::ChunkShare;
 use cudarc::driver::{
-    result::{self, memcpy_dtoh_async, memcpy_htod_async, stream},
+    result::{self, malloc_async, memcpy_dtoh_async, memcpy_htod_async, stream},
     sys::{CUdeviceptr, CUstream, CUstream_st},
     CudaDevice, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceRepr, DriverError,
 };
@@ -121,4 +121,13 @@ pub fn htod_on_stream_sync<T: DeviceRepr>(
         buf
     };
     Ok(buf)
+}
+
+pub unsafe fn alloc_on_stream<T>(
+    device: &Arc<CudaDevice>,
+    len: usize,
+    stream: &CudaStream,
+) -> CudaSlice<T> {
+    let rand_ptr = malloc_async(stream.stream, len * std::mem::size_of::<T>()).unwrap();
+    device.upgrade_device_ptr(rand_ptr, len)
 }

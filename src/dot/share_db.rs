@@ -271,6 +271,8 @@ impl ShareDB {
                         .unwrap(),
                 );
             }
+
+            device_manager.device(idx).synchronize().unwrap();
         }
 
         // Init RNGs
