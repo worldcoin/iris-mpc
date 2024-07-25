@@ -94,6 +94,15 @@ The following dependency versions have been confirmed to work:
 Some Linux distributions have a (lib)cuda package 12.2 which depends on earlier versions of these packages.
 It might not work.
 
+### Direnv setup
+If you're running with libraries in non-standard paths you'll likely want to setup direnv to automatically load the env vars for configuration.
+
+[Make sure to install direnv](https://direnv.net/)
+
+Then copy `.envrc.example` to `.envrc` and setup `$PRE_CARGO_LD_LIBRARY_PATH` env var to point to your installation of the cuda toolkit libs.
+
+The example file contains a sample WSL env var.
+
 ## Testing
 
 To run the tests:
