@@ -92,8 +92,7 @@ mod tests {
                 };
                 let device = CudaDevice::new(i).unwrap();
                 let comm = Comm::from_rank(device, i, n_parties, net_id).unwrap();
-                let common_state = sync(&comm, &my_state).unwrap();
-                common_state
+                sync(&comm, &my_state).unwrap()
             }
         };
 
