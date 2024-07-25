@@ -47,10 +47,12 @@ impl Drop for TaskMonitor {
 
         // Check for hangs and panics.
         //
-        // If there is a hang (or hang panic) here, try calling abort_all() and waiting
-        // before dropping the TaskMonitor. Or call
+        // If there is a hang (or hang panic) here, try calling abort_all() and
+        // waiting before dropping the TaskMonitor. Or call
         // `check_tasks_finished_ignoring_hangs()` here instead.
-        self.check_tasks_finished();
+
+        // EXPERIMENT: Try and improve the panic message in staging
+        // self.check_tasks_finished();
     }
 }
 
