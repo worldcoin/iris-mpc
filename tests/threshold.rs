@@ -211,8 +211,8 @@ async fn test_threshold() -> eyre::Result<()> {
     for _ in 0..10 {
         server_tasks.check_tasks();
 
-        let code_gpu = code_gpu.iter().map(|x| x.as_view()).collect::<Vec<_>>();
-        let mask_gpu = mask_gpu.iter().map(|x| x.as_view()).collect::<Vec<_>>();
+        let code_gpu = code_gpu.clone();
+        let mask_gpu = mask_gpu.clone();
 
         let now = Instant::now();
         party.compare_threshold_masked_many(&code_gpu, &mask_gpu, &streams);

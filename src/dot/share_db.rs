@@ -11,7 +11,7 @@ use crate::{
         task_monitor::TaskMonitor,
     },
     rng::chacha::ChaChaCudaRng,
-    threshold_ring::protocol::{ChunkShare, ChunkShareView},
+    threshold_ring::protocol::ChunkShare,
 };
 use axum::{routing::get, Router};
 #[cfg(feature = "otp_encrypt")]
@@ -20,12 +20,11 @@ use cudarc::{
     cublas::{result::gemm_ex, sys, CudaBlas},
     driver::{
         result::malloc_async, sys::CUdeviceptr, CudaFunction, CudaSlice, CudaStream, DevicePtr,
-        DeviceSlice, LaunchAsync, LaunchConfig,
+        LaunchAsync, LaunchConfig,
     },
     nccl::{self, result, Comm, Id, NcclType},
     nvrtc::compile_ptx,
 };
-use itertools::izip;
 #[cfg(feature = "otp_encrypt")]
 use itertools::Itertools;
 use rayon::prelude::*;
@@ -848,15 +847,28 @@ impl ShareDB {
         }
     }
 
-    pub fn result_chunk_shares(&self, db_sizes: &[usize]) -> Vec<ChunkShareView<u16>> {
-        izip!(self.results.iter(), self.results_peer.iter(), db_sizes)
-            .map(|(a, b, e)| ChunkShareView {
-                // SAFETY: we have ensured that the slices are of the correct length
-                a: unsafe { a.transmute(a.len() / 2).unwrap() }.slice(0..e * self.query_length),
-                // SAFETY: we have ensured that the slices are of the correct length
-                b: unsafe { b.transmute(b.len() / 2).unwrap() }.slice(0..e * self.query_length),
-            })
-            .collect()
+    // TODO: this is very hacky
+    pub fn result_chunk_shares(&self, db_sizes: &[usize]) -> Vec<ChunkShare<u16>> {
+        let results_ptrs = self
+            .results
+            .iter()
+            .map(|x| *x.device_ptr())
+            .collect::<Vec<_>>();
+        let results_peer_ptrs = self
+            .results_peer
+            .iter()
+            .map(|x| *x.device_ptr())
+            .collect::<Vec<_>>();
+
+        device_ptrs_to_shares(
+            &results_ptrs,
+            &results_peer_ptrs,
+            &db_sizes
+                .iter()
+                .map(|e| e * self.query_length)
+                .collect::<Vec<_>>(),
+            self.device_manager.devices(),
+        )
     }
 }
 
