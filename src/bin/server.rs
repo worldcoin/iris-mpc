@@ -376,6 +376,8 @@ async fn main() -> eyre::Result<()> {
                     })
                     .collect();
 
+                store.mark_requests_done(&request_ids).await?;
+
                 store
                     .insert_irises(&codes_and_masks)
                     .await
@@ -395,8 +397,6 @@ async fn main() -> eyre::Result<()> {
                     .send()
                     .await?;
             }
-
-            store.mark_requests_done(&request_ids).await?;
         }
 
         Ok(())

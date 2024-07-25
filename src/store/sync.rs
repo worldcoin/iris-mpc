@@ -69,7 +69,10 @@ fn sync(comm: &Comm, state: &SyncState) -> Result<SyncResult> {
     let dev = comm.device();
 
     let state_dev = comm.device().htod_copy(state.serialize()?).unwrap();
-    let mut all_states_dev = comm.device().alloc_zeros(comm.world_size()).unwrap();
+    let mut all_states_dev = comm
+        .device()
+        .alloc_zeros(state_dev.len * comm.world_size())
+        .unwrap();
 
     comm.all_gather(&state_dev, &mut all_states_dev)
         .map_err(|e| eyre!("{:?}", e.0))?;
@@ -78,17 +81,7 @@ fn sync(comm: &Comm, state: &SyncState) -> Result<SyncResult> {
     let all_states = SyncState::deserialize_all(&all_states_ser)?;
     println!("all_states: {:?}", all_states);
 
-    let common_state = all_states.iter().min_by_key(|s| s.db_len).unwrap().clone();
-    // TODO: Find most recent request_id.
-
-    if all_states.iter().all(|s| *s == common_state) {
-        Ok(SyncResult::InSync)
-    } else {
-        Ok(SyncResult::OutOfSync(OutOfSync {
-            my_state: state.clone(),
-            common_state,
-        }))
-    }
+    Ok(SyncState::compare_states(state, &all_states))
 }
 
 impl SyncState {
@@ -127,6 +120,30 @@ impl SyncState {
             .map(Self::deserialize)
             .collect()
     }
+
+    fn compare_states(my_state: &Self, states: &[Self]) -> SyncResult {
+        let common_state = SyncState {
+            db_len:          Self::find_most_late(states).db_len,
+            last_request_id: Self::find_most_ahead(states).last_request_id,
+        };
+
+        if states.iter().all(|s| *s == common_state) {
+            SyncResult::InSync
+        } else {
+            SyncResult::OutOfSync(OutOfSync {
+                my_state: my_state.clone(),
+                common_state,
+            })
+        }
+    }
+
+    fn find_most_late(states: &[Self]) -> Self {
+        states.iter().min_by_key(|s| s.db_len).unwrap().clone()
+    }
+
+    fn find_most_ahead(states: &[Self]) -> Self {
+        states.iter().max_by_key(|s| s.db_len).unwrap().clone()
+    }
 }
 
 #[cfg(test)]
@@ -139,8 +156,8 @@ mod tests {
     use eyre::Result;
     use tokio::task::JoinSet;
 
-    #[tokio::test]
-    async fn test_serialize() -> Result<()> {
+    #[test]
+    fn test_serialize() -> Result<()> {
         // My state.
         let state = some_state();
         let state_ser = state.serialize()?;
@@ -153,6 +170,47 @@ mod tests {
             assert_eq!(s, &state);
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_compare_states_sync() {
+        let my_state = some_state();
+        let states = vec![some_state(), some_state(), some_state()];
+        assert_eq!(
+            SyncState::compare_states(&my_state, &states),
+            SyncResult::InSync
+        );
+    }
+
+    #[test]
+    fn test_compare_states_out_of_sync() {
+        let states = vec![
+            SyncState {
+                db_len:          123,
+                last_request_id: Some("most late".to_string()),
+            },
+            SyncState {
+                db_len:          456,
+                last_request_id: Some("x".to_string()),
+            },
+            SyncState {
+                db_len:          789,
+                last_request_id: Some("most ahead".to_string()),
+            },
+        ];
+        let common_state = SyncState {
+            db_len:          123, // most late.
+            last_request_id: Some("most ahead".to_string()),
+        };
+
+        let my_state = states[0].clone();
+        assert_eq!(
+            SyncState::compare_states(&my_state, &states),
+            SyncResult::OutOfSync(OutOfSync {
+                my_state,
+                common_state,
+            })
+        );
     }
 
     #[tokio::test]
