@@ -85,7 +85,7 @@ fn sync(comm: &Comm, state: &SyncState) -> Result<SyncResult> {
 }
 
 impl SyncState {
-    const SERIAL_SIZE: usize = 1 << 14;
+    const SERIAL_SIZE: usize = 1 << 10;
 
     /// Serialize the state to a fixed-size buffer.
     fn serialize(&self) -> Result<Vec<u8>> {
@@ -159,7 +159,10 @@ mod tests {
     #[test]
     fn test_serialize() -> Result<()> {
         // My state.
-        let state = some_state();
+        let state =     SyncState {
+            db_len:          123,
+            last_request_id: Some("A".repeat(64)),
+        };
         let state_ser = state.serialize()?;
         assert_eq!(state_ser.len(), SyncState::SERIAL_SIZE);
         // Concatenation of states from 3 parties.
