@@ -306,36 +306,36 @@ async fn main() -> eyre::Result<()> {
             store: query_store,
         }) = rx.recv().await
         {
+            // Insert non-matching queries into the persistent store.
+            {
+                let codes_and_masks: Vec<StoredIrisRef> = matches
+                    .iter()
+                    .enumerate()
+                    .filter_map(
+                        // Find the indices of non-matching queries in the batch.
+                        |(query_idx, is_match)| if !is_match { Some(query_idx) } else { None },
+                    )
+                    .map(|query_idx| {
+                        // Get the original vectors from `receive_batch`.
+                        let code = &query_store.code[query_idx].coefs[..];
+                        let mask = &query_store.mask[query_idx].coefs[..];
+                        StoredIrisRef {
+                            left_code:  code,
+                            left_mask:  mask,
+                            // TODO: second eye.
+                            right_code: &[],
+                            right_mask: &[],
+                        }
+                    })
+                    .collect();
+
+                store
+                    .insert_irises(&codes_and_masks)
+                    .await
+                    .wrap_err("failed to persist queries")?;
+            }
+
             for (i, &idx_result) in merged_results.iter().enumerate() {
-                // Insert non-matching queries into the persistent store.
-                {
-                    let codes_and_masks: Vec<StoredIrisRef> = matches
-                        .iter()
-                        .enumerate()
-                        .filter_map(
-                            // Find the indices of non-matching queries in the batch.
-                            |(query_idx, is_match)| if !is_match { Some(query_idx) } else { None },
-                        )
-                        .map(|query_idx| {
-                            // Get the original vectors from `receive_batch`.
-                            let code = &query_store.code[query_idx].coefs[..];
-                            let mask = &query_store.mask[query_idx].coefs[..];
-                            StoredIrisRef {
-                                left_code:  code,
-                                left_mask:  mask,
-                                // TODO: second eye.
-                                right_code: &[],
-                                right_mask: &[],
-                            }
-                        })
-                        .collect();
-
-                    store
-                        .insert_irises(&codes_and_masks)
-                        .await
-                        .wrap_err("failed to persist queries")?;
-                }
-
                 // Notify consumers about result
                 println!("Sending results back to SNS...");
                 let result_event =
