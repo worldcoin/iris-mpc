@@ -36,9 +36,8 @@ jobs:
           # Split the test and bench caches, the have different debug settings
           key: "bench"
       - name: Install Rust nightly
-        run: rustup toolchain install nightly
+        run: rustup toolchain install nightly-2024-07-10
       - name: Set Rust nightly as default
-        run: rustup default nightly
-      # Docker CI already builds binaries in release mode, so we can run faster by building in dev mode here
-      - name: Build Binaries
+        run: rustup default nightly-2024-07-10
+      - name: Build All Targets
         run: cargo build --all-features --lib --bins --benches --examples

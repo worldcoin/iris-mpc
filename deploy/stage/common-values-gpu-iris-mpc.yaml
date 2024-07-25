@@ -11,7 +11,7 @@ datadog:
 
 ports:
   - containerPort: 3000
-    name: http
+    name: health
     protocol: TCP
 
 livenessProbe:
