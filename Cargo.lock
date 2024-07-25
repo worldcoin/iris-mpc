@@ -982,7 +982,7 @@ dependencies = [
 [[package]]
 name = "cudarc"
 version = "0.10.0"
-source = "git+https://github.com/worldcoin/cudarc.git?rev=e30e6ae#e30e6aea6ff7f96a7ad80ba5f070f33e3e9db57a"
+source = "git+https://github.com/rw0x0/cudarc.git?rev=origin/transmute#17ee7db80e4167db3b3aca93f8e06c97ebc50a02"
 dependencies = [
  "libloading",
 ]

@@ -684,8 +684,6 @@ impl ServerActor {
                         &compact_device_sums.mask_query_insert,
                     ),
                 ] {
-
-                    println!("DB memory pointer {:?}", *db.code_gr.limb_0[i].device_ptr());
                     unsafe {
                         helpers::dtod_at_offset(
                             *db.code_gr.limb_0[i].device_ptr(),

@@ -464,7 +464,6 @@ impl ShareDB {
             .iter()
             .enumerate()
             .map(|(idx, chunk)| {
-                println!("db 1 alloc {:?}", idx);
                 let mut slice = unsafe {
                     self.device_manager
                         .device(idx)
@@ -481,7 +480,6 @@ impl ShareDB {
             .iter()
             .enumerate()
             .map(|(idx, chunk)| {
-                println!("db 0 alloc {:?}", idx);
                 let mut slice = unsafe {
                     self.device_manager
                         .device(idx)

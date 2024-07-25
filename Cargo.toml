@@ -15,7 +15,7 @@ base64 = "0.22.1"
 bytemuck = "1.16"
 config = "0.14.0"
 clap = { version = "4.5.9", features = ["derive", "env"] }
-cudarc = { git = "https://github.com/worldcoin/cudarc.git", rev = "e30e6ae", features = [
+cudarc = { git = "https://github.com/rw0x0/cudarc.git", rev = "origin/transmute", features = [
     "cuda-12020",
 ] }
 eyre = "0.6.12"
