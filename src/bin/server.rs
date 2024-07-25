@@ -402,6 +402,8 @@ async fn main() -> eyre::Result<()> {
                         .await?;
                 }
             }
+
+            store.mark_requests_done(&request_ids).await?;
         }
 
         Ok(())

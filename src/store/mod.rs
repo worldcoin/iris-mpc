@@ -58,6 +58,11 @@ pub struct StoredIrisRef<'a> {
     pub right_mask: &'a [u16],
 }
 
+#[derive(sqlx::FromRow, Debug, Default)]
+struct StoredState {
+    request_id: String,
+}
+
 pub struct Store {
     pool: PgPool,
 }
@@ -125,6 +130,23 @@ impl Store {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    pub async fn mark_requests_done(&self, request_ids: &[String]) -> Result<()> {
+        // Insert request_ids that are done processing.
+        let mut query = sqlx::QueryBuilder::new("INSERT INTO sync (request_id)");
+        query.push_values(request_ids, |mut query, request_id| {
+            query.push_bind(request_id);
+        });
+        query.build().execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn last_request_done(&self) -> Result<Option<String>> {
+        let row = sqlx::query_as::<_, StoredState>("SELECT * FROM sync ORDER BY id DESC LIMIT 1")
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|r| r.request_id))
     }
 }
 
@@ -243,6 +265,27 @@ mod tests {
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), 5);
         assert_contiguous_id(&got);
+
+        cleanup(&store, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_mark_requests_done() -> Result<()> {
+        let schema_name = temporary_name();
+        let store = Store::new(&test_db_url()?, &schema_name).await?;
+
+        assert_eq!(store.last_request_done().await?, None);
+
+        for i in 0..2 {
+            let request_ids = (0..2)
+                .map(|j| format!("test_{}_{}", i, j))
+                .collect::<Vec<_>>();
+            store.mark_requests_done(&request_ids).await?;
+
+            let got = store.last_request_done().await?;
+            assert_eq!(got, Some(request_ids[1].clone()));
+        }
 
         cleanup(&store, &schema_name).await?;
         Ok(())
