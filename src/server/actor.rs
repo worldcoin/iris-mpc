@@ -276,7 +276,7 @@ impl ServerActor {
         let mut streams = vec![];
         let mut cublas_handles = vec![];
         for _ in 0..2 {
-            let tmp_streams = device_manager.fork_streams();
+            let tmp_streams = device_manager.default_streams();
             cublas_handles.push(device_manager.create_cublas(&tmp_streams));
             streams.push(tmp_streams);
         }
