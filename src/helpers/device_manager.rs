@@ -51,17 +51,6 @@ impl DeviceManager {
             .collect::<Vec<_>>()
     }
 
-    pub fn default_streams(&self) -> Vec<CudaStream> {
-        self.devices
-            .iter()
-            .map(|dev| {
-                let mut s = dev.fork_default_stream().unwrap();
-                s.stream = *dev.cu_stream();
-                s
-            })
-            .collect::<Vec<_>>()
-    }
-
     pub fn create_cublas(&self, streams: &Vec<CudaStream>) -> Vec<CudaBlas> {
         self.devices
             .iter()
