@@ -63,12 +63,9 @@ fn install_tracing() {
 
 // Simulate a sync between all parties by running each party in its own thread.
 async fn simulate_sync(
-    parties: &[(
-        usize,
-        &ServersConfig,
-        &Arc<DeviceManager>,
-        &(Vec<u16>, Vec<u16>),
-    )],
+    configs: &[&ServersConfig],
+    device_managers: &[&Arc<DeviceManager>],
+    dbs: &[&(Vec<u16>, Vec<u16>)],
 ) -> Result<()> {
     let sync_task =
         |party_id, config: ServersConfig, device_manager: Arc<DeviceManager>, db_len| {
@@ -92,8 +89,13 @@ async fn simulate_sync(
 
     // Run parties in parallel.
     let mut tasks = JoinSet::new();
-    for &(i, config, devman, db) in parties {
-        tasks.spawn_blocking(sync_task(i, config.clone(), devman.clone(), db.0.len()));
+    for i in 0..configs.len() {
+        tasks.spawn_blocking(sync_task(
+            i,
+            configs[i].clone(),
+            device_managers[i].clone(),
+            dbs[i].0.len(),
+        ));
     }
     while let Some(result) = tasks.join_next().await {
         assert_eq!(result?, SyncResult::InSync);
@@ -147,11 +149,11 @@ async fn e2e_test() -> Result<()> {
     let device_manager1 = Arc::new(device_managers.pop().unwrap());
     let device_manager0 = Arc::new(device_managers.pop().unwrap());
 
-    simulate_sync(&[
-        (0, &config0, &device_manager0, &db0),
-        (1, &config1, &device_manager1, &db1),
-        (2, &config2, &device_manager2, &db2),
-    ])
+    simulate_sync(
+        &[&config0, &config1, &config2],
+        &[&device_manager0, &device_manager1, &device_manager2],
+        &[&db0, &db1, &db2],
+    )
     .await?;
 
     let actor0_task = tokio::task::spawn_blocking(move || {
