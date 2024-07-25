@@ -77,10 +77,10 @@ impl DeviceManager {
     }
 
     pub fn await_streams(&self, streams: &[CudaStream]) {
-        for i in 0..self.devices.len() {
-            self.devices[i].bind_to_thread().unwrap();
-            unsafe { synchronize(streams[i].stream).unwrap() }
-        }
+        // for i in 0..self.devices.len() {
+        //     self.devices[i].bind_to_thread().unwrap();
+        //     unsafe { synchronize(streams[i].stream).unwrap() }
+        // }
     }
 
     pub fn create_events(&self, blocking_sync: bool) -> Vec<CUevent> {
@@ -99,26 +99,27 @@ impl DeviceManager {
     }
 
     pub fn record_event(&self, streams: &[CudaStream], events: &[CUevent]) {
-        for idx in 0..self.devices.len() {
-            unsafe {
-                self.devices[idx].bind_to_thread().unwrap();
-                event::record(events[idx], streams[idx].stream).unwrap();
-            };
-        }
+        // for idx in 0..self.devices.len() {
+        //     unsafe {
+        //         self.devices[idx].bind_to_thread().unwrap();
+        //         event::record(events[idx], streams[idx].stream).unwrap();
+        //     };
+        // }
     }
 
     pub fn await_event(&self, streams: &[CudaStream], events: &[CUevent]) {
-        for idx in 0..self.devices.len() {
-            unsafe {
-                self.devices[idx].bind_to_thread().unwrap();
-                wait_event(
-                    streams[idx].stream,
-                    events[idx],
-                    cudarc::driver::sys::CUevent_wait_flags::CU_EVENT_WAIT_DEFAULT,
-                )
-                .unwrap();
-            };
-        }
+        // for idx in 0..self.devices.len() {
+        //     unsafe {
+        //         self.devices[idx].bind_to_thread().unwrap();
+        //         wait_event(
+        //             streams[idx].stream,
+        //             events[idx],
+        //             
+        // cudarc::driver::sys::CUevent_wait_flags::CU_EVENT_WAIT_DEFAULT,
+        //         )
+        //         .unwrap();
+        //     };
+        // }
     }
 
     pub fn htod_transfer_query(
