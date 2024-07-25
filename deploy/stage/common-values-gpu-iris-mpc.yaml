@@ -7,7 +7,7 @@ strategy:
   type: Recreate
 
 datadog:
-  enabled: false
+  enabled: true
 
 ports:
   - containerPort: 3000
