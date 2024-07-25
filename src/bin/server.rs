@@ -258,9 +258,10 @@ async fn initialize_iris_dbs(
     Ok((codes_db, masks_db, store_len))
 }
 
-fn startup_sync(
+async fn startup_sync(
     config: &Config,
     device_manager: &DeviceManager,
+    store: &Store,
     db_len: usize,
 ) -> eyre::Result<SyncResult> {
     let mut syncer = Syncer::new(
@@ -271,7 +272,8 @@ fn startup_sync(
     );
 
     let my_state = SyncState {
-        db_len: db_len as u64,
+        db_len:          db_len as u64,
+        last_request_id: store.last_request_done().await?,
     };
     let result = syncer.sync(&my_state)?;
 
@@ -302,7 +304,7 @@ async fn main() -> eyre::Result<()> {
 
     let device_manager = Arc::new(DeviceManager::init());
 
-    let sync_result = startup_sync(&config, &device_manager, store_len)?;
+    let sync_result = startup_sync(&config, &device_manager, &store, store_len).await?;
     if let SyncResult::OutOfSync(oos) = sync_result {
         eprintln!("Databases are out-of-sync: {:?}", oos);
         store.rollback(oos.common_state.db_len as usize).await?;

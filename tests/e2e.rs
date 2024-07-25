@@ -82,7 +82,8 @@ async fn simulate_sync(
                 );
 
                 let my_state = SyncState {
-                    db_len: db_len as u64,
+                    db_len:          db_len as u64,
+                    last_request_id: Some("some_request".to_string()),
                 };
                 let result = syncer.sync(&my_state).unwrap();
                 syncer.stop();
