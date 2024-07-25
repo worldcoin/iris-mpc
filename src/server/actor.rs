@@ -685,6 +685,15 @@ impl ServerActor {
                     ),
                 ] {
                     unsafe {
+                        println!(
+                            "Inserting into db0 at {:#x} + {:#x} from {:#x} + {:#x} with len {:?}",
+                            *db.code_gr.limb_0[i].device_ptr(),
+                            self.current_db_sizes[i] * IRIS_CODE_LENGTH,
+                            *query.limb_0[i].device_ptr(),
+                            IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                            IRIS_CODE_LENGTH
+                        );
+
                         helpers::dtod_at_offset(
                             *db.code_gr.limb_0[i].device_ptr(),
                             self.current_db_sizes[i] * IRIS_CODE_LENGTH,
@@ -692,6 +701,15 @@ impl ServerActor {
                             IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                             IRIS_CODE_LENGTH,
                             self.streams[0][i].stream,
+                        );
+
+                        println!(
+                            "Inserting into db1 at {:#x} + {:#x} from {:#x} + {:#x} with len {:?}",
+                            *db.code_gr.limb_1[i].device_ptr(),
+                            self.current_db_sizes[i] * IRIS_CODE_LENGTH,
+                            *query.limb_1[i].device_ptr(),
+                            IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                            IRIS_CODE_LENGTH,
                         );
 
                         helpers::dtod_at_offset(
@@ -703,6 +721,16 @@ impl ServerActor {
                             self.streams[0][i].stream,
                         );
 
+                        println!(
+                            "Inserting into db0_sums at {:#x} + {:#x} from {:#x} + {:#x} with len {:?}",
+                            *db.code_sums_gr.limb_0[i].device_ptr(),
+                            self.current_db_sizes[i] * mem::size_of::<u32>(),
+                            *sums.limb_0[i].device_ptr(),
+                            mem::size_of::<u32>() * 15
+                                + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                            mem::size_of::<u32>(),
+                        );
+
                         helpers::dtod_at_offset(
                             *db.code_sums_gr.limb_0[i].device_ptr(),
                             self.current_db_sizes[i] * mem::size_of::<u32>(),
@@ -711,6 +739,16 @@ impl ServerActor {
                                 + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
                             mem::size_of::<u32>(),
                             self.streams[0][i].stream,
+                        );
+
+                        println!(
+                            "Inserting into db1sums at {:#x} + {:#x} from {:#x} + {:#x} with len {:?}",
+                            *db.code_sums_gr.limb_1[i].device_ptr(),
+                            self.current_db_sizes[i] * mem::size_of::<u32>(),
+                            *sums.limb_1[i].device_ptr(),
+                            mem::size_of::<u32>() * 15
+                                + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                            mem::size_of::<u32>(),
                         );
 
                         helpers::dtod_at_offset(
