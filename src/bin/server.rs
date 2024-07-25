@@ -88,9 +88,6 @@ async fn receive_batch(
                 }
 
                 batch_query.request_ids.push(message.clone().request_id);
-                batch_query
-                    .sqs_receipt_handles
-                    .push(sqs_message.receipt_handle.unwrap());
                 batch_query.metadata.push(batch_metadata);
 
                 let (
@@ -135,6 +132,13 @@ async fn receive_batch(
                 batch_query.db.mask.extend(db_mask_shares);
                 batch_query.query.code.extend(iris_shares);
                 batch_query.query.mask.extend(mask_shares);
+
+                client
+                    .delete_message()
+                    .queue_url(queue_url)
+                    .receipt_handle(sqs_message.receipt_handle.unwrap())
+                    .send()
+                    .await?;
             }
         }
     }
@@ -338,48 +342,45 @@ async fn main() -> eyre::Result<()> {
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
     let rx_sns_client = sns_client.clone();
-    let sqs_client_bg = sqs_client.clone();
-    let queue_url_bg = config.requests_queue_url.clone();
 
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
             merged_results,
             request_ids,
-            sqs_receipt_handles,
             matches,
             store: query_store,
         }) = rx.recv().await
         {
+            // Insert non-matching queries into the persistent store.
+            {
+                let codes_and_masks: Vec<StoredIrisRef> = matches
+                    .iter()
+                    .enumerate()
+                    .filter_map(
+                        // Find the indices of non-matching queries in the batch.
+                        |(query_idx, is_match)| if !is_match { Some(query_idx) } else { None },
+                    )
+                    .map(|query_idx| {
+                        // Get the original vectors from `receive_batch`.
+                        let code = &query_store.code[query_idx].coefs[..];
+                        let mask = &query_store.mask[query_idx].coefs[..];
+                        StoredIrisRef {
+                            left_code:  code,
+                            left_mask:  mask,
+                            // TODO: second eye.
+                            right_code: &[],
+                            right_mask: &[],
+                        }
+                    })
+                    .collect();
+
+                store
+                    .insert_irises(&codes_and_masks)
+                    .await
+                    .wrap_err("failed to persist queries")?;
+            }
+
             for (i, &idx_result) in merged_results.iter().enumerate() {
-                // Insert non-matching queries into the persistent store.
-                {
-                    let codes_and_masks: Vec<StoredIrisRef> = matches
-                        .iter()
-                        .enumerate()
-                        .filter_map(
-                            // Find the indices of non-matching queries in the batch.
-                            |(query_idx, is_match)| if !is_match { Some(query_idx) } else { None },
-                        )
-                        .map(|query_idx| {
-                            // Get the original vectors from `receive_batch`.
-                            let code = &query_store.code[query_idx].coefs[..];
-                            let mask = &query_store.mask[query_idx].coefs[..];
-                            StoredIrisRef {
-                                left_code:  code,
-                                left_mask:  mask,
-                                // TODO: second eye.
-                                right_code: &[],
-                                right_mask: &[],
-                            }
-                        })
-                        .collect();
-
-                    store
-                        .insert_irises(&codes_and_masks)
-                        .await
-                        .wrap_err("failed to persist queries")?;
-                }
-
                 // Notify consumers about result
                 println!("Sending results back to SNS...");
                 let result_event =
@@ -391,16 +392,6 @@ async fn main() -> eyre::Result<()> {
                     .message(serde_json::to_string(&result_event).unwrap())
                     .send()
                     .await?;
-
-                // Tell SQS that we are done with these requests.
-                for sqs_receipt_handle in sqs_receipt_handles.iter() {
-                    sqs_client_bg
-                        .delete_message()
-                        .queue_url(&queue_url_bg)
-                        .receipt_handle(sqs_receipt_handle)
-                        .send()
-                        .await?;
-                }
             }
 
             store.mark_requests_done(&request_ids).await?;
