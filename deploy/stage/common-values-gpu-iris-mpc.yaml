@@ -17,12 +17,12 @@ ports:
 livenessProbe:
   httpGet:
     path: /health
-    port: http
+    port: health
 
 readinessProbe:
   httpGet:
     path: /health
-    port: http
+    port: health
 
 resources:
   limits:
