@@ -686,7 +686,8 @@ impl ServerActor {
                 ] {
                     unsafe {
                         println!(
-                            "Inserting into db0 at {:#x} + {:#x} from {:#x} + {:#x} with len {:?}",
+                            "{}: Inserting into db0 at {:#x} + {:#x} from {:#x} + {:#x} with len {:?}",
+                            self.party_id,
                             *db.code_gr.limb_0[i].device_ptr(),
                             self.current_db_sizes[i] * IRIS_CODE_LENGTH,
                             *query.limb_0[i].device_ptr(),
@@ -704,7 +705,8 @@ impl ServerActor {
                         );
 
                         println!(
-                            "Inserting into db1 at {:#x} + {:#x} from {:#x} + {:#x} with len {:?}",
+                            "{}: Inserting into db1 at {:#x} + {:#x} from {:#x} + {:#x} with len {:?}",
+                            self.party_id,
                             *db.code_gr.limb_1[i].device_ptr(),
                             self.current_db_sizes[i] * IRIS_CODE_LENGTH,
                             *query.limb_1[i].device_ptr(),
@@ -722,7 +724,8 @@ impl ServerActor {
                         );
 
                         println!(
-                            "Inserting into db0_sums at {:#x} + {:#x} from {:#x} + {:#x} with len {:?}",
+                            "{}: Inserting into db0_sums at {:#x} + {:#x} from {:#x} + {:#x} with len {:?}",
+                            self.party_id,
                             *db.code_sums_gr.limb_0[i].device_ptr(),
                             self.current_db_sizes[i] * mem::size_of::<u32>(),
                             *sums.limb_0[i].device_ptr(),
@@ -742,7 +745,8 @@ impl ServerActor {
                         );
 
                         println!(
-                            "Inserting into db1sums at {:#x} + {:#x} from {:#x} + {:#x} with len {:?}",
+                            "{}: Inserting into db1sums at {:#x} + {:#x} from {:#x} + {:#x} with len {:?}",
+                            self.party_id,
                             *db.code_sums_gr.limb_1[i].device_ptr(),
                             self.current_db_sizes[i] * mem::size_of::<u32>(),
                             *sums.limb_1[i].device_ptr(),
