@@ -364,15 +364,12 @@ impl ServerActor {
         let compact_device_queries =
             compact_query.htod_transfer(&self.device_manager, batch_streams)?;
 
-        self.device_manager.await_streams(&self.streams[0]);
-
         let compact_device_sums = compact_device_queries.query_sums(
             &self.codes_engine,
             &self.masks_engine,
             batch_streams,
             batch_cublas,
         )?;
-        self.device_manager.await_streams(&self.streams[0]);
 
         // ---- START BATCH DEDUP ----
         tracing::debug!(party_id = self.party_id, "Starting batch deduplication");
@@ -384,7 +381,6 @@ impl ServerActor {
             batch_streams,
             batch_cublas,
         );
-        self.device_manager.await_streams(&self.streams[0]);
 
         compact_device_sums.compute_dot_reducers(
             &mut self.batch_codes_engine,
@@ -393,30 +389,21 @@ impl ServerActor {
             0,
             batch_streams,
         );
-        self.device_manager.await_streams(&self.streams[0]);
 
         self.batch_codes_engine
             .reshare_results(&self.query_db_size, batch_streams);
-
-        self.device_manager.await_streams(&self.streams[0]);
         self.batch_masks_engine
             .reshare_results(&self.query_db_size, batch_streams);
-        self.device_manager.await_streams(&self.streams[0]);
 
         let db_sizes_batch = vec![QUERIES; self.device_manager.device_count()];
         // TODO: remove
         let mut code_dots_batch = self.batch_codes_engine.result_chunk_shares(&db_sizes_batch);
-        self.device_manager.await_streams(&self.streams[0]);
         let mut mask_dots_batch = self.batch_masks_engine.result_chunk_shares(&db_sizes_batch);
-        self.device_manager.await_streams(&self.streams[0]);
-
         self.phase2_batch.compare_threshold_masked_many(
             &code_dots_batch,
             &mask_dots_batch,
             batch_streams,
         );
-        self.device_manager.await_streams(&self.streams[0]);
-
         let res = self.phase2_batch.take_result_buffer();
         let chunk_size = self.phase2_batch.chunk_size();
         open(
@@ -429,7 +416,6 @@ impl ServerActor {
             0,
             batch_streams,
         );
-        self.device_manager.await_streams(&self.streams[0]);
         self.phase2_batch.return_result_buffer(res);
 
         forget_vec!(code_dots_batch);
@@ -495,7 +481,6 @@ impl ServerActor {
                 request_streams,
                 request_cublas_handles,
             );
-            self.device_manager.await_streams(&self.streams[0]);
 
             // wait for the exchange result buffers to be ready
             tracing::debug!(
@@ -515,7 +500,6 @@ impl ServerActor {
                 offset,
                 request_streams,
             );
-            self.device_manager.await_streams(&self.streams[0]);
 
             tracing::debug!(
                 party_id = self.party_id,
@@ -527,10 +511,8 @@ impl ServerActor {
 
             self.codes_engine
                 .reshare_results(&chunk_size, request_streams);
-            self.device_manager.await_streams(&self.streams[0]);
             self.masks_engine
                 .reshare_results(&chunk_size, request_streams);
-            self.device_manager.await_streams(&self.streams[0]);
 
             // ---- END PHASE 1 ----
 
@@ -547,9 +529,7 @@ impl ServerActor {
             let max_chunk_size = chunk_size.iter().max().copied().unwrap();
             let phase_2_chunk_sizes = vec![max_chunk_size; self.device_manager.device_count()];
             let mut code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
-            self.device_manager.await_streams(&self.streams[0]);
             let mut mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
-            self.device_manager.await_streams(&self.streams[0]);
             {
                 assert_eq!(
                     (max_chunk_size * QUERIES) % 64,
@@ -559,7 +539,6 @@ impl ServerActor {
                 self.phase2.set_chunk_size(max_chunk_size * QUERIES / 64);
                 self.phase2
                     .compare_threshold_masked_many(&code_dots, &mask_dots, request_streams);
-                self.device_manager.await_streams(&self.streams[0]);
                 // we can now record the exchange event since the phase 2 is no longer using the
                 // code_dots/mask_dots which are just reinterpretations of the exchange result
                 // buffers
@@ -582,7 +561,6 @@ impl ServerActor {
                     offset,
                     request_streams,
                 );
-                self.device_manager.await_streams(&self.streams[0]);
                 self.phase2.return_result_buffer(res);
             }
             tracing::debug!(
@@ -663,7 +641,6 @@ impl ServerActor {
         let host_results = self
             .distance_comparator
             .fetch_final_results(&self.final_results);
-        self.device_manager.await_streams(&self.streams[0]);
 
         // Evaluate the results across devices
         // Format: merged_results[query_index]
@@ -716,7 +693,6 @@ impl ServerActor {
                             IRIS_CODE_LENGTH,
                             self.streams[0][i].stream,
                         );
-                        self.device_manager.await_streams(&self.streams[0]);
 
                         helpers::dtod_at_offset(
                             *db.code_gr.limb_1[i].device_ptr(),
@@ -726,7 +702,6 @@ impl ServerActor {
                             IRIS_CODE_LENGTH,
                             self.streams[0][i].stream,
                         );
-                        self.device_manager.await_streams(&self.streams[0]);
 
                         helpers::dtod_at_offset(
                             *db.code_sums_gr.limb_0[i].device_ptr(),
@@ -737,7 +712,6 @@ impl ServerActor {
                             mem::size_of::<u32>(),
                             self.streams[0][i].stream,
                         );
-                        self.device_manager.await_streams(&self.streams[0]);
 
                         helpers::dtod_at_offset(
                             *db.code_sums_gr.limb_1[i].device_ptr(),
@@ -748,7 +722,6 @@ impl ServerActor {
                             mem::size_of::<u32>(),
                             self.streams[0][i].stream,
                         );
-                        self.device_manager.await_streams(&self.streams[0]);
                     }
                 }
                 self.current_db_sizes[i] += 1;
@@ -780,21 +753,18 @@ impl ServerActor {
             &RESULTS_INIT_HOST,
             &self.streams[0],
         );
-        self.device_manager.await_streams(&self.streams[0]);
         reset_results(
             self.device_manager.devices(),
             &self.batch_results,
             &RESULTS_INIT_HOST,
             &self.streams[0],
         );
-        self.device_manager.await_streams(&self.streams[0]);
         reset_results(
             self.device_manager.devices(),
             &self.final_results,
             &FINAL_RESULTS_INIT_HOST,
             &self.streams[0],
         );
-        self.device_manager.await_streams(&self.streams[0]);
 
         // Prepare for next batch
         self.server_tasks.check_tasks();
