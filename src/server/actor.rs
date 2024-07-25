@@ -741,7 +741,6 @@ impl ServerActor {
             .send(ServerJobResult {
                 merged_results,
                 request_ids: batch.request_ids,
-                sqs_receipt_handles: batch.sqs_receipt_handles,
                 matches,
                 store: query_store,
             })
