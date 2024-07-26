@@ -775,6 +775,7 @@ impl ServerActor {
                 i,
                 self.current_db_sizes[i]
             );
+            break;
         }
 
         // Pass to internal sender thread
