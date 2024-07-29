@@ -27,6 +27,7 @@ use gpu_iris_mpc::{
     },
 };
 use rand::{rngs::StdRng, SeedableRng};
+use static_assertions::const_assert;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -46,6 +47,7 @@ const DB_SIZE: usize = 8 * 1_000;
 const N_QUERIES: usize = 32;
 const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
+const_assert!(N_QUERIES <= SyncState::MAX_REQUESTS); // At least a whole batch of queries should be synchronized.
 /// The number of batches before a stream is re-used.
 
 const QUERIES: usize = ROTATIONS * N_QUERIES;
@@ -276,8 +278,8 @@ async fn startup_sync(
     );
 
     let my_state = SyncState {
-        db_len:          db_len as u64,
-        last_request_id: store.last_request_deleted().await?,
+        db_len:              db_len as u64,
+        deleted_request_ids: store.last_deleted_requests(N_QUERIES).await?,
     };
     let result = syncer.sync(&my_state)?;
 

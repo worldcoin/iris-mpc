@@ -143,11 +143,12 @@ impl Store {
         Ok(())
     }
 
-    pub async fn last_request_deleted(&self) -> Result<Option<String>> {
-        let row = sqlx::query_as::<_, StoredState>("SELECT * FROM sync ORDER BY id DESC LIMIT 1")
-            .fetch_optional(&self.pool)
+    pub async fn last_deleted_requests(&self, count: usize) -> Result<Vec<String>> {
+        let rows = sqlx::query_as::<_, StoredState>("SELECT * FROM sync ORDER BY id DESC LIMIT $1")
+            .bind(count as i64)
+            .fetch_all(&self.pool)
             .await?;
-        Ok(row.map(|r| r.request_id))
+        Ok(rows.into_iter().rev().map(|r| r.request_id).collect())
     }
 }
 
@@ -276,7 +277,7 @@ mod tests {
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
 
-        assert_eq!(store.last_request_deleted().await?, None);
+        assert_eq!(store.last_deleted_requests(2).await?.len(), 0);
 
         for i in 0..2 {
             let request_ids = (0..2)
@@ -284,8 +285,8 @@ mod tests {
                 .collect::<Vec<_>>();
             store.mark_requests_deleted(&request_ids).await?;
 
-            let got = store.last_request_deleted().await?;
-            assert_eq!(got, Some(request_ids[1].clone()));
+            let got = store.last_deleted_requests(2).await?;
+            assert_eq!(got, request_ids);
         }
 
         cleanup(&store, &schema_name).await?;

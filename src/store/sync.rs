@@ -4,13 +4,14 @@ use crate::{
 };
 use cudarc::{driver::CudaDevice, nccl::Comm};
 use eyre::{eyre, Result};
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncState {
-    pub db_len:          u64,
-    pub last_request_id: Option<String>, // None at the beginning.
+    pub db_len:              u64,
+    pub deleted_request_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,7 +86,8 @@ fn sync(comm: &Comm, state: &SyncState) -> Result<SyncResult> {
 }
 
 impl SyncState {
-    const SERIAL_SIZE: usize = 1 << 10;
+    pub const MAX_REQUESTS: usize = 32;
+    const SERIAL_SIZE: usize = 4096;
 
     /// Serialize the state to a fixed-size buffer.
     fn serialize(&self) -> Result<Vec<u8>> {
@@ -123,11 +125,11 @@ impl SyncState {
 
     fn compare_states(my_state: &Self, states: &[Self]) -> SyncResult {
         let common_state = SyncState {
-            db_len:          Self::find_most_late(states).db_len,
-            last_request_id: Self::find_most_ahead(states).last_request_id,
+            db_len:              Self::find_most_late(states).db_len,
+            deleted_request_ids: Self::merge_request_ids(states),
         };
 
-        if states.iter().all(|s| *s == common_state) {
+        if states.iter().all(|s| s.db_len == common_state.db_len) {
             SyncResult::InSync
         } else {
             SyncResult::OutOfSync(OutOfSync {
@@ -141,8 +143,13 @@ impl SyncState {
         states.iter().min_by_key(|s| s.db_len).unwrap().clone()
     }
 
-    fn find_most_ahead(states: &[Self]) -> Self {
-        states.iter().max_by_key(|s| s.db_len).unwrap().clone()
+    fn merge_request_ids(states: &[Self]) -> Vec<String> {
+        states
+            .iter()
+            .flat_map(|s| s.deleted_request_ids.clone())
+            .sorted()
+            .dedup()
+            .collect()
     }
 }
 
@@ -160,8 +167,8 @@ mod tests {
     fn test_serialize() -> Result<()> {
         // My state.
         let state = SyncState {
-            db_len:          123,
-            last_request_id: Some("A".repeat(64)),
+            db_len:              123,
+            deleted_request_ids: vec!["A".repeat(64); SyncState::MAX_REQUESTS],
         };
         let state_ser = state.serialize()?;
         assert_eq!(state_ser.len(), SyncState::SERIAL_SIZE);
@@ -189,21 +196,25 @@ mod tests {
     fn test_compare_states_out_of_sync() {
         let states = vec![
             SyncState {
-                db_len:          123,
-                last_request_id: Some("most late".to_string()),
+                db_len:              123,
+                deleted_request_ids: vec!["most late".to_string()],
             },
             SyncState {
-                db_len:          456,
-                last_request_id: Some("x".to_string()),
+                db_len:              456,
+                deleted_request_ids: vec!["x".to_string()],
             },
             SyncState {
-                db_len:          789,
-                last_request_id: Some("most ahead".to_string()),
+                db_len:              789,
+                deleted_request_ids: vec!["most ahead".to_string()],
             },
         ];
         let common_state = SyncState {
-            db_len:          123, // most late.
-            last_request_id: Some("most ahead".to_string()),
+            db_len:              123, // most late.
+            deleted_request_ids: vec![
+                "most ahead".to_string(),
+                "most late".to_string(),
+                "x".to_string(),
+            ],
         };
 
         let my_state = states[0].clone();
@@ -252,8 +263,8 @@ mod tests {
                 some_state()
             } else {
                 SyncState {
-                    db_len:          456,
-                    last_request_id: None,
+                    db_len:              456,
+                    deleted_request_ids: vec![],
                 }
             };
             move || {
@@ -284,8 +295,8 @@ mod tests {
 
     fn some_state() -> SyncState {
         SyncState {
-            db_len:          123,
-            last_request_id: None,
+            db_len:              123,
+            deleted_request_ids: vec![],
         }
     }
 }
