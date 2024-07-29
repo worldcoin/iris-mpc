@@ -306,6 +306,20 @@ async fn main() -> eyre::Result<()> {
             store: query_store,
         }) = rx.recv().await
         {
+            for (i, &idx_result) in merged_results.iter().enumerate() {
+                // Notify consumers about result
+                println!("Sending results back to SNS...");
+                let result_event =
+                    ResultEvent::new(party_id, idx_result, matches[i], request_ids[i].clone());
+
+                rx_sns_client
+                    .publish()
+                    .topic_arn(&config.results_topic_arn)
+                    .message(serde_json::to_string(&result_event).unwrap())
+                    .send()
+                    .await?;
+            }
+
             // Insert non-matching queries into the persistent store.
             {
                 let codes_and_masks: Vec<StoredIrisRef> = matches
@@ -333,20 +347,6 @@ async fn main() -> eyre::Result<()> {
                     .insert_irises(&codes_and_masks)
                     .await
                     .wrap_err("failed to persist queries")?;
-            }
-
-            for (i, &idx_result) in merged_results.iter().enumerate() {
-                // Notify consumers about result
-                println!("Sending results back to SNS...");
-                let result_event =
-                    ResultEvent::new(party_id, idx_result, matches[i], request_ids[i].clone());
-
-                rx_sns_client
-                    .publish()
-                    .topic_arn(&config.results_topic_arn)
-                    .message(serde_json::to_string(&result_event).unwrap())
-                    .send()
-                    .await?;
             }
         }
 
