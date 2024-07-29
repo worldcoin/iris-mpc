@@ -342,10 +342,6 @@ impl Buffers {
     }
 }
 
-pub struct SendableRcComm(Arc<Comm>);
-
-unsafe impl Send for SendableRcComm {}
-
 pub struct Circuits {
     peer_id:          usize,
     next_id:          usize,
@@ -353,7 +349,7 @@ pub struct Circuits {
     chunk_size:       usize,
     n_devices:        usize,
     devs:             Vec<Arc<CudaDevice>>,
-    comms:            Vec<SendableRcComm>,
+    comms:            Vec<Arc<Comm>>,
     kernels:          Vec<Kernels>,
     buffers:          Buffers,
     rngs:             Vec<ChaChaCudaCorrRng>,
@@ -455,7 +451,7 @@ impl Circuits {
         server_port: Option<u16>,
         devices: &[Arc<CudaDevice>],
         server_task_set: Option<&mut TaskMonitor>,
-    ) -> (Vec<SendableRcComm>, Option<AbortHandle>) {
+    ) -> (Vec<Arc<Comm>>, Option<AbortHandle>) {
         let n_devices = devices.len();
         let mut comms = Vec::with_capacity(n_devices);
         let mut ids = Vec::with_capacity(n_devices);
@@ -507,9 +503,9 @@ impl Circuits {
 
             // Bind to thread (important!)
             devices[i].bind_to_thread().unwrap();
-            comms.push(SendableRcComm(Arc::new(
+            comms.push(Arc::new(
                 Comm::from_rank(devices[i].clone(), peer_id, 3, id).unwrap(),
-            )));
+            ));
         }
         (comms, server_abort)
     }
@@ -608,7 +604,7 @@ impl Circuits {
                 send.len(),
                 T::as_nccl_type(),
                 peer_id as i32,
-                self.comms[idx].0.comm.0,
+                self.comms[idx].comm.0,
                 streams[idx].stream as *mut _,
             )
         }
@@ -630,7 +626,7 @@ impl Circuits {
                 receive.len(),
                 T::as_nccl_type(),
                 peer_id as i32,
-                self.comms[idx].0.comm.0,
+                self.comms[idx].comm.0,
                 streams[idx].stream as *mut _,
             )
         }
@@ -652,7 +648,7 @@ impl Circuits {
                 send.len(),
                 T::as_nccl_type(),
                 peer_id as i32,
-                self.comms[idx].0.comm.0,
+                self.comms[idx].comm.0,
                 streams[idx].stream as *mut _,
             )
         }
@@ -674,7 +670,7 @@ impl Circuits {
                 receive.len(),
                 T::as_nccl_type(),
                 peer_id as i32,
-                self.comms[idx].0.comm.0,
+                self.comms[idx].comm.0,
                 streams[idx].stream as *mut _,
             )
         }
