@@ -63,6 +63,7 @@ struct StoredState {
     request_id: String,
 }
 
+#[derive(Clone)]
 pub struct Store {
     pool: PgPool,
 }
@@ -132,8 +133,8 @@ impl Store {
         Ok(())
     }
 
-    pub async fn mark_requests_done(&self, request_ids: &[String]) -> Result<()> {
-        // Insert request_ids that are done processing.
+    pub async fn mark_requests_deleted(&self, request_ids: &[String]) -> Result<()> {
+        // Insert request_ids that are deleted from the queue.
         let mut query = sqlx::QueryBuilder::new("INSERT INTO sync (request_id)");
         query.push_values(request_ids, |mut query, request_id| {
             query.push_bind(request_id);
@@ -142,7 +143,7 @@ impl Store {
         Ok(())
     }
 
-    pub async fn last_request_done(&self) -> Result<Option<String>> {
+    pub async fn last_request_deleted(&self) -> Result<Option<String>> {
         let row = sqlx::query_as::<_, StoredState>("SELECT * FROM sync ORDER BY id DESC LIMIT 1")
             .fetch_optional(&self.pool)
             .await?;
@@ -271,19 +272,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mark_requests_done() -> Result<()> {
+    async fn test_mark_requests_deleted() -> Result<()> {
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
 
-        assert_eq!(store.last_request_done().await?, None);
+        assert_eq!(store.last_request_deleted().await?, None);
 
         for i in 0..2 {
             let request_ids = (0..2)
                 .map(|j| format!("test_{}_{}", i, j))
                 .collect::<Vec<_>>();
-            store.mark_requests_done(&request_ids).await?;
+            store.mark_requests_deleted(&request_ids).await?;
 
-            let got = store.last_request_done().await?;
+            let got = store.last_request_deleted().await?;
             assert_eq!(got, Some(request_ids[1].clone()));
         }
 
