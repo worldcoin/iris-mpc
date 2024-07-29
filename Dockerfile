@@ -27,11 +27,13 @@ RUN cargo install cargo-build-deps \
 FROM --platform=linux/amd64 build-image as build-app
 WORKDIR /src/gpu-iris-mpc
 COPY . .
-RUN cargo build --release --target x86_64-unknown-linux-gnu --bin server
+RUN cargo build --release --target x86_64-unknown-linux-gnu --bin server --bin client
 
 FROM --platform=linux/amd64 ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/server /bin/server
+# include client for testing
+COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/client /bin/client
 RUN apt-get update && apt-get install -y pkg-config wget libssl-dev ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
