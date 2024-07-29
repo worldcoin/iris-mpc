@@ -46,6 +46,7 @@ const DB_SIZE: usize = 8 * 1_000;
 const N_QUERIES: usize = 32;
 const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
+const SYNC_RESULTS: usize = N_QUERIES * 2;
 /// The number of batches before a stream is re-used.
 
 const QUERIES: usize = ROTATIONS * N_QUERIES;
@@ -280,6 +281,24 @@ fn startup_sync(
     Ok(result)
 }
 
+async fn replay_result_events(
+    store: &Store,
+    sns_client: &SNSClient,
+    topic: &str,
+) -> eyre::Result<()> {
+    let result_events = store.last_results(SYNC_RESULTS).await?;
+
+    for result_event in result_events {
+        sns_client
+            .publish()
+            .topic_arn(topic)
+            .message(result_event)
+            .send()
+            .await?;
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     dotenvy::dotenv().ok();
@@ -308,6 +327,8 @@ async fn main() -> eyre::Result<()> {
         store.rollback(oos.common_state.db_len as usize).await?;
         return Err(eyre!("Rolled back to common state. Restarting…"));
     }
+
+    replay_result_events(&store, &sns_client, &config.results_topic_arn).await?;
 
     let mut background_tasks = TaskMonitor::new();
     // a bit convoluted, but we need to create the actor on the thread already,

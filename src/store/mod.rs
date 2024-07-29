@@ -179,6 +179,7 @@ mod tests {
     const DOTENV_TEST: &str = ".env.test";
 
     use super::*;
+    use crate::helpers::sqs::ResultEvent;
     use futures::TryStreamExt;
     use tokio;
 
@@ -247,13 +248,22 @@ mod tests {
             right_mask: &[101_u16; 12800],
         };
         let codes_and_masks = vec![iris; count];
+
+        let result_event =
+            serde_json::to_string(&ResultEvent::new(0, 1_000_000_000, false, "A".repeat(64)))?;
+        let result_events = vec![result_event; count];
+
         let mut tx = store.tx().await?;
+        store.insert_results(&mut tx, &result_events).await?;
         store.insert_irises(&mut tx, &codes_and_masks).await?;
         tx.commit().await?;
 
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), count);
         assert_contiguous_id(&got);
+
+        let got = store.last_results(count).await?;
+        assert_eq!(got, result_events);
 
         cleanup(&store, &schema_name).await?;
         Ok(())
