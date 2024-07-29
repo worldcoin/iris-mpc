@@ -63,9 +63,6 @@ impl Config {
 
         let config: Config = settings.try_deserialize::<Config>()?;
 
-        dbg!("Debug config");
-        dbg!(&config);
-
         Ok(config)
     }
 
