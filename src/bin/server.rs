@@ -29,6 +29,7 @@ use gpu_iris_mpc::{
 use rand::{rngs::StdRng, SeedableRng};
 use static_assertions::const_assert;
 use std::{
+    mem,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -47,7 +48,8 @@ const DB_SIZE: usize = 8 * 1_000;
 const N_QUERIES: usize = 32;
 const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
-const_assert!(N_QUERIES <= SyncState::MAX_REQUESTS); // At least a whole batch of queries should be synchronized.
+const SYNC_QUERIES: usize = N_QUERIES * 2;
+const_assert!(SYNC_QUERIES <= SyncState::MAX_REQUESTS);
 /// The number of batches before a stream is re-used.
 
 const QUERIES: usize = ROTATIONS * N_QUERIES;
@@ -57,6 +59,7 @@ async fn receive_batch(
     client: &Client,
     queue_url: &String,
     store: &Store,
+    skip_request_ids: Vec<String>,
 ) -> eyre::Result<BatchQuery> {
     let mut batch_query = BatchQuery::default();
 
@@ -72,6 +75,22 @@ async fn receive_batch(
             for sqs_message in messages {
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())?;
                 let message: SMPCRequest = serde_json::from_str(&message.message)?;
+
+                store
+                    .mark_requests_deleted(&[message.request_id.clone()])
+                    .await?;
+
+                client
+                    .delete_message()
+                    .queue_url(queue_url)
+                    .receipt_handle(sqs_message.receipt_handle.unwrap())
+                    .send()
+                    .await?;
+
+                if skip_request_ids.contains(&message.request_id) {
+                    // Some party (maybe us) already meant to delete this request, so we skip it.
+                    continue;
+                }
 
                 let message_attributes = sqs_message.message_attributes.unwrap_or_default();
 
@@ -90,8 +109,7 @@ async fn receive_batch(
                     batch_metadata.span_id = span_id.to_string();
                 }
 
-                let request_id = message.request_id.clone();
-                batch_query.request_ids.push(request_id.clone());
+                batch_query.request_ids.push(message.request_id.clone());
                 batch_query.metadata.push(batch_metadata);
 
                 let (
@@ -136,15 +154,6 @@ async fn receive_batch(
                 batch_query.db.mask.extend(db_mask_shares);
                 batch_query.query.code.extend(iris_shares);
                 batch_query.query.mask.extend(mask_shares);
-
-                store.mark_requests_deleted(&[request_id]).await?;
-
-                client
-                    .delete_message()
-                    .queue_url(queue_url)
-                    .receipt_handle(sqs_message.receipt_handle.unwrap())
-                    .send()
-                    .await?;
             }
         }
     }
@@ -279,7 +288,7 @@ async fn startup_sync(
 
     let my_state = SyncState {
         db_len:              db_len as u64,
-        deleted_request_ids: store.last_deleted_requests(N_QUERIES).await?,
+        deleted_request_ids: store.last_deleted_requests(SYNC_QUERIES).await?,
     };
     let result = syncer.sync(&my_state)?;
 
@@ -316,6 +325,8 @@ async fn main() -> eyre::Result<()> {
         store.rollback(db_len).await?;
         return Err(eyre!("Rolled back to common state. Restarting…"));
     }
+    // Input queues will be synchronized while consuming them.
+    let mut skip_request_ids = sync_result.deleted_request_ids();
 
     let mut background_tasks = TaskMonitor::new();
     // a bit convoluted, but we need to create the actor on the thread already,
@@ -449,10 +460,19 @@ async fn main() -> eyre::Result<()> {
         }
         let now = Instant::now();
 
+        // Skip requests based on the startup sync, only in the first iteration.
+        let skip_request_ids = mem::take(&mut skip_request_ids);
+
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
-        let batch =
-            receive_batch(party_id, &sqs_client, &config.requests_queue_url, &store).await?;
+        let batch = receive_batch(
+            party_id,
+            &sqs_client,
+            &config.requests_queue_url,
+            &store,
+            skip_request_ids,
+        )
+        .await?;
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id and
