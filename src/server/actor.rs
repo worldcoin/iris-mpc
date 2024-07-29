@@ -170,9 +170,8 @@ impl ServerActor {
             masks_engine_port,
             batch_codes_engine_port,
             batch_masks_engine_port,
-            phase_2_port,
-            phase_2_batch_port,
             bootstrap_url,
+            ..
         } = config;
 
         // Phase 1 Setup
@@ -252,9 +251,6 @@ impl ServerActor {
             phase2_batch_chunk_size,
             phase2_batch_chunk_size / 64,
             next_chacha_seeds(chacha_seeds)?,
-            bootstrap_url.clone(),
-            Some(phase_2_batch_port),
-            Some(&mut server_tasks),
             device_manager.clone(),
         );
         server_tasks.check_tasks();
@@ -264,9 +260,6 @@ impl ServerActor {
             phase2_chunk_size,
             phase2_chunk_size / 64,
             next_chacha_seeds(chacha_seeds)?,
-            bootstrap_url.clone(),
-            Some(phase_2_port),
-            Some(&mut server_tasks),
             device_manager.clone(),
         );
         server_tasks.check_tasks();
