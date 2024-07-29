@@ -159,7 +159,7 @@ mod tests {
     #[test]
     fn test_serialize() -> Result<()> {
         // My state.
-        let state =     SyncState {
+        let state = SyncState {
             db_len:          123,
             last_request_id: Some("A".repeat(64)),
         };

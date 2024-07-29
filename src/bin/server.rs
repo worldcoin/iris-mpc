@@ -54,6 +54,7 @@ async fn receive_batch(
     party_id: usize,
     client: &Client,
     queue_url: &String,
+    store: &Store,
 ) -> eyre::Result<BatchQuery> {
     let mut batch_query = BatchQuery::default();
 
@@ -87,7 +88,8 @@ async fn receive_batch(
                     batch_metadata.span_id = span_id.to_string();
                 }
 
-                batch_query.request_ids.push(message.clone().request_id);
+                let request_id = message.request_id.clone();
+                batch_query.request_ids.push(request_id.clone());
                 batch_query.metadata.push(batch_metadata);
 
                 let (
@@ -132,6 +134,8 @@ async fn receive_batch(
                 batch_query.db.mask.extend(db_mask_shares);
                 batch_query.query.code.extend(iris_shares);
                 batch_query.query.mask.extend(mask_shares);
+
+                store.mark_requests_deleted(&[request_id]).await?;
 
                 client
                     .delete_message()
@@ -273,7 +277,7 @@ async fn startup_sync(
 
     let my_state = SyncState {
         db_len:          db_len as u64,
-        last_request_id: store.last_request_done().await?,
+        last_request_id: store.last_request_deleted().await?,
     };
     let result = syncer.sync(&my_state)?;
 
@@ -345,6 +349,7 @@ async fn main() -> eyre::Result<()> {
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
     let rx_sns_client = sns_client.clone();
 
+    let store_bg = store.clone();
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
             merged_results,
@@ -376,9 +381,7 @@ async fn main() -> eyre::Result<()> {
                     })
                     .collect();
 
-                store.mark_requests_done(&request_ids).await?;
-
-                store
+                store_bg
                     .insert_irises(&codes_and_masks)
                     .await
                     .wrap_err("failed to persist queries")?;
@@ -446,7 +449,8 @@ async fn main() -> eyre::Result<()> {
 
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
-        let batch = receive_batch(party_id, &sqs_client, &config.requests_queue_url).await?;
+        let batch =
+            receive_batch(party_id, &sqs_client, &config.requests_queue_url, &store).await?;
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id and
