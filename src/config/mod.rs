@@ -142,6 +142,7 @@ pub struct ServersConfig {
     pub batch_masks_engine_port: u16,
     pub phase_2_batch_port:      u16,
     pub phase_2_port:            u16,
+    pub sync_port:               u16,
     #[serde(default)]
     pub bootstrap_url:           Option<String>,
 }

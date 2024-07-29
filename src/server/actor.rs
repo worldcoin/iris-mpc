@@ -173,6 +173,7 @@ impl ServerActor {
             phase_2_port,
             phase_2_batch_port,
             bootstrap_url,
+            ..
         } = config;
 
         // Phase 1 Setup

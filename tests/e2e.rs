@@ -7,10 +7,11 @@ use gpu_iris_mpc::{
         galois_engine::degree4::GaloisRingIrisCodeShare,
         iris_db::{db::IrisDB, iris::IrisCode},
     },
+    store::sync::{SyncState, Syncer},
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use std::{collections::HashMap, env, sync::Arc};
-use tokio::sync::oneshot;
+use tokio::{sync::oneshot, task::JoinSet};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
@@ -60,13 +61,59 @@ fn install_tracing() {
         .init();
 }
 
+// Simulate a sync between all parties by running each party in its own thread.
+async fn simulate_sync(
+    configs: &[&ServersConfig],
+    device_managers: &[&Arc<DeviceManager>],
+    dbs: &[&(Vec<u16>, Vec<u16>)],
+) -> Result<()> {
+    let sync_task =
+        |party_id, config: ServersConfig, device_manager: Arc<DeviceManager>, db_len| {
+            move || {
+                // Each party sends and receives the state.
+                let mut syncer = Syncer::new(
+                    party_id,
+                    config.bootstrap_url,
+                    config.sync_port,
+                    device_manager.device(0),
+                );
+
+                let my_state = SyncState {
+                    db_len: db_len as u64,
+                };
+                let common_state = syncer.sync(&my_state).unwrap();
+                syncer.stop();
+                common_state
+            }
+        };
+
+    // Run parties in parallel.
+    let mut tasks = JoinSet::new();
+    for i in 0..configs.len() {
+        tasks.spawn_blocking(sync_task(
+            i,
+            configs[i].clone(),
+            device_managers[i].clone(),
+            dbs[i].0.len(),
+        ));
+    }
+    let expected_state = SyncState {
+        db_len: dbs[0].0.len() as u64,
+    };
+    while let Some(common_state) = tasks.join_next().await {
+        assert_eq!(common_state?, expected_state);
+    }
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn e2e_test() -> Result<()> {
     install_tracing();
     env::set_var("NCCL_P2P_LEVEL", "LOC");
     env::set_var("NCCL_NET", "Socket");
 
-    let db0 = generate_db(0)?;
+    let db0: (Vec<u16>, Vec<u16>) = generate_db(0)?;
     let db1 = generate_db(1)?;
     let db2 = generate_db(2)?;
 
@@ -77,6 +124,7 @@ async fn e2e_test() -> Result<()> {
         batch_masks_engine_port: 10004,
         phase_2_batch_port:      10005,
         phase_2_port:            10006,
+        sync_port:               10007,
         bootstrap_url:           None,
     };
     let config1 = ServersConfig {
@@ -103,6 +151,13 @@ async fn e2e_test() -> Result<()> {
     let device_manager2 = Arc::new(device_managers.pop().unwrap());
     let device_manager1 = Arc::new(device_managers.pop().unwrap());
     let device_manager0 = Arc::new(device_managers.pop().unwrap());
+
+    simulate_sync(
+        &[&config0, &config1, &config2],
+        &[&device_manager0, &device_manager1, &device_manager2],
+        &[&db0, &db1, &db2],
+    )
+    .await?;
 
     let actor0_task = tokio::task::spawn_blocking(move || {
         let actor = match ServerActor::new_with_device_manager(
