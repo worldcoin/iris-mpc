@@ -8,6 +8,19 @@ pub struct SyncState {
     pub db_len: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncResult {
+    InSync,
+    OutOfSync(OutOfSync),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutOfSync {
+    #[allow(dead_code)]
+    pub my_state:     SyncState,
+    pub common_state: SyncState,
+}
+
 pub struct Syncer {
     comm:         Arc<Comm>,
     task_monitor: TaskMonitor,
@@ -36,7 +49,7 @@ impl Syncer {
         }
     }
 
-    pub fn sync(&self, state: &SyncState) -> Result<SyncState> {
+    pub fn sync(&self, state: &SyncState) -> Result<SyncResult> {
         sync(&self.comm, state)
     }
 
@@ -47,7 +60,7 @@ impl Syncer {
     }
 }
 
-fn sync(comm: &Comm, state: &SyncState) -> Result<SyncState> {
+fn sync(comm: &Comm, state: &SyncState) -> Result<SyncResult> {
     let dev = comm.device();
 
     let my_state = comm.device().htod_copy(vec![state.db_len]).unwrap();
@@ -61,9 +74,17 @@ fn sync(comm: &Comm, state: &SyncState) -> Result<SyncState> {
     println!("all_states: {:?}", all_states);
 
     let common_state = *all_states.iter().min().unwrap();
-    Ok(SyncState {
-        db_len: common_state,
-    })
+
+    if all_states.iter().all(|s| *s == common_state) {
+        Ok(SyncResult::InSync)
+    } else {
+        Ok(SyncResult::OutOfSync(OutOfSync {
+            my_state:     state.clone(),
+            common_state: SyncState {
+                db_len: common_state,
+            },
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -83,10 +104,8 @@ mod tests {
         let expected_state = SyncState { db_len: 123 };
 
         let sync_task = |i| {
+            let my_state = expected_state.clone();
             move || {
-                let my_state = SyncState {
-                    db_len: expected_state.db_len + i as u64,
-                };
                 let device = CudaDevice::new(i).unwrap();
                 let comm = Comm::from_rank(device, i, n_parties, net_id).unwrap();
                 sync(&comm, &my_state).unwrap()
@@ -98,8 +117,45 @@ mod tests {
             tasks.spawn_blocking(sync_task(i));
         }
 
-        while let Some(common_state) = tasks.join_next().await {
-            assert_eq!(common_state?, expected_state);
+        while let Some(result) = tasks.join_next().await {
+            assert_eq!(result?, SyncResult::InSync);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_out_of_sync() -> Result<()> {
+        let n_parties = 3.min(CudaDevice::count()? as usize);
+        let net_id = Id::new().unwrap();
+
+        let sync_task = |i| {
+            let my_state = if i == 0 {
+                SyncState { db_len: 123 }
+            } else {
+                SyncState { db_len: 456 }
+            };
+            move || {
+                let device = CudaDevice::new(i).unwrap();
+                let comm = Comm::from_rank(device, i, n_parties, net_id).unwrap();
+                sync(&comm, &my_state).unwrap()
+            }
+        };
+
+        let mut tasks = JoinSet::new();
+        for i in 0..n_parties {
+            tasks.spawn_blocking(sync_task(i));
+        }
+
+        while let Some(result) = tasks.join_next().await {
+            match result? {
+                SyncResult::InSync => panic!("Expected OutOfSync"),
+                SyncResult::OutOfSync(OutOfSync {
+                    my_state: _,
+                    common_state,
+                }) => {
+                    assert_eq!(common_state, SyncState { db_len: 123 });
+                }
+            }
         }
         Ok(())
     }

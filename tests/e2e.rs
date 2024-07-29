@@ -7,7 +7,7 @@ use gpu_iris_mpc::{
         galois_engine::degree4::GaloisRingIrisCodeShare,
         iris_db::{db::IrisDB, iris::IrisCode},
     },
-    store::sync::{SyncState, Syncer},
+    store::sync::{SyncResult, SyncState, Syncer},
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use std::{collections::HashMap, env, sync::Arc};
@@ -81,9 +81,9 @@ async fn simulate_sync(
                 let my_state = SyncState {
                     db_len: db_len as u64,
                 };
-                let common_state = syncer.sync(&my_state).unwrap();
+                let result = syncer.sync(&my_state).unwrap();
                 syncer.stop();
-                common_state
+                result
             }
         };
 
@@ -97,11 +97,8 @@ async fn simulate_sync(
             dbs[i].0.len(),
         ));
     }
-    let expected_state = SyncState {
-        db_len: dbs[0].0.len() as u64,
-    };
-    while let Some(common_state) = tasks.join_next().await {
-        assert_eq!(common_state?, expected_state);
+    while let Some(result) = tasks.join_next().await {
+        assert_eq!(result?, SyncResult::InSync);
     }
 
     Ok(())
