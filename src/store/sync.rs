@@ -1,7 +1,4 @@
-use crate::{
-    helpers::task_monitor::TaskMonitor,
-    threshold_ring::protocol::{Circuits, SendableRcComm},
-};
+use crate::{helpers::task_monitor::TaskMonitor, threshold_ring::protocol::Circuits};
 use cudarc::{driver::CudaDevice, nccl::Comm};
 use eyre::{eyre, Result};
 use std::{sync::Arc, time::Duration};
@@ -12,7 +9,7 @@ pub struct SyncState {
 }
 
 pub struct Syncer {
-    comm:         SendableRcComm,
+    comm:         Arc<Comm>,
     task_monitor: TaskMonitor,
 }
 

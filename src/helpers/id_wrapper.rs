@@ -16,6 +16,9 @@ impl FromStr for IdWrapper {
 
 impl std::fmt::Display for IdWrapper {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #[allow(clippy::unnecessary_cast)]
+        // depending on the platform, c_char might be signed or unsigned, so the below cast might be
+        // unnecessary
         f.write_str(&hex::encode(
             self.0
                 .internal()
