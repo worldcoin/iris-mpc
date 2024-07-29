@@ -311,9 +311,9 @@ async fn main() -> eyre::Result<()> {
     let device_manager = Arc::new(DeviceManager::init());
 
     let sync_result = startup_sync(&config, &device_manager, &store, store_len).await?;
-    if let SyncResult::OutOfSync(oos) = sync_result {
-        eprintln!("Databases are out-of-sync: {:?}", oos);
-        store.rollback(oos.common_state.db_len as usize).await?;
+    if let Some(db_len) = sync_result.must_rollback_storage() {
+        eprintln!("Databases are out-of-sync: {:?}", sync_result);
+        store.rollback(db_len).await?;
         return Err(eyre!("Rolled back to common state. Restarting…"));
     }
 

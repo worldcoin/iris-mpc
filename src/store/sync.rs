@@ -15,16 +15,31 @@ pub struct SyncState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SyncResult {
-    InSync,
-    OutOfSync(OutOfSync),
+pub struct SyncResult {
+    my_state:   SyncState,
+    all_states: Vec<SyncState>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OutOfSync {
-    #[allow(dead_code)]
-    pub my_state:     SyncState,
-    pub common_state: SyncState,
+impl SyncResult {
+    pub fn must_rollback_storage(&self) -> Option<usize> {
+        let smallest_len = self.all_states.iter().map(|s| s.db_len).min()?;
+        let all_equal = self.all_states.iter().all(|s| s.db_len == smallest_len);
+        if all_equal {
+            None
+        } else {
+            Some(smallest_len as usize)
+        }
+    }
+
+    pub fn deleted_request_ids(&self) -> Vec<String> {
+        // Merge request IDs.
+        self.all_states
+            .iter()
+            .flat_map(|s| s.deleted_request_ids.clone())
+            .sorted()
+            .dedup()
+            .collect()
+    }
 }
 
 pub struct Syncer {
@@ -81,8 +96,10 @@ fn sync(comm: &Comm, state: &SyncState) -> Result<SyncResult> {
     let all_states_ser = dev.dtoh_sync_copy(&all_states_dev).unwrap();
     let all_states = SyncState::deserialize_all(&all_states_ser)?;
     println!("all_states: {:?}", all_states);
-
-    Ok(SyncState::compare_states(state, &all_states))
+    Ok(SyncResult {
+        my_state: state.clone(),
+        all_states,
+    })
 }
 
 impl SyncState {
@@ -122,35 +139,6 @@ impl SyncState {
             .map(Self::deserialize)
             .collect()
     }
-
-    fn compare_states(my_state: &Self, states: &[Self]) -> SyncResult {
-        let common_state = SyncState {
-            db_len:              Self::find_most_late(states).db_len,
-            deleted_request_ids: Self::merge_request_ids(states),
-        };
-
-        if states.iter().all(|s| s.db_len == common_state.db_len) {
-            SyncResult::InSync
-        } else {
-            SyncResult::OutOfSync(OutOfSync {
-                my_state: my_state.clone(),
-                common_state,
-            })
-        }
-    }
-
-    fn find_most_late(states: &[Self]) -> Self {
-        states.iter().min_by_key(|s| s.db_len).unwrap().clone()
-    }
-
-    fn merge_request_ids(states: &[Self]) -> Vec<String> {
-        states
-            .iter()
-            .flat_map(|s| s.deleted_request_ids.clone())
-            .sorted()
-            .dedup()
-            .collect()
-    }
 }
 
 #[cfg(test)]
@@ -165,10 +153,12 @@ mod tests {
 
     #[test]
     fn test_serialize() -> Result<()> {
+        // Make sure we can serialize enough request IDs assuming a maximum length.
+        const MAX_REQUEST_ID_LEN: usize = 100;
         // My state.
         let state = SyncState {
             db_len:              123,
-            deleted_request_ids: vec!["A".repeat(64); SyncState::MAX_REQUESTS],
+            deleted_request_ids: vec!["A".repeat(MAX_REQUEST_ID_LEN); SyncState::MAX_REQUESTS],
         };
         let state_ser = state.serialize()?;
         assert_eq!(state_ser.len(), SyncState::SERIAL_SIZE);
@@ -184,12 +174,11 @@ mod tests {
 
     #[test]
     fn test_compare_states_sync() {
-        let my_state = some_state();
-        let states = vec![some_state(), some_state(), some_state()];
-        assert_eq!(
-            SyncState::compare_states(&my_state, &states),
-            SyncResult::InSync
-        );
+        let sync_res = SyncResult {
+            my_state:   some_state(),
+            all_states: vec![some_state(), some_state(), some_state()],
+        };
+        assert_eq!(sync_res.must_rollback_storage(), None);
     }
 
     #[test]
@@ -201,30 +190,26 @@ mod tests {
             },
             SyncState {
                 db_len:              456,
-                deleted_request_ids: vec!["x".to_string()],
+                deleted_request_ids: vec!["x".to_string(), "y".to_string()],
             },
             SyncState {
                 db_len:              789,
                 deleted_request_ids: vec!["most ahead".to_string()],
             },
         ];
-        let common_state = SyncState {
-            db_len:              123, // most late.
-            deleted_request_ids: vec![
-                "most ahead".to_string(),
-                "most late".to_string(),
-                "x".to_string(),
-            ],
-        };
+        let deleted_request_ids = vec![
+            "most ahead".to_string(),
+            "most late".to_string(),
+            "x".to_string(),
+            "y".to_string(),
+        ];
 
-        let my_state = states[0].clone();
-        assert_eq!(
-            SyncState::compare_states(&my_state, &states),
-            SyncResult::OutOfSync(OutOfSync {
-                my_state,
-                common_state,
-            })
-        );
+        let sync_res = SyncResult {
+            my_state:   states[0].clone(),
+            all_states: states.clone(),
+        };
+        assert_eq!(sync_res.must_rollback_storage(), Some(123)); // most late.
+        assert_eq!(sync_res.deleted_request_ids(), deleted_request_ids);
     }
 
     #[tokio::test]
@@ -248,7 +233,7 @@ mod tests {
         }
 
         while let Some(result) = tasks.join_next().await {
-            assert_eq!(result?, SyncResult::InSync);
+            assert_eq!(result?.must_rollback_storage(), None);
         }
         Ok(())
     }
@@ -263,7 +248,7 @@ mod tests {
                 some_state()
             } else {
                 SyncState {
-                    db_len:              456,
+                    db_len:              12, // late
                     deleted_request_ids: vec![],
                 }
             };
@@ -280,15 +265,7 @@ mod tests {
         }
 
         while let Some(result) = tasks.join_next().await {
-            match result? {
-                SyncResult::InSync => panic!("Expected OutOfSync"),
-                SyncResult::OutOfSync(OutOfSync {
-                    my_state: _,
-                    common_state,
-                }) => {
-                    assert_eq!(common_state, some_state());
-                }
-            }
+            assert_eq!(result?.must_rollback_storage(), Some(12));
         }
         Ok(())
     }
@@ -296,7 +273,7 @@ mod tests {
     fn some_state() -> SyncState {
         SyncState {
             db_len:              123,
-            deleted_request_ids: vec![],
+            deleted_request_ids: vec!["abc".to_string(), "def".to_string()],
         }
     }
 }
