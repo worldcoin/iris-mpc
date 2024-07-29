@@ -351,45 +351,56 @@ async fn main() -> eyre::Result<()> {
             store: query_store,
         }) = rx.recv().await
         {
+            let result_events = merged_results
+                .iter()
+                .enumerate()
+                .map(|(i, &idx_result)| {
+                    let result_event =
+                        ResultEvent::new(party_id, idx_result, matches[i], request_ids[i].clone());
+
+                    serde_json::to_string(&result_event).wrap_err("failed to serialize result")
+                })
+                .collect::<eyre::Result<Vec<_>>>()?;
+
             // Insert non-matching queries into the persistent store.
-            {
-                let codes_and_masks: Vec<StoredIrisRef> = matches
-                    .iter()
-                    .enumerate()
-                    .filter_map(
-                        // Find the indices of non-matching queries in the batch.
-                        |(query_idx, is_match)| if !is_match { Some(query_idx) } else { None },
-                    )
-                    .map(|query_idx| {
-                        // Get the original vectors from `receive_batch`.
-                        let code = &query_store.code[query_idx].coefs[..];
-                        let mask = &query_store.mask[query_idx].coefs[..];
-                        StoredIrisRef {
-                            left_code:  code,
-                            left_mask:  mask,
-                            // TODO: second eye.
-                            right_code: &[],
-                            right_mask: &[],
-                        }
-                    })
-                    .collect();
+            let codes_and_masks: Vec<StoredIrisRef> = matches
+                .iter()
+                .enumerate()
+                .filter_map(
+                    // Find the indices of non-matching queries in the batch.
+                    |(query_idx, is_match)| if !is_match { Some(query_idx) } else { None },
+                )
+                .map(|query_idx| {
+                    // Get the original vectors from `receive_batch`.
+                    let code = &query_store.code[query_idx].coefs[..];
+                    let mask = &query_store.mask[query_idx].coefs[..];
+                    StoredIrisRef {
+                        left_code:  code,
+                        left_mask:  mask,
+                        // TODO: second eye.
+                        right_code: &[],
+                        right_mask: &[],
+                    }
+                })
+                .collect();
 
-                store
-                    .insert_irises(&codes_and_masks)
-                    .await
-                    .wrap_err("failed to persist queries")?;
-            }
+            let mut tx = store.tx().await?;
 
-            for (i, &idx_result) in merged_results.iter().enumerate() {
-                // Notify consumers about result
-                println!("Sending results back to SNS...");
-                let result_event =
-                    ResultEvent::new(party_id, idx_result, matches[i], request_ids[i].clone());
+            store.insert_results(&mut tx, &result_events).await?;
 
+            store
+                .insert_irises(&mut tx, &codes_and_masks)
+                .await
+                .wrap_err("failed to persist queries")?;
+
+            tx.commit().await?;
+
+            println!("Sending results back to SNS...");
+            for result_event in result_events {
                 rx_sns_client
                     .publish()
                     .topic_arn(&config.results_topic_arn)
-                    .message(serde_json::to_string(&result_event).unwrap())
+                    .message(result_event)
                     .send()
                     .await?;
             }

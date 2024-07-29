@@ -4,7 +4,8 @@ use crate::config::Config;
 use bytemuck::cast_slice;
 use eyre::{eyre, Result};
 use futures::Stream;
-use sqlx::{migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool};
+use sqlx::{migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Transaction};
+use std::ops::DerefMut;
 
 const APP_NAME: &str = "SMPC";
 const POOL_SIZE: u32 = 5;
@@ -97,13 +98,19 @@ impl Store {
         Ok(Store { pool })
     }
 
+    pub async fn tx(&self) -> Result<Transaction<'_, Postgres>> {
+        Ok(self.pool.begin().await?)
+    }
+
     pub async fn stream_irises(&self) -> impl Stream<Item = Result<StoredIris, sqlx::Error>> + '_ {
         sqlx::query_as::<_, StoredIris>("SELECT * FROM irises ORDER BY id").fetch(&self.pool)
     }
 
-    pub async fn insert_irises(&self, codes_and_masks: &[StoredIrisRef<'_>]) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
-
+    pub async fn insert_irises(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        codes_and_masks: &[StoredIrisRef<'_>],
+    ) -> Result<()> {
         let mut query = sqlx::QueryBuilder::new(
             "INSERT INTO irises (left_code, left_mask, right_code, right_mask)",
         );
@@ -114,8 +121,7 @@ impl Store {
             query.push_bind(cast_slice::<u16, u8>(iris.right_mask));
         });
 
-        query.build().execute(&mut *tx).await?;
-        tx.commit().await?;
+        query.build().execute(tx.deref_mut()).await?;
         Ok(())
     }
 
@@ -125,6 +131,30 @@ impl Store {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    pub async fn insert_results(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        result_events: &[String],
+    ) -> Result<()> {
+        let mut query = sqlx::QueryBuilder::new("INSERT INTO results (result_event)");
+        query.push_values(result_events, |mut query, result| {
+            query.push_bind(result);
+        });
+
+        query.build().execute(tx.deref_mut()).await?;
+        Ok(())
+    }
+
+    pub async fn last_results(&self, count: usize) -> Result<Vec<String>> {
+        let mut result_events: Vec<String> =
+            sqlx::query_scalar("SELECT result_event FROM results ORDER BY id DESC LIMIT $1")
+                .bind(count as i64)
+                .fetch_all(&self.pool)
+                .await?;
+        result_events.reverse();
+        Ok(result_events)
     }
 }
 
@@ -182,8 +212,10 @@ mod tests {
                 right_mask: &[],
             },
         ];
-        store.insert_irises(&codes_and_masks[0..2]).await?;
-        store.insert_irises(&codes_and_masks[2..3]).await?;
+        let mut tx = store.tx().await?;
+        store.insert_irises(&mut tx, &codes_and_masks[0..2]).await?;
+        store.insert_irises(&mut tx, &codes_and_masks[2..3]).await?;
+        tx.commit().await?;
 
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
 
@@ -215,7 +247,9 @@ mod tests {
             right_mask: &[101_u16; 12800],
         };
         let codes_and_masks = vec![iris; count];
-        store.insert_irises(&codes_and_masks).await?;
+        let mut tx = store.tx().await?;
+        store.insert_irises(&mut tx, &codes_and_masks).await?;
+        tx.commit().await?;
 
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), count);
@@ -237,12 +271,32 @@ mod tests {
             right_mask: &[101_u16; 12800],
         };
 
-        store.insert_irises(&vec![iris; 10]).await?;
+        let mut tx = store.tx().await?;
+        store.insert_irises(&mut tx, &vec![iris; 10]).await?;
+        tx.commit().await?;
         store.rollback(5).await?;
 
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), 5);
         assert_contiguous_id(&got);
+
+        cleanup(&store, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_results() -> Result<()> {
+        let schema_name = temporary_name();
+        let store = Store::new(&test_db_url()?, &schema_name).await?;
+
+        let result_events = vec!["event1".to_string(), "event2".to_string()];
+        let mut tx = store.tx().await?;
+        store.insert_results(&mut tx, &result_events).await?;
+        store.insert_results(&mut tx, &result_events).await?;
+        tx.commit().await?;
+
+        let got = store.last_results(2).await?;
+        assert_eq!(got, vec!["event1", "event2"]);
 
         cleanup(&store, &schema_name).await?;
         Ok(())
