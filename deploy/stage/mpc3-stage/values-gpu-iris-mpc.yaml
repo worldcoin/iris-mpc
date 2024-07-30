@@ -1,4 +1,7 @@
 env:
+  - name: "NCCL_DEBUG"
+    value: "info"
+
   - name: RUST_BACKTRACE
     value: "full"
 
