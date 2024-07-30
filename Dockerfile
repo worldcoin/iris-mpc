@@ -39,7 +39,7 @@ RUN apt-get update && apt-get install -y pkg-config wget libssl-dev ca-certifica
 RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
     && dpkg -i cuda-keyring_1.1-1_all.deb \
     && apt-get update \
-    && apt-get install -y cuda-toolkit-12-2 libnccl2 libnccl-dev
+    && apt-get install -y cuda-toolkit-12-2 libnccl2=2.22.3-1+cuda12.2 libnccl-dev=2.22.3-1+cuda12.2
 
 USER 65534
 ENTRYPOINT ["/bin/server"]
