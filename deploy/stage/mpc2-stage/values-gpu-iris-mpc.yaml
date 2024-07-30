@@ -47,6 +47,9 @@ env:
   - name: SMPC__SERVERS__PHASE_2_PORT
     value: "4005"
 
+  - name: SMPC__SERVERS__SYNC_PORT
+    value: "4006"
+
   - name: SMPC__REQUESTS_QUEUE_URL
     valueFrom:
       secretKeyRef:
