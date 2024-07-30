@@ -23,6 +23,9 @@ impl DeviceManager {
         for i in 0..CudaDevice::count().unwrap() {
             devices.push(CudaDevice::new(i as usize).unwrap());
         }
+
+        println!("Found {} devices", devices.len());
+
         Self { devices }
     }
 
