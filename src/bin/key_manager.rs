@@ -1,4 +1,4 @@
-use aws_sdk_s3::{Client as S3Client, config::Region as S3Region, Error as S3Error};
+use aws_sdk_s3::{config::Region as S3Region, Client as S3Client, Error as S3Error};
 use aws_sdk_secretsmanager::{Client as SecretsManagerClient, Error as SecretsManagerError};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use clap::Parser;
@@ -48,7 +48,7 @@ async fn main() -> eyre::Result<()> {
 
     let region_provider = S3Region::new(REGION);
     let shared_config = aws_config::from_env().region(region_provider).load().await;
-    
+
     let s3_client = S3Client::new(&shared_config);
     let sm_client = SecretsManagerClient::new(&shared_config);
 
@@ -65,7 +65,7 @@ async fn main() -> eyre::Result<()> {
 
         let user_pubkey = STANDARD.decode(pub_key_str.as_bytes()).unwrap();
         let decoded_pub_key = PublicKey::from_slice(&user_pubkey).unwrap();
-    
+
         assert_eq!(public_key, decoded_pub_key);
 
         let user_privkey = STANDARD.decode(priv_key_str.as_bytes()).unwrap();
@@ -83,17 +83,12 @@ async fn main() -> eyre::Result<()> {
     )
     .await?;
 
-    upload_private_key_to_asm(
-        &sm_client,
-        secret_key_name.as_str(),
-        priv_key_str.as_str(),
-    ).await?;
+    upload_private_key_to_asm(&sm_client, secret_key_name.as_str(), priv_key_str.as_str()).await?;
 
     println!("File uploaded successfully!");
 
     Ok(())
 }
-
 
 async fn upload_private_key_to_asm(
     client: &SecretsManagerClient,
