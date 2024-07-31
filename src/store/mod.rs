@@ -1,3 +1,5 @@
+pub mod sync;
+
 use crate::config::Config;
 use bytemuck::cast_slice;
 use eyre::{eyre, Result};
@@ -116,6 +118,14 @@ impl Store {
         tx.commit().await?;
         Ok(())
     }
+
+    pub async fn rollback(&self, db_len: usize) -> Result<()> {
+        sqlx::query("DELETE FROM irises WHERE id >= $1")
+            .bind(db_len as i64)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }
 
 fn sanitize_identifier(input: &str) -> Result<()> {
@@ -209,6 +219,29 @@ mod tests {
 
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), count);
+        assert_contiguous_id(&got);
+
+        cleanup(&store, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_rollback() -> Result<()> {
+        let schema_name = temporary_name();
+        let store = Store::new(&test_db_url()?, &schema_name).await?;
+
+        let iris = StoredIrisRef {
+            left_code:  &[123_u16; 12800],
+            left_mask:  &[456_u16; 12800],
+            right_code: &[789_u16; 12800],
+            right_mask: &[101_u16; 12800],
+        };
+
+        store.insert_irises(&vec![iris; 10]).await?;
+        store.rollback(5).await?;
+
+        let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
+        assert_eq!(got.len(), 5);
         assert_contiguous_id(&got);
 
         cleanup(&store, &schema_name).await?;

@@ -7,10 +7,11 @@ use gpu_iris_mpc::{
         galois_engine::degree4::GaloisRingIrisCodeShare,
         iris_db::{db::IrisDB, iris::IrisCode},
     },
+    store::sync::{SyncResult, SyncState, Syncer},
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use std::{collections::HashMap, env, sync::Arc};
-use tokio::sync::oneshot;
+use tokio::{sync::oneshot, task::JoinSet};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
@@ -60,13 +61,56 @@ fn install_tracing() {
         .init();
 }
 
+// Simulate a sync between all parties by running each party in its own thread.
+async fn simulate_sync(
+    configs: &[&ServersConfig],
+    device_managers: &[&Arc<DeviceManager>],
+    dbs: &[&(Vec<u16>, Vec<u16>)],
+) -> Result<()> {
+    let sync_task =
+        |party_id, config: ServersConfig, device_manager: Arc<DeviceManager>, db_len| {
+            move || {
+                // Each party sends and receives the state.
+                let mut syncer = Syncer::new(
+                    party_id,
+                    config.bootstrap_url,
+                    config.sync_port,
+                    device_manager.device(0),
+                );
+
+                let my_state = SyncState {
+                    db_len: db_len as u64,
+                };
+                let result = syncer.sync(&my_state).unwrap();
+                syncer.stop();
+                result
+            }
+        };
+
+    // Run parties in parallel.
+    let mut tasks = JoinSet::new();
+    for i in 0..configs.len() {
+        tasks.spawn_blocking(sync_task(
+            i,
+            configs[i].clone(),
+            device_managers[i].clone(),
+            dbs[i].0.len(),
+        ));
+    }
+    while let Some(result) = tasks.join_next().await {
+        assert_eq!(result?, SyncResult::InSync);
+    }
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn e2e_test() -> Result<()> {
     install_tracing();
     env::set_var("NCCL_P2P_LEVEL", "LOC");
     env::set_var("NCCL_NET", "Socket");
 
-    let db0 = generate_db(0)?;
+    let db0: (Vec<u16>, Vec<u16>) = generate_db(0)?;
     let db1 = generate_db(1)?;
     let db2 = generate_db(2)?;
 
@@ -94,6 +138,13 @@ async fn e2e_test() -> Result<()> {
         .collect::<Vec<_>>();
     let ids1 = ids0.clone();
     let ids2 = ids0.clone();
+
+    simulate_sync(
+        &[&config0, &config1, &config2],
+        &[&device_manager0, &device_manager1, &device_manager2],
+        &[&db0, &db1, &db2],
+    )
+    .await?;
 
     let actor0_task = tokio::task::spawn_blocking(move || {
         let comms0 = device_manager0.instantiate_network_from_ids(0, ids0);

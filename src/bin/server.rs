@@ -4,7 +4,7 @@ use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{routing::get, Router};
 use clap::Parser;
-use eyre::Context;
+use eyre::{eyre, Context};
 use futures::StreamExt;
 use gpu_iris_mpc::{
     config::{json_wrapper::JsonStrWrapper, Config, Opt},
@@ -14,16 +14,23 @@ use gpu_iris_mpc::{
             NODE_ID_MESSAGE_ATTRIBUTE_NAME, SPAN_ID_MESSAGE_ATTRIBUTE_NAME,
             TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
         },
+        device_manager::DeviceManager,
         kms_dh::derive_shared_secret,
         sqs::{ResultEvent, SMPCRequest, SQSMessage},
         task_monitor::TaskMonitor,
     },
     server::{BatchMetadata, BatchQuery, ServerActor, ServerJobResult},
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
-    store::{Store, StoredIrisRef},
+    store::{
+        sync::{SyncResult, SyncState, Syncer},
+        Store, StoredIrisRef,
+    },
 };
 use rand::{rngs::StdRng, SeedableRng};
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use telemetry_batteries::{
     metrics::statsd::StatsdBattery,
     tracing::{datadog::DatadogBattery, TracingShutdownHandle},
@@ -170,7 +177,7 @@ fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
 }
 
 async fn initialize_chacha_seeds(
-    kms_key_arns: JsonStrWrapper<Vec<String>>,
+    kms_key_arns: &JsonStrWrapper<Vec<String>>,
     party_id: usize,
 ) -> eyre::Result<([u32; 8], [u32; 8])> {
     // Init RNGs
@@ -202,7 +209,10 @@ async fn initialize_chacha_seeds(
     Ok(chacha_seeds)
 }
 
-async fn initialize_iris_dbs(party_id: usize, store: &Store) -> eyre::Result<(Vec<u16>, Vec<u16>)> {
+async fn initialize_iris_dbs(
+    party_id: usize,
+    store: &Store,
+) -> eyre::Result<(Vec<u16>, Vec<u16>, usize)> {
     // Generate or load DB
     let (mut codes_db, mut masks_db) = {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
@@ -237,14 +247,39 @@ async fn initialize_iris_dbs(party_id: usize, store: &Store) -> eyre::Result<(Ve
     };
 
     // Load DB from persistent storage.
+    let random_len = codes_db.len();
     while let Some(iris) = store.stream_irises().await.next().await {
         let iris = iris?;
         codes_db.extend(iris.left_code());
         masks_db.extend(iris.left_mask());
     }
+    let store_len = codes_db.len() - random_len;
 
-    Ok((codes_db, masks_db))
+    Ok((codes_db, masks_db, store_len))
 }
+
+fn startup_sync(
+    config: &Config,
+    device_manager: &DeviceManager,
+    db_len: usize,
+) -> eyre::Result<SyncResult> {
+    let mut syncer = Syncer::new(
+        config.party_id,
+        config.servers.bootstrap_url.clone(),
+        config.servers.sync_port,
+        device_manager.device(0),
+    );
+
+    let my_state = SyncState {
+        db_len: db_len as u64,
+    };
+    let result = syncer.sync(&my_state)?;
+
+    // Not using the syncer anymore, stop it.
+    syncer.stop();
+    Ok(result)
+}
+
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     dotenvy::dotenv().ok();
@@ -261,9 +296,18 @@ async fn main() -> eyre::Result<()> {
     let sns_client = SNSClient::new(&shared_config);
 
     let party_id = config.party_id;
-    let chacha_seeds = initialize_chacha_seeds(config.kms_key_arns, party_id).await?;
+    let chacha_seeds = initialize_chacha_seeds(&config.kms_key_arns, party_id).await?;
 
-    let (codes_db, masks_db) = initialize_iris_dbs(party_id, &store).await?;
+    let (codes_db, masks_db, store_len) = initialize_iris_dbs(party_id, &store).await?;
+
+    let device_manager = Arc::new(DeviceManager::init());
+
+    let sync_result = startup_sync(&config, &device_manager, store_len)?;
+    if let SyncResult::OutOfSync(oos) = sync_result {
+        eprintln!("Databases are out-of-sync: {:?}", oos);
+        store.rollback(oos.common_state.db_len as usize).await?;
+        return Err(eyre!("Rolled back to common state. Restarting…"));
+    }
 
     let mut background_tasks = TaskMonitor::new();
     // a bit convoluted, but we need to create the actor on the thread already,

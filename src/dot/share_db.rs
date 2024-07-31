@@ -65,7 +65,7 @@ pub fn gemm(
     beta: i32,
 ) {
     unsafe {
-        gemm_ex(
+        let status = gemm_ex(
             *handle.handle(),
             sys::cublasOperation_t::CUBLAS_OP_T,
             sys::cublasOperation_t::CUBLAS_OP_N,
@@ -85,8 +85,17 @@ pub fn gemm(
             m as i32,
             sys::cublasComputeType_t::CUBLAS_COMPUTE_32I_PEDANTIC,
             sys::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT,
-        )
-        .unwrap();
+        );
+
+        match status {
+            Ok(_) => {
+                println!("GEMM success");
+            }
+            Err(e) => {
+                // Handle error
+                eprintln!("CUBLAS error: {:?}", e);
+            }
+        }
     }
 }
 

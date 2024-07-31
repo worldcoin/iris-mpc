@@ -1,6 +1,12 @@
 env:
+  - name: "NCCL_DEBUG"
+    value: "info"
+
   - name: RUST_BACKTRACE
     value: "full"
+
+  - name: NCCL_SOCKET_IFNAME
+    value: "eth0"
 
   - name: SMPC__ENVIRONMENT
     value: "stage"
@@ -43,6 +49,9 @@ env:
 
   - name: SMPC__SERVERS__PHASE_2_PORT
     value: "4005"
+
+  - name: SMPC__SERVERS__SYNC_PORT
+    value: "4006"
 
   - name: SMPC__REQUESTS_QUEUE_URL
     valueFrom:

@@ -102,6 +102,23 @@ impl ServerActor {
         job_queue_size: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let device_manager = Arc::new(DeviceManager::init());
+        Self::new_with_device_manager(
+            party_id,
+            chacha_seeds,
+            codes_db,
+            masks_db,
+            device_manager,
+            job_queue_size,
+        )
+    }
+    pub fn new_with_device_manager(
+        party_id: usize,
+        chacha_seeds: ([u32; 8], [u32; 8]),
+        codes_db: &[u16],
+        masks_db: &[u16],
+        device_manager: Arc<DeviceManager>,
+        job_queue_size: usize,
+    ) -> eyre::Result<(Self, ServerActorHandle)> {
         let ids = device_manager.get_ids_from_magic(0);
         let comms = device_manager.instantiate_network_from_ids(party_id, ids);
         Self::new_with_device_manager_and_comms(
