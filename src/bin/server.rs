@@ -271,14 +271,7 @@ async fn main() -> eyre::Result<()> {
     // channel
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
-        let actor = match ServerActor::new(
-            config.party_id,
-            config.servers,
-            chacha_seeds,
-            &codes_db,
-            &masks_db,
-            8,
-        ) {
+        let actor = match ServerActor::new(config.party_id, chacha_seeds, &codes_db, &masks_db, 8) {
             Ok((actor, handle)) => {
                 tx.send(Ok(handle)).unwrap();
                 actor

@@ -187,12 +187,15 @@ async fn test_lift() -> eyre::Result<()> {
 
     // Get Circuit Party
     let device_manager = Arc::new(DeviceManager::init());
+    let ids = device_manager.get_ids_from_magic(0);
+    let comms = device_manager.instantiate_network_from_ids(party_id, ids);
     let mut party = Circuits::new(
         party_id,
         INPUTS_PER_GPU_SIZE,
         INPUTS_PER_GPU_SIZE / 64,
         ([party_id as u32; 8], [((party_id + 2) % 3) as u32; 8]),
         device_manager.clone(),
+        comms,
     );
     let devices = party.get_devices();
     let streams = devices

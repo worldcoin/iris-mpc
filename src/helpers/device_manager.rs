@@ -181,9 +181,8 @@ impl DeviceManager {
     }
 
     #[allow(clippy::unnecessary_cast)]
-    pub fn instantiate_network(&self, peer_id: usize, magic: u64) -> Vec<Arc<Comm>> {
+    pub fn get_ids_from_magic(&self, magic: u64) -> Vec<Id> {
         let n_devices = self.devices.len();
-        let mut comms = Vec::with_capacity(n_devices);
         let mut ids = Vec::with_capacity(n_devices);
 
         if std::env::var("NCCL_COMM_ID").is_err() {
@@ -202,6 +201,13 @@ impl DeviceManager {
 
             ids.push(id);
         }
+
+        ids
+    }
+
+    pub fn instantiate_network_from_ids(&self, peer_id: usize, ids: Vec<Id>) -> Vec<Arc<Comm>> {
+        let n_devices = self.devices.len();
+        let mut comms = Vec::with_capacity(n_devices);
 
         for i in 0..n_devices {
             // Bind to thread (important!)

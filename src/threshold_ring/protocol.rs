@@ -371,6 +371,7 @@ impl Circuits {
         alloc_size: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
         device_manager: Arc<DeviceManager>,
+        comms: Vec<Arc<Comm>>,
     ) -> Self {
         // For the transpose, inputs should be multiple of 64 bits
         assert!(input_size % 64 == 0);
@@ -393,8 +394,6 @@ impl Circuits {
             kernels.push(kernel);
             rngs.push(rng);
         }
-
-        let comms = device_manager.instantiate_network(peer_id, chacha_seeds.0[0] as u64);
 
         let buffers = Buffers::new(&devs, alloc_size);
 
