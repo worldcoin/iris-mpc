@@ -29,7 +29,7 @@ impl<'a> Syncer<'a> {
     }
 
     pub fn sync(&self, state: &SyncState) -> Result<SyncResult> {
-        sync(&self.comm, state)
+        sync(self.comm, state)
     }
 }
 

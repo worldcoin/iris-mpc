@@ -77,8 +77,7 @@ async fn simulate_sync(
             let my_state = SyncState {
                 db_len: db_len as u64,
             };
-            let result = syncer.sync(&my_state).unwrap();
-            result
+            syncer.sync(&my_state).unwrap()
         }
     };
 
