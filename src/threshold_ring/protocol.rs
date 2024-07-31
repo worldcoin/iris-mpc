@@ -442,7 +442,14 @@ impl Circuits {
         }
 
         for _ in 0..n_devices {
-            ids.push(Id::new().unwrap());
+            let id = Id::new().unwrap();
+            let raw = id.internal().to_owned();
+            dbg!(raw);
+            for i in raw {
+                print!("{:02x}", i);
+            }
+            println!("");
+            ids.push(id);
         }
 
         for i in 0..n_devices {
