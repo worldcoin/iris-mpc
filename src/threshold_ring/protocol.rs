@@ -441,7 +441,7 @@ impl Circuits {
             panic!("NCCL_COMM_ID must be set to <host0_ip:port>");
         }
 
-        for _ in 0..n_devices {
+        for _ in 0..1 {
             let id = Id::new().unwrap();
             let raw = id.internal().to_owned();
             dbg!(raw);
@@ -452,7 +452,7 @@ impl Circuits {
             ids.push(id);
         }
 
-        for i in 0..n_devices {
+        for i in 0..11 {
             // Bind to thread (important!)
             devices[i].bind_to_thread().unwrap();
             comms.push(Arc::new(
