@@ -7,7 +7,7 @@ use gpu_iris_mpc::{
         galois_engine::degree4::GaloisRingIrisCodeShare,
         iris_db::{db::IrisDB, iris::IrisCode},
     },
-    store::sync::{SyncResult, SyncState, Syncer},
+    store::sync::{self, SyncResult, SyncState},
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use std::{collections::HashMap, env, sync::Arc};
@@ -72,12 +72,10 @@ async fn simulate_sync(
             let mut comms = device_manager.instantiate_network_from_ids(party_id, ids);
             let comm = comms.pop().unwrap();
             // Each party sends and receives the state.
-            let syncer = Syncer::new(comm.as_ref());
-
             let my_state = SyncState {
                 db_len: db_len as u64,
             };
-            syncer.sync(&my_state).unwrap()
+            sync::sync(comm.as_ref(), &my_state).unwrap()
         }
     };
 
@@ -132,11 +130,16 @@ async fn e2e_test() -> Result<()> {
         .collect::<Vec<_>>();
     let ids1 = ids0.clone();
     let ids2 = ids0.clone();
+    let ids0_sync = (0..num_devices)
+        .map(|_| Id::new().unwrap())
+        .collect::<Vec<_>>();
+    let ids1_sync = ids0_sync.clone();
+    let ids2_sync = ids0_sync.clone();
 
     simulate_sync(
         &[&db0, &db1, &db2],
         &[&device_manager0, &device_manager1, &device_manager2],
-        &[ids0.clone(), ids1.clone(), ids2.clone()],
+        &[ids0_sync, ids1_sync, ids2_sync],
     )
     .await?;
 

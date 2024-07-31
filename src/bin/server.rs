@@ -22,7 +22,7 @@ use gpu_iris_mpc::{
     server::{BatchMetadata, BatchQuery, ServerActor, ServerJobResult},
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     store::{
-        sync::{SyncResult, SyncState, Syncer},
+        sync::{self, SyncResult, SyncState},
         Store, StoredIrisRef,
     },
 };
@@ -266,12 +266,11 @@ fn startup_sync(
     let ids = device_manager.get_ids_from_magic(1234567890);
     let mut comms = device_manager.instantiate_network_from_ids(party_id, ids);
     let comm = comms.pop().unwrap();
-    let syncer = Syncer::new(comm.as_ref());
 
     let my_state = SyncState {
         db_len: db_len as u64,
     };
-    let result = syncer.sync(&my_state)?;
+    let result = sync::sync(comm.as_ref(), &my_state)?;
 
     // Not using the syncer anymore, stop it.
     Ok(result)

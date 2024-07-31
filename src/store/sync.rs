@@ -19,21 +19,7 @@ pub struct OutOfSync {
     pub common_state: SyncState,
 }
 
-pub struct Syncer<'a> {
-    comm: &'a Comm,
-}
-
-impl<'a> Syncer<'a> {
-    pub fn new(comm: &'a Comm) -> Self {
-        Self { comm }
-    }
-
-    pub fn sync(&self, state: &SyncState) -> Result<SyncResult> {
-        sync(self.comm, state)
-    }
-}
-
-fn sync(comm: &Comm, state: &SyncState) -> Result<SyncResult> {
+pub fn sync(comm: &Comm, state: &SyncState) -> Result<SyncResult> {
     let dev = comm.device();
 
     let my_state = comm.device().htod_copy(vec![state.db_len]).unwrap();
