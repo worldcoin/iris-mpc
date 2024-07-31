@@ -441,18 +441,18 @@ impl Circuits {
             panic!("NCCL_COMM_ID must be set to <host0_ip:port>");
         }
 
-        for _ in 0..1 {
+        for i in 0..n_devices {
             let id = Id::new().unwrap();
-            let raw = id.internal().to_owned();
-            dbg!(raw);
-            for i in raw {
-                print!("{:02x}", i);
-            }
-            println!("");
+            let mut raw = id.internal().to_owned();
+            let magic = u64::try_from(i).unwrap();
+            raw[0..8].copy_from_slice(&magic.to_be_bytes());
+
+            let id = Id::uninit(raw);
+
             ids.push(id);
         }
 
-        for i in 0..11 {
+        for i in 0..n_devices {
             // Bind to thread (important!)
             devices[i].bind_to_thread().unwrap();
             comms.push(Arc::new(
