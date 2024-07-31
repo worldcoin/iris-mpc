@@ -1,5 +1,11 @@
-use aws_sdk_s3::{config::Region as S3Region, Client as S3Client, Error as S3Error};
-use aws_sdk_secretsmanager::{Client as SecretsManagerClient, Error as SecretsManagerError};
+use aws_sdk_s3::{
+    config::Region as S3Region, operation::put_object::PutObjectOutput, Client as S3Client,
+    Error as S3Error,
+};
+use aws_sdk_secretsmanager::{
+    operation::create_secret::CreateSecretOutput, Client as SecretsManagerClient,
+    Error as SecretsManagerError,
+};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use clap::Parser;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -75,15 +81,40 @@ async fn main() -> eyre::Result<()> {
 
         return Ok(());
     }
-    upload_public_key_to_s3(
+    match upload_public_key_to_s3(
         &s3_client,
         public_key_s3_bucket_name.as_str(),
         bucket_key_name.as_str(),
         pub_key_str.as_str(),
     )
-    .await?;
+    .await
+    {
+        Ok(output) => {
+            println!("Bucket: {}", public_key_s3_bucket_name);
+            println!("Key: {}", bucket_key_name);
+            println!("ETag: {}", output.e_tag.unwrap());
+        }
+        Err(e) => {
+            eprintln!("Error uploading public key to S3: {:?}", e);
+            return Err(eyre::eyre!("Error uploading public key to S3"));
+        }
+    }
 
-    upload_private_key_to_asm(&sm_client, secret_key_name.as_str(), priv_key_str.as_str()).await?;
+    match upload_private_key_to_asm(&sm_client, secret_key_name.as_str(), priv_key_str.as_str())
+        .await
+    {
+        Ok(output) => {
+            println!("Secret ARN: {}", output.arn.unwrap());
+            println!("Secret Name: {}", output.name.unwrap());
+            println!("Version ID: {}", output.version_id.unwrap());
+        }
+        Err(e) => {
+            eprintln!("Error uploading private key to Secrets Manager: {:?}", e);
+            return Err(eyre::eyre!(
+                "Error uploading private key to Secrets Manager"
+            ));
+        }
+    }
 
     println!("File uploaded successfully!");
 
@@ -94,15 +125,14 @@ async fn upload_private_key_to_asm(
     client: &SecretsManagerClient,
     secret_name: &str,
     content: &str,
-) -> Result<(), SecretsManagerError> {
-    client
+) -> Result<CreateSecretOutput, SecretsManagerError> {
+    Ok(client
         .create_secret()
         .secret_string(content)
         .name(secret_name)
         .kms_key_id(PRIVATE_KEY_KMS_KEY_ID)
         .send()
-        .await?;
-    Ok(())
+        .await?)
 }
 
 async fn upload_public_key_to_s3(
@@ -110,16 +140,14 @@ async fn upload_public_key_to_s3(
     bucket: &str,
     key: &str,
     content: &str,
-) -> Result<(), S3Error> {
-    client
+) -> Result<PutObjectOutput, S3Error> {
+    Ok(client
         .put_object()
         .bucket(bucket)
         .key(key)
         .body(content.to_string().into_bytes().into())
         .send()
-        .await?;
-
-    Ok(())
+        .await?)
 }
 
 fn generate_key_pairs(seed: Seed) -> (PublicKey, SecretKey) {
