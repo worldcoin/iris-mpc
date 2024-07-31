@@ -205,6 +205,9 @@ impl DeviceManager {
         ids
     }
 
+    // TODO: check if we can do this nicer, atm we only use the arc to clone it, so
+    // a Rc would do.
+    #[allow(clippy::arc_with_non_send_sync)]
     pub fn instantiate_network_from_ids(&self, peer_id: usize, ids: Vec<Id>) -> Vec<Arc<Comm>> {
         let n_devices = self.devices.len();
         let mut comms = Vec::with_capacity(n_devices);
