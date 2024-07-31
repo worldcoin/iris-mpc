@@ -431,7 +431,7 @@ impl Circuits {
         Buffers::return_buffer(&mut self.buffers.u64_32c_1, src);
     }
 
-    #[allow(clippy::arc_with_non_send_sync)]
+    #[allow(clippy::unnecessary_cast)]
     pub fn instantiate_network(peer_id: usize, devices: &[Arc<CudaDevice>]) -> Vec<Arc<Comm>> {
         let n_devices = devices.len();
         let mut comms = Vec::with_capacity(n_devices);
@@ -444,8 +444,10 @@ impl Circuits {
         for i in 0..n_devices {
             let id = Id::new().unwrap();
             let mut raw = id.internal().to_owned();
-            let magic = u64::try_from(i).unwrap();
-            raw[0..8].copy_from_slice(&magic.to_be_bytes());
+            let magic = u64::try_from(i).unwrap().to_be_bytes();
+            for i in 0..8 {
+                raw[i] = magic[i] as ::core::ffi::c_char;
+            }
 
             let id = Id::uninit(raw);
 
