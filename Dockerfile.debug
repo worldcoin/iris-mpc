@@ -1,0 +1,40 @@
+FROM --platform=linux/amd64 ubuntu:22.04 as build-image
+
+WORKDIR /src
+RUN apt-get update && apt-get install -y \
+    curl \
+    build-essential \
+    libssl-dev \
+    texinfo \
+    libcap2-bin \
+    pkg-config \
+    git \
+    devscripts \
+    debhelper \
+    ca-certificates \
+    wget
+
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
+ENV PATH "/root/.cargo/bin:${PATH}"
+ENV RUSTUP_HOME "/root/.rustup"
+ENV CARGO_HOME "/root/.cargo"
+RUN rustup toolchain install nightly-2024-07-10
+RUN rustup default nightly-2024-07-10
+RUN rustup component add cargo
+
+FROM --platform=linux/amd64 build-image as build-app
+WORKDIR /src/gpu-iris-mpc
+COPY . .
+
+FROM --platform=linux/amd64 ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+
+COPY --from=build-app /src/gpu-iris-mpc/ /app/src/gpu-iris-mpc/
+
+RUN apt-get update && apt-get install -y pkg-config wget libssl-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
+    && dpkg -i cuda-keyring_1.1-1_all.deb \
+    && apt-get update \
+    && apt-get install -y cuda-toolkit-12-2 libnccl2=2.22.3-1+cuda12.2 libnccl-dev=2.22.3-1+cuda12.2
