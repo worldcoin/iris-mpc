@@ -63,37 +63,32 @@ fn install_tracing() {
 
 // Simulate a sync between all parties by running each party in its own thread.
 async fn simulate_sync(
-    configs: &[&ServersConfig],
-    device_managers: &[&Arc<DeviceManager>],
     dbs: &[&(Vec<u16>, Vec<u16>)],
+    device_managers: &[&Arc<DeviceManager>],
+    ids: &[Vec<Id>],
 ) -> Result<()> {
-    let sync_task =
-        |party_id, config: ServersConfig, device_manager: Arc<DeviceManager>, db_len| {
-            move || {
-                // Each party sends and receives the state.
-                let mut syncer = Syncer::new(
-                    party_id,
-                    config.bootstrap_url,
-                    config.sync_port,
-                    device_manager.device(0),
-                );
+    let sync_task = |party_id, device_manager: Arc<DeviceManager>, ids: Vec<Id>, db_len| {
+        move || {
+            let mut comms = device_manager.instantiate_network_from_ids(party_id, ids);
+            let comm = comms.pop().unwrap();
+            // Each party sends and receives the state.
+            let syncer = Syncer::new(comm.as_ref());
 
-                let my_state = SyncState {
-                    db_len: db_len as u64,
-                };
-                let result = syncer.sync(&my_state).unwrap();
-                syncer.stop();
-                result
-            }
-        };
+            let my_state = SyncState {
+                db_len: db_len as u64,
+            };
+            let result = syncer.sync(&my_state).unwrap();
+            result
+        }
+    };
 
     // Run parties in parallel.
     let mut tasks = JoinSet::new();
-    for i in 0..configs.len() {
+    for i in 0..device_managers.len() {
         tasks.spawn_blocking(sync_task(
             i,
-            configs[i].clone(),
             device_managers[i].clone(),
+            ids[i].clone(),
             dbs[i].0.len(),
         ));
     }
@@ -140,9 +135,9 @@ async fn e2e_test() -> Result<()> {
     let ids2 = ids0.clone();
 
     simulate_sync(
-        &[&config0, &config1, &config2],
-        &[&device_manager0, &device_manager1, &device_manager2],
         &[&db0, &db1, &db2],
+        &[&device_manager0, &device_manager1, &device_manager2],
+        &[ids0.clone(), ids1.clone(), ids2.clone()],
     )
     .await?;
 
