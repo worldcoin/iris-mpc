@@ -9,6 +9,7 @@ use cudarc::{
         sys::{CUevent, CUevent_flags},
         CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceRepr,
     },
+    nccl::{Comm, Id},
 };
 use std::sync::Arc;
 
@@ -177,5 +178,38 @@ impl DeviceManager {
         self.device(index).bind_to_thread()?;
         unsafe { result::memcpy_htod_sync(*dst.device_ptr(), src.as_ref())? };
         Ok(())
+    }
+
+    #[allow(clippy::unnecessary_cast)]
+    pub fn instantiate_network(&self, peer_id: usize, magic: u64) -> Vec<Arc<Comm>> {
+        let n_devices = self.devices.len();
+        let mut comms = Vec::with_capacity(n_devices);
+        let mut ids = Vec::with_capacity(n_devices);
+
+        if std::env::var("NCCL_COMM_ID").is_err() {
+            panic!("NCCL_COMM_ID must be set to <host0_ip:port>");
+        }
+
+        for i in 0..n_devices {
+            let id = Id::new().unwrap();
+            let mut raw = id.internal().to_owned();
+            let magic = magic.wrapping_add(u64::try_from(i).unwrap()).to_be_bytes();
+            for i in 0..8 {
+                raw[i] = magic[i] as ::core::ffi::c_char;
+            }
+
+            let id = Id::uninit(raw);
+
+            ids.push(id);
+        }
+
+        for i in 0..n_devices {
+            // Bind to thread (important!)
+            self.devices[i].bind_to_thread().unwrap();
+            comms.push(Arc::new(
+                Comm::from_rank(self.devices[i].clone(), peer_id, 3, ids[i]).unwrap(),
+            ));
+        }
+        comms
     }
 }

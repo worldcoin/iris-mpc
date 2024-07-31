@@ -8,7 +8,7 @@ use cudarc::{
         result::stream, CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, CudaViewMut,
         DevicePtr, DeviceSlice, LaunchAsync, LaunchConfig,
     },
-    nccl::{result, Comm, Id},
+    nccl::{result, Comm},
     nvrtc::{self, Ptx},
 };
 use itertools::izip;
@@ -394,7 +394,7 @@ impl Circuits {
             rngs.push(rng);
         }
 
-        let comms = Self::instantiate_network(peer_id, &devs);
+        let comms = device_manager.instantiate_network(peer_id, chacha_seeds.0[0] as u64);
 
         let buffers = Buffers::new(&devs, alloc_size);
 
@@ -429,39 +429,6 @@ impl Circuits {
 
     pub fn return_result_buffer(&mut self, src: Vec<ChunkShare<u64>>) {
         Buffers::return_buffer(&mut self.buffers.u64_32c_1, src);
-    }
-
-    #[allow(clippy::unnecessary_cast)]
-    pub fn instantiate_network(peer_id: usize, devices: &[Arc<CudaDevice>]) -> Vec<Arc<Comm>> {
-        let n_devices = devices.len();
-        let mut comms = Vec::with_capacity(n_devices);
-        let mut ids = Vec::with_capacity(n_devices);
-
-        if std::env::var("NCCL_COMM_ID").is_err() {
-            panic!("NCCL_COMM_ID must be set to <host0_ip:port>");
-        }
-
-        for i in 0..n_devices {
-            let id = Id::new().unwrap();
-            let mut raw = id.internal().to_owned();
-            let magic = u64::try_from(i).unwrap().to_be_bytes();
-            for i in 0..8 {
-                raw[i] = magic[i] as ::core::ffi::c_char;
-            }
-
-            let id = Id::uninit(raw);
-
-            ids.push(id);
-        }
-
-        for i in 0..n_devices {
-            // Bind to thread (important!)
-            devices[i].bind_to_thread().unwrap();
-            comms.push(Arc::new(
-                Comm::from_rank(devices[i].clone(), peer_id, 3, ids[i]).unwrap(),
-            ));
-        }
-        comms
     }
 
     pub fn next_id(&self) -> usize {
