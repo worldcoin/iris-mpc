@@ -13,9 +13,8 @@ use clap::{Parser, Subcommand};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use sodiumoxide::crypto::box_::{curve25519xsalsa20poly1305, PublicKey, SecretKey, Seed};
 
-const PUBLIC_KEY_S3_BUCKET_NAME: &str = "public-key-s3-bucket-name";
+const PUBLIC_KEY_S3_BUCKET_NAME: &str = "wf-mpc-vpc-stage-public-smpcv2-keys";
 const PUBLIC_KEY_S3_KEY_NAME_PREFIX: &str = "public-key";
-const PRIVATE_KEY_SECRET_ID_PREFIX: &str = "private-key-secret-id";
 const REGION: &str = "eu-north-1";
 
 /// A fictional versioning CLI
@@ -28,6 +27,9 @@ struct KeyManagerCli {
 
     #[arg(short, long, env)]
     node_id: u16,
+
+    #[arg(short, long, env, default_value = "stage")]
+    env: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -62,8 +64,10 @@ async fn main() -> eyre::Result<()> {
     let shared_config = aws_config::from_env().region(region_provider).load().await;
 
     let bucket_key_name = format!("{}-{}", PUBLIC_KEY_S3_KEY_NAME_PREFIX, args.node_id);
-    let private_key_secret_id: String =
-        format!("{}-{}", PRIVATE_KEY_SECRET_ID_PREFIX, args.node_id);
+    let private_key_secret_id: String = format!(
+        "{}/gpu-iris-mpc-{}/ecdh-private-key",
+        args.env, args.node_id
+    );
 
     match args.command {
         Commands::Rotate { rng_seed, dry_run } => {
@@ -269,7 +273,7 @@ fn generate_key_pairs(seed: Seed) -> (PublicKey, SecretKey) {
 #[cfg(test)]
 mod test {
     use super::*;
-    use sodiumoxide::crypto::box_;
+    use sodiumoxide::crypto::sealedbox;
     use std::{fs::File, io::Read};
 
     pub fn get_public_key(user_pub_key: &str) -> PublicKey {
@@ -291,8 +295,6 @@ mod test {
     #[test]
     fn test_encode_and_decode_shares() {
         let (server_public_key, server_private_key) = generate_key_pairs(Seed([0u8; 32]));
-        let (client_public_key, client_private_key) = generate_key_pairs(Seed([1u8; 32]));
-        let client_nonce = curve25519xsalsa20poly1305::gen_nonce();
 
         let iris_code_file = "./src/bin/data/iris_codes.json";
         let mut file = File::open(iris_code_file).expect("Unable to open file");
@@ -301,20 +303,10 @@ mod test {
             .expect("Unable to read file");
 
         let client_iris_code_plaintext = STANDARD.encode(contents);
-        let ciphertext = box_::seal(
-            client_iris_code_plaintext.as_bytes(),
-            &client_nonce,
-            &server_public_key,
-            &client_private_key,
-        );
+        let ciphertext = sealedbox::seal(client_iris_code_plaintext.as_bytes(), &server_public_key);
 
-        let server_iris_code_plaintext = box_::open(
-            &ciphertext,
-            &client_nonce,
-            &client_public_key,
-            &server_private_key,
-        )
-        .unwrap();
+        let server_iris_code_plaintext =
+            sealedbox::open(&ciphertext, &server_public_key, &server_private_key).unwrap();
 
         assert!(client_iris_code_plaintext.as_bytes() == server_iris_code_plaintext.as_slice());
     }
