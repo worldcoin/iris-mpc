@@ -1,46 +1,141 @@
+use aws_config::SdkConfig;
 use aws_sdk_s3::{
-    config::Region as S3Region, operation::put_object::PutObjectOutput, Client as S3Client,
-    Error as S3Error,
+    config::Region as S3Region,
+    operation::{get_object::GetObjectOutput, put_object::PutObjectOutput},
+    Client as S3Client, Error as S3Error,
 };
 use aws_sdk_secretsmanager::{
-    operation::put_secret_value::PutSecretValueOutput, Client as SecretsManagerClient,
-    Error as SecretsManagerError,
+    operation::{get_secret_value::GetSecretValueOutput, put_secret_value::PutSecretValueOutput},
+    Client as SecretsManagerClient, Error as SecretsManagerError,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use sodiumoxide::crypto::box_::{curve25519xsalsa20poly1305, PublicKey, SecretKey, Seed};
 
+const PUBLIC_KEY_S3_BUCKET_NAME: &str = "public-key-s3-bucket-name";
 const PUBLIC_KEY_S3_KEY_NAME_PREFIX: &str = "public-key";
 const PRIVATE_KEY_SECRET_ID_PREFIX: &str = "private-key-secret-id";
 const REGION: &str = "eu-north-1";
 
-#[derive(Debug, Parser)]
-struct Opt {
-    #[arg(short, long, env)]
-    public_key_s3_bucket_name: String,
+/// A fictional versioning CLI
+#[derive(Debug, Parser)] // requires `derive` feature
+#[command(name = "key-manager")]
+#[command(about = "Key manager CLI", long_about = None)]
+struct KeyManagerCli {
+    #[command(subcommand)]
+    command: Commands,
 
     #[arg(short, long, env)]
     node_id: u16,
+}
 
-    #[arg(short, long, env)]
-    rng_seed: Option<u64>,
+#[derive(Debug, Subcommand)]
+enum Commands {
+    /// Clones repos
+    #[command(arg_required_else_help = true)]
+    Rotate {
+        #[arg(short, long, env)]
+        rng_seed: Option<u64>,
 
-    #[arg(short, long, env)]
-    dry_run: Option<bool>,
+        #[arg(short, long, env)]
+        dry_run: Option<bool>,
+    },
+    /// Compare two commits
+    Validate {
+        // AWSCURRENT or AWSPREVIOUS or a specific version
+        #[arg(short, long, env)]
+        version_id: String,
+
+        #[arg(short, long, env)]
+        b64_pub_key: Option<String>,
+    },
 }
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     tracing_subscriber::fmt::init();
 
-    let Opt {
-        public_key_s3_bucket_name,
-        node_id,
-        rng_seed,
-        dry_run,
-    } = Opt::parse();
+    let args = KeyManagerCli::parse();
 
+    let region_provider = S3Region::new(REGION);
+    let shared_config = aws_config::from_env().region(region_provider).load().await;
+
+    let bucket_key_name = format!("{}-{}", PUBLIC_KEY_S3_KEY_NAME_PREFIX, args.node_id);
+    let private_key_secret_id: String =
+        format!("{}-{}", PRIVATE_KEY_SECRET_ID_PREFIX, args.node_id);
+
+    match args.command {
+        Commands::Rotate { rng_seed, dry_run } => {
+            rotate_keys(
+                &shared_config,
+                &bucket_key_name,
+                &private_key_secret_id,
+                rng_seed,
+                dry_run,
+            )
+            .await?;
+        }
+        Commands::Validate {
+            version_id,
+            b64_pub_key,
+        } => {
+            validate_keys(
+                &shared_config,
+                &private_key_secret_id,
+                &version_id,
+                b64_pub_key,
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+async fn validate_keys(
+    sdk_config: &SdkConfig,
+    secret_id: &str,
+    version_id: &str,
+    b64_pub_key: Option<String>,
+) -> eyre::Result<()> {
+    let s3_client = S3Client::new(sdk_config);
+    let sm_client = SecretsManagerClient::new(sdk_config);
+
+    // Parse user-provided public key, if present
+    let pub_key = if let Some(b64_pub_key) = b64_pub_key {
+        let user_pubkey = STANDARD.decode(b64_pub_key.as_bytes()).unwrap();
+        match PublicKey::from_slice(&user_pubkey) {
+            Some(key) => key,
+            None => panic!("Invalid public key"),
+        }
+    } else {
+        // Otherwise, get the latest one from S3
+        let user_pubkey =
+            download_key_from_s3(&s3_client, PUBLIC_KEY_S3_BUCKET_NAME, secret_id).await?;
+        let data = user_pubkey.body.collect().await?;
+        let user_pubkey = STANDARD.decode(data.into_bytes()).unwrap();
+        match PublicKey::from_slice(&user_pubkey) {
+            Some(key) => key,
+            None => panic!("Invalid public key"),
+        }
+    };
+
+    let private_key = download_key_from_asm(&sm_client, secret_id, version_id).await?;
+    let data = private_key.secret_string.unwrap();
+    let user_privkey = STANDARD.decode(data.as_bytes()).unwrap();
+    let decoded_priv_key = SecretKey::from_slice(&user_privkey).unwrap();
+
+    assert!(decoded_priv_key.public_key() == pub_key);
+    Ok(())
+}
+
+async fn rotate_keys(
+    sdk_config: &SdkConfig,
+    bucket_key_name: &str,
+    private_key_secret_id: &str,
+    rng_seed: Option<u64>,
+    dry_run: Option<bool>,
+) -> eyre::Result<()> {
     let mut rng = if let Some(rng_seed) = rng_seed {
         StdRng::seed_from_u64(rng_seed)
     } else {
@@ -51,17 +146,12 @@ async fn main() -> eyre::Result<()> {
     rng.fill(&mut seedbuf);
     let pk_seed = Seed(seedbuf);
 
-    let region_provider = S3Region::new(REGION);
-    let shared_config = aws_config::from_env().region(region_provider).load().await;
-
-    let s3_client = S3Client::new(&shared_config);
-    let sm_client = SecretsManagerClient::new(&shared_config);
+    let s3_client = S3Client::new(sdk_config);
+    let sm_client = SecretsManagerClient::new(sdk_config);
 
     let (public_key, private_key) = generate_key_pairs(pk_seed);
     let pub_key_str = STANDARD.encode(public_key);
     let priv_key_str = STANDARD.encode(private_key.clone());
-    let bucket_key_name = format!("{}-{}", PUBLIC_KEY_S3_KEY_NAME_PREFIX, node_id);
-    let private_key_secret_id: String = format!("{}-{}", PRIVATE_KEY_SECRET_ID_PREFIX, node_id);
 
     if dry_run.unwrap_or(false) {
         println!("Dry run enabled, skipping upload of public key to S3");
@@ -82,14 +172,14 @@ async fn main() -> eyre::Result<()> {
     }
     match upload_public_key_to_s3(
         &s3_client,
-        public_key_s3_bucket_name.as_str(),
-        bucket_key_name.as_str(),
+        PUBLIC_KEY_S3_BUCKET_NAME,
+        bucket_key_name,
         pub_key_str.as_str(),
     )
     .await
     {
         Ok(output) => {
-            println!("Bucket: {}", public_key_s3_bucket_name);
+            println!("Bucket: {}", PUBLIC_KEY_S3_BUCKET_NAME);
             println!("Key: {}", bucket_key_name);
             println!("ETag: {}", output.e_tag.unwrap());
         }
@@ -99,12 +189,7 @@ async fn main() -> eyre::Result<()> {
         }
     }
 
-    match upload_private_key_to_asm(
-        &sm_client,
-        private_key_secret_id.as_str(),
-        priv_key_str.as_str(),
-    )
-    .await
+    match upload_private_key_to_asm(&sm_client, private_key_secret_id, priv_key_str.as_str()).await
     {
         Ok(output) => {
             println!("Secret ARN: {}", output.arn.unwrap());
@@ -122,6 +207,27 @@ async fn main() -> eyre::Result<()> {
     println!("File uploaded successfully!");
 
     Ok(())
+}
+
+async fn download_key_from_s3(
+    client: &S3Client,
+    bucket: &str,
+    key: &str,
+) -> Result<GetObjectOutput, S3Error> {
+    Ok(client.get_object().bucket(bucket).key(key).send().await?)
+}
+
+async fn download_key_from_asm(
+    client: &SecretsManagerClient,
+    secret_id: &str,
+    version_id: &str,
+) -> Result<GetSecretValueOutput, SecretsManagerError> {
+    Ok(client
+        .get_secret_value()
+        .secret_id(secret_id)
+        .version_id(version_id)
+        .send()
+        .await?)
 }
 
 async fn upload_private_key_to_asm(
