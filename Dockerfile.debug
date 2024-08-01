@@ -14,6 +14,11 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     wget
 
+FROM --platform=linux/amd64 ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+
+WORKDIR /app
+
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 ENV PATH "/root/.cargo/bin:${PATH}"
 ENV RUSTUP_HOME "/root/.rustup"
@@ -21,15 +26,9 @@ ENV CARGO_HOME "/root/.cargo"
 RUN rustup toolchain install nightly-2024-07-10
 RUN rustup default nightly-2024-07-10
 RUN rustup component add cargo
+RUN cargo install cargo-build-deps && cargo install cargo-edit
 
-FROM --platform=linux/amd64 build-image as build-app
-WORKDIR /src/gpu-iris-mpc
 COPY . .
-
-FROM --platform=linux/amd64 ubuntu:22.04
-ENV DEBIAN_FRONTEND=noninteractive
-
-COPY --from=build-app /src/gpu-iris-mpc/ /app/src/gpu-iris-mpc/
 
 RUN apt-get update && apt-get install -y pkg-config wget libssl-dev ca-certificates \
     && rm -rf /var/lib/apt/lists/*
