@@ -3,7 +3,7 @@ use aws_sdk_s3::{
     Error as S3Error,
 };
 use aws_sdk_secretsmanager::{
-    operation::create_secret::CreateSecretOutput, Client as SecretsManagerClient,
+    operation::put_secret_value::PutSecretValueOutput, Client as SecretsManagerClient,
     Error as SecretsManagerError,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -12,8 +12,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use sodiumoxide::crypto::box_::{curve25519xsalsa20poly1305, PublicKey, SecretKey, Seed};
 
 const PUBLIC_KEY_S3_KEY_NAME_PREFIX: &str = "public-key";
-const PRIVATE_KEY_SM_KEY_NAME_PREFIX: &str = "private-key";
-const PRIVATE_KEY_KMS_KEY_ID: &str = "private-key-kms-key-id";
+const PRIVATE_KEY_SECRET_ID_PREFIX: &str = "private-key-secret-id";
 const REGION: &str = "eu-north-1";
 
 #[derive(Debug, Parser)]
@@ -62,7 +61,7 @@ async fn main() -> eyre::Result<()> {
     let pub_key_str = STANDARD.encode(public_key);
     let priv_key_str = STANDARD.encode(private_key.clone());
     let bucket_key_name = format!("{}-{}", PUBLIC_KEY_S3_KEY_NAME_PREFIX, node_id);
-    let secret_key_name: String = format!("{}-{}", PRIVATE_KEY_SM_KEY_NAME_PREFIX, node_id);
+    let private_key_secret_id: String = format!("{}-{}", PRIVATE_KEY_SECRET_ID_PREFIX, node_id);
 
     if dry_run.unwrap_or(false) {
         println!("Dry run enabled, skipping upload of public key to S3");
@@ -100,8 +99,12 @@ async fn main() -> eyre::Result<()> {
         }
     }
 
-    match upload_private_key_to_asm(&sm_client, secret_key_name.as_str(), priv_key_str.as_str())
-        .await
+    match upload_private_key_to_asm(
+        &sm_client,
+        private_key_secret_id.as_str(),
+        priv_key_str.as_str(),
+    )
+    .await
     {
         Ok(output) => {
             println!("Secret ARN: {}", output.arn.unwrap());
@@ -123,14 +126,13 @@ async fn main() -> eyre::Result<()> {
 
 async fn upload_private_key_to_asm(
     client: &SecretsManagerClient,
-    secret_name: &str,
+    secret_id: &str,
     content: &str,
-) -> Result<CreateSecretOutput, SecretsManagerError> {
+) -> Result<PutSecretValueOutput, SecretsManagerError> {
     Ok(client
-        .create_secret()
+        .put_secret_value()
         .secret_string(content)
-        .name(secret_name)
-        .kms_key_id(PRIVATE_KEY_KMS_KEY_ID)
+        .secret_id(secret_id)
         .send()
         .await?)
 }
