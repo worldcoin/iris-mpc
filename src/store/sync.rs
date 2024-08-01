@@ -1,7 +1,5 @@
-use crate::{helpers::task_monitor::TaskMonitor, threshold_ring::protocol::Circuits};
-use cudarc::{driver::CudaDevice, nccl::Comm};
+use cudarc::nccl::Comm;
 use eyre::{eyre, Result};
-use std::{sync::Arc, time::Duration};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncState {
@@ -21,46 +19,7 @@ pub struct OutOfSync {
     pub common_state: SyncState,
 }
 
-pub struct Syncer {
-    comm:         Arc<Comm>,
-    task_monitor: TaskMonitor,
-}
-
-impl Syncer {
-    pub fn new(
-        peer_id: usize,
-        peer_url: Option<String>,
-        server_port: u16,
-        device: Arc<CudaDevice>,
-    ) -> Self {
-        let mut task_monitor = TaskMonitor::new();
-        let (mut comms, _server_abort) = Circuits::instantiate_network(
-            peer_id,
-            peer_url,
-            Some(server_port),
-            &[device],
-            Some(&mut task_monitor),
-        );
-        task_monitor.check_tasks();
-
-        Self {
-            comm: comms.pop().unwrap(),
-            task_monitor,
-        }
-    }
-
-    pub fn sync(&self, state: &SyncState) -> Result<SyncResult> {
-        sync(&self.comm, state)
-    }
-
-    pub fn stop(&mut self) {
-        self.task_monitor.abort_all();
-        std::thread::sleep(Duration::from_secs(1));
-        self.task_monitor.check_tasks_finished();
-    }
-}
-
-fn sync(comm: &Comm, state: &SyncState) -> Result<SyncResult> {
+pub fn sync(comm: &Comm, state: &SyncState) -> Result<SyncResult> {
     let dev = comm.device();
 
     let my_state = comm.device().htod_copy(vec![state.db_len]).unwrap();

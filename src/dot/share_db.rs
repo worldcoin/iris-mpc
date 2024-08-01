@@ -3,17 +3,14 @@ use crate::{
     helpers::{
         device_manager::DeviceManager,
         device_ptrs_to_shares,
-        id_wrapper::{http_root, IdWrapper},
         query_processor::{
             CudaVec2DSlicer, CudaVec2DSlicerI8, CudaVec2DSlicerU32, CudaVec2DSlicerU8,
             StreamAwareCudaSlice,
         },
-        task_monitor::TaskMonitor,
     },
     rng::chacha::ChaChaCudaRng,
     threshold_ring::protocol::ChunkShare,
 };
-use axum::{routing::get, Router};
 #[cfg(feature = "otp_encrypt")]
 use cudarc::driver::{CudaView, DeviceSlice};
 use cudarc::{
@@ -22,14 +19,13 @@ use cudarc::{
         result::malloc_async, sys::CUdeviceptr, CudaFunction, CudaSlice, CudaStream, DevicePtr,
         LaunchAsync, LaunchConfig,
     },
-    nccl::{self, result, Comm, Id, NcclType},
+    nccl::{self, result, Comm, NcclType},
     nvrtc::compile_ptx,
 };
 #[cfg(feature = "otp_encrypt")]
 use itertools::Itertools;
 use rayon::prelude::*;
-use std::{ffi::c_void, mem, str::FromStr, sync::Arc, thread, time::Duration};
-use tokio::task::AbortHandle;
+use std::{ffi::c_void, mem, sync::Arc};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const REDUCE_FUNCTION_NAME: &str = "matmul_correct_and_reduce";
@@ -207,7 +203,6 @@ pub struct ShareDB {
     intermediate_results:  Vec<CudaSlice<i32>>,
     pub results:           Vec<CudaSlice<u8>>,
     pub results_peer:      Vec<CudaSlice<u8>>,
-    pub server_abort:      Option<AbortHandle>,
 }
 
 impl ShareDB {
@@ -219,14 +214,10 @@ impl ShareDB {
         max_db_length: usize,
         query_length: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
-        peer_url: Option<String>,
-        is_remote: Option<bool>,
-        server_port: Option<u16>,
-        sever_task_set: Option<&mut TaskMonitor>,
+        comms: Vec<Arc<Comm>>,
     ) -> Self {
         let n_devices = device_manager.device_count();
         let ptx = compile_ptx(PTX_SRC).unwrap();
-        let is_remote = is_remote.unwrap_or(false);
 
         let mut kernels = Vec::new();
 
@@ -297,79 +288,20 @@ impl ShareDB {
             rngs.push((chacha1, chacha2));
         }
 
-        // Init NCCL comms
-        let mut comms = vec![];
-        let mut server_abort = None;
-        if is_remote {
-            let mut ids = vec![];
-            for _ in 0..n_devices {
-                ids.push(Id::new().unwrap());
-            }
-
-            // Start HTTP server to exchange NCCL commIds
-            if peer_id == 0 {
-                let sever_task_set = sever_task_set.expect(
-                    "task set must be supplied to peer_id 0 for remote connection monitoring",
-                );
-
-                let ids = ids.clone();
-                server_abort = Some(sever_task_set.spawn(async move {
-                    println!("Starting server on port {}...", server_port.unwrap());
-                    let app =
-                        Router::new().route("/:device_id", get(move |req| http_root(ids, req)));
-                    let listener =
-                        tokio::net::TcpListener::bind(format!("0.0.0.0:{}", server_port.unwrap()))
-                            .await?;
-                    axum::serve(listener, app).await?;
-                    Ok(())
-                }));
-            } else {
-                thread::sleep(Duration::from_secs(1));
-            }
-
-            for i in 0..n_devices {
-                let id = if peer_id == 0 {
-                    ids[i]
-                } else {
-                    let peer_url = peer_url.clone().unwrap();
-                    std::thread::spawn(move || {
-                        let res = reqwest::blocking::get(format!(
-                            "http://{}:{}/{}",
-                            peer_url,
-                            server_port.unwrap(),
-                            i
-                        ))
-                        .unwrap();
-                        IdWrapper::from_str(&res.text().unwrap()).unwrap().0
-                    })
-                    .join()
-                    .unwrap()
-                };
-                ids.push(id);
-
-                // Bind to thread (important!)
-                device_manager.device(i).bind_to_thread().unwrap();
-                comms.push(Arc::new(
-                    Comm::from_rank(device_manager.device(i), peer_id, 3, id).unwrap(),
-                ));
-            }
-        }
-
         Self {
             peer_id,
-            is_remote,
             query_length,
             device_manager,
             kernels,
             #[cfg(feature = "otp_encrypt")]
             xor_assign_u8_kernels,
             rngs,
+            is_remote: !comms.is_empty(),
             comms,
             intermediate_results,
             ones,
             results,
             results_peer,
-            server_abort,
         }
     }
 
@@ -936,10 +868,7 @@ mod tests {
             DB_SIZE,
             QUERY_SIZE,
             ([0u32; 8], [0u32; 8]),
-            None,
-            None,
-            None,
-            None,
+            vec![],
         );
         let preprocessed_query = preprocess_query(&query);
         let streams = device_manager.fork_streams();
@@ -1039,10 +968,7 @@ mod tests {
                 DB_SIZE,
                 QUERY_SIZE,
                 ([0u32; 8], [0u32; 8]),
-                None,
-                None,
-                None,
-                None,
+                vec![],
             );
             let preprocessed_query = preprocess_query(&querys);
             let streams = device_manager.fork_streams();
@@ -1159,10 +1085,7 @@ mod tests {
                 DB_SIZE,
                 QUERY_SIZE,
                 ([0u32; 8], [0u32; 8]),
-                None,
-                None,
-                None,
-                None,
+                vec![],
             );
             let mut masks_engine = ShareDB::init(
                 party_id,
@@ -1170,10 +1093,7 @@ mod tests {
                 DB_SIZE,
                 QUERY_SIZE,
                 ([0u32; 8], [0u32; 8]),
-                None,
-                None,
-                None,
-                None,
+                vec![],
             );
 
             let code_query = preprocess_query(&code_queries);
