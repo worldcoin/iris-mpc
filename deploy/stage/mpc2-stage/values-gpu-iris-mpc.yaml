@@ -8,6 +8,9 @@ env:
   - name: NCCL_SOCKET_IFNAME
     value: "eth0"
 
+  - name: NCCL_COMM_ID
+    value: "10.15.48.156:4000"
+
   - name: SMPC__ENVIRONMENT
     value: "stage"
 
@@ -28,30 +31,6 @@ env:
 
   - name: SMPC__AWS__REGION
     value: "eu-north-1"
-
-  - name: SMPC__SERVERS__BOOTSTRAP_URL
-    value: "10.15.48.156"
-
-  - name: SMPC__SERVERS__CODES_ENGINE_PORT
-    value: "4000"
-
-  - name: SMPC__SERVERS__MASKS_ENGINE_PORT
-    value: "4001"
-
-  - name: SMPC__SERVERS__BATCH_CODES_ENGINE_PORT
-    value: "4002"
-
-  - name: SMPC__SERVERS__BATCH_MASKS_ENGINE_PORT
-    value: "4003"
-
-  - name: SMPC__SERVERS__PHASE_2_BATCH_PORT
-    value: "4004"
-
-  - name: SMPC__SERVERS__PHASE_2_PORT
-    value: "4005"
-
-  - name: SMPC__SERVERS__SYNC_PORT
-    value: "4006"
 
   - name: SMPC__REQUESTS_QUEUE_URL
     valueFrom:
