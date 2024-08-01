@@ -435,7 +435,7 @@ impl ServerActor {
         tracing::debug!(party_id = self.party_id, "Start DB deduplication");
         let mut db_chunk_idx = 0;
         loop {
-            tracing::debug!(
+            tracing::info!(
                 party_id = self.party_id,
                 chunk = db_chunk_idx,
                 "starting chunk"
@@ -447,10 +447,10 @@ impl ServerActor {
             let chunk_size = self
                 .current_db_sizes
                 .iter()
-                .map(|s| DB_CHUNK_SIZE)
+                .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(0, DB_CHUNK_SIZE))
                 .collect::<Vec<_>>();
 
-            tracing::debug!("chunks: {:?}, offset: {}", chunk_size, offset);
+            tracing::info!("chunks: {:?}, offset: {}", chunk_size, offset);
 
             // First stream doesn't need to wait
             if db_chunk_idx == 0 {
@@ -526,7 +526,7 @@ impl ServerActor {
 
             // ---- START PHASE 2 ----
             // TODO: remove
-            let max_chunk_size = chunk_size.iter().max().copied().unwrap();
+            let max_chunk_size = chunk_size.iter().min().copied().unwrap();
             let phase_2_chunk_sizes = vec![max_chunk_size; self.device_manager.device_count()];
             let mut code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
             let mut mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
