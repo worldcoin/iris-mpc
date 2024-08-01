@@ -163,6 +163,8 @@ fn generate_key_pairs(seed: Seed) -> (PublicKey, SecretKey) {
 #[cfg(test)]
 mod test {
     use super::*;
+    use sodiumoxide::crypto::box_;
+    use std::{fs::File, io::Read};
 
     pub fn get_public_key(user_pub_key: &str) -> PublicKey {
         let user_pubkey = STANDARD.decode(user_pub_key.as_bytes()).unwrap();
@@ -178,5 +180,36 @@ mod test {
         let pub_key_str = STANDARD.encode(public_key);
         let decoded_pub_key = get_public_key(&pub_key_str);
         assert_eq!(public_key, decoded_pub_key);
+    }
+
+    #[test]
+    fn test_encode_and_decode_shares() {
+        let (server_public_key, server_private_key) = generate_key_pairs(Seed([0u8; 32]));
+        let (client_public_key, client_private_key) = generate_key_pairs(Seed([1u8; 32]));
+        let client_nonce = curve25519xsalsa20poly1305::gen_nonce();
+
+        let iris_code_file = "./src/bin/data/iris_codes.json";
+        let mut file = File::open(iris_code_file).expect("Unable to open file");
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)
+            .expect("Unable to read file");
+
+        let client_iris_code_plaintext = STANDARD.encode(contents);
+        let ciphertext = box_::seal(
+            client_iris_code_plaintext.as_bytes(),
+            &client_nonce,
+            &server_public_key,
+            &client_private_key,
+        );
+
+        let server_iris_code_plaintext = box_::open(
+            &ciphertext,
+            &client_nonce,
+            &client_public_key,
+            &server_private_key,
+        )
+        .unwrap();
+
+        assert!(client_iris_code_plaintext.as_bytes() == server_iris_code_plaintext.as_slice());
     }
 }
