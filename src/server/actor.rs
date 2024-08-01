@@ -766,7 +766,7 @@ impl ServerActor {
                         // );
                     }
                 }
-                self.current_db_sizes[i] += 1;
+                // self.current_db_sizes[i] += 1;
             }
 
             // DEBUG
