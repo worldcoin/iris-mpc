@@ -7,11 +7,10 @@ use gpu_iris_mpc::{
         galois_engine::degree4::GaloisRingIrisCodeShare,
         iris_db::{db::IrisDB, iris::IrisCode},
     },
-    store::sync::{self, SyncResult, SyncState},
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use std::{collections::HashMap, env, sync::Arc};
-use tokio::{sync::oneshot, task::JoinSet};
+use tokio::sync::oneshot;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
@@ -61,41 +60,6 @@ fn install_tracing() {
         .init();
 }
 
-// Simulate a sync between all parties by running each party in its own thread.
-async fn simulate_sync(
-    dbs: &[&(Vec<u16>, Vec<u16>)],
-    device_managers: &[&Arc<DeviceManager>],
-    ids: &[Vec<Id>],
-) -> Result<()> {
-    let sync_task = |party_id, device_manager: Arc<DeviceManager>, ids: Vec<Id>, db_len| {
-        move || {
-            let mut comms = device_manager.instantiate_network_from_ids(party_id, ids);
-            let comm = comms.pop().unwrap();
-            // Each party sends and receives the state.
-            let my_state = SyncState {
-                db_len: db_len as u64,
-            };
-            sync::sync(comm.as_ref(), &my_state).unwrap()
-        }
-    };
-
-    // Run parties in parallel.
-    let mut tasks = JoinSet::new();
-    for i in 0..device_managers.len() {
-        tasks.spawn_blocking(sync_task(
-            i,
-            device_managers[i].clone(),
-            ids[i].clone(),
-            dbs[i].0.len(),
-        ));
-    }
-    while let Some(result) = tasks.join_next().await {
-        assert_eq!(result?, SyncResult::InSync);
-    }
-
-    Ok(())
-}
-
 #[tokio::test]
 async fn e2e_test() -> Result<()> {
     install_tracing();
@@ -130,18 +94,6 @@ async fn e2e_test() -> Result<()> {
         .collect::<Vec<_>>();
     let ids1 = ids0.clone();
     let ids2 = ids0.clone();
-    let ids0_sync = (0..num_devices)
-        .map(|_| Id::new().unwrap())
-        .collect::<Vec<_>>();
-    let ids1_sync = ids0_sync.clone();
-    let ids2_sync = ids0_sync.clone();
-
-    simulate_sync(
-        &[&db0, &db1, &db2],
-        &[&device_manager0, &device_manager1, &device_manager2],
-        &[ids0_sync, ids1_sync, ids2_sync],
-    )
-    .await?;
 
     let actor0_task = tokio::task::spawn_blocking(move || {
         let comms0 = device_manager0.instantiate_network_from_ids(0, ids0);

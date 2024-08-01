@@ -14,23 +14,16 @@ use gpu_iris_mpc::{
             NODE_ID_MESSAGE_ATTRIBUTE_NAME, SPAN_ID_MESSAGE_ATTRIBUTE_NAME,
             TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
         },
-        device_manager::DeviceManager,
         kms_dh::derive_shared_secret,
         sqs::{ResultEvent, SMPCRequest, SQSMessage},
         task_monitor::TaskMonitor,
     },
-    server::{BatchMetadata, BatchQuery, ServerActor, ServerJobResult},
+    server::{BatchMetadata, BatchQuery, ServerActor, ServerActorStartupError, ServerJobResult},
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
-    store::{
-        sync::{self, SyncResult, SyncState},
-        Store, StoredIrisRef,
-    },
+    store::{Store, StoredIrisRef},
 };
 use rand::{rngs::StdRng, SeedableRng};
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 use telemetry_batteries::{
     metrics::statsd::StatsdBattery,
     tracing::{datadog::DatadogBattery, TracingShutdownHandle},
@@ -258,24 +251,6 @@ async fn initialize_iris_dbs(
     Ok((codes_db, masks_db, store_len))
 }
 
-fn startup_sync(
-    device_manager: &DeviceManager,
-    party_id: usize,
-    db_len: usize,
-) -> eyre::Result<SyncResult> {
-    let ids = device_manager.get_ids_from_magic(1234567890);
-    let mut comms = device_manager.instantiate_network_from_ids(party_id, ids);
-    let comm = comms.pop().unwrap();
-
-    let my_state = SyncState {
-        db_len: db_len as u64,
-    };
-    let result = sync::sync(comm.as_ref(), &my_state)?;
-
-    // Not using the syncer anymore, stop it.
-    Ok(result)
-}
-
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     dotenvy::dotenv().ok();
@@ -294,16 +269,7 @@ async fn main() -> eyre::Result<()> {
     let party_id = config.party_id;
     let chacha_seeds = initialize_chacha_seeds(&config.kms_key_arns, party_id).await?;
 
-    let (codes_db, masks_db, store_len) = initialize_iris_dbs(party_id, &store).await?;
-
-    let device_manager = Arc::new(DeviceManager::init());
-
-    let sync_result = startup_sync(&device_manager, party_id, store_len)?;
-    if let SyncResult::OutOfSync(oos) = sync_result {
-        eprintln!("Databases are out-of-sync: {:?}", oos);
-        store.rollback(oos.common_state.db_len as usize).await?;
-        return Err(eyre!("Rolled back to common state. Restarting…"));
-    }
+    let (codes_db, masks_db, _) = initialize_iris_dbs(party_id, &store).await?;
 
     let mut background_tasks = TaskMonitor::new();
     // a bit convoluted, but we need to create the actor on the thread already,
@@ -325,7 +291,15 @@ async fn main() -> eyre::Result<()> {
         Ok(())
     });
     background_tasks.check_tasks();
-    let mut handle = rx.await??;
+    let mut handle = match rx.await? {
+        Ok(handle) => handle,
+        Err(ServerActorStartupError::SyncError(oos)) => {
+            eprintln!("Databases are out-of-sync: {:?}", oos);
+            store.rollback(oos.common_state.db_len as usize).await?;
+            return Err(eyre!("Rolled back to common state. Restarting…"));
+        }
+        Err(ServerActorStartupError::Generic(e)) => return Err(e),
+    };
 
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value

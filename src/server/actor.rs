@@ -7,6 +7,7 @@ use crate::{
     },
     helpers::{self, device_manager::DeviceManager, query_processor::CompactQuery},
     setup::galois_engine::degree4::GaloisRingIrisCodeShare,
+    store::sync::{self, OutOfSync, SyncResult, SyncState},
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use cudarc::{
@@ -66,6 +67,14 @@ const DB_CHUNK_SIZE: usize = 512;
 const N_QUERIES: usize = 64;
 const QUERIES: usize = ROTATIONS * N_QUERIES;
 
+#[derive(Debug, thiserror::Error)]
+pub enum ServerActorStartupError {
+    #[error("{0}")]
+    Generic(#[from] eyre::Error),
+    #[error("DB out of sync")]
+    SyncError(OutOfSync),
+}
+
 pub struct ServerActor {
     job_queue:             mpsc::Receiver<ServerJob>,
     device_manager:        Arc<DeviceManager>,
@@ -100,7 +109,7 @@ impl ServerActor {
         codes_db: &[u16],
         masks_db: &[u16],
         job_queue_size: usize,
-    ) -> eyre::Result<(Self, ServerActorHandle)> {
+    ) -> Result<(Self, ServerActorHandle), ServerActorStartupError> {
         let device_manager = Arc::new(DeviceManager::init());
         Self::new_with_device_manager(
             party_id,
@@ -118,7 +127,7 @@ impl ServerActor {
         masks_db: &[u16],
         device_manager: Arc<DeviceManager>,
         job_queue_size: usize,
-    ) -> eyre::Result<(Self, ServerActorHandle)> {
+    ) -> Result<(Self, ServerActorHandle), ServerActorStartupError> {
         let ids = device_manager.get_ids_from_magic(0);
         let comms = device_manager.instantiate_network_from_ids(party_id, ids);
         Self::new_with_device_manager_and_comms(
@@ -139,7 +148,30 @@ impl ServerActor {
         device_manager: Arc<DeviceManager>,
         comms: Vec<Arc<Comm>>,
         job_queue_size: usize,
-    ) -> eyre::Result<(Self, ServerActorHandle)> {
+    ) -> Result<(Self, ServerActorHandle), ServerActorStartupError> {
+        // check if the dbs are in sync
+        let comm = comms
+            .first()
+            .expect("We have at least one communicator")
+            .as_ref();
+
+        assert_eq!(
+            codes_db.len(),
+            masks_db.len(),
+            "Internal DB mismatch, codes and masks sizes differ"
+        );
+
+        let my_state = SyncState {
+            db_len: codes_db.len() as u64,
+        };
+        let result = sync::sync(comm, &my_state)?;
+        match result {
+            SyncResult::InSync => {}
+            SyncResult::OutOfSync(out_of_sync) => {
+                return Err(ServerActorStartupError::SyncError(out_of_sync));
+            }
+        }
+        // DBs are in sync, carry on
         let (tx, rx) = mpsc::channel(job_queue_size);
         let actor = Self::init(
             party_id,
