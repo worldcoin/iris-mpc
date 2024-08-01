@@ -34,7 +34,7 @@ struct KeyManagerCli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Clones repos
+    /// Rotate private and public keys
     #[command(arg_required_else_help = true)]
     Rotate {
         #[arg(short, long, env)]
@@ -43,11 +43,12 @@ enum Commands {
         #[arg(short, long, env)]
         dry_run: Option<bool>,
     },
-    /// Compare two commits
+    /// Validate private key in key manager against public keys (either provided
+    /// or in s3)
     Validate {
         // AWSCURRENT or AWSPREVIOUS or a specific version
-        #[arg(short, long, env)]
-        version_id: String,
+        #[arg(short, long, env, value_parser = clap::builder::PossibleValuesParser::new(&["AWSCURRENT", "AWSPREVIOUS"]))]
+        version_stage: String,
 
         #[arg(short, long, env)]
         b64_pub_key: Option<String>,
@@ -81,13 +82,13 @@ async fn main() -> eyre::Result<()> {
             .await?;
         }
         Commands::Validate {
-            version_id,
+            version_stage,
             b64_pub_key,
         } => {
             validate_keys(
                 &shared_config,
                 &private_key_secret_id,
-                &version_id,
+                &version_stage,
                 b64_pub_key,
             )
             .await?;
@@ -99,7 +100,7 @@ async fn main() -> eyre::Result<()> {
 async fn validate_keys(
     sdk_config: &SdkConfig,
     secret_id: &str,
-    version_id: &str,
+    version_stage: &str,
     b64_pub_key: Option<String>,
 ) -> eyre::Result<()> {
     let s3_client = S3Client::new(sdk_config);
@@ -124,7 +125,7 @@ async fn validate_keys(
         }
     };
 
-    let private_key = download_key_from_asm(&sm_client, secret_id, version_id).await?;
+    let private_key = download_key_from_asm(&sm_client, secret_id, version_stage).await?;
     let data = private_key.secret_string.unwrap();
     let user_privkey = STANDARD.decode(data.as_bytes()).unwrap();
     let decoded_priv_key = SecretKey::from_slice(&user_privkey).unwrap();
@@ -224,12 +225,12 @@ async fn download_key_from_s3(
 async fn download_key_from_asm(
     client: &SecretsManagerClient,
     secret_id: &str,
-    version_id: &str,
+    version_stage: &str,
 ) -> Result<GetSecretValueOutput, SecretsManagerError> {
     Ok(client
         .get_secret_value()
         .secret_id(secret_id)
-        .version_id(version_id)
+        .version_stage(version_stage)
         .send()
         .await?)
 }
