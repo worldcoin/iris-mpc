@@ -447,7 +447,7 @@ impl ServerActor {
             let chunk_size = self
                 .current_db_sizes
                 .iter()
-                .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(0, DB_CHUNK_SIZE))
+                .map(|s| DB_CHUNK_SIZE)
                 .collect::<Vec<_>>();
 
             tracing::debug!("chunks: {:?}, offset: {}", chunk_size, offset);
@@ -766,7 +766,7 @@ impl ServerActor {
                         // );
                     }
                 }
-                // self.current_db_sizes[i] += 1;
+                self.current_db_sizes[i] += 1;
             }
 
             // DEBUG
