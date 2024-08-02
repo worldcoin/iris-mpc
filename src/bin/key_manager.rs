@@ -1,8 +1,7 @@
 use aws_config::SdkConfig;
 use aws_sdk_s3::{
-    config::Region as S3Region,
-    operation::{get_object::GetObjectOutput, put_object::PutObjectOutput},
-    Client as S3Client, Error as S3Error,
+    config::Region as S3Region, operation::put_object::PutObjectOutput, Client as S3Client,
+    Error as S3Error,
 };
 use aws_sdk_secretsmanager::{
     operation::{get_secret_value::GetSecretValueOutput, put_secret_value::PutSecretValueOutput},
@@ -11,6 +10,7 @@ use aws_sdk_secretsmanager::{
 use base64::{engine::general_purpose::STANDARD, Engine};
 use clap::{Parser, Subcommand};
 use rand::{rngs::StdRng, Rng, SeedableRng};
+use reqwest::Client;
 use sodiumoxide::crypto::box_::{curve25519xsalsa20poly1305, PublicKey, SecretKey, Seed};
 
 const PUBLIC_KEY_S3_BUCKET_NAME: &str = "wf-mpc-vpc-stage-public-smpcv2-keys";
@@ -90,6 +90,7 @@ async fn main() -> eyre::Result<()> {
                 &private_key_secret_id,
                 &version_stage,
                 b64_pub_key,
+                &bucket_key_name,
             )
             .await?;
         }
@@ -102,8 +103,8 @@ async fn validate_keys(
     secret_id: &str,
     version_stage: &str,
     b64_pub_key: Option<String>,
+    bucket_key_name: &str,
 ) -> eyre::Result<()> {
-    let s3_client = S3Client::new(sdk_config);
     let sm_client = SecretsManagerClient::new(sdk_config);
 
     // Parse user-provided public key, if present
@@ -114,11 +115,9 @@ async fn validate_keys(
             None => panic!("Invalid public key"),
         }
     } else {
-        // Otherwise, get the latest one from S3
-        let user_pubkey =
-            download_key_from_s3(&s3_client, PUBLIC_KEY_S3_BUCKET_NAME, secret_id).await?;
-        let data = user_pubkey.body.collect().await?;
-        let user_pubkey = STANDARD.decode(data.into_bytes()).unwrap();
+        // Otherwise, get the latest one from S3 using HTTPS
+        let user_pubkey_string = download_key_from_s3(bucket_key_name).await?;
+        let user_pubkey = STANDARD.decode(user_pubkey_string.as_bytes()).unwrap();
         match PublicKey::from_slice(&user_pubkey) {
             Some(key) => key,
             None => panic!("Invalid public key"),
@@ -214,12 +213,18 @@ async fn rotate_keys(
     Ok(())
 }
 
-async fn download_key_from_s3(
-    client: &S3Client,
-    bucket: &str,
-    key: &str,
-) -> Result<GetObjectOutput, S3Error> {
-    Ok(client.get_object().bucket(bucket).key(key).send().await?)
+async fn download_key_from_s3(key: &str) -> Result<String, reqwest::Error> {
+    print!(
+        "Downloading key from S3 bucket: {} key: {}",
+        PUBLIC_KEY_S3_BUCKET_NAME, key
+    );
+    let s3_url = format!(
+        "https://{}.s3.{}.amazonaws.com/{}",
+        PUBLIC_KEY_S3_BUCKET_NAME, REGION, key
+    );
+    let client = Client::new();
+    let response = client.get(&s3_url).send().await?.text().await?;
+    Ok(response)
 }
 
 async fn download_key_from_asm(
