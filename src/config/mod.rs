@@ -42,6 +42,9 @@ pub struct Config {
 
     #[serde(default)]
     pub aws: Option<AwsConfig>,
+
+    #[serde(default)]
+    pub processing_timeout_secs: u64,
 }
 
 impl Config {

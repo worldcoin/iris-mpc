@@ -44,6 +44,9 @@ env:
         key: SNS_RESULTS_ARN
         name: application
 
+  - name: SMPC__PROCESSING_TIMEOUT_SECS
+    value: "60"
+
   - name: SMPC__PATH
     value: "/data/"
 
