@@ -736,7 +736,7 @@ impl ServerActor {
         // }
 
         for i in 0..self.device_manager.device_count() {
-            self.current_db_sizes[i] += 2;
+            self.current_db_sizes[i] += 4;
         }
 
         // Pass to internal sender thread
