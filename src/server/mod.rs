@@ -1,7 +1,7 @@
 mod actor;
 
 use crate::setup::galois_engine::degree4::GaloisRingIrisCodeShare;
-pub use actor::{ServerActor, ServerActorHandle, ServerActorStartupError};
+pub use actor::{ServerActor, ServerActorHandle};
 use tokio::sync::oneshot;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]

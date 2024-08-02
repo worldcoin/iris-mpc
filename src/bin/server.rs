@@ -14,16 +14,23 @@ use gpu_iris_mpc::{
             NODE_ID_MESSAGE_ATTRIBUTE_NAME, SPAN_ID_MESSAGE_ATTRIBUTE_NAME,
             TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
         },
+        device_manager::DeviceManager,
         kms_dh::derive_shared_secret,
         sqs::{ResultEvent, SMPCRequest, SQSMessage},
         task_monitor::TaskMonitor,
     },
-    server::{BatchMetadata, BatchQuery, ServerActor, ServerActorStartupError, ServerJobResult},
+    server::{BatchMetadata, BatchQuery, ServerActor, ServerJobResult},
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
-    store::{Store, StoredIrisRef},
+    store::{
+        sync::{self, SyncResult, SyncState},
+        Store, StoredIrisRef,
+    },
 };
 use rand::{rngs::StdRng, SeedableRng};
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use telemetry_batteries::{
     metrics::statsd::StatsdBattery,
     tracing::{datadog::DatadogBattery, TracingShutdownHandle},
@@ -240,13 +247,13 @@ async fn initialize_iris_dbs(
     };
 
     // Load DB from persistent storage.
-    let random_len = codes_db.len();
+    let mut store_len = 0;
     while let Some(iris) = store.stream_irises().await.next().await {
         let iris = iris?;
         codes_db.extend(iris.left_code());
         masks_db.extend(iris.left_mask());
+        store_len += 1;
     }
-    let store_len = codes_db.len() - random_len;
 
     Ok((codes_db, masks_db, store_len))
 }
@@ -269,7 +276,7 @@ async fn main() -> eyre::Result<()> {
     let party_id = config.party_id;
     let chacha_seeds = initialize_chacha_seeds(&config.kms_key_arns, party_id).await?;
 
-    let (codes_db, masks_db, _) = initialize_iris_dbs(party_id, &store).await?;
+    let (codes_db, masks_db, store_len) = initialize_iris_dbs(party_id, &store).await?;
 
     let mut background_tasks = TaskMonitor::new();
     // a bit convoluted, but we need to create the actor on the thread already,
@@ -277,29 +284,54 @@ async fn main() -> eyre::Result<()> {
     // channel
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
-        let actor = match ServerActor::new(config.party_id, chacha_seeds, &codes_db, &masks_db, 8) {
+        let device_manager = Arc::new(DeviceManager::init());
+        let ids = device_manager.get_ids_from_magic(0);
+        let comms = device_manager.instantiate_network_from_ids(config.party_id, ids);
+
+        let my_state = SyncState {
+            db_len: store_len as u64,
+        };
+        let sync_result = match sync::sync(&comms[0], &my_state) {
+            Ok(res) => res,
+            Err(e) => {
+                tx.send(Err(e)).unwrap();
+                return Ok(());
+            }
+        };
+
+        match ServerActor::new_with_device_manager_and_comms(
+            config.party_id,
+            chacha_seeds,
+            &codes_db,
+            &masks_db,
+            device_manager,
+            comms,
+            8,
+        ) {
             Ok((actor, handle)) => {
-                tx.send(Ok(handle)).unwrap();
-                actor
+                tx.send(Ok((handle, sync_result))).unwrap();
+                actor.run(); // forever
             }
             Err(e) => {
                 tx.send(Err(e)).unwrap();
                 return Ok(());
             }
         };
-        actor.run();
         Ok(())
     });
-    background_tasks.check_tasks();
+
     let mut handle = match rx.await? {
-        Ok(handle) => handle,
-        Err(ServerActorStartupError::SyncError(oos)) => {
-            eprintln!("Databases are out-of-sync: {:?}", oos);
-            store.rollback(oos.common_state.db_len as usize).await?;
-            return Err(eyre!("Rolled back to common state. Restarting…"));
+        Ok((handle, sync_result)) => {
+            if let SyncResult::OutOfSync(oos) = sync_result {
+                eprintln!("Databases are out-of-sync: {:?}", oos);
+                store.rollback(oos.common_state.db_len as usize).await?;
+                return Err(eyre!("Rolled back to common state. Restarting…"));
+            }
+            handle
         }
-        Err(ServerActorStartupError::Generic(e)) => return Err(e),
+        Err(e) => return Err(e),
     };
+    background_tasks.check_tasks();
 
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
