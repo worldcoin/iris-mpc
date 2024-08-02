@@ -31,6 +31,8 @@ RUN cargo build --release --target x86_64-unknown-linux-gnu --bin key-manager
 
 FROM --platform=linux/amd64 ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
+
+COPY --from=build-app /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/key-manager /bin/key-manager
 
 USER 65534
