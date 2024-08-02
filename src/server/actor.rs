@@ -444,15 +444,15 @@ impl ServerActor {
             let request_cublas_handles = &self.cublas_handles[0];
 
             let offset = db_chunk_idx * DB_CHUNK_SIZE;
-            let chunk_size = self
-                .current_db_sizes
-                .iter()
-                .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(0, DB_CHUNK_SIZE))
-                .collect::<Vec<_>>();
+            // let chunk_size = self
+            //     .current_db_sizes
+            //     .iter()
+            //     .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(0, DB_CHUNK_SIZE))
+            //     .collect::<Vec<_>>();
 
             let current_db_sizes2: Vec<usize> =
                 vec![DB_SIZE / self.device_manager.device_count(); self.device_manager.device_count()];
-            let chunk_size2 = current_db_sizes2
+            let chunk_size = current_db_sizes2
                 .iter()
                 .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(0, DB_CHUNK_SIZE))
                 .collect::<Vec<_>>();
