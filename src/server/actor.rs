@@ -132,7 +132,6 @@ impl ServerActor {
         )
     }
 
-    // TODO: return a SyncResult (always, not only error).
     pub fn new_with_device_manager_and_comms(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),

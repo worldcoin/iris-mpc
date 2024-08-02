@@ -22,7 +22,7 @@ use gpu_iris_mpc::{
     server::{BatchMetadata, BatchQuery, ServerActor, ServerJobResult},
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     store::{
-        sync::{self, SyncResult, SyncState},
+        sync::{self, SyncState},
         Store, StoredIrisRef,
     },
 };
@@ -293,21 +293,10 @@ async fn main() -> eyre::Result<()> {
 
     let (codes_db, masks_db, store_len) = initialize_iris_dbs(party_id, &store).await?;
 
-    // TODO: get sync_result from ServerActor.
-    //    let my_state = SyncState {
-    //        db_len:              db_len as u64,
-    //        deleted_request_ids: store.last_deleted_requests(SYNC_QUERIES).await?,
-    //    };
-    //    let sync_result = ???
-    //    if let Some(db_len) = sync_result.must_rollback_storage() {
-    //        eprintln!("Databases are out-of-sync: {:?}", sync_result);
-    //        store.rollback(db_len).await?;
-    //        return Err(eyre!("Rolled back to common state. Restarting…"));
-    //    }
-    //    // Input queues will be synchronized while consuming them.
-    //    let mut skip_request_ids = sync_result.deleted_request_ids();
-    let mut skip_request_ids = vec![];
-    // END TODO
+    let my_state = SyncState {
+        db_len:              store_len as u64,
+        deleted_request_ids: store.last_deleted_requests(SYNC_QUERIES).await?,
+    };
 
     let mut background_tasks = TaskMonitor::new();
     // a bit convoluted, but we need to create the actor on the thread already,
@@ -319,10 +308,6 @@ async fn main() -> eyre::Result<()> {
         let ids = device_manager.get_ids_from_magic(0);
         let comms = device_manager.instantiate_network_from_ids(config.party_id, ids);
 
-        let my_state = SyncState {
-            db_len:              store_len as u64,
-            deleted_request_ids: vec![], // TODO.
-        };
         let sync_result = match sync::sync(&comms[0], &my_state) {
             Ok(res) => res,
             Err(e) => {
@@ -352,17 +337,16 @@ async fn main() -> eyre::Result<()> {
         Ok(())
     });
 
-    let mut handle = match rx.await? {
-        Ok((handle, sync_result)) => {
-            if let SyncResult::OutOfSync(oos) = sync_result {
-                eprintln!("Databases are out-of-sync: {:?}", oos);
-                store.rollback(oos.common_state.db_len as usize).await?;
-                return Err(eyre!("Rolled back to common state. Restarting…"));
-            }
-            handle
-        }
-        Err(e) => return Err(e),
-    };
+    let (mut handle, sync_result) = rx.await??;
+
+    if let Some(db_len) = sync_result.must_rollback_storage() {
+        eprintln!("Databases are out-of-sync: {:?}", sync_result);
+        store.rollback(db_len).await?;
+        return Err(eyre!("Rolled back to common state. Restarting…"));
+    }
+
+    let mut skip_request_ids = sync_result.deleted_request_ids();
+
     background_tasks.check_tasks();
 
     // Start thread that will be responsible for communicating back the results
