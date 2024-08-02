@@ -444,18 +444,21 @@ impl ServerActor {
             let request_cublas_handles = &self.cublas_handles[0];
 
             let offset = db_chunk_idx * DB_CHUNK_SIZE;
-            let chunk_size2 = self
+            let chunk_size = self
                 .current_db_sizes
                 .iter()
                 .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(0, DB_CHUNK_SIZE))
                 .collect::<Vec<_>>();
 
-            let current_db_sizes2: Vec<usize> =
-                vec![DB_SIZE / self.device_manager.device_count(); self.device_manager.device_count()];
-            let chunk_size = current_db_sizes2
-                .iter()
-                .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(0, DB_CHUNK_SIZE))
-                .collect::<Vec<_>>();
+            // let current_db_sizes2: Vec<usize> =
+            //     vec![DB_SIZE / self.device_manager.device_count(); self.device_manager.device_count()];
+            // let chunk_size = current_db_sizes2
+            //     .iter()
+            //     .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(0, DB_CHUNK_SIZE))
+            //     .collect::<Vec<_>>();
+
+            let max_chunk_size = chunk_size.iter().max().copied().unwrap();
+            let chunk_size = vec![max_chunk_size; self.device_manager.device_count()];
 
             tracing::info!("chunks: {:?}, offset: {}", chunk_size, offset);
 
@@ -533,7 +536,7 @@ impl ServerActor {
 
             // ---- START PHASE 2 ----
             // TODO: remove
-            let max_chunk_size = chunk_size2.iter().max().copied().unwrap();
+            let max_chunk_size = chunk_size.iter().max().copied().unwrap();
             let phase_2_chunk_sizes = vec![max_chunk_size; self.device_manager.device_count()];
             let mut code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
             let mut mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
@@ -564,7 +567,7 @@ impl ServerActor {
                     &self.distance_comparator,
                     &self.results,
                     max_chunk_size * QUERIES / 64,
-                    &chunk_size2,
+                    &chunk_size,
                     offset,
                     request_streams,
                 );
