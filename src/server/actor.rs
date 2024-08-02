@@ -890,9 +890,9 @@ fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
     for j in 0..host_results[0].len() {
         let mut match_entry = u32::MAX;
         for i in 0..host_results.len() {
-            tracing::info!("{:?} {:?} {:?}", i, j, host_results[i][j]);
             let match_idx = host_results[i][j] * n_devices as u32 + i as u32;
             if host_results[i][j] != u32::MAX && match_idx < match_entry {
+                tracing::info!("{:?} {:?} {:?}", i, j, host_results[i][j]);
                 match_entry = match_idx;
             }
         }
