@@ -59,6 +59,12 @@ pub struct StoredIrisRef<'a> {
     pub right_mask: &'a [u16],
 }
 
+#[derive(sqlx::FromRow, Debug, Default)]
+struct StoredState {
+    request_id: String,
+}
+
+#[derive(Clone)]
 pub struct Store {
     pool: PgPool,
 }
@@ -155,6 +161,24 @@ impl Store {
                 .await?;
         result_events.reverse();
         Ok(result_events)
+    }
+
+    pub async fn mark_requests_deleted(&self, request_ids: &[String]) -> Result<()> {
+        // Insert request_ids that are deleted from the queue.
+        let mut query = sqlx::QueryBuilder::new("INSERT INTO sync (request_id)");
+        query.push_values(request_ids, |mut query, request_id| {
+            query.push_bind(request_id);
+        });
+        query.build().execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn last_deleted_requests(&self, count: usize) -> Result<Vec<String>> {
+        let rows = sqlx::query_as::<_, StoredState>("SELECT * FROM sync ORDER BY id DESC LIMIT $1")
+            .bind(count as i64)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.into_iter().rev().map(|r| r.request_id).collect())
     }
 }
 
@@ -307,6 +331,27 @@ mod tests {
 
         let got = store.last_results(2).await?;
         assert_eq!(got, vec!["event1", "event2"]);
+
+        cleanup(&store, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_mark_requests_deleted() -> Result<()> {
+        let schema_name = temporary_name();
+        let store = Store::new(&test_db_url()?, &schema_name).await?;
+
+        assert_eq!(store.last_deleted_requests(2).await?.len(), 0);
+
+        for i in 0..2 {
+            let request_ids = (0..2)
+                .map(|j| format!("test_{}_{}", i, j))
+                .collect::<Vec<_>>();
+            store.mark_requests_deleted(&request_ids).await?;
+
+            let got = store.last_deleted_requests(2).await?;
+            assert_eq!(got, request_ids);
+        }
 
         cleanup(&store, &schema_name).await?;
         Ok(())

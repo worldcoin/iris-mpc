@@ -22,12 +22,14 @@ use gpu_iris_mpc::{
     server::{BatchMetadata, BatchQuery, ServerActor, ServerJobResult},
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     store::{
-        sync::{SyncResult, SyncState, Syncer},
+        sync::{self, SyncState},
         Store, StoredIrisRef,
     },
 };
 use rand::{rngs::StdRng, SeedableRng};
+use static_assertions::const_assert;
 use std::{
+    mem,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -47,6 +49,8 @@ const N_QUERIES: usize = 32;
 const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
 const SYNC_RESULTS: usize = N_QUERIES * 2;
+const SYNC_QUERIES: usize = N_QUERIES * 2;
+const_assert!(SYNC_QUERIES <= SyncState::MAX_REQUESTS);
 /// The number of batches before a stream is re-used.
 
 const QUERIES: usize = ROTATIONS * N_QUERIES;
@@ -55,6 +59,8 @@ async fn receive_batch(
     party_id: usize,
     client: &Client,
     queue_url: &String,
+    store: &Store,
+    skip_request_ids: Vec<String>,
 ) -> eyre::Result<BatchQuery> {
     let mut batch_query = BatchQuery::default();
 
@@ -70,6 +76,22 @@ async fn receive_batch(
             for sqs_message in messages {
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())?;
                 let message: SMPCRequest = serde_json::from_str(&message.message)?;
+
+                store
+                    .mark_requests_deleted(&[message.request_id.clone()])
+                    .await?;
+
+                client
+                    .delete_message()
+                    .queue_url(queue_url)
+                    .receipt_handle(sqs_message.receipt_handle.unwrap())
+                    .send()
+                    .await?;
+
+                if skip_request_ids.contains(&message.request_id) {
+                    // Some party (maybe us) already meant to delete this request, so we skip it.
+                    continue;
+                }
 
                 let message_attributes = sqs_message.message_attributes.unwrap_or_default();
 
@@ -88,7 +110,7 @@ async fn receive_batch(
                     batch_metadata.span_id = span_id.to_string();
                 }
 
-                batch_query.request_ids.push(message.clone().request_id);
+                batch_query.request_ids.push(message.request_id.clone());
                 batch_query.metadata.push(batch_metadata);
 
                 let (
@@ -133,13 +155,6 @@ async fn receive_batch(
                 batch_query.db.mask.extend(db_mask_shares);
                 batch_query.query.code.extend(iris_shares);
                 batch_query.query.mask.extend(mask_shares);
-
-                client
-                    .delete_message()
-                    .queue_url(queue_url)
-                    .receipt_handle(sqs_message.receipt_handle.unwrap())
-                    .send()
-                    .await?;
             }
         }
     }
@@ -248,37 +263,15 @@ async fn initialize_iris_dbs(
     };
 
     // Load DB from persistent storage.
-    let random_len = codes_db.len();
+    let mut store_len = 0;
     while let Some(iris) = store.stream_irises().await.next().await {
         let iris = iris?;
         codes_db.extend(iris.left_code());
         masks_db.extend(iris.left_mask());
+        store_len += 1;
     }
-    let store_len = codes_db.len() - random_len;
 
     Ok((codes_db, masks_db, store_len))
-}
-
-fn startup_sync(
-    config: &Config,
-    device_manager: &DeviceManager,
-    db_len: usize,
-) -> eyre::Result<SyncResult> {
-    let mut syncer = Syncer::new(
-        config.party_id,
-        config.servers.bootstrap_url.clone(),
-        config.servers.sync_port,
-        device_manager.device(0),
-    );
-
-    let my_state = SyncState {
-        db_len: db_len as u64,
-    };
-    let result = syncer.sync(&my_state)?;
-
-    // Not using the syncer anymore, stop it.
-    syncer.stop();
-    Ok(result)
 }
 
 async fn replay_result_events(
@@ -317,18 +310,14 @@ async fn main() -> eyre::Result<()> {
     let party_id = config.party_id;
     let chacha_seeds = initialize_chacha_seeds(&config.kms_key_arns, party_id).await?;
 
+    replay_result_events(&store, &sns_client, &config.results_topic_arn).await?;
+
     let (codes_db, masks_db, store_len) = initialize_iris_dbs(party_id, &store).await?;
 
-    let device_manager = Arc::new(DeviceManager::init());
-
-    let sync_result = startup_sync(&config, &device_manager, store_len)?;
-    if let SyncResult::OutOfSync(oos) = sync_result {
-        eprintln!("Databases are out-of-sync: {:?}", oos);
-        store.rollback(oos.common_state.db_len as usize).await?;
-        return Err(eyre!("Rolled back to common state. Restarting…"));
-    }
-
-    replay_result_events(&store, &sns_client, &config.results_topic_arn).await?;
+    let my_state = SyncState {
+        db_len:              store_len as u64,
+        deleted_request_ids: store.last_deleted_requests(SYNC_QUERIES).await?,
+    };
 
     let mut background_tasks = TaskMonitor::new();
     // a bit convoluted, but we need to create the actor on the thread already,
@@ -336,34 +325,56 @@ async fn main() -> eyre::Result<()> {
     // channel
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
-        let actor = match ServerActor::new_with_device_manager(
+        let device_manager = Arc::new(DeviceManager::init());
+        let ids = device_manager.get_ids_from_magic(0);
+        let comms = device_manager.instantiate_network_from_ids(config.party_id, ids);
+
+        let sync_result = match sync::sync(&comms[0], &my_state) {
+            Ok(res) => res,
+            Err(e) => {
+                tx.send(Err(e)).unwrap();
+                return Ok(());
+            }
+        };
+
+        match ServerActor::new_with_device_manager_and_comms(
             config.party_id,
-            config.servers,
             chacha_seeds,
             &codes_db,
             &masks_db,
             device_manager,
+            comms,
             8,
         ) {
             Ok((actor, handle)) => {
-                tx.send(Ok(handle)).unwrap();
-                actor
+                tx.send(Ok((handle, sync_result))).unwrap();
+                actor.run(); // forever
             }
             Err(e) => {
                 tx.send(Err(e)).unwrap();
                 return Ok(());
             }
         };
-        actor.run();
         Ok(())
     });
+
+    let (mut handle, sync_result) = rx.await??;
+
+    if let Some(db_len) = sync_result.must_rollback_storage() {
+        eprintln!("Databases are out-of-sync: {:?}", sync_result);
+        store.rollback(db_len).await?;
+        return Err(eyre!("Rolled back to common state. Restarting…"));
+    }
+
+    let mut skip_request_ids = sync_result.deleted_request_ids();
+
     background_tasks.check_tasks();
-    let mut handle = rx.await??;
 
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
     let rx_sns_client = sns_client.clone();
 
+    let store_bg = store.clone();
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
             merged_results,
@@ -405,11 +416,11 @@ async fn main() -> eyre::Result<()> {
                 })
                 .collect();
 
-            let mut tx = store.tx().await?;
+            let mut tx = store_bg.tx().await?;
 
-            store.insert_results(&mut tx, &result_events).await?;
+            store_bg.insert_results(&mut tx, &result_events).await?;
 
-            store
+            store_bg
                 .insert_irises(&mut tx, &codes_and_masks)
                 .await
                 .wrap_err("failed to persist queries")?;
@@ -472,9 +483,19 @@ async fn main() -> eyre::Result<()> {
         }
         let now = Instant::now();
 
+        // Skip requests based on the startup sync, only in the first iteration.
+        let skip_request_ids = mem::take(&mut skip_request_ids);
+
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
-        let batch = receive_batch(party_id, &sqs_client, &config.requests_queue_url).await?;
+        let batch = receive_batch(
+            party_id,
+            &sqs_client,
+            &config.requests_queue_url,
+            &store,
+            skip_request_ids,
+        )
+        .await?;
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id and

@@ -1,89 +1,99 @@
-use crate::{helpers::task_monitor::TaskMonitor, threshold_ring::protocol::Circuits};
-use cudarc::{driver::CudaDevice, nccl::Comm};
+use cudarc::nccl::Comm;
 use eyre::{eyre, Result};
-use std::{sync::Arc, time::Duration};
+use itertools::Itertools;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncState {
-    pub db_len: u64,
+    pub db_len:              u64,
+    pub deleted_request_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SyncResult {
-    InSync,
-    OutOfSync(OutOfSync),
+pub struct SyncResult {
+    my_state:   SyncState,
+    all_states: Vec<SyncState>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OutOfSync {
-    #[allow(dead_code)]
-    pub my_state:     SyncState,
-    pub common_state: SyncState,
-}
-
-pub struct Syncer {
-    comm:         Arc<Comm>,
-    task_monitor: TaskMonitor,
-}
-
-impl Syncer {
-    pub fn new(
-        peer_id: usize,
-        peer_url: Option<String>,
-        server_port: u16,
-        device: Arc<CudaDevice>,
-    ) -> Self {
-        let mut task_monitor = TaskMonitor::new();
-        let (mut comms, _server_abort) = Circuits::instantiate_network(
-            peer_id,
-            peer_url,
-            Some(server_port),
-            &[device],
-            Some(&mut task_monitor),
-        );
-        task_monitor.check_tasks();
-
-        Self {
-            comm: comms.pop().unwrap(),
-            task_monitor,
+impl SyncResult {
+    pub fn must_rollback_storage(&self) -> Option<usize> {
+        let smallest_len = self.all_states.iter().map(|s| s.db_len).min()?;
+        let all_equal = self.all_states.iter().all(|s| s.db_len == smallest_len);
+        if all_equal {
+            None
+        } else {
+            Some(smallest_len as usize)
         }
     }
 
-    pub fn sync(&self, state: &SyncState) -> Result<SyncResult> {
-        sync(&self.comm, state)
-    }
-
-    pub fn stop(&mut self) {
-        self.task_monitor.abort_all();
-        std::thread::sleep(Duration::from_secs(1));
-        self.task_monitor.check_tasks_finished();
+    pub fn deleted_request_ids(&self) -> Vec<String> {
+        // Merge request IDs.
+        self.all_states
+            .iter()
+            .flat_map(|s| s.deleted_request_ids.clone())
+            .sorted()
+            .dedup()
+            .collect()
     }
 }
 
-fn sync(comm: &Comm, state: &SyncState) -> Result<SyncResult> {
+pub fn sync(comm: &Comm, state: &SyncState) -> Result<SyncResult> {
     let dev = comm.device();
 
-    let my_state = comm.device().htod_copy(vec![state.db_len]).unwrap();
+    let state_dev = comm.device().htod_copy(state.serialize()?).unwrap();
+    let mut all_states_dev = comm
+        .device()
+        .alloc_zeros(state_dev.len * comm.world_size())
+        .unwrap();
 
-    let mut all_states = comm.device().alloc_zeros(comm.world_size()).unwrap();
-
-    comm.all_gather(&my_state, &mut all_states)
+    comm.all_gather(&state_dev, &mut all_states_dev)
         .map_err(|e| eyre!("{:?}", e.0))?;
 
-    let all_states = dev.dtoh_sync_copy(&all_states).unwrap();
+    let all_states_ser = dev.dtoh_sync_copy(&all_states_dev).unwrap();
+    let all_states = SyncState::deserialize_all(&all_states_ser)?;
     println!("all_states: {:?}", all_states);
+    Ok(SyncResult {
+        my_state: state.clone(),
+        all_states,
+    })
+}
 
-    let common_state = *all_states.iter().min().unwrap();
+impl SyncState {
+    pub const MAX_REQUESTS: usize = 64;
+    const SERIAL_SIZE: usize = 8192;
 
-    if all_states.iter().all(|s| *s == common_state) {
-        Ok(SyncResult::InSync)
-    } else {
-        Ok(SyncResult::OutOfSync(OutOfSync {
-            my_state:     state.clone(),
-            common_state: SyncState {
-                db_len: common_state,
-            },
-        }))
+    /// Serialize the state to a fixed-size buffer.
+    fn serialize(&self) -> Result<Vec<u8>> {
+        let mut state_ser = vec![0; 8];
+        serde_json::to_writer(&mut state_ser, self)?;
+        // Frame with the buffer length.
+        let buf_len = state_ser.len();
+        if buf_len > Self::SERIAL_SIZE {
+            return Err(eyre!("State too large to serialize"));
+        }
+        state_ser[..8].copy_from_slice(&(buf_len as u64).to_le_bytes());
+        // Pad to fixed size.
+        state_ser.resize(Self::SERIAL_SIZE, 0);
+        Ok(state_ser)
+    }
+
+    /// Deserialize the state from a fixed-size buffer.
+    fn deserialize(state_ser: &[u8]) -> Result<Self> {
+        // Unframe the buffer.
+        let buf_len = u64::from_le_bytes(state_ser[..8].try_into().unwrap()) as usize;
+        if buf_len > Self::SERIAL_SIZE {
+            return Err(eyre!("State too large to deserialize"));
+        }
+        let state = serde_json::from_slice(&state_ser[8..buf_len])?;
+        Ok(state)
+    }
+
+    /// Deserialize all states concatenated in a buffer.
+    fn deserialize_all(state_ser: &[u8]) -> Result<Vec<Self>> {
+        state_ser
+            .chunks(Self::SERIAL_SIZE)
+            .map(Self::deserialize)
+            .collect()
     }
 }
 
@@ -97,11 +107,72 @@ mod tests {
     use eyre::Result;
     use tokio::task::JoinSet;
 
+    #[test]
+    fn test_serialize() -> Result<()> {
+        // Make sure we can serialize enough request IDs assuming a maximum length.
+        const MAX_REQUEST_ID_LEN: usize = 100;
+        // My state.
+        let state = SyncState {
+            db_len:              123,
+            deleted_request_ids: vec!["A".repeat(MAX_REQUEST_ID_LEN); SyncState::MAX_REQUESTS],
+        };
+        let state_ser = state.serialize()?;
+        assert_eq!(state_ser.len(), SyncState::SERIAL_SIZE);
+        // Concatenation of states from 3 parties.
+        let all_states_ser = vec![state_ser.clone(); 3].concat();
+        let all_states = SyncState::deserialize_all(&all_states_ser)?;
+
+        for s in all_states.iter() {
+            assert_eq!(s, &state);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_compare_states_sync() {
+        let sync_res = SyncResult {
+            my_state:   some_state(),
+            all_states: vec![some_state(), some_state(), some_state()],
+        };
+        assert_eq!(sync_res.must_rollback_storage(), None);
+    }
+
+    #[test]
+    fn test_compare_states_out_of_sync() {
+        let states = vec![
+            SyncState {
+                db_len:              123,
+                deleted_request_ids: vec!["most late".to_string()],
+            },
+            SyncState {
+                db_len:              456,
+                deleted_request_ids: vec!["x".to_string(), "y".to_string()],
+            },
+            SyncState {
+                db_len:              789,
+                deleted_request_ids: vec!["most ahead".to_string()],
+            },
+        ];
+        let deleted_request_ids = vec![
+            "most ahead".to_string(),
+            "most late".to_string(),
+            "x".to_string(),
+            "y".to_string(),
+        ];
+
+        let sync_res = SyncResult {
+            my_state:   states[0].clone(),
+            all_states: states.clone(),
+        };
+        assert_eq!(sync_res.must_rollback_storage(), Some(123)); // most late.
+        assert_eq!(sync_res.deleted_request_ids(), deleted_request_ids);
+    }
+
     #[tokio::test]
     async fn test_sync() -> Result<()> {
         let n_parties = 3.min(CudaDevice::count()? as usize);
         let net_id = Id::new().unwrap();
-        let expected_state = SyncState { db_len: 123 };
+        let expected_state = some_state();
 
         let sync_task = |i| {
             let my_state = expected_state.clone();
@@ -118,7 +189,7 @@ mod tests {
         }
 
         while let Some(result) = tasks.join_next().await {
-            assert_eq!(result?, SyncResult::InSync);
+            assert_eq!(result?.must_rollback_storage(), None);
         }
         Ok(())
     }
@@ -130,9 +201,12 @@ mod tests {
 
         let sync_task = |i| {
             let my_state = if i == 0 {
-                SyncState { db_len: 123 }
+                some_state()
             } else {
-                SyncState { db_len: 456 }
+                SyncState {
+                    db_len:              12, // late
+                    deleted_request_ids: vec![],
+                }
             };
             move || {
                 let device = CudaDevice::new(i).unwrap();
@@ -147,16 +221,15 @@ mod tests {
         }
 
         while let Some(result) = tasks.join_next().await {
-            match result? {
-                SyncResult::InSync => panic!("Expected OutOfSync"),
-                SyncResult::OutOfSync(OutOfSync {
-                    my_state: _,
-                    common_state,
-                }) => {
-                    assert_eq!(common_state, SyncState { db_len: 123 });
-                }
-            }
+            assert_eq!(result?.must_rollback_storage(), Some(12));
         }
         Ok(())
+    }
+
+    fn some_state() -> SyncState {
+        SyncState {
+            db_len:              123,
+            deleted_request_ids: vec!["abc".to_string(), "def".to_string()],
+        }
     }
 }
