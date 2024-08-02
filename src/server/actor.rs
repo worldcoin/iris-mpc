@@ -450,6 +450,13 @@ impl ServerActor {
                 .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(0, DB_CHUNK_SIZE))
                 .collect::<Vec<_>>();
 
+            let current_db_sizes2: Vec<usize> =
+                vec![DB_SIZE / self.device_manager.device_count(); self.device_manager.device_count()];
+            let chunk_size2 = current_db_sizes2
+                .iter()
+                .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(0, DB_CHUNK_SIZE))
+                .collect::<Vec<_>>();
+
             tracing::info!("chunks: {:?}, offset: {}", chunk_size, offset);
 
             // First stream doesn't need to wait
@@ -526,7 +533,7 @@ impl ServerActor {
 
             // ---- START PHASE 2 ----
             // TODO: remove
-            let max_chunk_size = chunk_size.iter().min().copied().unwrap();
+            let max_chunk_size = chunk_size2.iter().max().copied().unwrap();
             let phase_2_chunk_sizes = vec![max_chunk_size; self.device_manager.device_count()];
             let mut code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
             let mut mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
