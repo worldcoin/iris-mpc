@@ -671,7 +671,7 @@ impl ServerActor {
         for i in 0..self.device_manager.device_count() {
             self.device_manager.device(i).bind_to_thread().unwrap();
             for insertion_idx in insertion_list[i].clone() {
-                for _ in 0..4 {
+                // for _ in 0..4 {
                     // Append to codes and masks db
                     for (db, query, sums) in [
                         (
@@ -728,7 +728,7 @@ impl ServerActor {
                         }
                     }
                     self.current_db_sizes[i] += 1;
-                }
+                // }
             }
 
             // DEBUG
