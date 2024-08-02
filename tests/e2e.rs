@@ -1,17 +1,16 @@
+use cudarc::nccl::Id;
 use eyre::Result;
 use gpu_iris_mpc::{
-    config::ServersConfig,
     helpers::device_manager::DeviceManager,
     server::{BatchQuery, ServerActor, ServerJobResult},
     setup::{
         galois_engine::degree4::GaloisRingIrisCodeShare,
         iris_db::{db::IrisDB, iris::IrisCode},
     },
-    store::sync::{SyncState, Syncer},
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use std::{collections::HashMap, env, sync::Arc};
-use tokio::{sync::oneshot, task::JoinSet};
+use tokio::sync::oneshot;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
@@ -61,50 +60,6 @@ fn install_tracing() {
         .init();
 }
 
-// Simulate a sync between all parties by running each party in its own thread.
-async fn simulate_sync(
-    configs: &[&ServersConfig],
-    device_managers: &[&Arc<DeviceManager>],
-    dbs: &[&(Vec<u16>, Vec<u16>)],
-) -> Result<()> {
-    let sync_task =
-        |party_id, config: ServersConfig, device_manager: Arc<DeviceManager>, db_len| {
-            move || {
-                // Each party sends and receives the state.
-                let mut syncer = Syncer::new(
-                    party_id,
-                    config.bootstrap_url,
-                    config.sync_port,
-                    device_manager.device(0),
-                );
-
-                let my_state = SyncState {
-                    db_len:              db_len as u64,
-                    deleted_request_ids: vec!["some_request".to_string()],
-                };
-                let result = syncer.sync(&my_state).unwrap();
-                syncer.stop();
-                result
-            }
-        };
-
-    // Run parties in parallel.
-    let mut tasks = JoinSet::new();
-    for i in 0..configs.len() {
-        tasks.spawn_blocking(sync_task(
-            i,
-            configs[i].clone(),
-            device_managers[i].clone(),
-            dbs[i].0.len(),
-        ));
-    }
-    while let Some(result) = tasks.join_next().await {
-        assert_eq!(result?.must_rollback_storage(), None);
-    }
-
-    Ok(())
-}
-
 #[tokio::test]
 async fn e2e_test() -> Result<()> {
     install_tracing();
@@ -114,22 +69,6 @@ async fn e2e_test() -> Result<()> {
     let db0: (Vec<u16>, Vec<u16>) = generate_db(0)?;
     let db1 = generate_db(1)?;
     let db2 = generate_db(2)?;
-
-    let config0 = ServersConfig {
-        codes_engine_port:       10001,
-        masks_engine_port:       10002,
-        batch_codes_engine_port: 10003,
-        batch_masks_engine_port: 10004,
-        phase_2_batch_port:      10005,
-        phase_2_port:            10006,
-        sync_port:               10007,
-        bootstrap_url:           None,
-    };
-    let config1 = ServersConfig {
-        bootstrap_url: Some("localhost".to_string()),
-        ..config0.clone()
-    };
-    let config2 = config1.clone();
 
     let chacha_seeds0 = ([0u32; 8], [2u32; 8]);
     let chacha_seeds1 = ([1u32; 8], [0u32; 8]);
@@ -149,22 +88,22 @@ async fn e2e_test() -> Result<()> {
     let device_manager2 = Arc::new(device_managers.pop().unwrap());
     let device_manager1 = Arc::new(device_managers.pop().unwrap());
     let device_manager0 = Arc::new(device_managers.pop().unwrap());
-
-    simulate_sync(
-        &[&config0, &config1, &config2],
-        &[&device_manager0, &device_manager1, &device_manager2],
-        &[&db0, &db1, &db2],
-    )
-    .await?;
+    let num_devices = device_manager0.devices().len();
+    let ids0 = (0..num_devices)
+        .map(|_| Id::new().unwrap())
+        .collect::<Vec<_>>();
+    let ids1 = ids0.clone();
+    let ids2 = ids0.clone();
 
     let actor0_task = tokio::task::spawn_blocking(move || {
-        let actor = match ServerActor::new_with_device_manager(
+        let comms0 = device_manager0.instantiate_network_from_ids(0, ids0);
+        let actor = match ServerActor::new_with_device_manager_and_comms(
             0,
-            config0,
             chacha_seeds0,
             &db0.0,
             &db0.1,
             device_manager0,
+            comms0,
             8,
         ) {
             Ok((actor, handle)) => {
@@ -179,13 +118,14 @@ async fn e2e_test() -> Result<()> {
         actor.run();
     });
     let actor1_task = tokio::task::spawn_blocking(move || {
-        let actor = match ServerActor::new_with_device_manager(
+        let comms1 = device_manager1.instantiate_network_from_ids(1, ids1);
+        let actor = match ServerActor::new_with_device_manager_and_comms(
             1,
-            config1,
             chacha_seeds1,
             &db1.0,
             &db1.1,
             device_manager1,
+            comms1,
             8,
         ) {
             Ok((actor, handle)) => {
@@ -200,13 +140,14 @@ async fn e2e_test() -> Result<()> {
         actor.run();
     });
     let actor2_task = tokio::task::spawn_blocking(move || {
-        let actor = match ServerActor::new_with_device_manager(
+        let comms2 = device_manager2.instantiate_network_from_ids(2, ids2);
+        let actor = match ServerActor::new_with_device_manager_and_comms(
             2,
-            config2,
             chacha_seeds2,
             &db2.0,
             &db2.1,
             device_manager2,
+            comms2,
             8,
         ) {
             Ok((actor, handle)) => {

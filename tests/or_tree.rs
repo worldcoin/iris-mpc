@@ -1,16 +1,13 @@
 use cudarc::driver::{CudaDevice, CudaStream};
 use gpu_iris_mpc::{
-    helpers::{
-        device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync,
-        task_monitor::TaskMonitor,
-    },
+    helpers::{device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync},
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use static_assertions::const_assert;
 use std::{env, sync::Arc};
-use tokio::time::{self, Instant};
+use tokio::time::Instant;
 
 // ceil(930 * 125_000 / 2048) * 2048
 // const INPUTS_PER_GPU_SIZE: usize = 116_250_624;
@@ -102,33 +99,28 @@ async fn main() -> eyre::Result<()> {
         .expect("PARTY_ID environment variable not set")
         .parse()
         .expect("PARTY_ID must be a valid usize");
-    let url = env::var("PEER_URL")?;
     let n_devices = CudaDevice::count()? as usize;
 
     // Get Circuit Party
     let device_manager = Arc::new(DeviceManager::init());
-    let mut server_tasks = TaskMonitor::new();
+    let ids = device_manager.get_ids_from_magic(0);
+    let comms = device_manager.instantiate_network_from_ids(party_id, ids);
     let mut party = Circuits::new(
         party_id,
         INPUTS_PER_GPU_SIZE,
         INPUTS_PER_GPU_SIZE / 64,
         ([party_id as u32; 8], [((party_id + 2) % 3) as u32; 8]),
-        Some(url),
-        Some(9001),
-        Some(&mut server_tasks),
         device_manager.clone(),
+        comms,
     );
     let devices = party.get_devices();
     let streams = devices
         .iter()
         .map(|dev| dev.fork_default_stream().unwrap())
         .collect::<Vec<_>>();
-    server_tasks.check_tasks();
 
     println!("Starting tests...");
     for i in 0..=n_devices {
-        server_tasks.check_tasks();
-
         println!("Test: {}", i);
         let mut inputs = vec![0; CHUNK_SIZE * n_devices];
         if i < n_devices {
@@ -166,8 +158,5 @@ async fn main() -> eyre::Result<()> {
         }
     }
 
-    server_tasks.abort_all();
-    time::sleep(time::Duration::from_secs(5)).await;
-    server_tasks.check_tasks_finished();
     Ok(())
 }
