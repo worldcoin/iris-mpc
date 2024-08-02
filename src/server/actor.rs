@@ -735,7 +735,7 @@ impl ServerActor {
             );
         }
 
-        let max = self.current_db_sizes.iter().max().copied().unwrap();
+        let max = self.current_db_sizes.iter().min().copied().unwrap();
         self.current_db_sizes = vec![max; self.device_manager.device_count()];
 
         // Pass to internal sender thread
