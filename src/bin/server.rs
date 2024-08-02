@@ -48,6 +48,7 @@ const DB_SIZE: usize = 8 * 1_000;
 const N_QUERIES: usize = 32;
 const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
+const SYNC_RESULTS: usize = N_QUERIES * 2;
 const SYNC_QUERIES: usize = N_QUERIES * 2;
 const_assert!(SYNC_QUERIES <= SyncState::MAX_REQUESTS);
 /// The number of batches before a stream is re-used.
@@ -273,6 +274,24 @@ async fn initialize_iris_dbs(
     Ok((codes_db, masks_db, store_len))
 }
 
+async fn replay_result_events(
+    store: &Store,
+    sns_client: &SNSClient,
+    topic: &str,
+) -> eyre::Result<()> {
+    let result_events = store.last_results(SYNC_RESULTS).await?;
+
+    for result_event in result_events {
+        sns_client
+            .publish()
+            .topic_arn(topic)
+            .message(result_event)
+            .send()
+            .await?;
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     dotenvy::dotenv().ok();
@@ -290,6 +309,8 @@ async fn main() -> eyre::Result<()> {
 
     let party_id = config.party_id;
     let chacha_seeds = initialize_chacha_seeds(&config.kms_key_arns, party_id).await?;
+
+    replay_result_events(&store, &sns_client, &config.results_topic_arn).await?;
 
     let (codes_db, masks_db, store_len) = initialize_iris_dbs(party_id, &store).await?;
 
@@ -362,45 +383,56 @@ async fn main() -> eyre::Result<()> {
             store: query_store,
         }) = rx.recv().await
         {
+            let result_events = merged_results
+                .iter()
+                .enumerate()
+                .map(|(i, &idx_result)| {
+                    let result_event =
+                        ResultEvent::new(party_id, idx_result, matches[i], request_ids[i].clone());
+
+                    serde_json::to_string(&result_event).wrap_err("failed to serialize result")
+                })
+                .collect::<eyre::Result<Vec<_>>>()?;
+
             // Insert non-matching queries into the persistent store.
-            {
-                let codes_and_masks: Vec<StoredIrisRef> = matches
-                    .iter()
-                    .enumerate()
-                    .filter_map(
-                        // Find the indices of non-matching queries in the batch.
-                        |(query_idx, is_match)| if !is_match { Some(query_idx) } else { None },
-                    )
-                    .map(|query_idx| {
-                        // Get the original vectors from `receive_batch`.
-                        let code = &query_store.code[query_idx].coefs[..];
-                        let mask = &query_store.mask[query_idx].coefs[..];
-                        StoredIrisRef {
-                            left_code:  code,
-                            left_mask:  mask,
-                            // TODO: second eye.
-                            right_code: &[],
-                            right_mask: &[],
-                        }
-                    })
-                    .collect();
+            let codes_and_masks: Vec<StoredIrisRef> = matches
+                .iter()
+                .enumerate()
+                .filter_map(
+                    // Find the indices of non-matching queries in the batch.
+                    |(query_idx, is_match)| if !is_match { Some(query_idx) } else { None },
+                )
+                .map(|query_idx| {
+                    // Get the original vectors from `receive_batch`.
+                    let code = &query_store.code[query_idx].coefs[..];
+                    let mask = &query_store.mask[query_idx].coefs[..];
+                    StoredIrisRef {
+                        left_code:  code,
+                        left_mask:  mask,
+                        // TODO: second eye.
+                        right_code: &[],
+                        right_mask: &[],
+                    }
+                })
+                .collect();
 
-                store_bg
-                    .insert_irises(&codes_and_masks)
-                    .await
-                    .wrap_err("failed to persist queries")?;
-            }
+            let mut tx = store_bg.tx().await?;
 
-            for (i, &idx_result) in merged_results.iter().enumerate() {
-                // Notify consumers about result
-                println!("Sending results back to SNS...");
-                let result_event =
-                    ResultEvent::new(party_id, idx_result, matches[i], request_ids[i].clone());
+            store_bg.insert_results(&mut tx, &result_events).await?;
 
+            store_bg
+                .insert_irises(&mut tx, &codes_and_masks)
+                .await
+                .wrap_err("failed to persist queries")?;
+
+            tx.commit().await?;
+
+            println!("Sending results back to SNS...");
+            for result_event in result_events {
                 rx_sns_client
                     .publish()
                     .topic_arn(&config.results_topic_arn)
-                    .message(serde_json::to_string(&result_event).unwrap())
+                    .message(result_event)
                     .send()
                     .await?;
             }
