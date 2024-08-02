@@ -66,7 +66,7 @@ async fn main() -> eyre::Result<()> {
 
     let bucket_key_name = format!("{}-{}", PUBLIC_KEY_S3_KEY_NAME_PREFIX, args.node_id);
     let private_key_secret_id: String = format!(
-        "{}/gpu-iris-mpc-{}/ecdh-private-key",
+        "{}/gpu-iris-mpc/ecdh-private-key-{}",
         args.env, args.node_id
     );
 
