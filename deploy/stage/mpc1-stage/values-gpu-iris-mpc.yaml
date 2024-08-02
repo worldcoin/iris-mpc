@@ -45,7 +45,7 @@ env:
         name: application
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "3600"
+    value: "60"
 
   - name: SMPC__PATH
     value: "/data/"

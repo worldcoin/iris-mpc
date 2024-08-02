@@ -428,7 +428,10 @@ async fn main() -> eyre::Result<()> {
         let result_future = handle.submit_batch_query(batch).await;
 
         // await the result
-        let result = timeout(processing_timeout, result_future).await?;
+        let result = timeout(processing_timeout, result_future)
+            .await
+            .map_err(|e| eyre!("ServerActor processing timeout: {:?}", e))?;
+
         tx.send(result).await.unwrap();
         println!("CPU time of one iteration {:?}", now.elapsed());
 
