@@ -450,16 +450,6 @@ impl ServerActor {
                 .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(0, DB_CHUNK_SIZE))
                 .collect::<Vec<_>>();
 
-            // let current_db_sizes2: Vec<usize> =
-            //     vec![DB_SIZE / self.device_manager.device_count(); self.device_manager.device_count()];
-            // let chunk_size = current_db_sizes2
-            //     .iter()
-            //     .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(0, DB_CHUNK_SIZE))
-            //     .collect::<Vec<_>>();
-
-            let max_chunk_size = chunk_size.iter().max().copied().unwrap();
-            let chunk_size = vec![max_chunk_size; self.device_manager.device_count()];
-
             tracing::info!("chunks: {:?}, offset: {}", chunk_size, offset);
 
             // First stream doesn't need to wait
@@ -695,85 +685,43 @@ impl ServerActor {
                     ),
                 ] {
                     unsafe {
-                        // println!(
-                        //     "{}: Inserting into db0 at {:#x} + {:#x} from {:#x} + {:#x} with len {:?}",
-                        //     self.party_id,
-                        //     *db.code_gr.limb_0[i].device_ptr(),
-                        //     self.current_db_sizes[i] * IRIS_CODE_LENGTH,
-                        //     *query.limb_0[i].device_ptr(),
-                        //     IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                        //     IRIS_CODE_LENGTH
-                        // );
+                        helpers::dtod_at_offset(
+                            *db.code_gr.limb_0[i].device_ptr(),
+                            self.current_db_sizes[i] * IRIS_CODE_LENGTH,
+                            *query.limb_0[i].device_ptr(),
+                            IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                            IRIS_CODE_LENGTH,
+                            self.streams[0][i].stream,
+                        );
 
-                        // helpers::dtod_at_offset(
-                        //     *db.code_gr.limb_0[i].device_ptr(),
-                        //     self.current_db_sizes[i] * IRIS_CODE_LENGTH,
-                        //     *query.limb_0[i].device_ptr(),
-                        //     IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                        //     IRIS_CODE_LENGTH,
-                        //     self.streams[0][i].stream,
-                        // );
+                        helpers::dtod_at_offset(
+                            *db.code_gr.limb_1[i].device_ptr(),
+                            self.current_db_sizes[i] * IRIS_CODE_LENGTH,
+                            *query.limb_1[i].device_ptr(),
+                            IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                            IRIS_CODE_LENGTH,
+                            self.streams[0][i].stream,
+                        );
 
-                        // println!(
-                        //     "{}: Inserting into db1 at {:#x} + {:#x} from {:#x} + {:#x} with len {:?}",
-                        //     self.party_id,
-                        //     *db.code_gr.limb_1[i].device_ptr(),
-                        //     self.current_db_sizes[i] * IRIS_CODE_LENGTH,
-                        //     *query.limb_1[i].device_ptr(),
-                        //     IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                        //     IRIS_CODE_LENGTH,
-                        // );
+                        helpers::dtod_at_offset(
+                            *db.code_sums_gr.limb_0[i].device_ptr(),
+                            self.current_db_sizes[i] * mem::size_of::<u32>(),
+                            *sums.limb_0[i].device_ptr(),
+                            mem::size_of::<u32>() * 15
+                                + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                            mem::size_of::<u32>(),
+                            self.streams[0][i].stream,
+                        );
 
-                        // helpers::dtod_at_offset(
-                        //     *db.code_gr.limb_1[i].device_ptr(),
-                        //     self.current_db_sizes[i] * IRIS_CODE_LENGTH,
-                        //     *query.limb_1[i].device_ptr(),
-                        //     IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                        //     IRIS_CODE_LENGTH,
-                        //     self.streams[0][i].stream,
-                        // );
-
-                        // println!(
-                        //     "{}: Inserting into db0_sums at {:#x} + {:#x} from {:#x} + {:#x} with len {:?}",
-                        //     self.party_id,
-                        //     *db.code_sums_gr.limb_0[i].device_ptr(),
-                        //     self.current_db_sizes[i] * mem::size_of::<u32>(),
-                        //     *sums.limb_0[i].device_ptr(),
-                        //     mem::size_of::<u32>() * 15
-                        //         + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                        //     mem::size_of::<u32>(),
-                        // );
-
-                        // helpers::dtod_at_offset(
-                        //     *db.code_sums_gr.limb_0[i].device_ptr(),
-                        //     self.current_db_sizes[i] * mem::size_of::<u32>(),
-                        //     *sums.limb_0[i].device_ptr(),
-                        //     mem::size_of::<u32>() * 15
-                        //         + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                        //     mem::size_of::<u32>(),
-                        //     self.streams[0][i].stream,
-                        // );
-
-                        // println!(
-                        //     "{}: Inserting into db1sums at {:#x} + {:#x} from {:#x} + {:#x} with len {:?}",
-                        //     self.party_id,
-                        //     *db.code_sums_gr.limb_1[i].device_ptr(),
-                        //     self.current_db_sizes[i] * mem::size_of::<u32>(),
-                        //     *sums.limb_1[i].device_ptr(),
-                        //     mem::size_of::<u32>() * 15
-                        //         + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                        //     mem::size_of::<u32>(),
-                        // );
-
-                        // helpers::dtod_at_offset(
-                        //     *db.code_sums_gr.limb_1[i].device_ptr(),
-                        //     self.current_db_sizes[i] * mem::size_of::<u32>(),
-                        //     *sums.limb_1[i].device_ptr(),
-                        //     mem::size_of::<u32>() * 15
-                        //         + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                        //     mem::size_of::<u32>(),
-                        //     self.streams[0][i].stream,
-                        // );
+                        helpers::dtod_at_offset(
+                            *db.code_sums_gr.limb_1[i].device_ptr(),
+                            self.current_db_sizes[i] * mem::size_of::<u32>(),
+                            *sums.limb_1[i].device_ptr(),
+                            mem::size_of::<u32>() * 15
+                                + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                            mem::size_of::<u32>(),
+                            self.streams[0][i].stream,
+                        );
                     }
                 }
                 self.current_db_sizes[i] += 1;
@@ -786,6 +734,9 @@ impl ServerActor {
                 self.current_db_sizes[i]
             );
         }
+
+        let max = self.current_db_sizes.iter().max().copied().unwrap();
+        self.current_db_sizes = vec![max; self.device_manager.device_count()];
 
         // Pass to internal sender thread
         return_channel
