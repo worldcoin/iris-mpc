@@ -22,12 +22,14 @@ use gpu_iris_mpc::{
     server::{BatchMetadata, BatchQuery, ServerActor, ServerJobResult},
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     store::{
-        sync::{self, SyncResult, SyncState},
+        sync::{self, SyncState},
         Store, StoredIrisRef,
     },
 };
 use rand::{rngs::StdRng, SeedableRng};
+use static_assertions::const_assert;
 use std::{
+    mem,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -46,6 +48,8 @@ const DB_SIZE: usize = 8 * 1_000;
 const N_QUERIES: usize = 32;
 const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
+const SYNC_QUERIES: usize = N_QUERIES * 2;
+const_assert!(SYNC_QUERIES <= SyncState::MAX_REQUESTS);
 /// The number of batches before a stream is re-used.
 
 const QUERIES: usize = ROTATIONS * N_QUERIES;
@@ -54,6 +58,8 @@ async fn receive_batch(
     party_id: usize,
     client: &Client,
     queue_url: &String,
+    store: &Store,
+    skip_request_ids: Vec<String>,
 ) -> eyre::Result<BatchQuery> {
     let mut batch_query = BatchQuery::default();
 
@@ -69,6 +75,22 @@ async fn receive_batch(
             for sqs_message in messages {
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())?;
                 let message: SMPCRequest = serde_json::from_str(&message.message)?;
+
+                store
+                    .mark_requests_deleted(&[message.request_id.clone()])
+                    .await?;
+
+                client
+                    .delete_message()
+                    .queue_url(queue_url)
+                    .receipt_handle(sqs_message.receipt_handle.unwrap())
+                    .send()
+                    .await?;
+
+                if skip_request_ids.contains(&message.request_id) {
+                    // Some party (maybe us) already meant to delete this request, so we skip it.
+                    continue;
+                }
 
                 let message_attributes = sqs_message.message_attributes.unwrap_or_default();
 
@@ -87,7 +109,7 @@ async fn receive_batch(
                     batch_metadata.span_id = span_id.to_string();
                 }
 
-                batch_query.request_ids.push(message.clone().request_id);
+                batch_query.request_ids.push(message.request_id.clone());
                 batch_query.metadata.push(batch_metadata);
 
                 let (
@@ -132,13 +154,6 @@ async fn receive_batch(
                 batch_query.db.mask.extend(db_mask_shares);
                 batch_query.query.code.extend(iris_shares);
                 batch_query.query.mask.extend(mask_shares);
-
-                client
-                    .delete_message()
-                    .queue_url(queue_url)
-                    .receipt_handle(sqs_message.receipt_handle.unwrap())
-                    .send()
-                    .await?;
             }
         }
     }
@@ -278,6 +293,11 @@ async fn main() -> eyre::Result<()> {
 
     let (codes_db, masks_db, store_len) = initialize_iris_dbs(party_id, &store).await?;
 
+    let my_state = SyncState {
+        db_len:              store_len as u64,
+        deleted_request_ids: store.last_deleted_requests(SYNC_QUERIES).await?,
+    };
+
     let mut background_tasks = TaskMonitor::new();
     // a bit convoluted, but we need to create the actor on the thread already,
     // since it blocks a lot and is `!Send`, we get back the handle via the oneshot
@@ -288,9 +308,6 @@ async fn main() -> eyre::Result<()> {
         let ids = device_manager.get_ids_from_magic(0);
         let comms = device_manager.instantiate_network_from_ids(config.party_id, ids);
 
-        let my_state = SyncState {
-            db_len: store_len as u64,
-        };
         let sync_result = match sync::sync(&comms[0], &my_state) {
             Ok(res) => res,
             Err(e) => {
@@ -320,23 +337,23 @@ async fn main() -> eyre::Result<()> {
         Ok(())
     });
 
-    let mut handle = match rx.await? {
-        Ok((handle, sync_result)) => {
-            if let SyncResult::OutOfSync(oos) = sync_result {
-                eprintln!("Databases are out-of-sync: {:?}", oos);
-                store.rollback(oos.common_state.db_len as usize).await?;
-                return Err(eyre!("Rolled back to common state. Restarting…"));
-            }
-            handle
-        }
-        Err(e) => return Err(e),
-    };
+    let (mut handle, sync_result) = rx.await??;
+
+    if let Some(db_len) = sync_result.must_rollback_storage() {
+        eprintln!("Databases are out-of-sync: {:?}", sync_result);
+        store.rollback(db_len).await?;
+        return Err(eyre!("Rolled back to common state. Restarting…"));
+    }
+
+    let mut skip_request_ids = sync_result.deleted_request_ids();
+
     background_tasks.check_tasks();
 
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
     let rx_sns_client = sns_client.clone();
 
+    let store_bg = store.clone();
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
             merged_results,
@@ -368,7 +385,7 @@ async fn main() -> eyre::Result<()> {
                     })
                     .collect();
 
-                store
+                store_bg
                     .insert_irises(&codes_and_masks)
                     .await
                     .wrap_err("failed to persist queries")?;
@@ -434,9 +451,19 @@ async fn main() -> eyre::Result<()> {
         }
         let now = Instant::now();
 
+        // Skip requests based on the startup sync, only in the first iteration.
+        let skip_request_ids = mem::take(&mut skip_request_ids);
+
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
-        let batch = receive_batch(party_id, &sqs_client, &config.requests_queue_url).await?;
+        let batch = receive_batch(
+            party_id,
+            &sqs_client,
+            &config.requests_queue_url,
+            &store,
+            skip_request_ids,
+        )
+        .await?;
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id and
