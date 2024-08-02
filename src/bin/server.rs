@@ -31,6 +31,7 @@ use telemetry_batteries::{
 use tokio::{
     sync::{mpsc, oneshot},
     task::spawn_blocking,
+    time::timeout,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -377,6 +378,7 @@ async fn main() -> eyre::Result<()> {
     });
     background_tasks.check_tasks();
 
+    let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
     let mut total_time = Instant::now();
     let mut batch_times = Duration::from_secs(0);
 
@@ -426,7 +428,7 @@ async fn main() -> eyre::Result<()> {
         let result_future = handle.submit_batch_query(batch).await;
 
         // await the result
-        let result = result_future.await;
+        let result = timeout(processing_timeout, result_future).await?;
         tx.send(result).await.unwrap();
         println!("CPU time of one iteration {:?}", now.elapsed());
 
