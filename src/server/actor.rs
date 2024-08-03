@@ -526,7 +526,7 @@ impl ServerActor {
 
             // ---- START PHASE 2 ----
             // TODO: remove
-            let max_chunk_size = chunk_size.iter().max().copied().unwrap();
+            let max_chunk_size = chunk_size.iter().max().copied().unwrap() - 1;
             let phase_2_chunk_sizes = vec![max_chunk_size; self.device_manager.device_count()];
             let mut code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
             let mut mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
