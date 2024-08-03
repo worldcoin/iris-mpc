@@ -56,6 +56,10 @@ jobs:
         with:
           toolchain: nightly
 
+      - name: cuda test
+        run: nvcc -lcublas test.cu && ./a.out
+        shell: bash
+        
       - name: Tests
         run: cargo test --release dot::share_db::tests::check_matmul
         shell: bash
