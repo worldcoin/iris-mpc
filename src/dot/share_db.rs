@@ -89,7 +89,8 @@ pub fn gemm(
             m as i32,
             sys::cublasComputeType_t::CUBLAS_COMPUTE_32I_PEDANTIC,
             sys::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT,
-        ).unwrap();
+        )
+        .unwrap();
     }
 }
 
@@ -469,7 +470,12 @@ impl ShareDB {
                         .alloc(max_size * IRIS_CODE_LENGTH)
                         .unwrap()
                 };
-                println!("{}: db1 pointer for dev {}: {:#x}", self.peer_id, idx, *slice.device_ptr() as u64);
+                println!(
+                    "{}: db1 pointer for dev {}: {:#x}",
+                    self.peer_id,
+                    idx,
+                    *slice.device_ptr() as u64
+                );
                 self.device_manager
                     .htod_copy_into(chunk.to_vec(), &mut slice, idx)
                     .unwrap();
@@ -486,7 +492,12 @@ impl ShareDB {
                         .alloc(max_size * IRIS_CODE_LENGTH)
                         .unwrap()
                 };
-                println!("{}: db0 pointer for dev {}: {:#x}", self.peer_id, idx, *slice.device_ptr() as u64);
+                println!(
+                    "{}: db0 pointer for dev {}: {:#x}",
+                    self.peer_id,
+                    idx,
+                    *slice.device_ptr() as u64
+                );
                 self.device_manager
                     .htod_copy_into(chunk.to_vec(), &mut slice, idx)
                     .unwrap();
@@ -607,10 +618,10 @@ impl ShareDB {
 
             // Prepare randomness to mask results
             // if self.is_remote {
-            //     let len: usize = (chunk_sizes[idx] * self.query_length).div_ceil(64) * 64;
-            //     self.rngs[idx].0.fill_rng_no_host_copy(len, &streams[idx]);
-            //     self.rngs[idx].1.fill_rng_no_host_copy(len, &streams[idx]);
-            // }
+            //     let len: usize = (chunk_sizes[idx] * self.query_length).div_ceil(64) *
+            // 64;     self.rngs[idx].0.fill_rng_no_host_copy(len,
+            // &streams[idx]);     self.rngs[idx].1.fill_rng_no_host_copy(len,
+            // &streams[idx]); }
 
             for (i, d) in [&db.limb_0[idx], &db.limb_1[idx]].iter().enumerate() {
                 for (j, q) in [query0, query1].iter().enumerate() {
@@ -877,7 +888,7 @@ impl ShareDB {
 mod tests {
     use super::{preprocess_query, ShareDB};
     use crate::{
-        helpers::device_manager::DeviceManager,
+        helpers::device_manager::{self, DeviceManager},
         setup::{galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     };
     use float_eq::assert_float_eq;
@@ -888,7 +899,7 @@ mod tests {
 
     const WIDTH: usize = 12_800;
     const QUERY_SIZE: usize = 31;
-    const DB_SIZE: usize = 999 * 4;
+    const DB_SIZE: usize = 999;
     const RNG_SEED: u64 = 42;
 
     /// Helper to generate random ndarray
@@ -919,8 +930,12 @@ mod tests {
     fn check_matmul() {
         let db = random_vec(DB_SIZE, WIDTH, u16::MAX as u32);
         let query = random_vec(QUERY_SIZE, WIDTH, u16::MAX as u32);
-        let device_manager = Arc::new(DeviceManager::init());
+        let device_manager = DeviceManager::init();
         let n_devices = device_manager.device_count();
+        let mut device_managers = device_manager.split_into_n_chunks(n_devices).unwrap();
+        let device_manager = Arc::new(device_managers.pop().unwrap());
+        let n_devices = device_manager.device_count();
+
         let mut gpu_result = vec![0u16; DB_SIZE / n_devices * QUERY_SIZE];
         let db_sizes = vec![DB_SIZE / n_devices; n_devices];
 
