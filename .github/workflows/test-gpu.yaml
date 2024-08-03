@@ -56,11 +56,19 @@ jobs:
         with:
           toolchain: nightly
 
+      - name: Tests
+        run: cargo test --release dot::share_db::tests::check_matmul
+        shell: bash
+        env:
+          NCCL_P2P_LEVEL: LOC
+          NCCL_NET: Socket
+          NCCL_P2P_DIRECT_DISABLE: 1
+          NCCL_SHM_DISABLE: 1
+
       - name: E2E Tests
         run: cargo test --release e2e
         shell: bash
         env:
-          NCCL_DEBUG: info
           NCCL_P2P_LEVEL: LOC
           NCCL_NET: Socket
           NCCL_P2P_DIRECT_DISABLE: 1

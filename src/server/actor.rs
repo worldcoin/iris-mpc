@@ -526,10 +526,7 @@ impl ServerActor {
 
             // ---- START PHASE 2 ----
             // TODO: remove
-            let mut max_chunk_size = chunk_size.iter().max().copied().unwrap();
-            if max_chunk_size < DB_CHUNK_SIZE {
-                max_chunk_size = max_chunk_size + 1;
-            }
+            let max_chunk_size = chunk_size.iter().max().copied().unwrap();
             let phase_2_chunk_sizes = vec![max_chunk_size; self.device_manager.device_count()];
             let mut code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
             let mut mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
@@ -674,7 +671,7 @@ impl ServerActor {
         for i in 0..self.device_manager.device_count() {
             self.device_manager.device(i).bind_to_thread().unwrap();
             for insertion_idx in insertion_list[i].clone() {
-                for _ in 0..2 {
+                // for _ in 0..2 {
                     // Append to codes and masks db
                     for (db, query, sums) in [
                         (
@@ -732,7 +729,7 @@ impl ServerActor {
                     }
                     self.current_db_sizes[i] += 1;
                 }
-            }
+            // }
 
             // DEBUG
             tracing::debug!(

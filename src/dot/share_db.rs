@@ -606,11 +606,11 @@ impl ShareDB {
             let query1 = &queries.limb_1[idx];
 
             // Prepare randomness to mask results
-            if self.is_remote {
-                let len: usize = (chunk_sizes[idx] * self.query_length).div_ceil(64) * 64;
-                self.rngs[idx].0.fill_rng_no_host_copy(len, &streams[idx]);
-                self.rngs[idx].1.fill_rng_no_host_copy(len, &streams[idx]);
-            }
+            // if self.is_remote {
+            //     let len: usize = (chunk_sizes[idx] * self.query_length).div_ceil(64) * 64;
+            //     self.rngs[idx].0.fill_rng_no_host_copy(len, &streams[idx]);
+            //     self.rngs[idx].1.fill_rng_no_host_copy(len, &streams[idx]);
+            // }
 
             for (i, d) in [&db.limb_0[idx], &db.limb_1[idx]].iter().enumerate() {
                 for (j, q) in [query0, query1].iter().enumerate() {
@@ -888,7 +888,7 @@ mod tests {
 
     const WIDTH: usize = 12_800;
     const QUERY_SIZE: usize = 31;
-    const DB_SIZE: usize = 8 * 1000;
+    const DB_SIZE: usize = 999 * 4;
     const RNG_SEED: u64 = 42;
 
     /// Helper to generate random ndarray
