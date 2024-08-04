@@ -449,8 +449,10 @@ impl ServerActor {
                 .iter()
                 .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(0, DB_CHUNK_SIZE))
                 .collect::<Vec<_>>();
-
-            tracing::info!("chunks: {:?}, offset: {}", chunk_size, offset);
+            let dot_chunk_size = chunk_size
+                .iter()
+                .map(|s| s.div_ceil(4) * 4)
+                .collect::<Vec<_>>();
 
             // First stream doesn't need to wait
             if db_chunk_idx == 0 {
@@ -476,7 +478,7 @@ impl ServerActor {
                 &mut self.masks_engine,
                 &self.code_db_slices,
                 &self.mask_db_slices,
-                &chunk_size,
+                &dot_chunk_size,
                 offset,
                 request_streams,
                 request_cublas_handles,
@@ -671,65 +673,61 @@ impl ServerActor {
         for i in 0..self.device_manager.device_count() {
             self.device_manager.device(i).bind_to_thread().unwrap();
             for insertion_idx in insertion_list[i].clone() {
-                // for _ in 0..2 {
-                    // Append to codes and masks db
-                    for (db, query, sums) in [
-                        (
-                            &self.code_db_slices,
-                            &compact_device_queries.code_query_insert,
-                            &compact_device_sums.code_query_insert,
-                        ),
-                        (
-                            &self.mask_db_slices,
-                            &compact_device_queries.mask_query_insert,
-                            &compact_device_sums.mask_query_insert,
-                        ),
-                    ] {
-                        unsafe {
-                            helpers::dtod_at_offset(
-                                *db.code_gr.limb_0[i].device_ptr(),
-                                self.current_db_sizes[i] * IRIS_CODE_LENGTH,
-                                *query.limb_0[i].device_ptr(),
-                                IRIS_CODE_LENGTH * 15
-                                    + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                                IRIS_CODE_LENGTH,
-                                self.streams[0][i].stream,
-                            );
+                // Append to codes and masks db
+                for (db, query, sums) in [
+                    (
+                        &self.code_db_slices,
+                        &compact_device_queries.code_query_insert,
+                        &compact_device_sums.code_query_insert,
+                    ),
+                    (
+                        &self.mask_db_slices,
+                        &compact_device_queries.mask_query_insert,
+                        &compact_device_sums.mask_query_insert,
+                    ),
+                ] {
+                    unsafe {
+                        helpers::dtod_at_offset(
+                            *db.code_gr.limb_0[i].device_ptr(),
+                            self.current_db_sizes[i] * IRIS_CODE_LENGTH,
+                            *query.limb_0[i].device_ptr(),
+                            IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                            IRIS_CODE_LENGTH,
+                            self.streams[0][i].stream,
+                        );
 
-                            helpers::dtod_at_offset(
-                                *db.code_gr.limb_1[i].device_ptr(),
-                                self.current_db_sizes[i] * IRIS_CODE_LENGTH,
-                                *query.limb_1[i].device_ptr(),
-                                IRIS_CODE_LENGTH * 15
-                                    + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                                IRIS_CODE_LENGTH,
-                                self.streams[0][i].stream,
-                            );
+                        helpers::dtod_at_offset(
+                            *db.code_gr.limb_1[i].device_ptr(),
+                            self.current_db_sizes[i] * IRIS_CODE_LENGTH,
+                            *query.limb_1[i].device_ptr(),
+                            IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                            IRIS_CODE_LENGTH,
+                            self.streams[0][i].stream,
+                        );
 
-                            helpers::dtod_at_offset(
-                                *db.code_sums_gr.limb_0[i].device_ptr(),
-                                self.current_db_sizes[i] * mem::size_of::<u32>(),
-                                *sums.limb_0[i].device_ptr(),
-                                mem::size_of::<u32>() * 15
-                                    + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                                mem::size_of::<u32>(),
-                                self.streams[0][i].stream,
-                            );
+                        helpers::dtod_at_offset(
+                            *db.code_sums_gr.limb_0[i].device_ptr(),
+                            self.current_db_sizes[i] * mem::size_of::<u32>(),
+                            *sums.limb_0[i].device_ptr(),
+                            mem::size_of::<u32>() * 15
+                                + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                            mem::size_of::<u32>(),
+                            self.streams[0][i].stream,
+                        );
 
-                            helpers::dtod_at_offset(
-                                *db.code_sums_gr.limb_1[i].device_ptr(),
-                                self.current_db_sizes[i] * mem::size_of::<u32>(),
-                                *sums.limb_1[i].device_ptr(),
-                                mem::size_of::<u32>() * 15
-                                    + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                                mem::size_of::<u32>(),
-                                self.streams[0][i].stream,
-                            );
-                        }
+                        helpers::dtod_at_offset(
+                            *db.code_sums_gr.limb_1[i].device_ptr(),
+                            self.current_db_sizes[i] * mem::size_of::<u32>(),
+                            *sums.limb_1[i].device_ptr(),
+                            mem::size_of::<u32>() * 15
+                                + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                            mem::size_of::<u32>(),
+                            self.streams[0][i].stream,
+                        );
                     }
-                    self.current_db_sizes[i] += 1;
                 }
-            // }
+                self.current_db_sizes[i] += 1;
+            }
 
             // DEBUG
             tracing::debug!(
