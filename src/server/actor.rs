@@ -478,7 +478,7 @@ impl ServerActor {
                 &mut self.masks_engine,
                 &self.code_db_slices,
                 &self.mask_db_slices,
-                &dot_chunk_size,
+                &chunk_size,
                 offset,
                 request_streams,
                 request_cublas_handles,
@@ -659,9 +659,6 @@ impl ServerActor {
 
         // Spread the insertions across devices.
         let insertion_list = distribute_insertions(&insertion_list, &self.current_db_sizes);
-
-        tracing::info!("insertion_list: {:?}", insertion_list);
-        tracing::info!("current_db_sizes: {:?}", self.current_db_sizes);
 
         // Calculate the new indices for the inserted queries
         let matches = calculate_insertion_indices(
@@ -845,7 +842,6 @@ fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
         for i in 0..host_results.len() {
             let match_idx = host_results[i][j] * n_devices as u32 + i as u32;
             if host_results[i][j] != u32::MAX && match_idx < match_entry {
-                tracing::info!("{:?} {:?} {:?}", i, j, host_results[i][j]);
                 match_entry = match_idx;
             }
         }
