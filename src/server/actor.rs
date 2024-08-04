@@ -1,29 +1,22 @@
 use super::{BatchQuery, ServerJob, ServerJobResult};
 use crate::{
-    config::ServersConfig,
     dot::{
         distance_comparator::DistanceComparator,
         share_db::{preprocess_query, ShareDB, SlicedProcessedDatabase},
         IRIS_CODE_LENGTH, ROTATIONS,
     },
-    helpers::{
-        self, device_manager::DeviceManager, query_processor::CompactQuery,
-        task_monitor::TaskMonitor,
-    },
+    helpers::{self, device_manager::DeviceManager, query_processor::CompactQuery},
     setup::galois_engine::degree4::GaloisRingIrisCodeShare,
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use cudarc::{
     cublas::CudaBlas,
     driver::{result, CudaDevice, CudaSlice, CudaStream, DevicePtr},
+    nccl::Comm,
 };
 use futures::{Future, FutureExt};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
-use std::{
-    mem,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{mem, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
 
 #[allow(unused)]
@@ -72,7 +65,6 @@ const QUERIES: usize = ROTATIONS * N_QUERIES;
 pub struct ServerActor {
     job_queue:           mpsc::Receiver<ServerJob>,
     device_manager:      Arc<DeviceManager>,
-    server_tasks:        TaskMonitor,
     party_id:            usize,
     // engines
     codes_engine:        ShareDB,
@@ -100,7 +92,6 @@ const FINAL_RESULTS_INIT_HOST: [u32; N_QUERIES] = [u32::MAX; N_QUERIES];
 impl ServerActor {
     pub fn new(
         party_id: usize,
-        config: ServersConfig,
         chacha_seeds: ([u32; 8], [u32; 8]),
         codes_db: &[u16],
         masks_db: &[u16],
@@ -109,7 +100,6 @@ impl ServerActor {
         let device_manager = Arc::new(DeviceManager::init());
         Self::new_with_device_manager(
             party_id,
-            config,
             chacha_seeds,
             codes_db,
             masks_db,
@@ -119,21 +109,48 @@ impl ServerActor {
     }
     pub fn new_with_device_manager(
         party_id: usize,
-        config: ServersConfig,
         chacha_seeds: ([u32; 8], [u32; 8]),
         codes_db: &[u16],
         masks_db: &[u16],
         device_manager: Arc<DeviceManager>,
         job_queue_size: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
-        let (tx, rx) = mpsc::channel(job_queue_size);
-        let actor = Self::init(
+        let ids = device_manager.get_ids_from_magic(0);
+        let comms = device_manager.instantiate_network_from_ids(party_id, ids);
+        Self::new_with_device_manager_and_comms(
             party_id,
-            config,
             chacha_seeds,
             codes_db,
             masks_db,
             device_manager,
+            comms,
+            job_queue_size,
+        )
+    }
+
+    pub fn new_with_device_manager_and_comms(
+        party_id: usize,
+        chacha_seeds: ([u32; 8], [u32; 8]),
+        codes_db: &[u16],
+        masks_db: &[u16],
+        device_manager: Arc<DeviceManager>,
+        comms: Vec<Arc<Comm>>,
+        job_queue_size: usize,
+    ) -> eyre::Result<(Self, ServerActorHandle)> {
+        assert_eq!(
+            codes_db.len(),
+            masks_db.len(),
+            "Internal DB mismatch, codes and masks sizes differ"
+        );
+
+        let (tx, rx) = mpsc::channel(job_queue_size);
+        let actor = Self::init(
+            party_id,
+            chacha_seeds,
+            codes_db,
+            masks_db,
+            device_manager,
+            comms,
             rx,
         )?;
         Ok((actor, ServerActorHandle { job_queue: tx }))
@@ -141,11 +158,11 @@ impl ServerActor {
 
     fn init(
         party_id: usize,
-        config: ServersConfig,
         chacha_seeds: ([u32; 8], [u32; 8]),
         codes_db: &[u16],
         masks_db: &[u16],
         device_manager: Arc<DeviceManager>,
+        comms: Vec<Arc<Comm>>,
         job_queue: mpsc::Receiver<ServerJob>,
     ) -> eyre::Result<Self> {
         let mut kdf_nonce = 0;
@@ -164,17 +181,6 @@ impl ServerActor {
 
         tracing::info!("Starting engines...");
 
-        let mut server_tasks = TaskMonitor::new();
-        let ServersConfig {
-            codes_engine_port,
-            masks_engine_port,
-            batch_codes_engine_port,
-            batch_masks_engine_port,
-            phase_2_port,
-            phase_2_batch_port,
-            bootstrap_url,
-        } = config;
-
         // Phase 1 Setup
         let codes_engine = ShareDB::init(
             party_id,
@@ -182,12 +188,8 @@ impl ServerActor {
             DB_CHUNK_SIZE,
             QUERIES,
             next_chacha_seeds(chacha_seeds)?,
-            bootstrap_url.clone(),
-            Some(true),
-            Some(codes_engine_port),
-            Some(&mut server_tasks),
+            comms.clone(),
         );
-        server_tasks.check_tasks();
 
         let masks_engine = ShareDB::init(
             party_id,
@@ -195,12 +197,8 @@ impl ServerActor {
             DB_CHUNK_SIZE,
             QUERIES,
             next_chacha_seeds(chacha_seeds)?,
-            bootstrap_url.clone(),
-            Some(true),
-            Some(masks_engine_port),
-            Some(&mut server_tasks),
+            comms.clone(),
         );
-        server_tasks.check_tasks();
 
         let code_db_slices = codes_engine.load_db(codes_db, DB_SIZE, DB_SIZE + DB_BUFFER, true);
         let mask_db_slices = masks_engine.load_db(masks_db, DB_SIZE, DB_SIZE + DB_BUFFER, true);
@@ -212,12 +210,8 @@ impl ServerActor {
             QUERIES,
             QUERIES,
             next_chacha_seeds(chacha_seeds)?,
-            bootstrap_url.clone(),
-            Some(true),
-            Some(batch_codes_engine_port),
-            Some(&mut server_tasks),
+            comms.clone(),
         );
-        server_tasks.check_tasks();
 
         let batch_masks_engine = ShareDB::init(
             party_id,
@@ -225,12 +219,8 @@ impl ServerActor {
             QUERIES,
             QUERIES,
             next_chacha_seeds(chacha_seeds)?,
-            bootstrap_url.clone(),
-            Some(true),
-            Some(batch_masks_engine_port),
-            Some(&mut server_tasks),
+            comms.clone(),
         );
-        server_tasks.check_tasks();
 
         // Phase 2 Setup
         let phase2_chunk_size = QUERIES * DB_CHUNK_SIZE;
@@ -252,24 +242,18 @@ impl ServerActor {
             phase2_batch_chunk_size,
             phase2_batch_chunk_size / 64,
             next_chacha_seeds(chacha_seeds)?,
-            bootstrap_url.clone(),
-            Some(phase_2_batch_port),
-            Some(&mut server_tasks),
             device_manager.clone(),
+            comms.clone(),
         );
-        server_tasks.check_tasks();
 
         let phase2 = Circuits::new(
             party_id,
             phase2_chunk_size,
             phase2_chunk_size / 64,
             next_chacha_seeds(chacha_seeds)?,
-            bootstrap_url.clone(),
-            Some(phase_2_port),
-            Some(&mut server_tasks),
             device_manager.clone(),
+            comms,
         );
-        server_tasks.check_tasks();
 
         let distance_comparator = DistanceComparator::init(QUERIES, device_manager.clone());
         // Prepare streams etc.
@@ -297,7 +281,6 @@ impl ServerActor {
             party_id,
             job_queue,
             device_manager,
-            server_tasks,
             codes_engine,
             masks_engine,
             phase2,
@@ -325,14 +308,7 @@ impl ServerActor {
             } = job;
             let _ = self.process_batch_query(batch, return_channel);
         }
-
-        // await the last thread for phase 2
-        // Clean up server tasks, then wait for them to finish
-        self.server_tasks.abort_all();
-
-        std::thread::sleep(Duration::from_secs(1));
-
-        self.server_tasks.check_tasks_finished();
+        tracing::info!("Server Actor finished due to all job queues being closed");
     }
 
     fn process_batch_query(
@@ -596,12 +572,8 @@ impl ServerActor {
                 "finished chunk"
             );
 
-            // DEBUG
-            self.device_manager.await_streams(request_streams);
-
-            // self.device_manager
-            //     .await_streams(&self.streams[(db_chunk_idx + 1) % 2]); // await other
-            // stream
+            self.device_manager
+                .await_streams(&self.streams[(db_chunk_idx + 1) % 2]); // await other stream
 
             // Break if we reached the end of the database
             if db_chunk_idx * DB_CHUNK_SIZE >= *self.current_db_sizes.iter().max().unwrap() {
@@ -741,7 +713,6 @@ impl ServerActor {
             .send(ServerJobResult {
                 merged_results,
                 request_ids: batch.request_ids,
-                sqs_receipt_handles: batch.sqs_receipt_handles,
                 matches,
                 store: query_store,
             })
@@ -766,15 +737,6 @@ impl ServerActor {
             &FINAL_RESULTS_INIT_HOST,
             &self.streams[0],
         );
-
-        // Prepare for next batch
-        self.server_tasks.check_tasks();
-        self.device_manager.await_streams(&self.streams[0]);
-        self.device_manager.await_streams(&self.streams[1]);
-
-        for dev in self.device_manager.devices() {
-            dev.synchronize().unwrap();
-        }
 
         tracing::info!("CPU time of one iteration {:?}", now.elapsed());
         Ok(())

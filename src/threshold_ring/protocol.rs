@@ -1,28 +1,22 @@
 use crate::{
     helpers::{
-        alloc_on_stream,
-        device_manager::DeviceManager,
-        dtoh_on_stream_sync, htod_on_stream_sync,
-        id_wrapper::{http_root, IdWrapper},
-        task_monitor::TaskMonitor,
+        alloc_on_stream, device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync,
     },
     rng::chacha_corr::ChaChaCudaCorrRng,
     threshold_ring::cuda::PTX_SRC,
 };
-use axum::{routing::get, Router};
 use cudarc::{
     driver::{
         result::stream, CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, CudaViewMut,
         DevicePtr, DeviceSlice, LaunchAsync, LaunchConfig,
     },
-    nccl::{result, Comm, Id},
+    nccl::{result, Comm},
     nvrtc::{self, Ptx},
 };
 use itertools::izip;
 #[cfg(feature = "otp_encrypt")]
 use itertools::Itertools;
-use std::{ops::Range, str::FromStr, sync::Arc, thread, time::Duration};
-use tokio::task::AbortHandle;
+use std::{ops::Range, sync::Arc};
 
 pub(crate) const B_BITS: usize = 16;
 
@@ -344,22 +338,17 @@ impl Buffers {
     }
 }
 
-pub struct SendableRcComm(Arc<Comm>);
-
-unsafe impl Send for SendableRcComm {}
-
 pub struct Circuits {
-    peer_id:          usize,
-    next_id:          usize,
-    prev_id:          usize,
-    chunk_size:       usize,
-    n_devices:        usize,
-    devs:             Vec<Arc<CudaDevice>>,
-    comms:            Vec<SendableRcComm>,
-    kernels:          Vec<Kernels>,
-    buffers:          Buffers,
-    rngs:             Vec<ChaChaCudaCorrRng>,
-    pub server_abort: Option<AbortHandle>,
+    peer_id:    usize,
+    next_id:    usize,
+    prev_id:    usize,
+    chunk_size: usize,
+    n_devices:  usize,
+    devs:       Vec<Arc<CudaDevice>>,
+    comms:      Vec<Arc<Comm>>,
+    kernels:    Vec<Kernels>,
+    buffers:    Buffers,
+    rngs:       Vec<ChaChaCudaCorrRng>,
 }
 
 impl Circuits {
@@ -384,10 +373,8 @@ impl Circuits {
         input_size: usize, // per GPU
         alloc_size: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
-        peer_url: Option<String>,
-        server_port: Option<u16>,
-        server_task_set: Option<&mut TaskMonitor>,
         device_manager: Arc<DeviceManager>,
+        comms: Vec<Arc<Comm>>,
     ) -> Self {
         // For the transpose, inputs should be multiple of 64 bits
         assert!(input_size % 64 == 0);
@@ -411,9 +398,6 @@ impl Circuits {
             rngs.push(rng);
         }
 
-        let (comms, server_abort) =
-            Self::instantiate_network(peer_id, peer_url, server_port, &devs, server_task_set);
-
         let buffers = Buffers::new(&devs, alloc_size);
 
         Circuits {
@@ -427,7 +411,6 @@ impl Circuits {
             kernels,
             buffers,
             rngs,
-            server_abort,
         }
     }
 
@@ -448,72 +431,6 @@ impl Circuits {
 
     pub fn return_result_buffer(&mut self, src: Vec<ChunkShare<u64>>) {
         Buffers::return_buffer(&mut self.buffers.u64_32c_1, src);
-    }
-
-    #[allow(clippy::arc_with_non_send_sync)]
-    pub fn instantiate_network(
-        peer_id: usize,
-        peer_url: Option<String>,
-        server_port: Option<u16>,
-        devices: &[Arc<CudaDevice>],
-        server_task_set: Option<&mut TaskMonitor>,
-    ) -> (Vec<SendableRcComm>, Option<AbortHandle>) {
-        let n_devices = devices.len();
-        let mut comms = Vec::with_capacity(n_devices);
-        let mut ids = Vec::with_capacity(n_devices);
-        for _ in 0..n_devices {
-            ids.push(Id::new().unwrap());
-        }
-
-        // Start HTTP server to exchange NCCL commIds
-        let mut server_abort = None;
-        if peer_id == 0 {
-            let server_task_set = server_task_set
-                .expect("task set must be supplied to peer_id 0 for remote connection monitoring");
-
-            let ids = ids.clone();
-            server_abort = Some(server_task_set.spawn(async move {
-                println!("Starting server on port {}...", server_port.unwrap());
-                let app = Router::new().route("/:device_id", get(move |req| http_root(ids, req)));
-                let listener =
-                    tokio::net::TcpListener::bind(format!("0.0.0.0:{}", server_port.unwrap()))
-                        .await?;
-                axum::serve(listener, app).await?;
-                Ok(())
-            }));
-        }
-
-        if peer_id != 0 {
-            thread::sleep(Duration::from_secs(1));
-        }
-
-        for i in 0..n_devices {
-            let id = if peer_id == 0 {
-                ids[i]
-            } else {
-                let peer_url = peer_url.clone().unwrap();
-                std::thread::spawn(move || {
-                    let res = reqwest::blocking::get(format!(
-                        "http://{}:{}/{}",
-                        peer_url,
-                        server_port.unwrap(),
-                        i
-                    ))
-                    .unwrap();
-                    IdWrapper::from_str(&res.text().unwrap()).unwrap().0
-                })
-                .join()
-                .unwrap()
-            };
-            ids.push(id);
-
-            // Bind to thread (important!)
-            devices[i].bind_to_thread().unwrap();
-            comms.push(SendableRcComm(Arc::new(
-                Comm::from_rank(devices[i].clone(), peer_id, 3, id).unwrap(),
-            )));
-        }
-        (comms, server_abort)
     }
 
     pub fn next_id(&self) -> usize {
@@ -610,7 +527,7 @@ impl Circuits {
                 send.len(),
                 T::as_nccl_type(),
                 peer_id as i32,
-                self.comms[idx].0.comm.0,
+                self.comms[idx].comm.0,
                 streams[idx].stream as *mut _,
             )
         }
@@ -632,7 +549,7 @@ impl Circuits {
                 receive.len(),
                 T::as_nccl_type(),
                 peer_id as i32,
-                self.comms[idx].0.comm.0,
+                self.comms[idx].comm.0,
                 streams[idx].stream as *mut _,
             )
         }
@@ -654,7 +571,7 @@ impl Circuits {
                 send.len(),
                 T::as_nccl_type(),
                 peer_id as i32,
-                self.comms[idx].0.comm.0,
+                self.comms[idx].comm.0,
                 streams[idx].stream as *mut _,
             )
         }
@@ -676,7 +593,7 @@ impl Circuits {
                 receive.len(),
                 T::as_nccl_type(),
                 peer_id as i32,
-                self.comms[idx].0.comm.0,
+                self.comms[idx].comm.0,
                 streams[idx].stream as *mut _,
             )
         }

@@ -4,7 +4,7 @@ use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{routing::get, Router};
 use clap::Parser;
-use eyre::Context;
+use eyre::{eyre, Context};
 use futures::StreamExt;
 use gpu_iris_mpc::{
     config::{json_wrapper::JsonStrWrapper, Config, Opt},
@@ -14,18 +14,23 @@ use gpu_iris_mpc::{
             NODE_ID_MESSAGE_ATTRIBUTE_NAME, SPAN_ID_MESSAGE_ATTRIBUTE_NAME,
             TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
         },
+        device_manager::DeviceManager,
         kms_dh::derive_shared_secret,
-        mmap::{read_mmap_file, write_mmap_file},
         sqs::{ResultEvent, SMPCRequest, SQSMessage},
         task_monitor::TaskMonitor,
     },
     server::{BatchMetadata, BatchQuery, ServerActor, ServerJobResult},
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
-    store::Store,
+    store::{
+        sync::{self, SyncState},
+        Store, StoredIrisRef,
+    },
 };
 use rand::{rngs::StdRng, SeedableRng};
+use static_assertions::const_assert;
 use std::{
-    fs::metadata,
+    mem,
+    sync::Arc,
     time::{Duration, Instant},
 };
 use telemetry_batteries::{
@@ -35,6 +40,7 @@ use telemetry_batteries::{
 use tokio::{
     sync::{mpsc, oneshot},
     task::spawn_blocking,
+    time::timeout,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -43,16 +49,19 @@ const DB_SIZE: usize = 8 * 1_000;
 const N_QUERIES: usize = 32;
 const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
+const SYNC_RESULTS: usize = N_QUERIES * 2;
+const SYNC_QUERIES: usize = N_QUERIES * 2;
+const_assert!(SYNC_QUERIES <= SyncState::MAX_REQUESTS);
 /// The number of batches before a stream is re-used.
 
-const DB_CODE_FILE: &str = "codes.db";
-const DB_MASK_FILE: &str = "masks.db";
 const QUERIES: usize = ROTATIONS * N_QUERIES;
 
 async fn receive_batch(
     party_id: usize,
     client: &Client,
     queue_url: &String,
+    store: &Store,
+    skip_request_ids: Vec<String>,
 ) -> eyre::Result<BatchQuery> {
     let mut batch_query = BatchQuery::default();
 
@@ -68,6 +77,22 @@ async fn receive_batch(
             for sqs_message in messages {
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())?;
                 let message: SMPCRequest = serde_json::from_str(&message.message)?;
+
+                store
+                    .mark_requests_deleted(&[message.request_id.clone()])
+                    .await?;
+
+                client
+                    .delete_message()
+                    .queue_url(queue_url)
+                    .receipt_handle(sqs_message.receipt_handle.unwrap())
+                    .send()
+                    .await?;
+
+                if skip_request_ids.contains(&message.request_id) {
+                    // Some party (maybe us) already meant to delete this request, so we skip it.
+                    continue;
+                }
 
                 let message_attributes = sqs_message.message_attributes.unwrap_or_default();
 
@@ -86,10 +111,7 @@ async fn receive_batch(
                     batch_metadata.span_id = span_id.to_string();
                 }
 
-                batch_query.request_ids.push(message.clone().request_id);
-                batch_query
-                    .sqs_receipt_handles
-                    .push(sqs_message.receipt_handle.unwrap());
+                batch_query.request_ids.push(message.request_id.clone());
                 batch_query.metadata.push(batch_metadata);
 
                 let (
@@ -172,7 +194,7 @@ fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
 }
 
 async fn initialize_chacha_seeds(
-    kms_key_arns: JsonStrWrapper<Vec<String>>,
+    kms_key_arns: &JsonStrWrapper<Vec<String>>,
     party_id: usize,
 ) -> eyre::Result<([u32; 8], [u32; 8])> {
     // Init RNGs
@@ -205,62 +227,72 @@ async fn initialize_chacha_seeds(
 }
 
 async fn initialize_iris_dbs(
-    path: &str,
     party_id: usize,
     store: &Store,
-) -> eyre::Result<(Vec<u16>, Vec<u16>)> {
-    let code_db_path = format!("{}/{}", path, DB_CODE_FILE);
-    let mask_db_path = format!("{}/{}", path, DB_MASK_FILE);
+) -> eyre::Result<(Vec<u16>, Vec<u16>, usize)> {
     // Generate or load DB
-    let (mut codes_db, mut masks_db) =
-        if metadata(&code_db_path).is_ok() && metadata(&mask_db_path).is_ok() {
-            (
-                read_mmap_file(&code_db_path)?,
-                read_mmap_file(&mask_db_path)?,
-            )
-        } else {
-            let mut rng = StdRng::seed_from_u64(RNG_SEED);
-            let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
+    let (mut codes_db, mut masks_db) = {
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+        let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
-            let codes_db = db
-                .db
-                .iter()
-                .flat_map(|iris| {
-                    GaloisRingIrisCodeShare::encode_iris_code(
-                        &iris.code,
-                        &iris.mask,
-                        &mut StdRng::seed_from_u64(RNG_SEED),
-                    )[party_id]
-                        .coefs
-                })
-                .collect::<Vec<_>>();
+        let codes_db = db
+            .db
+            .iter()
+            .flat_map(|iris| {
+                GaloisRingIrisCodeShare::encode_iris_code(
+                    &iris.code,
+                    &iris.mask,
+                    &mut StdRng::seed_from_u64(RNG_SEED),
+                )[party_id]
+                    .coefs
+            })
+            .collect::<Vec<_>>();
 
-            let masks_db = db
-                .db
-                .iter()
-                .flat_map(|iris| {
-                    GaloisRingIrisCodeShare::encode_mask_code(
-                        &iris.mask,
-                        &mut StdRng::seed_from_u64(RNG_SEED),
-                    )[party_id]
-                        .coefs
-                })
-                .collect::<Vec<_>>();
+        let masks_db = db
+            .db
+            .iter()
+            .flat_map(|iris| {
+                GaloisRingIrisCodeShare::encode_mask_code(
+                    &iris.mask,
+                    &mut StdRng::seed_from_u64(RNG_SEED),
+                )[party_id]
+                    .coefs
+            })
+            .collect::<Vec<_>>();
 
-            write_mmap_file(&code_db_path, &codes_db)?;
-            write_mmap_file(&mask_db_path, &masks_db)?;
-            (codes_db, masks_db)
-        };
+        (codes_db, masks_db)
+    };
 
     // Load DB from persistent storage.
+    let mut store_len = 0;
     while let Some(iris) = store.stream_irises().await.next().await {
         let iris = iris?;
-        codes_db.extend(iris.code());
-        masks_db.extend(iris.mask());
+        codes_db.extend(iris.left_code());
+        masks_db.extend(iris.left_mask());
+        store_len += 1;
     }
 
-    Ok((codes_db, masks_db))
+    Ok((codes_db, masks_db, store_len))
 }
+
+async fn replay_result_events(
+    store: &Store,
+    sns_client: &SNSClient,
+    topic: &str,
+) -> eyre::Result<()> {
+    let result_events = store.last_results(SYNC_RESULTS).await?;
+
+    for result_event in result_events {
+        sns_client
+            .publish()
+            .topic_arn(topic)
+            .message(result_event)
+            .send()
+            .await?;
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     dotenvy::dotenv().ok();
@@ -277,9 +309,16 @@ async fn main() -> eyre::Result<()> {
     let sns_client = SNSClient::new(&shared_config);
 
     let party_id = config.party_id;
-    let chacha_seeds = initialize_chacha_seeds(config.kms_key_arns, party_id).await?;
+    let chacha_seeds = initialize_chacha_seeds(&config.kms_key_arns, party_id).await?;
 
-    let (codes_db, masks_db) = initialize_iris_dbs(&config.path, party_id, &store).await?;
+    replay_result_events(&store, &sns_client, &config.results_topic_arn).await?;
+
+    let (codes_db, masks_db, store_len) = initialize_iris_dbs(party_id, &store).await?;
+
+    let my_state = SyncState {
+        db_len:              store_len as u64,
+        deleted_request_ids: store.last_deleted_requests(SYNC_QUERIES).await?,
+    };
 
     let mut background_tasks = TaskMonitor::new();
     // a bit convoluted, but we need to create the actor on the thread already,
@@ -287,89 +326,116 @@ async fn main() -> eyre::Result<()> {
     // channel
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
-        let actor = match ServerActor::new(
+        let device_manager = Arc::new(DeviceManager::init());
+        let ids = device_manager.get_ids_from_magic(0);
+        let comms = device_manager.instantiate_network_from_ids(config.party_id, ids);
+
+        let sync_result = match sync::sync(&comms[0], &my_state) {
+            Ok(res) => res,
+            Err(e) => {
+                tx.send(Err(e)).unwrap();
+                return Ok(());
+            }
+        };
+
+        match ServerActor::new_with_device_manager_and_comms(
             config.party_id,
-            config.servers,
             chacha_seeds,
             &codes_db,
             &masks_db,
+            device_manager,
+            comms,
             8,
         ) {
             Ok((actor, handle)) => {
-                tx.send(Ok(handle)).unwrap();
-                actor
+                tx.send(Ok((handle, sync_result))).unwrap();
+                actor.run(); // forever
             }
             Err(e) => {
                 tx.send(Err(e)).unwrap();
                 return Ok(());
             }
         };
-        actor.run();
         Ok(())
     });
+
+    let (mut handle, sync_result) = rx.await??;
+
+    if let Some(db_len) = sync_result.must_rollback_storage() {
+        eprintln!("Databases are out-of-sync: {:?}", sync_result);
+        store.rollback(db_len).await?;
+        return Err(eyre!("Rolled back to common state. Restarting…"));
+    }
+
+    let mut skip_request_ids = sync_result.deleted_request_ids();
+
     background_tasks.check_tasks();
-    let mut handle = rx.await??;
 
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
     let rx_sns_client = sns_client.clone();
-    let sqs_client_bg = sqs_client.clone();
-    let queue_url_bg = config.requests_queue_url.clone();
 
+    let store_bg = store.clone();
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
             merged_results,
             request_ids,
-            sqs_receipt_handles,
             matches,
             store: query_store,
         }) = rx.recv().await
         {
-            for (i, &idx_result) in merged_results.iter().enumerate() {
-                // Insert non-matching queries into the persistent store.
-                {
-                    let codes_and_masks: Vec<(&[u16], &[u16])> = matches
-                        .iter()
-                        .enumerate()
-                        .filter_map(
-                            // Find the indices of non-matching queries in the batch.
-                            |(query_idx, is_match)| if !is_match { Some(query_idx) } else { None },
-                        )
-                        .map(|query_idx| {
-                            // Get the original vectors from `receive_batch`.
-                            let code = &query_store.code[query_idx].coefs[..];
-                            let mask = &query_store.mask[query_idx].coefs[..];
-                            (code, mask)
-                        })
-                        .collect();
+            let result_events = merged_results
+                .iter()
+                .enumerate()
+                .map(|(i, &idx_result)| {
+                    let result_event =
+                        ResultEvent::new(party_id, idx_result, matches[i], request_ids[i].clone());
 
-                    store
-                        .insert_irises(&codes_and_masks)
-                        .await
-                        .wrap_err("failed to persist queries")?;
-                }
+                    serde_json::to_string(&result_event).wrap_err("failed to serialize result")
+                })
+                .collect::<eyre::Result<Vec<_>>>()?;
 
-                // Notify consumers about result
-                println!("Sending results back to SNS...");
-                let result_event =
-                    ResultEvent::new(party_id, idx_result, matches[i], request_ids[i].clone());
+            // Insert non-matching queries into the persistent store.
+            let codes_and_masks: Vec<StoredIrisRef> = matches
+                .iter()
+                .enumerate()
+                .filter_map(
+                    // Find the indices of non-matching queries in the batch.
+                    |(query_idx, is_match)| if !is_match { Some(query_idx) } else { None },
+                )
+                .map(|query_idx| {
+                    // Get the original vectors from `receive_batch`.
+                    let code = &query_store.code[query_idx].coefs[..];
+                    let mask = &query_store.mask[query_idx].coefs[..];
+                    StoredIrisRef {
+                        left_code:  code,
+                        left_mask:  mask,
+                        // TODO: second eye.
+                        right_code: &[],
+                        right_mask: &[],
+                    }
+                })
+                .collect();
 
+            let mut tx = store_bg.tx().await?;
+
+            store_bg.insert_results(&mut tx, &result_events).await?;
+
+            store_bg
+                .insert_irises(&mut tx, &codes_and_masks)
+                .await
+                .wrap_err("failed to persist queries")?;
+
+            tx.commit().await?;
+
+            println!("Sending results back to SNS...");
+            for result_event in result_events {
                 rx_sns_client
                     .publish()
                     .topic_arn(&config.results_topic_arn)
-                    .message(serde_json::to_string(&result_event).unwrap())
+                    .message(result_event)
                     .send()
                     .await?;
-
-                // Tell SQS that we are done with these requests.
-                for sqs_receipt_handle in sqs_receipt_handles.iter() {
-                    sqs_client_bg
-                        .delete_message()
-                        .queue_url(&queue_url_bg)
-                        .receipt_handle(sqs_receipt_handle)
-                        .send()
-                        .await?;
-                }
             }
         }
 
@@ -393,6 +459,7 @@ async fn main() -> eyre::Result<()> {
     });
     background_tasks.check_tasks();
 
+    let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
     let mut total_time = Instant::now();
     let mut batch_times = Duration::from_secs(0);
 
@@ -418,9 +485,19 @@ async fn main() -> eyre::Result<()> {
         }
         let now = Instant::now();
 
+        // Skip requests based on the startup sync, only in the first iteration.
+        let skip_request_ids = mem::take(&mut skip_request_ids);
+
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
-        let batch = receive_batch(party_id, &sqs_client, &config.requests_queue_url).await?;
+        let batch = receive_batch(
+            party_id,
+            &sqs_client,
+            &config.requests_queue_url,
+            &store,
+            skip_request_ids,
+        )
+        .await?;
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id and
@@ -442,7 +519,10 @@ async fn main() -> eyre::Result<()> {
         let result_future = handle.submit_batch_query(batch).await;
 
         // await the result
-        let result = result_future.await;
+        let result = timeout(processing_timeout, result_future)
+            .await
+            .map_err(|e| eyre!("ServerActor processing timeout: {:?}", e))?;
+
         tx.send(result).await.unwrap();
         println!("CPU time of one iteration {:?}", now.elapsed());
 
@@ -460,6 +540,7 @@ async fn main() -> eyre::Result<()> {
     // Clean up server tasks, then wait for them to finish
     background_tasks.abort_all();
     tokio::time::sleep(Duration::from_secs(5)).await;
+
     // Check for background task hangs and shutdown panics
     background_tasks.check_tasks_finished();
 
