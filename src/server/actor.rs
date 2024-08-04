@@ -413,6 +413,7 @@ impl ServerActor {
             &self.batch_results,
             chunk_size,
             &db_sizes_batch,
+            &db_sizes_batch,
             0,
             batch_streams,
         );
@@ -453,7 +454,7 @@ impl ServerActor {
                 .iter()
                 .map(|s| s.div_ceil(4) * 4)
                 .collect::<Vec<_>>();
-
+            
             // First stream doesn't need to wait
             if db_chunk_idx == 0 {
                 self.device_manager
@@ -478,7 +479,7 @@ impl ServerActor {
                 &mut self.masks_engine,
                 &self.code_db_slices,
                 &self.mask_db_slices,
-                &chunk_size,
+                &dot_chunk_size,
                 offset,
                 request_streams,
                 request_cublas_handles,
@@ -498,7 +499,7 @@ impl ServerActor {
                 &mut self.masks_engine,
                 &self.code_db_slices,
                 &self.mask_db_slices,
-                &chunk_size,
+                &dot_chunk_size,
                 offset,
                 request_streams,
             );
@@ -512,9 +513,9 @@ impl ServerActor {
                 .record_event(request_streams, &next_dot_event);
 
             self.codes_engine
-                .reshare_results(&chunk_size, request_streams);
+                .reshare_results(&dot_chunk_size, request_streams);
             self.masks_engine
-                .reshare_results(&chunk_size, request_streams);
+                .reshare_results(&dot_chunk_size, request_streams);
 
             // ---- END PHASE 1 ----
 
@@ -528,7 +529,7 @@ impl ServerActor {
 
             // ---- START PHASE 2 ----
             // TODO: remove
-            let max_chunk_size = chunk_size.iter().max().copied().unwrap();
+            let max_chunk_size = dot_chunk_size.iter().max().copied().unwrap();
             let phase_2_chunk_sizes = vec![max_chunk_size; self.device_manager.device_count()];
             let mut code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
             let mut mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
@@ -559,6 +560,7 @@ impl ServerActor {
                     &self.distance_comparator,
                     &self.results,
                     max_chunk_size * QUERIES / 64,
+                    &dot_chunk_size,
                     &chunk_size,
                     offset,
                     request_streams,
@@ -805,6 +807,7 @@ fn open(
     results_ptrs: &[CudaSlice<u32>],
     chunk_size: usize,
     db_sizes: &[usize],
+    real_db_sizes: &[usize],
     offset: usize,
     streams: &[CudaStream],
 ) {
@@ -832,7 +835,7 @@ fn open(
     }
     cudarc::nccl::result::group_end().unwrap();
 
-    distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, offset, streams);
+    distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, real_db_sizes, offset, streams);
 }
 
 fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
