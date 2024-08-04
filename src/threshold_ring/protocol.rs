@@ -12,9 +12,8 @@ use crate::{
 use axum::{routing::get, Router};
 use cudarc::{
     driver::{
-        result::stream,
-        CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, CudaViewMut, DevicePtr,
-        DeviceSlice, LaunchAsync, LaunchConfig,
+        result::stream, CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, CudaViewMut,
+        DevicePtr, DeviceSlice, LaunchAsync, LaunchConfig,
     },
     nccl::{result, Comm, Id},
     nvrtc::{self, Ptx},

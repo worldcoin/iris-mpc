@@ -454,7 +454,7 @@ impl ServerActor {
                 .iter()
                 .map(|s| s.div_ceil(4) * 4)
                 .collect::<Vec<_>>();
-            
+
             // First stream doesn't need to wait
             if db_chunk_idx == 0 {
                 self.device_manager
@@ -835,7 +835,16 @@ fn open(
     }
     cudarc::nccl::result::group_end().unwrap();
 
-    distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, real_db_sizes, offset, streams);
+    distance_comparator.open_results(
+        &a,
+        &b,
+        &c,
+        results_ptrs,
+        db_sizes,
+        real_db_sizes,
+        offset,
+        streams,
+    );
 }
 
 fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {

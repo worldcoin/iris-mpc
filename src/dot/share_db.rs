@@ -68,6 +68,13 @@ pub fn gemm(
     alpha: i32,
     beta: i32,
 ) {
+    // https://docs.nvidia.com/cuda/cublas/#cublasgemmex:
+    // "CUBLAS_COMPUTE_32I and CUBLAS_COMPUTE_32I_PEDANTIC compute types are only supported with A, B being 4-byte aligned and lda, ldb being multiples of 4."
+    assert!(m % 4 == 0, "m must be a multiple of 4");
+    // We don't enforce the following, since we use it for n=1 and emperial testing
+    // shows that it works. assert!(n % 4 == 0, "n must be a multiple of 4");
+    assert!(a % 4 == 0, "a must be aligned to 4 bytes");
+    assert!(b % 4 == 0, "b must be aligned to 4 bytes");
     unsafe {
         gemm_ex(
             *handle.handle(),
@@ -474,7 +481,7 @@ impl ShareDB {
                     "{}: db1 pointer for dev {}: {:#x}",
                     self.peer_id,
                     idx,
-                    *slice.device_ptr() as u64
+                    *slice.device_ptr()
                 );
                 self.device_manager
                     .htod_copy_into(chunk.to_vec(), &mut slice, idx)
@@ -496,7 +503,7 @@ impl ShareDB {
                     "{}: db0 pointer for dev {}: {:#x}",
                     self.peer_id,
                     idx,
-                    *slice.device_ptr() as u64
+                    *slice.device_ptr()
                 );
                 self.device_manager
                     .htod_copy_into(chunk.to_vec(), &mut slice, idx)
@@ -888,7 +895,7 @@ impl ShareDB {
 mod tests {
     use super::{preprocess_query, ShareDB};
     use crate::{
-        helpers::device_manager::{self, DeviceManager},
+        helpers::device_manager::DeviceManager,
         setup::{galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     };
     use float_eq::assert_float_eq;
@@ -898,8 +905,8 @@ mod tests {
     use std::sync::Arc;
 
     const WIDTH: usize = 12_800;
-    const QUERY_SIZE: usize = 31;
-    const DB_SIZE: usize = 999;
+    const QUERY_SIZE: usize = 32;
+    const DB_SIZE: usize = 8 * 1000;
     const RNG_SEED: u64 = 42;
 
     /// Helper to generate random ndarray
@@ -930,10 +937,7 @@ mod tests {
     fn check_matmul() {
         let db = random_vec(DB_SIZE, WIDTH, u16::MAX as u32);
         let query = random_vec(QUERY_SIZE, WIDTH, u16::MAX as u32);
-        let device_manager = DeviceManager::init();
-        let n_devices = device_manager.device_count();
-        let mut device_managers = device_manager.split_into_n_chunks(n_devices).unwrap();
-        let device_manager = Arc::new(device_managers.pop().unwrap());
+        let device_manager = Arc::new(DeviceManager::init());
         let n_devices = device_manager.device_count();
 
         let mut gpu_result = vec![0u16; DB_SIZE / n_devices * QUERY_SIZE];

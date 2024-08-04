@@ -123,6 +123,27 @@ pub fn htod_on_stream_sync<T: DeviceRepr>(
     Ok(buf)
 }
 
+/// Allocates memory on a given CUDA stream.
+///
+/// # Parameters
+/// - `device`: A reference to an `Arc<CudaDevice>`, representing the CUDA
+///   device.
+/// - `len`: The length (number of elements) to allocate.
+/// - `stream`: A reference to a `CudaStream` where the memory allocation should
+///   happen.
+///
+/// # Returns
+/// - A `CudaSlice<T>` which is a wrapper around the allocated memory.
+///
+/// # Safety
+/// This function is `unsafe` because it involves raw pointer operations and
+/// interacts directly with CUDA's memory management, which can lead to
+/// undefined behavior if not used correctly. The caller must ensure that:
+/// - The `device` is valid and properly initialized.
+/// - The `stream` is valid and properly initialized.
+/// - The allocated memory is properly managed and freed to avoid memory leaks.
+/// - The usage of the allocated memory does not cause data races or other
+///   concurrency issues.
 pub unsafe fn alloc_on_stream<T>(
     device: &Arc<CudaDevice>,
     len: usize,
