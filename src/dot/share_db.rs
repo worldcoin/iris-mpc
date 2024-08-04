@@ -11,10 +11,15 @@ use crate::{
     rng::chacha::ChaChaCudaRng,
     threshold_ring::protocol::ChunkShare,
 };
+use core::panic;
 #[cfg(feature = "otp_encrypt")]
 use cudarc::driver::{CudaView, DeviceSlice};
 use cudarc::{
-    cublas::{result::gemm_ex, sys, CudaBlas},
+    cublas::{
+        result::gemm_ex,
+        sys::{self, lib},
+        CudaBlas,
+    },
     driver::{
         result::malloc_async, sys::CUdeviceptr, CudaFunction, CudaSlice, CudaStream, DevicePtr,
         LaunchAsync, LaunchConfig,
@@ -25,7 +30,11 @@ use cudarc::{
 #[cfg(feature = "otp_encrypt")]
 use itertools::Itertools;
 use rayon::prelude::*;
-use std::{ffi::c_void, mem, sync::Arc};
+use std::{
+    ffi::{c_void, CStr},
+    mem,
+    sync::Arc,
+};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const REDUCE_FUNCTION_NAME: &str = "matmul_correct_and_reduce";
@@ -94,14 +103,10 @@ pub fn gemm(
             sys::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT,
         );
 
-        match status {
-            Ok(_) => {
-                println!("GEMM success");
-            }
-            Err(e) => {
-                // Handle error
-                eprintln!("CUBLAS error: {:?}", e);
-            }
+        // Try to fetch more information in case of an error
+        if let Err(e) = status {
+            let c_str = CStr::from_ptr(lib().cublasGetStatusString(e.0));
+            panic!("CUBLAS error: {:?}", c_str.to_str());
         }
     }
 }
