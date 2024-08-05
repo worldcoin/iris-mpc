@@ -1,8 +1,5 @@
 use crate::{
-    helpers::{
-        device_manager::DeviceManager,
-        dtoh_on_stream_sync, htod_on_stream_sync,
-    },
+    helpers::{device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync},
     rng::chacha_corr::ChaChaCudaCorrRng,
     threshold_ring::cuda::PTX_SRC,
 };
