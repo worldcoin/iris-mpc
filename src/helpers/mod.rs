@@ -1,6 +1,6 @@
 use crate::threshold_ring::protocol::ChunkShare;
 use cudarc::driver::{
-    result::{self, malloc_async, memcpy_dtoh_async, memcpy_htod_async, stream},
+    result::{self, memcpy_dtoh_async, memcpy_htod_async, stream},
     sys::{CUdeviceptr, CUstream, CUstream_st},
     CudaDevice, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceRepr, DriverError,
 };
@@ -120,34 +120,4 @@ pub fn htod_on_stream_sync<T: DeviceRepr>(
         buf
     };
     Ok(buf)
-}
-
-/// Allocates memory on a given CUDA stream.
-///
-/// # Parameters
-/// - `device`: A reference to an `Arc<CudaDevice>`, representing the CUDA
-///   device.
-/// - `len`: The length (number of elements) to allocate.
-/// - `stream`: A reference to a `CudaStream` where the memory allocation should
-///   happen.
-///
-/// # Returns
-/// - A `CudaSlice<T>` which is a wrapper around the allocated memory.
-///
-/// # Safety
-/// This function is `unsafe` because it involves raw pointer operations and
-/// interacts directly with CUDA's memory management, which can lead to
-/// undefined behavior if not used correctly. The caller must ensure that:
-/// - The `device` is valid and properly initialized.
-/// - The `stream` is valid and properly initialized.
-/// - The allocated memory is properly managed and freed to avoid memory leaks.
-/// - The usage of the allocated memory does not cause data races or other
-///   concurrency issues.
-pub unsafe fn alloc_on_stream<T>(
-    device: &Arc<CudaDevice>,
-    len: usize,
-    stream: &CudaStream,
-) -> CudaSlice<T> {
-    let rand_ptr = malloc_async(stream.stream, len * std::mem::size_of::<T>()).unwrap();
-    device.upgrade_device_ptr(rand_ptr, len)
 }

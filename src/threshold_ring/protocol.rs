@@ -1,6 +1,7 @@
 use crate::{
     helpers::{
-        alloc_on_stream, device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync,
+        device_manager::DeviceManager,
+        dtoh_on_stream_sync, htod_on_stream_sync,
     },
     rng::chacha_corr::ChaChaCudaCorrRng,
     threshold_ring::cuda::PTX_SRC,
@@ -675,7 +676,7 @@ impl Circuits {
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
         let size = (self.chunk_size * bits + 7) / 8;
-        let mut rand = unsafe { alloc_on_stream::<u64>(&self.devs[idx], size * 8, &streams[idx]) };
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(size * 8).unwrap() };
         self.fill_rand_u64(&mut rand, idx, streams);
 
         let cfg = Self::launch_config_from_elements_and_threads(
@@ -746,7 +747,7 @@ impl Circuits {
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
         let size = (self.chunk_size + 7) / 8;
-        let mut rand = unsafe { alloc_on_stream::<u64>(&self.devs[idx], size * 8, &streams[idx]) };
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(size * 8).unwrap() };
         self.fill_rand_u64(&mut rand, idx, streams);
 
         unsafe {
@@ -772,7 +773,7 @@ impl Circuits {
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
         let size = (x1.len() + 7) / 8;
-        let mut rand = unsafe { alloc_on_stream::<u64>(&self.devs[idx], size * 8, &streams[idx]) };
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(size * 8).unwrap() };
         self.fill_rand_u64(&mut rand, idx, streams);
 
         let cfg = Self::launch_config_from_elements_and_threads(
@@ -802,8 +803,7 @@ impl Circuits {
     ) -> CudaSlice<u32> {
         let data_len = input.len();
         assert_eq!(data_len & 1, 0);
-        let mut rand =
-            unsafe { alloc_on_stream::<u32>(&self.devs[idx], data_len >> 1, &streams[idx]) };
+        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
         let mut rand_u16 = self.fill_my_rng_into_u16(&mut rand, idx, streams);
         self.single_xor_assign_u16(&mut rand_u16, input, idx, data_len, streams);
         rand
@@ -818,8 +818,7 @@ impl Circuits {
     ) -> CudaSlice<u32> {
         let data_len = input.len();
         assert_eq!(data_len & 1, 0);
-        let mut rand =
-            unsafe { alloc_on_stream::<u32>(&self.devs[idx], data_len >> 1, &streams[idx]) };
+        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
         let mut rand_u16 = self.fill_their_rng_into_u16(&mut rand, idx, streams);
         self.single_xor_assign_u16(&mut rand_u16, input, idx, data_len, streams);
         rand
@@ -834,8 +833,7 @@ impl Circuits {
     ) {
         let data_len = input.len();
         assert_eq!(data_len & 1, 0);
-        let mut rand =
-            unsafe { alloc_on_stream::<u32>(&self.devs[idx], data_len >> 1, &streams[idx]) };
+        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
         let rand_u16 = self.fill_my_rng_into_u16(&mut rand, idx, streams);
         self.single_xor_assign_u16(input, &rand_u16, idx, data_len, streams);
     }
@@ -849,8 +847,7 @@ impl Circuits {
     ) {
         let data_len = input.len();
         assert_eq!(data_len & 1, 0);
-        let mut rand =
-            unsafe { alloc_on_stream::<u32>(&self.devs[idx], data_len >> 1, &streams[idx]) };
+        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
         let rand_u16 = self.fill_their_rng_into_u16(&mut rand, idx, streams);
         self.single_xor_assign_u16(input, &rand_u16, idx, data_len, streams);
     }
@@ -864,8 +861,7 @@ impl Circuits {
     ) -> CudaSlice<u64> {
         let data_len = input.len();
         let rand_size = (data_len + 7) / 8; // Multiple of 16 u32
-        let mut rand =
-            unsafe { alloc_on_stream::<u64>(&self.devs[idx], rand_size * 8, &streams[idx]) };
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(rand_size * 8).unwrap() };
         self.fill_my_rand_u64(&mut rand, idx, streams);
         self.single_xor_assign_u64(
             &mut rand.slice(..data_len),
@@ -886,8 +882,7 @@ impl Circuits {
     ) {
         let data_len = inout.len();
         let rand_size = (data_len + 7) / 8; // Multiple of 16 u32
-        let mut rand =
-            unsafe { alloc_on_stream::<u64>(&self.devs[idx], rand_size * 8, &streams[idx]) };
+        let mut rand = unsafe { self.devs[idx].alloc::<u64>(rand_size * 8).unwrap() };
         self.fill_their_rand_u64(&mut rand, idx, streams);
         self.single_xor_assign_u64(
             &mut inout.b,
@@ -1233,27 +1228,23 @@ impl Circuits {
         for (idx, (inp, res, m0, m1)) in izip!(inp, outp, &m0, &m1).enumerate() {
             // SAFETY: Only unsafe because memory is not initialized. But, we fill
             // afterwards.
-            let mut rand_ca_alloc = unsafe {
-                alloc_on_stream::<u32>(&self.devs[idx], self.chunk_size * 64, &streams[idx])
-            };
+            let mut rand_ca_alloc =
+                unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
             let rand_ca = self.fill_my_rng_into_u16(&mut rand_ca_alloc, idx, streams);
             // SAFETY: Only unsafe because memory is not initialized. But, we fill
             // afterwards.
-            let mut rand_cb_alloc = unsafe {
-                alloc_on_stream::<u32>(&self.devs[idx], self.chunk_size * 64, &streams[idx])
-            };
+            let mut rand_cb_alloc =
+                unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
             let rand_cb = self.fill_their_rng_into_u16(&mut rand_cb_alloc, idx, streams);
             // SAFETY: Only unsafe because memory is not initialized. But, we fill
             // afterwards.
-            let mut rand_wa1_alloc = unsafe {
-                alloc_on_stream::<u32>(&self.devs[idx], self.chunk_size * 64, &streams[idx])
-            };
+            let mut rand_wa1_alloc =
+                unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
             let rand_wa1 = self.fill_my_rng_into_u16(&mut rand_wa1_alloc, idx, streams);
             // SAFETY: Only unsafe because memory is not initialized. But, we fill
             // afterwards.
-            let mut rand_wa2_alloc = unsafe {
-                alloc_on_stream::<u32>(&self.devs[idx], self.chunk_size * 64, &streams[idx])
-            };
+            let mut rand_wa2_alloc =
+                unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
             let rand_wa2 = self.fill_my_rng_into_u16(&mut rand_wa2_alloc, idx, streams);
 
             let cfg = Self::launch_config_from_elements_and_threads(
@@ -1360,7 +1351,7 @@ impl Circuits {
             // SAFETY: Only unsafe because memory is not initialized. But, we fill
             // afterwards.
             let mut rand_ca_alloc =
-                unsafe { alloc_on_stream(&self.devs[idx], self.chunk_size * 64, &streams[idx]) };
+                unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
             let rand_ca = self.fill_my_rng_into_u16(&mut rand_ca_alloc, idx, streams);
 
             // OTP decrypt
@@ -1438,21 +1429,18 @@ impl Circuits {
         for (idx, (inp, res, wc)) in izip!(inp, outp.iter_mut(), &wc).enumerate() {
             // SAFETY: Only unsafe because memory is not initialized. But, we fill
             // afterwards.
-            let mut rand_cb_alloc = unsafe {
-                alloc_on_stream::<u32>(&self.devs[idx], self.chunk_size * 64, &streams[idx])
-            };
+            let mut rand_cb_alloc =
+                unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
             let rand_cb = self.fill_their_rng_into_u16(&mut rand_cb_alloc, idx, streams);
             // SAFETY: Only unsafe because memory is not initialized. But, we fill
             // afterwards.
-            let mut rand_wb1_alloc = unsafe {
-                alloc_on_stream::<u32>(&self.devs[idx], self.chunk_size * 64, &streams[idx])
-            };
+            let mut rand_wb1_alloc =
+                unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
             let rand_wb1 = self.fill_their_rng_into_u16(&mut rand_wb1_alloc, idx, streams);
             // SAFETY: Only unsafe because memory is not initialized. But, we fill
             // afterwards.
-            let mut rand_wb2_alloc = unsafe {
-                alloc_on_stream::<u32>(&self.devs[idx], self.chunk_size * 64, &streams[idx])
-            };
+            let mut rand_wb2_alloc =
+                unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
             let rand_wb2 = self.fill_their_rng_into_u16(&mut rand_wb2_alloc, idx, streams);
 
             let cfg = Self::launch_config_from_elements_and_threads(
@@ -2086,7 +2074,7 @@ impl Circuits {
 
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
-        let mut rand = unsafe { alloc_on_stream(&self.devs[0], 16, &streams[0]) };
+        let mut rand = unsafe { self.devs[0].alloc::<u64>(16).unwrap() }; // minimum size is 16 for RNG, need only 10 though
         self.fill_rand_u64(&mut rand, 0, streams);
 
         let mut rand_offset = rand.slice(..);
