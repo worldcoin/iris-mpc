@@ -313,7 +313,7 @@ async fn main() -> eyre::Result<()> {
 
     replay_result_events(&store, &sns_client, &config.results_topic_arn).await?;
 
-    let (codes_db, masks_db, store_len) = initialize_iris_dbs(party_id, &store).await?;
+    let (mut codes_db, mut masks_db, store_len) = initialize_iris_dbs(party_id, &store).await?;
 
     let my_state = SyncState {
         db_len:              store_len as u64,
@@ -337,6 +337,15 @@ async fn main() -> eyre::Result<()> {
                 return Ok(());
             }
         };
+
+        if let Some(db_len) = sync_result.must_rollback_storage() {
+            // Rollback the data that we have already loaded.
+            let code_size = GaloisRingIrisCodeShare::CODE_SIZE;
+            let bit_len = db_len * code_size;
+            let bit_len = bit_len + (codes_db.len() - store_len * code_size); // TODO: remove this line if you removed fake data.
+            codes_db.truncate(bit_len);
+            masks_db.truncate(bit_len);
+        }
 
         match ServerActor::new_with_device_manager_and_comms(
             config.party_id,
@@ -364,7 +373,7 @@ async fn main() -> eyre::Result<()> {
     if let Some(db_len) = sync_result.must_rollback_storage() {
         eprintln!("Databases are out-of-sync: {:?}", sync_result);
         store.rollback(db_len).await?;
-        return Err(eyre!("Rolled back to common state. Restarting…"));
+        eprintln!("Rolled back to db_len={}", db_len);
     }
 
     let mut skip_request_ids = sync_result.deleted_request_ids();

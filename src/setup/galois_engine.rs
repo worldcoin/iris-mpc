@@ -247,6 +247,7 @@ pub mod degree4 {
     }
 
     impl GaloisRingIrisCodeShare {
+        pub const CODE_SIZE: usize = 12800;
         const COLS: usize = 200;
 
         pub fn new(id: usize, coefs: [u16; 12800]) -> Self {
