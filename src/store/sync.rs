@@ -59,7 +59,7 @@ pub fn sync(comm: &Comm, state: &SyncState) -> Result<SyncResult> {
 }
 
 impl SyncState {
-    pub const MAX_REQUESTS: usize = 64;
+    pub const MAX_REQUESTS: usize = 128;
     const SERIAL_SIZE: usize = 8192;
 
     /// Serialize the state to a fixed-size buffer.
