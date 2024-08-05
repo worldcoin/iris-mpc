@@ -99,7 +99,7 @@ impl<S: NewIrisShareSink> IrisCodeUpgrader<S> {
 
     /// Finalizes the upgrade protocol.
     /// Takes 2 [TwoToThreeIrisCodeMessage] from the 3 parties and combines them
-    /// into a final shamir share. Also takes a [ShamirSharesMessage] with
+    /// into a final shamir share. Also takes a [MaskShareMessage] with
     /// the masks. Both the new shared code and mask are then stored in the
     /// [NewIrisShareSink].
     pub async fn finalize(
