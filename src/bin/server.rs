@@ -8,7 +8,7 @@ use eyre::{eyre, Context};
 use futures::StreamExt;
 use gpu_iris_mpc::{
     config::{json_wrapper::JsonStrWrapper, Config, Opt},
-    dot::ROTATIONS,
+    dot::{IRIS_CODE_LENGTH, ROTATIONS},
     helpers::{
         aws::{
             NODE_ID_MESSAGE_ATTRIBUTE_NAME, SPAN_ID_MESSAGE_ATTRIBUTE_NAME,
@@ -340,9 +340,9 @@ async fn main() -> eyre::Result<()> {
 
         if let Some(db_len) = sync_result.must_rollback_storage() {
             // Rollback the data that we have already loaded.
-            let code_size = GaloisRingIrisCodeShare::CODE_SIZE;
-            let bit_len = db_len * code_size;
-            let bit_len = bit_len + (codes_db.len() - store_len * code_size); // TODO: remove this line if you removed fake data.
+            let bit_len = db_len * IRIS_CODE_LENGTH;
+            // TODO: remove the line below if you removed fake data.
+            let bit_len = bit_len + (codes_db.len() - store_len * IRIS_CODE_LENGTH);
             codes_db.truncate(bit_len);
             masks_db.truncate(bit_len);
         }
