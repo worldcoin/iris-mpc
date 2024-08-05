@@ -423,12 +423,6 @@ impl ShareDB {
                         .alloc(max_size * IRIS_CODE_LENGTH)
                         .unwrap()
                 };
-                println!(
-                    "{}: db1 pointer for dev {}: {:#x}",
-                    self.peer_id,
-                    idx,
-                    *slice.device_ptr()
-                );
                 self.device_manager
                     .htod_copy_into(chunk.to_vec(), &mut slice, idx)
                     .unwrap();
@@ -445,12 +439,6 @@ impl ShareDB {
                         .alloc(max_size * IRIS_CODE_LENGTH)
                         .unwrap()
                 };
-                println!(
-                    "{}: db0 pointer for dev {}: {:#x}",
-                    self.peer_id,
-                    idx,
-                    *slice.device_ptr()
-                );
                 self.device_manager
                     .htod_copy_into(chunk.to_vec(), &mut slice, idx)
                     .unwrap();

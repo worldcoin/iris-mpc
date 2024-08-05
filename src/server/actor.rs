@@ -412,13 +412,14 @@ impl ServerActor {
         tracing::debug!(party_id = self.party_id, "Start DB deduplication");
         let mut db_chunk_idx = 0;
         loop {
-            tracing::info!(
+            tracing::debug!(
                 party_id = self.party_id,
                 chunk = db_chunk_idx,
                 "starting chunk"
             );
-            let request_streams = &self.streams[0];
-            let request_cublas_handles = &self.cublas_handles[0];
+
+            let request_streams = &self.streams[db_chunk_idx % 2];
+            let request_cublas_handles = &self.cublas_handles[db_chunk_idx % 2];
 
             let offset = db_chunk_idx * DB_CHUNK_SIZE;
             let chunk_size = self
@@ -426,6 +427,9 @@ impl ServerActor {
                 .iter()
                 .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(0, DB_CHUNK_SIZE))
                 .collect::<Vec<_>>();
+
+            // We need to pad the chunk size to be a multiple of 4, because the underlying `gemm_ex` expects this.
+            // We filter out potential "phantom matches" for the padded data in the `open` later.
             let dot_chunk_size = chunk_size
                 .iter()
                 .map(|s| s.div_ceil(4) * 4)
@@ -823,7 +827,7 @@ fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
         results.push(match_entry);
 
         // DEBUG
-        tracing::info!(
+        tracing::debug!(
             "Query {}: match={} [index: {}]",
             j,
             match_entry != u32::MAX,
