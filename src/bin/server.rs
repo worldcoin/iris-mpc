@@ -445,7 +445,6 @@ async fn main() -> eyre::Result<()> {
                     .topic_arn(&config.results_topic_arn)
                     .message(result_event)
                     .message_group_id(&format!("party-id-{}", config.party_id))
-                    .message_deduplication_id(Uuid::new_v4())
                     .send()
                     .await?;
             }
