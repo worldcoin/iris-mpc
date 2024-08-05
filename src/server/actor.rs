@@ -16,11 +16,7 @@ use cudarc::{
 };
 use futures::{Future, FutureExt};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
-use std::{
-    mem,
-    sync::{Arc, Mutex},
-    time::Instant,
-};
+use std::{mem, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
 
 #[allow(unused)]
@@ -67,27 +63,27 @@ const N_QUERIES: usize = 64;
 const QUERIES: usize = ROTATIONS * N_QUERIES;
 
 pub struct ServerActor {
-    job_queue:             mpsc::Receiver<ServerJob>,
-    device_manager:        Arc<DeviceManager>,
-    party_id:              usize,
+    job_queue:           mpsc::Receiver<ServerJob>,
+    device_manager:      Arc<DeviceManager>,
+    party_id:            usize,
     // engines
-    codes_engine:          ShareDB,
-    masks_engine:          ShareDB,
-    batch_codes_engine:    ShareDB,
-    batch_masks_engine:    ShareDB,
-    phase2:                Circuits,
-    phase2_batch:          Circuits,
-    distance_comparator:   DistanceComparator,
+    codes_engine:        ShareDB,
+    masks_engine:        ShareDB,
+    batch_codes_engine:  ShareDB,
+    batch_masks_engine:  ShareDB,
+    phase2:              Circuits,
+    phase2_batch:        Circuits,
+    distance_comparator: DistanceComparator,
     // DB slices
-    code_db_slices:        SlicedProcessedDatabase,
-    mask_db_slices:        SlicedProcessedDatabase,
-    streams:               Vec<Vec<CudaStream>>,
-    cublas_handles:        Vec<Vec<CudaBlas>>,
-    results:               Vec<CudaSlice<u32>>,
-    batch_results:         Vec<CudaSlice<u32>>,
-    final_results:         Vec<CudaSlice<u32>>,
-    current_db_size_mutex: Vec<Arc<Mutex<usize>>>,
-    query_db_size:         Vec<usize>,
+    code_db_slices:      SlicedProcessedDatabase,
+    mask_db_slices:      SlicedProcessedDatabase,
+    streams:             Vec<Vec<CudaStream>>,
+    cublas_handles:      Vec<Vec<CudaBlas>>,
+    results:             Vec<CudaSlice<u32>>,
+    batch_results:       Vec<CudaSlice<u32>>,
+    final_results:       Vec<CudaSlice<u32>>,
+    current_db_sizes:    Vec<usize>,
+    query_db_size:       Vec<usize>,
 }
 
 const RESULTS_INIT_HOST: [u32; N_QUERIES * ROTATIONS] = [u32::MAX; N_QUERIES * ROTATIONS];
@@ -273,13 +269,9 @@ impl ServerActor {
         let results = distance_comparator.prepare_results();
         let batch_results = distance_comparator.prepare_results();
 
-        let current_db_size: Vec<usize> =
+        let current_db_sizes: Vec<usize> =
             vec![DB_SIZE / device_manager.device_count(); device_manager.device_count()];
         let query_db_size = vec![QUERIES; device_manager.device_count()];
-        let current_db_size_mutex = current_db_size
-            .iter()
-            .map(|&s| Arc::new(Mutex::new(s)))
-            .collect::<Vec<_>>();
 
         for dev in device_manager.devices() {
             dev.synchronize().unwrap();
@@ -303,7 +295,7 @@ impl ServerActor {
             results,
             batch_results,
             final_results,
-            current_db_size_mutex,
+            current_db_sizes,
             query_db_size,
         })
     }
@@ -355,12 +347,6 @@ impl ServerActor {
             batch_cublas,
         )?;
 
-        let mut current_db_sizes = self
-            .current_db_size_mutex
-            .iter()
-            .map(|e| *e.lock().unwrap())
-            .collect::<Vec<_>>();
-
         // ---- START BATCH DEDUP ----
         tracing::debug!(party_id = self.party_id, "Starting batch deduplication");
         compact_device_queries.compute_dot_products(
@@ -403,6 +389,7 @@ impl ServerActor {
             &self.batch_results,
             chunk_size,
             &db_sizes_batch,
+            &db_sizes_batch,
             0,
             batch_streams,
         );
@@ -430,16 +417,24 @@ impl ServerActor {
                 chunk = db_chunk_idx,
                 "starting chunk"
             );
+
             let request_streams = &self.streams[db_chunk_idx % 2];
             let request_cublas_handles = &self.cublas_handles[db_chunk_idx % 2];
 
             let offset = db_chunk_idx * DB_CHUNK_SIZE;
-            let chunk_size = current_db_sizes
+            let chunk_size = self
+                .current_db_sizes
                 .iter()
                 .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(0, DB_CHUNK_SIZE))
                 .collect::<Vec<_>>();
 
-            tracing::debug!("chunks: {:?}, offset: {}", chunk_size, offset);
+            // We need to pad the chunk size to be a multiple of 4, because the underlying
+            // `gemm_ex` expects this. We filter out potential "phantom matches"
+            // for the padded data in the `open` later.
+            let dot_chunk_size = chunk_size
+                .iter()
+                .map(|s| s.div_ceil(4) * 4)
+                .collect::<Vec<_>>();
 
             // First stream doesn't need to wait
             if db_chunk_idx == 0 {
@@ -465,7 +460,7 @@ impl ServerActor {
                 &mut self.masks_engine,
                 &self.code_db_slices,
                 &self.mask_db_slices,
-                &chunk_size,
+                &dot_chunk_size,
                 offset,
                 request_streams,
                 request_cublas_handles,
@@ -485,7 +480,7 @@ impl ServerActor {
                 &mut self.masks_engine,
                 &self.code_db_slices,
                 &self.mask_db_slices,
-                &chunk_size,
+                &dot_chunk_size,
                 offset,
                 request_streams,
             );
@@ -499,9 +494,9 @@ impl ServerActor {
                 .record_event(request_streams, &next_dot_event);
 
             self.codes_engine
-                .reshare_results(&chunk_size, request_streams);
+                .reshare_results(&dot_chunk_size, request_streams);
             self.masks_engine
-                .reshare_results(&chunk_size, request_streams);
+                .reshare_results(&dot_chunk_size, request_streams);
 
             // ---- END PHASE 1 ----
 
@@ -515,7 +510,7 @@ impl ServerActor {
 
             // ---- START PHASE 2 ----
             // TODO: remove
-            let max_chunk_size = chunk_size.iter().max().copied().unwrap();
+            let max_chunk_size = dot_chunk_size.iter().max().copied().unwrap();
             let phase_2_chunk_sizes = vec![max_chunk_size; self.device_manager.device_count()];
             let mut code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
             let mut mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
@@ -546,6 +541,7 @@ impl ServerActor {
                     &self.distance_comparator,
                     &self.results,
                     max_chunk_size * QUERIES / 64,
+                    &dot_chunk_size,
                     &chunk_size,
                     offset,
                     request_streams,
@@ -580,11 +576,12 @@ impl ServerActor {
                 chunk = db_chunk_idx,
                 "finished chunk"
             );
+
             self.device_manager
                 .await_streams(&self.streams[(db_chunk_idx + 1) % 2]); // await other stream
 
             // Break if we reached the end of the database
-            if db_chunk_idx * DB_CHUNK_SIZE >= *current_db_sizes.iter().max().unwrap() {
+            if db_chunk_idx * DB_CHUNK_SIZE >= *self.current_db_sizes.iter().max().unwrap() {
                 break;
             }
         }
@@ -640,11 +637,14 @@ impl ServerActor {
             .collect::<Vec<_>>();
 
         // Spread the insertions across devices.
-        let insertion_list = distribute_insertions(&insertion_list, &current_db_sizes);
+        let insertion_list = distribute_insertions(&insertion_list, &self.current_db_sizes);
 
         // Calculate the new indices for the inserted queries
-        let matches =
-            calculate_insertion_indices(&mut merged_results, &insertion_list, &current_db_sizes);
+        let matches = calculate_insertion_indices(
+            &mut merged_results,
+            &insertion_list,
+            &self.current_db_sizes,
+        );
 
         for i in 0..self.device_manager.device_count() {
             self.device_manager.device(i).bind_to_thread().unwrap();
@@ -665,7 +665,7 @@ impl ServerActor {
                     unsafe {
                         helpers::dtod_at_offset(
                             *db.code_gr.limb_0[i].device_ptr(),
-                            current_db_sizes[i] * IRIS_CODE_LENGTH,
+                            self.current_db_sizes[i] * IRIS_CODE_LENGTH,
                             *query.limb_0[i].device_ptr(),
                             IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                             IRIS_CODE_LENGTH,
@@ -674,7 +674,7 @@ impl ServerActor {
 
                         helpers::dtod_at_offset(
                             *db.code_gr.limb_1[i].device_ptr(),
-                            current_db_sizes[i] * IRIS_CODE_LENGTH,
+                            self.current_db_sizes[i] * IRIS_CODE_LENGTH,
                             *query.limb_1[i].device_ptr(),
                             IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
                             IRIS_CODE_LENGTH,
@@ -683,7 +683,7 @@ impl ServerActor {
 
                         helpers::dtod_at_offset(
                             *db.code_sums_gr.limb_0[i].device_ptr(),
-                            current_db_sizes[i] * mem::size_of::<u32>(),
+                            self.current_db_sizes[i] * mem::size_of::<u32>(),
                             *sums.limb_0[i].device_ptr(),
                             mem::size_of::<u32>() * 15
                                 + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
@@ -693,7 +693,7 @@ impl ServerActor {
 
                         helpers::dtod_at_offset(
                             *db.code_sums_gr.limb_1[i].device_ptr(),
-                            current_db_sizes[i] * mem::size_of::<u32>(),
+                            self.current_db_sizes[i] * mem::size_of::<u32>(),
                             *sums.limb_1[i].device_ptr(),
                             mem::size_of::<u32>() * 15
                                 + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
@@ -702,17 +702,14 @@ impl ServerActor {
                         );
                     }
                 }
-                current_db_sizes[i] += 1;
+                self.current_db_sizes[i] += 1;
             }
-
-            // Write new db sizes to device
-            *self.current_db_size_mutex[i].lock().unwrap() += insertion_list[i].len() as usize;
 
             // DEBUG
             tracing::debug!(
                 "Updating DB size on device {}: {:?}",
                 i,
-                *self.current_db_size_mutex[i].lock().unwrap()
+                self.current_db_sizes[i]
             );
         }
 
@@ -777,6 +774,7 @@ fn open(
     results_ptrs: &[CudaSlice<u32>],
     chunk_size: usize,
     db_sizes: &[usize],
+    real_db_sizes: &[usize],
     offset: usize,
     streams: &[CudaStream],
 ) {
@@ -804,7 +802,16 @@ fn open(
     }
     cudarc::nccl::result::group_end().unwrap();
 
-    distance_comparator.open_results(&a, &b, &c, results_ptrs, db_sizes, offset, streams);
+    distance_comparator.open_results(
+        &a,
+        &b,
+        &c,
+        results_ptrs,
+        db_sizes,
+        real_db_sizes,
+        offset,
+        streams,
+    );
 }
 
 fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
