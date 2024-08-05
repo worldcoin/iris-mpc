@@ -25,7 +25,7 @@ struct KeyManagerCli {
     #[command(subcommand)]
     command: Commands,
 
-    #[arg(short, long, env)]
+    #[arg(short, long, env, value_parser = clap::builder::PossibleValuesParser::new(&["0", "1", "2"]))]
     node_id: u16,
 
     #[arg(short, long, env, default_value = "stage")]
