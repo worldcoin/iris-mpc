@@ -80,6 +80,16 @@ pub fn gemm(
     // shows that it works. assert!(n % 4 == 0, "n must be a multiple of 4");
     assert!(a % 4 == 0, "a must be aligned to 4 bytes");
     assert!(b % 4 == 0, "b must be aligned to 4 bytes");
+
+    println!("a: {:#x}, b: {:#x}, c: {:#x}", a, b, c);
+    println!(
+        "a_offset: {}, b_offset: {}, c_offset: {}",
+        a_offset, b_offset, c_offset
+    );
+
+    println!("m: {}, n: {}, k: {}", m, n, k);
+    println!("alpha: {:#x}, beta: {:#x}", alpha, beta);
+
     unsafe {
         let status = gemm_ex(
             *handle.handle(),
