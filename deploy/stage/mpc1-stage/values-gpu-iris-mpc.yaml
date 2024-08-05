@@ -3,7 +3,7 @@ env:
     value: "eth0"
 
   - name: NCCL_COMM_ID
-    value: "10.15.48.156:4000"
+    value: "10.15.48.175:4000"
 
   - name: RUST_BACKTRACE
     value: "full"
