@@ -1,8 +1,11 @@
+pub mod sync;
+
 use crate::config::Config;
 use bytemuck::cast_slice;
 use eyre::{eyre, Result};
 use futures::Stream;
-use sqlx::{migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool};
+use sqlx::{migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Transaction};
+use std::ops::DerefMut;
 
 const APP_NAME: &str = "SMPC";
 const POOL_SIZE: u32 = 5;
@@ -59,6 +62,11 @@ pub struct StoredIrisRef<'a> {
     pub right_mask: &'a [u16],
 }
 
+#[derive(sqlx::FromRow, Debug, Default)]
+struct StoredState {
+    request_id: String,
+}
+
 #[derive(Clone)]
 pub struct Store {
     pool: PgPool,
@@ -99,13 +107,19 @@ impl Store {
         Ok(Store { pool })
     }
 
+    pub async fn tx(&self) -> Result<Transaction<'_, Postgres>> {
+        Ok(self.pool.begin().await?)
+    }
+
     pub async fn stream_irises(&self) -> impl Stream<Item = Result<StoredIris, sqlx::Error>> + '_ {
         sqlx::query_as::<_, StoredIris>("SELECT * FROM irises ORDER BY id").fetch(&self.pool)
     }
 
-    pub async fn insert_irises(&self, codes_and_masks: &[StoredIrisRef<'_>]) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
-
+    pub async fn insert_irises(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        codes_and_masks: &[StoredIrisRef<'_>],
+    ) -> Result<()> {
         let mut query = sqlx::QueryBuilder::new(
             "INSERT INTO irises (left_code, left_mask, right_code, right_mask)",
         );
@@ -116,8 +130,7 @@ impl Store {
             query.push_bind(cast_slice::<u16, u8>(iris.right_mask));
         });
 
-        query.build().execute(&mut *tx).await?;
-        tx.commit().await?;
+        query.build().execute(tx.deref_mut()).await?;
         Ok(())
     }
 
@@ -145,6 +158,7 @@ DO UPDATE SET left_code = EXCLUDED.left_code, left_mask = EXCLUDED.left_mask;
         tx.commit().await?;
         Ok(())
     }
+
     pub async fn insert_or_update_right_iris(
         &self,
         id: i64,
@@ -169,6 +183,56 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         tx.commit().await?;
         Ok(())
     }
+
+    pub async fn rollback(&self, db_len: usize) -> Result<()> {
+        sqlx::query("DELETE FROM irises WHERE id >= $1")
+            .bind(db_len as i64)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn insert_results(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        result_events: &[String],
+    ) -> Result<()> {
+        let mut query = sqlx::QueryBuilder::new("INSERT INTO results (result_event)");
+        query.push_values(result_events, |mut query, result| {
+            query.push_bind(result);
+        });
+
+        query.build().execute(tx.deref_mut()).await?;
+        Ok(())
+    }
+
+    pub async fn last_results(&self, count: usize) -> Result<Vec<String>> {
+        let mut result_events: Vec<String> =
+            sqlx::query_scalar("SELECT result_event FROM results ORDER BY id DESC LIMIT $1")
+                .bind(count as i64)
+                .fetch_all(&self.pool)
+                .await?;
+        result_events.reverse();
+        Ok(result_events)
+    }
+
+    pub async fn mark_requests_deleted(&self, request_ids: &[String]) -> Result<()> {
+        // Insert request_ids that are deleted from the queue.
+        let mut query = sqlx::QueryBuilder::new("INSERT INTO sync (request_id)");
+        query.push_values(request_ids, |mut query, request_id| {
+            query.push_bind(request_id);
+        });
+        query.build().execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn last_deleted_requests(&self, count: usize) -> Result<Vec<String>> {
+        let rows = sqlx::query_as::<_, StoredState>("SELECT * FROM sync ORDER BY id DESC LIMIT $1")
+            .bind(count as i64)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.into_iter().rev().map(|r| r.request_id).collect())
+    }
 }
 
 fn sanitize_identifier(input: &str) -> Result<()> {
@@ -192,6 +256,7 @@ mod tests {
     const DOTENV_TEST: &str = ".env.test";
 
     use super::*;
+    use crate::helpers::sqs::ResultEvent;
     use futures::TryStreamExt;
     use tokio;
 
@@ -225,8 +290,10 @@ mod tests {
                 right_mask: &[],
             },
         ];
-        store.insert_irises(&codes_and_masks[0..2]).await?;
-        store.insert_irises(&codes_and_masks[2..3]).await?;
+        let mut tx = store.tx().await?;
+        store.insert_irises(&mut tx, &codes_and_masks[0..2]).await?;
+        store.insert_irises(&mut tx, &codes_and_masks[2..3]).await?;
+        tx.commit().await?;
 
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
 
@@ -258,11 +325,86 @@ mod tests {
             right_mask: &[101_u16; 12800],
         };
         let codes_and_masks = vec![iris; count];
-        store.insert_irises(&codes_and_masks).await?;
+
+        let result_event =
+            serde_json::to_string(&ResultEvent::new(0, 1_000_000_000, false, "A".repeat(64)))?;
+        let result_events = vec![result_event; count];
+
+        let mut tx = store.tx().await?;
+        store.insert_results(&mut tx, &result_events).await?;
+        store.insert_irises(&mut tx, &codes_and_masks).await?;
+        tx.commit().await?;
 
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), count);
         assert_contiguous_id(&got);
+
+        let got = store.last_results(count).await?;
+        assert_eq!(got, result_events);
+
+        cleanup(&store, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_rollback() -> Result<()> {
+        let schema_name = temporary_name();
+        let store = Store::new(&test_db_url()?, &schema_name).await?;
+
+        let iris = StoredIrisRef {
+            left_code:  &[123_u16; 12800],
+            left_mask:  &[456_u16; 12800],
+            right_code: &[789_u16; 12800],
+            right_mask: &[101_u16; 12800],
+        };
+
+        let mut tx = store.tx().await?;
+        store.insert_irises(&mut tx, &vec![iris; 10]).await?;
+        tx.commit().await?;
+        store.rollback(5).await?;
+
+        let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
+        assert_eq!(got.len(), 5);
+        assert_contiguous_id(&got);
+
+        cleanup(&store, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_results() -> Result<()> {
+        let schema_name = temporary_name();
+        let store = Store::new(&test_db_url()?, &schema_name).await?;
+
+        let result_events = vec!["event1".to_string(), "event2".to_string()];
+        let mut tx = store.tx().await?;
+        store.insert_results(&mut tx, &result_events).await?;
+        store.insert_results(&mut tx, &result_events).await?;
+        tx.commit().await?;
+
+        let got = store.last_results(2).await?;
+        assert_eq!(got, vec!["event1", "event2"]);
+
+        cleanup(&store, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_mark_requests_deleted() -> Result<()> {
+        let schema_name = temporary_name();
+        let store = Store::new(&test_db_url()?, &schema_name).await?;
+
+        assert_eq!(store.last_deleted_requests(2).await?.len(), 0);
+
+        for i in 0..2 {
+            let request_ids = (0..2)
+                .map(|j| format!("test_{}_{}", i, j))
+                .collect::<Vec<_>>();
+            store.mark_requests_deleted(&request_ids).await?;
+
+            let got = store.last_deleted_requests(2).await?;
+            assert_eq!(got, request_ids);
+        }
 
         cleanup(&store, &schema_name).await?;
         Ok(())

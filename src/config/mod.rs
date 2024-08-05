@@ -15,9 +15,6 @@ pub struct Opt {
 
     #[structopt(long)]
     party_id: Option<usize>,
-
-    #[structopt(long)]
-    bootstrap_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,9 +35,6 @@ pub struct Config {
     pub kms_key_arns: JsonStrWrapper<Vec<String>>,
 
     #[serde(default)]
-    pub servers: ServersConfig,
-
-    #[serde(default)]
     pub service: Option<ServiceConfig>,
 
     #[serde(default)]
@@ -48,6 +42,9 @@ pub struct Config {
 
     #[serde(default)]
     pub aws: Option<AwsConfig>,
+
+    #[serde(default)]
+    pub processing_timeout_secs: u64,
 }
 
 impl Config {
@@ -63,9 +60,6 @@ impl Config {
 
         let config: Config = settings.try_deserialize::<Config>()?;
 
-        dbg!("Debug config");
-        dbg!(&config);
-
         Ok(config)
     }
 
@@ -80,10 +74,6 @@ impl Config {
 
         if let Some(party_id) = opts.party_id {
             self.party_id = party_id;
-        }
-
-        if let Some(bootstrap_url) = opts.bootstrap_url {
-            self.servers.bootstrap_url = Some(bootstrap_url);
         }
     }
 }
@@ -135,16 +125,4 @@ pub struct MetricsConfig {
     pub queue_size:  usize,
     pub buffer_size: usize,
     pub prefix:      String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ServersConfig {
-    pub codes_engine_port:       u16,
-    pub masks_engine_port:       u16,
-    pub batch_codes_engine_port: u16,
-    pub batch_masks_engine_port: u16,
-    pub phase_2_batch_port:      u16,
-    pub phase_2_port:            u16,
-    #[serde(default)]
-    pub bootstrap_url:           Option<String>,
 }

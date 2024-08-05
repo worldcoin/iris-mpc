@@ -16,8 +16,8 @@ jobs:
       - name: Show errors inline
         uses: r7kamura/rust-problem-matchers@v1
       - name: Install Rust nightly
-        run: rustup toolchain install nightly
+        run: rustup toolchain install nightly-2024-07-10
       - name: Set Rust nightly as default
-        run: rustup default nightly
+        run: rustup default nightly-2024-07-10
       - name: Build Docs
         run: cargo doc --all-features --no-deps --document-private-items

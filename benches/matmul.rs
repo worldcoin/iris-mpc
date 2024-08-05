@@ -32,10 +32,7 @@ fn bench_memcpy(c: &mut Criterion) {
         DB_SIZE,
         QUERY_SIZE,
         ([0u32; 8], [0u32; 8]),
-        None,
-        None,
-        None,
-        None,
+        vec![],
     );
     let preprocessed_query = preprocess_query(&query);
     let streams = device_manager.fork_streams();

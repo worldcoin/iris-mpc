@@ -2,11 +2,11 @@ pub type CompactGaloisRingShares = Vec<Vec<u8>>;
 
 pub mod degree2 {
     use crate::{
+        dot::IRIS_CODE_LENGTH,
         setup::{
             galois::degree2::{GaloisRingElement, ShamirGaloisRingShare},
             iris_db::iris::IrisCodeArray,
         },
-        IRIS_CODE_LENGTH,
     };
     use base64::{prelude::BASE64_STANDARD, Engine};
     use rand::{CryptoRng, Rng};
@@ -166,7 +166,7 @@ pub mod degree2 {
         }
 
         pub fn from_base64(id: usize, s: &str) -> eyre::Result<Self> {
-            let mut coefs = [0u16; 12800];
+            let mut coefs = [0u16; IRIS_CODE_LENGTH];
             BASE64_STANDARD.decode_slice(s, bytemuck::cast_slice_mut(&mut coefs))?;
             Ok(Self::new(id, coefs))
         }
@@ -234,11 +234,11 @@ pub mod degree2 {
 
 pub mod degree4 {
     use crate::{
+        dot::IRIS_CODE_LENGTH,
         setup::{
             galois::degree4::{basis, GaloisRingElement, ShamirGaloisRingShare},
             iris_db::iris::IrisCodeArray,
         },
-        IRIS_CODE_LENGTH,
     };
     use base64::{prelude::BASE64_STANDARD, Engine};
     use rand::{CryptoRng, Rng};
@@ -449,7 +449,7 @@ pub mod degree4 {
         }
 
         pub fn from_base64(id: usize, s: &str) -> eyre::Result<Self> {
-            let mut coefs = [0u16; 12800];
+            let mut coefs = [0u16; IRIS_CODE_LENGTH];
             BASE64_STANDARD.decode_slice(s, bytemuck::cast_slice_mut(&mut coefs))?;
             Ok(Self::new(id, coefs))
         }

@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/gpu-iris-mpc:e71bbbf4c017bd278e20870144046840f77f206c"
+image: "ghcr.io/worldcoin/gpu-iris-mpc:v0.2.5-alpha"
 
 environment: stage
 replicaCount: 1
@@ -7,40 +7,22 @@ strategy:
   type: Recreate
 
 datadog:
-  enabled: false
+  enabled: true
 
 ports:
   - containerPort: 3000
-    name: http
-    protocol: TCP
-  - containerPort: 4000
-    name: http
-    protocol: TCP
-  - containerPort: 4001
-    name: http
-    protocol: TCP
-  - containerPort: 4002
-    name: http
-    protocol: TCP
-  - containerPort: 4003
-    name: http
-    protocol: TCP
-  - containerPort: 4004
-    name: http
-    protocol: TCP
-  - containerPort: 4005
-    name: http
+    name: health
     protocol: TCP
 
 livenessProbe:
   httpGet:
     path: /health
-    port: http
+    port: health
 
 readinessProbe:
   httpGet:
     path: /health
-    port: http
+    port: health
 
 resources:
   limits:

@@ -1,6 +1,6 @@
+use cudarc::nccl::Id;
 use eyre::Result;
 use gpu_iris_mpc::{
-    config::ServersConfig,
     helpers::device_manager::DeviceManager,
     server::{BatchQuery, ServerActor, ServerJobResult},
     setup::{
@@ -8,19 +8,20 @@ use gpu_iris_mpc::{
         iris_db::{db::IrisDB, iris::IrisCode},
     },
 };
-use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{collections::HashMap, env, sync::Arc};
 use tokio::sync::oneshot;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
 const DB_SIZE: usize = 8 * 1000;
-const RNG_SEED: u64 = 0xdeadbeef;
-const NUM_BATCHES: usize = 5;
+const DB_RNG_SEED: u64 = 0xdeadbeef;
+const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
+const NUM_BATCHES: usize = 10;
 const BATCH_SIZE: usize = 64;
 
 fn generate_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
-    let mut rng = StdRng::seed_from_u64(RNG_SEED);
+    let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
     let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
     let codes_db = db
@@ -30,7 +31,7 @@ fn generate_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
             GaloisRingIrisCodeShare::encode_iris_code(
                 &iris.code,
                 &iris.mask,
-                &mut StdRng::seed_from_u64(RNG_SEED),
+                &mut StdRng::seed_from_u64(DB_RNG_SEED),
             )[party_id]
                 .coefs
         })
@@ -42,7 +43,7 @@ fn generate_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
         .flat_map(|iris| {
             GaloisRingIrisCodeShare::encode_mask_code(
                 &iris.mask,
-                &mut StdRng::seed_from_u64(RNG_SEED),
+                &mut StdRng::seed_from_u64(DB_RNG_SEED),
             )[party_id]
                 .coefs
         })
@@ -66,24 +67,9 @@ async fn e2e_test() -> Result<()> {
     env::set_var("NCCL_P2P_LEVEL", "LOC");
     env::set_var("NCCL_NET", "Socket");
 
-    let db0 = generate_db(0)?;
+    let db0: (Vec<u16>, Vec<u16>) = generate_db(0)?;
     let db1 = generate_db(1)?;
     let db2 = generate_db(2)?;
-
-    let config0 = ServersConfig {
-        codes_engine_port:       10001,
-        masks_engine_port:       10002,
-        batch_codes_engine_port: 10003,
-        batch_masks_engine_port: 10004,
-        phase_2_batch_port:      10005,
-        phase_2_port:            10006,
-        bootstrap_url:           None,
-    };
-    let config1 = ServersConfig {
-        bootstrap_url: Some("localhost".to_string()),
-        ..config0.clone()
-    };
-    let config2 = config1.clone();
 
     let chacha_seeds0 = ([0u32; 8], [2u32; 8]);
     let chacha_seeds1 = ([1u32; 8], [0u32; 8]);
@@ -103,15 +89,22 @@ async fn e2e_test() -> Result<()> {
     let device_manager2 = Arc::new(device_managers.pop().unwrap());
     let device_manager1 = Arc::new(device_managers.pop().unwrap());
     let device_manager0 = Arc::new(device_managers.pop().unwrap());
+    let num_devices = device_manager0.devices().len();
+    let ids0 = (0..num_devices)
+        .map(|_| Id::new().unwrap())
+        .collect::<Vec<_>>();
+    let ids1 = ids0.clone();
+    let ids2 = ids0.clone();
 
     let actor0_task = tokio::task::spawn_blocking(move || {
-        let actor = match ServerActor::new_with_device_manager(
+        let comms0 = device_manager0.instantiate_network_from_ids(0, ids0);
+        let actor = match ServerActor::new_with_device_manager_and_comms(
             0,
-            config0,
             chacha_seeds0,
             &db0.0,
             &db0.1,
             device_manager0,
+            comms0,
             8,
         ) {
             Ok((actor, handle)) => {
@@ -126,13 +119,14 @@ async fn e2e_test() -> Result<()> {
         actor.run();
     });
     let actor1_task = tokio::task::spawn_blocking(move || {
-        let actor = match ServerActor::new_with_device_manager(
+        let comms1 = device_manager1.instantiate_network_from_ids(1, ids1);
+        let actor = match ServerActor::new_with_device_manager_and_comms(
             1,
-            config1,
             chacha_seeds1,
             &db1.0,
             &db1.1,
             device_manager1,
+            comms1,
             8,
         ) {
             Ok((actor, handle)) => {
@@ -147,13 +141,14 @@ async fn e2e_test() -> Result<()> {
         actor.run();
     });
     let actor2_task = tokio::task::spawn_blocking(move || {
-        let actor = match ServerActor::new_with_device_manager(
+        let comms2 = device_manager2.instantiate_network_from_ids(2, ids2);
+        let actor = match ServerActor::new_with_device_manager_and_comms(
             2,
-            config2,
             chacha_seeds2,
             &db2.0,
             &db2.1,
             device_manager2,
+            comms2,
             8,
         ) {
             Ok((actor, handle)) => {
@@ -173,10 +168,9 @@ async fn e2e_test() -> Result<()> {
 
     // make a test query and send it to server
 
-    let db = IrisDB::new_random_par(DB_SIZE, &mut StdRng::seed_from_u64(RNG_SEED));
+    let db = IrisDB::new_random_par(DB_SIZE, &mut StdRng::seed_from_u64(DB_RNG_SEED));
 
-    let mut choice_rng = thread_rng();
-    let mut rng = thread_rng();
+    let mut rng = StdRng::seed_from_u64(INTERNAL_RNG_SEED);
 
     let mut expected_results: HashMap<String, Option<u32>> = HashMap::new();
     let mut requests: HashMap<String, IrisCode> = HashMap::new();
@@ -190,7 +184,7 @@ async fn e2e_test() -> Result<()> {
             let request_id = Uuid::new_v4();
             // Automatic random tests
             let options = if responses.is_empty() { 2 } else { 3 };
-            let template = match choice_rng.gen_range(0..options) {
+            let template = match rng.gen_range(0..options) {
                 0 => {
                     println!("Sending new iris code");
                     expected_results.insert(request_id.to_string(), None);
