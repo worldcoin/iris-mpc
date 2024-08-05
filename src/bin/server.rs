@@ -43,7 +43,6 @@ use tokio::{
     time::timeout,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use uuid::Uuid;
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
@@ -444,7 +443,7 @@ async fn main() -> eyre::Result<()> {
                     .publish()
                     .topic_arn(&config.results_topic_arn)
                     .message(result_event)
-                    .message_group_id(&format!("party-id-{}", config.party_id))
+                    .message_group_id(format!("party-id-{}", config.party_id))
                     .send()
                     .await?;
             }
