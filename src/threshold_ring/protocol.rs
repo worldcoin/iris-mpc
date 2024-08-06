@@ -281,6 +281,7 @@ impl Buffers {
             let a = dev.alloc_zeros::<T>(size).unwrap();
             let b = dev.alloc_zeros::<T>(size).unwrap();
             res.push(ChunkShare::new(a, b));
+            dev.synchronize().unwrap();
         }
         res
     }

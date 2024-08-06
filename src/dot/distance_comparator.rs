@@ -73,6 +73,7 @@ impl DistanceComparator {
         results3: &[CudaView<u64>],
         results_ptrs: &[CudaSlice<u32>],
         db_sizes: &[usize],
+        real_db_sizes: &[usize],
         offset: usize,
         streams: &[CudaStream],
     ) {
@@ -102,6 +103,7 @@ impl DistanceComparator {
                             self.query_length,
                             offset,
                             num_elements,
+                            real_db_sizes[i],
                         ),
                     )
                     .unwrap();

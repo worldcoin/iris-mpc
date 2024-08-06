@@ -47,7 +47,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
-const N_QUERIES: usize = 32;
+const N_QUERIES: usize = 64;
 const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
 const SYNC_RESULTS: usize = N_QUERIES * 2;
@@ -289,6 +289,7 @@ async fn replay_result_events(
     store: &Store,
     sns_client: &SNSClient,
     topic: &str,
+    party_id: usize,
 ) -> eyre::Result<()> {
     let result_events = store.last_results(SYNC_RESULTS).await?;
 
@@ -297,6 +298,7 @@ async fn replay_result_events(
             .publish()
             .topic_arn(topic)
             .message(result_event)
+            .message_group_id(format!("party-id-{}", party_id))
             .send()
             .await?;
     }
@@ -324,7 +326,7 @@ async fn main() -> eyre::Result<()> {
     let chacha_seeds = initialize_chacha_seeds(&config.kms_key_arns, party_id).await?;
     let encrypted_shares = config.encrypted_shares;
 
-    replay_result_events(&store, &sns_client, &config.results_topic_arn).await?;
+    replay_result_events(&store, &sns_client, &config.results_topic_arn, party_id).await?;
 
     let (mut codes_db, mut masks_db, store_len) = initialize_iris_dbs(party_id, &store).await?;
 
@@ -456,6 +458,7 @@ async fn main() -> eyre::Result<()> {
                     .publish()
                     .topic_arn(&config.results_topic_arn)
                     .message(result_event)
+                    .message_group_id(format!("party-id-{}", config.party_id))
                     .send()
                     .await?;
             }

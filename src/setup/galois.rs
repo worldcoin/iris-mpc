@@ -1,4 +1,5 @@
 pub mod degree2 {
+    use crate::setup::id::PartyID;
     use rand::{CryptoRng, Rng};
     /// An element of the Galois ring `$\mathbb{Z}_{2^{16}}[x]/(x^2 - x - 1)$`.
     #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -209,7 +210,22 @@ pub mod degree2 {
             [share1, share2, share3]
         }
 
-        pub fn deg_3_lagrange_polys_at_zero() -> [GaloisRingElement; 3] {
+        pub fn deg_1_lagrange_polys_at_zero(
+            my_id: PartyID,
+            other_id: PartyID,
+        ) -> GaloisRingElement {
+            let mut res = GaloisRingElement::ONE;
+            let i = usize::from(my_id) + 1;
+            let j = usize::from(other_id) + 1;
+            res = res * (-GaloisRingElement::EXCEPTIONAL_SEQUENCE[j]);
+            res = res
+                * (GaloisRingElement::EXCEPTIONAL_SEQUENCE[i]
+                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[j])
+                    .inverse();
+            res
+        }
+
+        pub fn deg_2_lagrange_polys_at_zero() -> [GaloisRingElement; 3] {
             let mut res = [GaloisRingElement::ONE; 3];
             for i in 1..=3 {
                 for j in 1..=3 {
@@ -226,7 +242,7 @@ pub mod degree2 {
         }
 
         pub fn reconstruct_deg_2_shares(shares: &[ShamirGaloisRingShare; 3]) -> GaloisRingElement {
-            let lagrange_polys_at_zero = Self::deg_3_lagrange_polys_at_zero();
+            let lagrange_polys_at_zero = Self::deg_2_lagrange_polys_at_zero();
             shares
                 .iter()
                 .map(|s| s.y * lagrange_polys_at_zero[s.id - 1])
@@ -303,6 +319,7 @@ pub mod degree2 {
 }
 
 pub mod degree4 {
+    use crate::setup::id::PartyID;
     use basis::{Basis, Monomial};
     use rand::{CryptoRng, Rng};
     use std::marker::PhantomData;
@@ -405,6 +422,29 @@ pub mod degree4 {
             }
 
             panic!("No inverse for {:?} in LUT", self);
+        }
+
+        #[allow(non_snake_case)]
+        pub fn to_basis_A(&self) -> GaloisRingElement<basis::A> {
+            // Multiplication with matrix (S)^-1
+            // [    1     0     0     0]
+            // [ 7454     1     0     0]
+            // [35057 40342     1     0]
+            // [37176 61738  8525     1]
+            GaloisRingElement {
+                coefs: [
+                    self.coefs[0],
+                    self.coefs[1].wrapping_add(self.coefs[0].wrapping_mul(7454)),
+                    self.coefs[2]
+                        .wrapping_add(self.coefs[0].wrapping_mul(35057))
+                        .wrapping_add(self.coefs[1].wrapping_mul(40342)),
+                    self.coefs[3]
+                        .wrapping_add(self.coefs[0].wrapping_mul(37176))
+                        .wrapping_add(self.coefs[1].wrapping_mul(61738))
+                        .wrapping_add(self.coefs[2].wrapping_mul(8525)),
+                ],
+                basis: PhantomData,
+            }
         }
 
         #[allow(non_snake_case)]
@@ -664,7 +704,22 @@ pub mod degree4 {
             [share1, share2, share3]
         }
 
-        pub fn deg_3_lagrange_polys_at_zero() -> [GaloisRingElement<Monomial>; 3] {
+        pub fn deg_1_lagrange_polys_at_zero(
+            my_id: PartyID,
+            other_id: PartyID,
+        ) -> GaloisRingElement<Monomial> {
+            let mut res = GaloisRingElement::ONE;
+            let i = usize::from(my_id) + 1;
+            let j = usize::from(other_id) + 1;
+            res = res * (-GaloisRingElement::EXCEPTIONAL_SEQUENCE[j]);
+            res = res
+                * (GaloisRingElement::EXCEPTIONAL_SEQUENCE[i]
+                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[j])
+                    .inverse();
+            res
+        }
+
+        pub fn deg_2_lagrange_polys_at_zero() -> [GaloisRingElement<Monomial>; 3] {
             let mut res = [GaloisRingElement::ONE; 3];
             for i in 1..=3 {
                 for j in 1..=3 {
@@ -683,7 +738,7 @@ pub mod degree4 {
         pub fn reconstruct_deg_2_shares(
             shares: &[ShamirGaloisRingShare; 3],
         ) -> GaloisRingElement<Monomial> {
-            let lagrange_polys_at_zero = Self::deg_3_lagrange_polys_at_zero();
+            let lagrange_polys_at_zero = Self::deg_2_lagrange_polys_at_zero();
             shares
                 .iter()
                 .map(|s| s.y * lagrange_polys_at_zero[s.id - 1])
@@ -773,6 +828,7 @@ pub mod degree4 {
             let input2 = GaloisRingElement::<basis::A>::random(&mut rand::thread_rng());
             let result = dot(&input1.coefs, &input2.coefs);
             let monomial1 = input1.to_monomial();
+            assert!(monomial1.to_basis_A() == input1);
             let monomial2 = input2.to_monomial();
             let res2 = monomial1 * monomial2;
             // TODO this vector needs to be adapted

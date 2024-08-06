@@ -1,0 +1,49 @@
+services:
+  old-db-1:
+    image: postgres:16
+    ports:
+      - "6100:5432"
+    environment:
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+  old-db-2:
+    image: postgres:16
+    ports:
+      - "6101:5432"
+    environment:
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+  new-db-1:
+    image: postgres:16
+    ports:
+      - "6200:5432"
+    environment:
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+  new-db-2:
+    image: postgres:16
+    ports:
+      - "6201:5432"
+    environment:
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+  new-db-3:
+    image: postgres:16
+    ports:
+      - "6202:5432"
+    environment:
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+  db-ui:
+    depends_on:
+      - old-db-1
+      - old-db-2
+      - new-db-1
+      - new-db-2
+      - new-db-3
+    image: dpage/pgadmin4
+    ports:
+      - "15432:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: "postgres@postgres.postgres"
+      PGADMIN_DEFAULT_PASSWORD: "postgres"

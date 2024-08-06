@@ -11,10 +11,15 @@ use crate::{
     rng::chacha::ChaChaCudaRng,
     threshold_ring::protocol::ChunkShare,
 };
+use core::panic;
 #[cfg(feature = "otp_encrypt")]
 use cudarc::driver::{CudaView, DeviceSlice};
 use cudarc::{
-    cublas::{result::gemm_ex, sys, CudaBlas},
+    cublas::{
+        result::gemm_ex,
+        sys::{self, lib},
+        CudaBlas,
+    },
     driver::{
         result::malloc_async, sys::CUdeviceptr, CudaFunction, CudaSlice, CudaStream, DevicePtr,
         LaunchAsync, LaunchConfig,
@@ -25,7 +30,11 @@ use cudarc::{
 #[cfg(feature = "otp_encrypt")]
 use itertools::Itertools;
 use rayon::prelude::*;
-use std::{ffi::c_void, mem, sync::Arc};
+use std::{
+    ffi::{c_void, CStr},
+    mem,
+    sync::Arc,
+};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const REDUCE_FUNCTION_NAME: &str = "matmul_correct_and_reduce";
@@ -64,6 +73,13 @@ pub fn gemm(
     alpha: i32,
     beta: i32,
 ) {
+    // https://docs.nvidia.com/cuda/cublas/#cublasgemmex:
+    // "CUBLAS_COMPUTE_32I and CUBLAS_COMPUTE_32I_PEDANTIC compute types are only supported with A, B being 4-byte aligned and lda, ldb being multiples of 4."
+    assert!(m % 4 == 0, "m must be a multiple of 4");
+    // We don't enforce the following, since we use it for n=1 and emperial testing
+    // shows that it works. assert!(n % 4 == 0, "n must be a multiple of 4");
+    assert!(a % 4 == 0, "a must be aligned to 4 bytes");
+    assert!(b % 4 == 0, "b must be aligned to 4 bytes");
     unsafe {
         let status = gemm_ex(
             *handle.handle(),
@@ -87,14 +103,10 @@ pub fn gemm(
             sys::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT,
         );
 
-        match status {
-            Ok(_) => {
-                println!("GEMM success");
-            }
-            Err(e) => {
-                // Handle error
-                eprintln!("CUBLAS error: {:?}", e);
-            }
+        // Try to fetch more information in case of an error
+        if let Err(e) = status {
+            let c_str = CStr::from_ptr(lib().cublasGetStatusString(e.0));
+            panic!("CUBLAS error: {:?}", c_str.to_str());
         }
     }
 }
@@ -825,7 +837,7 @@ mod tests {
     use std::sync::Arc;
 
     const WIDTH: usize = 12_800;
-    const QUERY_SIZE: usize = 31;
+    const QUERY_SIZE: usize = 32;
     const DB_SIZE: usize = 8 * 1000;
     const RNG_SEED: u64 = 42;
 
@@ -859,6 +871,7 @@ mod tests {
         let query = random_vec(QUERY_SIZE, WIDTH, u16::MAX as u32);
         let device_manager = Arc::new(DeviceManager::init());
         let n_devices = device_manager.device_count();
+
         let mut gpu_result = vec![0u16; DB_SIZE / n_devices * QUERY_SIZE];
         let db_sizes = vec![DB_SIZE / n_devices; n_devices];
 

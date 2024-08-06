@@ -8,7 +8,7 @@ edition = "2021"
 atomic_float = "1.0"
 sodiumoxide = { git = "https://github.com/worldcoin/sodiumoxide.git" }
 aws-config = { version = "1.5.4", features = ["behavior-version-latest"] }
-aws-sdk-kms = { version = "1.35.0" }
+aws-sdk-kms = { version = "1.37.0" }
 aws-sdk-sns = { version = "1.37.0" }
 aws-sdk-sqs = { version = "1.36.0" }
 aws-sdk-s3 = { version = "1.42.0" }
@@ -23,23 +23,25 @@ cudarc = { git = "https://github.com/rw0x0/cudarc.git", rev = "origin/transmute"
 ] }
 eyre = "0.6.12"
 float_eq = "1.0.1"
+futures-concurrency = "7.6.0"
 hex = "0.4.3"
 hmac = "0.12"
 http = "1.1.0"
 itertools = "0.13"
 lazy_static = "1.5.0"
 memmap2 = "0.9.4"
-ndarray = "0.15.3"
 num = { version = "0.4.2", features = ["num-bigint"] }
 num-traits = "0.2"
 once_cell = "1.19.0"
 opentelemetry = "0.21.0"
 percent-encoding = "2"
 rand = "0.8.5"
+rand_chacha = "0.3.1"
 rayon = "1.5.1"
 reqwest = { version = "0.12.5", features = ["blocking"] }
 ring = "0.17.8"
 serde = { version = "1.0", features = ["derive"] }
+serde-big-array = "0.5.1"
 serde_json = "1.0"
 sha2 = "0.10"
 telemetry-batteries = { git = "https://github.com/worldcoin/telemetry-batteries.git", rev = "802a4f39f358e077b11c8429b4c65f3e45b85959" }
@@ -55,8 +57,12 @@ dotenvy = "0.15.7"
 static_assertions = "1.1.0"
 futures = "0.3.30"
 
+mpc-uniqueness-check = { package = "mpc", git = "https://github.com/worldcoin/mpc-uniqueness-check", rev = "4d38402" }
+indicatif = "0.17.8"
+
 [dev-dependencies]
 criterion = "0.5"
+ndarray = "0.16.0"
 
 [features]
 default = []
@@ -82,6 +88,22 @@ panic = 'abort'
 
 [profile.dev]
 panic = 'abort'
+
+[[bin]]
+name = "upgrade-checker"
+path = "src/bin/upgrade/checker.rs"
+
+[[bin]]
+name = "upgrade-server"
+path = "src/bin/upgrade/tcp_upgrade_server.rs"
+
+[[bin]]
+name = "upgrade-client"
+path = "src/bin/upgrade/tcp_upgrade_client.rs"
+
+[[bin]]
+name = "seed-v1-dbs"
+path = "src/bin/upgrade/seed_v1_dbs.rs"
 
 [[bin]]
 name = "key-manager"

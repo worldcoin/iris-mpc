@@ -23,7 +23,7 @@ extern "C" __global__ void matmul_correct_and_reduce(int *c, unsigned short *out
     }
 }
 
-extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned int *output, size_t dbLength, size_t queryLength, size_t offset, size_t numElements)
+extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned int *output, size_t dbLength, size_t queryLength, size_t offset, size_t numElements, size_t realDbLen)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
@@ -36,7 +36,7 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
             bool match = (result & (1ULL << i));
 
             // Check if we are out of bounds for the query or db
-            if (queryIdx >= queryLength || dbIdx >= dbLength) {
+            if (queryIdx >= queryLength || dbIdx >= realDbLen) {
                 continue;
             }
 
