@@ -311,14 +311,15 @@ async fn main() -> eyre::Result<()> {
     let party_id = config.party_id;
     let chacha_seeds = initialize_chacha_seeds(&config.kms_key_arns, party_id).await?;
 
-    replay_result_events(&store, &sns_client, &config.results_topic_arn).await?;
+    // replay_result_events(&store, &sns_client, &config.results_topic_arn).await?;
 
-    let (mut codes_db, mut masks_db, store_len) = initialize_iris_dbs(party_id, &store).await?;
+    // let (mut codes_db, mut masks_db, store_len) = initialize_iris_dbs(party_id,
+    // &store).await?;
 
-    let my_state = SyncState {
-        db_len:              store_len as u64,
-        deleted_request_ids: store.last_deleted_requests(SYNC_QUERIES).await?,
-    };
+    // let my_state = SyncState {
+    //     db_len:              store_len as u64,
+    //     deleted_request_ids: store.last_deleted_requests(SYNC_QUERIES).await?,
+    // };
 
     let mut background_tasks = TaskMonitor::new();
     // a bit convoluted, but we need to create the actor on the thread already,
@@ -330,34 +331,34 @@ async fn main() -> eyre::Result<()> {
         let ids = device_manager.get_ids_from_magic(0);
         let comms = device_manager.instantiate_network_from_ids(config.party_id, ids);
 
-        let sync_result = match sync::sync(&comms[0], &my_state) {
-            Ok(res) => res,
-            Err(e) => {
-                tx.send(Err(e)).unwrap();
-                return Ok(());
-            }
-        };
+        // let sync_result = match sync::sync(&comms[0], &my_state) {
+        //     Ok(res) => res,
+        //     Err(e) => {
+        //         tx.send(Err(e)).unwrap();
+        //         return Ok(());
+        //     }
+        // };
 
-        if let Some(db_len) = sync_result.must_rollback_storage() {
-            // Rollback the data that we have already loaded.
-            let bit_len = db_len * IRIS_CODE_LENGTH;
-            // TODO: remove the line below if you removed fake data.
-            let bit_len = bit_len + (codes_db.len() - store_len * IRIS_CODE_LENGTH);
-            codes_db.truncate(bit_len);
-            masks_db.truncate(bit_len);
-        }
+        // if let Some(db_len) = sync_result.must_rollback_storage() {
+        //     // Rollback the data that we have already loaded.
+        //     let bit_len = db_len * IRIS_CODE_LENGTH;
+        //     // TODO: remove the line below if you removed fake data.
+        //     let bit_len = bit_len + (codes_db.len() - store_len * IRIS_CODE_LENGTH);
+        //     codes_db.truncate(bit_len);
+        //     masks_db.truncate(bit_len);
+        // }
 
         match ServerActor::new_with_device_manager_and_comms(
             config.party_id,
             chacha_seeds,
-            &codes_db,
-            &masks_db,
+            &[],
+            &[],
             device_manager,
             comms,
             8,
         ) {
             Ok((actor, handle)) => {
-                tx.send(Ok((handle, sync_result))).unwrap();
+                tx.send(Ok(handle)).unwrap();
                 actor.run(); // forever
             }
             Err(e) => {
@@ -368,15 +369,15 @@ async fn main() -> eyre::Result<()> {
         Ok(())
     });
 
-    let (mut handle, sync_result) = rx.await??;
+    let mut handle = rx.await??;
 
-    if let Some(db_len) = sync_result.must_rollback_storage() {
-        eprintln!("Databases are out-of-sync: {:?}", sync_result);
-        store.rollback(db_len).await?;
-        eprintln!("Rolled back to db_len={}", db_len);
-    }
+    // if let Some(db_len) = sync_result.must_rollback_storage() {
+    //     eprintln!("Databases are out-of-sync: {:?}", sync_result);
+    //     store.rollback(db_len).await?;
+    //     eprintln!("Rolled back to db_len={}", db_len);
+    // }
 
-    let mut skip_request_ids = sync_result.deleted_request_ids();
+    // let mut skip_request_ids = sync_result.deleted_request_ids();
 
     background_tasks.check_tasks();
 
@@ -495,7 +496,7 @@ async fn main() -> eyre::Result<()> {
         let now = Instant::now();
 
         // Skip requests based on the startup sync, only in the first iteration.
-        let skip_request_ids = mem::take(&mut skip_request_ids);
+        // let skip_request_ids = mem::take(&mut skip_request_ids);
 
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
@@ -504,7 +505,7 @@ async fn main() -> eyre::Result<()> {
             &sqs_client,
             &config.requests_queue_url,
             &store,
-            skip_request_ids,
+            vec![],
         )
         .await?;
 
@@ -532,7 +533,7 @@ async fn main() -> eyre::Result<()> {
             .await
             .map_err(|e| eyre!("ServerActor processing timeout: {:?}", e))?;
 
-        tx.send(result).await.unwrap();
+        // tx.send(result).await.unwrap();
         println!("CPU time of one iteration {:?}", now.elapsed());
 
         // wrap up span context
