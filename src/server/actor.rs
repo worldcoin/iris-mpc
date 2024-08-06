@@ -650,11 +650,12 @@ impl ServerActor {
         println!("Time for DB dedup: {:?}", now.elapsed());
 
         let mut total_time: f32 = 0.0;
-        let i = 0;
+        let mut i = 0;
         while i < events.len() {
             let elapsed =
                 unsafe { elapsed(events[i][0] as *mut _, events[i + 1][0] as *mut _).unwrap() };
             total_time += elapsed;
+            i += 2;
         }
         println!("Time for dot: {:?}", total_time);
 
