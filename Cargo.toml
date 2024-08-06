@@ -16,9 +16,6 @@ aws-sdk-sqs = { version = "1.36.0" }
 aws-sdk-s3 = { version = "1.42.0" }
 aws-sdk-secretsmanager = { version = "1.40.0" }
 axum = "0.7"
-cudarc = { git = "https://github.com/rw0x0/cudarc.git", rev = "origin/transmute", features = [
-    "cuda-12020",
-] }
 clap = { version = "4", features = ["derive"] }
 base64 = "0.22.1"
 bytemuck = "1.16"
