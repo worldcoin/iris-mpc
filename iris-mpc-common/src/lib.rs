@@ -1,3 +1,4 @@
+#![allow(clippy::needless_range_loop)]
 pub mod config;
 pub mod error;
 pub mod galois;

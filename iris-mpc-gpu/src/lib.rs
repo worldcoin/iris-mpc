@@ -1,3 +1,4 @@
+#![allow(clippy::needless_range_loop)]
 pub mod dot;
 pub mod helpers;
 pub mod rng;
