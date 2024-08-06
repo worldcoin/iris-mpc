@@ -1,7 +1,6 @@
 use crate::{
     dot::share_db::{ShareDB, SlicedProcessedDatabase},
     helpers::device_manager::DeviceManager,
-    setup::galois_engine::CompactGaloisRingShares,
 };
 use cudarc::{
     cublas::CudaBlas,
@@ -84,6 +83,7 @@ pub struct CudaVec2DSlicer<T> {
 pub type CudaVec2DSlicerU32 = CudaVec2DSlicer<u32>;
 pub type CudaVec2DSlicerU8 = CudaVec2DSlicer<u8>;
 pub type CudaVec2DSlicerI8 = CudaVec2DSlicer<i8>;
+pub type CompactGaloisRingShares = ([u8; 1984], [u8; 1984]);
 
 pub struct CompactQuery {
     pub code_query:        CompactGaloisRingShares,
@@ -99,10 +99,10 @@ impl CompactQuery {
         streams: &[CudaStream],
     ) -> eyre::Result<DeviceCompactQuery> {
         Ok(DeviceCompactQuery {
-            code_query:        device.htod_transfer_query(&self.code_query, streams)?,
-            mask_query:        device.htod_transfer_query(&self.mask_query, streams)?,
-            code_query_insert: device.htod_transfer_query(&self.code_query_insert, streams)?,
-            mask_query_insert: device.htod_transfer_query(&self.mask_query_insert, streams)?,
+            code_query:        device.htod_transfer_query(self.code_query, streams)?,
+            mask_query:        device.htod_transfer_query(self.mask_query, streams)?,
+            code_query_insert: device.htod_transfer_query(self.code_query_insert, streams)?,
+            mask_query_insert: device.htod_transfer_query(self.mask_query_insert, streams)?,
         })
     }
 }

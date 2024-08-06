@@ -1,5 +1,3 @@
-pub type CompactGaloisRingShares = Vec<Vec<u8>>;
-
 pub mod degree2 {
     use crate::{
         dot::IRIS_CODE_LENGTH,
