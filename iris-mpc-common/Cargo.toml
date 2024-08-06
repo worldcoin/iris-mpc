@@ -1,0 +1,45 @@
+[package]
+name = "iris-mpc-common"
+version = "0.1.0"
+edition = "2021"
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+aws-config.workspace = true
+aws-sdk-kms.workspace = true
+aws-sdk-sns.workspace = true
+aws-sdk-sqs.workspace = true
+aws-sdk-s3.workspace = true
+aws-sdk-secretsmanager.workspace = true
+clap.workspace = true
+rand.workspace = true
+bytemuck.workspace = true
+eyre.workspace = true
+thiserror = "1"
+rayon.workspace = true
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+config = "0.14.0"
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+reqwest.workspace = true
+
+sodiumoxide = { git = "https://github.com/worldcoin/sodiumoxide.git" }
+hmac = "0.12"
+http = "1.1.0"
+opentelemetry = "0.21.0"
+telemetry-batteries.workspace = true
+percent-encoding = "2"
+sha2 = "0.10"
+time = { version = "^0.3.6", features = ["formatting", "macros"] }
+url = "2"
+hex.workspace = true
+
+[dev-dependencies]
+float_eq = "1"
+
+[[bin]]
+name = "key-manager"
+path = "src/bin/key_manager.rs"

@@ -8,15 +8,13 @@ use aws_sdk_sqs::Client as SqsClient;
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use eyre::{Context, ContextCompat};
-use iris_mpc::{
+use iris_mpc_common::{
+    galois_engine::degree4::GaloisRingIrisCodeShare,
     helpers::{
         aws::{construct_message_attributes, NODE_ID_MESSAGE_ATTRIBUTE_NAME},
         sqs::{ResultEvent, SMPCRequest},
     },
-    setup::{
-        galois_engine::degree4::GaloisRingIrisCodeShare,
-        iris_db::{db::IrisDB, iris::IrisCode},
-    },
+    iris_db::{db::IrisDB, iris::IrisCode},
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use serde_json::to_string;

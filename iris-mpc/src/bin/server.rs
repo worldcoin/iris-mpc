@@ -6,25 +6,29 @@ use axum::{routing::get, Router};
 use clap::Parser;
 use eyre::{eyre, Context};
 use futures::StreamExt;
-use iris_mpc::{
+use iris_mpc_common::{
     config::{json_wrapper::JsonStrWrapper, Config, Opt},
-    dot::{IRIS_CODE_LENGTH, ROTATIONS},
+    galois_engine::degree4::GaloisRingIrisCodeShare,
     helpers::{
         aws::{
             NODE_ID_MESSAGE_ATTRIBUTE_NAME, SPAN_ID_MESSAGE_ATTRIBUTE_NAME,
             TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
         },
-        device_manager::DeviceManager,
         kms_dh::derive_shared_secret,
         sqs::{ResultEvent, SMPCRequest, SQSMessage},
         task_monitor::TaskMonitor,
     },
+    iris_db::db::IrisDB,
+    IRIS_CODE_LENGTH,
+};
+use iris_mpc_gpu::{
+    dot::ROTATIONS,
+    helpers::device_manager::DeviceManager,
     server::{BatchMetadata, BatchQuery, ServerActor, ServerJobResult},
-    setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
-    store::{
-        sync::{self, SyncState},
-        Store, StoredIrisRef,
-    },
+};
+use iris_mpc_store::{
+    sync::{self, SyncState},
+    Store, StoredIrisRef,
 };
 use rand::{rngs::StdRng, SeedableRng};
 use static_assertions::const_assert;
