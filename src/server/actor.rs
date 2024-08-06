@@ -585,7 +585,6 @@ impl ServerActor {
                 break;
             }
         }
-        println!("Time for DB dedup: {:?}", now.elapsed());
         // ---- END DATABASE DEDUP ----
 
         // Wait for protocol to finish
@@ -593,6 +592,9 @@ impl ServerActor {
         self.device_manager.await_streams(&self.streams[0]);
         self.device_manager.await_streams(&self.streams[1]);
         tracing::debug!(party_id = self.party_id, "batch work finished");
+        println!("Time for DB dedup: {:?}", now.elapsed());
+
+        let now = Instant::now();
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id
@@ -646,6 +648,8 @@ impl ServerActor {
             &insertion_list,
             &self.current_db_sizes,
         );
+
+        println!("Time for result processing: {:?}", now.elapsed());
 
         // for i in 0..self.device_manager.device_count() {
         //     self.device_manager.device(i).bind_to_thread().unwrap();
@@ -827,7 +831,7 @@ fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
         results.push(match_entry);
 
         // DEBUG
-        println!(
+        tracing::debug!(
             "Query {}: match={} [index: {}]",
             j,
             match_entry != u32::MAX,
