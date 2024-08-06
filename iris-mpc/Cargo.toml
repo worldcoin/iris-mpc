@@ -35,4 +35,4 @@ ndarray = "0.16.0"
 
 [features]
 default = []
-otp_encrypt = []
+otp_encrypt = ["iris-mpc-gpu/otp_encrypt"]
