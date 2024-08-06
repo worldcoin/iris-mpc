@@ -1719,65 +1719,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2fabcfbdc87f4758337ca535fb41a6d701b65693ce38287d856d1674551ec9b"
 
 [[package]]
-name = "gpu-iris-mpc"
-version = "0.1.0"
-dependencies = [
- "atomic_float",
- "aws-config",
- "aws-sdk-kms",
- "aws-sdk-s3",
- "aws-sdk-secretsmanager",
- "aws-sdk-sns",
- "aws-sdk-sqs",
- "axum",
- "base64 0.22.1",
- "bytemuck",
- "clap",
- "config",
- "criterion",
- "cudarc",
- "dotenvy",
- "eyre",
- "float_eq",
- "futures",
- "futures-concurrency",
- "hex",
- "hmac",
- "http 1.1.0",
- "indicatif",
- "itertools 0.13.0",
- "lazy_static",
- "memmap2",
- "mpc",
- "ndarray",
- "num",
- "num-traits",
- "once_cell",
- "opentelemetry",
- "percent-encoding",
- "rand",
- "rand_chacha",
- "rayon",
- "reqwest 0.12.5",
- "ring",
- "serde",
- "serde-big-array",
- "serde_json",
- "sha2",
- "sodiumoxide",
- "sqlx",
- "static_assertions",
- "telemetry-batteries",
- "thiserror",
- "time",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
-]
-
-[[package]]
 name = "group"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2251,6 +2192,65 @@ name = "ipnet"
 version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f518f335dce6725a761382244631d86cf0ccb2863413590b31338feb467f9c3"
+
+[[package]]
+name = "iris-mpc"
+version = "0.1.0"
+dependencies = [
+ "atomic_float",
+ "aws-config",
+ "aws-sdk-kms",
+ "aws-sdk-s3",
+ "aws-sdk-secretsmanager",
+ "aws-sdk-sns",
+ "aws-sdk-sqs",
+ "axum",
+ "base64 0.22.1",
+ "bytemuck",
+ "clap",
+ "config",
+ "criterion",
+ "cudarc",
+ "dotenvy",
+ "eyre",
+ "float_eq",
+ "futures",
+ "futures-concurrency",
+ "hex",
+ "hmac",
+ "http 1.1.0",
+ "indicatif",
+ "itertools 0.13.0",
+ "lazy_static",
+ "memmap2",
+ "mpc",
+ "ndarray",
+ "num",
+ "num-traits",
+ "once_cell",
+ "opentelemetry",
+ "percent-encoding",
+ "rand",
+ "rand_chacha",
+ "rayon",
+ "reqwest 0.12.5",
+ "ring",
+ "serde",
+ "serde-big-array",
+ "serde_json",
+ "sha2",
+ "sodiumoxide",
+ "sqlx",
+ "static_assertions",
+ "telemetry-batteries",
+ "thiserror",
+ "time",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
 
 [[package]]
 name = "is-terminal"
