@@ -347,6 +347,9 @@ impl ServerActor {
             batch_cublas,
         )?;
 
+        self.device_manager.await_streams(batch_streams);
+        println!("Time for prep: {:?}", now.elapsed());
+
         // ---- START BATCH DEDUP ----
         tracing::debug!(party_id = self.party_id, "Starting batch deduplication");
         compact_device_queries.compute_dot_products(
