@@ -577,7 +577,7 @@ impl ServerActor {
                 "finished chunk"
             );
 
-            if db_chunk_idx > 1 {
+            if db_chunk_idx > 2 {
                 self.device_manager
                     .await_streams(&self.streams[(db_chunk_idx + 1) % 2]); // await other stream
             }
