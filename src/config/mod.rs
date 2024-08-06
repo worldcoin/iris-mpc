@@ -50,7 +50,7 @@ pub struct Config {
     pub public_key_bucket_name: String,
 
     #[serde(default)]
-    pub encrypted_shares: bool,
+    pub enable_processing_encrypted_shares: bool,
 }
 
 impl Config {
