@@ -11,6 +11,7 @@ use eyre::{Context, ContextCompat};
 use gpu_iris_mpc::{
     helpers::{
         aws::{construct_message_attributes, NODE_ID_MESSAGE_ATTRIBUTE_NAME},
+        key_pair::download_public_key_from_s3,
         sqs::{ResultEvent, SMPCRequest},
     },
     setup::{
@@ -20,6 +21,7 @@ use gpu_iris_mpc::{
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use serde_json::to_string;
+use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{spawn, sync::Mutex, time::sleep};
 use uuid::Uuid;
@@ -29,6 +31,7 @@ const REGION: &str = "eu-north-1";
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
+const PUBLIC_KEY_S3_BUCKET_NAME: &str = "wf-mpc-vpc-stage-public-smpcv2-keys";
 
 #[derive(Debug, Parser)]
 struct Opt {
@@ -49,6 +52,9 @@ struct Opt {
 
     #[arg(short, long, env)]
     random: Option<bool>,
+
+    #[arg(short, long, env)]
+    encrypt_shares: Option<bool>,
 }
 
 #[tokio::main]
@@ -62,6 +68,7 @@ async fn main() -> eyre::Result<()> {
         rng_seed,
         n_repeat,
         random,
+        encrypt_shares,
     } = Opt::parse();
 
     let mut rng = if let Some(rng_seed) = rng_seed {
@@ -69,6 +76,23 @@ async fn main() -> eyre::Result<()> {
     } else {
         StdRng::from_entropy()
     };
+
+    let mut shares_encryption_public_keys: Vec<PublicKey> = vec![];
+    let encrypt_shares = encrypt_shares.is_some();
+
+    if encrypt_shares {
+        for i in 0..3 {
+            let public_key_string =
+                download_public_key_from_s3(PUBLIC_KEY_S3_BUCKET_NAME.to_string(), i.to_string())
+                    .await?;
+            let public_key_bytes = general_purpose::STANDARD
+                .decode(public_key_string)
+                .context("Failed to decode public key")?;
+            let public_key =
+                PublicKey::from_slice(&public_key_bytes).context("Failed to parse public key")?;
+            shares_encryption_public_keys.push(public_key);
+        }
+    }
 
     let n_repeat = n_repeat.unwrap_or(0);
 
@@ -227,10 +251,25 @@ async fn main() -> eyre::Result<()> {
         let mut messages = vec![];
         for i in 0..3 {
             let sns_id = Uuid::new_v4();
-            let iris_code =
-                general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_code[i].coefs));
-            let mask_code =
-                general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_mask[i].coefs));
+            let iris_code_coefs = bytemuck::cast_slice(&shared_code[i].coefs);
+            let mask_code_coefs = bytemuck::cast_slice(&shared_mask[i].coefs);
+
+            let iris_code: String;
+            let mask_code: String;
+
+            if encrypt_shares {
+                iris_code = general_purpose::STANDARD.encode(sealedbox::seal(
+                    iris_code_coefs,
+                    &shares_encryption_public_keys[i],
+                ));
+                mask_code = general_purpose::STANDARD.encode(sealedbox::seal(
+                    mask_code_coefs,
+                    &shares_encryption_public_keys[i],
+                ));
+            } else {
+                iris_code = general_purpose::STANDARD.encode(iris_code_coefs);
+                mask_code = general_purpose::STANDARD.encode(mask_code_coefs);
+            }
 
             let request_message = SMPCRequest {
                 request_id: request_id.to_string(),
