@@ -556,6 +556,8 @@ impl ServerActor {
             self.masks_engine
                 .reshare_results(&dot_chunk_size, request_streams);
 
+            debug_record_event!(self.device_manager, request_streams, &mut events);
+
             // ---- END PHASE 1 ----
 
             tracing::debug!(
@@ -606,6 +608,9 @@ impl ServerActor {
                 );
                 self.phase2.return_result_buffer(res);
             }
+
+            debug_record_event!(self.device_manager, request_streams, &mut events);
+
             tracing::debug!(
                 party_id = self.party_id,
                 chunk = db_chunk_idx,
@@ -649,15 +654,22 @@ impl ServerActor {
         tracing::debug!(party_id = self.party_id, "batch work finished");
         println!("Time for DB dedup: {:?}", now.elapsed());
 
-        let mut total_time: f32 = 0.0;
+        let mut total_dot_time: f32 = 0.0;
+        let mut total_reshare_time: f32 = 0.0;
+        let mut total_phase2_time: f32 = 0.0;
         let mut i = 0;
         while i < events.len() {
-            let elapsed =
+            total_dot_time +=
                 unsafe { elapsed(events[i][0] as *mut _, events[i + 1][0] as *mut _).unwrap() };
-            total_time += elapsed;
-            i += 2;
+            total_reshare_time +=
+                unsafe { elapsed(events[i + 1][0] as *mut _, events[i + 2][0] as *mut _).unwrap() };
+            total_phase2_time +=
+                unsafe { elapsed(events[i + 2][0] as *mut _, events[i + 3][0] as *mut _).unwrap() };
+            i += 4;
         }
-        println!("Time for dot: {:?}", total_time);
+        println!("Time for dot: {:?}", total_dot_time);
+        println!("Time for reshare: {:?}", total_reshare_time);
+        println!("Time for phase2: {:?}", total_phase2_time);
 
         let now = Instant::now();
 
