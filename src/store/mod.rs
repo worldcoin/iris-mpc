@@ -49,6 +49,9 @@ impl StoredIris {
     pub fn right_mask(&self) -> &[u16] {
         cast_u8_to_u16(&self.right_mask)
     }
+    pub fn id(&self) -> i64 {
+        self.id
+    }
 }
 
 #[derive(Clone)]
@@ -128,6 +131,56 @@ impl Store {
         });
 
         query.build().execute(tx.deref_mut()).await?;
+        Ok(())
+    }
+
+    pub async fn insert_or_update_left_iris(
+        &self,
+        id: i64,
+        left_code: &[u16],
+        left_mask: &[u16],
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        let query = sqlx::query(
+            r#"
+INSERT INTO irises (id, left_code, left_mask) 
+VALUES ( $1, $2, $3 ) 
+ON CONFLICT (id)
+DO UPDATE SET left_code = EXCLUDED.left_code, left_mask = EXCLUDED.left_mask;
+"#,
+        )
+        .bind(id)
+        .bind(cast_slice::<u16, u8>(left_code))
+        .bind(cast_slice::<u16, u8>(left_mask));
+
+        query.execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn insert_or_update_right_iris(
+        &self,
+        id: i64,
+        right_code: &[u16],
+        right_mask: &[u16],
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        let query = sqlx::query(
+            r#"
+INSERT INTO irises (id, right_code, right_mask) 
+VALUES ( $1, $2, $3 ) 
+ON CONFLICT (id)
+DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask;
+"#,
+        )
+        .bind(id)
+        .bind(cast_slice::<u16, u8>(right_code))
+        .bind(cast_slice::<u16, u8>(right_mask));
+
+        query.execute(&mut *tx).await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -351,6 +404,79 @@ mod tests {
 
             let got = store.last_deleted_requests(2).await?;
             assert_eq!(got, request_ids);
+        }
+
+        cleanup(&store, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_left_right() -> Result<()> {
+        let schema_name = temporary_name();
+        let store = Store::new(&test_db_url()?, &schema_name).await?;
+
+        for i in 0..10u16 {
+            if i % 2 == 0 {
+                store
+                    .insert_or_update_left_iris(
+                        i as i64,
+                        &[i * 100 + 1, i * 100 + 2, i * 100 + 3, i * 100 + 4],
+                        &[i * 100 + 5, i * 100 + 6, i * 100 + 7, i * 100 + 8],
+                    )
+                    .await?;
+                store
+                    .insert_or_update_right_iris(
+                        i as i64,
+                        &[i * 100 + 9, i * 100 + 10, i * 100 + 11, i * 100 + 12],
+                        &[i * 100 + 13, i * 100 + 14, i * 100 + 15, i * 100 + 16],
+                    )
+                    .await?;
+            } else {
+                store
+                    .insert_or_update_right_iris(
+                        i as i64,
+                        &[i * 100 + 9, i * 100 + 10, i * 100 + 11, i * 100 + 12],
+                        &[i * 100 + 13, i * 100 + 14, i * 100 + 15, i * 100 + 16],
+                    )
+                    .await?;
+                store
+                    .insert_or_update_left_iris(
+                        i as i64,
+                        &[i * 100 + 1, i * 100 + 2, i * 100 + 3, i * 100 + 4],
+                        &[i * 100 + 5, i * 100 + 6, i * 100 + 7, i * 100 + 8],
+                    )
+                    .await?;
+            }
+        }
+
+        let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
+
+        for i in 0..10u16 {
+            assert_eq!(got[i as usize].id, i as i64);
+            assert_eq!(got[i as usize].left_code(), &[
+                i * 100 + 1,
+                i * 100 + 2,
+                i * 100 + 3,
+                i * 100 + 4
+            ]);
+            assert_eq!(got[i as usize].left_mask(), &[
+                i * 100 + 5,
+                i * 100 + 6,
+                i * 100 + 7,
+                i * 100 + 8
+            ]);
+            assert_eq!(got[i as usize].right_code(), &[
+                i * 100 + 9,
+                i * 100 + 10,
+                i * 100 + 11,
+                i * 100 + 12
+            ]);
+            assert_eq!(got[i as usize].right_mask(), &[
+                i * 100 + 13,
+                i * 100 + 14,
+                i * 100 + 15,
+                i * 100 + 16
+            ]);
         }
 
         cleanup(&store, &schema_name).await?;

@@ -1,5 +1,8 @@
+use std::str::FromStr;
+
 /// An enum representing the party ID
 #[derive(std::cmp::Eq, std::cmp::PartialEq, Clone, Copy, Debug)]
+#[repr(u8)]
 pub enum PartyID {
     /// Party 0
     ID0 = 0,
@@ -29,25 +32,53 @@ impl PartyID {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct PartyIDError(String);
+
+impl std::error::Error for PartyIDError {}
+
+impl std::fmt::Display for PartyIDError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Invalid party ID: {}", &self.0)
+    }
+}
+
 impl TryFrom<usize> for PartyID {
-    type Error = super::error::Error;
+    type Error = PartyIDError;
 
     fn try_from(other: usize) -> Result<Self, Self::Error> {
         match other {
             0 => Ok(PartyID::ID0),
             1 => Ok(PartyID::ID1),
             2 => Ok(PartyID::ID2),
-            i => Err(Self::Error::Id(i)),
+            i => Err(PartyIDError(format!("Invalid party ID: {}", i))),
         }
     }
 }
 
 impl TryFrom<u8> for PartyID {
-    type Error = super::error::Error;
+    type Error = PartyIDError;
 
     #[inline(always)]
     fn try_from(other: u8) -> Result<Self, Self::Error> {
         (other as usize).try_into()
+    }
+}
+
+impl FromStr for PartyID {
+    type Err = PartyIDError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse::<usize>()
+            .map_err(|e| PartyIDError(e.to_string()))?
+            .try_into()
+    }
+}
+
+impl From<PartyID> for u8 {
+    #[inline(always)]
+    fn from(other: PartyID) -> Self {
+        other as u8
     }
 }
 

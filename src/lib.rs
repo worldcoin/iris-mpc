@@ -7,3 +7,6 @@ pub mod server;
 pub mod setup;
 pub mod store;
 pub mod threshold_ring;
+pub mod upgrade;
+
+pub use dot::IRIS_CODE_LENGTH;

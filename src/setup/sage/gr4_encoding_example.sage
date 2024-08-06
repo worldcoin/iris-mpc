@@ -77,7 +77,11 @@ def prod_R_monom(a, b):
 change_of_basis_A_to_monom = S
 change_of_basis_monom_to_B = (S*S.transpose()).inverse()
 print(change_of_basis_A_to_monom)
+print()
+print(change_of_basis_A_to_monom.inverse())
+print()
 print(change_of_basis_monom_to_B)
+print()
 
 # - Vectors are first encoded as elements of R represented in basis A
 # - For vectors so encoded, their dot product can be computed as the
