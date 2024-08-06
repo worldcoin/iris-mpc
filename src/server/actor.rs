@@ -469,9 +469,8 @@ impl ServerActor {
                 ] {
                     unsafe {
                         mem_prefetch_async(
-                            ptr + DB_CHUNK_SIZE as u64
-                                + mem_offsets[i] as u64 * IRIS_CODE_LENGTH as u64,
-                            DB_CHUNK_SIZE,
+                            ptr + ((DB_CHUNK_SIZE + mem_offsets[i]) * IRIS_CODE_LENGTH) as u64,
+                            DB_CHUNK_SIZE * IRIS_CODE_LENGTH,
                             CUmemLocation_st {
                                 type_: CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE,
                                 id:    i as i32,
