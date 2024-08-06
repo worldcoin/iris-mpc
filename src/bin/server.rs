@@ -1,32 +1,13 @@
 #![allow(clippy::needless_range_loop)]
 
-use std::{
-    mem,
-    sync::Arc,
-    time::{Duration, Instant},
-};
-
 use aws_sdk_sns::Client as SNSClient;
-use aws_sdk_sqs::{Client, config::Region};
-use axum::{Router, routing::get};
+use aws_sdk_sqs::{config::Region, Client};
+use axum::{routing::get, Router};
 use clap::Parser;
-use eyre::{Context, eyre};
+use eyre::{eyre, Context};
 use futures::StreamExt;
-use rand::{rngs::StdRng, SeedableRng};
-use static_assertions::const_assert;
-use telemetry_batteries::{
-    metrics::statsd::StatsdBattery,
-    tracing::{datadog::DatadogBattery, TracingShutdownHandle},
-};
-use tokio::{
-    sync::{mpsc, oneshot},
-    task::spawn_blocking,
-    time::timeout,
-};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
 use gpu_iris_mpc::{
-    config::{Config, json_wrapper::JsonStrWrapper, Opt},
+    config::{json_wrapper::JsonStrWrapper, Config, Opt},
     dot::{IRIS_CODE_LENGTH, ROTATIONS},
     helpers::{
         aws::{
@@ -42,10 +23,27 @@ use gpu_iris_mpc::{
     server::{BatchMetadata, BatchQuery, ServerActor, ServerJobResult},
     setup::{galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::db::IrisDB},
     store::{
-        Store,
-        StoredIrisRef, sync::{self, SyncState},
+        sync::{self, SyncState},
+        Store, StoredIrisRef,
     },
 };
+use rand::{rngs::StdRng, SeedableRng};
+use static_assertions::const_assert;
+use std::{
+    mem,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use telemetry_batteries::{
+    metrics::statsd::StatsdBattery,
+    tracing::{datadog::DatadogBattery, TracingShutdownHandle},
+};
+use tokio::{
+    sync::{mpsc, oneshot},
+    task::spawn_blocking,
+    time::timeout,
+};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
@@ -160,7 +158,7 @@ async fn receive_batch(
                         mask_share.all_rotations(),
                     )
                 })
-                    .await?;
+                .await?;
 
                 batch_query.store.code.push(store_iris_shares);
                 batch_query.store.mask.push(store_mask_shares);
@@ -333,7 +331,7 @@ async fn main() -> eyre::Result<()> {
     let (mut codes_db, mut masks_db, store_len) = initialize_iris_dbs(party_id, &store).await?;
 
     let my_state = SyncState {
-        db_len: store_len as u64,
+        db_len:              store_len as u64,
         deleted_request_ids: store.last_deleted_requests(SYNC_QUERIES).await?,
     };
 
@@ -404,11 +402,11 @@ async fn main() -> eyre::Result<()> {
     let store_bg = store.clone();
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
-                           merged_results,
-                           request_ids,
-                           matches,
-                           store: query_store,
-                       }) = rx.recv().await
+            merged_results,
+            request_ids,
+            matches,
+            store: query_store,
+        }) = rx.recv().await
         {
             let result_events = merged_results
                 .iter()
@@ -434,8 +432,8 @@ async fn main() -> eyre::Result<()> {
                     let code = &query_store.code[query_idx].coefs[..];
                     let mask = &query_store.mask[query_idx].coefs[..];
                     StoredIrisRef {
-                        left_code: code,
-                        left_mask: mask,
+                        left_code:  code,
+                        left_mask:  mask,
                         // TODO: second eye.
                         right_code: &[],
                         right_mask: &[],
@@ -526,7 +524,7 @@ async fn main() -> eyre::Result<()> {
             enable_processing_encrypted_shares,
             shares_encryption_key_pair,
         )
-            .await?;
+        .await?;
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id and
