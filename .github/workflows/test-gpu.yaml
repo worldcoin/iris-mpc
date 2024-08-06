@@ -37,7 +37,7 @@ jobs:
         run: find /usr -name "libnvrtc*" && find /usr -name libcuda.so
 
       - name: Cache Rust build
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         id: cache-rust
         with:
           path: |
