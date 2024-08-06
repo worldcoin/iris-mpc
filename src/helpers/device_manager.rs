@@ -115,7 +115,7 @@ impl DeviceManager {
 
     pub fn htod_transfer_query(
         &self,
-        preprocessed_query: ([u8; 25395200], [u8; 25395200]),
+        preprocessed_query: &Vec<Vec<u8>>,
         streams: &[CudaStream],
     ) -> eyre::Result<CudaVec2DSlicerU8> {
         let mut slices0 = vec![];
@@ -125,29 +125,29 @@ impl DeviceManager {
             device.bind_to_thread().unwrap();
 
             let query0 =
-                unsafe { malloc_async(streams[idx].stream, preprocessed_query.0.len()).unwrap() };
+                unsafe { malloc_async(streams[idx].stream, preprocessed_query[0].len()).unwrap() };
 
             let slice0 = StreamAwareCudaSlice::<u8>::upgrade_ptr_stream(
                 query0,
                 streams[idx].stream,
-                preprocessed_query.0.len(),
+                preprocessed_query[0].len(),
             );
 
             unsafe {
-                memcpy_htod_async(query0, &preprocessed_query.0, streams[idx].stream).unwrap();
+                memcpy_htod_async(query0, &preprocessed_query[0], streams[idx].stream).unwrap();
             }
 
             let query1 =
-                unsafe { malloc_async(streams[idx].stream, preprocessed_query.1.len()).unwrap() };
+                unsafe { malloc_async(streams[idx].stream, preprocessed_query[1].len()).unwrap() };
 
             let slice1 = StreamAwareCudaSlice::<u8>::upgrade_ptr_stream(
                 query1,
                 streams[idx].stream,
-                preprocessed_query.1.len(),
+                preprocessed_query[1].len(),
             );
 
             unsafe {
-                memcpy_htod_async(query1, &preprocessed_query.1, streams[idx].stream).unwrap();
+                memcpy_htod_async(query1, &preprocessed_query[1], streams[idx].stream).unwrap();
             }
 
             slices0.push(slice0);
