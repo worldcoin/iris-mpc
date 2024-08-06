@@ -346,8 +346,8 @@ impl ServerActor {
         let now = Instant::now();
         let query_store = batch.store;
 
-        let batch_streams = &self.streams[1];
-        let batch_cublas = &self.cublas_handles[1];
+        let batch_streams = &self.streams[0];
+        let batch_cublas = &self.cublas_handles[0];
 
         // Transfer queries to device
         let compact_device_queries =
@@ -457,33 +457,6 @@ impl ServerActor {
                 .map(|s| s.div_ceil(4) * 4)
                 .collect::<Vec<_>>();
 
-            // Prefetch the next chunk already
-            if chunk_size[0] == DB_CHUNK_SIZE {
-                for i in 0..self.device_manager.device_count() {
-                    self.device_manager.device(i).bind_to_thread().unwrap();
-                    for ptr in &[
-                        self.code_db_slices.code_gr.limb_0[i],
-                        self.code_db_slices.code_gr.limb_1[i],
-                        self.mask_db_slices.code_gr.limb_0[i],
-                        self.mask_db_slices.code_gr.limb_1[i],
-                    ] {
-                        unsafe {
-                            mem_prefetch_async(
-                                ptr + (DB_CHUNK_SIZE * (db_chunk_idx + 1) * IRIS_CODE_LENGTH)
-                                    as u64,
-                                DB_CHUNK_SIZE * IRIS_CODE_LENGTH,
-                                CUmemLocation_st {
-                                    type_: CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE,
-                                    id:    i as i32,
-                                },
-                                self.streams[(db_chunk_idx + 1) % 2][i].stream,
-                            )
-                            .unwrap();
-                        }
-                    }
-                }
-            }
-
             // First stream doesn't need to wait
             if db_chunk_idx == 0 {
                 self.device_manager
@@ -522,6 +495,33 @@ impl ServerActor {
             );
             self.device_manager
                 .await_event(request_streams, &current_exchange_event);
+
+            // Prefetch the next chunk
+            if chunk_size[0] == DB_CHUNK_SIZE {
+                for i in 0..self.device_manager.device_count() {
+                    self.device_manager.device(i).bind_to_thread().unwrap();
+                    for ptr in &[
+                        self.code_db_slices.code_gr.limb_0[i],
+                        self.code_db_slices.code_gr.limb_1[i],
+                        self.mask_db_slices.code_gr.limb_0[i],
+                        self.mask_db_slices.code_gr.limb_1[i],
+                    ] {
+                        unsafe {
+                            mem_prefetch_async(
+                                ptr + (DB_CHUNK_SIZE * (db_chunk_idx + 1) * IRIS_CODE_LENGTH)
+                                    as u64,
+                                DB_CHUNK_SIZE * IRIS_CODE_LENGTH,
+                                CUmemLocation_st {
+                                    type_: CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE,
+                                    id:    i as i32,
+                                },
+                                self.streams[(db_chunk_idx + 1) % 2][i].stream,
+                            )
+                            .unwrap();
+                        }
+                    }
+                }
+            }
 
             compact_device_sums.compute_dot_reducer_against_db(
                 &mut self.codes_engine,
