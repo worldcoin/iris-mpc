@@ -19,9 +19,9 @@ jobs:
           # Split the test and bench caches, the have different debug settings
           key: "test"
       - name: Install Rust nightly
-        run: rustup toolchain install nightly
+        run: rustup toolchain install nightly-2024-07-10
       - name: Set Rust nightly as default
-        run: rustup default nightly
+        run: rustup default nightly-2024-07-10
       # Building tests in release mode checks warnings and compiler errors that depend on optimisations
       - name: Build Tests
         run: cargo build --release --all-features --tests
@@ -40,4 +40,4 @@ jobs:
       - name: Set Rust nightly as default
         run: rustup default nightly-2024-07-10
       - name: Build All Targets
-        run: cargo build --all-features --lib --bins --benches --examples
+        run: cargo build --release --all-features --lib --bins --benches --examples
