@@ -11,7 +11,7 @@ use cudarc::{
     driver::{CudaDevice, CudaSlice},
     nccl::{Comm, Id},
 };
-use gpu_iris_mpc::helpers::id_wrapper::IdWrapper;
+use iris_mpc::helpers::id_wrapper::IdWrapper;
 use once_cell::sync::Lazy;
 use std::{env, str::FromStr, time::Instant};
 

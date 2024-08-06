@@ -1,6 +1,6 @@
 use clap::Parser;
 use futures::StreamExt;
-use gpu_iris_mpc::{
+use iris_mpc::{
     setup::{
         galois::degree4::{basis::Monomial, GaloisRingElement, ShamirGaloisRingShare},
         id::PartyID,

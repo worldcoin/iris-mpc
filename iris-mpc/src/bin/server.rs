@@ -6,7 +6,7 @@ use axum::{routing::get, Router};
 use clap::Parser;
 use eyre::{eyre, Context};
 use futures::StreamExt;
-use gpu_iris_mpc::{
+use iris_mpc::{
     config::{json_wrapper::JsonStrWrapper, Config, Opt},
     dot::{IRIS_CODE_LENGTH, ROTATIONS},
     helpers::{

@@ -2,7 +2,8 @@ use clap::Parser;
 use eyre::ContextCompat;
 use futures::{Stream, StreamExt};
 use futures_concurrency::future::Join;
-use gpu_iris_mpc::{
+use indicatif::{ProgressBar, ProgressStyle};
+use iris_mpc::{
     setup::galois_engine::degree4::GaloisRingIrisCodeShare,
     upgrade::{
         config::UpgradeClientConfig,
@@ -12,7 +13,6 @@ use gpu_iris_mpc::{
     },
     IRIS_CODE_LENGTH,
 };
-use indicatif::{ProgressBar, ProgressStyle};
 use mpc_uniqueness_check::{bits::Bits, distance::EncodedBits};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;

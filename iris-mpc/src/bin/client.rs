@@ -8,7 +8,7 @@ use aws_sdk_sqs::Client as SqsClient;
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use eyre::{Context, ContextCompat};
-use gpu_iris_mpc::{
+use iris_mpc::{
     helpers::{
         aws::{construct_message_attributes, NODE_ID_MESSAGE_ATTRIBUTE_NAME},
         sqs::{ResultEvent, SMPCRequest},

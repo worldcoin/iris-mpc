@@ -1,6 +1,6 @@
 use cudarc::nccl::Id;
 use eyre::Result;
-use gpu_iris_mpc::{
+use iris_mpc::{
     helpers::device_manager::DeviceManager,
     server::{BatchQuery, ServerActor, ServerJobResult},
     setup::{

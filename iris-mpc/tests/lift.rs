@@ -1,5 +1,5 @@
 use cudarc::driver::{CudaDevice, CudaStream};
-use gpu_iris_mpc::{
+use iris_mpc::{
     helpers::{device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync},
     setup::iris_db::iris::IrisCodeArray,
     threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},

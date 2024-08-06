@@ -1,7 +1,7 @@
 use clap::Parser;
 use eyre::bail;
 use futures_concurrency::future::Join;
-use gpu_iris_mpc::{
+use iris_mpc::{
     setup::id::PartyID,
     store::Store,
     upgrade::{
@@ -221,8 +221,8 @@ impl NewIrisShareSink for IrisShareDbSink {
     async fn store_code_mask_share(
         &self,
         share_id: u64,
-        code_share: &[u16; gpu_iris_mpc::IRIS_CODE_LENGTH],
-        mask_share: &[u16; gpu_iris_mpc::IRIS_CODE_LENGTH],
+        code_share: &[u16; iris_mpc::IRIS_CODE_LENGTH],
+        mask_share: &[u16; iris_mpc::IRIS_CODE_LENGTH],
     ) -> eyre::Result<()> {
         let id = i64::try_from(share_id).expect("id fits into i64");
         match self.eye {

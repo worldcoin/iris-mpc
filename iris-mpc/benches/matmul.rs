@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
-use gpu_iris_mpc::{
+use iris_mpc::{
     dot::share_db::{preprocess_query, ShareDB},
     helpers::device_manager::DeviceManager,
     setup::shamir::P,

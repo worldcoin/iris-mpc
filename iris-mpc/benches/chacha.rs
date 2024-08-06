@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use cudarc::driver::CudaDevice;
-use gpu_iris_mpc::rng::{aes::AesCudaRng, chacha::ChaChaCudaRng};
+use iris_mpc::rng::{aes::AesCudaRng, chacha::ChaChaCudaRng};
 
 pub fn criterion_benchmark_chacha12_runner(c: &mut Criterion, buf_size: usize) {
     let mut group = c.benchmark_group(format!(

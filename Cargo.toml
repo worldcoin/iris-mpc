@@ -1,2 +1,12 @@
 [workspace]
 members = ["iris-mpc"]
+resolver = "2"
+
+# Abort on panics rather than unwinding.
+# This improves performance and makes panic propagation more reliable.
+# bench gets its setting from release, and test from dev.
+[profile.release]
+panic = 'abort'
+
+[profile.dev]
+panic = 'abort'
