@@ -17,7 +17,7 @@ axum = "0.7.5"
 base64 = "0.22.1"
 bytemuck = "1.16"
 config = "0.14.0"
-clap = { version = "4.5.9", features = ["derive", "env"] }
+clap = { version = "4.5.13", features = ["derive", "env"] }
 cudarc = { git = "https://github.com/rw0x0/cudarc.git", rev = "origin/transmute", features = [
     "cuda-12020",
 ] }
