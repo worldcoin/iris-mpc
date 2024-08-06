@@ -10,6 +10,7 @@ pub mod aws;
 pub mod aws_sigv4;
 pub mod device_manager;
 pub mod id_wrapper;
+pub mod key_pair;
 pub mod kms_dh;
 pub mod query_processor;
 pub mod sqs;

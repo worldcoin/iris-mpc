@@ -1,6 +1,8 @@
+use super::key_pair::SharesEncryptionKeyPair;
 use crate::setup::iris_db::iris::IrisCodeArray;
 use base64::{engine::general_purpose, Engine};
 use serde::{Deserialize, Serialize};
+use sodiumoxide::crypto::sealedbox;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SQSMessage {
@@ -28,17 +30,57 @@ pub struct SMPCRequest {
 }
 
 impl SMPCRequest {
-    fn decode_bytes(bytes: &[u8]) -> [u16; IrisCodeArray::IRIS_CODE_SIZE] {
+    fn decrypt_b64_share(
+        code: Vec<u8>,
+        decryption_key_pair: SharesEncryptionKeyPair,
+    ) -> [u16; IrisCodeArray::IRIS_CODE_SIZE] {
+        let mut buffer = [0u8; 32];
+        buffer.copy_from_slice(bytemuck::cast_slice(&code));
+        let decrypted = sealedbox::open(&buffer, &decryption_key_pair.pk, &decryption_key_pair.sk);
+        match decrypted {
+            Ok(bytes) => {
+                let mut buffer = [0u16; IrisCodeArray::IRIS_CODE_SIZE];
+                buffer.copy_from_slice(bytemuck::cast_slice(&bytes));
+                buffer
+            }
+            Err(_) => panic!("Failed to decrypt iris code"),
+        }
+    }
+
+    fn decode_bytes(
+        bytes: &[u8],
+        encrypted_shares: bool,
+        decryption_key_pair: SharesEncryptionKeyPair,
+    ) -> [u16; IrisCodeArray::IRIS_CODE_SIZE] {
         let code = general_purpose::STANDARD.decode(bytes).unwrap();
+        if encrypted_shares {
+            return Self::decrypt_b64_share(code, decryption_key_pair);
+        }
         let mut buffer = [0u16; IrisCodeArray::IRIS_CODE_SIZE];
         buffer.copy_from_slice(bytemuck::cast_slice(&code));
         buffer
     }
-    pub fn get_iris_shares(&self) -> [u16; IrisCodeArray::IRIS_CODE_SIZE] {
-        Self::decode_bytes(self.iris_code.as_bytes())
+    pub fn get_iris_shares(
+        &self,
+        encrypted_shares: bool,
+        decryption_key_pair: SharesEncryptionKeyPair,
+    ) -> [u16; IrisCodeArray::IRIS_CODE_SIZE] {
+        Self::decode_bytes(
+            self.iris_code.as_bytes(),
+            encrypted_shares,
+            decryption_key_pair,
+        )
     }
-    pub fn get_mask_shares(&self) -> [u16; IrisCodeArray::IRIS_CODE_SIZE] {
-        Self::decode_bytes(self.mask_code.as_bytes())
+    pub fn get_mask_shares(
+        &self,
+        encrypted_shares: bool,
+        decryption_key_pair: SharesEncryptionKeyPair,
+    ) -> [u16; IrisCodeArray::IRIS_CODE_SIZE] {
+        Self::decode_bytes(
+            self.mask_code.as_bytes(),
+            encrypted_shares,
+            decryption_key_pair,
+        )
     }
 }
 

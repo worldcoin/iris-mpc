@@ -1,9 +1,9 @@
-pub mod json_wrapper;
-
 use crate::config::json_wrapper::JsonStrWrapper;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+
+pub mod json_wrapper;
 
 #[derive(Debug, Parser)]
 pub struct Opt {
@@ -45,6 +45,12 @@ pub struct Config {
 
     #[serde(default)]
     pub processing_timeout_secs: u64,
+
+    #[serde(default)]
+    pub public_key_bucket_name: String,
+
+    #[serde(default)]
+    pub encrypted_shares: bool,
 }
 
 impl Config {

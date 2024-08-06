@@ -15,6 +15,7 @@ use gpu_iris_mpc::{
             TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
         },
         device_manager::DeviceManager,
+        key_pair::SharesEncryptionKeyPair,
         kms_dh::derive_shared_secret,
         sqs::{ResultEvent, SMPCRequest, SQSMessage},
         task_monitor::TaskMonitor,
@@ -62,6 +63,8 @@ async fn receive_batch(
     queue_url: &String,
     store: &Store,
     skip_request_ids: Vec<String>,
+    encrypted_shares: bool,
+    shares_encryption_key_pair: SharesEncryptionKeyPair,
 ) -> eyre::Result<BatchQuery> {
     let mut batch_query = BatchQuery::default();
 
@@ -75,6 +78,7 @@ async fn receive_batch(
 
         if let Some(messages) = rcv_message_output.messages {
             for sqs_message in messages {
+                let shares_encryption_key_pair = shares_encryption_key_pair.clone();
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())?;
                 let message: SMPCRequest = serde_json::from_str(&message.message)?;
 
@@ -122,10 +126,16 @@ async fn receive_batch(
                     iris_shares,
                     mask_shares,
                 ) = spawn_blocking(move || {
-                    let mut iris_share =
-                        GaloisRingIrisCodeShare::new(party_id + 1, message.get_iris_shares());
-                    let mut mask_share =
-                        GaloisRingIrisCodeShare::new(party_id + 1, message.get_mask_shares());
+                    let mut iris_share = GaloisRingIrisCodeShare::new(
+                        party_id + 1,
+                        message
+                            .get_iris_shares(encrypted_shares, shares_encryption_key_pair.clone()),
+                    );
+                    let mut mask_share = GaloisRingIrisCodeShare::new(
+                        party_id + 1,
+                        message
+                            .get_mask_shares(encrypted_shares, shares_encryption_key_pair.clone()),
+                    );
 
                     // Original for storage.
                     let store_iris_shares = iris_share.clone();
@@ -307,9 +317,12 @@ async fn main() -> eyre::Result<()> {
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);
+    let shares_encryption_key_pair =
+        SharesEncryptionKeyPair::initialize_from_storage(config.clone()).await;
 
     let party_id = config.party_id;
     let chacha_seeds = initialize_chacha_seeds(&config.kms_key_arns, party_id).await?;
+    let encrypted_shares = config.encrypted_shares;
 
     replay_result_events(&store, &sns_client, &config.results_topic_arn).await?;
 
@@ -471,7 +484,6 @@ async fn main() -> eyre::Result<()> {
     let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
     let mut total_time = Instant::now();
     let mut batch_times = Duration::from_secs(0);
-
     // Main loop
     for request_counter in 0..N_BATCHES {
         // **Tensor format of queries**
@@ -497,6 +509,7 @@ async fn main() -> eyre::Result<()> {
         // Skip requests based on the startup sync, only in the first iteration.
         let skip_request_ids = mem::take(&mut skip_request_ids);
 
+        let shares_encryption_key_pair = shares_encryption_key_pair.clone();
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
         let batch = receive_batch(
@@ -505,6 +518,8 @@ async fn main() -> eyre::Result<()> {
             &config.requests_queue_url,
             &store,
             skip_request_ids,
+            encrypted_shares,
+            shares_encryption_key_pair,
         )
         .await?;
 
