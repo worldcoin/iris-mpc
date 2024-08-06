@@ -432,7 +432,6 @@ impl ServerActor {
         let now = Instant::now();
         tracing::debug!(party_id = self.party_id, "Start DB deduplication");
         let mut db_chunk_idx = 0;
-        let mut mem_offsets = vec![0; self.device_manager.device_count()];
         loop {
             tracing::debug!(
                 party_id = self.party_id,
@@ -459,30 +458,31 @@ impl ServerActor {
                 .collect::<Vec<_>>();
 
             // Prefetch the next chunk already
-            // if chunk_size[0] == DB_CHUNK_SIZE {
-            //     for i in 0..self.device_manager.device_count() {
-            //         self.device_manager.device(i).bind_to_thread().unwrap();
-            //         for ptr in &[
-            //             self.code_db_slices.code_gr.limb_0[i],
-            //             self.code_db_slices.code_gr.limb_1[i],
-            //             self.mask_db_slices.code_gr.limb_0[i],
-            //             self.mask_db_slices.code_gr.limb_1[i],
-            //         ] {
-            //             unsafe {
-            //                 mem_prefetch_async(
-            //                     ptr + ((DB_CHUNK_SIZE + mem_offsets[i]) *
-            // IRIS_CODE_LENGTH) as u64,                     DB_CHUNK_SIZE *
-            // IRIS_CODE_LENGTH,                     CUmemLocation_st {
-            //                         type_:
-            // CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE,
-            // id:    i as i32,                     },
-            //                     self.streams[(db_chunk_idx + 1) % 2][i].stream,
-            //                 )
-            //                 .unwrap();
-            //             }
-            //         }
-            //     }
-            // }
+            if chunk_size[0] == DB_CHUNK_SIZE {
+                for i in 0..self.device_manager.device_count() {
+                    self.device_manager.device(i).bind_to_thread().unwrap();
+                    for ptr in &[
+                        self.code_db_slices.code_gr.limb_0[i],
+                        self.code_db_slices.code_gr.limb_1[i],
+                        self.mask_db_slices.code_gr.limb_0[i],
+                        self.mask_db_slices.code_gr.limb_1[i],
+                    ] {
+                        unsafe {
+                            mem_prefetch_async(
+                                ptr + (DB_CHUNK_SIZE * (db_chunk_idx + 1) * IRIS_CODE_LENGTH)
+                                    as u64,
+                                DB_CHUNK_SIZE * IRIS_CODE_LENGTH,
+                                CUmemLocation_st {
+                                    type_: CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE,
+                                    id:    i as i32,
+                                },
+                                self.streams[(db_chunk_idx + 1) % 2][i].stream,
+                            )
+                            .unwrap();
+                        }
+                    }
+                }
+            }
 
             // First stream doesn't need to wait
             if db_chunk_idx == 0 {
@@ -618,12 +618,6 @@ impl ServerActor {
 
             // Increment chunk index
             db_chunk_idx += 1;
-
-            mem_offsets = mem_offsets
-                .iter()
-                .zip(chunk_size.iter())
-                .map(|(offset, chunk_size)| offset + chunk_size)
-                .collect();
 
             tracing::debug!(
                 party_id = self.party_id,
