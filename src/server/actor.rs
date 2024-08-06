@@ -521,6 +521,11 @@ impl ServerActor {
                 request_cublas_handles,
             );
 
+            debug_record_event!(self.device_manager, request_streams, &mut events);
+
+            self.device_manager
+                .record_event(request_streams, &next_dot_event);
+
             // wait for the exchange result buffers to be ready
             tracing::debug!(
                 party_id = self.party_id,
@@ -545,8 +550,6 @@ impl ServerActor {
                 chunk = db_chunk_idx,
                 "recording dot-event"
             );
-            self.device_manager
-                .record_event(request_streams, &next_dot_event);
 
             // DEBUG
             debug_record_event!(self.device_manager, request_streams, &mut events);
@@ -568,6 +571,7 @@ impl ServerActor {
             self.device_manager
                 .await_event(request_streams, &current_phase2_event);
 
+            debug_record_event!(self.device_manager, request_streams, &mut events);
             // ---- START PHASE 2 ----
             // TODO: remove
             let max_chunk_size = dot_chunk_size.iter().max().copied().unwrap();
@@ -662,10 +666,10 @@ impl ServerActor {
             total_dot_time +=
                 unsafe { elapsed(events[i][0] as *mut _, events[i + 1][0] as *mut _).unwrap() };
             total_reshare_time +=
-                unsafe { elapsed(events[i + 1][0] as *mut _, events[i + 2][0] as *mut _).unwrap() };
-            total_phase2_time +=
                 unsafe { elapsed(events[i + 2][0] as *mut _, events[i + 3][0] as *mut _).unwrap() };
-            i += 4;
+            total_phase2_time +=
+                unsafe { elapsed(events[i + 4][0] as *mut _, events[i + 5][0] as *mut _).unwrap() };
+            i += 6;
         }
         println!("Time for dot: {:?}", total_dot_time);
         println!("Time for reshare: {:?}", total_reshare_time);
