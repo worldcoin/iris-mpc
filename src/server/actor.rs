@@ -67,7 +67,7 @@ impl ServerActorHandle {
 const DB_SIZE: usize = 1 << 24;
 const DB_BUFFER: usize = 8 * (1 << 16);
 const DB_CHUNK_SIZE: usize = 1 << 16;
-const N_QUERIES: usize = 64 * 2;
+const N_QUERIES: usize = 64 * 4;
 const QUERIES: usize = ROTATIONS * N_QUERIES;
 
 pub struct ServerActor {
@@ -459,7 +459,7 @@ impl ServerActor {
                 .collect::<Vec<_>>();
 
             // Prefetch the next chunk already
-            // if dot_chunk_size[0] == DB_CHUNK_SIZE {
+            // if chunk_size[0] == DB_CHUNK_SIZE {
             //     for i in 0..self.device_manager.device_count() {
             //         self.device_manager.device(i).bind_to_thread().unwrap();
             //         for ptr in &[
@@ -474,7 +474,7 @@ impl ServerActor {
             // IRIS_CODE_LENGTH) as u64,                     DB_CHUNK_SIZE *
             // IRIS_CODE_LENGTH,                     CUmemLocation_st {
             //                         type_:
-            // CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE,                  
+            // CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE,
             // id:    i as i32,                     },
             //                     self.streams[(db_chunk_idx + 1) % 2][i].stream,
             //                 )
