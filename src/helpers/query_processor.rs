@@ -83,7 +83,7 @@ pub struct CudaVec2DSlicer<T> {
 pub type CudaVec2DSlicerU32 = CudaVec2DSlicer<u32>;
 pub type CudaVec2DSlicerU8 = CudaVec2DSlicer<u8>;
 pub type CudaVec2DSlicerI8 = CudaVec2DSlicer<i8>;
-pub type CompactGaloisRingShares = ([u8; 1984], [u8; 1984]);
+pub type CompactGaloisRingShares = ([u8; 25395200], [u8; 25395200]);
 
 pub struct CompactQuery {
     pub code_query:        CompactGaloisRingShares,

@@ -115,7 +115,7 @@ impl DeviceManager {
 
     pub fn htod_transfer_query(
         &self,
-        preprocessed_query: ([u8; 1984], [u8; 1984]),
+        preprocessed_query: ([u8; 25395200], [u8; 25395200]),
         streams: &[CudaStream],
     ) -> eyre::Result<CudaVec2DSlicerU8> {
         let mut slices0 = vec![];

@@ -772,9 +772,9 @@ fn derive_seed(seed: [u32; 8], kdf_salt: &Salt, nonce: usize) -> eyre::Result<[u
     Ok(result)
 }
 
-fn prepare_query_shares(shares: Vec<GaloisRingIrisCodeShare>) -> ([u8; QUERIES], [u8; QUERIES]) {
-    let mut res0 = [0u8; QUERIES];
-    let mut res1 = [0u8; QUERIES];
+fn prepare_query_shares(shares: Vec<GaloisRingIrisCodeShare>) -> ([u8; 25395200], [u8; 25395200]) {
+    let mut res0: [u8; 25395200] = [0u8; QUERIES * IRIS_CODE_LENGTH];
+    let mut res1 = [0u8; QUERIES * IRIS_CODE_LENGTH];
     for (i, s) in shares.into_iter().flat_map(|e| e.coefs).enumerate() {
         res0[i] = (s as i8 - 127 - 1) as u8;
         res1[i] = ((s >> 8) as i8 - 127 - 1) as u8;
