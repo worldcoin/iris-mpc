@@ -470,8 +470,7 @@ async fn main() -> eyre::Result<()> {
     background_tasks.check_tasks();
 
     let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
-    let mut total_time = Instant::now();
-    let mut batch_times = Duration::from_secs(0);
+    let mut total_time = 0u128;
 
     // Main loop
     for request_counter in 0..N_BATCHES {
@@ -487,13 +486,6 @@ async fn main() -> eyre::Result<()> {
         //   - One batch: many queries.
         // - The outer Vec is the dimension of the Galois Ring (2):
         //   - A decomposition of each iris bit into two u8 limbs.
-
-        // Skip first iteration
-        if request_counter == 1 {
-            total_time = Instant::now();
-            batch_times = Duration::from_secs(0);
-        }
-        let now = Instant::now();
 
         // Skip requests based on the startup sync, only in the first iteration.
         // let skip_request_ids = mem::take(&mut skip_request_ids);
@@ -521,10 +513,9 @@ async fn main() -> eyre::Result<()> {
             );
         }
 
-        // start trace span - with single TraceId and single ParentTraceID
-        println!("Received batch in {:?}", now.elapsed());
-        batch_times += now.elapsed();
         background_tasks.check_tasks();
+
+        let now = Instant::now();
 
         let result_future = handle.submit_batch_query(batch).await;
 
@@ -533,9 +524,15 @@ async fn main() -> eyre::Result<()> {
             .await
             .map_err(|e| eyre!("ServerActor processing timeout: {:?}", e))?;
 
-        // tx.send(result).await.unwrap();
-        println!("CPU time of one iteration {:?}", now.elapsed());
+        let elapsed = now.elapsed().as_millis();
 
+        println!("Batch {} took {} ms", request_counter, elapsed);
+
+        if request_counter > 0 {
+            total_time += elapsed;
+        }
+
+        // tx.send(result).await.unwrap();
         // wrap up span context
     }
     // drop actor handle to initiate shutdown
@@ -544,7 +541,7 @@ async fn main() -> eyre::Result<()> {
     println!(
         "Total time for {} iterations: {:?}",
         N_BATCHES - 1,
-        total_time.elapsed() - batch_times
+        total_time as f64 / 1000f64
     );
 
     // Clean up server tasks, then wait for them to finish
