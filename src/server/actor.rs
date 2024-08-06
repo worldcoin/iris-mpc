@@ -86,6 +86,7 @@ pub struct ServerActor {
     code_db_slices:      SlicedProcessedDatabase,
     mask_db_slices:      SlicedProcessedDatabase,
     streams:             Vec<Vec<CudaStream>>,
+    memory_streams:      Vec<CudaStream>,
     cublas_handles:      Vec<Vec<CudaBlas>>,
     results:             Vec<CudaSlice<u32>>,
     batch_results:       Vec<CudaSlice<u32>>,
@@ -275,6 +276,7 @@ impl ServerActor {
             cublas_handles.push(device_manager.create_cublas(&tmp_streams));
             streams.push(tmp_streams);
         }
+        let memory_streams = device_manager.fork_streams();
 
         let final_results = distance_comparator.prepare_final_results();
         let results = distance_comparator.prepare_results();
@@ -302,6 +304,7 @@ impl ServerActor {
             code_db_slices,
             mask_db_slices,
             streams,
+            memory_streams,
             cublas_handles,
             results,
             batch_results,
@@ -467,6 +470,33 @@ impl ServerActor {
                     .record_event(request_streams, &current_phase2_event);
             }
 
+            // Prefetch the next chunk
+            if chunk_size[0] == DB_CHUNK_SIZE {
+                for i in 0..self.device_manager.device_count() {
+                    self.device_manager.device(i).bind_to_thread().unwrap();
+                    for ptr in &[
+                        self.code_db_slices.code_gr.limb_0[i],
+                        self.code_db_slices.code_gr.limb_1[i],
+                        self.mask_db_slices.code_gr.limb_0[i],
+                        self.mask_db_slices.code_gr.limb_1[i],
+                    ] {
+                        unsafe {
+                            mem_prefetch_async(
+                                ptr + (DB_CHUNK_SIZE * (db_chunk_idx + 1) * IRIS_CODE_LENGTH)
+                                    as u64,
+                                DB_CHUNK_SIZE * IRIS_CODE_LENGTH,
+                                CUmemLocation_st {
+                                    type_: CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE,
+                                    id:    i as i32,
+                                },
+                                self.memory_streams[i].stream,
+                            )
+                            .unwrap();
+                        }
+                    }
+                }
+            }
+
             tracing::debug!(
                 party_id = self.party_id,
                 chunk = db_chunk_idx,
@@ -580,35 +610,6 @@ impl ServerActor {
             forget_vec!(code_dots);
             forget_vec!(mask_dots);
             // ---- END PHASE 2 ----
-
-            // self.device_manager.await_streams(request_streams);
-
-            // // Prefetch the next chunk
-            // if chunk_size[0] == DB_CHUNK_SIZE {
-            //     for i in 0..self.device_manager.device_count() {
-            //         self.device_manager.device(i).bind_to_thread().unwrap();
-            //         for ptr in &[
-            //             self.code_db_slices.code_gr.limb_0[i],
-            //             self.code_db_slices.code_gr.limb_1[i],
-            //             self.mask_db_slices.code_gr.limb_0[i],
-            //             self.mask_db_slices.code_gr.limb_1[i],
-            //         ] {
-            //             unsafe {
-            //                 mem_prefetch_async(
-            //                     ptr + (DB_CHUNK_SIZE * (db_chunk_idx + 1) *
-            // IRIS_CODE_LENGTH)                         as u64,
-            //                     DB_CHUNK_SIZE * IRIS_CODE_LENGTH,
-            //                     CUmemLocation_st {
-            //                         type_:
-            // CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE,                  
-            // id:    i as i32,                     },
-            //                     self.streams[(db_chunk_idx + 1) % 2][i].stream,
-            //                 )
-            //                 .unwrap();
-            //             }
-            //         }
-            //     }
-            // }
 
             // Update events for synchronization
             current_dot_event = next_dot_event;
