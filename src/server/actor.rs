@@ -669,8 +669,8 @@ impl ServerActor {
         //                     *db.code_gr.limb_0[i].device_ptr(),
         //                     self.current_db_sizes[i] * IRIS_CODE_LENGTH,
         //                     *query.limb_0[i].device_ptr(),
-        //                     IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-        //                     IRIS_CODE_LENGTH,
+        //                     IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH
+        // * ROTATIONS,                     IRIS_CODE_LENGTH,
         //                     self.streams[0][i].stream,
         //                 );
 
@@ -678,8 +678,8 @@ impl ServerActor {
         //                     *db.code_gr.limb_1[i].device_ptr(),
         //                     self.current_db_sizes[i] * IRIS_CODE_LENGTH,
         //                     *query.limb_1[i].device_ptr(),
-        //                     IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-        //                     IRIS_CODE_LENGTH,
+        //                     IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH
+        // * ROTATIONS,                     IRIS_CODE_LENGTH,
         //                     self.streams[0][i].stream,
         //                 );
 
@@ -707,13 +707,13 @@ impl ServerActor {
         //         self.current_db_sizes[i] += 1;
         //     }
 
-            // DEBUG
-            tracing::info!(
-                "Updating DB size on device {}: {:?}",
-                i,
-                self.current_db_sizes[i]
-            );
-        }
+        //     // DEBUG
+        //     tracing::info!(
+        //         "Updating DB size on device {}: {:?}",
+        //         i,
+        //         self.current_db_sizes[i]
+        //     );
+        // }
 
         // Pass to internal sender thread
         return_channel
