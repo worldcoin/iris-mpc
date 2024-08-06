@@ -45,14 +45,8 @@ use tokio::{
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
-const DB_SIZE: usize = 8 * 250_000;
 const N_QUERIES: usize = 64;
 const N_BATCHES: usize = 10;
-const RNG_SEED: u64 = 42;
-const SYNC_RESULTS: usize = N_QUERIES * 2;
-const SYNC_QUERIES: usize = N_QUERIES * 2;
-const_assert!(SYNC_QUERIES <= SyncState::MAX_REQUESTS);
-/// The number of batches before a stream is re-used.
 
 const QUERIES: usize = ROTATIONS * N_QUERIES;
 
