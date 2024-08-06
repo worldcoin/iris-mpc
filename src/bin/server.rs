@@ -279,6 +279,7 @@ async fn replay_result_events(
     store: &Store,
     sns_client: &SNSClient,
     topic: &str,
+    party_id: usize,
 ) -> eyre::Result<()> {
     let result_events = store.last_results(SYNC_RESULTS).await?;
 
@@ -287,6 +288,7 @@ async fn replay_result_events(
             .publish()
             .topic_arn(topic)
             .message(result_event)
+            .message_group_id(format!("party-id-{}", party_id))
             .send()
             .await?;
     }
@@ -444,6 +446,7 @@ async fn main() -> eyre::Result<()> {
                     .publish()
                     .topic_arn(&config.results_topic_arn)
                     .message(result_event)
+                    .message_group_id(format!("party-id-{}", config.party_id))
                     .send()
                     .await?;
             }

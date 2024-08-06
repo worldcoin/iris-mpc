@@ -91,7 +91,7 @@ pub mod degree2 {
         }
 
         pub fn preprocess_iris_code_query_share(&mut self) {
-            let lagrange_coeffs = ShamirGaloisRingShare::deg_3_lagrange_polys_at_zero();
+            let lagrange_coeffs = ShamirGaloisRingShare::deg_2_lagrange_polys_at_zero();
             for i in (0..IRIS_CODE_LENGTH).step_by(2) {
                 let new_share = GaloisRingElement {
                     coefs: [self.coefs[i], self.coefs[i + 1]],
@@ -234,10 +234,7 @@ pub mod degree4 {
     use crate::{
         dot::IRIS_CODE_LENGTH,
         setup::{
-            galois::degree4::{
-                basis::{self},
-                GaloisRingElement, ShamirGaloisRingShare,
-            },
+            galois::degree4::{basis, GaloisRingElement, ShamirGaloisRingShare},
             iris_db::iris::IrisCodeArray,
         },
     };
@@ -335,9 +332,47 @@ pub mod degree4 {
             }
             shares
         }
+        #[allow(clippy::assertions_on_constants)]
+        pub fn reencode_extended_iris_code<R: CryptoRng + Rng>(
+            iris_code: &[u16; IRIS_CODE_LENGTH],
+            rng: &mut R,
+        ) -> [GaloisRingIrisCodeShare; 3] {
+            assert!(IRIS_CODE_LENGTH % 4 == 0);
+            let mut shares = [
+                GaloisRingIrisCodeShare {
+                    id:    1,
+                    coefs: [0; IRIS_CODE_LENGTH],
+                },
+                GaloisRingIrisCodeShare {
+                    id:    2,
+                    coefs: [0; IRIS_CODE_LENGTH],
+                },
+                GaloisRingIrisCodeShare {
+                    id:    3,
+                    coefs: [0; IRIS_CODE_LENGTH],
+                },
+            ];
+            for i in (0..12800).step_by(4) {
+                let element = GaloisRingElement::<basis::A>::from_coefs([
+                    iris_code[i],
+                    iris_code[i + 1],
+                    iris_code[i + 2],
+                    iris_code[i + 3],
+                ]);
+                let element = element.to_monomial();
+                let share = ShamirGaloisRingShare::encode_3_mat(&element.coefs, rng);
+                for j in 0..3 {
+                    shares[j].coefs[i] = share[j].y.coefs[0];
+                    shares[j].coefs[i + 1] = share[j].y.coefs[1];
+                    shares[j].coefs[i + 2] = share[j].y.coefs[2];
+                    shares[j].coefs[i + 3] = share[j].y.coefs[3];
+                }
+            }
+            shares
+        }
 
         pub fn preprocess_iris_code_query_share(&mut self) {
-            let lagrange_coeffs = ShamirGaloisRingShare::deg_3_lagrange_polys_at_zero();
+            let lagrange_coeffs = ShamirGaloisRingShare::deg_2_lagrange_polys_at_zero();
             for i in (0..IRIS_CODE_LENGTH).step_by(4) {
                 let element = GaloisRingElement::<basis::Monomial>::from_coefs([
                     self.coefs[i],
@@ -357,7 +392,7 @@ pub mod degree4 {
 
         pub fn full_dot(&self, other: &GaloisRingIrisCodeShare) -> u16 {
             let mut sum = 0u16;
-            let lagrange_coeffs = ShamirGaloisRingShare::deg_3_lagrange_polys_at_zero();
+            let lagrange_coeffs = ShamirGaloisRingShare::deg_2_lagrange_polys_at_zero();
             for i in (0..IRIS_CODE_LENGTH).step_by(4) {
                 let x = GaloisRingElement::from_coefs([
                     self.coefs[i],
