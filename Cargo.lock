@@ -2192,9 +2192,6 @@ name = "iris-mpc"
 version = "0.1.0"
 dependencies = [
  "aws-config",
- "aws-sdk-kms",
- "aws-sdk-s3",
- "aws-sdk-secretsmanager",
  "aws-sdk-sns",
  "aws-sdk-sqs",
  "axum",
@@ -2210,8 +2207,6 @@ dependencies = [
  "iris-mpc-store",
  "ndarray",
  "rand",
- "reqwest 0.12.5",
- "serde",
  "serde_json",
  "static_assertions",
  "telemetry-batteries",
@@ -2230,7 +2225,6 @@ dependencies = [
  "aws-sdk-s3",
  "aws-sdk-secretsmanager",
  "aws-sdk-sns",
- "aws-sdk-sqs",
  "base64 0.22.1",
  "bytemuck",
  "clap",
