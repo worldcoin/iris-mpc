@@ -26,7 +26,7 @@ use tokio::sync::{mpsc, oneshot};
 #[allow(unused)]
 macro_rules! debug_record_event {
     ($manager:expr, $streams:expr, $timers:expr) => {
-        let evts = $manager.create_events();
+        let evts = $manager.create_events(false);
         $manager.record_event($streams, &evts);
         $timers.push(evts);
     };
@@ -424,7 +424,6 @@ impl ServerActor {
         println!("Time for batch dedup: {:?}", now.elapsed());
 
         // Create new initial events
-        let mut start_event = self.device_manager.create_events(false);
         let mut current_dot_event = self.device_manager.create_events(false);
         let mut next_dot_event = self.device_manager.create_events(false);
         let mut current_exchange_event = self.device_manager.create_events(false);
@@ -433,6 +432,7 @@ impl ServerActor {
         let mut next_phase2_event = self.device_manager.create_events(false);
 
         // ---- START DATABASE DEDUP ----
+        let mut events = vec![];
         let now = Instant::now();
         tracing::debug!(party_id = self.party_id, "Start DB deduplication");
         let mut db_chunk_idx = 0;
@@ -506,8 +506,8 @@ impl ServerActor {
             self.device_manager
                 .await_event(request_streams, &current_dot_event);
 
-            self.device_manager
-                .record_event(request_streams, &start_event);
+            // DEBUG
+            debug_record_event!(self.device_manager, request_streams, &mut events);
 
             // ---- START PHASE 1 ----
             compact_device_queries.dot_products_against_db(
@@ -547,6 +547,9 @@ impl ServerActor {
             );
             self.device_manager
                 .record_event(request_streams, &next_dot_event);
+
+            // DEBUG
+            debug_record_event!(self.device_manager, request_streams, &mut events);
 
             self.codes_engine
                 .reshare_results(&dot_chunk_size, request_streams);
@@ -615,10 +618,6 @@ impl ServerActor {
             forget_vec!(mask_dots);
             // ---- END PHASE 2 ----
 
-            let elapsed =
-                unsafe { elapsed(start_event[0] as *mut _, next_dot_event[0] as *mut _).unwrap() };
-            println!("Time for dot {}: {:?}", db_chunk_idx, elapsed);
-
             // Update events for synchronization
             current_dot_event = next_dot_event;
             current_exchange_event = next_exchange_event;
@@ -626,7 +625,6 @@ impl ServerActor {
             next_dot_event = self.device_manager.create_events(false);
             next_exchange_event = self.device_manager.create_events(false);
             next_phase2_event = self.device_manager.create_events(false);
-            start_event = self.device_manager.create_events(false);
 
             // Increment chunk index
             db_chunk_idx += 1;
@@ -650,6 +648,15 @@ impl ServerActor {
         self.device_manager.await_streams(&self.streams[1]);
         tracing::debug!(party_id = self.party_id, "batch work finished");
         println!("Time for DB dedup: {:?}", now.elapsed());
+
+        let mut total_time: f32 = 0.0;
+        let i = 0;
+        while i < events.len() {
+            let elapsed =
+                unsafe { elapsed(events[i][0] as *mut _, events[i + 1][0] as *mut _).unwrap() };
+            total_time += elapsed;
+        }
+        println!("Time for dot: {:?}", total_time);
 
         let now = Instant::now();
 
