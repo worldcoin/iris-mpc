@@ -316,6 +316,7 @@ impl ServerActor {
         batch: BatchQuery,
         return_channel: oneshot::Sender<ServerJobResult>,
     ) -> eyre::Result<()> {
+        let now = Instant::now();
         // *Query* variant including Lagrange interpolation.
         let compact_query = {
             let code_query = prepare_query_shares(batch.query.code);
@@ -398,6 +399,9 @@ impl ServerActor {
         forget_vec!(mask_dots_batch);
         tracing::debug!(party_id = self.party_id, "Finished batch deduplication");
         // ---- END BATCH DEDUP ----
+
+        self.device_manager.await_streams(batch_streams);
+        println!("Time for batch dedup: {:?}", now.elapsed());
 
         // Create new initial events
         let mut current_dot_event = self.device_manager.create_events(false);
