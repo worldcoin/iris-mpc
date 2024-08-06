@@ -768,14 +768,14 @@ impl ServerActor {
         // }
 
         // Pass to internal sender thread
-        return_channel
-            .send(ServerJobResult {
-                merged_results,
-                request_ids: batch.request_ids,
-                matches,
-                store: query_store,
-            })
-            .unwrap();
+        // return_channel
+        //     .send(ServerJobResult {
+        //         merged_results,
+        //         request_ids: batch.request_ids,
+        //         matches,
+        //         store: query_store,
+        //     })
+        //     .unwrap();
 
         // Reset the results buffers for reuse
         reset_results(
