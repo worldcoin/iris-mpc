@@ -1197,8 +1197,8 @@ dependencies = [
 
 [[package]]
 name = "cudarc"
-version = "0.10.0"
-source = "git+https://github.com/rw0x0/cudarc.git?rev=origin/transmute#17ee7db80e4167db3b3aca93f8e06c97ebc50a02"
+version = "0.11.7"
+source = "git+https://github.com/philsippl/cudarc.git?rev=b824f30#b824f30c6ab2715a3b10c5997c085d97c6f83f94"
 dependencies = [
  "libloading",
 ]

@@ -81,6 +81,11 @@ pub struct CudaVec2DSlicer<T> {
     pub limb_1: Vec<StreamAwareCudaSlice<T>>,
 }
 
+pub struct CudaGlobalMemoryLimbs {
+    pub limb_0: Vec<u64>,
+    pub limb_1: Vec<u64>,
+}
+
 pub type CudaVec2DSlicerU32 = CudaVec2DSlicer<u32>;
 pub type CudaVec2DSlicerU8 = CudaVec2DSlicer<u8>;
 pub type CudaVec2DSlicerI8 = CudaVec2DSlicer<i8>;
@@ -141,7 +146,20 @@ impl DeviceCompactQuery {
     ) {
         code_engine.dot(
             &self.code_query,
-            &self.code_query_insert,
+            (
+                &self
+                    .code_query_insert
+                    .limb_0
+                    .iter()
+                    .map(|x| *x.device_ptr())
+                    .collect::<Vec<_>>(),
+                &self
+                    .code_query_insert
+                    .limb_1
+                    .iter()
+                    .map(|x| *x.device_ptr())
+                    .collect::<Vec<_>>(),
+            ),
             db_sizes,
             offset,
             streams,
@@ -150,7 +168,20 @@ impl DeviceCompactQuery {
 
         mask_engine.dot(
             &self.mask_query,
-            &self.mask_query_insert,
+            (
+                &self
+                    .mask_query_insert
+                    .limb_0
+                    .iter()
+                    .map(|x| *x.device_ptr())
+                    .collect::<Vec<_>>(),
+                &self
+                    .mask_query_insert
+                    .limb_1
+                    .iter()
+                    .map(|x| *x.device_ptr())
+                    .collect::<Vec<_>>(),
+            ),
             db_sizes,
             offset,
             streams,
@@ -175,7 +206,10 @@ impl DeviceCompactQuery {
     ) {
         code_engine.dot(
             &self.code_query,
-            &sliced_code_db.code_gr,
+            (
+                &sliced_code_db.code_gr.limb_0,
+                &sliced_code_db.code_gr.limb_1,
+            ),
             database_sizes,
             offset,
             streams,
@@ -183,7 +217,10 @@ impl DeviceCompactQuery {
         );
         mask_engine.dot(
             &self.mask_query,
-            &sliced_mask_db.code_gr,
+            (
+                &sliced_mask_db.code_gr.limb_0,
+                &sliced_mask_db.code_gr.limb_1,
+            ),
             database_sizes,
             offset,
             streams,
