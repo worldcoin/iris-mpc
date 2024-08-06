@@ -331,7 +331,9 @@ async fn main() -> eyre::Result<()> {
     background_tasks.spawn_blocking(move || {
         let device_manager = Arc::new(DeviceManager::init());
         let ids = device_manager.get_ids_from_magic(0);
+        println!("starting network...");
         let comms = device_manager.instantiate_network_from_ids(config.party_id, ids);
+        println!("network started");
 
         // let sync_result = match sync::sync(&comms[0], &my_state) {
         //     Ok(res) => res,

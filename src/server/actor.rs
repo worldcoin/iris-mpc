@@ -60,7 +60,7 @@ impl ServerActorHandle {
     }
 }
 
-const DB_SIZE: usize = 1 << 22;
+const DB_SIZE: usize = 1 << 24;
 const DB_BUFFER: usize = 8 * 1_000;
 const DB_CHUNK_SIZE: usize = 1 << 16;
 const N_QUERIES: usize = 64;
@@ -185,6 +185,7 @@ impl ServerActor {
 
         tracing::info!("Starting engines...");
 
+        println!("Creating engines 1");
         // Phase 1 Setup
         let codes_engine = ShareDB::init(
             party_id,
@@ -194,6 +195,8 @@ impl ServerActor {
             next_chacha_seeds(chacha_seeds)?,
             comms.clone(),
         );
+
+        println!("Creating engines 2");
 
         let masks_engine = ShareDB::init(
             party_id,
