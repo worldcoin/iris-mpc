@@ -46,7 +46,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 1 << 24;
-const N_QUERIES: usize = 64 * 4;
+const N_QUERIES: usize = 64 * 8;
 const N_BATCHES: usize = 10;
 const RNG_SEED: u64 = 42;
 const SYNC_RESULTS: usize = N_QUERIES * 2;
