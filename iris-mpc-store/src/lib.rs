@@ -1,5 +1,3 @@
-pub mod sync;
-
 use bytemuck::cast_slice;
 use eyre::{eyre, Result};
 use futures::Stream;

@@ -24,12 +24,12 @@ use iris_mpc_common::{
 use iris_mpc_gpu::{
     dot::ROTATIONS,
     helpers::device_manager::DeviceManager,
-    server::{BatchMetadata, BatchQuery, ServerActor, ServerJobResult},
+    server::{
+        sync::{self, SyncState},
+        BatchMetadata, BatchQuery, ServerActor, ServerJobResult,
+    },
 };
-use iris_mpc_store::{
-    sync::{self, SyncState},
-    Store, StoredIrisRef,
-};
+use iris_mpc_store::{Store, StoredIrisRef};
 use rand::{rngs::StdRng, SeedableRng};
 use static_assertions::const_assert;
 use std::{

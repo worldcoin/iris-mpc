@@ -2272,6 +2272,8 @@ dependencies = [
  "rayon",
  "reqwest 0.12.5",
  "ring",
+ "serde",
+ "serde_json",
  "static_assertions",
  "tokio",
  "tracing",
@@ -2284,7 +2286,6 @@ name = "iris-mpc-store"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
- "cudarc",
  "dotenvy",
  "eyre",
  "futures",
