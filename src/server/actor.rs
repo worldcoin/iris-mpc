@@ -65,7 +65,7 @@ impl ServerActorHandle {
 }
 
 const DB_SIZE: usize = 1 << 24;
-const DB_BUFFER: usize = 8 * 1_000;
+const DB_BUFFER: usize = 8 * (1 << 16);
 const DB_CHUNK_SIZE: usize = 1 << 16;
 const N_QUERIES: usize = 64;
 const QUERIES: usize = ROTATIONS * N_QUERIES;
