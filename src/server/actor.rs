@@ -12,7 +12,7 @@ use crate::{
 use cudarc::{
     cublas::CudaBlas,
     driver::{
-        result::{self, mem_prefetch_async},
+        result::{self, event::elapsed, mem_prefetch_async},
         sys::{CUmemLocationType, CUmemLocation_st},
         CudaDevice, CudaSlice, CudaStream, DevicePtr,
     },
@@ -424,6 +424,7 @@ impl ServerActor {
         println!("Time for batch dedup: {:?}", now.elapsed());
 
         // Create new initial events
+        let mut start_event = self.device_manager.create_events(false);
         let mut current_dot_event = self.device_manager.create_events(false);
         let mut next_dot_event = self.device_manager.create_events(false);
         let mut current_exchange_event = self.device_manager.create_events(false);
@@ -504,6 +505,9 @@ impl ServerActor {
             );
             self.device_manager
                 .await_event(request_streams, &current_dot_event);
+
+            self.device_manager
+                .record_event(request_streams, &start_event);
 
             // ---- START PHASE 1 ----
             compact_device_queries.dot_products_against_db(
@@ -611,6 +615,10 @@ impl ServerActor {
             forget_vec!(mask_dots);
             // ---- END PHASE 2 ----
 
+            let elapsed =
+                unsafe { elapsed(start_event[0] as *mut _, next_dot_event[0] as *mut _).unwrap() };
+            println!("Time for dot {}: {:?}", db_chunk_idx, elapsed);
+
             // Update events for synchronization
             current_dot_event = next_dot_event;
             current_exchange_event = next_exchange_event;
@@ -618,6 +626,7 @@ impl ServerActor {
             next_dot_event = self.device_manager.create_events(false);
             next_exchange_event = self.device_manager.create_events(false);
             next_phase2_event = self.device_manager.create_events(false);
+            start_event = self.device_manager.create_events(false);
 
             // Increment chunk index
             db_chunk_idx += 1;
