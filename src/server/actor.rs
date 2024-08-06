@@ -316,7 +316,6 @@ impl ServerActor {
         batch: BatchQuery,
         return_channel: oneshot::Sender<ServerJobResult>,
     ) -> eyre::Result<()> {
-        let now = Instant::now();
         // *Query* variant including Lagrange interpolation.
         let compact_query = {
             let code_query = prepare_query_shares(batch.query.code);
@@ -333,8 +332,8 @@ impl ServerActor {
         };
         let query_store = batch.store;
 
-        let batch_streams = &self.streams[0];
-        let batch_cublas = &self.cublas_handles[0];
+        let batch_streams = &self.streams[1];
+        let batch_cublas = &self.cublas_handles[1];
 
         // Transfer queries to device
         let compact_device_queries =
@@ -409,6 +408,7 @@ impl ServerActor {
         let mut next_phase2_event = self.device_manager.create_events(false);
 
         // ---- START DATABASE DEDUP ----
+        let now = Instant::now();
         tracing::debug!(party_id = self.party_id, "Start DB deduplication");
         let mut db_chunk_idx = 0;
         loop {
@@ -585,6 +585,7 @@ impl ServerActor {
                 break;
             }
         }
+        println!("Time for DB dedup: {:?}", now.elapsed());
         // ---- END DATABASE DEDUP ----
 
         // Wait for protocol to finish
