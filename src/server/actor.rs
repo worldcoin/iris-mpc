@@ -476,7 +476,7 @@ impl ServerActor {
                                     type_: CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE,
                                     id:    i as i32,
                                 },
-                                request_streams[i].stream,
+                                self.streams[(db_chunk_idx + 1) % 2][i].stream,
                             )
                             .unwrap();
                         }
