@@ -36,6 +36,10 @@ macro_rules! forget_vec {
     };
 }
 
+fn prepare_query_shares(shares: Vec<GaloisRingIrisCodeShare>) -> Vec<Vec<u8>> {
+    preprocess_query(&shares.into_iter().flat_map(|e| e.coefs).collect::<Vec<_>>())
+}
+
 #[derive(Debug, Clone)]
 pub struct ServerActorHandle {
     job_queue: mpsc::Sender<ServerJob>,
@@ -772,30 +776,12 @@ fn derive_seed(seed: [u32; 8], kdf_salt: &Salt, nonce: usize) -> eyre::Result<[u
     Ok(result)
 }
 
-fn prepare_query_shares(shares: Vec<GaloisRingIrisCodeShare>) -> ([u8; 25395200], [u8; 25395200]) {
-    let mut res0: [u8; 25395200] = [0u8; QUERIES * IRIS_CODE_LENGTH];
-    let mut res1 = [0u8; QUERIES * IRIS_CODE_LENGTH];
-    for (i, s) in shares.into_iter().flat_map(|e| e.coefs).enumerate() {
-        res0[i] = (s as i8 - 127 - 1) as u8;
-        res1[i] = ((s >> 8) as i8 - 127 - 1) as u8;
-    }
-    (res0, res1)
-}
-
-// pub fn preprocess_query(query: &[u16]) -> Vec<Vec<u8>> {
-//     let mut result0 = vec![];
-//     for _ in 0..LIMBS {
-//         result.push(vec![0u8; query.len()]);
-//     }
-
-//     for (idx, &entry) in query.iter().enumerate() {
-//         for i in 0..LIMBS {
-//             let tmp = (entry as u32 >> (i * 8)) as u8;
-//             result[i][idx] = (tmp as i32 - 128) as u8;
-//         }
-//     }
-
-//     result.to_vec()
+// fn prepare_query_shares(shares: Vec<GaloisRingIrisCodeShare>) -> ([u8;
+// 25395200], [u8; 25395200]) {     let mut res0: [u8; 25395200] = [0u8; QUERIES
+// * IRIS_CODE_LENGTH];     let mut res1 = [0u8; QUERIES * IRIS_CODE_LENGTH];
+//   for (i, s) in shares.into_iter().flat_map(|e| e.coefs).enumerate() {
+//   res0[i] = (s as i8 - 127 - 1) as u8; res1[i] = ((s >> 8) as i8 - 127 - 1)
+//   as u8; } (res0, res1)
 // }
 
 #[allow(clippy::too_many_arguments)]
