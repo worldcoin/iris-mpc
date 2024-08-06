@@ -577,11 +577,6 @@ impl ServerActor {
                 "finished chunk"
             );
 
-            if db_chunk_idx > 2 {
-                self.device_manager
-                    .await_streams(&self.streams[(db_chunk_idx + 1) % 2]); // await other stream
-            }
-
             // Break if we reached the end of the database
             if db_chunk_idx * DB_CHUNK_SIZE >= *self.current_db_sizes.iter().max().unwrap() {
                 break;
@@ -674,17 +669,19 @@ impl ServerActor {
         //                     *db.code_gr.limb_0[i].device_ptr(),
         //                     self.current_db_sizes[i] * IRIS_CODE_LENGTH,
         //                     *query.limb_0[i].device_ptr(),
-        //                     IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH
-        // * ROTATIONS,                     IRIS_CODE_LENGTH, self.streams[0][i].stream,
-        //   );
+        //                     IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+        //                     IRIS_CODE_LENGTH,
+        //                     self.streams[0][i].stream,
+        //                 );
 
         //                 helpers::dtod_at_offset(
         //                     *db.code_gr.limb_1[i].device_ptr(),
         //                     self.current_db_sizes[i] * IRIS_CODE_LENGTH,
         //                     *query.limb_1[i].device_ptr(),
-        //                     IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH
-        // * ROTATIONS,                     IRIS_CODE_LENGTH, self.streams[0][i].stream,
-        //   );
+        //                     IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+        //                     IRIS_CODE_LENGTH,
+        //                     self.streams[0][i].stream,
+        //                 );
 
         //                 helpers::dtod_at_offset(
         //                     *db.code_sums_gr.limb_0[i].device_ptr(),
@@ -710,13 +707,13 @@ impl ServerActor {
         //         self.current_db_sizes[i] += 1;
         //     }
 
-        //     // DEBUG
-        //     tracing::info!(
-        //         "Updating DB size on device {}: {:?}",
-        //         i,
-        //         self.current_db_sizes[i]
-        //     );
-        // }
+            // DEBUG
+            tracing::info!(
+                "Updating DB size on device {}: {:?}",
+                i,
+                self.current_db_sizes[i]
+            );
+        }
 
         // Pass to internal sender thread
         return_channel
