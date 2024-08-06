@@ -706,7 +706,7 @@ impl ServerActor {
             }
 
             // DEBUG
-            tracing::debug!(
+            tracing::info!(
                 "Updating DB size on device {}: {:?}",
                 i,
                 self.current_db_sizes[i]
@@ -828,7 +828,7 @@ fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
         results.push(match_entry);
 
         // DEBUG
-        tracing::debug!(
+        println!(
             "Query {}: match={} [index: {}]",
             j,
             match_entry != u32::MAX,
