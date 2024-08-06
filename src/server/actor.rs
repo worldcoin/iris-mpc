@@ -459,25 +459,27 @@ impl ServerActor {
                 .collect::<Vec<_>>();
 
             // Prefetch the next chunk already
-            for i in 0..self.device_manager.device_count() {
-                self.device_manager.device(i).bind_to_thread().unwrap();
-                for ptr in &[
-                    self.code_db_slices.code_gr.limb_0[i],
-                    self.code_db_slices.code_gr.limb_1[i],
-                    self.mask_db_slices.code_gr.limb_0[i],
-                    self.mask_db_slices.code_gr.limb_1[i],
-                ] {
-                    unsafe {
-                        mem_prefetch_async(
-                            ptr + ((DB_CHUNK_SIZE + mem_offsets[i]) * IRIS_CODE_LENGTH) as u64,
-                            DB_CHUNK_SIZE * IRIS_CODE_LENGTH,
-                            CUmemLocation_st {
-                                type_: CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE,
-                                id:    i as i32,
-                            },
-                            request_streams[i].stream,
-                        )
-                        .unwrap();
+            if dot_chunk_size[0] == DB_CHUNK_SIZE {
+                for i in 0..self.device_manager.device_count() {
+                    self.device_manager.device(i).bind_to_thread().unwrap();
+                    for ptr in &[
+                        self.code_db_slices.code_gr.limb_0[i],
+                        self.code_db_slices.code_gr.limb_1[i],
+                        self.mask_db_slices.code_gr.limb_0[i],
+                        self.mask_db_slices.code_gr.limb_1[i],
+                    ] {
+                        unsafe {
+                            mem_prefetch_async(
+                                ptr + ((DB_CHUNK_SIZE + mem_offsets[i]) * IRIS_CODE_LENGTH) as u64,
+                                DB_CHUNK_SIZE * IRIS_CODE_LENGTH,
+                                CUmemLocation_st {
+                                    type_: CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE,
+                                    id:    i as i32,
+                                },
+                                request_streams[i].stream,
+                            )
+                            .unwrap();
+                        }
                     }
                 }
             }
