@@ -331,6 +331,8 @@ impl ServerActor {
                 mask_query_insert,
             }
         };
+        println!("Time for preprocess: {:?}", now.elapsed());
+        let now = Instant::now();
         let query_store = batch.store;
 
         let batch_streams = &self.streams[1];
@@ -348,7 +350,8 @@ impl ServerActor {
         )?;
 
         self.device_manager.await_streams(batch_streams);
-        println!("Time for prep: {:?}", now.elapsed());
+        println!("Time for query copy: {:?}", now.elapsed());
+        let now = Instant::now();
 
         // ---- START BATCH DEDUP ----
         tracing::debug!(party_id = self.party_id, "Starting batch deduplication");
