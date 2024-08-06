@@ -56,7 +56,7 @@ impl ServerActorHandle {
     }
 }
 
-const DB_SIZE: usize = 1 << 21;
+const DB_SIZE: usize = 1 << 22;
 const DB_BUFFER: usize = 8 * 1_000;
 const DB_CHUNK_SIZE: usize = 1 << 16;
 const N_QUERIES: usize = 64;
@@ -670,18 +670,16 @@ impl ServerActor {
         //                     self.current_db_sizes[i] * IRIS_CODE_LENGTH,
         //                     *query.limb_0[i].device_ptr(),
         //                     IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH
-        // * ROTATIONS,                     IRIS_CODE_LENGTH,
-        //                     self.streams[0][i].stream,
-        //                 );
+        // * ROTATIONS,                     IRIS_CODE_LENGTH, self.streams[0][i].stream,
+        //   );
 
         //                 helpers::dtod_at_offset(
         //                     *db.code_gr.limb_1[i].device_ptr(),
         //                     self.current_db_sizes[i] * IRIS_CODE_LENGTH,
         //                     *query.limb_1[i].device_ptr(),
         //                     IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH
-        // * ROTATIONS,                     IRIS_CODE_LENGTH,
-        //                     self.streams[0][i].stream,
-        //                 );
+        // * ROTATIONS,                     IRIS_CODE_LENGTH, self.streams[0][i].stream,
+        //   );
 
         //                 helpers::dtod_at_offset(
         //                     *db.code_sums_gr.limb_0[i].device_ptr(),
