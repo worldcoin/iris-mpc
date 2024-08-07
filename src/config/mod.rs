@@ -43,8 +43,12 @@ pub struct Config {
     #[serde(default)]
     pub aws: Option<AwsConfig>,
 
-    #[serde(default)]
+    #[serde(default = "default_processing_timeout_secs")]
     pub processing_timeout_secs: u64,
+}
+
+fn default_processing_timeout_secs() -> u64 {
+    60
 }
 
 impl Config {
@@ -87,6 +91,13 @@ pub struct DbConfig {
 
     #[serde(default)]
     pub create: bool,
+
+    #[serde(default = "default_load_parallelism")]
+    pub load_parallelism: usize,
+}
+
+fn default_load_parallelism() -> usize {
+    8
 }
 
 impl fmt::Debug for DbConfig {
