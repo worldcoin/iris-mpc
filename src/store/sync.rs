@@ -59,8 +59,9 @@ pub fn sync(comm: &Comm, state: &SyncState) -> Result<SyncResult> {
 }
 
 impl SyncState {
+    // Change these parameters together - see unittests below.
     pub const MAX_REQUESTS: usize = 128;
-    const SERIAL_SIZE: usize = 8192;
+    const SERIAL_SIZE: usize = 16384;
 
     /// Serialize the state to a fixed-size buffer.
     fn serialize(&self) -> Result<Vec<u8>> {
