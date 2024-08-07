@@ -37,7 +37,7 @@ macro_rules! record_stream_time {
         let evt1 = $manager.create_events();
         $manager.record_event($streams, &evt0);
         $block
-        $manager.record_event($streams, &evt0);
+        $manager.record_event($streams, &evt1);
         $map.insert($label, vec![evt0, evt1]);
     };
 }
@@ -809,17 +809,21 @@ impl ServerActor {
 }
 
 fn log_timers(events: HashMap<&str, Vec<Vec<CUevent>>>) {
-    for (name, events) in events.iter() {
-        assert!(events.len() % 2 == 0);
-        let mut duration = 0.0f32;
-        for i in 0..events.len() - 1 {
-            let mut tmp_sum = 0.0f32;
-            for j in 0..events[i].len() {
-                tmp_sum +=
-                    unsafe { elapsed(events[i][j] as *mut _, events[i + 1][j] as *mut _).unwrap() };
-            }
-            duration += tmp_sum / events[i].len() as f32;
-        }
+    for (name, event_vecs) in &events {
+        let duration: f32 = event_vecs
+            .windows(2)
+            .step_by(2)
+            .map(|pair| {
+                let (start_events, end_events) = (&pair[0], &pair[1]);
+                let total_duration: f32 = start_events
+                    .iter()
+                    .zip(end_events.iter())
+                    .map(|(start, end)| unsafe { elapsed(*start, *end) }.unwrap())
+                    .sum();
+
+                total_duration / start_events.len() as f32
+            })
+            .sum();
 
         tracing::info!("Event {}: {:?} ms", name, duration);
         // TODO: send to metrics
