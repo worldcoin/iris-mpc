@@ -29,6 +29,9 @@ env:
   - name: SMPC__DATABASE__CREATE
     value: "true"
 
+  - name: SMPC__DATABASE__LOAD_PARALLELISM
+    value: "8"
+
   - name: SMPC__AWS__REGION
     value: "eu-north-1"
 
