@@ -273,13 +273,20 @@ async fn initialize_iris_dbs(
         (codes_db, masks_db)
     };
 
+    tracing::info!("Initialize iris db: Loading from DB");
     // Load DB from persistent storage.
     let mut store_len = 0;
     while let Some(iris) = store.stream_irises().await.next().await {
         let iris = iris?;
+
         codes_db.extend(iris.left_code());
         masks_db.extend(iris.left_mask());
+
         store_len += 1;
+
+        if (store_len % 10000) == 0 {
+            tracing::info!("Initialize iris db: Loaded {} entries from DB", store_len);
+        }
     }
 
     Ok((codes_db, masks_db, store_len))
@@ -293,6 +300,7 @@ async fn replay_result_events(
 ) -> eyre::Result<()> {
     let result_events = store.last_results(SYNC_RESULTS).await?;
 
+    tracing::info!("Replaying {} results", result_events.len());
     for result_event in result_events {
         sns_client
             .publish()
@@ -308,12 +316,18 @@ async fn replay_result_events(
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     dotenvy::dotenv().ok();
+
+    println!("Init config");
     let mut config: Config = Config::load_config("SMPC").unwrap();
     config.overwrite_defaults_with_cli_args(Opt::parse());
 
+    println!("Init tracing");
     let _tracing_shutdown_handle = initialize_tracing(&config)?;
+
+    tracing::info!("Creating new storage from: {:?}", config);
     let store = Store::new_from_config(&config).await?;
 
+    tracing::info!("Initialising AWS services");
     // TODO: probably move into separate function
     let region_provider = Region::new(REGION);
     let shared_config = aws_config::from_env().region(region_provider).load().await;
@@ -323,11 +337,14 @@ async fn main() -> eyre::Result<()> {
         SharesEncryptionKeyPair::initialize_from_storage(config.clone()).await;
 
     let party_id = config.party_id;
+    tracing::info!("Deriving shared secrets");
     let chacha_seeds = initialize_chacha_seeds(&config.kms_key_arns, party_id).await?;
     let enable_processing_encrypted_shares = config.enable_processing_encrypted_shares;
 
+    tracing::info!("Replaying results");
     replay_result_events(&store, &sns_client, &config.results_topic_arn, party_id).await?;
 
+    tracing::info!("Initialize iris db");
     let (mut codes_db, mut masks_db, store_len) = initialize_iris_dbs(party_id, &store).await?;
 
     let my_state = SyncState {
@@ -335,6 +352,7 @@ async fn main() -> eyre::Result<()> {
         deleted_request_ids: store.last_deleted_requests(SYNC_QUERIES).await?,
     };
 
+    tracing::info!("Preparing task monitor");
     let mut background_tasks = TaskMonitor::new();
     // a bit convoluted, but we need to create the actor on the thread already,
     // since it blocks a lot and is `!Send`, we get back the handle via the oneshot
@@ -362,6 +380,7 @@ async fn main() -> eyre::Result<()> {
             masks_db.truncate(bit_len);
         }
 
+        tracing::info!("Starting server actor");
         match ServerActor::new_with_device_manager_and_comms(
             config.party_id,
             chacha_seeds,

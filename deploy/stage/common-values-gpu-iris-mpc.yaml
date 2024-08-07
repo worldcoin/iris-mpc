@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/gpu-iris-mpc:v0.2.7-alpha"
+image: "ghcr.io/worldcoin/gpu-iris-mpc:v0.2.10-alpha"
 
 environment: stage
 replicaCount: 1
@@ -15,11 +15,13 @@ ports:
     protocol: TCP
 
 livenessProbe:
+  initialDelaySeconds: 300
   httpGet:
     path: /health
     port: health
 
 readinessProbe:
+  initialDelaySeconds: 300
   httpGet:
     path: /health
     port: health
