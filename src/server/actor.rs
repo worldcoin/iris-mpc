@@ -797,6 +797,10 @@ impl ServerActor {
             &self.streams[0],
         );
 
+        // Wait for all streams before get timings
+        self.device_manager.await_streams(&self.streams[0]);
+        self.device_manager.await_streams(&self.streams[1]);
+
         // Log timers
         log_aggregated_timers(events);
 
