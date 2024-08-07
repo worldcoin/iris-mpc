@@ -51,7 +51,6 @@ pub fn sync(comm: &Comm, state: &SyncState) -> Result<SyncResult> {
 
     let all_states_ser = dev.dtoh_sync_copy(&all_states_dev).unwrap();
     let all_states = SyncState::deserialize_all(&all_states_ser)?;
-    println!("all_states: {:?}", all_states);
     Ok(SyncResult {
         my_state: state.clone(),
         all_states,

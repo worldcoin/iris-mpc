@@ -186,7 +186,10 @@ fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
     } else {
         tracing_subscriber::registry()
             .with(tracing_subscriber::fmt::layer().pretty().compact())
-            .with(tracing_subscriber::EnvFilter::from_default_env())
+            .with(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "info".into()),
+            )
             .init();
 
         Ok(TracingShutdownHandle)
