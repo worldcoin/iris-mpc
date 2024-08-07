@@ -268,11 +268,15 @@ async fn initialize_iris_dbs(
     let mut store_len = 0;
     while let Some(iris) = store.stream_irises().await.next().await {
         let iris = iris?;
+
         codes_db.extend(iris.left_code());
         masks_db.extend(iris.left_mask());
+
         store_len += 1;
 
-        tracing::info!("Initialize iris db: Loaded {} entries from DB", store_len);
+        if (store_len % 10000) == 0 {
+            tracing::info!("Initialize iris db: Loaded {} entries from DB", store_len);
+        }
     }
 
     Ok((codes_db, masks_db, store_len))
