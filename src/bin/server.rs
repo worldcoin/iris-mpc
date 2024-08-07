@@ -263,6 +263,7 @@ async fn initialize_iris_dbs(
         (codes_db, masks_db)
     };
 
+    tracing::info!("Initialize iris db: Loading from DB");
     // Load DB from persistent storage.
     let mut store_len = 0;
     while let Some(iris) = store.stream_irises().await.next().await {
@@ -270,6 +271,8 @@ async fn initialize_iris_dbs(
         codes_db.extend(iris.left_code());
         masks_db.extend(iris.left_mask());
         store_len += 1;
+
+        tracing::info!("Initialize iris db: Loaded {} entries from DB", store_len);
     }
 
     Ok((codes_db, masks_db, store_len))
@@ -283,6 +286,7 @@ async fn replay_result_events(
 ) -> eyre::Result<()> {
     let result_events = store.last_results(SYNC_RESULTS).await?;
 
+    tracing::info!("Replaying {} results", result_events.len());
     for result_event in result_events {
         sns_client
             .publish()
@@ -323,7 +327,7 @@ async fn main() -> eyre::Result<()> {
     tracing::info!("Replaying results");
     replay_result_events(&store, &sns_client, &config.results_topic_arn, party_id).await?;
 
-    tracing::info!("Replaying results");
+    tracing::info!("Initialize iris db");
     let (mut codes_db, mut masks_db, store_len) = initialize_iris_dbs(party_id, &store).await?;
 
     let my_state = SyncState {
