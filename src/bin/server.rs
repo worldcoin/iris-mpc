@@ -471,20 +471,19 @@ async fn main() -> eyre::Result<()> {
                 })
                 .collect();
 
-            // let mut tx = store_bg.tx().await?;
+            let mut tx = store_bg.tx().await?;
 
-            // store_bg.insert_results(&mut tx, &result_events).await?;
+            store_bg.insert_results(&mut tx, &result_events).await?;
 
-            // store_bg
-            //     .insert_irises(&mut tx, &codes_and_masks)
-            //     .await
-            //     .wrap_err("failed to persist queries")?;
+            store_bg
+                .insert_irises(&mut tx, &codes_and_masks)
+                .await
+                .wrap_err("failed to persist queries")?;
 
-            // tx.commit().await?;
+            tx.commit().await?;
 
             tracing::info!("Sending {} results", result_events.len());
-            // send_result_events(result_events, &sns_client_bg,
-            // &config_bg).await?;
+            send_result_events(result_events, &sns_client_bg, &config_bg).await?;
         }
 
         Ok(())

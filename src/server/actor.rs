@@ -808,6 +808,7 @@ impl ServerActor {
     }
 }
 
+/// Internal helper function to log the timers of measured cuda streams.
 fn log_timers(events: HashMap<&str, Vec<Vec<CUevent>>>) {
     for (name, event_vecs) in &events {
         let duration: f32 = event_vecs
