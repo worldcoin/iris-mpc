@@ -11,20 +11,27 @@ use crate::{
 };
 use cudarc::{
     cublas::CudaBlas,
-    driver::{result, CudaDevice, CudaSlice, CudaStream, DevicePtr},
+    driver::{
+        result::{self, event::elapsed},
+        CudaDevice, CudaSlice, CudaStream, DevicePtr,
+    },
     nccl::Comm,
 };
 use futures::{Future, FutureExt};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
-use std::{mem, sync::Arc, time::Instant};
+use std::{collections::HashMap, mem, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
 
 #[allow(unused)]
-macro_rules! debug_record_event {
-    ($manager:expr, $streams:expr, $timers:expr) => {
-        let evts = $manager.create_events();
-        $manager.record_event($streams, &evts);
-        $timers.push(evts);
+macro_rules! record_event {
+    ($manager:expr, $streams:expr, $map:expr, $name:expr) => {
+        if $map.get($name).is_none() {
+            $map.insert($name.to_string(), vec![]);
+        }
+        let evt = $manager.create_events(false);
+        $manager.record_event($streams, &evt);
+        let events = $map.get_mut($name).unwrap();
+        events.push(evt);
     };
 }
 
@@ -34,6 +41,23 @@ macro_rules! forget_vec {
             std::mem::forget(item);
         }
     };
+}
+
+fn log_aggregated_timers(events: HashMap<String, Vec<Vec<*mut cudarc::driver::sys::CUevent_st>>>) {
+    for (name, events) in events.iter() {
+        assert!(events.len() % 2 == 0);
+        let mut duration = 0.0f32;
+        for i in 0..events.len() - 1 {
+            let mut tmp_sum = 0.0f32;
+            for j in 0..events[i].len() {
+                tmp_sum +=
+                    unsafe { elapsed(events[i][j] as *mut _, events[i + 1][j] as *mut _).unwrap() };
+            }
+            duration += tmp_sum / events[i].len() as f32;
+        }
+
+        tracing::info!("Event {}: {:?} ms", name, duration);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -317,6 +341,8 @@ impl ServerActor {
         return_channel: oneshot::Sender<ServerJobResult>,
     ) -> eyre::Result<()> {
         let now = Instant::now();
+        let mut events = HashMap::new();
+
         // *Query* variant including Lagrange interpolation.
         let compact_query = {
             let code_query = prepare_query_shares(batch.query.code);
@@ -349,6 +375,8 @@ impl ServerActor {
 
         // ---- START BATCH DEDUP ----
         tracing::debug!(party_id = self.party_id, "Starting batch deduplication");
+
+        record_event!(&self.device_manager, batch_streams, events, "batch_dot");
         compact_device_queries.compute_dot_products(
             &mut self.batch_codes_engine,
             &mut self.batch_masks_engine,
@@ -366,20 +394,39 @@ impl ServerActor {
             batch_streams,
         );
 
+        record_event!(&self.device_manager, batch_streams, events, "batch_dot");
+        record_event!(&self.device_manager, batch_streams, events, "batch_reshare");
+
         self.batch_codes_engine
             .reshare_results(&self.query_db_size, batch_streams);
         self.batch_masks_engine
             .reshare_results(&self.query_db_size, batch_streams);
 
+        record_event!(&self.device_manager, batch_streams, events, "batch_reshare");
+
         let db_sizes_batch = vec![QUERIES; self.device_manager.device_count()];
         // TODO: remove
         let mut code_dots_batch = self.batch_codes_engine.result_chunk_shares(&db_sizes_batch);
         let mut mask_dots_batch = self.batch_masks_engine.result_chunk_shares(&db_sizes_batch);
+
+        record_event!(
+            &self.device_manager,
+            batch_streams,
+            events,
+            "batch_threshold"
+        );
         self.phase2_batch.compare_threshold_masked_many(
             &code_dots_batch,
             &mask_dots_batch,
             batch_streams,
         );
+        record_event!(
+            &self.device_manager,
+            batch_streams,
+            events,
+            "batch_threshold"
+        );
+
         let res = self.phase2_batch.take_result_buffer();
         let chunk_size = self.phase2_batch.chunk_size();
         open(
@@ -455,6 +502,7 @@ impl ServerActor {
                 .await_event(request_streams, &current_dot_event);
 
             // ---- START PHASE 1 ----
+            record_event!(&self.device_manager, batch_streams, events, "db_dot");
             compact_device_queries.dot_products_against_db(
                 &mut self.codes_engine,
                 &mut self.masks_engine,
@@ -465,6 +513,7 @@ impl ServerActor {
                 request_streams,
                 request_cublas_handles,
             );
+            record_event!(&self.device_manager, batch_streams, events, "db_dot");
 
             // wait for the exchange result buffers to be ready
             tracing::debug!(
@@ -475,6 +524,7 @@ impl ServerActor {
             self.device_manager
                 .await_event(request_streams, &current_exchange_event);
 
+            record_event!(&self.device_manager, batch_streams, events, "db_reduce");
             compact_device_sums.compute_dot_reducer_against_db(
                 &mut self.codes_engine,
                 &mut self.masks_engine,
@@ -484,6 +534,7 @@ impl ServerActor {
                 offset,
                 request_streams,
             );
+            record_event!(&self.device_manager, batch_streams, events, "db_reduce");
 
             tracing::debug!(
                 party_id = self.party_id,
@@ -493,10 +544,12 @@ impl ServerActor {
             self.device_manager
                 .record_event(request_streams, &next_dot_event);
 
+            record_event!(&self.device_manager, batch_streams, events, "db_reshare");
             self.codes_engine
                 .reshare_results(&dot_chunk_size, request_streams);
             self.masks_engine
                 .reshare_results(&dot_chunk_size, request_streams);
+            record_event!(&self.device_manager, batch_streams, events, "db_reshare");
 
             // ---- END PHASE 1 ----
 
@@ -521,8 +574,10 @@ impl ServerActor {
                     "Phase 2 input size must be a multiple of 64"
                 );
                 self.phase2.set_chunk_size(max_chunk_size * QUERIES / 64);
+                record_event!(&self.device_manager, batch_streams, events, "db_threshold");
                 self.phase2
                     .compare_threshold_masked_many(&code_dots, &mask_dots, request_streams);
+                record_event!(&self.device_manager, batch_streams, events, "db_threshold");
                 // we can now record the exchange event since the phase 2 is no longer using the
                 // code_dots/mask_dots which are just reinterpretations of the exchange result
                 // buffers
@@ -577,9 +632,6 @@ impl ServerActor {
                 "finished chunk"
             );
 
-            self.device_manager
-                .await_streams(&self.streams[(db_chunk_idx + 1) % 2]); // await other stream
-
             // Break if we reached the end of the database
             if db_chunk_idx * DB_CHUNK_SIZE >= *self.current_db_sizes.iter().max().unwrap() {
                 break;
@@ -588,10 +640,10 @@ impl ServerActor {
         // ---- END DATABASE DEDUP ----
 
         // Wait for protocol to finish
-        tracing::debug!(party_id = self.party_id, "waiting for batch work to finish");
+        tracing::debug!(party_id = self.party_id, "waiting for db search to finish");
         self.device_manager.await_streams(&self.streams[0]);
         self.device_manager.await_streams(&self.streams[1]);
-        tracing::debug!(party_id = self.party_id, "batch work finished");
+        tracing::debug!(party_id = self.party_id, "db search finished");
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id
@@ -646,6 +698,7 @@ impl ServerActor {
             &self.current_db_sizes,
         );
 
+        record_event!(&self.device_manager, &self.streams[0], events, "db_write");
         for i in 0..self.device_manager.device_count() {
             self.device_manager.device(i).bind_to_thread().unwrap();
             for insertion_idx in insertion_list[i].clone() {
@@ -712,6 +765,7 @@ impl ServerActor {
                 self.current_db_sizes[i]
             );
         }
+        record_event!(&self.device_manager, &self.streams[0], events, "db_write");
 
         // Pass to internal sender thread
         return_channel
@@ -742,6 +796,9 @@ impl ServerActor {
             &FINAL_RESULTS_INIT_HOST,
             &self.streams[0],
         );
+
+        // Log timers
+        log_aggregated_timers(events);
 
         tracing::info!("CPU time of one iteration {:?}", now.elapsed());
         Ok(())
