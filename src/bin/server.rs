@@ -483,7 +483,8 @@ async fn main() -> eyre::Result<()> {
             // tx.commit().await?;
 
             tracing::info!("Sending {} results", result_events.len());
-            send_result_events(result_events, &sns_client_bg, &config_bg).await?;
+            // send_result_events(result_events, &sns_client_bg,
+            // &config_bg).await?;
         }
 
         Ok(())
