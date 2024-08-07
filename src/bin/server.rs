@@ -334,7 +334,13 @@ async fn main() -> eyre::Result<()> {
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);
     let shares_encryption_key_pair =
-        SharesEncryptionKeyPair::initialize_from_storage(config.clone()).await;
+        match SharesEncryptionKeyPair::initialize_from_storage(config.clone()).await {
+            Ok(key_pair) => key_pair,
+            Err(e) => {
+                tracing::error!("Failed to initialize shares encryption key pair: {:?}", e);
+                return Ok(());
+            }
+        };
 
     let party_id = config.party_id;
     tracing::info!("Deriving shared secrets");

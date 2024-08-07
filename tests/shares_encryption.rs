@@ -51,7 +51,8 @@ async fn test_share_encryption_and_decryption() -> eyre::Result<()> {
         let server_shares_key_pair = SharesEncryptionKeyPair::from_b64_strings(
             server_pub_key_str.clone(),
             server_priv_key_str.clone(),
-        );
+        )
+        .unwrap();
 
         let iris_code_coefs = bytemuck::cast_slice(&shares[i].coefs);
         let mask_code_coefs = bytemuck::cast_slice(&masks[i].coefs);

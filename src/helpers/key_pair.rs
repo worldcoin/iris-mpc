@@ -21,6 +21,8 @@ pub enum SecretError {
     PublicKeyNotFound(#[from] reqwest::Error),
     #[error("Decoding error: {0}")]
     DecodingError(#[from] base64::DecodeError),
+    #[error("Parsing key error")]
+    ParsingKeyError,
 }
 
 #[derive(Clone, Debug)]
@@ -30,7 +32,7 @@ pub struct SharesEncryptionKeyPair {
 }
 
 impl SharesEncryptionKeyPair {
-    pub async fn initialize_from_storage(config: Config) -> Self {
+    pub async fn initialize_from_storage(config: Config) -> Result<Self, SecretError> {
         let region_provider = Region::new(REGION);
         let shared_config = aws_config::from_env().region(region_provider).load().await;
         let client = SecretsManagerClient::new(&shared_config);
@@ -42,10 +44,7 @@ impl SharesEncryptionKeyPair {
         .await
         {
             Ok(pk) => pk,
-            Err(e) => panic!(
-                "Failed to download public key from AWS Secrets Manager: {}",
-                e
-            ),
+            Err(e) => return Err(e),
         };
 
         let sk_b64_string = match download_private_key_from_asm(
@@ -57,35 +56,35 @@ impl SharesEncryptionKeyPair {
         .await
         {
             Ok(sk) => sk,
-            Err(e) => panic!(
-                "Failed to download private key from AWS Secrets Manager: {}",
-                e
-            ),
+            Err(e) => return Err(e),
         };
 
-        SharesEncryptionKeyPair::from_b64_strings(pk_b64_string, sk_b64_string)
+        match SharesEncryptionKeyPair::from_b64_strings(pk_b64_string, sk_b64_string) {
+            Ok(key_pair) => Ok(key_pair),
+            Err(e) => Err(e),
+        }
     }
 
-    pub fn from_b64_strings(pk: String, sk: String) -> Self {
+    pub fn from_b64_strings(pk: String, sk: String) -> Result<Self, SecretError> {
         let pk_bytes = match STANDARD.decode(pk) {
             Ok(bytes) => bytes,
-            Err(_) => panic!("Invalid base64 string for public key"),
+            Err(e) => return Err(SecretError::DecodingError(e)),
         };
         let sk_bytes = match STANDARD.decode(sk) {
             Ok(bytes) => bytes,
-            Err(_) => panic!("Invalid base64 string for secret key"),
+            Err(e) => return Err(SecretError::DecodingError(e)),
         };
 
         let pk = match PublicKey::from_slice(&pk_bytes) {
             Some(pk) => pk,
-            None => panic!("Invalid public key"),
+            None => return Err(SecretError::ParsingKeyError),
         };
         let sk = match SecretKey::from_slice(&sk_bytes) {
             Some(sk) => sk,
-            None => panic!("Invalid secret key"),
+            None => return Err(SecretError::ParsingKeyError),
         };
 
-        Self { pk, sk }
+        Ok(Self { pk, sk })
     }
 }
 
