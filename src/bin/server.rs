@@ -298,12 +298,18 @@ async fn replay_result_events(
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     dotenvy::dotenv().ok();
+
+    println!("Init config");
     let mut config: Config = Config::load_config("SMPC").unwrap();
     config.overwrite_defaults_with_cli_args(Opt::parse());
 
+    println!("Init tracing");
     let _tracing_shutdown_handle = initialize_tracing(&config)?;
+
+    tracing::info!("Creating new storage from: {:?}", config);
     let store = Store::new_from_config(&config).await?;
 
+    tracing::info!("Initialising AWS services");
     // TODO: probably move into separate function
     let region_provider = Region::new(REGION);
     let shared_config = aws_config::from_env().region(region_provider).load().await;
@@ -311,10 +317,13 @@ async fn main() -> eyre::Result<()> {
     let sns_client = SNSClient::new(&shared_config);
 
     let party_id = config.party_id;
+    tracing::info!("Deriving shared secrets");
     let chacha_seeds = initialize_chacha_seeds(&config.kms_key_arns, party_id).await?;
 
+    tracing::info!("Replaying results");
     replay_result_events(&store, &sns_client, &config.results_topic_arn, party_id).await?;
 
+    tracing::info!("Replaying results");
     let (mut codes_db, mut masks_db, store_len) = initialize_iris_dbs(party_id, &store).await?;
 
     let my_state = SyncState {
@@ -322,6 +331,7 @@ async fn main() -> eyre::Result<()> {
         deleted_request_ids: store.last_deleted_requests(SYNC_QUERIES).await?,
     };
 
+    tracing::info!("Preparing task monitor");
     let mut background_tasks = TaskMonitor::new();
     // a bit convoluted, but we need to create the actor on the thread already,
     // since it blocks a lot and is `!Send`, we get back the handle via the oneshot
@@ -349,6 +359,7 @@ async fn main() -> eyre::Result<()> {
             masks_db.truncate(bit_len);
         }
 
+        tracing::info!("Starting server actor");
         match ServerActor::new_with_device_manager_and_comms(
             config.party_id,
             chacha_seeds,
