@@ -263,6 +263,10 @@ async fn initialize_iris_dbs(
         (codes_db, masks_db)
     };
 
+    let count_irises = store.count_irises().await?;
+    codes_db.reserve(count_irises * IRIS_CODE_LENGTH);
+    masks_db.reserve(count_irises * IRIS_CODE_LENGTH);
+
     tracing::info!("Initialize iris db: Loading from DB");
     // Load DB from persistent storage.
     let mut store_len = 0;
