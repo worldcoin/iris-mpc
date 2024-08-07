@@ -109,6 +109,13 @@ impl Store {
         Ok(self.pool.begin().await?)
     }
 
+    pub async fn count_irises(&self) -> Result<usize> {
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM irises")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(count.0 as usize)
+    }
+
     pub async fn stream_irises(&self) -> impl Stream<Item = Result<StoredIris, sqlx::Error>> + '_ {
         sqlx::query_as::<_, StoredIris>("SELECT * FROM irises ORDER BY id").fetch(&self.pool)
     }
@@ -292,8 +299,10 @@ mod tests {
         store.insert_irises(&mut tx, &codes_and_masks[2..3]).await?;
         tx.commit().await?;
 
+        let got_len = store.count_irises().await?;
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
 
+        assert_eq!(got_len, 3);
         assert_eq!(got.len(), 3);
         for i in 0..3 {
             assert_eq!(got[i].id, i as i64);
