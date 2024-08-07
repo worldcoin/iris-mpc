@@ -571,7 +571,6 @@ impl ServerActor {
             self.device_manager
                 .await_event(request_streams, &current_phase2_event);
 
-            debug_record_event!(self.device_manager, request_streams, &mut events);
             // ---- START PHASE 2 ----
             // TODO: remove
             let max_chunk_size = dot_chunk_size.iter().max().copied().unwrap();
@@ -585,8 +584,10 @@ impl ServerActor {
                     "Phase 2 input size must be a multiple of 64"
                 );
                 self.phase2.set_chunk_size(max_chunk_size * QUERIES / 64);
+                debug_record_event!(self.device_manager, request_streams, &mut events);
                 self.phase2
                     .compare_threshold_masked_many(&code_dots, &mask_dots, request_streams);
+                debug_record_event!(self.device_manager, request_streams, &mut events);
                 // we can now record the exchange event since the phase 2 is no longer using the
                 // code_dots/mask_dots which are just reinterpretations of the exchange result
                 // buffers
@@ -599,6 +600,7 @@ impl ServerActor {
                     .record_event(request_streams, &next_exchange_event);
 
                 let res = self.phase2.take_result_buffer();
+                debug_record_event!(self.device_manager, request_streams, &mut events);
                 open(
                     &mut self.phase2,
                     &res,
@@ -610,10 +612,9 @@ impl ServerActor {
                     offset,
                     request_streams,
                 );
+                debug_record_event!(self.device_manager, request_streams, &mut events);
                 self.phase2.return_result_buffer(res);
             }
-
-            debug_record_event!(self.device_manager, request_streams, &mut events);
 
             tracing::debug!(
                 party_id = self.party_id,
@@ -661,6 +662,7 @@ impl ServerActor {
         let mut total_dot_time: f32 = 0.0;
         let mut total_reshare_time: f32 = 0.0;
         let mut total_phase2_time: f32 = 0.0;
+        let mut total_open_time: f32 = 0.0;
         let mut i = 0;
         while i < events.len() {
             total_dot_time +=
@@ -669,11 +671,14 @@ impl ServerActor {
                 unsafe { elapsed(events[i + 2][0] as *mut _, events[i + 3][0] as *mut _).unwrap() };
             total_phase2_time +=
                 unsafe { elapsed(events[i + 4][0] as *mut _, events[i + 5][0] as *mut _).unwrap() };
-            i += 6;
+            total_open_time +=
+                unsafe { elapsed(events[i + 6][0] as *mut _, events[i + 7][0] as *mut _).unwrap() };
+            i += 8;
         }
         println!("Time for dot: {:?}", total_dot_time);
         println!("Time for reshare: {:?}", total_reshare_time);
         println!("Time for phase2: {:?}", total_phase2_time);
+        println!("Time for open: {:?}", total_open_time);
 
         let now = Instant::now();
 
