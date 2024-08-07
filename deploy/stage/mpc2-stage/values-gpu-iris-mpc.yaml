@@ -55,3 +55,9 @@ env:
 
   - name: SMPC__PARTY_ID
     value: "1"
+
+  - name: SMPC__PUBLIC_KEY_BUCKET_NAME
+    value: "wf-mpc-vpc-stage-public-smpcv2-keys"
+
+  - name: SMPC__ENABLE_PROCESSING_ENCRYPTED_SHARES
+    value: "false"
