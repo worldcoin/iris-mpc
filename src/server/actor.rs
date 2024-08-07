@@ -11,7 +11,10 @@ use crate::{
 };
 use cudarc::{
     cublas::CudaBlas,
-    driver::{result, CudaDevice, CudaSlice, CudaStream, DevicePtr},
+    driver::{
+        result::{self, event::elapsed},
+        CudaDevice, CudaSlice, CudaStream, DevicePtr,
+    },
     nccl::Comm,
 };
 use futures::{Future, FutureExt};
@@ -22,7 +25,7 @@ use tokio::sync::{mpsc, oneshot};
 #[allow(unused)]
 macro_rules! debug_record_event {
     ($manager:expr, $streams:expr, $timers:expr) => {
-        let evts = $manager.create_events();
+        let evts = $manager.create_events(false);
         $manager.record_event($streams, &evts);
         $timers.push(evts);
     };
@@ -418,6 +421,7 @@ impl ServerActor {
         let mut next_phase2_event = self.device_manager.create_events(false);
 
         // ---- START DATABASE DEDUP ----
+        let mut events = vec![];
         let now = Instant::now();
         tracing::debug!(party_id = self.party_id, "Start DB deduplication");
         let mut db_chunk_idx = 0;
@@ -465,6 +469,7 @@ impl ServerActor {
                 .await_event(request_streams, &current_dot_event);
 
             // ---- START PHASE 1 ----
+            debug_record_event!(self.device_manager, request_streams, events);
             compact_device_queries.dot_products_against_db(
                 &mut self.codes_engine,
                 &mut self.masks_engine,
@@ -475,6 +480,7 @@ impl ServerActor {
                 request_streams,
                 request_cublas_handles,
             );
+            debug_record_event!(self.device_manager, request_streams, events);
 
             // wait for the exchange result buffers to be ready
             tracing::debug!(
@@ -485,6 +491,7 @@ impl ServerActor {
             self.device_manager
                 .await_event(request_streams, &current_exchange_event);
 
+            debug_record_event!(self.device_manager, request_streams, events);
             compact_device_sums.compute_dot_reducer_against_db(
                 &mut self.codes_engine,
                 &mut self.masks_engine,
@@ -494,6 +501,7 @@ impl ServerActor {
                 offset,
                 request_streams,
             );
+            debug_record_event!(self.device_manager, request_streams, events);
 
             tracing::debug!(
                 party_id = self.party_id,
@@ -503,10 +511,12 @@ impl ServerActor {
             self.device_manager
                 .record_event(request_streams, &next_dot_event);
 
+            debug_record_event!(self.device_manager, request_streams, events);
             self.codes_engine
                 .reshare_results(&dot_chunk_size, request_streams);
             self.masks_engine
                 .reshare_results(&dot_chunk_size, request_streams);
+            debug_record_event!(self.device_manager, request_streams, events);
 
             // ---- END PHASE 1 ----
 
@@ -531,8 +541,10 @@ impl ServerActor {
                     "Phase 2 input size must be a multiple of 64"
                 );
                 self.phase2.set_chunk_size(max_chunk_size * QUERIES / 64);
+                debug_record_event!(self.device_manager, request_streams, events);
                 self.phase2
                     .compare_threshold_masked_many(&code_dots, &mask_dots, request_streams);
+                debug_record_event!(self.device_manager, request_streams, events);
                 // we can now record the exchange event since the phase 2 is no longer using the
                 // code_dots/mask_dots which are just reinterpretations of the exchange result
                 // buffers
@@ -545,6 +557,7 @@ impl ServerActor {
                     .record_event(request_streams, &next_exchange_event);
 
                 let res = self.phase2.take_result_buffer();
+                debug_record_event!(self.device_manager, request_streams, events);
                 open(
                     &mut self.phase2,
                     &res,
@@ -556,6 +569,7 @@ impl ServerActor {
                     offset,
                     request_streams,
                 );
+                debug_record_event!(self.device_manager, request_streams, events);
                 self.phase2.return_result_buffer(res);
             }
             tracing::debug!(
@@ -600,6 +614,31 @@ impl ServerActor {
         self.device_manager.await_streams(&self.streams[1]);
         tracing::debug!(party_id = self.party_id, "batch work finished");
         println!("Time for DB dedup: {:?}", now.elapsed());
+
+        let mut total_dot_time: f32 = 0.0;
+        let mut total_reduce_time: f32 = 0.0;
+        let mut total_reshare_time: f32 = 0.0;
+        let mut total_phase2_time: f32 = 0.0;
+        let mut total_open_time: f32 = 0.0;
+        let mut i = 0;
+        while i < events.len() {
+            total_dot_time +=
+                unsafe { elapsed(events[i][0] as *mut _, events[i + 1][0] as *mut _).unwrap() };
+            total_reduce_time +=
+                unsafe { elapsed(events[i + 2][0] as *mut _, events[i + 3][0] as *mut _).unwrap() };
+            total_reshare_time +=
+                unsafe { elapsed(events[i + 4][0] as *mut _, events[i + 5][0] as *mut _).unwrap() };
+            total_phase2_time +=
+                unsafe { elapsed(events[i + 6][0] as *mut _, events[i + 7][0] as *mut _).unwrap() };
+            total_open_time +=
+                unsafe { elapsed(events[i + 8][0] as *mut _, events[i + 9][0] as *mut _).unwrap() };
+            i += 10;
+        }
+        println!("Time for dot: {:?}", total_dot_time);
+        println!("Time for reduce: {:?}", total_reduce_time);
+        println!("Time for reshare: {:?}", total_reshare_time);
+        println!("Time for phase2: {:?}", total_phase2_time);
+        println!("Time for open: {:?}", total_open_time);
 
         let now = Instant::now();
 
