@@ -290,21 +290,17 @@ async fn initialize_iris_dbs(
     Ok((codes_db, masks_db, store_len))
 }
 
-async fn replay_result_events(
-    store: &Store,
+async fn send_result_events(
+    result_events: Vec<String>,
     sns_client: &SNSClient,
-    topic: &str,
-    party_id: usize,
+    config: &Config,
 ) -> eyre::Result<()> {
-    let result_events = store.last_results(SYNC_RESULTS).await?;
-
-    tracing::info!("Replaying {} results", result_events.len());
     for result_event in result_events {
         sns_client
             .publish()
-            .topic_arn(topic)
+            .topic_arn(&config.results_topic_arn)
             .message(result_event)
-            .message_group_id(format!("party-id-{}", party_id))
+            .message_group_id(format!("party-id-{}", config.party_id))
             .send()
             .await?;
     }
@@ -337,7 +333,12 @@ async fn main() -> eyre::Result<()> {
     let chacha_seeds = initialize_chacha_seeds(&config.kms_key_arns, party_id).await?;
 
     tracing::info!("Replaying results");
-    replay_result_events(&store, &sns_client, &config.results_topic_arn, party_id).await?;
+    send_result_events(
+        store.last_results(SYNC_RESULTS).await?,
+        &sns_client,
+        &config,
+    )
+    .await?;
 
     tracing::info!("Initialize iris db");
     let (mut codes_db, mut masks_db, store_len) = initialize_iris_dbs(party_id, &store).await?;
@@ -411,8 +412,8 @@ async fn main() -> eyre::Result<()> {
 
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
-    let rx_sns_client = sns_client.clone();
-
+    let sns_client_bg = sns_client.clone();
+    let config_bg = config.clone();
     let store_bg = store.clone();
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
@@ -466,16 +467,8 @@ async fn main() -> eyre::Result<()> {
 
             tx.commit().await?;
 
-            println!("Sending results back to SNS...");
-            for result_event in result_events {
-                rx_sns_client
-                    .publish()
-                    .topic_arn(&config.results_topic_arn)
-                    .message(result_event)
-                    .message_group_id(format!("party-id-{}", config.party_id))
-                    .send()
-                    .await?;
-            }
+            tracing::info!("Sending {} results", result_events.len());
+            send_result_events(result_events, &sns_client_bg, &config_bg).await?;
         }
 
         Ok(())
