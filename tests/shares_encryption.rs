@@ -55,7 +55,6 @@ async fn test_share_encryption_and_decryption() -> eyre::Result<()> {
 
         let iris_code_coefs = bytemuck::cast_slice(&shares[i].coefs);
         let mask_code_coefs = bytemuck::cast_slice(&masks[i].coefs);
-        println!("iris_code_coefs: {:?}", iris_code_coefs.len());
         let encrypted_iris_code =
             STANDARD.encode(sealedbox::seal(iris_code_coefs, &server_shares_key_pair.pk));
         let encrypted_mask_code =
