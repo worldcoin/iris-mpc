@@ -1,0 +1,20 @@
+[package]
+name = "iris-mpc-store"
+version = "0.1.0"
+edition = "2021"
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+iris-mpc-common = { path = "../iris-mpc-common" }
+bytemuck.workspace = true
+futures.workspace = true
+sqlx.workspace = true
+eyre.workspace = true
+itertools.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+rand.workspace = true
+dotenvy.workspace = true
+tokio.workspace = true

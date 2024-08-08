@@ -1,0 +1,45 @@
+[package]
+name = "iris-mpc-upgrade"
+version = "0.1.0"
+edition = "2021"
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+iris-mpc-common = { path = "../iris-mpc-common" }
+iris-mpc-store = { path = "../iris-mpc-store" }
+clap.workspace = true
+eyre.workspace = true
+bytemuck.workspace = true
+sqlx.workspace = true
+serde.workspace = true
+serde-big-array = "0.5"
+tracing.workspace = true
+itertools.workspace = true
+futures.workspace = true
+futures-concurrency = "7.6.0"
+rand.workspace = true
+rand_chacha = "0.3"
+tokio.workspace = true
+tracing-subscriber.workspace = true
+
+mpc-uniqueness-check = { package = "mpc", git = "https://github.com/worldcoin/mpc-uniqueness-check", rev = "4d38402" }
+indicatif = "0.17.8"
+
+[dev-dependencies]
+float_eq = "1"
+
+[[bin]]
+name = "upgrade-checker"
+path = "src/bin/checker.rs"
+
+[[bin]]
+name = "upgrade-server"
+path = "src/bin/tcp_upgrade_server.rs"
+
+[[bin]]
+name = "upgrade-client"
+path = "src/bin/tcp_upgrade_client.rs"
+
+[[bin]]
+name = "seed-v1-dbs"
+path = "src/bin/seed_v1_dbs.rs"
