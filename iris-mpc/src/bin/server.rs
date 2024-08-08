@@ -576,14 +576,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             // Iterate over a list of tracing payloads, and create logs with mappings to
             // payloads Log at least a "start" event using a log with trace.id and
             // parent.trace.id
-            for tracing_payload in batch.metadata.iter() {
-                tracing::info!(
-                    node_id = tracing_payload.node_id,
-                    dd.trace_id = tracing_payload.trace_id,
-                    dd.span_id = tracing_payload.span_id,
-                    "Started processing share",
-                );
-            }
+            // for tracing_payload in batch.metadata.iter() {
+            //     tracing::info!(
+            //         node_id = tracing_payload.node_id,
+            //         dd.trace_id = tracing_payload.trace_id,
+            //         dd.span_id = tracing_payload.span_id,
+            //         "Started processing share",
+            //     );
+            // }
 
             // start trace span - with single TraceId and single ParentTraceID
             tracing::info!("Received batch in {:?}", now.elapsed());
