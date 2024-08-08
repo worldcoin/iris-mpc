@@ -1,0 +1,38 @@
+[package]
+name = "iris-mpc"
+version = "0.1.0"
+edition = "2021"
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+aws-config.workspace = true
+aws-sdk-sns.workspace = true
+aws-sdk-sqs.workspace = true
+axum.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+static_assertions.workspace = true
+futures.workspace = true
+serde_json.workspace = true
+telemetry-batteries.workspace = true
+eyre.workspace = true
+clap.workspace = true
+bytemuck.workspace = true
+dotenvy.workspace = true
+rand.workspace = true
+base64.workspace = true
+uuid.workspace = true
+
+
+iris-mpc-gpu = { path = "../iris-mpc-gpu" }
+iris-mpc-common = { path = "../iris-mpc-common" }
+iris-mpc-store = { path = "../iris-mpc-store" }
+
+[dev-dependencies]
+criterion = "0.5"
+ndarray = "0.16.0"
+
+[features]
+default = []
+otp_encrypt = ["iris-mpc-gpu/otp_encrypt"]
