@@ -2234,6 +2234,7 @@ dependencies = [
  "hex",
  "hmac",
  "http 1.1.0",
+ "itertools 0.13.0",
  "opentelemetry",
  "percent-encoding",
  "rand",
