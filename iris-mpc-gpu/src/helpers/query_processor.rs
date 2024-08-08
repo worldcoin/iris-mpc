@@ -83,11 +83,11 @@ pub struct CudaVec2DSlicerRawPointer {
     pub limb_1: Vec<u64>,
 }
 
-impl<T> Into<CudaVec2DSlicerRawPointer> for &CudaVec2DSlicer<T> {
-    fn into(self) -> CudaVec2DSlicerRawPointer {
+impl<T> From<&CudaVec2DSlicer<T>> for CudaVec2DSlicerRawPointer {
+    fn from(slicer: &CudaVec2DSlicer<T>) -> Self {
         CudaVec2DSlicerRawPointer {
-            limb_0: self.limb_0.iter().map(|s| *s.device_ptr()).collect(),
-            limb_1: self.limb_1.iter().map(|s| *s.device_ptr()).collect(),
+            limb_0: slicer.limb_0.iter().map(|s| *s.device_ptr()).collect(),
+            limb_1: slicer.limb_1.iter().map(|s| *s.device_ptr()).collect(),
         }
     }
 }

@@ -4,8 +4,8 @@ use crate::{
         device_manager::DeviceManager,
         device_ptrs_to_shares,
         query_processor::{
-            CudaVec2DSlicer, CudaVec2DSlicerI8, CudaVec2DSlicerRawPointer, CudaVec2DSlicerU32,
-            CudaVec2DSlicerU8, StreamAwareCudaSlice,
+            CudaVec2DSlicer, CudaVec2DSlicerRawPointer, CudaVec2DSlicerU32, CudaVec2DSlicerU8,
+            StreamAwareCudaSlice,
         },
     },
     rng::chacha::ChaChaCudaRng,
@@ -175,10 +175,6 @@ fn chunking<T: Clone>(
 pub struct SlicedProcessedDatabase {
     pub code_gr:      CudaVec2DSlicerRawPointer,
     pub code_sums_gr: CudaVec2DSlicerU32,
-}
-
-fn custom_device_ptrs<T>(slice: &[StreamAwareCudaSlice<T>]) -> Vec<CUdeviceptr> {
-    slice.iter().map(|s| *s.device_ptr()).collect()
 }
 
 pub struct ShareDB {
