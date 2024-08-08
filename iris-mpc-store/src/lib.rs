@@ -1,12 +1,15 @@
 use bytemuck::cast_slice;
 use eyre::{eyre, Result};
-use futures::Stream;
+use futures::{
+    stream::{self},
+    Stream,
+};
 use iris_mpc_common::config::Config;
 use sqlx::{migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Transaction};
-use std::ops::DerefMut;
+use std::{ops::DerefMut, pin::Pin};
 
 const APP_NAME: &str = "SMPC";
-const POOL_SIZE: u32 = 5;
+const MAX_CONNECTIONS: u32 = 100;
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
@@ -21,7 +24,7 @@ fn sql_switch_schema(schema_name: &str) -> Result<String> {
     ))
 }
 
-#[derive(sqlx::FromRow, Debug, Default)]
+#[derive(sqlx::FromRow, Debug, Default, PartialEq, Eq)]
 pub struct StoredIris {
     #[allow(dead_code)]
     id:         i64, // BIGSERIAL
@@ -32,6 +35,11 @@ pub struct StoredIris {
 }
 
 impl StoredIris {
+    /// The index which is contiguous and starts from 0.
+    pub fn index(&self) -> usize {
+        self.id as usize
+    }
+
     pub fn left_code(&self) -> &[u16] {
         cast_u8_to_u16(&self.left_code)
     }
@@ -85,7 +93,7 @@ impl Store {
         let connect_sql = sql_switch_schema(schema_name)?;
 
         let pool = PgPoolOptions::new()
-            .max_connections(POOL_SIZE)
+            .max_connections(MAX_CONNECTIONS)
             .after_connect(move |conn, _meta| {
                 // Switch to the given schema in every connection.
                 let connect_sql = connect_sql.clone();
@@ -116,8 +124,35 @@ impl Store {
         Ok(count.0 as usize)
     }
 
+    /// Stream irises in order.
     pub async fn stream_irises(&self) -> impl Stream<Item = Result<StoredIris, sqlx::Error>> + '_ {
         sqlx::query_as::<_, StoredIris>("SELECT * FROM irises ORDER BY id").fetch(&self.pool)
+    }
+
+    /// Stream irises in parallel, without a particular order.
+    pub async fn stream_irises_par(
+        &self,
+        partitions: usize,
+    ) -> impl Stream<Item = Result<StoredIris, sqlx::Error>> + '_ {
+        let count = self.count_irises().await.expect("Failed count_irises") - 1;
+        let partition_size = count.div_ceil(partitions);
+
+        let mut partition_streams = Vec::new();
+        for i in 0..partitions {
+            let start_id = partition_size * i;
+            let end_id = start_id + partition_size - 1;
+
+            let partition_stream =
+                sqlx::query_as::<_, StoredIris>("SELECT * FROM irises WHERE id BETWEEN $1 AND $2")
+                    .bind(start_id as i64)
+                    .bind(end_id as i64)
+                    .fetch(&self.pool);
+
+            partition_streams.push(Box::pin(partition_stream)
+                as Pin<Box<dyn Stream<Item = Result<StoredIris, sqlx::Error>> + Send>>);
+        }
+
+        stream::select_all(partition_streams)
     }
 
     pub async fn insert_irises(
@@ -344,6 +379,10 @@ mod tests {
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), count);
         assert_contiguous_id(&got);
+
+        let mut got_par: Vec<StoredIris> = store.stream_irises_par(5).await.try_collect().await?;
+        got_par.sort_by_key(|iris| iris.id);
+        assert_eq!(got, got_par);
 
         let got = store.last_results(count).await?;
         assert_eq!(got, result_events);

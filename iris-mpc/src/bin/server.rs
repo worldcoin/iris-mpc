@@ -233,6 +233,7 @@ async fn initialize_chacha_seeds(
 async fn initialize_iris_dbs(
     party_id: usize,
     store: &Store,
+    config: &Config,
 ) -> eyre::Result<(Vec<u16>, Vec<u16>, usize)> {
     // Generate or load DB
     let (mut codes_db, mut masks_db) = {
@@ -266,22 +267,36 @@ async fn initialize_iris_dbs(
 
         (codes_db, masks_db)
     };
+    let fake_len = codes_db.len();
 
     let count_irises = store.count_irises().await?;
-    codes_db.reserve(count_irises * IRIS_CODE_LENGTH);
-    masks_db.reserve(count_irises * IRIS_CODE_LENGTH);
+    codes_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
+    masks_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
 
-    tracing::info!("Initialize iris db: Loading from DB");
+    let parallelism = config
+        .database
+        .as_ref()
+        .ok_or(eyre!("Missing database config"))?
+        .load_parallelism;
+
+    tracing::info!(
+        "Initialize iris db: Loading from DB (parallelism: {})",
+        parallelism
+    );
     // Load DB from persistent storage.
     let mut store_len = 0;
-    while let Some(iris) = store.stream_irises().await.next().await {
+    while let Some(iris) = store.stream_irises_par(parallelism).await.next().await {
         let iris = iris?;
+        if iris.index() >= count_irises {
+            tracing::warn!("Inconsistent iris index {}", iris.index());
+            continue;
+        }
 
-        codes_db.extend(iris.left_code());
-        masks_db.extend(iris.left_mask());
+        let start = fake_len + iris.index() * IRIS_CODE_LENGTH;
+        codes_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.left_code());
+        masks_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.left_mask());
 
         store_len += 1;
-
         if (store_len % 10000) == 0 {
             tracing::info!("Initialize iris db: Loaded {} entries from DB", store_len);
         }
@@ -341,7 +356,8 @@ async fn main() -> eyre::Result<()> {
     .await?;
 
     tracing::info!("Initialize iris db");
-    let (mut codes_db, mut masks_db, store_len) = initialize_iris_dbs(party_id, &store).await?;
+    let (mut codes_db, mut masks_db, store_len) =
+        initialize_iris_dbs(party_id, &store, &config).await?;
 
     let my_state = SyncState {
         db_len:              store_len as u64,
