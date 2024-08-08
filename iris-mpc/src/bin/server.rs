@@ -49,7 +49,7 @@ use tokio::{
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
-const DB_SIZE: usize = 8 * 1_000;
+const DB_SIZE: usize = 1 << 22;
 const N_QUERIES: usize = 64;
 const RNG_SEED: u64 = 42;
 const SYNC_RESULTS: usize = N_QUERIES * 2;
@@ -383,8 +383,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     .await?;
 
     tracing::info!("Initialize iris db");
-    let (mut codes_db, mut masks_db, store_len) =
-        initialize_iris_dbs(party_id, &store, &config).await?;
+    // let (mut codes_db, mut masks_db, store_len) =
+    //     initialize_iris_dbs(party_id, &store, &config).await?;
+
+    let (mut codes_db, mut masks_db, store_len) = (vec![], vec![], 0);
 
     let my_state = SyncState {
         db_len:              store_len as u64,
