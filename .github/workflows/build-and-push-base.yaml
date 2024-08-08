@@ -1,22 +1,27 @@
-name: Build only docker image
+name: Build and push base docker image (CUDA, NCCL)
 
 on:
   push:
-    branches-ignore:
-      - 'main'
-      - 'v*'
+    paths:
+      - Dockerfile.base
+      - .github/workflows/build-and-push-base.yaml
 
-concurrency:
-  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
-  cancel-in-progress: true
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
-
+  IMAGE_NAME: ${{ github.repository }}-base
+  CUDA_VERSION: 12_2
+  NCCL_VERSION: 2_22_3_1
 jobs:
   docker:
     runs-on:
       labels: ubuntu-22.04-64core
+    permissions:
+      packages: write
+      contents: read
+      attestations: write
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,13 +35,14 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build Docker image
+      - name: Build and Push
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: false
-          tags: ghcr.io/worldcoin/gpu-iris-mpc:${{ github.sha }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda${{ env.CUDA_VERSION }}-nccl${{ env.NCCL_VERSION }}
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          file: Dockerfile.base
