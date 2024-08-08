@@ -332,12 +332,18 @@ async fn send_result_events(
 async fn main() -> eyre::Result<()> {
     dotenvy::dotenv().ok();
 
-    tracing::info!("Init config");
+    println!("Init config");
     let mut config: Config = Config::load_config("SMPC").unwrap();
     config.overwrite_defaults_with_cli_args(Opt::parse());
 
-    tracing::info!("Init tracing");
-    let _tracing_shutdown_handle = initialize_tracing(&config)?;
+    println!("Init tracing");
+    let _tracing_shutdown_handle = match initialize_tracing(&config) {
+        Ok(handle) => handle,
+        Err(e) => {
+            eprintln!("Failed to initialize tracing: {:?}", e);
+            return Err(e);
+        }
+    };
 
     match server_main(config).await {
         Ok(_) => {
