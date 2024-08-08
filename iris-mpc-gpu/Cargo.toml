@@ -24,8 +24,9 @@ rand.workspace = true
 static_assertions.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-
+sodiumoxide = { git = "https://github.com/worldcoin/sodiumoxide.git" }
 iris-mpc-common = { path = "../iris-mpc-common" }
+base64 = "0.22.1"
 
 [dev-dependencies]
 criterion = "0.5"

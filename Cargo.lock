@@ -2250,6 +2250,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -2257,6 +2258,7 @@ name = "iris-mpc-gpu"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.22.1",
  "bytemuck",
  "criterion",
  "cudarc",
@@ -2274,6 +2276,7 @@ dependencies = [
  "ring",
  "serde",
  "serde_json",
+ "sodiumoxide",
  "static_assertions",
  "tokio",
  "tracing",
