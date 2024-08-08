@@ -70,8 +70,8 @@ async fn test_share_encryption_and_decryption() -> eyre::Result<()> {
         let decrypted_shares =
             as_smpc_request.get_iris_shares(true, server_shares_key_pair.clone());
         let decrypted_mask = as_smpc_request.get_mask_shares(true, server_shares_key_pair.clone());
-        assert_eq!(shares[i].coefs, decrypted_shares);
-        assert_eq!(masks[i].coefs, decrypted_mask);
+        assert_eq!(shares[i].coefs, decrypted_shares.unwrap());
+        assert_eq!(masks[i].coefs, decrypted_mask.unwrap());
     }
 
     Ok(())

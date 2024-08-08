@@ -1,8 +1,7 @@
-use super::key_pair::SharesEncryptionKeyPair;
+use super::key_pair::{SecretError, SharesEncryptionKeyPair};
 use crate::setup::iris_db::iris::IrisCodeArray;
 use base64::{engine::general_purpose, Engine};
 use serde::{Deserialize, Serialize};
-use sodiumoxide::crypto::{sealedbox, sealedbox::SEALBYTES};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SQSMessage {
@@ -30,41 +29,31 @@ pub struct SMPCRequest {
 }
 
 impl SMPCRequest {
-    fn decrypt_share(
-        code: Vec<u8>,
-        decryption_key_pair: SharesEncryptionKeyPair,
-    ) -> [u16; IrisCodeArray::IRIS_CODE_SIZE] {
-        let mut buffer = [0u8; IrisCodeArray::IRIS_CODE_SIZE * 2 + SEALBYTES];
-        buffer.copy_from_slice(bytemuck::cast_slice(&code));
-        let decrypted = sealedbox::open(&buffer, &decryption_key_pair.pk, &decryption_key_pair.sk);
-        match decrypted {
-            Ok(bytes) => {
-                let mut buffer = [0u16; IrisCodeArray::IRIS_CODE_SIZE];
-                buffer.copy_from_slice(bytemuck::cast_slice(&bytes));
-                buffer
-            }
-            Err(_) => panic!("Failed to decrypt iris code"),
-        }
-    }
-
     fn decode_bytes(
         bytes: &[u8],
         encrypted_shares: bool,
         decryption_key_pair: SharesEncryptionKeyPair,
-    ) -> [u16; IrisCodeArray::IRIS_CODE_SIZE] {
+    ) -> Result<[u16; IrisCodeArray::IRIS_CODE_SIZE], SecretError> {
         let code = general_purpose::STANDARD.decode(bytes).unwrap();
-        if encrypted_shares {
-            return Self::decrypt_share(code, decryption_key_pair);
-        }
         let mut buffer = [0u16; IrisCodeArray::IRIS_CODE_SIZE];
-        buffer.copy_from_slice(bytemuck::cast_slice(&code));
-        buffer
+        if encrypted_shares {
+            match decryption_key_pair.open_sealed_box(code) {
+                Ok(decrypted_code) => {
+                    buffer.copy_from_slice(bytemuck::cast_slice(&decrypted_code));
+                    Ok(buffer)
+                }
+                Err(e) => Err(e),
+            }
+        } else {
+            buffer.copy_from_slice(bytemuck::cast_slice(&code));
+            Ok(buffer)
+        }
     }
     pub fn get_iris_shares(
         &self,
         encrypted_shares: bool,
         decryption_key_pair: SharesEncryptionKeyPair,
-    ) -> [u16; IrisCodeArray::IRIS_CODE_SIZE] {
+    ) -> Result<[u16; IrisCodeArray::IRIS_CODE_SIZE], SecretError> {
         Self::decode_bytes(
             self.iris_code.as_bytes(),
             encrypted_shares,
@@ -75,7 +64,7 @@ impl SMPCRequest {
         &self,
         encrypted_shares: bool,
         decryption_key_pair: SharesEncryptionKeyPair,
-    ) -> [u16; IrisCodeArray::IRIS_CODE_SIZE] {
+    ) -> Result<[u16; IrisCodeArray::IRIS_CODE_SIZE], SecretError> {
         Self::decode_bytes(
             self.mask_code.as_bytes(),
             encrypted_shares,

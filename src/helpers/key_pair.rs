@@ -1,11 +1,15 @@
-use crate::config::Config;
+use crate::{config::Config, setup::iris_db::iris::IrisCodeArray};
 use aws_config::Region;
 use aws_sdk_secretsmanager::{
     error::SdkError, operation::get_secret_value::GetSecretValueError,
     Client as SecretsManagerClient,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
-use sodiumoxide::crypto::box_::{PublicKey, SecretKey};
+use sodiumoxide::crypto::{
+    box_::{PublicKey, SecretKey},
+    sealedbox,
+    sealedbox::SEALBYTES,
+};
 use thiserror::Error;
 
 const REGION: &str = "eu-north-1";
@@ -23,6 +27,8 @@ pub enum SecretError {
     DecodingError(#[from] base64::DecodeError),
     #[error("Parsing key error")]
     ParsingKeyError,
+    #[error("Sealed box open error")]
+    SealedBoxOpenError,
 }
 
 #[derive(Clone, Debug)]
@@ -85,6 +91,16 @@ impl SharesEncryptionKeyPair {
         };
 
         Ok(Self { pk, sk })
+    }
+
+    pub fn open_sealed_box(&self, code: Vec<u8>) -> Result<Vec<u8>, SecretError> {
+        let mut buffer = [0u8; IrisCodeArray::IRIS_CODE_SIZE * 2 + SEALBYTES];
+        buffer[..code.len()].copy_from_slice(&code);
+        let decrypted = sealedbox::open(&buffer, &self.pk, &self.sk);
+        match decrypted {
+            Ok(bytes) => Ok(bytes),
+            Err(_) => Err(SecretError::SealedBoxOpenError),
+        }
     }
 }
 

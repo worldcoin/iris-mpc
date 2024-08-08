@@ -118,6 +118,25 @@ async fn receive_batch(
                 batch_query.request_ids.push(message.request_id.clone());
                 batch_query.metadata.push(batch_metadata);
 
+                let iris_message_share = match message
+                    .get_iris_shares(encrypted_shares, shares_encryption_key_pair.clone())
+                {
+                    Ok(iris_message_share) => iris_message_share,
+                    Err(e) => {
+                        tracing::error!("Failed to get iris shares: {:?}", e);
+                        continue;
+                    }
+                };
+                let iris_message_mask = match message
+                    .get_mask_shares(encrypted_shares, shares_encryption_key_pair.clone())
+                {
+                    Ok(iris_message_mask) => iris_message_mask,
+                    Err(e) => {
+                        tracing::error!("Failed to get iris masks: {:?}", e);
+                        continue;
+                    }
+                };
+
                 let (
                     store_iris_shares,
                     store_mask_shares,
@@ -126,16 +145,10 @@ async fn receive_batch(
                     iris_shares,
                     mask_shares,
                 ) = spawn_blocking(move || {
-                    let mut iris_share = GaloisRingIrisCodeShare::new(
-                        party_id + 1,
-                        message
-                            .get_iris_shares(encrypted_shares, shares_encryption_key_pair.clone()),
-                    );
-                    let mut mask_share = GaloisRingIrisCodeShare::new(
-                        party_id + 1,
-                        message
-                            .get_mask_shares(encrypted_shares, shares_encryption_key_pair.clone()),
-                    );
+                    let mut iris_share =
+                        GaloisRingIrisCodeShare::new(party_id + 1, iris_message_share);
+                    let mut mask_share =
+                        GaloisRingIrisCodeShare::new(party_id + 1, iris_message_mask);
 
                     // Original for storage.
                     let store_iris_shares = iris_share.clone();
