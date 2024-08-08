@@ -51,7 +51,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
 const N_QUERIES: usize = 64;
-const N_BATCHES: usize = 100;
 const RNG_SEED: u64 = 42;
 const SYNC_RESULTS: usize = N_QUERIES * 2;
 const SYNC_QUERIES: usize = N_QUERIES * 2;
@@ -196,7 +195,10 @@ fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
     } else {
         tracing_subscriber::registry()
             .with(tracing_subscriber::fmt::layer().pretty().compact())
-            .with(tracing_subscriber::EnvFilter::from_default_env())
+            .with(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "info".into()),
+            )
             .init();
 
         Ok(TracingShutdownHandle)
@@ -534,93 +536,85 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Healthcheck server running on port 3000.");
 
     let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
-    let mut total_time = Instant::now();
-    let mut batch_times = Duration::from_secs(0);
 
     // Main loop
-    tracing::info!("Starting main loop, waiting for requests.");
-    for request_counter in 0..N_BATCHES {
-        // **Tensor format of queries**
-        //
-        // The functions `receive_batch` and `prepare_query_shares` will prepare the
-        // _query_ variables as `Vec<Vec<u8>>` formatted as follows:
-        //
-        // - The inner Vec is a flattening of these dimensions (inner to outer):
-        //   - One u8 limb of one iris bit.
-        //   - One code: 12800 coefficients.
-        //   - One query: all rotated variants of a code.
-        //   - One batch: many queries.
-        // - The outer Vec is the dimension of the Galois Ring (2):
-        //   - A decomposition of each iris bit into two u8 limbs.
+    let res: eyre::Result<()> = async {
+        loop {
+            // **Tensor format of queries**
+            //
+            // The functions `receive_batch` and `prepare_query_shares` will prepare the
+            // _query_ variables as `Vec<Vec<u8>>` formatted as follows:
+            //
+            // - The inner Vec is a flattening of these dimensions (inner to outer):
+            //   - One u8 limb of one iris bit.
+            //   - One code: 12800 coefficients.
+            //   - One query: all rotated variants of a code.
+            //   - One batch: many queries.
+            // - The outer Vec is the dimension of the Galois Ring (2):
+            //   - A decomposition of each iris bit into two u8 limbs.
 
-        // Skip first iteration
-        if request_counter == 1 {
-            total_time = Instant::now();
-            batch_times = Duration::from_secs(0);
-        }
-        let now = Instant::now();
+            let now = Instant::now();
 
-        // Skip requests based on the startup sync, only in the first iteration.
-        let skip_request_ids = mem::take(&mut skip_request_ids);
+            // Skip requests based on the startup sync, only in the first iteration.
+            let skip_request_ids = mem::take(&mut skip_request_ids);
 
-        // This batch can consist of N sets of iris_share + mask
-        // It also includes a vector of request ids, mapping to the sets above
-        let batch = receive_batch(
-            party_id,
-            &sqs_client,
-            &config.requests_queue_url,
-            &store,
-            skip_request_ids,
-        )
-        .await
-        .context("while receiving batches from SQS")?;
-
-        // Iterate over a list of tracing payloads, and create logs with mappings to
-        // payloads Log at least a "start" event using a log with trace.id and
-        // parent.trace.id
-        for tracing_payload in batch.metadata.iter() {
-            tracing::info!(
-                node_id = tracing_payload.node_id,
-                dd.trace_id = tracing_payload.trace_id,
-                dd.span_id = tracing_payload.span_id,
-                "Started processing share",
-            );
-        }
-
-        // start trace span - with single TraceId and single ParentTraceID
-        tracing::info!("Received batch in {:?}", now.elapsed());
-        batch_times += now.elapsed();
-        background_tasks.check_tasks();
-
-        tracing::info!("Submitting batch query to GPU actor");
-        let result_future = handle.submit_batch_query(batch).await;
-
-        // await the result
-        let result = timeout(processing_timeout, result_future)
+            // This batch can consist of N sets of iris_share + mask
+            // It also includes a vector of request ids, mapping to the sets above
+            let batch = receive_batch(
+                party_id,
+                &sqs_client,
+                &config.requests_queue_url,
+                &store,
+                skip_request_ids,
+            )
             .await
-            .map_err(|e| eyre!("ServerActor processing timeout: {:?}", e))?;
+            .context("while receiving batches from SQS")?;
 
-        tx.send(result).await.unwrap();
-        tracing::info!("CPU time of one iteration {:?}", now.elapsed());
+            // Iterate over a list of tracing payloads, and create logs with mappings to
+            // payloads Log at least a "start" event using a log with trace.id and
+            // parent.trace.id
+            for tracing_payload in batch.metadata.iter() {
+                tracing::info!(
+                    node_id = tracing_payload.node_id,
+                    dd.trace_id = tracing_payload.trace_id,
+                    dd.span_id = tracing_payload.span_id,
+                    "Started processing share",
+                );
+            }
 
-        // wrap up span context
+            // start trace span - with single TraceId and single ParentTraceID
+            tracing::info!("Received batch in {:?}", now.elapsed());
+            background_tasks.check_tasks();
+
+            let result_future = handle.submit_batch_query(batch).await;
+
+            // await the result
+            let result = timeout(processing_timeout, result_future)
+                .await
+                .map_err(|e| eyre!("ServerActor processing timeout: {:?}", e))?;
+
+            tx.send(result).await?;
+
+            // wrap up span context
+        }
     }
-    tracing::info!("Reached current batch limit: {}, shutting down", N_BATCHES);
-    // drop actor handle to initiate shutdown
-    drop(handle);
+    .await;
 
-    tracing::info!(
-        "Total time for {} iterations: {:?}",
-        N_BATCHES - 1,
-        total_time.elapsed() - batch_times
-    );
+    match res {
+        Ok(_) => {}
+        Err(e) => {
+            tracing::error!("ServerActor processing error: {:?}", e);
+            // drop actor handle to initiate shutdown
+            drop(handle);
 
-    // Clean up server tasks, then wait for them to finish
-    background_tasks.abort_all();
-    tokio::time::sleep(Duration::from_secs(5)).await;
+            // Clean up server tasks, then wait for them to finish
+            background_tasks.abort_all();
+            tokio::time::sleep(Duration::from_secs(5)).await;
 
-    // Check for background task hangs and shutdown panics
-    background_tasks.check_tasks_finished();
+            // Check for background task hangs and shutdown panics
+            background_tasks.check_tasks_finished();
+        }
+    }
 
     Ok(())
 }

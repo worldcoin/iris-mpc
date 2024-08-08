@@ -10,29 +10,35 @@ use crate::{
 };
 use cudarc::{
     cublas::CudaBlas,
-    driver::{result, CudaDevice, CudaSlice, CudaStream, DevicePtr},
+    driver::{
+        result::{self, event::elapsed},
+        sys::CUevent,
+        CudaDevice, CudaSlice, CudaStream, DevicePtr,
+    },
     nccl::Comm,
 };
 use futures::{Future, FutureExt};
 use iris_mpc_common::galois_engine::degree4::GaloisRingIrisCodeShare;
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
-use std::{mem, sync::Arc, time::Instant};
+use std::{collections::HashMap, mem, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
-
-#[allow(unused)]
-macro_rules! debug_record_event {
-    ($manager:expr, $streams:expr, $timers:expr) => {
-        let evts = $manager.create_events();
-        $manager.record_event($streams, &evts);
-        $timers.push(evts);
-    };
-}
 
 macro_rules! forget_vec {
     ($vec:expr) => {
         while let Some(item) = $vec.pop() {
             std::mem::forget(item);
         }
+    };
+}
+
+macro_rules! record_stream_time {
+    ($manager:expr, $streams:expr, $map:expr, $label:expr, $block:block) => {
+        let evt0 = $manager.create_events();
+        let evt1 = $manager.create_events();
+        $manager.record_event($streams, &evt0);
+        $block
+        $manager.record_event($streams, &evt1);
+        $map.entry($label).or_default().extend(vec![evt0, evt1])
     };
 }
 
@@ -317,6 +323,8 @@ impl ServerActor {
         return_channel: oneshot::Sender<ServerJobResult>,
     ) -> eyre::Result<()> {
         let now = Instant::now();
+        let mut events: HashMap<&str, Vec<Vec<CUevent>>> = HashMap::new();
+
         // *Query* variant including Lagrange interpolation.
         let compact_query = {
             let code_query = prepare_query_shares(batch.query.code);
@@ -349,37 +357,58 @@ impl ServerActor {
 
         // ---- START BATCH DEDUP ----
         tracing::debug!(party_id = self.party_id, "Starting batch deduplication");
-        compact_device_queries.compute_dot_products(
-            &mut self.batch_codes_engine,
-            &mut self.batch_masks_engine,
-            &self.query_db_size,
-            0,
-            batch_streams,
-            batch_cublas,
-        );
 
-        compact_device_sums.compute_dot_reducers(
-            &mut self.batch_codes_engine,
-            &mut self.batch_masks_engine,
-            &self.query_db_size,
-            0,
-            batch_streams,
-        );
+        record_stream_time!(&self.device_manager, batch_streams, events, "batch_dot", {
+            compact_device_queries.compute_dot_products(
+                &mut self.batch_codes_engine,
+                &mut self.batch_masks_engine,
+                &self.query_db_size,
+                0,
+                batch_streams,
+                batch_cublas,
+            );
 
-        self.batch_codes_engine
-            .reshare_results(&self.query_db_size, batch_streams);
-        self.batch_masks_engine
-            .reshare_results(&self.query_db_size, batch_streams);
+            compact_device_sums.compute_dot_reducers(
+                &mut self.batch_codes_engine,
+                &mut self.batch_masks_engine,
+                &self.query_db_size,
+                0,
+                batch_streams,
+            );
+        });
+
+        record_stream_time!(
+            &self.device_manager,
+            batch_streams,
+            events,
+            "batch_reshare",
+            {
+                self.batch_codes_engine
+                    .reshare_results(&self.query_db_size, batch_streams);
+                self.batch_masks_engine
+                    .reshare_results(&self.query_db_size, batch_streams);
+            }
+        );
 
         let db_sizes_batch = vec![QUERIES; self.device_manager.device_count()];
         // TODO: remove
         let mut code_dots_batch = self.batch_codes_engine.result_chunk_shares(&db_sizes_batch);
         let mut mask_dots_batch = self.batch_masks_engine.result_chunk_shares(&db_sizes_batch);
-        self.phase2_batch.compare_threshold_masked_many(
-            &code_dots_batch,
-            &mask_dots_batch,
+
+        record_stream_time!(
+            &self.device_manager,
             batch_streams,
+            events,
+            "batch_threshold",
+            {
+                self.phase2_batch.compare_threshold_masked_many(
+                    &code_dots_batch,
+                    &mask_dots_batch,
+                    batch_streams,
+                );
+            }
         );
+
         let res = self.phase2_batch.take_result_buffer();
         let chunk_size = self.phase2_batch.chunk_size();
         open(
@@ -401,12 +430,12 @@ impl ServerActor {
         // ---- END BATCH DEDUP ----
 
         // Create new initial events
-        let mut current_dot_event = self.device_manager.create_events(false);
-        let mut next_dot_event = self.device_manager.create_events(false);
-        let mut current_exchange_event = self.device_manager.create_events(false);
-        let mut next_exchange_event = self.device_manager.create_events(false);
-        let mut current_phase2_event = self.device_manager.create_events(false);
-        let mut next_phase2_event = self.device_manager.create_events(false);
+        let mut current_dot_event = self.device_manager.create_events();
+        let mut next_dot_event = self.device_manager.create_events();
+        let mut current_exchange_event = self.device_manager.create_events();
+        let mut next_exchange_event = self.device_manager.create_events();
+        let mut current_phase2_event = self.device_manager.create_events();
+        let mut next_phase2_event = self.device_manager.create_events();
 
         // ---- START DATABASE DEDUP ----
         tracing::debug!(party_id = self.party_id, "Start DB deduplication");
@@ -455,16 +484,18 @@ impl ServerActor {
                 .await_event(request_streams, &current_dot_event);
 
             // ---- START PHASE 1 ----
-            compact_device_queries.dot_products_against_db(
-                &mut self.codes_engine,
-                &mut self.masks_engine,
-                &self.code_db_slices,
-                &self.mask_db_slices,
-                &dot_chunk_size,
-                offset,
-                request_streams,
-                request_cublas_handles,
-            );
+            record_stream_time!(&self.device_manager, batch_streams, events, "db_dot", {
+                compact_device_queries.dot_products_against_db(
+                    &mut self.codes_engine,
+                    &mut self.masks_engine,
+                    &self.code_db_slices,
+                    &self.mask_db_slices,
+                    &dot_chunk_size,
+                    offset,
+                    request_streams,
+                    request_cublas_handles,
+                );
+            });
 
             // wait for the exchange result buffers to be ready
             tracing::debug!(
@@ -475,15 +506,17 @@ impl ServerActor {
             self.device_manager
                 .await_event(request_streams, &current_exchange_event);
 
-            compact_device_sums.compute_dot_reducer_against_db(
-                &mut self.codes_engine,
-                &mut self.masks_engine,
-                &self.code_db_slices,
-                &self.mask_db_slices,
-                &dot_chunk_size,
-                offset,
-                request_streams,
-            );
+            record_stream_time!(&self.device_manager, batch_streams, events, "db_reduce", {
+                compact_device_sums.compute_dot_reducer_against_db(
+                    &mut self.codes_engine,
+                    &mut self.masks_engine,
+                    &self.code_db_slices,
+                    &self.mask_db_slices,
+                    &dot_chunk_size,
+                    offset,
+                    request_streams,
+                );
+            });
 
             tracing::debug!(
                 party_id = self.party_id,
@@ -493,10 +526,12 @@ impl ServerActor {
             self.device_manager
                 .record_event(request_streams, &next_dot_event);
 
-            self.codes_engine
-                .reshare_results(&dot_chunk_size, request_streams);
-            self.masks_engine
-                .reshare_results(&dot_chunk_size, request_streams);
+            record_stream_time!(&self.device_manager, batch_streams, events, "db_reshare", {
+                self.codes_engine
+                    .reshare_results(&dot_chunk_size, request_streams);
+                self.masks_engine
+                    .reshare_results(&dot_chunk_size, request_streams);
+            });
 
             // ---- END PHASE 1 ----
 
@@ -521,8 +556,19 @@ impl ServerActor {
                     "Phase 2 input size must be a multiple of 64"
                 );
                 self.phase2.set_chunk_size(max_chunk_size * QUERIES / 64);
-                self.phase2
-                    .compare_threshold_masked_many(&code_dots, &mask_dots, request_streams);
+                record_stream_time!(
+                    &self.device_manager,
+                    batch_streams,
+                    events,
+                    "db_threshold",
+                    {
+                        self.phase2.compare_threshold_masked_many(
+                            &code_dots,
+                            &mask_dots,
+                            request_streams,
+                        );
+                    }
+                );
                 // we can now record the exchange event since the phase 2 is no longer using the
                 // code_dots/mask_dots which are just reinterpretations of the exchange result
                 // buffers
@@ -564,9 +610,9 @@ impl ServerActor {
             current_dot_event = next_dot_event;
             current_exchange_event = next_exchange_event;
             current_phase2_event = next_phase2_event;
-            next_dot_event = self.device_manager.create_events(false);
-            next_exchange_event = self.device_manager.create_events(false);
-            next_phase2_event = self.device_manager.create_events(false);
+            next_dot_event = self.device_manager.create_events();
+            next_exchange_event = self.device_manager.create_events();
+            next_phase2_event = self.device_manager.create_events();
 
             // Increment chunk index
             db_chunk_idx += 1;
@@ -577,9 +623,6 @@ impl ServerActor {
                 "finished chunk"
             );
 
-            self.device_manager
-                .await_streams(&self.streams[(db_chunk_idx + 1) % 2]); // await other stream
-
             // Break if we reached the end of the database
             if db_chunk_idx * DB_CHUNK_SIZE >= *self.current_db_sizes.iter().max().unwrap() {
                 break;
@@ -588,10 +631,10 @@ impl ServerActor {
         // ---- END DATABASE DEDUP ----
 
         // Wait for protocol to finish
-        tracing::debug!(party_id = self.party_id, "waiting for batch work to finish");
+        tracing::debug!(party_id = self.party_id, "waiting for db search to finish");
         self.device_manager.await_streams(&self.streams[0]);
         self.device_manager.await_streams(&self.streams[1]);
-        tracing::debug!(party_id = self.party_id, "batch work finished");
+        tracing::debug!(party_id = self.party_id, "db search finished");
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id
@@ -646,72 +689,84 @@ impl ServerActor {
             &self.current_db_sizes,
         );
 
-        for i in 0..self.device_manager.device_count() {
-            self.device_manager.device(i).bind_to_thread().unwrap();
-            for insertion_idx in insertion_list[i].clone() {
-                // Append to codes and masks db
-                for (db, query, sums) in [
-                    (
-                        &self.code_db_slices,
-                        &compact_device_queries.code_query_insert,
-                        &compact_device_sums.code_query_insert,
-                    ),
-                    (
-                        &self.mask_db_slices,
-                        &compact_device_queries.mask_query_insert,
-                        &compact_device_sums.mask_query_insert,
-                    ),
-                ] {
-                    unsafe {
-                        helpers::dtod_at_offset(
-                            *db.code_gr.limb_0[i].device_ptr(),
-                            self.current_db_sizes[i] * IRIS_CODE_LENGTH,
-                            *query.limb_0[i].device_ptr(),
-                            IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                            IRIS_CODE_LENGTH,
-                            self.streams[0][i].stream,
-                        );
+        let previous_total_db_size = self.current_db_sizes.iter().sum::<usize>();
 
-                        helpers::dtod_at_offset(
-                            *db.code_gr.limb_1[i].device_ptr(),
-                            self.current_db_sizes[i] * IRIS_CODE_LENGTH,
-                            *query.limb_1[i].device_ptr(),
-                            IRIS_CODE_LENGTH * 15 + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                            IRIS_CODE_LENGTH,
-                            self.streams[0][i].stream,
-                        );
+        record_stream_time!(
+            &self.device_manager,
+            &self.streams[0],
+            events,
+            "db_write",
+            {
+                for i in 0..self.device_manager.device_count() {
+                    self.device_manager.device(i).bind_to_thread().unwrap();
+                    for insertion_idx in insertion_list[i].clone() {
+                        // Append to codes and masks db
+                        for (db, query, sums) in [
+                            (
+                                &self.code_db_slices,
+                                &compact_device_queries.code_query_insert,
+                                &compact_device_sums.code_query_insert,
+                            ),
+                            (
+                                &self.mask_db_slices,
+                                &compact_device_queries.mask_query_insert,
+                                &compact_device_sums.mask_query_insert,
+                            ),
+                        ] {
+                            unsafe {
+                                helpers::dtod_at_offset(
+                                    *db.code_gr.limb_0[i].device_ptr(),
+                                    self.current_db_sizes[i] * IRIS_CODE_LENGTH,
+                                    *query.limb_0[i].device_ptr(),
+                                    IRIS_CODE_LENGTH * 15
+                                        + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                                    IRIS_CODE_LENGTH,
+                                    self.streams[0][i].stream,
+                                );
 
-                        helpers::dtod_at_offset(
-                            *db.code_sums_gr.limb_0[i].device_ptr(),
-                            self.current_db_sizes[i] * mem::size_of::<u32>(),
-                            *sums.limb_0[i].device_ptr(),
-                            mem::size_of::<u32>() * 15
-                                + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                            mem::size_of::<u32>(),
-                            self.streams[0][i].stream,
-                        );
+                                helpers::dtod_at_offset(
+                                    *db.code_gr.limb_1[i].device_ptr(),
+                                    self.current_db_sizes[i] * IRIS_CODE_LENGTH,
+                                    *query.limb_1[i].device_ptr(),
+                                    IRIS_CODE_LENGTH * 15
+                                        + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                                    IRIS_CODE_LENGTH,
+                                    self.streams[0][i].stream,
+                                );
 
-                        helpers::dtod_at_offset(
-                            *db.code_sums_gr.limb_1[i].device_ptr(),
-                            self.current_db_sizes[i] * mem::size_of::<u32>(),
-                            *sums.limb_1[i].device_ptr(),
-                            mem::size_of::<u32>() * 15
-                                + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                            mem::size_of::<u32>(),
-                            self.streams[0][i].stream,
-                        );
+                                helpers::dtod_at_offset(
+                                    *db.code_sums_gr.limb_0[i].device_ptr(),
+                                    self.current_db_sizes[i] * mem::size_of::<u32>(),
+                                    *sums.limb_0[i].device_ptr(),
+                                    mem::size_of::<u32>() * 15
+                                        + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                                    mem::size_of::<u32>(),
+                                    self.streams[0][i].stream,
+                                );
+
+                                helpers::dtod_at_offset(
+                                    *db.code_sums_gr.limb_1[i].device_ptr(),
+                                    self.current_db_sizes[i] * mem::size_of::<u32>(),
+                                    *sums.limb_1[i].device_ptr(),
+                                    mem::size_of::<u32>() * 15
+                                        + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                                    mem::size_of::<u32>(),
+                                    self.streams[0][i].stream,
+                                );
+                            }
+                        }
+                        self.current_db_sizes[i] += 1;
                     }
-                }
-                self.current_db_sizes[i] += 1;
-            }
 
-            // DEBUG
-            tracing::debug!(
-                "Updating DB size on device {}: {:?}",
-                i,
-                self.current_db_sizes[i]
-            );
-        }
+                    // DEBUG
+                    tracing::debug!(
+                        "Updating DB size on device {}: {:?}",
+                        i,
+                        self.current_db_sizes[i]
+                    );
+                }
+            }
+        );
 
         // Pass to internal sender thread
         return_channel
@@ -743,8 +798,41 @@ impl ServerActor {
             &self.streams[0],
         );
 
-        tracing::info!("CPU time of one iteration {:?}", now.elapsed());
+        // Wait for all streams before get timings
+        self.device_manager.await_streams(&self.streams[0]);
+        self.device_manager.await_streams(&self.streams[1]);
+
+        // ---- END RESULT PROCESSING ----
+        log_timers(events);
+
+        tracing::info!(
+            "Batch took {:?} [{:.2} Melems/s]",
+            now.elapsed(),
+            (N_QUERIES * previous_total_db_size) as f64 / now.elapsed().as_secs_f64() / 1e6
+        );
         Ok(())
+    }
+}
+
+/// Internal helper function to log the timers of measured cuda streams.
+fn log_timers(events: HashMap<&str, Vec<Vec<CUevent>>>) {
+    for (name, event_vecs) in &events {
+        let duration: f32 = event_vecs
+            .chunks(2)
+            .map(|pair| {
+                let (start_events, end_events) = (&pair[0], &pair[1]);
+                let total_duration: f32 = start_events
+                    .iter()
+                    .zip(end_events.iter())
+                    .map(|(start, end)| unsafe { elapsed(*start, *end) }.unwrap())
+                    .sum();
+
+                total_duration / start_events.len() as f32
+            })
+            .sum();
+
+        tracing::info!("Event {}: {:?} ms", name, duration);
+        // TODO: send to metrics
     }
 }
 
