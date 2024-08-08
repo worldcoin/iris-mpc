@@ -75,23 +75,28 @@ async fn receive_batch(
             .max_number_of_messages(1)
             .queue_url(queue_url)
             .send()
-            .await?;
+            .await
+            .context("while calling `receive_message` on SQS client")?;
 
         if let Some(messages) = rcv_message_output.messages {
             for sqs_message in messages {
-                let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())?;
-                let message: SMPCRequest = serde_json::from_str(&message.message)?;
+                let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
+                    .context("while trying to parse SQSMessage")?;
+                let message: SMPCRequest = serde_json::from_str(&message.message)
+                    .context("while trying to parse SMPCRequest")?;
 
                 store
                     .mark_requests_deleted(&[message.request_id.clone()])
-                    .await?;
+                    .await
+                    .context("while marking requests as deleted")?;
 
                 client
                     .delete_message()
                     .queue_url(queue_url)
                     .receipt_handle(sqs_message.receipt_handle.unwrap())
                     .send()
-                    .await?;
+                    .await
+                    .context("while calling `delete_message` on SQS client")?;
 
                 if skip_request_ids.contains(&message.request_id) {
                     // Some party (maybe us) already meant to delete this request, so we skip it.
@@ -152,7 +157,8 @@ async fn receive_batch(
                         mask_share.all_rotations(),
                     )
                 })
-                .await?;
+                .await
+                .context("while pre-processing iris code query")?;
 
                 batch_query.store.code.push(store_iris_shares);
                 batch_query.store.mask.push(store_mask_shares);
@@ -331,8 +337,27 @@ async fn main() -> eyre::Result<()> {
     config.overwrite_defaults_with_cli_args(Opt::parse());
 
     println!("Init tracing");
-    let _tracing_shutdown_handle = initialize_tracing(&config)?;
+    let _tracing_shutdown_handle = match initialize_tracing(&config) {
+        Ok(handle) => handle,
+        Err(e) => {
+            eprintln!("Failed to initialize tracing: {:?}", e);
+            return Err(e);
+        }
+    };
 
+    match server_main(config).await {
+        Ok(_) => {
+            tracing::info!("Server exited normally");
+        }
+        Err(e) => {
+            tracing::error!("Server exited with error: {:?}", e);
+            return Err(e);
+        }
+    }
+    Ok(())
+}
+
+async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Creating new storage from: {:?}", config);
     let store = Store::new_from_config(&config).await?;
 
@@ -417,9 +442,9 @@ async fn main() -> eyre::Result<()> {
     let (mut handle, sync_result) = rx.await??;
 
     if let Some(db_len) = sync_result.must_rollback_storage() {
-        eprintln!("Databases are out-of-sync: {:?}", sync_result);
+        tracing::error!("Databases are out-of-sync: {:?}", sync_result);
         store.rollback(db_len).await?;
-        eprintln!("Rolled back to db_len={}", db_len);
+        tracing::error!("Rolled back to db_len={}", db_len);
     }
 
     let mut skip_request_ids = sync_result.deleted_request_ids();
@@ -491,8 +516,8 @@ async fn main() -> eyre::Result<()> {
     });
     background_tasks.check_tasks();
 
-    println!("All systems ready.");
-    println!("Starting healthcheck server.");
+    tracing::info!("All systems ready.");
+    tracing::info!("Starting healthcheck server.");
 
     let _health_check_abort = background_tasks.spawn(async move {
         let app = Router::new().route("/health", get(|| async {})); // implicit 200 return
@@ -506,12 +531,14 @@ async fn main() -> eyre::Result<()> {
         Ok(())
     });
     background_tasks.check_tasks();
+    tracing::info!("Healthcheck server running on port 3000.");
 
     let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
     let mut total_time = Instant::now();
     let mut batch_times = Duration::from_secs(0);
 
     // Main loop
+    tracing::info!("Starting main loop, waiting for requests.");
     for request_counter in 0..N_BATCHES {
         // **Tensor format of queries**
         //
@@ -545,7 +572,8 @@ async fn main() -> eyre::Result<()> {
             &store,
             skip_request_ids,
         )
-        .await?;
+        .await
+        .context("while receiving batches from SQS")?;
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id and
@@ -560,10 +588,11 @@ async fn main() -> eyre::Result<()> {
         }
 
         // start trace span - with single TraceId and single ParentTraceID
-        println!("Received batch in {:?}", now.elapsed());
+        tracing::info!("Received batch in {:?}", now.elapsed());
         batch_times += now.elapsed();
         background_tasks.check_tasks();
 
+        tracing::info!("Submitting batch query to GPU actor");
         let result_future = handle.submit_batch_query(batch).await;
 
         // await the result
@@ -572,14 +601,15 @@ async fn main() -> eyre::Result<()> {
             .map_err(|e| eyre!("ServerActor processing timeout: {:?}", e))?;
 
         tx.send(result).await.unwrap();
-        println!("CPU time of one iteration {:?}", now.elapsed());
+        tracing::info!("CPU time of one iteration {:?}", now.elapsed());
 
         // wrap up span context
     }
+    tracing::info!("Reached current batch limit: {}, shutting down", N_BATCHES);
     // drop actor handle to initiate shutdown
     drop(handle);
 
-    println!(
+    tracing::info!(
         "Total time for {} iterations: {:?}",
         N_BATCHES - 1,
         total_time.elapsed() - batch_times
