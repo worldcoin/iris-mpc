@@ -8,8 +8,6 @@ use std::sync::Arc;
 
 pub mod device_manager;
 pub mod id_wrapper;
-pub mod key_pair;
-pub mod kms_dh;
 pub mod query_processor;
 
 pub fn device_ptrs<T>(slice: &[CudaSlice<T>]) -> Vec<CUdeviceptr> {

@@ -24,7 +24,7 @@ rand.workspace = true
 base64.workspace = true
 uuid.workspace = true
 
-
+sodiumoxide = { git = "https://github.com/worldcoin/sodiumoxide.git" }
 iris-mpc-gpu = { path = "../iris-mpc-gpu" }
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }

@@ -1,14 +1,14 @@
-use base64::{Engine, engine::general_purpose::STANDARD};
-use rand::{Rng, rngs::StdRng, SeedableRng};
+use base64::{engine::general_purpose::STANDARD, Engine};
+use iris_mpc_common::{
+    galois_engine::degree4::GaloisRingIrisCodeShare,
+    helpers::{key_pair::SharesEncryptionKeyPair, sqs::SMPCRequest},
+    iris_db::iris::IrisCode,
+};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use sodiumoxide::crypto::{
     box_::{curve25519xsalsa20poly1305, PublicKey, SecretKey, Seed},
     sealedbox,
 };
-
-use iris_mpc_common::galois_engine::degree4::GaloisRingIrisCodeShare;
-use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPair;
-use iris_mpc_common::helpers::sqs::SMPCRequest;
-use iris_mpc_common::iris_db::iris::IrisCode;
 
 const RNG_SEED_SERVER: u64 = 1;
 const RNG_SEED_CODES: u64 = 2;
@@ -53,7 +53,7 @@ async fn test_share_encryption_and_decryption() -> eyre::Result<()> {
             server_pub_key_str.clone(),
             server_priv_key_str.clone(),
         )
-            .unwrap();
+        .unwrap();
 
         let iris_code_coefs = bytemuck::cast_slice(&shares[i].coefs);
         let mask_code_coefs = bytemuck::cast_slice(&masks[i].coefs);
@@ -62,8 +62,8 @@ async fn test_share_encryption_and_decryption() -> eyre::Result<()> {
 
         let as_smpc_request = SMPCRequest {
             request_id: format!("request_id_{}", i),
-            iris_code: encrypted_iris_code,
-            mask_code: encrypted_mask_code,
+            iris_code:  encrypted_iris_code,
+            mask_code:  encrypted_mask_code,
         };
         // Decrypt shares
         let decrypted_shares =

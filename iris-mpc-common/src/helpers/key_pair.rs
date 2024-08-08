@@ -1,9 +1,10 @@
+use crate::{config::Config, iris_db::iris::IrisCodeArray};
 use aws_config::Region;
 use aws_sdk_secretsmanager::{
-    Client as SecretsManagerClient, error::SdkError,
-    operation::get_secret_value::GetSecretValueError,
+    error::SdkError, operation::get_secret_value::GetSecretValueError,
+    Client as SecretsManagerClient,
 };
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use sodiumoxide::crypto::{
     box_::{PublicKey, SecretKey},
     sealedbox,
@@ -11,9 +12,6 @@ use sodiumoxide::crypto::{
 };
 use thiserror::Error;
 use zeroize::Zeroize;
-
-use crate::config::Config;
-use crate::iris_db::iris::IrisCodeArray;
 
 const REGION: &str = "eu-north-1";
 const CURRENT_SECRET_LABEL: &str = "AWSCURRENT";
@@ -64,7 +62,7 @@ impl SharesEncryptionKeyPair {
             config.public_key_bucket_name,
             config.party_id.to_string(),
         )
-            .await
+        .await
         {
             Ok(pk) => pk,
             Err(e) => return Err(e),
@@ -76,7 +74,7 @@ impl SharesEncryptionKeyPair {
             &config.party_id.to_string(),
             CURRENT_SECRET_LABEL,
         )
-            .await
+        .await
         {
             Ok(sk) => sk,
             Err(e) => return Err(e),

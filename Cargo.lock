@@ -2208,6 +2208,7 @@ dependencies = [
  "ndarray",
  "rand",
  "serde_json",
+ "sodiumoxide",
  "static_assertions",
  "telemetry-batteries",
  "tokio",
