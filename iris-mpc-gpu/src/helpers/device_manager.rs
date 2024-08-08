@@ -75,17 +75,11 @@ impl DeviceManager {
         }
     }
 
-    pub fn create_events(&self, blocking_sync: bool) -> Vec<CUevent> {
-        let flags = if blocking_sync {
-            CUevent_flags::CU_EVENT_BLOCKING_SYNC
-        } else {
-            CUevent_flags::CU_EVENT_DEFAULT
-        };
-
+    pub fn create_events(&self) -> Vec<CUevent> {
         let mut events = vec![];
         for idx in 0..self.devices.len() {
             self.devices[idx].bind_to_thread().unwrap();
-            events.push(event::create(flags).unwrap());
+            events.push(event::create(CUevent_flags::CU_EVENT_DEFAULT).unwrap());
         }
         events
     }
