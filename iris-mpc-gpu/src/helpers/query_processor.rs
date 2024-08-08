@@ -76,6 +76,22 @@ impl<T> Drop for StreamAwareCudaSlice<T> {
     }
 }
 
+/// Holds the raw memory pointers for the 2D slices.
+/// Memory is not freed when the struct is dropped, but must be freed manually.
+pub struct CudaVec2DSlicerRawPointer {
+    pub limb_0: Vec<u64>,
+    pub limb_1: Vec<u64>,
+}
+
+impl<T> Into<CudaVec2DSlicerRawPointer> for &CudaVec2DSlicer<T> {
+    fn into(self) -> CudaVec2DSlicerRawPointer {
+        CudaVec2DSlicerRawPointer {
+            limb_0: self.limb_0.iter().map(|s| *s.device_ptr()).collect(),
+            limb_1: self.limb_1.iter().map(|s| *s.device_ptr()).collect(),
+        }
+    }
+}
+
 pub struct CudaVec2DSlicer<T> {
     pub limb_0: Vec<StreamAwareCudaSlice<T>>,
     pub limb_1: Vec<StreamAwareCudaSlice<T>>,
@@ -141,7 +157,7 @@ impl DeviceCompactQuery {
     ) {
         code_engine.dot(
             &self.code_query,
-            &self.code_query_insert,
+            &(&self.code_query_insert).into(),
             db_sizes,
             offset,
             streams,
@@ -150,7 +166,7 @@ impl DeviceCompactQuery {
 
         mask_engine.dot(
             &self.mask_query,
-            &self.mask_query_insert,
+            &(&self.mask_query_insert).into(),
             db_sizes,
             offset,
             streams,
