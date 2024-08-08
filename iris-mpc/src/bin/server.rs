@@ -75,23 +75,28 @@ async fn receive_batch(
             .max_number_of_messages(1)
             .queue_url(queue_url)
             .send()
-            .await?;
+            .await
+            .context("while calling `receive_message` on SQS client")?;
 
         if let Some(messages) = rcv_message_output.messages {
             for sqs_message in messages {
-                let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())?;
-                let message: SMPCRequest = serde_json::from_str(&message.message)?;
+                let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
+                    .context("while trying to parse SQSMessage")?;
+                let message: SMPCRequest = serde_json::from_str(&message.message)
+                    .context("while trying to parse SMPCRequest")?;
 
                 store
                     .mark_requests_deleted(&[message.request_id.clone()])
-                    .await?;
+                    .await
+                    .context("while marking requests as deleted")?;
 
                 client
                     .delete_message()
                     .queue_url(queue_url)
                     .receipt_handle(sqs_message.receipt_handle.unwrap())
                     .send()
-                    .await?;
+                    .await
+                    .context("while calling `delete_message` on SQS client")?;
 
                 if skip_request_ids.contains(&message.request_id) {
                     // Some party (maybe us) already meant to delete this request, so we skip it.
@@ -152,7 +157,8 @@ async fn receive_batch(
                         mask_share.all_rotations(),
                     )
                 })
-                .await?;
+                .await
+                .context("while pre-processing iris code query")?;
 
                 batch_query.store.code.push(store_iris_shares);
                 batch_query.store.mask.push(store_mask_shares);
