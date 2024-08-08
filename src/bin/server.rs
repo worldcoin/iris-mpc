@@ -507,11 +507,9 @@ async fn main() -> eyre::Result<()> {
     background_tasks.check_tasks();
 
     let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
-    let mut total_time = Instant::now();
-    let mut batch_times = Duration::from_secs(0);
 
     // Main loop
-    for request_counter in 0..N_BATCHES {
+    loop {
         // **Tensor format of queries**
         //
         // The functions `receive_batch` and `prepare_query_shares` will prepare the
@@ -525,11 +523,6 @@ async fn main() -> eyre::Result<()> {
         // - The outer Vec is the dimension of the Galois Ring (2):
         //   - A decomposition of each iris bit into two u8 limbs.
 
-        // Skip first iteration
-        if request_counter == 1 {
-            total_time = Instant::now();
-            batch_times = Duration::from_secs(0);
-        }
         let now = Instant::now();
 
         // Skip requests based on the startup sync, only in the first iteration.
@@ -559,8 +552,7 @@ async fn main() -> eyre::Result<()> {
         }
 
         // start trace span - with single TraceId and single ParentTraceID
-        println!("Received batch in {:?}", now.elapsed());
-        batch_times += now.elapsed();
+        tracing::info!("Received batch in {:?}", now.elapsed());
         background_tasks.check_tasks();
 
         let result_future = handle.submit_batch_query(batch).await;
@@ -571,25 +563,7 @@ async fn main() -> eyre::Result<()> {
             .map_err(|e| eyre!("ServerActor processing timeout: {:?}", e))?;
 
         tx.send(result).await.unwrap();
-        println!("CPU time of one iteration {:?}", now.elapsed());
 
         // wrap up span context
     }
-    // drop actor handle to initiate shutdown
-    drop(handle);
-
-    println!(
-        "Total time for {} iterations: {:?}",
-        N_BATCHES - 1,
-        total_time.elapsed() - batch_times
-    );
-
-    // Clean up server tasks, then wait for them to finish
-    background_tasks.abort_all();
-    tokio::time::sleep(Duration::from_secs(5)).await;
-
-    // Check for background task hangs and shutdown panics
-    background_tasks.check_tasks_finished();
-
-    Ok(())
 }

@@ -689,6 +689,8 @@ impl ServerActor {
             &self.current_db_sizes,
         );
 
+        let previous_total_db_size = self.current_db_sizes.iter().sum::<usize>();
+
         record_stream_time!(
             &self.device_manager,
             &self.streams[0],
@@ -800,10 +802,14 @@ impl ServerActor {
         self.device_manager.await_streams(&self.streams[0]);
         self.device_manager.await_streams(&self.streams[1]);
 
-        // Log timers
+        // ---- END RESULT PROCESSING ----
         log_timers(events);
 
-        tracing::info!("CPU time of one iteration {:?}", now.elapsed());
+        tracing::info!(
+            "Batch took {:?} [{:.2} Melems/s]",
+            now.elapsed(),
+            (N_QUERIES * previous_total_db_size) as f64 / now.elapsed().as_secs_f64() / 1e6
+        );
         Ok(())
     }
 }
