@@ -508,61 +508,82 @@ async fn main() -> eyre::Result<()> {
     let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
     // Main loop
-    loop {
-        // **Tensor format of queries**
-        //
-        // The functions `receive_batch` and `prepare_query_shares` will prepare the
-        // _query_ variables as `Vec<Vec<u8>>` formatted as follows:
-        //
-        // - The inner Vec is a flattening of these dimensions (inner to outer):
-        //   - One u8 limb of one iris bit.
-        //   - One code: 12800 coefficients.
-        //   - One query: all rotated variants of a code.
-        //   - One batch: many queries.
-        // - The outer Vec is the dimension of the Galois Ring (2):
-        //   - A decomposition of each iris bit into two u8 limbs.
+    let res: eyre::Result<()> = async {
+        loop {
+            // **Tensor format of queries**
+            //
+            // The functions `receive_batch` and `prepare_query_shares` will prepare the
+            // _query_ variables as `Vec<Vec<u8>>` formatted as follows:
+            //
+            // - The inner Vec is a flattening of these dimensions (inner to outer):
+            //   - One u8 limb of one iris bit.
+            //   - One code: 12800 coefficients.
+            //   - One query: all rotated variants of a code.
+            //   - One batch: many queries.
+            // - The outer Vec is the dimension of the Galois Ring (2):
+            //   - A decomposition of each iris bit into two u8 limbs.
 
-        let now = Instant::now();
+            let now = Instant::now();
 
-        // Skip requests based on the startup sync, only in the first iteration.
-        let skip_request_ids = mem::take(&mut skip_request_ids);
+            // Skip requests based on the startup sync, only in the first iteration.
+            let skip_request_ids = mem::take(&mut skip_request_ids);
 
-        // This batch can consist of N sets of iris_share + mask
-        // It also includes a vector of request ids, mapping to the sets above
-        let batch = receive_batch(
-            party_id,
-            &sqs_client,
-            &config.requests_queue_url,
-            &store,
-            skip_request_ids,
-        )
-        .await?;
+            // This batch can consist of N sets of iris_share + mask
+            // It also includes a vector of request ids, mapping to the sets above
+            let batch = receive_batch(
+                party_id,
+                &sqs_client,
+                &config.requests_queue_url,
+                &store,
+                skip_request_ids,
+            )
+            .await?;
 
-        // Iterate over a list of tracing payloads, and create logs with mappings to
-        // payloads Log at least a "start" event using a log with trace.id and
-        // parent.trace.id
-        for tracing_payload in batch.metadata.iter() {
-            tracing::info!(
-                node_id = tracing_payload.node_id,
-                dd.trace_id = tracing_payload.trace_id,
-                dd.span_id = tracing_payload.span_id,
-                "Started processing share",
-            );
+            // Iterate over a list of tracing payloads, and create logs with mappings to
+            // payloads Log at least a "start" event using a log with trace.id and
+            // parent.trace.id
+            for tracing_payload in batch.metadata.iter() {
+                tracing::info!(
+                    node_id = tracing_payload.node_id,
+                    dd.trace_id = tracing_payload.trace_id,
+                    dd.span_id = tracing_payload.span_id,
+                    "Started processing share",
+                );
+            }
+
+            // start trace span - with single TraceId and single ParentTraceID
+            tracing::info!("Received batch in {:?}", now.elapsed());
+            background_tasks.check_tasks();
+
+            let result_future = handle.submit_batch_query(batch).await;
+
+            // await the result
+            let result = timeout(processing_timeout, result_future)
+                .await
+                .map_err(|e| eyre!("ServerActor processing timeout: {:?}", e))?;
+
+            tx.send(result).await?;
+
+            // wrap up span context
         }
-
-        // start trace span - with single TraceId and single ParentTraceID
-        tracing::info!("Received batch in {:?}", now.elapsed());
-        background_tasks.check_tasks();
-
-        let result_future = handle.submit_batch_query(batch).await;
-
-        // await the result
-        let result = timeout(processing_timeout, result_future)
-            .await
-            .map_err(|e| eyre!("ServerActor processing timeout: {:?}", e))?;
-
-        tx.send(result).await.unwrap();
-
-        // wrap up span context
     }
+    .await;
+
+    match res {
+        Ok(_) => {}
+        Err(e) => {
+            tracing::error!("ServerActor processing error: {:?}", e);
+            // drop actor handle to initiate shutdown
+            drop(handle);
+
+            // Clean up server tasks, then wait for them to finish
+            background_tasks.abort_all();
+            tokio::time::sleep(Duration::from_secs(5)).await;
+
+            // Check for background task hangs and shutdown panics
+            background_tasks.check_tasks_finished();
+        }
+    }
+
+    Ok(())
 }

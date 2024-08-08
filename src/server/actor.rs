@@ -38,7 +38,7 @@ macro_rules! record_stream_time {
         $manager.record_event($streams, &evt0);
         $block
         $manager.record_event($streams, &evt1);
-        $map.insert($label, vec![evt0, evt1]);
+        $map.entry($label).or_default().extend(vec![evt0, evt1])
     };
 }
 
@@ -323,7 +323,7 @@ impl ServerActor {
         return_channel: oneshot::Sender<ServerJobResult>,
     ) -> eyre::Result<()> {
         let now = Instant::now();
-        let mut events = HashMap::new();
+        let mut events: HashMap<&str, Vec<Vec<CUevent>>> = HashMap::new();
 
         // *Query* variant including Lagrange interpolation.
         let compact_query = {
@@ -818,8 +818,7 @@ impl ServerActor {
 fn log_timers(events: HashMap<&str, Vec<Vec<CUevent>>>) {
     for (name, event_vecs) in &events {
         let duration: f32 = event_vecs
-            .windows(2)
-            .step_by(2)
+            .chunks(2)
             .map(|pair| {
                 let (start_events, end_events) = (&pair[0], &pair[1]);
                 let total_duration: f32 = start_events
