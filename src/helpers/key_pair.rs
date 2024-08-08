@@ -11,6 +11,7 @@ use sodiumoxide::crypto::{
     sealedbox::SEALBYTES,
 };
 use thiserror::Error;
+use zeroize::Zeroize;
 
 const REGION: &str = "eu-north-1";
 const CURRENT_SECRET_LABEL: &str = "AWSCURRENT";
@@ -33,12 +34,26 @@ pub enum SecretError {
 
 #[derive(Clone, Debug)]
 pub struct SharesEncryptionKeyPair {
-    pub pk: PublicKey,
-    pub sk: SecretKey,
+    pk: PublicKey,
+    sk: SecretKey,
+}
+
+impl Zeroize for SharesEncryptionKeyPair {
+    fn zeroize(&mut self) {
+        self.pk.0.zeroize();
+        self.sk.0.zeroize();
+    }
+}
+
+impl Drop for SharesEncryptionKeyPair {
+    fn drop(&mut self) {
+        self.pk.0.zeroize();
+        self.sk.0.zeroize();
+    }
 }
 
 impl SharesEncryptionKeyPair {
-    pub async fn initialize_from_storage(config: Config) -> Result<Self, SecretError> {
+    pub async fn from_storage(config: Config) -> Result<Self, SecretError> {
         let region_provider = Region::new(REGION);
         let shared_config = aws_config::from_env().region(region_provider).load().await;
         let client = SecretsManagerClient::new(&shared_config);

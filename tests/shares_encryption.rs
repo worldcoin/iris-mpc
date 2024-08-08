@@ -56,10 +56,8 @@ async fn test_share_encryption_and_decryption() -> eyre::Result<()> {
 
         let iris_code_coefs = bytemuck::cast_slice(&shares[i].coefs);
         let mask_code_coefs = bytemuck::cast_slice(&masks[i].coefs);
-        let encrypted_iris_code =
-            STANDARD.encode(sealedbox::seal(iris_code_coefs, &server_shares_key_pair.pk));
-        let encrypted_mask_code =
-            STANDARD.encode(sealedbox::seal(mask_code_coefs, &server_shares_key_pair.pk));
+        let encrypted_iris_code = STANDARD.encode(sealedbox::seal(iris_code_coefs, &server_pk));
+        let encrypted_mask_code = STANDARD.encode(sealedbox::seal(mask_code_coefs, &server_pk));
 
         let as_smpc_request = SMPCRequest {
             request_id: format!("request_id_{}", i),
