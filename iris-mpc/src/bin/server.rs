@@ -596,7 +596,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .await
                 .map_err(|e| eyre!("ServerActor processing timeout: {:?}", e))?;
 
-            tx.send(result).await?;
+            // tx.send(result).await?;
 
             // wrap up span context
         }
