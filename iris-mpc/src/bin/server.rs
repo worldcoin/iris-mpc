@@ -375,12 +375,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let chacha_seeds = initialize_chacha_seeds(&config.kms_key_arns, party_id).await?;
 
     tracing::info!("Replaying results");
-    send_result_events(
-        store.last_results(SYNC_RESULTS).await?,
-        &sns_client,
-        &config,
-    )
-    .await?;
+    // send_result_events(
+    //     store.last_results(SYNC_RESULTS).await?,
+    //     &sns_client,
+    //     &config,
+    // )
+    // .await?;
 
     tracing::info!("Initialize iris db");
     // let (mut codes_db, mut masks_db, store_len) =
@@ -513,7 +513,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             tx.commit().await?;
 
             tracing::info!("Sending {} results", result_events.len());
-            send_result_events(result_events, &sns_client_bg, &config_bg).await?;
+            // send_result_events(result_events, &sns_client_bg,
+            // &config_bg).await?;
         }
 
         Ok(())
