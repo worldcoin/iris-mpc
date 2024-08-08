@@ -532,14 +532,14 @@ impl ShareDB {
                 self.rngs[idx].1.fill_rng_no_host_copy(len, &streams[idx]);
             }
 
-            for (i, d) in [&db.limb_0[idx], &db.limb_1[idx]].iter().enumerate() {
+            for (i, d) in [db.limb_0[idx], db.limb_1[idx]].into_iter().enumerate() {
                 for (j, q) in [query0, query1].iter().enumerate() {
                     if i + j >= LIMBS {
                         continue;
                     }
                     gemm(
                         &blass[idx],
-                        **d,
+                        d,
                         *q.device_ptr(),
                         *self.intermediate_results[idx].device_ptr(),
                         (offset * IRIS_CODE_LENGTH) as u64,
