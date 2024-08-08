@@ -333,6 +333,19 @@ async fn main() -> eyre::Result<()> {
     tracing::info!("Init tracing");
     let _tracing_shutdown_handle = initialize_tracing(&config)?;
 
+    match server_main(config).await {
+        Ok(_) => {
+            tracing::info!("Server exited normally");
+        }
+        Err(e) => {
+            tracing::error!("Server exited with error: {:?}", e);
+            return Err(e);
+        }
+    }
+    Ok(())
+}
+
+async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Creating new storage from: {:?}", config);
     let store = Store::new_from_config(&config).await?;
 
