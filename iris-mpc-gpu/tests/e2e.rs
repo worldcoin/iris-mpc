@@ -15,6 +15,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
 const DB_SIZE: usize = 8 * 1000;
+const DB_BUFFER: usize = 8 * 1000;
 const DB_RNG_SEED: u64 = 0xdeadbeef;
 const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 10;
@@ -106,6 +107,8 @@ async fn e2e_test() -> Result<()> {
             device_manager0,
             comms0,
             8,
+            DB_SIZE,
+            DB_BUFFER,
         ) {
             Ok((actor, handle)) => {
                 tx0.send(Ok(handle)).unwrap();
@@ -128,6 +131,8 @@ async fn e2e_test() -> Result<()> {
             device_manager1,
             comms1,
             8,
+            DB_SIZE,
+            DB_BUFFER,
         ) {
             Ok((actor, handle)) => {
                 tx1.send(Ok(handle)).unwrap();
@@ -150,6 +155,8 @@ async fn e2e_test() -> Result<()> {
             device_manager2,
             comms2,
             8,
+            DB_SIZE,
+            DB_BUFFER,
         ) {
             Ok((actor, handle)) => {
                 tx2.send(Ok(handle)).unwrap();

@@ -64,8 +64,6 @@ impl ServerActorHandle {
     }
 }
 
-const DB_SIZE: usize = 8 * 1_000;
-const DB_BUFFER: usize = 8 * 1_000;
 const DB_CHUNK_SIZE: usize = 512;
 const QUERIES: usize = ROTATIONS * MAX_BATCH_SIZE;
 pub struct ServerActor {
@@ -102,6 +100,8 @@ impl ServerActor {
         codes_db: &[u16],
         masks_db: &[u16],
         job_queue_size: usize,
+        db_size: usize,
+        db_buffer: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let device_manager = Arc::new(DeviceManager::init());
         Self::new_with_device_manager(
@@ -111,6 +111,8 @@ impl ServerActor {
             masks_db,
             device_manager,
             job_queue_size,
+            db_size,
+            db_buffer,
         )
     }
     pub fn new_with_device_manager(
@@ -120,6 +122,8 @@ impl ServerActor {
         masks_db: &[u16],
         device_manager: Arc<DeviceManager>,
         job_queue_size: usize,
+        db_size: usize,
+        db_buffer: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let ids = device_manager.get_ids_from_magic(0);
         let comms = device_manager.instantiate_network_from_ids(party_id, ids);
@@ -131,6 +135,8 @@ impl ServerActor {
             device_manager,
             comms,
             job_queue_size,
+            db_size,
+            db_buffer,
         )
     }
 
@@ -142,6 +148,8 @@ impl ServerActor {
         device_manager: Arc<DeviceManager>,
         comms: Vec<Arc<Comm>>,
         job_queue_size: usize,
+        db_size: usize,
+        db_buffer: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         assert_eq!(
             codes_db.len(),
@@ -158,6 +166,8 @@ impl ServerActor {
             device_manager,
             comms,
             rx,
+            db_size,
+            db_buffer,
         )?;
         Ok((actor, ServerActorHandle { job_queue: tx }))
     }
@@ -170,6 +180,8 @@ impl ServerActor {
         device_manager: Arc<DeviceManager>,
         comms: Vec<Arc<Comm>>,
         job_queue: mpsc::Receiver<ServerJob>,
+        db_size: usize,
+        db_buffer: usize,
     ) -> eyre::Result<Self> {
         let mut kdf_nonce = 0;
         let kdf_salt: Salt = Salt::new(HKDF_SHA256, b"IRIS_MPC");
@@ -206,8 +218,8 @@ impl ServerActor {
             comms.clone(),
         );
 
-        let code_db_slices = codes_engine.load_db(codes_db, DB_SIZE, DB_SIZE + DB_BUFFER, true);
-        let mask_db_slices = masks_engine.load_db(masks_db, DB_SIZE, DB_SIZE + DB_BUFFER, true);
+        let code_db_slices = codes_engine.load_db(codes_db, db_size, db_size + db_buffer, true);
+        let mask_db_slices = masks_engine.load_db(masks_db, db_size, db_size + db_buffer, true);
 
         // Engines for inflight queries
         let batch_codes_engine = ShareDB::init(
@@ -276,7 +288,7 @@ impl ServerActor {
         let batch_results = distance_comparator.prepare_results();
 
         let current_db_sizes: Vec<usize> =
-            vec![DB_SIZE / device_manager.device_count(); device_manager.device_count()];
+            vec![db_size / device_manager.device_count(); device_manager.device_count()];
         let query_db_size = vec![QUERIES; device_manager.device_count()];
 
         for dev in device_manager.devices() {

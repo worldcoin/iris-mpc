@@ -52,6 +52,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
+const DB_BUFFER: usize = 8 * 1_000;
 const RNG_SEED: u64 = 42;
 const SYNC_RESULTS: usize = MAX_BATCH_SIZE * 2;
 const SYNC_QUERIES: usize = MAX_BATCH_SIZE * 2;
@@ -438,6 +439,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             device_manager,
             comms,
             8,
+            DB_SIZE,
+            DB_BUFFER,
         ) {
             Ok((actor, handle)) => {
                 tx.send(Ok((handle, sync_result))).unwrap();
