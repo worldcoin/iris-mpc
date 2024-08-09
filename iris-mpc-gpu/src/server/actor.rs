@@ -681,15 +681,12 @@ impl ServerActor {
         self.device_manager.await_streams(&self.streams[0]);
 
         // Fetch the final results (blocking)
-        let host_results = self
+        let mut host_results = self
             .distance_comparator
             .fetch_final_results(&self.final_results);
 
         // Truncate the results to the batch size
-        let host_results = host_results
-            .into_iter()
-            .map(|x| x[0..batch_size].to_vec())
-            .collect::<Vec<_>>();
+        host_results.iter_mut().for_each(|x| x.truncate(batch_size));
 
         // Evaluate the results across devices
         // Format: merged_results[query_index]
