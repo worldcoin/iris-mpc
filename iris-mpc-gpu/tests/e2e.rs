@@ -215,45 +215,73 @@ async fn e2e_test() -> Result<()> {
             // batch0
             batch0.request_ids.push(request_id.to_string());
             // for storage
-            batch0.store.code.push(shared_code[0].clone());
-            batch0.store.mask.push(shared_mask[0].clone());
+            batch0.store_left.code.push(shared_code[0].clone());
+            batch0.store_left.mask.push(shared_mask[0].clone());
             // with rotations
-            batch0.db.code.extend(shared_code[0].all_rotations());
-            batch0.db.mask.extend(shared_mask[0].all_rotations());
+            batch0.db_left.code.extend(shared_code[0].all_rotations());
+            batch0.db_left.mask.extend(shared_mask[0].all_rotations());
             // with rotations
             GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_code[0]);
             GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_mask[0]);
-            batch0.query.code.extend(shared_code[0].all_rotations());
-            batch0.query.mask.extend(shared_mask[0].all_rotations());
+            batch0
+                .query_left
+                .code
+                .extend(shared_code[0].all_rotations());
+            batch0
+                .query_left
+                .mask
+                .extend(shared_mask[0].all_rotations());
 
             // batch 1
             batch1.request_ids.push(request_id.to_string());
             // for storage
-            batch1.store.code.push(shared_code[1].clone());
-            batch1.store.mask.push(shared_mask[1].clone());
+            batch1.store_left.code.push(shared_code[1].clone());
+            batch1.store_left.mask.push(shared_mask[1].clone());
             // with rotations
-            batch1.db.code.extend(shared_code[1].all_rotations());
-            batch1.db.mask.extend(shared_mask[1].all_rotations());
+            batch1.db_left.code.extend(shared_code[1].all_rotations());
+            batch1.db_left.mask.extend(shared_mask[1].all_rotations());
             // with rotations
             GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_code[1]);
             GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_mask[1]);
-            batch1.query.code.extend(shared_code[1].all_rotations());
-            batch1.query.mask.extend(shared_mask[1].all_rotations());
+            batch1
+                .query_left
+                .code
+                .extend(shared_code[1].all_rotations());
+            batch1
+                .query_left
+                .mask
+                .extend(shared_mask[1].all_rotations());
 
             // batch 2
             batch2.request_ids.push(request_id.to_string());
             // for storage
-            batch2.store.code.push(shared_code[2].clone());
-            batch2.store.mask.push(shared_mask[2].clone());
+            batch2.store_left.code.push(shared_code[2].clone());
+            batch2.store_left.mask.push(shared_mask[2].clone());
             // with rotations
-            batch2.db.code.extend(shared_code[2].all_rotations());
-            batch2.db.mask.extend(shared_mask[2].all_rotations());
+            batch2.db_left.code.extend(shared_code[2].all_rotations());
+            batch2.db_left.mask.extend(shared_mask[2].all_rotations());
             // with rotations
             GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_code[2]);
             GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_mask[2]);
-            batch2.query.code.extend(shared_code[2].all_rotations());
-            batch2.query.mask.extend(shared_mask[2].all_rotations());
+            batch2
+                .query_left
+                .code
+                .extend(shared_code[2].all_rotations());
+            batch2
+                .query_left
+                .mask
+                .extend(shared_mask[2].all_rotations());
         }
+        // TODO: better tests involving two eyes, atm just copy left to right
+        batch0.db_right = batch0.db_left.clone();
+        batch1.db_right = batch1.db_left.clone();
+        batch2.db_right = batch2.db_left.clone();
+        batch0.query_right = batch0.query_left.clone();
+        batch1.query_right = batch1.query_left.clone();
+        batch2.query_right = batch2.query_left.clone();
+        batch0.store_right = batch0.store_left.clone();
+        batch1.store_right = batch1.store_left.clone();
+        batch2.store_right = batch2.store_left.clone();
 
         // send batches to servers
         let res0_fut = handle0.submit_batch_query(batch0).await;

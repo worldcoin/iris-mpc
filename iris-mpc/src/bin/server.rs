@@ -69,7 +69,7 @@ async fn receive_batch(
 ) -> eyre::Result<BatchQuery> {
     let mut batch_query = BatchQuery::default();
 
-    while batch_query.db.code.len() < QUERIES {
+    while batch_query.db_left.code.len() < QUERIES {
         let rcv_message_output = client
             .receive_message()
             .max_number_of_messages(1)
@@ -160,15 +160,20 @@ async fn receive_batch(
                 .await
                 .context("while pre-processing iris code query")?;
 
-                batch_query.store.code.push(store_iris_shares);
-                batch_query.store.mask.push(store_mask_shares);
-                batch_query.db.code.extend(db_iris_shares);
-                batch_query.db.mask.extend(db_mask_shares);
-                batch_query.query.code.extend(iris_shares);
-                batch_query.query.mask.extend(mask_shares);
+                batch_query.store_left.code.push(store_iris_shares);
+                batch_query.store_left.mask.push(store_mask_shares);
+                batch_query.db_left.code.extend(db_iris_shares);
+                batch_query.db_left.mask.extend(db_mask_shares);
+                batch_query.query_left.code.extend(iris_shares);
+                batch_query.query_left.mask.extend(mask_shares);
             }
         }
     }
+    // TODO: also grab the right side from the batch once it is sent, ATM just
+    // duplicate left eye
+    batch_query.store_right = batch_query.store_left.clone();
+    batch_query.db_right = batch_query.db_left.clone();
+    batch_query.query_right = batch_query.query_left.clone();
 
     Ok(batch_query)
 }
@@ -470,7 +475,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             merged_results,
             request_ids,
             matches,
-            store: query_store,
+            store_left,
+            store_right,
         }) = rx.recv().await
         {
             let result_events = merged_results
@@ -494,14 +500,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 )
                 .map(|query_idx| {
                     // Get the original vectors from `receive_batch`.
-                    let code = &query_store.code[query_idx].coefs[..];
-                    let mask = &query_store.mask[query_idx].coefs[..];
                     StoredIrisRef {
-                        left_code:  code,
-                        left_mask:  mask,
-                        // TODO: second eye.
-                        right_code: &[],
-                        right_mask: &[],
+                        left_code:  &store_left.code[query_idx].coefs[..],
+                        left_mask:  &store_left.mask[query_idx].coefs[..],
+                        right_code: &store_right.code[query_idx].coefs[..],
+                        right_mask: &store_right.mask[query_idx].coefs[..],
                     }
                 })
                 .collect();

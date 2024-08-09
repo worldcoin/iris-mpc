@@ -96,8 +96,10 @@ pub struct ServerActor {
     query_db_size:       Vec<usize>,
 }
 
-const RESULTS_INIT_HOST: [u32; N_QUERIES * ROTATIONS] = [u32::MAX; N_QUERIES * ROTATIONS];
-const FINAL_RESULTS_INIT_HOST: [u32; N_QUERIES] = [u32::MAX; N_QUERIES];
+const NON_MATCH_ID: u32 = u32::MAX;
+
+const RESULTS_INIT_HOST: [u32; N_QUERIES * ROTATIONS] = [NON_MATCH_ID; N_QUERIES * ROTATIONS];
+const FINAL_RESULTS_INIT_HOST: [u32; N_QUERIES] = [NON_MATCH_ID; N_QUERIES];
 
 impl ServerActor {
     pub fn new(
@@ -329,13 +331,17 @@ impl ServerActor {
         let now = Instant::now();
         let mut events: HashMap<&str, Vec<Vec<CUevent>>> = HashMap::new();
 
+        ///////////////////////////////////////////////////////////////////
+        // COMPARE LEFT EYE QUERIES
+        ///////////////////////////////////////////////////////////////////
+
         // *Query* variant including Lagrange interpolation.
-        let compact_query = {
-            let code_query = prepare_query_shares(batch.query.code);
-            let mask_query = prepare_query_shares(batch.query.mask);
+        let compact_query_left = {
+            let code_query = prepare_query_shares(batch.query_left.code);
+            let mask_query = prepare_query_shares(batch.query_left.mask);
             // *Storage* variant (no interpolation).
-            let code_query_insert = prepare_query_shares(batch.db.code);
-            let mask_query_insert = prepare_query_shares(batch.db.mask);
+            let code_query_insert = prepare_query_shares(batch.db_left.code);
+            let mask_query_insert = prepare_query_shares(batch.db_left.mask);
             CompactQuery {
                 code_query,
                 mask_query,
@@ -343,23 +349,80 @@ impl ServerActor {
                 mask_query_insert,
             }
         };
-        let query_store = batch.store;
+        let query_store_left = batch.store_left;
 
-        let compact_device_queries =
-            compact_query.htod_transfer(&self.device_manager, &self.streams[0])?;
+        let compact_device_queries_left =
+            compact_query_left.htod_transfer(&self.device_manager, &self.streams[0])?;
 
-        let compact_device_sums = compact_device_queries.query_sums(
+        let compact_device_sums_left = compact_device_queries_left.query_sums(
             &self.codes_engine,
             &self.masks_engine,
             &self.streams[0],
             &self.cublas_handles[0],
         )?;
 
-        let mut merged_results = self.compare_query_against_db_and_self(
-            &compact_device_queries,
-            &compact_device_sums,
+        let merged_results_left = self.compare_query_against_db_and_self(
+            &compact_device_queries_left,
+            &compact_device_sums_left,
             &mut events,
         )?;
+
+        ///////////////////////////////////////////////////////////////////
+        // COMPARE RIGHT EYE QUERIES
+        ///////////////////////////////////////////////////////////////////
+
+        // *Query* variant including Lagrange interpolation.
+        let compact_query_right = {
+            let code_query = prepare_query_shares(batch.query_right.code);
+            let mask_query = prepare_query_shares(batch.query_right.mask);
+            // *Storage* variant (no interpolation).
+            let code_query_insert = prepare_query_shares(batch.db_right.code);
+            let mask_query_insert = prepare_query_shares(batch.db_right.mask);
+            CompactQuery {
+                code_query,
+                mask_query,
+                code_query_insert,
+                mask_query_insert,
+            }
+        };
+        let query_store_right = batch.store_right;
+
+        let compact_device_queries_right =
+            compact_query_right.htod_transfer(&self.device_manager, &self.streams[0])?;
+
+        let compact_device_sums_right = compact_device_queries_right.query_sums(
+            &self.codes_engine,
+            &self.masks_engine,
+            &self.streams[0],
+            &self.cublas_handles[0],
+        )?;
+
+        let merged_results_right = self.compare_query_against_db_and_self(
+            &compact_device_queries_right,
+            &compact_device_sums_right,
+            &mut events,
+        )?;
+
+        ///////////////////////////////////////////////////////////////////
+        // MERGE LEFT & RIGHT results
+        ///////////////////////////////////////////////////////////////////
+        let mut merged_results = merged_results_left
+            .into_iter()
+            .zip(merged_results_right.into_iter())
+            .map(|(left, right)| {
+                // If both eyes do not match, it is a non-match
+                if left == NON_MATCH_ID && right == NON_MATCH_ID {
+                    NON_MATCH_ID
+                } else {
+                    // otherwise just return the one that is not a non-match, with left priority
+                    if left != NON_MATCH_ID {
+                        left
+                    } else {
+                        right
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id
@@ -376,7 +439,7 @@ impl ServerActor {
         let insertion_list = merged_results
             .iter()
             .enumerate()
-            .filter(|&(_idx, &num)| num == u32::MAX)
+            .filter(|&(_idx, &num)| num == NON_MATCH_ID)
             .map(|(idx, _num)| idx)
             .collect::<Vec<_>>();
 
@@ -405,13 +468,13 @@ impl ServerActor {
                         for (db, query, sums) in [
                             (
                                 &self.code_db_slices,
-                                &compact_device_queries.code_query_insert,
-                                &compact_device_sums.code_query_insert,
+                                &compact_device_queries_right.code_query_insert,
+                                &compact_device_sums_right.code_query_insert,
                             ),
                             (
                                 &self.mask_db_slices,
-                                &compact_device_queries.mask_query_insert,
-                                &compact_device_sums.mask_query_insert,
+                                &compact_device_queries_right.mask_query_insert,
+                                &compact_device_sums_right.mask_query_insert,
                             ),
                         ] {
                             unsafe {
@@ -475,7 +538,8 @@ impl ServerActor {
                 merged_results,
                 request_ids: batch.request_ids,
                 matches,
-                store: query_store,
+                store_left: query_store_left,
+                store_right: query_store_right,
             })
             .unwrap();
 
@@ -922,10 +986,10 @@ fn open(
 fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
     let mut results = vec![];
     for j in 0..host_results[0].len() {
-        let mut match_entry = u32::MAX;
+        let mut match_entry = NON_MATCH_ID;
         for i in 0..host_results.len() {
             let match_idx = host_results[i][j] * n_devices as u32 + i as u32;
-            if host_results[i][j] != u32::MAX && match_idx < match_entry {
+            if host_results[i][j] != NON_MATCH_ID && match_idx < match_entry {
                 match_entry = match_idx;
             }
         }
@@ -936,7 +1000,7 @@ fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
         tracing::debug!(
             "Query {}: match={} [index: {}]",
             j,
-            match_entry != u32::MAX,
+            match_entry != NON_MATCH_ID,
             match_entry
         );
     }
