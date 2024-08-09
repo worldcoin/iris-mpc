@@ -20,7 +20,7 @@ use cudarc::{
 use futures::{Future, FutureExt};
 use iris_mpc_common::galois_engine::degree4::GaloisRingIrisCodeShare;
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
-use std::{collections::HashMap, mem, sync::Arc, time::Instant};
+use std::{cmp::min, collections::HashMap, mem, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
 
 macro_rules! forget_vec {
@@ -51,9 +51,11 @@ impl ServerActorHandle {
     pub async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
+        batch_size: usize,
     ) -> impl Future<Output = ServerJobResult> {
         let (tx, rx) = oneshot::channel();
         let job = ServerJob {
+            batch_size,
             batch,
             return_channel: tx,
         };
@@ -307,10 +309,11 @@ impl ServerActor {
     pub fn run(mut self) {
         while let Some(job) = self.job_queue.blocking_recv() {
             let ServerJob {
+                batch_size,
                 batch,
                 return_channel,
             } = job;
-            let _ = self.process_batch_query(batch, return_channel);
+            let _ = self.process_batch_query(batch, batch_size, return_channel);
         }
         tracing::info!("Server Actor finished due to all job queues being closed");
     }
@@ -318,10 +321,12 @@ impl ServerActor {
     fn process_batch_query(
         &mut self,
         batch: BatchQuery,
+        batch_size: usize,
         return_channel: oneshot::Sender<ServerJobResult>,
     ) -> eyre::Result<()> {
         let now = Instant::now();
         let mut events: HashMap<&str, Vec<Vec<CUevent>>> = HashMap::new();
+        let batch_size = min(batch_size, MAX_BATCH_SIZE);
 
         // *Query* variant including Lagrange interpolation.
         let compact_query = {
@@ -665,6 +670,12 @@ impl ServerActor {
         let host_results = self
             .distance_comparator
             .fetch_final_results(&self.final_results);
+
+        // Truncate the results to the batch size
+        let host_results = host_results
+            .into_iter()
+            .map(|x| x[0..batch_size].to_vec())
+            .collect::<Vec<_>>();
 
         // Evaluate the results across devices
         // Format: merged_results[query_index]

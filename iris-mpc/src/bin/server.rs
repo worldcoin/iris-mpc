@@ -611,7 +611,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             // This batch can consist of N sets of iris_share + mask
             // It also includes a vector of request ids, mapping to the sets above
-            let mut batch = receive_batch(
+            let batch = receive_batch(
                 party_id,
                 &sqs_client,
                 &config.requests_queue_url,
@@ -620,11 +620,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             )
             .await
             .context("while receiving batches from SQS")?;
-
-            // We haven't filled a full batch, so we extend it
-            if batch.store.code.len() < MAX_BATCH_SIZE {
-                batch = extend_batch(batch, MAX_BATCH_SIZE)?;
-            }
 
             // Iterate over a list of tracing payloads, and create logs with mappings to
             // payloads Log at least a "start" event using a log with trace.id and
@@ -644,7 +639,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             tracing::info!("Received batch in {:?}", now.elapsed());
             background_tasks.check_tasks();
 
-            let result_future = handle.submit_batch_query(batch).await;
+            let batch_size = batch.store.code.len();
+            let result_future = handle.submit_batch_query(batch, batch_size).await;
 
             // await the result
             let result = timeout(processing_timeout, result_future)

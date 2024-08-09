@@ -31,6 +31,7 @@ pub struct BatchQuery {
 
 #[derive(Debug)]
 pub struct ServerJob {
+    batch_size:     usize,
     batch:          BatchQuery,
     return_channel: oneshot::Sender<ServerJobResult>,
 }
