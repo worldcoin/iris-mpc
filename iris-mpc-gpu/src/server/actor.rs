@@ -715,7 +715,7 @@ impl ServerActor {
                         ] {
                             unsafe {
                                 helpers::dtod_at_offset(
-                                    *db.code_gr.limb_0[i].device_ptr(),
+                                    db.code_gr.limb_0[i],
                                     self.current_db_sizes[i] * IRIS_CODE_LENGTH,
                                     *query.limb_0[i].device_ptr(),
                                     IRIS_CODE_LENGTH * 15
@@ -725,7 +725,7 @@ impl ServerActor {
                                 );
 
                                 helpers::dtod_at_offset(
-                                    *db.code_gr.limb_1[i].device_ptr(),
+                                    db.code_gr.limb_1[i],
                                     self.current_db_sizes[i] * IRIS_CODE_LENGTH,
                                     *query.limb_1[i].device_ptr(),
                                     IRIS_CODE_LENGTH * 15

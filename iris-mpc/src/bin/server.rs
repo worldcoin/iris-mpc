@@ -53,6 +53,7 @@ const RNG_SEED: u64 = 42;
 const SYNC_RESULTS: usize = N_QUERIES * 2;
 const SYNC_QUERIES: usize = N_QUERIES * 2;
 const_assert!(SYNC_QUERIES <= sync_nccl::MAX_REQUESTS);
+const MAX_ROLLBACK: usize = N_QUERIES * 2;
 /// The number of batches before a stream is re-used.
 
 const QUERIES: usize = ROTATIONS * N_QUERIES;
@@ -294,8 +295,7 @@ async fn initialize_iris_dbs(
     while let Some(iris) = store.stream_irises_par(parallelism).await.next().await {
         let iris = iris?;
         if iris.index() >= count_irises {
-            tracing::warn!("Inconsistent iris index {}", iris.index());
-            continue;
+            return Err(eyre!("Inconsistent iris index {}", iris.index()));
         }
 
         let start = fake_len + iris.index() * IRIS_CODE_LENGTH;
@@ -308,7 +308,7 @@ async fn initialize_iris_dbs(
         }
     }
 
-    Ok((codes_db, masks_db, store_len))
+    Ok((codes_db, masks_db, count_irises))
 }
 
 async fn send_result_events(
@@ -443,6 +443,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     if let Some(db_len) = sync_result.must_rollback_storage() {
         tracing::error!("Databases are out-of-sync: {:?}", sync_result);
+        if db_len + MAX_ROLLBACK < store_len {
+            return Err(eyre!(
+                "Refusing to rollback so much (from {} to {})",
+                store_len,
+                db_len,
+            ));
+        }
         store.rollback(db_len).await?;
         tracing::error!("Rolled back to db_len={}", db_len);
     }
