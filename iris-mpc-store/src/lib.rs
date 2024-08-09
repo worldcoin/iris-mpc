@@ -134,7 +134,7 @@ impl Store {
         &self,
         partitions: usize,
     ) -> impl Stream<Item = Result<StoredIris, sqlx::Error>> + '_ {
-        let count = self.count_irises().await.expect("Failed count_irises") - 1;
+        let count = self.count_irises().await.expect("Failed count_irises");
         let partition_size = count.div_ceil(partitions);
 
         let mut partition_streams = Vec::new();
@@ -380,9 +380,16 @@ mod tests {
         assert_eq!(got.len(), count);
         assert_contiguous_id(&got);
 
-        let mut got_par: Vec<StoredIris> = store.stream_irises_par(5).await.try_collect().await?;
-        got_par.sort_by_key(|iris| iris.id);
-        assert_eq!(got, got_par);
+        // Compare with the parallel version with several edge-cases.
+        for parallelism in [1, 5, MAX_CONNECTIONS as usize + 1] {
+            let mut got_par: Vec<StoredIris> = store
+                .stream_irises_par(parallelism)
+                .await
+                .try_collect()
+                .await?;
+            got_par.sort_by_key(|iris| iris.id);
+            assert_eq!(got, got_par);
+        }
 
         let got = store.last_results(count).await?;
         assert_eq!(got, result_events);
