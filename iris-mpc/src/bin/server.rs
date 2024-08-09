@@ -127,7 +127,7 @@ async fn receive_batch(
                 }
 
                 batch_query.request_ids.push(message.request_id.clone());
-                batch_query.metadata.push(Some(batch_metadata));
+                batch_query.metadata.push(batch_metadata);
 
                 let (
                     store_iris_shares,
