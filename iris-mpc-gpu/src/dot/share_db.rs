@@ -826,7 +826,10 @@ impl ShareDB {
 #[cfg(test)]
 mod tests {
     use super::{preprocess_query, ShareDB};
-    use crate::helpers::device_manager::DeviceManager;
+    use crate::{
+        dot::{IRIS_CODE_LENGTH, ROTATIONS},
+        helpers::device_manager::DeviceManager,
+    };
     use float_eq::assert_float_eq;
     use iris_mpc_common::{galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::db::IrisDB};
     use ndarray::Array2;
@@ -885,7 +888,11 @@ mod tests {
         let streams = device_manager.fork_streams();
         let blass = device_manager.create_cublas(&streams);
         let preprocessed_query = device_manager
-            .htod_transfer_query(&preprocessed_query, &streams)
+            .htod_transfer_query(
+                &preprocessed_query,
+                &streams,
+                QUERY_SIZE * ROTATIONS * IRIS_CODE_LENGTH,
+            )
             .unwrap();
         let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
         let db_slices = engine.load_db(&db, DB_SIZE, DB_SIZE, false);
