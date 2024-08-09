@@ -1100,6 +1100,10 @@ fn calculate_insertion_indices(
 ) -> Vec<bool> {
     let mut matches = vec![true; N_QUERIES];
     let mut last_db_index = db_sizes.iter().sum::<usize>() as u32;
+    assert!(
+        last_db_index % 2 == 0,
+        "we always have a multiple of 2 in the DB"
+    );
     let (mut min_index, mut min_index_val) = (0, usize::MAX);
     for (i, list) in insertion_list.iter().enumerate() {
         if let Some(&first_val) = list.first() {
