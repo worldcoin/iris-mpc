@@ -68,7 +68,6 @@ async fn receive_batch(
     skip_request_ids: Vec<String>,
 ) -> eyre::Result<BatchQuery> {
     let mut batch_query = BatchQuery::default();
-    let mut next_batch_size = *CURRENT_BATCH_SIZE.lock().unwrap();
 
     while batch_query.db.code.len() < *CURRENT_BATCH_SIZE.lock().unwrap() * ROTATIONS {
         let rcv_message_output = client
@@ -105,7 +104,12 @@ async fn receive_batch(
                 }
 
                 if let Some(batch_size) = message.batch_size {
-                    next_batch_size = min(batch_size, MAX_BATCH_SIZE);
+                    // Updating the batch size instantly makes it a bit unpredictable, since
+                    // if we're already above the new limit, we'll still process the current batch
+                    // at the higher limit. On the other hand, updating it after the batch is
+                    // processed would not let us "unblock" the protocol if we're stuck with low
+                    // throughput.
+                    *CURRENT_BATCH_SIZE.lock().unwrap() = min(batch_size, MAX_BATCH_SIZE);
                     tracing::info!("Updating batch size to {}", batch_size);
                 }
 
@@ -175,9 +179,6 @@ async fn receive_batch(
             }
         }
     }
-
-    // Update the batch size for the next time.
-    *CURRENT_BATCH_SIZE.lock().unwrap() = next_batch_size;
 
     Ok(batch_query)
 }
