@@ -826,10 +826,7 @@ impl ShareDB {
 #[cfg(test)]
 mod tests {
     use super::{preprocess_query, ShareDB};
-    use crate::{
-        dot::{IRIS_CODE_LENGTH, ROTATIONS},
-        helpers::device_manager::DeviceManager,
-    };
+    use crate::helpers::device_manager::DeviceManager;
     use float_eq::assert_float_eq;
     use iris_mpc_common::{galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::db::IrisDB};
     use ndarray::Array2;

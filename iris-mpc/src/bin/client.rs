@@ -231,7 +231,7 @@ async fn main() -> eyre::Result<()> {
                 general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_mask[i].coefs));
 
             let request_message = SMPCRequest {
-                batch_size: Some(3),
+                batch_size: None,
                 request_id: request_id.to_string(),
                 iris_code,
                 mask_code,
