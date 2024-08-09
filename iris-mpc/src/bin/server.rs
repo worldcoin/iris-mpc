@@ -16,6 +16,7 @@ use iris_mpc_common::{
         },
         kms_dh::derive_shared_secret,
         sqs::{ResultEvent, SMPCRequest, SQSMessage},
+        sync::SyncState,
         task_monitor::TaskMonitor,
     },
     iris_db::db::IrisDB,
@@ -24,10 +25,7 @@ use iris_mpc_common::{
 use iris_mpc_gpu::{
     dot::ROTATIONS,
     helpers::device_manager::DeviceManager,
-    server::{
-        sync::{self, SyncState},
-        BatchMetadata, BatchQuery, ServerActor, ServerJobResult,
-    },
+    server::{sync_nccl, BatchMetadata, BatchQuery, ServerActor, ServerJobResult},
 };
 use iris_mpc_store::{Store, StoredIrisRef};
 use rand::{rngs::StdRng, SeedableRng};
@@ -54,7 +52,7 @@ const N_QUERIES: usize = 64;
 const RNG_SEED: u64 = 42;
 const SYNC_RESULTS: usize = N_QUERIES * 2;
 const SYNC_QUERIES: usize = N_QUERIES * 2;
-const_assert!(SYNC_QUERIES <= SyncState::MAX_REQUESTS);
+const_assert!(SYNC_QUERIES <= sync_nccl::MAX_REQUESTS);
 const MAX_ROLLBACK: usize = N_QUERIES * 2;
 /// The number of batches before a stream is re-used.
 
@@ -402,7 +400,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         let ids = device_manager.get_ids_from_magic(0);
         let comms = device_manager.instantiate_network_from_ids(config.party_id, ids);
 
-        let sync_result = match sync::sync(&comms[0], &my_state) {
+        let sync_result = match sync_nccl::sync(&comms[0], &my_state) {
             Ok(res) => res,
             Err(e) => {
                 tx.send(Err(e)).unwrap();
