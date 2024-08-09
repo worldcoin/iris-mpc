@@ -180,11 +180,13 @@ async fn e2e_test() -> Result<()> {
         let mut batch0 = BatchQuery::default();
         let mut batch1 = BatchQuery::default();
         let mut batch2 = BatchQuery::default();
-        for _ in 0..BATCH_SIZE {
+        for i in 0..BATCH_SIZE {
             let request_id = Uuid::new_v4();
             // Automatic random tests
             let options = if responses.is_empty() { 2 } else { 3 };
-            let template = match rng.gen_range(0..options) {
+            let option = rng.gen_range(0..options);
+            let option = if i == 0 { 0 } else { option };
+            let template = match option {
                 0 => {
                     println!("Sending new iris code");
                     expected_results.insert(request_id.to_string(), None);
