@@ -23,7 +23,7 @@ pub struct BatchMetadata {
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BatchQuery {
     pub request_ids: Vec<String>,
-    pub metadata:    Vec<Option<BatchMetadata>>,
+    pub metadata:    Vec<BatchMetadata>,
     pub query:       BatchQueryEntries,
     pub db:          BatchQueryEntries,
     pub store:       BatchQueryEntries,

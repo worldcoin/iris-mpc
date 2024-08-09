@@ -348,11 +348,8 @@ impl ServerActor {
         let batch_cublas = &self.cublas_handles[0];
 
         // Transfer queries to device
-        let compact_device_queries = compact_query.htod_transfer(
-            &self.device_manager,
-            batch_streams,
-            MAX_BATCH_SIZE * ROTATIONS * IRIS_CODE_LENGTH,
-        )?;
+        let compact_device_queries =
+            compact_query.htod_transfer(&self.device_manager, batch_streams, MAX_BATCH_SIZE)?;
 
         let compact_device_sums = compact_device_queries.query_sums(
             &self.codes_engine,
@@ -646,14 +643,12 @@ impl ServerActor {
         // payloads Log at least a "start" event using a log with trace.id
         // and parent.trace.id
         for tracing_payload in batch.metadata.iter() {
-            if let Some(tracing_payload) = tracing_payload {
-                tracing::info!(
-                    node_id = tracing_payload.node_id,
-                    dd.trace_id = tracing_payload.trace_id,
-                    dd.span_id = tracing_payload.span_id,
-                    "Protocol finished",
-                );
-            }
+            tracing::info!(
+                node_id = tracing_payload.node_id,
+                dd.trace_id = tracing_payload.trace_id,
+                dd.span_id = tracing_payload.span_id,
+                "Protocol finished",
+            );
         }
 
         // ---- START RESULT PROCESSING ----

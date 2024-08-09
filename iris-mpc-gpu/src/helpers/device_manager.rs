@@ -1,4 +1,5 @@
 use super::query_processor::{CudaVec2DSlicerU8, StreamAwareCudaSlice};
+use crate::dot::{IRIS_CODE_LENGTH, ROTATIONS};
 use cudarc::{
     cublas::CudaBlas,
     driver::{
@@ -111,10 +112,11 @@ impl DeviceManager {
         &self,
         preprocessed_query: &[Vec<u8>],
         streams: &[CudaStream],
-        query_size: usize,
+        query_batch_size: usize,
     ) -> eyre::Result<CudaVec2DSlicerU8> {
         let mut slices0 = vec![];
         let mut slices1 = vec![];
+        let query_size = query_batch_size * ROTATIONS * IRIS_CODE_LENGTH;
         for idx in 0..self.device_count() {
             let device = self.device(idx);
             device.bind_to_thread().unwrap();

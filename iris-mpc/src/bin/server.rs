@@ -509,16 +509,16 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 })
                 .collect();
 
-            // let mut tx = store_bg.tx().await?;
+            let mut tx = store_bg.tx().await?;
 
-            // store_bg.insert_results(&mut tx, &result_events).await?;
+            store_bg.insert_results(&mut tx, &result_events).await?;
 
-            // store_bg
-            //     .insert_irises(&mut tx, &codes_and_masks)
-            //     .await
-            //     .wrap_err("failed to persist queries")?;
+            store_bg
+                .insert_irises(&mut tx, &codes_and_masks)
+                .await
+                .wrap_err("failed to persist queries")?;
 
-            // tx.commit().await?;
+            tx.commit().await?;
 
             tracing::info!("Sending {} results", result_events.len());
             send_result_events(result_events, &sns_client_bg, &config_bg).await?;
@@ -584,14 +584,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             // payloads Log at least a "start" event using a log with trace.id and
             // parent.trace.id
             for tracing_payload in batch.metadata.iter() {
-                if let Some(tracing_payload) = tracing_payload {
-                    tracing::info!(
-                        node_id = tracing_payload.node_id,
-                        dd.trace_id = tracing_payload.trace_id,
-                        dd.span_id = tracing_payload.span_id,
-                        "Started processing share",
-                    );
-                }
+                tracing::info!(
+                    node_id = tracing_payload.node_id,
+                    dd.trace_id = tracing_payload.trace_id,
+                    dd.span_id = tracing_payload.span_id,
+                    "Started processing share",
+                );
             }
 
             // start trace span - with single TraceId and single ParentTraceID
