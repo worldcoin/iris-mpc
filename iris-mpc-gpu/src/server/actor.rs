@@ -466,7 +466,63 @@ impl ServerActor {
                 for i in 0..self.device_manager.device_count() {
                     self.device_manager.device(i).bind_to_thread().unwrap();
                     for insertion_idx in insertion_list[i].clone() {
-                        // Append to codes and masks db
+                        // Append left to codes and masks db
+                        for (db, query, sums) in [
+                            (
+                                &self.code_db_slices,
+                                &compact_device_queries_left.code_query_insert,
+                                &compact_device_sums_left.code_query_insert,
+                            ),
+                            (
+                                &self.mask_db_slices,
+                                &compact_device_queries_left.mask_query_insert,
+                                &compact_device_sums_left.mask_query_insert,
+                            ),
+                        ] {
+                            unsafe {
+                                helpers::dtod_at_offset(
+                                    db.code_gr.limb_0[i],
+                                    self.current_db_sizes[i] * IRIS_CODE_LENGTH,
+                                    *query.limb_0[i].device_ptr(),
+                                    IRIS_CODE_LENGTH * 15
+                                        + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                                    IRIS_CODE_LENGTH,
+                                    self.streams[0][i].stream,
+                                );
+
+                                helpers::dtod_at_offset(
+                                    db.code_gr.limb_1[i],
+                                    self.current_db_sizes[i] * IRIS_CODE_LENGTH,
+                                    *query.limb_1[i].device_ptr(),
+                                    IRIS_CODE_LENGTH * 15
+                                        + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                                    IRIS_CODE_LENGTH,
+                                    self.streams[0][i].stream,
+                                );
+
+                                helpers::dtod_at_offset(
+                                    *db.code_sums_gr.limb_0[i].device_ptr(),
+                                    self.current_db_sizes[i] * mem::size_of::<u32>(),
+                                    *sums.limb_0[i].device_ptr(),
+                                    mem::size_of::<u32>() * 15
+                                        + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                                    mem::size_of::<u32>(),
+                                    self.streams[0][i].stream,
+                                );
+
+                                helpers::dtod_at_offset(
+                                    *db.code_sums_gr.limb_1[i].device_ptr(),
+                                    self.current_db_sizes[i] * mem::size_of::<u32>(),
+                                    *sums.limb_1[i].device_ptr(),
+                                    mem::size_of::<u32>() * 15
+                                        + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                                    mem::size_of::<u32>(),
+                                    self.streams[0][i].stream,
+                                );
+                            }
+                        }
+                        self.current_db_sizes[i] += 1;
+                        // Append right to codes and masks db
                         for (db, query, sums) in [
                             (
                                 &self.code_db_slices,
@@ -544,26 +600,6 @@ impl ServerActor {
                 store_right: query_store_right,
             })
             .unwrap();
-
-        // Reset the results buffers for reuse
-        reset_results(
-            self.device_manager.devices(),
-            &self.results,
-            &RESULTS_INIT_HOST,
-            &self.streams[0],
-        );
-        reset_results(
-            self.device_manager.devices(),
-            &self.batch_results,
-            &RESULTS_INIT_HOST,
-            &self.streams[0],
-        );
-        reset_results(
-            self.device_manager.devices(),
-            &self.final_results,
-            &FINAL_RESULTS_INIT_HOST,
-            &self.streams[0],
-        );
 
         // Wait for all streams before get timings
         self.device_manager.await_streams(&self.streams[0]);
@@ -893,6 +929,27 @@ impl ServerActor {
         // Evaluate the results across devices
         // Format: merged_results[query_index]
         let merged_results = get_merged_results(&host_results, self.device_manager.device_count());
+
+        // Reset the results buffers for reuse
+        reset_results(
+            self.device_manager.devices(),
+            &self.results,
+            &RESULTS_INIT_HOST,
+            &self.streams[0],
+        );
+        reset_results(
+            self.device_manager.devices(),
+            &self.batch_results,
+            &RESULTS_INIT_HOST,
+            &self.streams[0],
+        );
+        reset_results(
+            self.device_manager.devices(),
+            &self.final_results,
+            &FINAL_RESULTS_INIT_HOST,
+            &self.streams[0],
+        );
+
         Ok(merged_results)
     }
 }
