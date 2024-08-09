@@ -30,11 +30,12 @@ use iris_mpc_gpu::{
     },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
+use once_cell::sync::Lazy;
 use rand::{rngs::StdRng, SeedableRng};
 use static_assertions::const_assert;
 use std::{
     mem,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use telemetry_batteries::{
@@ -57,7 +58,7 @@ const SYNC_QUERIES: usize = N_QUERIES * 2;
 const_assert!(SYNC_QUERIES <= SyncState::MAX_REQUESTS);
 /// The number of batches before a stream is re-used.
 
-const QUERIES: usize = ROTATIONS * N_QUERIES;
+static QUERIES_PER_BATCH: Lazy<Mutex<usize>> = Lazy::new(|| Mutex::new(ROTATIONS * N_QUERIES));
 
 async fn receive_batch(
     party_id: usize,
@@ -68,7 +69,7 @@ async fn receive_batch(
 ) -> eyre::Result<BatchQuery> {
     let mut batch_query = BatchQuery::default();
 
-    while batch_query.db.code.len() < QUERIES {
+    while batch_query.db.code.len() < *QUERIES_PER_BATCH.lock().unwrap() {
         let rcv_message_output = client
             .receive_message()
             .max_number_of_messages(1)
@@ -83,6 +84,8 @@ async fn receive_batch(
                     .context("while trying to parse SQSMessage")?;
                 let message: SMPCRequest = serde_json::from_str(&message.message)
                     .context("while trying to parse SMPCRequest")?;
+
+                println!("Received message: {:?}", sqs_message.message_attributes());
 
                 store
                     .mark_requests_deleted(&[message.request_id.clone()])

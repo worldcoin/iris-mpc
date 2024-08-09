@@ -65,8 +65,8 @@ impl ServerActorHandle {
 const DB_SIZE: usize = 8 * 1_000;
 const DB_BUFFER: usize = 8 * 1_000;
 const DB_CHUNK_SIZE: usize = 512;
-const N_QUERIES: usize = 64;
-const QUERIES: usize = ROTATIONS * N_QUERIES;
+const MAX_BATCH_SIZE: usize = 64;
+const QUERIES: usize = ROTATIONS * MAX_BATCH_SIZE;
 
 pub struct ServerActor {
     job_queue:           mpsc::Receiver<ServerJob>,
@@ -92,8 +92,8 @@ pub struct ServerActor {
     query_db_size:       Vec<usize>,
 }
 
-const RESULTS_INIT_HOST: [u32; N_QUERIES * ROTATIONS] = [u32::MAX; N_QUERIES * ROTATIONS];
-const FINAL_RESULTS_INIT_HOST: [u32; N_QUERIES] = [u32::MAX; N_QUERIES];
+const RESULTS_INIT_HOST: [u32; QUERIES] = [u32::MAX; QUERIES];
+const FINAL_RESULTS_INIT_HOST: [u32; MAX_BATCH_SIZE] = [u32::MAX; MAX_BATCH_SIZE];
 
 impl ServerActor {
     pub fn new(
@@ -808,7 +808,7 @@ impl ServerActor {
         tracing::info!(
             "Batch took {:?} [{:.2} Melems/s]",
             now.elapsed(),
-            (N_QUERIES * previous_total_db_size) as f64 / now.elapsed().as_secs_f64() / 1e6
+            (MAX_BATCH_SIZE * previous_total_db_size) as f64 / now.elapsed().as_secs_f64() / 1e6
         );
         Ok(())
     }
@@ -958,7 +958,7 @@ fn calculate_insertion_indices(
     insertion_list: &[Vec<usize>],
     db_sizes: &[usize],
 ) -> Vec<bool> {
-    let mut matches = vec![true; N_QUERIES];
+    let mut matches = vec![true; MAX_BATCH_SIZE];
     let mut last_db_index = db_sizes.iter().sum::<usize>() as u32;
     let (mut min_index, mut min_index_val) = (0, usize::MAX);
     for (i, list) in insertion_list.iter().enumerate() {
