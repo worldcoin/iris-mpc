@@ -351,7 +351,7 @@ impl ServerActor {
         let compact_device_queries = compact_query.htod_transfer(
             &self.device_manager,
             batch_streams,
-            MAX_BATCH_SIZE * ROTATIONS,
+            MAX_BATCH_SIZE * ROTATIONS * IRIS_CODE_LENGTH,
         )?;
 
         let compact_device_sums = compact_device_queries.query_sums(
