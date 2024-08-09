@@ -182,47 +182,6 @@ async fn receive_batch(
     Ok(batch_query)
 }
 
-/// Extends a given batch to a larger size by repeating the last element.
-fn extend_batch(batch: BatchQuery, size: usize) -> eyre::Result<BatchQuery> {
-    if batch.db.code.len() >= size {
-        eyre::bail!("Batch already larger than requested size")
-    }
-
-    let mut extended_batch = batch.clone();
-
-    for _ in batch.db.code.len()..size {
-        extended_batch.db.code.extend(
-            batch.db.code[batch.db.code.len() - ROTATIONS - 1..]
-                .iter()
-                .cloned(),
-        );
-        extended_batch.db.mask.extend(
-            batch.db.mask[batch.db.mask.len() - ROTATIONS - 1..]
-                .iter()
-                .cloned(),
-        );
-        extended_batch.query.code.extend(
-            batch.query.code[batch.query.code.len() - ROTATIONS - 1..]
-                .iter()
-                .cloned(),
-        );
-        extended_batch.query.mask.extend(
-            batch.query.mask[batch.query.mask.len() - ROTATIONS - 1..]
-                .iter()
-                .cloned(),
-        );
-        extended_batch
-            .store
-            .code
-            .push(batch.store.code[batch.store.code.len() - 1].clone());
-        extended_batch
-            .store
-            .mask
-            .push(batch.store.mask[batch.store.mask.len() - 1].clone());
-    }
-    Ok(batch)
-}
-
 fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
     if let Some(service) = &config.service {
         let tracing_shutdown_handle = DatadogBattery::init(

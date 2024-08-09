@@ -348,8 +348,11 @@ impl ServerActor {
         let batch_cublas = &self.cublas_handles[0];
 
         // Transfer queries to device
-        let compact_device_queries =
-            compact_query.htod_transfer(&self.device_manager, batch_streams)?;
+        let compact_device_queries = compact_query.htod_transfer(
+            &self.device_manager,
+            batch_streams,
+            MAX_BATCH_SIZE * ROTATIONS,
+        )?;
 
         let compact_device_sums = compact_device_queries.query_sums(
             &self.codes_engine,
