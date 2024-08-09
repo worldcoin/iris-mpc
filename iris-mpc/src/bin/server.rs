@@ -374,7 +374,7 @@ async fn send_result_events(
             .publish()
             .topic_arn(&config.results_topic_arn)
             .message(result_event)
-            .message_group_id(format!("party-id-{}", config.party_id))
+            // .message_group_id(format!("party-id-{}", config.party_id))
             .send()
             .await?;
     }
