@@ -26,7 +26,7 @@ use iris_mpc_gpu::{
     helpers::device_manager::DeviceManager,
     server::{
         sync::{self, SyncState},
-        BatchMetadata, BatchQuery, ServerActor, ServerJobResult,
+        BatchMetadata, BatchQuery, ServerActor, ServerJobResult, MAX_BATCH_SIZE,
     },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
@@ -34,6 +34,7 @@ use once_cell::sync::Lazy;
 use rand::{rngs::StdRng, SeedableRng};
 use static_assertions::const_assert;
 use std::{
+    cmp::min,
     mem,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -51,14 +52,13 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
-const N_QUERIES: usize = 64;
 const RNG_SEED: u64 = 42;
-const SYNC_RESULTS: usize = N_QUERIES * 2;
-const SYNC_QUERIES: usize = N_QUERIES * 2;
+const SYNC_RESULTS: usize = MAX_BATCH_SIZE * 2;
+const SYNC_QUERIES: usize = MAX_BATCH_SIZE * 2;
 const_assert!(SYNC_QUERIES <= SyncState::MAX_REQUESTS);
 /// The number of batches before a stream is re-used.
 
-static QUERIES_PER_BATCH: Lazy<Mutex<usize>> = Lazy::new(|| Mutex::new(ROTATIONS * N_QUERIES));
+static CURRENT_BATCH_SIZE: Lazy<Mutex<usize>> = Lazy::new(|| Mutex::new(MAX_BATCH_SIZE));
 
 async fn receive_batch(
     party_id: usize,
@@ -68,8 +68,9 @@ async fn receive_batch(
     skip_request_ids: Vec<String>,
 ) -> eyre::Result<BatchQuery> {
     let mut batch_query = BatchQuery::default();
+    let mut next_batch_size = *CURRENT_BATCH_SIZE.lock().unwrap();
 
-    while batch_query.db.code.len() < *QUERIES_PER_BATCH.lock().unwrap() {
+    while batch_query.db.code.len() < *CURRENT_BATCH_SIZE.lock().unwrap() * ROTATIONS {
         let rcv_message_output = client
             .receive_message()
             .max_number_of_messages(1)
@@ -84,8 +85,6 @@ async fn receive_batch(
                     .context("while trying to parse SQSMessage")?;
                 let message: SMPCRequest = serde_json::from_str(&message.message)
                     .context("while trying to parse SMPCRequest")?;
-
-                println!("Received message: {:?}", sqs_message.message_attributes());
 
                 store
                     .mark_requests_deleted(&[message.request_id.clone()])
@@ -103,6 +102,11 @@ async fn receive_batch(
                 if skip_request_ids.contains(&message.request_id) {
                     // Some party (maybe us) already meant to delete this request, so we skip it.
                     continue;
+                }
+
+                if let Some(batch_size) = message.batch_size {
+                    next_batch_size = min(batch_size, MAX_BATCH_SIZE);
+                    tracing::info!("Updating batch size to {}", batch_size);
                 }
 
                 let message_attributes = sqs_message.message_attributes.unwrap_or_default();
@@ -123,7 +127,7 @@ async fn receive_batch(
                 }
 
                 batch_query.request_ids.push(message.request_id.clone());
-                batch_query.metadata.push(batch_metadata);
+                batch_query.metadata.push(Some(batch_metadata));
 
                 let (
                     store_iris_shares,
@@ -172,7 +176,51 @@ async fn receive_batch(
         }
     }
 
+    // Update the batch size for the next time.
+    *CURRENT_BATCH_SIZE.lock().unwrap() = next_batch_size;
+
     Ok(batch_query)
+}
+
+/// Extends a given batch to a larger size by repeating the last element.
+fn extend_batch(batch: BatchQuery, size: usize) -> eyre::Result<BatchQuery> {
+    if batch.db.code.len() >= size {
+        eyre::bail!("Batch already larger than requested size")
+    }
+
+    let mut extended_batch = batch.clone();
+
+    for _ in batch.db.code.len()..size {
+        extended_batch.db.code.extend(
+            batch.db.code[batch.db.code.len() - ROTATIONS - 1..]
+                .iter()
+                .cloned(),
+        );
+        extended_batch.db.mask.extend(
+            batch.db.mask[batch.db.mask.len() - ROTATIONS - 1..]
+                .iter()
+                .cloned(),
+        );
+        extended_batch.query.code.extend(
+            batch.query.code[batch.query.code.len() - ROTATIONS - 1..]
+                .iter()
+                .cloned(),
+        );
+        extended_batch.query.mask.extend(
+            batch.query.mask[batch.query.mask.len() - ROTATIONS - 1..]
+                .iter()
+                .cloned(),
+        );
+        extended_batch
+            .store
+            .code
+            .push(batch.store.code[batch.store.code.len() - 1].clone());
+        extended_batch
+            .store
+            .mask
+            .push(batch.store.mask[batch.store.mask.len() - 1].clone());
+    }
+    Ok(batch)
 }
 
 fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
@@ -563,7 +611,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             // This batch can consist of N sets of iris_share + mask
             // It also includes a vector of request ids, mapping to the sets above
-            let batch = receive_batch(
+            let mut batch = receive_batch(
                 party_id,
                 &sqs_client,
                 &config.requests_queue_url,
@@ -573,16 +621,23 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             .await
             .context("while receiving batches from SQS")?;
 
+            // We haven't filled a full batch, so we extend it
+            if batch.store.code.len() < MAX_BATCH_SIZE {
+                batch = extend_batch(batch, MAX_BATCH_SIZE)?;
+            }
+
             // Iterate over a list of tracing payloads, and create logs with mappings to
             // payloads Log at least a "start" event using a log with trace.id and
             // parent.trace.id
             for tracing_payload in batch.metadata.iter() {
-                tracing::info!(
-                    node_id = tracing_payload.node_id,
-                    dd.trace_id = tracing_payload.trace_id,
-                    dd.span_id = tracing_payload.span_id,
-                    "Started processing share",
-                );
+                if let Some(tracing_payload) = tracing_payload {
+                    tracing::info!(
+                        node_id = tracing_payload.node_id,
+                        dd.trace_id = tracing_payload.trace_id,
+                        dd.span_id = tracing_payload.span_id,
+                        "Started processing share",
+                    );
+                }
             }
 
             // start trace span - with single TraceId and single ParentTraceID

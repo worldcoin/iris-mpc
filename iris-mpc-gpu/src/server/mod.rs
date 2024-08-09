@@ -5,6 +5,8 @@ pub use actor::{ServerActor, ServerActorHandle};
 use iris_mpc_common::galois_engine::degree4::GaloisRingIrisCodeShare;
 use tokio::sync::oneshot;
 
+pub const MAX_BATCH_SIZE: usize = 64;
+
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BatchQueryEntries {
     pub code: Vec<GaloisRingIrisCodeShare>,
@@ -21,7 +23,7 @@ pub struct BatchMetadata {
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BatchQuery {
     pub request_ids: Vec<String>,
-    pub metadata:    Vec<BatchMetadata>,
+    pub metadata:    Vec<Option<BatchMetadata>>,
     pub query:       BatchQueryEntries,
     pub db:          BatchQueryEntries,
     pub store:       BatchQueryEntries,

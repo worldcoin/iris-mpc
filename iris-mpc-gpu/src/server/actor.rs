@@ -1,4 +1,4 @@
-use super::{BatchQuery, ServerJob, ServerJobResult};
+use super::{BatchQuery, ServerJob, ServerJobResult, MAX_BATCH_SIZE};
 use crate::{
     dot::{
         distance_comparator::DistanceComparator,
@@ -65,9 +65,7 @@ impl ServerActorHandle {
 const DB_SIZE: usize = 8 * 1_000;
 const DB_BUFFER: usize = 8 * 1_000;
 const DB_CHUNK_SIZE: usize = 512;
-const MAX_BATCH_SIZE: usize = 64;
 const QUERIES: usize = ROTATIONS * MAX_BATCH_SIZE;
-
 pub struct ServerActor {
     job_queue:           mpsc::Receiver<ServerJob>,
     device_manager:      Arc<DeviceManager>,
@@ -640,12 +638,14 @@ impl ServerActor {
         // payloads Log at least a "start" event using a log with trace.id
         // and parent.trace.id
         for tracing_payload in batch.metadata.iter() {
-            tracing::info!(
-                node_id = tracing_payload.node_id,
-                dd.trace_id = tracing_payload.trace_id,
-                dd.span_id = tracing_payload.span_id,
-                "Protocol finished",
-            );
+            if let Some(tracing_payload) = tracing_payload {
+                tracing::info!(
+                    node_id = tracing_payload.node_id,
+                    dd.trace_id = tracing_payload.trace_id,
+                    dd.span_id = tracing_payload.span_id,
+                    "Protocol finished",
+                );
+            }
         }
 
         // ---- START RESULT PROCESSING ----
