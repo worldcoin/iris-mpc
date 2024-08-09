@@ -94,6 +94,7 @@ const RESULTS_INIT_HOST: [u32; QUERIES] = [u32::MAX; QUERIES];
 const FINAL_RESULTS_INIT_HOST: [u32; MAX_BATCH_SIZE] = [u32::MAX; MAX_BATCH_SIZE];
 
 impl ServerActor {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
@@ -115,6 +116,7 @@ impl ServerActor {
             db_buffer,
         )
     }
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_device_manager(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
@@ -140,6 +142,7 @@ impl ServerActor {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_device_manager_and_comms(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
@@ -172,6 +175,7 @@ impl ServerActor {
         Ok((actor, ServerActorHandle { job_queue: tx }))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn init(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
