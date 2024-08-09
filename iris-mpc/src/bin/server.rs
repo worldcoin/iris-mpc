@@ -305,9 +305,13 @@ async fn initialize_iris_dbs(
             return Err(eyre!("Inconsistent iris index {}", iris.index()));
         }
 
-        let start = fake_len + iris.index() * IRIS_CODE_LENGTH;
+        let start = fake_len + iris.index() * 2 * IRIS_CODE_LENGTH;
         codes_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.left_code());
         masks_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.left_mask());
+        codes_db[start + IRIS_CODE_LENGTH..start + IRIS_CODE_LENGTH * 2]
+            .copy_from_slice(iris.right_code());
+        masks_db[start + IRIS_CODE_LENGTH..start + IRIS_CODE_LENGTH * 2]
+            .copy_from_slice(iris.right_mask());
 
         store_len += 1;
         if (store_len % 10000) == 0 {
