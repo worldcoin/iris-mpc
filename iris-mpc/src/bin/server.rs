@@ -16,6 +16,7 @@ use iris_mpc_common::{
         },
         kms_dh::derive_shared_secret,
         sqs::{ResultEvent, SMPCRequest, SQSMessage},
+        sync::SyncState,
         task_monitor::TaskMonitor,
     },
     iris_db::db::IrisDB,
@@ -24,10 +25,7 @@ use iris_mpc_common::{
 use iris_mpc_gpu::{
     dot::ROTATIONS,
     helpers::device_manager::DeviceManager,
-    server::{
-        sync::{self, SyncState},
-        BatchMetadata, BatchQuery, ServerActor, ServerJobResult, MAX_BATCH_SIZE,
-    },
+    server::{sync_nccl, BatchMetadata, BatchQuery, ServerActor, ServerJobResult, MAX_BATCH_SIZE},
 };
 use iris_mpc_store::{Store, StoredIrisRef};
 use once_cell::sync::Lazy;
@@ -56,7 +54,8 @@ const DB_BUFFER: usize = 8 * 1_000;
 const RNG_SEED: u64 = 42;
 const SYNC_RESULTS: usize = MAX_BATCH_SIZE * 2;
 const SYNC_QUERIES: usize = MAX_BATCH_SIZE * 2;
-const_assert!(SYNC_QUERIES <= SyncState::MAX_REQUESTS);
+const_assert!(SYNC_QUERIES <= sync_nccl::MAX_REQUESTS);
+const MAX_ROLLBACK: usize = MAX_BATCH_SIZE * 2;
 /// The number of batches before a stream is re-used.
 
 static CURRENT_BATCH_SIZE: Lazy<Mutex<usize>> = Lazy::new(|| Mutex::new(MAX_BATCH_SIZE));
@@ -307,8 +306,7 @@ async fn initialize_iris_dbs(
     while let Some(iris) = store.stream_irises_par(parallelism).await.next().await {
         let iris = iris?;
         if iris.index() >= count_irises {
-            tracing::warn!("Inconsistent iris index {}", iris.index());
-            continue;
+            return Err(eyre!("Inconsistent iris index {}", iris.index()));
         }
 
         let start = fake_len + iris.index() * IRIS_CODE_LENGTH;
@@ -321,7 +319,7 @@ async fn initialize_iris_dbs(
         }
     }
 
-    Ok((codes_db, masks_db, store_len))
+    Ok((codes_db, masks_db, count_irises))
 }
 
 async fn send_result_events(
@@ -413,7 +411,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         let ids = device_manager.get_ids_from_magic(0);
         let comms = device_manager.instantiate_network_from_ids(config.party_id, ids);
 
-        let sync_result = match sync::sync(&comms[0], &my_state) {
+        let sync_result = match sync_nccl::sync(&comms[0], &my_state) {
             Ok(res) => res,
             Err(e) => {
                 tx.send(Err(e)).unwrap();
@@ -458,6 +456,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     if let Some(db_len) = sync_result.must_rollback_storage() {
         tracing::error!("Databases are out-of-sync: {:?}", sync_result);
+        if db_len + MAX_ROLLBACK < store_len {
+            return Err(eyre!(
+                "Refusing to rollback so much (from {} to {})",
+                store_len,
+                db_len,
+            ));
+        }
         store.rollback(db_len).await?;
         tracing::error!("Rolled back to db_len={}", db_len);
     }

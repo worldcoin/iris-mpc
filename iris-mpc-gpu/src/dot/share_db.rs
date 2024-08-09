@@ -4,7 +4,7 @@ use crate::{
         device_manager::DeviceManager,
         device_ptrs_to_shares,
         query_processor::{
-            CudaVec2DSlicer, CudaVec2DSlicerI8, CudaVec2DSlicerU32, CudaVec2DSlicerU8,
+            CudaVec2DSlicer, CudaVec2DSlicerRawPointer, CudaVec2DSlicerU32, CudaVec2DSlicerU8,
             StreamAwareCudaSlice,
         },
     },
@@ -21,8 +21,9 @@ use cudarc::{
         CudaBlas,
     },
     driver::{
-        result::malloc_async, sys::CUdeviceptr, CudaFunction, CudaSlice, CudaStream, DevicePtr,
-        LaunchAsync, LaunchConfig,
+        result::{malloc_async, malloc_managed},
+        sys::{CUdeviceptr, CUmemAttach_flags},
+        CudaFunction, CudaSlice, CudaStream, DevicePtr, LaunchAsync, LaunchConfig,
     },
     nccl::{self, result, Comm, NcclType},
     nvrtc::compile_ptx,
@@ -172,33 +173,8 @@ fn chunking<T: Clone>(
 }
 
 pub struct SlicedProcessedDatabase {
-    pub code_gr:      CudaVec2DSlicerI8,
+    pub code_gr:      CudaVec2DSlicerRawPointer,
     pub code_sums_gr: CudaVec2DSlicerU32,
-}
-
-impl SlicedProcessedDatabase {
-    #[allow(clippy::type_complexity)]
-    pub fn slice_tuples_to_ptrs(
-        &self,
-    ) -> (
-        (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
-        (Vec<CUdeviceptr>, Vec<CUdeviceptr>),
-    ) {
-        (
-            (
-                custom_device_ptrs(self.code_gr.limb_0.as_ref()),
-                custom_device_ptrs(self.code_gr.limb_1.as_ref()),
-            ),
-            (
-                custom_device_ptrs(self.code_sums_gr.limb_0.as_ref()),
-                custom_device_ptrs(self.code_sums_gr.limb_1.as_ref()),
-            ),
-        )
-    }
-}
-
-fn custom_device_ptrs<T>(slice: &[StreamAwareCudaSlice<T>]) -> Vec<CUdeviceptr> {
-    slice.iter().map(|s| *s.device_ptr()).collect()
 }
 
 pub struct ShareDB {
@@ -413,34 +389,28 @@ impl ShareDB {
 
         let db1 = db1
             .iter()
-            .enumerate()
-            .map(|(idx, chunk)| {
-                let mut slice = unsafe {
-                    self.device_manager
-                        .device(idx)
-                        .alloc(max_size * IRIS_CODE_LENGTH)
-                        .unwrap()
-                };
-                self.device_manager
-                    .htod_copy_into(chunk.to_vec(), &mut slice, idx)
-                    .unwrap();
-                StreamAwareCudaSlice::from(slice)
+            .map(|chunk| unsafe {
+                let mem = malloc_managed(
+                    max_size * IRIS_CODE_LENGTH,
+                    CUmemAttach_flags::CU_MEM_ATTACH_GLOBAL,
+                )
+                .unwrap();
+
+                std::ptr::copy(chunk.as_ptr() as *const _, mem as *mut _, chunk.len());
+                mem
             })
             .collect::<Vec<_>>();
         let db0 = db0
             .iter()
-            .enumerate()
-            .map(|(idx, chunk)| {
-                let mut slice = unsafe {
-                    self.device_manager
-                        .device(idx)
-                        .alloc(max_size * IRIS_CODE_LENGTH)
-                        .unwrap()
-                };
-                self.device_manager
-                    .htod_copy_into(chunk.to_vec(), &mut slice, idx)
-                    .unwrap();
-                StreamAwareCudaSlice::from(slice)
+            .map(|chunk| unsafe {
+                let mem = malloc_managed(
+                    max_size * IRIS_CODE_LENGTH,
+                    CUmemAttach_flags::CU_MEM_ATTACH_GLOBAL,
+                )
+                .unwrap();
+
+                std::ptr::copy(chunk.as_ptr() as *const _, mem as *mut _, chunk.len());
+                mem
             })
             .collect::<Vec<_>>();
 
@@ -449,7 +419,7 @@ impl ShareDB {
         }
 
         SlicedProcessedDatabase {
-            code_gr:      CudaVec2DSlicerI8 {
+            code_gr:      CudaVec2DSlicerRawPointer {
                 limb_0: db0,
                 limb_1: db1,
             },
@@ -541,10 +511,10 @@ impl ShareDB {
         }
     }
 
-    pub fn dot<T, U>(
+    pub fn dot<T>(
         &mut self,
         queries: &CudaVec2DSlicer<T>,
-        db: &CudaVec2DSlicer<U>,
+        db: &CudaVec2DSlicerRawPointer,
         chunk_sizes: &[usize],
         offset: usize,
         streams: &[CudaStream],
@@ -562,14 +532,14 @@ impl ShareDB {
                 self.rngs[idx].1.fill_rng_no_host_copy(len, &streams[idx]);
             }
 
-            for (i, d) in [&db.limb_0[idx], &db.limb_1[idx]].iter().enumerate() {
+            for (i, d) in [db.limb_0[idx], db.limb_1[idx]].into_iter().enumerate() {
                 for (j, q) in [query0, query1].iter().enumerate() {
                     if i + j >= LIMBS {
                         continue;
                     }
                     gemm(
                         &blass[idx],
-                        *d.device_ptr(),
+                        d,
                         *q.device_ptr(),
                         *self.intermediate_results[idx].device_ptr(),
                         (offset * IRIS_CODE_LENGTH) as u64,
