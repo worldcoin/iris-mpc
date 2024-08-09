@@ -521,10 +521,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             store_bg.insert_results(&mut tx, &result_events).await?;
 
-            store_bg
-                .insert_irises(&mut tx, &codes_and_masks)
-                .await
-                .wrap_err("failed to persist queries")?;
+            if !codes_and_masks.is_empty() {
+                store_bg
+                    .insert_irises(&mut tx, &codes_and_masks)
+                    .await
+                    .wrap_err("failed to persist queries")?;
+            }
 
             tx.commit().await?;
 
