@@ -193,7 +193,8 @@ async fn e2e_test() -> Result<()> {
                 1 => {
                     println!("Sending iris code from db");
                     let db_index = rng.gen_range(0..db.db.len());
-                    expected_results.insert(request_id.to_string(), Some(db_index as u32));
+                    // we expect the db index to be divided by 2, since we have 2 eyes per person
+                    expected_results.insert(request_id.to_string(), Some((db_index / 2) as u32));
                     db.db[db_index].clone()
                 }
                 2 => {

@@ -415,10 +415,12 @@ impl ServerActor {
                     NON_MATCH_ID
                 } else {
                     // otherwise just return the one that is not a non-match, with left priority
+                    // also divide by 2, since we have two eyes, and person i has indices i*2 and
+                    // i*2+1 for their left and right eye as we want to return the person index
                     if left != NON_MATCH_ID {
-                        left
+                        left / 2
                     } else {
-                        right
+                        right / 2
                     }
                 }
             })
