@@ -342,7 +342,7 @@ impl ServerActor {
     ) -> eyre::Result<()> {
         let now = Instant::now();
         let mut events: HashMap<&str, Vec<Vec<CUevent>>> = HashMap::new();
-        let batch_size = min(batch_size, MAX_BATCH_SIZE);
+        let batch_size = batch_size.clamp(1, MAX_BATCH_SIZE);
 
         // *Query* variant including Lagrange interpolation.
         let compact_query = {
