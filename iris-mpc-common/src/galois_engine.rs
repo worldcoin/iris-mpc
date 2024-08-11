@@ -272,9 +272,19 @@ pub mod degree4 {
                 },
             ];
             let encode_mask_code = |i| {
-                let m = mask_code.get_bit(i) as u16;
-                let c = iris_code.get_bit(i) as u16;
-                m.wrapping_sub(2 * (c & m))
+                // Maps from old encoding to new encoding
+                // ( r,   c, w, b)  -->  (b, w, r % 4,   c, r // 4)
+                // (16, 200, 2, 2)  -->  (2, 2,     4, 200,      4)
+                let b = i / 6400;
+                let w = i % 6400 / 3200;
+                let r1 = i % 3200 / 800;
+                let c = i % 800 / 4;
+                let r2 = i % 4;
+                let r = r2 * 4 + r1;
+                let idx = 800 * r + c * 4 + w * 2 + b;
+                let mask = mask_code.get_bit(idx) as u16;
+                let code = iris_code.get_bit(idx) as u16;
+                mask.wrapping_sub(2 * (code & mask))
             };
             for i in (0..IRIS_CODE_LENGTH).step_by(4) {
                 let element = GaloisRingElement::<basis::A>::from_coefs([
