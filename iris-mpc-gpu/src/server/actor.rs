@@ -222,8 +222,15 @@ impl ServerActor {
             comms.clone(),
         );
 
-        let code_db_slices = codes_engine.load_db(codes_db, db_size, db_size + db_buffer, true);
-        let mask_db_slices = masks_engine.load_db(masks_db, db_size, db_size + db_buffer, true);
+        let (code_db_slices, current_db_sizes) =
+            codes_engine.load_db(codes_db, db_size, db_size + db_buffer, true);
+        let (mask_db_slices, mask_db_lens) =
+            masks_engine.load_db(masks_db, db_size, db_size + db_buffer, true);
+
+        assert_eq!(
+            current_db_sizes, mask_db_lens,
+            "Code and mask db sizes mismatch"
+        );
 
         // Engines for inflight queries
         let batch_codes_engine = ShareDB::init(
@@ -291,8 +298,6 @@ impl ServerActor {
         let results = distance_comparator.prepare_results();
         let batch_results = distance_comparator.prepare_results();
 
-        let current_db_sizes: Vec<usize> =
-            vec![db_size / device_manager.device_count(); device_manager.device_count()];
         let query_db_size = vec![QUERIES; device_manager.device_count()];
 
         for dev in device_manager.devices() {
@@ -342,7 +347,7 @@ impl ServerActor {
     ) -> eyre::Result<()> {
         let now = Instant::now();
         let mut events: HashMap<&str, Vec<Vec<CUevent>>> = HashMap::new();
-        let batch_size = batch_size.clamp(1, MAX_BATCH_SIZE);
+        assert!(batch_size > 0 && batch_size <= MAX_BATCH_SIZE);
 
         // *Query* variant including Lagrange interpolation.
         let compact_query = {

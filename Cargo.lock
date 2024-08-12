@@ -2206,7 +2206,6 @@ dependencies = [
  "iris-mpc-gpu",
  "iris-mpc-store",
  "ndarray",
- "once_cell",
  "rand",
  "serde_json",
  "static_assertions",

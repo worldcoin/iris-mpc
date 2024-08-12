@@ -28,13 +28,11 @@ use iris_mpc_gpu::{
     server::{sync_nccl, BatchMetadata, BatchQuery, ServerActor, ServerJobResult, MAX_BATCH_SIZE},
 };
 use iris_mpc_store::{Store, StoredIrisRef};
-use once_cell::sync::Lazy;
 use rand::{rngs::StdRng, SeedableRng};
 use static_assertions::const_assert;
 use std::{
-    cmp::min,
     mem,
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
 };
 use telemetry_batteries::{
@@ -56,9 +54,8 @@ const SYNC_RESULTS: usize = MAX_BATCH_SIZE * 2;
 const SYNC_QUERIES: usize = MAX_BATCH_SIZE * 2;
 const_assert!(SYNC_QUERIES <= sync_nccl::MAX_REQUESTS);
 const MAX_ROLLBACK: usize = MAX_BATCH_SIZE * 2;
-/// The number of batches before a stream is re-used.
 
-static CURRENT_BATCH_SIZE: Lazy<Mutex<usize>> = Lazy::new(|| Mutex::new(MAX_BATCH_SIZE));
+static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(MAX_BATCH_SIZE));
 
 async fn receive_batch(
     party_id: usize,
@@ -109,7 +106,7 @@ async fn receive_batch(
                     // at the higher limit. On the other hand, updating it after the batch is
                     // processed would not let us "unblock" the protocol if we're stuck with low
                     // throughput.
-                    *CURRENT_BATCH_SIZE.lock().unwrap() = min(batch_size, MAX_BATCH_SIZE);
+                    *CURRENT_BATCH_SIZE.lock().unwrap() = batch_size.clamp(1, MAX_BATCH_SIZE);
                     tracing::info!("Updating batch size to {}", batch_size);
                 }
 
