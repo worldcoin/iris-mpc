@@ -12,7 +12,7 @@ resolver = "2"
 aws-config = { version = "1.5.4", features = ["behavior-version-latest"] }
 aws-sdk-kms = { version = "1.37.0" }
 aws-sdk-sns = { version = "1.37.0" }
-aws-sdk-sqs = { version = "1.36.0" }
+aws-sdk-sqs = { version = "1.37.0" }
 aws-sdk-s3 = { version = "1.42.0" }
 aws-sdk-secretsmanager = { version = "1.40.0" }
 axum = "0.7"
