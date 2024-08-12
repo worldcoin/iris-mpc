@@ -248,9 +248,12 @@ pub mod degree4 {
     impl GaloisRingIrisCodeShare {
         const COLS: usize = 200;
 
-        /// Maps from old encoding to new encoding
-        // ( r,   c, w, b)  -->  (b, w, r % 4,   c, r // 4)
-        // (16, 200, 2, 2)  -->  (2, 2,     4, 200,      4)
+        /// Maps from an index in a flattened array of the new shape to the
+        /// index of a flattened array of the original shape.
+        ///
+        ///          New shape         --> Original shape
+        /// (b, w, r % 4,   c, r // 4) --> ( r,   c, w, b)
+        /// (2, 2,     4, 200,      4) --> (16, 200, 2, 2)
         const fn remap_index(i: usize) -> usize {
             let b = i / 6400;
             let w = i % 6400 / 3200;
