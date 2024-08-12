@@ -385,6 +385,11 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // COMPARE LEFT EYE QUERIES
         ///////////////////////////////////////////////////////////////////
+        tracing::info!(
+            "Transferring queries to device, {}, {}",
+            batch_size,
+            batch.query_left.code.len()
+        );
 
         // *Query* variant including Lagrange interpolation.
         let compact_query_left = {
