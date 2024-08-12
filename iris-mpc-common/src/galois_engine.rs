@@ -248,6 +248,19 @@ pub mod degree4 {
     impl GaloisRingIrisCodeShare {
         const COLS: usize = 200;
 
+        /// Maps from old encoding to new encoding
+        // ( r,   c, w, b)  -->  (b, w, r % 4,   c, r // 4)
+        // (16, 200, 2, 2)  -->  (2, 2,     4, 200,      4)
+        const fn remap_index(i: usize) -> usize {
+            let b = i / 6400;
+            let w = i % 6400 / 3200;
+            let r1 = i % 3200 / 800;
+            let c = i % 800 / 4;
+            let r2 = i % 4;
+            let r = r2 * 4 + r1;
+            800 * r + c * 4 + w * 2 + b
+        }
+
         pub fn new(id: usize, coefs: [u16; IRIS_CODE_LENGTH]) -> Self {
             Self { id, coefs }
         }
@@ -272,26 +285,16 @@ pub mod degree4 {
                 },
             ];
             let encode_mask_code = |i| {
-                // Maps from old encoding to new encoding
-                // ( r,   c, w, b)  -->  (b, w, r % 4,   c, r // 4)
-                // (16, 200, 2, 2)  -->  (2, 2,     4, 200,      4)
-                let b = i / 6400;
-                let w = i % 6400 / 3200;
-                let r1 = i % 3200 / 800;
-                let c = i % 800 / 4;
-                let r2 = i % 4;
-                let r = r2 * 4 + r1;
-                let idx = 800 * r + c * 4 + w * 2 + b;
-                let mask = mask_code.get_bit(idx) as u16;
-                let code = iris_code.get_bit(idx) as u16;
+                let mask = mask_code.get_bit(i) as u16;
+                let code = iris_code.get_bit(i) as u16;
                 mask.wrapping_sub(2 * (code & mask))
             };
             for i in (0..IRIS_CODE_LENGTH).step_by(4) {
                 let element = GaloisRingElement::<basis::A>::from_coefs([
-                    encode_mask_code(i),
-                    encode_mask_code(i + 1),
-                    encode_mask_code(i + 2),
-                    encode_mask_code(i + 3),
+                    encode_mask_code(Self::remap_index(i)),
+                    encode_mask_code(Self::remap_index(i + 1)),
+                    encode_mask_code(Self::remap_index(i + 2)),
+                    encode_mask_code(Self::remap_index(i + 3)),
                 ]);
                 let element = element.to_monomial();
                 let share = ShamirGaloisRingShare::encode_3_mat(&element.coefs, rng);
@@ -324,10 +327,10 @@ pub mod degree4 {
             ];
             for i in (0..IRIS_CODE_LENGTH).step_by(4) {
                 let element = GaloisRingElement::<basis::A>::from_coefs([
-                    iris_code.get_bit(i) as u16,
-                    iris_code.get_bit(i + 1) as u16,
-                    iris_code.get_bit(i + 2) as u16,
-                    iris_code.get_bit(i + 3) as u16,
+                    iris_code.get_bit(Self::remap_index(i)) as u16,
+                    iris_code.get_bit(Self::remap_index(i + 1)) as u16,
+                    iris_code.get_bit(Self::remap_index(i + 2)) as u16,
+                    iris_code.get_bit(Self::remap_index(i + 3)) as u16,
                 ]);
                 let element = element.to_monomial();
                 let share = ShamirGaloisRingShare::encode_3_mat(&element.coefs, rng);
@@ -362,10 +365,10 @@ pub mod degree4 {
             ];
             for i in (0..12800).step_by(4) {
                 let element = GaloisRingElement::<basis::A>::from_coefs([
-                    iris_code[i],
-                    iris_code[i + 1],
-                    iris_code[i + 2],
-                    iris_code[i + 3],
+                    iris_code[Self::remap_index(i)],
+                    iris_code[Self::remap_index(i + 1)],
+                    iris_code[Self::remap_index(i + 2)],
+                    iris_code[Self::remap_index(i + 3)],
                 ]);
                 let element = element.to_monomial();
                 let share = ShamirGaloisRingShare::encode_3_mat(&element.coefs, rng);
