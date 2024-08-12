@@ -440,18 +440,13 @@ impl ServerActor {
             .into_iter()
             .zip(merged_results_right)
             .map(|(left, right)| {
-                // If both eyes do not match, it is a non-match
-                if left == NON_MATCH_ID && right == NON_MATCH_ID {
-                    NON_MATCH_ID
+                // If both eyes are matches with the same ID, return the ID
+                // This also covers the case where both are non-matches, since we return
+                // NON_MATCH in that case as well
+                if left == right {
+                    left
                 } else {
-                    // otherwise just return the one that is not a non-match, with left priority
-                    // also divide by 2, since we have two eyes, and person i has indices i*2 and
-                    // i*2+1 for their left and right eye as we want to return the person index
-                    if left != NON_MATCH_ID {
-                        left / 2
-                    } else {
-                        right / 2
-                    }
+                    NON_MATCH_ID
                 }
             })
             .collect::<Vec<_>>();
