@@ -23,6 +23,7 @@ use cudarc::{
 };
 use futures::{Future, FutureExt};
 use iris_mpc_common::{galois_engine::degree4::GaloisRingIrisCodeShare, IrisCodeDbSlice};
+use itertools::Itertools;
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{collections::HashMap, mem, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
@@ -171,7 +172,8 @@ impl ServerActor {
                 right_eye_db.1.len()
             ]
             .iter()
-            .all(|size| size == &db_size),
+            .tuple_windows()
+            .all(|(a, b)| a == b),
             "Internal DB mismatch, codes and masks sizes differ"
         );
 
