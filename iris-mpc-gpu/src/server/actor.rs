@@ -24,7 +24,7 @@ use cudarc::{
 use futures::{Future, FutureExt};
 use iris_mpc_common::{galois_engine::degree4::GaloisRingIrisCodeShare, IrisCodeDbSlice};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
-use std::{collections::HashMap, mem, sync::Arc, time::Instant};
+use std::{collections::HashMap, mem, sync::Arc, time::Instant, usize::MAX};
 use tokio::sync::{mpsc, oneshot};
 
 macro_rules! forget_vec {
@@ -407,8 +407,11 @@ impl ServerActor {
         };
         let query_store_left = batch.store_left;
 
-        let compact_device_queries_left =
-            compact_query_left.htod_transfer(&self.device_manager, &self.streams[0], batch_size)?;
+        let compact_device_queries_left = compact_query_left.htod_transfer(
+            &self.device_manager,
+            &self.streams[0],
+            MAX_BATCH_SIZE,
+        )?;
 
         let compact_device_sums_left = compact_device_queries_left.query_sums(
             &self.codes_engine,
@@ -448,7 +451,7 @@ impl ServerActor {
         let compact_device_queries_right = compact_query_right.htod_transfer(
             &self.device_manager,
             &self.streams[0],
-            batch_size,
+            MAX_BATCH_SIZE,
         )?;
 
         let compact_device_sums_right = compact_device_queries_right.query_sums(
