@@ -164,6 +164,14 @@ impl ServerActor {
         db_size: usize,
         db_buffer: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
+        tracing::info!(
+            "DB sizes: {}, {}, {}, {}",
+            left_eye_db.0.len(),
+            left_eye_db.1.len(),
+            right_eye_db.0.len(),
+            right_eye_db.1.len()
+        );
+        tracing::info!("DB size: {}, buffer: {}", db_size, db_buffer);
         assert!(
             [
                 left_eye_db.0.len(),
