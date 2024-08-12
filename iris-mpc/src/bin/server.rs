@@ -618,8 +618,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             tracing::info!("Received batch in {:?}", now.elapsed());
             background_tasks.check_tasks();
 
-            let batch_size = batch.store_left.code.len();
-            let result_future = handle.submit_batch_query(batch, batch_size).await;
+            let result_future = handle.submit_batch_query(batch).await;
 
             // await the result
             let result = timeout(processing_timeout, result_future)

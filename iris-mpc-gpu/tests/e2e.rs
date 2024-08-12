@@ -19,7 +19,6 @@ const DB_BUFFER: usize = 8 * 1000;
 const DB_RNG_SEED: u64 = 0xdeadbeef;
 const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 10;
-const BATCH_SIZE: usize = 64;
 
 fn generate_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
     let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
@@ -187,7 +186,8 @@ async fn e2e_test() -> Result<()> {
         let mut batch0 = BatchQuery::default();
         let mut batch1 = BatchQuery::default();
         let mut batch2 = BatchQuery::default();
-        for _ in 0..BATCH_SIZE {
+        let batch_size = rng.gen_range(1..MAX_BATCH_SIZE);
+        for _ in 0..batch_size {
             let request_id = Uuid::new_v4();
             // Automatic random tests
             let options = if responses.is_empty() { 2 } else { 3 };
@@ -292,10 +292,9 @@ async fn e2e_test() -> Result<()> {
         batch2.store_right = batch2.store_left.clone();
 
         // send batches to servers
-        let batch_size = rng.gen_range(1..MAX_BATCH_SIZE);
-        let res0_fut = handle0.submit_batch_query(batch0, batch_size).await;
-        let res1_fut = handle1.submit_batch_query(batch1, batch_size).await;
-        let res2_fut = handle2.submit_batch_query(batch2, batch_size).await;
+        let res0_fut = handle0.submit_batch_query(batch0).await;
+        let res1_fut = handle1.submit_batch_query(batch1).await;
+        let res2_fut = handle2.submit_batch_query(batch2).await;
 
         let res0 = res0_fut.await;
         let res1 = res1_fut.await;

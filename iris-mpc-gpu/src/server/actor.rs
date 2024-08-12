@@ -55,11 +55,9 @@ impl ServerActorHandle {
     pub async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
-        batch_size: usize,
     ) -> impl Future<Output = ServerJobResult> {
         let (tx, rx) = oneshot::channel();
         let job = ServerJob {
-            batch_size,
             batch,
             return_channel: tx,
         };
@@ -355,11 +353,10 @@ impl ServerActor {
     pub fn run(mut self) {
         while let Some(job) = self.job_queue.blocking_recv() {
             let ServerJob {
-                batch_size,
                 batch,
                 return_channel,
             } = job;
-            let _ = self.process_batch_query(batch, batch_size, return_channel);
+            let _ = self.process_batch_query(batch, return_channel);
         }
         tracing::info!("Server Actor finished due to all job queues being closed");
     }
@@ -367,12 +364,27 @@ impl ServerActor {
     fn process_batch_query(
         &mut self,
         batch: BatchQuery,
-        batch_size: usize,
         return_channel: oneshot::Sender<ServerJobResult>,
     ) -> eyre::Result<()> {
         let now = Instant::now();
         let mut events: HashMap<&str, Vec<Vec<CUevent>>> = HashMap::new();
+
+        let batch_size = batch.db_left.code.len();
         assert!(batch_size > 0 && batch_size <= MAX_BATCH_SIZE);
+        assert!(
+            batch_size == batch.db_left.mask.len()
+                && batch_size == batch.query_left.code.len()
+                && batch_size == batch.query_left.mask.len()
+                && batch_size == batch.query_right.code.len()
+                && batch_size == batch.query_right.mask.len()
+                && batch_size == batch.db_right.code.len()
+                && batch_size == batch.db_right.mask.len()
+                && batch_size == batch.store_left.code.len()
+                && batch_size == batch.store_left.mask.len()
+                && batch_size == batch.store_right.code.len()
+                && batch_size == batch.store_right.mask.len(),
+            "Query batch sizes mismatch"
+        );
 
         ///////////////////////////////////////////////////////////////////
         // COMPARE LEFT EYE QUERIES
@@ -394,11 +406,8 @@ impl ServerActor {
         };
         let query_store_left = batch.store_left;
 
-        let compact_device_queries_left = compact_query_left.htod_transfer(
-            &self.device_manager,
-            &self.streams[0],
-            MAX_BATCH_SIZE,
-        )?;
+        let compact_device_queries_left =
+            compact_query_left.htod_transfer(&self.device_manager, &self.streams[0])?;
 
         let compact_device_sums_left = compact_device_queries_left.query_sums(
             &self.codes_engine,
@@ -435,11 +444,8 @@ impl ServerActor {
         };
         let query_store_right = batch.store_right;
 
-        let compact_device_queries_right = compact_query_right.htod_transfer(
-            &self.device_manager,
-            &self.streams[0],
-            MAX_BATCH_SIZE,
-        )?;
+        let compact_device_queries_right =
+            compact_query_right.htod_transfer(&self.device_manager, &self.streams[0])?;
 
         let compact_device_sums_right = compact_device_queries_right.query_sums(
             &self.codes_engine,

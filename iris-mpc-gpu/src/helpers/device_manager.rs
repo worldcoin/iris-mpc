@@ -1,5 +1,8 @@
 use super::query_processor::{CudaVec2DSlicerU8, StreamAwareCudaSlice};
-use crate::dot::{IRIS_CODE_LENGTH, ROTATIONS};
+use crate::{
+    dot::{IRIS_CODE_LENGTH, ROTATIONS},
+    server::MAX_BATCH_SIZE,
+};
 use cudarc::{
     cublas::CudaBlas,
     driver::{
@@ -112,48 +115,39 @@ impl DeviceManager {
         &self,
         preprocessed_query: &[Vec<u8>],
         streams: &[CudaStream],
-        query_batch_size: usize,
     ) -> eyre::Result<CudaVec2DSlicerU8> {
         let mut slices0 = vec![];
         let mut slices1 = vec![];
-        let query_size = query_batch_size * ROTATIONS * IRIS_CODE_LENGTH;
+        const QUERY_SIZE: usize = MAX_BATCH_SIZE * ROTATIONS * IRIS_CODE_LENGTH;
         for idx in 0..self.device_count() {
             let device = self.device(idx);
             device.bind_to_thread().unwrap();
 
-            let query0 = unsafe { malloc_async(streams[idx].stream, query_size).unwrap() };
+            let query0 = unsafe { malloc_async(streams[idx].stream, QUERY_SIZE).unwrap() };
 
             let slice0 = StreamAwareCudaSlice::<u8>::upgrade_ptr_stream(
                 query0,
                 streams[idx].stream,
-                query_size,
+                QUERY_SIZE,
             );
 
             unsafe {
-                memcpy_htod_async(
-                    query0,
-                    &preprocessed_query[0][..query_size],
-                    streams[idx].stream,
-                )
-                .unwrap();
+                memcpy_htod_async(query0, &preprocessed_query[0], streams[idx].stream).unwrap();
             }
+            // TODO: is it ok if the remaining memory above is unititialized?
 
-            let query1 = unsafe { malloc_async(streams[idx].stream, query_size).unwrap() };
+            let query1 = unsafe { malloc_async(streams[idx].stream, QUERY_SIZE).unwrap() };
 
             let slice1 = StreamAwareCudaSlice::<u8>::upgrade_ptr_stream(
                 query1,
                 streams[idx].stream,
-                query_size,
+                QUERY_SIZE,
             );
 
             unsafe {
-                memcpy_htod_async(
-                    query1,
-                    &preprocessed_query[1][..query_size],
-                    streams[idx].stream,
-                )
-                .unwrap();
+                memcpy_htod_async(query1, &preprocessed_query[1], streams[idx].stream).unwrap();
             }
+            // TODO: is it ok if the remaining memory above is unititialized?
 
             slices0.push(slice0);
             slices1.push(slice1);
