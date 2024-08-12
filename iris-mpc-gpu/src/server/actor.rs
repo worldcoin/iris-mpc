@@ -180,8 +180,7 @@ impl ServerActor {
                 right_eye_db.1.len()
             ]
             .iter()
-            .tuple_windows()
-            .all(|(a, b)| a == b),
+            .all(|&x| x == db_size * IRIS_CODE_LENGTH),
             "Internal DB mismatch, codes and masks sizes differ"
         );
 
@@ -1119,10 +1118,6 @@ fn calculate_insertion_indices(
 ) -> Vec<bool> {
     let mut matches = vec![true; MAX_BATCH_SIZE];
     let mut last_db_index = db_sizes.iter().sum::<usize>() as u32;
-    assert!(
-        last_db_index % 2 == 0,
-        "we always have a multiple of 2 in the DB"
-    );
     let (mut min_index, mut min_index_val) = (0, usize::MAX);
     for (i, list) in insertion_list.iter().enumerate() {
         if let Some(&first_val) = list.first() {
