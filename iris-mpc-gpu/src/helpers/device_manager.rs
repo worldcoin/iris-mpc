@@ -130,7 +130,12 @@ impl DeviceManager {
             );
 
             unsafe {
-                memcpy_htod_async(query0, &preprocessed_query[0], streams[idx].stream).unwrap();
+                memcpy_htod_async(
+                    query0,
+                    &preprocessed_query[0][..query_size],
+                    streams[idx].stream,
+                )
+                .unwrap();
             }
 
             let query1 = unsafe { malloc_async(streams[idx].stream, query_size).unwrap() };
@@ -142,7 +147,12 @@ impl DeviceManager {
             );
 
             unsafe {
-                memcpy_htod_async(query1, &preprocessed_query[1], streams[idx].stream).unwrap();
+                memcpy_htod_async(
+                    query1,
+                    &preprocessed_query[1][..query_size],
+                    streams[idx].stream,
+                )
+                .unwrap();
             }
 
             slices0.push(slice0);
