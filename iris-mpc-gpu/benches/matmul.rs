@@ -37,8 +37,7 @@ fn bench_memcpy(c: &mut Criterion) {
     let preprocessed_query = preprocess_query(&query);
     let streams = device_manager.fork_streams();
     let blass = device_manager.create_cublas(&streams);
-    let db_slices = engine.load_db(&db, DB_SIZE, DB_SIZE, false);
-    let db_sizes = vec![DB_SIZE; 8];
+    let (db_slices, db_sizes) = engine.load_db(&db, DB_SIZE, DB_SIZE, false);
 
     group.throughput(Throughput::Elements((DB_SIZE * QUERY_SIZE / 31) as u64));
     group.sample_size(10);
@@ -46,7 +45,7 @@ fn bench_memcpy(c: &mut Criterion) {
     group.bench_function(format!("matmul {} x {}", DB_SIZE, QUERY_SIZE), |b| {
         b.iter(|| {
             let preprocessed_query = device_manager
-                .htod_transfer_query(&preprocessed_query, &streams)
+                .htod_transfer_query(&preprocessed_query, &streams, QUERY_SIZE)
                 .unwrap();
             let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
             engine.dot(

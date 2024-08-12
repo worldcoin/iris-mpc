@@ -16,6 +16,7 @@ use iris_mpc_common::{
         },
         kms_dh::derive_shared_secret,
         sqs::{ResultEvent, SMPCRequest, SQSMessage},
+        sync::SyncState,
         task_monitor::TaskMonitor,
     },
     iris_db::db::IrisDB,
@@ -24,17 +25,14 @@ use iris_mpc_common::{
 use iris_mpc_gpu::{
     dot::ROTATIONS,
     helpers::device_manager::DeviceManager,
-    server::{
-        sync::{self, SyncState},
-        BatchMetadata, BatchQuery, ServerActor, ServerJobResult,
-    },
+    server::{sync_nccl, BatchMetadata, BatchQuery, ServerActor, ServerJobResult, MAX_BATCH_SIZE},
 };
 use iris_mpc_store::{Store, StoredIrisRef};
 use rand::{rngs::StdRng, SeedableRng};
 use static_assertions::const_assert;
 use std::{
     mem,
-    sync::Arc,
+    sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
 };
 use telemetry_batteries::{
@@ -50,15 +48,14 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
-const N_QUERIES: usize = 64;
+const DB_BUFFER: usize = 8 * 1_000;
 const RNG_SEED: u64 = 42;
-const SYNC_RESULTS: usize = N_QUERIES * 2;
-const SYNC_QUERIES: usize = N_QUERIES * 2;
-const_assert!(SYNC_QUERIES <= SyncState::MAX_REQUESTS);
-const MAX_ROLLBACK: usize = N_QUERIES * 2;
-/// The number of batches before a stream is re-used.
+const SYNC_RESULTS: usize = MAX_BATCH_SIZE * 2;
+const SYNC_QUERIES: usize = MAX_BATCH_SIZE * 2;
+const_assert!(SYNC_QUERIES <= sync_nccl::MAX_REQUESTS);
+const MAX_ROLLBACK: usize = MAX_BATCH_SIZE * 2;
 
-const QUERIES: usize = ROTATIONS * N_QUERIES;
+static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(MAX_BATCH_SIZE));
 
 async fn receive_batch(
     party_id: usize,
@@ -69,7 +66,7 @@ async fn receive_batch(
 ) -> eyre::Result<BatchQuery> {
     let mut batch_query = BatchQuery::default();
 
-    while batch_query.db_left.code.len() < QUERIES {
+    while batch_query.db_left.code.len() < *CURRENT_BATCH_SIZE.lock().unwrap() * ROTATIONS {
         let rcv_message_output = client
             .receive_message()
             .max_number_of_messages(1)
@@ -101,6 +98,16 @@ async fn receive_batch(
                 if skip_request_ids.contains(&message.request_id) {
                     // Some party (maybe us) already meant to delete this request, so we skip it.
                     continue;
+                }
+
+                if let Some(batch_size) = message.batch_size {
+                    // Updating the batch size instantly makes it a bit unpredictable, since
+                    // if we're already above the new limit, we'll still process the current batch
+                    // at the higher limit. On the other hand, updating it after the batch is
+                    // processed would not let us "unblock" the protocol if we're stuck with low
+                    // throughput.
+                    *CURRENT_BATCH_SIZE.lock().unwrap() = batch_size.clamp(1, MAX_BATCH_SIZE);
+                    tracing::info!("Updating batch size to {}", batch_size);
                 }
 
                 let message_attributes = sqs_message.message_attributes.unwrap_or_default();
@@ -411,7 +418,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         let ids = device_manager.get_ids_from_magic(0);
         let comms = device_manager.instantiate_network_from_ids(config.party_id, ids);
 
-        let sync_result = match sync::sync(&comms[0], &my_state) {
+        let sync_result = match sync_nccl::sync(&comms[0], &my_state) {
             Ok(res) => res,
             Err(e) => {
                 tx.send(Err(e)).unwrap();
@@ -437,6 +444,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             device_manager,
             comms,
             8,
+            DB_SIZE,
+            DB_BUFFER,
         ) {
             Ok((actor, handle)) => {
                 tx.send(Ok((handle, sync_result))).unwrap();
@@ -517,10 +526,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             store_bg.insert_results(&mut tx, &result_events).await?;
 
-            store_bg
-                .insert_irises(&mut tx, &codes_and_masks)
-                .await
-                .wrap_err("failed to persist queries")?;
+            if !codes_and_masks.is_empty() {
+                store_bg
+                    .insert_irises(&mut tx, &codes_and_masks)
+                    .await
+                    .wrap_err("failed to persist queries")?;
+            }
 
             tx.commit().await?;
 
@@ -600,7 +611,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             tracing::info!("Received batch in {:?}", now.elapsed());
             background_tasks.check_tasks();
 
-            let result_future = handle.submit_batch_query(batch).await;
+            let batch_size = batch.store_left.code.len();
+            let result_future = handle.submit_batch_query(batch, batch_size).await;
 
             // await the result
             let result = timeout(processing_timeout, result_future)

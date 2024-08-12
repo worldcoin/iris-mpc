@@ -22,6 +22,8 @@ pub struct SQSMessage {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SMPCRequest {
+    // TODO: make this a message attribute, but the SQS message will anyways be refactored soon.
+    pub batch_size: Option<usize>,
     pub request_id: String,
     pub iris_code:  String,
     pub mask_code:  String,

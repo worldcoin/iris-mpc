@@ -22,7 +22,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{spawn, sync::Mutex, time::sleep};
 use uuid::Uuid;
 
-const N_QUERIES: usize = 64 * 20;
+const N_QUERIES: usize = 64 * 5;
 const REGION: &str = "eu-north-1";
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;
@@ -231,6 +231,7 @@ async fn main() -> eyre::Result<()> {
                 general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_mask[i].coefs));
 
             let request_message = SMPCRequest {
+                batch_size: None,
                 request_id: request_id.to_string(),
                 iris_code,
                 mask_code,
@@ -268,6 +269,8 @@ async fn main() -> eyre::Result<()> {
             sleep(Duration::from_secs(1)).await;
         }
     }
+
+    sleep(Duration::from_secs(10)).await;
 
     // Receive all messages
     recv_thread.await??;

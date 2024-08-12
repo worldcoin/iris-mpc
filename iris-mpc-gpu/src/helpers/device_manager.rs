@@ -1,4 +1,5 @@
 use super::query_processor::{CudaVec2DSlicerU8, StreamAwareCudaSlice};
+use crate::dot::{IRIS_CODE_LENGTH, ROTATIONS};
 use cudarc::{
     cublas::CudaBlas,
     driver::{
@@ -111,33 +112,33 @@ impl DeviceManager {
         &self,
         preprocessed_query: &[Vec<u8>],
         streams: &[CudaStream],
+        query_batch_size: usize,
     ) -> eyre::Result<CudaVec2DSlicerU8> {
         let mut slices0 = vec![];
         let mut slices1 = vec![];
+        let query_size = query_batch_size * ROTATIONS * IRIS_CODE_LENGTH;
         for idx in 0..self.device_count() {
             let device = self.device(idx);
             device.bind_to_thread().unwrap();
 
-            let query0 =
-                unsafe { malloc_async(streams[idx].stream, preprocessed_query[0].len()).unwrap() };
+            let query0 = unsafe { malloc_async(streams[idx].stream, query_size).unwrap() };
 
             let slice0 = StreamAwareCudaSlice::<u8>::upgrade_ptr_stream(
                 query0,
                 streams[idx].stream,
-                preprocessed_query[0].len(),
+                query_size,
             );
 
             unsafe {
                 memcpy_htod_async(query0, &preprocessed_query[0], streams[idx].stream).unwrap();
             }
 
-            let query1 =
-                unsafe { malloc_async(streams[idx].stream, preprocessed_query[1].len()).unwrap() };
+            let query1 = unsafe { malloc_async(streams[idx].stream, query_size).unwrap() };
 
             let slice1 = StreamAwareCudaSlice::<u8>::upgrade_ptr_stream(
                 query1,
                 streams[idx].stream,
-                preprocessed_query[1].len(),
+                query_size,
             );
 
             unsafe {
