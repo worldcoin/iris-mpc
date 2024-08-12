@@ -25,8 +25,10 @@ struct KeyManagerCli {
     #[command(subcommand)]
     command: Commands,
 
-    #[arg(short, long, env, value_parser = clap::builder::PossibleValuesParser::new(&["0", "1", "2"]))]
-    node_id: u16,
+    #[arg(
+        short, long, env, value_parser = clap::builder::PossibleValuesParser::new(& ["0", "1", "2"])
+    )]
+    node_id: String,
 
     #[arg(short, long, env, default_value = "stage")]
     env: String,
@@ -47,7 +49,9 @@ enum Commands {
     /// or in s3)
     Validate {
         // AWSCURRENT or AWSPREVIOUS or a specific version
-        #[arg(short, long, env, value_parser = clap::builder::PossibleValuesParser::new(&["AWSCURRENT", "AWSPREVIOUS"]))]
+        #[arg(
+            short, long, env, value_parser = clap::builder::PossibleValuesParser::new(& ["AWSCURRENT", "AWSPREVIOUS"])
+        )]
         version_stage: String,
 
         #[arg(short, long, env)]
@@ -129,7 +133,7 @@ async fn validate_keys(
     let user_privkey = STANDARD.decode(data.as_bytes()).unwrap();
     let decoded_priv_key = SecretKey::from_slice(&user_privkey).unwrap();
 
-    assert!(decoded_priv_key.public_key() == pub_key);
+    assert_eq!(decoded_priv_key.public_key(), pub_key);
     Ok(())
 }
 
