@@ -134,7 +134,7 @@ impl Store {
         &self,
         partitions: usize,
     ) -> impl Stream<Item = Result<StoredIris, sqlx::Error>> + '_ {
-        let count = self.count_irises().await.expect("Failed count_irises") - 1;
+        let count = self.count_irises().await.expect("Failed count_irises");
         let partition_size = count.div_ceil(partitions);
 
         let mut partition_streams = Vec::new();
@@ -160,6 +160,9 @@ impl Store {
         tx: &mut Transaction<'_, Postgres>,
         codes_and_masks: &[StoredIrisRef<'_>],
     ) -> Result<()> {
+        if codes_and_masks.is_empty() {
+            return Ok(());
+        }
         let mut query = sqlx::QueryBuilder::new(
             "INSERT INTO irises (left_code, left_mask, right_code, right_mask)",
         );
@@ -237,6 +240,9 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         tx: &mut Transaction<'_, Postgres>,
         result_events: &[String],
     ) -> Result<()> {
+        if result_events.is_empty() {
+            return Ok(());
+        }
         let mut query = sqlx::QueryBuilder::new("INSERT INTO results (result_event)");
         query.push_values(result_events, |mut query, result| {
             query.push_bind(result);
@@ -257,6 +263,9 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
     }
 
     pub async fn mark_requests_deleted(&self, request_ids: &[String]) -> Result<()> {
+        if request_ids.is_empty() {
+            return Ok(());
+        }
         // Insert request_ids that are deleted from the queue.
         let mut query = sqlx::QueryBuilder::new("INSERT INTO sync (request_id)");
         query.push_values(request_ids, |mut query, request_id| {
@@ -353,6 +362,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_empty_insert() -> Result<()> {
+        let schema_name = temporary_name();
+        let store = Store::new(&test_db_url()?, &schema_name).await?;
+
+        let mut tx = store.tx().await?;
+        store.insert_results(&mut tx, &[]).await?;
+        store.insert_irises(&mut tx, &[]).await?;
+        tx.commit().await?;
+        store.mark_requests_deleted(&[]).await?;
+
+        cleanup(&store, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_insert_many() -> Result<()> {
         let count = 1 << 13;
 
@@ -380,9 +404,16 @@ mod tests {
         assert_eq!(got.len(), count);
         assert_contiguous_id(&got);
 
-        let mut got_par: Vec<StoredIris> = store.stream_irises_par(5).await.try_collect().await?;
-        got_par.sort_by_key(|iris| iris.id);
-        assert_eq!(got, got_par);
+        // Compare with the parallel version with several edge-cases.
+        for parallelism in [1, 5, MAX_CONNECTIONS as usize + 1] {
+            let mut got_par: Vec<StoredIris> = store
+                .stream_irises_par(parallelism)
+                .await
+                .try_collect()
+                .await?;
+            got_par.sort_by_key(|iris| iris.id);
+            assert_eq!(got, got_par);
+        }
 
         let got = store.last_results(count).await?;
         assert_eq!(got, result_events);

@@ -5,7 +5,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-cudarc = { git = "https://github.com/rw0x0/cudarc.git", rev = "origin/transmute", features = [
+cudarc = { git = "https://github.com/philsippl/cudarc.git", rev = "b824f30", features = [
     "cuda-12020",
 ] }
 eyre.workspace = true

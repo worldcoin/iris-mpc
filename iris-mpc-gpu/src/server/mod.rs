@@ -1,5 +1,5 @@
 mod actor;
-pub mod sync;
+pub mod sync_nccl;
 
 pub use actor::{ServerActor, ServerActorHandle};
 use iris_mpc_common::galois_engine::degree4::GaloisRingIrisCodeShare;
