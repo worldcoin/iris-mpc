@@ -249,7 +249,7 @@ pub mod degree4 {
         const COLS: usize = 200;
 
         /// Maps from an index in a flattened array of the new shape to the
-        /// index of a flattened array of the original shape.
+        /// index in a flattened array of the original shape.
         ///
         ///          New shape         --> Original shape
         /// (b, w, r % 4,   c, r // 4) --> ( r,   c, w, b)
