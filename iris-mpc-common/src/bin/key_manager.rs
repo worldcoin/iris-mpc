@@ -28,7 +28,7 @@ struct KeyManagerCli {
     #[arg(
         short, long, env, value_parser = clap::builder::PossibleValuesParser::new(& ["0", "1", "2"])
     )]
-    node_id: u16,
+    node_id: String,
 
     #[arg(short, long, env, default_value = "stage")]
     env: String,
@@ -83,7 +83,7 @@ async fn main() -> eyre::Result<()> {
                 rng_seed,
                 dry_run,
             )
-            .await?;
+                .await?;
         }
         Commands::Validate {
             version_stage,
@@ -96,7 +96,7 @@ async fn main() -> eyre::Result<()> {
                 b64_pub_key,
                 &bucket_key_name,
             )
-            .await?;
+                .await?;
         }
     }
     Ok(())
@@ -184,7 +184,7 @@ async fn rotate_keys(
         bucket_key_name,
         pub_key_str.as_str(),
     )
-    .await
+        .await
     {
         Ok(output) => {
             println!("Bucket: {}", PUBLIC_KEY_S3_BUCKET_NAME);

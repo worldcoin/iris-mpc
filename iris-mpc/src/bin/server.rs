@@ -1,13 +1,32 @@
 #![allow(clippy::needless_range_loop)]
 
+use std::{
+    mem,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
 use aws_sdk_sns::Client as SNSClient;
-use aws_sdk_sqs::{config::Region, Client};
-use axum::{routing::get, Router};
+use aws_sdk_sqs::{Client, config::Region};
+use axum::{Router, routing::get};
 use clap::Parser;
-use eyre::{eyre, Context};
+use eyre::{Context, eyre};
 use futures::StreamExt;
+use rand::{rngs::StdRng, SeedableRng};
+use static_assertions::const_assert;
+use telemetry_batteries::{
+    metrics::statsd::StatsdBattery,
+    tracing::{datadog::DatadogBattery, TracingShutdownHandle},
+};
+use tokio::{
+    sync::{mpsc, oneshot},
+    task::spawn_blocking,
+    time::timeout,
+};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
 use iris_mpc_common::{
-    config::{json_wrapper::JsonStrWrapper, Config, Opt},
+    config::{Config, json_wrapper::JsonStrWrapper, Opt},
     galois_engine::degree4::GaloisRingIrisCodeShare,
     helpers::{
         aws::{
@@ -20,32 +39,15 @@ use iris_mpc_common::{
         sync::SyncState,
         task_monitor::TaskMonitor,
     },
-    iris_db::db::IrisDB,
     IRIS_CODE_LENGTH,
+    iris_db::db::IrisDB,
 };
 use iris_mpc_gpu::{
     dot::ROTATIONS,
     helpers::device_manager::DeviceManager,
-    server::{sync_nccl, BatchMetadata, BatchQuery, ServerActor, ServerJobResult},
+    server::{BatchMetadata, BatchQuery, ServerActor, ServerJobResult, sync_nccl},
 };
 use iris_mpc_store::{Store, StoredIrisRef};
-use rand::{rngs::StdRng, SeedableRng};
-use static_assertions::const_assert;
-use std::{
-    mem,
-    sync::Arc,
-    time::{Duration, Instant},
-};
-use telemetry_batteries::{
-    metrics::statsd::StatsdBattery,
-    tracing::{datadog::DatadogBattery, TracingShutdownHandle},
-};
-use tokio::{
-    sync::{mpsc, oneshot},
-    task::spawn_blocking,
-    time::timeout,
-};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
@@ -88,7 +90,7 @@ async fn receive_batch(
                     .context("while trying to parse SMPCRequest")?;
 
                 store
-                    .mark_requests_deleted(&[message.request_id.clone()])
+                    .mark_requests_deleted(&[message.signup_id.clone()])
                     .await
                     .context("while marking requests as deleted")?;
 
@@ -100,7 +102,7 @@ async fn receive_batch(
                     .await
                     .context("while calling `delete_message` on SQS client")?;
 
-                if skip_request_ids.contains(&message.request_id) {
+                if skip_request_ids.contains(&message.signup_id) {
                     // Some party (maybe us) already meant to delete this request, so we skip it.
                     continue;
                 }
@@ -109,10 +111,6 @@ async fn receive_batch(
 
                 let mut batch_metadata = BatchMetadata::default();
 
-                if let Some(node_id) = message_attributes.get(NODE_ID_MESSAGE_ATTRIBUTE_NAME) {
-                    let node_id = node_id.string_value().unwrap();
-                    batch_metadata.node_id = node_id.to_string();
-                }
                 if let Some(trace_id) = message_attributes.get(TRACE_ID_MESSAGE_ATTRIBUTE_NAME) {
                     let trace_id = trace_id.string_value().unwrap();
                     batch_metadata.trace_id = trace_id.to_string();
@@ -122,7 +120,7 @@ async fn receive_batch(
                     batch_metadata.span_id = span_id.to_string();
                 }
 
-                batch_query.request_ids.push(message.request_id.clone());
+                batch_query.request_ids.push(message.signup_id.clone());
                 batch_query.metadata.push(batch_metadata);
 
                 let iris_message_share = match message
@@ -178,8 +176,8 @@ async fn receive_batch(
                         mask_share.all_rotations(),
                     )
                 })
-                .await
-                .context("while pre-processing iris code query")?;
+                    .await
+                    .context("while pre-processing iris code query")?;
 
                 batch_query.store.code.push(store_iris_shares);
                 batch_query.store.mask.push(store_mask_shares);
@@ -410,14 +408,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         &sns_client,
         &config,
     )
-    .await?;
+        .await?;
 
     tracing::info!("Initialize iris db");
     let (mut codes_db, mut masks_db, store_len) =
         initialize_iris_dbs(party_id, &store, &config).await?;
 
     let my_state = SyncState {
-        db_len:              store_len as u64,
+        db_len: store_len as u64,
         deleted_request_ids: store.last_deleted_requests(SYNC_QUERIES).await?,
     };
 
@@ -497,11 +495,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let store_bg = store.clone();
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
-            merged_results,
-            request_ids,
-            matches,
-            store: query_store,
-        }) = rx.recv().await
+                           merged_results,
+                           request_ids,
+                           matches,
+                           store: query_store,
+                       }) = rx.recv().await
         {
             let result_events = merged_results
                 .iter()
@@ -527,8 +525,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     let code = &query_store.code[query_idx].coefs[..];
                     let mask = &query_store.mask[query_idx].coefs[..];
                     StoredIrisRef {
-                        left_code:  code,
-                        left_mask:  mask,
+                        left_code: code,
+                        left_mask: mask,
                         // TODO: second eye.
                         right_code: &[],
                         right_mask: &[],
@@ -607,8 +605,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 enable_processing_encrypted_shares,
                 shares_encryption_key_pair,
             )
-            .await
-            .context("while receiving batches from SQS")?;
+                .await
+                .context("while receiving batches from SQS")?;
 
             // Iterate over a list of tracing payloads, and create logs with mappings to
             // payloads Log at least a "start" event using a log with trace.id and
@@ -638,7 +636,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             // wrap up span context
         }
     }
-    .await;
+        .await;
 
     match res {
         Ok(_) => {}

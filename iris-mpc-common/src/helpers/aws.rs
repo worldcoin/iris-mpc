@@ -1,6 +1,7 @@
+use std::collections::HashMap;
+
 use aws_sdk_sns::types::MessageAttributeValue;
 use opentelemetry::trace::{SpanContext, SpanId, TraceFlags, TraceId, TraceState};
-use std::collections::HashMap;
 
 pub const TRACE_ID_MESSAGE_ATTRIBUTE_NAME: &str = "TraceID";
 pub const SPAN_ID_MESSAGE_ATTRIBUTE_NAME: &str = "SpanID";
@@ -10,7 +11,7 @@ pub fn construct_message_attributes() -> eyre::Result<HashMap<String, MessageAtt
     let (trace_id, span_id) = telemetry_batteries::tracing::extract_span_ids();
 
     let mut message_attributes = HashMap::new();
-
+    
     let trace_id_message_attribute = MessageAttributeValue::builder()
         .data_type("String")
         .string_value(trace_id.to_string())
