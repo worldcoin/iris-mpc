@@ -1152,10 +1152,9 @@ fn calculate_insertion_indices(
             }
 
             let insert_idx = insertion_list[idx][c];
-            // we return the index of the person, so we divide by 2
-            merged_results[insert_idx] = last_db_index / 2;
+            merged_results[insert_idx] = last_db_index;
             matches[insert_idx] = false;
-            last_db_index += 2; // we insert 2 eyes
+            last_db_index += 1;
         }
         c += 1;
     }
