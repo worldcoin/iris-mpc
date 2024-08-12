@@ -438,7 +438,7 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         let mut merged_results = merged_results_left
             .into_iter()
-            .zip(merged_results_right.into_iter())
+            .zip(merged_results_right)
             .map(|(left, right)| {
                 // If both eyes do not match, it is a non-match
                 if left == NON_MATCH_ID && right == NON_MATCH_ID {
