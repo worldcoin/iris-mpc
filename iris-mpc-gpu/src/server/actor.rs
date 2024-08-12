@@ -369,20 +369,20 @@ impl ServerActor {
         let now = Instant::now();
         let mut events: HashMap<&str, Vec<Vec<CUevent>>> = HashMap::new();
 
-        let batch_size = batch.db_left.code.len();
+        let batch_size = batch.store_left.code.len();
         assert!(batch_size > 0 && batch_size <= MAX_BATCH_SIZE);
         assert!(
-            batch_size == batch.db_left.mask.len()
-                && batch_size == batch.query_left.code.len()
-                && batch_size == batch.query_left.mask.len()
-                && batch_size == batch.query_right.code.len()
-                && batch_size == batch.query_right.mask.len()
-                && batch_size == batch.db_right.code.len()
-                && batch_size == batch.db_right.mask.len()
-                && batch_size == batch.store_left.code.len()
-                && batch_size == batch.store_left.mask.len()
+            batch_size == batch.store_left.mask.len()
                 && batch_size == batch.store_right.code.len()
-                && batch_size == batch.store_right.mask.len(),
+                && batch_size == batch.store_right.mask.len()
+                && batch_size * ROTATIONS == batch.query_left.code.len()
+                && batch_size * ROTATIONS == batch.query_left.mask.len()
+                && batch_size * ROTATIONS == batch.query_right.code.len()
+                && batch_size * ROTATIONS == batch.query_right.mask.len()
+                && batch_size * ROTATIONS == batch.db_left.code.len()
+                && batch_size * ROTATIONS == batch.db_left.mask.len()
+                && batch_size * ROTATIONS == batch.db_right.code.len()
+                && batch_size * ROTATIONS == batch.db_right.mask.len(),
             "Query batch sizes mismatch"
         );
 
