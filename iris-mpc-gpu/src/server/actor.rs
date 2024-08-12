@@ -24,7 +24,7 @@ use cudarc::{
 use futures::{Future, FutureExt};
 use iris_mpc_common::{galois_engine::degree4::GaloisRingIrisCodeShare, IrisCodeDbSlice};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
-use std::{collections::HashMap, mem, sync::Arc, time::Instant, usize::MAX};
+use std::{collections::HashMap, mem, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
 
 macro_rules! forget_vec {
@@ -163,14 +163,6 @@ impl ServerActor {
         db_size: usize,
         db_buffer: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
-        tracing::info!(
-            "DB sizes: {}, {}, {}, {}",
-            left_eye_db.0.len(),
-            left_eye_db.1.len(),
-            right_eye_db.0.len(),
-            right_eye_db.1.len()
-        );
-        tracing::info!("DB size: {}, buffer: {}", db_size, db_buffer);
         assert!(
             [
                 left_eye_db.0.len(),
@@ -385,11 +377,6 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // COMPARE LEFT EYE QUERIES
         ///////////////////////////////////////////////////////////////////
-        tracing::info!(
-            "Transferring queries to device, {}, {}",
-            batch_size,
-            batch.query_left.code.len()
-        );
 
         // *Query* variant including Lagrange interpolation.
         let compact_query_left = {
