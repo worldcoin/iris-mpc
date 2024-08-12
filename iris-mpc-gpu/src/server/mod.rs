@@ -47,3 +47,8 @@ pub struct ServerJobResult {
     pub store_left:     BatchQueryEntries,
     pub store_right:    BatchQueryEntries,
 }
+
+enum Eye {
+    Left,
+    Right,
+}

@@ -1,4 +1,4 @@
-use super::{BatchQuery, ServerJob, ServerJobResult, MAX_BATCH_SIZE};
+use super::{BatchQuery, Eye, ServerJob, ServerJobResult, MAX_BATCH_SIZE};
 use crate::{
     dot::{
         distance_comparator::DistanceComparator,
@@ -22,7 +22,7 @@ use cudarc::{
     nccl::Comm,
 };
 use futures::{Future, FutureExt};
-use iris_mpc_common::galois_engine::degree4::GaloisRingIrisCodeShare;
+use iris_mpc_common::{galois_engine::degree4::GaloisRingIrisCodeShare, IrisCodeDbSlice};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{collections::HashMap, mem, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
@@ -71,27 +71,29 @@ impl ServerActorHandle {
 const DB_CHUNK_SIZE: usize = 512;
 const QUERIES: usize = ROTATIONS * MAX_BATCH_SIZE;
 pub struct ServerActor {
-    job_queue:           mpsc::Receiver<ServerJob>,
-    device_manager:      Arc<DeviceManager>,
-    party_id:            usize,
+    job_queue:            mpsc::Receiver<ServerJob>,
+    device_manager:       Arc<DeviceManager>,
+    party_id:             usize,
     // engines
-    codes_engine:        ShareDB,
-    masks_engine:        ShareDB,
-    batch_codes_engine:  ShareDB,
-    batch_masks_engine:  ShareDB,
-    phase2:              Circuits,
-    phase2_batch:        Circuits,
-    distance_comparator: DistanceComparator,
+    codes_engine:         ShareDB,
+    masks_engine:         ShareDB,
+    batch_codes_engine:   ShareDB,
+    batch_masks_engine:   ShareDB,
+    phase2:               Circuits,
+    phase2_batch:         Circuits,
+    distance_comparator:  DistanceComparator,
     // DB slices
-    code_db_slices:      SlicedProcessedDatabase,
-    mask_db_slices:      SlicedProcessedDatabase,
-    streams:             Vec<Vec<CudaStream>>,
-    cublas_handles:      Vec<Vec<CudaBlas>>,
-    results:             Vec<CudaSlice<u32>>,
-    batch_results:       Vec<CudaSlice<u32>>,
-    final_results:       Vec<CudaSlice<u32>>,
-    current_db_sizes:    Vec<usize>,
-    query_db_size:       Vec<usize>,
+    left_code_db_slices:  SlicedProcessedDatabase,
+    left_mask_db_slices:  SlicedProcessedDatabase,
+    right_code_db_slices: SlicedProcessedDatabase,
+    right_mask_db_slices: SlicedProcessedDatabase,
+    streams:              Vec<Vec<CudaStream>>,
+    cublas_handles:       Vec<Vec<CudaBlas>>,
+    results:              Vec<CudaSlice<u32>>,
+    batch_results:        Vec<CudaSlice<u32>>,
+    final_results:        Vec<CudaSlice<u32>>,
+    current_db_sizes:     Vec<usize>,
+    query_db_size:        Vec<usize>,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -105,8 +107,8 @@ impl ServerActor {
     pub fn new(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
-        codes_db: &[u16],
-        masks_db: &[u16],
+        left_eye_db: IrisCodeDbSlice,
+        right_eye_db: IrisCodeDbSlice,
         job_queue_size: usize,
         db_size: usize,
         db_buffer: usize,
@@ -115,8 +117,8 @@ impl ServerActor {
         Self::new_with_device_manager(
             party_id,
             chacha_seeds,
-            codes_db,
-            masks_db,
+            left_eye_db,
+            right_eye_db,
             device_manager,
             job_queue_size,
             db_size,
@@ -127,8 +129,8 @@ impl ServerActor {
     pub fn new_with_device_manager(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
-        codes_db: &[u16],
-        masks_db: &[u16],
+        left_eye_db: IrisCodeDbSlice,
+        right_eye_db: IrisCodeDbSlice,
         device_manager: Arc<DeviceManager>,
         job_queue_size: usize,
         db_size: usize,
@@ -139,8 +141,8 @@ impl ServerActor {
         Self::new_with_device_manager_and_comms(
             party_id,
             chacha_seeds,
-            codes_db,
-            masks_db,
+            left_eye_db,
+            right_eye_db,
             device_manager,
             comms,
             job_queue_size,
@@ -153,17 +155,23 @@ impl ServerActor {
     pub fn new_with_device_manager_and_comms(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
-        codes_db: &[u16],
-        masks_db: &[u16],
+        left_eye_db: IrisCodeDbSlice,
+        right_eye_db: IrisCodeDbSlice,
         device_manager: Arc<DeviceManager>,
         comms: Vec<Arc<Comm>>,
         job_queue_size: usize,
         db_size: usize,
         db_buffer: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
-        assert_eq!(
-            codes_db.len(),
-            masks_db.len(),
+        assert!(
+            [
+                left_eye_db.0.len(),
+                left_eye_db.1.len(),
+                right_eye_db.0.len(),
+                right_eye_db.1.len()
+            ]
+            .iter()
+            .all(|size| size == &db_size),
             "Internal DB mismatch, codes and masks sizes differ"
         );
 
@@ -171,8 +179,8 @@ impl ServerActor {
         let actor = Self::init(
             party_id,
             chacha_seeds,
-            codes_db,
-            masks_db,
+            left_eye_db,
+            right_eye_db,
             device_manager,
             comms,
             rx,
@@ -186,8 +194,8 @@ impl ServerActor {
     fn init(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
-        codes_db: &[u16],
-        masks_db: &[u16],
+        left_eye_db: IrisCodeDbSlice,
+        right_eye_db: IrisCodeDbSlice,
         device_manager: Arc<DeviceManager>,
         comms: Vec<Arc<Comm>>,
         job_queue: mpsc::Receiver<ServerJob>,
@@ -229,13 +237,21 @@ impl ServerActor {
             comms.clone(),
         );
 
-        let (code_db_slices, current_db_sizes) =
-            codes_engine.load_db(codes_db, db_size, db_size + db_buffer, true);
-        let (mask_db_slices, mask_db_lens) =
-            masks_engine.load_db(masks_db, db_size, db_size + db_buffer, true);
+        // load left and right eye databases to device
+        let (left_code_db_slices, current_db_sizes) =
+            codes_engine.load_db(left_eye_db.0, db_size, db_size + db_buffer, true);
+        let (left_mask_db_slices, left_mask_db_sizes) =
+            masks_engine.load_db(left_eye_db.1, db_size, db_size + db_buffer, true);
 
-        assert_eq!(
-            current_db_sizes, mask_db_lens,
+        let (right_code_db_slices, right_db_sizes) =
+            codes_engine.load_db(right_eye_db.0, db_size, db_size + db_buffer, true);
+        let (right_mask_db_slices, right_mask_db_sizes) =
+            masks_engine.load_db(right_eye_db.1, db_size, db_size + db_buffer, true);
+
+        assert!(
+            [left_mask_db_sizes, right_mask_db_sizes, right_db_sizes]
+                .iter()
+                .all(|size| size == &current_db_sizes),
             "Code and mask db sizes mismatch"
         );
 
@@ -322,8 +338,10 @@ impl ServerActor {
             distance_comparator,
             batch_codes_engine,
             batch_masks_engine,
-            code_db_slices,
-            mask_db_slices,
+            left_code_db_slices,
+            left_mask_db_slices,
+            right_code_db_slices,
+            right_mask_db_slices,
             streams,
             cublas_handles,
             results,
@@ -391,6 +409,7 @@ impl ServerActor {
             &compact_device_sums_left,
             &mut events,
             batch_size,
+            Eye::Left,
         )?;
 
         ///////////////////////////////////////////////////////////////////
@@ -431,6 +450,7 @@ impl ServerActor {
             &compact_device_sums_right,
             &mut events,
             batch_size,
+            Eye::Right,
         )?;
 
         ///////////////////////////////////////////////////////////////////
@@ -494,68 +514,22 @@ impl ServerActor {
                         // Append left to codes and masks db
                         for (db, query, sums) in [
                             (
-                                &self.code_db_slices,
+                                &self.left_code_db_slices,
                                 &compact_device_queries_left.code_query_insert,
                                 &compact_device_sums_left.code_query_insert,
                             ),
                             (
-                                &self.mask_db_slices,
+                                &self.left_mask_db_slices,
                                 &compact_device_queries_left.mask_query_insert,
                                 &compact_device_sums_left.mask_query_insert,
                             ),
-                        ] {
-                            unsafe {
-                                helpers::dtod_at_offset(
-                                    db.code_gr.limb_0[i],
-                                    self.current_db_sizes[i] * IRIS_CODE_LENGTH,
-                                    *query.limb_0[i].device_ptr(),
-                                    IRIS_CODE_LENGTH * 15
-                                        + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                                    IRIS_CODE_LENGTH,
-                                    self.streams[0][i].stream,
-                                );
-
-                                helpers::dtod_at_offset(
-                                    db.code_gr.limb_1[i],
-                                    self.current_db_sizes[i] * IRIS_CODE_LENGTH,
-                                    *query.limb_1[i].device_ptr(),
-                                    IRIS_CODE_LENGTH * 15
-                                        + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                                    IRIS_CODE_LENGTH,
-                                    self.streams[0][i].stream,
-                                );
-
-                                helpers::dtod_at_offset(
-                                    *db.code_sums_gr.limb_0[i].device_ptr(),
-                                    self.current_db_sizes[i] * mem::size_of::<u32>(),
-                                    *sums.limb_0[i].device_ptr(),
-                                    mem::size_of::<u32>() * 15
-                                        + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                                    mem::size_of::<u32>(),
-                                    self.streams[0][i].stream,
-                                );
-
-                                helpers::dtod_at_offset(
-                                    *db.code_sums_gr.limb_1[i].device_ptr(),
-                                    self.current_db_sizes[i] * mem::size_of::<u32>(),
-                                    *sums.limb_1[i].device_ptr(),
-                                    mem::size_of::<u32>() * 15
-                                        + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                                    mem::size_of::<u32>(),
-                                    self.streams[0][i].stream,
-                                );
-                            }
-                        }
-                        self.current_db_sizes[i] += 1;
-                        // Append right to codes and masks db
-                        for (db, query, sums) in [
                             (
-                                &self.code_db_slices,
+                                &self.right_code_db_slices,
                                 &compact_device_queries_right.code_query_insert,
                                 &compact_device_sums_right.code_query_insert,
                             ),
                             (
-                                &self.mask_db_slices,
+                                &self.right_mask_db_slices,
                                 &compact_device_queries_right.mask_query_insert,
                                 &compact_device_sums_right.mask_query_insert,
                             ),
@@ -647,10 +621,16 @@ impl ServerActor {
         compact_device_sums: &DeviceCompactSums,
         events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
         batch_size: usize,
+        eye_db: Eye,
     ) -> eyre::Result<Vec<u32>> {
         let batch_streams = &self.streams[0];
         let batch_cublas = &self.cublas_handles[0];
 
+        // which database are we querying against
+        let (code_db_slices, mask_db_slices) = match eye_db {
+            Eye::Left => (&self.left_code_db_slices, &self.left_mask_db_slices),
+            Eye::Right => (&self.right_code_db_slices, &self.right_mask_db_slices),
+        };
         // Transfer queries to device
 
         // ---- START BATCH DEDUP ----
@@ -786,8 +766,8 @@ impl ServerActor {
                 compact_device_queries.dot_products_against_db(
                     &mut self.codes_engine,
                     &mut self.masks_engine,
-                    &self.code_db_slices,
-                    &self.mask_db_slices,
+                    code_db_slices,
+                    mask_db_slices,
                     &dot_chunk_size,
                     offset,
                     request_streams,
@@ -808,8 +788,8 @@ impl ServerActor {
                 compact_device_sums.compute_dot_reducer_against_db(
                     &mut self.codes_engine,
                     &mut self.masks_engine,
-                    &self.code_db_slices,
-                    &self.mask_db_slices,
+                    code_db_slices,
+                    mask_db_slices,
                     &dot_chunk_size,
                     offset,
                     request_streams,

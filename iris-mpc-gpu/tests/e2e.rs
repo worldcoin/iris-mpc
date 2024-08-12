@@ -102,8 +102,8 @@ async fn e2e_test() -> Result<()> {
         let actor = match ServerActor::new_with_device_manager_and_comms(
             0,
             chacha_seeds0,
-            &db0.0,
-            &db0.1,
+            (&db0.0, &db0.1),
+            (&db0.0, &db0.1),
             device_manager0,
             comms0,
             8,
@@ -126,8 +126,8 @@ async fn e2e_test() -> Result<()> {
         let actor = match ServerActor::new_with_device_manager_and_comms(
             1,
             chacha_seeds1,
-            &db1.0,
-            &db1.1,
+            (&db1.0, &db1.1),
+            (&db1.0, &db1.1),
             device_manager1,
             comms1,
             8,
@@ -150,8 +150,8 @@ async fn e2e_test() -> Result<()> {
         let actor = match ServerActor::new_with_device_manager_and_comms(
             2,
             chacha_seeds2,
-            &db2.0,
-            &db2.1,
+            (&db2.0, &db2.1),
+            (&db2.0, &db2.1),
             device_manager2,
             comms2,
             8,
@@ -187,12 +187,11 @@ async fn e2e_test() -> Result<()> {
         let mut batch0 = BatchQuery::default();
         let mut batch1 = BatchQuery::default();
         let mut batch2 = BatchQuery::default();
-        for i in 0..BATCH_SIZE {
+        for _ in 0..BATCH_SIZE {
             let request_id = Uuid::new_v4();
             // Automatic random tests
             let options = if responses.is_empty() { 2 } else { 3 };
             let option = rng.gen_range(0..options);
-            let option = if i == 0 { 0 } else { option };
             let template = match option {
                 0 => {
                     println!("Sending new iris code");
@@ -202,8 +201,7 @@ async fn e2e_test() -> Result<()> {
                 1 => {
                     println!("Sending iris code from db");
                     let db_index = rng.gen_range(0..db.db.len());
-                    // we expect the db index to be divided by 2, since we have 2 eyes per person
-                    expected_results.insert(request_id.to_string(), Some((db_index / 2) as u32));
+                    expected_results.insert(request_id.to_string(), Some(db_index as u32));
                     db.db[db_index].clone()
                 }
                 2 => {

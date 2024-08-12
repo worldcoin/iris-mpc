@@ -20,7 +20,7 @@ use iris_mpc_common::{
         task_monitor::TaskMonitor,
     },
     iris_db::db::IrisDB,
-    IRIS_CODE_LENGTH,
+    IrisCodeDb, IRIS_CODE_LENGTH,
 };
 use iris_mpc_gpu::{
     dot::ROTATIONS,
@@ -255,9 +255,9 @@ async fn initialize_iris_dbs(
     party_id: usize,
     store: &Store,
     config: &Config,
-) -> eyre::Result<(Vec<u16>, Vec<u16>, usize)> {
+) -> eyre::Result<(IrisCodeDb, IrisCodeDb, usize)> {
     // Generate or load DB
-    let (mut codes_db, mut masks_db) = {
+    let (mut left_codes_db, mut left_masks_db) = {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
@@ -288,11 +288,14 @@ async fn initialize_iris_dbs(
 
         (codes_db, masks_db)
     };
-    let fake_len = codes_db.len();
+    let (mut right_codes_db, mut right_masks_db) = (left_codes_db.clone(), left_masks_db.clone());
+    let fake_len = left_codes_db.len();
 
     let count_irises = store.count_irises().await?;
-    codes_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
-    masks_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
+    left_codes_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
+    left_masks_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
+    right_codes_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
+    right_masks_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
 
     let parallelism = config
         .database
@@ -312,13 +315,11 @@ async fn initialize_iris_dbs(
             return Err(eyre!("Inconsistent iris index {}", iris.index()));
         }
 
-        let start = fake_len + iris.index() * 2 * IRIS_CODE_LENGTH;
-        codes_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.left_code());
-        masks_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.left_mask());
-        codes_db[start + IRIS_CODE_LENGTH..start + IRIS_CODE_LENGTH * 2]
-            .copy_from_slice(iris.right_code());
-        masks_db[start + IRIS_CODE_LENGTH..start + IRIS_CODE_LENGTH * 2]
-            .copy_from_slice(iris.right_mask());
+        let start = fake_len + iris.index() * IRIS_CODE_LENGTH;
+        left_codes_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.left_code());
+        left_masks_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.left_mask());
+        right_codes_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.right_code());
+        right_masks_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.right_mask());
 
         store_len += 1;
         if (store_len % 10000) == 0 {
@@ -326,7 +327,11 @@ async fn initialize_iris_dbs(
         }
     }
 
-    Ok((codes_db, masks_db, count_irises))
+    Ok((
+        (left_codes_db, left_masks_db),
+        (right_codes_db, right_masks_db),
+        count_irises,
+    ))
 }
 
 async fn send_result_events(
@@ -399,7 +404,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     .await?;
 
     tracing::info!("Initialize iris db");
-    let (mut codes_db, mut masks_db, store_len) =
+    let (mut left_iris_db, mut right_iris_db, store_len) =
         initialize_iris_dbs(party_id, &store, &config).await?;
 
     let my_state = SyncState {
@@ -430,17 +435,19 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             // Rollback the data that we have already loaded.
             let bit_len = db_len * IRIS_CODE_LENGTH;
             // TODO: remove the line below if you removed fake data.
-            let bit_len = bit_len + (codes_db.len() - store_len * IRIS_CODE_LENGTH);
-            codes_db.truncate(bit_len);
-            masks_db.truncate(bit_len);
+            let bit_len = bit_len + (left_iris_db.0.len() - store_len * IRIS_CODE_LENGTH);
+            left_iris_db.0.truncate(bit_len);
+            left_iris_db.1.truncate(bit_len);
+            right_iris_db.0.truncate(bit_len);
+            right_iris_db.1.truncate(bit_len);
         }
 
         tracing::info!("Starting server actor");
         match ServerActor::new_with_device_manager_and_comms(
             config.party_id,
             chacha_seeds,
-            &codes_db,
-            &masks_db,
+            (&left_iris_db.0, &left_iris_db.1),
+            (&right_iris_db.0, &right_iris_db.1),
             device_manager,
             comms,
             8,
