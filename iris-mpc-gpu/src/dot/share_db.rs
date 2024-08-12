@@ -300,7 +300,7 @@ impl ShareDB {
         db_length: usize, // TODO: should handle different sizes for each device
         max_db_length: usize,
         alternating_chunks: bool,
-    ) -> SlicedProcessedDatabase {
+    ) -> (SlicedProcessedDatabase, Vec<usize>) {
         let mut a1_host = db_entries
             .par_iter()
             .map(|&x: &u16| (x >> 8) as i8)
@@ -387,6 +387,18 @@ impl ShareDB {
             alternating_chunks,
         );
 
+        assert!(
+            db0.iter()
+                .zip(db1.iter())
+                .all(|(chunk0, chunk1)| chunk0.len() == chunk1.len()),
+            "db0 and db1 chunks must have the same length"
+        );
+
+        let db_lens = db0
+            .iter()
+            .map(|chunk| chunk.len() / IRIS_CODE_LENGTH)
+            .collect::<Vec<_>>();
+
         let db1 = db1
             .iter()
             .map(|chunk| unsafe {
@@ -418,16 +430,19 @@ impl ShareDB {
             dev.synchronize().unwrap();
         }
 
-        SlicedProcessedDatabase {
-            code_gr:      CudaVec2DSlicerRawPointer {
-                limb_0: db0,
-                limb_1: db1,
+        (
+            SlicedProcessedDatabase {
+                code_gr:      CudaVec2DSlicerRawPointer {
+                    limb_0: db0,
+                    limb_1: db1,
+                },
+                code_sums_gr: CudaVec2DSlicerU32 {
+                    limb_0: db0_sums,
+                    limb_1: db1_sums,
+                },
             },
-            code_sums_gr: CudaVec2DSlicerU32 {
-                limb_0: db0_sums,
-                limb_1: db1_sums,
-            },
-        }
+            db_lens,
+        )
     }
 
     pub fn query_sums(
@@ -841,7 +856,6 @@ mod tests {
         let n_devices = device_manager.device_count();
 
         let mut gpu_result = vec![0u16; DB_SIZE / n_devices * QUERY_SIZE];
-        let db_sizes = vec![DB_SIZE / n_devices; n_devices];
 
         let mut engine = ShareDB::init(
             0,
@@ -855,10 +869,10 @@ mod tests {
         let streams = device_manager.fork_streams();
         let blass = device_manager.create_cublas(&streams);
         let preprocessed_query = device_manager
-            .htod_transfer_query(&preprocessed_query, &streams)
+            .htod_transfer_query(&preprocessed_query, &streams, QUERY_SIZE)
             .unwrap();
         let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
-        let db_slices = engine.load_db(&db, DB_SIZE, DB_SIZE, false);
+        let (db_slices, db_sizes) = engine.load_db(&db, DB_SIZE, DB_SIZE, false);
 
         engine.dot(
             &preprocessed_query,
@@ -915,8 +929,6 @@ mod tests {
             vec![0u16; DB_SIZE * QUERY_SIZE / n_devices],
         ];
 
-        let db_sizes = vec![DB_SIZE / n_devices; n_devices];
-
         for i in 0..3 {
             let device_manager = Arc::clone(&device_manager);
 
@@ -955,10 +967,10 @@ mod tests {
             let streams = device_manager.fork_streams();
             let blass = device_manager.create_cublas(&streams);
             let preprocessed_query = device_manager
-                .htod_transfer_query(&preprocessed_query, &streams)
+                .htod_transfer_query(&preprocessed_query, &streams, QUERY_SIZE)
                 .unwrap();
             let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
-            let db_slices = engine.load_db(&codes_db, DB_SIZE, DB_SIZE, false);
+            let (db_slices, db_sizes) = engine.load_db(&codes_db, DB_SIZE, DB_SIZE, false);
             engine.dot(
                 &preprocessed_query,
                 &db_slices.code_gr,
@@ -990,8 +1002,6 @@ mod tests {
         let n_devices = device_manager.device_count();
 
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
-
-        let db_sizes = vec![DB_SIZE / n_devices; n_devices];
 
         let mut results_codes = [
             vec![0u16; DB_SIZE / n_devices * QUERY_SIZE],
@@ -1083,15 +1093,19 @@ mod tests {
             let streams = device_manager.fork_streams();
             let blass = device_manager.create_cublas(&streams);
             let code_query = device_manager
-                .htod_transfer_query(&code_query, &streams)
+                .htod_transfer_query(&code_query, &streams, QUERY_SIZE)
                 .unwrap();
             let mask_query = device_manager
-                .htod_transfer_query(&mask_query, &streams)
+                .htod_transfer_query(&mask_query, &streams, QUERY_SIZE)
                 .unwrap();
             let code_query_sums = codes_engine.query_sums(&code_query, &streams, &blass);
             let mask_query_sums = masks_engine.query_sums(&mask_query, &streams, &blass);
-            let code_db_slices = codes_engine.load_db(&codes_db, DB_SIZE, DB_SIZE, false);
-            let mask_db_slices = codes_engine.load_db(&masks_db, DB_SIZE, DB_SIZE, false);
+            let (code_db_slices, db_sizes) =
+                codes_engine.load_db(&codes_db, DB_SIZE, DB_SIZE, false);
+            let (mask_db_slices, mask_db_sizes) =
+                codes_engine.load_db(&masks_db, DB_SIZE, DB_SIZE, false);
+
+            assert_eq!(db_sizes, mask_db_sizes);
 
             codes_engine.dot(
                 &code_query,

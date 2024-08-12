@@ -6,7 +6,7 @@ use iris_mpc_common::{
 };
 use iris_mpc_gpu::{
     helpers::device_manager::DeviceManager,
-    server::{BatchQuery, ServerActor, ServerJobResult},
+    server::{BatchQuery, ServerActor, ServerJobResult, MAX_BATCH_SIZE},
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{collections::HashMap, env, sync::Arc};
@@ -15,6 +15,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
 const DB_SIZE: usize = 8 * 1000;
+const DB_BUFFER: usize = 8 * 1000;
 const DB_RNG_SEED: u64 = 0xdeadbeef;
 const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 10;
@@ -106,6 +107,8 @@ async fn e2e_test() -> Result<()> {
             device_manager0,
             comms0,
             8,
+            DB_SIZE,
+            DB_BUFFER,
         ) {
             Ok((actor, handle)) => {
                 tx0.send(Ok(handle)).unwrap();
@@ -128,6 +131,8 @@ async fn e2e_test() -> Result<()> {
             device_manager1,
             comms1,
             8,
+            DB_SIZE,
+            DB_BUFFER,
         ) {
             Ok((actor, handle)) => {
                 tx1.send(Ok(handle)).unwrap();
@@ -150,6 +155,8 @@ async fn e2e_test() -> Result<()> {
             device_manager2,
             comms2,
             8,
+            DB_SIZE,
+            DB_BUFFER,
         ) {
             Ok((actor, handle)) => {
                 tx2.send(Ok(handle)).unwrap();
@@ -256,9 +263,10 @@ async fn e2e_test() -> Result<()> {
         }
 
         // send batches to servers
-        let res0_fut = handle0.submit_batch_query(batch0).await;
-        let res1_fut = handle1.submit_batch_query(batch1).await;
-        let res2_fut = handle2.submit_batch_query(batch2).await;
+        let batch_size = rng.gen_range(1..MAX_BATCH_SIZE);
+        let res0_fut = handle0.submit_batch_query(batch0, batch_size).await;
+        let res1_fut = handle1.submit_batch_query(batch1, batch_size).await;
+        let res2_fut = handle2.submit_batch_query(batch2, batch_size).await;
 
         let res0 = res0_fut.await;
         let res1 = res1_fut.await;

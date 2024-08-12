@@ -1,4 +1,4 @@
-use super::{BatchQuery, ServerJob, ServerJobResult};
+use super::{BatchQuery, ServerJob, ServerJobResult, MAX_BATCH_SIZE};
 use crate::{
     dot::{
         distance_comparator::DistanceComparator,
@@ -51,9 +51,11 @@ impl ServerActorHandle {
     pub async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
+        batch_size: usize,
     ) -> impl Future<Output = ServerJobResult> {
         let (tx, rx) = oneshot::channel();
         let job = ServerJob {
+            batch_size,
             batch,
             return_channel: tx,
         };
@@ -62,12 +64,8 @@ impl ServerActorHandle {
     }
 }
 
-const DB_SIZE: usize = 8 * 1_000;
-const DB_BUFFER: usize = 8 * 1_000;
 const DB_CHUNK_SIZE: usize = 512;
-const N_QUERIES: usize = 64;
-const QUERIES: usize = ROTATIONS * N_QUERIES;
-
+const QUERIES: usize = ROTATIONS * MAX_BATCH_SIZE;
 pub struct ServerActor {
     job_queue:           mpsc::Receiver<ServerJob>,
     device_manager:      Arc<DeviceManager>,
@@ -92,16 +90,19 @@ pub struct ServerActor {
     query_db_size:       Vec<usize>,
 }
 
-const RESULTS_INIT_HOST: [u32; N_QUERIES * ROTATIONS] = [u32::MAX; N_QUERIES * ROTATIONS];
-const FINAL_RESULTS_INIT_HOST: [u32; N_QUERIES] = [u32::MAX; N_QUERIES];
+const RESULTS_INIT_HOST: [u32; QUERIES] = [u32::MAX; QUERIES];
+const FINAL_RESULTS_INIT_HOST: [u32; MAX_BATCH_SIZE] = [u32::MAX; MAX_BATCH_SIZE];
 
 impl ServerActor {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
         codes_db: &[u16],
         masks_db: &[u16],
         job_queue_size: usize,
+        db_size: usize,
+        db_buffer: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let device_manager = Arc::new(DeviceManager::init());
         Self::new_with_device_manager(
@@ -111,8 +112,11 @@ impl ServerActor {
             masks_db,
             device_manager,
             job_queue_size,
+            db_size,
+            db_buffer,
         )
     }
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_device_manager(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
@@ -120,6 +124,8 @@ impl ServerActor {
         masks_db: &[u16],
         device_manager: Arc<DeviceManager>,
         job_queue_size: usize,
+        db_size: usize,
+        db_buffer: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let ids = device_manager.get_ids_from_magic(0);
         let comms = device_manager.instantiate_network_from_ids(party_id, ids);
@@ -131,9 +137,12 @@ impl ServerActor {
             device_manager,
             comms,
             job_queue_size,
+            db_size,
+            db_buffer,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_device_manager_and_comms(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
@@ -142,6 +151,8 @@ impl ServerActor {
         device_manager: Arc<DeviceManager>,
         comms: Vec<Arc<Comm>>,
         job_queue_size: usize,
+        db_size: usize,
+        db_buffer: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         assert_eq!(
             codes_db.len(),
@@ -158,10 +169,13 @@ impl ServerActor {
             device_manager,
             comms,
             rx,
+            db_size,
+            db_buffer,
         )?;
         Ok((actor, ServerActorHandle { job_queue: tx }))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn init(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
@@ -170,6 +184,8 @@ impl ServerActor {
         device_manager: Arc<DeviceManager>,
         comms: Vec<Arc<Comm>>,
         job_queue: mpsc::Receiver<ServerJob>,
+        db_size: usize,
+        db_buffer: usize,
     ) -> eyre::Result<Self> {
         let mut kdf_nonce = 0;
         let kdf_salt: Salt = Salt::new(HKDF_SHA256, b"IRIS_MPC");
@@ -206,8 +222,15 @@ impl ServerActor {
             comms.clone(),
         );
 
-        let code_db_slices = codes_engine.load_db(codes_db, DB_SIZE, DB_SIZE + DB_BUFFER, true);
-        let mask_db_slices = masks_engine.load_db(masks_db, DB_SIZE, DB_SIZE + DB_BUFFER, true);
+        let (code_db_slices, current_db_sizes) =
+            codes_engine.load_db(codes_db, db_size, db_size + db_buffer, true);
+        let (mask_db_slices, mask_db_lens) =
+            masks_engine.load_db(masks_db, db_size, db_size + db_buffer, true);
+
+        assert_eq!(
+            current_db_sizes, mask_db_lens,
+            "Code and mask db sizes mismatch"
+        );
 
         // Engines for inflight queries
         let batch_codes_engine = ShareDB::init(
@@ -275,8 +298,6 @@ impl ServerActor {
         let results = distance_comparator.prepare_results();
         let batch_results = distance_comparator.prepare_results();
 
-        let current_db_sizes: Vec<usize> =
-            vec![DB_SIZE / device_manager.device_count(); device_manager.device_count()];
         let query_db_size = vec![QUERIES; device_manager.device_count()];
 
         for dev in device_manager.devices() {
@@ -309,10 +330,11 @@ impl ServerActor {
     pub fn run(mut self) {
         while let Some(job) = self.job_queue.blocking_recv() {
             let ServerJob {
+                batch_size,
                 batch,
                 return_channel,
             } = job;
-            let _ = self.process_batch_query(batch, return_channel);
+            let _ = self.process_batch_query(batch, batch_size, return_channel);
         }
         tracing::info!("Server Actor finished due to all job queues being closed");
     }
@@ -320,10 +342,12 @@ impl ServerActor {
     fn process_batch_query(
         &mut self,
         batch: BatchQuery,
+        batch_size: usize,
         return_channel: oneshot::Sender<ServerJobResult>,
     ) -> eyre::Result<()> {
         let now = Instant::now();
         let mut events: HashMap<&str, Vec<Vec<CUevent>>> = HashMap::new();
+        assert!(batch_size > 0 && batch_size <= MAX_BATCH_SIZE);
 
         // *Query* variant including Lagrange interpolation.
         let compact_query = {
@@ -346,7 +370,7 @@ impl ServerActor {
 
         // Transfer queries to device
         let compact_device_queries =
-            compact_query.htod_transfer(&self.device_manager, batch_streams)?;
+            compact_query.htod_transfer(&self.device_manager, batch_streams, MAX_BATCH_SIZE)?;
 
         let compact_device_sums = compact_device_queries.query_sums(
             &self.codes_engine,
@@ -662,9 +686,12 @@ impl ServerActor {
         self.device_manager.await_streams(&self.streams[0]);
 
         // Fetch the final results (blocking)
-        let host_results = self
+        let mut host_results = self
             .distance_comparator
             .fetch_final_results(&self.final_results);
+
+        // Truncate the results to the batch size
+        host_results.iter_mut().for_each(|x| x.truncate(batch_size));
 
         // Evaluate the results across devices
         // Format: merged_results[query_index]
@@ -808,7 +835,7 @@ impl ServerActor {
         tracing::info!(
             "Batch took {:?} [{:.2} Melems/s]",
             now.elapsed(),
-            (N_QUERIES * previous_total_db_size) as f64 / now.elapsed().as_secs_f64() / 1e6
+            (MAX_BATCH_SIZE * previous_total_db_size) as f64 / now.elapsed().as_secs_f64() / 1e6
         );
         Ok(())
     }
@@ -958,7 +985,7 @@ fn calculate_insertion_indices(
     insertion_list: &[Vec<usize>],
     db_sizes: &[usize],
 ) -> Vec<bool> {
-    let mut matches = vec![true; N_QUERIES];
+    let mut matches = vec![true; MAX_BATCH_SIZE];
     let mut last_db_index = db_sizes.iter().sum::<usize>() as u32;
     let (mut min_index, mut min_index_val) = (0, usize::MAX);
     for (i, list) in insertion_list.iter().enumerate() {
