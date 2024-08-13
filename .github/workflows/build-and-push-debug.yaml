@@ -3,7 +3,7 @@ name: Build and push debug docker image
 on:
   push:
     branches:
-      - "debug/db-perf"
+      - "debug/db-perf-image"
 
 concurrency:
   group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
