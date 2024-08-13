@@ -45,7 +45,7 @@ fn bench_memcpy(c: &mut Criterion) {
     group.bench_function(format!("matmul {} x {}", DB_SIZE, QUERY_SIZE), |b| {
         b.iter(|| {
             let preprocessed_query = device_manager
-                .htod_transfer_query(&preprocessed_query, &streams)
+                .htod_transfer_query(&preprocessed_query, &streams, QUERY_SIZE)
                 .unwrap();
             let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
             engine.dot(

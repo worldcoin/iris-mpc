@@ -1,8 +1,5 @@
 use super::query_processor::{CudaVec2DSlicerU8, StreamAwareCudaSlice};
-use crate::{
-    dot::{IRIS_CODE_LENGTH, ROTATIONS},
-    server::MAX_BATCH_SIZE,
-};
+use crate::dot::{IRIS_CODE_LENGTH, ROTATIONS};
 use cudarc::{
     cublas::CudaBlas,
     driver::{
@@ -115,20 +112,21 @@ impl DeviceManager {
         &self,
         preprocessed_query: &[Vec<u8>],
         streams: &[CudaStream],
+        batch_size: usize,
     ) -> eyre::Result<CudaVec2DSlicerU8> {
         let mut slices0 = vec![];
         let mut slices1 = vec![];
-        const QUERY_SIZE: usize = MAX_BATCH_SIZE * ROTATIONS * IRIS_CODE_LENGTH;
+        let query_size = batch_size * ROTATIONS * IRIS_CODE_LENGTH;
         for idx in 0..self.device_count() {
             let device = self.device(idx);
             device.bind_to_thread().unwrap();
 
-            let query0 = unsafe { malloc_async(streams[idx].stream, QUERY_SIZE).unwrap() };
+            let query0 = unsafe { malloc_async(streams[idx].stream, query_size).unwrap() };
 
             let slice0 = StreamAwareCudaSlice::<u8>::upgrade_ptr_stream(
                 query0,
                 streams[idx].stream,
-                QUERY_SIZE,
+                query_size,
             );
 
             unsafe {
@@ -136,12 +134,12 @@ impl DeviceManager {
             }
             // TODO: is it ok if the remaining memory above is unititialized?
 
-            let query1 = unsafe { malloc_async(streams[idx].stream, QUERY_SIZE).unwrap() };
+            let query1 = unsafe { malloc_async(streams[idx].stream, query_size).unwrap() };
 
             let slice1 = StreamAwareCudaSlice::<u8>::upgrade_ptr_stream(
                 query1,
                 streams[idx].stream,
-                QUERY_SIZE,
+                query_size,
             );
 
             unsafe {
