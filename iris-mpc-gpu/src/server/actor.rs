@@ -1037,7 +1037,7 @@ pub fn preprocess_batch_query(batch: BatchQuery) -> (BatchQuery, PreprocessedBat
 }
 
 fn prepare_query_shares(shares: &[GaloisRingIrisCodeShare]) -> Vec<Vec<u8>> {
-    preprocess_query(&shares.into_iter().flat_map(|e| e.coefs).collect::<Vec<_>>())
+    preprocess_query(&shares.iter().flat_map(|e| e.coefs).collect::<Vec<_>>())
 }
 
 #[allow(clippy::too_many_arguments)]
