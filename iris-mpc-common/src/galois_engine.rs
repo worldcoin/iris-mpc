@@ -254,7 +254,7 @@ pub mod degree4 {
         ///          New shape         --> Original shape
         /// (b, w, r % 4,   c, r // 4) --> ( r,   c, w, b)
         /// (2, 2,     4, 200,      4) --> (16, 200, 2, 2)
-        const fn remap_index(i: usize) -> usize {
+        pub const fn remap_index(i: usize) -> usize {
             let b = i / 6400;
             let w = i % 6400 / 3200;
             let r1 = i % 3200 / 800;
