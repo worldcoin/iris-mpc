@@ -15,8 +15,6 @@ pub struct DistanceComparator {
     pub open_kernels:            Vec<CudaFunction>,
     pub merge_kernels:           Vec<CudaFunction>,
     pub query_length:            usize,
-    pub opened_results:          Vec<CudaSlice<u32>>,
-    pub final_results:           Vec<CudaSlice<u32>>,
     pub results_init_host:       Vec<u32>,
     pub final_results_init_host: Vec<u32>,
 }
@@ -26,8 +24,6 @@ impl DistanceComparator {
         let ptx = compile_ptx(PTX_SRC).unwrap();
         let mut open_kernels = Vec::new();
         let mut merge_kernels = Vec::new();
-        let mut opened_results = vec![];
-        let mut final_results = vec![];
 
         let devices_count = device_manager.device_count();
 
@@ -46,9 +42,6 @@ impl DistanceComparator {
             let open_results_function = device.get_func("", OPEN_RESULTS_FUNCTION).unwrap();
             let merge_results_function = device.get_func("", MERGE_RESULTS_FUNCTION).unwrap();
 
-            opened_results.push(device.htod_copy(results_init_host.clone()).unwrap());
-            final_results.push(device.htod_copy(final_results_init_host.clone()).unwrap());
-
             open_kernels.push(open_results_function);
             merge_kernels.push(merge_results_function);
         }
@@ -58,8 +51,6 @@ impl DistanceComparator {
             open_kernels,
             merge_kernels,
             query_length,
-            opened_results,
-            final_results,
             results_init_host,
             final_results_init_host,
         }
