@@ -5,18 +5,21 @@ use iris_mpc_common::config::Config;
 use iris_mpc_store::{Store, StoredIris, StoredIrisRef};
 use tokio::runtime::Runtime;
 
+const IRIS_CODE_LENGTH: usize = 12800;
+
 async fn setup(count: usize) -> Result<(Store, String)> {
     let schema_name = temporary_name();
     let store = Store::new(&test_db_url()?, &schema_name).await?;
 
     let chunk_size = count.min(1_000);
     let chunk_count = count.div_ceil(chunk_size);
+    assert_eq!(chunk_size * chunk_count, count);
 
     let iris = StoredIrisRef {
-        left_code:  &[123_u16; 12800],
-        left_mask:  &[456_u16; 12800],
-        right_code: &[789_u16; 12800],
-        right_mask: &[101_u16; 12800],
+        left_code:  &[123_u16; IRIS_CODE_LENGTH],
+        left_mask:  &[456_u16; IRIS_CODE_LENGTH],
+        right_code: &[789_u16; IRIS_CODE_LENGTH],
+        right_mask: &[101_u16; IRIS_CODE_LENGTH],
     };
     let codes_and_masks = vec![iris; chunk_size];
 
@@ -29,7 +32,34 @@ async fn setup(count: usize) -> Result<(Store, String)> {
     Ok((store, schema_name))
 }
 
-async fn load(store: &Store, parallelism: usize) -> Result<()> {
+async fn load_collect(store: &Store, count_irises: usize, parallelism: usize) -> Result<()> {
+    let data_len = count_irises * IRIS_CODE_LENGTH;
+    let mut left_codes_db = vec![0; data_len];
+    let mut left_masks_db = vec![0; data_len];
+    let mut right_codes_db = vec![0; data_len];
+    let mut right_masks_db = vec![0; data_len];
+
+    let mut stream = store.stream_irises_par(parallelism).await;
+    while let Some(iris) = stream.try_next().await? {
+        if iris.index() >= count_irises {
+            return Err(eyre!("Inconsistent iris index {}", iris.index()));
+        }
+
+        let start = iris.index() * IRIS_CODE_LENGTH;
+        left_codes_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.left_code());
+        left_masks_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.left_mask());
+        right_codes_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.right_code());
+        right_masks_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.right_mask());
+    }
+
+    black_box(left_codes_db);
+    black_box(left_masks_db);
+    black_box(right_codes_db);
+    black_box(right_masks_db);
+    Ok(())
+}
+
+async fn load_drop(store: &Store, _count_irises: usize, parallelism: usize) -> Result<()> {
     store
         .stream_irises_par(parallelism)
         .await
@@ -47,11 +77,17 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     let mut c = c.benchmark_group(format!("load count={}", count));
     c.sample_size(10);
 
-    for para in [16, 4, 1] {
+    for parallelism in [16, 4, 1] {
         c.throughput(Throughput::Elements(count as u64));
-        c.bench_function(format!("parallelism={}", para), |b| {
+
+        c.bench_function(format!("drop parallelism={}", parallelism), |b| {
             b.to_async(&rt)
-                .iter(|| async { load(&store, para).await.unwrap() })
+                .iter(|| async { load_drop(&store, count, parallelism).await.unwrap() })
+        });
+
+        c.bench_function(format!("collect parallelism={}", parallelism), |b| {
+            b.to_async(&rt)
+                .iter(|| async { load_collect(&store, count, parallelism).await.unwrap() })
         });
     }
 
