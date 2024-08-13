@@ -18,3 +18,8 @@ serde_json.workspace = true
 rand.workspace = true
 dotenvy.workspace = true
 tokio.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "bench_load"
+harness = false

@@ -75,7 +75,7 @@ struct StoredState {
 
 #[derive(Clone)]
 pub struct Store {
-    pool: PgPool,
+    pub pool: PgPool, // TODO: not pub.
 }
 
 impl Store {
@@ -148,8 +148,7 @@ impl Store {
                     .bind(end_id as i64)
                     .fetch(&self.pool);
 
-            partition_streams.push(Box::pin(partition_stream)
-                as Pin<Box<dyn Stream<Item = Result<StoredIris, sqlx::Error>> + Send>>);
+            partition_streams.push(partition_stream);
         }
 
         stream::select_all(partition_streams)
