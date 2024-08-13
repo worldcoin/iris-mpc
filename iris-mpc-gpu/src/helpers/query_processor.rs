@@ -113,20 +113,20 @@ impl CompactQuery {
         &self,
         device: &DeviceManager,
         streams: &[CudaStream],
-        query_size: usize,
+        batch_size: usize,
     ) -> eyre::Result<DeviceCompactQuery> {
         Ok(DeviceCompactQuery {
-            code_query:        device.htod_transfer_query(&self.code_query, streams, query_size)?,
-            mask_query:        device.htod_transfer_query(&self.mask_query, streams, query_size)?,
+            code_query:        device.htod_transfer_query(&self.code_query, streams, batch_size)?,
+            mask_query:        device.htod_transfer_query(&self.mask_query, streams, batch_size)?,
             code_query_insert: device.htod_transfer_query(
                 &self.code_query_insert,
                 streams,
-                query_size,
+                batch_size,
             )?,
             mask_query_insert: device.htod_transfer_query(
                 &self.mask_query_insert,
                 streams,
-                query_size,
+                batch_size,
             )?,
         })
     }
