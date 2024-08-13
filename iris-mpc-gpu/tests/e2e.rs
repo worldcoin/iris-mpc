@@ -6,7 +6,7 @@ use iris_mpc_common::{
 };
 use iris_mpc_gpu::{
     helpers::device_manager::DeviceManager,
-    server::{BatchQuery, ServerActor, ServerJobResult, MAX_BATCH_SIZE},
+    server::{preprocess_batch_query, BatchQuery, ServerActor, ServerJobResult, MAX_BATCH_SIZE},
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{collections::HashMap, env, sync::Arc};
@@ -292,9 +292,19 @@ async fn e2e_test() -> Result<()> {
         batch2.store_right = batch2.store_left.clone();
 
         // send batches to servers
-        let res0_fut = handle0.submit_batch_query(batch0).await;
-        let res1_fut = handle1.submit_batch_query(batch1).await;
-        let res2_fut = handle2.submit_batch_query(batch2).await;
+        let (batch0, preprocessed_batch0) = preprocess_batch_query(batch0);
+        let (batch1, preprocessed_batch1) = preprocess_batch_query(batch1);
+        let (batch2, preprocessed_batch2) = preprocess_batch_query(batch2);
+
+        let res0_fut = handle0
+            .submit_batch_query(batch0, preprocessed_batch0)
+            .await;
+        let res1_fut = handle1
+            .submit_batch_query(batch1, preprocessed_batch1)
+            .await;
+        let res2_fut = handle2
+            .submit_batch_query(batch2, preprocessed_batch2)
+            .await;
 
         let res0 = res0_fut.await;
         let res1 = res1_fut.await;

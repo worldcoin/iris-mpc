@@ -1,11 +1,14 @@
 mod actor;
 pub mod sync_nccl;
 
-pub use actor::{ServerActor, ServerActorHandle};
+use crate::helpers::query_processor::CompactQuery;
+pub use actor::{preprocess_batch_query, ServerActor, ServerActorHandle};
 use iris_mpc_common::galois_engine::degree4::GaloisRingIrisCodeShare;
 use tokio::sync::oneshot;
 
 pub const MAX_BATCH_SIZE: usize = 64;
+
+pub type PreprocessedBatchQuery = (CompactQuery, CompactQuery);
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BatchQueryEntries {
@@ -32,10 +35,10 @@ pub struct BatchQuery {
     pub store_right: BatchQueryEntries,
 }
 
-#[derive(Debug)]
 pub struct ServerJob {
-    batch:          BatchQuery,
-    return_channel: oneshot::Sender<ServerJobResult>,
+    batch:              BatchQuery,
+    preprocessed_batch: PreprocessedBatchQuery,
+    return_channel:     oneshot::Sender<ServerJobResult>,
 }
 
 #[derive(Debug, Clone)]

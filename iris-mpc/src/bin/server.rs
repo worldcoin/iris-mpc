@@ -25,7 +25,10 @@ use iris_mpc_common::{
 use iris_mpc_gpu::{
     dot::ROTATIONS,
     helpers::device_manager::DeviceManager,
-    server::{sync_nccl, BatchMetadata, BatchQuery, ServerActor, ServerJobResult, MAX_BATCH_SIZE},
+    server::{
+        preprocess_batch_query, sync_nccl, BatchMetadata, BatchQuery, ServerActor, ServerJobResult,
+        MAX_BATCH_SIZE,
+    },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
 use rand::{rngs::StdRng, SeedableRng};
@@ -41,7 +44,7 @@ use telemetry_batteries::{
 };
 use tokio::{
     sync::{mpsc, oneshot},
-    task::spawn_blocking,
+    task::{self, spawn_blocking},
     time::timeout,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -567,26 +570,27 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     background_tasks.check_tasks();
     tracing::info!("Healthcheck server running on port 3000.");
 
-    let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
+    // **Tensor format of queries**
+    //
+    // The functions `receive_batch` and `prepare_query_shares` will prepare the
+    // _query_ variables as `Vec<Vec<u8>>` formatted as follows:
+    //
+    // - The inner Vec is a flattening of these dimensions (inner to outer):
+    //   - One u8 limb of one iris bit.
+    //   - One code: 12800 coefficients.
+    //   - One query: all rotated variants of a code.
+    //   - One batch: many queries.
+    // - The outer Vec is the dimension of the Galois Ring (2):
+    //   - A decomposition of each iris bit into two u8 limbs.
 
-    // Main loop
-    let res: eyre::Result<()> = async {
+    // We limit this channel to two elements to limit the amount of queries we lose
+    // when one of the nodes crashes.
+    let (query_tx, mut query_rx) = mpsc::channel(2);
+
+    // Query producer (CPU load)
+    background_tasks.spawn(async move {
         loop {
-            // **Tensor format of queries**
-            //
-            // The functions `receive_batch` and `prepare_query_shares` will prepare the
-            // _query_ variables as `Vec<Vec<u8>>` formatted as follows:
-            //
-            // - The inner Vec is a flattening of these dimensions (inner to outer):
-            //   - One u8 limb of one iris bit.
-            //   - One code: 12800 coefficients.
-            //   - One query: all rotated variants of a code.
-            //   - One batch: many queries.
-            // - The outer Vec is the dimension of the Galois Ring (2):
-            //   - A decomposition of each iris bit into two u8 limbs.
-
             let now = Instant::now();
-
             // Skip requests based on the startup sync, only in the first iteration.
             let skip_request_ids = mem::take(&mut skip_request_ids);
 
@@ -601,6 +605,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             )
             .await
             .context("while receiving batches from SQS")?;
+            tracing::info!("Received batch in {:?}", now.elapsed());
 
             // Iterate over a list of tracing payloads, and create logs with mappings to
             // payloads Log at least a "start" event using a log with trace.id and
@@ -614,20 +619,38 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 );
             }
 
-            // start trace span - with single TraceId and single ParentTraceID
-            tracing::info!("Received batch in {:?}", now.elapsed());
+            let now = Instant::now();
+            let (batch, preprocessed_batch) =
+                task::spawn_blocking(move || preprocess_batch_query(batch)).await?;
+            tracing::info!("Preprocessed batch in {:?}", now.elapsed());
+
+            query_tx.send((batch, preprocessed_batch)).await?;
+        }
+    });
+    background_tasks.check_tasks();
+
+    // Query consumer (GPU load)
+    background_tasks.spawn(async move {
+        while let Some((batch, preprocessed_batch)) = query_rx.recv().await {
+            let result_future = handle.submit_batch_query(batch, preprocessed_batch).await;
+
+            let result = timeout(
+                Duration::from_secs(config.processing_timeout_secs),
+                result_future,
+            )
+            .await
+            .map_err(|e| eyre!("ServerActor processing timeout: {:?}", e))?;
+
+            tx.send(result).await.unwrap();
+        }
+        Ok::<(), eyre::Error>(())
+    });
+    background_tasks.check_tasks();
+
+    let res: eyre::Result<()> = async {
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
             background_tasks.check_tasks();
-
-            let result_future = handle.submit_batch_query(batch).await;
-
-            // await the result
-            let result = timeout(processing_timeout, result_future)
-                .await
-                .map_err(|e| eyre!("ServerActor processing timeout: {:?}", e))?;
-
-            tx.send(result).await?;
-
-            // wrap up span context
         }
     }
     .await;
@@ -636,8 +659,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         Ok(_) => {}
         Err(e) => {
             tracing::error!("ServerActor processing error: {:?}", e);
-            // drop actor handle to initiate shutdown
-            drop(handle);
 
             // Clean up server tasks, then wait for them to finish
             background_tasks.abort_all();

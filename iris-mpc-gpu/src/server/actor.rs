@@ -1,4 +1,4 @@
-use super::{BatchQuery, Eye, ServerJob, ServerJobResult, MAX_BATCH_SIZE};
+use super::{BatchQuery, Eye, PreprocessedBatchQuery, ServerJob, ServerJobResult, MAX_BATCH_SIZE};
 use crate::{
     dot::{
         distance_comparator::DistanceComparator,
@@ -55,10 +55,12 @@ impl ServerActorHandle {
     pub async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
+        preprocessed_batch: PreprocessedBatchQuery,
     ) -> impl Future<Output = ServerJobResult> {
         let (tx, rx) = oneshot::channel();
         let job = ServerJob {
             batch,
+            preprocessed_batch,
             return_channel: tx,
         };
         self.job_queue.send(job).await.unwrap();
@@ -354,9 +356,10 @@ impl ServerActor {
         while let Some(job) = self.job_queue.blocking_recv() {
             let ServerJob {
                 batch,
+                preprocessed_batch,
                 return_channel,
             } = job;
-            let _ = self.process_batch_query(batch, return_channel);
+            let _ = self.process_batch_query(batch, preprocessed_batch, return_channel);
         }
         tracing::info!("Server Actor finished due to all job queues being closed");
     }
@@ -364,6 +367,7 @@ impl ServerActor {
     fn process_batch_query(
         &mut self,
         batch: BatchQuery,
+        preprocessed_batch: PreprocessedBatchQuery,
         return_channel: oneshot::Sender<ServerJobResult>,
     ) -> eyre::Result<()> {
         let now = Instant::now();
@@ -390,25 +394,11 @@ impl ServerActor {
         // COMPARE LEFT EYE QUERIES
         ///////////////////////////////////////////////////////////////////
 
-        // *Query* variant including Lagrange interpolation.
-        let compact_query_left = {
-            let code_query = prepare_query_shares(batch.query_left.code);
-            let mask_query = prepare_query_shares(batch.query_left.mask);
-            // *Storage* variant (no interpolation).
-            let code_query_insert = prepare_query_shares(batch.db_left.code);
-            let mask_query_insert = prepare_query_shares(batch.db_left.mask);
-            CompactQuery {
-                code_query,
-                mask_query,
-                code_query_insert,
-                mask_query_insert,
-            }
-        };
         let query_store_left = batch.store_left;
 
         // THIS needs to be MAX_BATCH_SIZE, even though the query can be shorter to have
         // enough padding for GEMM
-        let compact_device_queries_left = compact_query_left.htod_transfer(
+        let compact_device_queries_left = preprocessed_batch.0.htod_transfer(
             &self.device_manager,
             &self.streams[0],
             MAX_BATCH_SIZE,
@@ -433,25 +423,11 @@ impl ServerActor {
         // COMPARE RIGHT EYE QUERIES
         ///////////////////////////////////////////////////////////////////
 
-        // *Query* variant including Lagrange interpolation.
-        let compact_query_right = {
-            let code_query = prepare_query_shares(batch.query_right.code);
-            let mask_query = prepare_query_shares(batch.query_right.mask);
-            // *Storage* variant (no interpolation).
-            let code_query_insert = prepare_query_shares(batch.db_right.code);
-            let mask_query_insert = prepare_query_shares(batch.db_right.mask);
-            CompactQuery {
-                code_query,
-                mask_query,
-                code_query_insert,
-                mask_query_insert,
-            }
-        };
         let query_store_right = batch.store_right;
 
         // THIS needs to be MAX_BATCH_SIZE, even though the query can be shorter to have
         // enough padding for GEMM
-        let compact_device_queries_right = compact_query_right.htod_transfer(
+        let compact_device_queries_right = preprocessed_batch.1.htod_transfer(
             &self.device_manager,
             &self.streams[0],
             MAX_BATCH_SIZE,
@@ -1018,7 +994,49 @@ fn derive_seed(seed: [u32; 8], kdf_salt: &Salt, nonce: usize) -> eyre::Result<[u
     Ok(result)
 }
 
-fn prepare_query_shares(shares: Vec<GaloisRingIrisCodeShare>) -> Vec<Vec<u8>> {
+pub fn preprocess_batch_query(batch: BatchQuery) -> (BatchQuery, PreprocessedBatchQuery) {
+    ///////////////////////////////////////////////////////////////////
+    // PREPARE LEFT EYE QUERIES
+    ///////////////////////////////////////////////////////////////////
+
+    // *Query* variant including Lagrange interpolation.
+    let compact_query_left = {
+        let code_query = prepare_query_shares(&batch.query_left.code);
+        let mask_query = prepare_query_shares(&batch.query_left.mask);
+        // *Storage* variant (no interpolation).
+        let code_query_insert = prepare_query_shares(&batch.db_left.code);
+        let mask_query_insert = prepare_query_shares(&batch.db_left.mask);
+        CompactQuery {
+            code_query,
+            mask_query,
+            code_query_insert,
+            mask_query_insert,
+        }
+    };
+
+    ////////////////////////////////////////////////////////////////////
+    // PREPARE RIGHT EYE QUERIES
+    ///////////////////////////////////////////////////////////////////
+
+    // *Query* variant including Lagrange interpolation.
+    let compact_query_right = {
+        let code_query = prepare_query_shares(&batch.query_right.code);
+        let mask_query = prepare_query_shares(&batch.query_right.mask);
+        // *Storage* variant (no interpolation).
+        let code_query_insert = prepare_query_shares(&batch.db_right.code);
+        let mask_query_insert = prepare_query_shares(&batch.db_right.mask);
+        CompactQuery {
+            code_query,
+            mask_query,
+            code_query_insert,
+            mask_query_insert,
+        }
+    };
+
+    (batch, (compact_query_left, compact_query_right))
+}
+
+fn prepare_query_shares(shares: &[GaloisRingIrisCodeShare]) -> Vec<Vec<u8>> {
     preprocess_query(&shares.into_iter().flat_map(|e| e.coefs).collect::<Vec<_>>())
 }
 
