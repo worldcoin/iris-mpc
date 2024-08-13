@@ -5,7 +5,7 @@ use aws_sdk_sqs::{config::Region, Client};
 use axum::{routing::get, Router};
 use clap::Parser;
 use eyre::{eyre, Context};
-use futures::StreamExt;
+use futures::TryStreamExt;
 use iris_mpc_common::{
     config::{json_wrapper::JsonStrWrapper, Config, Opt},
     galois_engine::degree4::GaloisRingIrisCodeShare,
@@ -309,8 +309,8 @@ async fn initialize_iris_dbs(
     );
     // Load DB from persistent storage.
     let mut store_len = 0;
-    while let Some(iris) = store.stream_irises_par(parallelism).await.next().await {
-        let iris = iris?;
+    let mut stream = store.stream_irises_par(parallelism).await;
+    while let Some(iris) = stream.try_next().await? {
         if iris.index() >= count_irises {
             return Err(eyre!("Inconsistent iris index {}", iris.index()));
         }
