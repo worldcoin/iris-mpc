@@ -129,10 +129,13 @@ impl DeviceManager {
                 query_size,
             );
 
+            // It might happen that the size of preprocessed_query is smaller than
+            // query_size, leading to uninitialized memory here. However, all bit-patterns
+            // are valid for u8, so this is not a problem as we truncate the results based
+            // on the uninit calculations anyway.
             unsafe {
                 memcpy_htod_async(query0, &preprocessed_query[0], streams[idx].stream).unwrap();
             }
-            // TODO: is it ok if the remaining memory above is unititialized?
 
             let query1 = unsafe { malloc_async(streams[idx].stream, query_size).unwrap() };
 
@@ -142,10 +145,13 @@ impl DeviceManager {
                 query_size,
             );
 
+            // It might happen that the size of preprocessed_query is smaller than
+            // query_size, leading to uninitialized memory here. However, all bit-patterns
+            // are valid for u8, so this is not a problem as we truncate the results based
+            // on the uninit calculations anyway.
             unsafe {
                 memcpy_htod_async(query1, &preprocessed_query[1], streams[idx].stream).unwrap();
             }
-            // TODO: is it ok if the remaining memory above is unititialized?
 
             slices0.push(slice0);
             slices1.push(slice1);
