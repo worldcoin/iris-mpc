@@ -1,21 +1,13 @@
 #![allow(clippy::needless_range_loop)]
-use std::{collections::HashMap, sync::Arc, time::Duration};
-
 use aws_sdk_sns::{
-    Client,
     config::Region,
     types::{MessageAttributeValue, PublishBatchRequestEntry},
+    Client,
 };
 use aws_sdk_sqs::Client as SqsClient;
-use base64::{Engine, engine::general_purpose};
+use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use eyre::{Context, ContextCompat};
-use rand::{Rng, rngs::StdRng, SeedableRng, thread_rng};
-use serde_json::to_string;
-use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
-use tokio::{spawn, sync::Mutex, time::sleep};
-use uuid::Uuid;
-
 use iris_mpc_common::{
     galois_engine::degree4::GaloisRingIrisCodeShare,
     helpers::{
@@ -25,6 +17,12 @@ use iris_mpc_common::{
     },
     iris_db::{db::IrisDB, iris::IrisCode},
 };
+use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
+use serde_json::to_string;
+use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
+use std::{collections::HashMap, sync::Arc, time::Duration};
+use tokio::{spawn, sync::Mutex, time::sleep};
+use uuid::Uuid;
 
 const N_QUERIES: usize = 64 * 20;
 const REGION: &str = "eu-north-1";

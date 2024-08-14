@@ -1,19 +1,38 @@
 #![allow(clippy::needless_range_loop)]
 
+use aws_sdk_sns::Client as SNSClient;
+use aws_sdk_sqs::{config::Region, Client};
+use axum::{routing::get, Router};
+use clap::Parser;
+use eyre::{eyre, Context};
+use futures::StreamExt;
+use iris_mpc_common::{
+    config::{json_wrapper::JsonStrWrapper, Config, Opt},
+    galois_engine::degree4::GaloisRingIrisCodeShare,
+    helpers::{
+        aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
+        key_pair::SharesEncryptionKeyPair,
+        kms_dh::derive_shared_secret,
+        sqs::{ResultEvent, SMPCRequest, SQSMessage},
+        sync::SyncState,
+        task_monitor::TaskMonitor,
+    },
+    iris_db::db::IrisDB,
+    IRIS_CODE_LENGTH,
+};
+use iris_mpc_gpu::{
+    dot::ROTATIONS,
+    helpers::device_manager::DeviceManager,
+    server::{sync_nccl, BatchMetadata, BatchQuery, ServerActor, ServerJobResult},
+};
+use iris_mpc_store::{Store, StoredIrisRef};
+use rand::{rngs::StdRng, SeedableRng};
+use static_assertions::const_assert;
 use std::{
     mem,
     sync::Arc,
     time::{Duration, Instant},
 };
-
-use aws_sdk_sns::Client as SNSClient;
-use aws_sdk_sqs::{Client, config::Region};
-use axum::{Router, routing::get};
-use clap::Parser;
-use eyre::{Context, eyre};
-use futures::StreamExt;
-use rand::{rngs::StdRng, SeedableRng};
-use static_assertions::const_assert;
 use telemetry_batteries::{
     metrics::statsd::StatsdBattery,
     tracing::{datadog::DatadogBattery, TracingShutdownHandle},
@@ -24,30 +43,6 @@ use tokio::{
     time::timeout,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
-use iris_mpc_common::{
-    config::{Config, json_wrapper::JsonStrWrapper, Opt},
-    galois_engine::degree4::GaloisRingIrisCodeShare,
-    helpers::{
-        aws::{
-            SPAN_ID_MESSAGE_ATTRIBUTE_NAME,
-            TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
-        },
-        key_pair::SharesEncryptionKeyPair,
-        kms_dh::derive_shared_secret,
-        sqs::{ResultEvent, SMPCRequest, SQSMessage},
-        sync::SyncState,
-        task_monitor::TaskMonitor,
-    },
-    IRIS_CODE_LENGTH,
-    iris_db::db::IrisDB,
-};
-use iris_mpc_gpu::{
-    dot::ROTATIONS,
-    helpers::device_manager::DeviceManager,
-    server::{BatchMetadata, BatchQuery, ServerActor, ServerJobResult, sync_nccl},
-};
-use iris_mpc_store::{Store, StoredIrisRef};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
@@ -176,8 +171,8 @@ async fn receive_batch(
                         mask_share.all_rotations(),
                     )
                 })
-                    .await
-                    .context("while pre-processing iris code query")?;
+                .await
+                .context("while pre-processing iris code query")?;
 
                 batch_query.store.code.push(store_iris_shares);
                 batch_query.store.mask.push(store_mask_shares);
@@ -408,14 +403,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         &sns_client,
         &config,
     )
-        .await?;
+    .await?;
 
     tracing::info!("Initialize iris db");
     let (mut codes_db, mut masks_db, store_len) =
         initialize_iris_dbs(party_id, &store, &config).await?;
 
     let my_state = SyncState {
-        db_len: store_len as u64,
+        db_len:              store_len as u64,
         deleted_request_ids: store.last_deleted_requests(SYNC_QUERIES).await?,
     };
 
@@ -495,11 +490,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let store_bg = store.clone();
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
-                           merged_results,
-                           request_ids,
-                           matches,
-                           store: query_store,
-                       }) = rx.recv().await
+            merged_results,
+            request_ids,
+            matches,
+            store: query_store,
+        }) = rx.recv().await
         {
             let result_events = merged_results
                 .iter()
@@ -525,8 +520,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     let code = &query_store.code[query_idx].coefs[..];
                     let mask = &query_store.mask[query_idx].coefs[..];
                     StoredIrisRef {
-                        left_code: code,
-                        left_mask: mask,
+                        left_code:  code,
+                        left_mask:  mask,
                         // TODO: second eye.
                         right_code: &[],
                         right_mask: &[],
@@ -605,8 +600,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 enable_processing_encrypted_shares,
                 shares_encryption_key_pair,
             )
-                .await
-                .context("while receiving batches from SQS")?;
+            .await
+            .context("while receiving batches from SQS")?;
 
             // Iterate over a list of tracing payloads, and create logs with mappings to
             // payloads Log at least a "start" event using a log with trace.id and
@@ -636,7 +631,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             // wrap up span context
         }
     }
-        .await;
+    .await;
 
     match res {
         Ok(_) => {}
