@@ -24,9 +24,9 @@ config = "0.14.0"
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-reqwest.workspace = true
 
-sodiumoxide = { git = "https://github.com/worldcoin/sodiumoxide.git" }
+reqwest = { workspace = true, features = ["blocking", "json"] }
+sodiumoxide = "0.2.7"
 hmac = "0.12"
 http = "1.1.0"
 opentelemetry = "0.21.0"
@@ -37,6 +37,7 @@ time = { version = "^0.3.6", features = ["formatting", "macros"] }
 url = "2"
 hex.workspace = true
 zeroize = "1.8.1"
+wiremock = "0.6.1"
 
 [dev-dependencies]
 float_eq = "1"

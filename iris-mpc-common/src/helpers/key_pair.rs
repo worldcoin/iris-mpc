@@ -1,9 +1,10 @@
+use crate::{config::Config, iris_db::iris::IrisCodeArray};
 use aws_config::Region;
 use aws_sdk_secretsmanager::{
-    Client as SecretsManagerClient, error::SdkError,
-    operation::get_secret_value::GetSecretValueError,
+    error::SdkError, operation::get_secret_value::GetSecretValueError,
+    Client as SecretsManagerClient,
 };
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use sodiumoxide::crypto::{
     box_::{PublicKey, SecretKey},
     sealedbox,
@@ -11,8 +12,6 @@ use sodiumoxide::crypto::{
 };
 use thiserror::Error;
 use zeroize::Zeroize;
-
-use crate::{config::Config, iris_db::iris::IrisCodeArray};
 
 const REGION: &str = "eu-north-1";
 const CURRENT_SECRET_LABEL: &str = "AWSCURRENT";
@@ -27,14 +26,24 @@ pub enum SharesDecodingError {
     RequestError(#[from] reqwest::Error),
     #[error("Decoding error: {0}")]
     DecodingError(#[from] base64::DecodeError),
+    #[error("Parsing struct from JSON error")]
+    DecodedShareParsingToJSONError,
+    #[error("Parsing bytes to UTF8 error")]
+    DecodedShareParsingToUTF8Error,
     #[error("Parsing key error")]
     ParsingKeyError,
     #[error("Sealed box open error")]
     SealedBoxOpenError,
+    #[error("Public key not found error")]
+    PublicKeyNotFound,
+    #[error("Private key not found error")]
+    PrivateKeyNotFound,
+    #[error("Base64 decoding error")]
+    Base64DecodeError,
     #[error("Received error message from server: [{}] {}", .status, .message)]
     ResponseContent {
-        status: reqwest::StatusCode,
-        url: String,
+        status:  reqwest::StatusCode,
+        url:     String,
         message: String,
     },
     #[error(transparent)]
@@ -71,7 +80,7 @@ impl SharesEncryptionKeyPair {
             config.public_key_bucket_name,
             config.party_id.to_string(),
         )
-            .await
+        .await
         {
             Ok(pk) => pk,
             Err(e) => return Err(e),
@@ -83,7 +92,7 @@ impl SharesEncryptionKeyPair {
             &config.party_id.to_string(),
             CURRENT_SECRET_LABEL,
         )
-            .await
+        .await
         {
             Ok(sk) => sk,
             Err(e) => return Err(e),
@@ -118,9 +127,7 @@ impl SharesEncryptionKeyPair {
     }
 
     pub fn open_sealed_box(&self, code: Vec<u8>) -> Result<Vec<u8>, SharesDecodingError> {
-        let mut buffer = [0u8; IrisCodeArray::IRIS_CODE_SIZE * 2 + SEALBYTES];
-        buffer[..code.len()].copy_from_slice(&code);
-        let decrypted = sealedbox::open(&buffer, &self.pk, &self.sk);
+        let decrypted = sealedbox::open(&code, &self.pk, &self.sk);
         match decrypted {
             Ok(bytes) => Ok(bytes),
             Err(_) => Err(SharesDecodingError::SealedBoxOpenError),
@@ -167,9 +174,9 @@ pub async fn download_public_key_from_s3(
             let body = response.text().await;
             match body {
                 Ok(body) => Ok(body),
-                Err(e) => Err(SharesDecodingError::PublicKeyNotFound(e)),
+                Err(e) => Err(SharesDecodingError::RequestError(e)),
             }
         }
-        Err(e) => Err(SharesDecodingError::PublicKeyNotFound(e)),
+        Err(e) => Err(SharesDecodingError::RequestError(e)),
     }
 }
