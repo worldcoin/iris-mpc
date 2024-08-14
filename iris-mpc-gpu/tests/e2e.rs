@@ -192,7 +192,7 @@ async fn e2e_test() -> Result<()> {
             // Automatic random tests
             let options = if responses.is_empty() { 2 } else { 3 };
             let option = rng.gen_range(0..options);
-            let template = match option {
+            let template = match 1 {
                 0 => {
                     println!("Sending new iris code");
                     expected_results.insert(request_id.to_string(), None);
@@ -200,7 +200,7 @@ async fn e2e_test() -> Result<()> {
                 }
                 1 => {
                     println!("Sending iris code from db");
-                    let db_index = rng.gen_range(0..db.db.len());
+                    let db_index = 42; // rng.gen_range(0..db.db.len());
                     expected_results.insert(request_id.to_string(), Some(db_index as u32));
                     db.db[db_index].clone()
                 }

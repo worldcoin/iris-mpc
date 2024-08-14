@@ -83,6 +83,7 @@ impl DistanceComparator {
         db_sizes: &[usize],
         real_db_sizes: &[usize],
         offset: usize,
+        total_db_sizes: &[usize],
         streams: &[CudaStream],
     ) {
         for i in 0..self.device_manager.device_count() {
@@ -112,6 +113,7 @@ impl DistanceComparator {
                             offset,
                             num_elements,
                             real_db_sizes[i],
+                            total_db_sizes[i],
                         ),
                     )
                     .unwrap();

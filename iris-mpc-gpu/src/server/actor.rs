@@ -438,13 +438,12 @@ impl ServerActor {
             &self.cublas_handles[0],
         )?;
 
-        let merged_results_left = self.compare_query_against_db_and_self(
+        self.compare_query_against_db_and_self(
             &compact_device_queries_left,
             &compact_device_sums_left,
             &mut events,
-            batch_size,
             Eye::Left,
-        )?;
+        );
 
         ///////////////////////////////////////////////////////////////////
         // COMPARE RIGHT EYE QUERIES
@@ -481,31 +480,36 @@ impl ServerActor {
             &self.cublas_handles[0],
         )?;
 
-        let merged_results_right = self.compare_query_against_db_and_self(
+        self.compare_query_against_db_and_self(
             &compact_device_queries_right,
             &compact_device_sums_right,
             &mut events,
-            batch_size,
             Eye::Right,
-        )?;
+        );
 
         ///////////////////////////////////////////////////////////////////
         // MERGE LEFT & RIGHT results
         ///////////////////////////////////////////////////////////////////
-        let mut merged_results = merged_results_left
-            .into_iter()
-            .zip(merged_results_right)
-            .map(|(left, right)| {
-                // If both eyes are matches with the same ID, return the ID
-                // This also covers the case where both are non-matches, since we return
-                // NON_MATCH in that case as well
-                if left == right {
-                    left
-                } else {
-                    NON_MATCH_ID
-                }
-            })
-            .collect::<Vec<_>>();
+
+        // Merge results and fetch matching indices
+        // Format: host_results[device_index][query_index]
+        self.distance_comparator.merge_db_results(
+            &self.db_match_list_left,
+            &self.db_match_list_right,
+            &self.final_results,
+            &self.current_db_sizes,
+            &self.streams[0],
+        );
+
+        self.device_manager.await_streams(&self.streams[0]);
+
+        // self.distance_comparator.merge_batch_results(
+        //     &self.batch_match_list_left,
+        //     &self.batch_match_list_right,
+        //     &self.final_results,
+        //     &self.current_db_sizes,
+        //     &self.streams[0],
+        // );
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id
@@ -518,6 +522,20 @@ impl ServerActor {
                 "Protocol finished",
             );
         }
+
+        // Fetch the final results (blocking)
+        let mut host_results = self
+            .distance_comparator
+            .fetch_final_results(&self.final_results);
+
+        // Truncate the results to the batch size
+        host_results.iter_mut().for_each(|x| x.truncate(batch_size));
+
+        // Evaluate the results across devices
+        // Format: merged_results[query_index]
+        let mut merged_results =
+            get_merged_results(&host_results, self.device_manager.device_count());
+
         // List the indices of the queries that did not match.
         let insertion_list = merged_results
             .iter()
@@ -656,9 +674,8 @@ impl ServerActor {
         compact_device_queries: &DeviceCompactQuery,
         compact_device_sums: &DeviceCompactSums,
         events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
-        batch_size: usize,
         eye_db: Eye,
-    ) -> eyre::Result<Vec<u32>> {
+    ) {
         let batch_streams = &self.streams[0];
         let batch_cublas = &self.cublas_handles[0];
 
@@ -740,6 +757,7 @@ impl ServerActor {
             &db_sizes_batch,
             &db_sizes_batch,
             0,
+            &self.current_db_sizes,
             batch_streams,
         );
         self.phase2_batch.return_result_buffer(res);
@@ -910,6 +928,7 @@ impl ServerActor {
                     &dot_chunk_size,
                     &chunk_size,
                     offset,
+                    &self.current_db_sizes,
                     request_streams,
                 );
                 self.phase2.return_result_buffer(res);
@@ -958,37 +977,20 @@ impl ServerActor {
 
         // ---- START RESULT PROCESSING ----
 
-        // Merge results and fetch matching indices
-        // Format: host_results[device_index][query_index]
-        self.distance_comparator.merge_db_results(
-            &self.db_match_list_left,
-            &self.db_match_list_right,
-            &self.final_results,
-            &self.current_db_sizes,
-            &self.streams[0],
-        );
-
-        self.distance_comparator.merge_batch_results(
-            &self.batch_match_list_left,
-            &self.batch_match_list_right,
-            &self.final_results,
-            &self.current_db_sizes,
-            &self.streams[0],
-        );
-
         self.device_manager.await_streams(&self.streams[0]);
 
         // Fetch the final results (blocking)
-        let mut host_results = self
-            .distance_comparator
-            .fetch_final_results(&self.final_results);
+        // let mut host_results = self
+        //     .distance_comparator
+        //     .fetch_final_results(&self.final_results);
 
-        // Truncate the results to the batch size
-        host_results.iter_mut().for_each(|x| x.truncate(batch_size));
+        // // Truncate the results to the batch size
+        // host_results.iter_mut().for_each(|x| x.truncate(batch_size));
 
-        // Evaluate the results across devices
-        // Format: merged_results[query_index]
-        let merged_results = get_merged_results(&host_results, self.device_manager.device_count());
+        // // Evaluate the results across devices
+        // // Format: merged_results[query_index]
+        // let merged_results = get_merged_results(&host_results,
+        // self.device_manager.device_count());
 
         // Reset the results buffers for reuse
         reset_results(
@@ -1010,7 +1012,7 @@ impl ServerActor {
             &self.streams[0],
         );
 
-        Ok(merged_results)
+        // Ok(merged_results)
     }
 }
 
@@ -1064,6 +1066,7 @@ fn open(
     db_sizes: &[usize],
     real_db_sizes: &[usize],
     offset: usize,
+    total_db_sizes: &[usize],
     streams: &[CudaStream],
 ) {
     let n_devices = x.len();
@@ -1098,6 +1101,7 @@ fn open(
         db_sizes,
         real_db_sizes,
         offset,
+        total_db_sizes,
         streams,
     );
 }

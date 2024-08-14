@@ -26,7 +26,7 @@ extern "C" __global__ void matmul_correct_and_reduce(int *c, unsigned short *out
     }
 }
 
-extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t dbLength, size_t queryLength, size_t offset, size_t numElements, size_t realDbLen)
+extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t dbLength, size_t queryLength, size_t offset, size_t numElements, size_t realDbLen, size_t totalDbLen)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
@@ -44,7 +44,7 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
                 continue;
             }
 
-            unsigned int outputIdx = (idx * 64 + i) + offset * queryLength / ROTATIONS;
+            unsigned int outputIdx = totalDbLen * (queryIdx / ALL_ROTATIONS) + dbIdx;
             atomicOr(&output[outputIdx / 64], (1ULL << (outputIdx % 64)));
         }
     }
@@ -61,8 +61,6 @@ extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, 
             unsigned int dbIdx = (idx * 64 + i) % dbLength;
             bool matchLeft = (matchResultsLeft[idx] & (1ULL << i));
             bool matchRight = (matchResultsRight[idx] & (1ULL << i));
-
-            finalResults[queryIdx] = UINT_MAX;
 
             if (matchLeft && matchRight)
             {
