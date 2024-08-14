@@ -69,29 +69,33 @@ impl ServerActorHandle {
 const DB_CHUNK_SIZE: usize = 512;
 const QUERIES: usize = ROTATIONS * MAX_BATCH_SIZE;
 pub struct ServerActor {
-    job_queue:            mpsc::Receiver<ServerJob>,
-    device_manager:       Arc<DeviceManager>,
-    party_id:             usize,
+    job_queue:              mpsc::Receiver<ServerJob>,
+    device_manager:         Arc<DeviceManager>,
+    party_id:               usize,
     // engines
-    codes_engine:         ShareDB,
-    masks_engine:         ShareDB,
-    batch_codes_engine:   ShareDB,
-    batch_masks_engine:   ShareDB,
-    phase2:               Circuits,
-    phase2_batch:         Circuits,
-    distance_comparator:  DistanceComparator,
+    codes_engine:           ShareDB,
+    masks_engine:           ShareDB,
+    batch_codes_engine:     ShareDB,
+    batch_masks_engine:     ShareDB,
+    phase2:                 Circuits,
+    phase2_batch:           Circuits,
+    distance_comparator:    DistanceComparator,
     // DB slices
-    left_code_db_slices:  SlicedProcessedDatabase,
-    left_mask_db_slices:  SlicedProcessedDatabase,
-    right_code_db_slices: SlicedProcessedDatabase,
-    right_mask_db_slices: SlicedProcessedDatabase,
-    streams:              Vec<Vec<CudaStream>>,
-    cublas_handles:       Vec<Vec<CudaBlas>>,
-    results:              Vec<CudaSlice<u32>>,
-    batch_results:        Vec<CudaSlice<u32>>,
-    final_results:        Vec<CudaSlice<u32>>,
-    current_db_sizes:     Vec<usize>,
-    query_db_size:        Vec<usize>,
+    left_code_db_slices:    SlicedProcessedDatabase,
+    left_mask_db_slices:    SlicedProcessedDatabase,
+    right_code_db_slices:   SlicedProcessedDatabase,
+    right_mask_db_slices:   SlicedProcessedDatabase,
+    streams:                Vec<Vec<CudaStream>>,
+    cublas_handles:         Vec<Vec<CudaBlas>>,
+    results:                Vec<CudaSlice<u32>>,
+    batch_results:          Vec<CudaSlice<u32>>,
+    final_results:          Vec<CudaSlice<u32>>,
+    db_match_list_left:     Vec<CudaSlice<u64>>,
+    db_match_list_right:    Vec<CudaSlice<u64>>,
+    batch_match_list_left:  Vec<CudaSlice<u64>>,
+    batch_match_list_right: Vec<CudaSlice<u64>>,
+    current_db_sizes:       Vec<usize>,
+    query_db_size:          Vec<usize>,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -319,6 +323,15 @@ impl ServerActor {
         let results = distance_comparator.prepare_results();
         let batch_results = distance_comparator.prepare_results();
 
+        let db_match_list_left = distance_comparator
+            .prepare_db_match_list((db_size + db_buffer) / device_manager.device_count());
+        let db_match_list_right = distance_comparator
+            .prepare_db_match_list((db_size + db_buffer) / device_manager.device_count());
+        let batch_match_list_left =
+            distance_comparator.prepare_db_match_list(QUERIES / device_manager.device_count());
+        let batch_match_list_right =
+            distance_comparator.prepare_db_match_list(QUERIES / device_manager.device_count());
+
         let query_db_size = vec![QUERIES; device_manager.device_count()];
 
         for dev in device_manager.devices() {
@@ -347,6 +360,10 @@ impl ServerActor {
             final_results,
             current_db_sizes,
             query_db_size,
+            db_match_list_left,
+            db_match_list_right,
+            batch_match_list_left,
+            batch_match_list_right,
         })
     }
 
@@ -650,6 +667,12 @@ impl ServerActor {
             Eye::Left => (&self.left_code_db_slices, &self.left_mask_db_slices),
             Eye::Right => (&self.right_code_db_slices, &self.right_mask_db_slices),
         };
+
+        let (db_match_bitmap, batch_match_bitmap) = match eye_db {
+            Eye::Left => (&self.db_match_list_left, &self.batch_match_list_left),
+            Eye::Right => (&self.db_match_list_right, &self.batch_match_list_right),
+        };
+
         // Transfer queries to device
 
         // ---- START BATCH DEDUP ----
@@ -712,7 +735,7 @@ impl ServerActor {
             &mut self.phase2_batch,
             &res,
             &self.distance_comparator,
-            &self.batch_results,
+            &batch_match_bitmap,
             chunk_size,
             &db_sizes_batch,
             &db_sizes_batch,
@@ -882,7 +905,7 @@ impl ServerActor {
                     &mut self.phase2,
                     &res,
                     &self.distance_comparator,
-                    &self.results,
+                    &db_match_bitmap,
                     max_chunk_size * QUERIES / 64,
                     &dot_chunk_size,
                     &chunk_size,
@@ -937,10 +960,19 @@ impl ServerActor {
 
         // Merge results and fetch matching indices
         // Format: host_results[device_index][query_index]
-        self.distance_comparator.merge_results(
-            &self.batch_results,
-            &self.results,
+        self.distance_comparator.merge_db_results(
+            &self.db_match_list_left,
+            &self.db_match_list_right,
             &self.final_results,
+            &self.current_db_sizes,
+            &self.streams[0],
+        );
+
+        self.distance_comparator.merge_batch_results(
+            &self.batch_match_list_left,
+            &self.batch_match_list_right,
+            &self.final_results,
+            &self.current_db_sizes,
             &self.streams[0],
         );
 
@@ -1027,7 +1059,7 @@ fn open(
     party: &mut Circuits,
     x: &[ChunkShare<u64>],
     distance_comparator: &DistanceComparator,
-    results_ptrs: &[CudaSlice<u32>],
+    matches_bitmap: &[CudaSlice<u64>],
     chunk_size: usize,
     db_sizes: &[usize],
     real_db_sizes: &[usize],
@@ -1062,7 +1094,7 @@ fn open(
         &a,
         &b,
         &c,
-        results_ptrs,
+        matches_bitmap,
         db_sizes,
         real_db_sizes,
         offset,
@@ -1084,7 +1116,7 @@ fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
         results.push(match_entry);
 
         // DEBUG
-        tracing::debug!(
+        println!(
             "Query {}: match={} [index: {}]",
             j,
             match_entry != NON_MATCH_ID,
