@@ -17,14 +17,14 @@ spec:
     runAsUser: 0
   containers:
     - name: db-cleaner
-      image: ghcr.io/worldcoin/gpu-iris-mpc-debug:2b1a5adf8aebc6a0917f591ec2cc364d5ea5d346
+      image: ghcr.io/worldcoin/gpu-iris-mpc-debug:34b305f6e9acafe9043636fb32fc11870615f34e
       imagePullPolicy: Always
       command: [ "/bin/bash" ]
       args: [ "-c", "while true; do ping localhost; sleep 60; done" ]
       resources:
         limits:
-          cpu: 1
-          memory: 1Gi
+          cpu: 16
+          memory: 32Gi
         requests:
-          cpu: 1
-          memory: 1Gi
+          cpu: 16
+          memory: 32Gi

@@ -2236,6 +2236,7 @@ dependencies = [
  "ndarray",
  "rand",
  "serde_json",
+ "sha2",
  "sodiumoxide",
  "static_assertions",
  "telemetry-batteries",

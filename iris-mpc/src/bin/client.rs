@@ -5,7 +5,7 @@ use aws_sdk_sns::{
     Client,
 };
 use aws_sdk_sqs::Client as SqsClient;
-use base64::{engine::general_purpose, Engine};
+use base64::{alphabet::STANDARD, engine::general_purpose, Engine};
 use clap::Parser;
 use eyre::{Context, ContextCompat};
 use iris_mpc_common::{
@@ -13,12 +13,14 @@ use iris_mpc_common::{
     helpers::{
         aws::{construct_message_attributes, NODE_ID_MESSAGE_ATTRIBUTE_NAME},
         key_pair::download_public_key_from_s3,
-        smpc_request::{ResultEvent, SMPCRequest},
+        smpc_request::{IrisCodesJSON, ResultEvent, SMPCRequest},
+        sqs_s3_helper::upload_file_and_generate_presigned_url,
     },
     iris_db::{db::IrisDB, iris::IrisCode},
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use serde_json::to_string;
+use sha2::{Digest, Sha256};
 use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{spawn, sync::Mutex, time::sleep};
@@ -29,7 +31,8 @@ const REGION: &str = "eu-north-1";
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
-const PUBLIC_KEY_S3_BUCKET_NAME: &str = "wf-mpc-vpc-stage-public-smpcv2-keys";
+const PUBLIC_KEY_S3_BUCKET_NAME: &str = "wf-smpcv2-stage-public-keys";
+const SQS_REQUESTS_BUCKET_NAME: &str = "wf-mpc-stage-smpcv2-sns-requests";
 
 #[derive(Debug, Parser)]
 struct Opt {
@@ -78,18 +81,16 @@ async fn main() -> eyre::Result<()> {
     let mut shares_encryption_public_keys: Vec<PublicKey> = vec![];
     let encrypt_shares = encrypt_shares.is_some();
 
-    if encrypt_shares {
-        for i in 0..3 {
-            let public_key_string =
-                download_public_key_from_s3(PUBLIC_KEY_S3_BUCKET_NAME.to_string(), i.to_string())
-                    .await?;
-            let public_key_bytes = general_purpose::STANDARD
-                .decode(public_key_string)
-                .context("Failed to decode public key")?;
-            let public_key =
-                PublicKey::from_slice(&public_key_bytes).context("Failed to parse public key")?;
-            shares_encryption_public_keys.push(public_key);
-        }
+    for i in 0..3 {
+        let public_key_string =
+            download_public_key_from_s3(PUBLIC_KEY_S3_BUCKET_NAME.to_string(), i.to_string())
+                .await?;
+        let public_key_bytes = general_purpose::STANDARD
+            .decode(public_key_string)
+            .context("Failed to decode public key")?;
+        let public_key =
+            PublicKey::from_slice(&public_key_bytes).context("Failed to parse public key")?;
+        shares_encryption_public_keys.push(public_key);
     }
 
     let n_repeat = n_repeat.unwrap_or(0);
@@ -246,60 +247,58 @@ async fn main() -> eyre::Result<()> {
             &mut StdRng::seed_from_u64(RNG_SEED_SERVER),
         );
 
-        let mut messages = vec![];
+        let mut iris_shares_file_hashes: [String; 3] = Default::default();
+        let mut iris_codes_shares_base64: [String; 3] = Default::default();
+
         for i in 0..3 {
-            let sns_id = Uuid::new_v4();
-            let iris_code_coefs = bytemuck::cast_slice(&shared_code[i].coefs);
-            let mask_code_coefs = bytemuck::cast_slice(&shared_mask[i].coefs);
+            let iris_code_coefs_base64 =
+                general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_code[i].coefs));
+            let mask_code_coefs_base64 =
+                general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_mask[i].coefs));
 
-            let iris_code: String;
-            let mask_code: String;
-
-            if encrypt_shares {
-                iris_code = general_purpose::STANDARD.encode(sealedbox::seal(
-                    iris_code_coefs,
-                    &shares_encryption_public_keys[i],
-                ));
-                mask_code = general_purpose::STANDARD.encode(sealedbox::seal(
-                    mask_code_coefs,
-                    &shares_encryption_public_keys[i],
-                ));
-            } else {
-                iris_code = general_purpose::STANDARD.encode(iris_code_coefs);
-                mask_code = general_purpose::STANDARD.encode(mask_code_coefs);
-            }
-
-            let request_message = SMPCRequest {
-                signup_id: request_id.to_string(),
-                iris_code,
-                mask_code,
+            let iris_codes_json = IrisCodesJSON {
+                iris_version:    "1.0".to_string(),
+                right_iris_code: iris_code_coefs_base64,
+                right_iris_mask: mask_code_coefs_base64,
+                left_iris_code:  "nan".to_string(),
+                left_iris_mask:  "nan".to_string(),
             };
+            let serialized_iris_codes_json =
+                to_string(&iris_codes_json).expect("Serialization failed");
 
-            let mut message_attributes = construct_message_attributes()?;
-            message_attributes.insert(
-                NODE_ID_MESSAGE_ATTRIBUTE_NAME.to_string(),
-                MessageAttributeValue::builder()
-                    .data_type("String")
-                    .string_value(i.to_string())
-                    .build()?,
+            // calculate hash of the object
+            let mut hasher = Sha256::new();
+            hasher.update(serialized_iris_codes_json);
+            let result = hasher.finalize();
+            let hash_string = format!("{:x}", result);
+
+            // encrypt the object using sealed box and public key
+            let encrypted_bytes = sealedbox::seal(
+                serialized_iris_codes_json.as_bytes(),
+                &shares_encryption_public_keys[i],
             );
 
-            messages.push(
-                PublishBatchRequestEntry::builder()
-                    .message(to_string(&request_message)?)
-                    .id(sns_id.to_string())
-                    .message_group_id(ENROLLMENT_REQUEST_TYPE)
-                    .set_message_attributes(Some(message_attributes))
-                    .build()
-                    .unwrap(),
-            );
+            iris_codes_shares_base64[i] = general_purpose::STANDARD.encode(&encrypted_bytes);
+            iris_shares_file_hashes[i] = hash_string;
         }
+
+        let presigned_url = upload_file_and_generate_presigned_url(
+            SQS_REQUESTS_BUCKET_NAME,
+            &request_id.to_string(),
+            &serde_json::to_vec(&iris_codes_shares_base64)?,
+        );
+
+        let request_message = SMPCRequest {
+            signup_id: request_id.to_string(),
+            s3_presigned_url: presigned_url,
+            iris_shares_file_hashes,
+        };
 
         // Send all messages in batch
         client
-            .publish_batch()
+            .publish()
             .topic_arn(request_topic_arn.clone())
-            .set_publish_batch_request_entries(Some(messages))
+            .message(to_string(&request_message)?)
             .send()
             .await?;
 

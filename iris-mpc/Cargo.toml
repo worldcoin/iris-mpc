@@ -28,6 +28,7 @@ sodiumoxide = "0.2.7"
 iris-mpc-gpu = { path = "../iris-mpc-gpu" }
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
+sha2 = "0.10.8"
 
 [dev-dependencies]
 criterion = "0.5"

@@ -13,7 +13,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use reqwest::Client;
 use sodiumoxide::crypto::box_::{curve25519xsalsa20poly1305, PublicKey, SecretKey, Seed};
 
-const PUBLIC_KEY_S3_BUCKET_NAME: &str = "wf-mpc-vpc-stage-public-smpcv2-keys";
+const PUBLIC_KEY_S3_BUCKET_NAME: &str = "wf-smpcv2-stage-public-keys";
 const PUBLIC_KEY_S3_KEY_NAME_PREFIX: &str = "public-key";
 const REGION: &str = "eu-north-1";
 
