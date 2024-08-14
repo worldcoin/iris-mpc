@@ -69,29 +69,30 @@ impl ServerActorHandle {
 const DB_CHUNK_SIZE: usize = 512;
 const QUERIES: usize = ROTATIONS * MAX_BATCH_SIZE;
 pub struct ServerActor {
-    job_queue:            mpsc::Receiver<ServerJob>,
-    device_manager:       Arc<DeviceManager>,
-    party_id:             usize,
+    job_queue:              mpsc::Receiver<ServerJob>,
+    device_manager:         Arc<DeviceManager>,
+    party_id:               usize,
     // engines
-    codes_engine:         ShareDB,
-    masks_engine:         ShareDB,
-    batch_codes_engine:   ShareDB,
-    batch_masks_engine:   ShareDB,
-    phase2:               Circuits,
-    phase2_batch:         Circuits,
-    distance_comparator:  DistanceComparator,
+    codes_engine:           ShareDB,
+    masks_engine:           ShareDB,
+    batch_codes_engine:     ShareDB,
+    batch_masks_engine:     ShareDB,
+    phase2:                 Circuits,
+    phase2_batch:           Circuits,
+    distance_comparator:    DistanceComparator,
     // DB slices
-    left_code_db_slices:  SlicedProcessedDatabase,
-    left_mask_db_slices:  SlicedProcessedDatabase,
-    right_code_db_slices: SlicedProcessedDatabase,
-    right_mask_db_slices: SlicedProcessedDatabase,
-    streams:              Vec<Vec<CudaStream>>,
-    cublas_handles:       Vec<Vec<CudaBlas>>,
-    results:              Vec<CudaSlice<u32>>,
-    batch_results:        Vec<CudaSlice<u32>>,
-    final_results:        Vec<CudaSlice<u32>>,
-    current_db_sizes:     Vec<usize>,
-    query_db_size:        Vec<usize>,
+    left_code_db_slices:    SlicedProcessedDatabase,
+    left_mask_db_slices:    SlicedProcessedDatabase,
+    right_code_db_slices:   SlicedProcessedDatabase,
+    right_mask_db_slices:   SlicedProcessedDatabase,
+    streams:                Vec<Vec<CudaStream>>,
+    cublas_handles:         Vec<Vec<CudaBlas>>,
+    eye_comparison_results: Vec<Vec<CudaSlice<u64>>>,
+    results:                Vec<CudaSlice<u32>>,
+    batch_results:          Vec<CudaSlice<u32>>,
+    final_results:          Vec<CudaSlice<u32>>,
+    current_db_sizes:       Vec<usize>,
+    query_db_size:          Vec<usize>,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -318,6 +319,22 @@ impl ServerActor {
         let final_results = distance_comparator.prepare_final_results();
         let results = distance_comparator.prepare_results();
         let batch_results = distance_comparator.prepare_results();
+        let left_eye_results = (0..device_manager.device_count())
+            .map(|i| {
+                device_manager
+                    .device(i)
+                    .alloc_zeros(MAX_BATCH_SIZE * DB_CHUNK_SIZE)
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let right_eye_results = (0..device_manager.device_count())
+            .map(|i| {
+                device_manager
+                    .device(i)
+                    .alloc_zeros(MAX_BATCH_SIZE * DB_CHUNK_SIZE)
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
 
         let query_db_size = vec![QUERIES; device_manager.device_count()];
 
@@ -342,6 +359,7 @@ impl ServerActor {
             right_mask_db_slices,
             streams,
             cublas_handles,
+            eye_comparison_results: vec![left_eye_results, right_eye_results],
             results,
             batch_results,
             final_results,
@@ -387,7 +405,7 @@ impl ServerActor {
         );
 
         ///////////////////////////////////////////////////////////////////
-        // COMPARE LEFT EYE QUERIES
+        // PREPARE LEFT EYE QUERIES
         ///////////////////////////////////////////////////////////////////
 
         // *Query* variant including Lagrange interpolation.
@@ -421,16 +439,8 @@ impl ServerActor {
             &self.cublas_handles[0],
         )?;
 
-        let merged_results_left = self.compare_query_against_db_and_self(
-            &compact_device_queries_left,
-            &compact_device_sums_left,
-            &mut events,
-            batch_size,
-            Eye::Left,
-        )?;
-
         ///////////////////////////////////////////////////////////////////
-        // COMPARE RIGHT EYE QUERIES
+        // PREPARE RIGHT EYE QUERIES
         ///////////////////////////////////////////////////////////////////
 
         // *Query* variant including Lagrange interpolation.
@@ -464,31 +474,18 @@ impl ServerActor {
             &self.cublas_handles[0],
         )?;
 
-        let merged_results_right = self.compare_query_against_db_and_self(
+        ///////////////////////////////////////////////////////////////////
+        // QUERY LEFT & RIGHT EYE
+        ///////////////////////////////////////////////////////////////////
+
+        let mut merged_results = self.compare_query_against_db_and_self(
+            &compact_device_queries_left,
+            &compact_device_sums_left,
             &compact_device_queries_right,
             &compact_device_sums_right,
             &mut events,
             batch_size,
-            Eye::Right,
         )?;
-
-        ///////////////////////////////////////////////////////////////////
-        // MERGE LEFT & RIGHT results
-        ///////////////////////////////////////////////////////////////////
-        let mut merged_results = merged_results_left
-            .into_iter()
-            .zip(merged_results_right)
-            .map(|(left, right)| {
-                // If both eyes are matches with the same ID, return the ID
-                // This also covers the case where both are non-matches, since we return
-                // NON_MATCH in that case as well
-                if left == right {
-                    left
-                } else {
-                    NON_MATCH_ID
-                }
-            })
-            .collect::<Vec<_>>();
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id
@@ -634,35 +631,24 @@ impl ServerActor {
         Ok(())
     }
 
-    fn compare_query_against_db_and_self(
+    fn batch_dedup(
         &mut self,
         compact_device_queries: &DeviceCompactQuery,
         compact_device_sums: &DeviceCompactSums,
         events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
-        batch_size: usize,
-        eye_db: Eye,
-    ) -> eyre::Result<Vec<u32>> {
-        let batch_streams = &self.streams[0];
-        let batch_cublas = &self.cublas_handles[0];
-
-        // which database are we querying against
-        let (code_db_slices, mask_db_slices) = match eye_db {
-            Eye::Left => (&self.left_code_db_slices, &self.left_mask_db_slices),
-            Eye::Right => (&self.right_code_db_slices, &self.right_mask_db_slices),
-        };
-        // Transfer queries to device
-
-        // ---- START BATCH DEDUP ----
-        tracing::debug!(party_id = self.party_id, "Starting batch deduplication");
-
-        record_stream_time!(&self.device_manager, batch_streams, events, "batch_dot", {
+        stream_idx: usize,
+    ) {
+        assert!(stream_idx < 2);
+        let streams = self.streams[stream_idx].as_slice();
+        let cublas = self.cublas_handles[stream_idx].as_slice();
+        record_stream_time!(&self.device_manager, streams, events, "batch_dot", {
             compact_device_queries.compute_dot_products(
                 &mut self.batch_codes_engine,
                 &mut self.batch_masks_engine,
                 &self.query_db_size,
                 0,
-                batch_streams,
-                batch_cublas,
+                streams,
+                cublas,
             );
 
             compact_device_sums.compute_dot_reducers(
@@ -670,41 +656,29 @@ impl ServerActor {
                 &mut self.batch_masks_engine,
                 &self.query_db_size,
                 0,
-                batch_streams,
+                streams,
             );
         });
 
-        record_stream_time!(
-            &self.device_manager,
-            batch_streams,
-            events,
-            "batch_reshare",
-            {
-                self.batch_codes_engine
-                    .reshare_results(&self.query_db_size, batch_streams);
-                self.batch_masks_engine
-                    .reshare_results(&self.query_db_size, batch_streams);
-            }
-        );
+        record_stream_time!(&self.device_manager, streams, events, "batch_reshare", {
+            self.batch_codes_engine
+                .reshare_results(&self.query_db_size, streams);
+            self.batch_masks_engine
+                .reshare_results(&self.query_db_size, streams);
+        });
 
         let db_sizes_batch = vec![QUERIES; self.device_manager.device_count()];
         // TODO: remove
         let mut code_dots_batch = self.batch_codes_engine.result_chunk_shares(&db_sizes_batch);
         let mut mask_dots_batch = self.batch_masks_engine.result_chunk_shares(&db_sizes_batch);
 
-        record_stream_time!(
-            &self.device_manager,
-            batch_streams,
-            events,
-            "batch_threshold",
-            {
-                self.phase2_batch.compare_threshold_masked_many(
-                    &code_dots_batch,
-                    &mask_dots_batch,
-                    batch_streams,
-                );
-            }
-        );
+        record_stream_time!(&self.device_manager, streams, events, "batch_threshold", {
+            self.phase2_batch.compare_threshold_masked_many(
+                &code_dots_batch,
+                &mask_dots_batch,
+                streams,
+            );
+        });
 
         let res = self.phase2_batch.take_result_buffer();
         let chunk_size = self.phase2_batch.chunk_size();
@@ -712,27 +686,185 @@ impl ServerActor {
             &mut self.phase2_batch,
             &res,
             &self.distance_comparator,
-            &self.batch_results,
+            &self.eye_comparison_results[stream_idx], // TODO: this gets overwritten atm
             chunk_size,
             &db_sizes_batch,
-            &db_sizes_batch,
-            0,
-            batch_streams,
+            streams,
         );
         self.phase2_batch.return_result_buffer(res);
 
         forget_vec!(code_dots_batch);
         forget_vec!(mask_dots_batch);
+    }
+
+    fn process_db_chunk(
+        &mut self,
+        compact_device_queries: &DeviceCompactQuery,
+        compact_device_sums: &DeviceCompactSums,
+        eye: Eye,
+        dot_chunk_size: &[usize],
+        offset: usize,
+        db_chunk_idx: usize,
+        stream_idx: usize,
+        sync_events: &mut BatchEvents,
+        events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
+    ) {
+        assert!(stream_idx < 2);
+        let streams = self.streams[stream_idx].as_slice();
+        let cublas = self.cublas_handles[stream_idx].as_slice();
+        let (code_db_slices, mask_db_slices) = match eye {
+            Eye::Left => (&self.left_code_db_slices, &self.left_mask_db_slices),
+            Eye::Right => (&self.right_code_db_slices, &self.right_mask_db_slices),
+        };
+        tracing::debug!(
+            party_id = self.party_id,
+            chunk = db_chunk_idx,
+            "waiting for dot-event"
+        );
+        self.device_manager
+            .await_event(streams, &sync_events.current_dot_event);
+
+        // ---- START PHASE 1 ----
+        record_stream_time!(&self.device_manager, streams, events, "db_dot", {
+            compact_device_queries.dot_products_against_db(
+                &mut self.codes_engine,
+                &mut self.masks_engine,
+                code_db_slices,
+                mask_db_slices,
+                &dot_chunk_size,
+                offset,
+                streams,
+                cublas,
+            );
+        });
+
+        // wait for the exchange result buffers to be ready
+        tracing::debug!(
+            party_id = self.party_id,
+            chunk = db_chunk_idx,
+            "waiting for exchange-event"
+        );
+        self.device_manager
+            .await_event(streams, &sync_events.current_exchange_event);
+
+        record_stream_time!(&self.device_manager, streams, events, "db_reduce", {
+            compact_device_sums.compute_dot_reducer_against_db(
+                &mut self.codes_engine,
+                &mut self.masks_engine,
+                code_db_slices,
+                mask_db_slices,
+                &dot_chunk_size,
+                offset,
+                streams,
+            );
+        });
+
+        tracing::debug!(
+            party_id = self.party_id,
+            chunk = db_chunk_idx,
+            "recording dot-event"
+        );
+        self.device_manager
+            .record_event(streams, &sync_events.next_dot_event);
+
+        record_stream_time!(&self.device_manager, streams, events, "db_reshare", {
+            self.codes_engine.reshare_results(&dot_chunk_size, streams);
+            self.masks_engine.reshare_results(&dot_chunk_size, streams);
+        });
+
+        // ---- END PHASE 1 ----
+
+        tracing::debug!(
+            party_id = self.party_id,
+            chunk = db_chunk_idx,
+            "waiting for phase2-event"
+        );
+        self.device_manager
+            .await_event(streams, &sync_events.current_phase2_event);
+
+        // ---- START PHASE 2 ----
+        // TODO: remove
+        let max_chunk_size = dot_chunk_size.iter().max().copied().unwrap();
+        let phase_2_chunk_sizes = vec![max_chunk_size; self.device_manager.device_count()];
+        let mut code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
+        let mut mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
+        {
+            assert_eq!(
+                (max_chunk_size * QUERIES) % 64,
+                0,
+                "Phase 2 input size must be a multiple of 64"
+            );
+            self.phase2.set_chunk_size(max_chunk_size * QUERIES / 64);
+            record_stream_time!(&self.device_manager, streams, events, "db_threshold", {
+                self.phase2
+                    .compare_threshold_masked_many(&code_dots, &mask_dots, streams);
+            });
+            // we can now record the exchange event since the phase 2 is no longer using the
+            // code_dots/mask_dots which are just reinterpretations of the exchange result
+            // buffers
+            tracing::debug!(
+                party_id = self.party_id,
+                chunk = db_chunk_idx,
+                "recording exchange-event"
+            );
+            self.device_manager
+                .record_event(streams, &sync_events.next_exchange_event);
+
+            let res = self.phase2.take_result_buffer();
+            open(
+                &mut self.phase2,
+                &res,
+                &self.distance_comparator,
+                &self.eye_comparison_results[stream_idx],
+                max_chunk_size * QUERIES / 64,
+                &dot_chunk_size,
+                streams,
+            );
+            self.phase2.return_result_buffer(res);
+        }
+        tracing::debug!(
+            party_id = self.party_id,
+            chunk = db_chunk_idx,
+            "recording phase2-event"
+        );
+        self.device_manager
+            .record_event(streams, &sync_events.next_phase2_event);
+
+        forget_vec!(code_dots);
+        forget_vec!(mask_dots);
+        // ---- END PHASE 2 ----
+        sync_events.rotate_events(&self.device_manager);
+    }
+
+    fn compare_query_against_db_and_self(
+        &mut self,
+        compact_device_queries_left: &DeviceCompactQuery,
+        compact_device_sums_left: &DeviceCompactSums,
+        compact_device_queries_right: &DeviceCompactQuery,
+        compact_device_sums_right: &DeviceCompactSums,
+        events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
+        batch_size: usize,
+    ) -> eyre::Result<Vec<u32>> {
+        // ---- START BATCH DEDUP ----
+        tracing::debug!(party_id = self.party_id, "Starting batch deduplication");
+        self.batch_dedup(
+            compact_device_queries_left,
+            compact_device_sums_left,
+            events,
+            0,
+        );
+        self.batch_dedup(
+            compact_device_queries_right,
+            compact_device_sums_right,
+            events,
+            1,
+        );
+
         tracing::debug!(party_id = self.party_id, "Finished batch deduplication");
         // ---- END BATCH DEDUP ----
 
-        // Create new initial events
-        let mut current_dot_event = self.device_manager.create_events();
-        let mut next_dot_event = self.device_manager.create_events();
-        let mut current_exchange_event = self.device_manager.create_events();
-        let mut next_exchange_event = self.device_manager.create_events();
-        let mut current_phase2_event = self.device_manager.create_events();
-        let mut next_phase2_event = self.device_manager.create_events();
+        // Create new initial events, and fire the first one on stream 0
+        let mut sync_events = BatchEvents::new(&self.device_manager, &self.streams[0]);
 
         // ---- START DATABASE DEDUP ----
         tracing::debug!(party_id = self.party_id, "Start DB deduplication");
@@ -743,9 +875,6 @@ impl ServerActor {
                 chunk = db_chunk_idx,
                 "starting chunk"
             );
-
-            let request_streams = &self.streams[db_chunk_idx % 2];
-            let request_cublas_handles = &self.cublas_handles[db_chunk_idx % 2];
 
             let offset = db_chunk_idx * DB_CHUNK_SIZE;
             let chunk_size = self
@@ -762,154 +891,30 @@ impl ServerActor {
                 .map(|s| s.div_ceil(4) * 4)
                 .collect::<Vec<_>>();
 
-            // First stream doesn't need to wait
-            if db_chunk_idx == 0 {
-                self.device_manager
-                    .record_event(request_streams, &current_dot_event);
-                self.device_manager
-                    .record_event(request_streams, &current_exchange_event);
-                self.device_manager
-                    .record_event(request_streams, &current_phase2_event);
-            }
-
-            tracing::debug!(
-                party_id = self.party_id,
-                chunk = db_chunk_idx,
-                "waiting for dot-event"
+            self.process_db_chunk(
+                compact_device_queries_left,
+                compact_device_sums_left,
+                Eye::Left,
+                &dot_chunk_size,
+                offset,
+                db_chunk_idx,
+                0,
+                &mut sync_events,
+                events,
             );
-            self.device_manager
-                .await_event(request_streams, &current_dot_event);
 
-            // ---- START PHASE 1 ----
-            record_stream_time!(&self.device_manager, batch_streams, events, "db_dot", {
-                compact_device_queries.dot_products_against_db(
-                    &mut self.codes_engine,
-                    &mut self.masks_engine,
-                    code_db_slices,
-                    mask_db_slices,
-                    &dot_chunk_size,
-                    offset,
-                    request_streams,
-                    request_cublas_handles,
-                );
-            });
-
-            // wait for the exchange result buffers to be ready
-            tracing::debug!(
-                party_id = self.party_id,
-                chunk = db_chunk_idx,
-                "waiting for exchange-event"
+            self.process_db_chunk(
+                compact_device_queries_right,
+                compact_device_sums_right,
+                Eye::Right,
+                &dot_chunk_size,
+                offset,
+                db_chunk_idx,
+                0,
+                &mut sync_events,
+                events,
             );
-            self.device_manager
-                .await_event(request_streams, &current_exchange_event);
-
-            record_stream_time!(&self.device_manager, batch_streams, events, "db_reduce", {
-                compact_device_sums.compute_dot_reducer_against_db(
-                    &mut self.codes_engine,
-                    &mut self.masks_engine,
-                    code_db_slices,
-                    mask_db_slices,
-                    &dot_chunk_size,
-                    offset,
-                    request_streams,
-                );
-            });
-
-            tracing::debug!(
-                party_id = self.party_id,
-                chunk = db_chunk_idx,
-                "recording dot-event"
-            );
-            self.device_manager
-                .record_event(request_streams, &next_dot_event);
-
-            record_stream_time!(&self.device_manager, batch_streams, events, "db_reshare", {
-                self.codes_engine
-                    .reshare_results(&dot_chunk_size, request_streams);
-                self.masks_engine
-                    .reshare_results(&dot_chunk_size, request_streams);
-            });
-
-            // ---- END PHASE 1 ----
-
-            tracing::debug!(
-                party_id = self.party_id,
-                chunk = db_chunk_idx,
-                "waiting for phase2-event"
-            );
-            self.device_manager
-                .await_event(request_streams, &current_phase2_event);
-
-            // ---- START PHASE 2 ----
-            // TODO: remove
-            let max_chunk_size = dot_chunk_size.iter().max().copied().unwrap();
-            let phase_2_chunk_sizes = vec![max_chunk_size; self.device_manager.device_count()];
-            let mut code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
-            let mut mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
-            {
-                assert_eq!(
-                    (max_chunk_size * QUERIES) % 64,
-                    0,
-                    "Phase 2 input size must be a multiple of 64"
-                );
-                self.phase2.set_chunk_size(max_chunk_size * QUERIES / 64);
-                record_stream_time!(
-                    &self.device_manager,
-                    batch_streams,
-                    events,
-                    "db_threshold",
-                    {
-                        self.phase2.compare_threshold_masked_many(
-                            &code_dots,
-                            &mask_dots,
-                            request_streams,
-                        );
-                    }
-                );
-                // we can now record the exchange event since the phase 2 is no longer using the
-                // code_dots/mask_dots which are just reinterpretations of the exchange result
-                // buffers
-                tracing::debug!(
-                    party_id = self.party_id,
-                    chunk = db_chunk_idx,
-                    "recording exchange-event"
-                );
-                self.device_manager
-                    .record_event(request_streams, &next_exchange_event);
-
-                let res = self.phase2.take_result_buffer();
-                open(
-                    &mut self.phase2,
-                    &res,
-                    &self.distance_comparator,
-                    &self.results,
-                    max_chunk_size * QUERIES / 64,
-                    &dot_chunk_size,
-                    &chunk_size,
-                    offset,
-                    request_streams,
-                );
-                self.phase2.return_result_buffer(res);
-            }
-            tracing::debug!(
-                party_id = self.party_id,
-                chunk = db_chunk_idx,
-                "recording phase2-event"
-            );
-            self.device_manager
-                .record_event(request_streams, &next_phase2_event);
-
-            forget_vec!(code_dots);
-            forget_vec!(mask_dots);
-            // ---- END PHASE 2 ----
-
-            // Update events for synchronization
-            current_dot_event = next_dot_event;
-            current_exchange_event = next_exchange_event;
-            current_phase2_event = next_phase2_event;
-            next_dot_event = self.device_manager.create_events();
-            next_exchange_event = self.device_manager.create_events();
-            next_phase2_event = self.device_manager.create_events();
+            // we now have partial results in the eye_comparison_results buffers
 
             // Increment chunk index
             db_chunk_idx += 1;
@@ -1027,11 +1032,9 @@ fn open(
     party: &mut Circuits,
     x: &[ChunkShare<u64>],
     distance_comparator: &DistanceComparator,
-    results_ptrs: &[CudaSlice<u32>],
+    results_ptrs: &[CudaSlice<u64>],
     chunk_size: usize,
     db_sizes: &[usize],
-    real_db_sizes: &[usize],
-    offset: usize,
     streams: &[CudaStream],
 ) {
     let n_devices = x.len();
@@ -1058,16 +1061,7 @@ fn open(
     }
     cudarc::nccl::result::group_end().unwrap();
 
-    distance_comparator.open_results(
-        &a,
-        &b,
-        &c,
-        results_ptrs,
-        db_sizes,
-        real_db_sizes,
-        offset,
-        streams,
-    );
+    distance_comparator.recombine_results(&a, &b, &c, results_ptrs, db_sizes, streams);
 }
 
 fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
@@ -1152,5 +1146,52 @@ fn calculate_insertion_indices(
             last_db_index += 1;
         }
         c += 1;
+    }
+}
+
+struct BatchEvents {
+    current_dot_event:      Vec<CUevent>,
+    next_dot_event:         Vec<CUevent>,
+    current_exchange_event: Vec<CUevent>,
+    next_exchange_event:    Vec<CUevent>,
+    current_phase2_event:   Vec<CUevent>,
+    next_phase2_event:      Vec<CUevent>,
+}
+
+impl BatchEvents {
+    fn new(device_manager: &DeviceManager, initial_streams: &[CudaStream]) -> Self {
+        let current_dot_event = device_manager.create_events();
+        let next_dot_event = device_manager.create_events();
+        let current_exchange_event = device_manager.create_events();
+        let next_exchange_event = device_manager.create_events();
+        let current_phase2_event = device_manager.create_events();
+        let next_phase2_event = device_manager.create_events();
+
+        // First stream doesn't need to wait
+        device_manager.record_event(initial_streams, &current_dot_event);
+        device_manager.record_event(initial_streams, &current_exchange_event);
+        device_manager.record_event(initial_streams, &current_phase2_event);
+
+        Self {
+            current_dot_event,
+            next_dot_event,
+            current_exchange_event,
+            next_exchange_event,
+            current_phase2_event,
+            next_phase2_event,
+        }
+    }
+
+    fn rotate_events(&mut self, device_manager: &DeviceManager) {
+        // Update events for synchronization
+        self.current_dot_event = device_manager.create_events();
+        self.current_exchange_event = device_manager.create_events();
+        self.current_phase2_event = device_manager.create_events();
+        std::mem::swap(&mut self.current_dot_event, &mut self.next_dot_event);
+        std::mem::swap(
+            &mut self.current_exchange_event,
+            &mut self.next_exchange_event,
+        );
+        std::mem::swap(&mut self.current_phase2_event, &mut self.next_phase2_event);
     }
 }
