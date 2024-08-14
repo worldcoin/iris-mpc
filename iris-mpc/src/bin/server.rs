@@ -54,6 +54,7 @@ const SYNC_RESULTS: usize = MAX_BATCH_SIZE * 2;
 const SYNC_QUERIES: usize = MAX_BATCH_SIZE * 2;
 const_assert!(SYNC_QUERIES <= sync_nccl::MAX_REQUESTS);
 const MAX_ROLLBACK: usize = MAX_BATCH_SIZE * 2;
+const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 
 static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(MAX_BATCH_SIZE));
 
@@ -174,6 +175,8 @@ async fn receive_batch(
                 batch_query.query_left.code.extend(iris_shares);
                 batch_query.query_left.mask.extend(mask_shares);
             }
+        } else {
+            tokio::time::sleep(SQS_POLLING_INTERVAL).await;
         }
     }
     // TODO: also grab the right side from the batch once it is sent, ATM just
