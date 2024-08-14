@@ -13,7 +13,7 @@ use iris_mpc_common::{
         aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
         key_pair::SharesEncryptionKeyPair,
         kms_dh::derive_shared_secret,
-        sqs::{ResultEvent, SMPCRequest, SQSMessage},
+        smpc_request::{ResultEvent, SMPCRequest, SQSMessage},
         sync::SyncState,
         task_monitor::TaskMonitor,
     },
@@ -81,11 +81,12 @@ async fn receive_batch(
                 let shares_encryption_key_pair = shares_encryption_key_pair.clone();
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
                     .context("while trying to parse SQSMessage")?;
-                let message: SMPCRequest = serde_json::from_str(&message.message)
+
+                let smpc_request: SMPCRequest = serde_json::from_str(&message.message)
                     .context("while trying to parse SMPCRequest")?;
 
                 store
-                    .mark_requests_deleted(&[message.signup_id.clone()])
+                    .mark_requests_deleted(&[smpc_request.signup_id.clone()])
                     .await
                     .context("while marking requests as deleted")?;
 
@@ -97,7 +98,7 @@ async fn receive_batch(
                     .await
                     .context("while calling `delete_message` on SQS client")?;
 
-                if skip_request_ids.contains(&message.signup_id) {
+                if skip_request_ids.contains(&smpc_request.signup_id) {
                     // Some party (maybe us) already meant to delete this request, so we skip it.
                     continue;
                 }
@@ -115,24 +116,25 @@ async fn receive_batch(
                     batch_metadata.span_id = span_id.to_string();
                 }
 
-                batch_query.request_ids.push(message.signup_id.clone());
+                batch_query.request_ids.push(smpc_request.signup_id.clone());
                 batch_query.metadata.push(batch_metadata);
 
-                let iris_message_share = match message
-                    .get_iris_shares(encrypted_shares, shares_encryption_key_pair.clone())
-                {
-                    Ok(iris_message_share) => iris_message_share,
+                let base_64_encoded_message_payload =
+                    match smpc_request.get_iris_data_by_party_id(party_id).await {
+                        Ok(iris_message_share) => iris_message_share,
+                        Err(e) => {
+                            tracing::error!("Failed to get iris shares: {:?}", e);
+                            continue;
+                        }
+                    };
+
+                let iris_message_share = match smpc_request.decrypt_iris_share(
+                    base_64_encoded_message_payload,
+                    shares_encryption_key_pair.clone(),
+                ) {
+                    Ok(iris_data) => iris_data,
                     Err(e) => {
-                        tracing::error!("Failed to get iris shares: {:?}", e);
-                        continue;
-                    }
-                };
-                let iris_message_mask = match message
-                    .get_mask_shares(encrypted_shares, shares_encryption_key_pair.clone())
-                {
-                    Ok(iris_message_mask) => iris_message_mask,
-                    Err(e) => {
-                        tracing::error!("Failed to get iris masks: {:?}", e);
+                        tracing::error!("Failed to decrypt iris shares: {:?}", e);
                         continue;
                     }
                 };
@@ -145,10 +147,26 @@ async fn receive_batch(
                     iris_shares,
                     mask_shares,
                 ) = spawn_blocking(move || {
-                    let mut iris_share =
-                        GaloisRingIrisCodeShare::new(party_id + 1, iris_message_share);
-                    let mut mask_share =
-                        GaloisRingIrisCodeShare::new(party_id + 1, iris_message_mask);
+                    let mut iris_share = match GaloisRingIrisCodeShare::from_base64(
+                        party_id + 1,
+                        iris_message_share.right_iris_code.as_ref(),
+                    ) {
+                        Ok(iris_share) => iris_share,
+                        Err(e) => {
+                            tracing::error!("Failed to parse iris share: {:?}", e);
+                            return Err(e);
+                        }
+                    };
+                    let mut mask_share = match GaloisRingIrisCodeShare::from_base64(
+                        party_id + 1,
+                        iris_message_share.right_iris_mask.as_ref(),
+                    ) {
+                        Ok(iris_share) => iris_share,
+                        Err(e) => {
+                            tracing::error!("Failed to parse iris mask: {:?}", e);
+                            return Err(e);
+                        }
+                    };
 
                     // Original for storage.
                     let store_iris_shares = iris_share.clone();
@@ -162,17 +180,17 @@ async fn receive_batch(
                     GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
                     GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut mask_share);
 
-                    (
+                    Ok((
                         store_iris_shares,
                         store_mask_shares,
                         db_iris_shares,
                         db_mask_shares,
                         iris_share.all_rotations(),
                         mask_share.all_rotations(),
-                    )
+                    ))
                 })
                 .await
-                .context("while pre-processing iris code query")?;
+                .context("while pre-processing iris code query")??;
 
                 batch_query.store.code.push(store_iris_shares);
                 batch_query.store.mask.push(store_mask_shares);

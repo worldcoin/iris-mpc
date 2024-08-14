@@ -13,7 +13,7 @@ use iris_mpc_common::{
     helpers::{
         aws::{construct_message_attributes, NODE_ID_MESSAGE_ATTRIBUTE_NAME},
         key_pair::download_public_key_from_s3,
-        sqs::{ResultEvent, SMPCRequest},
+        smpc_request::{ResultEvent, SMPCRequest},
     },
     iris_db::{db::IrisDB, iris::IrisCode},
 };

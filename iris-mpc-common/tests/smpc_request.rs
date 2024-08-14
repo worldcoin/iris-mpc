@@ -1,161 +1,10 @@
-use super::key_pair::{SharesDecodingError, SharesEncryptionKeyPair};
-use base64::{engine::general_purpose::STANDARD, Engine};
-use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct SQSMessage {
-    #[serde(rename = "Type")]
-    pub notification_type: String,
-    #[serde(rename = "MessageId")]
-    pub message_id:        String,
-    #[serde(rename = "SequenceNumber")]
-    pub sequence_number:   String,
-    #[serde(rename = "TopicArn")]
-    pub topic_arn:         String,
-    #[serde(rename = "Message")]
-    pub message:           String,
-    #[serde(rename = "Timestamp")]
-    pub timestamp:         String,
-    #[serde(rename = "UnsubscribeURL")]
-    pub unsubscribe_url:   String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SMPCRequest {
-    pub signup_id:               String,
-    pub s3_presigned_url:        String,
-    pub iris_shares_file_hashes: [String; 3],
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SharesS3Object {
-    pub iris_share_0: String,
-    pub iris_share_1: String,
-    pub iris_share_2: String,
-}
-
-#[derive(PartialEq, Serialize, Deserialize, Debug)]
-pub struct IrisCodesJSON {
-    #[serde(rename = "IRIS_version")]
-    pub iris_version:    String,
-    pub left_iris_code:  String,
-    pub right_iris_code: String,
-    pub left_iris_mask:  String,
-    pub right_iris_mask: String,
-}
-
-impl SharesS3Object {
-    pub fn get(&self, party_id: &String) -> Option<&String> {
-        match party_id.as_str() {
-            "0" => Some(&self.iris_share_0),
-            "1" => Some(&self.iris_share_1),
-            "2" => Some(&self.iris_share_2),
-            _ => None,
-        }
-    }
-}
-
-impl SMPCRequest {
-    pub async fn get_iris_data_by_party_id(
-        &self,
-        node_id: String,
-        presign_url: String,
-    ) -> Result<String, SharesDecodingError> {
-        // Send a GET request to the presigned URL
-        let response = match reqwest::get(presign_url.clone()).await {
-            Ok(response) => response,
-            Err(e) => {
-                eprintln!("Failed to send request: {}", e);
-                return Err(SharesDecodingError::RequestError(e));
-            }
-        };
-
-        // Ensure the request was successful
-        if response.status().is_success() {
-            // Parse the JSON response into the SharesS3Object struct
-            let shares_file: SharesS3Object = match response.json().await {
-                Ok(file) => file,
-                Err(e) => {
-                    eprintln!("Failed to parse JSON: {}", e);
-                    return Err(SharesDecodingError::RequestError(e));
-                }
-            };
-
-            // Construct the field name dynamically
-            let field_name = format!("iris_share_{}", node_id);
-            // Access the field dynamically
-            if let Some(value) = shares_file.get(&node_id) {
-                Ok(value.to_string())
-            } else {
-                eprintln!("Failed to find field: {}", field_name);
-                Err(SharesDecodingError::SecretStringNotFound)
-            }
-        } else {
-            eprintln!("Failed to download file: {}", response.status());
-            Err(SharesDecodingError::ResponseContent {
-                status:  response.status(),
-                url:     presign_url,
-                message: response.text().await.unwrap_or_default(),
-            })
-        }
-    }
-
-    pub fn decrypt_iris_share(
-        &self,
-        share: String,
-        key_pair: SharesEncryptionKeyPair,
-    ) -> Result<IrisCodesJSON, SharesDecodingError> {
-        let share_bytes = STANDARD
-            .decode(share.as_bytes())
-            .map_err(|_| SharesDecodingError::Base64DecodeError)?;
-
-        let decrypted = key_pair.open_sealed_box(share_bytes);
-
-        let iris_share = match decrypted {
-            Ok(bytes) => {
-                let json_string = String::from_utf8(bytes)
-                    .map_err(|_| SharesDecodingError::DecodedShareParsingToUTF8Error)?;
-
-                let iris_share: IrisCodesJSON = serde_json::from_str(&json_string)
-                    .map_err(|_| SharesDecodingError::DecodedShareParsingToJSONError)?;
-                iris_share
-            }
-            Err(e) => return Err(e),
-        };
-
-        Ok(iris_share)
-    }
-
-    fn validate_hashes(&self, hashes: [String; 3]) -> bool {
-        self.iris_shares_file_hashes == hashes
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ResultEvent {
-    pub node_id:    usize,
-    pub db_index:   u32,
-    pub is_match:   bool,
-    pub request_id: String,
-}
-
-impl ResultEvent {
-    pub fn new(node_id: usize, db_index: u32, is_match: bool, request_id: String) -> Self {
-        Self {
-            node_id,
-            db_index,
-            is_match,
-            request_id,
-        }
-    }
-}
 mod tests {
-    use crate::helpers::{
-        key_pair::{SharesDecodingError, SharesEncryptionKeyPair},
-        sqs::{IrisCodesJSON, SMPCRequest},
-    };
     use base64::{engine::general_purpose::STANDARD, Engine};
     use http::StatusCode;
+    use iris_mpc_common::helpers::{
+        key_pair::{SharesDecodingError, SharesEncryptionKeyPair},
+        smpc_request::{IrisCodesJSON, SMPCRequest},
+    };
     use serde_json::json;
     use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
     use wiremock::{
@@ -215,9 +64,7 @@ mod tests {
             ],
         };
 
-        let result = smpc_request
-            .get_iris_data_by_party_id("0".to_string(), smpc_request.s3_presigned_url.clone())
-            .await;
+        let result = smpc_request.get_iris_data_by_party_id(0).await;
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "share_0_data".to_string());

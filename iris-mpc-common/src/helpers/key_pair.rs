@@ -1,4 +1,4 @@
-use crate::{config::Config, iris_db::iris::IrisCodeArray};
+use crate::config::Config;
 use aws_config::Region;
 use aws_sdk_secretsmanager::{
     error::SdkError, operation::get_secret_value::GetSecretValueError,
@@ -8,7 +8,6 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use sodiumoxide::crypto::{
     box_::{PublicKey, SecretKey},
     sealedbox,
-    sealedbox::SEALBYTES,
 };
 use thiserror::Error;
 use zeroize::Zeroize;
