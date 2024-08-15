@@ -187,12 +187,12 @@ async fn e2e_test() -> Result<()> {
         let mut batch1 = BatchQuery::default();
         let mut batch2 = BatchQuery::default();
         let batch_size = rng.gen_range(1..MAX_BATCH_SIZE);
-        for _ in 0..MAX_BATCH_SIZE {
+        for _ in 0..batch_size {
             let request_id = Uuid::new_v4();
             // Automatic random tests
             let options = if responses.is_empty() { 2 } else { 3 };
             let option = rng.gen_range(0..options);
-            let template = match 1 {
+            let template = match option {
                 0 => {
                     println!("Sending new iris code");
                     expected_results.insert(request_id.to_string(), None);
@@ -200,7 +200,7 @@ async fn e2e_test() -> Result<()> {
                 }
                 1 => {
                     println!("Sending iris code from db");
-                    let db_index = 42; // rng.gen_range(0..db.db.len());
+                    let db_index = rng.gen_range(0..db.db.len());
                     expected_results.insert(request_id.to_string(), Some(db_index as u32));
                     db.db[db_index].clone()
                 }

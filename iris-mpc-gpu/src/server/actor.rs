@@ -17,7 +17,7 @@ use cudarc::{
     driver::{
         result::{self, event::elapsed},
         sys::CUevent,
-        CudaDevice, CudaSlice, CudaStream, DevicePtr,
+        CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceSlice,
     },
     nccl::Comm,
 };
@@ -499,8 +499,6 @@ impl ServerActor {
             &self.streams[0],
         );
 
-        self.device_manager.await_streams(&self.streams[0]);
-
         self.distance_comparator.merge_batch_results(
             &self.batch_match_list_left,
             &self.batch_match_list_right,
@@ -658,6 +656,16 @@ impl ServerActor {
         // Wait for all streams before get timings
         self.device_manager.await_streams(&self.streams[0]);
         self.device_manager.await_streams(&self.streams[1]);
+
+        // Reset the results buffers for reuse
+        for dst in &[
+            &self.db_match_list_left,
+            &self.db_match_list_right,
+            &self.batch_match_list_left,
+            &self.batch_match_list_right,
+        ] {
+            reset_results_bitmap(self.device_manager.devices(), dst, &self.streams[0]);
+        }
 
         // ---- END RESULT PROCESSING ----
         log_timers(events);
@@ -1155,6 +1163,21 @@ fn reset_results(
     for i in 0..devs.len() {
         devs[i].bind_to_thread().unwrap();
         unsafe { result::memcpy_htod_async(*dst[i].device_ptr(), src, streams[i].stream) }.unwrap();
+    }
+}
+
+fn reset_results_bitmap(devs: &[Arc<CudaDevice>], dst: &[CudaSlice<u64>], streams: &[CudaStream]) {
+    for i in 0..devs.len() {
+        devs[i].bind_to_thread().unwrap();
+        unsafe {
+            result::memset_d8_async(
+                *dst[i].device_ptr(),
+                0,
+                dst[i].num_bytes(),
+                streams[i].stream,
+            )
+            .unwrap();
+        };
     }
 }
 
