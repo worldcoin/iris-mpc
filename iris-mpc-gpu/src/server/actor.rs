@@ -1,11 +1,15 @@
-use super::{BatchQuery, ServerJob, ServerJobResult};
+use super::{BatchQuery, Eye, ServerJob, ServerJobResult, MAX_BATCH_SIZE};
 use crate::{
     dot::{
         distance_comparator::DistanceComparator,
         share_db::{preprocess_query, ShareDB, SlicedProcessedDatabase},
         IRIS_CODE_LENGTH, ROTATIONS,
     },
-    helpers::{self, device_manager::DeviceManager, query_processor::CompactQuery},
+    helpers::{
+        self,
+        device_manager::DeviceManager,
+        query_processor::{CompactQuery, DeviceCompactQuery, DeviceCompactSums},
+    },
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use cudarc::{
@@ -18,7 +22,7 @@ use cudarc::{
     nccl::Comm,
 };
 use futures::{Future, FutureExt};
-use iris_mpc_common::galois_engine::degree4::GaloisRingIrisCodeShare;
+use iris_mpc_common::{galois_engine::degree4::GaloisRingIrisCodeShare, IrisCodeDbSlice};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{collections::HashMap, mem, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
@@ -51,7 +55,7 @@ impl ServerActorHandle {
     pub async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
-    ) -> impl Future<Output = ServerJobResult> {
+    ) -> impl Future<Output=ServerJobResult> {
         let (tx, rx) = oneshot::channel();
         let job = ServerJob {
             batch,
@@ -62,90 +66,110 @@ impl ServerActorHandle {
     }
 }
 
-const DB_SIZE: usize = 8 * 1_000;
-const DB_BUFFER: usize = 8 * 1_000;
 const DB_CHUNK_SIZE: usize = 512;
-const N_QUERIES: usize = 64;
-const QUERIES: usize = ROTATIONS * N_QUERIES;
-
+const QUERIES: usize = ROTATIONS * MAX_BATCH_SIZE;
 pub struct ServerActor {
-    job_queue:           mpsc::Receiver<ServerJob>,
-    device_manager:      Arc<DeviceManager>,
-    party_id:            usize,
+    job_queue: mpsc::Receiver<ServerJob>,
+    device_manager: Arc<DeviceManager>,
+    party_id: usize,
     // engines
-    codes_engine:        ShareDB,
-    masks_engine:        ShareDB,
-    batch_codes_engine:  ShareDB,
-    batch_masks_engine:  ShareDB,
-    phase2:              Circuits,
-    phase2_batch:        Circuits,
+    codes_engine: ShareDB,
+    masks_engine: ShareDB,
+    batch_codes_engine: ShareDB,
+    batch_masks_engine: ShareDB,
+    phase2: Circuits,
+    phase2_batch: Circuits,
     distance_comparator: DistanceComparator,
     // DB slices
-    code_db_slices:      SlicedProcessedDatabase,
-    mask_db_slices:      SlicedProcessedDatabase,
-    streams:             Vec<Vec<CudaStream>>,
-    cublas_handles:      Vec<Vec<CudaBlas>>,
-    results:             Vec<CudaSlice<u32>>,
-    batch_results:       Vec<CudaSlice<u32>>,
-    final_results:       Vec<CudaSlice<u32>>,
-    current_db_sizes:    Vec<usize>,
-    query_db_size:       Vec<usize>,
+    left_code_db_slices: SlicedProcessedDatabase,
+    left_mask_db_slices: SlicedProcessedDatabase,
+    right_code_db_slices: SlicedProcessedDatabase,
+    right_mask_db_slices: SlicedProcessedDatabase,
+    streams: Vec<Vec<CudaStream>>,
+    cublas_handles: Vec<Vec<CudaBlas>>,
+    results: Vec<CudaSlice<u32>>,
+    batch_results: Vec<CudaSlice<u32>>,
+    final_results: Vec<CudaSlice<u32>>,
+    current_db_sizes: Vec<usize>,
+    query_db_size: Vec<usize>,
 }
 
-const RESULTS_INIT_HOST: [u32; N_QUERIES * ROTATIONS] = [u32::MAX; N_QUERIES * ROTATIONS];
-const FINAL_RESULTS_INIT_HOST: [u32; N_QUERIES] = [u32::MAX; N_QUERIES];
+const NON_MATCH_ID: u32 = u32::MAX;
+
+const RESULTS_INIT_HOST: [u32; MAX_BATCH_SIZE * ROTATIONS] =
+    [NON_MATCH_ID; MAX_BATCH_SIZE * ROTATIONS];
+const FINAL_RESULTS_INIT_HOST: [u32; MAX_BATCH_SIZE] = [NON_MATCH_ID; MAX_BATCH_SIZE];
 
 impl ServerActor {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
-        codes_db: &[u16],
-        masks_db: &[u16],
+        left_eye_db: IrisCodeDbSlice,
+        right_eye_db: IrisCodeDbSlice,
         job_queue_size: usize,
+        db_size: usize,
+        db_buffer: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let device_manager = Arc::new(DeviceManager::init());
         Self::new_with_device_manager(
             party_id,
             chacha_seeds,
-            codes_db,
-            masks_db,
+            left_eye_db,
+            right_eye_db,
             device_manager,
             job_queue_size,
+            db_size,
+            db_buffer,
         )
     }
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_device_manager(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
-        codes_db: &[u16],
-        masks_db: &[u16],
+        left_eye_db: IrisCodeDbSlice,
+        right_eye_db: IrisCodeDbSlice,
         device_manager: Arc<DeviceManager>,
         job_queue_size: usize,
+        db_size: usize,
+        db_buffer: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let ids = device_manager.get_ids_from_magic(0);
         let comms = device_manager.instantiate_network_from_ids(party_id, ids);
         Self::new_with_device_manager_and_comms(
             party_id,
             chacha_seeds,
-            codes_db,
-            masks_db,
+            left_eye_db,
+            right_eye_db,
             device_manager,
             comms,
             job_queue_size,
+            db_size,
+            db_buffer,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_device_manager_and_comms(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
-        codes_db: &[u16],
-        masks_db: &[u16],
+        left_eye_db: IrisCodeDbSlice,
+        right_eye_db: IrisCodeDbSlice,
         device_manager: Arc<DeviceManager>,
         comms: Vec<Arc<Comm>>,
         job_queue_size: usize,
+        db_size: usize,
+        db_buffer: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
-        assert_eq!(
-            codes_db.len(),
-            masks_db.len(),
+        assert!(
+            [
+                left_eye_db.0.len(),
+                left_eye_db.1.len(),
+                right_eye_db.0.len(),
+                right_eye_db.1.len()
+            ]
+                .iter()
+                .all(|&x| x == db_size * IRIS_CODE_LENGTH),
             "Internal DB mismatch, codes and masks sizes differ"
         );
 
@@ -153,23 +177,28 @@ impl ServerActor {
         let actor = Self::init(
             party_id,
             chacha_seeds,
-            codes_db,
-            masks_db,
+            left_eye_db,
+            right_eye_db,
             device_manager,
             comms,
             rx,
+            db_size,
+            db_buffer,
         )?;
         Ok((actor, ServerActorHandle { job_queue: tx }))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn init(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
-        codes_db: &[u16],
-        masks_db: &[u16],
+        left_eye_db: IrisCodeDbSlice,
+        right_eye_db: IrisCodeDbSlice,
         device_manager: Arc<DeviceManager>,
         comms: Vec<Arc<Comm>>,
         job_queue: mpsc::Receiver<ServerJob>,
+        db_size: usize,
+        db_buffer: usize,
     ) -> eyre::Result<Self> {
         let mut kdf_nonce = 0;
         let kdf_salt: Salt = Salt::new(HKDF_SHA256, b"IRIS_MPC");
@@ -206,8 +235,23 @@ impl ServerActor {
             comms.clone(),
         );
 
-        let code_db_slices = codes_engine.load_db(codes_db, DB_SIZE, DB_SIZE + DB_BUFFER, true);
-        let mask_db_slices = masks_engine.load_db(masks_db, DB_SIZE, DB_SIZE + DB_BUFFER, true);
+        // load left and right eye databases to device
+        let (left_code_db_slices, current_db_sizes) =
+            codes_engine.load_db(left_eye_db.0, db_size, db_size + db_buffer, true);
+        let (left_mask_db_slices, left_mask_db_sizes) =
+            masks_engine.load_db(left_eye_db.1, db_size, db_size + db_buffer, true);
+
+        let (right_code_db_slices, right_db_sizes) =
+            codes_engine.load_db(right_eye_db.0, db_size, db_size + db_buffer, true);
+        let (right_mask_db_slices, right_mask_db_sizes) =
+            masks_engine.load_db(right_eye_db.1, db_size, db_size + db_buffer, true);
+
+        assert!(
+            [left_mask_db_sizes, right_mask_db_sizes, right_db_sizes]
+                .iter()
+                .all(|size| size == &current_db_sizes),
+            "Code and mask db sizes mismatch"
+        );
 
         // Engines for inflight queries
         let batch_codes_engine = ShareDB::init(
@@ -275,8 +319,6 @@ impl ServerActor {
         let results = distance_comparator.prepare_results();
         let batch_results = distance_comparator.prepare_results();
 
-        let current_db_sizes: Vec<usize> =
-            vec![DB_SIZE / device_manager.device_count(); device_manager.device_count()];
         let query_db_size = vec![QUERIES; device_manager.device_count()];
 
         for dev in device_manager.devices() {
@@ -294,8 +336,10 @@ impl ServerActor {
             distance_comparator,
             batch_codes_engine,
             batch_masks_engine,
-            code_db_slices,
-            mask_db_slices,
+            left_code_db_slices,
+            left_mask_db_slices,
+            right_code_db_slices,
+            right_mask_db_slices,
             streams,
             cublas_handles,
             results,
@@ -325,13 +369,34 @@ impl ServerActor {
         let now = Instant::now();
         let mut events: HashMap<&str, Vec<Vec<CUevent>>> = HashMap::new();
 
+        let batch_size = batch.store_left.code.len();
+        assert!(batch_size > 0 && batch_size <= MAX_BATCH_SIZE);
+        assert!(
+            batch_size == batch.store_left.mask.len()
+                && batch_size == batch.store_right.code.len()
+                && batch_size == batch.store_right.mask.len()
+                && batch_size * ROTATIONS == batch.query_left.code.len()
+                && batch_size * ROTATIONS == batch.query_left.mask.len()
+                && batch_size * ROTATIONS == batch.query_right.code.len()
+                && batch_size * ROTATIONS == batch.query_right.mask.len()
+                && batch_size * ROTATIONS == batch.db_left.code.len()
+                && batch_size * ROTATIONS == batch.db_left.mask.len()
+                && batch_size * ROTATIONS == batch.db_right.code.len()
+                && batch_size * ROTATIONS == batch.db_right.mask.len(),
+            "Query batch sizes mismatch"
+        );
+
+        ///////////////////////////////////////////////////////////////////
+        // COMPARE LEFT EYE QUERIES
+        ///////////////////////////////////////////////////////////////////
+
         // *Query* variant including Lagrange interpolation.
-        let compact_query = {
-            let code_query = prepare_query_shares(batch.query.code);
-            let mask_query = prepare_query_shares(batch.query.mask);
+        let compact_query_left = {
+            let code_query = prepare_query_shares(batch.query_left.code);
+            let mask_query = prepare_query_shares(batch.query_left.mask);
             // *Storage* variant (no interpolation).
-            let code_query_insert = prepare_query_shares(batch.db.code);
-            let mask_query_insert = prepare_query_shares(batch.db.mask);
+            let code_query_insert = prepare_query_shares(batch.db_left.code);
+            let mask_query_insert = prepare_query_shares(batch.db_left.mask);
             CompactQuery {
                 code_query,
                 mask_query,
@@ -339,21 +404,253 @@ impl ServerActor {
                 mask_query_insert,
             }
         };
-        let query_store = batch.store;
+        let query_store_left = batch.store_left;
 
+        // THIS needs to be MAX_BATCH_SIZE, even though the query can be shorter to have
+        // enough padding for GEMM
+        let compact_device_queries_left = compact_query_left.htod_transfer(
+            &self.device_manager,
+            &self.streams[0],
+            MAX_BATCH_SIZE,
+        )?;
+
+        let compact_device_sums_left = compact_device_queries_left.query_sums(
+            &self.codes_engine,
+            &self.masks_engine,
+            &self.streams[0],
+            &self.cublas_handles[0],
+        )?;
+
+        let merged_results_left = self.compare_query_against_db_and_self(
+            &compact_device_queries_left,
+            &compact_device_sums_left,
+            &mut events,
+            batch_size,
+            Eye::Left,
+        )?;
+
+        ///////////////////////////////////////////////////////////////////
+        // COMPARE RIGHT EYE QUERIES
+        ///////////////////////////////////////////////////////////////////
+
+        // *Query* variant including Lagrange interpolation.
+        let compact_query_right = {
+            let code_query = prepare_query_shares(batch.query_right.code);
+            let mask_query = prepare_query_shares(batch.query_right.mask);
+            // *Storage* variant (no interpolation).
+            let code_query_insert = prepare_query_shares(batch.db_right.code);
+            let mask_query_insert = prepare_query_shares(batch.db_right.mask);
+            CompactQuery {
+                code_query,
+                mask_query,
+                code_query_insert,
+                mask_query_insert,
+            }
+        };
+        let query_store_right = batch.store_right;
+
+        // THIS needs to be MAX_BATCH_SIZE, even though the query can be shorter to have
+        // enough padding for GEMM
+        let compact_device_queries_right = compact_query_right.htod_transfer(
+            &self.device_manager,
+            &self.streams[0],
+            MAX_BATCH_SIZE,
+        )?;
+
+        let compact_device_sums_right = compact_device_queries_right.query_sums(
+            &self.codes_engine,
+            &self.masks_engine,
+            &self.streams[0],
+            &self.cublas_handles[0],
+        )?;
+
+        let merged_results_right = self.compare_query_against_db_and_self(
+            &compact_device_queries_right,
+            &compact_device_sums_right,
+            &mut events,
+            batch_size,
+            Eye::Right,
+        )?;
+
+        ///////////////////////////////////////////////////////////////////
+        // MERGE LEFT & RIGHT results
+        ///////////////////////////////////////////////////////////////////
+        let mut merged_results = merged_results_left
+            .into_iter()
+            .zip(merged_results_right)
+            .map(|(left, right)| {
+                // If both eyes are matches with the same ID, return the ID
+                // This also covers the case where both are non-matches, since we return
+                // NON_MATCH in that case as well
+                if left == right {
+                    left
+                } else {
+                    NON_MATCH_ID
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // Iterate over a list of tracing payloads, and create logs with mappings to
+        // payloads Log at least a "start" event using a log with trace.id
+        // and parent.trace.id
+        for tracing_payload in batch.metadata.iter() {
+            tracing::info!(
+                node_id = tracing_payload.node_id,
+                dd.trace_id = tracing_payload.trace_id,
+                dd.span_id = tracing_payload.span_id,
+                "Protocol finished",
+            );
+        }
+        // List the indices of the queries that did not match.
+        let insertion_list = merged_results
+            .iter()
+            .enumerate()
+            .filter(|&(_idx, &num)| num == NON_MATCH_ID)
+            .map(|(idx, _num)| idx)
+            .collect::<Vec<_>>();
+
+        // Spread the insertions across devices.
+        let insertion_list = distribute_insertions(&insertion_list, &self.current_db_sizes);
+
+        // Calculate the new indices for the inserted queries
+        let matches = calculate_insertion_indices(
+            &mut merged_results,
+            &insertion_list,
+            &self.current_db_sizes,
+        );
+
+        let previous_total_db_size = self.current_db_sizes.iter().sum::<usize>();
+
+        record_stream_time!(
+            &self.device_manager,
+            &self.streams[0],
+            events,
+            "db_write",
+            {
+                for i in 0..self.device_manager.device_count() {
+                    self.device_manager.device(i).bind_to_thread().unwrap();
+                    for insertion_idx in insertion_list[i].clone() {
+                        // Append left to codes and masks db
+                        for (db, query, sums) in [
+                            (
+                                &self.left_code_db_slices,
+                                &compact_device_queries_left.code_query_insert,
+                                &compact_device_sums_left.code_query_insert,
+                            ),
+                            (
+                                &self.left_mask_db_slices,
+                                &compact_device_queries_left.mask_query_insert,
+                                &compact_device_sums_left.mask_query_insert,
+                            ),
+                            (
+                                &self.right_code_db_slices,
+                                &compact_device_queries_right.code_query_insert,
+                                &compact_device_sums_right.code_query_insert,
+                            ),
+                            (
+                                &self.right_mask_db_slices,
+                                &compact_device_queries_right.mask_query_insert,
+                                &compact_device_sums_right.mask_query_insert,
+                            ),
+                        ] {
+                            unsafe {
+                                helpers::dtod_at_offset(
+                                    db.code_gr.limb_0[i],
+                                    self.current_db_sizes[i] * IRIS_CODE_LENGTH,
+                                    *query.limb_0[i].device_ptr(),
+                                    IRIS_CODE_LENGTH * 15
+                                        + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                                    IRIS_CODE_LENGTH,
+                                    self.streams[0][i].stream,
+                                );
+
+                                helpers::dtod_at_offset(
+                                    db.code_gr.limb_1[i],
+                                    self.current_db_sizes[i] * IRIS_CODE_LENGTH,
+                                    *query.limb_1[i].device_ptr(),
+                                    IRIS_CODE_LENGTH * 15
+                                        + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
+                                    IRIS_CODE_LENGTH,
+                                    self.streams[0][i].stream,
+                                );
+
+                                helpers::dtod_at_offset(
+                                    *db.code_sums_gr.limb_0[i].device_ptr(),
+                                    self.current_db_sizes[i] * mem::size_of::<u32>(),
+                                    *sums.limb_0[i].device_ptr(),
+                                    mem::size_of::<u32>() * 15
+                                        + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                                    mem::size_of::<u32>(),
+                                    self.streams[0][i].stream,
+                                );
+
+                                helpers::dtod_at_offset(
+                                    *db.code_sums_gr.limb_1[i].device_ptr(),
+                                    self.current_db_sizes[i] * mem::size_of::<u32>(),
+                                    *sums.limb_1[i].device_ptr(),
+                                    mem::size_of::<u32>() * 15
+                                        + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
+                                    mem::size_of::<u32>(),
+                                    self.streams[0][i].stream,
+                                );
+                            }
+                        }
+                        self.current_db_sizes[i] += 1;
+                    }
+
+                    // DEBUG
+                    tracing::debug!(
+                        "Updating DB size on device {}: {:?}",
+                        i,
+                        self.current_db_sizes[i]
+                    );
+                }
+            }
+        );
+
+        // Pass to internal sender thread
+        return_channel
+            .send(ServerJobResult {
+                merged_results,
+                request_ids: batch.request_ids,
+                matches,
+                store_left: query_store_left,
+                store_right: query_store_right,
+            })
+            .unwrap();
+
+        // Wait for all streams before get timings
+        self.device_manager.await_streams(&self.streams[0]);
+        self.device_manager.await_streams(&self.streams[1]);
+
+        // ---- END RESULT PROCESSING ----
+        log_timers(events);
+
+        tracing::info!(
+            "Batch took {:?} [{:.2} Melems/s]",
+            now.elapsed(),
+            (MAX_BATCH_SIZE * previous_total_db_size) as f64 / now.elapsed().as_secs_f64() / 1e6
+        );
+        Ok(())
+    }
+
+    fn compare_query_against_db_and_self(
+        &mut self,
+        compact_device_queries: &DeviceCompactQuery,
+        compact_device_sums: &DeviceCompactSums,
+        events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
+        batch_size: usize,
+        eye_db: Eye,
+    ) -> eyre::Result<Vec<u32>> {
         let batch_streams = &self.streams[0];
         let batch_cublas = &self.cublas_handles[0];
 
+        // which database are we querying against
+        let (code_db_slices, mask_db_slices) = match eye_db {
+            Eye::Left => (&self.left_code_db_slices, &self.left_mask_db_slices),
+            Eye::Right => (&self.right_code_db_slices, &self.right_mask_db_slices),
+        };
         // Transfer queries to device
-        let compact_device_queries =
-            compact_query.htod_transfer(&self.device_manager, batch_streams)?;
-
-        let compact_device_sums = compact_device_queries.query_sums(
-            &self.codes_engine,
-            &self.masks_engine,
-            batch_streams,
-            batch_cublas,
-        )?;
 
         // ---- START BATCH DEDUP ----
         tracing::debug!(party_id = self.party_id, "Starting batch deduplication");
@@ -488,8 +785,8 @@ impl ServerActor {
                 compact_device_queries.dot_products_against_db(
                     &mut self.codes_engine,
                     &mut self.masks_engine,
-                    &self.code_db_slices,
-                    &self.mask_db_slices,
+                    code_db_slices,
+                    mask_db_slices,
                     &dot_chunk_size,
                     offset,
                     request_streams,
@@ -510,8 +807,8 @@ impl ServerActor {
                 compact_device_sums.compute_dot_reducer_against_db(
                     &mut self.codes_engine,
                     &mut self.masks_engine,
-                    &self.code_db_slices,
-                    &self.mask_db_slices,
+                    code_db_slices,
+                    mask_db_slices,
                     &dot_chunk_size,
                     offset,
                     request_streams,
@@ -636,18 +933,6 @@ impl ServerActor {
         self.device_manager.await_streams(&self.streams[1]);
         tracing::debug!(party_id = self.party_id, "db search finished");
 
-        // Iterate over a list of tracing payloads, and create logs with mappings to
-        // payloads Log at least a "start" event using a log with trace.id
-        // and parent.trace.id
-        for tracing_payload in batch.metadata.iter() {
-            tracing::info!(
-                node_id = tracing_payload.node_id,
-                dd.trace_id = tracing_payload.trace_id,
-                dd.span_id = tracing_payload.span_id,
-                "Protocol finished",
-            );
-        }
-
         // ---- START RESULT PROCESSING ----
 
         // Merge results and fetch matching indices
@@ -662,121 +947,16 @@ impl ServerActor {
         self.device_manager.await_streams(&self.streams[0]);
 
         // Fetch the final results (blocking)
-        let host_results = self
+        let mut host_results = self
             .distance_comparator
             .fetch_final_results(&self.final_results);
 
+        // Truncate the results to the batch size
+        host_results.iter_mut().for_each(|x| x.truncate(batch_size));
+
         // Evaluate the results across devices
         // Format: merged_results[query_index]
-        let mut merged_results =
-            get_merged_results(&host_results, self.device_manager.device_count());
-
-        // List the indices of the queries that did not match.
-        let insertion_list = merged_results
-            .iter()
-            .enumerate()
-            .filter(|&(_idx, &num)| num == u32::MAX)
-            .map(|(idx, _num)| idx)
-            .collect::<Vec<_>>();
-
-        // Spread the insertions across devices.
-        let insertion_list = distribute_insertions(&insertion_list, &self.current_db_sizes);
-
-        // Calculate the new indices for the inserted queries
-        let matches = calculate_insertion_indices(
-            &mut merged_results,
-            &insertion_list,
-            &self.current_db_sizes,
-        );
-
-        let previous_total_db_size = self.current_db_sizes.iter().sum::<usize>();
-
-        record_stream_time!(
-            &self.device_manager,
-            &self.streams[0],
-            events,
-            "db_write",
-            {
-                for i in 0..self.device_manager.device_count() {
-                    self.device_manager.device(i).bind_to_thread().unwrap();
-                    for insertion_idx in insertion_list[i].clone() {
-                        // Append to codes and masks db
-                        for (db, query, sums) in [
-                            (
-                                &self.code_db_slices,
-                                &compact_device_queries.code_query_insert,
-                                &compact_device_sums.code_query_insert,
-                            ),
-                            (
-                                &self.mask_db_slices,
-                                &compact_device_queries.mask_query_insert,
-                                &compact_device_sums.mask_query_insert,
-                            ),
-                        ] {
-                            unsafe {
-                                helpers::dtod_at_offset(
-                                    db.code_gr.limb_0[i],
-                                    self.current_db_sizes[i] * IRIS_CODE_LENGTH,
-                                    *query.limb_0[i].device_ptr(),
-                                    IRIS_CODE_LENGTH * 15
-                                        + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                                    IRIS_CODE_LENGTH,
-                                    self.streams[0][i].stream,
-                                );
-
-                                helpers::dtod_at_offset(
-                                    db.code_gr.limb_1[i],
-                                    self.current_db_sizes[i] * IRIS_CODE_LENGTH,
-                                    *query.limb_1[i].device_ptr(),
-                                    IRIS_CODE_LENGTH * 15
-                                        + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                                    IRIS_CODE_LENGTH,
-                                    self.streams[0][i].stream,
-                                );
-
-                                helpers::dtod_at_offset(
-                                    *db.code_sums_gr.limb_0[i].device_ptr(),
-                                    self.current_db_sizes[i] * mem::size_of::<u32>(),
-                                    *sums.limb_0[i].device_ptr(),
-                                    mem::size_of::<u32>() * 15
-                                        + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                                    mem::size_of::<u32>(),
-                                    self.streams[0][i].stream,
-                                );
-
-                                helpers::dtod_at_offset(
-                                    *db.code_sums_gr.limb_1[i].device_ptr(),
-                                    self.current_db_sizes[i] * mem::size_of::<u32>(),
-                                    *sums.limb_1[i].device_ptr(),
-                                    mem::size_of::<u32>() * 15
-                                        + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                                    mem::size_of::<u32>(),
-                                    self.streams[0][i].stream,
-                                );
-                            }
-                        }
-                        self.current_db_sizes[i] += 1;
-                    }
-
-                    // DEBUG
-                    tracing::debug!(
-                        "Updating DB size on device {}: {:?}",
-                        i,
-                        self.current_db_sizes[i]
-                    );
-                }
-            }
-        );
-
-        // Pass to internal sender thread
-        return_channel
-            .send(ServerJobResult {
-                merged_results,
-                request_ids: batch.request_ids,
-                matches,
-                store: query_store,
-            })
-            .unwrap();
+        let merged_results = get_merged_results(&host_results, self.device_manager.device_count());
 
         // Reset the results buffers for reuse
         reset_results(
@@ -798,19 +978,7 @@ impl ServerActor {
             &self.streams[0],
         );
 
-        // Wait for all streams before get timings
-        self.device_manager.await_streams(&self.streams[0]);
-        self.device_manager.await_streams(&self.streams[1]);
-
-        // ---- END RESULT PROCESSING ----
-        log_timers(events);
-
-        tracing::info!(
-            "Batch took {:?} [{:.2} Melems/s]",
-            now.elapsed(),
-            (N_QUERIES * previous_total_db_size) as f64 / now.elapsed().as_secs_f64() / 1e6
-        );
-        Ok(())
+        Ok(merged_results)
     }
 }
 
@@ -905,10 +1073,10 @@ fn open(
 fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
     let mut results = vec![];
     for j in 0..host_results[0].len() {
-        let mut match_entry = u32::MAX;
+        let mut match_entry = NON_MATCH_ID;
         for i in 0..host_results.len() {
             let match_idx = host_results[i][j] * n_devices as u32 + i as u32;
-            if host_results[i][j] != u32::MAX && match_idx < match_entry {
+            if host_results[i][j] != NON_MATCH_ID && match_idx < match_entry {
                 match_entry = match_idx;
             }
         }
@@ -919,7 +1087,7 @@ fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
         tracing::debug!(
             "Query {}: match={} [index: {}]",
             j,
-            match_entry != u32::MAX,
+            match_entry != NON_MATCH_ID,
             match_entry
         );
     }
@@ -958,7 +1126,7 @@ fn calculate_insertion_indices(
     insertion_list: &[Vec<usize>],
     db_sizes: &[usize],
 ) -> Vec<bool> {
-    let mut matches = vec![true; N_QUERIES];
+    let mut matches = vec![true; MAX_BATCH_SIZE];
     let mut last_db_index = db_sizes.iter().sum::<usize>() as u32;
     let (mut min_index, mut min_index_val) = (0, usize::MAX);
     for (i, list) in insertion_list.iter().enumerate() {

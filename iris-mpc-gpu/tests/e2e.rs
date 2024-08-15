@@ -6,7 +6,7 @@ use iris_mpc_common::{
 };
 use iris_mpc_gpu::{
     helpers::device_manager::DeviceManager,
-    server::{BatchQuery, ServerActor, ServerJobResult},
+    server::{BatchQuery, ServerActor, ServerJobResult, MAX_BATCH_SIZE},
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{collections::HashMap, env, sync::Arc};
@@ -15,10 +15,10 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
 const DB_SIZE: usize = 8 * 1000;
+const DB_BUFFER: usize = 8 * 1000;
 const DB_RNG_SEED: u64 = 0xdeadbeef;
 const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 10;
-const BATCH_SIZE: usize = 64;
 
 fn generate_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
     let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
@@ -101,11 +101,13 @@ async fn e2e_test() -> Result<()> {
         let actor = match ServerActor::new_with_device_manager_and_comms(
             0,
             chacha_seeds0,
-            &db0.0,
-            &db0.1,
+            (&db0.0, &db0.1),
+            (&db0.0, &db0.1),
             device_manager0,
             comms0,
             8,
+            DB_SIZE,
+            DB_BUFFER,
         ) {
             Ok((actor, handle)) => {
                 tx0.send(Ok(handle)).unwrap();
@@ -123,11 +125,13 @@ async fn e2e_test() -> Result<()> {
         let actor = match ServerActor::new_with_device_manager_and_comms(
             1,
             chacha_seeds1,
-            &db1.0,
-            &db1.1,
+            (&db1.0, &db1.1),
+            (&db1.0, &db1.1),
             device_manager1,
             comms1,
             8,
+            DB_SIZE,
+            DB_BUFFER,
         ) {
             Ok((actor, handle)) => {
                 tx1.send(Ok(handle)).unwrap();
@@ -145,11 +149,13 @@ async fn e2e_test() -> Result<()> {
         let actor = match ServerActor::new_with_device_manager_and_comms(
             2,
             chacha_seeds2,
-            &db2.0,
-            &db2.1,
+            (&db2.0, &db2.1),
+            (&db2.0, &db2.1),
             device_manager2,
             comms2,
             8,
+            DB_SIZE,
+            DB_BUFFER,
         ) {
             Ok((actor, handle)) => {
                 tx2.send(Ok(handle)).unwrap();
@@ -180,11 +186,13 @@ async fn e2e_test() -> Result<()> {
         let mut batch0 = BatchQuery::default();
         let mut batch1 = BatchQuery::default();
         let mut batch2 = BatchQuery::default();
-        for _ in 0..BATCH_SIZE {
+        let batch_size = rng.gen_range(1..MAX_BATCH_SIZE);
+        for _ in 0..batch_size {
             let request_id = Uuid::new_v4();
             // Automatic random tests
             let options = if responses.is_empty() { 2 } else { 3 };
-            let template = match rng.gen_range(0..options) {
+            let option = rng.gen_range(0..options);
+            let template = match option {
                 0 => {
                     println!("Sending new iris code");
                     expected_results.insert(request_id.to_string(), None);
@@ -215,45 +223,73 @@ async fn e2e_test() -> Result<()> {
             // batch0
             batch0.request_ids.push(request_id.to_string());
             // for storage
-            batch0.store.code.push(shared_code[0].clone());
-            batch0.store.mask.push(shared_mask[0].clone());
+            batch0.store_left.code.push(shared_code[0].clone());
+            batch0.store_left.mask.push(shared_mask[0].clone());
             // with rotations
-            batch0.db.code.extend(shared_code[0].all_rotations());
-            batch0.db.mask.extend(shared_mask[0].all_rotations());
+            batch0.db_left.code.extend(shared_code[0].all_rotations());
+            batch0.db_left.mask.extend(shared_mask[0].all_rotations());
             // with rotations
             GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_code[0]);
             GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_mask[0]);
-            batch0.query.code.extend(shared_code[0].all_rotations());
-            batch0.query.mask.extend(shared_mask[0].all_rotations());
+            batch0
+                .query_left
+                .code
+                .extend(shared_code[0].all_rotations());
+            batch0
+                .query_left
+                .mask
+                .extend(shared_mask[0].all_rotations());
 
             // batch 1
             batch1.request_ids.push(request_id.to_string());
             // for storage
-            batch1.store.code.push(shared_code[1].clone());
-            batch1.store.mask.push(shared_mask[1].clone());
+            batch1.store_left.code.push(shared_code[1].clone());
+            batch1.store_left.mask.push(shared_mask[1].clone());
             // with rotations
-            batch1.db.code.extend(shared_code[1].all_rotations());
-            batch1.db.mask.extend(shared_mask[1].all_rotations());
+            batch1.db_left.code.extend(shared_code[1].all_rotations());
+            batch1.db_left.mask.extend(shared_mask[1].all_rotations());
             // with rotations
             GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_code[1]);
             GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_mask[1]);
-            batch1.query.code.extend(shared_code[1].all_rotations());
-            batch1.query.mask.extend(shared_mask[1].all_rotations());
+            batch1
+                .query_left
+                .code
+                .extend(shared_code[1].all_rotations());
+            batch1
+                .query_left
+                .mask
+                .extend(shared_mask[1].all_rotations());
 
             // batch 2
             batch2.request_ids.push(request_id.to_string());
             // for storage
-            batch2.store.code.push(shared_code[2].clone());
-            batch2.store.mask.push(shared_mask[2].clone());
+            batch2.store_left.code.push(shared_code[2].clone());
+            batch2.store_left.mask.push(shared_mask[2].clone());
             // with rotations
-            batch2.db.code.extend(shared_code[2].all_rotations());
-            batch2.db.mask.extend(shared_mask[2].all_rotations());
+            batch2.db_left.code.extend(shared_code[2].all_rotations());
+            batch2.db_left.mask.extend(shared_mask[2].all_rotations());
             // with rotations
             GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_code[2]);
             GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_mask[2]);
-            batch2.query.code.extend(shared_code[2].all_rotations());
-            batch2.query.mask.extend(shared_mask[2].all_rotations());
+            batch2
+                .query_left
+                .code
+                .extend(shared_code[2].all_rotations());
+            batch2
+                .query_left
+                .mask
+                .extend(shared_mask[2].all_rotations());
         }
+        // TODO: better tests involving two eyes, atm just copy left to right
+        batch0.db_right = batch0.db_left.clone();
+        batch1.db_right = batch1.db_left.clone();
+        batch2.db_right = batch2.db_left.clone();
+        batch0.query_right = batch0.query_left.clone();
+        batch1.query_right = batch1.query_left.clone();
+        batch2.query_right = batch2.query_left.clone();
+        batch0.store_right = batch0.store_left.clone();
+        batch1.store_right = batch1.store_left.clone();
+        batch2.store_right = batch2.store_left.clone();
 
         // send batches to servers
         let res0_fut = handle0.submit_batch_query(batch0).await;

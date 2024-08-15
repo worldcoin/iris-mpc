@@ -5,7 +5,7 @@ use aws_sdk_sqs::{config::Region, Client};
 use axum::{routing::get, Router};
 use clap::Parser;
 use eyre::{eyre, Context};
-use futures::StreamExt;
+use futures::TryStreamExt;
 use iris_mpc_common::{
     config::{json_wrapper::JsonStrWrapper, Config, Opt},
     galois_engine::degree4::GaloisRingIrisCodeShare,
@@ -18,19 +18,19 @@ use iris_mpc_common::{
         task_monitor::TaskMonitor,
     },
     iris_db::db::IrisDB,
-    IRIS_CODE_LENGTH,
+    IrisCodeDb, IRIS_CODE_LENGTH,
 };
 use iris_mpc_gpu::{
     dot::ROTATIONS,
     helpers::device_manager::DeviceManager,
-    server::{sync_nccl, BatchMetadata, BatchQuery, ServerActor, ServerJobResult},
+    server::{sync_nccl, BatchMetadata, BatchQuery, ServerActor, ServerJobResult, MAX_BATCH_SIZE},
 };
 use iris_mpc_store::{Store, StoredIrisRef};
 use rand::{rngs::StdRng, SeedableRng};
 use static_assertions::const_assert;
 use std::{
     mem,
-    sync::Arc,
+    sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
 };
 use telemetry_batteries::{
@@ -46,15 +46,15 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
-const N_QUERIES: usize = 64;
+const DB_BUFFER: usize = 8 * 1_000;
 const RNG_SEED: u64 = 42;
-const SYNC_RESULTS: usize = N_QUERIES * 2;
-const SYNC_QUERIES: usize = N_QUERIES * 2;
+const SYNC_RESULTS: usize = MAX_BATCH_SIZE * 2;
+const SYNC_QUERIES: usize = MAX_BATCH_SIZE * 2;
 const_assert!(SYNC_QUERIES <= sync_nccl::MAX_REQUESTS);
-const MAX_ROLLBACK: usize = N_QUERIES * 2;
-/// The number of batches before a stream is re-used.
+const MAX_ROLLBACK: usize = MAX_BATCH_SIZE * 2;
+const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 
-const QUERIES: usize = ROTATIONS * N_QUERIES;
+static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(MAX_BATCH_SIZE));
 
 async fn receive_batch(
     party_id: usize,
@@ -67,7 +67,7 @@ async fn receive_batch(
 ) -> eyre::Result<BatchQuery> {
     let mut batch_query = BatchQuery::default();
 
-    while batch_query.db.code.len() < QUERIES {
+    while batch_query.db_left.code.len() < *CURRENT_BATCH_SIZE.lock().unwrap() * ROTATIONS {
         let rcv_message_output = client
             .receive_message()
             .max_number_of_messages(1)
@@ -101,6 +101,16 @@ async fn receive_batch(
                 if skip_request_ids.contains(&smpc_request.signup_id) {
                     // Some party (maybe us) already meant to delete this request, so we skip it.
                     continue;
+                }
+
+                if let Some(batch_size) = message.batch_size {
+                    // Updating the batch size instantly makes it a bit unpredictable, since
+                    // if we're already above the new limit, we'll still process the current batch
+                    // at the higher limit. On the other hand, updating it after the batch is
+                    // processed would not let us "unblock" the protocol if we're stuck with low
+                    // throughput.
+                    *CURRENT_BATCH_SIZE.lock().unwrap() = batch_size.clamp(1, MAX_BATCH_SIZE);
+                    tracing::info!("Updating batch size to {}", batch_size);
                 }
 
                 let message_attributes = sqs_message.message_attributes.unwrap_or_default();
@@ -192,15 +202,22 @@ async fn receive_batch(
                 .await
                 .context("while pre-processing iris code query")??;
 
-                batch_query.store.code.push(store_iris_shares);
-                batch_query.store.mask.push(store_mask_shares);
-                batch_query.db.code.extend(db_iris_shares);
-                batch_query.db.mask.extend(db_mask_shares);
-                batch_query.query.code.extend(iris_shares);
-                batch_query.query.mask.extend(mask_shares);
+                batch_query.store_left.code.push(store_iris_shares);
+                batch_query.store_left.mask.push(store_mask_shares);
+                batch_query.db_left.code.extend(db_iris_shares);
+                batch_query.db_left.mask.extend(db_mask_shares);
+                batch_query.query_left.code.extend(iris_shares);
+                batch_query.query_left.mask.extend(mask_shares);
             }
+        } else {
+            tokio::time::sleep(SQS_POLLING_INTERVAL).await;
         }
     }
+    // TODO: also grab the right side from the batch once it is sent, ATM just
+    // duplicate left eye
+    batch_query.store_right = batch_query.store_left.clone();
+    batch_query.db_right = batch_query.db_left.clone();
+    batch_query.query_right = batch_query.query_left.clone();
 
     Ok(batch_query)
 }
@@ -275,9 +292,9 @@ async fn initialize_iris_dbs(
     party_id: usize,
     store: &Store,
     config: &Config,
-) -> eyre::Result<(Vec<u16>, Vec<u16>, usize)> {
+) -> eyre::Result<(IrisCodeDb, IrisCodeDb, usize)> {
     // Generate or load DB
-    let (mut codes_db, mut masks_db) = {
+    let (mut left_codes_db, mut left_masks_db) = {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
@@ -308,11 +325,14 @@ async fn initialize_iris_dbs(
 
         (codes_db, masks_db)
     };
-    let fake_len = codes_db.len();
+    let (mut right_codes_db, mut right_masks_db) = (left_codes_db.clone(), left_masks_db.clone());
+    let fake_len = left_codes_db.len();
 
     let count_irises = store.count_irises().await?;
-    codes_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
-    masks_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
+    left_codes_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
+    left_masks_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
+    right_codes_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
+    right_masks_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
 
     let parallelism = config
         .database
@@ -326,15 +346,17 @@ async fn initialize_iris_dbs(
     );
     // Load DB from persistent storage.
     let mut store_len = 0;
-    while let Some(iris) = store.stream_irises_par(parallelism).await.next().await {
-        let iris = iris?;
+    let mut stream = store.stream_irises_par(parallelism).await;
+    while let Some(iris) = stream.try_next().await? {
         if iris.index() >= count_irises {
             return Err(eyre!("Inconsistent iris index {}", iris.index()));
         }
 
         let start = fake_len + iris.index() * IRIS_CODE_LENGTH;
-        codes_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.left_code());
-        masks_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.left_mask());
+        left_codes_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.left_code());
+        left_masks_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.left_mask());
+        right_codes_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.right_code());
+        right_masks_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.right_mask());
 
         store_len += 1;
         if (store_len % 10000) == 0 {
@@ -342,7 +364,11 @@ async fn initialize_iris_dbs(
         }
     }
 
-    Ok((codes_db, masks_db, count_irises))
+    Ok((
+        (left_codes_db, left_masks_db),
+        (right_codes_db, right_masks_db),
+        count_irises,
+    ))
 }
 
 async fn send_result_events(
@@ -424,7 +450,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     .await?;
 
     tracing::info!("Initialize iris db");
-    let (mut codes_db, mut masks_db, store_len) =
+    let (mut left_iris_db, mut right_iris_db, store_len) =
         initialize_iris_dbs(party_id, &store, &config).await?;
 
     let my_state = SyncState {
@@ -455,20 +481,24 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             // Rollback the data that we have already loaded.
             let bit_len = db_len * IRIS_CODE_LENGTH;
             // TODO: remove the line below if you removed fake data.
-            let bit_len = bit_len + (codes_db.len() - store_len * IRIS_CODE_LENGTH);
-            codes_db.truncate(bit_len);
-            masks_db.truncate(bit_len);
+            let bit_len = bit_len + (left_iris_db.0.len() - store_len * IRIS_CODE_LENGTH);
+            left_iris_db.0.truncate(bit_len);
+            left_iris_db.1.truncate(bit_len);
+            right_iris_db.0.truncate(bit_len);
+            right_iris_db.1.truncate(bit_len);
         }
 
         tracing::info!("Starting server actor");
         match ServerActor::new_with_device_manager_and_comms(
             config.party_id,
             chacha_seeds,
-            &codes_db,
-            &masks_db,
+            (&left_iris_db.0, &left_iris_db.1),
+            (&right_iris_db.0, &right_iris_db.1),
             device_manager,
             comms,
             8,
+            DB_SIZE,
+            DB_BUFFER,
         ) {
             Ok((actor, handle)) => {
                 tx.send(Ok((handle, sync_result))).unwrap();
@@ -511,7 +541,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             merged_results,
             request_ids,
             matches,
-            store: query_store,
+            store_left,
+            store_right,
         }) = rx.recv().await
         {
             let result_events = merged_results
@@ -535,14 +566,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 )
                 .map(|query_idx| {
                     // Get the original vectors from `receive_batch`.
-                    let code = &query_store.code[query_idx].coefs[..];
-                    let mask = &query_store.mask[query_idx].coefs[..];
                     StoredIrisRef {
-                        left_code:  code,
-                        left_mask:  mask,
-                        // TODO: second eye.
-                        right_code: &[],
-                        right_mask: &[],
+                        left_code:  &store_left.code[query_idx].coefs[..],
+                        left_mask:  &store_left.mask[query_idx].coefs[..],
+                        right_code: &store_right.code[query_idx].coefs[..],
+                        right_mask: &store_right.mask[query_idx].coefs[..],
                     }
                 })
                 .collect();
@@ -551,10 +579,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             store_bg.insert_results(&mut tx, &result_events).await?;
 
-            store_bg
-                .insert_irises(&mut tx, &codes_and_masks)
-                .await
-                .wrap_err("failed to persist queries")?;
+            if !codes_and_masks.is_empty() {
+                store_bg
+                    .insert_irises(&mut tx, &codes_and_masks)
+                    .await
+                    .wrap_err("failed to persist queries")?;
+            }
 
             tx.commit().await?;
 

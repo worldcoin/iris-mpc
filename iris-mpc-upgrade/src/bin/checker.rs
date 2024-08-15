@@ -2,6 +2,7 @@ use clap::Parser;
 use futures::StreamExt;
 use iris_mpc_common::{
     galois::degree4::{basis::Monomial, GaloisRingElement, ShamirGaloisRingShare},
+    galois_engine::degree4::GaloisRingIrisCodeShare,
     id::PartyID,
     IRIS_CODE_LENGTH,
 };
@@ -241,5 +242,12 @@ fn recombine_enc_bits(
         let share = share.to_basis_A();
         res.extend_from_slice(&share.coefs);
     }
-    EncodedBits(res.try_into().expect("iris codes have correct size"))
+    assert!(res.len() == IRIS_CODE_LENGTH);
+    // reorder the bits according to new encoding
+    let mut reordered = [0u16; IRIS_CODE_LENGTH];
+    for (i, bit) in res.into_iter().enumerate() {
+        reordered[GaloisRingIrisCodeShare::remap_index(i)] = bit;
+    }
+
+    EncodedBits(reordered)
 }
