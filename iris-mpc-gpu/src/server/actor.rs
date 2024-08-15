@@ -1,25 +1,9 @@
-use std::{collections::HashMap, mem, sync::Arc, time::Instant};
-
-use cudarc::{
-    cublas::CudaBlas,
-    driver::{
-        CudaDevice,
-        CudaSlice,
-        CudaStream, DevicePtr, result::{self, event::elapsed}, sys::CUevent,
-    },
-    nccl::Comm,
-};
-use futures::{Future, FutureExt};
-use ring::hkdf::{Algorithm, HKDF_SHA256, Okm, Salt};
-use tokio::sync::{mpsc, oneshot};
-
-use iris_mpc_common::{galois_engine::degree4::GaloisRingIrisCodeShare, IrisCodeDbSlice};
-
+use super::{BatchQuery, Eye, ServerJob, ServerJobResult, MAX_BATCH_SIZE};
 use crate::{
     dot::{
         distance_comparator::DistanceComparator,
-        IRIS_CODE_LENGTH,
-        ROTATIONS, share_db::{preprocess_query, ShareDB, SlicedProcessedDatabase},
+        share_db::{preprocess_query, ShareDB, SlicedProcessedDatabase},
+        IRIS_CODE_LENGTH, ROTATIONS,
     },
     helpers::{
         self,
@@ -28,8 +12,20 @@ use crate::{
     },
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
-
-use super::{BatchQuery, Eye, MAX_BATCH_SIZE, ServerJob, ServerJobResult};
+use cudarc::{
+    cublas::CudaBlas,
+    driver::{
+        result::{self, event::elapsed},
+        sys::CUevent,
+        CudaDevice, CudaSlice, CudaStream, DevicePtr,
+    },
+    nccl::Comm,
+};
+use futures::{Future, FutureExt};
+use iris_mpc_common::{galois_engine::degree4::GaloisRingIrisCodeShare, IrisCodeDbSlice};
+use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
+use std::{collections::HashMap, mem, sync::Arc, time::Instant};
+use tokio::sync::{mpsc, oneshot};
 
 macro_rules! forget_vec {
     ($vec:expr) => {
@@ -59,7 +55,7 @@ impl ServerActorHandle {
     pub async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
-    ) -> impl Future<Output=ServerJobResult> {
+    ) -> impl Future<Output = ServerJobResult> {
         let (tx, rx) = oneshot::channel();
         let job = ServerJob {
             batch,
@@ -73,29 +69,29 @@ impl ServerActorHandle {
 const DB_CHUNK_SIZE: usize = 512;
 const QUERIES: usize = ROTATIONS * MAX_BATCH_SIZE;
 pub struct ServerActor {
-    job_queue: mpsc::Receiver<ServerJob>,
-    device_manager: Arc<DeviceManager>,
-    party_id: usize,
+    job_queue:            mpsc::Receiver<ServerJob>,
+    device_manager:       Arc<DeviceManager>,
+    party_id:             usize,
     // engines
-    codes_engine: ShareDB,
-    masks_engine: ShareDB,
-    batch_codes_engine: ShareDB,
-    batch_masks_engine: ShareDB,
-    phase2: Circuits,
-    phase2_batch: Circuits,
-    distance_comparator: DistanceComparator,
+    codes_engine:         ShareDB,
+    masks_engine:         ShareDB,
+    batch_codes_engine:   ShareDB,
+    batch_masks_engine:   ShareDB,
+    phase2:               Circuits,
+    phase2_batch:         Circuits,
+    distance_comparator:  DistanceComparator,
     // DB slices
-    left_code_db_slices: SlicedProcessedDatabase,
-    left_mask_db_slices: SlicedProcessedDatabase,
+    left_code_db_slices:  SlicedProcessedDatabase,
+    left_mask_db_slices:  SlicedProcessedDatabase,
     right_code_db_slices: SlicedProcessedDatabase,
     right_mask_db_slices: SlicedProcessedDatabase,
-    streams: Vec<Vec<CudaStream>>,
-    cublas_handles: Vec<Vec<CudaBlas>>,
-    results: Vec<CudaSlice<u32>>,
-    batch_results: Vec<CudaSlice<u32>>,
-    final_results: Vec<CudaSlice<u32>>,
-    current_db_sizes: Vec<usize>,
-    query_db_size: Vec<usize>,
+    streams:              Vec<Vec<CudaStream>>,
+    cublas_handles:       Vec<Vec<CudaBlas>>,
+    results:              Vec<CudaSlice<u32>>,
+    batch_results:        Vec<CudaSlice<u32>>,
+    final_results:        Vec<CudaSlice<u32>>,
+    current_db_sizes:     Vec<usize>,
+    query_db_size:        Vec<usize>,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -172,8 +168,8 @@ impl ServerActor {
                 right_eye_db.0.len(),
                 right_eye_db.1.len()
             ]
-                .iter()
-                .all(|&x| x == db_size * IRIS_CODE_LENGTH),
+            .iter()
+            .all(|&x| x == db_size * IRIS_CODE_LENGTH),
             "Internal DB mismatch, codes and masks sizes differ"
         );
 
@@ -282,8 +278,16 @@ impl ServerActor {
         // Not divided by GPU_COUNT since we do the work on all GPUs for simplicity,
         // also not padded to 2048 since we only require it to be a multiple of 64
         let phase2_batch_chunk_size = QUERIES * QUERIES;
-        assert_eq!(phase2_batch_chunk_size % 64, 0, "Phase2 batch chunk size must be a multiple of 64");
-        assert_eq!(phase2_chunk_size % 64, 0, "Phase2 chunk size must be a multiple of 64");
+        assert_eq!(
+            phase2_batch_chunk_size % 64,
+            0,
+            "Phase2 batch chunk size must be a multiple of 64"
+        );
+        assert_eq!(
+            phase2_chunk_size % 64,
+            0,
+            "Phase2 chunk size must be a multiple of 64"
+        );
 
         let phase2_batch = Circuits::new(
             party_id,
