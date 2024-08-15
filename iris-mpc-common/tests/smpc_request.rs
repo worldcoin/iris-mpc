@@ -16,11 +16,11 @@ mod tests {
     const PRIVATE_KEY: &str = "14Z6Zijg3kbFN//R9BRKLeTS/wCiZMfK6AurEr/nAZg=";
 
     fn get_key_pair() -> SharesEncryptionKeyPair {
-        return SharesEncryptionKeyPair::from_b64_strings(
+        SharesEncryptionKeyPair::from_b64_strings(
             PUBLIC_KEY.to_string().clone(),
             PRIVATE_KEY.to_string().clone(),
         )
-        .unwrap();
+        .unwrap()
     }
 
     fn get_mock_request() -> SMPCRequest {
@@ -140,7 +140,7 @@ mod tests {
 
         let decoded_public_key = STANDARD.decode(PUBLIC_KEY.as_bytes()).unwrap();
         let shares_encryption_public_key = PublicKey::from_slice(&decoded_public_key).unwrap();
-        let sealed_box = sealedbox::seal(&invalid_json.as_bytes(), &shares_encryption_public_key);
+        let sealed_box = sealedbox::seal(invalid_json.as_bytes(), &shares_encryption_public_key);
         let encoded_share = STANDARD.encode(&sealed_box);
 
         let key_pair = get_key_pair();
