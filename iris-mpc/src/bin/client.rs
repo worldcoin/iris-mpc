@@ -1,17 +1,12 @@
 #![allow(clippy::needless_range_loop)]
-use aws_sdk_sns::{
-    config::Region,
-    types::{MessageAttributeValue, PublishBatchRequestEntry},
-    Client,
-};
+use aws_sdk_sns::{config::Region, Client};
 use aws_sdk_sqs::Client as SqsClient;
-use base64::{alphabet::STANDARD, engine::general_purpose, Engine};
+use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use eyre::{Context, ContextCompat};
 use iris_mpc_common::{
     galois_engine::degree4::GaloisRingIrisCodeShare,
     helpers::{
-        aws::{construct_message_attributes, NODE_ID_MESSAGE_ATTRIBUTE_NAME},
         key_pair::download_public_key_from_s3,
         smpc_request::{IrisCodesJSON, ResultEvent, SMPCRequest},
         sqs_s3_helper::upload_file_and_generate_presigned_url,
@@ -79,7 +74,7 @@ async fn main() -> eyre::Result<()> {
     };
 
     let mut shares_encryption_public_keys: Vec<PublicKey> = vec![];
-    let encrypt_shares = encrypt_shares.is_some();
+    let _ = encrypt_shares.is_some();
 
     for i in 0..3 {
         let public_key_string =
@@ -263,12 +258,13 @@ async fn main() -> eyre::Result<()> {
                 left_iris_code:  "nan".to_string(),
                 left_iris_mask:  "nan".to_string(),
             };
-            let serialized_iris_codes_json =
-                to_string(&iris_codes_json).expect("Serialization failed");
+            let serialized_iris_codes_json = to_string(&iris_codes_json)
+                .expect("Serialization failed")
+                .clone();
 
             // calculate hash of the object
             let mut hasher = Sha256::new();
-            hasher.update(serialized_iris_codes_json);
+            hasher.update(serialized_iris_codes_json.clone());
             let result = hasher.finalize();
             let hash_string = format!("{:x}", result);
 
@@ -282,11 +278,20 @@ async fn main() -> eyre::Result<()> {
             iris_shares_file_hashes[i] = hash_string;
         }
 
-        let presigned_url = upload_file_and_generate_presigned_url(
+        let contents = serde_json::to_vec(&iris_codes_shares_base64)?;
+        let presigned_url = match upload_file_and_generate_presigned_url(
             SQS_REQUESTS_BUCKET_NAME,
             &request_id.to_string(),
-            &serde_json::to_vec(&iris_codes_shares_base64)?,
-        );
+            &contents,
+        )
+        .await
+        {
+            Ok(url) => url,
+            Err(e) => {
+                eprintln!("Failed to upload file: {}", e);
+                continue;
+            }
+        };
 
         let request_message = SMPCRequest {
             batch_size: None,
@@ -299,6 +304,7 @@ async fn main() -> eyre::Result<()> {
         client
             .publish()
             .topic_arn(request_topic_arn.clone())
+            .message_group_id(ENROLLMENT_REQUEST_TYPE)
             .message(to_string(&request_message)?)
             .send()
             .await?;

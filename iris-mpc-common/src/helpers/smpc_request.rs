@@ -22,6 +22,7 @@ pub struct SQSMessage {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SMPCRequest {
+    pub batch_size:              Option<usize>,
     pub signup_id:               String,
     pub s3_presigned_url:        String,
     pub iris_shares_file_hashes: [String; 3],
@@ -125,6 +126,7 @@ impl SMPCRequest {
         Ok(iris_share)
     }
 
+    #[allow(dead_code)] // TODO: implement hashes validation
     fn validate_hashes(&self, hashes: [String; 3]) -> bool {
         self.iris_shares_file_hashes == hashes
     }

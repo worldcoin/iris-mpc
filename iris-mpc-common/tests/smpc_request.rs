@@ -25,6 +25,7 @@ mod tests {
 
     fn get_mock_request() -> SMPCRequest {
         SMPCRequest {
+            batch_size:              None,
             signup_id:               "test_signup_id".to_string(),
             s3_presigned_url:        "https://example.com/package".to_string(),
             iris_shares_file_hashes: [
@@ -55,6 +56,7 @@ mod tests {
             .await;
 
         let smpc_request = SMPCRequest {
+            batch_size:              None,
             signup_id:               "test_signup_id".to_string(),
             s3_presigned_url:        mock_server.uri().clone() + "/test_presign_url",
             iris_shares_file_hashes: [

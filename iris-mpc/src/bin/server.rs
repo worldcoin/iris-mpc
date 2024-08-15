@@ -62,7 +62,6 @@ async fn receive_batch(
     queue_url: &String,
     store: &Store,
     skip_request_ids: Vec<String>,
-    encrypted_shares: bool,
     shares_encryption_key_pair: SharesEncryptionKeyPair,
 ) -> eyre::Result<BatchQuery> {
     let mut batch_query = BatchQuery::default();
@@ -103,7 +102,7 @@ async fn receive_batch(
                     continue;
                 }
 
-                if let Some(batch_size) = message.batch_size {
+                if let Some(batch_size) = smpc_request.batch_size {
                     // Updating the batch size instantly makes it a bit unpredictable, since
                     // if we're already above the new limit, we'll still process the current batch
                     // at the higher limit. On the other hand, updating it after the batch is
@@ -439,7 +438,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let party_id = config.party_id;
     tracing::info!("Deriving shared secrets");
     let chacha_seeds = initialize_chacha_seeds(&config.kms_key_arns, party_id).await?;
-    let enable_processing_encrypted_shares = config.enable_processing_encrypted_shares;
+    let _ = config.enable_processing_encrypted_shares;
 
     tracing::info!("Replaying results");
     send_result_events(
@@ -645,7 +644,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 &config.requests_queue_url,
                 &store,
                 skip_request_ids,
-                enable_processing_encrypted_shares,
                 shares_encryption_key_pair,
             )
             .await

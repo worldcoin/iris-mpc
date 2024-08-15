@@ -1,9 +1,25 @@
-use super::{BatchQuery, Eye, ServerJob, ServerJobResult, MAX_BATCH_SIZE};
+use std::{collections::HashMap, mem, sync::Arc, time::Instant};
+
+use cudarc::{
+    cublas::CudaBlas,
+    driver::{
+        CudaDevice,
+        CudaSlice,
+        CudaStream, DevicePtr, result::{self, event::elapsed}, sys::CUevent,
+    },
+    nccl::Comm,
+};
+use futures::{Future, FutureExt};
+use ring::hkdf::{Algorithm, HKDF_SHA256, Okm, Salt};
+use tokio::sync::{mpsc, oneshot};
+
+use iris_mpc_common::{galois_engine::degree4::GaloisRingIrisCodeShare, IrisCodeDbSlice};
+
 use crate::{
     dot::{
         distance_comparator::DistanceComparator,
-        share_db::{preprocess_query, ShareDB, SlicedProcessedDatabase},
-        IRIS_CODE_LENGTH, ROTATIONS,
+        IRIS_CODE_LENGTH,
+        ROTATIONS, share_db::{preprocess_query, ShareDB, SlicedProcessedDatabase},
     },
     helpers::{
         self,
@@ -12,20 +28,8 @@ use crate::{
     },
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
-use cudarc::{
-    cublas::CudaBlas,
-    driver::{
-        result::{self, event::elapsed},
-        sys::CUevent,
-        CudaDevice, CudaSlice, CudaStream, DevicePtr,
-    },
-    nccl::Comm,
-};
-use futures::{Future, FutureExt};
-use iris_mpc_common::{galois_engine::degree4::GaloisRingIrisCodeShare, IrisCodeDbSlice};
-use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
-use std::{collections::HashMap, mem, sync::Arc, time::Instant};
-use tokio::sync::{mpsc, oneshot};
+
+use super::{BatchQuery, Eye, MAX_BATCH_SIZE, ServerJob, ServerJobResult};
 
 macro_rules! forget_vec {
     ($vec:expr) => {
@@ -278,14 +282,8 @@ impl ServerActor {
         // Not divided by GPU_COUNT since we do the work on all GPUs for simplicity,
         // also not padded to 2048 since we only require it to be a multiple of 64
         let phase2_batch_chunk_size = QUERIES * QUERIES;
-        assert!(
-            phase2_batch_chunk_size % 64 == 0,
-            "Phase2 batch chunk size must be a multiple of 64"
-        );
-        assert!(
-            phase2_chunk_size % 64 == 0,
-            "Phase2 chunk size must be a multiple of 64"
-        );
+        assert_eq!(phase2_batch_chunk_size % 64, 0, "Phase2 batch chunk size must be a multiple of 64");
+        assert_eq!(phase2_chunk_size % 64, 0, "Phase2 chunk size must be a multiple of 64");
 
         let phase2_batch = Circuits::new(
             party_id,

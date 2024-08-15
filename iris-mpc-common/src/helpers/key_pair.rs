@@ -47,6 +47,12 @@ pub enum SharesDecodingError {
     },
     #[error(transparent)]
     SerdeError(#[from] serde_json::error::Error),
+    #[error(transparent)]
+    PresigningConfigError(#[from] aws_sdk_s3::presigning::PresigningConfigError),
+    #[error(transparent)]
+    PresignedRequestError(
+        #[from] aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::get_object::GetObjectError>,
+    ),
 }
 
 #[derive(Clone, Debug)]
