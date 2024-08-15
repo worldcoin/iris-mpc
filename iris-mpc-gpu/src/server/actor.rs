@@ -327,10 +327,8 @@ impl ServerActor {
             .prepare_db_match_list((db_size + db_buffer) / device_manager.device_count());
         let db_match_list_right = distance_comparator
             .prepare_db_match_list((db_size + db_buffer) / device_manager.device_count());
-        let batch_match_list_left =
-            distance_comparator.prepare_db_match_list(QUERIES / device_manager.device_count());
-        let batch_match_list_right =
-            distance_comparator.prepare_db_match_list(QUERIES / device_manager.device_count());
+        let batch_match_list_left = distance_comparator.prepare_db_match_list(QUERIES);
+        let batch_match_list_right = distance_comparator.prepare_db_match_list(QUERIES);
 
         let query_db_size = vec![QUERIES; device_manager.device_count()];
 
@@ -503,13 +501,14 @@ impl ServerActor {
 
         self.device_manager.await_streams(&self.streams[0]);
 
-        // self.distance_comparator.merge_batch_results(
-        //     &self.batch_match_list_left,
-        //     &self.batch_match_list_right,
-        //     &self.final_results,
-        //     &self.current_db_sizes,
-        //     &self.streams[0],
-        // );
+        self.distance_comparator.merge_batch_results(
+            &self.batch_match_list_left,
+            &self.batch_match_list_right,
+            &self.final_results,
+            &self.streams[0],
+        );
+
+        self.device_manager.await_streams(&self.streams[0]);
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id
@@ -527,6 +526,8 @@ impl ServerActor {
         let mut host_results = self
             .distance_comparator
             .fetch_final_results(&self.final_results);
+
+        println!("host_results: {:?}", host_results[0]);
 
         // Truncate the results to the batch size
         host_results.iter_mut().for_each(|x| x.truncate(batch_size));
@@ -757,7 +758,7 @@ impl ServerActor {
             &db_sizes_batch,
             &db_sizes_batch,
             0,
-            &self.current_db_sizes,
+            &db_sizes_batch,
             batch_streams,
         );
         self.phase2_batch.return_result_buffer(res);

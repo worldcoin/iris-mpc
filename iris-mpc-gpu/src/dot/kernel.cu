@@ -44,13 +44,13 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
                 continue;
             }
 
-            unsigned int outputIdx = totalDbLen * (queryIdx / ALL_ROTATIONS) + dbIdx;
+            unsigned int outputIdx = totalDbLen * (queryIdx / ALL_ROTATIONS) + dbIdx + offset;
             atomicOr(&output[outputIdx / 64], (1ULL << (outputIdx % 64)));
         }
     }
 }
 
-extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t dbLength, size_t numElements)
+extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
@@ -62,41 +62,45 @@ extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, 
             bool matchLeft = (matchResultsLeft[idx] & (1ULL << i));
             bool matchRight = (matchResultsRight[idx] & (1ULL << i));
 
+            // Check bounds
+            if (queryIdx >= queryLength || dbIdx >= dbLength)
+                continue;
+
+            // Current *AND* policy: only match, if both eyes match
             if (matchLeft && matchRight)
-            {
                 atomicMin(&finalResults[queryIdx], dbIdx);
-            }
         }
     }
 }
 
-extern "C" __global__ void mergeBatchResults(unsigned long long *matchResultsSelfLeft, unsigned long long *matchResultsSelfRight, unsigned int *finalResults, size_t dbLength, size_t numElements)
+extern "C" __global__ void mergeBatchResults(unsigned long long *matchResultsSelfLeft, unsigned long long *matchResultsSelfRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
     {
-        // Join together the results from both eyes
         for (int i = 0; i < 64; i++)
         {
             unsigned int queryIdx = (idx * 64 + i) / dbLength;
             unsigned int dbIdx = (idx * 64 + i) % dbLength;
 
-            if ((queryIdx - ROTATIONS - 1) % ALL_ROTATIONS != 0)
-            {
+            // Check bounds
+            if (queryIdx >= queryLength || dbIdx >= dbLength)
                 continue;
-            }
 
-            if (queryIdx == dbIdx)
-            {
+            // Query is already considering rotations, ignore rotated db entries
+            if ((dbIdx - ROTATIONS) % ALL_ROTATIONS != 0)
                 continue;
-            }
+
+            // Only consider results above the diagonal
+            if (queryIdx <= dbIdx / ALL_ROTATIONS)
+                continue;
 
             bool matchLeft = (matchResultsSelfLeft[idx] & (1ULL << i));
             bool matchRight = (matchResultsSelfRight[idx] & (1ULL << i));
 
             if (matchLeft || matchRight)
             {
-                atomicMin(&finalResults[queryIdx], dbIdx);
+                atomicMin(&finalResults[queryIdx], UINT_MAX - 1);
             }
         }
     }

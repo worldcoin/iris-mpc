@@ -148,6 +148,7 @@ impl DistanceComparator {
                             &matches_bitmap_left[i],
                             &matches_bitmap_right[i],
                             &final_results[i],
+                            (self.query_length / ROTATIONS) as u64,
                             db_sizes[i] as u64,
                             num_elements as u64,
                         ),
@@ -162,11 +163,10 @@ impl DistanceComparator {
         matches_bitmap_left: &[CudaSlice<u64>],
         matches_bitmap_right: &[CudaSlice<u64>],
         final_results: &[CudaSlice<u32>],
-        db_sizes: &[usize],
         streams: &[CudaStream],
     ) {
         for i in 0..self.device_manager.device_count() {
-            let num_elements = (db_sizes[i] * self.query_length / ROTATIONS).div_ceil(64);
+            let num_elements = (self.query_length * self.query_length / ROTATIONS).div_ceil(64);
             let threads_per_block = 256;
             let blocks_per_grid = num_elements.div_ceil(threads_per_block);
             let cfg = LaunchConfig {
@@ -184,7 +184,8 @@ impl DistanceComparator {
                             &matches_bitmap_left[i],
                             &matches_bitmap_right[i],
                             &final_results[i],
-                            db_sizes[i] as u64,
+                            (self.query_length / ROTATIONS) as u64,
+                            self.query_length as u64,
                             num_elements as u64,
                         ),
                     )
