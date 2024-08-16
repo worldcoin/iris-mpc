@@ -90,7 +90,9 @@ async fn main() -> eyre::Result<()> {
 
     let n_repeat = n_repeat.unwrap_or(0);
 
-    let region_provider = Region::new(REGION);
+    // THIS IS REQUIRED TO USE THE SQS FROM SECONDARY REGION, URL DOES NOT SUFFICE
+    let region_provider = Region::new("eu-central-1");
+
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let client = Client::new(&shared_config);
 
