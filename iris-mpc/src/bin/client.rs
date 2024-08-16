@@ -106,12 +106,12 @@ async fn main() -> eyre::Result<()> {
                 println!("Received result: {:?}", result);
 
                 let tmp = thread_expected_results.lock().await;
-                let expected_result = tmp.get(&result.request_id);
+                let expected_result = tmp.get(&result.signup_id);
                 if expected_result.is_none() {
                     eprintln!(
                         "No expected result found for request_id: {}, the SQS message is likely \
                          stale, clear the queue",
-                        result.request_id
+                        result.signup_id
                     );
                     continue;
                 }
@@ -123,18 +123,21 @@ async fn main() -> eyre::Result<()> {
                     let request = thread_requests
                         .lock()
                         .await
-                        .get(&result.request_id)
+                        .get(&result.signup_id)
                         .unwrap()
                         .clone();
                     thread_responses
                         .lock()
                         .await
-                        .insert(result.db_index, request);
+                        .insert(result.serial_id, request);
                 } else {
                     // Existing entry
-                    println!("Expected: {:?} Got: {:?}", expected_result, result.db_index);
+                    println!(
+                        "Expected: {:?} Got: {:?}",
+                        expected_result, result.serial_id
+                    );
                     assert!(result.is_match);
-                    assert_eq!(result.db_index, expected_result.unwrap());
+                    assert_eq!(result.serial_id, expected_result.unwrap());
                 }
 
                 sqs_client

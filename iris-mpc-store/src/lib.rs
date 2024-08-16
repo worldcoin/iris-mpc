@@ -391,8 +391,13 @@ mod tests {
         };
         let codes_and_masks = vec![iris; count];
 
-        let result_event =
-            serde_json::to_string(&ResultEvent::new(0, 1_000_000_000, false, "A".repeat(64)))?;
+        let result_event = serde_json::to_string(&ResultEvent::new(
+            0,
+            1_000_000_000,
+            false,
+            "A".repeat(64),
+            Vec::new(),
+        ))?;
         let result_events = vec![result_event; count];
 
         let mut tx = store.tx().await?;
