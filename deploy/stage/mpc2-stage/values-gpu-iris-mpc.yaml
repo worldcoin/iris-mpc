@@ -62,8 +62,8 @@ env:
   - name: SMPC__PARTY_ID
     value: "1"
 
-  - name: SMPC__PUBLIC_KEY_BUCKET_NAME
-    value: "wf-smpcv2-stage-public-keys"
+  - name: SMPC__PUBLIC_KEY_BASE_URL
+    value: "https://d24uxaabh702ht.cloudfront.net"
 
   - name: SMPC__ENABLE_PROCESSING_ENCRYPTED_SHARES
     value: "false"

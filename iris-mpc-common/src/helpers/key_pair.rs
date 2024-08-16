@@ -81,8 +81,8 @@ impl SharesEncryptionKeyPair {
         let shared_config = aws_config::from_env().region(region_provider).load().await;
         let client = SecretsManagerClient::new(&shared_config);
 
-        let pk_b64_string = match download_public_key_from_s3(
-            config.public_key_bucket_name,
+        let pk_b64_string = match download_public_key(
+            config.public_key_base_url,
             config.party_id.to_string(),
         )
         .await
@@ -163,23 +163,27 @@ pub async fn download_private_key_from_asm(
     }
 }
 
-pub async fn download_public_key_from_s3(
-    bucket_name: String,
+pub async fn download_public_key(
+    base_url: String,
     node_id: String,
 ) -> Result<String, SharesDecodingError> {
     let client = reqwest::Client::new();
-    // TODO: remove coupling to S3
-    let url: String = format!(
-        "https://{}.s3.amazonaws.com/public-key-{}",
-        bucket_name, node_id
-    );
-    let response = client.get(url).send().await;
+    let url: String = format!("{}/public-key-{}", base_url, node_id);
+    let response = client.get(url.clone()).send().await;
     match response {
         Ok(response) => {
-            let body = response.text().await;
-            match body {
-                Ok(body) => Ok(body),
-                Err(e) => Err(SharesDecodingError::RequestError(e)),
+            if response.status().is_success() {
+                let body = response.text().await;
+                match body {
+                    Ok(body) => Ok(body),
+                    Err(e) => Err(SharesDecodingError::RequestError(e)),
+                }
+            } else {
+                Err(SharesDecodingError::ResponseContent {
+                    status: response.status(),
+                    message: response.text().await.unwrap_or_default(),
+                    url,
+                })
             }
         }
         Err(e) => Err(SharesDecodingError::RequestError(e)),

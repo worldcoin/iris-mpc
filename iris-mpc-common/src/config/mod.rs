@@ -47,7 +47,7 @@ pub struct Config {
     pub processing_timeout_secs: u64,
 
     #[serde(default)]
-    pub public_key_bucket_name: String,
+    pub public_key_base_url: String,
 
     #[serde(default)]
     pub enable_processing_encrypted_shares: bool,
