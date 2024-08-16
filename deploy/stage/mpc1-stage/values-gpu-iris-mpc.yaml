@@ -61,3 +61,6 @@ env:
 
   - name: SMPC__PARTY_ID
     value: "0"
+
+  - name: SMPC__PUBLIC_KEY_BUCKET_NAME
+    value: "wf-smpcv2-stage-public-keys"
