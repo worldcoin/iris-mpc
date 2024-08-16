@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/gpu-iris-mpc:debug-pop-1768"
+image: "ghcr.io/worldcoin/gpu-iris-mpc:debug-pop-1768-v2"
 
 environment: stage
 replicaCount: 1
