@@ -100,10 +100,6 @@ pub struct ServerActor {
 
 const NON_MATCH_ID: u32 = u32::MAX;
 
-const RESULTS_INIT_HOST: [u32; MAX_BATCH_SIZE * ROTATIONS] =
-    [NON_MATCH_ID; MAX_BATCH_SIZE * ROTATIONS];
-const FINAL_RESULTS_INIT_HOST: [u32; MAX_BATCH_SIZE] = [NON_MATCH_ID; MAX_BATCH_SIZE];
-
 impl ServerActor {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -491,7 +487,7 @@ impl ServerActor {
 
         // Merge results and fetch matching indices
         // Format: host_results[device_index][query_index]
-        self.distance_comparator.merge_db_results(
+        self.distance_comparator.join_db_matches(
             &self.db_match_list_left,
             &self.db_match_list_right,
             &self.final_results,
@@ -499,7 +495,7 @@ impl ServerActor {
             &self.streams[0],
         );
 
-        self.distance_comparator.merge_batch_results(
+        self.distance_comparator.join_batch_matches(
             &self.batch_match_list_left,
             &self.batch_match_list_right,
             &self.final_results,
@@ -524,8 +520,6 @@ impl ServerActor {
         let mut host_results = self
             .distance_comparator
             .fetch_final_results(&self.final_results);
-
-        println!("host_results: {:?}", host_results[0]);
 
         // Truncate the results to the batch size
         host_results.iter_mut().for_each(|x| x.truncate(batch_size));
@@ -664,7 +658,7 @@ impl ServerActor {
             &self.batch_match_list_left,
             &self.batch_match_list_right,
         ] {
-            reset_results_bitmap(self.device_manager.devices(), dst, &self.streams[0]);
+            reset_slice(self.device_manager.devices(), dst, 0, &self.streams[0]);
         }
 
         // ---- END RESULT PROCESSING ----
@@ -984,44 +978,10 @@ impl ServerActor {
         self.device_manager.await_streams(&self.streams[1]);
         tracing::debug!(party_id = self.party_id, "db search finished");
 
-        // ---- START RESULT PROCESSING ----
-
-        self.device_manager.await_streams(&self.streams[0]);
-
-        // Fetch the final results (blocking)
-        // let mut host_results = self
-        //     .distance_comparator
-        //     .fetch_final_results(&self.final_results);
-
-        // // Truncate the results to the batch size
-        // host_results.iter_mut().for_each(|x| x.truncate(batch_size));
-
-        // // Evaluate the results across devices
-        // // Format: merged_results[query_index]
-        // let merged_results = get_merged_results(&host_results,
-        // self.device_manager.device_count());
-
         // Reset the results buffers for reuse
-        reset_results(
-            self.device_manager.devices(),
-            &self.results,
-            &RESULTS_INIT_HOST,
-            &self.streams[0],
-        );
-        reset_results(
-            self.device_manager.devices(),
-            &self.batch_results,
-            &RESULTS_INIT_HOST,
-            &self.streams[0],
-        );
-        reset_results(
-            self.device_manager.devices(),
-            &self.final_results,
-            &FINAL_RESULTS_INIT_HOST,
-            &self.streams[0],
-        );
-
-        // Ok(merged_results)
+        for dst in &[&self.results, &self.batch_results, &self.final_results] {
+            reset_slice(self.device_manager.devices(), dst, 0xff, &self.streams[0]);
+        }
     }
 }
 
@@ -1129,7 +1089,7 @@ fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
         results.push(match_entry);
 
         // DEBUG
-        println!(
+        tracing::debug!(
             "Query {}: match={} [index: {}]",
             j,
             match_entry != NON_MATCH_ID,
@@ -1154,25 +1114,18 @@ fn distribute_insertions(results: &[usize], db_sizes: &[usize]) -> Vec<Vec<usize
     ret
 }
 
-fn reset_results(
+fn reset_slice<T>(
     devs: &[Arc<CudaDevice>],
-    dst: &[CudaSlice<u32>],
-    src: &[u32],
+    dst: &[CudaSlice<T>],
+    value: u8,
     streams: &[CudaStream],
 ) {
-    for i in 0..devs.len() {
-        devs[i].bind_to_thread().unwrap();
-        unsafe { result::memcpy_htod_async(*dst[i].device_ptr(), src, streams[i].stream) }.unwrap();
-    }
-}
-
-fn reset_results_bitmap(devs: &[Arc<CudaDevice>], dst: &[CudaSlice<u64>], streams: &[CudaStream]) {
     for i in 0..devs.len() {
         devs[i].bind_to_thread().unwrap();
         unsafe {
             result::memset_d8_async(
                 *dst[i].device_ptr(),
-                0,
+                value,
                 dst[i].num_bytes(),
                 streams[i].stream,
             )
