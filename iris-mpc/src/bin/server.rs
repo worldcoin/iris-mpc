@@ -503,7 +503,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             merged_results,
             request_ids,
             matches,
-            match_ids, // TODO: use this in result event
+            match_ids,
             store_left,
             store_right,
         }) = rx.recv().await
