@@ -43,6 +43,8 @@ pub struct ServerJobResult {
     pub merged_results: Vec<u32>,
     pub request_ids:    Vec<String>,
     pub matches:        Vec<bool>,
+    pub match_counters: Vec<usize>,
+    pub match_ids:      Vec<Vec<u32>>,
     pub store_left:     BatchQueryEntries,
     pub store_right:    BatchQueryEntries,
 }

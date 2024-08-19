@@ -3,6 +3,7 @@
 #define ALL_ROTATIONS (2 * ROTATIONS + 1)
 #define IRIS_CODE_LENGTH 12800
 #define U8 unsigned char
+#define MAX_MATCHES_LEN 256
 
 extern "C" __global__ void xor_assign_u8(U8 *lhs, U8 *rhs, int n)
 {
@@ -50,7 +51,7 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
     }
 }
 
-extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements)
+extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *matchCounter, unsigned int *allMatches)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
@@ -68,12 +69,17 @@ extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, 
 
             // Current *AND* policy: only match, if both eyes match
             if (matchLeft && matchRight)
+            {
                 atomicMin(&finalResults[queryIdx], dbIdx);
+                unsigned int queryMatchCounter = atomicAdd(&matchCounter[queryIdx], 1);
+                if (queryMatchCounter < MAX_MATCHES_LEN)
+                    allMatches[MAX_MATCHES_LEN * queryIdx + queryMatchCounter] = dbIdx;
+            }
         }
     }
 }
 
-extern "C" __global__ void mergeBatchResults(unsigned long long *matchResultsSelfLeft, unsigned long long *matchResultsSelfRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements)
+extern "C" __global__ void mergeBatchResults(unsigned long long *matchResultsSelfLeft, unsigned long long *matchResultsSelfRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *__matchCounter, unsigned int *__allMatches)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)

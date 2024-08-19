@@ -495,6 +495,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             merged_results,
             request_ids,
             matches,
+            match_counters: _, // TODO: use this in result event
+            match_ids: _,      // TODO: use this in result event
             store_left,
             store_right,
         }) = rx.recv().await
