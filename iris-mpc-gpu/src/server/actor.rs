@@ -161,6 +161,11 @@ impl ServerActor {
         db_size: usize,
         db_buffer: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
+        println!("db_size: {}", db_size);
+        println!("left_eye_db.0.len(): {}", left_eye_db.0.len());
+        println!("left_eye_db.1.len(): {}", left_eye_db.1.len());
+        println!("right_eye_db.0.len(): {}", right_eye_db.0.len());
+        println!("right_eye_db.1.len(): {}", right_eye_db.1.len());
         assert!(
             [
                 left_eye_db.0.len(),
