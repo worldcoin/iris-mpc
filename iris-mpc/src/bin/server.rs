@@ -498,8 +498,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             merged_results,
             request_ids,
             matches,
-            match_counters: _, // TODO: use this in result event
-            match_ids: _,      // TODO: use this in result event
+            match_ids, // TODO: use this in result event
             store_left,
             store_right,
         }) = rx.recv().await
@@ -508,15 +507,18 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .iter()
                 .enumerate()
                 .map(|(i, &idx_result)| {
-                    // TODO: return the actual serial ids. Skipped for now in order not to create
-                    // big conflicts with in progress PRs.
-                    let dummy_matched_serial_ids = Some(vec![]);
                     let result_event = ResultEvent::new(
                         party_id,
-                        Option::from(idx_result),
+                        match matches[i] {
+                            true => None,
+                            false => Some(idx_result),
+                        },
                         matches[i],
                         request_ids[i].clone(),
-                        dummy_matched_serial_ids,
+                        match matches[i] {
+                            true => Some(match_ids[i].clone()),
+                            false => None,
+                        },
                     );
 
                     serde_json::to_string(&result_event).wrap_err("failed to serialize result")

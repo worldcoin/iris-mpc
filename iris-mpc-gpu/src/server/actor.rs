@@ -680,7 +680,6 @@ impl ServerActor {
                 merged_results,
                 request_ids: batch.request_ids,
                 matches,
-                match_counters,
                 match_ids,
                 store_left: query_store_left,
                 store_right: query_store_right,
