@@ -333,7 +333,7 @@ async fn initialize_iris_dbs(
     Ok((
         (left_codes_db, left_masks_db),
         (right_codes_db, right_masks_db),
-        count_irises,
+        fake_len + count_irises, // TODO: remove fake_len if you removed fake data
     ))
 }
 
