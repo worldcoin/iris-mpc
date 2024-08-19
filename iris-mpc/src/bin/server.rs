@@ -508,10 +508,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .map(|(i, &idx_result)| {
                     // TODO: return the actual serial ids. Skipped for now in order not to create
                     // big conflicts with in progress PRs.
-                    let dummy_matched_serial_ids = vec![];
+                    let dummy_matched_serial_ids = Some(vec![]);
                     let result_event = ResultEvent::new(
                         party_id,
-                        idx_result,
+                        Option::from(idx_result),
                         matches[i],
                         request_ids[i].clone(),
                         dummy_matched_serial_ids,

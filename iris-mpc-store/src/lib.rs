@@ -393,10 +393,10 @@ mod tests {
 
         let result_event = serde_json::to_string(&ResultEvent::new(
             0,
-            1_000_000_000,
+            Some(1_000_000_000),
             false,
             "A".repeat(64),
-            Vec::new(),
+            Some(Vec::new()),
         ))?;
         let result_events = vec![result_event; count];
 

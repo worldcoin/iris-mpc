@@ -129,7 +129,7 @@ async fn main() -> eyre::Result<()> {
                     thread_responses
                         .lock()
                         .await
-                        .insert(result.serial_id, request);
+                        .insert(result.serial_id.unwrap(), request);
                 } else {
                     // Existing entry
                     println!(
@@ -137,7 +137,7 @@ async fn main() -> eyre::Result<()> {
                         expected_result, result.serial_id
                     );
                     assert!(result.is_match);
-                    assert_eq!(result.serial_id, expected_result.unwrap());
+                    assert_eq!(result.serial_id.unwrap(), expected_result.unwrap());
                 }
 
                 sqs_client
