@@ -347,7 +347,7 @@ async fn send_result_events(
             .publish()
             .topic_arn(&config.results_topic_arn)
             .message(result_event)
-            .message_group_id(format!("party-id-{}", config.party_id))
+            // .message_group_id(format!("party-id-{}", config.party_id))
             .send()
             .await?;
     }
@@ -433,6 +433,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 return Ok(());
             }
         };
+
+        tracing::error!(
+            "rolling back, db_len={}, left_iris_db.0.len()={}, store_len={}",
+            store_len,
+            left_iris_db.0.len(),
+            store_len,
+        );
 
         if let Some(db_len) = sync_result.must_rollback_storage() {
             // Rollback the data that we have already loaded.
