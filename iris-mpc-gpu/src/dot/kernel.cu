@@ -66,7 +66,7 @@ extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, 
             if (queryIdx >= queryLength || dbIdx >= dbLength)
                 continue;
 
-            // Current *AND* policy: only match, if both eyes match
+            // Current *AND* policy: only match if both eyes match
             if (matchLeft && matchRight)
                 atomicMin(&finalResults[queryIdx], dbIdx);
         }
@@ -98,10 +98,9 @@ extern "C" __global__ void mergeBatchResults(unsigned long long *matchResultsSel
             bool matchLeft = (matchResultsSelfLeft[idx] & (1ULL << i));
             bool matchRight = (matchResultsSelfRight[idx] & (1ULL << i));
 
-            if (matchLeft || matchRight)
-            {
+            // Current *AND* policy: only match if both eyes match
+            if (matchLeft && matchRight)
                 atomicMin(&finalResults[queryIdx], UINT_MAX - 1);
-            }
         }
     }
 }
