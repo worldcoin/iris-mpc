@@ -396,7 +396,7 @@ mod tests {
             Some(1_000_000_000),
             false,
             "A".repeat(64),
-            Some(Vec::new()),
+            None,
         ))?;
         let result_events = vec![result_event; count];
 
