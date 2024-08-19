@@ -571,6 +571,19 @@ impl ServerActor {
             .distance_comparator
             .fetch_all_match_ids(match_counters_devices);
 
+        // Check if there are more matches than we fetch
+        // TODO: In the future we might want to dynamically allocate more memory here
+        // and retry.
+        for i in 0..match_counters.len() {
+            if match_counters[i] > match_ids[i].len() {
+                tracing::error!(
+                    "Match counter exceeds match ids length: {} > {}",
+                    match_counters[i],
+                    match_ids[i].len()
+                );
+            }
+        }
+
         // Write back to in-memory db
         let previous_total_db_size = self.current_db_sizes.iter().sum::<usize>();
 
