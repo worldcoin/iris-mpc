@@ -435,6 +435,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         };
 
         if let Some(db_len) = sync_result.must_rollback_storage() {
+            tracing::warn!(
+                "Databases are out-of-sync, rolling back (current len: {}, new len: {})",
+                store_len,
+                db_len
+            );
             // Rollback the data that we have already loaded.
             let bit_len = db_len * IRIS_CODE_LENGTH;
             // TODO: remove the line below if you removed fake data.
@@ -454,7 +459,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             device_manager,
             comms,
             8,
-            DB_SIZE,
+            store_len + DB_SIZE, // TODO: remove DB_SIZE you removed fake data.
             DB_BUFFER,
         ) {
             Ok((actor, handle)) => {
