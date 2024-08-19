@@ -576,8 +576,8 @@ impl ServerActor {
         // and retry.
         for i in 0..match_counters.len() {
             if match_counters[i] > match_ids[i].len() {
-                tracing::error!(
-                    "Match counter exceeds match ids length: {} > {}",
+                tracing::warn!(
+                    "More matches than fetched (actual: {}, fetched: {}).",
                     match_counters[i],
                     match_ids[i].len()
                 );
