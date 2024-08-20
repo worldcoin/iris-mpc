@@ -158,7 +158,7 @@ async fn receive_batch(
                 ) = spawn_blocking(move || {
                     let mut iris_share = match GaloisRingIrisCodeShare::from_base64(
                         party_id + 1,
-                        iris_message_share.right_iris_code.as_ref(),
+                        iris_message_share.right_iris_code_shares.as_ref(),
                     ) {
                         Ok(iris_share) => iris_share,
                         Err(e) => {
@@ -168,7 +168,7 @@ async fn receive_batch(
                     };
                     let mut mask_share = match GaloisRingIrisCodeShare::from_base64(
                         party_id + 1,
-                        iris_message_share.right_iris_mask.as_ref(),
+                        iris_message_share.right_iris_mask_shares.as_ref(),
                     ) {
                         Ok(iris_share) => iris_share,
                         Err(e) => {

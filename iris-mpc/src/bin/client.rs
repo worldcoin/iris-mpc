@@ -265,11 +265,11 @@ async fn main() -> eyre::Result<()> {
                 general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_mask[i].coefs));
 
             let iris_codes_json = IrisCodesJSON {
-                iris_version:    "1.0".to_string(),
-                right_iris_code: iris_code_coefs_base64,
-                right_iris_mask: mask_code_coefs_base64,
-                left_iris_code:  "nan".to_string(),
-                left_iris_mask:  "nan".to_string(),
+                iris_version:           "1.0".to_string(),
+                right_iris_code_shares: iris_code_coefs_base64,
+                right_iris_mask_shares: mask_code_coefs_base64,
+                left_iris_code_shares:  "nan".to_string(),
+                left_iris_mask_shares:  "nan".to_string(),
             };
             let serialized_iris_codes_json = to_string(&iris_codes_json)
                 .expect("Serialization failed")
