@@ -1,8 +1,6 @@
 use crate::helpers::key_pair::SharesDecodingError;
 use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_s3::{
-    error,
-    error::SdkError,
     presigning::PresigningConfig,
     primitives::{ByteStream, SdkBody},
     Client,
