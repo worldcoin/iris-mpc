@@ -10,11 +10,11 @@ use std::time::Duration;
 pub async fn upload_file_and_generate_presigned_url(
     bucket: &str,
     key: &str,
-    region: &str,
+    region: &'static str,
     contents: &[u8],
 ) -> Result<String, SharesDecodingError> {
     // Load AWS configuration
-    let region_provider = RegionProviderChain::default_provider().or_else("us-east-1");
+    let region_provider = RegionProviderChain::default_provider().or_else(region);
     let config = aws_config::from_env().region(region_provider).load().await;
 
     // Create S3 client
