@@ -50,9 +50,6 @@ struct Opt {
 
     #[arg(long, env)]
     random: Option<bool>,
-
-    #[arg(long, env)]
-    encrypt_shares: Option<bool>,
 }
 
 #[tokio::main]
@@ -66,7 +63,6 @@ async fn main() -> eyre::Result<()> {
         rng_seed,
         n_repeat,
         random,
-        encrypt_shares,
     } = Opt::parse();
 
     let mut rng = if let Some(rng_seed) = rng_seed {
@@ -76,7 +72,6 @@ async fn main() -> eyre::Result<()> {
     };
 
     let mut shares_encryption_public_keys: Vec<PublicKey> = vec![];
-    let _ = encrypt_shares.is_some();
 
     for i in 0..3 {
         let public_key_string =

@@ -48,9 +48,6 @@ pub struct Config {
 
     #[serde(default)]
     pub public_key_base_url: String,
-
-    #[serde(default)]
-    pub enable_processing_encrypted_shares: bool,
 }
 
 fn default_processing_timeout_secs() -> u64 {

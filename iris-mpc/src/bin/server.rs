@@ -438,7 +438,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let party_id = config.party_id;
     tracing::info!("Deriving shared secrets");
     let chacha_seeds = initialize_chacha_seeds(&config.kms_key_arns, party_id).await?;
-    let _ = config.enable_processing_encrypted_shares;
 
     tracing::info!("Replaying results");
     send_result_events(
