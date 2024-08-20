@@ -7,7 +7,7 @@ use eyre::{Context, ContextCompat};
 use iris_mpc_common::{
     galois_engine::degree4::GaloisRingIrisCodeShare,
     helpers::{
-        key_pair::download_public_key_from_s3,
+        key_pair::download_public_key,
         smpc_request::{IrisCodesJSON, ResultEvent, SMPCRequest},
         sqs_s3_helper::upload_file_and_generate_presigned_url,
     },
@@ -22,7 +22,7 @@ use tokio::{spawn, sync::Mutex, time::sleep};
 use uuid::Uuid;
 
 const N_QUERIES: usize = 64 * 5;
-const REGION: &str = "eu-north-1";
+const RESULT_SQS_AWS_REGION: &str = "eu-central-1";
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
@@ -78,8 +78,7 @@ async fn main() -> eyre::Result<()> {
 
     for i in 0..3 {
         let public_key_string =
-            download_public_key_from_s3(PUBLIC_KEY_S3_BUCKET_NAME.to_string(), i.to_string())
-                .await?;
+            download_public_key(PUBLIC_KEY_S3_BUCKET_NAME.to_string(), i.to_string()).await?;
         let public_key_bytes = general_purpose::STANDARD
             .decode(public_key_string)
             .context("Failed to decode public key")?;
@@ -91,7 +90,7 @@ async fn main() -> eyre::Result<()> {
     let n_repeat = n_repeat.unwrap_or(0);
 
     // THIS IS REQUIRED TO USE THE SQS FROM SECONDARY REGION, URL DOES NOT SUFFICE
-    let region_provider = Region::new("eu-central-1");
+    let region_provider = Region::new(RESULT_SQS_AWS_REGION);
 
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let client = Client::new(&shared_config);

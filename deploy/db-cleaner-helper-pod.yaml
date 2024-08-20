@@ -23,8 +23,8 @@ spec:
       args: [ "-c", "while true; do ping localhost; sleep 60; done" ]
       resources:
         limits:
-          cpu: 16
-          memory: 32Gi
+          cpu: 1
+          memory: 1Gi
         requests:
-          cpu: 16
-          memory: 32Gi
+          cpu: 1
+          memory: 1Gi

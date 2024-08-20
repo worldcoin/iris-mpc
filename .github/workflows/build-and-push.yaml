@@ -1,6 +1,9 @@
 name: Build and push docker image
 
 on:
+  push:
+    branches:
+      - "POP-1768-retrieve-keys-from-remote-storage"
   release:
     types:
       - 'published'
