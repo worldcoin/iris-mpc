@@ -38,11 +38,11 @@ pub struct SharesS3Object {
 #[derive(PartialEq, Serialize, Deserialize, Debug)]
 pub struct IrisCodesJSON {
     #[serde(rename = "IRIS_version")]
-    pub iris_version:    String,
-    pub left_iris_code:  String, // these are base64 encoded strings
-    pub right_iris_code: String, // these are base64 encoded strings
-    pub left_iris_mask:  String, // these are base64 encoded strings
-    pub right_iris_mask: String, // these are base64 encoded strings
+    pub iris_version:           String,
+    pub left_iris_code_shares:  String, // these are base64 encoded strings
+    pub right_iris_code_shares: String, // these are base64 encoded strings
+    pub left_iris_mask_shares:  String, // these are base64 encoded strings
+    pub right_iris_mask_shares: String, // these are base64 encoded strings
 }
 
 impl SharesS3Object {
@@ -116,6 +116,7 @@ impl SMPCRequest {
                 let json_string = String::from_utf8(bytes)
                     .map_err(SharesDecodingError::DecodedShareParsingToUTF8Error)?;
 
+                println!("json_string: {:?}", json_string);
                 let iris_share: IrisCodesJSON =
                     serde_json::from_str(&json_string).map_err(SharesDecodingError::SerdeError)?;
                 iris_share
