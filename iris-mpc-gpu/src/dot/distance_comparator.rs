@@ -4,7 +4,7 @@ use cudarc::{
     driver::{CudaFunction, CudaSlice, CudaStream, CudaView, LaunchAsync, LaunchConfig},
     nvrtc::compile_ptx,
 };
-use std::sync::Arc;
+use std::{cmp::min, sync::Arc};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const OPEN_RESULTS_FUNCTION: &str = "openResults";
@@ -252,7 +252,7 @@ impl DistanceComparator {
             let mut offset = 0;
             for j in 0..match_counters[0].len() {
                 let len = match_counters[i][j] as usize;
-                let ids = results[i][offset..offset + len]
+                let ids = results[i][offset..offset + min(len, ALL_MATCHES_LEN)]
                     .iter()
                     .map(|idx| idx * n_devices as u32 + i as u32)
                     .collect::<Vec<_>>();
