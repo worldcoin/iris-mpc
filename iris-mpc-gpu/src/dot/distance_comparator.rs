@@ -10,6 +10,7 @@ const PTX_SRC: &str = include_str!("kernel.cu");
 const OPEN_RESULTS_FUNCTION: &str = "openResults";
 const MERGE_DB_RESULTS_FUNCTION: &str = "mergeDbResults";
 const MERGE_BATCH_RESULTS_FUNCTION: &str = "mergeBatchResults";
+const ALL_MATCHES_LEN: usize = 256;
 
 pub struct DistanceComparator {
     pub device_manager:          Arc<DeviceManager>,
@@ -21,6 +22,8 @@ pub struct DistanceComparator {
     pub final_results:           Vec<CudaSlice<u32>>,
     pub results_init_host:       Vec<u32>,
     pub final_results_init_host: Vec<u32>,
+    pub match_counters:          Vec<CudaSlice<u32>>,
+    pub all_matches:             Vec<CudaSlice<u32>>,
 }
 
 impl DistanceComparator {
@@ -31,6 +34,8 @@ impl DistanceComparator {
         let mut merge_batch_kernels = Vec::new();
         let mut opened_results = vec![];
         let mut final_results = vec![];
+        let mut match_counters: Vec<CudaSlice<u32>> = vec![];
+        let mut all_matches: Vec<CudaSlice<u32>> = vec![];
 
         let devices_count = device_manager.device_count();
 
@@ -54,6 +59,12 @@ impl DistanceComparator {
 
             opened_results.push(device.htod_copy(results_init_host.clone()).unwrap());
             final_results.push(device.htod_copy(final_results_init_host.clone()).unwrap());
+            match_counters.push(device.alloc_zeros(query_length / ROTATIONS).unwrap());
+            all_matches.push(
+                device
+                    .alloc_zeros(ALL_MATCHES_LEN * query_length / ROTATIONS)
+                    .unwrap(),
+            );
 
             open_kernels.push(open_results_function);
             merge_db_kernels.push(merge_db_results_function);
@@ -70,6 +81,8 @@ impl DistanceComparator {
             final_results,
             results_init_host,
             final_results_init_host,
+            match_counters,
+            all_matches,
         }
     }
 
@@ -187,6 +200,8 @@ impl DistanceComparator {
                             (self.query_length / ROTATIONS) as u64,
                             db_sizes[i] as u64,
                             num_elements as u64,
+                            &self.match_counters[i],
+                            &self.all_matches[i],
                         ),
                     )
                     .unwrap();
@@ -205,6 +220,48 @@ impl DistanceComparator {
             );
         }
         results
+    }
+
+    pub fn fetch_match_counters(&self) -> Vec<Vec<u32>> {
+        let mut results = vec![];
+        for i in 0..self.device_manager.device_count() {
+            results.push(
+                self.device_manager
+                    .device(i)
+                    .dtoh_sync_copy(&self.match_counters[i])
+                    .unwrap(),
+            );
+        }
+        results
+    }
+
+    pub fn fetch_all_match_ids(&self, match_counters: Vec<Vec<u32>>) -> Vec<Vec<u32>> {
+        let mut results = vec![];
+        for i in 0..self.device_manager.device_count() {
+            results.push(
+                self.device_manager
+                    .device(i)
+                    .dtoh_sync_copy(&self.all_matches[i])
+                    .unwrap(),
+            );
+        }
+
+        let mut matches_per_query = vec![vec![]; match_counters[0].len()];
+        let n_devices = self.device_manager.device_count();
+        for i in 0..self.device_manager.device_count() {
+            let mut offset = 0;
+            for j in 0..match_counters[0].len() {
+                let len = match_counters[i][j] as usize;
+                let ids = results[i][offset..offset + len]
+                    .iter()
+                    .map(|idx| idx * n_devices as u32 + i as u32)
+                    .collect::<Vec<_>>();
+                matches_per_query[j].extend_from_slice(&ids);
+                offset += ALL_MATCHES_LEN;
+            }
+        }
+
+        matches_per_query
     }
 
     pub fn prepare_results(&self) -> Vec<CudaSlice<u32>> {

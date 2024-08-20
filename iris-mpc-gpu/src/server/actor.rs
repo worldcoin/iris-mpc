@@ -547,6 +547,44 @@ impl ServerActor {
             &self.current_db_sizes,
         );
 
+        // Fetch and truncate the match counters
+        let match_counters_devices = self
+            .distance_comparator
+            .fetch_match_counters()
+            .into_iter()
+            .map(|x| x[..batch_size].to_vec())
+            .collect::<Vec<_>>();
+
+        // Aggregate across devices
+        let match_counters =
+            match_counters_devices
+                .iter()
+                .fold(vec![0usize; batch_size], |mut acc, counters| {
+                    for (i, &value) in counters.iter().enumerate() {
+                        acc[i] += value as usize;
+                    }
+                    acc
+                });
+
+        // Transfer all match ids
+        let match_ids = self
+            .distance_comparator
+            .fetch_all_match_ids(match_counters_devices);
+
+        // Check if there are more matches than we fetch
+        // TODO: In the future we might want to dynamically allocate more memory here
+        // and retry.
+        for i in 0..match_counters.len() {
+            if match_counters[i] > match_ids[i].len() {
+                tracing::warn!(
+                    "More matches than fetched (actual: {}, fetched: {}).",
+                    match_counters[i],
+                    match_ids[i].len()
+                );
+            }
+        }
+
+        // Write back to in-memory db
         let previous_total_db_size = self.current_db_sizes.iter().sum::<usize>();
 
         record_stream_time!(
@@ -642,6 +680,7 @@ impl ServerActor {
                 merged_results,
                 request_ids: batch.request_ids,
                 matches,
+                match_ids,
                 store_left: query_store_left,
                 store_right: query_store_right,
             })
@@ -660,6 +699,13 @@ impl ServerActor {
         ] {
             reset_slice(self.device_manager.devices(), dst, 0, &self.streams[0]);
         }
+
+        reset_slice(
+            self.device_manager.devices(),
+            &self.distance_comparator.match_counters,
+            0,
+            &self.streams[0],
+        );
 
         // ---- END RESULT PROCESSING ----
         log_timers(events);
