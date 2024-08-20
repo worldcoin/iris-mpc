@@ -1,16 +1,15 @@
 mod tests {
-    use base64::{Engine, engine::general_purpose::STANDARD};
+    use base64::{engine::general_purpose::STANDARD, Engine};
     use http::StatusCode;
+    use iris_mpc_common::helpers::{
+        key_pair::{SharesDecodingError, SharesEncryptionKeyPair},
+        smpc_request::{IrisCodesJSON, SMPCRequest},
+    };
     use serde_json::json;
     use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
     use wiremock::{
         matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
-    };
-
-    use iris_mpc_common::helpers::{
-        key_pair::{SharesDecodingError, SharesEncryptionKeyPair},
-        smpc_request::{IrisCodesJSON, SMPCRequest},
     };
 
     const PUBLIC_KEY: &str = "HDp962tQyZIG9t+GX4JM0i1wgJx/YGpHGsuDSD34KBA=";
@@ -21,14 +20,14 @@ mod tests {
             PUBLIC_KEY.to_string().clone(),
             PRIVATE_KEY.to_string().clone(),
         )
-            .unwrap()
+        .unwrap()
     }
 
     fn get_mock_request() -> SMPCRequest {
         SMPCRequest {
-            batch_size: None,
-            signup_id: "test_signup_id".to_string(),
-            s3_presigned_url: "https://example.com/package".to_string(),
+            batch_size:              None,
+            signup_id:               "test_signup_id".to_string(),
+            s3_presigned_url:        "https://example.com/package".to_string(),
             iris_shares_file_hashes: [
                 "hash_0".to_string(),
                 "hash_1".to_string(),
@@ -57,9 +56,9 @@ mod tests {
             .await;
 
         let smpc_request = SMPCRequest {
-            batch_size: None,
-            signup_id: "test_signup_id".to_string(),
-            s3_presigned_url: mock_server.uri().clone() + "/test_presign_url",
+            batch_size:              None,
+            signup_id:               "test_signup_id".to_string(),
+            s3_presigned_url:        mock_server.uri().clone() + "/test_presign_url",
             iris_shares_file_hashes: [
                 "hash_0".to_string(),
                 "hash_1".to_string(),
@@ -77,10 +76,10 @@ mod tests {
     async fn test_decrypt_iris_share_success() {
         // Mocked base64 encoded JSON string
         let iris_codes_json = IrisCodesJSON {
-            iris_version: "1.0".to_string(),
-            left_iris_code_shares: "left_code".to_string(),
+            iris_version:           "1.0".to_string(),
+            left_iris_code_shares:  "left_code".to_string(),
             right_iris_code_shares: "right_code".to_string(),
-            left_iris_mask_shares: "left_mask".to_string(),
+            left_iris_mask_shares:  "left_mask".to_string(),
             right_iris_mask_shares: "right_mask".to_string(),
         };
 
