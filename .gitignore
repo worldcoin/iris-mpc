@@ -4,4 +4,4 @@
 .idea/
 .env
 .envrc
-gpu-iris-mpc.iml
+*.iml

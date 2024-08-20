@@ -67,3 +67,6 @@ env:
 
   - name: SMPC__ENABLE_PROCESSING_ENCRYPTED_SHARES
     value: "false"
+
+  - name: SMPC__PUBLIC_KEY_BUCKET_NAME
+    value: "wf-smpcv2-stage-public-keys"

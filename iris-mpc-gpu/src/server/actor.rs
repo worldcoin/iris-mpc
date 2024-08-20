@@ -17,7 +17,7 @@ use cudarc::{
     driver::{
         result::{self, event::elapsed},
         sys::CUevent,
-        CudaDevice, CudaSlice, CudaStream, DevicePtr,
+        CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceSlice,
     },
     nccl::Comm,
 };
@@ -69,36 +69,36 @@ impl ServerActorHandle {
 const DB_CHUNK_SIZE: usize = 512;
 const QUERIES: usize = ROTATIONS * MAX_BATCH_SIZE;
 pub struct ServerActor {
-    job_queue:            mpsc::Receiver<ServerJob>,
-    device_manager:       Arc<DeviceManager>,
-    party_id:             usize,
+    job_queue:              mpsc::Receiver<ServerJob>,
+    device_manager:         Arc<DeviceManager>,
+    party_id:               usize,
     // engines
-    codes_engine:         ShareDB,
-    masks_engine:         ShareDB,
-    batch_codes_engine:   ShareDB,
-    batch_masks_engine:   ShareDB,
-    phase2:               Circuits,
-    phase2_batch:         Circuits,
-    distance_comparator:  DistanceComparator,
+    codes_engine:           ShareDB,
+    masks_engine:           ShareDB,
+    batch_codes_engine:     ShareDB,
+    batch_masks_engine:     ShareDB,
+    phase2:                 Circuits,
+    phase2_batch:           Circuits,
+    distance_comparator:    DistanceComparator,
     // DB slices
-    left_code_db_slices:  SlicedProcessedDatabase,
-    left_mask_db_slices:  SlicedProcessedDatabase,
-    right_code_db_slices: SlicedProcessedDatabase,
-    right_mask_db_slices: SlicedProcessedDatabase,
-    streams:              Vec<Vec<CudaStream>>,
-    cublas_handles:       Vec<Vec<CudaBlas>>,
-    results:              Vec<CudaSlice<u32>>,
-    batch_results:        Vec<CudaSlice<u32>>,
-    final_results:        Vec<CudaSlice<u32>>,
-    current_db_sizes:     Vec<usize>,
-    query_db_size:        Vec<usize>,
+    left_code_db_slices:    SlicedProcessedDatabase,
+    left_mask_db_slices:    SlicedProcessedDatabase,
+    right_code_db_slices:   SlicedProcessedDatabase,
+    right_mask_db_slices:   SlicedProcessedDatabase,
+    streams:                Vec<Vec<CudaStream>>,
+    cublas_handles:         Vec<Vec<CudaBlas>>,
+    results:                Vec<CudaSlice<u32>>,
+    batch_results:          Vec<CudaSlice<u32>>,
+    final_results:          Vec<CudaSlice<u32>>,
+    db_match_list_left:     Vec<CudaSlice<u64>>,
+    db_match_list_right:    Vec<CudaSlice<u64>>,
+    batch_match_list_left:  Vec<CudaSlice<u64>>,
+    batch_match_list_right: Vec<CudaSlice<u64>>,
+    current_db_sizes:       Vec<usize>,
+    query_db_size:          Vec<usize>,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
-
-const RESULTS_INIT_HOST: [u32; MAX_BATCH_SIZE * ROTATIONS] =
-    [NON_MATCH_ID; MAX_BATCH_SIZE * ROTATIONS];
-const FINAL_RESULTS_INIT_HOST: [u32; MAX_BATCH_SIZE] = [NON_MATCH_ID; MAX_BATCH_SIZE];
 
 impl ServerActor {
     #[allow(clippy::too_many_arguments)]
@@ -321,6 +321,13 @@ impl ServerActor {
         let results = distance_comparator.prepare_results();
         let batch_results = distance_comparator.prepare_results();
 
+        let db_match_list_left = distance_comparator
+            .prepare_db_match_list((db_size + db_buffer) / device_manager.device_count());
+        let db_match_list_right = distance_comparator
+            .prepare_db_match_list((db_size + db_buffer) / device_manager.device_count());
+        let batch_match_list_left = distance_comparator.prepare_db_match_list(QUERIES);
+        let batch_match_list_right = distance_comparator.prepare_db_match_list(QUERIES);
+
         let query_db_size = vec![QUERIES; device_manager.device_count()];
 
         for dev in device_manager.devices() {
@@ -349,6 +356,10 @@ impl ServerActor {
             final_results,
             current_db_sizes,
             query_db_size,
+            db_match_list_left,
+            db_match_list_right,
+            batch_match_list_left,
+            batch_match_list_right,
         })
     }
 
@@ -423,13 +434,12 @@ impl ServerActor {
             &self.cublas_handles[0],
         )?;
 
-        let merged_results_left = self.compare_query_against_db_and_self(
+        self.compare_query_against_db_and_self(
             &compact_device_queries_left,
             &compact_device_sums_left,
             &mut events,
-            batch_size,
             Eye::Left,
-        )?;
+        );
 
         ///////////////////////////////////////////////////////////////////
         // COMPARE RIGHT EYE QUERIES
@@ -466,31 +476,35 @@ impl ServerActor {
             &self.cublas_handles[0],
         )?;
 
-        let merged_results_right = self.compare_query_against_db_and_self(
+        self.compare_query_against_db_and_self(
             &compact_device_queries_right,
             &compact_device_sums_right,
             &mut events,
-            batch_size,
             Eye::Right,
-        )?;
+        );
 
         ///////////////////////////////////////////////////////////////////
         // MERGE LEFT & RIGHT results
         ///////////////////////////////////////////////////////////////////
-        let mut merged_results = merged_results_left
-            .into_iter()
-            .zip(merged_results_right)
-            .map(|(left, right)| {
-                // If both eyes are matches with the same ID, return the ID
-                // This also covers the case where both are non-matches, since we return
-                // NON_MATCH in that case as well
-                if left == right {
-                    left
-                } else {
-                    NON_MATCH_ID
-                }
-            })
-            .collect::<Vec<_>>();
+
+        // Merge results and fetch matching indices
+        // Format: host_results[device_index][query_index]
+        self.distance_comparator.join_db_matches(
+            &self.db_match_list_left,
+            &self.db_match_list_right,
+            &self.final_results,
+            &self.current_db_sizes,
+            &self.streams[0],
+        );
+
+        self.distance_comparator.join_batch_matches(
+            &self.batch_match_list_left,
+            &self.batch_match_list_right,
+            &self.final_results,
+            &self.streams[0],
+        );
+
+        self.device_manager.await_streams(&self.streams[0]);
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id
@@ -503,6 +517,20 @@ impl ServerActor {
                 "Protocol finished",
             );
         }
+
+        // Fetch the final results (blocking)
+        let mut host_results = self
+            .distance_comparator
+            .fetch_final_results(&self.final_results);
+
+        // Truncate the results to the batch size
+        host_results.iter_mut().for_each(|x| x.truncate(batch_size));
+
+        // Evaluate the results across devices
+        // Format: merged_results[query_index]
+        let mut merged_results =
+            get_merged_results(&host_results, self.device_manager.device_count());
+
         // List the indices of the queries that did not match.
         let insertion_list = merged_results
             .iter()
@@ -521,6 +549,44 @@ impl ServerActor {
             &self.current_db_sizes,
         );
 
+        // Fetch and truncate the match counters
+        let match_counters_devices = self
+            .distance_comparator
+            .fetch_match_counters()
+            .into_iter()
+            .map(|x| x[..batch_size].to_vec())
+            .collect::<Vec<_>>();
+
+        // Aggregate across devices
+        let match_counters =
+            match_counters_devices
+                .iter()
+                .fold(vec![0usize; batch_size], |mut acc, counters| {
+                    for (i, &value) in counters.iter().enumerate() {
+                        acc[i] += value as usize;
+                    }
+                    acc
+                });
+
+        // Transfer all match ids
+        let match_ids = self
+            .distance_comparator
+            .fetch_all_match_ids(match_counters_devices);
+
+        // Check if there are more matches than we fetch
+        // TODO: In the future we might want to dynamically allocate more memory here
+        // and retry.
+        for i in 0..match_counters.len() {
+            if match_counters[i] > match_ids[i].len() {
+                tracing::warn!(
+                    "More matches than fetched (actual: {}, fetched: {}).",
+                    match_counters[i],
+                    match_ids[i].len()
+                );
+            }
+        }
+
+        // Write back to in-memory db
         let previous_total_db_size = self.current_db_sizes.iter().sum::<usize>();
 
         record_stream_time!(
@@ -616,6 +682,7 @@ impl ServerActor {
                 merged_results,
                 request_ids: batch.request_ids,
                 matches,
+                match_ids,
                 store_left: query_store_left,
                 store_right: query_store_right,
             })
@@ -624,6 +691,23 @@ impl ServerActor {
         // Wait for all streams before get timings
         self.device_manager.await_streams(&self.streams[0]);
         self.device_manager.await_streams(&self.streams[1]);
+
+        // Reset the results buffers for reuse
+        for dst in &[
+            &self.db_match_list_left,
+            &self.db_match_list_right,
+            &self.batch_match_list_left,
+            &self.batch_match_list_right,
+        ] {
+            reset_slice(self.device_manager.devices(), dst, 0, &self.streams[0]);
+        }
+
+        reset_slice(
+            self.device_manager.devices(),
+            &self.distance_comparator.match_counters,
+            0,
+            &self.streams[0],
+        );
 
         // ---- END RESULT PROCESSING ----
         log_timers(events);
@@ -641,9 +725,8 @@ impl ServerActor {
         compact_device_queries: &DeviceCompactQuery,
         compact_device_sums: &DeviceCompactSums,
         events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
-        batch_size: usize,
         eye_db: Eye,
-    ) -> eyre::Result<Vec<u32>> {
+    ) {
         let batch_streams = &self.streams[0];
         let batch_cublas = &self.cublas_handles[0];
 
@@ -652,6 +735,12 @@ impl ServerActor {
             Eye::Left => (&self.left_code_db_slices, &self.left_mask_db_slices),
             Eye::Right => (&self.right_code_db_slices, &self.right_mask_db_slices),
         };
+
+        let (db_match_bitmap, batch_match_bitmap) = match eye_db {
+            Eye::Left => (&self.db_match_list_left, &self.batch_match_list_left),
+            Eye::Right => (&self.db_match_list_right, &self.batch_match_list_right),
+        };
+
         // Transfer queries to device
 
         // ---- START BATCH DEDUP ----
@@ -714,11 +803,12 @@ impl ServerActor {
             &mut self.phase2_batch,
             &res,
             &self.distance_comparator,
-            &self.batch_results,
+            batch_match_bitmap,
             chunk_size,
             &db_sizes_batch,
             &db_sizes_batch,
             0,
+            &db_sizes_batch,
             batch_streams,
         );
         self.phase2_batch.return_result_buffer(res);
@@ -884,11 +974,12 @@ impl ServerActor {
                     &mut self.phase2,
                     &res,
                     &self.distance_comparator,
-                    &self.results,
+                    db_match_bitmap,
                     max_chunk_size * QUERIES / 64,
                     &dot_chunk_size,
                     &chunk_size,
                     offset,
+                    &self.current_db_sizes,
                     request_streams,
                 );
                 self.phase2.return_result_buffer(res);
@@ -935,52 +1026,10 @@ impl ServerActor {
         self.device_manager.await_streams(&self.streams[1]);
         tracing::debug!(party_id = self.party_id, "db search finished");
 
-        // ---- START RESULT PROCESSING ----
-
-        // Merge results and fetch matching indices
-        // Format: host_results[device_index][query_index]
-        self.distance_comparator.merge_results(
-            &self.batch_results,
-            &self.results,
-            &self.final_results,
-            &self.streams[0],
-        );
-
-        self.device_manager.await_streams(&self.streams[0]);
-
-        // Fetch the final results (blocking)
-        let mut host_results = self
-            .distance_comparator
-            .fetch_final_results(&self.final_results);
-
-        // Truncate the results to the batch size
-        host_results.iter_mut().for_each(|x| x.truncate(batch_size));
-
-        // Evaluate the results across devices
-        // Format: merged_results[query_index]
-        let merged_results = get_merged_results(&host_results, self.device_manager.device_count());
-
         // Reset the results buffers for reuse
-        reset_results(
-            self.device_manager.devices(),
-            &self.results,
-            &RESULTS_INIT_HOST,
-            &self.streams[0],
-        );
-        reset_results(
-            self.device_manager.devices(),
-            &self.batch_results,
-            &RESULTS_INIT_HOST,
-            &self.streams[0],
-        );
-        reset_results(
-            self.device_manager.devices(),
-            &self.final_results,
-            &FINAL_RESULTS_INIT_HOST,
-            &self.streams[0],
-        );
-
-        Ok(merged_results)
+        for dst in &[&self.results, &self.batch_results, &self.final_results] {
+            reset_slice(self.device_manager.devices(), dst, 0xff, &self.streams[0]);
+        }
     }
 }
 
@@ -1029,11 +1078,12 @@ fn open(
     party: &mut Circuits,
     x: &[ChunkShare<u64>],
     distance_comparator: &DistanceComparator,
-    results_ptrs: &[CudaSlice<u32>],
+    matches_bitmap: &[CudaSlice<u64>],
     chunk_size: usize,
     db_sizes: &[usize],
     real_db_sizes: &[usize],
     offset: usize,
+    total_db_sizes: &[usize],
     streams: &[CudaStream],
 ) {
     let n_devices = x.len();
@@ -1064,10 +1114,11 @@ fn open(
         &a,
         &b,
         &c,
-        results_ptrs,
+        matches_bitmap,
         db_sizes,
         real_db_sizes,
         offset,
+        total_db_sizes,
         streams,
     );
 }
@@ -1111,15 +1162,23 @@ fn distribute_insertions(results: &[usize], db_sizes: &[usize]) -> Vec<Vec<usize
     ret
 }
 
-fn reset_results(
+fn reset_slice<T>(
     devs: &[Arc<CudaDevice>],
-    dst: &[CudaSlice<u32>],
-    src: &[u32],
+    dst: &[CudaSlice<T>],
+    value: u8,
     streams: &[CudaStream],
 ) {
     for i in 0..devs.len() {
         devs[i].bind_to_thread().unwrap();
-        unsafe { result::memcpy_htod_async(*dst[i].device_ptr(), src, streams[i].stream) }.unwrap();
+        unsafe {
+            result::memset_d8_async(
+                *dst[i].device_ptr(),
+                value,
+                dst[i].num_bytes(),
+                streams[i].stream,
+            )
+            .unwrap();
+        };
     }
 }
 
