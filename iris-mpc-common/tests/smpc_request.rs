@@ -76,11 +76,11 @@ mod tests {
     async fn test_decrypt_iris_share_success() {
         // Mocked base64 encoded JSON string
         let iris_codes_json = IrisCodesJSON {
-            iris_version:    "1.0".to_string(),
-            left_iris_code:  "left_code".to_string(),
-            right_iris_code: "right_code".to_string(),
-            left_iris_mask:  "left_mask".to_string(),
-            right_iris_mask: "right_mask".to_string(),
+            iris_version:           "1.0".to_string(),
+            left_iris_code_shares:  "left_code".to_string(),
+            right_iris_code_shares: "right_code".to_string(),
+            left_iris_mask_shares:  "left_mask".to_string(),
+            right_iris_mask_shares: "right_mask".to_string(),
         };
 
         let decoded_public_key = STANDARD.decode(PUBLIC_KEY.as_bytes()).unwrap();
