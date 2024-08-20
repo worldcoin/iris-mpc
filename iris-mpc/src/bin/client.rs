@@ -28,6 +28,7 @@ const DB_SIZE: usize = 8 * 1_000;
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 const PUBLIC_KEY_BASE_URL: &str = "https://d24uxaabh702ht.cloudfront.net";
 const SQS_REQUESTS_BUCKET_NAME: &str = "wf-mpc-stage-smpcv2-sns-requests";
+const SQS_REQUESTS_BUCKET_REGION: &str = "eu-north-1";
 
 #[derive(Debug, Parser)]
 struct Opt {
@@ -283,6 +284,7 @@ async fn main() -> eyre::Result<()> {
         let presigned_url = match upload_file_and_generate_presigned_url(
             SQS_REQUESTS_BUCKET_NAME,
             &request_id.to_string(),
+            SQS_REQUESTS_BUCKET_REGION,
             &contents,
         )
         .await

@@ -10,6 +10,7 @@ use std::time::Duration;
 pub async fn upload_file_and_generate_presigned_url(
     bucket: &str,
     key: &str,
+    region: &str,
     contents: &[u8],
 ) -> Result<String, SharesDecodingError> {
     // Load AWS configuration

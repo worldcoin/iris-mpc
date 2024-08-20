@@ -11,7 +11,7 @@ spec:
     kubernetes.io/arch: amd64
   containers:
     - name: smpcv2-signup-service-helper
-      image: ghcr.io/worldcoin/gpu-iris-mpc:deb25c2686c442a0b1e1650bcf162e142dea63be
+      image: ghcr.io/worldcoin/gpu-iris-mpc:fcdc688ee705a7bdf581b293b2e60c72222e6790
       securityContext:
         allowPrivilegeEscalation: false
         seccompProfile:
