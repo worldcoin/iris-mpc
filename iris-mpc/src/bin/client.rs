@@ -1,18 +1,9 @@
 #![allow(clippy::needless_range_loop)]
-use std::{collections::HashMap, sync::Arc, time::Duration};
-
-use aws_sdk_sns::{Client, config::Region};
+use aws_sdk_sns::{config::Region, Client};
 use aws_sdk_sqs::Client as SqsClient;
-use base64::{Engine, engine::general_purpose};
+use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use eyre::{Context, ContextCompat};
-use rand::{Rng, rngs::StdRng, SeedableRng, thread_rng};
-use serde_json::to_string;
-use sha2::{Digest, Sha256};
-use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
-use tokio::{spawn, sync::Mutex, time::sleep};
-use uuid::Uuid;
-
 use iris_mpc_common::{
     galois_engine::degree4::GaloisRingIrisCodeShare,
     helpers::{
@@ -22,6 +13,13 @@ use iris_mpc_common::{
     },
     iris_db::{db::IrisDB, iris::IrisCode},
 };
+use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
+use serde_json::to_string;
+use sha2::{Digest, Sha256};
+use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
+use std::{collections::HashMap, sync::Arc, time::Duration};
+use tokio::{spawn, sync::Mutex, time::sleep};
+use uuid::Uuid;
 
 const N_QUERIES: usize = 64 * 5;
 const RESULT_SQS_AWS_REGION: &str = "eu-central-1";
@@ -272,11 +270,11 @@ async fn main() -> eyre::Result<()> {
                 general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_mask[i].coefs));
 
             let iris_codes_json = IrisCodesJSON {
-                iris_version: "1.0".to_string(),
+                iris_version:    "1.0".to_string(),
                 right_iris_code: iris_code_coefs_base64,
                 right_iris_mask: mask_code_coefs_base64,
-                left_iris_code: "nan".to_string(),
-                left_iris_mask: "nan".to_string(),
+                left_iris_code:  "nan".to_string(),
+                left_iris_mask:  "nan".to_string(),
             };
             let serialized_iris_codes_json = to_string(&iris_codes_json)
                 .expect("Serialization failed")
@@ -305,7 +303,7 @@ async fn main() -> eyre::Result<()> {
             SQS_REQUESTS_BUCKET_REGION,
             &contents,
         )
-            .await
+        .await
         {
             Ok(url) => url,
             Err(e) => {
