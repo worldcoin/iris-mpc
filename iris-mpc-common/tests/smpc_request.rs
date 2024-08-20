@@ -130,7 +130,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(SharesDecodingError::DecodedShareParsingToUTF8Error)
+            Err(SharesDecodingError::DecodedShareParsingToUTF8Error(_))
         ));
     }
 
@@ -148,9 +148,6 @@ mod tests {
 
         let result = smpc_request.decrypt_iris_share(encoded_share, key_pair);
 
-        assert!(matches!(
-            result,
-            Err(SharesDecodingError::DecodedShareParsingToJSONError)
-        ));
+        assert!(matches!(result, Err(SharesDecodingError::SerdeError(_))));
     }
 }

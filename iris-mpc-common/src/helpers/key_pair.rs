@@ -9,6 +9,7 @@ use sodiumoxide::crypto::{
     box_::{PublicKey, SecretKey},
     sealedbox,
 };
+use std::string::FromUtf8Error;
 use thiserror::Error;
 use zeroize::Zeroize;
 
@@ -25,10 +26,8 @@ pub enum SharesDecodingError {
     RequestError(#[from] reqwest::Error),
     #[error("Decoding error: {0}")]
     DecodingError(#[from] base64::DecodeError),
-    #[error("Parsing struct from JSON error")]
-    DecodedShareParsingToJSONError,
     #[error("Parsing bytes to UTF8 error")]
-    DecodedShareParsingToUTF8Error,
+    DecodedShareParsingToUTF8Error(#[from] FromUtf8Error),
     #[error("Parsing key error")]
     ParsingKeyError,
     #[error("Sealed box open error")]
