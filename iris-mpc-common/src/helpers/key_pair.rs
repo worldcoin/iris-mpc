@@ -139,7 +139,7 @@ impl SharesEncryptionKeyPair {
     }
 }
 
-pub async fn download_private_key_from_asm(
+async fn download_private_key_from_asm(
     client: &SecretsManagerClient,
     env: &str,
     node_id: &str,

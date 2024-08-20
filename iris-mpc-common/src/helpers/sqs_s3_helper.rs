@@ -1,6 +1,8 @@
 use crate::helpers::key_pair::SharesDecodingError;
 use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_s3::{
+    error,
+    error::SdkError,
     presigning::PresigningConfig,
     primitives::{ByteStream, SdkBody},
     Client,
@@ -20,20 +22,28 @@ pub async fn upload_file_and_generate_presigned_url(
     // Create S3 client
     let client = Client::new(&config);
     let content_bytestream = ByteStream::new(SdkBody::from(contents));
+
     // Create a PutObject request
-    client
+    match client
         .put_object()
         .bucket(bucket)
         .key(key)
         .body(content_bytestream)
         .send()
         .await
-        .expect("Failed to upload file.");
+    {
+        Ok(_) => {
+            tracing::info!("File uploaded successfully.");
+        }
+        Err(e) => {
+            tracing::error!("Error: Failed to upload file: {:?}", e);
+        }
+    }
 
-    println!("File uploaded successfully.");
+    tracing::info!("File uploaded successfully.");
 
     // Create a presigned URL for the uploaded file
-    let presigning_config = match PresigningConfig::expires_in(Duration::from_secs(3600)) {
+    let presigning_config = match PresigningConfig::expires_in(Duration::from_secs(36000)) {
         Ok(config) => config,
         Err(e) => return Err(SharesDecodingError::PresigningConfigError(e)),
     };

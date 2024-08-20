@@ -26,18 +26,27 @@ const RESULT_SQS_AWS_REGION: &str = "eu-central-1";
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
-const PUBLIC_KEY_BASE_URL: &str = "https://d24uxaabh702ht.cloudfront.net";
+// const PUBLIC_KEY_BASE_URL: &str = "https://d24uxaabh702ht.cloudfront.net";
 const SQS_REQUESTS_BUCKET_NAME: &str = "wf-mpc-stage-smpcv2-sns-requests";
 const SQS_REQUESTS_BUCKET_REGION: &str = "eu-north-1";
 const SNS_TOPIC_REGION: &str = "eu-north-1";
 
 #[derive(Debug, Parser)]
 struct Opt {
-    #[arg(long, env)]
+    #[arg(long, env, required = true)]
     request_topic_arn: String,
 
-    #[arg(long, env)]
+    #[arg(long, env, required = true)]
     response_queue_url: String,
+
+    #[arg(long, env, required = true)]
+    requests_bucket_name: String,
+
+    #[arg(long, env, required = true)]
+    public_key_base_url: String,
+
+    #[arg(long, env, required = true)]
+    requests_bucket_region: String,
 
     #[arg(long, env)]
     db_index: Option<usize>,
@@ -57,6 +66,9 @@ async fn main() -> eyre::Result<()> {
     tracing_subscriber::fmt::init();
 
     let Opt {
+        public_key_base_url,
+        requests_bucket_name,
+        requests_bucket_region,
         request_topic_arn,
         response_queue_url,
         db_index,
@@ -75,7 +87,7 @@ async fn main() -> eyre::Result<()> {
 
     for i in 0..3 {
         let public_key_string =
-            download_public_key(PUBLIC_KEY_BASE_URL.to_string(), i.to_string()).await?;
+            download_public_key(public_key_base_url.to_string(), i.to_string()).await?;
         let public_key_bytes = general_purpose::STANDARD
             .decode(public_key_string)
             .context("Failed to decode public key")?;
@@ -86,12 +98,8 @@ async fn main() -> eyre::Result<()> {
 
     let n_repeat = n_repeat.unwrap_or(0);
 
-    // THIS IS REQUIRED TO USE THE SQS FROM SECONDARY REGION, URL DOES NOT SUFFICE
-    let region_provider = Region::new(RESULT_SQS_AWS_REGION);
-    let shared_config = aws_config::from_env().region(region_provider).load().await;
-
-    let sqs_config = aws_config::from_env().region(SNS_TOPIC_REGION).load().await;
-    let client = Client::new(&sqs_config);
+    let requests_sns_config = aws_config::from_env().region(SNS_TOPIC_REGION).load().await;
+    let requests_sns_client = Client::new(&requests_sns_config);
 
     let db = IrisDB::new_random_par(DB_SIZE, &mut StdRng::seed_from_u64(RNG_SEED_SERVER));
 
@@ -107,11 +115,15 @@ async fn main() -> eyre::Result<()> {
     let thread_responses = responses.clone();
 
     let recv_thread = spawn(async move {
-        let sqs_client = SqsClient::new(&shared_config);
+        // // THIS IS REQUIRED TO USE THE SQS FROM SECONDARY REGION, URL DOES NOT
+        // SUFFICE
+        let region_provider = Region::new(RESULT_SQS_AWS_REGION);
+        let results_sqs_config = aws_config::from_env().region(region_provider).load().await;
+        let results_qs_client = SqsClient::new(&results_sqs_config);
         let mut counter = 0;
         while counter < N_QUERIES * 3 {
             // Receive responses
-            let msg = sqs_client
+            let msg = results_qs_client
                 .receive_message()
                 .max_number_of_messages(1)
                 .queue_url(response_queue_url.clone())
@@ -135,7 +147,7 @@ async fn main() -> eyre::Result<()> {
                         result.signup_id
                     );
 
-                    sqs_client
+                    results_qs_client
                         .delete_message()
                         .queue_url(response_queue_url.clone())
                         .receipt_handle(msg.receipt_handle.unwrap())
@@ -170,7 +182,7 @@ async fn main() -> eyre::Result<()> {
                     assert_eq!(result.serial_id.unwrap(), expected_result.unwrap());
                 }
 
-                sqs_client
+                results_qs_client
                     .delete_message()
                     .queue_url(response_queue_url.clone())
                     .receipt_handle(msg.receipt_handle.unwrap())
@@ -315,7 +327,7 @@ async fn main() -> eyre::Result<()> {
         };
 
         // Send all messages in batch
-        client
+        requests_sns_client
             .publish()
             .topic_arn(request_topic_arn.clone())
             .message_group_id(ENROLLMENT_REQUEST_TYPE)

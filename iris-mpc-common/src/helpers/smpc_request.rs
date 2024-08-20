@@ -65,7 +65,7 @@ impl SMPCRequest {
         let response = match reqwest::get(self.s3_presigned_url.clone()).await {
             Ok(response) => response,
             Err(e) => {
-                eprintln!("Failed to send request: {}", e);
+                tracing::error!("Failed to send request: {}", e);
                 return Err(SharesDecodingError::RequestError(e));
             }
         };
@@ -76,7 +76,7 @@ impl SMPCRequest {
             let shares_file: SharesS3Object = match response.json().await {
                 Ok(file) => file,
                 Err(e) => {
-                    eprintln!("Failed to parse JSON: {}", e);
+                    tracing::error!("Failed to parse JSON: {}", e);
                     return Err(SharesDecodingError::RequestError(e));
                 }
             };
@@ -87,11 +87,11 @@ impl SMPCRequest {
             if let Some(value) = shares_file.get(party_id) {
                 Ok(value.to_string())
             } else {
-                eprintln!("Failed to find field: {}", field_name);
+                tracing::error!("Failed to find field: {}", field_name);
                 Err(SharesDecodingError::SecretStringNotFound)
             }
         } else {
-            eprintln!("Failed to download file: {}", response.status());
+            tracing::error!("Failed to download file: {}", response.status());
             Err(SharesDecodingError::ResponseContent {
                 status:  response.status(),
                 url:     self.s3_presigned_url.clone(),
@@ -116,7 +116,7 @@ impl SMPCRequest {
                 let json_string = String::from_utf8(bytes)
                     .map_err(SharesDecodingError::DecodedShareParsingToUTF8Error)?;
 
-                println!("shares_json_string: {:?}", json_string);
+                tracing::info!("shares_json_string: {:?}", json_string);
                 let iris_share: IrisCodesJSON =
                     serde_json::from_str(&json_string).map_err(SharesDecodingError::SerdeError)?;
                 iris_share
