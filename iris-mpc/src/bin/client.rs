@@ -26,7 +26,7 @@ const RESULT_SQS_AWS_REGION: &str = "eu-central-1";
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
-const PUBLIC_KEY_S3_BUCKET_NAME: &str = "wf-smpcv2-stage-public-keys";
+const PUBLIC_KEY_BASE_URL: &str = "https://d24uxaabh702ht.cloudfront.net";
 const SQS_REQUESTS_BUCKET_NAME: &str = "wf-mpc-stage-smpcv2-sns-requests";
 
 #[derive(Debug, Parser)]
@@ -78,7 +78,7 @@ async fn main() -> eyre::Result<()> {
 
     for i in 0..3 {
         let public_key_string =
-            download_public_key(PUBLIC_KEY_S3_BUCKET_NAME.to_string(), i.to_string()).await?;
+            download_public_key(PUBLIC_KEY_BASE_URL.to_string(), i.to_string()).await?;
         let public_key_bytes = general_purpose::STANDARD
             .decode(public_key_string)
             .context("Failed to decode public key")?;
