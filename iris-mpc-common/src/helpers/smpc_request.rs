@@ -134,19 +134,27 @@ impl SMPCRequest {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ResultEvent {
-    pub node_id:    usize,
-    pub db_index:   u32,
-    pub is_match:   bool,
-    pub request_id: String,
+    pub node_id:            usize,
+    pub serial_id:          Option<u32>,
+    pub is_match:           bool,
+    pub signup_id:          String,
+    pub matched_serial_ids: Option<Vec<u32>>,
 }
 
 impl ResultEvent {
-    pub fn new(node_id: usize, db_index: u32, is_match: bool, request_id: String) -> Self {
+    pub fn new(
+        node_id: usize,
+        serial_id: Option<u32>,
+        is_match: bool,
+        signup_id: String,
+        matched_serial_ids: Option<Vec<u32>>,
+    ) -> Self {
         Self {
             node_id,
-            db_index,
+            serial_id,
             is_match,
-            request_id,
+            signup_id,
+            matched_serial_ids,
         }
     }
 }

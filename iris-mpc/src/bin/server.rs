@@ -656,8 +656,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             &sqs_client,
             &config.requests_queue_url,
             &store,
-            skip_request_ids,
-            shares_encryption_key_pair,
+            &skip_request_ids,
+            shares_encryption_key_pair.clone(),
         );
         loop {
             let now = Instant::now();
@@ -688,6 +688,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 &config.requests_queue_url,
                 &store,
                 &skip_request_ids,
+                shares_encryption_key_pair.clone(),
             );
 
             // await the result
@@ -698,9 +699,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             tx.send(result).await?;
 
             // wrap up span context
-            }
         }
-        .await;
+    }
+    .await;
 
     match res {
         Ok(_) => {}
