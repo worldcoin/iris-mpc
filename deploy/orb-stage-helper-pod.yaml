@@ -11,21 +11,19 @@ spec:
     kubernetes.io/arch: amd64
   containers:
     - name: smpcv2-signup-service-helper
-      image: ghcr.io/worldcoin/gpu-iris-mpc:3b21c20235536b392aef3119ddfc5014daf3d66c
+      image: ghcr.io/worldcoin/gpu-iris-mpc-debug:0510757a9d076c206d9a42eedca639787c44a0a8
       securityContext:
+        runAsUser: 0
         allowPrivilegeEscalation: false
         seccompProfile:
           type: RuntimeDefault  # or Localhost if you have a local profile
-        capabilities:
-          drop:
-            - ALL
       imagePullPolicy: Always
       command: [ "/bin/bash" ]
       args: [ "-c", "while true; do ping localhost; sleep 60; done" ]
       resources:
         limits:
-          cpu: 1
-          memory: 1Gi
+          cpu: 4
+          memory: 4Gi
         requests:
-          cpu: 1
-          memory: 1Gi
+          cpu: 4
+          memory: 4Gi

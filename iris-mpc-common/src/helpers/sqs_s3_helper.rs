@@ -14,7 +14,7 @@ pub async fn upload_file_and_generate_presigned_url(
     contents: &[u8],
 ) -> Result<String, SharesDecodingError> {
     // Load AWS configuration
-    let region_provider = RegionProviderChain::default_provider().or_else(region);
+    let region_provider = RegionProviderChain::first_try(region).or_default_provider();
     let config = aws_config::from_env().region(region_provider).load().await;
 
     // Create S3 client

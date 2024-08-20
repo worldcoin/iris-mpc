@@ -29,28 +29,29 @@ const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 const PUBLIC_KEY_BASE_URL: &str = "https://d24uxaabh702ht.cloudfront.net";
 const SQS_REQUESTS_BUCKET_NAME: &str = "wf-mpc-stage-smpcv2-sns-requests";
 const SQS_REQUESTS_BUCKET_REGION: &str = "eu-north-1";
+const SNS_TOPIC_REGION: &str = "eu-north-1";
 
 #[derive(Debug, Parser)]
 struct Opt {
-    #[arg(short, long, env)]
+    #[arg(long, env)]
     request_topic_arn: String,
 
-    #[arg(short, long, env)]
+    #[arg(long, env)]
     response_queue_url: String,
 
-    #[arg(short, long, env)]
+    #[arg(long, env)]
     db_index: Option<usize>,
 
-    #[arg(short, long, env)]
+    #[arg(long, env)]
     rng_seed: Option<u64>,
 
-    #[arg(short, long, env)]
+    #[arg(long, env)]
     n_repeat: Option<usize>,
 
-    #[arg(short, long, env)]
+    #[arg(long, env)]
     random: Option<bool>,
 
-    #[arg(short, long, env)]
+    #[arg(long, env)]
     encrypt_shares: Option<bool>,
 }
 
@@ -92,9 +93,10 @@ async fn main() -> eyre::Result<()> {
 
     // THIS IS REQUIRED TO USE THE SQS FROM SECONDARY REGION, URL DOES NOT SUFFICE
     let region_provider = Region::new(RESULT_SQS_AWS_REGION);
-
     let shared_config = aws_config::from_env().region(region_provider).load().await;
-    let client = Client::new(&shared_config);
+
+    let sqs_config = aws_config::from_env().region(SNS_TOPIC_REGION).load().await;
+    let client = Client::new(&sqs_config);
 
     let db = IrisDB::new_random_par(DB_SIZE, &mut StdRng::seed_from_u64(RNG_SEED_SERVER));
 
@@ -111,7 +113,8 @@ async fn main() -> eyre::Result<()> {
 
     let recv_thread = spawn(async move {
         let sqs_client = SqsClient::new(&shared_config);
-        for _ in 0..N_QUERIES * 3 {
+        let mut counter = 0;
+        while counter < N_QUERIES * 3 {
             // Receive responses
             let msg = sqs_client
                 .receive_message()
@@ -122,6 +125,7 @@ async fn main() -> eyre::Result<()> {
                 .context("Failed to receive message")?;
 
             for msg in msg.messages.unwrap_or_default() {
+                counter = counter + 1;
                 let result: ResultEvent = serde_json::from_str(&msg.body.context("No body found")?)
                     .context("Failed to parse message body")?;
 
@@ -135,6 +139,15 @@ async fn main() -> eyre::Result<()> {
                          stale, clear the queue",
                         result.request_id
                     );
+
+                    sqs_client
+                        .delete_message()
+                        .queue_url(response_queue_url.clone())
+                        .receipt_handle(msg.receipt_handle.unwrap())
+                        .send()
+                        .await
+                        .context("Failed to delete message")?;
+
                     continue;
                 }
                 let expected_result = expected_result.unwrap();
