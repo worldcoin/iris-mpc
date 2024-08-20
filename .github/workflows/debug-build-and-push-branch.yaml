@@ -1,9 +1,9 @@
-name: Build and push docker image
+name: Debug Build and push docker image for the keys and sqs/s3
 
 on:
-  release:
-    types:
-      - 'published'
+  push:
+    branches:
+      - "POP-1768-retrieve-keys-from-remote-storage"
 
 concurrency:
   group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
@@ -41,7 +41,6 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.release.tag_name }},
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           platforms: linux/amd64
           cache-from: type=gha
