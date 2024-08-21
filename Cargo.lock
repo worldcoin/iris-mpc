@@ -2272,7 +2272,6 @@ dependencies = [
  "rand",
  "rayon",
  "reqwest 0.12.5",
- "ring",
  "serde",
  "serde_json",
  "sha2",

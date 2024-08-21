@@ -39,7 +39,7 @@ pub struct SharesS3Object {
     pub iris_share_2: String,
 }
 
-#[derive(PartialEq, Serialize, Deserialize, Debug)]
+#[derive(PartialEq, Serialize, Deserialize, Debug, Clone)]
 pub struct IrisCodesJSON {
     #[serde(rename = "IRIS_version")]
     pub iris_version:           String,

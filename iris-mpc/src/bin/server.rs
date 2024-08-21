@@ -148,7 +148,7 @@ async fn receive_batch(
                     }
                 };
 
-                match smpc_request.validate_iris_share(party_id, iris_message_share) {
+                match smpc_request.validate_iris_share(party_id, iris_message_share.clone()) {
                     Ok(_) => {}
                     Err(e) => {
                         tracing::error!("Failed to validate iris shares: {:?}", e);
