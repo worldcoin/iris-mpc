@@ -183,12 +183,11 @@ async fn main() -> eyre::Result<()> {
                         .insert(result.serial_id.unwrap(), request);
                 } else {
                     // Existing entry
-                    println!(
-                        "Expected: {:?} Got: {:?}",
-                        expected_result, result.serial_id
-                    );
                     assert!(result.is_match);
-                    assert_eq!(result.serial_id.unwrap(), expected_result.unwrap());
+                    assert!(result.matched_serial_ids.is_some());
+                    let matched_ids = result.matched_serial_ids.unwrap();
+                    assert!(matched_ids.len() == 1);
+                    assert_eq!(expected_result.unwrap(), matched_ids[0]);
                 }
 
                 results_sqs_client
@@ -206,7 +205,6 @@ async fn main() -> eyre::Result<()> {
     // Prepare query
     for query_idx in 0..N_QUERIES {
         let request_id = Uuid::new_v4();
-        println!("Building request: {}", request_id);
 
         let template = if random.is_some() {
             // Automatic random tests
