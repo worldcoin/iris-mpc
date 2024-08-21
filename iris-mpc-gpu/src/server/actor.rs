@@ -278,12 +278,14 @@ impl ServerActor {
         // Not divided by GPU_COUNT since we do the work on all GPUs for simplicity,
         // also not padded to 2048 since we only require it to be a multiple of 64
         let phase2_batch_chunk_size = QUERIES * QUERIES;
-        assert!(
-            phase2_batch_chunk_size % 64 == 0,
+        assert_eq!(
+            phase2_batch_chunk_size % 64,
+            0,
             "Phase2 batch chunk size must be a multiple of 64"
         );
-        assert!(
-            phase2_chunk_size % 64 == 0,
+        assert_eq!(
+            phase2_chunk_size % 64,
+            0,
             "Phase2 chunk size must be a multiple of 64"
         );
 

@@ -1,9 +1,9 @@
-pub mod json_wrapper;
-
 use crate::config::json_wrapper::JsonStrWrapper;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+
+pub mod json_wrapper;
 
 #[derive(Debug, Parser)]
 pub struct Opt {
@@ -45,6 +45,9 @@ pub struct Config {
 
     #[serde(default = "default_processing_timeout_secs")]
     pub processing_timeout_secs: u64,
+
+    #[serde(default)]
+    pub public_key_base_url: String,
 }
 
 fn default_processing_timeout_secs() -> u64 {

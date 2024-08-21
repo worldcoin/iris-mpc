@@ -1,3 +1,13 @@
+# GPU Iris MPC Deployment in current stage
+
+The application right now has issues with DB loading. To run the app it is necessary to truncate tables in the dbs in all 3 parties.
+
+To do so, please deploy the pod in `/deploy/db-cleaner-helper-pod.yaml` in every party and run the following command putting appropriate DB URL and party id in it beforehand:
+
+```bash
+apt update && apt install -y postgresql-client && psql -H <DB_URL> -c 'SET search_path TO "SMPC_stage_{0,1,2}"; TRUNCATE irises, results, sync;'
+```
+
 # Application Upgrade Documentation
 
 This document provides a step-by-step guide on how to upgrade the application deployed using ArgoCD. The application configuration is located in the `deploy/stage/mpc1-stage`, `deploy/stage/mpc2-stage`, and `deploy/stage/mpc3-stage` directories. Each directory contains a `values-gpu-iris-mpc.yaml` file, which includes the deployment configuration for the respective clusters: `mpc1-stage`, `mpc2-stage`, and `mpc3-stage`, and common value file placed in `deploy/stage/values-common-gpu-iris-mpc.yaml`

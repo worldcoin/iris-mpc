@@ -1155,7 +1155,7 @@ mod tests {
             let mask = results_masks[0][i] + results_masks[1][i] + results_masks[2][i];
 
             if i == 0 {
-                println!("Code: {}, Mask: {}", code, mask);
+                tracing::info!("Code: {}, Mask: {}", code, mask);
             }
 
             reconstructed_codes.push(code);

@@ -26,7 +26,7 @@ impl DeviceManager {
             devices.push(CudaDevice::new(i as usize).unwrap());
         }
 
-        println!("Found {} devices", devices.len());
+        tracing::info!("Found {} devices", devices.len());
 
         Self { devices }
     }

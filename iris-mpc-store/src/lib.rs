@@ -306,7 +306,7 @@ mod tests {
 
     use super::*;
     use futures::TryStreamExt;
-    use iris_mpc_common::helpers::sqs::ResultEvent;
+    use iris_mpc_common::helpers::smpc_request::ResultEvent;
 
     #[tokio::test]
     async fn test_store() -> Result<()> {
