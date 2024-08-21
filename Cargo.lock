@@ -2260,6 +2260,7 @@ dependencies = [
  "bytemuck",
  "clap",
  "config",
+ "digest",
  "eyre",
  "float_eq",
  "hex",

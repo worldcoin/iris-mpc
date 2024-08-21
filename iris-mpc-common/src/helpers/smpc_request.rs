@@ -1,4 +1,8 @@
-use super::key_pair::{SharesDecodingError, SharesEncryptionKeyPair};
+use super::{
+    key_pair::{SharesDecodingError, SharesEncryptionKeyPair},
+    serialize_with_sorted_keys::SerializeWithSortedKeys,
+    sha256::calculate_sha256,
+};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 
@@ -35,7 +39,7 @@ pub struct SharesS3Object {
     pub iris_share_2: String,
 }
 
-#[derive(PartialEq, Serialize, Deserialize, Debug)]
+#[derive(PartialEq, Serialize, Deserialize, Debug, Clone)]
 pub struct IrisCodesJSON {
     #[serde(rename = "IRIS_version")]
     pub iris_version:           String,
@@ -126,10 +130,16 @@ impl SMPCRequest {
 
         Ok(iris_share)
     }
+    pub fn validate_iris_share(
+        &self,
+        party_id: usize,
+        share: IrisCodesJSON,
+    ) -> Result<bool, SharesDecodingError> {
+        let stringified_share = serde_json::to_string(&SerializeWithSortedKeys(&share))
+            .map_err(SharesDecodingError::SerdeError)?
+            .into_bytes();
 
-    #[allow(dead_code)] // TODO: implement hashes validation
-    fn validate_hashes(&self, hashes: [String; 3]) -> bool {
-        self.iris_shares_file_hashes == hashes
+        Ok(self.iris_shares_file_hashes[party_id] == calculate_sha256(stringified_share))
     }
 }
 
