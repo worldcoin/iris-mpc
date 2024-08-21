@@ -8,6 +8,7 @@ use iris_mpc_common::{
     galois_engine::degree4::GaloisRingIrisCodeShare,
     helpers::{
         key_pair::download_public_key,
+        sha256::calculate_sha256,
         smpc_request::{IrisCodesJSON, ResultEvent, SMPCRequest},
         sqs_s3_helper::upload_file_and_generate_presigned_url,
     },
@@ -15,7 +16,6 @@ use iris_mpc_common::{
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use serde_json::to_string;
-use sha2::{Digest, Sha256};
 use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{spawn, sync::Mutex, time::sleep};
@@ -297,10 +297,7 @@ async fn main() -> eyre::Result<()> {
                 .clone();
 
             // calculate hash of the object
-            let mut hasher = Sha256::new();
-            hasher.update(serialized_iris_codes_json.clone());
-            let result = hasher.finalize();
-            let hash_string = format!("{:x}", result);
+            let hash_string = calculate_sha256(&serialized_iris_codes_json);
 
             // encrypt the object using sealed box and public key
             let encrypted_bytes = sealedbox::seal(

@@ -148,6 +148,14 @@ async fn receive_batch(
                     }
                 };
 
+                match smpc_request.validate_iris_share(party_id, iris_message_share) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::error!("Failed to validate iris shares: {:?}", e);
+                        continue;
+                    }
+                }
+
                 let (
                     store_iris_shares,
                     store_mask_shares,
@@ -421,6 +429,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let store = Store::new_from_config(&config).await?;
 
     tracing::info!("Initialising AWS services");
+
     // TODO: probably move into separate function
     let region_provider = Region::new(REGION);
     let shared_config = aws_config::from_env().region(region_provider).load().await;
