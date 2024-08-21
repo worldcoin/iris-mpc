@@ -1,0 +1,30 @@
+name: Run unit tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [ opened, synchronize ]
+
+concurrency:
+  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Cache build products
+        uses: Swatinem/rust-cache@v2.7.3
+        with:
+          # Split the test and bench caches, the have different debug settings
+          key: "test"
+      - name: Install Rust nightly
+        run: rustup toolchain install nightly-2024-07-10
+      - name: Set Rust nightly as default
+        run: rustup default nightly-2024-07-10
+      - name: Run Tests
+        run: cargo test
