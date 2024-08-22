@@ -1,6 +1,5 @@
 use super::{
     key_pair::{SharesDecodingError, SharesEncryptionKeyPair},
-    serialize_with_sorted_keys::SerializeWithSortedKeys,
     sha256::calculate_sha256,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -135,7 +134,7 @@ impl SMPCRequest {
         party_id: usize,
         share: IrisCodesJSON,
     ) -> Result<bool, SharesDecodingError> {
-        let stringified_share = serde_json::to_string(&SerializeWithSortedKeys(&share))
+        let stringified_share = serde_json::to_string(&share)
             .map_err(SharesDecodingError::SerdeError)?
             .into_bytes();
 
