@@ -107,5 +107,8 @@ fn main() {
         &signups,
     )
     .unwrap();
-    println!("Share calculation completed. Results written to {:?}", output_file);
+    println!(
+        "Share calculation completed. Results written to {:?}",
+        output_file
+    );
 }
