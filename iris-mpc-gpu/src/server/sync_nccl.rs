@@ -67,6 +67,7 @@ mod tests {
     use tokio::task::JoinSet;
 
     #[test]
+    #[cfg(feature = "gpu_dependent")]
     fn test_serialize() -> Result<()> {
         // Make sure we can serialize enough request IDs assuming a maximum length.
         const MAX_REQUEST_ID_LEN: usize = 100;
@@ -88,6 +89,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "gpu_dependent")]
     async fn test_sync() -> Result<()> {
         let n_parties = 3.min(CudaDevice::count()? as usize);
         let net_id = Id::new().unwrap();
@@ -114,6 +116,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "gpu_dependent")]
     async fn test_out_of_sync() -> Result<()> {
         let n_parties = 3.min(CudaDevice::count()? as usize);
         let net_id = Id::new().unwrap();

@@ -154,6 +154,7 @@ fn open(party: &mut Circuits, x: &[ChunkShare<u64>], streams: &[CudaStream]) -> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(feature = "gpu_dependent")]
 #[ignore]
 async fn test_threshold() -> eyre::Result<()> {
     const_assert!(

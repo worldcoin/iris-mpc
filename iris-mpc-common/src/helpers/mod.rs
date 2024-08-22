@@ -2,7 +2,6 @@ pub mod aws;
 pub mod aws_sigv4;
 pub mod key_pair;
 pub mod kms_dh;
-pub mod serialize_with_sorted_keys;
 pub mod sha256;
 pub mod smpc_request;
 pub mod sqs_s3_helper;

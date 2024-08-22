@@ -3,7 +3,6 @@ mod tests {
     use http::StatusCode;
     use iris_mpc_common::helpers::{
         key_pair::{SharesDecodingError, SharesEncryptionKeyPair},
-        serialize_with_sorted_keys::SerializeWithSortedKeys,
         sha256::calculate_sha256,
         smpc_request::{IrisCodesJSON, SMPCRequest},
     };
@@ -175,8 +174,7 @@ mod tests {
     #[tokio::test]
     async fn test_validate_iris_share() {
         let mock_iris_codes_json = mock_iris_codes_json();
-        let mock_serialized_iris =
-            serde_json::to_string(&SerializeWithSortedKeys(&mock_iris_codes_json)).unwrap();
+        let mock_serialized_iris = serde_json::to_string(&mock_iris_codes_json).unwrap();
         let mock_hash = calculate_sha256(mock_serialized_iris.into_bytes());
 
         let smpc_request = get_mock_smpc_request_with_hashes([

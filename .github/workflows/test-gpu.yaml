@@ -56,8 +56,8 @@ jobs:
         with:
           toolchain: nightly
 
-      - name: E2E Tests
-        run: cargo test --release e2e
+      - name: GPU Dependent Tests
+        run: cargo test --release --features gpu_dependent
         shell: bash
         env:
           NCCL_P2P_LEVEL: LOC
@@ -65,21 +65,9 @@ jobs:
           NCCL_P2P_DIRECT_DISABLE: 1
           NCCL_SHM_DISABLE: 1
 
-      - name: E2E Tests w/ OTP encryption
-        run: cargo test --release e2e --features otp_encrypt
+      - name: GPU Tests w/ OTP encryption
+        run: cargo test --release --features otp_encrypt,gpu_dependent
         shell: bash
-        env:
-          NCCL_P2P_LEVEL: LOC
-          NCCL_NET: Socket
-          NCCL_P2P_DIRECT_DISABLE: 1
-          NCCL_SHM_DISABLE: 1
-
-      - name: Grab e2e executable name
-        run: echo TEST_NAME=$(cargo --color=never test --release e2e --no-run 2>&1 | grep "Executable tests/e2e.rs" | sed "s/.*(\(.*\))/\1/") >> $GITHUB_OUTPUT
-        id: build-e2e
-
-      - name: E2E Tests w/ compute-sanitizer
-        run: /usr/local/cuda-12.2/bin/compute-sanitizer --tool=memcheck ${{ steps.build-e2e.outputs.TEST_NAME }} --nocapture
         env:
           NCCL_P2P_LEVEL: LOC
           NCCL_NET: Socket

@@ -38,6 +38,7 @@ uuid.workspace = true
 [features]
 default = []
 otp_encrypt = []
+gpu_dependent = []
 
 #[[bench]]
 #name = "chacha"
