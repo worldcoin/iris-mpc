@@ -37,3 +37,5 @@ jobs:
         run: rustup default nightly-2024-07-10
       - name: Run Tests
         run: cargo test --release
+      - name: Run Tests with DB
+        run: cargo test --release --features db_dependent
