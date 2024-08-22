@@ -46,3 +46,11 @@ float_eq = "1"
 [[bin]]
 name = "key-manager"
 path = "src/bin/key_manager.rs"
+
+[[bin]]
+name = "shares-encoding"
+path = "src/bin/shares_encoding.rs"
+
+[[bin]]
+name = "e2e-input-transform"
+path = "src/bin/e2e_input_transform.rs"
