@@ -13,6 +13,9 @@ concurrency:
 
 jobs:
   unit-tests:
+    runs-on:
+      labels: ubuntu-22.04-64core
+
     services:
       postgres:
         image: postgres
@@ -22,7 +25,6 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
 
-    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
