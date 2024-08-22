@@ -1,6 +1,6 @@
 mod tests {
-    use serde_json;
     use iris_mpc_common::helpers::serialize_with_sorted_keys::SerializeWithSortedKeys;
+    use serde_json;
 
     #[derive(serde::Serialize)]
     struct Foo {
@@ -19,7 +19,8 @@ mod tests {
             d: 4,
         };
 
-        // By default, serde serializes the keys in the order in which they were defined.
+        // By default, serde serializes the keys in the order in which they were
+        // defined.
         assert_eq!(
             serde_json::to_string(&foo).unwrap(),
             r#"{"d":4,"c":3,"a":1,"b":2}"#
@@ -32,5 +33,3 @@ mod tests {
         );
     }
 }
-
-
