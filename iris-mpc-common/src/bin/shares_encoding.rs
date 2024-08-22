@@ -1,8 +1,8 @@
 use clap::Parser;
-use iris_mpc_common::galois_engine::degree4::GaloisRingIrisCodeShare;
-use iris_mpc_common::iris_db::iris::IrisCodeArray;
-use rand::prelude::StdRng;
-use rand::SeedableRng;
+use iris_mpc_common::{
+    galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::iris::IrisCodeArray,
+};
+use rand::{prelude::StdRng, SeedableRng};
 
 const RNG_SEED: u64 = 42; // Replace with your seed value
 
@@ -18,7 +18,6 @@ struct Args {
     #[arg(short, long, env)]
     rng_seed: Option<u64>,
 }
-
 
 fn main() {
     let args = Args::parse();
