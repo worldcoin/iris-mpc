@@ -13,6 +13,15 @@ concurrency:
 
 jobs:
   unit-tests:
+    services:
+      postgres:
+        image: postgres
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
