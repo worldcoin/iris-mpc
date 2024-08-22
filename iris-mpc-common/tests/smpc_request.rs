@@ -21,33 +21,33 @@ mod tests {
             PUBLIC_KEY.to_string().clone(),
             PRIVATE_KEY.to_string().clone(),
         )
-        .unwrap()
+            .unwrap()
     }
 
     fn mock_iris_codes_json() -> IrisCodesJSON {
         IrisCodesJSON {
-            iris_version:           "1.0".to_string(),
-            left_iris_code_shares:  STANDARD.encode("left_iris_code_mock"),
+            iris_version: "1.0".to_string(),
+            left_iris_code_shares: STANDARD.encode("left_iris_code_mock"),
             right_iris_code_shares: STANDARD.encode("right_iris_code_mock"),
-            left_iris_mask_shares:  STANDARD.encode("left_iris_mask_mock"),
+            left_iris_mask_shares: STANDARD.encode("left_iris_mask_mock"),
             right_iris_mask_shares: STANDARD.encode("right_iris_mask_mock"),
         }
     }
 
     fn get_mock_smpc_request_with_hashes(hashes: [String; 3]) -> SMPCRequest {
         SMPCRequest {
-            batch_size:              Some(1),
-            signup_id:               "signup_mock".to_string(),
-            s3_presigned_url:        "https://example.com/mock".to_string(),
+            batch_size: Some(1),
+            signup_id: "signup_mock".to_string(),
+            s3_presigned_url: "https://example.com/mock".to_string(),
             iris_shares_file_hashes: hashes,
         }
     }
 
     fn get_mock_request() -> SMPCRequest {
         SMPCRequest {
-            batch_size:              None,
-            signup_id:               "test_signup_id".to_string(),
-            s3_presigned_url:        "https://example.com/package".to_string(),
+            batch_size: None,
+            signup_id: "test_signup_id".to_string(),
+            s3_presigned_url: "https://example.com/package".to_string(),
             iris_shares_file_hashes: [
                 "hash_0".to_string(),
                 "hash_1".to_string(),
@@ -76,9 +76,9 @@ mod tests {
             .await;
 
         let smpc_request = SMPCRequest {
-            batch_size:              None,
-            signup_id:               "test_signup_id".to_string(),
-            s3_presigned_url:        mock_server.uri().clone() + "/test_presign_url",
+            batch_size: None,
+            signup_id: "test_signup_id".to_string(),
+            s3_presigned_url: mock_server.uri().clone() + "/test_presign_url",
             iris_shares_file_hashes: [
                 "hash_0".to_string(),
                 "hash_1".to_string(),
@@ -96,10 +96,10 @@ mod tests {
     async fn test_decrypt_iris_share_success() {
         // Mocked base64 encoded JSON string
         let iris_codes_json = IrisCodesJSON {
-            iris_version:           "1.0".to_string(),
-            left_iris_code_shares:  "left_code".to_string(),
+            iris_version: "1.0".to_string(),
+            left_iris_code_shares: "left_code".to_string(),
             right_iris_code_shares: "right_code".to_string(),
-            left_iris_mask_shares:  "left_mask".to_string(),
+            left_iris_mask_shares: "left_mask".to_string(),
             right_iris_mask_shares: "right_mask".to_string(),
         };
 
