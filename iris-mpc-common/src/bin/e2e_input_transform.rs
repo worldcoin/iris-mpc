@@ -74,7 +74,7 @@ fn get_share_strings(shares_iris_code_left: &[GaloisRingIrisCodeShare; 3]) -> [S
         shares[i] =
             general_purpose::STANDARD.encode(bytemuck::cast_slice(&shares_iris_code_left[i].coefs));
     }
-    return shares;
+    shares
 }
 
 fn read_json_file(file_path: &str) -> serde_json::Result<Vec<Signup>> {
