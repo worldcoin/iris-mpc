@@ -310,7 +310,6 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "db_dependent")]
-    #[cfg(feature = "db_dependent")]
     async fn test_store() -> Result<()> {
         // Create a unique schema for this test.
         let schema_name = temporary_name();
