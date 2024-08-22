@@ -27,4 +27,4 @@ jobs:
       - name: Set Rust nightly as default
         run: rustup default nightly-2024-07-10
       - name: Run Tests
-        run: cargo test
+        run: cargo test --release

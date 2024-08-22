@@ -240,6 +240,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "gpu_dependent")]
     fn test_chacha_rng() {
         // This call to CudaDevice::new is only used in context of a test - not used in
         // the server binary

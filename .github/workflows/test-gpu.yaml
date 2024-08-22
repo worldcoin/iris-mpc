@@ -56,8 +56,8 @@ jobs:
         with:
           toolchain: nightly
 
-      - name: E2E Tests
-        run: cargo test --release e2e
+      - name: GPU Dependent Tests
+        run: cargo test --release --features gpu_dependent
         shell: bash
         env:
           NCCL_P2P_LEVEL: LOC
@@ -65,8 +65,8 @@ jobs:
           NCCL_P2P_DIRECT_DISABLE: 1
           NCCL_SHM_DISABLE: 1
 
-      - name: E2E Tests w/ OTP encryption
-        run: cargo test --release e2e --features otp_encrypt
+      - name: GPU Tests w/ OTP encryption
+        run: cargo test --release --features otp_encrypt,gpu_dependent
         shell: bash
         env:
           NCCL_P2P_LEVEL: LOC
