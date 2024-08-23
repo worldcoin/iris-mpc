@@ -18,17 +18,22 @@ use rand::{distributions::Standard, prelude::Distribution, Rng};
 use std::ops::SubAssign;
 
 impl<N: NetworkTrait> IrisWorker<N> {
-    pub(crate) fn mul_lift_2k<T: IntRing2k, const K: u64>(vals: SliceShare<T>) -> VecShare<u32>
+    pub(crate) fn mul_lift_2k<T: IntRing2k, const K: u64>(val: &Share<T>) -> Share<u32>
+    where
+        u32: From<T>,
+    {
+        let a = (u32::from(val.a.0)) << K;
+        let b = (u32::from(val.b.0)) << K;
+        Share::new(RingElement(a), RingElement(b))
+    }
+
+    pub(crate) fn mul_lift_2k_many<T: IntRing2k, const K: u64>(vals: SliceShare<T>) -> VecShare<u32>
     where
         u32: From<T>,
     {
         VecShare::new_vec(
             vals.iter()
-                .map(|val| {
-                    let a = (u32::from(val.a.0)) << K;
-                    let b = (u32::from(val.b.0)) << K;
-                    Share::new(RingElement(a), RingElement(b))
-                })
+                .map(|val| Self::mul_lift_2k::<T, K>(val))
                 .collect(),
         )
     }
@@ -323,6 +328,34 @@ impl<N: NetworkTrait> IrisWorker<N> {
         Ok(res)
     }
 
+    // TODO a dedicated bitextraction for just one element would be more
+    // efficient
+    pub fn single_extract_msb_u16<const K: usize>(
+        &mut self,
+        x: Share<u16>,
+    ) -> Result<Share<Bit>, Error> {
+        let (a, b) = self
+            .extract_msb_u16::<{ u16::BITS as usize }>(VecShare::new_vec(vec![x]))?
+            .get_at(0)
+            .get_ab();
+
+        Ok(Share::new(a.get_bit_as_bit(0), b.get_bit_as_bit(0)))
+    }
+
+    // TODO a dedicated bitextraction for just one element would be more
+    // efficient
+    pub fn single_extract_msb_u32<const K: usize>(
+        &mut self,
+        x: Share<u32>,
+    ) -> Result<Share<Bit>, Error> {
+        let (a, b) = self
+            .extract_msb_u32::<{ u16::BITS as usize }>(VecShare::new_vec(vec![x]))?
+            .get_at(0)
+            .get_ab();
+
+        Ok(Share::new(a.get_bit_as_bit(0), b.get_bit_as_bit(0)))
+    }
+
     pub fn extract_msb_u16<const K: usize>(
         &mut self,
         x_: VecShare<u16>,
@@ -544,8 +577,8 @@ impl<N: NetworkTrait> IrisWorker<N> {
         // the correct one later) Self::share_bit_mod(&mut b1, K as u32);
         // Self::share_bit_mod(&mut b2, K as u32 - 1);
 
-        let b1 = Self::mul_lift_2k::<_, { u16::K as u64 }>(b1.to_slice());
-        let b2 = Self::mul_lift_2k::<_, { u16::K as u64 + 1 }>(b2.to_slice());
+        let b1 = Self::mul_lift_2k_many::<_, { u16::K as u64 }>(b1.to_slice());
+        let b2 = Self::mul_lift_2k_many::<_, { u16::K as u64 + 1 }>(b2.to_slice());
 
         // Finally, compute the result
         x_a.sub_assign(b1);
@@ -555,7 +588,28 @@ impl<N: NetworkTrait> IrisWorker<N> {
 
     // Compute code_dots > a/b * mask_dots
     // via MSB(a * mask_dots - b * code_dots)
-    pub(crate) fn compare_threshold_masked_many(
+    pub fn compare_threshold_masked(
+        &mut self,
+        code_dot: Share<u16>,
+        mask_dot: Share<u16>,
+    ) -> Result<Share<Bit>, Error> {
+        debug_assert!(A_BITS as u64 <= B_BITS);
+
+        let y = Self::mul_lift_2k::<_, B_BITS>(&code_dot);
+        // TODO a dedicated bitextraction for just one element would be more
+        // efficient
+        let mut x = self.lift::<{ B_BITS as usize }>(VecShare::new_vec(vec![mask_dot]))?;
+        debug_assert_eq!(x.len(), 1);
+        let mut x = x.pop().expect("Enough elements present");
+        x *= A as u32;
+        x -= y;
+
+        self.single_extract_msb_u32::<{ u16::K + B_BITS as usize }>(x)
+    }
+
+    // Compute code_dots > a/b * mask_dots
+    // via MSB(a * mask_dots - b * code_dots)
+    pub fn compare_threshold_masked_many(
         &mut self,
         code_dots: VecShare<u16>,
         mask_dots: VecShare<u16>,
@@ -564,7 +618,7 @@ impl<N: NetworkTrait> IrisWorker<N> {
         let len = code_dots.len();
         assert_eq!(len, mask_dots.len());
 
-        let y = Self::mul_lift_2k::<_, B_BITS>(code_dots.as_slice());
+        let y = Self::mul_lift_2k_many::<_, B_BITS>(code_dots.as_slice());
         let mut x = self.lift::<{ B_BITS as usize }>(mask_dots)?;
         for x_ in x.iter_mut() {
             *x_ *= A as u32;
