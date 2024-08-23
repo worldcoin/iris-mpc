@@ -3,12 +3,16 @@ use crate::{
     error::Error,
     networks::network_trait::NetworkTrait,
     shares::{
+        ring_impl::RingElement,
         share::Share,
         vecshare::{SliceShare, VecShare},
     },
+    utils::Utils,
 };
 use bytes::{Buf, Bytes, BytesMut};
-use iris_mpc_common::{id::PartyID, iris_db::iris::IrisCodeArray};
+use iris_mpc_common::{
+    galois_engine::degree4::GaloisRingIrisCodeShare, id::PartyID, iris_db::iris::IrisCodeArray,
+};
 
 pub(crate) const IRIS_CODE_SIZE: usize =
     iris_mpc_common::iris_db::iris::IrisCodeArray::IRIS_CODE_SIZE;
@@ -57,18 +61,31 @@ impl<N: NetworkTrait> WorkerThread<N> {
         Ok(())
     }
 
-    pub(crate) fn get_cmp_diff(&self, dot: &mut Share<u16>, mask_ones: usize) {
-        let threshold = (mask_ones as f64 * (1. - 2. * MATCH_THRESHOLD_RATIO)) as usize;
-        *dot = dot.sub_from_const(
-            threshold
-                .try_into()
-                .expect("Sizes are checked in constructor"),
-            self.network.get_id(),
-        )
+    pub(crate) fn rep3_get_cmp_diff(&self, dot: &mut Share<u16>, mask_ones: usize) {
+        let threshold: u16 = ((mask_ones as f64 * (1. - 2. * MATCH_THRESHOLD_RATIO)) as usize)
+            .try_into()
+            .expect("Sizes are checked in constructor");
+        *dot = dot.sub_from_const(threshold, self.network.get_id());
+    }
+
+    pub(crate) fn shamir_get_cmp_diff(&self, dot: &mut RingElement<u16>, mask_ones: usize) {
+        let threshold: u16 = ((mask_ones as f64 * (1. - 2. * MATCH_THRESHOLD_RATIO)) as usize)
+            .try_into()
+            .expect("Sizes are checked in constructor");
+        *dot = RingElement(threshold) - *dot;
     }
 
     pub(crate) fn combine_masks(mask_a: &IrisCodeArray, mask_b: &IrisCodeArray) -> IrisCodeArray {
         *mask_a & *mask_b
+    }
+
+    fn shamir_to_rep3(&mut self, inp: Vec<RingElement<u16>>) -> Result<VecShare<u16>, Error> {
+        let len = inp.len();
+        let shares_a = inp;
+        let bytes = Utils::blocking_send_slice_and_receive(&mut self.network, &shares_a)?;
+        let shares_b = Utils::ring_iter_from_bytes(bytes, len)?;
+        let res = VecShare::from_avec_biter(shares_a, shares_b);
+        Ok(res)
     }
 
     pub(crate) fn rep3_compare_iris_public_mask_many(
@@ -90,14 +107,96 @@ impl<N: NetworkTrait> WorkerThread<N> {
         let mask_lens: Vec<_> = masks.iter().map(|m| m.count_ones()).collect();
 
         let mut dots = self.rep3_dot_many(a, b)?;
-        // self.compare_threshold_many(dots, mask_lens)
 
         // a < b <=> msb(a - b)
         // Given no overflow, which is enforced in constructor
         for (dot, mask_len) in dots.iter_mut().zip(mask_lens) {
-            self.get_cmp_diff(dot, mask_len);
+            self.rep3_get_cmp_diff(dot, mask_len);
         }
 
         self.extract_msb_u16::<{ u16::BITS as usize }>(dots)
+    }
+
+    pub(crate) fn rep3_compare_iris_private_mask_many(
+        &mut self,
+        a: SliceShare<'_, u16>,
+        b: &[VecShare<u16>],
+        mask_a: SliceShare<'_, u16>,
+        mask_b: &[VecShare<u16>],
+    ) -> Result<VecShare<u64>, Error> {
+        let amount = b.len();
+        if (amount != mask_b.len()) || (amount == 0) {
+            return Err(Error::InvalidSize);
+        }
+
+        let code_dots = self.rep3_dot_many(a, b)?;
+        let mask_dots = self.rep3_dot_many(mask_a, mask_b)?;
+
+        // Compute code_dots > a/b * mask_dots
+        // via MSB(a * mask_dots - b * code_dots)
+        self.compare_threshold_masked_many(code_dots, mask_dots)
+    }
+
+    pub(crate) fn shamir_compare_iris_public_mask_many(
+        &mut self,
+        a: &mut GaloisRingIrisCodeShare,
+        b: &[GaloisRingIrisCodeShare],
+        mask_a: &IrisCodeArray,
+        mask_b: &[IrisCodeArray],
+    ) -> Result<VecShare<u64>, Error> {
+        let amount = b.len();
+        if (amount != mask_b.len()) || (amount == 0) {
+            return Err(Error::InvalidSize);
+        }
+
+        // We have to add the lagrange coefficient here
+        a.preprocess_iris_code_query_share();
+
+        let masks = mask_b
+            .iter()
+            .map(|b| Self::combine_masks(mask_a, b))
+            .collect::<Vec<_>>();
+        let mask_lens: Vec<_> = masks.iter().map(|m| m.count_ones()).collect();
+
+        let mut dots = self.shamir_dot_many(a, b)?;
+
+        // a < b <=> msb(a - b)
+        // Given no overflow, which is enforced in constructor
+        for (dot, mask_len) in dots.iter_mut().zip(mask_lens) {
+            self.shamir_get_cmp_diff(dot, mask_len);
+        }
+
+        // Network: reshare
+        let dots = self.shamir_to_rep3(dots)?;
+
+        self.extract_msb_u16::<{ u16::BITS as usize }>(dots)
+    }
+
+    pub(crate) fn shamir_compare_iris_private_mask_many(
+        &mut self,
+        a: &mut GaloisRingIrisCodeShare,
+        b: &[GaloisRingIrisCodeShare],
+        mask_a: &mut GaloisRingIrisCodeShare,
+        mask_b: &[GaloisRingIrisCodeShare],
+    ) -> Result<VecShare<u64>, Error> {
+        let amount = b.len();
+        if (amount != mask_b.len()) || (amount == 0) {
+            return Err(Error::InvalidSize);
+        }
+
+        // We have to add the lagrange coefficient here
+        a.preprocess_iris_code_query_share();
+        mask_a.preprocess_iris_code_query_share();
+
+        let code_dots = self.shamir_dot_many(a, b)?;
+        let mask_dots = self.shamir_dot_many(mask_a, mask_b)?;
+
+        // Network: reshare
+        let code_dots = self.shamir_to_rep3(code_dots)?;
+        let mask_dots = self.shamir_to_rep3(mask_dots)?;
+
+        // Compute code_dots > a/b * mask_dots
+        // via MSB(a * mask_dots - b * code_dots)
+        self.compare_threshold_masked_many(code_dots, mask_dots)
     }
 }
