@@ -39,6 +39,10 @@ hex.workspace = true
 zeroize = "1.8.1"
 wiremock = "0.6.1"
 digest = "0.10.7"
+ring = "0.17.8"
+data-encoding = "2.6.0"
+bincode = "2.0.0-rc.3"
+serde-big-array = "0.5.1"
 
 [dev-dependencies]
 float_eq = "1"
