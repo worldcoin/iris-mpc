@@ -1,8 +1,10 @@
 use crate::{
     error::Error,
+    networks::network_trait::NetworkTrait,
     shares::{int_ring::IntRing2k, ring_impl::RingElement, vecshare::RingBytesIter},
 };
 use bytes::{Buf, Bytes, BytesMut};
+use std::io;
 
 pub struct Utils {}
 
@@ -22,5 +24,22 @@ impl Utils {
         }
 
         Ok(RingBytesIter::new(bytes))
+    }
+
+    pub fn blocking_send_and_receive<N: NetworkTrait>(
+        network: &mut N,
+        data: Bytes,
+    ) -> Result<BytesMut, io::Error> {
+        network.blocking_send_next_id(data)?;
+        let data = network.blocking_receive_prev_id()?;
+        Ok(data)
+    }
+
+    pub fn blocking_send_slice_and_receive<N: NetworkTrait, T: IntRing2k>(
+        network: &mut N,
+        values: &[RingElement<T>],
+    ) -> Result<BytesMut, Error> {
+        let data = Self::ring_slice_to_bytes(values);
+        Ok(Self::blocking_send_and_receive(network, data)?)
     }
 }

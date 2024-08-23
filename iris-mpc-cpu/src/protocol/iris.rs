@@ -1,7 +1,14 @@
 use super::prf::{Prf, PrfSeed};
-use crate::{error::Error, networks::network_trait::NetworkTrait};
+use crate::{
+    error::Error,
+    networks::network_trait::NetworkTrait,
+    shares::{
+        share::Share,
+        vecshare::{SliceShare, VecShare},
+    },
+};
 use bytes::{Buf, Bytes, BytesMut};
-use iris_mpc_common::id::PartyID;
+use iris_mpc_common::{id::PartyID, iris_db::iris::IrisCodeArray};
 
 pub(crate) const IRIS_CODE_SIZE: usize =
     iris_mpc_common::iris_db::iris::IrisCodeArray::IRIS_CODE_SIZE;
@@ -48,5 +55,49 @@ impl<N: NetworkTrait> WorkerThread<N> {
         let their_seed = Self::bytes_to_seed(response)?;
         self.prf = Prf::new(seed, their_seed);
         Ok(())
+    }
+
+    pub(crate) fn get_cmp_diff(&self, dot: &mut Share<u16>, mask_ones: usize) {
+        let threshold = (mask_ones as f64 * (1. - 2. * MATCH_THRESHOLD_RATIO)) as usize;
+        *dot = dot.sub_from_const(
+            threshold
+                .try_into()
+                .expect("Sizes are checked in constructor"),
+            self.network.get_id(),
+        )
+    }
+
+    pub(crate) fn combine_masks(mask_a: &IrisCodeArray, mask_b: &IrisCodeArray) -> IrisCodeArray {
+        *mask_a & *mask_b
+    }
+
+    pub(crate) fn rep3_compare_iris_public_mask_many(
+        &mut self,
+        a: SliceShare<'_, u16>,
+        b: &[VecShare<u16>],
+        mask_a: &IrisCodeArray,
+        mask_b: &[IrisCodeArray],
+    ) -> Result<VecShare<u64>, Error> {
+        let amount = b.len();
+        if (amount != mask_b.len()) || (amount == 0) {
+            return Err(Error::InvalidSize);
+        }
+
+        let masks = mask_b
+            .iter()
+            .map(|b| Self::combine_masks(mask_a, b))
+            .collect::<Vec<_>>();
+        let mask_lens: Vec<_> = masks.iter().map(|m| m.count_ones()).collect();
+
+        let mut dots = self.rep3_dot_many(a, b)?;
+        // self.compare_threshold_many(dots, mask_lens)
+
+        // a < b <=> msb(a - b)
+        // Given no overflow, which is enforced in constructor
+        for (dot, mask_len) in dots.iter_mut().zip(mask_lens) {
+            self.get_cmp_diff(dot, mask_len);
+        }
+
+        self.extract_msb_u16::<{ u16::BITS as usize }>(dots)
     }
 }
