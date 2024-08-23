@@ -57,7 +57,7 @@ jobs:
           toolchain: nightly
 
       - name: GPU Dependent Tests
-        run: cargo test --release --features gpu_dependent
+        run: cargo test --release --features gpu_dependent -- --test-threads=1
         shell: bash
         env:
           NCCL_P2P_LEVEL: LOC
@@ -66,7 +66,7 @@ jobs:
           NCCL_SHM_DISABLE: 1
 
       - name: GPU Tests w/ OTP encryption
-        run: cargo test --release --features otp_encrypt,gpu_dependent
+        run: cargo test --release --features otp_encrypt,gpu_dependent -- --test-threads=1
         shell: bash
         env:
           NCCL_P2P_LEVEL: LOC
