@@ -18,3 +18,4 @@ serde.workspace = true
 tokio.workspace = true
 thiserror = "1.0"
 tracing.workspace = true
+futures.workspace = true

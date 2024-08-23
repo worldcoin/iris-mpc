@@ -383,24 +383,3 @@ impl<'a, T: IntRing2k> DerefMut for SliceShareMut<'a, T> {
         self.shares
     }
 }
-
-pub trait ChunksOwned: Sized {
-    fn chunks_owned(self, chunk_size: usize) -> Vec<Self>;
-}
-
-impl<T: IntRing2k> ChunksOwned for VecShare<T> {
-    fn chunks_owned(self, chunk_size: usize) -> Vec<Self> {
-        self.shares
-            .chunks(chunk_size)
-            .map(|x| Self {
-                shares: x.to_owned(),
-            })
-            .collect()
-    }
-}
-
-impl ChunksOwned for Vec<usize> {
-    fn chunks_owned(self, chunk_size: usize) -> Vec<Self> {
-        self.chunks(chunk_size).map(|x| x.to_vec()).collect()
-    }
-}

@@ -3,6 +3,7 @@ use crate::{
     error::Error,
     networks::network_trait::NetworkTrait,
     shares::{
+        int_ring::IntRing2k,
         ring_impl::RingElement,
         share::Share,
         vecshare::{SliceShare, VecShare},
@@ -22,19 +23,35 @@ pub(crate) const B: u64 = 1 << B_BITS;
 pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
 pub(crate) const A_BITS: u32 = u64::BITS - A.leading_zeros();
 
-pub(crate) struct WorkerThread<N: NetworkTrait> {
-    pub(crate) id:      usize,
+pub struct IrisWorker<N: NetworkTrait> {
     pub(crate) network: N,
     pub(crate) prf:     Prf,
 }
 
-impl<N: NetworkTrait> WorkerThread<N> {
-    pub(crate) fn create(id: usize, network: N) -> Self {
+impl<N: NetworkTrait> IrisWorker<N> {
+    pub fn new(network: N) -> Self {
+        if MATCH_THRESHOLD_RATIO >= 1.
+            || MATCH_THRESHOLD_RATIO <= 0.
+            || u16::BITS as usize - 1 <= Self::ceil_log2(IRIS_CODE_SIZE)
+        // Comparison by checking msb of difference could produce an overflow
+        {
+            panic!("Configuration error");
+        }
+
         Self {
-            id,
             network,
             prf: Prf::default(),
         }
+    }
+
+    fn ceil_log2(x: usize) -> usize {
+        let mut y = 0;
+        let mut x = x - 1;
+        while x > 0 {
+            x >>= 1;
+            y += 1;
+        }
+        y
     }
 
     pub fn get_party_id(&self) -> PartyID {
@@ -51,7 +68,7 @@ impl<N: NetworkTrait> WorkerThread<N> {
         }
     }
 
-    pub(crate) async fn setup_prf(&mut self) -> Result<(), Error> {
+    pub async fn setup_prf(&mut self) -> Result<(), Error> {
         let seed = Prf::gen_seed();
         let data = Bytes::from_iter(seed.into_iter());
         self.network.send_next_id(data).await?;
@@ -88,7 +105,7 @@ impl<N: NetworkTrait> WorkerThread<N> {
         Ok(res)
     }
 
-    pub(crate) fn rep3_compare_iris_public_mask_many(
+    pub fn rep3_compare_iris_public_mask_many(
         &mut self,
         a: SliceShare<'_, u16>,
         b: &[VecShare<u16>],
@@ -117,7 +134,7 @@ impl<N: NetworkTrait> WorkerThread<N> {
         self.extract_msb_u16::<{ u16::BITS as usize }>(dots)
     }
 
-    pub(crate) fn rep3_compare_iris_private_mask_many(
+    pub fn rep3_compare_iris_private_mask_many(
         &mut self,
         a: SliceShare<'_, u16>,
         b: &[VecShare<u16>],
@@ -137,7 +154,7 @@ impl<N: NetworkTrait> WorkerThread<N> {
         self.compare_threshold_masked_many(code_dots, mask_dots)
     }
 
-    pub(crate) fn shamir_compare_iris_public_mask_many(
+    pub fn shamir_compare_iris_public_mask_many(
         &mut self,
         a: &mut GaloisRingIrisCodeShare,
         b: &[GaloisRingIrisCodeShare],
@@ -172,7 +189,7 @@ impl<N: NetworkTrait> WorkerThread<N> {
         self.extract_msb_u16::<{ u16::BITS as usize }>(dots)
     }
 
-    pub(crate) fn shamir_compare_iris_private_mask_many(
+    pub fn shamir_compare_iris_private_mask_many(
         &mut self,
         a: &mut GaloisRingIrisCodeShare,
         b: &[GaloisRingIrisCodeShare],
@@ -198,5 +215,59 @@ impl<N: NetworkTrait> WorkerThread<N> {
         // Compute code_dots > a/b * mask_dots
         // via MSB(a * mask_dots - b * code_dots)
         self.compare_threshold_masked_many(code_dots, mask_dots)
+    }
+
+    pub fn open<T: IntRing2k>(&mut self, share: Share<T>) -> Result<T, Error> {
+        let c = Utils::blocking_send_and_receive_value(&mut self.network, &share.b)?;
+        Ok((share.a + share.b + c).convert())
+    }
+
+    pub fn open_t_many<T: IntRing2k>(&mut self, shares: VecShare<T>) -> Result<Vec<T>, Error> {
+        let shares_b = shares.iter().map(|s| &s.b);
+        let bytes = Utils::blocking_send_iter_and_receive(&mut self.network, shares_b)?;
+        let shares_c = Utils::ring_iter_from_bytes(bytes, shares.len())?;
+        let res = shares
+            .into_iter()
+            .zip(shares_c)
+            .map(|(s, c)| {
+                let (a, b) = s.get_ab();
+                (a + b + c).convert()
+            })
+            .collect();
+        Ok(res)
+    }
+
+    pub async fn open_async<T: IntRing2k>(
+        &mut self,
+        share: Share<T>,
+    ) -> Result<RingElement<T>, Error> {
+        let bytes_to_send = Utils::ring_to_bytes(&share.b);
+        let _ = self.network.send_next_id(bytes_to_send).await;
+        let response = self.network.receive_prev_id().await?;
+        let (a, b) = share.get_ab();
+        Ok(a + b + Utils::ring_from_bytes(response)?)
+    }
+
+    pub async fn open_async_t_many<T: IntRing2k>(
+        &mut self,
+        shares: VecShare<T>,
+    ) -> Result<Vec<RingElement<T>>, Error> {
+        let n = shares.len();
+        let shares_b: Vec<_> = shares.iter().map(|s| s.b).collect();
+        let bytes_to_send = Utils::ring_slice_to_bytes(&shares_b);
+
+        self.network.send_next_id(bytes_to_send).await?;
+        let response = self.network.receive_prev_id().await?;
+        let shares_c = Utils::ring_iter_from_bytes(response, n)?;
+
+        let res = shares
+            .into_iter()
+            .zip(shares_c)
+            .map(|(s, c)| {
+                let (a, b) = s.get_ab();
+                a + b + c
+            })
+            .collect();
+        Ok(res)
     }
 }

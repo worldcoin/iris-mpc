@@ -2367,6 +2367,7 @@ dependencies = [
  "bytemuck",
  "bytes",
  "eyre",
+ "futures",
  "iris-mpc-common",
  "num-traits",
  "rand",

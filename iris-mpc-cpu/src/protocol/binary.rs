@@ -1,8 +1,8 @@
-use super::iris::WorkerThread;
+use super::iris_worker::IrisWorker;
 use crate::{
     error::Error,
     networks::network_trait::NetworkTrait,
-    protocol::iris::{A, A_BITS, B_BITS},
+    protocol::iris_worker::{A, A_BITS, B_BITS},
     shares::{
         bit::Bit,
         int_ring::IntRing2k,
@@ -17,7 +17,7 @@ use num_traits::{One, Zero};
 use rand::{distributions::Standard, prelude::Distribution, Rng};
 use std::ops::SubAssign;
 
-impl<N: NetworkTrait> WorkerThread<N> {
+impl<N: NetworkTrait> IrisWorker<N> {
     pub(crate) fn mul_lift_2k<T: IntRing2k, const K: u64>(vals: SliceShare<T>) -> VecShare<u32>
     where
         u32: From<T>,
@@ -555,7 +555,7 @@ impl<N: NetworkTrait> WorkerThread<N> {
 
     // Compute code_dots > a/b * mask_dots
     // via MSB(a * mask_dots - b * code_dots)
-    pub fn compare_threshold_masked_many(
+    pub(crate) fn compare_threshold_masked_many(
         &mut self,
         code_dots: VecShare<u16>,
         mask_dots: VecShare<u16>,
@@ -572,5 +572,46 @@ impl<N: NetworkTrait> WorkerThread<N> {
 
         x.sub_assign(y);
         self.extract_msb_u32::<{ u16::K + B_BITS as usize }>(x)
+    }
+
+    pub fn open_bit(&mut self, share: Share<Bit>) -> Result<bool, Error> {
+        let c = Utils::blocking_send_and_receive_value(&mut self.network, &share.b)?;
+        Ok((share.a ^ share.b ^ c).convert().convert())
+    }
+
+    pub fn open_bit_many(&mut self, shares: VecShare<Bit>) -> Result<Vec<bool>, Error> {
+        let shares_b = shares.iter().map(|s| &s.b);
+        let bytes = Utils::blocking_send_iter_and_receive(&mut self.network, shares_b)?;
+        let shares_c = Utils::ring_iter_from_bytes(bytes, shares.len())?;
+        let res = shares
+            .into_iter()
+            .zip(shares_c)
+            .map(|(s, c)| {
+                let (a, b) = s.get_ab();
+                (a ^ b ^ c).convert().convert()
+            })
+            .collect();
+        Ok(res)
+    }
+
+    pub fn open_bin<T: IntRing2k>(&mut self, share: Share<T>) -> Result<T, Error> {
+        let c = Utils::blocking_send_and_receive_value(&mut self.network, &share.b)?;
+        Ok((share.a ^ share.b ^ c).convert())
+    }
+
+    pub fn open_bin_many<T: IntRing2k>(&mut self, shares: VecShare<T>) -> Result<Vec<T>, Error> {
+        let shares_b = shares.iter().map(|s| &s.b);
+        let bytes: bytes::BytesMut =
+            Utils::blocking_send_iter_and_receive(&mut self.network, shares_b)?;
+        let shares_c = Utils::ring_iter_from_bytes(bytes, shares.len())?;
+        let res = shares
+            .into_iter()
+            .zip(shares_c)
+            .map(|(s, c)| {
+                let (a, b) = s.get_ab();
+                (a ^ b ^ c).convert()
+            })
+            .collect();
+        Ok(res)
     }
 }

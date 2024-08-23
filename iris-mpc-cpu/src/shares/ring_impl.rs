@@ -87,12 +87,6 @@ impl<T: IntRing2k> RingElement<T> {
         RingElement((self.0 >> index) & T::one())
     }
 
-    #[cfg(test)]
-    pub(crate) fn get_bit_as_bit(&self, index: usize) -> RingElement<Bit> {
-        let bit = ((self.0 >> index) & T::one()) == T::one();
-        RingElement(Bit(bit as u8))
-    }
-
     pub fn upgrade_to_128(self) -> RingElement<u128> {
         RingElement(self.0.into())
     }

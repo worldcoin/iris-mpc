@@ -1,4 +1,4 @@
-use super::iris::WorkerThread;
+use super::iris_worker::IrisWorker;
 use crate::{
     error::Error,
     networks::network_trait::NetworkTrait,
@@ -12,8 +12,8 @@ use iris_mpc_common::{
     galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::iris::IrisCodeArray,
 };
 
-impl<N: NetworkTrait> WorkerThread<N> {
-    pub(crate) fn rep3_dot_many(
+impl<N: NetworkTrait> IrisWorker<N> {
+    pub fn rep3_dot_many(
         &mut self,
         a: SliceShare<'_, u16>,
         b: &[VecShare<u16>],
@@ -44,7 +44,7 @@ impl<N: NetworkTrait> WorkerThread<N> {
         Ok(res)
     }
 
-    pub(crate) fn shamir_dot_many(
+    pub fn shamir_dot_many(
         &mut self,
         a: &GaloisRingIrisCodeShare,
         b: &[GaloisRingIrisCodeShare],
