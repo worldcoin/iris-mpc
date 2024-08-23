@@ -1,5 +1,4 @@
 use base64::prelude::{Engine, BASE64_STANDARD};
-use bincode::serialize;
 use clap::Parser;
 use data_encoding::HEXLOWER;
 use iris_mpc_common::{
@@ -7,8 +6,7 @@ use iris_mpc_common::{
 };
 use rand::{prelude::StdRng, SeedableRng};
 use ring::digest::{digest, SHA256};
-use serde::ser::Error;
-use serde::{Serialize, Serializer};
+use serde::{ser::Error, Serialize, Serializer};
 use serde_big_array::BigArray;
 use std::collections::BTreeMap;
 
@@ -20,25 +18,26 @@ const IRIS_MPC_VERSION: &str = "1.0";
 pub struct SerializeWithSortedKeys<T: Serialize>(#[serde(serialize_with = "sorted_keys")] pub T);
 
 fn sorted_keys<T: Serialize, S: Serializer>(value: &T, serializer: S) -> Result<S::Ok, S::Error> {
-    serde_json::to_value(value).map_err(Error::custom)?.serialize(serializer)
+    serde_json::to_value(value)
+        .map_err(Error::custom)?
+        .serialize(serializer)
 }
-
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
 struct IrisCodeSharesJson {
-    iris_version: String,
-    iris_shares_version: String,
-    left_iris_code_shares: String,
-    left_mask_code_shares: String,
+    iris_version:           String,
+    iris_shares_version:    String,
+    left_iris_code_shares:  String,
+    left_mask_code_shares:  String,
     right_iris_code_shares: String,
     right_mask_code_shares: String,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
 struct IrisCodeSharesFileOutput {
-    iris_code_shares_1: String,
-    iris_code_shares_2: String,
-    iris_code_shares_3: String,
+    iris_code_shares_1:      String,
+    iris_code_shares_2:      String,
+    iris_code_shares_3:      String,
     iris_code_shares_1_hash: String,
     iris_code_shares_2_hash: String,
     iris_code_shares_3_hash: String,
@@ -50,13 +49,12 @@ pub type IrisCodeShares = [IrisCodeShare; 3];
 /// Iris mask code shares.
 pub type MaskCodeShares = [IrisCodeShare; 3];
 
-
 /// Iris code share.
 #[allow(clippy::module_name_repetitions)]
 #[derive(Debug, Clone, Serialize)]
 pub struct IrisCodeShare {
     /// The ID.
-    pub id: usize,
+    pub id:    usize,
     /// The coefficients.
     #[serde(with = "BigArray")]
     pub coefs: [u16; 12800],
@@ -64,13 +62,19 @@ pub struct IrisCodeShare {
 
 impl Default for IrisCodeShare {
     fn default() -> Self {
-        Self { id: 0, coefs: [0; 12800] }
+        Self {
+            id:    0,
+            coefs: [0; 12800],
+        }
     }
 }
 
 impl From<GaloisRingIrisCodeShare> for IrisCodeShare {
     fn from(share: GaloisRingIrisCodeShare) -> Self {
-        Self { id: share.id, coefs: share.coefs }
+        Self {
+            id:    share.id,
+            coefs: share.coefs,
+        }
     }
 }
 
@@ -95,20 +99,19 @@ fn to_array(input: [GaloisRingIrisCodeShare; 3]) -> [IrisCodeShare; 3] {
         .expect("Expected exactly 3 elements")
 }
 
-
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    #[arg(short, long)]
+    #[arg(long)]
     iris_b64_left: Option<String>,
 
-    #[arg(short, long)]
+    #[arg(long)]
     mask_b64_left: Option<String>,
 
-    #[arg(short, long)]
+    #[arg(long)]
     iris_b64_right: Option<String>,
 
-    #[arg(short, long)]
+    #[arg(long)]
     mask_b64_right: Option<String>,
 
     #[arg(short, long, env)]
@@ -147,10 +150,24 @@ fn main() {
         IrisCodeArray::default()
     };
 
-    let shares_left = to_array(GaloisRingIrisCodeShare::encode_iris_code(&iris_code_left, &mask_code_left, &mut rng));
-    let masks_left = to_array(GaloisRingIrisCodeShare::encode_mask_code(&mask_code_left, &mut rng));
-    let shares_right = to_array(GaloisRingIrisCodeShare::encode_iris_code(&iris_code_right, &mask_code_right, &mut rng));
-    let masks_right = to_array(GaloisRingIrisCodeShare::encode_mask_code(&mask_code_right, &mut rng));
+    let shares_left = to_array(GaloisRingIrisCodeShare::encode_iris_code(
+        &iris_code_left,
+        &mask_code_left,
+        &mut rng,
+    ));
+    let masks_left = to_array(GaloisRingIrisCodeShare::encode_mask_code(
+        &mask_code_left,
+        &mut rng,
+    ));
+    let shares_right = to_array(GaloisRingIrisCodeShare::encode_iris_code(
+        &iris_code_right,
+        &mask_code_right,
+        &mut rng,
+    ));
+    let masks_right = to_array(GaloisRingIrisCodeShare::encode_mask_code(
+        &mask_code_right,
+        &mut rng,
+    ));
 
     let mut iris_code_shares_jsons = Vec::new();
     let mut iris_code_shares_file_output = BTreeMap::new();
@@ -162,10 +179,10 @@ fn main() {
         .enumerate()
     {
         let iris_code_shares = IrisCodeSharesJson {
-            iris_version: IRIS_VERSION.to_string(),
-            iris_shares_version: IRIS_MPC_VERSION.to_string(),
-            left_iris_code_shares: li.into(),
-            left_mask_code_shares: lm.into(),
+            iris_version:           IRIS_VERSION.to_string(),
+            iris_shares_version:    IRIS_MPC_VERSION.to_string(),
+            left_iris_code_shares:  li.into(),
+            left_mask_code_shares:  lm.into(),
             right_iris_code_shares: ri.into(),
             right_mask_code_shares: rm.into(),
         };
@@ -173,12 +190,19 @@ fn main() {
             .unwrap()
             .into_bytes();
 
-        iris_code_shares_file_output.insert(format!("iris_code_shares_hash{i}.json"), HEXLOWER.encode(digest(&SHA256, &json_u8).as_ref()));
-        iris_code_shares_file_output.insert(format!("iris_code_shares_{i}.json"), &json_u8);
+        iris_code_shares_file_output.insert(
+            format!("iris_code_shares_hash_{i}"),
+            HEXLOWER.encode(digest(&SHA256, &json_u8).as_ref()),
+        );
+        iris_code_shares_file_output.insert(
+            format!("iris_code_shares_{i}"),
+            BASE64_STANDARD.encode(&json_u8),
+        );
         iris_code_shares_jsons.push(json_u8);
     }
 
     // write iris_code_shares_file_output to file
-    let json_data = serde_json::to_string_pretty(&iris_code_shares_jsons).expect("Serialization failed");
+    let json_data =
+        serde_json::to_string(&iris_code_shares_file_output).expect("Serialization failed");
     println!("{}", json_data);
 }
