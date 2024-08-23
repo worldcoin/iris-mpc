@@ -33,16 +33,6 @@ struct IrisCodeSharesJson {
     right_mask_code_shares: String,
 }
 
-#[derive(Serialize, Debug, Clone, PartialEq)]
-struct IrisCodeSharesFileOutput {
-    iris_code_shares_1:      String,
-    iris_code_shares_2:      String,
-    iris_code_shares_3:      String,
-    iris_code_shares_1_hash: String,
-    iris_code_shares_2_hash: String,
-    iris_code_shares_3_hash: String,
-}
-
 /// Iris code shares.
 #[allow(clippy::module_name_repetitions)]
 pub type IrisCodeShares = [IrisCodeShare; 3];
