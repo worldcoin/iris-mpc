@@ -34,9 +34,8 @@ use rand::{rngs::StdRng, SeedableRng};
 use static_assertions::const_assert;
 use std::{
     mem,
-    os::unix::thread,
     sync::{Arc, LazyLock, Mutex},
-    time::{self, Duration, Instant},
+    time::{Duration, Instant},
 };
 use telemetry_batteries::{
     metrics::statsd::StatsdBattery,
@@ -45,7 +44,7 @@ use telemetry_batteries::{
 use tokio::{
     sync::{mpsc, oneshot},
     task::spawn_blocking,
-    time::{sleep, timeout},
+    time::timeout,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
