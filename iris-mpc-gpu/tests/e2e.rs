@@ -1,7 +1,7 @@
 use cudarc::nccl::Id;
 use eyre::Result;
 use iris_mpc_common::{
-    galois_engine::degree4::GaloisRingIrisCodeShare,
+    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     iris_db::{db::IrisDB, iris::IrisCode},
 };
 use iris_mpc_gpu::{
@@ -41,11 +41,13 @@ fn generate_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
         .db
         .iter()
         .flat_map(|iris| {
-            GaloisRingIrisCodeShare::encode_mask_code(
+            let mask: GaloisRingTrimmedMaskCodeShare = GaloisRingIrisCodeShare::encode_mask_code(
                 &iris.mask,
                 &mut StdRng::seed_from_u64(DB_RNG_SEED),
             )[party_id]
-                .coefs
+                .clone()
+                .into();
+            mask.coefs
         })
         .collect::<Vec<_>>();
 
@@ -220,6 +222,7 @@ async fn e2e_test() -> Result<()> {
                 GaloisRingIrisCodeShare::encode_iris_code(&template.code, &template.mask, &mut rng);
             let mut shared_mask =
                 GaloisRingIrisCodeShare::encode_mask_code(&template.mask, &mut rng);
+
             // batch0
             batch0.request_ids.push(request_id.to_string());
             // for storage

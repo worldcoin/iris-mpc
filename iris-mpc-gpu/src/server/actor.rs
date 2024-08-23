@@ -3,7 +3,7 @@ use crate::{
     dot::{
         distance_comparator::DistanceComparator,
         share_db::{preprocess_query, ShareDB, SlicedProcessedDatabase},
-        IRIS_CODE_LENGTH, ROTATIONS,
+        IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS,
     },
     helpers::{
         self,
@@ -162,15 +162,17 @@ impl ServerActor {
         db_buffer: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         assert!(
-            [
-                left_eye_db.0.len(),
-                left_eye_db.1.len(),
-                right_eye_db.0.len(),
-                right_eye_db.1.len()
-            ]
-            .iter()
-            .all(|&x| x == db_size * IRIS_CODE_LENGTH),
-            "Internal DB mismatch, codes and masks sizes differ"
+            [left_eye_db.0.len(), right_eye_db.0.len(),]
+                .iter()
+                .all(|&x| x == db_size * IRIS_CODE_LENGTH),
+            "Internal DB mismatch, left and right iris code db sizes differ"
+        );
+
+        assert!(
+            [left_eye_db.1.len(), right_eye_db.1.len()]
+                .iter()
+                .all(|&x| x == db_size * MASK_CODE_LENGTH),
+            "Internal DB mismatch, left and right mask code db sizes differ"
         );
 
         let (tx, rx) = mpsc::channel(job_queue_size);
@@ -222,6 +224,7 @@ impl ServerActor {
             device_manager.clone(),
             DB_CHUNK_SIZE,
             QUERIES,
+            IRIS_CODE_LENGTH,
             next_chacha_seeds(chacha_seeds)?,
             comms.clone(),
         );
@@ -231,6 +234,7 @@ impl ServerActor {
             device_manager.clone(),
             DB_CHUNK_SIZE,
             QUERIES,
+            MASK_CODE_LENGTH,
             next_chacha_seeds(chacha_seeds)?,
             comms.clone(),
         );
@@ -259,6 +263,7 @@ impl ServerActor {
             device_manager.clone(),
             QUERIES,
             QUERIES,
+            IRIS_CODE_LENGTH,
             next_chacha_seeds(chacha_seeds)?,
             comms.clone(),
         );
@@ -268,6 +273,7 @@ impl ServerActor {
             device_manager.clone(),
             QUERIES,
             QUERIES,
+            MASK_CODE_LENGTH,
             next_chacha_seeds(chacha_seeds)?,
             comms.clone(),
         );

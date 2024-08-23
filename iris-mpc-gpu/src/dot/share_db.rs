@@ -1,4 +1,3 @@
-use super::IRIS_CODE_LENGTH;
 use crate::{
     helpers::{
         device_manager::DeviceManager,
@@ -191,6 +190,7 @@ pub struct ShareDB {
     intermediate_results:  Vec<CudaSlice<i32>>,
     pub results:           Vec<CudaSlice<u8>>,
     pub results_peer:      Vec<CudaSlice<u8>>,
+    code_length:           usize,
 }
 
 impl ShareDB {
@@ -201,6 +201,7 @@ impl ShareDB {
         device_manager: Arc<DeviceManager>,
         max_db_length: usize,
         query_length: usize,
+        code_length: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
         comms: Vec<Arc<Comm>>,
     ) -> Self {
@@ -231,7 +232,7 @@ impl ShareDB {
             })
             .collect_vec();
 
-        let ones = vec![1u8; IRIS_CODE_LENGTH];
+        let ones = vec![1u8; code_length];
         let ones = (0..n_devices)
             .map(|idx| device_manager.device(idx).htod_sync_copy(&ones).unwrap())
             .collect::<Vec<_>>();
@@ -290,6 +291,7 @@ impl ShareDB {
             ones,
             results,
             results_peer,
+            code_length,
         }
     }
 
@@ -318,12 +320,12 @@ impl ShareDB {
             .for_each(|x| *x = (*x as i32 - 128) as i8);
 
         let a1_sums: Vec<u32> = a1_host
-            .par_chunks(IRIS_CODE_LENGTH)
+            .par_chunks(self.code_length)
             .map(|row| row.par_iter().map(|&x| x as u32).sum::<u32>())
             .collect();
 
         let a0_sums: Vec<u32> = a0_host
-            .par_chunks(IRIS_CODE_LENGTH)
+            .par_chunks(self.code_length)
             .map(|row| row.par_iter().map(|&x| x as u32).sum::<u32>())
             .collect();
 
@@ -374,16 +376,16 @@ impl ShareDB {
         let db1 = chunking(
             &a1_host,
             self.device_manager.device_count(),
-            chunk_size * IRIS_CODE_LENGTH,
-            IRIS_CODE_LENGTH,
+            chunk_size * self.code_length,
+            self.code_length,
             alternating_chunks,
         );
 
         let db0 = chunking(
             &a0_host,
             self.device_manager.device_count(),
-            chunk_size * IRIS_CODE_LENGTH,
-            IRIS_CODE_LENGTH,
+            chunk_size * self.code_length,
+            self.code_length,
             alternating_chunks,
         );
 
@@ -396,14 +398,14 @@ impl ShareDB {
 
         let db_lens = db0
             .iter()
-            .map(|chunk| chunk.len() / IRIS_CODE_LENGTH)
+            .map(|chunk| chunk.len() / self.code_length)
             .collect::<Vec<_>>();
 
         let db1 = db1
             .iter()
             .map(|chunk| unsafe {
                 let mem = malloc_managed(
-                    max_size * IRIS_CODE_LENGTH,
+                    max_size * self.code_length,
                     CUmemAttach_flags::CU_MEM_ATTACH_GLOBAL,
                 )
                 .unwrap();
@@ -416,7 +418,7 @@ impl ShareDB {
             .iter()
             .map(|chunk| unsafe {
                 let mem = malloc_managed(
-                    max_size * IRIS_CODE_LENGTH,
+                    max_size * self.code_length,
                     CUmemAttach_flags::CU_MEM_ATTACH_GLOBAL,
                 )
                 .unwrap();
@@ -498,7 +500,7 @@ impl ShareDB {
                 0,
                 self.query_length,
                 1,
-                IRIS_CODE_LENGTH,
+                self.code_length,
                 1,
                 0,
             );
@@ -512,7 +514,7 @@ impl ShareDB {
                 0,
                 self.query_length,
                 1,
-                IRIS_CODE_LENGTH,
+                self.code_length,
                 1,
                 0,
             );
@@ -557,12 +559,12 @@ impl ShareDB {
                         d,
                         *q.device_ptr(),
                         *self.intermediate_results[idx].device_ptr(),
-                        (offset * IRIS_CODE_LENGTH) as u64,
+                        (offset * self.code_length) as u64,
                         0,
                         0,
                         chunk_sizes[idx],
                         self.query_length,
-                        IRIS_CODE_LENGTH,
+                        self.code_length,
                         1 << (8 * (i + j)),
                         if i + j == 0 { 0 } else { 1 },
                     );
@@ -811,9 +813,15 @@ impl ShareDB {
 #[cfg(test)]
 mod tests {
     use super::{preprocess_query, ShareDB};
-    use crate::helpers::device_manager::DeviceManager;
+    use crate::{
+        dot::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH},
+        helpers::device_manager::DeviceManager,
+    };
     use float_eq::assert_float_eq;
-    use iris_mpc_common::{galois_engine::degree2::GaloisRingIrisCodeShare, iris_db::db::IrisDB};
+    use iris_mpc_common::{
+        galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+        iris_db::db::IrisDB,
+    };
     use ndarray::Array2;
     use num_traits::FromPrimitive;
     use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -862,6 +870,7 @@ mod tests {
             device_manager.clone(),
             DB_SIZE,
             QUERY_SIZE,
+            IRIS_CODE_LENGTH,
             ([0u32; 8], [0u32; 8]),
             vec![],
         );
@@ -869,7 +878,7 @@ mod tests {
         let streams = device_manager.fork_streams();
         let blass = device_manager.create_cublas(&streams);
         let preprocessed_query = device_manager
-            .htod_transfer_query(&preprocessed_query, &streams, QUERY_SIZE)
+            .htod_transfer_query(&preprocessed_query, &streams, QUERY_SIZE, IRIS_CODE_LENGTH)
             .unwrap();
         let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
         let (db_slices, db_sizes) = engine.load_db(&db, DB_SIZE, DB_SIZE, false);
@@ -947,11 +956,12 @@ mod tests {
             let querys = db.db[0..QUERY_SIZE]
                 .iter()
                 .flat_map(|iris| {
-                    let shares = GaloisRingIrisCodeShare::encode_mask_code(
+                    let mut shares = GaloisRingIrisCodeShare::encode_mask_code(
                         &iris.mask,
                         &mut StdRng::seed_from_u64(RNG_SEED),
                     );
-                    GaloisRingIrisCodeShare::preprocess_iris_code_query_shares(shares)[i].coefs
+                    shares[i].preprocess_iris_code_query_share();
+                    shares[i].coefs
                 })
                 .collect::<Vec<_>>();
 
@@ -960,6 +970,7 @@ mod tests {
                 device_manager.clone(),
                 DB_SIZE,
                 QUERY_SIZE,
+                IRIS_CODE_LENGTH,
                 ([0u32; 8], [0u32; 8]),
                 vec![],
             );
@@ -967,7 +978,7 @@ mod tests {
             let streams = device_manager.fork_streams();
             let blass = device_manager.create_cublas(&streams);
             let preprocessed_query = device_manager
-                .htod_transfer_query(&preprocessed_query, &streams, QUERY_SIZE)
+                .htod_transfer_query(&preprocessed_query, &streams, QUERY_SIZE, IRIS_CODE_LENGTH)
                 .unwrap();
             let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
             let (db_slices, db_sizes) = engine.load_db(&codes_db, DB_SIZE, DB_SIZE, false);
@@ -1003,17 +1014,8 @@ mod tests {
 
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
-        let mut results_codes = [
-            vec![0u16; DB_SIZE / n_devices * QUERY_SIZE],
-            vec![0u16; DB_SIZE / n_devices * QUERY_SIZE],
-            vec![0u16; DB_SIZE / n_devices * QUERY_SIZE],
-        ];
-
-        let mut results_masks = [
-            vec![0u16; DB_SIZE / n_devices * QUERY_SIZE],
-            vec![0u16; DB_SIZE / n_devices * QUERY_SIZE],
-            vec![0u16; DB_SIZE / n_devices * QUERY_SIZE],
-        ];
+        let mut results_codes = vec![vec![0u16; DB_SIZE / n_devices * QUERY_SIZE]; 3];
+        let mut results_masks = vec![vec![0u16; DB_SIZE / n_devices * QUERY_SIZE]; 3];
 
         for party_id in 0..3 {
             // DBs
@@ -1034,11 +1036,14 @@ mod tests {
                 .db
                 .iter()
                 .flat_map(|iris| {
-                    GaloisRingIrisCodeShare::encode_mask_code(
-                        &iris.mask,
-                        &mut StdRng::seed_from_u64(RNG_SEED),
-                    )[party_id]
-                        .coefs
+                    let mask: GaloisRingTrimmedMaskCodeShare =
+                        GaloisRingIrisCodeShare::encode_mask_code(
+                            &iris.mask,
+                            &mut StdRng::seed_from_u64(RNG_SEED),
+                        )[party_id]
+                            .clone()
+                            .into();
+                    mask.coefs
                 })
                 .collect::<Vec<_>>();
 
@@ -1046,25 +1051,26 @@ mod tests {
             let code_queries = db.db[0..QUERY_SIZE]
                 .iter()
                 .flat_map(|iris| {
-                    let shares = GaloisRingIrisCodeShare::encode_iris_code(
+                    let mut shares = GaloisRingIrisCodeShare::encode_iris_code(
                         &iris.code,
                         &iris.mask,
                         &mut StdRng::seed_from_u64(RNG_SEED),
                     );
-                    GaloisRingIrisCodeShare::preprocess_iris_code_query_shares(shares)[party_id]
-                        .coefs
+                    shares[party_id].preprocess_iris_code_query_share();
+                    shares[party_id].coefs
                 })
                 .collect::<Vec<_>>();
 
             let mask_queries = db.db[0..QUERY_SIZE]
                 .iter()
                 .flat_map(|iris| {
-                    let shares = GaloisRingIrisCodeShare::encode_mask_code(
+                    let mut shares = GaloisRingIrisCodeShare::encode_mask_code(
                         &iris.mask,
                         &mut StdRng::seed_from_u64(RNG_SEED),
                     );
-                    GaloisRingIrisCodeShare::preprocess_iris_code_query_shares(shares)[party_id]
-                        .coefs
+                    shares[party_id].preprocess_iris_code_query_share();
+                    let mask: GaloisRingTrimmedMaskCodeShare = shares[party_id].clone().into();
+                    mask.coefs
                 })
                 .collect::<Vec<_>>();
 
@@ -1075,6 +1081,7 @@ mod tests {
                 device_manager.clone(),
                 DB_SIZE,
                 QUERY_SIZE,
+                IRIS_CODE_LENGTH,
                 ([0u32; 8], [0u32; 8]),
                 vec![],
             );
@@ -1083,6 +1090,7 @@ mod tests {
                 device_manager.clone(),
                 DB_SIZE,
                 QUERY_SIZE,
+                MASK_CODE_LENGTH,
                 ([0u32; 8], [0u32; 8]),
                 vec![],
             );
@@ -1093,17 +1101,17 @@ mod tests {
             let streams = device_manager.fork_streams();
             let blass = device_manager.create_cublas(&streams);
             let code_query = device_manager
-                .htod_transfer_query(&code_query, &streams, QUERY_SIZE)
+                .htod_transfer_query(&code_query, &streams, QUERY_SIZE, IRIS_CODE_LENGTH)
                 .unwrap();
             let mask_query = device_manager
-                .htod_transfer_query(&mask_query, &streams, QUERY_SIZE)
+                .htod_transfer_query(&mask_query, &streams, QUERY_SIZE, MASK_CODE_LENGTH)
                 .unwrap();
             let code_query_sums = codes_engine.query_sums(&code_query, &streams, &blass);
             let mask_query_sums = masks_engine.query_sums(&mask_query, &streams, &blass);
             let (code_db_slices, db_sizes) =
                 codes_engine.load_db(&codes_db, DB_SIZE, DB_SIZE, false);
             let (mask_db_slices, mask_db_sizes) =
-                codes_engine.load_db(&masks_db, DB_SIZE, DB_SIZE, false);
+                masks_engine.load_db(&masks_db, DB_SIZE, DB_SIZE, false);
 
             assert_eq!(db_sizes, mask_db_sizes);
 
@@ -1153,6 +1161,7 @@ mod tests {
         for i in 0..results_codes[0].len() {
             let code = results_codes[0][i] + results_codes[1][i] + results_codes[2][i];
             let mask = results_masks[0][i] + results_masks[1][i] + results_masks[2][i];
+            let mask = mask * 2; // Correct for the shortening of the mask
 
             if i == 0 {
                 println!("Code: {}, Mask: {}", code, mask);
@@ -1171,6 +1180,9 @@ mod tests {
 
         // Compare against plain reference implementation
         let reference_dists = db.calculate_distances(&db.db[0]);
+
+        println!("Dists: {:?}", dists[0..10].to_vec());
+        println!("Ref Dists: {:?}", reference_dists[0..10].to_vec());
 
         // TODO: check for all devices and the whole query
         for i in 0..DB_SIZE / n_devices {

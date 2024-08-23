@@ -1,5 +1,8 @@
 use crate::{
-    dot::share_db::{ShareDB, SlicedProcessedDatabase},
+    dot::{
+        share_db::{ShareDB, SlicedProcessedDatabase},
+        IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
+    },
     helpers::device_manager::DeviceManager,
 };
 use cudarc::{
@@ -116,17 +119,29 @@ impl CompactQuery {
         batch_size: usize,
     ) -> eyre::Result<DeviceCompactQuery> {
         Ok(DeviceCompactQuery {
-            code_query:        device.htod_transfer_query(&self.code_query, streams, batch_size)?,
-            mask_query:        device.htod_transfer_query(&self.mask_query, streams, batch_size)?,
+            code_query:        device.htod_transfer_query(
+                &self.code_query,
+                streams,
+                batch_size,
+                IRIS_CODE_LENGTH,
+            )?,
+            mask_query:        device.htod_transfer_query(
+                &self.mask_query,
+                streams,
+                batch_size,
+                MASK_CODE_LENGTH,
+            )?,
             code_query_insert: device.htod_transfer_query(
                 &self.code_query_insert,
                 streams,
                 batch_size,
+                IRIS_CODE_LENGTH,
             )?,
             mask_query_insert: device.htod_transfer_query(
                 &self.mask_query_insert,
                 streams,
                 batch_size,
+                MASK_CODE_LENGTH,
             )?,
         })
     }

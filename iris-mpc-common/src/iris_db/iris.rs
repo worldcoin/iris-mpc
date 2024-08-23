@@ -165,9 +165,12 @@ impl IrisCode {
         };
 
         // remove about 10% of the mask bits
-        for _ in 0..Self::IRIS_CODE_SIZE / 10 {
-            let i = rng.gen_range(0..Self::IRIS_CODE_SIZE);
-            code.mask.set_bit(i, false);
+        // masks are duplicated in the last dimension, so we always need to set the bits
+        // pairwise <https://github.com/worldcoin/iris/blob/e43e32748fd6800aa1ee11b0e79261d5ed62d776/src/iris/nodes/encoder/iris_encoder.py#L46>
+        for _ in 0..Self::IRIS_CODE_SIZE / 10 / 2 {
+            let i = rng.gen_range(0..Self::IRIS_CODE_SIZE / 2);
+            code.mask.set_bit(2 * i, false);
+            code.mask.set_bit(2 * i + 1, false);
         }
 
         code

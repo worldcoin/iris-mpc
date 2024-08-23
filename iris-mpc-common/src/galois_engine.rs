@@ -4,7 +4,7 @@ pub mod degree2 {
     use crate::{
         galois::degree2::{GaloisRingElement, ShamirGaloisRingShare},
         iris_db::iris::IrisCodeArray,
-        IRIS_CODE_LENGTH,
+        IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
     };
     use base64::{prelude::BASE64_STANDARD, Engine};
     use rand::{CryptoRng, Rng};
@@ -234,10 +234,28 @@ pub mod degree4 {
     use crate::{
         galois::degree4::{basis, GaloisRingElement, ShamirGaloisRingShare},
         iris_db::iris::IrisCodeArray,
-        IRIS_CODE_LENGTH,
+        IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
     };
     use base64::{prelude::BASE64_STANDARD, Engine};
     use rand::{CryptoRng, Rng};
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub struct GaloisRingTrimmedMaskCodeShare {
+        pub id:    usize,
+        pub coefs: [u16; MASK_CODE_LENGTH],
+    }
+
+    impl From<GaloisRingIrisCodeShare> for GaloisRingTrimmedMaskCodeShare {
+        fn from(iris_share: GaloisRingIrisCodeShare) -> Self {
+            let mut coefs = [0; MASK_CODE_LENGTH];
+            coefs.copy_from_slice(&iris_share.coefs[..MASK_CODE_LENGTH]);
+
+            GaloisRingTrimmedMaskCodeShare {
+                id: iris_share.id,
+                coefs,
+            }
+        }
+    }
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     pub struct GaloisRingIrisCodeShare {
@@ -310,8 +328,9 @@ pub mod degree4 {
             }
             shares
         }
+
         pub fn encode_mask_code<R: CryptoRng + Rng>(
-            iris_code: &IrisCodeArray,
+            mask_code: &IrisCodeArray,
             rng: &mut R,
         ) -> [GaloisRingIrisCodeShare; 3] {
             let mut shares = [
@@ -330,10 +349,10 @@ pub mod degree4 {
             ];
             for i in (0..IRIS_CODE_LENGTH).step_by(4) {
                 let element = GaloisRingElement::<basis::A>::from_coefs([
-                    iris_code.get_bit(Self::remap_index(i)) as u16,
-                    iris_code.get_bit(Self::remap_index(i + 1)) as u16,
-                    iris_code.get_bit(Self::remap_index(i + 2)) as u16,
-                    iris_code.get_bit(Self::remap_index(i + 3)) as u16,
+                    mask_code.get_bit(Self::remap_index(i)) as u16,
+                    mask_code.get_bit(Self::remap_index(i + 1)) as u16,
+                    mask_code.get_bit(Self::remap_index(i + 2)) as u16,
+                    mask_code.get_bit(Self::remap_index(i + 3)) as u16,
                 ]);
                 let element = element.to_monomial();
                 let share = ShamirGaloisRingShare::encode_3_mat(&element.coefs, rng);
@@ -346,6 +365,30 @@ pub mod degree4 {
             }
             shares
         }
+
+        pub fn as_trimmed_mask(
+            shares: [GaloisRingIrisCodeShare; 3],
+        ) -> [GaloisRingTrimmedMaskCodeShare; 3] {
+            let mut trimmed_shares = [
+                GaloisRingTrimmedMaskCodeShare {
+                    id:    1,
+                    coefs: [0; MASK_CODE_LENGTH],
+                },
+                GaloisRingTrimmedMaskCodeShare {
+                    id:    2,
+                    coefs: [0; MASK_CODE_LENGTH],
+                },
+                GaloisRingTrimmedMaskCodeShare {
+                    id:    3,
+                    coefs: [0; MASK_CODE_LENGTH],
+                },
+            ];
+            for i in 0..3 {
+                trimmed_shares[i].coefs.copy_from_slice(&shares[i].coefs);
+            }
+            trimmed_shares
+        }
+
         #[allow(clippy::assertions_on_constants)]
         pub fn reencode_extended_iris_code<R: CryptoRng + Rng>(
             iris_code: &[u16; IRIS_CODE_LENGTH],
@@ -395,7 +438,8 @@ pub mod degree4 {
                     self.coefs[i + 3],
                 ]);
                 // include lagrange coeffs
-                let element = element * lagrange_coeffs[self.id - 1];
+                let element: GaloisRingElement<basis::Monomial> =
+                    element * lagrange_coeffs[self.id - 1];
                 let element = element.to_basis_B();
                 self.coefs[i] = element.coefs[0];
                 self.coefs[i + 1] = element.coefs[1];

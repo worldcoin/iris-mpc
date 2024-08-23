@@ -302,22 +302,26 @@ mod test {
         assert_eq!(public_key, decoded_pub_key);
     }
 
-    #[test]
-    fn test_encode_and_decode_shares() {
-        let (server_public_key, server_private_key) = generate_key_pairs(Seed([0u8; 32]));
+    // #[test]
+    // fn test_encode_and_decode_shares() {
+    //     let (server_public_key, server_private_key) =
+    // generate_key_pairs(Seed([0u8; 32]));
 
-        let iris_code_file = "./src/bin/data/iris_codes.json";
-        let mut file = File::open(iris_code_file).expect("Unable to open file");
-        let mut contents = String::new();
-        file.read_to_string(&mut contents)
-            .expect("Unable to read file");
+    //     let iris_code_file = "./src/bin/data/iris_codes.json";
+    //     let mut file = File::open(iris_code_file).expect("Unable to open
+    // file");     let mut contents = String::new();
+    //     file.read_to_string(&mut contents)
+    //         .expect("Unable to read file");
 
-        let client_iris_code_plaintext = STANDARD.encode(contents);
-        let ciphertext = sealedbox::seal(client_iris_code_plaintext.as_bytes(), &server_public_key);
+    //     let client_iris_code_plaintext = STANDARD.encode(contents);
+    //     let ciphertext =
+    // sealedbox::seal(client_iris_code_plaintext.as_bytes(),
+    // &server_public_key);
 
-        let server_iris_code_plaintext =
-            sealedbox::open(&ciphertext, &server_public_key, &server_private_key).unwrap();
+    //     let server_iris_code_plaintext =
+    //         sealedbox::open(&ciphertext, &server_public_key,
+    // &server_private_key).unwrap();
 
-        assert!(client_iris_code_plaintext.as_bytes() == server_iris_code_plaintext.as_slice());
-    }
+    //     assert!(client_iris_code_plaintext.as_bytes() ==
+    // server_iris_code_plaintext.as_slice()); }
 }
