@@ -56,6 +56,46 @@ const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 
 static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(MAX_BATCH_SIZE));
 
+#[allow(clippy::type_complexity)]
+fn preprocess_iris_message_shares(
+    party_id: usize,
+    code_shares: String,
+    mask_shares: String,
+) -> eyre::Result<(
+    GaloisRingIrisCodeShare,
+    GaloisRingIrisCodeShare,
+    Vec<GaloisRingIrisCodeShare>,
+    Vec<GaloisRingIrisCodeShare>,
+    Vec<GaloisRingIrisCodeShare>,
+    Vec<GaloisRingIrisCodeShare>,
+)> {
+    let mut iris_share = GaloisRingIrisCodeShare::from_base64(party_id + 1, code_shares.as_ref())
+        .context("Failed to base64 parse iris code")?;
+    let mut mask_share = GaloisRingIrisCodeShare::from_base64(party_id + 1, mask_shares.as_ref())
+        .context("Failed to base64 parse iris mask")?;
+
+    // Original for storage.
+    let store_iris_shares = iris_share.clone();
+    let store_mask_shares = mask_share.clone();
+
+    // With rotations for in-memory database.
+    let db_iris_shares = iris_share.all_rotations();
+    let db_mask_shares = mask_share.all_rotations();
+
+    // With Lagrange interpolation.
+    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
+    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut mask_share);
+
+    Ok((
+        store_iris_shares,
+        store_mask_shares,
+        db_iris_shares,
+        db_mask_shares,
+        iris_share.all_rotations(),
+        mask_share.all_rotations(),
+    ))
+}
+
 async fn receive_batch(
     party_id: usize,
     client: &Client,
@@ -156,75 +196,60 @@ async fn receive_batch(
                     }
                 }
 
+                // Preprocess shares for left eye.
                 let (
-                    store_iris_shares,
-                    store_mask_shares,
-                    db_iris_shares,
-                    db_mask_shares,
-                    iris_shares,
-                    mask_shares,
+                    store_iris_shares_left,
+                    store_mask_shares_left,
+                    db_iris_shares_left,
+                    db_mask_shares_left,
+                    iris_shares_left,
+                    mask_shares_left,
                 ) = spawn_blocking(move || {
-                    let mut iris_share = match GaloisRingIrisCodeShare::from_base64(
-                        party_id + 1,
-                        iris_message_share.right_iris_code_shares.as_ref(),
-                    ) {
-                        Ok(iris_share) => iris_share,
-                        Err(e) => {
-                            tracing::error!("Failed to parse iris share: {:?}", e);
-                            return Err(e);
-                        }
-                    };
-                    let mut mask_share = match GaloisRingIrisCodeShare::from_base64(
-                        party_id + 1,
-                        iris_message_share.right_iris_mask_shares.as_ref(),
-                    ) {
-                        Ok(iris_share) => iris_share,
-                        Err(e) => {
-                            tracing::error!("Failed to parse iris mask: {:?}", e);
-                            return Err(e);
-                        }
-                    };
-
-                    // Original for storage.
-                    let store_iris_shares = iris_share.clone();
-                    let store_mask_shares = mask_share.clone();
-
-                    // With rotations for in-memory database.
-                    let db_iris_shares = iris_share.all_rotations();
-                    let db_mask_shares = mask_share.all_rotations();
-
-                    // With Lagrange interpolation.
-                    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
-                    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut mask_share);
-
-                    Ok((
-                        store_iris_shares,
-                        store_mask_shares,
-                        db_iris_shares,
-                        db_mask_shares,
-                        iris_share.all_rotations(),
-                        mask_share.all_rotations(),
-                    ))
+                    preprocess_iris_message_shares(
+                        party_id,
+                        iris_message_share.left_iris_code_shares,
+                        iris_message_share.left_iris_mask_shares,
+                    )
                 })
                 .await
-                .context("while pre-processing iris code query")??;
+                .context("while pre-processing left iris query")??;
 
-                batch_query.store_left.code.push(store_iris_shares);
-                batch_query.store_left.mask.push(store_mask_shares);
-                batch_query.db_left.code.extend(db_iris_shares);
-                batch_query.db_left.mask.extend(db_mask_shares);
-                batch_query.query_left.code.extend(iris_shares);
-                batch_query.query_left.mask.extend(mask_shares);
+                batch_query.store_left.code.push(store_iris_shares_left);
+                batch_query.store_left.mask.push(store_mask_shares_left);
+                batch_query.db_left.code.extend(db_iris_shares_left);
+                batch_query.db_left.mask.extend(db_mask_shares_left);
+                batch_query.query_left.code.extend(iris_shares_left);
+                batch_query.query_left.mask.extend(mask_shares_left);
+
+                // Preprocess shares for right eye.
+                let (
+                    store_iris_shares_right,
+                    store_mask_shares_right,
+                    db_iris_shares_right,
+                    db_mask_shares_right,
+                    iris_shares_right,
+                    mask_shares_right,
+                ) = spawn_blocking(move || {
+                    preprocess_iris_message_shares(
+                        party_id,
+                        iris_message_share.right_iris_code_shares,
+                        iris_message_share.right_iris_mask_shares,
+                    )
+                })
+                .await
+                .context("while pre-processing right iris query")??;
+
+                batch_query.store_right.code.push(store_iris_shares_right);
+                batch_query.store_right.mask.push(store_mask_shares_right);
+                batch_query.db_right.code.extend(db_iris_shares_right);
+                batch_query.db_right.mask.extend(db_mask_shares_right);
+                batch_query.query_right.code.extend(iris_shares_right);
+                batch_query.query_right.mask.extend(mask_shares_right);
             }
         } else {
             tokio::time::sleep(SQS_POLLING_INTERVAL).await;
         }
     }
-    // TODO: also grab the right side from the batch once it is sent, ATM just
-    // duplicate left eye
-    batch_query.store_right = batch_query.store_left.clone();
-    batch_query.db_right = batch_query.db_left.clone();
-    batch_query.query_right = batch_query.query_left.clone();
 
     Ok(batch_query)
 }
