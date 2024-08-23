@@ -4,6 +4,7 @@ use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{routing::get, Router};
 use clap::Parser;
+use core::panic;
 use eyre::{eyre, Context};
 use futures::TryStreamExt;
 use iris_mpc_common::{
@@ -23,15 +24,19 @@ use iris_mpc_common::{
 use iris_mpc_gpu::{
     dot::ROTATIONS,
     helpers::device_manager::DeviceManager,
-    server::{sync_nccl, BatchMetadata, BatchQuery, ServerActor, ServerJobResult, MAX_BATCH_SIZE},
+    server::{
+        sync_nccl::{self, heartbeat},
+        BatchMetadata, BatchQuery, ServerActor, ServerJobResult, MAX_BATCH_SIZE,
+    },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
 use rand::{rngs::StdRng, SeedableRng};
 use static_assertions::const_assert;
 use std::{
     mem,
+    os::unix::thread,
     sync::{Arc, LazyLock, Mutex},
-    time::{Duration, Instant},
+    time::{self, Duration, Instant},
 };
 use telemetry_batteries::{
     metrics::statsd::StatsdBattery,
@@ -40,7 +45,7 @@ use telemetry_batteries::{
 use tokio::{
     sync::{mpsc, oneshot},
     task::spawn_blocking,
-    time::timeout,
+    time::{sleep, timeout},
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -53,6 +58,9 @@ const SYNC_QUERIES: usize = MAX_BATCH_SIZE * 2;
 const_assert!(SYNC_QUERIES <= sync_nccl::MAX_REQUESTS);
 const MAX_ROLLBACK: usize = MAX_BATCH_SIZE * 2;
 const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
+const HEARBEAT_INTERVAL: Duration = Duration::from_secs(5);
+const NCCL_START_WAIT_TIME: Duration = Duration::from_secs(5);
+const NCCL_START_RETRY: usize = 5;
 
 static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(MAX_BATCH_SIZE));
 
@@ -467,6 +475,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     tracing::info!("Preparing task monitor");
     let mut background_tasks = TaskMonitor::new();
+
     // a bit convoluted, but we need to create the actor on the thread already,
     // since it blocks a lot and is `!Send`, we get back the handle via the oneshot
     // channel
@@ -474,7 +483,16 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     background_tasks.spawn_blocking(move || {
         let device_manager = Arc::new(DeviceManager::init());
         let ids = device_manager.get_ids_from_magic(0);
-        let comms = device_manager.instantiate_network_from_ids(config.party_id, ids);
+
+        let mut comms = vec![];
+        for _ in 0..NCCL_START_RETRY {
+            let res = device_manager.instantiate_network_from_ids(config.party_id, &ids);
+            if let Ok(c) = res {
+                comms = c;
+                break;
+            }
+            std::thread::sleep(NCCL_START_WAIT_TIME);
+        }
 
         let sync_result = match sync_nccl::sync(&comms[0], &my_state) {
             Ok(res) => res,
@@ -634,8 +652,28 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
         Ok(())
     });
+
     background_tasks.check_tasks();
     tracing::info!("Healthcheck server running on port 3000.");
+
+    let _heartbeat = background_tasks.spawn_blocking(move || {
+        let device_manager = Arc::new(DeviceManager::init());
+        let ids = device_manager.get_ids_from_magic(0xdead);
+        let comms = device_manager.instantiate_network_from_ids(config.party_id, &ids)?;
+
+        loop {
+            for comm in comms.iter() {
+                if let Err(e) = heartbeat(comm) {
+                    tracing::error!("Heartbeat failed, aborting other tasks: {:?}", e);
+                    panic!("Heartbeat failed, restarting service");
+                }
+            }
+            std::thread::sleep(HEARBEAT_INTERVAL);
+        }
+    });
+
+    background_tasks.check_tasks();
+    tracing::info!("Heartbeat started.");
 
     let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 

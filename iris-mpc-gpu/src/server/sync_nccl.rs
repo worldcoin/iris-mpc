@@ -1,7 +1,7 @@
 //! Exchange the SyncState between parties using NCCL.
 
-use cudarc::nccl::Comm;
-use eyre::{eyre, Result};
+use cudarc::{driver::CudaSlice, nccl::Comm};
+use eyre::{eyre, Context, Result};
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 
 pub fn sync(comm: &Comm, state: &SyncState) -> Result<SyncResult> {
@@ -17,6 +17,19 @@ pub fn sync(comm: &Comm, state: &SyncState) -> Result<SyncResult> {
     let all_states_ser = comm.device().dtoh_sync_copy(&all_states_dev).unwrap();
     let all_states = deserialize_all(&all_states_ser)?;
     Ok(SyncResult::new(state.clone(), all_states))
+}
+
+pub fn heartbeat(comm: &Comm) -> Result<()> {
+    let ping: CudaSlice<u8> = comm.device().alloc_zeros(1).context("Failed to allocate")?;
+    let mut all_pings: CudaSlice<u8> = comm
+        .device()
+        .alloc_zeros(comm.world_size())
+        .context("Failed to allocate")?;
+
+    comm.all_gather(&ping, &mut all_pings)
+        .map_err(|e| eyre!("{:?}", e.0))?;
+
+    Ok(())
 }
 
 // Change these parameters together - see unittests below.
