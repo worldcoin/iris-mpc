@@ -5,6 +5,7 @@ on:
     paths:
       - Dockerfile.shares-encoding
       - .github/workflows/build-and-push-shares-encoding.yaml
+      - iris-mpc-common/src/bin/shares_encoding.rs
 
   workflow_dispatch:
 

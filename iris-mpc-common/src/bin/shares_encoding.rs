@@ -11,7 +11,7 @@ use serde_big_array::BigArray;
 use std::collections::BTreeMap;
 
 const RNG_SEED: u64 = 42; // Replace with your seed value
-const IRIS_VERSION: &str = "1.0";
+const IRIS_VERSION: &str = "1.1";
 const IRIS_MPC_VERSION: &str = "1.0";
 
 #[derive(Serialize)]
