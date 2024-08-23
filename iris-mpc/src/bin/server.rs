@@ -69,9 +69,9 @@ fn preprocess_iris_message_shares(
     Vec<GaloisRingIrisCodeShare>,
     Vec<GaloisRingIrisCodeShare>,
 )> {
-    let mut iris_share = GaloisRingIrisCodeShare::from_base64(party_id + 1, code_shares.as_ref())
+    let mut iris_share = GaloisRingIrisCodeShare::from_base64(party_id + 1, &code_shares)
         .context("Failed to base64 parse iris code")?;
-    let mut mask_share = GaloisRingIrisCodeShare::from_base64(party_id + 1, mask_shares.as_ref())
+    let mut mask_share = GaloisRingIrisCodeShare::from_base64(party_id + 1, &mask_shares)
         .context("Failed to base64 parse iris mask")?;
 
     // Original for storage.
