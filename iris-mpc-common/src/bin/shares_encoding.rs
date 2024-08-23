@@ -8,6 +8,7 @@ use rand::{prelude::StdRng, SeedableRng};
 use ring::digest::{digest, SHA256};
 use serde::{ser::Error, Serialize, Serializer};
 use serde_big_array::BigArray;
+use serde_json::Value;
 use std::collections::BTreeMap;
 
 const RNG_SEED: u64 = 42; // Replace with your seed value
@@ -18,9 +19,15 @@ const IRIS_MPC_VERSION: &str = "1.0";
 pub struct SerializeWithSortedKeys<T: Serialize>(#[serde(serialize_with = "sorted_keys")] pub T);
 
 fn sorted_keys<T: Serialize, S: Serializer>(value: &T, serializer: S) -> Result<S::Ok, S::Error> {
-    serde_json::to_value(value)
-        .map_err(Error::custom)?
-        .serialize(serializer)
+    let value = serde_json::to_value(value).map_err(Error::custom)?;
+
+    if let Value::Object(map) = value {
+        // Create a BTreeMap which automatically sorts the keys
+        let sorted_map: BTreeMap<_, _> = map.into_iter().collect();
+        sorted_map.serialize(serializer)
+    } else {
+        value.serialize(serializer)
+    }
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
