@@ -4,7 +4,7 @@ pub mod degree2 {
     use crate::{
         galois::degree2::{GaloisRingElement, ShamirGaloisRingShare},
         iris_db::iris::IrisCodeArray,
-        IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
+        IRIS_CODE_LENGTH,
     };
     use base64::{prelude::BASE64_STANDARD, Engine};
     use rand::{CryptoRng, Rng};
@@ -257,6 +257,52 @@ pub mod degree4 {
         }
     }
 
+    impl GaloisRingTrimmedMaskCodeShare {
+        const COLS: usize = 200;
+
+        pub fn preprocess_mask_code_query_share(&mut self) {
+            let lagrange_coeffs = ShamirGaloisRingShare::deg_2_lagrange_polys_at_zero();
+            for i in (0..MASK_CODE_LENGTH).step_by(4) {
+                let element = GaloisRingElement::<basis::Monomial>::from_coefs([
+                    self.coefs[i],
+                    self.coefs[i + 1],
+                    self.coefs[i + 2],
+                    self.coefs[i + 3],
+                ]);
+                // include lagrange coeffs
+                let element: GaloisRingElement<basis::Monomial> =
+                    element * lagrange_coeffs[self.id - 1];
+                let element = element.to_basis_B();
+                self.coefs[i] = element.coefs[0];
+                self.coefs[i + 1] = element.coefs[1];
+                self.coefs[i + 2] = element.coefs[2];
+                self.coefs[i + 3] = element.coefs[3];
+            }
+        }
+
+        pub fn all_rotations(&self) -> Vec<GaloisRingTrimmedMaskCodeShare> {
+            let mut reference = self.clone();
+            let mut result = vec![];
+            reference.rotate_left(16);
+            for _ in 0..31 {
+                reference.rotate_right(1);
+                result.push(reference.clone());
+            }
+            result
+        }
+        pub fn rotate_right(&mut self, by: usize) {
+            self.coefs
+                .chunks_exact_mut(Self::COLS * 4)
+                .for_each(|chunk| chunk.rotate_right(by * 4));
+        }
+
+        pub fn rotate_left(&mut self, by: usize) {
+            self.coefs
+                .chunks_exact_mut(Self::COLS * 4)
+                .for_each(|chunk| chunk.rotate_left(by * 4));
+        }
+    }
+
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     pub struct GaloisRingIrisCodeShare {
         pub id:    usize,
@@ -364,29 +410,6 @@ pub mod degree4 {
                 }
             }
             shares
-        }
-
-        pub fn as_trimmed_mask(
-            shares: [GaloisRingIrisCodeShare; 3],
-        ) -> [GaloisRingTrimmedMaskCodeShare; 3] {
-            let mut trimmed_shares = [
-                GaloisRingTrimmedMaskCodeShare {
-                    id:    1,
-                    coefs: [0; MASK_CODE_LENGTH],
-                },
-                GaloisRingTrimmedMaskCodeShare {
-                    id:    2,
-                    coefs: [0; MASK_CODE_LENGTH],
-                },
-                GaloisRingTrimmedMaskCodeShare {
-                    id:    3,
-                    coefs: [0; MASK_CODE_LENGTH],
-                },
-            ];
-            for i in 0..3 {
-                trimmed_shares[i].coefs.copy_from_slice(&shares[i].coefs);
-            }
-            trimmed_shares
         }
 
         #[allow(clippy::assertions_on_constants)]

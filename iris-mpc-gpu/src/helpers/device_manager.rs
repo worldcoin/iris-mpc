@@ -1,5 +1,5 @@
 use super::query_processor::{CudaVec2DSlicerU8, StreamAwareCudaSlice};
-use crate::dot::{IRIS_CODE_LENGTH, ROTATIONS};
+use crate::dot::ROTATIONS;
 use cudarc::{
     cublas::CudaBlas,
     driver::{

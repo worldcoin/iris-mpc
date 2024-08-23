@@ -2,7 +2,9 @@ mod actor;
 pub mod sync_nccl;
 
 pub use actor::{ServerActor, ServerActorHandle};
-use iris_mpc_common::galois_engine::degree4::GaloisRingIrisCodeShare;
+use iris_mpc_common::galois_engine::degree4::{
+    GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
+};
 use tokio::sync::oneshot;
 
 pub const MAX_BATCH_SIZE: usize = 64;
@@ -10,7 +12,7 @@ pub const MAX_BATCH_SIZE: usize = 64;
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BatchQueryEntries {
     pub code: Vec<GaloisRingIrisCodeShare>,
-    pub mask: Vec<GaloisRingIrisCodeShare>,
+    pub mask: Vec<GaloisRingTrimmedMaskCodeShare>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]

@@ -1,7 +1,6 @@
 #define UINT_MAX 0xffffffff
 #define ROTATIONS 15
 #define ALL_ROTATIONS (2 * ROTATIONS + 1)
-#define IRIS_CODE_LENGTH 12800
 #define U8 unsigned char
 #define MAX_MATCHES_LEN 256
 

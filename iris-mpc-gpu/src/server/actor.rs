@@ -22,7 +22,7 @@ use cudarc::{
     nccl::Comm,
 };
 use futures::{Future, FutureExt};
-use iris_mpc_common::{galois_engine::degree4::GaloisRingIrisCodeShare, IrisCodeDbSlice};
+use iris_mpc_common::IrisCodeDbSlice;
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{collections::HashMap, mem, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
@@ -409,11 +409,40 @@ impl ServerActor {
 
         // *Query* variant including Lagrange interpolation.
         let compact_query_left = {
-            let code_query = prepare_query_shares(batch.query_left.code);
-            let mask_query = prepare_query_shares(batch.query_left.mask);
+            let code_query = preprocess_query(
+                &batch
+                    .query_left
+                    .code
+                    .into_iter()
+                    .flat_map(|e| e.coefs)
+                    .collect::<Vec<_>>(),
+            );
+
+            let mask_query = preprocess_query(
+                &batch
+                    .query_left
+                    .mask
+                    .into_iter()
+                    .flat_map(|e| e.coefs)
+                    .collect::<Vec<_>>(),
+            );
             // *Storage* variant (no interpolation).
-            let code_query_insert = prepare_query_shares(batch.db_left.code);
-            let mask_query_insert = prepare_query_shares(batch.db_left.mask);
+            let code_query_insert = preprocess_query(
+                &batch
+                    .db_left
+                    .code
+                    .into_iter()
+                    .flat_map(|e| e.coefs)
+                    .collect::<Vec<_>>(),
+            );
+            let mask_query_insert = preprocess_query(
+                &batch
+                    .db_left
+                    .mask
+                    .into_iter()
+                    .flat_map(|e| e.coefs)
+                    .collect::<Vec<_>>(),
+            );
             CompactQuery {
                 code_query,
                 mask_query,
@@ -451,11 +480,40 @@ impl ServerActor {
 
         // *Query* variant including Lagrange interpolation.
         let compact_query_right = {
-            let code_query = prepare_query_shares(batch.query_right.code);
-            let mask_query = prepare_query_shares(batch.query_right.mask);
+            let code_query = preprocess_query(
+                &batch
+                    .query_right
+                    .code
+                    .into_iter()
+                    .flat_map(|e| e.coefs)
+                    .collect::<Vec<_>>(),
+            );
+
+            let mask_query = preprocess_query(
+                &batch
+                    .query_right
+                    .mask
+                    .into_iter()
+                    .flat_map(|e| e.coefs)
+                    .collect::<Vec<_>>(),
+            );
             // *Storage* variant (no interpolation).
-            let code_query_insert = prepare_query_shares(batch.db_right.code);
-            let mask_query_insert = prepare_query_shares(batch.db_right.mask);
+            let code_query_insert = preprocess_query(
+                &batch
+                    .db_right
+                    .code
+                    .into_iter()
+                    .flat_map(|e| e.coefs)
+                    .collect::<Vec<_>>(),
+            );
+            let mask_query_insert = preprocess_query(
+                &batch
+                    .db_right
+                    .mask
+                    .into_iter()
+                    .flat_map(|e| e.coefs)
+                    .collect::<Vec<_>>(),
+            );
             CompactQuery {
                 code_query,
                 mask_query,
@@ -603,23 +661,27 @@ impl ServerActor {
                     self.device_manager.device(i).bind_to_thread().unwrap();
                     for insertion_idx in insertion_list[i].clone() {
                         // Append left to codes and masks db
-                        for (db, query, sums) in [
+                        for (code_length, db, query, sums) in [
                             (
+                                IRIS_CODE_LENGTH,
                                 &self.left_code_db_slices,
                                 &compact_device_queries_left.code_query_insert,
                                 &compact_device_sums_left.code_query_insert,
                             ),
                             (
+                                MASK_CODE_LENGTH,
                                 &self.left_mask_db_slices,
                                 &compact_device_queries_left.mask_query_insert,
                                 &compact_device_sums_left.mask_query_insert,
                             ),
                             (
+                                IRIS_CODE_LENGTH,
                                 &self.right_code_db_slices,
                                 &compact_device_queries_right.code_query_insert,
                                 &compact_device_sums_right.code_query_insert,
                             ),
                             (
+                                MASK_CODE_LENGTH,
                                 &self.right_mask_db_slices,
                                 &compact_device_queries_right.mask_query_insert,
                                 &compact_device_sums_right.mask_query_insert,
@@ -628,21 +690,19 @@ impl ServerActor {
                             unsafe {
                                 helpers::dtod_at_offset(
                                     db.code_gr.limb_0[i],
-                                    self.current_db_sizes[i] * IRIS_CODE_LENGTH,
+                                    self.current_db_sizes[i] * code_length,
                                     *query.limb_0[i].device_ptr(),
-                                    IRIS_CODE_LENGTH * 15
-                                        + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                                    IRIS_CODE_LENGTH,
+                                    code_length * 15 + insertion_idx * code_length * ROTATIONS,
+                                    code_length,
                                     self.streams[0][i].stream,
                                 );
 
                                 helpers::dtod_at_offset(
                                     db.code_gr.limb_1[i],
-                                    self.current_db_sizes[i] * IRIS_CODE_LENGTH,
+                                    self.current_db_sizes[i] * code_length,
                                     *query.limb_1[i].device_ptr(),
-                                    IRIS_CODE_LENGTH * 15
-                                        + insertion_idx * IRIS_CODE_LENGTH * ROTATIONS,
-                                    IRIS_CODE_LENGTH,
+                                    code_length * 15 + insertion_idx * code_length * ROTATIONS,
+                                    code_length,
                                     self.streams[0][i].stream,
                                 );
 
@@ -1073,10 +1133,6 @@ fn derive_seed(seed: [u32; 8], kdf_salt: &Salt, nonce: usize) -> eyre::Result<[u
     Ok(result)
 }
 
-fn prepare_query_shares(shares: Vec<GaloisRingIrisCodeShare>) -> Vec<Vec<u8>> {
-    preprocess_query(&shares.into_iter().flat_map(|e| e.coefs).collect::<Vec<_>>())
-}
-
 #[allow(clippy::too_many_arguments)]
 fn open(
     party: &mut Circuits,
@@ -1141,7 +1197,7 @@ fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
         results.push(match_entry);
 
         // DEBUG
-        tracing::debug!(
+        println!(
             "Query {}: match={} [index: {}]",
             j,
             match_entry != NON_MATCH_ID,

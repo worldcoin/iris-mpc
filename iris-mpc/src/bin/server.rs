@@ -8,7 +8,7 @@ use eyre::{eyre, Context};
 use futures::TryStreamExt;
 use iris_mpc_common::{
     config::{json_wrapper::JsonStrWrapper, Config, Opt},
-    galois_engine::degree4::GaloisRingIrisCodeShare,
+    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
         aws::{
             NODE_ID_MESSAGE_ATTRIBUTE_NAME, SPAN_ID_MESSAGE_ATTRIBUTE_NAME,
@@ -141,8 +141,9 @@ async fn receive_batch(
                 ) = spawn_blocking(move || {
                     let mut iris_share =
                         GaloisRingIrisCodeShare::new(party_id + 1, message.get_iris_shares());
-                    let mut mask_share =
-                        GaloisRingIrisCodeShare::new(party_id + 1, message.get_mask_shares());
+                    let mut mask_share: GaloisRingTrimmedMaskCodeShare =
+                        GaloisRingIrisCodeShare::new(party_id + 1, message.get_mask_shares())
+                            .into();
 
                     // Original for storage.
                     let store_iris_shares = iris_share.clone();
@@ -154,7 +155,9 @@ async fn receive_batch(
 
                     // With Lagrange interpolation.
                     GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
-                    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut mask_share);
+                    GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(
+                        &mut mask_share,
+                    );
 
                     (
                         store_iris_shares,
