@@ -55,3 +55,7 @@ tolerations:
     operator: "Equal"
     value: "gpuGroup"
     effect: "NoSchedule"
+
+keelPolling:
+  # -- Specifies whether keel should poll for container updates
+  enabled: true
