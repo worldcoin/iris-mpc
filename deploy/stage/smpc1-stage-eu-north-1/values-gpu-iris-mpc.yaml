@@ -1,0 +1,66 @@
+env:
+  - name: RUST_LOG
+    value: "info"
+
+  - name: NCCL_SOCKET_IFNAME
+    value: "eth0"
+
+  - name: NCCL_COMM_ID
+    value: "172.16.0.160:4000"
+
+  - name: RUST_BACKTRACE
+    value: "full"
+
+  - name: SMPC__ENVIRONMENT
+    value: "stage"
+
+  - name: SMPC__SERVICE__SERVICE_NAME
+    value: "smpcv2-server"
+
+  - name: SMPC__DATABASE__URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_URL
+        name: application
+
+  - name: SMPC__DATABASE__MIGRATE
+    value: "true"
+
+  - name: SMPC__DATABASE__CREATE
+    value: "true"
+
+  - name: SMPC__DATABASE__LOAD_PARALLELISM
+    value: "8"
+
+  - name: SMPC__AWS__REGION
+    value: "eu-north-1"
+
+  - name: SMPC__REQUESTS_QUEUE_URL
+    valueFrom:
+      secretKeyRef:
+        key: SQS_URL
+        name: application
+
+  - name: SMPC__RESULTS_TOPIC_ARN
+    valueFrom:
+      secretKeyRef:
+        key: SNS_RESULTS_ARN
+        name: application
+
+  - name: SMPC__PROCESSING_TIMEOUT_SECS
+    value: "60"
+
+  - name: SMPC__PATH
+    value: "/data/"
+
+  - name: SMPC__KMS_KEY_ARNS
+    valueFrom:
+      secretKeyRef:
+        key: KMS_KEYS
+        name: application
+
+  - name: SMPC__PARTY_ID
+    value: "1"
+
+  - name: SMPC__PUBLIC_KEY_BASE_URL
+    value: "https://d2my9d2y2jkpfn.cloudfront.net"
