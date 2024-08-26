@@ -1,0 +1,43 @@
+name: Run unit tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [ opened, synchronize ]
+
+concurrency:
+  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    runs-on:
+      labels: ubuntu-22.04-64core
+
+    services:
+      postgres:
+        image: postgres
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Cache build products
+        uses: Swatinem/rust-cache@v2.7.3
+        with:
+          # Split the test and bench caches, the have different debug settings
+          key: "test"
+      - name: Install Rust nightly
+        run: rustup toolchain install nightly-2024-07-10
+      - name: Set Rust nightly as default
+        run: rustup default nightly-2024-07-10
+      - name: Run Tests
+        run: cargo test --release -- --test-threads=1
+      - name: Run Tests with DB
+        run: cargo test --release --features db_dependent -- --test-threads=1

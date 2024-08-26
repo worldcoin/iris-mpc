@@ -64,6 +64,7 @@ fn install_tracing() {
 }
 
 #[tokio::test]
+#[cfg(feature = "gpu_dependent")]
 async fn e2e_test() -> Result<()> {
     install_tracing();
     env::set_var("NCCL_P2P_LEVEL", "LOC");

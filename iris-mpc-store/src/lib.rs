@@ -306,9 +306,10 @@ mod tests {
 
     use super::*;
     use futures::TryStreamExt;
-    use iris_mpc_common::helpers::sqs::ResultEvent;
+    use iris_mpc_common::helpers::smpc_request::ResultEvent;
 
     #[tokio::test]
+    #[cfg(feature = "db_dependent")]
     async fn test_store() -> Result<()> {
         // Create a unique schema for this test.
         let schema_name = temporary_name();
@@ -362,6 +363,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "db_dependent")]
     async fn test_empty_insert() -> Result<()> {
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
@@ -377,6 +379,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "db_dependent")]
     async fn test_insert_many() -> Result<()> {
         let count = 1 << 13;
 
@@ -428,6 +431,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "db_dependent")]
     async fn test_rollback() -> Result<()> {
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
@@ -453,6 +457,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "db_dependent")]
     async fn test_results() -> Result<()> {
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
@@ -471,6 +476,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "db_dependent")]
     async fn test_mark_requests_deleted() -> Result<()> {
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
@@ -492,6 +498,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "db_dependent")]
     async fn test_insert_left_right() -> Result<()> {
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;

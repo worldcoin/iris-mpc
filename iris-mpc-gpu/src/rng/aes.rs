@@ -93,6 +93,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "gpu_dependent")]
     fn test_aes_rng() {
         let mut rng = AesCudaRng::init(1024 * 1024);
         rng.fill_rng();

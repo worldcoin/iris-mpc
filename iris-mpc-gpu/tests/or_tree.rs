@@ -86,6 +86,7 @@ fn open(party: &mut Circuits, result: &mut ChunkShare<u64>, streams: &[CudaStrea
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(feature = "gpu_dependent")]
 #[ignore]
 async fn main() -> eyre::Result<()> {
     const_assert!(

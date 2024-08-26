@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/gpu-iris-mpc:debug-pop-1768-v2"
+image: "ghcr.io/worldcoin/gpu-iris-mpc:v0.3.2-alpha"
 
 environment: stage
 replicaCount: 1
@@ -55,3 +55,7 @@ tolerations:
     operator: "Equal"
     value: "gpuGroup"
     effect: "NoSchedule"
+
+keelPolling:
+  # -- Specifies whether keel should poll for container updates
+  enabled: true

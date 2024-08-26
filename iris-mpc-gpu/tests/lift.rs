@@ -164,6 +164,7 @@ fn open(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore]
+#[cfg(feature = "gpu_dependent")]
 async fn test_lift() -> eyre::Result<()> {
     const_assert!(
         INPUTS_PER_GPU_SIZE % (2048) == 0,
