@@ -43,7 +43,7 @@ use telemetry_batteries::{
 };
 use tokio::{
     sync::{mpsc, oneshot},
-    task::spawn_blocking,
+    task::{spawn_blocking, JoinHandle},
     time::timeout,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -493,6 +493,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             std::thread::sleep(NCCL_START_WAIT_TIME);
         }
 
+        if comms.is_empty() {
+            tx.send(Err(eyre!("Number of NCCL connection retries exceeded")))
+                .unwrap();
+            return Ok(());
+        }
+
         let sync_result = match sync_nccl::sync(&comms[0], &my_state) {
             Ok(res) => res,
             Err(e) => {
@@ -655,20 +661,42 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     background_tasks.check_tasks();
     tracing::info!("Healthcheck server running on port 3000.");
 
-    let _heartbeat = background_tasks.spawn_blocking(move || {
-        let device_manager = Arc::new(DeviceManager::init());
-        let ids = device_manager.get_ids_from_magic(0xdead);
-        let comms = device_manager.instantiate_network_from_ids(config.party_id, &ids)?;
+    let _heartbeat = background_tasks.spawn(async move {
+        let (tx, mut rx) = mpsc::channel(1);
+
+        let comm_handle: JoinHandle<eyre::Result<()>> = spawn_blocking(move || {
+            let device_manager = Arc::new(DeviceManager::init());
+            let ids = device_manager.get_ids_from_magic(0xdead);
+            let comms = device_manager.instantiate_network_from_ids(config.party_id, &ids)?;
+
+            loop {
+                for comm in comms.iter() {
+                    tx.blocking_send(heartbeat(comm))?;
+                }
+                std::thread::sleep(HEARBEAT_INTERVAL);
+            }
+        });
 
         loop {
-            for comm in comms.iter() {
-                if let Err(e) = heartbeat(comm) {
-                    tracing::error!("Heartbeat failed, aborting other tasks: {:?}", e);
+            match timeout(HEARBEAT_INTERVAL * 2, rx.recv()).await {
+                Ok(Some(Ok(_))) => continue,
+                Ok(Some(Err(e))) => {
+                    tracing::error!("Heartbeat failed: {:?}", e);
                     panic!("Heartbeat failed, restarting service");
                 }
+                Ok(None) => {
+                    tracing::error!("Heartbeat channel closed, stopping heartbeat task.");
+                    break;
+                }
+                Err(_) => {
+                    tracing::error!("Heartbeat timeout.");
+                    panic!("Heartbeat timeout, restarting service");
+                }
             }
-            std::thread::sleep(HEARBEAT_INTERVAL);
         }
+
+        comm_handle.await??;
+        eyre::Ok(())
     });
 
     background_tasks.check_tasks();
