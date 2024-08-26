@@ -1,7 +1,5 @@
-use super::{
-    key_pair::{SharesDecodingError, SharesEncryptionKeyPair},
-    sha256::calculate_sha256,
-};
+use super::{key_pair::SharesDecodingError, sha256::calculate_sha256};
+use crate::helpers::key_pair::SharesEncryptionKeyPairs;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 
@@ -106,13 +104,24 @@ impl SMPCRequest {
     pub fn decrypt_iris_share(
         &self,
         share: String,
-        key_pair: SharesEncryptionKeyPair,
+        key_pairs: SharesEncryptionKeyPairs,
     ) -> Result<IrisCodesJSON, SharesDecodingError> {
         let share_bytes = STANDARD
             .decode(share.as_bytes())
             .map_err(|_| SharesDecodingError::Base64DecodeError)?;
 
-        let decrypted = key_pair.open_sealed_box(share_bytes);
+        // try decrypting with key_pairs.current_key_pair, if it fails, try decrypting
+        // with key_pairs.previous_key_pair
+        let decrypted = match key_pairs
+            .current_key_pair
+            .open_sealed_box(share_bytes.clone())
+        {
+            Ok(bytes) => Ok(bytes),
+            Err(_) => key_pairs
+                .previous_key_pair
+                .open_sealed_box(share_bytes)
+                .map_err(|_| SharesDecodingError::SealedBoxOpenError),
+        };
 
         let iris_share = match decrypted {
             Ok(bytes) => {

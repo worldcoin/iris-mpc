@@ -11,7 +11,7 @@ use iris_mpc_common::{
     galois_engine::degree4::GaloisRingIrisCodeShare,
     helpers::{
         aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
-        key_pair::SharesEncryptionKeyPair,
+        key_pair::SharesEncryptionKeyPairs,
         kms_dh::derive_shared_secret,
         smpc_request::{ResultEvent, SMPCRequest, SQSMessage},
         sync::SyncState,
@@ -62,7 +62,7 @@ async fn receive_batch(
     queue_url: &String,
     store: &Store,
     skip_request_ids: &[String],
-    shares_encryption_key_pair: SharesEncryptionKeyPair,
+    shares_encryption_key_pair: SharesEncryptionKeyPairs,
 ) -> eyre::Result<BatchQuery> {
     let mut batch_query = BatchQuery::default();
 
@@ -436,10 +436,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);
     let shares_encryption_key_pair =
-        match SharesEncryptionKeyPair::from_storage(config.clone()).await {
+        match SharesEncryptionKeyPairs::from_storage(config.clone()).await {
             Ok(key_pair) => key_pair,
             Err(e) => {
-                tracing::error!("Failed to initialize shares encryption key pair: {:?}", e);
+                tracing::error!("Failed to initialize shares encryption key pairs: {:?}", e);
                 return Ok(());
             }
         };

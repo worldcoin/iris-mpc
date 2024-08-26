@@ -15,6 +15,7 @@ use zeroize::Zeroize;
 
 const REGION: &str = "eu-north-1";
 const CURRENT_SECRET_LABEL: &str = "AWSCURRENT";
+const PREVIOUS_SECRET_LABEL: &str = "AWSPREVIOUS";
 
 #[derive(Error, Debug)]
 pub enum SharesDecodingError {
@@ -55,6 +56,84 @@ pub enum SharesDecodingError {
 }
 
 #[derive(Clone, Debug)]
+pub struct SharesEncryptionKeyPairs {
+    pub current_key_pair:  SharesEncryptionKeyPair,
+    pub previous_key_pair: SharesEncryptionKeyPair,
+}
+
+impl Zeroize for SharesEncryptionKeyPairs {
+    fn zeroize(&mut self) {
+        self.current_key_pair.pk.0.zeroize();
+        self.current_key_pair.sk.0.zeroize();
+        self.previous_key_pair.pk.0.zeroize();
+        self.previous_key_pair.sk.0.zeroize();
+    }
+}
+
+impl Drop for SharesEncryptionKeyPairs {
+    fn drop(&mut self) {
+        self.current_key_pair.pk.0.zeroize();
+        self.current_key_pair.sk.0.zeroize();
+        self.previous_key_pair.pk.0.zeroize();
+        self.previous_key_pair.sk.0.zeroize();
+    }
+}
+
+impl SharesEncryptionKeyPairs {
+    pub async fn from_storage(config: Config) -> Result<Self, SharesDecodingError> {
+        let region_provider = Region::new(REGION);
+        let shared_config = aws_config::from_env().region(region_provider).load().await;
+        let client = SecretsManagerClient::new(&shared_config);
+
+        let current_sk_b64_string = match download_private_key_from_asm(
+            &client,
+            &config.environment,
+            &config.party_id.to_string(),
+            CURRENT_SECRET_LABEL,
+        )
+        .await
+        {
+            Ok(sk) => sk,
+            Err(e) => return Err(e),
+        };
+
+        let previous_sk_b64_string = match download_private_key_from_asm(
+            &client,
+            &config.environment,
+            &config.party_id.to_string(),
+            PREVIOUS_SECRET_LABEL,
+        )
+        .await
+        {
+            Ok(sk) => sk,
+            Err(e) => return Err(e),
+        };
+
+        match SharesEncryptionKeyPairs::from_b64_private_key_strings(
+            current_sk_b64_string,
+            previous_sk_b64_string,
+        ) {
+            Ok(key_pairs) => Ok(key_pairs),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn from_b64_private_key_strings(
+        current_sk_b64_string: String,
+        previous_sk_b64_string: String,
+    ) -> Result<Self, SharesDecodingError> {
+        let current_key_pair =
+            SharesEncryptionKeyPair::from_b64_private_key_string(current_sk_b64_string)?;
+        let previous_key_pair =
+            SharesEncryptionKeyPair::from_b64_private_key_string(previous_sk_b64_string)?;
+        Ok(SharesEncryptionKeyPairs {
+            current_key_pair,
+            previous_key_pair,
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct SharesEncryptionKeyPair {
     pk: PublicKey,
     sk: SecretKey,
@@ -75,59 +154,19 @@ impl Drop for SharesEncryptionKeyPair {
 }
 
 impl SharesEncryptionKeyPair {
-    pub async fn from_storage(config: Config) -> Result<Self, SharesDecodingError> {
-        let region_provider = Region::new(REGION);
-        let shared_config = aws_config::from_env().region(region_provider).load().await;
-        let client = SecretsManagerClient::new(&shared_config);
-
-        let pk_b64_string = match download_public_key(
-            config.public_key_base_url,
-            config.party_id.to_string(),
-        )
-        .await
-        {
-            Ok(pk) => pk,
-            Err(e) => return Err(e),
-        };
-
-        let sk_b64_string = match download_private_key_from_asm(
-            &client,
-            &config.environment,
-            &config.party_id.to_string(),
-            CURRENT_SECRET_LABEL,
-        )
-        .await
-        {
-            Ok(sk) => sk,
-            Err(e) => return Err(e),
-        };
-
-        match SharesEncryptionKeyPair::from_b64_strings(pk_b64_string, sk_b64_string) {
-            Ok(key_pair) => Ok(key_pair),
-            Err(e) => Err(e),
-        }
-    }
-
-    pub fn from_b64_strings(pk: String, sk: String) -> Result<Self, SharesDecodingError> {
-        let pk_bytes = match STANDARD.decode(pk) {
-            Ok(bytes) => bytes,
-            Err(e) => return Err(SharesDecodingError::DecodingError(e)),
-        };
+    pub fn from_b64_private_key_string(sk: String) -> Result<Self, SharesDecodingError> {
         let sk_bytes = match STANDARD.decode(sk) {
             Ok(bytes) => bytes,
             Err(e) => return Err(SharesDecodingError::DecodingError(e)),
         };
 
-        let pk = match PublicKey::from_slice(&pk_bytes) {
-            Some(pk) => pk,
-            None => return Err(SharesDecodingError::ParsingKeyError),
-        };
         let sk = match SecretKey::from_slice(&sk_bytes) {
             Some(sk) => sk,
             None => return Err(SharesDecodingError::ParsingKeyError),
         };
 
-        Ok(Self { pk, sk })
+        let pk_from_sk = sk.public_key();
+        Ok(Self { pk: pk_from_sk, sk })
     }
 
     pub fn open_sealed_box(&self, code: Vec<u8>) -> Result<Vec<u8>, SharesDecodingError> {
