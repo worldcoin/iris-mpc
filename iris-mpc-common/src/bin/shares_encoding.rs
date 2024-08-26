@@ -8,8 +8,7 @@ use ring::digest::{digest, SHA256};
 use serde::{ser::Error, Serialize, Serializer};
 use serde_big_array::BigArray;
 use serde_json::Value;
-use std::collections::BTreeMap;
-use std::env;
+use std::{collections::BTreeMap, env};
 
 const RNG_SEED: u64 = 42; // Replace with your seed value
 const IRIS_VERSION: &str = "1.1";
