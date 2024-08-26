@@ -1,5 +1,4 @@
 use base64::prelude::{Engine, BASE64_STANDARD};
-use clap::Parser;
 use data_encoding::HEXLOWER;
 use iris_mpc_common::{
     galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::iris::IrisCodeArray,
@@ -10,6 +9,7 @@ use serde::{ser::Error, Serialize, Serializer};
 use serde_big_array::BigArray;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::env;
 
 const RNG_SEED: u64 = 42; // Replace with your seed value
 const IRIS_VERSION: &str = "1.1";
@@ -37,9 +37,9 @@ struct IrisCodeSharesJson {
     #[serde(rename = "IRIS_shares_version")]
     iris_shares_version:    String,
     left_iris_code_shares:  String,
-    left_mask_code_shares:  String,
+    left_iris_mask_shares:  String,
     right_iris_code_shares: String,
-    right_mask_code_shares: String,
+    right_iris_mask_shares: String,
 }
 
 /// Iris code shares.
@@ -98,52 +98,36 @@ fn to_array(input: [GaloisRingIrisCodeShare; 3]) -> [IrisCodeShare; 3] {
         .expect("Expected exactly 3 elements")
 }
 
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    #[arg(long)]
-    iris_b64_left: Option<String>,
-
-    #[arg(long)]
-    mask_b64_left: Option<String>,
-
-    #[arg(long)]
-    iris_b64_right: Option<String>,
-
-    #[arg(long)]
-    mask_b64_right: Option<String>,
-
-    #[arg(short, long, env)]
-    rng_seed: Option<u64>,
-}
-
 fn main() {
-    let args = Args::parse();
-    let mut rng = if let Some(seed_rng) = args.rng_seed {
-        StdRng::seed_from_u64(seed_rng)
+    let mut rng = if let Ok(seed_rng) = env::var("SEED_RNG") {
+        StdRng::seed_from_u64(seed_rng.parse().unwrap())
     } else {
         StdRng::seed_from_u64(RNG_SEED)
     };
 
-    let iris_code_left = if let Some(iris_base_64) = args.iris_b64_right {
+    match env::var("MY_ENV_VAR") {
+        Ok(value) => println!("The value of MY_ENV_VAR is: {}", value),
+        Err(e) => println!("Couldn't read MY_ENV_VAR: {}", e),
+    }
+    let iris_code_left = if let Ok(iris_base_64) = env::var("IRIS_B64_LEFT") {
         IrisCodeArray::from_base64(&iris_base_64).unwrap()
     } else {
         IrisCodeArray::random_rng(&mut rng)
     };
 
-    let mask_code_left = if let Some(mask_base_64) = args.mask_b64_right {
+    let mask_code_left = if let Ok(mask_base_64) = env::var("MASK_B64_LEFT") {
         IrisCodeArray::from_base64(&mask_base_64).unwrap()
     } else {
         IrisCodeArray::default()
     };
 
-    let iris_code_right = if let Some(iris_base_64) = args.iris_b64_left {
+    let iris_code_right = if let Ok(iris_base_64) = env::var("IRIS_B64_RIGHT") {
         IrisCodeArray::from_base64(&iris_base_64).unwrap()
     } else {
         IrisCodeArray::random_rng(&mut rng)
     };
 
-    let mask_code_right = if let Some(mask_base_64) = args.mask_b64_left {
+    let mask_code_right = if let Ok(mask_base_64) = env::var("MASK_B64_RIGHT") {
         IrisCodeArray::from_base64(&mask_base_64).unwrap()
     } else {
         IrisCodeArray::default()
@@ -181,9 +165,9 @@ fn main() {
             iris_version:           IRIS_VERSION.to_string(),
             iris_shares_version:    IRIS_MPC_VERSION.to_string(),
             left_iris_code_shares:  li.into(),
-            left_mask_code_shares:  lm.into(),
+            left_iris_mask_shares:  lm.into(),
             right_iris_code_shares: ri.into(),
-            right_mask_code_shares: rm.into(),
+            right_iris_mask_shares: rm.into(),
         };
         let json_u8 = serde_json::to_string(&SerializeWithSortedKeys(&iris_code_shares))
             .unwrap()
@@ -216,12 +200,12 @@ mod tests {
             iris_version:           IRIS_VERSION.to_string(),
             iris_shares_version:    IRIS_MPC_VERSION.to_string(),
             left_iris_code_shares:  "left_iris_code_shares".to_string(),
-            left_mask_code_shares:  "left_mask_code_shares".to_string(),
+            left_iris_mask_shares:  "left_mask_code_shares".to_string(),
             right_iris_code_shares: "right_iris_code_shares".to_string(),
-            right_mask_code_shares: "right_mask_code_shares".to_string(),
+            right_iris_mask_shares: "right_mask_code_shares".to_string(),
         };
 
-        let expected = r#"{"IRIS_shares_version":"1.0","IRIS_version":"1.1","left_iris_code_shares":"left_iris_code_shares","left_mask_code_shares":"left_mask_code_shares","right_iris_code_shares":"right_iris_code_shares","right_mask_code_shares":"right_mask_code_shares"}"#;
+        let expected = r#"{"IRIS_shares_version":"1.0","IRIS_version":"1.1","left_iris_code_shares":"left_iris_mask_shares","left_mask_code_shares":"left_mask_code_shares","right_iris_code_shares":"right_iris_code_shares","right_iris_mask_shares":"right_mask_code_shares"}"#;
         assert_eq!(
             serde_json::to_string(&SerializeWithSortedKeys(&iris_code_shares)).unwrap(),
             expected
