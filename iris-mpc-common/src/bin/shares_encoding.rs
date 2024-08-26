@@ -199,12 +199,12 @@ mod tests {
             iris_version:           IRIS_VERSION.to_string(),
             iris_shares_version:    IRIS_MPC_VERSION.to_string(),
             left_iris_code_shares:  "left_iris_code_shares".to_string(),
-            left_iris_mask_shares:  "left_mask_code_shares".to_string(),
+            left_iris_mask_shares:  "left_iris_mask_shares".to_string(),
             right_iris_code_shares: "right_iris_code_shares".to_string(),
-            right_iris_mask_shares: "right_mask_code_shares".to_string(),
+            right_iris_mask_shares: "right_iris_mask_shares".to_string(),
         };
 
-        let expected = r#"{"IRIS_shares_version":"1.0","IRIS_version":"1.1","left_iris_code_shares":"left_iris_mask_shares","left_mask_code_shares":"left_mask_code_shares","right_iris_code_shares":"right_iris_code_shares","right_iris_mask_shares":"right_mask_code_shares"}"#;
+        let expected = r#"{"IRIS_shares_version":"1.0","IRIS_version":"1.1","left_iris_code_shares":"left_iris_mask_shares","left_iris_mask_shares":"left_iris_mask_shares","right_iris_code_shares":"right_iris_code_shares","right_iris_mask_shares":"right_iris_mask_shares"}"#;
         assert_eq!(
             serde_json::to_string(&SerializeWithSortedKeys(&iris_code_shares)).unwrap(),
             expected
