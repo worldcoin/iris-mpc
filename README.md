@@ -119,8 +119,3 @@ If you are using `cargo test` with non-standard library paths, you might need [a
 ## Architecture
 
 ![architecture](mpc-architecture-v2.png)
-
-## Streams and Synchronization in V2 (`src/bin/server.rs`)
->
-> TODO: dedup between query and previous is not yet implemented
-![streams](mpc-iris-streams-v2.png)
