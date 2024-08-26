@@ -239,6 +239,27 @@ pub mod degree4 {
     use base64::{prelude::BASE64_STANDARD, Engine};
     use rand::{CryptoRng, Rng};
 
+    const CODE_COLS: usize = 200;
+
+    pub fn preprocess_coeffs(id: usize, coefs: &mut [u16]) {
+        let lagrange_coeffs = ShamirGaloisRingShare::deg_2_lagrange_polys_at_zero();
+        for i in (0..coefs.len()).step_by(4) {
+            let element = GaloisRingElement::<basis::Monomial>::from_coefs([
+                coefs[i],
+                coefs[i + 1],
+                coefs[i + 2],
+                coefs[i + 3],
+            ]);
+            // include lagrange coeffs
+            let element: GaloisRingElement<basis::Monomial> = element * lagrange_coeffs[id - 1];
+            let element = element.to_basis_B();
+            coefs[i] = element.coefs[0];
+            coefs[i + 1] = element.coefs[1];
+            coefs[i + 2] = element.coefs[2];
+            coefs[i + 3] = element.coefs[3];
+        }
+    }
+
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     pub struct GaloisRingTrimmedMaskCodeShare {
         pub id:    usize,
@@ -258,26 +279,8 @@ pub mod degree4 {
     }
 
     impl GaloisRingTrimmedMaskCodeShare {
-        const COLS: usize = 200;
-
-        pub fn preprocess_mask_code_query_share(&mut self) {
-            let lagrange_coeffs = ShamirGaloisRingShare::deg_2_lagrange_polys_at_zero();
-            for i in (0..MASK_CODE_LENGTH).step_by(4) {
-                let element = GaloisRingElement::<basis::Monomial>::from_coefs([
-                    self.coefs[i],
-                    self.coefs[i + 1],
-                    self.coefs[i + 2],
-                    self.coefs[i + 3],
-                ]);
-                // include lagrange coeffs
-                let element: GaloisRingElement<basis::Monomial> =
-                    element * lagrange_coeffs[self.id - 1];
-                let element = element.to_basis_B();
-                self.coefs[i] = element.coefs[0];
-                self.coefs[i + 1] = element.coefs[1];
-                self.coefs[i + 2] = element.coefs[2];
-                self.coefs[i + 3] = element.coefs[3];
-            }
+        pub fn preprocess_query_share(&mut self) {
+            preprocess_coeffs(self.id, &mut self.coefs);
         }
 
         pub fn all_rotations(&self) -> Vec<GaloisRingTrimmedMaskCodeShare> {
@@ -292,13 +295,13 @@ pub mod degree4 {
         }
         pub fn rotate_right(&mut self, by: usize) {
             self.coefs
-                .chunks_exact_mut(Self::COLS * 4)
+                .chunks_exact_mut(CODE_COLS * 4)
                 .for_each(|chunk| chunk.rotate_right(by * 4));
         }
 
         pub fn rotate_left(&mut self, by: usize) {
             self.coefs
-                .chunks_exact_mut(Self::COLS * 4)
+                .chunks_exact_mut(CODE_COLS * 4)
                 .for_each(|chunk| chunk.rotate_left(by * 4));
         }
     }
@@ -452,23 +455,7 @@ pub mod degree4 {
         }
 
         pub fn preprocess_iris_code_query_share(&mut self) {
-            let lagrange_coeffs = ShamirGaloisRingShare::deg_2_lagrange_polys_at_zero();
-            for i in (0..IRIS_CODE_LENGTH).step_by(4) {
-                let element = GaloisRingElement::<basis::Monomial>::from_coefs([
-                    self.coefs[i],
-                    self.coefs[i + 1],
-                    self.coefs[i + 2],
-                    self.coefs[i + 3],
-                ]);
-                // include lagrange coeffs
-                let element: GaloisRingElement<basis::Monomial> =
-                    element * lagrange_coeffs[self.id - 1];
-                let element = element.to_basis_B();
-                self.coefs[i] = element.coefs[0];
-                self.coefs[i + 1] = element.coefs[1];
-                self.coefs[i + 2] = element.coefs[2];
-                self.coefs[i + 3] = element.coefs[3];
-            }
+            preprocess_coeffs(self.id, &mut self.coefs);
         }
 
         pub fn full_dot(&self, other: &GaloisRingIrisCodeShare) -> u16 {
@@ -513,13 +500,13 @@ pub mod degree4 {
         }
         pub fn rotate_right(&mut self, by: usize) {
             self.coefs
-                .chunks_exact_mut(Self::COLS * 4)
+                .chunks_exact_mut(CODE_COLS * 4)
                 .for_each(|chunk| chunk.rotate_right(by * 4));
         }
 
         pub fn rotate_left(&mut self, by: usize) {
             self.coefs
-                .chunks_exact_mut(Self::COLS * 4)
+                .chunks_exact_mut(CODE_COLS * 4)
                 .for_each(|chunk| chunk.rotate_left(by * 4));
         }
 
