@@ -63,19 +63,15 @@ pub struct SharesEncryptionKeyPairs {
 
 impl Zeroize for SharesEncryptionKeyPairs {
     fn zeroize(&mut self) {
-        self.current_key_pair.pk.0.zeroize();
-        self.current_key_pair.sk.0.zeroize();
-        self.previous_key_pair.pk.0.zeroize();
-        self.previous_key_pair.sk.0.zeroize();
+        self.current_key_pair.zeroize();
+        self.previous_key_pair.zeroize();
     }
 }
 
 impl Drop for SharesEncryptionKeyPairs {
     fn drop(&mut self) {
-        self.current_key_pair.pk.0.zeroize();
-        self.current_key_pair.sk.0.zeroize();
-        self.previous_key_pair.pk.0.zeroize();
-        self.previous_key_pair.sk.0.zeroize();
+        self.current_key_pair.zeroize();
+        self.current_key_pair.zeroize();
     }
 }
 

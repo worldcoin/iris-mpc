@@ -62,7 +62,7 @@ async fn receive_batch(
     queue_url: &String,
     store: &Store,
     skip_request_ids: &[String],
-    shares_encryption_key_pair: SharesEncryptionKeyPairs,
+    shares_encryption_key_pairs: SharesEncryptionKeyPairs,
 ) -> eyre::Result<BatchQuery> {
     let mut batch_query = BatchQuery::default();
 
@@ -77,7 +77,7 @@ async fn receive_batch(
 
         if let Some(messages) = rcv_message_output.messages {
             for sqs_message in messages {
-                let shares_encryption_key_pair = shares_encryption_key_pair.clone();
+                let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
                     .context("while trying to parse SQSMessage")?;
 
@@ -139,7 +139,7 @@ async fn receive_batch(
 
                 let iris_message_share = match smpc_request.decrypt_iris_share(
                     base_64_encoded_message_payload,
-                    shares_encryption_key_pair.clone(),
+                    shares_encryption_key_pairs.clone(),
                 ) {
                     Ok(iris_data) => iris_data,
                     Err(e) => {
