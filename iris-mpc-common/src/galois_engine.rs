@@ -241,7 +241,7 @@ pub mod degree4 {
 
     const CODE_COLS: usize = 200;
 
-    pub fn preprocess_coeffs(id: usize, coefs: &mut [u16]) {
+    fn preprocess_coefs(id: usize, coefs: &mut [u16]) {
         let lagrange_coeffs = ShamirGaloisRingShare::deg_2_lagrange_polys_at_zero();
         for i in (0..coefs.len()).step_by(4) {
             let element = GaloisRingElement::<basis::Monomial>::from_coefs([
@@ -258,6 +258,18 @@ pub mod degree4 {
             coefs[i + 2] = element.coefs[2];
             coefs[i + 3] = element.coefs[3];
         }
+    }
+
+    fn rotate_coefs_right(coefs: &mut [u16], by: usize) {
+        coefs
+            .chunks_exact_mut(CODE_COLS * 4)
+            .for_each(|chunk| chunk.rotate_right(by * 4));
+    }
+
+    fn rotate_coefs_left(coefs: &mut [u16], by: usize) {
+        coefs
+            .chunks_exact_mut(CODE_COLS * 4)
+            .for_each(|chunk| chunk.rotate_left(by * 4));
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -280,29 +292,18 @@ pub mod degree4 {
 
     impl GaloisRingTrimmedMaskCodeShare {
         pub fn preprocess_mask_code_query_share(&mut self) {
-            preprocess_coeffs(self.id, &mut self.coefs);
+            preprocess_coefs(self.id, &mut self.coefs);
         }
 
         pub fn all_rotations(&self) -> Vec<GaloisRingTrimmedMaskCodeShare> {
             let mut reference = self.clone();
             let mut result = vec![];
-            reference.rotate_left(16);
+            rotate_coefs_left(&mut reference.coefs, 16);
             for _ in 0..31 {
-                reference.rotate_right(1);
+                rotate_coefs_right(&mut reference.coefs, 1);
                 result.push(reference.clone());
             }
             result
-        }
-        pub fn rotate_right(&mut self, by: usize) {
-            self.coefs
-                .chunks_exact_mut(CODE_COLS * 4)
-                .for_each(|chunk| chunk.rotate_right(by * 4));
-        }
-
-        pub fn rotate_left(&mut self, by: usize) {
-            self.coefs
-                .chunks_exact_mut(CODE_COLS * 4)
-                .for_each(|chunk| chunk.rotate_left(by * 4));
         }
     }
 
@@ -453,7 +454,7 @@ pub mod degree4 {
         }
 
         pub fn preprocess_iris_code_query_share(&mut self) {
-            preprocess_coeffs(self.id, &mut self.coefs);
+            preprocess_coefs(self.id, &mut self.coefs);
         }
 
         pub fn full_dot(&self, other: &GaloisRingIrisCodeShare) -> u16 {
@@ -486,26 +487,16 @@ pub mod degree4 {
             }
             sum
         }
+
         pub fn all_rotations(&self) -> Vec<GaloisRingIrisCodeShare> {
             let mut reference = self.clone();
             let mut result = vec![];
-            reference.rotate_left(16);
+            rotate_coefs_left(&mut reference.coefs, 16);
             for _ in 0..31 {
-                reference.rotate_right(1);
+                rotate_coefs_right(&mut reference.coefs, 1);
                 result.push(reference.clone());
             }
             result
-        }
-        pub fn rotate_right(&mut self, by: usize) {
-            self.coefs
-                .chunks_exact_mut(CODE_COLS * 4)
-                .for_each(|chunk| chunk.rotate_right(by * 4));
-        }
-
-        pub fn rotate_left(&mut self, by: usize) {
-            self.coefs
-                .chunks_exact_mut(CODE_COLS * 4)
-                .for_each(|chunk| chunk.rotate_left(by * 4));
         }
 
         pub fn to_base64(&self) -> String {
