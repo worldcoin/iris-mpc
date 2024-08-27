@@ -1198,8 +1198,7 @@ fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
 
         results.push(match_entry);
 
-        // DEBUG
-        println!(
+        tracing::debug!(
             "Query {}: match={} [index: {}]",
             j,
             match_entry != NON_MATCH_ID,
