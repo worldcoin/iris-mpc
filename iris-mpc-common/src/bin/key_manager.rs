@@ -44,6 +44,9 @@ enum Commands {
 
         #[arg(short, long, env)]
         dry_run: Option<bool>,
+
+        #[arg(short, long, env)]
+        public_key_bucket_name: Option<String>,
     },
     /// Validate private key in key manager against public keys (either provided
     /// or in s3)
@@ -56,6 +59,9 @@ enum Commands {
 
         #[arg(short, long, env)]
         b64_pub_key: Option<String>,
+
+        #[arg(short, long, env)]
+        public_key_bucket_name: Option<String>,
     },
 }
 
@@ -75,19 +81,25 @@ async fn main() -> eyre::Result<()> {
     );
 
     match args.command {
-        Commands::Rotate { rng_seed, dry_run } => {
+        Commands::Rotate {
+            rng_seed,
+            dry_run,
+            public_key_bucket_name,
+        } => {
             rotate_keys(
                 &shared_config,
                 &bucket_key_name,
                 &private_key_secret_id,
                 rng_seed,
                 dry_run,
+                public_key_bucket_name,
             )
             .await?;
         }
         Commands::Validate {
             version_stage,
             b64_pub_key,
+            public_key_bucket_name,
         } => {
             validate_keys(
                 &shared_config,
@@ -95,6 +107,7 @@ async fn main() -> eyre::Result<()> {
                 &version_stage,
                 b64_pub_key,
                 &bucket_key_name,
+                public_key_bucket_name,
             )
             .await?;
         }
@@ -108,9 +121,15 @@ async fn validate_keys(
     version_stage: &str,
     b64_pub_key: Option<String>,
     bucket_key_name: &str,
+    public_key_bucket_name: Option<String>,
 ) -> eyre::Result<()> {
     let sm_client = SecretsManagerClient::new(sdk_config);
 
+    let bucket_name = if let Some(bucket_name) = public_key_bucket_name {
+        bucket_name
+    } else {
+        PUBLIC_KEY_S3_BUCKET_NAME.to_string()
+    };
     // Parse user-provided public key, if present
     let pub_key = if let Some(b64_pub_key) = b64_pub_key {
         let user_pubkey = STANDARD.decode(b64_pub_key.as_bytes()).unwrap();
@@ -120,7 +139,8 @@ async fn validate_keys(
         }
     } else {
         // Otherwise, get the latest one from S3 using HTTPS
-        let user_pubkey_string = download_key_from_s3(bucket_key_name).await?;
+        let user_pubkey_string =
+            download_key_from_s3(bucket_name.as_str(), bucket_key_name).await?;
         let user_pubkey = STANDARD.decode(user_pubkey_string.as_bytes()).unwrap();
         match PublicKey::from_slice(&user_pubkey) {
             Some(key) => key,
@@ -143,11 +163,18 @@ async fn rotate_keys(
     private_key_secret_id: &str,
     rng_seed: Option<u64>,
     dry_run: Option<bool>,
+    public_key_bucket_name: Option<String>,
 ) -> eyre::Result<()> {
     let mut rng = if let Some(rng_seed) = rng_seed {
         StdRng::seed_from_u64(rng_seed)
     } else {
         StdRng::from_entropy()
+    };
+
+    let bucket_name = if let Some(bucket_name) = public_key_bucket_name {
+        bucket_name
+    } else {
+        PUBLIC_KEY_S3_BUCKET_NAME.to_string()
     };
 
     let mut seedbuf = [0u8; 32];
@@ -180,14 +207,14 @@ async fn rotate_keys(
     }
     match upload_public_key_to_s3(
         &s3_client,
-        PUBLIC_KEY_S3_BUCKET_NAME,
+        bucket_name.as_str(),
         bucket_key_name,
         pub_key_str.as_str(),
     )
     .await
     {
         Ok(output) => {
-            println!("Bucket: {}", PUBLIC_KEY_S3_BUCKET_NAME);
+            println!("Bucket: {}", bucket_name);
             println!("Key: {}", bucket_key_name);
             println!("ETag: {}", output.e_tag.unwrap());
         }
@@ -217,15 +244,9 @@ async fn rotate_keys(
     Ok(())
 }
 
-async fn download_key_from_s3(key: &str) -> Result<String, reqwest::Error> {
-    print!(
-        "Downloading key from S3 bucket: {} key: {}",
-        PUBLIC_KEY_S3_BUCKET_NAME, key
-    );
-    let s3_url = format!(
-        "https://{}.s3.{}.amazonaws.com/{}",
-        PUBLIC_KEY_S3_BUCKET_NAME, REGION, key
-    );
+async fn download_key_from_s3(bucket: &str, key: &str) -> Result<String, reqwest::Error> {
+    print!("Downloading key from S3 bucket: {} key: {}", bucket, key);
+    let s3_url = format!("https://{}.s3.{}.amazonaws.com/{}", bucket, REGION, key);
     let client = Client::new();
     let response = client.get(&s3_url).send().await?.text().await?;
     Ok(response)
