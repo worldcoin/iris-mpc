@@ -4,7 +4,6 @@ use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{routing::get, Router};
 use clap::Parser;
-use core::panic;
 use eyre::{eyre, Context};
 use futures::TryStreamExt;
 use iris_mpc_common::{
@@ -25,8 +24,8 @@ use iris_mpc_gpu::{
     dot::ROTATIONS,
     helpers::device_manager::DeviceManager,
     server::{
-        sync_nccl::{self, heartbeat},
-        BatchMetadata, BatchQuery, ServerActor, ServerJobResult, MAX_BATCH_SIZE,
+        heartbeat_nccl::start_heartbeat, sync_nccl, BatchMetadata, BatchQuery, ServerActor,
+        ServerJobResult, MAX_BATCH_SIZE,
     },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
@@ -43,7 +42,7 @@ use telemetry_batteries::{
 };
 use tokio::{
     sync::{mpsc, oneshot},
-    task::{spawn_blocking, JoinHandle},
+    task::spawn_blocking,
     time::timeout,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -57,7 +56,6 @@ const SYNC_QUERIES: usize = MAX_BATCH_SIZE * 2;
 const_assert!(SYNC_QUERIES <= sync_nccl::MAX_REQUESTS);
 const MAX_ROLLBACK: usize = MAX_BATCH_SIZE * 2;
 const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
-const HEARBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const NCCL_START_WAIT_TIME: Duration = Duration::from_secs(5);
 const NCCL_START_RETRY: usize = 5;
 
@@ -661,43 +659,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     background_tasks.check_tasks();
     tracing::info!("Healthcheck server running on port 3000.");
 
-    let _heartbeat = background_tasks.spawn(async move {
-        let (tx, mut rx) = mpsc::channel(1);
-
-        let comm_handle: JoinHandle<eyre::Result<()>> = spawn_blocking(move || {
-            let device_manager = Arc::new(DeviceManager::init());
-            let ids = device_manager.get_ids_from_magic(0xdead);
-            let comms = device_manager.instantiate_network_from_ids(config.party_id, &ids)?;
-
-            loop {
-                for comm in comms.iter() {
-                    tx.blocking_send(heartbeat(comm))?;
-                }
-                std::thread::sleep(HEARBEAT_INTERVAL);
-            }
-        });
-
-        loop {
-            match timeout(HEARBEAT_INTERVAL * 2, rx.recv()).await {
-                Ok(Some(Ok(_))) => continue,
-                Ok(Some(Err(e))) => {
-                    tracing::error!("Heartbeat failed: {:?}", e);
-                    panic!("Heartbeat failed, restarting service");
-                }
-                Ok(None) => {
-                    tracing::error!("Heartbeat channel closed, stopping heartbeat task.");
-                    break;
-                }
-                Err(_) => {
-                    tracing::error!("Heartbeat timeout.");
-                    panic!("Heartbeat timeout, restarting service");
-                }
-            }
-        }
-
-        comm_handle.await??;
-        eyre::Ok(())
-    });
+    let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id));
 
     background_tasks.check_tasks();
     tracing::info!("Heartbeat started.");
