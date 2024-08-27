@@ -11,7 +11,7 @@ use iris_mpc_common::{
     galois_engine::degree4::GaloisRingIrisCodeShare,
     helpers::{
         aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
-        key_pair::SharesEncryptionKeyPair,
+        key_pair::SharesEncryptionKeyPairs,
         kms_dh::derive_shared_secret,
         smpc_request::{ResultEvent, SMPCRequest, SQSMessage},
         sync::SyncState,
@@ -107,7 +107,7 @@ async fn receive_batch(
     queue_url: &String,
     store: &Store,
     skip_request_ids: &[String],
-    shares_encryption_key_pair: SharesEncryptionKeyPair,
+    shares_encryption_key_pairs: SharesEncryptionKeyPairs,
 ) -> eyre::Result<BatchQuery> {
     let mut batch_query = BatchQuery::default();
 
@@ -122,7 +122,7 @@ async fn receive_batch(
 
         if let Some(messages) = rcv_message_output.messages {
             for sqs_message in messages {
-                let shares_encryption_key_pair = shares_encryption_key_pair.clone();
+                let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
                     .context("while trying to parse SQSMessage")?;
 
@@ -184,7 +184,7 @@ async fn receive_batch(
 
                 let iris_message_share = match smpc_request.decrypt_iris_share(
                     base_64_encoded_message_payload,
-                    shares_encryption_key_pair.clone(),
+                    shares_encryption_key_pairs.clone(),
                 ) {
                     Ok(iris_data) => iris_data,
                     Err(e) => {
@@ -468,10 +468,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);
     let shares_encryption_key_pair =
-        match SharesEncryptionKeyPair::from_storage(config.clone()).await {
+        match SharesEncryptionKeyPairs::from_storage(config.clone()).await {
             Ok(key_pair) => key_pair,
             Err(e) => {
-                tracing::error!("Failed to initialize shares encryption key pair: {:?}", e);
+                tracing::error!("Failed to initialize shares encryption key pairs: {:?}", e);
                 return Ok(());
             }
         };
