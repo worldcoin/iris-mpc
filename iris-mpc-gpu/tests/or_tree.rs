@@ -61,11 +61,11 @@ fn open(party: &mut Circuits, result: &mut ChunkShare<u64>, streams: &[CudaStrea
     let res = result.get_offset(0, 1);
     let mut res_helper = result.get_offset(1, 1);
     cudarc::nccl::result::group_start().expect("group start should work");
-    party
-        .send_view(&res.b, party.next_id(), 0, streams)
+    party.comms()[0]
+        .send_view(&res.b, party.next_id(), &streams[0])
         .unwrap();
-    party
-        .receive_view(&mut res_helper.a, party.prev_id(), 0, streams)
+    party.comms()[0]
+        .receive_view(&mut res_helper.a, party.prev_id(), &streams[0])
         .unwrap();
     cudarc::nccl::result::group_end().expect("group end should work");
 

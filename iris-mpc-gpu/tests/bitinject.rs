@@ -105,13 +105,13 @@ fn open(party: &mut Circuits, x: &mut [ChunkShareView<u16>], streams: &[CudaStre
     }
     cudarc::nccl::result::group_start().unwrap();
     for (idx, res) in x.iter().enumerate() {
-        party
-            .send_view_u16(&res.b, party.next_id(), idx, streams)
+        party.comms()[idx]
+            .send_view_u16(&res.b, party.next_id(), &streams[idx])
             .unwrap();
     }
     for (idx, res) in x.iter_mut().enumerate() {
-        party
-            .receive_view_u16(&mut res.a, party.prev_id(), idx, streams)
+        party.comms()[idx]
+            .receive_view_u16(&mut res.a, party.prev_id(), &streams[idx])
             .unwrap();
     }
     cudarc::nccl::result::group_end().unwrap();

@@ -121,16 +121,16 @@ fn open(party: &mut Circuits, x: &[ChunkShare<u64>], streams: &[CudaStream]) -> 
     for (idx, res) in x.iter().enumerate() {
         // Result is in bit 0
         let res = res.get_offset(0, CHUNK_SIZE);
-        party
-            .send_view(&res.b, party.next_id(), idx, streams)
+        party.comms()[idx]
+            .send_view(&res.b, party.next_id(), &streams[idx])
             .unwrap();
         a.push(res.a);
         b.push(res.b);
     }
     for (idx, res) in x.iter().enumerate() {
         let mut res = res.get_offset(1, CHUNK_SIZE);
-        party
-            .receive_view(&mut res.a, party.prev_id(), idx, streams)
+        party.comms()[idx]
+            .receive_view(&mut res.a, party.prev_id(), &streams[idx])
             .unwrap();
         c.push(res.a);
     }

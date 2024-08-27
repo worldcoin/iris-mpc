@@ -1,10 +1,11 @@
 //! Exchange the SyncState between parties using NCCL.
 
-use cudarc::{driver::DeviceSlice, nccl::Comm};
+use crate::helpers::comm::NcclComm;
+use cudarc::driver::DeviceSlice;
 use eyre::{eyre, Result};
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 
-pub fn sync(comm: &Comm, state: &SyncState) -> Result<SyncResult> {
+pub fn sync(comm: &NcclComm, state: &SyncState) -> Result<SyncResult> {
     let state_dev = comm.device().htod_copy(serialize(state)?).unwrap();
     let mut all_states_dev = comm
         .device()
@@ -59,10 +60,7 @@ fn deserialize_all(state_ser: &[u8]) -> Result<Vec<SyncState>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cudarc::{
-        driver::CudaDevice,
-        nccl::{Comm, Id},
-    };
+    use cudarc::{driver::CudaDevice, nccl::Id};
     use eyre::Result;
     use tokio::task::JoinSet;
 
@@ -99,7 +97,7 @@ mod tests {
             let my_state = expected_state.clone();
             move || {
                 let device = CudaDevice::new(i).unwrap();
-                let comm = Comm::from_rank(device, i, n_parties, net_id).unwrap();
+                let comm = NcclComm::from_rank(device, i, n_parties, net_id).unwrap();
                 sync(&comm, &my_state).unwrap()
             }
         };
@@ -132,7 +130,7 @@ mod tests {
             };
             move || {
                 let device = CudaDevice::new(i).unwrap();
-                let comm = Comm::from_rank(device, i, n_parties, net_id).unwrap();
+                let comm = NcclComm::from_rank(device, i, n_parties, net_id).unwrap();
                 sync(&comm, &my_state).unwrap()
             }
         };

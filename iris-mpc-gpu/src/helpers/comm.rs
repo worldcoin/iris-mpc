@@ -2,10 +2,10 @@ use cudarc::{
     driver::{CudaDevice, CudaSlice, CudaStream, CudaView, DevicePtr, DevicePtrMut, DeviceSlice},
     nccl::{result, sys, Id, NcclType},
 };
-use std::{mem::MaybeUninit, sync::Arc};
+use std::{mem::MaybeUninit, ptr, sync::Arc};
 
 #[derive(Debug)]
-pub struct Comm {
+pub struct NcclComm {
     comm:       sys::ncclComm_t,
     device:     Arc<CudaDevice>,
     rank:       usize,
@@ -15,7 +15,7 @@ pub struct Comm {
 // creation methods
 // copied from cudarc, under MIT License, (C) Corey Lowman
 // Licensed under the Apache License, Version 2.0 http://www.apache.org/licenses/LICENSE-2.0 or the MIT license http://opensource.org/licenses/MIT, at your option.
-impl Comm {
+impl NcclComm {
     pub fn device(&self) -> Arc<CudaDevice> {
         self.device.clone()
     }
@@ -86,12 +86,51 @@ impl Comm {
             world_size,
         })
     }
+    pub fn broadcast<S: DevicePtr<T>, R: DevicePtrMut<T>, T: NcclType>(
+        &self,
+        sendbuff: &Option<S>,
+        recvbuff: &mut R,
+        root: i32,
+    ) -> Result<result::NcclStatus, result::NcclError> {
+        unsafe {
+            let send_ptr = match sendbuff {
+                Some(buffer) => *buffer.device_ptr() as *mut _,
+                None => ptr::null(),
+            };
+            result::broadcast(
+                send_ptr,
+                *recvbuff.device_ptr_mut() as *mut _,
+                recvbuff.len(),
+                T::as_nccl_type(),
+                root,
+                self.comm,
+                *self.device.cu_stream() as *mut _,
+            )
+        }
+    }
+
+    pub fn all_gather<S: DevicePtr<T>, R: DevicePtrMut<T>, T: NcclType>(
+        &self,
+        sendbuff: &S,
+        recvbuff: &mut R,
+    ) -> Result<result::NcclStatus, result::NcclError> {
+        unsafe {
+            result::all_gather(
+                *sendbuff.device_ptr() as *mut _,
+                *recvbuff.device_ptr_mut() as *mut _,
+                sendbuff.len(),
+                T::as_nccl_type(),
+                self.comm,
+                *self.device.cu_stream() as *mut _,
+            )
+        }
+    }
 }
 
 // our comm methods
-impl Comm {
+impl NcclComm {
     pub fn send_u16(
-        &mut self,
+        &self,
         send: &CudaSlice<u16>,
         peer_id: usize,
         stream: &CudaStream,
@@ -104,7 +143,7 @@ impl Comm {
     }
 
     pub fn receive_u16(
-        &mut self,
+        &self,
         receive: &mut CudaSlice<u16>,
         peer_id: usize,
         stream: &CudaStream,
@@ -118,7 +157,7 @@ impl Comm {
     }
 
     pub fn send_view_u16(
-        &mut self,
+        &self,
         send: &CudaView<u16>,
         peer_id: usize,
         stream: &CudaStream,
@@ -131,7 +170,7 @@ impl Comm {
     }
 
     pub fn receive_view_u16(
-        &mut self,
+        &self,
         receive: &mut CudaView<u16>,
         peer_id: usize,
         stream: &CudaStream,
@@ -145,7 +184,7 @@ impl Comm {
     }
 
     pub fn send_view<T>(
-        &mut self,
+        &self,
         send: &CudaView<T>,
         peer_id: usize,
         stream: &CudaStream,
@@ -166,7 +205,7 @@ impl Comm {
     }
 
     pub fn receive_view<T>(
-        &mut self,
+        &self,
         receive: &mut CudaView<T>,
         peer_id: usize,
         stream: &CudaStream,
@@ -187,7 +226,7 @@ impl Comm {
     }
 
     pub fn send<T>(
-        &mut self,
+        &self,
         send: &CudaSlice<T>,
         peer_id: usize,
         stream: &CudaStream,
@@ -208,7 +247,7 @@ impl Comm {
     }
 
     pub fn receive<T>(
-        &mut self,
+        &self,
         receive: &mut CudaSlice<T>,
         peer_id: usize,
         stream: &CudaStream,

@@ -1,14 +1,16 @@
 use crate::{
-    helpers::{device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync},
+    helpers::{
+        comm::NcclComm, device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync,
+    },
     rng::chacha_corr::ChaChaCudaCorrRng,
     threshold_ring::cuda::PTX_SRC,
 };
 use cudarc::{
     driver::{
         result::stream, CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, CudaViewMut,
-        DevicePtr, DeviceSlice, LaunchAsync, LaunchConfig,
+        DeviceSlice, LaunchAsync, LaunchConfig,
     },
-    nccl::{result, Comm},
+    nccl::result,
     nvrtc::{self, Ptx},
 };
 use itertools::izip;
@@ -343,7 +345,7 @@ pub struct Circuits {
     chunk_size: usize,
     n_devices:  usize,
     devs:       Vec<Arc<CudaDevice>>,
-    comms:      Vec<Arc<Comm>>,
+    comms:      Vec<Arc<NcclComm>>,
     kernels:    Vec<Kernels>,
     buffers:    Buffers,
     rngs:       Vec<ChaChaCudaCorrRng>,
@@ -372,7 +374,7 @@ impl Circuits {
         alloc_size: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
         device_manager: Arc<DeviceManager>,
-        comms: Vec<Arc<Comm>>,
+        comms: Vec<Arc<NcclComm>>,
     ) -> Self {
         // For the transpose, inputs should be multiple of 64 bits
         assert!(input_size % 64 == 0);
@@ -442,158 +444,16 @@ impl Circuits {
         self.devs.clone()
     }
 
+    pub fn comms(&self) -> &[Arc<NcclComm>] {
+        &self.comms
+    }
+
     fn launch_config_from_elements_and_threads(n: u32, t: u32) -> LaunchConfig {
         let num_blocks = (n + t - 1) / t;
         LaunchConfig {
             grid_dim:         (num_blocks, 1, 1),
             block_dim:        (t, 1, 1),
             shared_mem_bytes: 0,
-        }
-    }
-
-    pub fn send_u16(
-        &mut self,
-        send: &CudaSlice<u16>,
-        peer_id: usize,
-        idx: usize,
-        streams: &[CudaStream],
-    ) -> Result<result::NcclStatus, result::NcclError> {
-        // We have to transmute since u16 is not sendable
-        let send_trans: CudaView<u8> = // the transmute_mut is safe because we
-        // know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
-         unsafe { send.transmute(send.len() * 2).unwrap() };
-        self.send_view(&send_trans, peer_id, idx, streams)
-    }
-
-    pub fn receive_u16(
-        &mut self,
-        receive: &mut CudaSlice<u16>,
-        peer_id: usize,
-        idx: usize,
-        streams: &[CudaStream],
-    ) -> Result<result::NcclStatus, result::NcclError> {
-        // We have to transmute since u16 is not receivable
-        let mut receive_trans: CudaView<u8> = // the transmute_mut is safe
-    // because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
-    unsafe { receive.transmute(receive.len() * 2).unwrap()
-    };
-        self.receive_view(&mut receive_trans, peer_id, idx, streams)
-    }
-
-    pub fn send_view_u16(
-        &mut self,
-        send: &CudaView<u16>,
-        peer_id: usize,
-        idx: usize,
-        streams: &[CudaStream],
-    ) -> Result<result::NcclStatus, result::NcclError> {
-        // We have to transmute since u16 is not sendable
-        let send_trans: CudaView<u8> = // the transmute_mut is safe because we
-    // know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
-         unsafe { send.transmute(send.len() * 2).unwrap() };
-        self.send_view(&send_trans, peer_id, idx, streams)
-    }
-
-    pub fn receive_view_u16(
-        &mut self,
-        receive: &mut CudaView<u16>,
-        peer_id: usize,
-        idx: usize,
-        streams: &[CudaStream],
-    ) -> Result<result::NcclStatus, result::NcclError> {
-        // We have to transmute since u16 is not receivable
-        let mut receive_trans: CudaView<u8> = // the transmute_mut
-    // is safe because we know that one u16 is 2 u8s, and the buffer is aligned properly for the transmute
-        unsafe { receive.transmute(receive.len() *
-    2).unwrap() };
-        self.receive_view(&mut receive_trans, peer_id, idx, streams)
-    }
-
-    pub fn send_view<T>(
-        &mut self,
-        send: &CudaView<T>,
-        peer_id: usize,
-        idx: usize,
-        streams: &[CudaStream],
-    ) -> Result<result::NcclStatus, result::NcclError>
-    where
-        T: cudarc::nccl::NcclType,
-    {
-        unsafe {
-            result::send(
-                *send.device_ptr() as *mut _,
-                send.len(),
-                T::as_nccl_type(),
-                peer_id as i32,
-                self.comms[idx].comm.0,
-                streams[idx].stream as *mut _,
-            )
-        }
-    }
-
-    pub fn receive_view<T>(
-        &mut self,
-        receive: &mut CudaView<T>,
-        peer_id: usize,
-        idx: usize,
-        streams: &[CudaStream],
-    ) -> Result<result::NcclStatus, result::NcclError>
-    where
-        T: cudarc::nccl::NcclType,
-    {
-        unsafe {
-            result::recv(
-                *receive.device_ptr() as *mut _,
-                receive.len(),
-                T::as_nccl_type(),
-                peer_id as i32,
-                self.comms[idx].comm.0,
-                streams[idx].stream as *mut _,
-            )
-        }
-    }
-
-    pub fn send<T>(
-        &mut self,
-        send: &CudaSlice<T>,
-        peer_id: usize,
-        idx: usize,
-        streams: &[CudaStream],
-    ) -> Result<result::NcclStatus, result::NcclError>
-    where
-        T: cudarc::nccl::NcclType,
-    {
-        unsafe {
-            result::send(
-                *send.device_ptr() as *mut _,
-                send.len(),
-                T::as_nccl_type(),
-                peer_id as i32,
-                self.comms[idx].comm.0,
-                streams[idx].stream as *mut _,
-            )
-        }
-    }
-
-    pub fn receive<T>(
-        &mut self,
-        receive: &mut CudaSlice<T>,
-        peer_id: usize,
-        idx: usize,
-        streams: &[CudaStream],
-    ) -> Result<result::NcclStatus, result::NcclError>
-    where
-        T: cudarc::nccl::NcclType,
-    {
-        unsafe {
-            result::recv(
-                *receive.device_ptr() as *mut _,
-                receive.len(),
-                T::as_nccl_type(),
-                peer_id as i32,
-                self.comms[idx].comm.0,
-                streams[idx].stream as *mut _,
-            )
         }
     }
 
@@ -929,10 +789,13 @@ impl Circuits {
     ) {
         result::group_start().unwrap();
         let send = res.a.slice(range.to_owned());
-        self.send_view(&send, self.next_id, idx, streams).unwrap();
+        self.comms[idx]
+            .send_view(&send, self.next_id, &streams[idx])
+            .unwrap();
 
         let mut rcv = res.b.slice(range.to_owned());
-        self.receive_view(&mut rcv, self.prev_id, idx, streams)
+        self.comms[idx]
+            .receive_view(&mut rcv, self.prev_id, &streams[idx])
             .unwrap();
 
         result::group_end().unwrap();
@@ -986,11 +849,14 @@ impl Circuits {
         result::group_start().unwrap();
         for (idx, res) in res.iter().enumerate() {
             let send = res.a.slice(range.to_owned());
-            self.send_view(&send, self.next_id, idx, streams).unwrap();
+            self.comms[idx]
+                .send_view(&send, self.next_id, &streams[idx])
+                .unwrap();
         }
         for (idx, res) in res.iter_mut().enumerate() {
             let mut rcv = res.b.slice(range.to_owned());
-            self.receive_view(&mut rcv, self.prev_id, idx, streams)
+            self.comms[idx]
+                .receive_view(&mut rcv, self.prev_id, &streams[idx])
                 .unwrap();
         }
         result::group_end().unwrap();
@@ -1026,10 +892,13 @@ impl Circuits {
 
         result::group_start().unwrap();
         for (idx, res) in res.iter().enumerate() {
-            self.send_view(&res.a, self.next_id, idx, streams).unwrap();
+            self.comms[idx]
+                .send_view(&res.a, self.next_id, &streams[idx])
+                .unwrap();
         }
         for (idx, res) in res.iter_mut().enumerate() {
-            self.receive_view(&mut res.b, self.prev_id, idx, streams)
+            self.comms[idx]
+                .receive_view(&mut res.b, self.prev_id, &streams[idx])
                 .unwrap();
         }
         result::group_end().unwrap();
@@ -1060,8 +929,11 @@ impl Circuits {
         streams: &[CudaStream],
     ) {
         result::group_start().unwrap();
-        self.send_view(&res.a, self.next_id, idx, streams).unwrap();
-        self.receive_view(&mut res.b, self.prev_id, idx, streams)
+        self.comms[idx]
+            .send_view(&res.a, self.next_id, &streams[idx])
+            .unwrap();
+        self.comms[idx]
+            .receive_view(&mut res.b, self.prev_id, &streams[idx])
             .unwrap();
         result::group_end().unwrap();
     }
@@ -1299,8 +1171,12 @@ impl Circuits {
         {
             result::group_start().unwrap();
             for (idx, (m0, m1)) in izip!(&m0, &m1).enumerate() {
-                self.send_view_u16(m0, self.prev_id, idx, streams).unwrap();
-                self.send_view_u16(m1, self.prev_id, idx, streams).unwrap();
+                self.comms[idx]
+                    .send_view_u16(m0, self.prev_id, &streams[idx])
+                    .unwrap();
+                self.comms[idx]
+                    .send_view_u16(m1, self.prev_id, &streams[idx])
+                    .unwrap();
             }
             result::group_end().unwrap();
         }
@@ -1327,11 +1203,14 @@ impl Circuits {
 
         result::group_start().unwrap();
         for (idx, (m0, m1, wc)) in izip!(&mut m0, &mut m1, &mut wc).enumerate() {
-            self.receive_view_u16(m0, self.next_id, idx, streams)
+            self.comms[idx]
+                .receive_view_u16(m0, self.next_id, &streams[idx])
                 .unwrap();
-            self.receive_view_u16(wc, self.prev_id, idx, streams)
+            self.comms[idx]
+                .receive_view_u16(wc, self.prev_id, &streams[idx])
                 .unwrap();
-            self.receive_view_u16(m1, self.next_id, idx, streams)
+            self.comms[idx]
+                .receive_view_u16(m1, self.next_id, &streams[idx])
                 .unwrap();
         }
         result::group_end().unwrap();
@@ -1400,7 +1279,8 @@ impl Circuits {
         #[cfg(not(feature = "otp_encrypt"))]
         {
             for (idx, res) in outp.iter().enumerate() {
-                self.send_view_u16(&res.b, self.prev_id, idx, streams)
+                self.comms[idx]
+                    .send_view_u16(&res.b, self.prev_id, &streams[idx])
                     .unwrap();
             }
         }
@@ -1480,13 +1360,16 @@ impl Circuits {
         #[cfg(not(feature = "otp_encrypt"))]
         {
             for (idx, wc) in wc.iter().enumerate() {
-                self.send_view_u16(wc, self.next_id, idx, streams).unwrap();
+                self.comms[idx]
+                    .send_view_u16(wc, self.next_id, &streams[idx])
+                    .unwrap();
             }
         }
         result::group_end().unwrap();
         result::group_start().unwrap();
         for (idx, res) in outp.iter_mut().enumerate() {
-            self.receive_view_u16(&mut res.a, self.next_id, idx, streams)
+            self.comms[idx]
+                .receive_view_u16(&mut res.a, self.next_id, &streams[idx])
                 .unwrap();
         }
         result::group_end().unwrap();
