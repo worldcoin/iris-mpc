@@ -1,9 +1,6 @@
 use bytemuck::cast_slice;
 use eyre::{eyre, Result};
-use futures::{
-    stream::{self},
-    Stream,
-};
+use futures::{stream::{self}, Stream, StreamExt};
 use iris_mpc_common::config::Config;
 use sqlx::{migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Transaction};
 use std::{ops::DerefMut, pin::Pin};
@@ -85,7 +82,7 @@ impl Store {
             .database
             .as_ref()
             .ok_or(eyre!("Missing database config"))?;
-        let schema_name = format!("{}_{}_{}", APP_NAME, config.environment, config.party_id);
+        let schema_name = format!("{}_{}_{}_temporary_fix_2", APP_NAME, config.environment, config.party_id);
         Self::new(&db_config.url, &schema_name).await
     }
 
@@ -135,6 +132,12 @@ impl Store {
         partitions: usize,
     ) -> impl Stream<Item = Result<StoredIris, sqlx::Error>> + '_ {
         let count = self.count_irises().await.expect("Failed count_irises");
+
+        if count == 0 {
+            // Return an empty stream if there are no irises
+            return stream::empty().boxed();
+        }
+
         let partition_size = count.div_ceil(partitions);
 
         let mut partition_streams = Vec::new();
@@ -152,7 +155,7 @@ impl Store {
                 as Pin<Box<dyn Stream<Item = Result<StoredIris, sqlx::Error>> + Send>>);
         }
 
-        stream::select_all(partition_streams)
+        Box::pin(stream::select_all(partition_streams))
     }
 
     pub async fn insert_irises(

@@ -21,33 +21,47 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{spawn, sync::Mutex, time::sleep};
 use uuid::Uuid;
 
-const N_QUERIES: usize = 64 * 5;
+const N_QUERIES: usize = 64;
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 
 #[derive(Debug, Parser)]
 struct Opt {
+    /*
+        cargo run --release --bin client -- \
+    --request-topic-arn arn:aws:sns:eu-north-1:767397716933:gpu-iris-mpc-input.fifo \
+    --request-topic-region eu-north-1 \
+    --response-queue-url https://sqs.eu-north-1.amazonaws.com/654654380399/temporal-results.fifo \
+    --response-queue-region eu-north-1 \
+    --requests-bucket-name wf-mpc-prod-smpcv2-sns-requests \
+    --public-key-base-url https://d2k2ck8dyw4s60.cloudfront.net \
+    --requests-bucket-region eu-north-1 \
+    --random true
+     */
     #[arg(long, env, required = true)]
     request_topic_arn: String,
+    //arn:aws:sns:eu-north-1:767397716933:gpu-iris-mpc-input.fifo
 
     #[arg(long, env, required = true)]
     request_topic_region: String,
+    //eu-north-1
 
     #[arg(long, env, required = true)]
     response_queue_url: String,
-
+    //https://sqs.eu-north-1.amazonaws.com/654654380399/temporal-results.fifo
     #[arg(long, env, required = true)]
     response_queue_region: String,
-
+    //eu-north-1
     #[arg(long, env, required = true)]
     requests_bucket_name: String,
-
+    //wf-mpc-prod-smpcv2-sns-requests
     #[arg(long, env, required = true)]
     public_key_base_url: String,
-
+    //https://d2k2ck8dyw4s60.cloudfront.net
     #[arg(long, env, required = true)]
     requests_bucket_region: String,
+    //eu-north-1
 
     #[arg(long, env)]
     db_index: Option<usize>,
@@ -142,6 +156,7 @@ async fn main() -> eyre::Result<()> {
 
             for msg in msg.messages.unwrap_or_default() {
                 counter += 1;
+                println!("Received message: {:?}", &msg.body);
                 let result: ResultEvent = serde_json::from_str(&msg.body.context("No body found")?)
                     .context("Failed to parse message body")?;
 
@@ -285,10 +300,10 @@ async fn main() -> eyre::Result<()> {
 
             let iris_codes_json = IrisCodesJSON {
                 iris_version:           "1.0".to_string(),
-                right_iris_code_shares: iris_code_coefs_base64,
-                right_iris_mask_shares: mask_code_coefs_base64,
-                left_iris_code_shares:  "nan".to_string(),
-                left_iris_mask_shares:  "nan".to_string(),
+                right_iris_code_shares: iris_code_coefs_base64.clone(),
+                right_iris_mask_shares: mask_code_coefs_base64.clone(),
+                left_iris_code_shares:  iris_code_coefs_base64.clone(),
+                left_iris_mask_shares:  mask_code_coefs_base64.clone(),
             };
             let serialized_iris_codes_json = to_string(&iris_codes_json)
                 .expect("Serialization failed")

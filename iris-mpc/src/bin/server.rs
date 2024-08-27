@@ -508,6 +508,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         let device_manager = Arc::new(DeviceManager::init());
         let ids = device_manager.get_ids_from_magic(0);
 
+        tracing::info!("Starting NCCL");
         let mut comms = vec![];
         for _ in 0..NCCL_START_RETRY {
             let res = device_manager.instantiate_network_from_ids(config.party_id, &ids);
@@ -518,12 +519,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             std::thread::sleep(NCCL_START_WAIT_TIME);
         }
 
+        tracing::info!("NCCL: checking empty");
         if comms.is_empty() {
             tx.send(Err(eyre!("Number of NCCL connection retries exceeded")))
                 .unwrap();
             return Ok(());
         }
 
+        tracing::info!("NCCL: getting sync results");
         let sync_result = match sync_nccl::sync(&comms[0], &my_state) {
             Ok(res) => res,
             Err(e) => {
@@ -532,6 +535,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             }
         };
 
+        tracing::info!("DB: check if rollback needed");
         if let Some(db_len) = sync_result.must_rollback_storage() {
             tracing::warn!(
                 "Databases are out-of-sync, rolling back (current len: {}, new len: {})",
@@ -686,7 +690,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     background_tasks.check_tasks();
     tracing::info!("Healthcheck server running on port 3000.");
 
-    let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id));
+    // let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id));
 
     background_tasks.check_tasks();
     tracing::info!("Heartbeat started.");
@@ -695,6 +699,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     // Main loop
     let res: eyre::Result<()> = async {
+        tracing::info!("Entering main loop");
         // **Tensor format of queries**
         //
         // The functions `receive_batch` and `prepare_query_shares` will prepare the
