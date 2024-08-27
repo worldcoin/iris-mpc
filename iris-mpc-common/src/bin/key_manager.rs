@@ -307,10 +307,7 @@ mod test {
         let (server_public_key, server_private_key) = generate_key_pairs(Seed([0u8; 32]));
 
         let iris_code_file = "./src/bin/data/iris_codes.json";
-        let mut file = File::open(iris_code_file).expect(
-            "Unable to open
-    file",
-        );
+        let mut file = File::open(iris_code_file).expect("Unable to open file");
         let mut contents = String::new();
         file.read_to_string(&mut contents)
             .expect("Unable to read file");

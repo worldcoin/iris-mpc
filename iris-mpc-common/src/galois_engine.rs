@@ -279,7 +279,7 @@ pub mod degree4 {
     }
 
     impl GaloisRingTrimmedMaskCodeShare {
-        pub fn preprocess_query_share(&mut self) {
+        pub fn preprocess_mask_code_query_share(&mut self) {
             preprocess_coeffs(self.id, &mut self.coefs);
         }
 
@@ -313,8 +313,6 @@ pub mod degree4 {
     }
 
     impl GaloisRingIrisCodeShare {
-        const COLS: usize = 200;
-
         // Maps from an index in a flattened array of the new shape to the
         // index in a flattened array of the original shape.
         //
@@ -524,7 +522,9 @@ pub mod degree4 {
     #[cfg(test)]
     mod tests {
         use crate::{
-            galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::iris::IrisCodeArray,
+            galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+            iris_db::iris::IrisCodeArray,
+            MASK_CODE_LENGTH,
         };
         use float_eq::assert_float_eq;
         use rand::thread_rng;
@@ -601,7 +601,10 @@ pub mod degree4 {
 
             let mut t2_mask_shares_rotated = t2_mask_shares
                 .iter()
-                .map(|share| share.all_rotations())
+                .map(|share| {
+                    let trimmed: GaloisRingTrimmedMaskCodeShare = share.clone().into();
+                    trimmed.all_rotations()
+                })
                 .collect::<Vec<_>>();
 
             let mut min_dist = f64::MAX;
@@ -612,7 +615,7 @@ pub mod degree4 {
 
                 t2_mask_shares_rotated
                     .iter_mut()
-                    .for_each(|share| share[rot_idx].preprocess_iris_code_query_share());
+                    .for_each(|share| share[rot_idx].preprocess_mask_code_query_share());
 
                 // dot product for codes
                 let mut dot_codes = [0; 3];
@@ -624,16 +627,36 @@ pub mod degree4 {
                 // dot product for masks
                 let mut dot_masks = [0; 3];
                 for i in 0..3 {
-                    dot_masks[i] = t1_mask_shares[i].trick_dot(&t2_mask_shares_rotated[i][rot_idx]);
+                    // trick dot for mask
+                    dot_masks[i] = 0u16;
+                    for j in 0..MASK_CODE_LENGTH {
+                        dot_masks[i] = dot_masks[i].wrapping_add(
+                            t1_mask_shares[i].coefs[j]
+                                .wrapping_mul(t2_mask_shares_rotated[i][rot_idx].coefs[j]),
+                        );
+                    }
+                    dot_masks[i] = dot_masks[i].wrapping_mul(2);
                 }
                 let dot_masks = dot_masks.iter().fold(0u16, |acc, x| acc.wrapping_add(*x));
 
                 let res = 0.5f64 - (dot_codes as i16) as f64 / (2f64 * dot_masks as f64);
 
+                println!("{} {}", dot_codes, dot_masks);
+
                 // Without rotations
                 if rot_idx == 15 {
-                    assert_float_eq!(dist_0, res, abs <= 1e-6);
-                    assert_float_eq!(plain_distance, res, abs <= 1e-6);
+                    assert_float_eq!(
+                        dist_0,
+                        res,
+                        abs <= 1e-6,
+                        "galois impl distance doesn't match expected"
+                    );
+                    assert_float_eq!(
+                        plain_distance,
+                        res,
+                        abs <= 1e-6,
+                        "galois impl distance doesn't match reference impl"
+                    );
                 }
 
                 if res < min_dist {
