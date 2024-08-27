@@ -98,7 +98,9 @@ async fn e2e_test() -> Result<()> {
     let ids2 = ids0.clone();
 
     let actor0_task = tokio::task::spawn_blocking(move || {
-        let comms0 = device_manager0.instantiate_network_from_ids(0, ids0);
+        let comms0 = device_manager0
+            .instantiate_network_from_ids(0, &ids0)
+            .unwrap();
         let actor = match ServerActor::new_with_device_manager_and_comms(
             0,
             chacha_seeds0,
@@ -122,7 +124,9 @@ async fn e2e_test() -> Result<()> {
         actor.run();
     });
     let actor1_task = tokio::task::spawn_blocking(move || {
-        let comms1 = device_manager1.instantiate_network_from_ids(1, ids1);
+        let comms1 = device_manager1
+            .instantiate_network_from_ids(1, &ids1)
+            .unwrap();
         let actor = match ServerActor::new_with_device_manager_and_comms(
             1,
             chacha_seeds1,
@@ -146,7 +150,9 @@ async fn e2e_test() -> Result<()> {
         actor.run();
     });
     let actor2_task = tokio::task::spawn_blocking(move || {
-        let comms2 = device_manager2.instantiate_network_from_ids(2, ids2);
+        let comms2 = device_manager2
+            .instantiate_network_from_ids(2, &ids2)
+            .unwrap();
         let actor = match ServerActor::new_with_device_manager_and_comms(
             2,
             chacha_seeds2,

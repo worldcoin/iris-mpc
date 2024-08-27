@@ -23,7 +23,10 @@ use iris_mpc_common::{
 use iris_mpc_gpu::{
     dot::ROTATIONS,
     helpers::device_manager::DeviceManager,
-    server::{sync_nccl, BatchMetadata, BatchQuery, ServerActor, ServerJobResult, MAX_BATCH_SIZE},
+    server::{
+        heartbeat_nccl::start_heartbeat, sync_nccl, BatchMetadata, BatchQuery, ServerActor,
+        ServerJobResult, MAX_BATCH_SIZE,
+    },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
 use rand::{rngs::StdRng, SeedableRng};
@@ -53,6 +56,8 @@ const SYNC_QUERIES: usize = MAX_BATCH_SIZE * 2;
 const_assert!(SYNC_QUERIES <= sync_nccl::MAX_REQUESTS);
 const MAX_ROLLBACK: usize = MAX_BATCH_SIZE * 2;
 const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
+const NCCL_START_WAIT_TIME: Duration = Duration::from_secs(5);
+const NCCL_START_RETRY: usize = 5;
 
 static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(MAX_BATCH_SIZE));
 
@@ -494,6 +499,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     tracing::info!("Preparing task monitor");
     let mut background_tasks = TaskMonitor::new();
+
     // a bit convoluted, but we need to create the actor on the thread already,
     // since it blocks a lot and is `!Send`, we get back the handle via the oneshot
     // channel
@@ -501,7 +507,22 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     background_tasks.spawn_blocking(move || {
         let device_manager = Arc::new(DeviceManager::init());
         let ids = device_manager.get_ids_from_magic(0);
-        let comms = device_manager.instantiate_network_from_ids(config.party_id, ids);
+
+        let mut comms = vec![];
+        for _ in 0..NCCL_START_RETRY {
+            let res = device_manager.instantiate_network_from_ids(config.party_id, &ids);
+            if let Ok(c) = res {
+                comms = c;
+                break;
+            }
+            std::thread::sleep(NCCL_START_WAIT_TIME);
+        }
+
+        if comms.is_empty() {
+            tx.send(Err(eyre!("Number of NCCL connection retries exceeded")))
+                .unwrap();
+            return Ok(());
+        }
 
         let sync_result = match sync_nccl::sync(&comms[0], &my_state) {
             Ok(res) => res,
@@ -661,8 +682,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
         Ok(())
     });
+
     background_tasks.check_tasks();
     tracing::info!("Healthcheck server running on port 3000.");
+
+    let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id));
+
+    background_tasks.check_tasks();
+    tracing::info!("Heartbeat started.");
 
     let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
