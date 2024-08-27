@@ -6,6 +6,7 @@ use cudarc::driver::{
 };
 use std::sync::Arc;
 
+pub mod comm;
 pub mod device_manager;
 pub mod id_wrapper;
 pub mod query_processor;
