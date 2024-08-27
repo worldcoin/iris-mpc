@@ -99,32 +99,42 @@ fn to_array(input: [GaloisRingIrisCodeShare; 3]) -> [IrisCodeShare; 3] {
 
 fn main() {
     let mut rng = if let Ok(seed_rng) = env::var("SEED_RNG") {
+        // env variable passed, use passed seed
         StdRng::seed_from_u64(seed_rng.parse().unwrap())
     } else {
+        // no env variable passed, use default seed
         StdRng::seed_from_u64(RNG_SEED)
     };
 
     let iris_code_left = if let Ok(iris_base_64) = env::var("IRIS_B64_LEFT") {
+        // env variable passed, use passed iris code
         IrisCodeArray::from_base64(&iris_base_64).unwrap()
     } else {
+        // no env variable passed, generate random iris code
         IrisCodeArray::random_rng(&mut rng)
     };
 
     let mask_code_left = if let Ok(mask_base_64) = env::var("MASK_B64_LEFT") {
+        // env variable passed, use passed iris mask
         IrisCodeArray::from_base64(&mask_base_64).unwrap()
     } else {
+        // no env variable passed, use default iris mask
         IrisCodeArray::default()
     };
 
     let iris_code_right = if let Ok(iris_base_64) = env::var("IRIS_B64_RIGHT") {
+        // env variable passed, use passed iris code
         IrisCodeArray::from_base64(&iris_base_64).unwrap()
     } else {
+        // no env variable passed, generate random iris code
         IrisCodeArray::random_rng(&mut rng)
     };
 
     let mask_code_right = if let Ok(mask_base_64) = env::var("MASK_B64_RIGHT") {
+        // env variable passed, use passed iris mask
         IrisCodeArray::from_base64(&mask_base_64).unwrap()
     } else {
+        // no env variable passed, use default iris mask
         IrisCodeArray::default()
     };
 
