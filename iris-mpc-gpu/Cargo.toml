@@ -34,7 +34,7 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [features]
-default = ["gpu_dependent"]
+default = []
 otp_encrypt = []
 gpu_dependent = []
 

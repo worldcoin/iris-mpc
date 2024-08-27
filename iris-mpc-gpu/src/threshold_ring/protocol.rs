@@ -771,9 +771,12 @@ impl Circuits {
             self.otp_encrypt_my_rng_u64(&res.get_range(range.start, range.end), idx, streams);
 
         result::group_start().unwrap();
-        self.send(&send_bufs, self.next_id, idx, streams).unwrap();
+        self.comms[idx]
+            .send(&send_bufs, self.next_id, &streams[idx])
+            .unwrap();
         let mut rcv = res.b.slice(range.to_owned());
-        self.receive_view(&mut rcv, self.prev_id, idx, streams)
+        self.comms[idx]
+            .receive_view(&mut rcv, self.prev_id, &streams[idx])
             .unwrap();
         result::group_end().unwrap();
         self.otp_decrypt_their_rng_u64(&mut res.get_range(range.start, range.end), idx, streams);
@@ -820,11 +823,14 @@ impl Circuits {
 
         result::group_start().unwrap();
         for (idx, res) in send_bufs.iter().enumerate() {
-            self.send(res, self.next_id, idx, streams).unwrap();
+            self.comms[idx]
+                .send(res, self.next_id, &streams[idx])
+                .unwrap();
         }
         for (idx, res) in res.iter_mut().enumerate() {
             let mut rcv = res.b.slice(range.to_owned());
-            self.receive_view(&mut rcv, self.prev_id, idx, streams)
+            self.comms[idx]
+                .receive_view(&mut rcv, self.prev_id, &streams[idx])
                 .unwrap();
         }
         result::group_end().unwrap();
@@ -874,10 +880,13 @@ impl Circuits {
 
         result::group_start().unwrap();
         for (idx, res) in send_bufs.iter().enumerate() {
-            self.send(res, self.next_id, idx, streams).unwrap();
+            self.comms[idx]
+                .send(res, self.next_id, &streams[idx])
+                .unwrap();
         }
         for (idx, res) in res.iter_mut().enumerate() {
-            self.receive_view(&mut res.b, self.prev_id, idx, streams)
+            self.comms[idx]
+                .receive_view(&mut res.b, self.prev_id, &streams[idx])
                 .unwrap();
         }
         result::group_end().unwrap();
@@ -914,8 +923,11 @@ impl Circuits {
         let send_bufs = self.otp_encrypt_my_rng_u64(res, idx, streams);
 
         result::group_start().unwrap();
-        self.send(&send_bufs, self.next_id, idx, streams).unwrap();
-        self.receive_view(&mut res.b, self.prev_id, idx, streams)
+        self.comms[idx]
+            .send(&send_bufs, self.next_id, &streams[idx])
+            .unwrap();
+        self.comms[idx]
+            .receive_view(&mut res.b, self.prev_id, &streams[idx])
             .unwrap();
         result::group_end().unwrap();
         self.otp_decrypt_their_rng_u64(res, idx, streams);
@@ -1162,8 +1174,12 @@ impl Circuits {
 
             result::group_start().unwrap();
             for (idx, (m0, m1)) in izip!(&m0, &m1).enumerate() {
-                self.send(m0, self.prev_id, idx, streams).unwrap();
-                self.send(m1, self.prev_id, idx, streams).unwrap();
+                self.comms[idx]
+                    .send(m0, self.prev_id, &streams[idx])
+                    .unwrap();
+                self.comms[idx]
+                    .send(m1, self.prev_id, &streams[idx])
+                    .unwrap();
             }
             result::group_end().unwrap();
         }
@@ -1273,7 +1289,9 @@ impl Circuits {
         #[cfg(feature = "otp_encrypt")]
         {
             for (idx, send) in send.iter().enumerate() {
-                self.send(send, self.prev_id, idx, streams).unwrap();
+                self.comms[idx]
+                    .send(send, self.prev_id, &streams[idx])
+                    .unwrap();
             }
         }
         #[cfg(not(feature = "otp_encrypt"))]
@@ -1354,7 +1372,9 @@ impl Circuits {
         #[cfg(feature = "otp_encrypt")]
         {
             for (idx, send) in send.iter().enumerate() {
-                self.send(send, self.next_id, idx, streams).unwrap();
+                self.comms[idx]
+                    .send(send, self.next_id, &streams[idx])
+                    .unwrap();
             }
         }
         #[cfg(not(feature = "otp_encrypt"))]
