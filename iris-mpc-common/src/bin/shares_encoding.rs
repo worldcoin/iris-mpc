@@ -104,10 +104,6 @@ fn main() {
         StdRng::seed_from_u64(RNG_SEED)
     };
 
-    match env::var("MY_ENV_VAR") {
-        Ok(value) => println!("The value of MY_ENV_VAR is: {}", value),
-        Err(e) => println!("Couldn't read MY_ENV_VAR: {}", e),
-    }
     let iris_code_left = if let Ok(iris_base_64) = env::var("IRIS_B64_LEFT") {
         IrisCodeArray::from_base64(&iris_base_64).unwrap()
     } else {
