@@ -713,8 +713,9 @@ impl ShareDB {
                 .send_view(&send_view, next_peer, &streams[idx])
                 .unwrap();
 
+            let mut recv_view = self.results_peer[idx].slice(..len);
             self.comms[idx]
-                .receive(&mut self.results_peer[idx], prev_peer, &streams[idx])
+                .receive_view(&mut recv_view, prev_peer, &streams[idx])
                 .unwrap();
         }
         nccl::group_end().unwrap();
