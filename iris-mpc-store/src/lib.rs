@@ -1,6 +1,9 @@
 use bytemuck::cast_slice;
 use eyre::{eyre, Result};
-use futures::{stream::{self}, Stream, StreamExt};
+use futures::{
+    stream::{self},
+    Stream, StreamExt,
+};
 use iris_mpc_common::config::Config;
 use sqlx::{migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Transaction};
 use std::{ops::DerefMut, pin::Pin};

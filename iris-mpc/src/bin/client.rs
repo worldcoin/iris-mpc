@@ -48,7 +48,7 @@ struct Opt {
 
     #[arg(long, env, required = true)]
     requests_bucket_region: String,
-    
+
     #[arg(long, env)]
     db_index: Option<usize>,
 
