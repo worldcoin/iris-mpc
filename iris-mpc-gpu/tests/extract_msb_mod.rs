@@ -178,7 +178,7 @@ async fn test_extract_msb_mod() -> eyre::Result<()> {
     // Get Circuit Party
     let device_manager = Arc::new(DeviceManager::init());
     let ids = device_manager.get_ids_from_magic(0);
-    let comms = device_manager.instantiate_network_from_ids(party_id, ids);
+    let comms = device_manager.instantiate_network_from_ids(party_id, &ids)?;
     let mut party = Circuits::new(
         party_id,
         INPUTS_PER_GPU_SIZE,

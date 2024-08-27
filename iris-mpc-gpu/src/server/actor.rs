@@ -135,7 +135,7 @@ impl ServerActor {
         db_buffer: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let ids = device_manager.get_ids_from_magic(0);
-        let comms = device_manager.instantiate_network_from_ids(party_id, ids);
+        let comms = device_manager.instantiate_network_from_ids(party_id, &ids)?;
         Self::new_with_device_manager_and_comms(
             party_id,
             chacha_seeds,
