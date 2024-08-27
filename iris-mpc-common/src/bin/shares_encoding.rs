@@ -204,7 +204,7 @@ mod tests {
             right_iris_mask_shares: "right_iris_mask_shares".to_string(),
         };
 
-        let expected = r#"{"IRIS_shares_version":"1.0","IRIS_version":"1.1","left_iris_code_shares":"left_iris_mask_shares","left_iris_mask_shares":"left_iris_mask_shares","right_iris_code_shares":"right_iris_code_shares","right_iris_mask_shares":"right_iris_mask_shares"}"#;
+        let expected = r#"{"IRIS_shares_version":"1.0","IRIS_version":"1.1","left_iris_code_shares":"left_iris_code_shares","left_iris_mask_shares":"left_iris_mask_shares","right_iris_code_shares":"right_iris_code_shares","right_iris_mask_shares":"right_iris_mask_shares"}"#;
         assert_eq!(
             serde_json::to_string(&SerializeWithSortedKeys(&iris_code_shares)).unwrap(),
             expected
