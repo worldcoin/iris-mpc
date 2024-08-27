@@ -82,7 +82,7 @@ impl Store {
             .database
             .as_ref()
             .ok_or(eyre!("Missing database config"))?;
-        let schema_name = format!("{}_{}_{}_temporary_fix_2", APP_NAME, config.environment, config.party_id);
+        let schema_name = format!("{}_{}_{}_temporary_fix_12", APP_NAME, config.environment, config.party_id);
         Self::new(&db_config.url, &schema_name).await
     }
 
