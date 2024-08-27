@@ -132,13 +132,7 @@ mod tests {
     #[tokio::test]
     async fn test_decrypt_iris_share_using_previous_valid_key() {
         // Mocked base64 encoded JSON string
-        let iris_codes_json = IrisCodesJSON {
-            iris_version:           "1.0".to_string(),
-            left_iris_code_shares:  "left_code".to_string(),
-            right_iris_code_shares: "right_code".to_string(),
-            left_iris_mask_shares:  "left_mask".to_string(),
-            right_iris_mask_shares: "right_mask".to_string(),
-        };
+        let iris_codes_json = mock_iris_codes_json();
 
         // Use previous public key to encrypt the shares
         let decoded_public_key = STANDARD.decode(PREVIOUS_PUBLIC_KEY.as_bytes()).unwrap();
@@ -161,6 +155,33 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), iris_codes_json);
+    }
+
+    #[tokio::test]
+    async fn test_decrypt_iris_share_non_existent_previous_private_key() {
+        // Mocked base64 encoded JSON string
+        let iris_codes_json = mock_iris_codes_json();
+
+        // Use previous public key to encrypt the shares
+        let decoded_public_key = STANDARD.decode(PREVIOUS_PUBLIC_KEY.as_bytes()).unwrap();
+        let shares_encryption_public_key = PublicKey::from_slice(&decoded_public_key).unwrap();
+        let json_string = serde_json::to_string(&iris_codes_json).unwrap();
+        let sealed_box = sealedbox::seal(json_string.as_bytes(), &shares_encryption_public_key);
+        let encoded_share = STANDARD.encode(&sealed_box);
+
+        // Set the previous key to be empty
+        let key_pair = get_key_pairs(CURRENT_PRIVATE_KEY.to_string(), "".to_string());
+
+        let smpc_request = get_mock_request();
+
+        // Decrypt the share. It will fail: it will attempt to decrypt using the current
+        // key, but the share was encrypted using the current key. The previous
+        // key does not exist, so it will return a sealed box open error
+        let result = smpc_request.decrypt_iris_share(encoded_share, key_pair);
+        assert!(matches!(
+            result,
+            Err(SharesDecodingError::SealedBoxOpenError)
+        ));
     }
 
     #[tokio::test]
