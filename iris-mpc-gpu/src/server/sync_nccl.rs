@@ -1,6 +1,6 @@
 //! Exchange the SyncState between parties using NCCL.
 
-use cudarc::nccl::Comm;
+use cudarc::{driver::DeviceSlice, nccl::Comm};
 use eyre::{eyre, Result};
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 
@@ -8,7 +8,7 @@ pub fn sync(comm: &Comm, state: &SyncState) -> Result<SyncResult> {
     let state_dev = comm.device().htod_copy(serialize(state)?).unwrap();
     let mut all_states_dev = comm
         .device()
-        .alloc_zeros(state_dev.len * comm.world_size())
+        .alloc_zeros(state_dev.len() * comm.world_size())
         .unwrap();
 
     comm.all_gather(&state_dev, &mut all_states_dev)
