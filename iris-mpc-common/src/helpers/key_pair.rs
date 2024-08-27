@@ -34,6 +34,8 @@ pub enum SharesDecodingError {
     #[error("Sealed box open error")]
     SealedBoxOpenError,
     #[error("Public key not found error")]
+    PreviousKeyNotFound,
+    #[error("Previous key not found error")]
     PublicKeyNotFound,
     #[error("Private key not found error")]
     PrivateKeyNotFound,
@@ -58,7 +60,7 @@ pub enum SharesDecodingError {
 #[derive(Clone, Debug)]
 pub struct SharesEncryptionKeyPairs {
     pub current_key_pair:  SharesEncryptionKeyPair,
-    pub previous_key_pair: SharesEncryptionKeyPair,
+    pub previous_key_pair: Option<SharesEncryptionKeyPair>,
 }
 
 impl Zeroize for SharesEncryptionKeyPairs {
@@ -120,11 +122,18 @@ impl SharesEncryptionKeyPairs {
     ) -> Result<Self, SharesDecodingError> {
         let current_key_pair =
             SharesEncryptionKeyPair::from_b64_private_key_string(current_sk_b64_string)?;
+        if previous_sk_b64_string.is_empty() {
+            return Ok(SharesEncryptionKeyPairs {
+                current_key_pair,
+                previous_key_pair: None,
+            });
+        }
+
         let previous_key_pair =
             SharesEncryptionKeyPair::from_b64_private_key_string(previous_sk_b64_string)?;
         Ok(SharesEncryptionKeyPairs {
             current_key_pair,
-            previous_key_pair,
+            previous_key_pair: Some(previous_key_pair),
         })
     }
 }
