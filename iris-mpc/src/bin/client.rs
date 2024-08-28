@@ -142,7 +142,7 @@ async fn main() -> eyre::Result<()> {
 
             for msg in msg.messages.unwrap_or_default() {
                 counter += 1;
-                println!("Received message: {:?}", &msg.body);
+                
                 let result: ResultEvent = serde_json::from_str(&msg.body.context("No body found")?)
                     .context("Failed to parse message body")?;
 
