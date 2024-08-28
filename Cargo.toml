@@ -42,6 +42,7 @@ uuid = { version = "1", features = ["v4"] }
 # bench gets its setting from release, and test from dev.
 [profile.release]
 panic = 'abort'
+debug = 1
 
 [profile.dev]
 panic = 'abort'
