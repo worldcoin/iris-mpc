@@ -254,12 +254,13 @@ impl DeviceCompactSums {
             offset,
             streams,
         );
-        mask_engine.dot_reduce(
+        mask_engine.dot_reduce_and_multiply(
             &self.mask_query,
             &self.mask_query_insert,
             db_sizes,
             offset,
             streams,
+            2,
         );
     }
 
@@ -281,12 +282,13 @@ impl DeviceCompactSums {
             offset,
             streams,
         );
-        mask_engine.dot_reduce(
+        mask_engine.dot_reduce_and_multiply(
             &self.mask_query,
             &sliced_mask_db.code_sums_gr,
             database_sizes,
             offset,
             streams,
+            2,
         );
     }
 }

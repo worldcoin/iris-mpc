@@ -807,8 +807,6 @@ impl ServerActor {
             Eye::Right => (&self.db_match_list_right, &self.batch_match_list_right),
         };
 
-        // Transfer queries to device
-
         // ---- START BATCH DEDUP ----
         tracing::debug!(party_id = self.party_id, "Starting batch deduplication");
 

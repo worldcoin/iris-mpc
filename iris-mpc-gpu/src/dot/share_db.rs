@@ -573,13 +573,14 @@ impl ShareDB {
         }
     }
 
-    pub fn dot_reduce(
+    pub fn dot_reduce_and_multiply(
         &mut self,
         query_sums: &CudaVec2DSlicerU32,
         db_sums: &CudaVec2DSlicerU32,
         chunk_sizes: &[usize],
         offset: usize,
         streams: &[CudaStream],
+        multiplier: u16,
     ) {
         for idx in 0..self.device_manager.device_count() {
             assert!(
@@ -611,6 +612,7 @@ impl ShareDB {
                             chunk_sizes[idx] as u64,
                             (chunk_sizes[idx] * self.query_length) as u64,
                             offset as u64,
+                            multiplier,
                             self.rngs[idx].0.cuda_slice().unwrap(),
                             self.rngs[idx].1.cuda_slice().unwrap(),
                         ),
@@ -618,6 +620,17 @@ impl ShareDB {
                     .unwrap();
             }
         }
+    }
+
+    pub fn dot_reduce(
+        &mut self,
+        query_sums: &CudaVec2DSlicerU32,
+        db_sums: &CudaVec2DSlicerU32,
+        chunk_sizes: &[usize],
+        offset: usize,
+        streams: &[CudaStream],
+    ) {
+        self.dot_reduce_and_multiply(query_sums, db_sums, chunk_sizes, offset, streams, 1);
     }
 
     #[cfg(feature = "otp_encrypt")]
@@ -1142,12 +1155,13 @@ mod tests {
                 0,
                 &streams,
             );
-            masks_engine.dot_reduce(
+            masks_engine.dot_reduce_and_multiply(
                 &mask_query_sums,
                 &mask_db_slices.code_sums_gr,
                 &db_sizes,
                 0,
                 &streams,
+                2,
             );
 
             device_manager.await_streams(&streams);
@@ -1164,7 +1178,6 @@ mod tests {
         for i in 0..results_codes[0].len() {
             let code = results_codes[0][i] + results_codes[1][i] + results_codes[2][i];
             let mask = results_masks[0][i] + results_masks[1][i] + results_masks[2][i];
-            let mask = mask * 2; // Correct for the shortening of the mask
 
             if i == 0 {
                 tracing::info!("Code: {}, Mask: {}", code, mask);
