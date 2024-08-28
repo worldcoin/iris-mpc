@@ -63,7 +63,6 @@ static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(
 
 #[allow(clippy::type_complexity)]
 fn preprocess_iris_message_shares(
-    party_id: usize,
     code_shares: String,
     mask_shares: String,
 ) -> eyre::Result<(
@@ -74,9 +73,9 @@ fn preprocess_iris_message_shares(
     Vec<GaloisRingIrisCodeShare>,
     Vec<GaloisRingIrisCodeShare>,
 )> {
-    let mut iris_share = GaloisRingIrisCodeShare::from_base64(party_id + 1, &code_shares)
+    let mut iris_share = GaloisRingIrisCodeShare::from_base64(&code_shares)
         .context("Failed to base64 parse iris code")?;
-    let mut mask_share = GaloisRingIrisCodeShare::from_base64(party_id + 1, &mask_shares)
+    let mut mask_share = GaloisRingIrisCodeShare::from_base64(&mask_shares)
         .context("Failed to base64 parse iris mask")?;
 
     // Original for storage.
@@ -204,7 +203,6 @@ async fn receive_batch(
                 // Preprocess shares for left eye.
                 let left_future = spawn_blocking(move || {
                     preprocess_iris_message_shares(
-                        party_id,
                         iris_message_share.left_iris_code_shares,
                         iris_message_share.left_iris_mask_shares,
                     )
@@ -213,7 +211,6 @@ async fn receive_batch(
                 // Preprocess shares for right eye.
                 let right_future = spawn_blocking(move || {
                     preprocess_iris_message_shares(
-                        party_id,
                         iris_message_share.right_iris_code_shares,
                         iris_message_share.right_iris_mask_shares,
                     )
