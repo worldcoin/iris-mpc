@@ -12,8 +12,7 @@ const HEARBEAT_INTERVAL: Duration = Duration::from_secs(5);
 pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
     let (tx, mut rx) = mpsc::channel(1);
 
-    #[allow(clippy::let_underscore_future)]
-    let _: JoinHandle<eyre::Result<()>> = spawn_blocking(move || {
+    let heartbeat_handle: JoinHandle<eyre::Result<()>> = spawn_blocking(move || {
         let device_manager = Arc::new(DeviceManager::init());
         let ids = device_manager.get_ids_from_magic(0xdead);
         let comms = device_manager.instantiate_network_from_ids(party_id, &ids)?;
@@ -58,6 +57,10 @@ pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
     loop {
         match timeout(HEARBEAT_INTERVAL * 2, rx.recv()).await {
             Ok(Some(Ok(_))) => continue,
+            Ok(None) => {
+                tracing::error!("Heartbeat channel closed.");
+                break;
+            }
             Ok(Some(Err(e))) => {
                 tracing::error!("Heartbeat failed: {:?}", e);
                 panic!("Heartbeat failed, restarting service");
@@ -66,7 +69,8 @@ pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
                 tracing::error!("Heartbeat timeout.");
                 panic!("Heartbeat timeout, restarting service");
             }
-            _ => unreachable!(),
         }
     }
+
+    heartbeat_handle.await?
 }
