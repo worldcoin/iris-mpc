@@ -18,7 +18,7 @@ use iris_mpc_common::{
         task_monitor::TaskMonitor,
     },
     iris_db::db::IrisDB,
-    IrisCodeDb, IRIS_CODE_LENGTH,
+    IrisCodeDb, IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use iris_mpc_gpu::{
     dot::ROTATIONS,
@@ -356,11 +356,14 @@ async fn initialize_iris_dbs(
             .db
             .iter()
             .flat_map(|iris| {
-                GaloisRingIrisCodeShare::encode_mask_code(
-                    &iris.mask,
-                    &mut StdRng::seed_from_u64(RNG_SEED),
-                )[party_id]
-                    .coefs
+                let mask: GaloisRingTrimmedMaskCodeShare =
+                    GaloisRingIrisCodeShare::encode_mask_code(
+                        &iris.mask,
+                        &mut StdRng::seed_from_u64(RNG_SEED),
+                    )[party_id]
+                        .clone()
+                        .into();
+                mask.coefs
             })
             .collect::<Vec<_>>();
 
@@ -371,9 +374,9 @@ async fn initialize_iris_dbs(
 
     let count_irises = store.count_irises().await?;
     left_codes_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
-    left_masks_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
+    left_masks_db.resize(fake_len + count_irises * MASK_CODE_LENGTH, 0);
     right_codes_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
-    right_masks_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
+    right_masks_db.resize(fake_len + count_irises * MASK_CODE_LENGTH, 0);
 
     let parallelism = config
         .database
@@ -393,11 +396,14 @@ async fn initialize_iris_dbs(
             return Err(eyre!("Inconsistent iris index {}", iris.index()));
         }
 
-        let start = fake_len + iris.index() * IRIS_CODE_LENGTH;
-        left_codes_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.left_code());
-        left_masks_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.left_mask());
-        right_codes_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.right_code());
-        right_masks_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.right_mask());
+        let start_code = fake_len + iris.index() * IRIS_CODE_LENGTH;
+        let start_mask = fake_len + iris.index() * MASK_CODE_LENGTH;
+        left_codes_db[start_code..start_code + IRIS_CODE_LENGTH].copy_from_slice(iris.left_code());
+        left_masks_db[start_mask..start_mask + MASK_CODE_LENGTH].copy_from_slice(iris.left_mask());
+        right_codes_db[start_code..start_code + IRIS_CODE_LENGTH]
+            .copy_from_slice(iris.right_code());
+        right_masks_db[start_mask..start_mask + MASK_CODE_LENGTH]
+            .copy_from_slice(iris.right_mask());
 
         store_len += 1;
         if (store_len % 10000) == 0 {
