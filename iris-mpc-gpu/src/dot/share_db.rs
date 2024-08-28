@@ -1,6 +1,7 @@
 use super::IRIS_CODE_LENGTH;
 use crate::{
     helpers::{
+        comm::NcclComm,
         device_manager::DeviceManager,
         device_ptrs_to_shares,
         query_processor::{
@@ -25,7 +26,7 @@ use cudarc::{
         sys::{CUdeviceptr, CUmemAttach_flags},
         CudaFunction, CudaSlice, CudaStream, DevicePtr, LaunchAsync, LaunchConfig,
     },
-    nccl::{self, result, Comm, NcclType},
+    nccl,
     nvrtc::compile_ptx,
 };
 #[cfg(feature = "otp_encrypt")]
@@ -112,44 +113,6 @@ pub fn gemm(
     }
 }
 
-fn send_stream<T: NcclType>(
-    sendbuff: &CudaSlice<T>,
-    len: usize,
-    peer: usize,
-    comm: &Comm,
-    stream: &CudaStream,
-) -> Result<result::NcclStatus, result::NcclError> {
-    unsafe {
-        result::send(
-            *sendbuff.device_ptr() as *mut _,
-            len,
-            T::as_nccl_type(),
-            peer as i32,
-            comm.comm.0,
-            stream.stream as *mut _,
-        )
-    }
-}
-
-fn receive_stream<T: NcclType>(
-    recvbuff: &mut CudaSlice<T>,
-    len: usize,
-    peer: usize,
-    comm: &Comm,
-    stream: &CudaStream,
-) -> Result<result::NcclStatus, result::NcclError> {
-    unsafe {
-        result::recv(
-            *recvbuff.device_ptr() as *mut _,
-            len,
-            T::as_nccl_type(),
-            peer as i32,
-            comm.comm.0,
-            stream.stream as *mut _,
-        )
-    }
-}
-
 fn chunking<T: Clone>(
     slice: &[T],
     n_chunks: usize,
@@ -186,7 +149,7 @@ pub struct ShareDB {
     #[cfg(feature = "otp_encrypt")]
     xor_assign_u8_kernels: Vec<CudaFunction>,
     rngs:                  Vec<(ChaChaCudaRng, ChaChaCudaRng)>,
-    comms:                 Vec<Arc<Comm>>,
+    comms:                 Vec<Arc<NcclComm>>,
     ones:                  Vec<CudaSlice<u8>>,
     intermediate_results:  Vec<CudaSlice<i32>>,
     pub results:           Vec<CudaSlice<u8>>,
@@ -202,7 +165,7 @@ impl ShareDB {
         max_db_length: usize,
         query_length: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
-        comms: Vec<Arc<Comm>>,
+        comms: Vec<Arc<NcclComm>>,
     ) -> Self {
         let n_devices = device_manager.device_count();
         let ptx = compile_ptx(PTX_SRC).unwrap();
@@ -745,23 +708,15 @@ impl ShareDB {
             let send_len = len >> 2;
             #[cfg(not(feature = "otp_encrypt"))]
             let send_len = len;
-            send_stream(
-                &send[idx],
-                send_len,
-                next_peer,
-                &self.comms[idx],
-                &streams[idx],
-            )
-            .unwrap();
+            let send_view = send[idx].slice(..send_len);
+            self.comms[idx]
+                .send_view(&send_view, next_peer, &streams[idx])
+                .unwrap();
 
-            receive_stream(
-                &mut self.results_peer[idx],
-                len,
-                prev_peer,
-                &self.comms[idx],
-                &streams[idx],
-            )
-            .unwrap();
+            let mut recv_view = self.results_peer[idx].slice(..len);
+            self.comms[idx]
+                .receive_view(&mut recv_view, prev_peer, &streams[idx])
+                .unwrap();
         }
         nccl::group_end().unwrap();
         #[cfg(feature = "otp_encrypt")]

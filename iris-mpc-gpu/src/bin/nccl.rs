@@ -73,7 +73,7 @@ async fn main() -> eyre::Result<()> {
 
         devs.push(dev);
         comms.push(comm);
-        slices.push(slice);
+        slices.push(Some(slice));
         slices1.push(slice1);
         slices2.push(slice2);
         slices3.push(slice3);
@@ -85,15 +85,9 @@ async fn main() -> eyre::Result<()> {
         for i in 0..n_devices {
             devs[i].bind_to_thread().unwrap();
 
-            comms[i]
-                .broadcast(&Some(&slices[i]), &mut slices1[i], 0)
-                .unwrap();
-            comms[i]
-                .broadcast(&Some(&slices[i]), &mut slices2[i], 1)
-                .unwrap();
-            comms[i]
-                .broadcast(&Some(&slices[i]), &mut slices3[i], 2)
-                .unwrap();
+            comms[i].broadcast(&slices[i], &mut slices1[i], 0).unwrap();
+            comms[i].broadcast(&slices[i], &mut slices2[i], 1).unwrap();
+            comms[i].broadcast(&slices[i], &mut slices3[i], 2).unwrap();
         }
 
         for dev in devs.iter() {

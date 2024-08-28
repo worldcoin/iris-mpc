@@ -7,6 +7,7 @@ use crate::{
     },
     helpers::{
         self,
+        comm::NcclComm,
         device_manager::DeviceManager,
         query_processor::{CompactQuery, DeviceCompactQuery, DeviceCompactSums},
     },
@@ -19,7 +20,6 @@ use cudarc::{
         sys::CUevent,
         CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceSlice,
     },
-    nccl::Comm,
 };
 use futures::{Future, FutureExt};
 use iris_mpc_common::{galois_engine::degree4::GaloisRingIrisCodeShare, IrisCodeDbSlice};
@@ -156,7 +156,7 @@ impl ServerActor {
         left_eye_db: IrisCodeDbSlice,
         right_eye_db: IrisCodeDbSlice,
         device_manager: Arc<DeviceManager>,
-        comms: Vec<Arc<Comm>>,
+        comms: Vec<Arc<NcclComm>>,
         job_queue_size: usize,
         db_size: usize,
         db_buffer: usize,
@@ -195,7 +195,7 @@ impl ServerActor {
         left_eye_db: IrisCodeDbSlice,
         right_eye_db: IrisCodeDbSlice,
         device_manager: Arc<DeviceManager>,
-        comms: Vec<Arc<Comm>>,
+        comms: Vec<Arc<NcclComm>>,
         job_queue: mpsc::Receiver<ServerJob>,
         db_size: usize,
         db_buffer: usize,
@@ -1095,16 +1095,16 @@ fn open(
     for (idx, res) in x.iter().enumerate() {
         // Result is in bit 0
         let res = res.get_offset(0, chunk_size);
-        party
-            .send_view(&res.b, party.next_id(), idx, streams)
+        party.comms()[idx]
+            .send_view(&res.b, party.next_id(), &streams[idx])
             .unwrap();
         a.push(res.a);
         b.push(res.b);
     }
     for (idx, res) in x.iter().enumerate() {
         let mut res = res.get_offset(1, chunk_size);
-        party
-            .receive_view(&mut res.a, party.prev_id(), idx, streams)
+        party.comms()[idx]
+            .receive_view(&mut res.a, party.prev_id(), &streams[idx])
             .unwrap();
         c.push(res.a);
     }
