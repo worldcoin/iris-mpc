@@ -6,6 +6,7 @@ use cudarc::driver::{
 };
 use std::sync::Arc;
 
+pub mod comm;
 pub mod device_manager;
 pub mod id_wrapper;
 pub mod query_processor;
@@ -21,12 +22,7 @@ pub fn device_ptrs_to_slices<T>(
 ) -> Vec<CudaSlice<T>> {
     ptrs.iter()
         .enumerate()
-        .map(|(idx, &p)| CudaSlice {
-            cu_device_ptr: p,
-            len:           sizes[idx],
-            device:        devs[idx].clone(),
-            host_buf:      None,
-        })
+        .map(|(idx, &p)| unsafe { devs[idx].upgrade_device_ptr(p, sizes[idx]) })
         .collect()
 }
 

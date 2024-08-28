@@ -103,19 +103,19 @@ fn open(
     }
     cudarc::nccl::result::group_start().unwrap();
     for (idx, (res, corr)) in izip!(x.iter(), corrections.iter()).enumerate() {
-        party
-            .send_view(&res.b, party.next_id(), idx, streams)
+        party.comms()[idx]
+            .send_view(&res.b, party.next_id(), &streams[idx])
             .unwrap();
-        party
-            .send_view_u16(&corr.b, party.next_id(), idx, streams)
+        party.comms()[idx]
+            .send_view_u16(&corr.b, party.next_id(), &streams[idx])
             .unwrap();
     }
     for (idx, (res, corr)) in izip!(x.iter_mut(), corrections.iter_mut()).enumerate() {
-        party
-            .receive_view(&mut res.a, party.prev_id(), idx, streams)
+        party.comms()[idx]
+            .receive_view(&mut res.a, party.prev_id(), &streams[idx])
             .unwrap();
-        party
-            .receive_view_u16(&mut corr.a, party.prev_id(), idx, streams)
+        party.comms()[idx]
+            .receive_view_u16(&mut corr.a, party.prev_id(), &streams[idx])
             .unwrap();
     }
     cudarc::nccl::result::group_end().unwrap();
