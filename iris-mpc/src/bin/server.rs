@@ -23,7 +23,10 @@ use iris_mpc_common::{
 use iris_mpc_gpu::{
     dot::ROTATIONS,
     helpers::device_manager::DeviceManager,
-    server::{sync_nccl, BatchMetadata, BatchQuery, ServerActor, ServerJobResult, MAX_BATCH_SIZE},
+    server::{
+        heartbeat_nccl::start_heartbeat, sync_nccl, BatchMetadata, BatchQuery, ServerActor,
+        ServerJobResult, MAX_BATCH_SIZE,
+    },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
 use rand::{rngs::StdRng, SeedableRng};
@@ -43,7 +46,6 @@ use tokio::{
     time::timeout,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use iris_mpc_gpu::server::heartbeat_nccl::start_heartbeat;
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
