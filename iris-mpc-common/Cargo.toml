@@ -5,37 +5,37 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-aws-config.workspace = true
-aws-sdk-kms.workspace = true
-aws-sdk-sns.workspace = true
-aws-sdk-s3.workspace = true
-aws-sdk-secretsmanager.workspace = true
-clap.workspace = true
-rand.workspace = true
-bytemuck.workspace = true
-eyre.workspace = true
+aws-config = { version = "1.5.4", features = ["behavior-version-latest"] }
+aws-sdk-kms = { version = "1.37.0" }
+aws-sdk-sns = { version = "1.37.0" }
+aws-sdk-s3 = { version = "1.42.0" }
+aws-sdk-secretsmanager = { version = "1.41.0" }
+clap = { version = "4", features = ["derive", "env"] }
+rand = "0.8"
+bytemuck = "1.17"
+eyre = "0.6"
 thiserror = "1"
-rayon.workspace = true
-itertools.workspace = true
-base64.workspace = true
-serde.workspace = true
-serde_json.workspace = true
+rayon = "1.5.1"
+itertools = "0.13"
+base64 = "0.22.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1"
 config = "0.14.0"
-tokio.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
+tokio = { version = "1.39", features = ["full", "rt-multi-thread"] }
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.15", features = ["env-filter"] }
 
-reqwest = { workspace = true, features = ["blocking", "json"] }
+reqwest = { version = "0.12", features = ["blocking", "json"] }
 sodiumoxide = "0.2.7"
 hmac = "0.12"
 http = "1.1.0"
 opentelemetry = "0.21.0"
-telemetry-batteries.workspace = true
+telemetry-batteries = { git = "https://github.com/worldcoin/telemetry-batteries.git", rev = "802a4f39f358e077b11c8429b4c65f3e45b85959" }
 percent-encoding = "2"
 sha2 = "0.10"
 time = { version = "^0.3.6", features = ["formatting", "macros"] }
 url = "2"
-hex.workspace = true
+hex = "0.4.3"
 zeroize = "1.8.1"
 wiremock = "0.6.1"
 digest = "0.10.7"
