@@ -23,10 +23,7 @@ use iris_mpc_common::{
 use iris_mpc_gpu::{
     dot::ROTATIONS,
     helpers::device_manager::DeviceManager,
-    server::{
-        sync_nccl, BatchMetadata, BatchQuery, ServerActor,
-        ServerJobResult, MAX_BATCH_SIZE,
-    },
+    server::{sync_nccl, BatchMetadata, BatchQuery, ServerActor, ServerJobResult, MAX_BATCH_SIZE},
 };
 use iris_mpc_store::{Store, StoredIrisRef};
 use rand::{rngs::StdRng, SeedableRng};
