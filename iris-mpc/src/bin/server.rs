@@ -370,13 +370,14 @@ async fn initialize_iris_dbs(
         (codes_db, masks_db)
     };
     let (mut right_codes_db, mut right_masks_db) = (left_codes_db.clone(), left_masks_db.clone());
-    let fake_len = left_codes_db.len();
+    let fake_len_codes = left_codes_db.len();
+    let fake_len_masks = left_masks_db.len();
 
     let count_irises = store.count_irises().await?;
-    left_codes_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
-    left_masks_db.resize(fake_len + count_irises * MASK_CODE_LENGTH, 0);
-    right_codes_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
-    right_masks_db.resize(fake_len + count_irises * MASK_CODE_LENGTH, 0);
+    left_codes_db.resize(fake_len_codes + count_irises * IRIS_CODE_LENGTH, 0);
+    left_masks_db.resize(fake_len_masks + count_irises * MASK_CODE_LENGTH, 0);
+    right_codes_db.resize(fake_len_codes + count_irises * IRIS_CODE_LENGTH, 0);
+    right_masks_db.resize(fake_len_masks + count_irises * MASK_CODE_LENGTH, 0);
 
     let parallelism = config
         .database
@@ -396,8 +397,8 @@ async fn initialize_iris_dbs(
             return Err(eyre!("Inconsistent iris index {}", iris.index()));
         }
 
-        let start_code = fake_len + iris.index() * IRIS_CODE_LENGTH;
-        let start_mask = fake_len + iris.index() * MASK_CODE_LENGTH;
+        let start_code = fake_len_codes + iris.index() * IRIS_CODE_LENGTH;
+        let start_mask = fake_len_masks + iris.index() * MASK_CODE_LENGTH;
         left_codes_db[start_code..start_code + IRIS_CODE_LENGTH].copy_from_slice(iris.left_code());
         left_masks_db[start_mask..start_mask + MASK_CODE_LENGTH].copy_from_slice(iris.left_mask());
         right_codes_db[start_code..start_code + IRIS_CODE_LENGTH]
@@ -428,7 +429,7 @@ async fn send_result_events(
             .publish()
             .topic_arn(&config.results_topic_arn)
             .message(result_event)
-            // .message_group_id(format!("party-id-{}", config.party_id))
+            .message_group_id(format!("party-id-{}", config.party_id))
             .send()
             .await?;
     }
