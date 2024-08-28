@@ -1,4 +1,7 @@
-use super::query_processor::{CudaVec2DSlicerU8, StreamAwareCudaSlice};
+use super::{
+    comm::NcclComm,
+    query_processor::{CudaVec2DSlicerU8, StreamAwareCudaSlice},
+};
 use crate::dot::ROTATIONS;
 use cudarc::{
     cublas::CudaBlas,
@@ -10,7 +13,7 @@ use cudarc::{
         sys::{CUevent, CUevent_flags},
         CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceRepr,
     },
-    nccl::{Comm, Id},
+    nccl::Id,
 };
 use eyre::eyre;
 use std::sync::Arc;
@@ -239,7 +242,7 @@ impl DeviceManager {
         &self,
         peer_id: usize,
         ids: &[Id],
-    ) -> eyre::Result<Vec<Arc<Comm>>> {
+    ) -> eyre::Result<Vec<Arc<NcclComm>>> {
         let n_devices = self.devices.len();
         let mut comms = Vec::with_capacity(n_devices);
 
@@ -247,7 +250,7 @@ impl DeviceManager {
             // Bind to thread (important!)
             self.devices[i].bind_to_thread().unwrap();
             comms.push(Arc::new(
-                Comm::from_rank(self.devices[i].clone(), peer_id, 3, ids[i])
+                NcclComm::from_rank(self.devices[i].clone(), peer_id, 3, ids[i])
                     .map_err(|e| eyre!("{:?}", e.0))?,
             ));
         }
