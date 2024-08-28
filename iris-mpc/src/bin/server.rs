@@ -43,6 +43,7 @@ use tokio::{
     time::timeout,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use iris_mpc_gpu::server::heartbeat_nccl::start_heartbeat;
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
@@ -687,7 +688,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     background_tasks.check_tasks();
     tracing::info!("Healthcheck server running on port 3000.");
 
-    // let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id));
+    let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id));
 
     background_tasks.check_tasks();
     tracing::info!("Heartbeat started.");
