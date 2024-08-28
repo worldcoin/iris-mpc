@@ -111,16 +111,22 @@ impl SMPCRequest {
             .map_err(|_| SharesDecodingError::Base64DecodeError)?;
 
         // try decrypting with key_pairs.current_key_pair, if it fails, try decrypting
-        // with key_pairs.previous_key_pair
+        // with key_pairs.previous_key_pair (if it exists, otherwise, return an error)
         let decrypted = match key_pairs
             .current_key_pair
             .open_sealed_box(share_bytes.clone())
         {
             Ok(bytes) => Ok(bytes),
-            Err(_) => key_pairs
-                .previous_key_pair
-                .open_sealed_box(share_bytes)
-                .map_err(|_| SharesDecodingError::SealedBoxOpenError),
+            Err(_) => {
+                match if let Some(key_pair) = key_pairs.previous_key_pair.clone() {
+                    key_pair.open_sealed_box(share_bytes)
+                } else {
+                    Err(SharesDecodingError::PreviousKeyNotFound)
+                } {
+                    Ok(bytes) => Ok(bytes),
+                    Err(_) => Err(SharesDecodingError::SealedBoxOpenError),
+                }
+            }
         };
 
         let iris_share = match decrypted {
