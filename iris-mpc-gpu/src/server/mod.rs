@@ -1,4 +1,5 @@
 mod actor;
+pub mod heartbeat_nccl;
 pub mod sync_nccl;
 
 pub use actor::{ServerActor, ServerActorHandle};

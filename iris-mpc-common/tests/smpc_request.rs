@@ -2,7 +2,7 @@ mod tests {
     use base64::{engine::general_purpose::STANDARD, Engine};
     use http::StatusCode;
     use iris_mpc_common::helpers::{
-        key_pair::{SharesDecodingError, SharesEncryptionKeyPair},
+        key_pair::{SharesDecodingError, SharesEncryptionKeyPairs},
         sha256::calculate_sha256,
         smpc_request::{IrisCodesJSON, SMPCRequest},
     };
@@ -13,13 +13,19 @@ mod tests {
         Mock, MockServer, ResponseTemplate,
     };
 
-    const PUBLIC_KEY: &str = "HDp962tQyZIG9t+GX4JM0i1wgJx/YGpHGsuDSD34KBA=";
-    const PRIVATE_KEY: &str = "14Z6Zijg3kbFN//R9BRKLeTS/wCiZMfK6AurEr/nAZg=";
+    const PREVIOUS_PUBLIC_KEY: &str = "1UY8lKlS7aVj5ZnorSfLIHlG3jg+L4ToVi4K+mLKqFQ=";
+    const PREVIOUS_PRIVATE_KEY: &str = "X26wWfzP5fKMP7QMz0X3eZsEeF4NhJU92jT69wZg6x8=";
 
-    fn get_key_pair() -> SharesEncryptionKeyPair {
-        SharesEncryptionKeyPair::from_b64_strings(
-            PUBLIC_KEY.to_string().clone(),
-            PRIVATE_KEY.to_string().clone(),
+    const CURRENT_PUBLIC_KEY: &str = "HDp962tQyZIG9t+GX4JM0i1wgJx/YGpHGsuDSD34KBA=";
+    const CURRENT_PRIVATE_KEY: &str = "14Z6Zijg3kbFN//R9BRKLeTS/wCiZMfK6AurEr/nAZg=";
+
+    fn get_key_pairs(
+        current_pk_string: String,
+        previous_pk_string: String,
+    ) -> SharesEncryptionKeyPairs {
+        SharesEncryptionKeyPairs::from_b64_private_key_strings(
+            current_pk_string.to_string().clone(),
+            previous_pk_string.to_string().clone(),
         )
         .unwrap()
     }
@@ -103,7 +109,7 @@ mod tests {
             right_iris_mask_shares: "right_mask".to_string(),
         };
 
-        let decoded_public_key = STANDARD.decode(PUBLIC_KEY.as_bytes()).unwrap();
+        let decoded_public_key = STANDARD.decode(CURRENT_PUBLIC_KEY.as_bytes()).unwrap();
         let shares_encryption_public_key = PublicKey::from_slice(&decoded_public_key).unwrap();
 
         // convert iris code to JSON string, sealbox and encode as BASE64
@@ -112,8 +118,45 @@ mod tests {
         let encoded_share = STANDARD.encode(sealed_box);
 
         let smpc_request = get_mock_request();
-        let key_pair = get_key_pair();
+        let key_pair = get_key_pairs(
+            PREVIOUS_PRIVATE_KEY.to_string(),
+            CURRENT_PRIVATE_KEY.to_string(),
+        );
 
+        let result = smpc_request.decrypt_iris_share(encoded_share, key_pair);
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), iris_codes_json);
+    }
+
+    #[tokio::test]
+    async fn test_decrypt_iris_share_using_previous_valid_key() {
+        // Mocked base64 encoded JSON string
+        let iris_codes_json = IrisCodesJSON {
+            iris_version:           "1.0".to_string(),
+            left_iris_code_shares:  "left_code".to_string(),
+            right_iris_code_shares: "right_code".to_string(),
+            left_iris_mask_shares:  "left_mask".to_string(),
+            right_iris_mask_shares: "right_mask".to_string(),
+        };
+
+        // Use previous public key to encrypt the shares
+        let decoded_public_key = STANDARD.decode(PREVIOUS_PUBLIC_KEY.as_bytes()).unwrap();
+        let shares_encryption_public_key = PublicKey::from_slice(&decoded_public_key).unwrap();
+
+        // convert iris code to JSON string, sealbox and encode as BASE64
+        let json_string = serde_json::to_string(&iris_codes_json).unwrap();
+        let sealed_box = sealedbox::seal(json_string.as_bytes(), &shares_encryption_public_key);
+        let encoded_share = STANDARD.encode(sealed_box);
+
+        let smpc_request = get_mock_request();
+        let key_pair = get_key_pairs(
+            PREVIOUS_PRIVATE_KEY.to_string(),
+            CURRENT_PRIVATE_KEY.to_string(),
+        );
+
+        // Decrypt the share. It will succeed, by first attempting to use the current
+        // private key (failing), and then the previous private key (succeeding)
         let result = smpc_request.decrypt_iris_share(encoded_share, key_pair);
 
         assert!(result.is_ok());
@@ -123,7 +166,10 @@ mod tests {
     #[tokio::test]
     async fn test_decrypt_iris_share_invalid_base64() {
         let invalid_base64 = "InvalidBase64String";
-        let key_pair = get_key_pair();
+        let key_pair = get_key_pairs(
+            CURRENT_PRIVATE_KEY.to_string(),
+            CURRENT_PRIVATE_KEY.to_string(),
+        );
         let smpc_request = get_mock_request();
 
         let result = smpc_request.decrypt_iris_share(invalid_base64.to_string(), key_pair);
@@ -138,12 +184,15 @@ mod tests {
     async fn test_decrypt_iris_share_invalid_utf8() {
         let invalid_utf8 = vec![0, 159, 146, 150]; // Not valid UTF-8
 
-        let decoded_public_key = STANDARD.decode(PUBLIC_KEY.as_bytes()).unwrap();
+        let decoded_public_key = STANDARD.decode(CURRENT_PUBLIC_KEY.as_bytes()).unwrap();
         let shares_encryption_public_key = PublicKey::from_slice(&decoded_public_key).unwrap();
         let sealed_box = sealedbox::seal(&invalid_utf8, &shares_encryption_public_key);
         let encoded_share = STANDARD.encode(&sealed_box);
 
-        let key_pair = get_key_pair();
+        let key_pair = get_key_pairs(
+            PREVIOUS_PRIVATE_KEY.to_string(),
+            CURRENT_PRIVATE_KEY.to_string(),
+        );
         let smpc_request = get_mock_request();
 
         let result = smpc_request.decrypt_iris_share(encoded_share, key_pair);
@@ -158,12 +207,15 @@ mod tests {
     async fn test_decrypt_iris_share_invalid_json() {
         let invalid_json = "totally-not-a-json-string";
 
-        let decoded_public_key = STANDARD.decode(PUBLIC_KEY.as_bytes()).unwrap();
+        let decoded_public_key = STANDARD.decode(CURRENT_PUBLIC_KEY.as_bytes()).unwrap();
         let shares_encryption_public_key = PublicKey::from_slice(&decoded_public_key).unwrap();
         let sealed_box = sealedbox::seal(invalid_json.as_bytes(), &shares_encryption_public_key);
         let encoded_share = STANDARD.encode(&sealed_box);
 
-        let key_pair = get_key_pair();
+        let key_pair = get_key_pairs(
+            PREVIOUS_PRIVATE_KEY.to_string(),
+            CURRENT_PRIVATE_KEY.to_string(),
+        );
         let smpc_request = get_mock_request();
 
         let result = smpc_request.decrypt_iris_share(encoded_share, key_pair);

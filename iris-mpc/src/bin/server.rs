@@ -11,7 +11,7 @@ use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
         aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
-        key_pair::SharesEncryptionKeyPair,
+        key_pair::SharesEncryptionKeyPairs,
         kms_dh::derive_shared_secret,
         smpc_request::{ResultEvent, SMPCRequest, SQSMessage},
         sync::SyncState,
@@ -23,7 +23,10 @@ use iris_mpc_common::{
 use iris_mpc_gpu::{
     dot::ROTATIONS,
     helpers::device_manager::DeviceManager,
-    server::{sync_nccl, BatchMetadata, BatchQuery, ServerActor, ServerJobResult, MAX_BATCH_SIZE},
+    server::{
+        heartbeat_nccl::start_heartbeat, sync_nccl, BatchMetadata, BatchQuery, ServerActor,
+        ServerJobResult, MAX_BATCH_SIZE,
+    },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
 use rand::{rngs::StdRng, SeedableRng};
@@ -53,8 +56,52 @@ const SYNC_QUERIES: usize = MAX_BATCH_SIZE * 2;
 const_assert!(SYNC_QUERIES <= sync_nccl::MAX_REQUESTS);
 const MAX_ROLLBACK: usize = MAX_BATCH_SIZE * 2;
 const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
+const NCCL_START_WAIT_TIME: Duration = Duration::from_secs(5);
+const NCCL_START_RETRY: usize = 5;
 
 static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(MAX_BATCH_SIZE));
+
+#[allow(clippy::type_complexity)]
+fn preprocess_iris_message_shares(
+    party_id: usize,
+    code_shares: String,
+    mask_shares: String,
+) -> eyre::Result<(
+    GaloisRingIrisCodeShare,
+    GaloisRingTrimmedMaskCodeShare,
+    Vec<GaloisRingIrisCodeShare>,
+    Vec<GaloisRingTrimmedMaskCodeShare>,
+    Vec<GaloisRingIrisCodeShare>,
+    Vec<GaloisRingTrimmedMaskCodeShare>,
+)> {
+    let mut iris_share = GaloisRingIrisCodeShare::from_base64(party_id + 1, &code_shares)
+        .context("Failed to base64 parse iris code")?;
+    let mut mask_share: GaloisRingTrimmedMaskCodeShare =
+        GaloisRingIrisCodeShare::from_base64(party_id + 1, &mask_shares)
+            .context("Failed to base64 parse iris mask")?
+            .into();
+
+    // Original for storage.
+    let store_iris_shares = iris_share.clone();
+    let store_mask_shares = mask_share.clone();
+
+    // With rotations for in-memory database.
+    let db_iris_shares = iris_share.all_rotations();
+    let db_mask_shares = mask_share.all_rotations();
+
+    // With Lagrange interpolation.
+    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
+    GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share);
+
+    Ok((
+        store_iris_shares,
+        store_mask_shares,
+        db_iris_shares,
+        db_mask_shares,
+        iris_share.all_rotations(),
+        mask_share.all_rotations(),
+    ))
+}
 
 async fn receive_batch(
     party_id: usize,
@@ -62,7 +109,7 @@ async fn receive_batch(
     queue_url: &String,
     store: &Store,
     skip_request_ids: &[String],
-    shares_encryption_key_pair: SharesEncryptionKeyPair,
+    shares_encryption_key_pairs: SharesEncryptionKeyPairs,
 ) -> eyre::Result<BatchQuery> {
     let mut batch_query = BatchQuery::default();
 
@@ -77,7 +124,7 @@ async fn receive_batch(
 
         if let Some(messages) = rcv_message_output.messages {
             for sqs_message in messages {
-                let shares_encryption_key_pair = shares_encryption_key_pair.clone();
+                let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
                     .context("while trying to parse SQSMessage")?;
 
@@ -139,7 +186,7 @@ async fn receive_batch(
 
                 let iris_message_share = match smpc_request.decrypt_iris_share(
                     base_64_encoded_message_payload,
-                    shares_encryption_key_pair.clone(),
+                    shares_encryption_key_pairs.clone(),
                 ) {
                     Ok(iris_data) => iris_data,
                     Err(e) => {
@@ -156,79 +203,62 @@ async fn receive_batch(
                     }
                 }
 
+                // Preprocess shares for left eye.
+                let left_future = spawn_blocking(move || {
+                    preprocess_iris_message_shares(
+                        party_id,
+                        iris_message_share.left_iris_code_shares,
+                        iris_message_share.left_iris_mask_shares,
+                    )
+                });
+
+                // Preprocess shares for right eye.
+                let right_future = spawn_blocking(move || {
+                    preprocess_iris_message_shares(
+                        party_id,
+                        iris_message_share.right_iris_code_shares,
+                        iris_message_share.right_iris_mask_shares,
+                    )
+                });
+
+                let (left_result, right_result) = tokio::join!(left_future, right_future);
+
                 let (
-                    store_iris_shares,
-                    store_mask_shares,
-                    db_iris_shares,
-                    db_mask_shares,
-                    iris_shares,
-                    mask_shares,
-                ) = spawn_blocking(move || {
-                    let mut iris_share = match GaloisRingIrisCodeShare::from_base64(
-                        party_id + 1,
-                        iris_message_share.right_iris_code_shares.as_ref(),
-                    ) {
-                        Ok(iris_share) => iris_share,
-                        Err(e) => {
-                            tracing::error!("Failed to parse iris share: {:?}", e);
-                            return Err(e);
-                        }
-                    };
-                    let mut mask_share: GaloisRingTrimmedMaskCodeShare =
-                        match GaloisRingIrisCodeShare::from_base64(
-                            party_id + 1,
-                            iris_message_share.right_iris_mask_shares.as_ref(),
-                        ) {
-                            Ok(iris_share) => iris_share,
-                            Err(e) => {
-                                tracing::error!("Failed to parse iris mask: {:?}", e);
-                                return Err(e);
-                            }
-                        }
-                        .into();
+                    store_iris_shares_left,
+                    store_mask_shares_left,
+                    db_iris_shares_left,
+                    db_mask_shares_left,
+                    iris_shares_left,
+                    mask_shares_left,
+                ) = left_result.context("while processing left iris shares")??;
 
-                    // Original for storage.
-                    let store_iris_shares = iris_share.clone();
-                    let store_mask_shares = mask_share.clone();
+                let (
+                    store_iris_shares_right,
+                    store_mask_shares_right,
+                    db_iris_shares_right,
+                    db_mask_shares_right,
+                    iris_shares_right,
+                    mask_shares_right,
+                ) = right_result.context("while processing right iris shares")??;
 
-                    // With rotations for in-memory database.
-                    let db_iris_shares = iris_share.all_rotations();
-                    let db_mask_shares = mask_share.all_rotations();
+                batch_query.store_left.code.push(store_iris_shares_left);
+                batch_query.store_left.mask.push(store_mask_shares_left);
+                batch_query.db_left.code.extend(db_iris_shares_left);
+                batch_query.db_left.mask.extend(db_mask_shares_left);
+                batch_query.query_left.code.extend(iris_shares_left);
+                batch_query.query_left.mask.extend(mask_shares_left);
 
-                    // With Lagrange interpolation.
-                    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
-                    GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(
-                        &mut mask_share,
-                    );
-
-                    Ok((
-                        store_iris_shares,
-                        store_mask_shares,
-                        db_iris_shares,
-                        db_mask_shares,
-                        iris_share.all_rotations(),
-                        mask_share.all_rotations(),
-                    ))
-                })
-                .await
-                .context("while pre-processing iris code query")??;
-
-                batch_query.store_left.code.push(store_iris_shares);
-                batch_query.store_left.mask.push(store_mask_shares);
-                batch_query.db_left.code.extend(db_iris_shares);
-                batch_query.db_left.mask.extend(db_mask_shares);
-                batch_query.query_left.code.extend(iris_shares);
-                batch_query.query_left.mask.extend(mask_shares);
+                batch_query.store_right.code.push(store_iris_shares_right);
+                batch_query.store_right.mask.push(store_mask_shares_right);
+                batch_query.db_right.code.extend(db_iris_shares_right);
+                batch_query.db_right.mask.extend(db_mask_shares_right);
+                batch_query.query_right.code.extend(iris_shares_right);
+                batch_query.query_right.mask.extend(mask_shares_right);
             }
         } else {
             tokio::time::sleep(SQS_POLLING_INTERVAL).await;
         }
     }
-    // TODO: also grab the right side from the batch once it is sent, ATM just
-    // duplicate left eye
-    batch_query.store_right = batch_query.store_left.clone();
-    batch_query.db_right = batch_query.db_left.clone();
-    batch_query.query_right = batch_query.query_left.clone();
 
     Ok(batch_query)
 }
@@ -440,10 +470,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);
     let shares_encryption_key_pair =
-        match SharesEncryptionKeyPair::from_storage(config.clone()).await {
+        match SharesEncryptionKeyPairs::from_storage(config.clone()).await {
             Ok(key_pair) => key_pair,
             Err(e) => {
-                tracing::error!("Failed to initialize shares encryption key pair: {:?}", e);
+                tracing::error!("Failed to initialize shares encryption key pairs: {:?}", e);
                 return Ok(());
             }
         };
@@ -471,6 +501,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     tracing::info!("Preparing task monitor");
     let mut background_tasks = TaskMonitor::new();
+
     // a bit convoluted, but we need to create the actor on the thread already,
     // since it blocks a lot and is `!Send`, we get back the handle via the oneshot
     // channel
@@ -478,7 +509,22 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     background_tasks.spawn_blocking(move || {
         let device_manager = Arc::new(DeviceManager::init());
         let ids = device_manager.get_ids_from_magic(0);
-        let comms = device_manager.instantiate_network_from_ids(config.party_id, ids);
+
+        let mut comms = vec![];
+        for _ in 0..NCCL_START_RETRY {
+            let res = device_manager.instantiate_network_from_ids(config.party_id, &ids);
+            if let Ok(c) = res {
+                comms = c;
+                break;
+            }
+            std::thread::sleep(NCCL_START_WAIT_TIME);
+        }
+
+        if comms.is_empty() {
+            tx.send(Err(eyre!("Number of NCCL connection retries exceeded")))
+                .unwrap();
+            return Ok(());
+        }
 
         let sync_result = match sync_nccl::sync(&comms[0], &my_state) {
             Ok(res) => res,
@@ -638,8 +684,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
         Ok(())
     });
+
     background_tasks.check_tasks();
     tracing::info!("Healthcheck server running on port 3000.");
+
+    let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id));
+
+    background_tasks.check_tasks();
+    tracing::info!("Heartbeat started.");
 
     let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 

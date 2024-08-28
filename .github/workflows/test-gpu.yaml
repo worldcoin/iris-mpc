@@ -57,6 +57,7 @@ jobs:
           toolchain: nightly
 
       - name: GPU Dependent Tests
+        timeout-minutes: 10
         run: cargo test --release --features gpu_dependent -- --test-threads=1
         shell: bash
         env:
@@ -66,6 +67,7 @@ jobs:
           NCCL_SHM_DISABLE: 1
 
       - name: GPU Tests w/ OTP encryption
+        timeout-minutes: 10
         run: cargo test --release --features otp_encrypt,gpu_dependent -- --test-threads=1
         shell: bash
         env:

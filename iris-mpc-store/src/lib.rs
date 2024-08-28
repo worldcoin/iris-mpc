@@ -135,7 +135,7 @@ impl Store {
         partitions: usize,
     ) -> impl Stream<Item = Result<StoredIris, sqlx::Error>> + '_ {
         let count = self.count_irises().await.expect("Failed count_irises");
-        let partition_size = count.div_ceil(partitions);
+        let partition_size = count.div_ceil(partitions).max(1);
 
         let mut partition_streams = Vec::new();
         for i in 0..partitions {
@@ -318,6 +318,9 @@ mod tests {
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), 0);
 
+        let got: Vec<StoredIris> = store.stream_irises_par(2).await.try_collect().await?;
+        assert_eq!(got.len(), 0);
+
         let codes_and_masks = &[
             StoredIrisRef {
                 left_code:  &[1, 2, 3, 4],
@@ -346,6 +349,10 @@ mod tests {
 
         let got_len = store.count_irises().await?;
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
+
+        let mut got_par: Vec<StoredIris> = store.stream_irises_par(2).await.try_collect().await?;
+        got_par.sort_by_key(|iris| iris.id);
+        assert_eq!(got, got_par);
 
         assert_eq!(got_len, 3);
         assert_eq!(got.len(), 3);
