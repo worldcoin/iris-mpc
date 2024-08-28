@@ -2,7 +2,7 @@ use bytemuck::cast_slice;
 use eyre::{eyre, Result};
 use futures::{
     stream::{self},
-    Stream, StreamExt,
+    Stream,
 };
 use iris_mpc_common::config::Config;
 use sqlx::{migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Transaction};
@@ -135,13 +135,7 @@ impl Store {
         partitions: usize,
     ) -> impl Stream<Item = Result<StoredIris, sqlx::Error>> + '_ {
         let count = self.count_irises().await.expect("Failed count_irises");
-
-        if count == 0 {
-            // Return an empty stream if there are no irises
-            return stream::empty().boxed();
-        }
-
-        let partition_size = count.div_ceil(partitions);
+        let partition_size = count.div_ceil(partitions).max(1);
 
         let mut partition_streams = Vec::new();
         for i in 0..partitions {
@@ -158,7 +152,7 @@ impl Store {
                 as Pin<Box<dyn Stream<Item = Result<StoredIris, sqlx::Error>> + Send>>);
         }
 
-        Box::pin(stream::select_all(partition_streams))
+        stream::select_all(partition_streams)
     }
 
     pub async fn insert_irises(
@@ -324,6 +318,9 @@ mod tests {
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), 0);
 
+        let got: Vec<StoredIris> = store.stream_irises_par(2).await.try_collect().await?;
+        assert_eq!(got.len(), 0);
+
         let codes_and_masks = &[
             StoredIrisRef {
                 left_code:  &[1, 2, 3, 4],
@@ -352,6 +349,10 @@ mod tests {
 
         let got_len = store.count_irises().await?;
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
+
+        let mut got_par: Vec<StoredIris> = store.stream_irises_par(2).await.try_collect().await?;
+        got_par.sort_by_key(|iris| iris.id);
+        assert_eq!(got, got_par);
 
         assert_eq!(got_len, 3);
         assert_eq!(got.len(), 3);

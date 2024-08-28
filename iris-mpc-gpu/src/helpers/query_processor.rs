@@ -7,20 +7,17 @@ use cudarc::{
     driver::{
         result::free_async,
         sys::{CUdeviceptr, CUstream},
-        CudaSlice, CudaStream, DevicePtr,
+        CudaSlice, CudaStream, DevicePtr, DeviceSlice,
     },
 };
 use iris_mpc_common::galois_engine::CompactGaloisRingShares;
-use std::{
-    marker::{Send, Sync},
-    pin::Pin,
-};
+use std::marker::{Send, Sync};
 
 pub struct StreamAwareCudaSlice<T> {
     pub cu_device_ptr: CUdeviceptr,
     pub len:           usize,
     pub stream:        CUstream,
-    pub host_buf:      Option<Pin<Vec<T>>>,
+    pub _phantom:      std::marker::PhantomData<T>,
 }
 
 unsafe impl<T: Send> Send for StreamAwareCudaSlice<T> {}
@@ -36,34 +33,24 @@ impl<T> StreamAwareCudaSlice<T> {
             cu_device_ptr,
             len,
             stream: cu_stream,
-            host_buf: None,
+            _phantom: std::marker::PhantomData,
         }
     }
 }
 
 impl<T> From<CudaSlice<T>> for StreamAwareCudaSlice<T> {
     fn from(value: CudaSlice<T>) -> Self {
-        let mut value = value;
         let res = {
-            if let Some(host_buf) = std::mem::take(&mut value.host_buf) {
-                StreamAwareCudaSlice {
-                    stream:        *value.device().cu_stream(),
-                    cu_device_ptr: *value.device_ptr(),
-                    len:           value.len,
-                    host_buf:      Some(host_buf),
-                }
-            } else {
-                StreamAwareCudaSlice {
-                    stream:        *value.device().cu_stream(),
-                    cu_device_ptr: *value.device_ptr(),
-                    len:           value.len,
-                    host_buf:      None,
-                }
+            StreamAwareCudaSlice {
+                stream:        *value.device().cu_stream(),
+                cu_device_ptr: *value.device_ptr(),
+                len:           value.len(),
+                _phantom:      std::marker::PhantomData,
             }
         };
         // forgetting the slice is ok since we are going to free up the memory using the
         // `StreamAwareCudaSlice` destructor.
-        std::mem::forget(value);
+        value.leak();
         res
     }
 }
