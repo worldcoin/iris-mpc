@@ -56,8 +56,6 @@ const SYNC_QUERIES: usize = MAX_BATCH_SIZE * 2;
 const_assert!(SYNC_QUERIES <= sync_nccl::MAX_REQUESTS);
 const MAX_ROLLBACK: usize = MAX_BATCH_SIZE * 2;
 const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
-const NCCL_START_WAIT_TIME: Duration = Duration::from_secs(5);
-const NCCL_START_RETRY: usize = 5;
 
 static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(MAX_BATCH_SIZE));
 
@@ -509,22 +507,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         let ids = device_manager.get_ids_from_magic(0);
 
         tracing::info!("Starting NCCL");
-        let mut comms = vec![];
-        for _ in 0..NCCL_START_RETRY {
-            let res = device_manager.instantiate_network_from_ids(config.party_id, &ids);
-            if let Ok(c) = res {
-                comms = c;
-                break;
-            }
-            std::thread::sleep(NCCL_START_WAIT_TIME);
-        }
-
-        tracing::info!("NCCL: checking empty");
-        if comms.is_empty() {
-            tx.send(Err(eyre!("Number of NCCL connection retries exceeded")))
-                .unwrap();
-            return Ok(());
-        }
+        let comms = device_manager.instantiate_network_from_ids(config.party_id, &ids)?;
 
         tracing::info!("NCCL: getting sync results");
         let sync_result = match sync_nccl::sync(&comms[0], &my_state) {

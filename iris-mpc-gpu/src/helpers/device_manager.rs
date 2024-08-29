@@ -16,7 +16,10 @@ use cudarc::{
     nccl::Id,
 };
 use eyre::eyre;
-use std::sync::Arc;
+use std::{sync::Arc, thread::sleep, time::Duration};
+
+const NCCL_START_WAIT_TIME: Duration = Duration::from_secs(5);
+const NCCL_START_RETRY: usize = 5;
 
 #[derive(Debug, Clone)]
 pub struct DeviceManager {
@@ -246,12 +249,21 @@ impl DeviceManager {
         let mut comms = Vec::with_capacity(n_devices);
 
         for i in 0..n_devices {
-            // Bind to thread (important!)
             self.devices[i].bind_to_thread().unwrap();
-            comms.push(Arc::new(
-                NcclComm::from_rank(self.devices[i].clone(), peer_id, 3, ids[i])
-                    .map_err(|e| eyre!("{:?}", e.0))?,
-            ));
+
+            let mut connected = false;
+            for _ in 0..NCCL_START_RETRY {
+                if let Ok(c) = NcclComm::from_rank(self.devices[i].clone(), peer_id, 3, ids[i]) {
+                    comms.push(Arc::new(c));
+                    connected = true;
+                    break;
+                }
+                sleep(NCCL_START_WAIT_TIME);
+            }
+
+            if !connected {
+                eyre::bail!("Failed to establish NCCL connection");
+            }
         }
         Ok(comms)
     }

@@ -1,7 +1,7 @@
 use crate::helpers::device_manager::DeviceManager;
 use cudarc::driver::CudaSlice;
 use eyre::{eyre, Context};
-use std::{sync::Arc, thread, time::Duration};
+use std::{sync::Arc, time::Duration};
 use tokio::{
     sync::mpsc,
     task::{spawn_blocking, JoinHandle},
@@ -15,10 +15,6 @@ pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
     let heartbeat_handle: JoinHandle<eyre::Result<()>> = spawn_blocking(move || {
         let device_manager = Arc::new(DeviceManager::init());
         let ids = device_manager.get_ids_from_magic(0xdead);
-
-        if party_id > 0 {
-            thread::sleep(Duration::from_secs(10));
-        }
 
         let comms = device_manager.instantiate_network_from_ids(party_id, &ids)?;
 
