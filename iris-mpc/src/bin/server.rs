@@ -41,7 +41,7 @@ use telemetry_batteries::{
     tracing::{datadog::DatadogBattery, TracingShutdownHandle},
 };
 use tokio::{
-    sync::{mpsc, oneshot, Notify},
+    sync::{mpsc, oneshot},
     task::spawn_blocking,
     time::timeout,
 };
