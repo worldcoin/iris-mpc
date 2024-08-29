@@ -676,7 +676,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     background_tasks.check_tasks();
     tracing::info!("Heartbeat started.");
 
-    tokio::time::sleep(Duration::from_secs(10)).await;
+    tokio::time::sleep(Duration::from_secs(20)).await;
 
     let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
