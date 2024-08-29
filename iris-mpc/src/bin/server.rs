@@ -504,9 +504,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Preparing task monitor");
     let mut background_tasks = TaskMonitor::new();
 
-    // create channel
     let (tx, rx) = oneshot::channel();
-
     let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id, tx));
 
     background_tasks.check_tasks();
