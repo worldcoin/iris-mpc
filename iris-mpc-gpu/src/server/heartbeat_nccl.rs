@@ -19,7 +19,7 @@ pub async fn start_heartbeat(party_id: usize, notify: Arc<Notify>) -> eyre::Resu
         let comms = device_manager.instantiate_network_from_ids(party_id, &ids)?;
 
         tracing::info!("Heartbeat: NCCL connection established");
-        notify.notify_waiters();
+        notify.notify_one();
 
         let mut pings = vec![];
         let mut pongs = vec![];
