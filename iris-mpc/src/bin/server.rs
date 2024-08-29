@@ -32,7 +32,7 @@ use iris_mpc_store::{Store, StoredIrisRef};
 use rand::{rngs::StdRng, SeedableRng};
 use static_assertions::const_assert;
 use std::{
-    mem,
+    env, mem,
     sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
 };
