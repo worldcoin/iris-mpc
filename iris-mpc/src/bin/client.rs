@@ -309,8 +309,9 @@ async fn main() -> eyre::Result<()> {
                 {
                     Ok(url) => url,
                     Err(e) => {
-                        // eprintln!("Failed to upload file: {}", e);
-                        eyre::bail!("Failed to upload file");
+                        eprintln!("Failed to upload file: {}", e);
+                        // ignore the error and continue
+                        return Ok(());
                     }
                 };
 

@@ -35,7 +35,7 @@ pub async fn upload_file_and_generate_presigned_url(
         }
         Err(e) => {
             tracing::error!("Error: Failed to upload file: {:?}", e);
-            panic!("Failed to upload file");
+            return Err(SharesDecodingError::UploadS3Error);
         }
     }
 
