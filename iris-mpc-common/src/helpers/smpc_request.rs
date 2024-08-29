@@ -134,7 +134,6 @@ impl SMPCRequest {
                 let json_string = String::from_utf8(bytes)
                     .map_err(SharesDecodingError::DecodedShareParsingToUTF8Error)?;
 
-                tracing::info!("shares_json_string: {:?}", json_string);
                 let iris_share: IrisCodesJSON =
                     serde_json::from_str(&json_string).map_err(SharesDecodingError::SerdeError)?;
                 iris_share
