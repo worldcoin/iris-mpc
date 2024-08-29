@@ -1,4 +1,4 @@
-use iris_mpc_common::IRIS_CODE_LENGTH;
+use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -47,7 +47,7 @@ pub struct MaskShareMessage {
     pub party_id: u8,
     pub from:     u8,
     #[serde(with = "BigArray")]
-    pub data:     [u16; IRIS_CODE_LENGTH],
+    pub data:     [u16; MASK_CODE_LENGTH],
 }
 impl Default for MaskShareMessage {
     fn default() -> Self {
@@ -55,7 +55,7 @@ impl Default for MaskShareMessage {
             id:       0,
             party_id: 0,
             from:     0,
-            data:     [0; IRIS_CODE_LENGTH],
+            data:     [0; MASK_CODE_LENGTH],
         }
     }
 }
@@ -76,22 +76,5 @@ impl MaskShareMessage {
         let data: &mut [u8] = bytemuck::cast_slice_mut(self.data.as_mut_slice());
         reader.read_exact(data).await?;
         Ok(())
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub enum ClientMessages {
-    Shares(TwoToThreeIrisCodeMessage),
-    Masks(MaskShareMessage),
-}
-
-impl From<TwoToThreeIrisCodeMessage> for ClientMessages {
-    fn from(x: TwoToThreeIrisCodeMessage) -> Self {
-        ClientMessages::Shares(x)
-    }
-}
-impl From<MaskShareMessage> for ClientMessages {
-    fn from(x: MaskShareMessage) -> Self {
-        ClientMessages::Masks(x)
     }
 }

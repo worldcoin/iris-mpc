@@ -4,7 +4,7 @@ use iris_mpc_common::{
     galois::degree4::{basis::Monomial, GaloisRingElement, ShamirGaloisRingShare},
     galois_engine::degree4::GaloisRingIrisCodeShare,
     id::PartyID,
-    IRIS_CODE_LENGTH,
+    IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use iris_mpc_store::Store;
 use iris_mpc_upgrade::db::V1Db;
@@ -129,7 +129,7 @@ async fn main() -> eyre::Result<()> {
 
         let enc_left_bits =
             recombine_enc_bits(iris0.left_code(), iris1.left_code(), poly01, poly10);
-        let enc_left_masks = Bits::from(&recombine_enc_bits(
+        let enc_left_masks = Bits::from(&recombine_enc_masks(
             iris0.left_mask(),
             iris1.left_mask(),
             poly01,
@@ -143,7 +143,7 @@ async fn main() -> eyre::Result<()> {
 
         let enc_left_bits1 =
             recombine_enc_bits(iris1.left_code(), iris2.left_code(), poly12, poly21);
-        let enc_left_masks1 = Bits::from(&recombine_enc_bits(
+        let enc_left_masks1 = Bits::from(&recombine_enc_masks(
             iris1.left_mask(),
             iris2.left_mask(),
             poly12,
@@ -160,7 +160,7 @@ async fn main() -> eyre::Result<()> {
 
         let enc_left_bits2 =
             recombine_enc_bits(iris2.left_code(), iris0.left_code(), poly20, poly02);
-        let enc_left_masks2 = Bits::from(&recombine_enc_bits(
+        let enc_left_masks2 = Bits::from(&recombine_enc_masks(
             iris2.left_mask(),
             iris0.left_mask(),
             poly20,
@@ -175,7 +175,7 @@ async fn main() -> eyre::Result<()> {
         // right
         let enc_right_bits =
             recombine_enc_bits(iris0.right_code(), iris1.right_code(), poly01, poly10);
-        let enc_right_masks = Bits::from(&recombine_enc_bits(
+        let enc_right_masks = Bits::from(&recombine_enc_masks(
             iris0.right_mask(),
             iris1.right_mask(),
             poly01,
@@ -184,7 +184,7 @@ async fn main() -> eyre::Result<()> {
 
         let enc_right_bits1 =
             recombine_enc_bits(iris1.right_code(), iris2.right_code(), poly12, poly21);
-        let enc_right_masks1 = Bits::from(&recombine_enc_bits(
+        let enc_right_masks1 = Bits::from(&recombine_enc_masks(
             iris1.right_mask(),
             iris2.right_mask(),
             poly12,
@@ -196,7 +196,7 @@ async fn main() -> eyre::Result<()> {
 
         let enc_right_bits2 =
             recombine_enc_bits(iris2.right_code(), iris0.right_code(), poly20, poly02);
-        let enc_right_masks2 = Bits::from(&recombine_enc_bits(
+        let enc_right_masks2 = Bits::from(&recombine_enc_masks(
             iris2.right_mask(),
             iris0.right_mask(),
             poly20,
@@ -247,6 +247,33 @@ fn recombine_enc_bits(
     let mut reordered = [0u16; IRIS_CODE_LENGTH];
     for (i, bit) in res.into_iter().enumerate() {
         reordered[GaloisRingIrisCodeShare::remap_index(i)] = bit;
+    }
+
+    EncodedBits(reordered)
+}
+fn recombine_enc_masks(
+    a: &[u16],
+    b: &[u16],
+    lag_point_ab: GaloisRingElement<Monomial>,
+    lag_point_ba: GaloisRingElement<Monomial>,
+) -> EncodedBits {
+    let mut res = Vec::with_capacity(MASK_CODE_LENGTH);
+    for (a, b) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
+        let share0 = GaloisRingElement::from_coefs(a.to_owned().try_into().unwrap());
+        let share1 = GaloisRingElement::from_coefs(b.to_owned().try_into().unwrap());
+
+        let share = share0 * lag_point_ab + share1 * lag_point_ba;
+        let share = share.to_basis_A();
+        res.extend_from_slice(&share.coefs);
+    }
+    assert!(res.len() == MASK_CODE_LENGTH);
+    // reorder the bits according to new encoding
+    let mut reordered = [0u16; IRIS_CODE_LENGTH];
+    for (i, bit) in res.into_iter().enumerate() {
+        reordered[GaloisRingIrisCodeShare::remap_index(i)] = bit;
+        // we cut the mask in half, so we need to duplicate the bits to get a "full"
+        // mask
+        reordered[GaloisRingIrisCodeShare::remap_index(i + MASK_CODE_LENGTH)] = bit;
     }
 
     EncodedBits(reordered)

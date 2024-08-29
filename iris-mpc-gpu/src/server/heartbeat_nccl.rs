@@ -82,5 +82,9 @@ pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
         }
     }
 
-    heartbeat_handle.await?
+    if let Err(e) = heartbeat_handle.await? {
+        tracing::error!("Heartbeat handle exited: {:?}", e);
+    }
+
+    Ok(())
 }

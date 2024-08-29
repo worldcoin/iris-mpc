@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
-use iris_mpc_common::shamir::P;
+use iris_mpc_common::{shamir::P, IRIS_CODE_LENGTH};
 use iris_mpc_gpu::{
     dot::share_db::{preprocess_query, ShareDB},
     helpers::device_manager::DeviceManager,
@@ -31,6 +31,7 @@ fn bench_memcpy(c: &mut Criterion) {
         device_manager.clone(),
         DB_SIZE,
         QUERY_SIZE,
+        IRIS_CODE_LENGTH,
         ([0u32; 8], [0u32; 8]),
         vec![],
     );
@@ -45,7 +46,7 @@ fn bench_memcpy(c: &mut Criterion) {
     group.bench_function(format!("matmul {} x {}", DB_SIZE, QUERY_SIZE), |b| {
         b.iter(|| {
             let preprocessed_query = device_manager
-                .htod_transfer_query(&preprocessed_query, &streams, QUERY_SIZE)
+                .htod_transfer_query(&preprocessed_query, &streams, QUERY_SIZE, IRIS_CODE_LENGTH)
                 .unwrap();
             let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
             engine.dot(

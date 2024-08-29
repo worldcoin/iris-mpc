@@ -237,12 +237,80 @@ pub mod degree4 {
     use crate::{
         galois::degree4::{basis, GaloisRingElement, ShamirGaloisRingShare},
         iris_db::iris::IrisCodeArray,
-        IRIS_CODE_LENGTH,
+        IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
     };
     use base64::{prelude::BASE64_STANDARD, Engine};
     use rand::{CryptoRng, Rng};
     use serde::{Deserialize, Serialize};
     use serde_big_array::BigArray;
+
+    const CODE_COLS: usize = 200;
+
+    fn preprocess_coefs(id: usize, coefs: &mut [u16]) {
+        let lagrange_coeffs = ShamirGaloisRingShare::deg_2_lagrange_polys_at_zero();
+        for i in (0..coefs.len()).step_by(4) {
+            let element = GaloisRingElement::<basis::Monomial>::from_coefs([
+                coefs[i],
+                coefs[i + 1],
+                coefs[i + 2],
+                coefs[i + 3],
+            ]);
+            // include lagrange coeffs
+            let element: GaloisRingElement<basis::Monomial> = element * lagrange_coeffs[id - 1];
+            let element = element.to_basis_B();
+            coefs[i] = element.coefs[0];
+            coefs[i + 1] = element.coefs[1];
+            coefs[i + 2] = element.coefs[2];
+            coefs[i + 3] = element.coefs[3];
+        }
+    }
+
+    fn rotate_coefs_right(coefs: &mut [u16], by: usize) {
+        coefs
+            .chunks_exact_mut(CODE_COLS * 4)
+            .for_each(|chunk| chunk.rotate_right(by * 4));
+    }
+
+    fn rotate_coefs_left(coefs: &mut [u16], by: usize) {
+        coefs
+            .chunks_exact_mut(CODE_COLS * 4)
+            .for_each(|chunk| chunk.rotate_left(by * 4));
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub struct GaloisRingTrimmedMaskCodeShare {
+        pub id:    usize,
+        pub coefs: [u16; MASK_CODE_LENGTH],
+    }
+
+    impl From<GaloisRingIrisCodeShare> for GaloisRingTrimmedMaskCodeShare {
+        fn from(iris_share: GaloisRingIrisCodeShare) -> Self {
+            let mut coefs = [0; MASK_CODE_LENGTH];
+            coefs.copy_from_slice(&iris_share.coefs[..MASK_CODE_LENGTH]);
+
+            GaloisRingTrimmedMaskCodeShare {
+                id: iris_share.id,
+                coefs,
+            }
+        }
+    }
+
+    impl GaloisRingTrimmedMaskCodeShare {
+        pub fn preprocess_mask_code_query_share(&mut self) {
+            preprocess_coefs(self.id, &mut self.coefs);
+        }
+
+        pub fn all_rotations(&self) -> Vec<GaloisRingTrimmedMaskCodeShare> {
+            let mut reference = self.clone();
+            let mut result = vec![];
+            rotate_coefs_left(&mut reference.coefs, 16);
+            for _ in 0..31 {
+                rotate_coefs_right(&mut reference.coefs, 1);
+                result.push(reference.clone());
+            }
+            result
+        }
+    }
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub struct GaloisRingIrisCodeShare {
@@ -252,8 +320,6 @@ pub mod degree4 {
     }
 
     impl GaloisRingIrisCodeShare {
-        const COLS: usize = 200;
-
         // Maps from an index in a flattened array of the new shape to the
         // index in a flattened array of the original shape.
         //
@@ -316,8 +382,9 @@ pub mod degree4 {
             }
             shares
         }
+
         pub fn encode_mask_code<R: CryptoRng + Rng>(
-            iris_code: &IrisCodeArray,
+            mask_code: &IrisCodeArray,
             rng: &mut R,
         ) -> [GaloisRingIrisCodeShare; 3] {
             let mut shares = [
@@ -336,10 +403,10 @@ pub mod degree4 {
             ];
             for i in (0..IRIS_CODE_LENGTH).step_by(4) {
                 let element = GaloisRingElement::<basis::A>::from_coefs([
-                    iris_code.get_bit(Self::remap_index(i)) as u16,
-                    iris_code.get_bit(Self::remap_index(i + 1)) as u16,
-                    iris_code.get_bit(Self::remap_index(i + 2)) as u16,
-                    iris_code.get_bit(Self::remap_index(i + 3)) as u16,
+                    mask_code.get_bit(Self::remap_index(i)) as u16,
+                    mask_code.get_bit(Self::remap_index(i + 1)) as u16,
+                    mask_code.get_bit(Self::remap_index(i + 2)) as u16,
+                    mask_code.get_bit(Self::remap_index(i + 3)) as u16,
                 ]);
                 let element = element.to_monomial();
                 let share = ShamirGaloisRingShare::encode_3_mat(&element.coefs, rng);
@@ -352,6 +419,7 @@ pub mod degree4 {
             }
             shares
         }
+
         #[allow(clippy::assertions_on_constants)]
         pub fn reencode_extended_iris_code<R: CryptoRng + Rng>(
             iris_code: &[u16; IRIS_CODE_LENGTH],
@@ -392,22 +460,7 @@ pub mod degree4 {
         }
 
         pub fn preprocess_iris_code_query_share(&mut self) {
-            let lagrange_coeffs = ShamirGaloisRingShare::deg_2_lagrange_polys_at_zero();
-            for i in (0..IRIS_CODE_LENGTH).step_by(4) {
-                let element = GaloisRingElement::<basis::Monomial>::from_coefs([
-                    self.coefs[i],
-                    self.coefs[i + 1],
-                    self.coefs[i + 2],
-                    self.coefs[i + 3],
-                ]);
-                // include lagrange coeffs
-                let element = element * lagrange_coeffs[self.id - 1];
-                let element = element.to_basis_B();
-                self.coefs[i] = element.coefs[0];
-                self.coefs[i + 1] = element.coefs[1];
-                self.coefs[i + 2] = element.coefs[2];
-                self.coefs[i + 3] = element.coefs[3];
-            }
+            preprocess_coefs(self.id, &mut self.coefs);
         }
 
         pub fn full_dot(&self, other: &GaloisRingIrisCodeShare) -> u16 {
@@ -440,26 +493,16 @@ pub mod degree4 {
             }
             sum
         }
+
         pub fn all_rotations(&self) -> Vec<GaloisRingIrisCodeShare> {
             let mut reference = self.clone();
             let mut result = vec![];
-            reference.rotate_left(16);
+            rotate_coefs_left(&mut reference.coefs, 16);
             for _ in 0..31 {
-                reference.rotate_right(1);
+                rotate_coefs_right(&mut reference.coefs, 1);
                 result.push(reference.clone());
             }
             result
-        }
-        pub fn rotate_right(&mut self, by: usize) {
-            self.coefs
-                .chunks_exact_mut(Self::COLS * 4)
-                .for_each(|chunk| chunk.rotate_right(by * 4));
-        }
-
-        pub fn rotate_left(&mut self, by: usize) {
-            self.coefs
-                .chunks_exact_mut(Self::COLS * 4)
-                .for_each(|chunk| chunk.rotate_left(by * 4));
         }
 
         pub fn to_base64(&self) -> String {
@@ -476,7 +519,9 @@ pub mod degree4 {
     #[cfg(test)]
     mod tests {
         use crate::{
-            galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::iris::IrisCodeArray,
+            galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+            iris_db::iris::IrisCodeArray,
+            MASK_CODE_LENGTH,
         };
         use float_eq::assert_float_eq;
         use rand::thread_rng;
@@ -553,7 +598,10 @@ pub mod degree4 {
 
             let mut t2_mask_shares_rotated = t2_mask_shares
                 .iter()
-                .map(|share| share.all_rotations())
+                .map(|share| {
+                    let trimmed: GaloisRingTrimmedMaskCodeShare = share.clone().into();
+                    trimmed.all_rotations()
+                })
                 .collect::<Vec<_>>();
 
             let mut min_dist = f64::MAX;
@@ -564,7 +612,7 @@ pub mod degree4 {
 
                 t2_mask_shares_rotated
                     .iter_mut()
-                    .for_each(|share| share[rot_idx].preprocess_iris_code_query_share());
+                    .for_each(|share| share[rot_idx].preprocess_mask_code_query_share());
 
                 // dot product for codes
                 let mut dot_codes = [0; 3];
@@ -576,16 +624,36 @@ pub mod degree4 {
                 // dot product for masks
                 let mut dot_masks = [0; 3];
                 for i in 0..3 {
-                    dot_masks[i] = t1_mask_shares[i].trick_dot(&t2_mask_shares_rotated[i][rot_idx]);
+                    // trick dot for mask
+                    dot_masks[i] = 0u16;
+                    for j in 0..MASK_CODE_LENGTH {
+                        dot_masks[i] = dot_masks[i].wrapping_add(
+                            t1_mask_shares[i].coefs[j]
+                                .wrapping_mul(t2_mask_shares_rotated[i][rot_idx].coefs[j]),
+                        );
+                    }
+                    dot_masks[i] = dot_masks[i].wrapping_mul(2);
                 }
                 let dot_masks = dot_masks.iter().fold(0u16, |acc, x| acc.wrapping_add(*x));
 
                 let res = 0.5f64 - (dot_codes as i16) as f64 / (2f64 * dot_masks as f64);
 
+                println!("{} {}", dot_codes, dot_masks);
+
                 // Without rotations
                 if rot_idx == 15 {
-                    assert_float_eq!(dist_0, res, abs <= 1e-6);
-                    assert_float_eq!(plain_distance, res, abs <= 1e-6);
+                    assert_float_eq!(
+                        dist_0,
+                        res,
+                        abs <= 1e-6,
+                        "galois impl distance doesn't match expected"
+                    );
+                    assert_float_eq!(
+                        plain_distance,
+                        res,
+                        abs <= 1e-6,
+                        "galois impl distance doesn't match reference impl"
+                    );
                 }
 
                 if res < min_dist {

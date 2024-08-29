@@ -1,7 +1,6 @@
 #define UINT_MAX 0xffffffff
 #define ROTATIONS 15
 #define ALL_ROTATIONS (2 * ROTATIONS + 1)
-#define IRIS_CODE_LENGTH 12800
 #define U8 unsigned char
 #define MAX_MATCHES_LEN 256
 
@@ -14,7 +13,7 @@ extern "C" __global__ void xor_assign_u8(U8 *lhs, U8 *rhs, int n)
     }
 }
 
-extern "C" __global__ void matmul_correct_and_reduce(int *c, unsigned short *output, int *a0Sums, int *a1Sums, int *b0Sums, int *b1Sums, size_t dbLength, size_t numElements, size_t offset, unsigned short *rngMasks0, unsigned short *rngMasks1)
+extern "C" __global__ void matmul_correct_and_reduce(int *c, unsigned short *output, int *a0Sums, int *a1Sums, int *b0Sums, int *b1Sums, size_t dbLength, size_t numElements, size_t offset, unsigned short multiplier, unsigned short *rngMasks0, unsigned short *rngMasks1)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
@@ -23,7 +22,8 @@ extern "C" __global__ void matmul_correct_and_reduce(int *c, unsigned short *out
         unsigned int dbIdx = idx % dbLength;
         int s0 = a0Sums[offset + dbIdx] + b0Sums[queryIdx];
         int s1 = a1Sums[offset + dbIdx] + b1Sums[queryIdx];
-        output[idx] = c[idx] + (s0 << 7) + ((s0 + s1) << 15) + rngMasks0[idx] - rngMasks1[idx];
+        unsigned short result = c[idx] + (s0 << 7) + ((s0 + s1) << 15);
+        output[idx] = result * multiplier + rngMasks0[idx] - rngMasks1[idx];
     }
 }
 

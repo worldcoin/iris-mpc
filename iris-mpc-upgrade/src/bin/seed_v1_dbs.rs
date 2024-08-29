@@ -1,5 +1,5 @@
 use clap::Parser;
-use mpc_uniqueness_check::{config::DbConfig, db::Db, template::Template};
+use mpc_uniqueness_check::{bits::BITS, config::DbConfig, db::Db, template::Template};
 use rand::Rng;
 
 #[derive(Debug, Clone, Parser)]
@@ -38,7 +38,12 @@ async fn main() -> eyre::Result<()> {
     let mut shares1 = Vec::with_capacity(args.num_elements as usize);
 
     for i in 0..args.num_elements {
-        let iris_code = rng.gen::<Template>();
+        let mut iris_code = rng.gen::<Template>();
+        // fix the iris code mask to be valid: all chunks of 2 bits are equal, since
+        // they mask the real/imaginary party of the same bit
+        for i in (0..BITS).step_by(2) {
+            iris_code.mask.set(i + 1, iris_code.mask.get(i))
+        }
         let encoded = mpc_uniqueness_check::distance::encode(&iris_code).share(2, &mut rng);
         masks.push((i, iris_code.mask));
         shares0.push((i, encoded[0]));

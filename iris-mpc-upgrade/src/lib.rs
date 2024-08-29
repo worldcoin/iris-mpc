@@ -1,6 +1,6 @@
 use eyre::{bail, Error, Result};
 use futures::Stream;
-use iris_mpc_common::{id::PartyID, IRIS_CODE_LENGTH};
+use iris_mpc_common::{id::PartyID, IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use itertools::izip;
 use mpc_uniqueness_check::{bits::Bits, distance::EncodedBits};
 use packets::{MaskShareMessage, TwoToThreeIrisCodeMessage};
@@ -39,7 +39,7 @@ pub trait NewIrisShareSink {
         &self,
         share_id: u64,
         code_share: &[u16; IRIS_CODE_LENGTH],
-        mask_share: &[u16; IRIS_CODE_LENGTH],
+        mask_share: &[u16; MASK_CODE_LENGTH],
     ) -> eyre::Result<()>;
 }
 
@@ -62,7 +62,7 @@ impl NewIrisShareSink for IrisShareTestFileSink {
         &self,
         share_id: u64,
         code_share: &[u16; IRIS_CODE_LENGTH],
-        mask_share: &[u16; IRIS_CODE_LENGTH],
+        mask_share: &[u16; MASK_CODE_LENGTH],
     ) -> eyre::Result<()> {
         let mut file = BufWriter::new(File::create(
             self.path.join(format!("code_share_{}", share_id)),

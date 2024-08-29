@@ -8,7 +8,7 @@ use eyre::{eyre, Context};
 use futures::TryStreamExt;
 use iris_mpc_common::{
     config::{json_wrapper::JsonStrWrapper, Config, Opt},
-    galois_engine::degree4::GaloisRingIrisCodeShare,
+    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
         aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
         key_pair::SharesEncryptionKeyPairs,
@@ -18,7 +18,7 @@ use iris_mpc_common::{
         task_monitor::TaskMonitor,
     },
     iris_db::db::IrisDB,
-    IrisCodeDb, IRIS_CODE_LENGTH,
+    IrisCodeDb, IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use iris_mpc_gpu::{
     dot::ROTATIONS,
@@ -65,16 +65,18 @@ fn preprocess_iris_message_shares(
     mask_shares: String,
 ) -> eyre::Result<(
     GaloisRingIrisCodeShare,
-    GaloisRingIrisCodeShare,
+    GaloisRingTrimmedMaskCodeShare,
     Vec<GaloisRingIrisCodeShare>,
+    Vec<GaloisRingTrimmedMaskCodeShare>,
     Vec<GaloisRingIrisCodeShare>,
-    Vec<GaloisRingIrisCodeShare>,
-    Vec<GaloisRingIrisCodeShare>,
+    Vec<GaloisRingTrimmedMaskCodeShare>,
 )> {
     let mut iris_share = GaloisRingIrisCodeShare::from_base64(&code_shares)
         .context("Failed to base64 parse iris code")?;
-    let mut mask_share = GaloisRingIrisCodeShare::from_base64(&mask_shares)
-        .context("Failed to base64 parse iris mask")?;
+    let mut mask_share: GaloisRingTrimmedMaskCodeShare =
+        GaloisRingIrisCodeShare::from_base64(&mask_shares)
+            .context("Failed to base64 parse iris mask")?
+            .into();
 
     // Original for storage.
     let store_iris_shares = iris_share.clone();
@@ -86,7 +88,7 @@ fn preprocess_iris_message_shares(
 
     // With Lagrange interpolation.
     GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
-    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut mask_share);
+    GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share);
 
     Ok((
         store_iris_shares,
@@ -349,24 +351,28 @@ async fn initialize_iris_dbs(
             .db
             .iter()
             .flat_map(|iris| {
-                GaloisRingIrisCodeShare::encode_mask_code(
-                    &iris.mask,
-                    &mut StdRng::seed_from_u64(RNG_SEED),
-                )[party_id]
-                    .coefs
+                let mask: GaloisRingTrimmedMaskCodeShare =
+                    GaloisRingIrisCodeShare::encode_mask_code(
+                        &iris.mask,
+                        &mut StdRng::seed_from_u64(RNG_SEED),
+                    )[party_id]
+                        .clone()
+                        .into();
+                mask.coefs
             })
             .collect::<Vec<_>>();
 
         (codes_db, masks_db)
     };
     let (mut right_codes_db, mut right_masks_db) = (left_codes_db.clone(), left_masks_db.clone());
-    let fake_len = left_codes_db.len();
+    let fake_len_codes = left_codes_db.len();
+    let fake_len_masks = left_masks_db.len();
 
     let count_irises = store.count_irises().await?;
-    left_codes_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
-    left_masks_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
-    right_codes_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
-    right_masks_db.resize(fake_len + count_irises * IRIS_CODE_LENGTH, 0);
+    left_codes_db.resize(fake_len_codes + count_irises * IRIS_CODE_LENGTH, 0);
+    left_masks_db.resize(fake_len_masks + count_irises * MASK_CODE_LENGTH, 0);
+    right_codes_db.resize(fake_len_codes + count_irises * IRIS_CODE_LENGTH, 0);
+    right_masks_db.resize(fake_len_masks + count_irises * MASK_CODE_LENGTH, 0);
 
     let parallelism = config
         .database
@@ -386,11 +392,14 @@ async fn initialize_iris_dbs(
             return Err(eyre!("Inconsistent iris index {}", iris.index()));
         }
 
-        let start = fake_len + iris.index() * IRIS_CODE_LENGTH;
-        left_codes_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.left_code());
-        left_masks_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.left_mask());
-        right_codes_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.right_code());
-        right_masks_db[start..start + IRIS_CODE_LENGTH].copy_from_slice(iris.right_mask());
+        let start_code = fake_len_codes + iris.index() * IRIS_CODE_LENGTH;
+        let start_mask = fake_len_masks + iris.index() * MASK_CODE_LENGTH;
+        left_codes_db[start_code..start_code + IRIS_CODE_LENGTH].copy_from_slice(iris.left_code());
+        left_masks_db[start_mask..start_mask + MASK_CODE_LENGTH].copy_from_slice(iris.left_mask());
+        right_codes_db[start_code..start_code + IRIS_CODE_LENGTH]
+            .copy_from_slice(iris.right_code());
+        right_masks_db[start_mask..start_mask + MASK_CODE_LENGTH]
+            .copy_from_slice(iris.right_mask());
 
         store_len += 1;
         if (store_len % 10000) == 0 {
@@ -528,13 +537,16 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 db_len
             );
             // Rollback the data that we have already loaded.
-            let bit_len = db_len * IRIS_CODE_LENGTH;
+            let bit_len_code = db_len * IRIS_CODE_LENGTH;
+            let bit_len_mask = db_len * MASK_CODE_LENGTH;
+
             // TODO: remove the line below if you removed fake data.
-            let bit_len = bit_len + (left_iris_db.0.len() - store_len * IRIS_CODE_LENGTH);
-            left_iris_db.0.truncate(bit_len);
-            left_iris_db.1.truncate(bit_len);
-            right_iris_db.0.truncate(bit_len);
-            right_iris_db.1.truncate(bit_len);
+            let bit_len_code = bit_len_code + (left_iris_db.0.len() - store_len * IRIS_CODE_LENGTH);
+            let bit_len_mask = bit_len_mask + (left_iris_db.1.len() - store_len * MASK_CODE_LENGTH);
+            left_iris_db.0.truncate(bit_len_code);
+            left_iris_db.1.truncate(bit_len_mask);
+            right_iris_db.0.truncate(bit_len_code);
+            right_iris_db.1.truncate(bit_len_mask);
         }
 
         tracing::info!("Starting server actor");

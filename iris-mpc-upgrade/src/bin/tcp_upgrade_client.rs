@@ -3,7 +3,10 @@ use eyre::ContextCompat;
 use futures::{Stream, StreamExt};
 use futures_concurrency::future::Join;
 use indicatif::{ProgressBar, ProgressStyle};
-use iris_mpc_common::{galois_engine::degree4::GaloisRingIrisCodeShare, IRIS_CODE_LENGTH};
+use iris_mpc_common::{
+    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    IRIS_CODE_LENGTH,
+};
 use iris_mpc_upgrade::{
     config::UpgradeClientConfig,
     db::V1Db,
@@ -173,12 +176,12 @@ async fn main() -> eyre::Result<()> {
         if args.party_id == 0 {
             let extended_masks = array::from_fn(|i| mask[i] as u16);
             let [ma, mb, mc] = {
-                let galois_shared_iris_code =
+                let [a, b, c] =
                     GaloisRingIrisCodeShare::reencode_extended_iris_code(&extended_masks, &mut rng);
                 [
-                    galois_shared_iris_code[0].coefs,
-                    galois_shared_iris_code[1].coefs,
-                    galois_shared_iris_code[2].coefs,
+                    GaloisRingTrimmedMaskCodeShare::from(a).coefs,
+                    GaloisRingTrimmedMaskCodeShare::from(b).coefs,
+                    GaloisRingTrimmedMaskCodeShare::from(c).coefs,
                 ]
             };
 

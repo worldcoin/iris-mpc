@@ -1,7 +1,7 @@
 use cudarc::nccl::Id;
 use eyre::Result;
 use iris_mpc_common::{
-    galois_engine::degree4::GaloisRingIrisCodeShare,
+    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     iris_db::{db::IrisDB, iris::IrisCode},
 };
 use iris_mpc_gpu::{
@@ -41,11 +41,13 @@ fn generate_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
         .db
         .iter()
         .flat_map(|iris| {
-            GaloisRingIrisCodeShare::encode_mask_code(
+            let mask: GaloisRingTrimmedMaskCodeShare = GaloisRingIrisCodeShare::encode_mask_code(
                 &iris.mask,
                 &mut StdRng::seed_from_u64(DB_RNG_SEED),
             )[party_id]
-                .coefs
+                .clone()
+                .into();
+            mask.coefs
         })
         .collect::<Vec<_>>();
 
@@ -225,8 +227,11 @@ async fn e2e_test() -> Result<()> {
 
             let mut shared_code =
                 GaloisRingIrisCodeShare::encode_iris_code(&template.code, &template.mask, &mut rng);
-            let mut shared_mask =
-                GaloisRingIrisCodeShare::encode_mask_code(&template.mask, &mut rng);
+            let shared_mask = GaloisRingIrisCodeShare::encode_mask_code(&template.mask, &mut rng);
+
+            let mut shared_mask: Vec<GaloisRingTrimmedMaskCodeShare> =
+                shared_mask.iter().map(|x| x.clone().into()).collect();
+
             // batch0
             batch0.request_ids.push(request_id.to_string());
             // for storage
@@ -237,7 +242,7 @@ async fn e2e_test() -> Result<()> {
             batch0.db_left.mask.extend(shared_mask[0].all_rotations());
             // with rotations
             GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_code[0]);
-            GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_mask[0]);
+            GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut shared_mask[0]);
             batch0
                 .query_left
                 .code
@@ -257,7 +262,7 @@ async fn e2e_test() -> Result<()> {
             batch1.db_left.mask.extend(shared_mask[1].all_rotations());
             // with rotations
             GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_code[1]);
-            GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_mask[1]);
+            GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut shared_mask[1]);
             batch1
                 .query_left
                 .code
@@ -277,7 +282,7 @@ async fn e2e_test() -> Result<()> {
             batch2.db_left.mask.extend(shared_mask[2].all_rotations());
             // with rotations
             GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_code[2]);
-            GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_mask[2]);
+            GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut shared_mask[2]);
             batch2
                 .query_left
                 .code

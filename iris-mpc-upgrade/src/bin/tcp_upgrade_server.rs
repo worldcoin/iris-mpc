@@ -220,7 +220,7 @@ impl NewIrisShareSink for IrisShareDbSink {
         &self,
         share_id: u64,
         code_share: &[u16; iris_mpc_common::IRIS_CODE_LENGTH],
-        mask_share: &[u16; iris_mpc_common::IRIS_CODE_LENGTH],
+        mask_share: &[u16; iris_mpc_common::MASK_CODE_LENGTH],
     ) -> eyre::Result<()> {
         let id = i64::try_from(share_id).expect("id fits into i64");
         match self.eye {
