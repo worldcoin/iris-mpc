@@ -495,11 +495,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Preparing task monitor");
     let mut background_tasks = TaskMonitor::new();
 
-    let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id));
-
-    background_tasks.check_tasks();
-    tracing::info!("Heartbeat started.");
-
     // a bit convoluted, but we need to create the actor on the thread already,
     // since it blocks a lot and is `!Send`, we get back the handle via the oneshot
     // channel
@@ -509,9 +504,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         let ids = device_manager.get_ids_from_magic(0);
 
         tracing::info!("Starting NCCL");
-        unsafe {
-            env::set_var("NCCL_COMM_ID", "10.15.32.27:4000");
-        }
+
         let comms = device_manager.instantiate_network_from_ids(config.party_id, &ids)?;
 
         tracing::info!("NCCL: getting sync results");
@@ -677,6 +670,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     background_tasks.check_tasks();
     tracing::info!("Healthcheck server running on port 3000.");
+
+    let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id));
+
+    background_tasks.check_tasks();
+    tracing::info!("Heartbeat started.");
 
     let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
