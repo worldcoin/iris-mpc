@@ -16,27 +16,11 @@ pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
         let device_manager = Arc::new(DeviceManager::init());
         let ids = device_manager.get_ids_from_magic(0xdead);
 
-        let mut comms = vec![];
-        for _ in 0..5 {
-            tracing::info!("Heartbeat: Attempting to initiate NCCL connection");
-            match device_manager.instantiate_network_from_ids(party_id, &ids) {
-                Ok(c) => {
-                    comms = c;
-                    break;
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Heartbeat: Failed to initiate NCCL connection, trying again: {:?}",
-                        e
-                    );
-                }
-            }
-            thread::sleep(Duration::from_secs(5));
+        if party_id > 0 {
+            thread::sleep(Duration::from_secs(10));
         }
 
-        if comms.is_empty() {
-            return eyre::bail!("Heartbeat: Failed to initiate NCCL connection");
-        }
+        let comms = device_manager.instantiate_network_from_ids(party_id, &ids)?;
 
         tracing::info!("Heartbeat: NCCL connection established");
 
