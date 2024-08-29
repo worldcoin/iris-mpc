@@ -18,7 +18,7 @@ use cudarc::{
 use std::{sync::Arc, thread::sleep, time::Duration};
 
 pub const NCCL_START_WAIT_TIME: Duration = Duration::from_secs(5);
-pub const NCCL_START_RETRY: usize = 5;
+pub const NCCL_START_RETRIES: usize = 5;
 
 #[derive(Debug, Clone)]
 pub struct DeviceManager {
@@ -251,7 +251,7 @@ impl DeviceManager {
             self.devices[i].bind_to_thread().unwrap();
 
             let mut connected = false;
-            for _ in 0..NCCL_START_RETRY {
+            for _ in 0..NCCL_START_RETRIES {
                 if let Ok(c) = NcclComm::from_rank(self.devices[i].clone(), peer_id, 3, ids[i]) {
                     comms.push(Arc::new(c));
                     connected = true;

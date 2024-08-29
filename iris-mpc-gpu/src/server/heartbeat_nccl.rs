@@ -1,4 +1,4 @@
-use crate::helpers::device_manager::{DeviceManager, NCCL_START_RETRY, NCCL_START_WAIT_TIME};
+use crate::helpers::device_manager::{DeviceManager, NCCL_START_RETRIES, NCCL_START_WAIT_TIME};
 use cudarc::driver::CudaSlice;
 use eyre::{eyre, Context};
 use std::{sync::Arc, time::Duration};
@@ -58,7 +58,10 @@ pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
         }
     });
 
-    let mut timeout_interval = 2 * NCCL_START_WAIT_TIME * NCCL_START_RETRY.try_into()?;
+    let mut timeout_interval = 2
+        * NCCL_START_WAIT_TIME
+        * (NCCL_START_RETRIES - 1).try_into()?
+        * DeviceManager::init().device_count().try_into()?;
     loop {
         match timeout(timeout_interval, rx.recv()).await {
             // The first heartbeat might take a while due to retries. However, after the connection
