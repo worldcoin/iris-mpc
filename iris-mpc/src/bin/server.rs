@@ -670,7 +670,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     background_tasks.check_tasks();
     tracing::info!("Healthcheck server running on port 3000.");
 
-    let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id));
+    // let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id));
 
     background_tasks.check_tasks();
     tracing::info!("Heartbeat started.");
