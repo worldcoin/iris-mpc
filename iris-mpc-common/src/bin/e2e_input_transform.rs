@@ -1,4 +1,3 @@
-use base64::{engine::general_purpose, Engine};
 use iris_mpc_common::{
     galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::iris::IrisCodeArray,
 };
@@ -40,22 +39,22 @@ impl Signup {
         // Encode iris code shares left
         let shares_iris_code_left =
             GaloisRingIrisCodeShare::encode_iris_code(&iris_code_left, &mask_code_left, &mut rng);
-        self.iris_code_shares_left = Some(get_share_strings(&shares_iris_code_left));
+        self.iris_code_shares_left = Some(shares_iris_code_left.map(|x| x.to_base64()));
 
         // Encode iris code shares right
         let shares_iris_code_right =
             GaloisRingIrisCodeShare::encode_iris_code(&iris_code_right, &mask_code_right, &mut rng);
-        self.iris_code_shares_right = Some(get_share_strings(&shares_iris_code_right));
+        self.iris_code_shares_right = Some(shares_iris_code_right.map(|x| x.to_base64()));
 
         // Encode mask code shares left
         let shares_mask_code_left =
             GaloisRingIrisCodeShare::encode_mask_code(&mask_code_left, &mut rng);
-        self.mask_code_shares_left = Some(get_share_strings(&shares_mask_code_left));
+        self.mask_code_shares_left = Some(shares_mask_code_left.map(|x| x.to_base64()));
 
         // Encode mask code shares right
         let shares_mask_code_right =
             GaloisRingIrisCodeShare::encode_mask_code(&mask_code_right, &mut rng);
-        self.mask_code_shares_right = Some(get_share_strings(&shares_mask_code_right));
+        self.mask_code_shares_right = Some(shares_mask_code_right.map(|x| x.to_base64()));
     }
 }
 
@@ -66,15 +65,6 @@ struct Match {
     distance_right:     f64,
     manipulation_type:  String,
     normalization_used: bool,
-}
-
-fn get_share_strings(shares_iris_code_left: &[GaloisRingIrisCodeShare; 3]) -> [String; 3] {
-    let mut shares: [String; 3] = Default::default();
-    for i in 0..3 {
-        shares[i] =
-            general_purpose::STANDARD.encode(bytemuck::cast_slice(&shares_iris_code_left[i].coefs));
-    }
-    shares
 }
 
 fn read_json_file(file_path: &str) -> serde_json::Result<Vec<Signup>> {
