@@ -1,4 +1,4 @@
-use crate::helpers::device_manager::DeviceManager;
+use crate::helpers::device_manager::{DeviceManager, NCCL_START_RETRY, NCCL_START_WAIT_TIME};
 use cudarc::driver::CudaSlice;
 use eyre::{eyre, Context};
 use std::{sync::Arc, time::Duration};
@@ -58,10 +58,12 @@ pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
         }
     });
 
-    let mut counter = 0;
+    let mut timeout_interval = 2 * NCCL_START_WAIT_TIME * NCCL_START_RETRY.try_into()?;
     loop {
-        match timeout(HEARBEAT_INTERVAL * 2, rx.recv()).await {
-            Ok(Some(Ok(_))) => counter += 1,
+        match timeout(timeout_interval, rx.recv()).await {
+            // The first heartbeat might take a while due to retries. However, after the connection
+            // is established, we switch to the normal heartbeat interval.
+            Ok(Some(Ok(_))) => timeout_interval = 2 * HEARBEAT_INTERVAL,
             Ok(None) => {
                 tracing::error!("Heartbeat: Channel closed.");
                 break;
@@ -71,11 +73,6 @@ pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
                 panic!("Heartbeat failed, restarting service");
             }
             Err(_) => {
-                if counter == 0 {
-                    // Ignore timeouts until the first heartbeat is received
-                    // It may take a bit of time to establish the connections
-                    continue;
-                }
                 tracing::error!("Heartbeat timeout.");
                 panic!("Heartbeat timeout, restarting service");
             }

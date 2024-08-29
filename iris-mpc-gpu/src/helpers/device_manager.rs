@@ -17,8 +17,8 @@ use cudarc::{
 };
 use std::{sync::Arc, thread::sleep, time::Duration};
 
-const NCCL_START_WAIT_TIME: Duration = Duration::from_secs(5);
-const NCCL_START_RETRY: usize = 5;
+pub const NCCL_START_WAIT_TIME: Duration = Duration::from_secs(5);
+pub const NCCL_START_RETRY: usize = 5;
 
 #[derive(Debug, Clone)]
 pub struct DeviceManager {
