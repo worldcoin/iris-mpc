@@ -41,7 +41,7 @@ use telemetry_batteries::{
     tracing::{datadog::DatadogBattery, TracingShutdownHandle},
 };
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::{mpsc, oneshot, Notify},
     task::spawn_blocking,
     time::timeout,
 };
@@ -504,9 +504,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Preparing task monitor");
     let mut background_tasks = TaskMonitor::new();
 
-    let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id));
+    let notify = Arc::new(Notify::new());
+    let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id, Arc::clone(&notify)));
 
     background_tasks.check_tasks();
+    tracing::info!("Heartbeat starting...");
+    notify.notified().await;
     tracing::info!("Heartbeat started.");
 
     // a bit convoluted, but we need to create the actor on the thread already,

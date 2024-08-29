@@ -3,13 +3,13 @@ use cudarc::driver::CudaSlice;
 use eyre::{eyre, Context};
 use std::{sync::Arc, time::Duration};
 use tokio::{
-    sync::mpsc,
+    sync::{mpsc, Notify},
     task::{spawn_blocking, JoinHandle},
     time::timeout,
 };
 const HEARBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
-pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
+pub async fn start_heartbeat(party_id: usize, notify: Arc<Notify>) -> eyre::Result<()> {
     let (tx, mut rx) = mpsc::channel(1);
 
     let heartbeat_handle: JoinHandle<eyre::Result<()>> = spawn_blocking(move || {
@@ -19,6 +19,7 @@ pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
         let comms = device_manager.instantiate_network_from_ids(party_id, &ids)?;
 
         tracing::info!("Heartbeat: NCCL connection established");
+        notify.notify_one();
 
         let mut pings = vec![];
         let mut pongs = vec![];
