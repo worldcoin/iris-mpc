@@ -18,22 +18,27 @@ pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
 
         let mut comms = vec![];
         for _ in 0..5 {
-            tracing::info!("Attempting to initiate NCCL connection");
+            tracing::info!("Heartbeat: Attempting to initiate NCCL connection");
             match device_manager.instantiate_network_from_ids(party_id, &ids) {
                 Ok(c) => {
                     comms = c;
                     break;
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to initiate NCCL connection, trying again: {:?}", e);
+                    tracing::warn!(
+                        "Heartbeat: Failed to initiate NCCL connection, trying again: {:?}",
+                        e
+                    );
                 }
             }
             thread::sleep(Duration::from_secs(5));
         }
 
         if comms.is_empty() {
-            return eyre::bail!("Failed to initiate NCCL connection");
+            return eyre::bail!("Heartbeat: Failed to initiate NCCL connection");
         }
+
+        tracing::info!("Heartbeat: NCCL connection established");
 
         let mut pings = vec![];
         let mut pongs = vec![];
@@ -78,7 +83,7 @@ pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
         match timeout(HEARBEAT_INTERVAL * 2, rx.recv()).await {
             Ok(Some(Ok(_))) => counter += 1,
             Ok(None) => {
-                tracing::error!("Heartbeat channel closed.");
+                tracing::error!("Heartbeat: Channel closed.");
                 break;
             }
             Ok(Some(Err(e))) => {
