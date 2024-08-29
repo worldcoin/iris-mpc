@@ -78,20 +78,3 @@ impl MaskShareMessage {
         Ok(())
     }
 }
-
-#[derive(Clone, Serialize, Deserialize)]
-pub enum ClientMessages {
-    Shares(TwoToThreeIrisCodeMessage),
-    Masks(MaskShareMessage),
-}
-
-impl From<TwoToThreeIrisCodeMessage> for ClientMessages {
-    fn from(x: TwoToThreeIrisCodeMessage) -> Self {
-        ClientMessages::Shares(x)
-    }
-}
-impl From<MaskShareMessage> for ClientMessages {
-    fn from(x: MaskShareMessage) -> Self {
-        ClientMessages::Masks(x)
-    }
-}
