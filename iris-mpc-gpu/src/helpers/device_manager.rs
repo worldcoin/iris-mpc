@@ -15,7 +15,6 @@ use cudarc::{
     },
     nccl::Id,
 };
-use eyre::eyre;
 use std::{sync::Arc, thread::sleep, time::Duration};
 
 const NCCL_START_WAIT_TIME: Duration = Duration::from_secs(5);

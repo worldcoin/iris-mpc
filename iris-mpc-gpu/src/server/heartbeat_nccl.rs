@@ -35,9 +35,9 @@ pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
 
         let mut counter: u64 = 0;
         loop {
+            tracing::info!("Heartbeat: {}", counter);
             for i in 0..comms.len() {
                 tx.blocking_send(|| -> eyre::Result<()> {
-                    tracing::info!("Heartbeat: {}", counter);
                     device_manager
                         .device(i)
                         .htod_copy_into(vec![counter], &mut pings[i])?;
