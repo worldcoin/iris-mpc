@@ -1,4 +1,4 @@
-use crate::helpers::device_manager::DeviceManager;
+use crate::helpers::device_manager::{DeviceManager, NCCL_START_RETRIES, NCCL_START_WAIT_TIME};
 use cudarc::driver::CudaSlice;
 use eyre::{eyre, Context};
 use std::{sync::Arc, time::Duration};
@@ -15,7 +15,10 @@ pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
     let heartbeat_handle: JoinHandle<eyre::Result<()>> = spawn_blocking(move || {
         let device_manager = Arc::new(DeviceManager::init());
         let ids = device_manager.get_ids_from_magic(0xdead);
+
         let comms = device_manager.instantiate_network_from_ids(party_id, &ids)?;
+
+        tracing::info!("Heartbeat: NCCL connection established");
 
         let mut pings = vec![];
         let mut pongs = vec![];
@@ -32,6 +35,7 @@ pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
 
         let mut counter: u64 = 0;
         loop {
+            tracing::info!("Heartbeat: {}", counter);
             for i in 0..comms.len() {
                 tx.blocking_send(|| -> eyre::Result<()> {
                     device_manager
@@ -54,11 +58,17 @@ pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
         }
     });
 
+    let mut timeout_interval = 2
+        * NCCL_START_WAIT_TIME
+        * (NCCL_START_RETRIES - 1).try_into()?
+        * DeviceManager::init().device_count().try_into()?;
     loop {
-        match timeout(HEARBEAT_INTERVAL * 2, rx.recv()).await {
-            Ok(Some(Ok(_))) => continue,
+        match timeout(timeout_interval, rx.recv()).await {
+            // The first heartbeat might take a while due to retries. However, after the connection
+            // is established, we switch to the normal heartbeat interval.
+            Ok(Some(Ok(_))) => timeout_interval = 2 * HEARBEAT_INTERVAL,
             Ok(None) => {
-                tracing::error!("Heartbeat channel closed.");
+                tracing::error!("Heartbeat: Channel closed.");
                 break;
             }
             Ok(Some(Err(e))) => {
