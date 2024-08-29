@@ -18,8 +18,15 @@ pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
 
         let mut comms = vec![];
         for _ in 0..5 {
-            if let Ok(c) = device_manager.instantiate_network_from_ids(party_id, &ids) {
-                comms = c;
+            tracing::info!("Attempting to initiate NCCL connection");
+            match device_manager.instantiate_network_from_ids(party_id, &ids) {
+                Ok(c) => {
+                    comms = c;
+                    break;
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to initiate NCCL connection, trying again: {:?}", e);
+                }
             }
             thread::sleep(Duration::from_secs(5));
         }
