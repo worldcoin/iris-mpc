@@ -142,6 +142,7 @@ async fn main() -> eyre::Result<()> {
 
             for msg in msg.messages.unwrap_or_default() {
                 counter += 1;
+
                 let result: ResultEvent = serde_json::from_str(&msg.body.context("No body found")?)
                     .context("Failed to parse message body")?;
 
@@ -278,17 +279,12 @@ async fn main() -> eyre::Result<()> {
         let mut iris_codes_shares_base64: [String; 3] = Default::default();
 
         for i in 0..3 {
-            let iris_code_coefs_base64 =
-                general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_code[i].coefs));
-            let mask_code_coefs_base64 =
-                general_purpose::STANDARD.encode(bytemuck::cast_slice(&shared_mask[i].coefs));
-
             let iris_codes_json = IrisCodesJSON {
                 iris_version:           "1.0".to_string(),
-                right_iris_code_shares: iris_code_coefs_base64,
-                right_iris_mask_shares: mask_code_coefs_base64,
-                left_iris_code_shares:  "nan".to_string(),
-                left_iris_mask_shares:  "nan".to_string(),
+                right_iris_code_shares: shared_code[i].to_base64(),
+                right_iris_mask_shares: shared_mask[i].to_base64(),
+                left_iris_code_shares:  shared_code[i].to_base64(),
+                left_iris_mask_shares:  shared_mask[i].to_base64(),
             };
             let serialized_iris_codes_json = to_string(&iris_codes_json)
                 .expect("Serialization failed")

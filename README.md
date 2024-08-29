@@ -119,3 +119,18 @@ If you are using `cargo test` with non-standard library paths, you might need [a
 ## Architecture
 
 ![architecture](mpc-architecture-v2.png)
+
+
+## How to run client in the prod-dev env
+
+```bash
+cargo run --release --bin client -- \
+    --request-topic-arn arn:aws:sns:eu-north-1:767397716933:gpu-iris-mpc-input.fifo \
+    --request-topic-region eu-north-1 \
+    --response-queue-url https://sqs.eu-north-1.amazonaws.com/654654380399/temporal-results.fifo \
+    --response-queue-region eu-north-1 \
+    --requests-bucket-name wf-mpc-prod-smpcv2-sns-requests \
+    --public-key-base-url https://d2k2ck8dyw4s60.cloudfront.net \
+    --requests-bucket-region eu-north-1 \
+    --random true
+```

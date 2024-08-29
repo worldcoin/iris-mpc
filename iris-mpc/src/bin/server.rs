@@ -63,7 +63,6 @@ static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(
 
 #[allow(clippy::type_complexity)]
 fn preprocess_iris_message_shares(
-    party_id: usize,
     code_shares: String,
     mask_shares: String,
 ) -> eyre::Result<(
@@ -74,10 +73,10 @@ fn preprocess_iris_message_shares(
     Vec<GaloisRingIrisCodeShare>,
     Vec<GaloisRingTrimmedMaskCodeShare>,
 )> {
-    let mut iris_share = GaloisRingIrisCodeShare::from_base64(party_id + 1, &code_shares)
+    let mut iris_share = GaloisRingIrisCodeShare::from_base64(&code_shares)
         .context("Failed to base64 parse iris code")?;
     let mut mask_share: GaloisRingTrimmedMaskCodeShare =
-        GaloisRingIrisCodeShare::from_base64(party_id + 1, &mask_shares)
+        GaloisRingIrisCodeShare::from_base64(&mask_shares)
             .context("Failed to base64 parse iris mask")?
             .into();
 
@@ -206,7 +205,6 @@ async fn receive_batch(
                 // Preprocess shares for left eye.
                 let left_future = spawn_blocking(move || {
                     preprocess_iris_message_shares(
-                        party_id,
                         iris_message_share.left_iris_code_shares,
                         iris_message_share.left_iris_mask_shares,
                     )
@@ -215,7 +213,6 @@ async fn receive_batch(
                 // Preprocess shares for right eye.
                 let right_future = spawn_blocking(move || {
                     preprocess_iris_message_shares(
-                        party_id,
                         iris_message_share.right_iris_code_shares,
                         iris_message_share.right_iris_mask_shares,
                     )
@@ -517,6 +514,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         let device_manager = Arc::new(DeviceManager::init());
         let ids = device_manager.get_ids_from_magic(0);
 
+        tracing::info!("Starting NCCL");
         let mut comms = vec![];
         for _ in 0..NCCL_START_RETRY {
             let res = device_manager.instantiate_network_from_ids(config.party_id, &ids);
@@ -527,12 +525,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             std::thread::sleep(NCCL_START_WAIT_TIME);
         }
 
+        tracing::info!("NCCL: checking empty");
         if comms.is_empty() {
             tx.send(Err(eyre!("Number of NCCL connection retries exceeded")))
                 .unwrap();
             return Ok(());
         }
 
+        tracing::info!("NCCL: getting sync results");
         let sync_result = match sync_nccl::sync(&comms[0], &my_state) {
             Ok(res) => res,
             Err(e) => {
@@ -541,6 +541,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             }
         };
 
+        tracing::info!("DB: check if rollback needed");
         if let Some(db_len) = sync_result.must_rollback_storage() {
             tracing::warn!(
                 "Databases are out-of-sync, rolling back (current len: {}, new len: {})",
@@ -707,6 +708,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     // Main loop
     let res: eyre::Result<()> = async {
+        tracing::info!("Entering main loop");
         // **Tensor format of queries**
         //
         // The functions `receive_batch` and `prepare_query_shares` will prepare the
