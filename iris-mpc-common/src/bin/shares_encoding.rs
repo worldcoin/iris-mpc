@@ -6,7 +6,6 @@ use iris_mpc_common::{
 use rand::{prelude::StdRng, SeedableRng};
 use ring::digest::{digest, SHA256};
 use serde::{ser::Error, Serialize, Serializer};
-use serde_big_array::BigArray;
 use serde_json::Value;
 use std::{collections::BTreeMap, env};
 
@@ -43,59 +42,9 @@ struct IrisCodeSharesJson {
 
 /// Iris code shares.
 #[allow(clippy::module_name_repetitions)]
-pub type IrisCodeShares = [IrisCodeShare; 3];
+pub type IrisCodeShares = [String; 3];
 /// Iris mask code shares.
-pub type MaskCodeShares = [IrisCodeShare; 3];
-
-/// Iris code share.
-#[allow(clippy::module_name_repetitions)]
-#[derive(Debug, Clone, Serialize)]
-pub struct IrisCodeShare {
-    /// The ID.
-    pub id:    usize,
-    /// The coefficients.
-    #[serde(with = "BigArray")]
-    pub coefs: [u16; 12800],
-}
-
-impl Default for IrisCodeShare {
-    fn default() -> Self {
-        Self {
-            id:    0,
-            coefs: [0; 12800],
-        }
-    }
-}
-
-impl From<GaloisRingIrisCodeShare> for IrisCodeShare {
-    fn from(share: GaloisRingIrisCodeShare) -> Self {
-        Self {
-            id:    share.id,
-            coefs: share.coefs,
-        }
-    }
-}
-
-impl From<&IrisCodeShare> for Vec<u8> {
-    fn from(val: &IrisCodeShare) -> Self {
-        bincode::serialize(&val).expect("to serialize")
-    }
-}
-
-impl From<&IrisCodeShare> for String {
-    fn from(val: &IrisCodeShare) -> Self {
-        BASE64_STANDARD.encode::<Vec<u8>>(val.into())
-    }
-}
-
-fn to_array(input: [GaloisRingIrisCodeShare; 3]) -> [IrisCodeShare; 3] {
-    input
-        .into_iter()
-        .map(Into::into)
-        .collect::<Vec<_>>()
-        .try_into()
-        .expect("Expected exactly 3 elements")
-}
+pub type MaskCodeShares = [String; 3];
 
 fn main() {
     let mut rng = if let Ok(seed_rng) = env::var("SEED_RNG") {
@@ -138,24 +87,17 @@ fn main() {
         IrisCodeArray::default()
     };
 
-    let shares_left = to_array(GaloisRingIrisCodeShare::encode_iris_code(
-        &iris_code_left,
-        &mask_code_left,
-        &mut rng,
-    ));
-    let masks_left = to_array(GaloisRingIrisCodeShare::encode_mask_code(
-        &mask_code_left,
-        &mut rng,
-    ));
-    let shares_right = to_array(GaloisRingIrisCodeShare::encode_iris_code(
-        &iris_code_right,
-        &mask_code_right,
-        &mut rng,
-    ));
-    let masks_right = to_array(GaloisRingIrisCodeShare::encode_mask_code(
-        &mask_code_right,
-        &mut rng,
-    ));
+    let shares_left =
+        GaloisRingIrisCodeShare::encode_iris_code(&iris_code_left, &mask_code_left, &mut rng)
+            .map(|x| x.to_base64());
+
+    let masks_left =
+        GaloisRingIrisCodeShare::encode_mask_code(&mask_code_left, &mut rng).map(|x| x.to_base64());
+    let shares_right =
+        GaloisRingIrisCodeShare::encode_iris_code(&iris_code_right, &mask_code_right, &mut rng)
+            .map(|x| x.to_base64());
+    let masks_right = GaloisRingIrisCodeShare::encode_mask_code(&mask_code_right, &mut rng)
+        .map(|x| x.to_base64());
 
     let mut iris_code_shares_jsons = Vec::new();
     let mut iris_code_shares_file_output = BTreeMap::new();
@@ -169,10 +111,10 @@ fn main() {
         let iris_code_shares = IrisCodeSharesJson {
             iris_version:           IRIS_VERSION.to_string(),
             iris_shares_version:    IRIS_MPC_VERSION.to_string(),
-            left_iris_code_shares:  li.into(),
-            left_iris_mask_shares:  lm.into(),
-            right_iris_code_shares: ri.into(),
-            right_iris_mask_shares: rm.into(),
+            left_iris_code_shares:  li.clone(),
+            left_iris_mask_shares:  lm.clone(),
+            right_iris_code_shares: ri.clone(),
+            right_iris_mask_shares: rm.clone(),
         };
         let json_u8 = serde_json::to_string(&SerializeWithSortedKeys(&iris_code_shares))
             .unwrap()

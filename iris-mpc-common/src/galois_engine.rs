@@ -8,10 +8,13 @@ pub mod degree2 {
     };
     use base64::{prelude::BASE64_STANDARD, Engine};
     use rand::{CryptoRng, Rng};
+    use serde::{Deserialize, Serialize};
+    use serde_big_array::BigArray;
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct GaloisRingIrisCodeShare {
         pub id:    usize,
+        #[serde(with = "BigArray")]
         pub coefs: [u16; IRIS_CODE_LENGTH],
     }
 
@@ -160,13 +163,13 @@ pub mod degree2 {
         }
 
         pub fn to_base64(&self) -> String {
-            BASE64_STANDARD.encode(bytemuck::cast_slice(&self.coefs))
+            let as_vec_u8 = bincode::serialize(&self).expect("to serialize");
+            BASE64_STANDARD.encode::<Vec<u8>>(as_vec_u8)
         }
 
-        pub fn from_base64(id: usize, s: &str) -> eyre::Result<Self> {
-            let mut coefs = [0u16; IRIS_CODE_LENGTH];
-            BASE64_STANDARD.decode_slice(s, bytemuck::cast_slice_mut(&mut coefs))?;
-            Ok(Self::new(id, coefs))
+        pub fn from_base64(s: &str) -> eyre::Result<Self> {
+            let decoded_bytes = BASE64_STANDARD.decode(s)?;
+            Ok(bincode::deserialize(&decoded_bytes)?)
         }
     }
 
@@ -223,7 +226,7 @@ pub mod degree2 {
             let shares = GaloisRingIrisCodeShare::encode_mask_code(&code, &mut rng);
             for i in 0..3 {
                 let s = shares[i].to_base64();
-                let decoded = GaloisRingIrisCodeShare::from_base64(i + 1, &s).unwrap();
+                let decoded = GaloisRingIrisCodeShare::from_base64(&s).unwrap();
                 assert_eq!(shares[i].coefs, decoded.coefs);
             }
         }
@@ -238,10 +241,13 @@ pub mod degree4 {
     };
     use base64::{prelude::BASE64_STANDARD, Engine};
     use rand::{CryptoRng, Rng};
+    use serde::{Deserialize, Serialize};
+    use serde_big_array::BigArray;
 
-    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub struct GaloisRingIrisCodeShare {
         pub id:    usize,
+        #[serde(with = "BigArray")]
         pub coefs: [u16; IRIS_CODE_LENGTH],
     }
 
@@ -457,13 +463,13 @@ pub mod degree4 {
         }
 
         pub fn to_base64(&self) -> String {
-            BASE64_STANDARD.encode(bytemuck::cast_slice(&self.coefs))
+            let as_vec_u8 = bincode::serialize(&self).expect("to serialize");
+            BASE64_STANDARD.encode::<Vec<u8>>(as_vec_u8)
         }
 
-        pub fn from_base64(id: usize, s: &str) -> eyre::Result<Self> {
-            let mut coefs = [0u16; IRIS_CODE_LENGTH];
-            BASE64_STANDARD.decode_slice(s, bytemuck::cast_slice_mut(&mut coefs))?;
-            Ok(Self::new(id, coefs))
+        pub fn from_base64(s: &str) -> eyre::Result<Self> {
+            let decoded_bytes = BASE64_STANDARD.decode(s)?;
+            Ok(bincode::deserialize(&decoded_bytes)?)
         }
     }
 
@@ -598,7 +604,7 @@ pub mod degree4 {
             let shares = GaloisRingIrisCodeShare::encode_mask_code(&code, &mut rng);
             for i in 0..3 {
                 let s = shares[i].to_base64();
-                let decoded = GaloisRingIrisCodeShare::from_base64(i + 1, &s).unwrap();
+                let decoded = GaloisRingIrisCodeShare::from_base64(&s).unwrap();
                 assert_eq!(shares[i].coefs, decoded.coefs);
             }
         }
