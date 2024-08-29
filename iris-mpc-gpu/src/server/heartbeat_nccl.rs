@@ -1,7 +1,7 @@
 use crate::helpers::device_manager::DeviceManager;
 use cudarc::driver::CudaSlice;
 use eyre::{eyre, Context};
-use std::{sync::Arc, time::Duration};
+use std::{sync::Arc, thread, time::Duration};
 use tokio::{
     sync::mpsc,
     task::{spawn_blocking, JoinHandle},
@@ -15,7 +15,18 @@ pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
     let heartbeat_handle: JoinHandle<eyre::Result<()>> = spawn_blocking(move || {
         let device_manager = Arc::new(DeviceManager::init());
         let ids = device_manager.get_ids_from_magic(0xdead);
-        let comms = device_manager.instantiate_network_from_ids(party_id, &ids)?;
+
+        let mut comms = vec![];
+        for _ in 0..5 {
+            if let Ok(c) = device_manager.instantiate_network_from_ids(party_id, &ids) {
+                comms = c;
+            }
+            thread::sleep(Duration::from_secs(5));
+        }
+
+        if comms.is_empty() {
+            return eyre::bail!("Failed to initiate NCCL connection");
+        }
 
         let mut pings = vec![];
         let mut pongs = vec![];
@@ -34,6 +45,7 @@ pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
         loop {
             for i in 0..comms.len() {
                 tx.blocking_send(|| -> eyre::Result<()> {
+                    tracing::info!("Heartbeat: {}", counter);
                     device_manager
                         .device(i)
                         .htod_copy_into(vec![counter], &mut pings[i])?;
@@ -54,9 +66,10 @@ pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
         }
     });
 
+    let mut counter = 0;
     loop {
         match timeout(HEARBEAT_INTERVAL * 2, rx.recv()).await {
-            Ok(Some(Ok(_))) => continue,
+            Ok(Some(Ok(_))) => counter += 1,
             Ok(None) => {
                 tracing::error!("Heartbeat channel closed.");
                 break;
@@ -66,6 +79,11 @@ pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
                 panic!("Heartbeat failed, restarting service");
             }
             Err(_) => {
+                if counter == 0 {
+                    // Ignore timeouts until the first heartbeat is received
+                    // It may take a bit of time to establish the connections
+                    continue;
+                }
                 tracing::error!("Heartbeat timeout.");
                 panic!("Heartbeat timeout, restarting service");
             }
