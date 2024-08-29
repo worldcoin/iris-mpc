@@ -509,6 +509,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         let ids = device_manager.get_ids_from_magic(0);
 
         tracing::info!("Starting NCCL");
+        unsafe {
+            env::set_var("NCCL_COMM_ID", "10.15.32.27:4000");
+        }
         let comms = device_manager.instantiate_network_from_ids(config.party_id, &ids)?;
 
         tracing::info!("NCCL: getting sync results");

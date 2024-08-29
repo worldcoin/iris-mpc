@@ -1,7 +1,7 @@
 use crate::helpers::device_manager::{DeviceManager, NCCL_START_RETRIES, NCCL_START_WAIT_TIME};
 use cudarc::driver::CudaSlice;
 use eyre::{eyre, Context};
-use std::{sync::Arc, time::Duration};
+use std::{env, sync::Arc, time::Duration};
 use tokio::{
     sync::mpsc,
     task::{spawn_blocking, JoinHandle},
@@ -13,6 +13,9 @@ pub async fn start_heartbeat(party_id: usize) -> eyre::Result<()> {
     let (tx, mut rx) = mpsc::channel(1);
 
     let heartbeat_handle: JoinHandle<eyre::Result<()>> = spawn_blocking(move || {
+        unsafe {
+            env::set_var("NCCL_COMM_ID", "10.15.32.27:4001");
+        }
         let device_manager = Arc::new(DeviceManager::init_with_stream());
         let ids = device_manager.get_ids_from_magic(0xdead);
 
