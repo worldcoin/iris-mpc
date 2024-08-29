@@ -548,13 +548,16 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 db_len
             );
             // Rollback the data that we have already loaded.
-            let bit_len = db_len * IRIS_CODE_LENGTH;
+            let bit_len_code = db_len * IRIS_CODE_LENGTH;
+            let bit_len_mask = db_len * MASK_CODE_LENGTH;
+
             // TODO: remove the line below if you removed fake data.
-            let bit_len = bit_len + (left_iris_db.0.len() - store_len * IRIS_CODE_LENGTH);
-            left_iris_db.0.truncate(bit_len);
-            left_iris_db.1.truncate(bit_len);
-            right_iris_db.0.truncate(bit_len);
-            right_iris_db.1.truncate(bit_len);
+            let bit_len_code = bit_len_code + (left_iris_db.0.len() - store_len * IRIS_CODE_LENGTH);
+            let bit_len_mask = bit_len_mask + (left_iris_db.1.len() - store_len * MASK_CODE_LENGTH);
+            left_iris_db.0.truncate(bit_len_code);
+            left_iris_db.1.truncate(bit_len_mask);
+            right_iris_db.0.truncate(bit_len_code);
+            right_iris_db.1.truncate(bit_len_mask);
         }
 
         tracing::info!("Starting server actor");
