@@ -507,13 +507,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Preparing task monitor");
     let mut background_tasks = TaskMonitor::new();
 
-    let (tx, rx) = oneshot::channel();
-    let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id, tx));
+    // let (tx, rx) = oneshot::channel();
+    // let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id,
+    // tx));
 
-    background_tasks.check_tasks();
-    tracing::info!("Heartbeat starting...");
-    rx.await??;
-    tracing::info!("Heartbeat started.");
+    // background_tasks.check_tasks();
+    // tracing::info!("Heartbeat starting...");
+    // rx.await??;
+    // tracing::info!("Heartbeat started.");
 
     // a bit convoluted, but we need to create the actor on the thread already,
     // since it blocks a lot and is `!Send`, we get back the handle via the oneshot
