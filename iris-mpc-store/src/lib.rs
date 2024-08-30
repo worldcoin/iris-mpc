@@ -126,7 +126,8 @@ impl Store {
 
     /// Stream irises in order.
     pub async fn stream_irises(&self) -> impl Stream<Item = Result<StoredIris, sqlx::Error>> + '_ {
-        sqlx::query_as::<_, StoredIris>("SELECT * FROM irises ORDER BY id").fetch(&self.pool)
+        sqlx::query_as::<_, StoredIris>("SELECT * FROM irises WHERE id >= 1 ORDER BY id")
+            .fetch(&self.pool)
     }
 
     /// Stream irises in parallel, without a particular order.
@@ -139,8 +140,9 @@ impl Store {
 
         let mut partition_streams = Vec::new();
         for i in 0..partitions {
-            let start_id = partition_size * i;
-            let end_id = start_id + partition_size - 1;
+            // we start from ID 1
+            let start_id = 1 + partition_size * i;
+            let end_id = start_id + partition_size;
 
             let partition_stream =
                 sqlx::query_as::<_, StoredIris>("SELECT * FROM irises WHERE id BETWEEN $1 AND $2")
