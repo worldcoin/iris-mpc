@@ -66,7 +66,7 @@ env:
     value: "https://d24uxaabh702ht.cloudfront.net"
 
   - name: SMPC__INIT_DB_WITH_RANDOM_SHARES
-    value: "false"
+    value: "true"
 
   - name: SMPC__INIT_DB_SIZE
     value: "10000"
