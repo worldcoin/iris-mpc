@@ -17,7 +17,7 @@ use iris_mpc_common::{
         sync::SyncState,
         task_monitor::TaskMonitor,
     },
-    iris_db::{db::IrisDB, iris::IrisCode},
+    iris_db::{db::IrisDB},
     IrisCodeDb, IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use iris_mpc_gpu::{
@@ -29,7 +29,7 @@ use iris_mpc_gpu::{
     },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{rngs::StdRng, SeedableRng};
 use static_assertions::const_assert;
 use std::{
     mem,

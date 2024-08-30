@@ -53,6 +53,9 @@ pub struct Config {
     pub init_db_with_random_shares: bool,
 
     #[serde(default)]
+    pub clear_db_before_init: bool,
+
+    #[serde(default)]
     pub init_db_size: usize,
 }
 
