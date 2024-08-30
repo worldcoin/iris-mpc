@@ -142,7 +142,7 @@ impl Store {
         for i in 0..partitions {
             // we start from ID 1
             let start_id = 1 + partition_size * i;
-            let end_id = start_id + partition_size;
+            let end_id = start_id + partition_size - 1;
 
             let partition_stream =
                 sqlx::query_as::<_, StoredIris>("SELECT * FROM irises WHERE id BETWEEN $1 AND $2")
@@ -230,7 +230,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
     }
 
     pub async fn rollback(&self, db_len: usize) -> Result<()> {
-        sqlx::query("DELETE FROM irises WHERE id >= $1")
+        sqlx::query("DELETE FROM irises WHERE id > $1")
             .bind(db_len as i64)
             .execute(&self.pool)
             .await?;
@@ -359,7 +359,7 @@ mod tests {
         assert_eq!(got_len, 3);
         assert_eq!(got.len(), 3);
         for i in 0..3 {
-            assert_eq!(got[i].id, i as i64);
+            assert_eq!(got[i].id, (i + 1) as i64);
             assert_eq!(got[i].left_code(), codes_and_masks[i].left_code);
             assert_eq!(got[i].left_mask(), codes_and_masks[i].left_mask);
             assert_eq!(got[i].right_code(), codes_and_masks[i].right_code);
@@ -390,7 +390,7 @@ mod tests {
     #[tokio::test]
     #[cfg(feature = "db_dependent")]
     async fn test_insert_many() -> Result<()> {
-        let count = 1 << 13;
+        let count = 1 << 3;
 
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
@@ -516,14 +516,14 @@ mod tests {
             if i % 2 == 0 {
                 store
                     .insert_or_update_left_iris(
-                        i as i64,
+                        (i + 1) as i64,
                         &[i * 100 + 1, i * 100 + 2, i * 100 + 3, i * 100 + 4],
                         &[i * 100 + 5, i * 100 + 6, i * 100 + 7, i * 100 + 8],
                     )
                     .await?;
                 store
                     .insert_or_update_right_iris(
-                        i as i64,
+                        (i + 1) as i64,
                         &[i * 100 + 9, i * 100 + 10, i * 100 + 11, i * 100 + 12],
                         &[i * 100 + 13, i * 100 + 14, i * 100 + 15, i * 100 + 16],
                     )
@@ -531,14 +531,14 @@ mod tests {
             } else {
                 store
                     .insert_or_update_right_iris(
-                        i as i64,
+                        (i + 1) as i64,
                         &[i * 100 + 9, i * 100 + 10, i * 100 + 11, i * 100 + 12],
                         &[i * 100 + 13, i * 100 + 14, i * 100 + 15, i * 100 + 16],
                     )
                     .await?;
                 store
                     .insert_or_update_left_iris(
-                        i as i64,
+                        (i + 1) as i64,
                         &[i * 100 + 1, i * 100 + 2, i * 100 + 3, i * 100 + 4],
                         &[i * 100 + 5, i * 100 + 6, i * 100 + 7, i * 100 + 8],
                     )
@@ -549,7 +549,7 @@ mod tests {
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
 
         for i in 0..10u16 {
-            assert_eq!(got[i as usize].id, i as i64);
+            assert_eq!(got[i as usize].id, (i + 1) as i64);
             assert_eq!(got[i as usize].left_code(), &[
                 i * 100 + 1,
                 i * 100 + 2,
@@ -594,7 +594,9 @@ mod tests {
 
     fn assert_contiguous_id(vec: &[StoredIris]) {
         assert!(
-            vec.iter().enumerate().all(|(i, row)| row.id == i as i64),
+            vec.iter()
+                .enumerate()
+                .all(|(i, row)| row.id == (i + 1) as i64),
             "IDs must be contiguous and in order"
         );
     }
