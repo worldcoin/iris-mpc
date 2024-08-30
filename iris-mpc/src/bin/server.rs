@@ -17,7 +17,7 @@ use iris_mpc_common::{
         sync::SyncState,
         task_monitor::TaskMonitor,
     },
-    iris_db::{db::IrisDB},
+    iris_db::db::IrisDB,
     IrisCodeDb, IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use iris_mpc_gpu::{
