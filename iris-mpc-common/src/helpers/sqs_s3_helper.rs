@@ -1,5 +1,5 @@
 use crate::helpers::key_pair::SharesDecodingError;
-use aws_config::meta::region::RegionProviderChain;
+use aws_config::{meta::region::RegionProviderChain, retry::RetryConfig};
 use aws_sdk_s3::{
     presigning::PresigningConfig,
     primitives::{ByteStream, SdkBody},
@@ -15,7 +15,11 @@ pub async fn upload_file_and_generate_presigned_url(
 ) -> Result<String, SharesDecodingError> {
     // Load AWS configuration
     let region_provider = RegionProviderChain::first_try(region).or_default_provider();
-    let config = aws_config::from_env().region(region_provider).load().await;
+    let config = aws_config::from_env()
+        .region(region_provider)
+        .retry_config(RetryConfig::standard().with_max_attempts(5))
+        .load()
+        .await;
 
     // Create S3 client
     let client = Client::new(&config);
@@ -35,6 +39,7 @@ pub async fn upload_file_and_generate_presigned_url(
         }
         Err(e) => {
             tracing::error!("Error: Failed to upload file: {:?}", e);
+            return Err(SharesDecodingError::UploadS3Error);
         }
     }
 

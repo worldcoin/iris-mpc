@@ -41,7 +41,7 @@ use telemetry_batteries::{
     tracing::{datadog::DatadogBattery, TracingShutdownHandle},
 };
 use tokio::{
-    sync::{mpsc, oneshot, Notify},
+    sync::{mpsc, oneshot},
     task::spawn_blocking,
     time::timeout,
 };
@@ -507,12 +507,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Preparing task monitor");
     let mut background_tasks = TaskMonitor::new();
 
-    let notify = Arc::new(Notify::new());
-    let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id, Arc::clone(&notify)));
+    let (tx, rx) = oneshot::channel();
+    let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id, tx));
 
     background_tasks.check_tasks();
     tracing::info!("Heartbeat starting...");
-    notify.notified().await;
+    rx.await??;
     tracing::info!("Heartbeat started.");
 
     // a bit convoluted, but we need to create the actor on the thread already,
@@ -613,6 +613,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             store_right,
         }) = rx.recv().await
         {
+            // returned serial_ids are 0 indexed, but we want them to be 1 indexed
             let result_events = merged_results
                 .iter()
                 .enumerate()
@@ -621,12 +622,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         party_id,
                         match matches[i] {
                             true => None,
-                            false => Some(idx_result),
+                            false => Some(idx_result + 1),
                         },
                         matches[i],
                         request_ids[i].clone(),
                         match matches[i] {
-                            true => Some(match_ids[i].clone()),
+                            true => Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
                             false => None,
                         },
                     );

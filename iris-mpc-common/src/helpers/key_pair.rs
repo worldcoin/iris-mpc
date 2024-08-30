@@ -55,6 +55,8 @@ pub enum SharesDecodingError {
     PresignedRequestError(
         #[from] aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::get_object::GetObjectError>,
     ),
+    #[error("Upload share file error")]
+    UploadS3Error,
 }
 
 #[derive(Clone, Debug)]

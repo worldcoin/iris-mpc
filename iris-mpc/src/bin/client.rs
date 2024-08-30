@@ -14,14 +14,17 @@ use iris_mpc_common::{
     },
     iris_db::{db::IrisDB, iris::IrisCode},
 };
-use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde_json::to_string;
 use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{spawn, sync::Mutex, time::sleep};
 use uuid::Uuid;
 
-const N_QUERIES: usize = 64 * 5;
+const BATCH_SIZE: usize = 64;
+const N_BATCHES: usize = 5;
+const N_QUERIES: usize = BATCH_SIZE * N_BATCHES;
+const WAIT_AFTER_BATCH: Duration = Duration::from_secs(2);
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
@@ -84,12 +87,6 @@ async fn main() -> eyre::Result<()> {
         random,
     } = Opt::parse();
 
-    let mut rng = if let Some(rng_seed) = rng_seed {
-        StdRng::seed_from_u64(rng_seed)
-    } else {
-        StdRng::from_entropy()
-    };
-
     let mut shares_encryption_public_keys: Vec<PublicKey> = vec![];
 
     for i in 0..3 {
@@ -112,20 +109,18 @@ async fn main() -> eyre::Result<()> {
 
     let db = IrisDB::new_random_par(DB_SIZE, &mut StdRng::seed_from_u64(RNG_SEED_SERVER));
 
-    let mut choice_rng = thread_rng();
-
     let expected_results: Arc<Mutex<HashMap<String, Option<u32>>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let requests: Arc<Mutex<HashMap<String, IrisCode>>> = Arc::new(Mutex::new(HashMap::new()));
     let responses: Arc<Mutex<HashMap<u32, IrisCode>>> = Arc::new(Mutex::new(HashMap::new()));
+    let db: Arc<Mutex<IrisDB>> = Arc::new(Mutex::new(db));
+    let requests_sns_client: Arc<Mutex<Client>> = Arc::new(Mutex::new(requests_sns_client));
 
     let thread_expected_results = expected_results.clone();
     let thread_requests = requests.clone();
     let thread_responses = responses.clone();
 
     let recv_thread = spawn(async move {
-        // // THIS IS REQUIRED TO USE THE SQS FROM SECONDARY REGION, URL DOES NOT
-        // SUFFICE
         let region_provider = Region::new(response_queue_region);
         let results_sqs_config = aws_config::from_env().region(region_provider).load().await;
         let results_sqs_client = SqsClient::new(&results_sqs_config);
@@ -188,7 +183,7 @@ async fn main() -> eyre::Result<()> {
                     assert!(result.matched_serial_ids.is_some());
                     let matched_ids = result.matched_serial_ids.unwrap();
                     assert!(matched_ids.len() == 1);
-                    assert_eq!(expected_result.unwrap(), matched_ids[0]);
+                    assert_eq!(expected_result.unwrap() + 1, matched_ids[0]);
                 }
 
                 results_sqs_client
@@ -204,143 +199,173 @@ async fn main() -> eyre::Result<()> {
     });
 
     // Prepare query
-    for query_idx in 0..N_QUERIES {
-        let request_id = Uuid::new_v4();
+    for batch_idx in 0..N_BATCHES {
+        let mut handles = Vec::new();
+        for batch_query_idx in 0..BATCH_SIZE {
+            let shares_encryption_public_keys2 = shares_encryption_public_keys.clone();
+            let requests_sns_client2 = requests_sns_client.clone();
+            let thread_db2 = db.clone();
+            let thread_expected_results2 = expected_results.clone();
+            let thread_requests2 = requests.clone();
+            let thread_responses2 = responses.clone();
+            let request_topic_arn = request_topic_arn.clone();
+            let requests_bucket_region = requests_bucket_region.clone();
+            let requests_bucket_name = requests_bucket_name.clone();
 
-        let template = if random.is_some() {
-            // Automatic random tests
-            let options = if responses.lock().await.len() == 0 {
-                2
-            } else {
-                3
-            };
-            match choice_rng.gen_range(0..options) {
-                0 => {
-                    println!("Sending new iris code");
-                    expected_results
-                        .lock()
-                        .await
-                        .insert(request_id.to_string(), None);
-                    IrisCode::random_rng(&mut rng)
-                }
-                1 => {
-                    println!("Sending iris code from db");
-                    let db_index = rng.gen_range(0..db.db.len());
-                    expected_results
-                        .lock()
-                        .await
-                        .insert(request_id.to_string(), Some(db_index as u32));
-                    db.db[db_index].clone()
-                }
-                2 => {
-                    println!("Sending freshly inserted iris code");
-                    let tmp = responses.lock().await;
-                    let keys = tmp.keys().collect::<Vec<_>>();
-                    let idx = rng.gen_range(0..keys.len());
-                    let iris_code = tmp.get(keys[idx]).unwrap().clone();
-                    expected_results
-                        .lock()
-                        .await
-                        .insert(request_id.to_string(), Some(*keys[idx]));
-                    iris_code
-                }
-                _ => unreachable!(),
-            }
-        } else {
-            // Manually passed cli arguments
-            if let Some(db_index) = db_index {
-                if query_idx < n_repeat {
-                    db.db[db_index].clone()
+            let handle = tokio::spawn(async move {
+                let mut rng = if let Some(rng_seed) = rng_seed {
+                    StdRng::seed_from_u64(rng_seed)
                 } else {
-                    IrisCode::random_rng(&mut rng)
+                    StdRng::from_entropy()
+                };
+
+                let request_id = Uuid::new_v4();
+
+                let template = if random.is_some() {
+                    // Automatic random tests
+                    let options = if thread_responses2.lock().await.len() == 0 {
+                        2
+                    } else {
+                        3
+                    };
+                    match rng.gen_range(0..options) {
+                        0 => {
+                            println!("Sending new iris code");
+                            thread_expected_results2
+                                .lock()
+                                .await
+                                .insert(request_id.to_string(), None);
+                            IrisCode::random_rng(&mut rng)
+                        }
+                        1 => {
+                            println!("Sending iris code from db");
+                            let db_index = rng.gen_range(0..thread_db2.lock().await.db.len());
+                            thread_expected_results2
+                                .lock()
+                                .await
+                                .insert(request_id.to_string(), Some(db_index as u32));
+                            thread_db2.lock().await.db[db_index].clone()
+                        }
+                        2 => {
+                            println!("Sending freshly inserted iris code");
+                            let tmp = thread_responses2.lock().await;
+                            let keys = tmp.keys().collect::<Vec<_>>();
+                            let idx = rng.gen_range(0..keys.len());
+                            let iris_code = tmp.get(keys[idx]).unwrap().clone();
+                            thread_expected_results2
+                                .lock()
+                                .await
+                                .insert(request_id.to_string(), Some(*keys[idx]));
+                            iris_code
+                        }
+                        _ => unreachable!(),
+                    }
+                } else {
+                    // Manually passed cli arguments
+                    if let Some(db_index) = db_index {
+                        if batch_query_idx * batch_idx < n_repeat {
+                            thread_db2.lock().await.db[db_index].clone()
+                        } else {
+                            IrisCode::random_rng(&mut rng)
+                        }
+                    } else {
+                        let mut rng = StdRng::seed_from_u64(1337); // TODO
+                        IrisCode::random_rng(&mut rng)
+                    }
+                };
+
+                thread_requests2
+                    .lock()
+                    .await
+                    .insert(request_id.to_string(), template.clone());
+
+                let shared_code = GaloisRingIrisCodeShare::encode_iris_code(
+                    &template.code,
+                    &template.mask,
+                    &mut rng,
+                );
+                let shared_mask =
+                    GaloisRingIrisCodeShare::encode_mask_code(&template.mask, &mut rng);
+
+                let mut iris_shares_file_hashes: [String; 3] = Default::default();
+                let mut iris_codes_shares_base64: [String; 3] = Default::default();
+
+                for i in 0..3 {
+                    let iris_codes_json = IrisCodesJSON {
+                        iris_version:           "1.0".to_string(),
+                        right_iris_code_shares: shared_code[i].to_base64(),
+                        right_iris_mask_shares: shared_mask[i].to_base64(),
+                        left_iris_code_shares:  shared_code[i].to_base64(),
+                        left_iris_mask_shares:  shared_mask[i].to_base64(),
+                    };
+                    let serialized_iris_codes_json = to_string(&iris_codes_json)
+                        .expect("Serialization failed")
+                        .clone();
+
+                    // calculate hash of the object
+                    let hash_string = calculate_sha256(&serialized_iris_codes_json);
+
+                    // encrypt the object using sealed box and public key
+                    let encrypted_bytes = sealedbox::seal(
+                        serialized_iris_codes_json.as_bytes(),
+                        &shares_encryption_public_keys2[i],
+                    );
+
+                    iris_codes_shares_base64[i] =
+                        general_purpose::STANDARD.encode(&encrypted_bytes);
+                    iris_shares_file_hashes[i] = hash_string;
                 }
-            } else {
-                let mut rng = StdRng::seed_from_u64(1337); // TODO
-                IrisCode::random_rng(&mut rng)
-            }
-        };
 
-        requests
-            .lock()
-            .await
-            .insert(request_id.to_string(), template.clone());
+                let contents = serde_json::to_vec(&iris_codes_shares_base64)?;
+                let presigned_url = match upload_file_and_generate_presigned_url(
+                    &requests_bucket_name,
+                    &request_id.to_string(),
+                    Box::leak(requests_bucket_region.clone().into_boxed_str()),
+                    &contents,
+                )
+                .await
+                {
+                    Ok(url) => url,
+                    Err(e) => {
+                        eprintln!("Failed to upload file: {}", e);
+                        // ignore the error and continue
+                        return Ok(());
+                    }
+                };
 
-        let shared_code = GaloisRingIrisCodeShare::encode_iris_code(
-            &template.code,
-            &template.mask,
-            &mut StdRng::seed_from_u64(RNG_SEED_SERVER),
-        );
-        let shared_mask = GaloisRingIrisCodeShare::encode_mask_code(
-            &template.mask,
-            &mut StdRng::seed_from_u64(RNG_SEED_SERVER),
-        );
+                let request_message = SMPCRequest {
+                    batch_size: None,
+                    signup_id: request_id.to_string(),
+                    s3_presigned_url: presigned_url,
+                    iris_shares_file_hashes,
+                };
 
-        let mut iris_shares_file_hashes: [String; 3] = Default::default();
-        let mut iris_codes_shares_base64: [String; 3] = Default::default();
+                // Send all messages in batch
+                requests_sns_client2
+                    .lock()
+                    .await
+                    .publish()
+                    .topic_arn(request_topic_arn.clone())
+                    .message_group_id(ENROLLMENT_REQUEST_TYPE)
+                    .message(to_string(&request_message)?)
+                    .send()
+                    .await?;
 
-        for i in 0..3 {
-            let iris_codes_json = IrisCodesJSON {
-                iris_version:           "1.0".to_string(),
-                right_iris_code_shares: shared_code[i].to_base64(),
-                right_iris_mask_shares: shared_mask[i].to_base64(),
-                left_iris_code_shares:  shared_code[i].to_base64(),
-                left_iris_mask_shares:  shared_mask[i].to_base64(),
-            };
-            let serialized_iris_codes_json = to_string(&iris_codes_json)
-                .expect("Serialization failed")
-                .clone();
-
-            // calculate hash of the object
-            let hash_string = calculate_sha256(&serialized_iris_codes_json);
-
-            // encrypt the object using sealed box and public key
-            let encrypted_bytes = sealedbox::seal(
-                serialized_iris_codes_json.as_bytes(),
-                &shares_encryption_public_keys[i],
-            );
-
-            iris_codes_shares_base64[i] = general_purpose::STANDARD.encode(&encrypted_bytes);
-            iris_shares_file_hashes[i] = hash_string;
+                eyre::Ok(())
+            });
+            handles.push(handle);
         }
 
-        let contents = serde_json::to_vec(&iris_codes_shares_base64)?;
-        let presigned_url = match upload_file_and_generate_presigned_url(
-            &requests_bucket_name,
-            &request_id.to_string(),
-            Box::leak(requests_bucket_region.clone().into_boxed_str()),
-            &contents,
-        )
-        .await
-        {
-            Ok(url) => url,
-            Err(e) => {
-                eprintln!("Failed to upload file: {}", e);
-                continue;
-            }
-        };
-
-        let request_message = SMPCRequest {
-            batch_size: None,
-            signup_id: request_id.to_string(),
-            s3_presigned_url: presigned_url,
-            iris_shares_file_hashes,
-        };
-
-        // Send all messages in batch
-        requests_sns_client
-            .publish()
-            .topic_arn(request_topic_arn.clone())
-            .message_group_id(ENROLLMENT_REQUEST_TYPE)
-            .message(to_string(&request_message)?)
-            .send()
-            .await?;
-
-        if (query_idx + 1) % 32 == 0 {
-            sleep(Duration::from_secs(1)).await;
+        // Wait for all tasks to complete
+        for handle in handles {
+            handle.await??;
         }
+
+        println!("Batch {} sent!", batch_idx);
+
+        // Give it some time to get back results
+        sleep(WAIT_AFTER_BATCH).await;
     }
-
-    sleep(Duration::from_secs(10)).await;
 
     // Receive all messages
     recv_thread.await??;
