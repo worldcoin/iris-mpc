@@ -201,7 +201,7 @@ async fn main() -> eyre::Result<()> {
     // Prepare query
     for batch_idx in 0..N_BATCHES {
         let mut handles = Vec::new();
-        for _ in 0..BATCH_SIZE {
+        for batch_query_idx in 0..BATCH_SIZE {
             let shares_encryption_public_keys2 = shares_encryption_public_keys.clone();
             let requests_sns_client2 = requests_sns_client.clone();
             let thread_db2 = db.clone();
@@ -213,47 +213,65 @@ async fn main() -> eyre::Result<()> {
             let requests_bucket_name = requests_bucket_name.clone();
 
             let handle = tokio::spawn(async move {
-                let mut rng = StdRng::from_entropy();
+                let mut rng = if let Some(rng_seed) = rng_seed {
+                    StdRng::seed_from_u64(rng_seed)
+                } else {
+                    StdRng::from_entropy()
+                };
 
                 let request_id = Uuid::new_v4();
 
-                // Automatic random tests
-                let options = if thread_responses2.lock().await.len() == 0 {
-                    2
+                let template = if random.is_some() {
+                    // Automatic random tests
+                    let options = if thread_responses2.lock().await.len() == 0 {
+                        2
+                    } else {
+                        3
+                    };
+                    match rng.gen_range(0..options) {
+                        0 => {
+                            println!("Sending new iris code");
+                            thread_expected_results2
+                                .lock()
+                                .await
+                                .insert(request_id.to_string(), None);
+                            IrisCode::random_rng(&mut rng)
+                        }
+                        1 => {
+                            println!("Sending iris code from db");
+                            let db_index = rng.gen_range(0..thread_db2.lock().await.db.len());
+                            thread_expected_results2
+                                .lock()
+                                .await
+                                .insert(request_id.to_string(), Some(db_index as u32));
+                            thread_db2.lock().await.db[db_index].clone()
+                        }
+                        2 => {
+                            println!("Sending freshly inserted iris code");
+                            let tmp = thread_responses2.lock().await;
+                            let keys = tmp.keys().collect::<Vec<_>>();
+                            let idx = rng.gen_range(0..keys.len());
+                            let iris_code = tmp.get(keys[idx]).unwrap().clone();
+                            thread_expected_results2
+                                .lock()
+                                .await
+                                .insert(request_id.to_string(), Some(*keys[idx]));
+                            iris_code
+                        }
+                        _ => unreachable!(),
+                    }
                 } else {
-                    3
-                };
-                let template = match rng.gen_range(0..options) {
-                    0 => {
-                        println!("Sending new iris code");
-                        thread_expected_results2
-                            .lock()
-                            .await
-                            .insert(request_id.to_string(), None);
+                    // Manually passed cli arguments
+                    if let Some(db_index) = db_index {
+                        if batch_query_idx * batch_idx < n_repeat {
+                            thread_db2.lock().await.db[db_index].clone()
+                        } else {
+                            IrisCode::random_rng(&mut rng)
+                        }
+                    } else {
+                        let mut rng = StdRng::seed_from_u64(1337); // TODO
                         IrisCode::random_rng(&mut rng)
                     }
-                    1 => {
-                        println!("Sending iris code from db");
-                        let db_index = rng.gen_range(0..thread_db2.lock().await.db.len());
-                        thread_expected_results2
-                            .lock()
-                            .await
-                            .insert(request_id.to_string(), Some(db_index as u32));
-                        thread_db2.lock().await.db[db_index].clone()
-                    }
-                    2 => {
-                        println!("Sending freshly inserted iris code");
-                        let tmp = thread_responses2.lock().await;
-                        let keys = tmp.keys().collect::<Vec<_>>();
-                        let idx = rng.gen_range(0..keys.len());
-                        let iris_code = tmp.get(keys[idx]).unwrap().clone();
-                        thread_expected_results2
-                            .lock()
-                            .await
-                            .insert(request_id.to_string(), Some(*keys[idx]));
-                        iris_code
-                    }
-                    _ => unreachable!(),
                 };
 
                 thread_requests2

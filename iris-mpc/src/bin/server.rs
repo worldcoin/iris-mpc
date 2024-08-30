@@ -495,6 +495,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Preparing task monitor");
     let mut background_tasks = TaskMonitor::new();
 
+    let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id));
+
+    background_tasks.check_tasks();
+    tracing::info!("Heartbeat started.");
+
     // a bit convoluted, but we need to create the actor on the thread already,
     // since it blocks a lot and is `!Send`, we get back the handle via the oneshot
     // channel
@@ -669,11 +674,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     background_tasks.check_tasks();
     tracing::info!("Healthcheck server running on port 3000.");
-
-    // let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id));
-
-    background_tasks.check_tasks();
-    tracing::info!("Heartbeat started.");
 
     let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
