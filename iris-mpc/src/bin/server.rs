@@ -493,10 +493,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     .await?;
 
     tracing::info!("Initialize iris db");
-    // let (mut left_iris_db, mut right_iris_db, store_len) =
-    //     initialize_iris_dbs(party_id, &store, &config).await?;
+    let (mut left_iris_db, mut right_iris_db, store_len) =
+        initialize_iris_dbs(party_id, &store, &config).await?;
 
-    let (mut left_iris_db, mut right_iris_db, store_len) = ((vec![], vec![]), (vec![], vec![]), 0);
+    // let (mut left_iris_db, mut right_iris_db, store_len) = ((vec![], vec![]),
+    // (vec![], vec![]), 0);
 
     let my_state = SyncState {
         db_len:              store_len as u64,
