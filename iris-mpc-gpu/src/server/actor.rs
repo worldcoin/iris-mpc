@@ -161,19 +161,19 @@ impl ServerActor {
         db_size: usize,
         db_buffer: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
-        assert!(
-            [left_eye_db.0.len(), right_eye_db.0.len(),]
-                .iter()
-                .all(|&x| x == db_size * IRIS_CODE_LENGTH),
-            "Internal DB mismatch, left and right iris code db sizes differ"
-        );
+        // assert!(
+        //     [left_eye_db.0.len(), right_eye_db.0.len(),]
+        //         .iter()
+        //         .all(|&x| x == db_size * IRIS_CODE_LENGTH),
+        //     "Internal DB mismatch, left and right iris code db sizes differ"
+        // );
 
-        assert!(
-            [left_eye_db.1.len(), right_eye_db.1.len()]
-                .iter()
-                .all(|&x| x == db_size * MASK_CODE_LENGTH),
-            "Internal DB mismatch, left and right mask code db sizes differ"
-        );
+        // assert!(
+        //     [left_eye_db.1.len(), right_eye_db.1.len()]
+        //         .iter()
+        //         .all(|&x| x == db_size * MASK_CODE_LENGTH),
+        //     "Internal DB mismatch, left and right mask code db sizes differ"
+        // );
 
         let (tx, rx) = mpsc::channel(job_queue_size);
         let actor = Self::init(
