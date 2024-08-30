@@ -361,7 +361,7 @@ impl ShareDB {
 
         let db_lens = db0
             .iter()
-            .map(|chunk| chunk.len() / self.code_length)
+            .map(|_| chunk_size / self.code_length)
             .collect::<Vec<_>>();
 
         let db1 = db1
