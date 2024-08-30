@@ -188,7 +188,7 @@ async fn main() -> eyre::Result<()> {
                     assert!(result.matched_serial_ids.is_some());
                     let matched_ids = result.matched_serial_ids.unwrap();
                     assert!(matched_ids.len() == 1);
-                    assert_eq!(expected_result.unwrap(), matched_ids[0]);
+                    assert_eq!(expected_result.unwrap() + 1, matched_ids[0]);
                 }
 
                 results_sqs_client

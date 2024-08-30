@@ -610,6 +610,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             store_right,
         }) = rx.recv().await
         {
+            // returned serial_ids are 0 indexed, but we want them to be 1 indexed
             let result_events = merged_results
                 .iter()
                 .enumerate()
@@ -618,12 +619,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         party_id,
                         match matches[i] {
                             true => None,
-                            false => Some(idx_result),
+                            false => Some(idx_result + 1),
                         },
                         matches[i],
                         request_ids[i].clone(),
                         match matches[i] {
-                            true => Some(match_ids[i].clone()),
+                            true => Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
                             false => None,
                         },
                     );
