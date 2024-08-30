@@ -779,9 +779,10 @@ impl ServerActor {
         log_timers(events);
 
         tracing::info!(
-            "Batch took {:?} [{:.2} Melems/s]",
+            "Batch took {:?} [{:.2} Melems/s] (DB size: {})",
             now.elapsed(),
-            (MAX_BATCH_SIZE * previous_total_db_size) as f64 / now.elapsed().as_secs_f64() / 1e6
+            (MAX_BATCH_SIZE * previous_total_db_size) as f64 / now.elapsed().as_secs_f64() / 1e6,
+            previous_total_db_size
         );
         Ok(())
     }
@@ -1196,7 +1197,7 @@ fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
 
         results.push(match_entry);
 
-        tracing::info!(
+        tracing::debug!(
             "Query {}: match={} [index: {}]",
             j,
             match_entry != NON_MATCH_ID,
