@@ -359,10 +359,7 @@ impl ShareDB {
             "db0 and db1 chunks must have the same length"
         );
 
-        let db_lens = db0
-            .iter()
-            .map(|_| chunk_size / self.code_length)
-            .collect::<Vec<_>>();
+        let db_lens = db0.iter().map(|_| chunk_size).collect::<Vec<_>>();
 
         let db1 = db1
             .iter()
