@@ -22,7 +22,7 @@ use tokio::{spawn, sync::Mutex, time::sleep};
 use uuid::Uuid;
 
 const BATCH_SIZE: usize = 64;
-const N_BATCHES: usize = 5;
+const N_BATCHES: usize = 1;
 const N_QUERIES: usize = BATCH_SIZE * N_BATCHES;
 const WAIT_AFTER_BATCH: Duration = Duration::from_secs(2);
 const RNG_SEED_SERVER: u64 = 42;
