@@ -658,94 +658,96 @@ impl ServerActor {
         // Write back to in-memory db
         let previous_total_db_size = self.current_db_sizes.iter().sum::<usize>();
 
-        record_stream_time!(
-            &self.device_manager,
-            &self.streams[0],
-            events,
-            "db_write",
-            {
-                for i in 0..self.device_manager.device_count() {
-                    self.device_manager.device(i).bind_to_thread().unwrap();
-                    for insertion_idx in insertion_list[i].clone() {
-                        // Append left to codes and masks db
-                        for (code_length, db, query, sums) in [
-                            (
-                                IRIS_CODE_LENGTH,
-                                &self.left_code_db_slices,
-                                &compact_device_queries_left.code_query_insert,
-                                &compact_device_sums_left.code_query_insert,
-                            ),
-                            (
-                                MASK_CODE_LENGTH,
-                                &self.left_mask_db_slices,
-                                &compact_device_queries_left.mask_query_insert,
-                                &compact_device_sums_left.mask_query_insert,
-                            ),
-                            (
-                                IRIS_CODE_LENGTH,
-                                &self.right_code_db_slices,
-                                &compact_device_queries_right.code_query_insert,
-                                &compact_device_sums_right.code_query_insert,
-                            ),
-                            (
-                                MASK_CODE_LENGTH,
-                                &self.right_mask_db_slices,
-                                &compact_device_queries_right.mask_query_insert,
-                                &compact_device_sums_right.mask_query_insert,
-                            ),
-                        ] {
-                            unsafe {
-                                helpers::dtod_at_offset(
-                                    db.code_gr.limb_0[i],
-                                    self.current_db_sizes[i] * code_length,
-                                    *query.limb_0[i].device_ptr(),
-                                    code_length * 15 + insertion_idx * code_length * ROTATIONS,
-                                    code_length,
-                                    self.streams[0][i].stream,
-                                );
+        // record_stream_time!(
+        //     &self.device_manager,
+        //     &self.streams[0],
+        //     events,
+        //     "db_write",
+        //     {
+        //         for i in 0..self.device_manager.device_count() {
+        //             self.device_manager.device(i).bind_to_thread().unwrap();
+        //             for insertion_idx in insertion_list[i].clone() {
+        //                 // Append left to codes and masks db
+        //                 for (code_length, db, query, sums) in [
+        //                     (
+        //                         IRIS_CODE_LENGTH,
+        //                         &self.left_code_db_slices,
+        //                         &compact_device_queries_left.code_query_insert,
+        //                         &compact_device_sums_left.code_query_insert,
+        //                     ),
+        //                     (
+        //                         MASK_CODE_LENGTH,
+        //                         &self.left_mask_db_slices,
+        //                         &compact_device_queries_left.mask_query_insert,
+        //                         &compact_device_sums_left.mask_query_insert,
+        //                     ),
+        //                     (
+        //                         IRIS_CODE_LENGTH,
+        //                         &self.right_code_db_slices,
+        //                         &compact_device_queries_right.code_query_insert,
+        //                         &compact_device_sums_right.code_query_insert,
+        //                     ),
+        //                     (
+        //                         MASK_CODE_LENGTH,
+        //                         &self.right_mask_db_slices,
+        //                         &compact_device_queries_right.mask_query_insert,
+        //                         &compact_device_sums_right.mask_query_insert,
+        //                     ),
+        //                 ] {
+        //                     unsafe {
+        //                         helpers::dtod_at_offset(
+        //                             db.code_gr.limb_0[i],
+        //                             self.current_db_sizes[i] * code_length,
+        //                             *query.limb_0[i].device_ptr(),
+        //                             code_length * 15 + insertion_idx * code_length *
+        // ROTATIONS,                             code_length,
+        //                             self.streams[0][i].stream,
+        //                         );
 
-                                helpers::dtod_at_offset(
-                                    db.code_gr.limb_1[i],
-                                    self.current_db_sizes[i] * code_length,
-                                    *query.limb_1[i].device_ptr(),
-                                    code_length * 15 + insertion_idx * code_length * ROTATIONS,
-                                    code_length,
-                                    self.streams[0][i].stream,
-                                );
+        //                         helpers::dtod_at_offset(
+        //                             db.code_gr.limb_1[i],
+        //                             self.current_db_sizes[i] * code_length,
+        //                             *query.limb_1[i].device_ptr(),
+        //                             code_length * 15 + insertion_idx * code_length *
+        // ROTATIONS,                             code_length,
+        //                             self.streams[0][i].stream,
+        //                         );
 
-                                helpers::dtod_at_offset(
-                                    *db.code_sums_gr.limb_0[i].device_ptr(),
-                                    self.current_db_sizes[i] * mem::size_of::<u32>(),
-                                    *sums.limb_0[i].device_ptr(),
-                                    mem::size_of::<u32>() * 15
-                                        + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                                    mem::size_of::<u32>(),
-                                    self.streams[0][i].stream,
-                                );
+        //                         helpers::dtod_at_offset(
+        //                             *db.code_sums_gr.limb_0[i].device_ptr(),
+        //                             self.current_db_sizes[i] * mem::size_of::<u32>(),
+        //                             *sums.limb_0[i].device_ptr(),
+        //                             mem::size_of::<u32>() * 15
+        //                                 + insertion_idx * mem::size_of::<u32>() *
+        //                                   ROTATIONS,
+        //                             mem::size_of::<u32>(),
+        //                             self.streams[0][i].stream,
+        //                         );
 
-                                helpers::dtod_at_offset(
-                                    *db.code_sums_gr.limb_1[i].device_ptr(),
-                                    self.current_db_sizes[i] * mem::size_of::<u32>(),
-                                    *sums.limb_1[i].device_ptr(),
-                                    mem::size_of::<u32>() * 15
-                                        + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                                    mem::size_of::<u32>(),
-                                    self.streams[0][i].stream,
-                                );
-                            }
-                        }
-                        self.current_db_sizes[i] += 1;
-                    }
+        //                         helpers::dtod_at_offset(
+        //                             *db.code_sums_gr.limb_1[i].device_ptr(),
+        //                             self.current_db_sizes[i] * mem::size_of::<u32>(),
+        //                             *sums.limb_1[i].device_ptr(),
+        //                             mem::size_of::<u32>() * 15
+        //                                 + insertion_idx * mem::size_of::<u32>() *
+        //                                   ROTATIONS,
+        //                             mem::size_of::<u32>(),
+        //                             self.streams[0][i].stream,
+        //                         );
+        //                     }
+        //                 }
+        //                 self.current_db_sizes[i] += 1;
+        //             }
 
-                    // DEBUG
-                    tracing::debug!(
-                        "Updating DB size on device {}: {:?}",
-                        i,
-                        self.current_db_sizes[i]
-                    );
-                }
-            }
-        );
+        //             // DEBUG
+        //             tracing::debug!(
+        //                 "Updating DB size on device {}: {:?}",
+        //                 i,
+        //                 self.current_db_sizes[i]
+        //             );
+        //         }
+        //     }
+        // );
 
         // Pass to internal sender thread
         return_channel
