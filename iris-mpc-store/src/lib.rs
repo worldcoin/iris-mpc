@@ -339,7 +339,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         tracing::info!("Completed initialization of iris db, committing...");
         tx.commit().await?;
         tracing::info!("Committed");
-        return Ok(());
+        Ok(())
     }
 }
 
