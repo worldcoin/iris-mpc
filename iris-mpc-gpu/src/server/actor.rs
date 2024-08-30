@@ -66,7 +66,7 @@ impl ServerActorHandle {
     }
 }
 
-const DB_CHUNK_SIZE: usize = 512;
+const DB_CHUNK_SIZE: usize = 1 << 15;
 const QUERIES: usize = ROTATIONS * MAX_BATCH_SIZE;
 pub struct ServerActor {
     job_queue:              mpsc::Receiver<ServerJob>,
@@ -1196,7 +1196,7 @@ fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
 
         results.push(match_entry);
 
-        tracing::debug!(
+        tracing::info!(
             "Query {}: match={} [index: {}]",
             j,
             match_entry != NON_MATCH_ID,
