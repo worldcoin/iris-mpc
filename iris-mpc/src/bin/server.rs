@@ -330,40 +330,19 @@ async fn initialize_iris_dbs(
     config: &Config,
 ) -> eyre::Result<(IrisCodeDb, IrisCodeDb, usize)> {
     // Generate or load DB
-    let (mut left_codes_db, mut left_masks_db) = {
-        let mut rng = StdRng::seed_from_u64(RNG_SEED);
-        let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
 
-        let codes_db = db
-            .db
-            .iter()
-            .flat_map(|iris| {
-                GaloisRingIrisCodeShare::encode_iris_code(
-                    &iris.code,
-                    &iris.mask,
-                    &mut StdRng::seed_from_u64(RNG_SEED),
-                )[party_id]
-                    .coefs
-            })
-            .collect::<Vec<_>>();
-
-        let masks_db = db
-            .db
-            .iter()
-            .flat_map(|iris| {
-                let mask: GaloisRingTrimmedMaskCodeShare =
-                    GaloisRingIrisCodeShare::encode_mask_code(
-                        &iris.mask,
-                        &mut StdRng::seed_from_u64(RNG_SEED),
-                    )[party_id]
-                        .clone()
-                        .into();
-                mask.coefs
-            })
-            .collect::<Vec<_>>();
-
-        (codes_db, masks_db)
-    };
+    let mut left_codes_db: Vec<u16> = Vec::new();
+    let mut left_masks_db: Vec<u16> = Vec::new();
+    if config.init_db_with_random_shares {
+        tracing::info!("Initialize persistent iris db with randomly generated shares");
+        store
+            .init_db_with_random_shares(RNG_SEED, party_id, config.init_db_size)
+            .await
+            .expect("failed to initialise db");
+    } else {
+        tracing::info!("Initialize in memory iris db with randomly generated shares");
+        (left_codes_db, left_masks_db) = init_in_mem_db(party_id);
+    }
     let (mut right_codes_db, mut right_masks_db) = (left_codes_db.clone(), left_masks_db.clone());
     let fake_len_codes = left_codes_db.len();
     let fake_len_masks = left_masks_db.len();
@@ -412,6 +391,40 @@ async fn initialize_iris_dbs(
         (right_codes_db, right_masks_db),
         count_irises,
     ))
+}
+
+fn init_in_mem_db(party_id: usize) -> (Vec<u16>, Vec<u16>) {
+    let mut rng = StdRng::seed_from_u64(RNG_SEED);
+    let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
+
+    let codes_db = db
+        .db
+        .iter()
+        .flat_map(|iris| {
+            GaloisRingIrisCodeShare::encode_iris_code(
+                &iris.code,
+                &iris.mask,
+                &mut StdRng::seed_from_u64(RNG_SEED),
+            )[party_id]
+                .coefs
+        })
+        .collect::<Vec<_>>();
+
+    let masks_db = db
+        .db
+        .iter()
+        .flat_map(|iris| {
+            let mask: GaloisRingTrimmedMaskCodeShare = GaloisRingIrisCodeShare::encode_mask_code(
+                &iris.mask,
+                &mut StdRng::seed_from_u64(RNG_SEED),
+            )[party_id]
+                .clone()
+                .into();
+            mask.coefs
+        })
+        .collect::<Vec<_>>();
+
+    (codes_db, masks_db)
 }
 
 async fn send_result_events(

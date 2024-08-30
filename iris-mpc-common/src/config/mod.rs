@@ -48,6 +48,15 @@ pub struct Config {
 
     #[serde(default)]
     pub public_key_base_url: String,
+
+    #[serde(default)]
+    pub init_db_with_random_shares: bool,
+
+    #[serde(default)]
+    pub clear_db_before_init: bool,
+
+    #[serde(default)]
+    pub init_db_size: usize,
 }
 
 fn default_processing_timeout_secs() -> u64 {
