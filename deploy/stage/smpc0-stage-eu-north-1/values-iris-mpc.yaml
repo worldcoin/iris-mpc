@@ -67,3 +67,6 @@ env:
 
   - name: SMPC__PUBLIC_KEY_BASE_URL
     value: "https://d2my9d2y2jkpfn.cloudfront.net"
+
+  - name: SMPC__INIT_DB_WITH_RANDOM_SHARES
+    value: "false"

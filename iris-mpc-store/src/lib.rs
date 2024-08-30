@@ -4,7 +4,12 @@ use futures::{
     stream::{self},
     Stream,
 };
-use iris_mpc_common::config::Config;
+use rand::{Rng, rngs::StdRng, SeedableRng};
+use iris_mpc_common::{
+    config::{Config},
+    iris_db::iris::IrisCode,
+    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+};
 use sqlx::{migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Transaction};
 use std::{ops::DerefMut, pin::Pin};
 
@@ -282,6 +287,52 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
             .await?;
         Ok(rows.into_iter().rev().map(|r| r.request_id).collect())
     }
+
+    /// Initialize the database with random shares and masks. Cleans up the db before inserting new generated irises.
+    pub async fn init_db_with_random_shares(&self, rng_seed: u64, party_id: usize, db_size: usize) -> eyre::Result<()>{
+        let mut rng = StdRng::seed_from_u64(rng_seed);
+
+        // Cleaning up the db before inserting new generated irises
+        self.rollback(0).await?;
+
+        let mut tx = self.tx().await.unwrap();
+
+        for i in 0..db_size {
+            if (i % 1000) == 0 {
+                tracing::info!("Initializing iris db: Generated {} entries", i);
+            }
+            let rng_seeds = (0..db_size).map(|_| rng.gen()).collect::<Vec<_>>();
+
+            let mut rng = StdRng::from_seed(rng_seeds[i]);
+            let iris = IrisCode::random_rng(&mut rng);
+
+            let share = GaloisRingIrisCodeShare::encode_iris_code(
+                &iris.code,
+                &iris.mask,
+                &mut StdRng::seed_from_u64(rng_seed),
+            )[party_id].clone();
+
+            let mask: GaloisRingTrimmedMaskCodeShare =
+                GaloisRingIrisCodeShare::encode_mask_code(
+                    &iris.mask,
+                    &mut StdRng::seed_from_u64(rng_seed),
+                )[party_id]
+                    .clone()
+                    .into();
+
+            // inserting shares and masks in the db. Reusing the same share and mask for left and right
+            self.insert_irises(&mut tx, &[StoredIrisRef {
+                left_code: &share.coefs,
+                left_mask: &mask.coefs,
+                right_code: &share.coefs,
+                right_mask: &mask.coefs,
+            }]).await?;
+        }
+        tracing::info!("Completed initialization of iris db, committing...");
+        tx.commit().await?;
+        tracing::info!("Committed");
+        return Ok(());
+    }
 }
 
 fn sanitize_identifier(input: &str) -> Result<()> {
@@ -435,6 +486,21 @@ mod tests {
 
         cleanup(&store, &schema_name).await?;
         Ok(())
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "db_dependent")]
+    async fn test_init_db_with_random_shares() -> Result<()> {
+        let schema_name = temporary_name();
+        let store = Store::new(&test_db_url()?, &schema_name).await?;
+
+        let expected_generated_irises_num = 10;
+        store.init_db_with_random_shares(0, 0, expected_generated_irises_num).await?;
+
+        let generated_irises_count = store.count_irises().await?;
+        assert_eq!(generated_irises_count, expected_generated_irises_num);
+
+        cleanup(&store, &schema_name).await
     }
 
     #[tokio::test]
