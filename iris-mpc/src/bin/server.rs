@@ -25,7 +25,7 @@ use iris_mpc_gpu::{
     helpers::device_manager::DeviceManager,
     server::{
         heartbeat_nccl::start_heartbeat, sync_nccl, BatchMetadata, BatchQuery, ServerActor,
-        ServerJobResult, MAX_BATCH_SIZE,
+        ServerJobResult, DB_BENCH_SIZE, MAX_BATCH_SIZE,
     },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
@@ -49,8 +49,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
-const DB_BENCH_SIZE: usize = 1 << 23;
-const DB_BUFFER: usize = 8 * 1_000;
+const DB_BUFFER: usize = DB_BENCH_SIZE;
 const RNG_SEED: u64 = 42;
 const SYNC_RESULTS: usize = MAX_BATCH_SIZE * 2;
 const SYNC_QUERIES: usize = MAX_BATCH_SIZE * 2;
@@ -564,7 +563,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             device_manager,
             comms,
             8,
-            DB_BENCH_SIZE,
+            store_len + DB_SIZE,
             DB_BUFFER,
         ) {
             Ok((actor, handle)) => {

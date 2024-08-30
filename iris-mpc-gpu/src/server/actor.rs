@@ -11,6 +11,7 @@ use crate::{
         device_manager::DeviceManager,
         query_processor::{CompactQuery, DeviceCompactQuery, DeviceCompactSums},
     },
+    server::DB_BENCH_SIZE,
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
 use cudarc::{
@@ -68,6 +69,7 @@ impl ServerActorHandle {
 
 const DB_CHUNK_SIZE: usize = 1 << 15;
 const QUERIES: usize = ROTATIONS * MAX_BATCH_SIZE;
+
 pub struct ServerActor {
     job_queue:              mpsc::Receiver<ServerJob>,
     device_manager:         Arc<DeviceManager>,
@@ -161,19 +163,19 @@ impl ServerActor {
         db_size: usize,
         db_buffer: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
-        // assert!(
-        //     [left_eye_db.0.len(), right_eye_db.0.len(),]
-        //         .iter()
-        //         .all(|&x| x == db_size * IRIS_CODE_LENGTH),
-        //     "Internal DB mismatch, left and right iris code db sizes differ"
-        // );
+        assert!(
+            [left_eye_db.0.len(), right_eye_db.0.len(),]
+                .iter()
+                .all(|&x| x == db_size * IRIS_CODE_LENGTH),
+            "Internal DB mismatch, left and right iris code db sizes differ"
+        );
 
-        // assert!(
-        //     [left_eye_db.1.len(), right_eye_db.1.len()]
-        //         .iter()
-        //         .all(|&x| x == db_size * MASK_CODE_LENGTH),
-        //     "Internal DB mismatch, left and right mask code db sizes differ"
-        // );
+        assert!(
+            [left_eye_db.1.len(), right_eye_db.1.len()]
+                .iter()
+                .all(|&x| x == db_size * MASK_CODE_LENGTH),
+            "Internal DB mismatch, left and right mask code db sizes differ"
+        );
 
         let (tx, rx) = mpsc::channel(job_queue_size);
         let actor = Self::init(
@@ -256,6 +258,9 @@ impl ServerActor {
                 .all(|size| size == &current_db_sizes),
             "Code and mask db sizes mismatch"
         );
+
+        let current_db_sizes =
+            vec![DB_BENCH_SIZE / device_manager.device_count(); device_manager.device_count()];
 
         // Engines for inflight queries
         let batch_codes_engine = ShareDB::init(
