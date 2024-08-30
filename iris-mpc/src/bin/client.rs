@@ -21,7 +21,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{spawn, sync::Mutex, time::sleep};
 use uuid::Uuid;
 
-const BATCH_SIZE: usize = 64;
+const BATCH_SIZE: usize = 32;
 const N_BATCHES: usize = 1;
 const N_QUERIES: usize = BATCH_SIZE * N_BATCHES;
 const WAIT_AFTER_BATCH: Duration = Duration::from_secs(2);
