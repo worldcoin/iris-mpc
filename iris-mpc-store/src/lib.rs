@@ -4,12 +4,12 @@ use futures::{
     stream::{self},
     Stream,
 };
-use rand::{Rng, rngs::StdRng, SeedableRng};
 use iris_mpc_common::{
-    config::{Config},
-    iris_db::iris::IrisCode,
+    config::Config,
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    iris_db::iris::IrisCode,
 };
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use sqlx::{migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Transaction};
 use std::{ops::DerefMut, pin::Pin};
 
@@ -288,8 +288,14 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         Ok(rows.into_iter().rev().map(|r| r.request_id).collect())
     }
 
-    /// Initialize the database with random shares and masks. Cleans up the db before inserting new generated irises.
-    pub async fn init_db_with_random_shares(&self, rng_seed: u64, party_id: usize, db_size: usize) -> eyre::Result<()>{
+    /// Initialize the database with random shares and masks. Cleans up the db
+    /// before inserting new generated irises.
+    pub async fn init_db_with_random_shares(
+        &self,
+        rng_seed: u64,
+        party_id: usize,
+        db_size: usize,
+    ) -> eyre::Result<()> {
         let mut rng = StdRng::seed_from_u64(rng_seed);
 
         // Cleaning up the db before inserting new generated irises
@@ -310,23 +316,25 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
                 &iris.code,
                 &iris.mask,
                 &mut StdRng::seed_from_u64(rng_seed),
-            )[party_id].clone();
+            )[party_id]
+                .clone();
 
-            let mask: GaloisRingTrimmedMaskCodeShare =
-                GaloisRingIrisCodeShare::encode_mask_code(
-                    &iris.mask,
-                    &mut StdRng::seed_from_u64(rng_seed),
-                )[party_id]
-                    .clone()
-                    .into();
+            let mask: GaloisRingTrimmedMaskCodeShare = GaloisRingIrisCodeShare::encode_mask_code(
+                &iris.mask,
+                &mut StdRng::seed_from_u64(rng_seed),
+            )[party_id]
+                .clone()
+                .into();
 
-            // inserting shares and masks in the db. Reusing the same share and mask for left and right
+            // inserting shares and masks in the db. Reusing the same share and mask for
+            // left and right
             self.insert_irises(&mut tx, &[StoredIrisRef {
-                left_code: &share.coefs,
-                left_mask: &mask.coefs,
+                left_code:  &share.coefs,
+                left_mask:  &mask.coefs,
                 right_code: &share.coefs,
                 right_mask: &mask.coefs,
-            }]).await?;
+            }])
+            .await?;
         }
         tracing::info!("Completed initialization of iris db, committing...");
         tx.commit().await?;
@@ -495,7 +503,9 @@ mod tests {
         let store = Store::new(&test_db_url()?, &schema_name).await?;
 
         let expected_generated_irises_num = 10;
-        store.init_db_with_random_shares(0, 0, expected_generated_irises_num).await?;
+        store
+            .init_db_with_random_shares(0, 0, expected_generated_irises_num)
+            .await?;
 
         let generated_irises_count = store.count_irises().await?;
         assert_eq!(generated_irises_count, expected_generated_irises_num);

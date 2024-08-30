@@ -17,7 +17,7 @@ use iris_mpc_common::{
         sync::SyncState,
         task_monitor::TaskMonitor,
     },
-    iris_db::db::IrisDB,
+    iris_db::{db::IrisDB, iris::IrisCode},
     IrisCodeDb, IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use iris_mpc_gpu::{
@@ -29,7 +29,7 @@ use iris_mpc_gpu::{
     },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
-use rand::{Rng, rngs::StdRng, SeedableRng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use static_assertions::const_assert;
 use std::{
     mem,
@@ -46,7 +46,6 @@ use tokio::{
     time::timeout,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use iris_mpc_common::iris_db::iris::IrisCode;
 
 const REGION: &str = "eu-north-1";
 const DB_SIZE: usize = 8 * 1_000;
@@ -336,7 +335,10 @@ async fn initialize_iris_dbs(
     let mut left_masks_db: Vec<u16> = Vec::new();
     if config.init_db_with_random_shares {
         tracing::info!("Initialize persistent iris db with randomly generated shares");
-        store.init_db_with_random_shares(RNG_SEED, party_id, config.init_db_size).await.expect("failed to initialise db");
+        store
+            .init_db_with_random_shares(RNG_SEED, party_id, config.init_db_size)
+            .await
+            .expect("failed to initialise db");
     } else {
         tracing::info!("Initialize in memory iris db with randomly generated shares");
         (left_codes_db, left_masks_db) = init_in_mem_db(party_id);
@@ -412,13 +414,12 @@ fn init_in_mem_db(party_id: usize) -> (Vec<u16>, Vec<u16>) {
         .db
         .iter()
         .flat_map(|iris| {
-            let mask: GaloisRingTrimmedMaskCodeShare =
-                GaloisRingIrisCodeShare::encode_mask_code(
-                    &iris.mask,
-                    &mut StdRng::seed_from_u64(RNG_SEED),
-                )[party_id]
-                    .clone()
-                    .into();
+            let mask: GaloisRingTrimmedMaskCodeShare = GaloisRingIrisCodeShare::encode_mask_code(
+                &iris.mask,
+                &mut StdRng::seed_from_u64(RNG_SEED),
+            )[party_id]
+                .clone()
+                .into();
             mask.coefs
         })
         .collect::<Vec<_>>();
