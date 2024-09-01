@@ -29,7 +29,7 @@ impl DeviceManager {
     pub fn init() -> Self {
         let mut devices = vec![];
         for i in 0..CudaDevice::count().unwrap() {
-            devices.push(CudaDevice::new(i as usize).unwrap());
+            devices.push(CudaDevice::new_with_stream(i as usize).unwrap());
         }
 
         tracing::info!("Found {} devices", devices.len());
