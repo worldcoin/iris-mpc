@@ -457,6 +457,9 @@ impl ServerActor {
                 mask_query_insert,
             }
         };
+
+        tracing::info!("preprocess left took: {:?}", now.elapsed());
+
         let query_store_left = batch.store_left;
 
         // THIS needs to be MAX_BATCH_SIZE, even though the query can be shorter to have
@@ -474,12 +477,16 @@ impl ServerActor {
             &self.cublas_handles[0],
         )?;
 
+        tracing::info!("copy left took: {:?}", now.elapsed());
+
         self.compare_query_against_db_and_self(
             &compact_device_queries_left,
             &compact_device_sums_left,
             &mut events,
             Eye::Left,
         );
+
+        tracing::info!("match left took: {:?}", now.elapsed());
 
         ///////////////////////////////////////////////////////////////////
         // COMPARE RIGHT EYE QUERIES
