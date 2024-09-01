@@ -578,14 +578,14 @@ impl ServerActor {
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id
         // and parent.trace.id
-        for tracing_payload in batch.metadata.iter() {
-            tracing::info!(
-                node_id = tracing_payload.node_id,
-                dd.trace_id = tracing_payload.trace_id,
-                dd.span_id = tracing_payload.span_id,
-                "Protocol finished",
-            );
-        }
+        // for tracing_payload in batch.metadata.iter() {
+        //     tracing::info!(
+        //         node_id = tracing_payload.node_id,
+        //         dd.trace_id = tracing_payload.trace_id,
+        //         dd.span_id = tracing_payload.span_id,
+        //         "Protocol finished",
+        //     );
+        // }
 
         // Fetch the final results (blocking)
         let mut host_results = self
@@ -645,15 +645,15 @@ impl ServerActor {
         // Check if there are more matches than we fetch
         // TODO: In the future we might want to dynamically allocate more memory here
         // and retry.
-        for i in 0..match_counters.len() {
-            if match_counters[i] > match_ids[i].len() {
-                tracing::warn!(
-                    "More matches than fetched (actual: {}, fetched: {}).",
-                    match_counters[i],
-                    match_ids[i].len()
-                );
-            }
-        }
+        // for i in 0..match_counters.len() {
+        //     if match_counters[i] > match_ids[i].len() {
+        //         tracing::warn!(
+        //             "More matches than fetched (actual: {}, fetched: {}).",
+        //             match_counters[i],
+        //             match_ids[i].len()
+        //         );
+        //     }
+        // }
 
         // Write back to in-memory db
         let previous_total_db_size = self.current_db_sizes.iter().sum::<usize>();
