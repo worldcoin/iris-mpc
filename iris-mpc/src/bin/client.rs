@@ -25,7 +25,7 @@ use tokio::{
 };
 use uuid::Uuid;
 
-const BATCH_SIZE: usize = 256;
+const BATCH_SIZE: usize = 64;
 const MAX_CONCURRENT_REQUESTS: usize = 32;
 const N_BATCHES: usize = 1;
 const N_QUERIES: usize = BATCH_SIZE * N_BATCHES;
