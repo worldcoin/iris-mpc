@@ -67,7 +67,7 @@ impl ServerActorHandle {
     }
 }
 
-const DB_CHUNK_SIZE: usize = 1 << 14;
+const DB_CHUNK_SIZE: usize = 1 << 13;
 const QUERIES: usize = ROTATIONS * MAX_BATCH_SIZE;
 
 pub struct ServerActor {
