@@ -22,7 +22,7 @@ pub fn sync(comm: &NcclComm, state: &SyncState) -> Result<SyncResult> {
 
 // Change these parameters together - see unittests below.
 /// Maximum number of requests in SyncState.
-pub const MAX_REQUESTS: usize = 512;
+pub const MAX_REQUESTS: usize = 1024;
 /// The fixed serialization size of SyncState.
 const SERIAL_SIZE: usize = 16384;
 
