@@ -18,10 +18,15 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde_json::to_string;
 use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
 use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::{spawn, sync::Mutex, time::sleep};
+use tokio::{
+    spawn,
+    sync::{Mutex, Semaphore},
+    time::sleep,
+};
 use uuid::Uuid;
 
-const BATCH_SIZE: usize = 32;
+const BATCH_SIZE: usize = 256;
+const MAX_CONCURRENT_REQUESTS: usize = 32;
 const N_BATCHES: usize = 1;
 const N_QUERIES: usize = BATCH_SIZE * N_BATCHES;
 const WAIT_AFTER_BATCH: Duration = Duration::from_secs(2);
@@ -201,6 +206,8 @@ async fn main() -> eyre::Result<()> {
     // Prepare query
     for batch_idx in 0..N_BATCHES {
         let mut handles = Vec::new();
+        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
+
         for batch_query_idx in 0..BATCH_SIZE {
             let shares_encryption_public_keys2 = shares_encryption_public_keys.clone();
             let requests_sns_client2 = requests_sns_client.clone();
@@ -211,8 +218,11 @@ async fn main() -> eyre::Result<()> {
             let request_topic_arn = request_topic_arn.clone();
             let requests_bucket_region = requests_bucket_region.clone();
             let requests_bucket_name = requests_bucket_name.clone();
+            let semaphore = Arc::clone(&semaphore);
 
             let handle = tokio::spawn(async move {
+                let _permit = semaphore.acquire().await.unwrap();
+
                 let mut rng = if let Some(rng_seed) = rng_seed {
                     StdRng::seed_from_u64(rng_seed)
                 } else {
