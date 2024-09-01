@@ -718,7 +718,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         let shares_encryption_key_pair = shares_encryption_key_pair.clone();
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
-        let mut next_batch = receive_batch(
+        let next_batch = receive_batch(
             party_id,
             &sqs_client,
             &config.requests_queue_url,
@@ -726,10 +726,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             &skip_request_ids,
             shares_encryption_key_pair.clone(),
         );
+        let batch = next_batch.await?;
+
         loop {
             let now = Instant::now();
 
-            let batch = next_batch.await?;
+            let batch = batch.clone();
 
             // Iterate over a list of tracing payloads, and create logs with mappings to
             // payloads Log at least a "start" event using a log with trace.id and
@@ -749,14 +751,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             let result_future = handle.submit_batch_query(batch);
 
-            next_batch = receive_batch(
-                party_id,
-                &sqs_client,
-                &config.requests_queue_url,
-                &store,
-                &skip_request_ids,
-                shares_encryption_key_pair.clone(),
-            );
+            // next_batch = receive_batch(
+            //     party_id,
+            //     &sqs_client,
+            //     &config.requests_queue_url,
+            //     &store,
+            //     &skip_request_ids,
+            //     shares_encryption_key_pair.clone(),
+            // );
 
             // await the result
             let result = timeout(processing_timeout, result_future.await)
