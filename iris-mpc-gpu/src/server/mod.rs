@@ -8,7 +8,7 @@ use iris_mpc_common::galois_engine::degree4::{
 };
 use tokio::sync::oneshot;
 
-pub const MAX_BATCH_SIZE: usize = 128;
+pub const MAX_BATCH_SIZE: usize = 512;
 pub const DB_BENCH_SIZE: usize = 1 << 23;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
