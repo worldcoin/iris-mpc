@@ -333,7 +333,6 @@ async fn initialize_iris_dbs(
 
     let mut left_codes_db: Vec<u16> = Vec::new();
     let mut left_masks_db: Vec<u16> = Vec::new();
-    let mut count_irises = 0;
     if config.init_db_with_random_shares {
         tracing::info!("Initialize persistent iris db with randomly generated shares");
         store
@@ -345,7 +344,7 @@ async fn initialize_iris_dbs(
         (left_codes_db, left_masks_db) = init_in_mem_db(party_id);
     }
 
-    count_irises = store.count_irises().await?;
+    let mut count_irises = store.count_irises().await?;
     tracing::info!("Initialize iris db: Counted {} entries in DB", count_irises);
     if !config.init_db_with_random_shares {
         count_irises += DB_SIZE;
