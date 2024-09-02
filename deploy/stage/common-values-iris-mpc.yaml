@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/gpu-iris-mpc:v0.3.3"
+image: "ghcr.io/worldcoin/gpu-iris-mpc:v0.4.1"
 
 environment: stage
 replicaCount: 1
@@ -22,6 +22,8 @@ livenessProbe:
 
 readinessProbe:
   initialDelaySeconds: 300
+  periodSeconds: 30
+  failureThreshold: 10
   httpGet:
     path: /health
     port: health
