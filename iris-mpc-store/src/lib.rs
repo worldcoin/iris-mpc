@@ -295,11 +295,14 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         rng_seed: u64,
         party_id: usize,
         db_size: usize,
-    ) -> eyre::Result<()> {
+        clear_db_before_init: bool,
+    ) -> Result<()> {
         let mut rng = StdRng::seed_from_u64(rng_seed);
 
-        // Cleaning up the db before inserting new generated irises
-        self.rollback(0).await?;
+        if clear_db_before_init {
+            // Cleaning up the db before inserting newly generated irises
+            self.rollback(0).await?;
+        }
 
         let mut tx = self.tx().await.unwrap();
 
@@ -504,7 +507,7 @@ mod tests {
 
         let expected_generated_irises_num = 10;
         store
-            .init_db_with_random_shares(0, 0, expected_generated_irises_num)
+            .init_db_with_random_shares(0, 0, expected_generated_irises_num, true)
             .await?;
 
         let generated_irises_count = store.count_irises().await?;
