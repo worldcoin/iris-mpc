@@ -229,7 +229,22 @@ async fn receive_batch(
                         iris_message_share.right_iris_mask_shares,
                     )?;
 
-                    Ok((left_code, left_mask, right_code, right_mask))
+                    // Preprocess shares for left eye.
+                    let left_future = spawn_blocking(move || {
+                        preprocess_iris_message_shares(left_code, left_mask)
+                    });
+
+                    // Preprocess shares for right eye.
+                    let right_future = spawn_blocking(move || {
+                        preprocess_iris_message_shares(right_code, right_mask)
+                    });
+
+                    let (left_result, right_result) = tokio::join!(left_future, right_future);
+
+                    Ok((
+                        left_result.context("while processing left iris shares")??,
+                        right_result.context("while processing right iris shares")??,
+                    ))
                 });
 
                 handles.push(handle);
@@ -240,7 +255,24 @@ async fn receive_batch(
     }
 
     for handle in handles {
-        let (left_code, left_mask, right_code, right_mask) = match handle.await? {
+        let (
+            (
+                store_iris_shares_left,
+                store_mask_shares_left,
+                db_iris_shares_left,
+                db_mask_shares_left,
+                iris_shares_left,
+                mask_shares_left,
+            ),
+            (
+                store_iris_shares_right,
+                store_mask_shares_right,
+                db_iris_shares_right,
+                db_mask_shares_right,
+                iris_shares_right,
+                mask_shares_right,
+            ),
+        ) = match handle.await? {
             Ok(res) => res,
             Err(e) => {
                 tracing::error!("Failed to process iris shares: {:?}", e);
@@ -249,34 +281,6 @@ async fn receive_batch(
                 eyre::bail!("Failed to process iris shares: {:?}", e);
             }
         };
-
-        // Preprocess shares for left eye.
-        let left_future =
-            spawn_blocking(move || preprocess_iris_message_shares(left_code, left_mask));
-
-        // Preprocess shares for right eye.
-        let right_future =
-            spawn_blocking(move || preprocess_iris_message_shares(right_code, right_mask));
-
-        let (left_result, right_result) = tokio::join!(left_future, right_future);
-
-        let (
-            store_iris_shares_left,
-            store_mask_shares_left,
-            db_iris_shares_left,
-            db_mask_shares_left,
-            iris_shares_left,
-            mask_shares_left,
-        ) = left_result.context("while processing left iris shares")??;
-
-        let (
-            store_iris_shares_right,
-            store_mask_shares_right,
-            db_iris_shares_right,
-            db_mask_shares_right,
-            iris_shares_right,
-            mask_shares_right,
-        ) = right_result.context("while processing right iris shares")??;
 
         batch_query.store_left.code.push(store_iris_shares_left);
         batch_query.store_left.mask.push(store_mask_shares_left);
