@@ -342,10 +342,10 @@ async fn initialize_iris_dbs(
     let count_irises = store.count_irises().await?;
     tracing::info!("Initialize iris db: Counted {} entries in DB", count_irises);
 
-    let mut left_codes_db: Vec<u16> = vec![(count_irises * IRIS_CODE_LENGTH) as u16];
-    let mut left_masks_db: Vec<u16> = vec![(count_irises * MASK_CODE_LENGTH) as u16];
-    let mut right_codes_db: Vec<u16> = vec![(count_irises * IRIS_CODE_LENGTH) as u16];
-    let mut right_masks_db: Vec<u16> = vec![(count_irises * MASK_CODE_LENGTH) as u16];
+    let mut left_codes_db: Vec<u16> = vec![0u16; count_irises * IRIS_CODE_LENGTH];
+    let mut left_masks_db: Vec<u16> = vec![0u16; count_irises * MASK_CODE_LENGTH];
+    let mut right_codes_db: Vec<u16> = vec![0u16; count_irises * IRIS_CODE_LENGTH];
+    let mut right_masks_db: Vec<u16> = vec![0u16; count_irises * MASK_CODE_LENGTH];
 
     let parallelism = config
         .database
