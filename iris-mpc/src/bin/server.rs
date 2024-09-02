@@ -333,6 +333,7 @@ async fn initialize_iris_dbs(
 
     let mut left_codes_db: Vec<u16> = Vec::new();
     let mut left_masks_db: Vec<u16> = Vec::new();
+    let mut count_irises = 0;
     if config.init_db_with_random_shares {
         tracing::info!("Initialize persistent iris db with randomly generated shares");
         store
@@ -343,11 +344,21 @@ async fn initialize_iris_dbs(
         tracing::info!("Initialize in memory iris db with randomly generated shares");
         (left_codes_db, left_masks_db) = init_in_mem_db(party_id);
     }
+
+    count_irises = store.count_irises().await?;
+    tracing::info!("Initialize iris db: Counted {} entries in DB", count_irises);
+    if !config.init_db_with_random_shares {
+        count_irises += DB_SIZE;
+        tracing::info!(
+            "Initialize iris db: Added {} entries from in in-memory DB",
+            count_irises
+        );
+    }
+
     let (mut right_codes_db, mut right_masks_db) = (left_codes_db.clone(), left_masks_db.clone());
     let fake_len_codes = left_codes_db.len();
     let fake_len_masks = left_masks_db.len();
 
-    let count_irises = store.count_irises().await?;
     left_codes_db.resize(fake_len_codes + count_irises * IRIS_CODE_LENGTH, 0);
     left_masks_db.resize(fake_len_masks + count_irises * MASK_CODE_LENGTH, 0);
     right_codes_db.resize(fake_len_codes + count_irises * IRIS_CODE_LENGTH, 0);
@@ -385,6 +396,10 @@ async fn initialize_iris_dbs(
             tracing::info!("Initialize iris db: Loaded {} entries from DB", store_len);
         }
     }
+    tracing::info!(
+        "Initialize iris db: Loaded {} entries from DB, done!",
+        store_len
+    );
 
     Ok((
         (left_codes_db, left_masks_db),
@@ -574,7 +589,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             device_manager,
             comms,
             8,
-            store_len + DB_SIZE, // TODO: remove DB_SIZE you removed fake data.
+            store_len,
             DB_BUFFER,
         ) {
             Ok((actor, handle)) => {
