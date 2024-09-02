@@ -65,8 +65,8 @@ env:
   - name: SMPC__PUBLIC_KEY_BASE_URL
     value: "https://d24uxaabh702ht.cloudfront.net"
 
-  - name: SMPC__INIT_DB_WITH_RANDOM_SHARES
+  - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
-    value: "10000"
+    value: "100000"

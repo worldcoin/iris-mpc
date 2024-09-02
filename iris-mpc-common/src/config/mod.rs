@@ -50,9 +50,6 @@ pub struct Config {
     pub public_key_base_url: String,
 
     #[serde(default)]
-    pub init_db_with_random_shares: bool,
-
-    #[serde(default)]
     pub clear_db_before_init: bool,
 
     #[serde(default)]
