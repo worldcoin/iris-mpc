@@ -37,6 +37,17 @@ impl DeviceManager {
         Self { devices }
     }
 
+    pub fn init_with_streams() -> Self {
+        let mut devices = vec![];
+        for i in 0..CudaDevice::count().unwrap() {
+            devices.push(CudaDevice::new_with_stream(i as usize).unwrap());
+        }
+
+        tracing::info!("Found {} devices", devices.len());
+
+        Self { devices }
+    }
+
     /// Splits the devices into n chunks, returning a device manager for each
     /// chunk.
     /// If too few devices are present, returns the original device manager.
