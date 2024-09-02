@@ -233,6 +233,7 @@ async fn e2e_test() -> Result<()> {
                 shared_mask.iter().map(|x| x.clone().into()).collect();
 
             // batch0
+            batch0.valid_entries.push(true);
             batch0.request_ids.push(request_id.to_string());
             // for storage
             batch0.store_left.code.push(shared_code[0].clone());
@@ -253,6 +254,7 @@ async fn e2e_test() -> Result<()> {
                 .extend(shared_mask[0].all_rotations());
 
             // batch 1
+            batch1.valid_entries.push(true);
             batch1.request_ids.push(request_id.to_string());
             // for storage
             batch1.store_left.code.push(shared_code[1].clone());
@@ -273,6 +275,7 @@ async fn e2e_test() -> Result<()> {
                 .extend(shared_mask[1].all_rotations());
 
             // batch 2
+            batch2.valid_entries.push(true);
             batch2.request_ids.push(request_id.to_string());
             // for storage
             batch2.store_left.code.push(shared_code[2].clone());

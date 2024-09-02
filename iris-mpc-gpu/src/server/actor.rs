@@ -70,36 +70,34 @@ impl ServerActorHandle {
 const DB_CHUNK_SIZE: usize = 512;
 const QUERIES: usize = ROTATIONS * MAX_BATCH_SIZE;
 pub struct ServerActor {
-    job_queue:                mpsc::Receiver<ServerJob>,
-    device_manager:           Arc<DeviceManager>,
-    party_id:                 usize,
+    job_queue:              mpsc::Receiver<ServerJob>,
+    device_manager:         Arc<DeviceManager>,
+    party_id:               usize,
     // engines
-    codes_engine:             ShareDB,
-    masks_engine:             ShareDB,
-    batch_codes_engine:       ShareDB,
-    batch_masks_engine:       ShareDB,
-    phase2:                   Circuits,
-    phase2_batch:             Circuits,
-    distance_comparator:      DistanceComparator,
-    comms:                    Vec<Arc<NcclComm>>,
+    codes_engine:           ShareDB,
+    masks_engine:           ShareDB,
+    batch_codes_engine:     ShareDB,
+    batch_masks_engine:     ShareDB,
+    phase2:                 Circuits,
+    phase2_batch:           Circuits,
+    distance_comparator:    DistanceComparator,
+    comms:                  Vec<Arc<NcclComm>>,
     // DB slices
-    left_code_db_slices:      SlicedProcessedDatabase,
-    left_mask_db_slices:      SlicedProcessedDatabase,
-    right_code_db_slices:     SlicedProcessedDatabase,
-    right_mask_db_slices:     SlicedProcessedDatabase,
-    streams:                  Vec<Vec<CudaStream>>,
-    cublas_handles:           Vec<Vec<CudaBlas>>,
-    results:                  Vec<CudaSlice<u32>>,
-    batch_results:            Vec<CudaSlice<u32>>,
-    final_results:            Vec<CudaSlice<u32>>,
-    db_match_list_left:       Vec<CudaSlice<u64>>,
-    db_match_list_right:      Vec<CudaSlice<u64>>,
-    batch_match_list_left:    Vec<CudaSlice<u64>>,
-    batch_match_list_right:   Vec<CudaSlice<u64>>,
-    query_filter_buffer:      CudaSlice<u8>,
-    query_filter_buffer_self: CudaSlice<u8>,
-    current_db_sizes:         Vec<usize>,
-    query_db_size:            Vec<usize>,
+    left_code_db_slices:    SlicedProcessedDatabase,
+    left_mask_db_slices:    SlicedProcessedDatabase,
+    right_code_db_slices:   SlicedProcessedDatabase,
+    right_mask_db_slices:   SlicedProcessedDatabase,
+    streams:                Vec<Vec<CudaStream>>,
+    cublas_handles:         Vec<Vec<CudaBlas>>,
+    results:                Vec<CudaSlice<u32>>,
+    batch_results:          Vec<CudaSlice<u32>>,
+    final_results:          Vec<CudaSlice<u32>>,
+    db_match_list_left:     Vec<CudaSlice<u64>>,
+    db_match_list_right:    Vec<CudaSlice<u64>>,
+    batch_match_list_left:  Vec<CudaSlice<u64>>,
+    batch_match_list_right: Vec<CudaSlice<u64>>,
+    current_db_sizes:       Vec<usize>,
+    query_db_size:          Vec<usize>,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -340,9 +338,6 @@ impl ServerActor {
 
         let query_db_size = vec![QUERIES; device_manager.device_count()];
 
-        let query_filter_buffer_self = device_manager.device(0).alloc_zeros(QUERIES * 3).unwrap();
-        let query_filter_buffer = device_manager.device(0).alloc_zeros(QUERIES).unwrap();
-
         for dev in device_manager.devices() {
             dev.synchronize().unwrap();
         }
@@ -372,8 +367,6 @@ impl ServerActor {
             query_db_size,
             db_match_list_left,
             db_match_list_right,
-            query_filter_buffer,
-            query_filter_buffer_self,
             batch_match_list_left,
             batch_match_list_right,
         })
@@ -605,19 +598,6 @@ impl ServerActor {
         let mut merged_results =
             get_merged_results(&host_results, self.device_manager.device_count());
 
-        // TODO: remove queries that are not valid
-        self.device_manager
-            .device(0)
-            .htod_copy_into(
-                batch
-                    .valid_entries
-                    .iter()
-                    .map(|&x| x as u8)
-                    .collect::<Vec<_>>(),
-                &mut self.query_filter_buffer,
-            )
-            .unwrap();
-
         // List the indices of the queries that did not match.
         let insertion_list = merged_results
             .iter()
@@ -634,7 +614,12 @@ impl ServerActor {
             &mut merged_results,
             &insertion_list,
             &self.current_db_sizes,
+            batch_size,
         );
+
+        // Sync match results: tell the other nodes about the local results and which
+        // ones should be ignored. Also perform a sanity check.
+        let matches = self.sync_batch_results(&batch.valid_entries, &matches)?;
 
         // Fetch and truncate the match counters
         let match_counters_devices = self
@@ -1119,34 +1104,56 @@ impl ServerActor {
         }
     }
 
-    fn sync_batch_results(&mut self, batch: &BatchQuery) -> eyre::Result<()> {
-        self.device_manager
-            .device(0)
-            .htod_copy_into(
-                batch
-                    .valid_entries
-                    .iter()
-                    .map(|&x| x as u8)
-                    .collect::<Vec<_>>(),
-                &mut self.query_filter_buffer_self,
-            )
-            .unwrap();
+    fn sync_batch_results(
+        &mut self,
+        valid_entries: &[bool],
+        matches: &[bool],
+    ) -> eyre::Result<Vec<bool>> {
+        assert!(
+            valid_entries.len() == matches.len(),
+            "Mismatch in valid entries and matches"
+        );
 
-        self.comms[0]
-            .all_gather(
-                &self.query_filter_buffer_self,
-                &mut self.query_filter_buffer,
-            )
-            .map_err(|e| eyre!(format!("{:?}", e)))?;
+        let encoded = valid_entries
+            .iter()
+            .zip(matches.iter())
+            .map(|(&v, &m)| if v { m as u8 } else { u8::MAX })
+            .collect::<Vec<_>>();
 
-        let host_results = self
+        let mut buffer = self
             .device_manager
             .device(0)
-            .dtoh_sync_copy(&self.query_filter_buffer)?;
+            .alloc_zeros(encoded.len() * self.comms[0].world_size())
+            .unwrap();
 
-        let xx = host_results.chunks(3).collect::<Vec<_>>();
+        let buffer_self = self.device_manager.device(0).htod_copy(encoded)?;
 
-        Ok(())
+        self.comms[0]
+            .all_gather(&buffer_self, &mut buffer)
+            .map_err(|e| eyre!(format!("{:?}", e)))?;
+
+        let results = self.device_manager.device(0).dtoh_sync_copy(&buffer)?;
+        let results: Vec<_> = results
+            .chunks_exact(results.len() / self.comms[0].world_size())
+            .collect();
+
+        println!("{:?}", results);
+
+        let mut valid_merged = vec![];
+        for i in 0..results[0].len() {
+            // Filter out results that are invalid on at least one node
+            let is_valid = [results[0], results[1], results[2]]
+                .iter()
+                .all(|x| x[i] != u8::MAX);
+            valid_merged.push(!is_valid || matches[i]);
+
+            // If the results are not valid, they should all be the same
+            if is_valid && (results[0][i] != results[1][i] || results[1][i] != results[2][i]) {
+                eyre::bail!("Mismatch in results across nodes.");
+            }
+        }
+
+        Ok(valid_merged)
     }
 }
 
@@ -1298,8 +1305,9 @@ fn calculate_insertion_indices(
     merged_results: &mut [u32],
     insertion_list: &[Vec<usize>],
     db_sizes: &[usize],
+    batch_size: usize,
 ) -> Vec<bool> {
-    let mut matches = vec![true; MAX_BATCH_SIZE];
+    let mut matches = vec![true; batch_size];
     let mut last_db_index = db_sizes.iter().sum::<usize>() as u32;
     let (mut min_index, mut min_index_val) = (0, usize::MAX);
     for (i, list) in insertion_list.iter().enumerate() {
