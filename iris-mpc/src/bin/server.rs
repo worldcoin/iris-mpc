@@ -21,7 +21,6 @@ use iris_mpc_common::{
     IrisCodeDb, IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use iris_mpc_gpu::{
-    dot::ROTATIONS,
     helpers::device_manager::DeviceManager,
     server::{
         heartbeat_nccl::start_heartbeat, sync_nccl, BatchMetadata, BatchQuery, ServerActor,
