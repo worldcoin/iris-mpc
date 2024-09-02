@@ -25,14 +25,15 @@ pub struct BatchMetadata {
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BatchQuery {
-    pub request_ids: Vec<String>,
-    pub metadata:    Vec<BatchMetadata>,
-    pub query_left:  BatchQueryEntries,
-    pub db_left:     BatchQueryEntries,
-    pub store_left:  BatchQueryEntries,
-    pub query_right: BatchQueryEntries,
-    pub db_right:    BatchQueryEntries,
-    pub store_right: BatchQueryEntries,
+    pub request_ids:   Vec<String>,
+    pub metadata:      Vec<BatchMetadata>,
+    pub query_left:    BatchQueryEntries,
+    pub db_left:       BatchQueryEntries,
+    pub store_left:    BatchQueryEntries,
+    pub query_right:   BatchQueryEntries,
+    pub db_right:      BatchQueryEntries,
+    pub store_right:   BatchQueryEntries,
+    pub valid_entries: Vec<bool>,
 }
 
 #[derive(Debug)]

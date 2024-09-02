@@ -21,6 +21,7 @@ use cudarc::{
         CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceSlice,
     },
 };
+use eyre::eyre;
 use futures::{Future, FutureExt};
 use iris_mpc_common::IrisCodeDbSlice;
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
@@ -69,33 +70,36 @@ impl ServerActorHandle {
 const DB_CHUNK_SIZE: usize = 512;
 const QUERIES: usize = ROTATIONS * MAX_BATCH_SIZE;
 pub struct ServerActor {
-    job_queue:              mpsc::Receiver<ServerJob>,
-    device_manager:         Arc<DeviceManager>,
-    party_id:               usize,
+    job_queue:                mpsc::Receiver<ServerJob>,
+    device_manager:           Arc<DeviceManager>,
+    party_id:                 usize,
     // engines
-    codes_engine:           ShareDB,
-    masks_engine:           ShareDB,
-    batch_codes_engine:     ShareDB,
-    batch_masks_engine:     ShareDB,
-    phase2:                 Circuits,
-    phase2_batch:           Circuits,
-    distance_comparator:    DistanceComparator,
+    codes_engine:             ShareDB,
+    masks_engine:             ShareDB,
+    batch_codes_engine:       ShareDB,
+    batch_masks_engine:       ShareDB,
+    phase2:                   Circuits,
+    phase2_batch:             Circuits,
+    distance_comparator:      DistanceComparator,
+    comms:                    Vec<Arc<NcclComm>>,
     // DB slices
-    left_code_db_slices:    SlicedProcessedDatabase,
-    left_mask_db_slices:    SlicedProcessedDatabase,
-    right_code_db_slices:   SlicedProcessedDatabase,
-    right_mask_db_slices:   SlicedProcessedDatabase,
-    streams:                Vec<Vec<CudaStream>>,
-    cublas_handles:         Vec<Vec<CudaBlas>>,
-    results:                Vec<CudaSlice<u32>>,
-    batch_results:          Vec<CudaSlice<u32>>,
-    final_results:          Vec<CudaSlice<u32>>,
-    db_match_list_left:     Vec<CudaSlice<u64>>,
-    db_match_list_right:    Vec<CudaSlice<u64>>,
-    batch_match_list_left:  Vec<CudaSlice<u64>>,
-    batch_match_list_right: Vec<CudaSlice<u64>>,
-    current_db_sizes:       Vec<usize>,
-    query_db_size:          Vec<usize>,
+    left_code_db_slices:      SlicedProcessedDatabase,
+    left_mask_db_slices:      SlicedProcessedDatabase,
+    right_code_db_slices:     SlicedProcessedDatabase,
+    right_mask_db_slices:     SlicedProcessedDatabase,
+    streams:                  Vec<Vec<CudaStream>>,
+    cublas_handles:           Vec<Vec<CudaBlas>>,
+    results:                  Vec<CudaSlice<u32>>,
+    batch_results:            Vec<CudaSlice<u32>>,
+    final_results:            Vec<CudaSlice<u32>>,
+    db_match_list_left:       Vec<CudaSlice<u64>>,
+    db_match_list_right:      Vec<CudaSlice<u64>>,
+    batch_match_list_left:    Vec<CudaSlice<u64>>,
+    batch_match_list_right:   Vec<CudaSlice<u64>>,
+    query_filter_buffer:      CudaSlice<u8>,
+    query_filter_buffer_self: CudaSlice<u8>,
+    current_db_sizes:         Vec<usize>,
+    query_db_size:            Vec<usize>,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -310,7 +314,7 @@ impl ServerActor {
             phase2_chunk_size / 64,
             next_chacha_seeds(chacha_seeds)?,
             device_manager.clone(),
-            comms,
+            comms.clone(),
         );
 
         let distance_comparator = DistanceComparator::init(QUERIES, device_manager.clone());
@@ -336,6 +340,9 @@ impl ServerActor {
 
         let query_db_size = vec![QUERIES; device_manager.device_count()];
 
+        let query_filter_buffer_self = device_manager.device(0).alloc_zeros(QUERIES * 3).unwrap();
+        let query_filter_buffer = device_manager.device(0).alloc_zeros(QUERIES).unwrap();
+
         for dev in device_manager.devices() {
             dev.synchronize().unwrap();
         }
@@ -351,6 +358,7 @@ impl ServerActor {
             distance_comparator,
             batch_codes_engine,
             batch_masks_engine,
+            comms,
             left_code_db_slices,
             left_mask_db_slices,
             right_code_db_slices,
@@ -364,6 +372,8 @@ impl ServerActor {
             query_db_size,
             db_match_list_left,
             db_match_list_right,
+            query_filter_buffer,
+            query_filter_buffer_self,
             batch_match_list_left,
             batch_match_list_right,
         })
@@ -594,6 +604,19 @@ impl ServerActor {
         // Format: merged_results[query_index]
         let mut merged_results =
             get_merged_results(&host_results, self.device_manager.device_count());
+
+        // TODO: remove queries that are not valid
+        self.device_manager
+            .device(0)
+            .htod_copy_into(
+                batch
+                    .valid_entries
+                    .iter()
+                    .map(|&x| x as u8)
+                    .collect::<Vec<_>>(),
+                &mut self.query_filter_buffer,
+            )
+            .unwrap();
 
         // List the indices of the queries that did not match.
         let insertion_list = merged_results
@@ -1094,6 +1117,36 @@ impl ServerActor {
         for dst in &[&self.results, &self.batch_results, &self.final_results] {
             reset_slice(self.device_manager.devices(), dst, 0xff, &self.streams[0]);
         }
+    }
+
+    fn sync_batch_results(&mut self, batch: &BatchQuery) -> eyre::Result<()> {
+        self.device_manager
+            .device(0)
+            .htod_copy_into(
+                batch
+                    .valid_entries
+                    .iter()
+                    .map(|&x| x as u8)
+                    .collect::<Vec<_>>(),
+                &mut self.query_filter_buffer_self,
+            )
+            .unwrap();
+
+        self.comms[0]
+            .all_gather(
+                &self.query_filter_buffer_self,
+                &mut self.query_filter_buffer,
+            )
+            .map_err(|e| eyre!(format!("{:?}", e)))?;
+
+        let host_results = self
+            .device_manager
+            .device(0)
+            .dtoh_sync_copy(&self.query_filter_buffer)?;
+
+        let xx = host_results.chunks(3).collect::<Vec<_>>();
+
+        Ok(())
     }
 }
 

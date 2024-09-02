@@ -283,6 +283,15 @@ pub mod degree4 {
         pub coefs: [u16; MASK_CODE_LENGTH],
     }
 
+    impl Default for GaloisRingTrimmedMaskCodeShare {
+        fn default() -> Self {
+            GaloisRingTrimmedMaskCodeShare {
+                id:    0,
+                coefs: [0u16; MASK_CODE_LENGTH],
+            }
+        }
+    }
+
     impl From<GaloisRingIrisCodeShare> for GaloisRingTrimmedMaskCodeShare {
         fn from(iris_share: GaloisRingIrisCodeShare) -> Self {
             let mut coefs = [0; MASK_CODE_LENGTH];
@@ -317,6 +326,15 @@ pub mod degree4 {
         pub id:    usize,
         #[serde(with = "BigArray")]
         pub coefs: [u16; IRIS_CODE_LENGTH],
+    }
+
+    impl Default for GaloisRingIrisCodeShare {
+        fn default() -> Self {
+            GaloisRingIrisCodeShare {
+                id:    0,
+                coefs: [0u16; IRIS_CODE_LENGTH],
+            }
+        }
     }
 
     impl GaloisRingIrisCodeShare {
