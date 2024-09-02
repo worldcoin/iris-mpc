@@ -75,10 +75,8 @@ async fn main() -> eyre::Result<()> {
     let shared_config = aws_config::from_env().region(region_provider).load().await;
 
     let bucket_key_name = format!("{}-{}", PUBLIC_KEY_S3_KEY_NAME_PREFIX, args.node_id);
-    let private_key_secret_id: String = format!(
-        "{}/iris-mpc/ecdh-private-key-{}",
-        args.env, args.node_id
-    );
+    let private_key_secret_id: String =
+        format!("{}/iris-mpc/ecdh-private-key-{}", args.env, args.node_id);
 
     match args.command {
         Commands::Rotate {
