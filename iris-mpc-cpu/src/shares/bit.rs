@@ -1,4 +1,4 @@
-use crate::error::Error;
+use eyre::{eyre, Error};
 use num_traits::{
     AsPrimitive, One, WrappingAdd, WrappingMul, WrappingNeg, WrappingShl, WrappingShr, WrappingSub,
     Zero,
@@ -63,7 +63,7 @@ impl TryFrom<u8> for Bit {
         match value {
             0 => Ok(Bit(0)),
             1 => Ok(Bit(1)),
-            _ => Err(Error::Conversion),
+            _ => Err(eyre!("Conversion Error Bit From u8")),
         }
     }
 }
@@ -75,7 +75,7 @@ impl TryFrom<usize> for Bit {
         match value {
             0 => Ok(Bit(0)),
             1 => Ok(Bit(1)),
-            _ => Err(Error::Conversion),
+            _ => Err(eyre!("Conversion error Bit from usize")),
         }
     }
 }

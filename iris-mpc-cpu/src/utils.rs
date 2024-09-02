@@ -1,9 +1,9 @@
 use crate::{
-    error::Error,
     networks::network_trait::NetworkTrait,
     shares::{int_ring::IntRing2k, ring_impl::RingElement, vecshare::RingBytesIter},
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use eyre::{eyre, Error, Result};
 use std::io;
 
 pub struct Utils {}
@@ -20,7 +20,7 @@ impl Utils {
         n: usize,
     ) -> Result<RingBytesIter<T>, Error> {
         if bytes.remaining() != n * T::BYTES {
-            return Err(Error::InvalidSize);
+            return Err(eyre!("InvalidSize"));
         }
 
         Ok(RingBytesIter::new(bytes))
@@ -34,7 +34,7 @@ impl Utils {
 
     pub fn ring_from_bytes<T: IntRing2k>(value: BytesMut) -> Result<RingElement<T>, Error> {
         if value.remaining() != T::BYTES {
-            return Err(Error::InvalidSize);
+            return Err(eyre!("InvalidSize"));
         }
         let slice = value.as_ref();
         let slice_: &T = bytemuck::from_bytes(slice);

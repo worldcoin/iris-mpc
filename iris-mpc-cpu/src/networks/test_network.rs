@@ -1,6 +1,6 @@
 use super::network_trait::{NetworkEstablisher, NetworkTrait};
-use crate::error::Error;
 use bytes::{Bytes, BytesMut};
+use eyre::{eyre, Error};
 use iris_mpc_common::id::PartyID;
 use std::{
     collections::VecDeque,
@@ -127,7 +127,7 @@ impl NetworkEstablisher<PartyTestNetwork> for TestNetworkEstablisher {
     async fn open_channel(&mut self) -> Result<PartyTestNetwork, Error> {
         self.test_network
             .pop_front()
-            .ok_or(Error::Other("test config error".to_owned()))
+            .ok_or(eyre!("test config error".to_owned()))
     }
 
     async fn shutdown(self) -> Result<(), Error> {

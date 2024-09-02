@@ -1,6 +1,5 @@
 use super::iris_worker::IrisWorker;
 use crate::{
-    error::Error,
     networks::network_trait::NetworkTrait,
     shares::{
         ring_impl::RingElement,
@@ -9,6 +8,7 @@ use crate::{
     },
     utils::Utils,
 };
+use eyre::{eyre, Error};
 use iris_mpc_common::{
     galois_engine::degree4::GaloisRingIrisCodeShare, iris_db::iris::IrisCodeArray,
 };
@@ -20,7 +20,7 @@ impl<N: NetworkTrait> IrisWorker<N> {
         b: SliceShare<'_, u16>,
     ) -> Result<Share<u16>, Error> {
         if a.len() != IrisCodeArray::IRIS_CODE_SIZE || b.len() != IrisCodeArray::IRIS_CODE_SIZE {
-            return Err(Error::InvalidSize);
+            return Err(eyre!("Error::InvalidSize"));
         }
 
         let mut rand = self.prf.gen_zero_share();
@@ -45,7 +45,7 @@ impl<N: NetworkTrait> IrisWorker<N> {
         b: SliceShare<'_, u16>,
     ) -> Result<Share<u16>, Error> {
         if a.len() != IrisCodeArray::IRIS_CODE_SIZE || b.len() != IrisCodeArray::IRIS_CODE_SIZE {
-            return Err(Error::InvalidSize);
+            return Err(eyre!("Error::InvalidSize"));
         }
 
         let mut rand = self.prf.gen_zero_share();
@@ -70,7 +70,7 @@ impl<N: NetworkTrait> IrisWorker<N> {
     ) -> Result<VecShare<u16>, Error> {
         let len = b.len();
         if a.len() != IrisCodeArray::IRIS_CODE_SIZE {
-            return Err(Error::InvalidSize);
+            return Err(eyre!("Error::InvalidSize"));
         }
 
         let mut shares_a = Vec::with_capacity(len);
@@ -78,7 +78,7 @@ impl<N: NetworkTrait> IrisWorker<N> {
         for b_ in b.iter() {
             let mut rand = self.prf.gen_zero_share();
             if a.len() != b_.len() {
-                return Err(Error::InvalidSize);
+                return Err(eyre!("Error::InvalidSize"));
             }
             for (a__, b__) in a.iter().zip(b_.iter()) {
                 rand += a__ * b__;

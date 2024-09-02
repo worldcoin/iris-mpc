@@ -1,6 +1,5 @@
 use super::iris_worker::IrisWorker;
 use crate::{
-    error::Error,
     networks::network_trait::NetworkTrait,
     protocol::iris_worker::{A, A_BITS, B_BITS},
     shares::{
@@ -12,6 +11,7 @@ use crate::{
     },
     utils::Utils,
 };
+use eyre::{eyre, Error};
 use iris_mpc_common::id::PartyID;
 use num_traits::{One, Zero};
 use rand::{distributions::Standard, prelude::Distribution, Rng};
@@ -71,7 +71,7 @@ impl<N: NetworkTrait> IrisWorker<N> {
         Standard: Distribution<T>,
     {
         if a.len() != b.len() {
-            return Err(Error::InvalidSize);
+            return Err(eyre!("InvalidSize in and_many_send"));
         }
 
         let mut shares_a = Vec::with_capacity(a.len());

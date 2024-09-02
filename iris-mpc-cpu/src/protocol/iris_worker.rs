@@ -1,6 +1,5 @@
 use super::prf::{Prf, PrfSeed};
 use crate::{
-    error::Error,
     networks::network_trait::NetworkTrait,
     shares::{
         bit::Bit,
@@ -12,6 +11,7 @@ use crate::{
     utils::Utils,
 };
 use bytes::{Buf, Bytes, BytesMut};
+use eyre::{eyre, Error, Result};
 use iris_mpc_common::{
     galois_engine::degree4::GaloisRingIrisCodeShare, id::PartyID, iris_db::iris::IrisCodeArray,
 };
@@ -61,7 +61,7 @@ impl<N: NetworkTrait> IrisWorker<N> {
 
     pub(crate) fn bytes_to_seed(mut bytes: BytesMut) -> Result<PrfSeed, Error> {
         if bytes.len() != std::mem::size_of::<PrfSeed>() {
-            Err(Error::InvalidMessageSize)
+            Err(eyre!("InvalidMessageSize"))
         } else {
             let mut their_seed: PrfSeed = PrfSeed::default();
             bytes.copy_to_slice(&mut their_seed);
@@ -147,7 +147,7 @@ impl<N: NetworkTrait> IrisWorker<N> {
     ) -> Result<VecShare<u64>, Error> {
         let amount = b.len();
         if (amount != mask_b.len()) || (amount == 0) {
-            return Err(Error::InvalidSize);
+            return Err(eyre!("InvalidSize"));
         }
 
         let masks = mask_b
@@ -176,7 +176,7 @@ impl<N: NetworkTrait> IrisWorker<N> {
     ) -> Result<Share<Bit>, Error> {
         let amount = b.len();
         if (amount != mask_b.len()) || (amount == 0) {
-            return Err(Error::InvalidSize);
+            return Err(eyre!("InvalidSize"));
         }
 
         let code_dots = self.rep3_dot(a, b)?;
@@ -196,7 +196,7 @@ impl<N: NetworkTrait> IrisWorker<N> {
     ) -> Result<VecShare<u64>, Error> {
         let amount = b.len();
         if (amount != mask_b.len()) || (amount == 0) {
-            return Err(Error::InvalidSize);
+            return Err(eyre!("InvalidSize"));
         }
 
         let code_dots = self.rep3_dot_many(a, b)?;
@@ -241,7 +241,7 @@ impl<N: NetworkTrait> IrisWorker<N> {
     ) -> Result<VecShare<u64>, Error> {
         let amount = b.len();
         if (amount != mask_b.len()) || (amount == 0) {
-            return Err(Error::InvalidSize);
+            return Err(eyre!("InvalidSize"));
         }
 
         // We have to add the lagrange coefficient here
@@ -299,7 +299,7 @@ impl<N: NetworkTrait> IrisWorker<N> {
     ) -> Result<VecShare<u64>, Error> {
         let amount = b.len();
         if (amount != mask_b.len()) || (amount == 0) {
-            return Err(Error::InvalidSize);
+            return Err(eyre!("InvalidSize"));
         }
 
         // We have to add the lagrange coefficient here

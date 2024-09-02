@@ -1,7 +1,6 @@
-use crate::error::Error;
 use bytes::{Bytes, BytesMut};
+use eyre::{Error, Result};
 use iris_mpc_common::id::PartyID;
-
 pub type IoError = std::io::Error;
 
 #[allow(async_fn_in_trait)]
