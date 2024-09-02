@@ -330,7 +330,12 @@ async fn initialize_iris_dbs(
 
     tracing::info!("Initialize persistent iris db with randomly generated shares");
     store
-        .init_db_with_random_shares(RNG_SEED, party_id, config.init_db_size, config.clear_db_before_init)
+        .init_db_with_random_shares(
+            RNG_SEED,
+            party_id,
+            config.init_db_size,
+            config.clear_db_before_init,
+        )
         .await
         .expect("failed to initialise db");
 
