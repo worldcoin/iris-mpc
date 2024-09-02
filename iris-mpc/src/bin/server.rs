@@ -123,8 +123,9 @@ async fn receive_batch(
 
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
     let mut handles = vec![];
+    let mut msg_counter = 0;
 
-    while batch_query.db_left.code.len() < *CURRENT_BATCH_SIZE.lock().unwrap() * ROTATIONS {
+    while msg_counter < *CURRENT_BATCH_SIZE.lock().unwrap() * ROTATIONS {
         let rcv_message_output = client
             .receive_message()
             .max_number_of_messages(1)
@@ -135,6 +136,7 @@ async fn receive_batch(
 
         if let Some(messages) = rcv_message_output.messages {
             for sqs_message in messages {
+                msg_counter += 1;
                 let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
                     .context("while trying to parse SQSMessage")?;
