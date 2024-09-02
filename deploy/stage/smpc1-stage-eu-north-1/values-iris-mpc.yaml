@@ -68,7 +68,7 @@ env:
   - name: SMPC__PUBLIC_KEY_BASE_URL
     value: "https://d2my9d2y2jkpfn.cloudfront.net"
 
-  - name: SMPC_CLEAR_DB_BEFORE_INIT
+  - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
