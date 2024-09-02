@@ -191,8 +191,7 @@ async fn download_private_key_from_asm(
     node_id: &str,
     version_stage: &str,
 ) -> Result<String, SharesDecodingError> {
-    let private_key_secret_id: String =
-        format!("{}/gpu-iris-mpc/ecdh-private-key-{}", env, node_id);
+    let private_key_secret_id: String = format!("{}/iris-mpc/ecdh-private-key-{}", env, node_id);
     match client
         .get_secret_value()
         .secret_id(private_key_secret_id)
