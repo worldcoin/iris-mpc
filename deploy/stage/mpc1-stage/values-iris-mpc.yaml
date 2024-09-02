@@ -69,4 +69,4 @@ env:
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
-    value: "100000"
+    value: "10000"
