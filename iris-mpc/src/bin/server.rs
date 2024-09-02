@@ -41,7 +41,7 @@ use telemetry_batteries::{
     tracing::{datadog::DatadogBattery, TracingShutdownHandle},
 };
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::{mpsc, oneshot, Semaphore},
     task::spawn_blocking,
     time::timeout,
 };
@@ -56,13 +56,28 @@ const SYNC_QUERIES: usize = MAX_BATCH_SIZE * 2;
 const_assert!(SYNC_QUERIES <= sync_nccl::MAX_REQUESTS);
 const MAX_ROLLBACK: usize = MAX_BATCH_SIZE * 2;
 const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
+const MAX_CONCURRENT_REQUESTS: usize = 32;
 
 static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(MAX_BATCH_SIZE));
 
+fn decode_iris_message_shares(
+    code_share: String,
+    mask_share: String,
+) -> eyre::Result<(GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare)> {
+    let iris_share = GaloisRingIrisCodeShare::from_base64(&code_share)
+        .context("Failed to base64 parse iris code")?;
+    let mask_share: GaloisRingTrimmedMaskCodeShare =
+        GaloisRingIrisCodeShare::from_base64(&mask_share)
+            .context("Failed to base64 parse iris mask")?
+            .into();
+
+    Ok((iris_share, mask_share))
+}
+
 #[allow(clippy::type_complexity)]
 fn preprocess_iris_message_shares(
-    code_shares: String,
-    mask_shares: String,
+    code_share: GaloisRingIrisCodeShare,
+    mask_share: GaloisRingTrimmedMaskCodeShare,
 ) -> eyre::Result<(
     GaloisRingIrisCodeShare,
     GaloisRingTrimmedMaskCodeShare,
@@ -71,23 +86,19 @@ fn preprocess_iris_message_shares(
     Vec<GaloisRingIrisCodeShare>,
     Vec<GaloisRingTrimmedMaskCodeShare>,
 )> {
-    let mut iris_share = GaloisRingIrisCodeShare::from_base64(&code_shares)
-        .context("Failed to base64 parse iris code")?;
-    let mut mask_share: GaloisRingTrimmedMaskCodeShare =
-        GaloisRingIrisCodeShare::from_base64(&mask_shares)
-            .context("Failed to base64 parse iris mask")?
-            .into();
+    let mut code_share = code_share;
+    let mut mask_share = mask_share;
 
     // Original for storage.
-    let store_iris_shares = iris_share.clone();
+    let store_iris_shares = code_share.clone();
     let store_mask_shares = mask_share.clone();
 
     // With rotations for in-memory database.
-    let db_iris_shares = iris_share.all_rotations();
+    let db_iris_shares = code_share.all_rotations();
     let db_mask_shares = mask_share.all_rotations();
 
     // With Lagrange interpolation.
-    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut iris_share);
+    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_share);
     GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share);
 
     Ok((
@@ -95,7 +106,7 @@ fn preprocess_iris_message_shares(
         store_mask_shares,
         db_iris_shares,
         db_mask_shares,
-        iris_share.all_rotations(),
+        code_share.all_rotations(),
         mask_share.all_rotations(),
     ))
 }
@@ -109,6 +120,9 @@ async fn receive_batch(
     shares_encryption_key_pairs: SharesEncryptionKeyPairs,
 ) -> eyre::Result<BatchQuery> {
     let mut batch_query = BatchQuery::default();
+
+    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
+    let mut handles = vec![];
 
     while batch_query.db_left.code.len() < *CURRENT_BATCH_SIZE.lock().unwrap() * ROTATIONS {
         let rcv_message_output = client
@@ -172,87 +186,110 @@ async fn receive_batch(
                 batch_query.request_ids.push(smpc_request.signup_id.clone());
                 batch_query.metadata.push(batch_metadata);
 
-                let base_64_encoded_message_payload =
-                    match smpc_request.get_iris_data_by_party_id(party_id).await {
-                        Ok(iris_message_share) => iris_message_share,
+                let semaphore = Arc::clone(&semaphore);
+                let handle = tokio::spawn(async move {
+                    let _ = semaphore.acquire().await?;
+
+                    let base_64_encoded_message_payload =
+                        match smpc_request.get_iris_data_by_party_id(party_id).await {
+                            Ok(iris_message_share) => iris_message_share,
+                            Err(e) => {
+                                tracing::error!("Failed to get iris shares: {:?}", e);
+                                eyre::bail!("Failed to get iris shares: {:?}", e);
+                            }
+                        };
+
+                    let iris_message_share = match smpc_request.decrypt_iris_share(
+                        base_64_encoded_message_payload,
+                        shares_encryption_key_pairs.clone(),
+                    ) {
+                        Ok(iris_data) => iris_data,
                         Err(e) => {
-                            tracing::error!("Failed to get iris shares: {:?}", e);
-                            continue;
+                            tracing::error!("Failed to decrypt iris shares: {:?}", e);
+                            eyre::bail!("Failed to decrypt iris shares: {:?}", e);
                         }
                     };
 
-                let iris_message_share = match smpc_request.decrypt_iris_share(
-                    base_64_encoded_message_payload,
-                    shares_encryption_key_pairs.clone(),
-                ) {
-                    Ok(iris_data) => iris_data,
-                    Err(e) => {
-                        tracing::error!("Failed to decrypt iris shares: {:?}", e);
-                        continue;
+                    match smpc_request.validate_iris_share(party_id, iris_message_share.clone()) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::error!("Failed to validate iris shares: {:?}", e);
+                            eyre::bail!("Failed to validate iris shares: {:?}", e);
+                        }
                     }
-                };
 
-                match smpc_request.validate_iris_share(party_id, iris_message_share.clone()) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        tracing::error!("Failed to validate iris shares: {:?}", e);
-                        continue;
-                    }
-                }
-
-                // Preprocess shares for left eye.
-                let left_future = spawn_blocking(move || {
-                    preprocess_iris_message_shares(
+                    let (left_code, left_mask) = decode_iris_message_shares(
                         iris_message_share.left_iris_code_shares,
                         iris_message_share.left_iris_mask_shares,
-                    )
-                });
+                    )?;
 
-                // Preprocess shares for right eye.
-                let right_future = spawn_blocking(move || {
-                    preprocess_iris_message_shares(
+                    let (right_code, right_mask) = decode_iris_message_shares(
                         iris_message_share.right_iris_code_shares,
                         iris_message_share.right_iris_mask_shares,
-                    )
+                    )?;
+
+                    Ok((left_code, left_mask, right_code, right_mask))
                 });
 
-                let (left_result, right_result) = tokio::join!(left_future, right_future);
-
-                let (
-                    store_iris_shares_left,
-                    store_mask_shares_left,
-                    db_iris_shares_left,
-                    db_mask_shares_left,
-                    iris_shares_left,
-                    mask_shares_left,
-                ) = left_result.context("while processing left iris shares")??;
-
-                let (
-                    store_iris_shares_right,
-                    store_mask_shares_right,
-                    db_iris_shares_right,
-                    db_mask_shares_right,
-                    iris_shares_right,
-                    mask_shares_right,
-                ) = right_result.context("while processing right iris shares")??;
-
-                batch_query.store_left.code.push(store_iris_shares_left);
-                batch_query.store_left.mask.push(store_mask_shares_left);
-                batch_query.db_left.code.extend(db_iris_shares_left);
-                batch_query.db_left.mask.extend(db_mask_shares_left);
-                batch_query.query_left.code.extend(iris_shares_left);
-                batch_query.query_left.mask.extend(mask_shares_left);
-
-                batch_query.store_right.code.push(store_iris_shares_right);
-                batch_query.store_right.mask.push(store_mask_shares_right);
-                batch_query.db_right.code.extend(db_iris_shares_right);
-                batch_query.db_right.mask.extend(db_mask_shares_right);
-                batch_query.query_right.code.extend(iris_shares_right);
-                batch_query.query_right.mask.extend(mask_shares_right);
+                handles.push(handle);
             }
         } else {
             tokio::time::sleep(SQS_POLLING_INTERVAL).await;
         }
+    }
+
+    for handle in handles {
+        let (left_code, left_mask, right_code, right_mask) = match handle.await? {
+            Ok(res) => res,
+            Err(e) => {
+                tracing::error!("Failed to process iris shares: {:?}", e);
+                // TODO: handle this case, nodes should sync with each other, which elements in
+                // the batch should be ignored.
+                eyre::bail!("Failed to process iris shares: {:?}", e);
+            }
+        };
+
+        // Preprocess shares for left eye.
+        let left_future =
+            spawn_blocking(move || preprocess_iris_message_shares(left_code, left_mask));
+
+        // Preprocess shares for right eye.
+        let right_future =
+            spawn_blocking(move || preprocess_iris_message_shares(right_code, right_mask));
+
+        let (left_result, right_result) = tokio::join!(left_future, right_future);
+
+        let (
+            store_iris_shares_left,
+            store_mask_shares_left,
+            db_iris_shares_left,
+            db_mask_shares_left,
+            iris_shares_left,
+            mask_shares_left,
+        ) = left_result.context("while processing left iris shares")??;
+
+        let (
+            store_iris_shares_right,
+            store_mask_shares_right,
+            db_iris_shares_right,
+            db_mask_shares_right,
+            iris_shares_right,
+            mask_shares_right,
+        ) = right_result.context("while processing right iris shares")??;
+
+        batch_query.store_left.code.push(store_iris_shares_left);
+        batch_query.store_left.mask.push(store_mask_shares_left);
+        batch_query.db_left.code.extend(db_iris_shares_left);
+        batch_query.db_left.mask.extend(db_mask_shares_left);
+        batch_query.query_left.code.extend(iris_shares_left);
+        batch_query.query_left.mask.extend(mask_shares_left);
+
+        batch_query.store_right.code.push(store_iris_shares_right);
+        batch_query.store_right.mask.push(store_mask_shares_right);
+        batch_query.db_right.code.extend(db_iris_shares_right);
+        batch_query.db_right.mask.extend(db_mask_shares_right);
+        batch_query.query_right.code.extend(iris_shares_right);
+        batch_query.query_right.mask.extend(mask_shares_right);
     }
 
     Ok(batch_query)
@@ -735,6 +772,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             &skip_request_ids,
             shares_encryption_key_pair.clone(),
         );
+
         loop {
             let now = Instant::now();
 
