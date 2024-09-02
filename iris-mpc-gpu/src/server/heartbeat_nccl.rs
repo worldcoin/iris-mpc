@@ -16,7 +16,7 @@ pub async fn start_heartbeat(
     let (tx, mut rx) = mpsc::channel(1);
 
     let heartbeat_handle: JoinHandle<eyre::Result<()>> = spawn_blocking(move || {
-        let device_manager = Arc::new(DeviceManager::init());
+        let device_manager = Arc::new(DeviceManager::init_with_streams());
         let ids = device_manager.get_ids_from_magic(0xdead);
 
         let comms = device_manager.instantiate_network_from_ids(party_id, &ids)?;
