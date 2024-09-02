@@ -125,7 +125,7 @@ async fn receive_batch(
     let mut handles = vec![];
     let mut msg_counter = 0;
 
-    while msg_counter < *CURRENT_BATCH_SIZE.lock().unwrap() * ROTATIONS {
+    while msg_counter < *CURRENT_BATCH_SIZE.lock().unwrap() {
         let rcv_message_output = client
             .receive_message()
             .max_number_of_messages(1)
