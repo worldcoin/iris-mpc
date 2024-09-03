@@ -1137,8 +1137,6 @@ impl ServerActor {
             .chunks_exact(results.len() / self.comms[0].world_size())
             .collect();
 
-        println!("{:?}", results);
-
         let mut valid_merged = vec![];
         for i in 0..results[0].len() {
             // Filter out results that are invalid on at least one node
