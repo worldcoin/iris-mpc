@@ -1,7 +1,13 @@
 use super::{key_pair::SharesDecodingError, sha256::calculate_sha256};
 use crate::helpers::key_pair::SharesEncryptionKeyPairs;
 use base64::{engine::general_purpose::STANDARD, Engine};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
+use tokio_retry::{
+    strategy::{jitter, FixedInterval},
+    Retry,
+};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SQSMessage {
@@ -57,19 +63,22 @@ impl SharesS3Object {
     }
 }
 
+static S3_HTTP_CLIENT: LazyLock<Client> = LazyLock::new(Client::new);
+
 impl SMPCRequest {
     pub async fn get_iris_data_by_party_id(
         &self,
         party_id: usize,
     ) -> Result<String, SharesDecodingError> {
         // Send a GET request to the presigned URL
-        let response = match reqwest::get(self.s3_presigned_url.clone()).await {
-            Ok(response) => response,
-            Err(e) => {
-                tracing::error!("Failed to send request: {}", e);
-                return Err(SharesDecodingError::RequestError(e));
-            }
-        };
+        let retry_strategy = FixedInterval::from_millis(200).map(jitter).take(5);
+        let response = Retry::spawn(retry_strategy, || async {
+            S3_HTTP_CLIENT
+                .get(self.s3_presigned_url.clone())
+                .send()
+                .await
+        })
+        .await?;
 
         // Ensure the request was successful
         if response.status().is_success() {

@@ -18,9 +18,14 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde_json::to_string;
 use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
 use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::{spawn, sync::Mutex, time::sleep};
+use tokio::{
+    spawn,
+    sync::{Mutex, Semaphore},
+    time::sleep,
+};
 use uuid::Uuid;
 
+const MAX_CONCURRENT_REQUESTS: usize = 32;
 const BATCH_SIZE: usize = 64;
 const N_BATCHES: usize = 5;
 const N_QUERIES: usize = BATCH_SIZE * N_BATCHES;
@@ -120,6 +125,8 @@ async fn main() -> eyre::Result<()> {
     let thread_requests = requests.clone();
     let thread_responses = responses.clone();
 
+    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
+
     let recv_thread = spawn(async move {
         let region_provider = Region::new(response_queue_region);
         let results_sqs_config = aws_config::from_env().region(region_provider).load().await;
@@ -211,8 +218,11 @@ async fn main() -> eyre::Result<()> {
             let request_topic_arn = request_topic_arn.clone();
             let requests_bucket_region = requests_bucket_region.clone();
             let requests_bucket_name = requests_bucket_name.clone();
+            let semaphore = Arc::clone(&semaphore);
 
             let handle = tokio::spawn(async move {
+                let _ = semaphore.acquire().await;
+
                 let mut rng = if let Some(rng_seed) = rng_seed {
                     StdRng::seed_from_u64(rng_seed)
                 } else {
