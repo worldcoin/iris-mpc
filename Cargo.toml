@@ -34,7 +34,7 @@ rayon = "1.5.1"
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 static_assertions = "1.1"
 telemetry-batteries = { git = "https://github.com/worldcoin/telemetry-batteries.git", rev = "802a4f39f358e077b11c8429b4c65f3e45b85959" }
-tokio = { version = "1.39", features = ["full", "rt-multi-thread"] }
+tokio = { version = "1.40", features = ["full", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4"] }
 
 # Abort on panics rather than unwinding.
