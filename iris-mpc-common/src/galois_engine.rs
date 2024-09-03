@@ -286,7 +286,7 @@ pub mod degree4 {
     impl Default for GaloisRingTrimmedMaskCodeShare {
         fn default() -> Self {
             GaloisRingTrimmedMaskCodeShare {
-                id:    0,
+                id:    1,
                 coefs: [0u16; MASK_CODE_LENGTH],
             }
         }
@@ -331,7 +331,7 @@ pub mod degree4 {
     impl Default for GaloisRingIrisCodeShare {
         fn default() -> Self {
             GaloisRingIrisCodeShare {
-                id:    0,
+                id:    1,
                 coefs: [0u16; IRIS_CODE_LENGTH],
             }
         }

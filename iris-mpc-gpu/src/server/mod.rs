@@ -2,6 +2,7 @@ mod actor;
 pub mod heartbeat_nccl;
 pub mod sync_nccl;
 
+use crate::dot::ROTATIONS;
 pub use actor::{ServerActor, ServerActorHandle};
 use iris_mpc_common::galois_engine::degree4::{
     GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
@@ -36,6 +37,48 @@ pub struct BatchQuery {
     pub valid_entries: Vec<bool>,
 }
 
+macro_rules! filter_by_indices {
+    ($data:expr, $indices:expr) => {
+        $data = $data
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| $indices.contains(i))
+            .map(|(_, v)| v.clone())
+            .collect();
+    };
+}
+
+macro_rules! filter_by_indices_with_rotations {
+    ($data:expr, $indices:expr) => {
+        $data = $data
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| $indices.contains((&(i / ROTATIONS))))
+            .map(|(_, v)| v.clone())
+            .collect();
+    };
+}
+
+impl BatchQuery {
+    pub fn retain(&mut self, indices: &[usize]) {
+        filter_by_indices!(self.request_ids, indices);
+        filter_by_indices!(self.metadata, indices);
+        filter_by_indices!(self.store_left.code, indices);
+        filter_by_indices!(self.store_left.mask, indices);
+        filter_by_indices!(self.store_right.code, indices);
+        filter_by_indices!(self.store_right.mask, indices);
+        filter_by_indices_with_rotations!(self.query_left.code, indices);
+        filter_by_indices_with_rotations!(self.query_left.mask, indices);
+        filter_by_indices_with_rotations!(self.db_left.code, indices);
+        filter_by_indices_with_rotations!(self.db_left.mask, indices);
+        filter_by_indices_with_rotations!(self.query_right.code, indices);
+        filter_by_indices_with_rotations!(self.query_right.mask, indices);
+        filter_by_indices_with_rotations!(self.db_right.code, indices);
+        filter_by_indices_with_rotations!(self.db_right.mask, indices);
+        filter_by_indices!(self.valid_entries, indices);
+    }
+}
+
 #[derive(Debug)]
 pub struct ServerJob {
     batch:          BatchQuery,
@@ -48,7 +91,6 @@ pub struct ServerJobResult {
     pub request_ids:    Vec<String>,
     pub matches:        Vec<bool>,
     pub match_ids:      Vec<Vec<u32>>,
-    pub valid_entries:  Vec<bool>,
     pub store_left:     BatchQueryEntries,
     pub store_right:    BatchQueryEntries,
 }

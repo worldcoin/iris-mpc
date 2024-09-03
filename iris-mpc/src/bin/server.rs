@@ -650,7 +650,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             request_ids,
             matches,
             match_ids,
-            valid_entries,
             store_left,
             store_right,
         }) = rx.recv().await
@@ -662,13 +661,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .map(|(i, &idx_result)| {
                     let result_event = ResultEvent::new(
                         party_id,
-                        match matches[i] || !valid_entries[i] {
+                        match matches[i] {
                             true => None,
                             false => Some(idx_result + 1),
                         },
                         matches[i],
                         request_ids[i].clone(),
-                        match matches[i] && valid_entries[i] {
+                        match matches[i] {
                             true => Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
                             false => None,
                         },

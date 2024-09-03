@@ -141,7 +141,7 @@ impl std::ops::BitXor for IrisCodeArray {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct IrisCode {
     pub code: IrisCodeArray,
     pub mask: IrisCodeArray,
