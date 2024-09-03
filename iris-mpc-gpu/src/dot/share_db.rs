@@ -756,8 +756,16 @@ impl ShareDB {
     pub fn result_chunk_shares<'a>(&'a self, db_sizes: &[usize]) -> Vec<ChunkShareView<'a, u16>> {
         izip!(db_sizes, self.results.iter(), self.results_peer.iter())
             .map(|(&len, xa, xb)| {
-                let xa_view = unsafe { xa.transmute(len * self.query_length).unwrap() };
-                let xb_view = unsafe { xb.transmute(len * self.query_length).unwrap() };
+                // SAFETY: All bit patterns are valid u16 values
+                let xa_view = unsafe {
+                    xa.transmute(len * self.query_length)
+                        .expect("len is correct")
+                };
+                // SAFETY: All bit patterns are valid u16 values
+                let xb_view = unsafe {
+                    xb.transmute(len * self.query_length)
+                        .expect("len is correct")
+                };
                 ChunkShareView {
                     a: xa_view,
                     b: xb_view,
