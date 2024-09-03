@@ -166,6 +166,8 @@ fn open(
 #[ignore]
 #[cfg(feature = "gpu_dependent")]
 async fn test_lift() -> eyre::Result<()> {
+    use itertools::Itertools;
+
     const_assert!(
         INPUTS_PER_GPU_SIZE % (2048) == 0,
         // Mod 16 for randomness, mod 64 for chunk size
@@ -215,7 +217,7 @@ async fn test_lift() -> eyre::Result<()> {
         let mut x = to_view(&x_);
         let correction_ = party.allocate_buffer::<u16>(INPUTS_PER_GPU_SIZE * 2);
         let mut correction = to_view(&correction_);
-        let mask_gpu = mask_gpu.clone();
+        let mask_gpu = mask_gpu.iter().map(|x| x.as_view()).collect_vec();
 
         let now = Instant::now();
         party.lift_mpc(&mask_gpu, &mut x, &mut correction, &streams);

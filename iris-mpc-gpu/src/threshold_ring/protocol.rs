@@ -1420,7 +1420,7 @@ impl Circuits {
 
     fn transpose_pack_u16_with_len(
         &mut self,
-        inp: &[ChunkShare<u16>],
+        inp: &[ChunkShareView<u16>],
         outp: &mut [ChunkShareView<u64>],
         bitlen: usize,
         streams: &[CudaStream],
@@ -1532,7 +1532,7 @@ impl Circuits {
 
     fn lift_split(
         &mut self,
-        inp: &[ChunkShare<u16>],
+        inp: &[ChunkShareView<u16>],
         lifted: &mut [ChunkShareView<u32>],
         inout1: &mut [ChunkShareView<u64>],
         out2: &mut [ChunkShareView<u64>],
@@ -1577,7 +1577,7 @@ impl Circuits {
         &mut self,
         mask_lifted: &mut [ChunkShareView<u32>],
         mask_correction: &[ChunkShareView<u16>],
-        code: &[ChunkShare<u16>],
+        code: &[ChunkShareView<u16>],
         streams: &[CudaStream],
     ) {
         assert_eq!(self.n_devices, mask_lifted.len());
@@ -1616,7 +1616,7 @@ impl Circuits {
     // outputs the uncorrected lifted shares and the injected correction values
     pub fn lift_mpc(
         &mut self,
-        shares: &[ChunkShare<u16>],
+        shares: &[ChunkShareView<u16>],
         xa: &mut [ChunkShareView<u32>],
         injected: &mut [ChunkShareView<u16>],
         streams: &[CudaStream],
@@ -2030,8 +2030,8 @@ impl Circuits {
     // Result is in the first bit of the result buffer
     pub fn compare_threshold_masked_many(
         &mut self,
-        code_dots: &[ChunkShare<u16>],
-        mask_dots: &[ChunkShare<u16>],
+        code_dots: &[ChunkShareView<u16>],
+        mask_dots: &[ChunkShareView<u16>],
         streams: &[CudaStream],
     ) {
         assert_eq!(self.n_devices, code_dots.len());
@@ -2060,8 +2060,8 @@ impl Circuits {
     // Result is in the lowest bit of the result buffer on the first gpu
     pub fn compare_threshold_masked_many_with_or_tree(
         &mut self,
-        code_dots: &[ChunkShare<u16>],
-        mask_dots: &[ChunkShare<u16>],
+        code_dots: &[ChunkShareView<u16>],
+        mask_dots: &[ChunkShareView<u16>],
         streams: &[CudaStream],
     ) {
         self.compare_threshold_masked_many(code_dots, mask_dots, streams);

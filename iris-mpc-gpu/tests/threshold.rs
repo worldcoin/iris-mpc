@@ -157,6 +157,8 @@ fn open(party: &mut Circuits, x: &[ChunkShare<u64>], streams: &[CudaStream]) -> 
 #[cfg(feature = "gpu_dependent")]
 #[ignore]
 async fn test_threshold() -> eyre::Result<()> {
+    use itertools::Itertools;
+
     const_assert!(
         INPUTS_PER_GPU_SIZE % (2048) == 0,
         // Mod 16 for randomness, mod 64 for chunk size
@@ -204,8 +206,8 @@ async fn test_threshold() -> eyre::Result<()> {
     println!("Starting tests...");
 
     for _ in 0..10 {
-        let code_gpu = code_gpu.clone();
-        let mask_gpu = mask_gpu.clone();
+        let code_gpu = code_gpu.iter().map(|x| x.as_view()).collect_vec();
+        let mask_gpu = mask_gpu.iter().map(|x| x.as_view()).collect_vec();
 
         let now = Instant::now();
         party.compare_threshold_masked_many(&code_gpu, &mask_gpu, &streams);
