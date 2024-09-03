@@ -2,14 +2,13 @@ use crate::{
     helpers::{
         comm::NcclComm,
         device_manager::DeviceManager,
-        device_ptrs_to_shares,
         query_processor::{
             CudaVec2DSlicer, CudaVec2DSlicerRawPointer, CudaVec2DSlicerU32, CudaVec2DSlicerU8,
             StreamAwareCudaSlice,
         },
     },
     rng::chacha::ChaChaCudaRng,
-    threshold_ring::protocol::ChunkShare,
+    threshold_ring::protocol::ChunkShareView,
 };
 use core::panic;
 #[cfg(feature = "otp_encrypt")]
@@ -28,6 +27,7 @@ use cudarc::{
     nccl,
     nvrtc::compile_ptx,
 };
+use itertools::izip;
 #[cfg(feature = "otp_encrypt")]
 use itertools::Itertools;
 use rayon::prelude::*;
@@ -753,28 +753,25 @@ impl ShareDB {
         }
     }
 
-    // TODO: this is very hacky
-    pub fn result_chunk_shares(&self, db_sizes: &[usize]) -> Vec<ChunkShare<u16>> {
-        let results_ptrs = self
-            .results
-            .iter()
-            .map(|x| *x.device_ptr())
-            .collect::<Vec<_>>();
-        let results_peer_ptrs = self
-            .results_peer
-            .iter()
-            .map(|x| *x.device_ptr())
-            .collect::<Vec<_>>();
-
-        device_ptrs_to_shares(
-            &results_ptrs,
-            &results_peer_ptrs,
-            &db_sizes
-                .iter()
-                .map(|e| e * self.query_length)
-                .collect::<Vec<_>>(),
-            self.device_manager.devices(),
-        )
+    pub fn result_chunk_shares<'a>(&'a self, db_sizes: &[usize]) -> Vec<ChunkShareView<'a, u16>> {
+        izip!(db_sizes, self.results.iter(), self.results_peer.iter())
+            .map(|(&len, xa, xb)| {
+                // SAFETY: All bit patterns are valid u16 values
+                let xa_view = unsafe {
+                    xa.transmute(len * self.query_length)
+                        .expect("len is correct")
+                };
+                // SAFETY: All bit patterns are valid u16 values
+                let xb_view = unsafe {
+                    xb.transmute(len * self.query_length)
+                        .expect("len is correct")
+                };
+                ChunkShareView {
+                    a: xa_view,
+                    b: xb_view,
+                }
+            })
+            .collect()
     }
 }
 

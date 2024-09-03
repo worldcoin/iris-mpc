@@ -27,14 +27,6 @@ use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{collections::HashMap, mem, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
 
-macro_rules! forget_vec {
-    ($vec:expr) => {
-        while let Some(item) = $vec.pop() {
-            std::mem::forget(item);
-        }
-    };
-}
-
 macro_rules! record_stream_time {
     ($manager:expr, $streams:expr, $map:expr, $label:expr, $block:block) => {
         let evt0 = $manager.create_events();
@@ -851,9 +843,8 @@ impl ServerActor {
         );
 
         let db_sizes_batch = vec![QUERIES; self.device_manager.device_count()];
-        // TODO: remove
-        let mut code_dots_batch = self.batch_codes_engine.result_chunk_shares(&db_sizes_batch);
-        let mut mask_dots_batch = self.batch_masks_engine.result_chunk_shares(&db_sizes_batch);
+        let code_dots_batch = self.batch_codes_engine.result_chunk_shares(&db_sizes_batch);
+        let mask_dots_batch = self.batch_masks_engine.result_chunk_shares(&db_sizes_batch);
 
         record_stream_time!(
             &self.device_manager,
@@ -885,8 +876,6 @@ impl ServerActor {
         );
         self.phase2_batch.return_result_buffer(res);
 
-        forget_vec!(code_dots_batch);
-        forget_vec!(mask_dots_batch);
         tracing::debug!(party_id = self.party_id, "Finished batch deduplication");
         // ---- END BATCH DEDUP ----
 
@@ -1005,11 +994,10 @@ impl ServerActor {
                 .await_event(request_streams, &current_phase2_event);
 
             // ---- START PHASE 2 ----
-            // TODO: remove
             let max_chunk_size = dot_chunk_size.iter().max().copied().unwrap();
             let phase_2_chunk_sizes = vec![max_chunk_size; self.device_manager.device_count()];
-            let mut code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
-            let mut mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
+            let code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
+            let mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
             {
                 assert_eq!(
                     (max_chunk_size * QUERIES) % 64,
@@ -1064,8 +1052,6 @@ impl ServerActor {
             self.device_manager
                 .record_event(request_streams, &next_phase2_event);
 
-            forget_vec!(code_dots);
-            forget_vec!(mask_dots);
             // ---- END PHASE 2 ----
 
             // Update events for synchronization
