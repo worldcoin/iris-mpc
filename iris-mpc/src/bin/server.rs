@@ -254,30 +254,57 @@ async fn receive_batch(
     for handle in handles {
         let (
             (
-                store_iris_shares_left,
-                store_mask_shares_left,
-                db_iris_shares_left,
-                db_mask_shares_left,
-                iris_shares_left,
-                mask_shares_left,
+                (
+                    store_iris_shares_left,
+                    store_mask_shares_left,
+                    db_iris_shares_left,
+                    db_mask_shares_left,
+                    iris_shares_left,
+                    mask_shares_left,
+                ),
+                (
+                    store_iris_shares_right,
+                    store_mask_shares_right,
+                    db_iris_shares_right,
+                    db_mask_shares_right,
+                    iris_shares_right,
+                    mask_shares_right,
+                ),
             ),
-            (
-                store_iris_shares_right,
-                store_mask_shares_right,
-                db_iris_shares_right,
-                db_mask_shares_right,
-                iris_shares_right,
-                mask_shares_right,
-            ),
+            valid_entry,
         ) = match handle.await? {
-            Ok(res) => res,
+            Ok(res) => (res, true),
             Err(e) => {
                 tracing::error!("Failed to process iris shares: {:?}", e);
-                // TODO: handle this case, nodes should sync with each other, which elements in
-                // the batch should be ignored.
-                eyre::bail!("Failed to process iris shares: {:?}", e);
+                // If we failed to process the iris shares, we include a dummy entry in the
+                // batch in order to keep the same order across nodes
+                let dummy_code_share = GaloisRingIrisCodeShare::default_for_party(party_id);
+                let dummy_mask_share = GaloisRingTrimmedMaskCodeShare::default_for_party(party_id);
+                (
+                    (
+                        (
+                            dummy_code_share.clone(),
+                            dummy_mask_share.clone(),
+                            dummy_code_share.clone().all_rotations(),
+                            dummy_mask_share.clone().all_rotations(),
+                            dummy_code_share.clone().all_rotations(),
+                            dummy_mask_share.clone().all_rotations(),
+                        ),
+                        (
+                            dummy_code_share.clone(),
+                            dummy_mask_share.clone(),
+                            dummy_code_share.clone().all_rotations(),
+                            dummy_mask_share.clone().all_rotations(),
+                            dummy_code_share.clone().all_rotations(),
+                            dummy_mask_share.clone().all_rotations(),
+                        ),
+                    ),
+                    false,
+                )
             }
         };
+
+        batch_query.valid_entries.push(valid_entry);
 
         batch_query.store_left.code.push(store_iris_shares_left);
         batch_query.store_left.mask.push(store_mask_shares_left);

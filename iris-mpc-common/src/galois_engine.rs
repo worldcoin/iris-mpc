@@ -296,6 +296,13 @@ pub mod degree4 {
     }
 
     impl GaloisRingTrimmedMaskCodeShare {
+        pub fn default_for_party(party_id: usize) -> Self {
+            GaloisRingTrimmedMaskCodeShare {
+                id:    party_id,
+                coefs: [0u16; MASK_CODE_LENGTH],
+            }
+        }
+
         pub fn preprocess_mask_code_query_share(&mut self) {
             preprocess_coefs(self.id, &mut self.coefs);
         }
@@ -338,6 +345,13 @@ pub mod degree4 {
 
         pub fn new(id: usize, coefs: [u16; IRIS_CODE_LENGTH]) -> Self {
             Self { id, coefs }
+        }
+
+        pub fn default_for_party(party_id: usize) -> Self {
+            GaloisRingIrisCodeShare {
+                id:    party_id,
+                coefs: [0u16; IRIS_CODE_LENGTH],
+            }
         }
 
         pub fn encode_iris_code<R: CryptoRng + Rng>(

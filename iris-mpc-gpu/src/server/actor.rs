@@ -21,8 +21,10 @@ use cudarc::{
         CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceSlice,
     },
 };
+use eyre::eyre;
 use futures::{Future, FutureExt};
 use iris_mpc_common::IrisCodeDbSlice;
+use itertools::Itertools;
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{collections::HashMap, mem, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
@@ -72,6 +74,7 @@ pub struct ServerActor {
     phase2:                 Circuits,
     phase2_batch:           Circuits,
     distance_comparator:    DistanceComparator,
+    comms:                  Vec<Arc<NcclComm>>,
     // DB slices
     left_code_db_slices:    SlicedProcessedDatabase,
     left_mask_db_slices:    SlicedProcessedDatabase,
@@ -310,7 +313,7 @@ impl ServerActor {
             phase2_chunk_size / 64,
             next_chacha_seeds(chacha_seeds)?,
             device_manager.clone(),
-            comms,
+            comms.clone(),
         );
 
         let distance_comparator = DistanceComparator::init(QUERIES, device_manager.clone());
@@ -351,6 +354,7 @@ impl ServerActor {
             distance_comparator,
             batch_codes_engine,
             batch_masks_engine,
+            comms,
             left_code_db_slices,
             left_mask_db_slices,
             right_code_db_slices,
@@ -388,10 +392,13 @@ impl ServerActor {
         let now = Instant::now();
         let mut events: HashMap<&str, Vec<Vec<CUevent>>> = HashMap::new();
 
-        let batch_size = batch.store_left.code.len();
+        let mut batch = batch;
+        let mut batch_size = batch.store_left.code.len();
         assert!(batch_size > 0 && batch_size <= MAX_BATCH_SIZE);
         assert!(
             batch_size == batch.store_left.mask.len()
+                && batch_size == batch.request_ids.len()
+                && batch_size == batch.metadata.len()
                 && batch_size == batch.store_right.code.len()
                 && batch_size == batch.store_right.mask.len()
                 && batch_size * ROTATIONS == batch.query_left.code.len()
@@ -404,6 +411,15 @@ impl ServerActor {
                 && batch_size * ROTATIONS == batch.db_right.mask.len(),
             "Query batch sizes mismatch"
         );
+
+        ///////////////////////////////////////////////////////////////////
+        // SYNC BATCH CONTENTS AND FILTER OUT INVALID ENTRIES
+        ///////////////////////////////////////////////////////////////////
+
+        let valid_entries = self.sync_batch_entries(&batch.valid_entries)?;
+        let valid_entry_idxs = valid_entries.iter().positions(|&x| x).collect::<Vec<_>>();
+        batch_size = valid_entry_idxs.len();
+        batch.retain(&valid_entry_idxs);
 
         ///////////////////////////////////////////////////////////////////
         // COMPARE LEFT EYE QUERIES
@@ -611,6 +627,7 @@ impl ServerActor {
             &mut merged_results,
             &insertion_list,
             &self.current_db_sizes,
+            batch_size,
         );
 
         // Fetch and truncate the match counters
@@ -1089,6 +1106,39 @@ impl ServerActor {
             reset_slice(self.device_manager.devices(), dst, 0xff, &self.streams[0]);
         }
     }
+
+    fn sync_batch_entries(&mut self, valid_entries: &[bool]) -> eyre::Result<Vec<bool>> {
+        let mut buffer = self
+            .device_manager
+            .device(0)
+            .alloc_zeros(valid_entries.len() * self.comms[0].world_size())
+            .unwrap();
+
+        let buffer_self = self
+            .device_manager
+            .device(0)
+            .htod_copy(valid_entries.iter().map(|&x| x as u8).collect::<Vec<_>>())?;
+
+        self.comms[0]
+            .all_gather(&buffer_self, &mut buffer)
+            .map_err(|e| eyre!(format!("{:?}", e)))?;
+
+        let results = self.device_manager.device(0).dtoh_sync_copy(&buffer)?;
+        let results: Vec<_> = results
+            .chunks_exact(results.len() / self.comms[0].world_size())
+            .collect();
+
+        let mut valid_merged = vec![];
+        for i in 0..results[0].len() {
+            valid_merged.push(
+                [results[0][i], results[1][i], results[2][i]]
+                    .iter()
+                    .all(|&x| x == 1),
+            );
+        }
+
+        Ok(valid_merged)
+    }
 }
 
 /// Internal helper function to log the timers of measured cuda streams.
@@ -1239,8 +1289,9 @@ fn calculate_insertion_indices(
     merged_results: &mut [u32],
     insertion_list: &[Vec<usize>],
     db_sizes: &[usize],
+    batch_size: usize,
 ) -> Vec<bool> {
-    let mut matches = vec![true; MAX_BATCH_SIZE];
+    let mut matches = vec![true; batch_size];
     let mut last_db_index = db_sizes.iter().sum::<usize>() as u32;
     let (mut min_index, mut min_index_val) = (0, usize::MAX);
     for (i, list) in insertion_list.iter().enumerate() {

@@ -223,7 +223,15 @@ async fn e2e_test() -> Result<()> {
                 }
                 _ => unreachable!(),
             };
-            requests.insert(request_id.to_string(), template.clone());
+
+            // Invalidate 10% of the queries
+            let is_valid = rng.gen_range(0..10) != 0;
+
+            if is_valid {
+                requests.insert(request_id.to_string(), template.clone());
+            } else {
+                requests.insert(request_id.to_string(), IrisCode::default());
+            }
 
             let mut shared_code =
                 GaloisRingIrisCodeShare::encode_iris_code(&template.code, &template.mask, &mut rng);
@@ -233,6 +241,12 @@ async fn e2e_test() -> Result<()> {
                 shared_mask.iter().map(|x| x.clone().into()).collect();
 
             // batch0
+            if !is_valid {
+                shared_code[0] = GaloisRingIrisCodeShare::default_for_party(1);
+                shared_mask[0] = GaloisRingTrimmedMaskCodeShare::default_for_party(1)
+            }
+            batch0.metadata.push(Default::default());
+            batch0.valid_entries.push(is_valid);
             batch0.request_ids.push(request_id.to_string());
             // for storage
             batch0.store_left.code.push(shared_code[0].clone());
@@ -253,6 +267,8 @@ async fn e2e_test() -> Result<()> {
                 .extend(shared_mask[0].all_rotations());
 
             // batch 1
+            batch1.valid_entries.push(true);
+            batch1.metadata.push(Default::default());
             batch1.request_ids.push(request_id.to_string());
             // for storage
             batch1.store_left.code.push(shared_code[1].clone());
@@ -273,6 +289,8 @@ async fn e2e_test() -> Result<()> {
                 .extend(shared_mask[1].all_rotations());
 
             // batch 2
+            batch2.valid_entries.push(true);
+            batch2.metadata.push(Default::default());
             batch2.request_ids.push(request_id.to_string());
             // for storage
             batch2.store_left.code.push(shared_code[2].clone());
@@ -325,7 +343,14 @@ async fn e2e_test() -> Result<()> {
                 .zip(matches.iter())
                 .zip(merged_results.iter())
             {
+                assert!(requests.contains_key(req_id));
+
+                // This was an invalid query, we should not get a response, but they should be
+                // silently ignored
+                assert!(*requests.get(req_id).unwrap() != IrisCode::default());
+
                 let expected_idx = expected_results.get(req_id).unwrap();
+
                 if let Some(expected_idx) = expected_idx {
                     assert!(was_match);
                     assert_eq!(expected_idx, &idx);
