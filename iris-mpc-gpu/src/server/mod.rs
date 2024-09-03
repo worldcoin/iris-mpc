@@ -8,8 +8,8 @@ use iris_mpc_common::galois_engine::degree4::{
 };
 use tokio::sync::oneshot;
 
-pub const MAX_BATCH_SIZE: usize = 64;
-pub const DB_BENCH_SIZE: usize = 1 << 23;
+pub const MAX_BATCH_SIZE: usize = 256;
+pub const DB_BENCH_SIZE: usize = 1 << 24;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BatchQueryEntries {
