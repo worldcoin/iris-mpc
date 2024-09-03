@@ -167,14 +167,22 @@ impl ServerActor {
             [left_eye_db.0.len(), right_eye_db.0.len(),]
                 .iter()
                 .all(|&x| x == db_size * IRIS_CODE_LENGTH),
-            "Internal DB mismatch, left and right iris code db sizes differ"
+            "Internal DB mismatch, left and right iris code db sizes differ, expected {}, left \
+             has {}, while right has {}",
+            db_size * IRIS_CODE_LENGTH,
+            left_eye_db.0.len(),
+            right_eye_db.0.len()
         );
 
         assert!(
             [left_eye_db.1.len(), right_eye_db.1.len()]
                 .iter()
                 .all(|&x| x == db_size * MASK_CODE_LENGTH),
-            "Internal DB mismatch, left and right mask code db sizes differ"
+            "Internal DB mismatch, left and right mask code db sizes differ, expected {}, left \
+             has {}, while right has {}",
+            db_size * MASK_CODE_LENGTH,
+            left_eye_db.1.len(),
+            right_eye_db.1.len()
         );
 
         let (tx, rx) = mpsc::channel(job_queue_size);
