@@ -10,13 +10,14 @@ aes-prng = "0.2"
 bytes = "1.7"
 bytemuck.workspace = true
 eyre.workspace = true
+futures.workspace = true
 hawk-pack = {  git = "ssh://git@github.com/Inversed-Tech/hawk-pack.git", branch="main"}
 iris-mpc-common = { path = "../iris-mpc-common" }
 num-traits = "0.2"
 rand.workspace = true
 rayon.workspace = true
 serde.workspace = true
-tokio.workspace = true
+static_assertions.workspace = true
 thiserror = "1.0"
+tokio.workspace = true
 tracing.workspace = true
-futures.workspace = true

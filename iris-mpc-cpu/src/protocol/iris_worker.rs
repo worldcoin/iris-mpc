@@ -15,9 +15,8 @@ use eyre::{eyre, Error, Result};
 use iris_mpc_common::{
     galois_engine::degree4::GaloisRingIrisCodeShare, id::PartyID, iris_db::iris::IrisCodeArray,
 };
+use static_assertions::const_assert;
 
-pub(crate) const IRIS_CODE_SIZE: usize =
-    iris_mpc_common::iris_db::iris::IrisCodeArray::IRIS_CODE_SIZE;
 pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
 pub(crate) const B_BITS: u64 = 16;
 pub(crate) const B: u64 = 1 << B_BITS;
@@ -31,28 +30,15 @@ pub struct IrisWorker<N: NetworkTrait> {
 
 impl<N: NetworkTrait> IrisWorker<N> {
     pub fn new(network: N) -> Self {
-        if MATCH_THRESHOLD_RATIO >= 1.
-            || MATCH_THRESHOLD_RATIO <= 0.
-            || u16::BITS as usize - 1 <= Self::ceil_log2(IRIS_CODE_SIZE)
-        // Comparison by checking msb of difference could produce an overflow
-        {
-            panic!("Configuration error");
-        }
-
+        const_assert!(MATCH_THRESHOLD_RATIO > 0.0 && MATCH_THRESHOLD_RATIO < 1.0);
+        // checking that code size fits on 15 bits.
+        const_assert!(
+            u16::MAX as usize >= iris_mpc_common::iris_db::iris::IrisCodeArray::IRIS_CODE_SIZE
+        );
         Self {
             network,
             prf: Prf::default(),
         }
-    }
-
-    fn ceil_log2(x: usize) -> usize {
-        let mut y = 0;
-        let mut x = x - 1;
-        while x > 0 {
-            x >>= 1;
-            y += 1;
-        }
-        y
     }
 
     pub fn get_party_id(&self) -> PartyID {

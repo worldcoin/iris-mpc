@@ -2377,6 +2377,7 @@ dependencies = [
  "rand",
  "rayon",
  "serde",
+ "static_assertions",
  "thiserror",
  "tokio",
  "tracing",
