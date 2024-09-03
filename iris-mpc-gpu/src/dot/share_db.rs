@@ -11,8 +11,6 @@ use crate::{
     threshold_ring::protocol::ChunkShareView,
 };
 use core::panic;
-#[cfg(feature = "otp_encrypt")]
-use cudarc::driver::{CudaView, DeviceSlice};
 use cudarc::{
     cublas::{
         result::gemm_ex,
@@ -22,14 +20,13 @@ use cudarc::{
     driver::{
         result::{malloc_async, malloc_managed},
         sys::{CUdeviceptr, CUmemAttach_flags},
-        CudaFunction, CudaSlice, CudaStream, DevicePtr, LaunchAsync, LaunchConfig,
+        CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr, DeviceSlice, LaunchAsync,
+        LaunchConfig,
     },
     nccl,
     nvrtc::compile_ptx,
 };
-use itertools::izip;
-#[cfg(feature = "otp_encrypt")]
-use itertools::Itertools;
+use itertools::{izip, Itertools};
 use rayon::prelude::*;
 use std::{
     ffi::{c_void, CStr},
@@ -39,7 +36,6 @@ use std::{
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const REDUCE_FUNCTION_NAME: &str = "matmul_correct_and_reduce";
-#[cfg(feature = "otp_encrypt")]
 const XOR_ASSIGN_U8_NAME: &str = "xor_assign_u8";
 const LIMBS: usize = 2;
 
@@ -145,7 +141,6 @@ pub struct ShareDB {
     query_length:          usize,
     device_manager:        Arc<DeviceManager>,
     kernels:               Vec<CudaFunction>,
-    #[cfg(feature = "otp_encrypt")]
     xor_assign_u8_kernels: Vec<CudaFunction>,
     rngs:                  Vec<(ChaChaCudaRng, ChaChaCudaRng)>,
     comms:                 Vec<Arc<NcclComm>>,
@@ -184,7 +179,6 @@ impl ShareDB {
             kernels.push(function);
         }
 
-        #[cfg(feature = "otp_encrypt")]
         let xor_assign_u8_kernels = (0..n_devices)
             .map(|i| {
                 let dev = device_manager.device(i);
@@ -245,7 +239,6 @@ impl ShareDB {
             query_length,
             device_manager,
             kernels,
-            #[cfg(feature = "otp_encrypt")]
             xor_assign_u8_kernels,
             rngs,
             is_remote: !comms.is_empty(),
@@ -596,7 +589,6 @@ impl ShareDB {
         self.dot_reduce_and_multiply(query_sums, db_sums, chunk_sizes, offset, streams, 1);
     }
 
-    #[cfg(feature = "otp_encrypt")]
     fn single_xor_assign_u8(
         &self,
         x1: &mut CudaView<u8>,
@@ -622,7 +614,6 @@ impl ShareDB {
     }
 
     // Fill randomness using my RNG
-    #[cfg(feature = "otp_encrypt")]
     fn fill_my_rng_into_u8<'a>(
         &mut self,
         rand: &'a mut CudaSlice<u32>,
@@ -639,7 +630,6 @@ impl ShareDB {
     }
 
     // Fill randomness using the their RNG
-    #[cfg(feature = "otp_encrypt")]
     fn fill_their_rng_into_u8<'a>(
         &mut self,
         rand: &'a mut CudaSlice<u32>,
@@ -655,7 +645,6 @@ impl ShareDB {
         rand_trans
     }
 
-    #[cfg(feature = "otp_encrypt")]
     fn otp_encrypt_rng_result(
         &mut self,
         len: usize,
@@ -680,7 +669,6 @@ impl ShareDB {
         rand
     }
 
-    #[cfg(feature = "otp_encrypt")]
     fn otp_decrypt_rng_result(&mut self, len: usize, idx: usize, streams: &[CudaStream]) {
         assert_eq!(len & 3, 0);
         let mut rand = unsafe {
@@ -703,7 +691,6 @@ impl ShareDB {
         let next_peer = (self.peer_id + 1) % 3;
         let prev_peer = (self.peer_id + 2) % 3;
 
-        #[cfg(feature = "otp_encrypt")]
         let send_bufs = (0..self.device_manager.device_count())
             .map(|idx| {
                 let len = db_sizes[idx] * self.query_length * 2;
@@ -711,18 +698,12 @@ impl ShareDB {
             })
             .collect_vec();
 
-        #[cfg(feature = "otp_encrypt")]
         let send = &send_bufs;
-        #[cfg(not(feature = "otp_encrypt"))]
-        let send = &self.results;
 
         nccl::group_start().unwrap();
         for idx in 0..self.device_manager.device_count() {
             let len = db_sizes[idx] * self.query_length * 2;
-            #[cfg(feature = "otp_encrypt")]
             let send_len = len >> 2;
-            #[cfg(not(feature = "otp_encrypt"))]
-            let send_len = len;
             let send_view = send[idx].slice(..send_len);
             self.comms[idx]
                 .send_view(&send_view, next_peer, &streams[idx])
@@ -734,7 +715,6 @@ impl ShareDB {
                 .unwrap();
         }
         nccl::group_end().unwrap();
-        #[cfg(feature = "otp_encrypt")]
         for idx in 0..self.device_manager.device_count() {
             let len = db_sizes[idx] * self.query_length * 2;
             self.otp_decrypt_rng_result(len, idx, streams);
