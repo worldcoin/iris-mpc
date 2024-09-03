@@ -7,6 +7,7 @@ pub use actor::{ServerActor, ServerActorHandle};
 use iris_mpc_common::galois_engine::degree4::{
     GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
 };
+use std::collections::HashSet;
 use tokio::sync::oneshot;
 
 pub const MAX_BATCH_SIZE: usize = 64;
@@ -61,21 +62,22 @@ macro_rules! filter_by_indices_with_rotations {
 
 impl BatchQuery {
     pub fn retain(&mut self, indices: &[usize]) {
-        filter_by_indices!(self.request_ids, indices);
-        filter_by_indices!(self.metadata, indices);
-        filter_by_indices!(self.store_left.code, indices);
-        filter_by_indices!(self.store_left.mask, indices);
-        filter_by_indices!(self.store_right.code, indices);
-        filter_by_indices!(self.store_right.mask, indices);
-        filter_by_indices_with_rotations!(self.query_left.code, indices);
-        filter_by_indices_with_rotations!(self.query_left.mask, indices);
-        filter_by_indices_with_rotations!(self.db_left.code, indices);
-        filter_by_indices_with_rotations!(self.db_left.mask, indices);
-        filter_by_indices_with_rotations!(self.query_right.code, indices);
-        filter_by_indices_with_rotations!(self.query_right.mask, indices);
-        filter_by_indices_with_rotations!(self.db_right.code, indices);
-        filter_by_indices_with_rotations!(self.db_right.mask, indices);
-        filter_by_indices!(self.valid_entries, indices);
+        let indices_set: HashSet<usize> = indices.iter().cloned().collect();
+        filter_by_indices!(self.request_ids, indices_set);
+        filter_by_indices!(self.metadata, indices_set);
+        filter_by_indices!(self.store_left.code, indices_set);
+        filter_by_indices!(self.store_left.mask, indices_set);
+        filter_by_indices!(self.store_right.code, indices_set);
+        filter_by_indices!(self.store_right.mask, indices_set);
+        filter_by_indices_with_rotations!(self.query_left.code, indices_set);
+        filter_by_indices_with_rotations!(self.query_left.mask, indices_set);
+        filter_by_indices_with_rotations!(self.db_left.code, indices_set);
+        filter_by_indices_with_rotations!(self.db_left.mask, indices_set);
+        filter_by_indices_with_rotations!(self.query_right.code, indices_set);
+        filter_by_indices_with_rotations!(self.query_right.mask, indices_set);
+        filter_by_indices_with_rotations!(self.db_right.code, indices_set);
+        filter_by_indices_with_rotations!(self.db_right.mask, indices_set);
+        filter_by_indices!(self.valid_entries, indices_set);
     }
 }
 
