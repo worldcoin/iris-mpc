@@ -278,23 +278,25 @@ async fn receive_batch(
                 tracing::error!("Failed to process iris shares: {:?}", e);
                 // If we failed to process the iris shares, we include a dummy entry in the
                 // batch in order to keep the same order across nodes
+                let dummy_code_share = GaloisRingIrisCodeShare::default_for_party(party_id);
+                let dummy_mask_share = GaloisRingTrimmedMaskCodeShare::default_for_party(party_id);
                 (
                     (
                         (
-                            GaloisRingIrisCodeShare::default(),
-                            GaloisRingTrimmedMaskCodeShare::default(),
-                            GaloisRingIrisCodeShare::default().all_rotations(),
-                            GaloisRingTrimmedMaskCodeShare::default().all_rotations(),
-                            GaloisRingIrisCodeShare::default().all_rotations(),
-                            GaloisRingTrimmedMaskCodeShare::default().all_rotations(),
+                            dummy_code_share.clone(),
+                            dummy_mask_share.clone(),
+                            dummy_code_share.clone().all_rotations(),
+                            dummy_mask_share.clone().all_rotations(),
+                            dummy_code_share.clone().all_rotations(),
+                            dummy_mask_share.clone().all_rotations(),
                         ),
                         (
-                            GaloisRingIrisCodeShare::default(),
-                            GaloisRingTrimmedMaskCodeShare::default(),
-                            GaloisRingIrisCodeShare::default().all_rotations(),
-                            GaloisRingTrimmedMaskCodeShare::default().all_rotations(),
-                            GaloisRingIrisCodeShare::default().all_rotations(),
-                            GaloisRingTrimmedMaskCodeShare::default().all_rotations(),
+                            dummy_code_share.clone(),
+                            dummy_mask_share.clone(),
+                            dummy_code_share.clone().all_rotations(),
+                            dummy_mask_share.clone().all_rotations(),
+                            dummy_code_share.clone().all_rotations(),
+                            dummy_mask_share.clone().all_rotations(),
                         ),
                     ),
                     false,

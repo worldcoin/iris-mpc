@@ -225,7 +225,7 @@ async fn e2e_test() -> Result<()> {
             };
 
             // Invalidate 10% of the queries
-            let is_valid = rng.gen_range(0..2) != 0;
+            let is_valid = rng.gen_range(0..10) != 0;
 
             if is_valid {
                 requests.insert(request_id.to_string(), template.clone());
@@ -242,8 +242,8 @@ async fn e2e_test() -> Result<()> {
 
             // batch0
             if !is_valid {
-                shared_code[0] = GaloisRingIrisCodeShare::default();
-                shared_mask[0] = GaloisRingTrimmedMaskCodeShare::default()
+                shared_code[0] = GaloisRingIrisCodeShare::default_for_party(1);
+                shared_mask[0] = GaloisRingTrimmedMaskCodeShare::default_for_party(1)
             }
             batch0.metadata.push(Default::default());
             batch0.valid_entries.push(is_valid);

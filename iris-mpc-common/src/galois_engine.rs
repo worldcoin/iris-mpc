@@ -283,15 +283,6 @@ pub mod degree4 {
         pub coefs: [u16; MASK_CODE_LENGTH],
     }
 
-    impl Default for GaloisRingTrimmedMaskCodeShare {
-        fn default() -> Self {
-            GaloisRingTrimmedMaskCodeShare {
-                id:    1,
-                coefs: [0u16; MASK_CODE_LENGTH],
-            }
-        }
-    }
-
     impl From<GaloisRingIrisCodeShare> for GaloisRingTrimmedMaskCodeShare {
         fn from(iris_share: GaloisRingIrisCodeShare) -> Self {
             let mut coefs = [0; MASK_CODE_LENGTH];
@@ -305,6 +296,13 @@ pub mod degree4 {
     }
 
     impl GaloisRingTrimmedMaskCodeShare {
+        pub fn default_for_party(party_id: usize) -> Self {
+            GaloisRingTrimmedMaskCodeShare {
+                id:    party_id,
+                coefs: [0u16; MASK_CODE_LENGTH],
+            }
+        }
+
         pub fn preprocess_mask_code_query_share(&mut self) {
             preprocess_coefs(self.id, &mut self.coefs);
         }
@@ -328,15 +326,6 @@ pub mod degree4 {
         pub coefs: [u16; IRIS_CODE_LENGTH],
     }
 
-    impl Default for GaloisRingIrisCodeShare {
-        fn default() -> Self {
-            GaloisRingIrisCodeShare {
-                id:    1,
-                coefs: [0u16; IRIS_CODE_LENGTH],
-            }
-        }
-    }
-
     impl GaloisRingIrisCodeShare {
         // Maps from an index in a flattened array of the new shape to the
         // index in a flattened array of the original shape.
@@ -356,6 +345,13 @@ pub mod degree4 {
 
         pub fn new(id: usize, coefs: [u16; IRIS_CODE_LENGTH]) -> Self {
             Self { id, coefs }
+        }
+
+        pub fn default_for_party(party_id: usize) -> Self {
+            GaloisRingIrisCodeShare {
+                id:    party_id,
+                coefs: [0u16; IRIS_CODE_LENGTH],
+            }
         }
 
         pub fn encode_iris_code<R: CryptoRng + Rng>(

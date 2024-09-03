@@ -421,13 +421,12 @@ impl ServerActor {
         );
 
         ///////////////////////////////////////////////////////////////////
-        // SYNC BATCH CONTENTS
+        // SYNC BATCH CONTENTS AND FILTER OUT INVALID ENTRIES
         ///////////////////////////////////////////////////////////////////
 
         let valid_entries = self.sync_batch_entries(&batch.valid_entries)?;
         let valid_entry_idxs = valid_entries.iter().positions(|&x| x).collect::<Vec<_>>();
-        // Filter out invalid entries
-        batch_size = valid_entries.iter().filter(|&&x| x).count();
+        batch_size = valid_entry_idxs.len();
         batch.retain(&valid_entry_idxs);
 
         ///////////////////////////////////////////////////////////////////
