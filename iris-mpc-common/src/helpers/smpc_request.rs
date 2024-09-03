@@ -28,11 +28,16 @@ pub struct SQSMessage {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SMPCRequest {
+pub struct UniquenessRequest {
     pub batch_size:              Option<usize>,
     pub signup_id:               String,
     pub s3_presigned_url:        String,
     pub iris_shares_file_hashes: [String; 3],
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct IdentityDeletionRequest {
+    pub serial_id: u32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -65,7 +70,7 @@ impl SharesS3Object {
 
 static S3_HTTP_CLIENT: LazyLock<Client> = LazyLock::new(Client::new);
 
-impl SMPCRequest {
+impl UniquenessRequest {
     pub async fn get_iris_data_by_party_id(
         &self,
         party_id: usize,

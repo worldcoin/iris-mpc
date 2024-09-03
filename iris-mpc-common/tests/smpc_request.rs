@@ -4,7 +4,7 @@ mod tests {
     use iris_mpc_common::helpers::{
         key_pair::{SharesDecodingError, SharesEncryptionKeyPairs},
         sha256::calculate_sha256,
-        smpc_request::{IrisCodesJSON, SMPCRequest},
+        smpc_request::{IrisCodesJSON, UniquenessRequest},
     };
     use serde_json::json;
     use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
@@ -40,8 +40,8 @@ mod tests {
         }
     }
 
-    fn get_mock_smpc_request_with_hashes(hashes: [String; 3]) -> SMPCRequest {
-        SMPCRequest {
+    fn get_mock_smpc_request_with_hashes(hashes: [String; 3]) -> UniquenessRequest {
+        UniquenessRequest {
             batch_size:              Some(1),
             signup_id:               "signup_mock".to_string(),
             s3_presigned_url:        "https://example.com/mock".to_string(),
@@ -49,8 +49,8 @@ mod tests {
         }
     }
 
-    fn get_mock_request() -> SMPCRequest {
-        SMPCRequest {
+    fn get_mock_request() -> UniquenessRequest {
+        UniquenessRequest {
             batch_size:              None,
             signup_id:               "test_signup_id".to_string(),
             s3_presigned_url:        "https://example.com/package".to_string(),
@@ -81,7 +81,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let smpc_request = SMPCRequest {
+        let smpc_request = UniquenessRequest {
             batch_size:              None,
             signup_id:               "test_signup_id".to_string(),
             s3_presigned_url:        mock_server.uri().clone() + "/test_presign_url",

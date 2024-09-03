@@ -13,7 +13,7 @@ use iris_mpc_common::{
         aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
         key_pair::SharesEncryptionKeyPairs,
         kms_dh::derive_shared_secret,
-        smpc_request::{ResultEvent, SMPCRequest, SQSMessage},
+        smpc_request::{ResultEvent, SQSMessage, UniquenessRequest},
         sync::SyncState,
         task_monitor::TaskMonitor,
     },
@@ -137,7 +137,7 @@ async fn receive_batch(
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
                     .context("while trying to parse SQSMessage")?;
 
-                let smpc_request: SMPCRequest = serde_json::from_str(&message.message)
+                let smpc_request: UniquenessRequest = serde_json::from_str(&message.message)
                     .context("while trying to parse SMPCRequest")?;
 
                 store
