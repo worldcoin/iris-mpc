@@ -606,11 +606,21 @@ impl ServerActor {
         let mut merged_results =
             get_merged_results(&host_results, self.device_manager.device_count());
 
+        // Sync match results: tell the other nodes about the local results and which
+        // ones should be ignored. Also perform a sanity check.
+        let valid_entries = self.sync_batch_results(
+            &batch.valid_entries,
+            &merged_results
+                .iter()
+                .map(|&x| x == NON_MATCH_ID)
+                .collect::<Vec<_>>(),
+        )?;
+
         // List the indices of the queries that did not match.
         let insertion_list = merged_results
             .iter()
             .enumerate()
-            .filter(|&(_idx, &num)| num == NON_MATCH_ID)
+            .filter(|&(idx, &num)| num == NON_MATCH_ID && valid_entries[idx])
             .map(|(idx, _num)| idx)
             .collect::<Vec<_>>();
 
@@ -625,10 +635,6 @@ impl ServerActor {
             batch_size,
         );
 
-        // Sync match results: tell the other nodes about the local results and which
-        // ones should be ignored. Also perform a sanity check.
-        let matches = self.sync_batch_results(&batch.valid_entries, &matches)?;
-
         // Fetch and truncate the match counters
         let match_counters_devices = self
             .distance_comparator
@@ -638,7 +644,7 @@ impl ServerActor {
             .collect::<Vec<_>>();
 
         // Aggregate across devices
-        let match_counters =
+        let mut match_counters =
             match_counters_devices
                 .iter()
                 .fold(vec![0usize; batch_size], |mut acc, counters| {
@@ -649,9 +655,17 @@ impl ServerActor {
                 });
 
         // Transfer all match ids
-        let match_ids = self
+        let mut match_ids = self
             .distance_comparator
             .fetch_all_match_ids(match_counters_devices);
+
+        // Remove invalid ones
+        for i in 0..valid_entries.len() {
+            if !valid_entries[i] {
+                match_counters[i] = 0;
+                match_ids[i].clear();
+            }
+        }
 
         // Check if there are more matches than we fetch
         // TODO: In the future we might want to dynamically allocate more memory here
@@ -765,6 +779,7 @@ impl ServerActor {
                 request_ids: batch.request_ids,
                 matches,
                 match_ids,
+                valid_entries,
                 store_left: query_store_left,
                 store_right: query_store_right,
             })
@@ -1115,16 +1130,16 @@ impl ServerActor {
     fn sync_batch_results(
         &mut self,
         valid_entries: &[bool],
-        matches: &[bool],
+        non_matches: &[bool],
     ) -> eyre::Result<Vec<bool>> {
         assert!(
-            valid_entries.len() == matches.len(),
-            "Mismatch in valid entries and matches"
+            valid_entries.len() == non_matches.len(),
+            "Mismatch in valid entries and non_matches"
         );
 
         let encoded = valid_entries
             .iter()
-            .zip(matches.iter())
+            .zip(non_matches.iter())
             .map(|(&v, &m)| if v { m as u8 } else { u8::MAX })
             .collect::<Vec<_>>();
 
@@ -1151,9 +1166,9 @@ impl ServerActor {
             let is_valid = [results[0], results[1], results[2]]
                 .iter()
                 .all(|x| x[i] != u8::MAX);
-            valid_merged.push(!is_valid || matches[i]);
+            valid_merged.push(is_valid);
 
-            // If the results are not valid, they should all be the same
+            // If the results are valid, they should all be the same
             if is_valid && (results[0][i] != results[1][i] || results[1][i] != results[2][i]) {
                 eyre::bail!("Mismatch in results across nodes.");
             }
