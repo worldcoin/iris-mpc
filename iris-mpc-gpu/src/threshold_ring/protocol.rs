@@ -13,9 +13,7 @@ use cudarc::{
     nccl::result,
     nvrtc::{self, Ptx},
 };
-use itertools::izip;
-#[cfg(feature = "otp_encrypt")]
-use itertools::Itertools;
+use itertools::{izip, Itertools};
 use std::{ops::Range, sync::Arc};
 
 pub(crate) const B_BITS: usize = 16;
@@ -129,9 +127,7 @@ struct Kernels {
     pub(crate) or_assign:             CudaFunction,
     pub(crate) xor:                   CudaFunction,
     pub(crate) xor_assign:            CudaFunction,
-    #[cfg(feature = "otp_encrypt")]
     pub(crate) single_xor_assign_u16: CudaFunction,
-    #[cfg(feature = "otp_encrypt")]
     pub(crate) single_xor_assign_u64: CudaFunction,
     pub(crate) split:                 CudaFunction,
     pub(crate) lift_split:            CudaFunction,
@@ -174,9 +170,7 @@ impl Kernels {
             .unwrap();
         let xor = dev.get_func(Self::MOD_NAME, "shared_xor").unwrap();
         let xor_assign = dev.get_func(Self::MOD_NAME, "shared_xor_assign").unwrap();
-        #[cfg(feature = "otp_encrypt")]
         let single_xor_assign_u16 = dev.get_func(Self::MOD_NAME, "xor_assign_u16").unwrap();
-        #[cfg(feature = "otp_encrypt")]
         let single_xor_assign_u64 = dev.get_func(Self::MOD_NAME, "xor_assign_u64").unwrap();
         let split = dev.get_func(Self::MOD_NAME, "split").unwrap();
         let lift_split = dev.get_func(Self::MOD_NAME, "lift_split").unwrap();
@@ -198,9 +192,7 @@ impl Kernels {
             or_assign,
             xor,
             xor_assign,
-            #[cfg(feature = "otp_encrypt")]
             single_xor_assign_u16,
-            #[cfg(feature = "otp_encrypt")]
             single_xor_assign_u64,
             split,
             lift_split,
@@ -467,7 +459,6 @@ impl Circuits {
     }
 
     // Fill randomness using the correlated RNG
-    #[cfg(feature = "otp_encrypt")]
     fn fill_my_rand_u64(&mut self, rand: &mut CudaSlice<u64>, idx: usize, streams: &[CudaStream]) {
         let rng = &mut self.rngs[idx];
         let mut rand_trans: CudaViewMut<u32> =
@@ -477,7 +468,6 @@ impl Circuits {
     }
 
     // Fill randomness using the correlated RNG
-    #[cfg(feature = "otp_encrypt")]
     fn fill_their_rand_u64(
         &mut self,
         rand: &mut CudaSlice<u64>,
@@ -651,7 +641,6 @@ impl Circuits {
         }
     }
 
-    #[cfg(feature = "otp_encrypt")]
     fn otp_encrypt_my_rng_u16(
         &mut self,
         input: &CudaView<u16>,
@@ -666,7 +655,6 @@ impl Circuits {
         rand
     }
 
-    #[cfg(feature = "otp_encrypt")]
     fn otp_encrypt_their_rng_u16(
         &mut self,
         input: &CudaView<u16>,
@@ -681,7 +669,6 @@ impl Circuits {
         rand
     }
 
-    #[cfg(feature = "otp_encrypt")]
     fn otp_decrypt_my_rng_u16(
         &mut self,
         input: &mut CudaView<u16>,
@@ -695,7 +682,6 @@ impl Circuits {
         self.single_xor_assign_u16(input, &rand_u16, idx, data_len, streams);
     }
 
-    #[cfg(feature = "otp_encrypt")]
     fn otp_decrypt_their_rng_u16(
         &mut self,
         input: &mut CudaView<u16>,
@@ -709,7 +695,6 @@ impl Circuits {
         self.single_xor_assign_u16(input, &rand_u16, idx, data_len, streams);
     }
 
-    #[cfg(feature = "otp_encrypt")]
     fn otp_encrypt_my_rng_u64(
         &mut self,
         input: &ChunkShareView<u64>,
@@ -730,7 +715,6 @@ impl Circuits {
         rand
     }
 
-    #[cfg(feature = "otp_encrypt")]
     fn otp_decrypt_their_rng_u64(
         &mut self,
         inout: &mut ChunkShareView<u64>,
@@ -759,7 +743,6 @@ impl Circuits {
         self.send_receive_view_with_offset(res, 0..bits * self.chunk_size, streams)
     }
 
-    #[cfg(feature = "otp_encrypt")]
     fn send_receive_view_with_offset_single_gpu(
         &mut self,
         res: &mut ChunkShareView<u64>,
@@ -782,29 +765,6 @@ impl Circuits {
         self.otp_decrypt_their_rng_u64(&mut res.get_range(range.start, range.end), idx, streams);
     }
 
-    #[cfg(not(feature = "otp_encrypt"))]
-    fn send_receive_view_with_offset_single_gpu(
-        &mut self,
-        res: &mut ChunkShareView<u64>,
-        range: Range<usize>,
-        idx: usize,
-        streams: &[CudaStream],
-    ) {
-        result::group_start().unwrap();
-        let send = res.a.slice(range.to_owned());
-        self.comms[idx]
-            .send_view(&send, self.next_id, &streams[idx])
-            .unwrap();
-
-        let mut rcv = res.b.slice(range.to_owned());
-        self.comms[idx]
-            .receive_view(&mut rcv, self.prev_id, &streams[idx])
-            .unwrap();
-
-        result::group_end().unwrap();
-    }
-
-    #[cfg(feature = "otp_encrypt")]
     fn send_receive_view_with_offset(
         &mut self,
         res: &mut [ChunkShareView<u64>],
@@ -843,32 +803,6 @@ impl Circuits {
         }
     }
 
-    #[cfg(not(feature = "otp_encrypt"))]
-    fn send_receive_view_with_offset(
-        &mut self,
-        res: &mut [ChunkShareView<u64>],
-        range: Range<usize>,
-        streams: &[CudaStream],
-    ) {
-        assert_eq!(res.len(), self.n_devices);
-
-        result::group_start().unwrap();
-        for (idx, res) in res.iter().enumerate() {
-            let send = res.a.slice(range.to_owned());
-            self.comms[idx]
-                .send_view(&send, self.next_id, &streams[idx])
-                .unwrap();
-        }
-        for (idx, res) in res.iter_mut().enumerate() {
-            let mut rcv = res.b.slice(range.to_owned());
-            self.comms[idx]
-                .receive_view(&mut rcv, self.prev_id, &streams[idx])
-                .unwrap();
-        }
-        result::group_end().unwrap();
-    }
-
-    #[cfg(feature = "otp_encrypt")]
     fn send_receive_view(&mut self, res: &mut [ChunkShareView<u64>], streams: &[CudaStream]) {
         assert_eq!(res.len(), self.n_devices);
 
@@ -895,25 +829,6 @@ impl Circuits {
         }
     }
 
-    #[cfg(not(feature = "otp_encrypt"))]
-    fn send_receive_view(&mut self, res: &mut [ChunkShareView<u64>], streams: &[CudaStream]) {
-        assert_eq!(res.len(), self.n_devices);
-
-        result::group_start().unwrap();
-        for (idx, res) in res.iter().enumerate() {
-            self.comms[idx]
-                .send_view(&res.a, self.next_id, &streams[idx])
-                .unwrap();
-        }
-        for (idx, res) in res.iter_mut().enumerate() {
-            self.comms[idx]
-                .receive_view(&mut res.b, self.prev_id, &streams[idx])
-                .unwrap();
-        }
-        result::group_end().unwrap();
-    }
-
-    #[cfg(feature = "otp_encrypt")]
     fn send_receive_view_single_gpu(
         &mut self,
         res: &mut ChunkShareView<u64>,
@@ -933,24 +848,6 @@ impl Circuits {
         self.otp_decrypt_their_rng_u64(res, idx, streams);
     }
 
-    #[cfg(not(feature = "otp_encrypt"))]
-    fn send_receive_view_single_gpu(
-        &mut self,
-        res: &mut ChunkShareView<u64>,
-        idx: usize,
-        streams: &[CudaStream],
-    ) {
-        result::group_start().unwrap();
-        self.comms[idx]
-            .send_view(&res.a, self.next_id, &streams[idx])
-            .unwrap();
-        self.comms[idx]
-            .receive_view(&mut res.b, self.prev_id, &streams[idx])
-            .unwrap();
-        result::group_end().unwrap();
-    }
-
-    #[cfg(feature = "otp_encrypt")]
     fn single_xor_assign_u16(
         &self,
         x1: &mut CudaView<u16>,
@@ -973,7 +870,6 @@ impl Circuits {
         }
     }
 
-    #[cfg(feature = "otp_encrypt")]
     fn single_xor_assign_u64(
         &self,
         x1: &mut CudaView<u64>,
@@ -1159,43 +1055,27 @@ impl Circuits {
         }
 
         // OTP encrypt
-        #[cfg(feature = "otp_encrypt")]
-        {
-            let m0 = m0
-                .into_iter()
-                .enumerate()
-                .map(|(idx, m0)| self.otp_encrypt_their_rng_u16(&m0, idx, streams))
-                .collect_vec();
-            let m1 = m1
-                .into_iter()
-                .enumerate()
-                .map(|(idx, m1)| self.otp_encrypt_their_rng_u16(&m1, idx, streams))
-                .collect_vec();
+        let m0 = m0
+            .into_iter()
+            .enumerate()
+            .map(|(idx, m0)| self.otp_encrypt_their_rng_u16(&m0, idx, streams))
+            .collect_vec();
+        let m1 = m1
+            .into_iter()
+            .enumerate()
+            .map(|(idx, m1)| self.otp_encrypt_their_rng_u16(&m1, idx, streams))
+            .collect_vec();
 
-            result::group_start().unwrap();
-            for (idx, (m0, m1)) in izip!(&m0, &m1).enumerate() {
-                self.comms[idx]
-                    .send(m0, self.prev_id, &streams[idx])
-                    .unwrap();
-                self.comms[idx]
-                    .send(m1, self.prev_id, &streams[idx])
-                    .unwrap();
-            }
-            result::group_end().unwrap();
+        result::group_start().unwrap();
+        for (idx, (m0, m1)) in izip!(&m0, &m1).enumerate() {
+            self.comms[idx]
+                .send(m0, self.prev_id, &streams[idx])
+                .unwrap();
+            self.comms[idx]
+                .send(m1, self.prev_id, &streams[idx])
+                .unwrap();
         }
-        #[cfg(not(feature = "otp_encrypt"))]
-        {
-            result::group_start().unwrap();
-            for (idx, (m0, m1)) in izip!(&m0, &m1).enumerate() {
-                self.comms[idx]
-                    .send_view_u16(m0, self.prev_id, &streams[idx])
-                    .unwrap();
-                self.comms[idx]
-                    .send_view_u16(m1, self.prev_id, &streams[idx])
-                    .unwrap();
-            }
-            result::group_end().unwrap();
-        }
+        result::group_end().unwrap();
 
         Buffers::return_single_buffer(&mut self.buffers.single_u16_128c_1, m0_);
         Buffers::return_single_buffer(&mut self.buffers.single_u16_128c_2, m1_);
@@ -1214,7 +1094,6 @@ impl Circuits {
         let mut m1 = Buffers::get_single_buffer_chunk(&m1_, self.chunk_size * 128);
         let mut wc = Buffers::get_single_buffer_chunk(&wc_, self.chunk_size * 128);
 
-        #[cfg(feature = "otp_encrypt")]
         let mut send = Vec::with_capacity(inp.len());
 
         result::group_start().unwrap();
@@ -1247,7 +1126,6 @@ impl Circuits {
             let rand_ca = self.fill_my_rng_into_u16(&mut rand_ca_alloc, idx, streams);
 
             // OTP decrypt
-            #[cfg(feature = "otp_encrypt")]
             {
                 self.otp_decrypt_my_rng_u16(m0, idx, streams);
                 self.otp_decrypt_their_rng_u16(wc, idx, streams);
@@ -1280,27 +1158,15 @@ impl Circuits {
                     .unwrap();
             }
             // OTP encrypt
-            #[cfg(feature = "otp_encrypt")]
             send.push(self.otp_encrypt_their_rng_u16(&res.b, idx, streams));
         }
 
         // Reshare to Helper
         result::group_start().unwrap();
-        #[cfg(feature = "otp_encrypt")]
-        {
-            for (idx, send) in send.iter().enumerate() {
-                self.comms[idx]
-                    .send(send, self.prev_id, &streams[idx])
-                    .unwrap();
-            }
-        }
-        #[cfg(not(feature = "otp_encrypt"))]
-        {
-            for (idx, res) in outp.iter().enumerate() {
-                self.comms[idx]
-                    .send_view_u16(&res.b, self.prev_id, &streams[idx])
-                    .unwrap();
-            }
+        for (idx, send) in send.iter().enumerate() {
+            self.comms[idx]
+                .send(send, self.prev_id, &streams[idx])
+                .unwrap();
         }
         result::group_end().unwrap();
 
@@ -1318,7 +1184,6 @@ impl Circuits {
         let wc_ = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_3);
         let wc = Buffers::get_single_buffer_chunk(&wc_, self.chunk_size * 128);
 
-        #[cfg(feature = "otp_encrypt")]
         let mut send = Vec::with_capacity(inp.len());
 
         for (idx, (inp, res, wc)) in izip!(inp, outp.iter_mut(), &wc).enumerate() {
@@ -1364,26 +1229,14 @@ impl Circuits {
             }
 
             // OTP encrypt
-            #[cfg(feature = "otp_encrypt")]
             send.push(self.otp_encrypt_my_rng_u16(wc, idx, streams));
         }
 
         result::group_start().unwrap();
-        #[cfg(feature = "otp_encrypt")]
-        {
-            for (idx, send) in send.iter().enumerate() {
-                self.comms[idx]
-                    .send(send, self.next_id, &streams[idx])
-                    .unwrap();
-            }
-        }
-        #[cfg(not(feature = "otp_encrypt"))]
-        {
-            for (idx, wc) in wc.iter().enumerate() {
-                self.comms[idx]
-                    .send_view_u16(wc, self.next_id, &streams[idx])
-                    .unwrap();
-            }
+        for (idx, send) in send.iter().enumerate() {
+            self.comms[idx]
+                .send(send, self.next_id, &streams[idx])
+                .unwrap();
         }
         result::group_end().unwrap();
         result::group_start().unwrap();
@@ -1394,7 +1247,6 @@ impl Circuits {
         }
         result::group_end().unwrap();
         // OTP decrypt
-        #[cfg(feature = "otp_encrypt")]
         {
             for (idx, res) in outp.iter_mut().enumerate() {
                 self.otp_decrypt_my_rng_u16(&mut res.a, idx, streams);

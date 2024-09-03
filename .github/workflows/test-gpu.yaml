@@ -65,13 +65,3 @@ jobs:
           NCCL_NET: Socket
           NCCL_P2P_DIRECT_DISABLE: 1
           NCCL_SHM_DISABLE: 1
-
-      - name: GPU Tests w/ OTP encryption
-        timeout-minutes: 10
-        run: cargo test --release --features otp_encrypt,gpu_dependent -- --test-threads=1
-        shell: bash
-        env:
-          NCCL_P2P_LEVEL: LOC
-          NCCL_NET: Socket
-          NCCL_P2P_DIRECT_DISABLE: 1
-          NCCL_SHM_DISABLE: 1
