@@ -10,7 +10,7 @@ apt update && apt install -y postgresql-client && psql -H <DB_URL> -c 'SET searc
 
 # Application Upgrade Documentation
 
-This document provides a step-by-step guide on how to upgrade the application deployed using ArgoCD. The application configuration is located in the `deploy/stage/mpc1-stage`, `deploy/stage/mpc2-stage`, and `deploy/stage/mpc3-stage` directories. Each directory contains a `values-gpu-iris-mpc.yaml` file, which includes the deployment configuration for the respective clusters: `mpc1-stage`, `mpc2-stage`, and `mpc3-stage`, and common value file placed in `deploy/stage/values-common-gpu-iris-mpc.yaml`
+This document provides a step-by-step guide on how to upgrade the application deployed using ArgoCD. The application configuration is located in the `deploy/stage/mpc1-stage`, `deploy/stage/mpc2-stage`, and `deploy/stage/mpc3-stage` directories. Each directory contains a `values-iris-mpc.yaml` file, which includes the deployment configuration for the respective clusters: `mpc1-stage`, `mpc2-stage`, and `mpc3-stage`, and common value file placed in `deploy/stage/values-common-gpu-iris-mpc.yaml`
 
 ## Prerequisites
 
