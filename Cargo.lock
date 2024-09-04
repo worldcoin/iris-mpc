@@ -1129,7 +1129,6 @@ dependencies = [
  "ciborium",
  "clap",
  "criterion-plot",
- "futures",
  "is-terminal",
  "itertools 0.10.5",
  "num-traits",
@@ -1142,7 +1141,6 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "tinytemplate",
- "tokio",
  "walkdir",
 ]
 
@@ -1869,23 +1867,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hawk-pack"
-version = "0.1.0"
-source = "git+ssh://git@github.com/Inversed-Tech/hawk-pack.git?branch=main#07b195fd74a5a05a6e0dd39106894ce194f4ebec"
-dependencies = [
- "aes-prng",
- "criterion",
- "futures",
- "rand",
- "rand_core",
- "serde",
- "serde_json",
- "sqlx",
- "tokio",
- "tokio-stream",
-]
-
-[[package]]
 name = "heck"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2371,7 +2352,6 @@ dependencies = [
  "bytes",
  "eyre",
  "futures",
- "hawk-pack",
  "iris-mpc-common",
  "num-traits",
  "rand",
