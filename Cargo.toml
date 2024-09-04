@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "iris-mpc",
+    "iris-mpc-cpu",
     "iris-mpc-gpu",
     "iris-mpc-common",
     "iris-mpc-upgrade",
