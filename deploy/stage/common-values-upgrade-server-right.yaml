@@ -13,7 +13,6 @@ ports:
   - containerPort: 8000
     name: http
     protocol: TCP
-    port: 8000
 
 livenessProbe:
   initialDelaySeconds: 300
