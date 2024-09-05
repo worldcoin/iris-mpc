@@ -2322,6 +2322,7 @@ dependencies = [
  "aws-sdk-s3",
  "aws-sdk-secretsmanager",
  "aws-sdk-sns",
+ "aws-sdk-sqs",
  "base64 0.22.1",
  "bincode",
  "bytemuck",

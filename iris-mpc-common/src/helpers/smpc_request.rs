@@ -1,9 +1,15 @@
 use super::{key_pair::SharesDecodingError, sha256::calculate_sha256};
 use crate::helpers::key_pair::SharesEncryptionKeyPairs;
+use aws_sdk_sqs::{
+    error::SdkError,
+    operation::{delete_message::DeleteMessageError, receive_message::ReceiveMessageError},
+};
 use base64::{engine::general_purpose::STANDARD, Engine};
+use eyre::Report;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
+use thiserror::Error;
 use tokio_retry::{
     strategy::{jitter, FixedInterval},
     Retry,
@@ -42,6 +48,45 @@ pub struct UniquenessRequest {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct IdentityDeletionRequest {
     pub serial_id: u32,
+}
+
+#[derive(Error, Debug)]
+pub enum ReceiveRequestError {
+    #[error("Failed to read from request SQS: {0}")]
+    FailedToReadFromSQS(#[from] SdkError<ReceiveMessageError>),
+
+    #[error("Failed to delete request from SQS: {0}")]
+    FailedToDeleteFromSQS(#[from] SdkError<DeleteMessageError>),
+
+    #[error("Failed to mark request as deleted in the database: {0}")]
+    FailedToMarkRequestAsDeleted(#[from] Report),
+
+    #[error("Failed to parse {json_name} JSON: {err}")]
+    JsonParseError {
+        json_name: String,
+        err:       serde_json::Error,
+    },
+
+    #[error("Request does not contain a message type attribute")]
+    NoMessageTypeAttribute,
+
+    #[error("Request does not contain a string message type attribute")]
+    NoStringMessageTypeAttribute,
+
+    #[error("Message type attribute is not valid")]
+    InvalidMessageType,
+
+    #[error("Failed to join receive handle: {0}")]
+    FailedToJoinHandle(#[from] tokio::task::JoinError),
+}
+
+impl ReceiveRequestError {
+    pub fn json_parse_error(json_name: &str, err: serde_json::error::Error) -> Self {
+        ReceiveRequestError::JsonParseError {
+            json_name: json_name.to_string(),
+            err,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
