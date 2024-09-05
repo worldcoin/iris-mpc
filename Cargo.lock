@@ -1940,7 +1940,7 @@ dependencies = [
 [[package]]
 name = "hawk-pack"
 version = "0.1.0"
-source = "git+ssh://git@github.com/Inversed-Tech/hawk-pack.git#07b195fd74a5a05a6e0dd39106894ce194f4ebec"
+source = "git+https://github.com/Inversed-Tech/hawk-pack.git#07b195fd74a5a05a6e0dd39106894ce194f4ebec"
 dependencies = [
  "aes-prng",
  "criterion",

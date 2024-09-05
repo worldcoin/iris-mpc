@@ -13,7 +13,7 @@ criterion = { version = "0.5.1", features = ["async_tokio"] }
 env_logger = "0.11.5"
 eyre.workspace = true
 futures.workspace = true
-hawk-pack = {  git = "ssh://git@github.com/Inversed-Tech/hawk-pack.git" }
+hawk-pack = { git = "https://github.com/Inversed-Tech/hawk-pack.git" }
 iris-mpc-common = { path = "../iris-mpc-common" }
 log = "0.4.22"
 num-traits = "0.2"
