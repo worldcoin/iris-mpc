@@ -10,8 +10,6 @@ use iris_mpc_common::galois_engine::degree4::{
 use std::collections::HashSet;
 use tokio::sync::oneshot;
 
-pub const MAX_BATCH_SIZE: usize = 64;
-
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BatchQueryEntries {
     pub code: Vec<GaloisRingIrisCodeShare>,

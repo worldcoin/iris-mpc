@@ -21,10 +21,10 @@ pub fn sync(comm: &NcclComm, state: &SyncState) -> Result<SyncResult> {
 }
 
 // Change these parameters together - see unittests below.
-/// Maximum number of requests in SyncState.
-pub const MAX_REQUESTS: usize = 128;
 /// The fixed serialization size of SyncState.
-const SERIAL_SIZE: usize = 16384;
+pub const MAX_REQUESTS: usize = 256 * 2;
+const MAX_REQUEST_ID_LEN: usize = 36; // uuidv4 string
+const SERIAL_SIZE: usize = MAX_REQUESTS * MAX_REQUEST_ID_LEN;
 
 /// Serialize the state to a fixed-size buffer suitable for all_gather.
 fn serialize(state: &SyncState) -> Result<Vec<u8>> {
@@ -72,7 +72,7 @@ mod tests {
         // My state.
         let state = SyncState {
             db_len:              123,
-            deleted_request_ids: vec!["A".repeat(MAX_REQUEST_ID_LEN); MAX_REQUESTS],
+            deleted_request_ids: vec!["A".repeat(MAX_REQUEST_ID_LEN); 128],
         };
         let state_ser = serialize(&state)?;
         assert_eq!(state_ser.len(), SERIAL_SIZE);

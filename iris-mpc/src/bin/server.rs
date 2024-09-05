@@ -23,11 +23,10 @@ use iris_mpc_gpu::{
     helpers::device_manager::DeviceManager,
     server::{
         heartbeat_nccl::start_heartbeat, sync_nccl, BatchMetadata, BatchQuery, ServerActor,
-        ServerJobResult, MAX_BATCH_SIZE,
+        ServerJobResult,
     },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
-use static_assertions::const_assert;
 use std::{
     mem,
     sync::{Arc, LazyLock, Mutex},
@@ -46,15 +45,11 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
 const DB_BUFFER: usize = 8 * 1_000;
-const RNG_SEED: u64 = 42;
-const SYNC_RESULTS: usize = MAX_BATCH_SIZE * 2;
-const SYNC_QUERIES: usize = MAX_BATCH_SIZE * 2;
-const_assert!(SYNC_QUERIES <= sync_nccl::MAX_REQUESTS);
-const MAX_ROLLBACK: usize = MAX_BATCH_SIZE * 2;
+const RNG_SEED_INIT_DB: u64 = 42;
 const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_CONCURRENT_REQUESTS: usize = 32;
 
-static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(MAX_BATCH_SIZE));
+static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
 
 fn decode_iris_message_shares(
     code_share: String,
@@ -114,6 +109,7 @@ async fn receive_batch(
     store: &Store,
     skip_request_ids: &[String],
     shares_encryption_key_pairs: SharesEncryptionKeyPairs,
+    max_batch_size: usize,
 ) -> eyre::Result<BatchQuery> {
     let mut batch_query = BatchQuery::default();
 
@@ -164,7 +160,7 @@ async fn receive_batch(
                     // at the higher limit. On the other hand, updating it after the batch is
                     // processed would not let us "unblock" the protocol if we're stuck with low
                     // throughput.
-                    *CURRENT_BATCH_SIZE.lock().unwrap() = batch_size.clamp(1, MAX_BATCH_SIZE);
+                    *CURRENT_BATCH_SIZE.lock().unwrap() = batch_size.clamp(1, max_batch_size);
                     tracing::info!("Updating batch size to {}", batch_size);
                 }
 
@@ -400,7 +396,7 @@ async fn initialize_iris_dbs(
     tracing::info!("Initialize persistent iris db with randomly generated shares");
     store
         .init_db_with_random_shares(
-            RNG_SEED,
+            RNG_SEED_INIT_DB,
             party_id,
             config.init_db_size,
             config.clear_db_before_init,
@@ -507,6 +503,13 @@ async fn main() -> eyre::Result<()> {
 }
 
 async fn server_main(config: Config) -> eyre::Result<()> {
+    // Load batch_size config
+    *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
+    let max_sync_lookback: usize = config.max_batch_size * 2;
+    let max_rollback: usize = config.max_batch_size * 2;
+    assert!(max_sync_lookback <= sync_nccl::MAX_REQUESTS);
+    tracing::info!("Set batch size to {}", config.max_batch_size);
+
     tracing::info!("Creating new storage from: {:?}", config);
     let store = Store::new_from_config(&config).await?;
 
@@ -532,7 +535,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     tracing::info!("Replaying results");
     send_result_events(
-        store.last_results(SYNC_RESULTS).await?,
+        store.last_results(max_sync_lookback).await?,
         &sns_client,
         &config,
     )
@@ -544,7 +547,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let my_state = SyncState {
         db_len:              store_len as u64,
-        deleted_request_ids: store.last_deleted_requests(SYNC_QUERIES).await?,
+        deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
     };
 
     tracing::info!("Preparing task monitor");
@@ -609,6 +612,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             8,
             store_len,
             DB_BUFFER,
+            config.max_batch_size,
         ) {
             Ok((actor, handle)) => {
                 tx.send(Ok((handle, sync_result))).unwrap();
@@ -626,7 +630,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     if let Some(db_len) = sync_result.must_rollback_storage() {
         tracing::error!("Databases are out-of-sync: {:?}", sync_result);
-        if db_len + MAX_ROLLBACK < store_len {
+        if db_len + max_rollback < store_len {
             return Err(eyre!(
                 "Refusing to rollback so much (from {} to {})",
                 store_len,
@@ -767,6 +771,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             &store,
             &skip_request_ids,
             shares_encryption_key_pair.clone(),
+            config.max_batch_size,
         );
 
         loop {
@@ -799,6 +804,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 &store,
                 &skip_request_ids,
                 shares_encryption_key_pair.clone(),
+                config.max_batch_size,
             );
 
             // await the result

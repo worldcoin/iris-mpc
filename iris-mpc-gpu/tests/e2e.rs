@@ -6,7 +6,7 @@ use iris_mpc_common::{
 };
 use iris_mpc_gpu::{
     helpers::device_manager::DeviceManager,
-    server::{BatchQuery, ServerActor, ServerJobResult, MAX_BATCH_SIZE},
+    server::{BatchQuery, ServerActor, ServerJobResult},
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{collections::HashMap, env, sync::Arc};
@@ -19,6 +19,7 @@ const DB_BUFFER: usize = 8 * 1000;
 const DB_RNG_SEED: u64 = 0xdeadbeef;
 const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 10;
+const MAX_BATCH_SIZE: usize = 64;
 
 fn generate_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
     let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
@@ -113,6 +114,7 @@ async fn e2e_test() -> Result<()> {
             8,
             DB_SIZE,
             DB_BUFFER,
+            MAX_BATCH_SIZE,
         ) {
             Ok((actor, handle)) => {
                 tx0.send(Ok(handle)).unwrap();
@@ -139,6 +141,7 @@ async fn e2e_test() -> Result<()> {
             8,
             DB_SIZE,
             DB_BUFFER,
+            MAX_BATCH_SIZE,
         ) {
             Ok((actor, handle)) => {
                 tx1.send(Ok(handle)).unwrap();
@@ -165,6 +168,7 @@ async fn e2e_test() -> Result<()> {
             8,
             DB_SIZE,
             DB_BUFFER,
+            MAX_BATCH_SIZE,
         ) {
             Ok((actor, handle)) => {
                 tx2.send(Ok(handle)).unwrap();

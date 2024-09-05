@@ -1,4 +1,4 @@
-use super::{BatchQuery, Eye, ServerJob, ServerJobResult, MAX_BATCH_SIZE};
+use super::{BatchQuery, Eye, ServerJob, ServerJobResult};
 use crate::{
     dot::{
         distance_comparator::DistanceComparator,
@@ -61,7 +61,6 @@ impl ServerActorHandle {
 }
 
 const DB_CHUNK_SIZE: usize = 512;
-const QUERIES: usize = ROTATIONS * MAX_BATCH_SIZE;
 pub struct ServerActor {
     job_queue:              mpsc::Receiver<ServerJob>,
     device_manager:         Arc<DeviceManager>,
@@ -91,6 +90,7 @@ pub struct ServerActor {
     batch_match_list_right: Vec<CudaSlice<u64>>,
     current_db_sizes:       Vec<usize>,
     query_db_size:          Vec<usize>,
+    max_batch_size:         usize,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -105,6 +105,7 @@ impl ServerActor {
         job_queue_size: usize,
         db_size: usize,
         db_buffer: usize,
+        max_batch_size: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let device_manager = Arc::new(DeviceManager::init());
         Self::new_with_device_manager(
@@ -116,6 +117,7 @@ impl ServerActor {
             job_queue_size,
             db_size,
             db_buffer,
+            max_batch_size,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -128,6 +130,7 @@ impl ServerActor {
         job_queue_size: usize,
         db_size: usize,
         db_buffer: usize,
+        max_batch_size: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let ids = device_manager.get_ids_from_magic(0);
         let comms = device_manager.instantiate_network_from_ids(party_id, &ids)?;
@@ -141,6 +144,7 @@ impl ServerActor {
             job_queue_size,
             db_size,
             db_buffer,
+            max_batch_size,
         )
     }
 
@@ -155,6 +159,7 @@ impl ServerActor {
         job_queue_size: usize,
         db_size: usize,
         db_buffer: usize,
+        max_batch_size: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         assert!(
             [left_eye_db.0.len(), right_eye_db.0.len(),]
@@ -189,6 +194,7 @@ impl ServerActor {
             rx,
             db_size,
             db_buffer,
+            max_batch_size,
         )?;
         Ok((actor, ServerActorHandle { job_queue: tx }))
     }
@@ -204,9 +210,11 @@ impl ServerActor {
         job_queue: mpsc::Receiver<ServerJob>,
         db_size: usize,
         db_buffer: usize,
+        max_batch_size: usize,
     ) -> eyre::Result<Self> {
         let mut kdf_nonce = 0;
         let kdf_salt: Salt = Salt::new(HKDF_SHA256, b"IRIS_MPC");
+        let n_queries = max_batch_size * ROTATIONS;
 
         // helper closure to generate the next chacha seeds
         let mut next_chacha_seeds =
@@ -226,7 +234,7 @@ impl ServerActor {
             party_id,
             device_manager.clone(),
             DB_CHUNK_SIZE,
-            QUERIES,
+            n_queries,
             IRIS_CODE_LENGTH,
             next_chacha_seeds(chacha_seeds)?,
             comms.clone(),
@@ -236,7 +244,7 @@ impl ServerActor {
             party_id,
             device_manager.clone(),
             DB_CHUNK_SIZE,
-            QUERIES,
+            n_queries,
             MASK_CODE_LENGTH,
             next_chacha_seeds(chacha_seeds)?,
             comms.clone(),
@@ -264,8 +272,8 @@ impl ServerActor {
         let batch_codes_engine = ShareDB::init(
             party_id,
             device_manager.clone(),
-            QUERIES,
-            QUERIES,
+            n_queries,
+            n_queries,
             IRIS_CODE_LENGTH,
             next_chacha_seeds(chacha_seeds)?,
             comms.clone(),
@@ -274,19 +282,19 @@ impl ServerActor {
         let batch_masks_engine = ShareDB::init(
             party_id,
             device_manager.clone(),
-            QUERIES,
-            QUERIES,
+            n_queries,
+            n_queries,
             MASK_CODE_LENGTH,
             next_chacha_seeds(chacha_seeds)?,
             comms.clone(),
         );
 
         // Phase 2 Setup
-        let phase2_chunk_size = QUERIES * DB_CHUNK_SIZE;
+        let phase2_chunk_size = n_queries * DB_CHUNK_SIZE;
 
         // Not divided by GPU_COUNT since we do the work on all GPUs for simplicity,
         // also not padded to 2048 since we only require it to be a multiple of 64
-        let phase2_batch_chunk_size = QUERIES * QUERIES;
+        let phase2_batch_chunk_size = n_queries * n_queries;
         assert_eq!(
             phase2_batch_chunk_size % 64,
             0,
@@ -316,7 +324,7 @@ impl ServerActor {
             comms.clone(),
         );
 
-        let distance_comparator = DistanceComparator::init(QUERIES, device_manager.clone());
+        let distance_comparator = DistanceComparator::init(n_queries, device_manager.clone());
         // Prepare streams etc.
         let mut streams = vec![];
         let mut cublas_handles = vec![];
@@ -334,10 +342,10 @@ impl ServerActor {
             .prepare_db_match_list((db_size + db_buffer) / device_manager.device_count());
         let db_match_list_right = distance_comparator
             .prepare_db_match_list((db_size + db_buffer) / device_manager.device_count());
-        let batch_match_list_left = distance_comparator.prepare_db_match_list(QUERIES);
-        let batch_match_list_right = distance_comparator.prepare_db_match_list(QUERIES);
+        let batch_match_list_left = distance_comparator.prepare_db_match_list(n_queries);
+        let batch_match_list_right = distance_comparator.prepare_db_match_list(n_queries);
 
-        let query_db_size = vec![QUERIES; device_manager.device_count()];
+        let query_db_size = vec![n_queries; device_manager.device_count()];
 
         for dev in device_manager.devices() {
             dev.synchronize().unwrap();
@@ -370,6 +378,7 @@ impl ServerActor {
             db_match_list_right,
             batch_match_list_left,
             batch_match_list_right,
+            max_batch_size,
         })
     }
 
@@ -394,7 +403,7 @@ impl ServerActor {
 
         let mut batch = batch;
         let mut batch_size = batch.store_left.code.len();
-        assert!(batch_size > 0 && batch_size <= MAX_BATCH_SIZE);
+        assert!(batch_size > 0 && batch_size <= self.max_batch_size);
         assert!(
             batch_size == batch.store_left.mask.len()
                 && batch_size == batch.request_ids.len()
@@ -470,12 +479,12 @@ impl ServerActor {
         };
         let query_store_left = batch.store_left;
 
-        // THIS needs to be MAX_BATCH_SIZE, even though the query can be shorter to have
+        // THIS needs to be max_batch_size, even though the query can be shorter to have
         // enough padding for GEMM
         let compact_device_queries_left = compact_query_left.htod_transfer(
             &self.device_manager,
             &self.streams[0],
-            MAX_BATCH_SIZE,
+            self.max_batch_size,
         )?;
 
         let compact_device_sums_left = compact_device_queries_left.query_sums(
@@ -546,7 +555,7 @@ impl ServerActor {
         let compact_device_queries_right = compact_query_right.htod_transfer(
             &self.device_manager,
             &self.streams[0],
-            MAX_BATCH_SIZE,
+            self.max_batch_size,
         )?;
 
         let compact_device_sums_right = compact_device_queries_right.query_sums(
@@ -798,7 +807,9 @@ impl ServerActor {
         tracing::info!(
             "Batch took {:?} [{:.2} Melems/s]",
             now.elapsed(),
-            (MAX_BATCH_SIZE * previous_total_db_size) as f64 / now.elapsed().as_secs_f64() / 1e6
+            (self.max_batch_size * previous_total_db_size) as f64
+                / now.elapsed().as_secs_f64()
+                / 1e6
         );
         Ok(())
     }
@@ -859,7 +870,8 @@ impl ServerActor {
             }
         );
 
-        let db_sizes_batch = vec![QUERIES; self.device_manager.device_count()];
+        let db_sizes_batch =
+            vec![self.max_batch_size * ROTATIONS; self.device_manager.device_count()];
         let code_dots_batch = self.batch_codes_engine.result_chunk_shares(&db_sizes_batch);
         let mask_dots_batch = self.batch_masks_engine.result_chunk_shares(&db_sizes_batch);
 
@@ -1017,11 +1029,12 @@ impl ServerActor {
             let mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
             {
                 assert_eq!(
-                    (max_chunk_size * QUERIES) % 64,
+                    (max_chunk_size * self.max_batch_size * ROTATIONS) % 64,
                     0,
                     "Phase 2 input size must be a multiple of 64"
                 );
-                self.phase2.set_chunk_size(max_chunk_size * QUERIES / 64);
+                self.phase2
+                    .set_chunk_size(max_chunk_size * self.max_batch_size * ROTATIONS / 64);
                 record_stream_time!(
                     &self.device_manager,
                     batch_streams,
@@ -1052,7 +1065,7 @@ impl ServerActor {
                     &res,
                     &self.distance_comparator,
                     db_match_bitmap,
-                    max_chunk_size * QUERIES / 64,
+                    max_chunk_size * self.max_batch_size * ROTATIONS / 64,
                     &dot_chunk_size,
                     &chunk_size,
                     offset,

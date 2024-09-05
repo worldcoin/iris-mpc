@@ -54,6 +54,9 @@ pub struct Config {
 
     #[serde(default)]
     pub init_db_size: usize,
+
+    #[serde(default)]
+    pub max_batch_size: usize,
 }
 
 fn default_processing_timeout_secs() -> u64 {
