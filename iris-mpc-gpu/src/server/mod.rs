@@ -35,6 +35,8 @@ pub struct BatchQuery {
     pub query_right:   BatchQueryEntries,
     pub db_right:      BatchQueryEntries,
     pub store_right:   BatchQueryEntries,
+    pub deletion_requests:         Vec<u32>,
+    pub deletion_requests_metadata: Vec<BatchMetadata>,
     pub valid_entries: Vec<bool>,
 }
 

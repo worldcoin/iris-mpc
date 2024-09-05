@@ -27,6 +27,10 @@ pub struct SQSMessage {
     pub unsubscribe_url:   String,
 }
 
+pub const SMPC_REQUEST_TYPE_ATTRIBUTE: &str = "message_type";
+pub const IDENTITY_DELETION_REQUEST_TYPE: &str = "identity_deletion";
+pub const UNIQUENESS_REQUEST_TYPE: &str = "uniqueness";
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct UniquenessRequest {
     pub batch_size:              Option<usize>,
@@ -157,6 +161,7 @@ impl UniquenessRequest {
 
         Ok(iris_share)
     }
+
     pub fn validate_iris_share(
         &self,
         party_id: usize,

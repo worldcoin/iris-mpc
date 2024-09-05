@@ -1,7 +1,7 @@
 #![allow(clippy::needless_range_loop)]
 
 use aws_sdk_sns::Client as SNSClient;
-use aws_sdk_sqs::{config::Region, Client};
+use aws_sdk_sqs::{config::Region, types::MessageAttributeValue, Client};
 use axum::{routing::get, Router};
 use clap::Parser;
 use eyre::{eyre, Context};
@@ -13,7 +13,10 @@ use iris_mpc_common::{
         aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
         key_pair::SharesEncryptionKeyPairs,
         kms_dh::derive_shared_secret,
-        smpc_request::{ResultEvent, SQSMessage, UniquenessRequest},
+        smpc_request::{
+            IdentityDeletionRequest, ResultEvent, SQSMessage, UniquenessRequest,
+            IDENTITY_DELETION_REQUEST_TYPE, SMPC_REQUEST_TYPE_ATTRIBUTE, UNIQUENESS_REQUEST_TYPE,
+        },
         sync::SyncState,
         task_monitor::TaskMonitor,
     },
@@ -132,10 +135,48 @@ async fn receive_batch(
 
         if let Some(messages) = rcv_message_output.messages {
             for sqs_message in messages {
-                msg_counter += 1;
-                let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
                     .context("while trying to parse SQSMessage")?;
+
+                let message_attributes = sqs_message.message_attributes.unwrap_or_default();
+
+                let mut batch_metadata = BatchMetadata::default();
+
+                if let Some(trace_id) = message_attributes.get(TRACE_ID_MESSAGE_ATTRIBUTE_NAME) {
+                    let trace_id = trace_id.string_value().unwrap();
+                    batch_metadata.trace_id = trace_id.to_string();
+                }
+                if let Some(span_id) = message_attributes.get(SPAN_ID_MESSAGE_ATTRIBUTE_NAME) {
+                    let span_id = span_id.string_value().unwrap();
+                    batch_metadata.span_id = span_id.to_string();
+                }
+
+                let request_type_attribute = message_attributes.get(SMPC_REQUEST_TYPE_ATTRIBUTE);
+                let default_request_type = MessageAttributeValue::builder()
+                    .string_value(UNIQUENESS_REQUEST_TYPE)
+                    .build()
+                    .unwrap();
+                let request_type = request_type_attribute
+                    .unwrap_or(&default_request_type)
+                    .string_value()
+                    .unwrap_or(UNIQUENESS_REQUEST_TYPE);
+
+                // If it's a deletion request, we just store the serial_id and continue.
+                // Deletion will take place when batch process starts.
+                if request_type == IDENTITY_DELETION_REQUEST_TYPE {
+                    let identity_deletion_request: IdentityDeletionRequest =
+                        serde_json::from_str(&message.message)
+                            .context("while trying to parse IdentityDeletionRequest")?;
+                    batch_query
+                        .deletion_requests
+                        .push(identity_deletion_request.serial_id);
+                    batch_query.deletion_requests_metadata.push(batch_metadata);
+                    continue;
+                }
+
+                msg_counter += 1;
+
+                let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
 
                 let smpc_request: UniquenessRequest = serde_json::from_str(&message.message)
                     .context("while trying to parse SMPCRequest")?;
@@ -166,19 +207,6 @@ async fn receive_batch(
                     // throughput.
                     *CURRENT_BATCH_SIZE.lock().unwrap() = batch_size.clamp(1, MAX_BATCH_SIZE);
                     tracing::info!("Updating batch size to {}", batch_size);
-                }
-
-                let message_attributes = sqs_message.message_attributes.unwrap_or_default();
-
-                let mut batch_metadata = BatchMetadata::default();
-
-                if let Some(trace_id) = message_attributes.get(TRACE_ID_MESSAGE_ATTRIBUTE_NAME) {
-                    let trace_id = trace_id.string_value().unwrap();
-                    batch_metadata.trace_id = trace_id.to_string();
-                }
-                if let Some(span_id) = message_attributes.get(SPAN_ID_MESSAGE_ATTRIBUTE_NAME) {
-                    let span_id = span_id.string_value().unwrap();
-                    batch_metadata.span_id = span_id.to_string();
                 }
 
                 batch_query.request_ids.push(smpc_request.signup_id.clone());
@@ -774,6 +802,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             let batch = next_batch.await?;
 
+            process_identity_deletions(&batch);
+
             // Iterate over a list of tracing payloads, and create logs with mappings to
             // payloads Log at least a "start" event using a log with trace.id and
             // parent.trace.id
@@ -830,4 +860,33 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     }
 
     Ok(())
+}
+
+fn process_identity_deletions(batch: &BatchQuery) {
+    if batch.deletion_requests.is_empty() {
+        return;
+    }
+
+    for (serial_id, tracing_payload) in batch
+        .deletion_requests
+        .iter()
+        .zip(batch.deletion_requests_metadata.iter())
+    {
+        tracing::info!(
+            node_id = tracing_payload.node_id,
+            dd.trace_id = tracing_payload.trace_id,
+            dd.span_id = tracing_payload.span_id,
+            "Started processing deletion request",
+        );
+
+        // TODO: implement deletionlogic here
+
+        tracing::info!(
+            node_id = tracing_payload.node_id,
+            dd.trace_id = tracing_payload.trace_id,
+            dd.span_id = tracing_payload.span_id,
+            "Deleted identity with serial id {}",
+            serial_id,
+        );
+    }
 }
