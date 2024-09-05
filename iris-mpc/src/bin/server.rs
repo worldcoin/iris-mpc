@@ -160,6 +160,8 @@ async fn receive_batch(
 
                 match request_type {
                     IDENTITY_DELETION_REQUEST_TYPE => {
+                        // If it's a deletion request, we just store the serial_id and continue.
+                        // Deletion will take place when batch process starts.
                         let identity_deletion_request: IdentityDeletionRequest =
                             serde_json::from_str(&message.message).map_err(|e| {
                                 ReceiveRequestError::json_parse_error(
@@ -288,7 +290,16 @@ async fn receive_batch(
 
                         handles.push(handle);
                     }
-                    _ => return Err(ReceiveRequestError::InvalidMessageType),
+                    _ => {
+                        client
+                            .delete_message()
+                            .queue_url(queue_url)
+                            .receipt_handle(sqs_message.receipt_handle.unwrap())
+                            .send()
+                            .await
+                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
+                        return Err(ReceiveRequestError::InvalidMessageType);
+                    }
                 }
             }
         } else {
