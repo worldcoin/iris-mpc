@@ -1,7 +1,8 @@
+use axum::{routing::get, Router};
 use clap::Parser;
 use eyre::{bail, Context};
 use futures_concurrency::future::Join;
-use iris_mpc_common::id::PartyID;
+use iris_mpc_common::{helpers::task_monitor::TaskMonitor, id::PartyID};
 use iris_mpc_store::Store;
 use iris_mpc_upgrade::{
     config::{Eye, UpgradeServerConfig},
@@ -53,8 +54,8 @@ async fn main() -> eyre::Result<()> {
 
     tracing::info!("Starting healthcheck server.");
 
-    let mut health_task = JoinSet::new();
-    let _health_check_abort = health_task.spawn(async move {
+    let mut background_tasks = TaskMonitor::new();
+    let _health_check_abort = background_tasks.spawn(async move {
         let app = Router::new().route("/health", get(|| async {})); // implicit 200 return
         let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
             .await
@@ -62,7 +63,6 @@ async fn main() -> eyre::Result<()> {
         axum::serve(listener, app)
             .await
             .wrap_err("healthcheck listener server launch error")?;
-
         Ok(())
     });
 
