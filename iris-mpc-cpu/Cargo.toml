@@ -9,14 +9,26 @@ edition = "2021"
 aes-prng = "0.2"
 bytes = "1.7"
 bytemuck.workspace = true
+criterion = { version = "0.5.1", features = ["async_tokio"] }
+env_logger = "0.11.5"
 eyre.workspace = true
 futures.workspace = true
+hawk-pack = {  git = "ssh://git@github.com/Inversed-Tech/hawk-pack.git" }
 iris-mpc-common = { path = "../iris-mpc-common" }
+log = "0.4.22"
 num-traits = "0.2"
+pprof = { version = "0.13", features = ["flamegraph", "criterion"] }
 rand.workspace = true
+rand_core = "0.6.4"
 rayon.workspace = true
 serde.workspace = true
 static_assertions.workspace = true
 thiserror = "1.0"
 tokio.workspace = true
 tracing.workspace = true
+tracing-test = "0.2.5"
+
+
+[[bench]]
+name = "hnsw"
+harness = false
