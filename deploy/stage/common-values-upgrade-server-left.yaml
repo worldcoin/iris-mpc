@@ -72,4 +72,4 @@ ingress:
   enabled: true
   ingressClassName: traefik-internal
   hosts:
-  - name: upgrade-left.1.stage.smpcv2.worldcoin.dev
+    - upgrade-left.1.stage.smpcv2.worldcoin.dev
