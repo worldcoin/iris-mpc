@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:v0.4.3"
+image: "ghcr.io/worldcoin/iris-mpc:v0.4.4"
 
 environment: stage
 replicaCount: 1
@@ -58,7 +58,7 @@ tolerations:
 serviceAccount:
   create: true
 
-command: ["/bin/upgrade-server"]
+command: [ "/bin/upgrade-server" ]
 
 env:
   - name: SMPC__DATABASE__URL
