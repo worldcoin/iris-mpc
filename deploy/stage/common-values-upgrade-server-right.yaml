@@ -67,3 +67,9 @@ env:
 keelPolling:
   # -- Specifies whether keel should poll for container updates
   enabled: true
+
+ingress:
+  enabled: true
+  ingressClassName: traefik-internal
+  hosts:
+    - name: upgrade-right.1.stage.smpcv2.worldcoin.dev
