@@ -879,7 +879,7 @@ fn process_identity_deletions(batch: &BatchQuery) {
             "Started processing deletion request",
         );
 
-        // TODO: implement deletionlogic here
+        // TODO: implement deletion logic here
 
         tracing::info!(
             node_id = tracing_payload.node_id,
