@@ -2431,6 +2431,7 @@ dependencies = [
 name = "iris-mpc-upgrade"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "bytemuck",
  "clap",
  "eyre",

@@ -13,7 +13,9 @@ ports:
   - containerPort: 8000
     name: http
     protocol: TCP
-    port: 8000
+  - containerPort: 3000
+    name: health
+    protocol: TCP
 
 livenessProbe:
   initialDelaySeconds: 300
@@ -48,12 +50,6 @@ hostNetwork: true
 podSecurityContext:
   runAsUser: 65534
   runAsGroup: 65534
-
-tolerations:
-  - key: "dedicated"
-    operator: "Equal"
-    value: "gpuGroup"
-    effect: "NoSchedule"
 
 serviceAccount:
   create: true

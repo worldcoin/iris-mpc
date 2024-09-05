@@ -1,5 +1,5 @@
 use clap::Parser;
-use eyre::bail;
+use eyre::{bail, Context};
 use futures_concurrency::future::Join;
 use iris_mpc_common::id::PartyID;
 use iris_mpc_store::Store;
@@ -50,6 +50,21 @@ async fn main() -> eyre::Result<()> {
     let mut senders = Vec::with_capacity(args.threads);
 
     let sink = IrisShareDbSink::new(Store::new(&args.db_url, "upgrade").await?, args.eye);
+
+    tracing::info!("Starting healthcheck server.");
+
+    let mut health_task = JoinSet::new();
+    let _health_check_abort = health_task.spawn(async move {
+        let app = Router::new().route("/health", get(|| async {})); // implicit 200 return
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+            .await
+            .wrap_err("healthcheck listener bind error")?;
+        axum::serve(listener, app)
+            .await
+            .wrap_err("healthcheck listener server launch error")?;
+
+        Ok(())
+    });
 
     for _ in 0..args.threads {
         let (sender, receiver) = mpsc::channel(32);
