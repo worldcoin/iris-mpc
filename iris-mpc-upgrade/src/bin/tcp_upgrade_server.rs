@@ -66,6 +66,9 @@ async fn main() -> eyre::Result<()> {
         Ok(())
     });
 
+    background_tasks.check_tasks();
+    tracing::info!("Healthcheck server running on port 3000.");
+
     for _ in 0..args.threads {
         let (sender, receiver) = mpsc::channel(32);
         let finished_counter = Arc::clone(&finished_counter);
