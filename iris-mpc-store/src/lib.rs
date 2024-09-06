@@ -184,6 +184,34 @@ impl Store {
         Ok(())
     }
 
+    /// Update existing iris with given shares.
+    pub async fn update_iris(
+        &self,
+        id: i64,
+        left_iris_share: &GaloisRingIrisCodeShare,
+        left_mask_share: &GaloisRingTrimmedMaskCodeShare,
+        right_iris_share: &GaloisRingIrisCodeShare,
+        right_mask_share: &GaloisRingTrimmedMaskCodeShare,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        let query = sqlx::query(
+            r#"
+UPDATE irises SET (left_code, left_mask, right_code, right_mask) = ($2, $3, $4, $5)
+WHERE id = $1;
+"#,
+        )
+        .bind(id)
+        .bind(cast_slice::<u16, u8>(&left_iris_share.coefs[..]))
+        .bind(cast_slice::<u16, u8>(&left_mask_share.coefs[..]))
+        .bind(cast_slice::<u16, u8>(&right_iris_share.coefs[..]))
+        .bind(cast_slice::<u16, u8>(&right_mask_share.coefs[..]));
+
+        query.execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn insert_or_update_left_iris(
         &self,
         id: i64,
@@ -654,6 +682,68 @@ mod tests {
                 i * 100 + 16
             ]);
         }
+
+        cleanup(&store, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "db_dependent")]
+    async fn test_update_iris() -> Result<()> {
+        let schema_name = temporary_name();
+        let store = Store::new(&test_db_url()?, &schema_name).await?;
+
+        // insert two irises into db
+        let iris = StoredIrisRef {
+            left_code:  &[123_u16; 12800],
+            left_mask:  &[456_u16; 6400],
+            right_code: &[789_u16; 12800],
+            right_mask: &[101_u16; 6400],
+        };
+        let mut tx = store.tx().await?;
+        store.insert_irises(&mut tx, &vec![iris.clone(); 2]).await?;
+        tx.commit().await?;
+
+        // update iris with id 1 in db
+        let updated_left_code = GaloisRingIrisCodeShare {
+            id:    0,
+            coefs: [666_u16; 12800],
+        };
+        let updated_left_mask = GaloisRingTrimmedMaskCodeShare {
+            id:    0,
+            coefs: [777_u16; 6400],
+        };
+        let updated_right_code = GaloisRingIrisCodeShare {
+            id:    0,
+            coefs: [888_u16; 12800],
+        };
+        let updated_right_mask = GaloisRingTrimmedMaskCodeShare {
+            id:    0,
+            coefs: [999_u16; 6400],
+        };
+        store
+            .update_iris(
+                1,
+                &updated_left_code,
+                &updated_left_mask,
+                &updated_right_code,
+                &updated_right_mask,
+            )
+            .await?;
+
+        // assert iris updated in db with new values
+        let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
+        assert_eq!(got.len(), 2);
+        assert_eq!(cast_u8_to_u16(&got[0].left_code), updated_left_code.coefs);
+        assert_eq!(cast_u8_to_u16(&got[0].left_mask), updated_left_mask.coefs);
+        assert_eq!(cast_u8_to_u16(&got[0].right_code), updated_right_code.coefs);
+        assert_eq!(cast_u8_to_u16(&got[0].right_mask), updated_right_mask.coefs);
+
+        // assert the other iris in db is not updated
+        assert_eq!(cast_u8_to_u16(&got[1].left_code), iris.left_code);
+        assert_eq!(cast_u8_to_u16(&got[1].left_mask), iris.left_mask);
+        assert_eq!(cast_u8_to_u16(&got[1].right_code), iris.right_code);
+        assert_eq!(cast_u8_to_u16(&got[1].right_mask), iris.right_mask);
 
         cleanup(&store, &schema_name).await?;
         Ok(())
