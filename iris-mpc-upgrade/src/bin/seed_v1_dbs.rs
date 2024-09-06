@@ -22,7 +22,7 @@ async fn main() -> eyre::Result<()> {
         return Err(eyre::eyre!("Expect 2 shares db urls to be provided"));
     }
 
-    if args.masks_db_url.len() == 0 {
+    if args.masks_db_url.is_empty() {
         return Err(eyre::eyre!("Expect 1 masks db urls to be provided"));
     }
 

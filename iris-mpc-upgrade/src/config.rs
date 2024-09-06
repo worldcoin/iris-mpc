@@ -32,10 +32,7 @@ pub struct UpgradeServerConfig {
     pub bind_addr: SocketAddr,
 
     #[clap(long)]
-    pub shares_db_url: String,
-
-    #[clap(long)]
-    pub masks_db_url: String,
+    pub db_url: String,
 
     #[clap(long)]
     pub party_id: PartyID,
@@ -51,8 +48,7 @@ impl std::fmt::Debug for UpgradeServerConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("UpgradeServerConfig")
             .field("bind_addr", &self.bind_addr)
-            .field("shares_db_url", &"<redacted>")
-            .field("masks_db_url", &"<redacted>")
+            .field("db_url", &"<redacted>")
             .field("party_id", &self.party_id)
             .field("threads", &self.threads)
             .field("eye", &self.eye)
