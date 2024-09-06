@@ -13,7 +13,11 @@ use iris_mpc_common::{
         aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
         key_pair::SharesEncryptionKeyPairs,
         kms_dh::derive_shared_secret,
-        smpc_request::{ResultEvent, SMPCRequest, SQSMessage},
+        smpc_request::{
+            IdentityDeletionRequest, ReceiveRequestError, ResultEvent, SQSMessage,
+            UniquenessRequest, IDENTITY_DELETION_REQUEST_TYPE, SMPC_REQUEST_TYPE_ATTRIBUTE,
+            UNIQUENESS_REQUEST_TYPE,
+        },
         sync::SyncState,
         task_monitor::TaskMonitor,
     },
@@ -114,7 +118,7 @@ async fn receive_batch(
     store: &Store,
     skip_request_ids: &[String],
     shares_encryption_key_pairs: SharesEncryptionKeyPairs,
-) -> eyre::Result<BatchQuery> {
+) -> eyre::Result<BatchQuery, ReceiveRequestError> {
     let mut batch_query = BatchQuery::default();
 
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
@@ -128,45 +132,12 @@ async fn receive_batch(
             .queue_url(queue_url)
             .send()
             .await
-            .context("while calling `receive_message` on SQS client")?;
+            .map_err(ReceiveRequestError::FailedToReadFromSQS)?;
 
         if let Some(messages) = rcv_message_output.messages {
             for sqs_message in messages {
-                msg_counter += 1;
-                let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
-                    .context("while trying to parse SQSMessage")?;
-
-                let smpc_request: SMPCRequest = serde_json::from_str(&message.message)
-                    .context("while trying to parse SMPCRequest")?;
-
-                store
-                    .mark_requests_deleted(&[smpc_request.signup_id.clone()])
-                    .await
-                    .context("while marking requests as deleted")?;
-
-                client
-                    .delete_message()
-                    .queue_url(queue_url)
-                    .receipt_handle(sqs_message.receipt_handle.unwrap())
-                    .send()
-                    .await
-                    .context("while calling `delete_message` on SQS client")?;
-
-                if skip_request_ids.contains(&smpc_request.signup_id) {
-                    // Some party (maybe us) already meant to delete this request, so we skip it.
-                    continue;
-                }
-
-                if let Some(batch_size) = smpc_request.batch_size {
-                    // Updating the batch size instantly makes it a bit unpredictable, since
-                    // if we're already above the new limit, we'll still process the current batch
-                    // at the higher limit. On the other hand, updating it after the batch is
-                    // processed would not let us "unblock" the protocol if we're stuck with low
-                    // throughput.
-                    *CURRENT_BATCH_SIZE.lock().unwrap() = batch_size.clamp(1, MAX_BATCH_SIZE);
-                    tracing::info!("Updating batch size to {}", batch_size);
-                }
+                    .map_err(|e| ReceiveRequestError::json_parse_error("SQS body", e))?;
 
                 let message_attributes = sqs_message.message_attributes.unwrap_or_default();
 
@@ -181,70 +152,155 @@ async fn receive_batch(
                     batch_metadata.span_id = span_id.to_string();
                 }
 
-                batch_query.request_ids.push(smpc_request.signup_id.clone());
-                batch_query.metadata.push(batch_metadata);
+                let request_type = message_attributes
+                    .get(SMPC_REQUEST_TYPE_ATTRIBUTE)
+                    .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?
+                    .string_value()
+                    .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?;
 
-                let semaphore = Arc::clone(&semaphore);
-                let handle = tokio::spawn(async move {
-                    let _ = semaphore.acquire().await?;
-
-                    let base_64_encoded_message_payload =
-                        match smpc_request.get_iris_data_by_party_id(party_id).await {
-                            Ok(iris_message_share) => iris_message_share,
-                            Err(e) => {
-                                tracing::error!("Failed to get iris shares: {:?}", e);
-                                eyre::bail!("Failed to get iris shares: {:?}", e);
-                            }
-                        };
-
-                    let iris_message_share = match smpc_request.decrypt_iris_share(
-                        base_64_encoded_message_payload,
-                        shares_encryption_key_pairs.clone(),
-                    ) {
-                        Ok(iris_data) => iris_data,
-                        Err(e) => {
-                            tracing::error!("Failed to decrypt iris shares: {:?}", e);
-                            eyre::bail!("Failed to decrypt iris shares: {:?}", e);
-                        }
-                    };
-
-                    match smpc_request.validate_iris_share(party_id, iris_message_share.clone()) {
-                        Ok(_) => {}
-                        Err(e) => {
-                            tracing::error!("Failed to validate iris shares: {:?}", e);
-                            eyre::bail!("Failed to validate iris shares: {:?}", e);
-                        }
+                match request_type {
+                    IDENTITY_DELETION_REQUEST_TYPE => {
+                        // If it's a deletion request, we just store the serial_id and continue.
+                        // Deletion will take place when batch process starts.
+                        let identity_deletion_request: IdentityDeletionRequest =
+                            serde_json::from_str(&message.message).map_err(|e| {
+                                ReceiveRequestError::json_parse_error(
+                                    "Identity deletion request",
+                                    e,
+                                )
+                            })?;
+                        batch_query
+                            .deletion_requests
+                            .push(identity_deletion_request.serial_id);
+                        batch_query.deletion_requests_metadata.push(batch_metadata);
+                        client
+                            .delete_message()
+                            .queue_url(queue_url)
+                            .receipt_handle(sqs_message.receipt_handle.unwrap())
+                            .send()
+                            .await
+                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
                     }
+                    UNIQUENESS_REQUEST_TYPE => {
+                        msg_counter += 1;
 
-                    let (left_code, left_mask) = decode_iris_message_shares(
-                        iris_message_share.left_iris_code_shares,
-                        iris_message_share.left_iris_mask_shares,
-                    )?;
+                        let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
 
-                    let (right_code, right_mask) = decode_iris_message_shares(
-                        iris_message_share.right_iris_code_shares,
-                        iris_message_share.right_iris_mask_shares,
-                    )?;
+                        let smpc_request: UniquenessRequest =
+                            serde_json::from_str(&message.message).map_err(|e| {
+                                ReceiveRequestError::json_parse_error("Uniqueness request", e)
+                            })?;
 
-                    // Preprocess shares for left eye.
-                    let left_future = spawn_blocking(move || {
-                        preprocess_iris_message_shares(left_code, left_mask)
-                    });
+                        store
+                            .mark_requests_deleted(&[smpc_request.signup_id.clone()])
+                            .await
+                            .map_err(ReceiveRequestError::FailedToMarkRequestAsDeleted)?;
 
-                    // Preprocess shares for right eye.
-                    let right_future = spawn_blocking(move || {
-                        preprocess_iris_message_shares(right_code, right_mask)
-                    });
+                        client
+                            .delete_message()
+                            .queue_url(queue_url)
+                            .receipt_handle(sqs_message.receipt_handle.unwrap())
+                            .send()
+                            .await
+                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
 
-                    let (left_result, right_result) = tokio::join!(left_future, right_future);
+                        if skip_request_ids.contains(&smpc_request.signup_id) {
+                            // Some party (maybe us) already meant to delete this request, so we
+                            // skip it.
+                            continue;
+                        }
 
-                    Ok((
-                        left_result.context("while processing left iris shares")??,
-                        right_result.context("while processing right iris shares")??,
-                    ))
-                });
+                        if let Some(batch_size) = smpc_request.batch_size {
+                            // Updating the batch size instantly makes it a bit unpredictable, since
+                            // if we're already above the new limit, we'll still process the current
+                            // batch at the higher limit. On the other
+                            // hand, updating it after the batch is
+                            // processed would not let us "unblock" the protocol if we're stuck with
+                            // low throughput.
+                            *CURRENT_BATCH_SIZE.lock().unwrap() =
+                                batch_size.clamp(1, MAX_BATCH_SIZE);
+                            tracing::info!("Updating batch size to {}", batch_size);
+                        }
 
-                handles.push(handle);
+                        batch_query.request_ids.push(smpc_request.signup_id.clone());
+                        batch_query.metadata.push(batch_metadata);
+
+                        let semaphore = Arc::clone(&semaphore);
+                        let handle = tokio::spawn(async move {
+                            let _ = semaphore.acquire().await?;
+
+                            let base_64_encoded_message_payload =
+                                match smpc_request.get_iris_data_by_party_id(party_id).await {
+                                    Ok(iris_message_share) => iris_message_share,
+                                    Err(e) => {
+                                        tracing::error!("Failed to get iris shares: {:?}", e);
+                                        eyre::bail!("Failed to get iris shares: {:?}", e);
+                                    }
+                                };
+
+                            let iris_message_share = match smpc_request.decrypt_iris_share(
+                                base_64_encoded_message_payload,
+                                shares_encryption_key_pairs.clone(),
+                            ) {
+                                Ok(iris_data) => iris_data,
+                                Err(e) => {
+                                    tracing::error!("Failed to decrypt iris shares: {:?}", e);
+                                    eyre::bail!("Failed to decrypt iris shares: {:?}", e);
+                                }
+                            };
+
+                            match smpc_request
+                                .validate_iris_share(party_id, iris_message_share.clone())
+                            {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    tracing::error!("Failed to validate iris shares: {:?}", e);
+                                    eyre::bail!("Failed to validate iris shares: {:?}", e);
+                                }
+                            }
+
+                            let (left_code, left_mask) = decode_iris_message_shares(
+                                iris_message_share.left_iris_code_shares,
+                                iris_message_share.left_iris_mask_shares,
+                            )?;
+
+                            let (right_code, right_mask) = decode_iris_message_shares(
+                                iris_message_share.right_iris_code_shares,
+                                iris_message_share.right_iris_mask_shares,
+                            )?;
+
+                            // Preprocess shares for left eye.
+                            let left_future = spawn_blocking(move || {
+                                preprocess_iris_message_shares(left_code, left_mask)
+                            });
+
+                            // Preprocess shares for right eye.
+                            let right_future = spawn_blocking(move || {
+                                preprocess_iris_message_shares(right_code, right_mask)
+                            });
+
+                            let (left_result, right_result) =
+                                tokio::join!(left_future, right_future);
+
+                            Ok((
+                                left_result.context("while processing left iris shares")??,
+                                right_result.context("while processing right iris shares")??,
+                            ))
+                        });
+
+                        handles.push(handle);
+                    }
+                    _ => {
+                        client
+                            .delete_message()
+                            .queue_url(queue_url)
+                            .receipt_handle(sqs_message.receipt_handle.unwrap())
+                            .send()
+                            .await
+                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
+                        tracing::error!("Error: {}", ReceiveRequestError::InvalidMessageType);
+                    }
+                }
             }
         } else {
             tokio::time::sleep(SQS_POLLING_INTERVAL).await;
@@ -272,7 +328,10 @@ async fn receive_batch(
                 ),
             ),
             valid_entry,
-        ) = match handle.await? {
+        ) = match handle
+            .await
+            .map_err(ReceiveRequestError::FailedToJoinHandle)?
+        {
             Ok(res) => (res, true),
             Err(e) => {
                 tracing::error!("Failed to process iris shares: {:?}", e);
@@ -774,6 +833,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             let batch = next_batch.await?;
 
+            process_identity_deletions(&batch);
+
             // Iterate over a list of tracing payloads, and create logs with mappings to
             // payloads Log at least a "start" event using a log with trace.id and
             // parent.trace.id
@@ -830,4 +891,33 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     }
 
     Ok(())
+}
+
+fn process_identity_deletions(batch: &BatchQuery) {
+    if batch.deletion_requests.is_empty() {
+        return;
+    }
+
+    for (serial_id, tracing_payload) in batch
+        .deletion_requests
+        .iter()
+        .zip(batch.deletion_requests_metadata.iter())
+    {
+        tracing::info!(
+            node_id = tracing_payload.node_id,
+            dd.trace_id = tracing_payload.trace_id,
+            dd.span_id = tracing_payload.span_id,
+            "Started processing deletion request",
+        );
+
+        // TODO: implement deletion logic here
+
+        tracing::info!(
+            node_id = tracing_payload.node_id,
+            dd.trace_id = tracing_payload.trace_id,
+            dd.span_id = tracing_payload.span_id,
+            "Deleted identity with serial id {}",
+            serial_id,
+        );
+    }
 }
