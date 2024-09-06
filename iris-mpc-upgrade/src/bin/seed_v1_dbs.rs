@@ -27,27 +27,27 @@ async fn main() -> eyre::Result<()> {
     }
 
     let shares_db_config0 = DbConfig {
-        url: args.shares_db_urls[0].clone(),
+        url:     args.shares_db_urls[0].clone(),
         migrate: true,
-        create: true,
+        create:  true,
     };
-    
+
     let shares_db_config1 = DbConfig {
-        url: args.shares_db_urls[1].clone(),
+        url:     args.shares_db_urls[1].clone(),
         migrate: true,
-        create: true,
+        create:  true,
     };
 
     let masks_db_config = DbConfig {
-        url: args.masks_db_url.clone(),
+        url:     args.masks_db_url.clone(),
         migrate: true,
-        create: true,
+        create:  true,
     };
 
     let shares_db0 = Db::new(&shares_db_config0).await?;
     let shares_db1 = Db::new(&shares_db_config1).await?;
     let masks_db = Db::new(&masks_db_config).await?;
-    
+
     let mut rng = rand::thread_rng();
 
     let mut masks = Vec::with_capacity(args.num_elements as usize);
@@ -67,7 +67,7 @@ async fn main() -> eyre::Result<()> {
         shares1.push((i, encoded[1]));
     }
     masks_db.insert_masks(&masks).await?;
-    
+
     shares_db0.insert_shares(&shares0).await?;
     shares_db1.insert_shares(&shares1).await?;
 
