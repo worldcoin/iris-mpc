@@ -9,7 +9,7 @@ use iris_mpc_common::{
     helpers::{
         key_pair::download_public_key,
         sha256::calculate_sha256,
-        smpc_request::{IrisCodesJSON, ResultEvent, UniquenessRequest},
+        smpc_request::{IrisCodesJSON, UniquenessResult, UniquenessRequest},
         sqs_s3_helper::upload_file_and_generate_presigned_url,
     },
     iris_db::{db::IrisDB, iris::IrisCode},
@@ -145,7 +145,7 @@ async fn main() -> eyre::Result<()> {
             for msg in msg.messages.unwrap_or_default() {
                 counter += 1;
 
-                let result: ResultEvent = serde_json::from_str(&msg.body.context("No body found")?)
+                let result: UniquenessResult = serde_json::from_str(&msg.body.context("No body found")?)
                     .context("Failed to parse message body")?;
 
                 println!("Received result: {:?}", result);

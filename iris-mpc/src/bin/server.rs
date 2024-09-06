@@ -1,6 +1,6 @@
 #![allow(clippy::needless_range_loop)]
 
-use aws_sdk_sns::Client as SNSClient;
+use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{routing::get, Router};
 use clap::Parser;
@@ -14,9 +14,9 @@ use iris_mpc_common::{
         key_pair::SharesEncryptionKeyPairs,
         kms_dh::derive_shared_secret,
         smpc_request::{
-            IdentityDeletionRequest, ReceiveRequestError, ResultEvent, SQSMessage,
-            UniquenessRequest, IDENTITY_DELETION_REQUEST_TYPE, SMPC_REQUEST_TYPE_ATTRIBUTE,
-            UNIQUENESS_REQUEST_TYPE,
+            create_message_type_attribute_map, IdentityDeletionRequest, ReceiveRequestError,
+            UniquenessResult, SQSMessage, UniquenessRequest, IDENTITY_DELETION_REQUEST_TYPE,
+            SMPC_REQUEST_TYPE_ATTRIBUTE, UNIQUENESS_REQUEST_TYPE,
         },
         sync::SyncState,
         task_monitor::TaskMonitor,
@@ -34,6 +34,8 @@ use iris_mpc_gpu::{
 use iris_mpc_store::{Store, StoredIrisRef};
 use rand::{rngs::StdRng, SeedableRng};
 use std::{
+    borrow::Cow,
+    collections::HashMap,
     mem,
     sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
@@ -517,17 +519,21 @@ async fn initialize_iris_dbs(
     ))
 }
 
-async fn send_result_events(
+async fn send_uniqueness_results(
     result_events: Vec<String>,
     sns_client: &SNSClient,
     config: &Config,
 ) -> eyre::Result<()> {
+    static UNIQUENESS_MESSAGE_ATTRIBUTE: LazyLock<HashMap<String, MessageAttributeValue>> =
+        LazyLock::new(|| create_message_type_attribute_map(UNIQUENESS_REQUEST_TYPE));
+
     for result_event in result_events {
         sns_client
             .publish()
             .topic_arn(&config.results_topic_arn)
             .message(result_event)
             .message_group_id(format!("party-id-{}", config.party_id))
+            .set_message_attributes(Some(Cow::Borrowed(&*UNIQUENESS_MESSAGE_ATTRIBUTE).into_owned()))
             .send()
             .await?;
     }
@@ -595,7 +601,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let chacha_seeds = initialize_chacha_seeds(&config.kms_key_arns, party_id).await?;
 
     tracing::info!("Replaying results");
-    send_result_events(
+    send_uniqueness_results(
         store.last_results(max_sync_lookback).await?,
         &sns_client,
         &config,
@@ -726,7 +732,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .iter()
                 .enumerate()
                 .map(|(i, &idx_result)| {
-                    let result_event = ResultEvent::new(
+                    let result_event = UniquenessResult::new(
                         party_id,
                         match matches[i] {
                             true => None,
@@ -777,7 +783,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             tx.commit().await?;
 
             tracing::info!("Sending {} results", result_events.len());
-            send_result_events(result_events, &sns_client_bg, &config_bg).await?;
+            send_uniqueness_results(result_events, &sns_client_bg, &config_bg).await?;
         }
 
         Ok(())

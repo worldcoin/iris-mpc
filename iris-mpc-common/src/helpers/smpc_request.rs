@@ -1,5 +1,6 @@
 use super::{key_pair::SharesDecodingError, sha256::calculate_sha256};
 use crate::helpers::key_pair::SharesEncryptionKeyPairs;
+use aws_sdk_sns::types::MessageAttributeValue;
 use aws_sdk_sqs::{
     error::SdkError,
     operation::{delete_message::DeleteMessageError, receive_message::ReceiveMessageError},
@@ -8,7 +9,7 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use eyre::Report;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::sync::LazyLock;
+use std::{collections::HashMap, sync::LazyLock};
 use thiserror::Error;
 use tokio_retry::{
     strategy::{jitter, FixedInterval},
@@ -221,7 +222,7 @@ impl UniquenessRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ResultEvent {
+pub struct UniquenessResult {
     pub node_id:            usize,
     pub serial_id:          Option<u32>,
     pub is_match:           bool,
@@ -229,7 +230,7 @@ pub struct ResultEvent {
     pub matched_serial_ids: Option<Vec<u32>>,
 }
 
-impl ResultEvent {
+impl UniquenessResult {
     pub fn new(
         node_id: usize,
         serial_id: Option<u32>,
@@ -245,4 +246,20 @@ impl ResultEvent {
             matched_serial_ids,
         }
     }
+}
+
+pub fn create_message_type_attribute_map(
+    message_type: &str,
+) -> HashMap<String, MessageAttributeValue> {
+    let mut message_attributes_map = HashMap::new();
+    let message_type_attribute = MessageAttributeValue::builder()
+        .data_type("String")
+        .string_value(message_type)
+        .build()
+        .unwrap();
+    message_attributes_map.insert(
+        SMPC_REQUEST_TYPE_ATTRIBUTE.to_string(),
+        message_type_attribute,
+    );
+    message_attributes_map
 }
