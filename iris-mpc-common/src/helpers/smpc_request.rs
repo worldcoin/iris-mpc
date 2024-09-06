@@ -248,6 +248,23 @@ impl UniquenessResult {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct IdentityDeletionResult {
+    pub node_id:   usize,
+    pub serial_id: u32,
+    pub success:   bool,
+}
+
+impl IdentityDeletionResult {
+    pub fn new(node_id: usize, serial_id: u32, success: bool) -> Self {
+        Self {
+            node_id,
+            serial_id,
+            success,
+        }
+    }
+}
+
 pub fn create_message_type_attribute_map(
     message_type: &str,
 ) -> HashMap<String, MessageAttributeValue> {

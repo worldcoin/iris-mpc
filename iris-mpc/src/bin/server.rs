@@ -14,9 +14,9 @@ use iris_mpc_common::{
         key_pair::SharesEncryptionKeyPairs,
         kms_dh::derive_shared_secret,
         smpc_request::{
-            create_message_type_attribute_map, IdentityDeletionRequest, ReceiveRequestError,
-            UniquenessResult, SQSMessage, UniquenessRequest, IDENTITY_DELETION_REQUEST_TYPE,
-            SMPC_REQUEST_TYPE_ATTRIBUTE, UNIQUENESS_REQUEST_TYPE,
+            create_message_type_attribute_map, IdentityDeletionRequest, IdentityDeletionResult,
+            ReceiveRequestError, SQSMessage, UniquenessRequest, UniquenessResult,
+            IDENTITY_DELETION_REQUEST_TYPE, SMPC_REQUEST_TYPE_ATTRIBUTE, UNIQUENESS_REQUEST_TYPE,
         },
         sync::SyncState,
         task_monitor::TaskMonitor,
@@ -34,7 +34,6 @@ use iris_mpc_gpu::{
 use iris_mpc_store::{Store, StoredIrisRef};
 use rand::{rngs::StdRng, SeedableRng};
 use std::{
-    borrow::Cow,
     collections::HashMap,
     mem,
     sync::{Arc, LazyLock, Mutex},
@@ -519,21 +518,19 @@ async fn initialize_iris_dbs(
     ))
 }
 
-async fn send_uniqueness_results(
+async fn send_results_to_sns(
     result_events: Vec<String>,
     sns_client: &SNSClient,
     config: &Config,
+    message_attributes: &HashMap<String, MessageAttributeValue>,
 ) -> eyre::Result<()> {
-    static UNIQUENESS_MESSAGE_ATTRIBUTE: LazyLock<HashMap<String, MessageAttributeValue>> =
-        LazyLock::new(|| create_message_type_attribute_map(UNIQUENESS_REQUEST_TYPE));
-
     for result_event in result_events {
         sns_client
             .publish()
             .topic_arn(&config.results_topic_arn)
             .message(result_event)
             .message_group_id(format!("party-id-{}", config.party_id))
-            .set_message_attributes(Some(Cow::Borrowed(&*UNIQUENESS_MESSAGE_ATTRIBUTE).into_owned()))
+            .set_message_attributes(Some(message_attributes.clone()))
             .send()
             .await?;
     }
@@ -600,11 +597,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Deriving shared secrets");
     let chacha_seeds = initialize_chacha_seeds(&config.kms_key_arns, party_id).await?;
 
+    let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_REQUEST_TYPE);
+    let identity_deletion_result_attributes =
+        create_message_type_attribute_map(UNIQUENESS_REQUEST_TYPE);
     tracing::info!("Replaying results");
-    send_uniqueness_results(
+    send_results_to_sns(
         store.last_results(max_sync_lookback).await?,
         &sns_client,
         &config,
+        &uniqueness_result_attributes,
     )
     .await?;
 
@@ -782,8 +783,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             tx.commit().await?;
 
-            tracing::info!("Sending {} results", result_events.len());
-            send_uniqueness_results(result_events, &sns_client_bg, &config_bg).await?;
+            tracing::info!("Sending {} uniqueness results", result_events.len());
+            send_results_to_sns(
+                result_events,
+                &sns_client_bg,
+                &config_bg,
+                &uniqueness_result_attributes,
+            )
+            .await?;
         }
 
         Ok(())
@@ -853,6 +860,28 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 &store,
                 &dummy_shares_for_deletions.0,
                 &dummy_shares_for_deletions.1,
+            )
+            .await?;
+
+            let identity_deletion_results = batch
+                .deletion_requests
+                .iter()
+                .map(|serial_id| {
+                    let result_event = IdentityDeletionResult::new(party_id, *serial_id, true);
+                    serde_json::to_string(&result_event)
+                        .wrap_err("failed to serialize identity deletion result")
+                })
+                .collect::<eyre::Result<Vec<_>>>()?;
+
+            tracing::info!(
+                "Sending {} identity deletion results",
+                identity_deletion_results.len()
+            );
+            send_results_to_sns(
+                identity_deletion_results,
+                &sns_client,
+                &config,
+                &identity_deletion_result_attributes,
             )
             .await?;
 
