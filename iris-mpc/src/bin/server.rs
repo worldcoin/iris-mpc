@@ -830,12 +830,20 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             shares_encryption_key_pair.clone(),
         );
 
+        let dummy_shares_for_deletions = get_dummy_shares_for_deletion(party_id);
+
         loop {
             let now = Instant::now();
 
             let batch = next_batch.await?;
 
-            process_identity_deletions(party_id, &batch, &store).await?;
+            process_identity_deletions(
+                &batch,
+                &store,
+                &dummy_shares_for_deletions.0,
+                &dummy_shares_for_deletions.1,
+            )
+            .await?;
 
             // Iterate over a list of tracing payloads, and create logs with mappings to
             // payloads Log at least a "start" event using a log with trace.id and
@@ -896,9 +904,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 }
 
 async fn process_identity_deletions(
-    party_id: usize,
     batch: &BatchQuery,
     store: &Store,
+    dummy_iris_share: &GaloisRingIrisCodeShare,
+    dummy_mask_share: &GaloisRingTrimmedMaskCodeShare,
 ) -> eyre::Result<()> {
     if batch.deletion_requests.is_empty() {
         return Ok(());
@@ -916,17 +925,15 @@ async fn process_identity_deletions(
             "Started processing deletion request",
         );
 
-        let (dummy_iris_share, dummy_mask_share) = get_dummy_shares_for_deletion(party_id);
-
         // overwrite postgres db with dummy values.
         // note that both serial_id and postgres db are 1-indexed.
         store
             .update_iris(
                 *serial_id as i64,
-                &dummy_iris_share,
-                &dummy_mask_share,
-                &dummy_iris_share,
-                &dummy_mask_share,
+                dummy_iris_share,
+                dummy_mask_share,
+                dummy_iris_share,
+                dummy_mask_share,
             )
             .await?;
 
