@@ -5,7 +5,11 @@ use rand::Rng;
 #[derive(Debug, Clone, Parser)]
 struct Args {
     #[clap(long)]
-    db_urls:      Vec<String>,
+    shares_db_urls: Vec<String>,
+
+    #[clap(long)]
+    masks_db_url: String,
+
     #[clap(long)]
     num_elements: u64,
 }
@@ -14,22 +18,35 @@ struct Args {
 async fn main() -> eyre::Result<()> {
     let args = Args::parse();
 
-    if args.db_urls.len() != 2 {
-        return Err(eyre::eyre!("Expect 2 db urls to be provided"));
+    if args.shares_db_urls.len() != 2 {
+        return Err(eyre::eyre!("Expect 2 shares db urls to be provided"));
     }
 
-    let db_config0 = DbConfig {
-        url:     args.db_urls[0].clone(),
+    if args.masks_db_url.is_empty() {
+        return Err(eyre::eyre!("Expect 1 masks db urls to be provided"));
+    }
+
+    let shares_db_config0 = DbConfig {
+        url:     args.shares_db_urls[0].clone(),
         migrate: true,
         create:  true,
     };
-    let db_config1 = DbConfig {
-        url:     args.db_urls[1].clone(),
+
+    let shares_db_config1 = DbConfig {
+        url:     args.shares_db_urls[1].clone(),
         migrate: true,
         create:  true,
     };
-    let db0 = Db::new(&db_config0).await?;
-    let db1 = Db::new(&db_config1).await?;
+
+    let masks_db_config = DbConfig {
+        url:     args.masks_db_url.clone(),
+        migrate: true,
+        create:  true,
+    };
+
+    let shares_db0 = Db::new(&shares_db_config0).await?;
+    let shares_db1 = Db::new(&shares_db_config1).await?;
+    let masks_db = Db::new(&masks_db_config).await?;
 
     let mut rng = rand::thread_rng();
 
@@ -49,10 +66,10 @@ async fn main() -> eyre::Result<()> {
         shares0.push((i, encoded[0]));
         shares1.push((i, encoded[1]));
     }
-    db0.insert_masks(&masks).await?;
-    db1.insert_masks(&masks).await?;
-    db0.insert_shares(&shares0).await?;
-    db1.insert_shares(&shares1).await?;
+    masks_db.insert_masks(&masks).await?;
+
+    shares_db0.insert_shares(&shares0).await?;
+    shares_db1.insert_shares(&shares1).await?;
 
     Ok(())
 }

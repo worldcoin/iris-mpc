@@ -78,7 +78,10 @@ async fn main() -> eyre::Result<()> {
 
     // need this to maybe store the PG db or otherwise the borrow checker complains
     #[allow(unused_assignments)]
-    let mut maybe_db = None;
+    let mut maybe_shares_db = None;
+
+    #[allow(unused_assignments)]
+    let mut maybe_masks_db = None;
 
     #[allow(clippy::type_complexity)]
     let (mut shares_stream, mut mask_stream): (
@@ -97,13 +100,22 @@ async fn main() -> eyre::Result<()> {
             _ => unreachable!(),
         }
     } else {
-        maybe_db = Some(V1Database {
-            db: V1Db::new(&args.db_url).await?,
+        maybe_shares_db = Some(V1Database {
+            db: V1Db::new(&args.shares_db_url).await?,
+        });
+
+        maybe_masks_db = Some(V1Database {
+            db: V1Db::new(&args.masks_db_url).await?,
         });
 
         (
-            Box::pin(maybe_db.as_ref().unwrap().stream_shares(db_range.clone())?),
-            Box::pin(maybe_db.as_ref().unwrap().stream_masks(db_range)?),
+            Box::pin(
+                maybe_shares_db
+                    .as_ref()
+                    .unwrap()
+                    .stream_shares(db_range.clone())?,
+            ),
+            Box::pin(maybe_masks_db.as_ref().unwrap().stream_masks(db_range)?),
         )
     };
 
