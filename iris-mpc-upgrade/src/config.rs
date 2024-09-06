@@ -2,7 +2,8 @@ use clap::Parser;
 use iris_mpc_common::id::PartyID;
 use std::{
     fmt::{self, Formatter},
-    net::SocketAddr,
+    io,
+    net::{SocketAddr, ToSocketAddrs},
     str::FromStr,
 };
 
@@ -57,13 +58,13 @@ impl std::fmt::Debug for UpgradeServerConfig {
 
 #[derive(Parser)]
 pub struct UpgradeClientConfig {
-    #[clap(long)]
+    #[clap(long,  default_value = "127.0.0.1:8000", value_parser = resolve_host)]
     pub server1: SocketAddr,
 
-    #[clap(long)]
+    #[clap(long,  default_value = "127.0.0.1:8001", value_parser = resolve_host)]
     pub server2: SocketAddr,
 
-    #[clap(long)]
+    #[clap(long,  default_value = "127.0.0.1:8002", value_parser = resolve_host)]
     pub server3: SocketAddr,
 
     #[clap(long)]
@@ -83,6 +84,16 @@ pub struct UpgradeClientConfig {
 
     #[clap(long)]
     pub db_url: String,
+}
+
+fn resolve_host(hostname_port: &str) -> io::Result<SocketAddr> {
+    let socketaddr = hostname_port.to_socket_addrs()?.next().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::AddrNotAvailable,
+            format!("Could not find destination {hostname_port}"),
+        )
+    })?;
+    Ok(socketaddr)
 }
 
 impl std::fmt::Debug for UpgradeClientConfig {
