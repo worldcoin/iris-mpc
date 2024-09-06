@@ -9,7 +9,7 @@ use iris_mpc_common::{
     helpers::{
         key_pair::download_public_key,
         sha256::calculate_sha256,
-        smpc_request::{IrisCodesJSON, ResultEvent, SMPCRequest},
+        smpc_request::{IrisCodesJSON, ResultEvent, UniquenessRequest},
         sqs_s3_helper::upload_file_and_generate_presigned_url,
     },
     iris_db::{db::IrisDB, iris::IrisCode},
@@ -343,7 +343,7 @@ async fn main() -> eyre::Result<()> {
                     }
                 };
 
-                let request_message = SMPCRequest {
+                let request_message = UniquenessRequest {
                     batch_size: None,
                     signup_id: request_id.to_string(),
                     s3_presigned_url: presigned_url,

@@ -1,9 +1,15 @@
 use super::{key_pair::SharesDecodingError, sha256::calculate_sha256};
 use crate::helpers::key_pair::SharesEncryptionKeyPairs;
+use aws_sdk_sqs::{
+    error::SdkError,
+    operation::{delete_message::DeleteMessageError, receive_message::ReceiveMessageError},
+};
 use base64::{engine::general_purpose::STANDARD, Engine};
+use eyre::Report;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
+use thiserror::Error;
 use tokio_retry::{
     strategy::{jitter, FixedInterval},
     Retry,
@@ -27,12 +33,60 @@ pub struct SQSMessage {
     pub unsubscribe_url:   String,
 }
 
+pub const SMPC_REQUEST_TYPE_ATTRIBUTE: &str = "message_type";
+pub const IDENTITY_DELETION_REQUEST_TYPE: &str = "identity_deletion";
+pub const UNIQUENESS_REQUEST_TYPE: &str = "uniqueness";
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SMPCRequest {
+pub struct UniquenessRequest {
     pub batch_size:              Option<usize>,
     pub signup_id:               String,
     pub s3_presigned_url:        String,
     pub iris_shares_file_hashes: [String; 3],
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct IdentityDeletionRequest {
+    pub serial_id: u32,
+}
+
+#[derive(Error, Debug)]
+pub enum ReceiveRequestError {
+    #[error("Failed to read from request SQS: {0}")]
+    FailedToReadFromSQS(#[from] SdkError<ReceiveMessageError>),
+
+    #[error("Failed to delete request from SQS: {0}")]
+    FailedToDeleteFromSQS(#[from] SdkError<DeleteMessageError>),
+
+    #[error("Failed to mark request as deleted in the database: {0}")]
+    FailedToMarkRequestAsDeleted(#[from] Report),
+
+    #[error("Failed to parse {json_name} JSON: {err}")]
+    JsonParseError {
+        json_name: String,
+        err:       serde_json::Error,
+    },
+
+    #[error("Request does not contain a message type attribute")]
+    NoMessageTypeAttribute,
+
+    #[error("Request does not contain a string message type attribute")]
+    NoStringMessageTypeAttribute,
+
+    #[error("Message type attribute is not valid")]
+    InvalidMessageType,
+
+    #[error("Failed to join receive handle: {0}")]
+    FailedToJoinHandle(#[from] tokio::task::JoinError),
+}
+
+impl ReceiveRequestError {
+    pub fn json_parse_error(json_name: &str, err: serde_json::error::Error) -> Self {
+        ReceiveRequestError::JsonParseError {
+            json_name: json_name.to_string(),
+            err,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -65,7 +119,7 @@ impl SharesS3Object {
 
 static S3_HTTP_CLIENT: LazyLock<Client> = LazyLock::new(Client::new);
 
-impl SMPCRequest {
+impl UniquenessRequest {
     pub async fn get_iris_data_by_party_id(
         &self,
         party_id: usize,
@@ -152,6 +206,7 @@ impl SMPCRequest {
 
         Ok(iris_share)
     }
+
     pub fn validate_iris_share(
         &self,
         party_id: usize,
