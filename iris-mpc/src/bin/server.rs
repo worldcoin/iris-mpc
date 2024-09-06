@@ -21,6 +21,7 @@ use iris_mpc_common::{
         sync::SyncState,
         task_monitor::TaskMonitor,
     },
+    iris_db::iris::IrisCode,
     IrisCodeDb, IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use iris_mpc_gpu::{
@@ -31,6 +32,7 @@ use iris_mpc_gpu::{
     },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
+use rand::{rngs::StdRng, SeedableRng};
 use static_assertions::const_assert;
 use std::{
     mem,
@@ -833,7 +835,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             let batch = next_batch.await?;
 
-            process_identity_deletions(&batch);
+            process_identity_deletions(party_id, &batch, &store).await?;
 
             // Iterate over a list of tracing payloads, and create logs with mappings to
             // payloads Log at least a "start" event using a log with trace.id and
@@ -893,9 +895,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     Ok(())
 }
 
-fn process_identity_deletions(batch: &BatchQuery) {
+async fn process_identity_deletions(
+    party_id: usize,
+    batch: &BatchQuery,
+    store: &Store,
+) -> eyre::Result<()> {
     if batch.deletion_requests.is_empty() {
-        return;
+        return Ok(());
     }
 
     for (serial_id, tracing_payload) in batch
@@ -910,7 +916,19 @@ fn process_identity_deletions(batch: &BatchQuery) {
             "Started processing deletion request",
         );
 
-        // TODO: implement deletion logic here
+        let (dummy_iris_share, dummy_mask_share) = get_dummy_shares_for_deletion(party_id);
+
+        // overwrite postgres db with dummy values.
+        // note that both serial_id and postgres db are 1-indexed.
+        store
+            .update_iris(
+                *serial_id as i64,
+                &dummy_iris_share,
+                &dummy_mask_share,
+                &dummy_iris_share,
+                &dummy_mask_share,
+            )
+            .await?;
 
         tracing::info!(
             node_id = tracing_payload.node_id,
@@ -920,4 +938,21 @@ fn process_identity_deletions(batch: &BatchQuery) {
             serial_id,
         );
     }
+
+    Ok(())
+}
+
+fn get_dummy_shares_for_deletion(
+    party_id: usize,
+) -> (GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare) {
+    let mut rng: StdRng = StdRng::seed_from_u64(0);
+    let dummy: IrisCode = IrisCode::default();
+    let iris_share: GaloisRingIrisCodeShare =
+        GaloisRingIrisCodeShare::encode_iris_code(&dummy.code, &dummy.mask, &mut rng)[party_id]
+            .clone();
+    let mask_share: GaloisRingTrimmedMaskCodeShare =
+        GaloisRingIrisCodeShare::encode_mask_code(&dummy.mask, &mut rng)[party_id]
+            .clone()
+            .into();
+    (iris_share, mask_share)
 }
