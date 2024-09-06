@@ -298,7 +298,7 @@ async fn receive_batch(
                             .send()
                             .await
                             .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
-                        return Err(ReceiveRequestError::InvalidMessageType);
+                        tracing::error!("Error: {}", ReceiveRequestError::InvalidMessageType);
                     }
                 }
             }
