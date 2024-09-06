@@ -32,7 +32,10 @@ pub struct UpgradeServerConfig {
     pub bind_addr: SocketAddr,
 
     #[clap(long)]
-    pub db_url: String,
+    pub shares_db_url: String,
+
+    #[clap(long)]
+    pub masks_db_url: String,
 
     #[clap(long)]
     pub party_id: PartyID,
@@ -48,7 +51,8 @@ impl std::fmt::Debug for UpgradeServerConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("UpgradeServerConfig")
             .field("bind_addr", &self.bind_addr)
-            .field("db_url", &"<redacted>")
+            .field("shares_db_url", &"<redacted>")
+            .field("masks_db_url", &"<redacted>")
             .field("party_id", &self.party_id)
             .field("threads", &self.threads)
             .field("eye", &self.eye)
@@ -83,7 +87,10 @@ pub struct UpgradeClientConfig {
     pub mock: bool,
 
     #[clap(long)]
-    pub db_url: String,
+    pub shares_db_url: String,
+
+    #[clap(long)]
+    pub masks_db_url: String,
 }
 
 fn resolve_host(hostname_port: &str) -> io::Result<SocketAddr> {
@@ -102,7 +109,8 @@ impl std::fmt::Debug for UpgradeClientConfig {
             .field("server1", &self.server1)
             .field("server2", &self.server2)
             .field("server3", &self.server3)
-            .field("db_url", &"<redacted>")
+            .field("shares_db_url", &"<redacted>")
+            .field("masks_db_url", &"<redacted>")
             .field("db_start", &self.db_start)
             .field("db_end", &self.db_end)
             .field("party_id", &self.party_id)
