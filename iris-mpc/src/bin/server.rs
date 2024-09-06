@@ -16,7 +16,7 @@ use iris_mpc_common::{
         smpc_request::{
             create_message_type_attribute_map, IdentityDeletionRequest, IdentityDeletionResult,
             ReceiveRequestError, SQSMessage, UniquenessRequest, UniquenessResult,
-            IDENTITY_DELETION_REQUEST_TYPE, SMPC_REQUEST_TYPE_ATTRIBUTE, UNIQUENESS_REQUEST_TYPE,
+            IDENTITY_DELETION_MESSAGE_TYPE, SMPC_MESSAGE_TYPE_ATTRIBUTE, UNIQUENESS_MESSAGE_TYPE,
         },
         sync::SyncState,
         task_monitor::TaskMonitor,
@@ -152,13 +152,13 @@ async fn receive_batch(
                 }
 
                 let request_type = message_attributes
-                    .get(SMPC_REQUEST_TYPE_ATTRIBUTE)
+                    .get(SMPC_MESSAGE_TYPE_ATTRIBUTE)
                     .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?
                     .string_value()
                     .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?;
 
                 match request_type {
-                    IDENTITY_DELETION_REQUEST_TYPE => {
+                    IDENTITY_DELETION_MESSAGE_TYPE => {
                         // If it's a deletion request, we just store the serial_id and continue.
                         // Deletion will take place when batch process starts.
                         let identity_deletion_request: IdentityDeletionRequest =
@@ -180,7 +180,7 @@ async fn receive_batch(
                             .await
                             .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
                     }
-                    UNIQUENESS_REQUEST_TYPE => {
+                    UNIQUENESS_MESSAGE_TYPE => {
                         msg_counter += 1;
 
                         let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
@@ -597,9 +597,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Deriving shared secrets");
     let chacha_seeds = initialize_chacha_seeds(&config.kms_key_arns, party_id).await?;
 
-    let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_REQUEST_TYPE);
+    let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
-        create_message_type_attribute_map(UNIQUENESS_REQUEST_TYPE);
+        create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     tracing::info!("Replaying results");
     send_results_to_sns(
         store.last_results(max_sync_lookback).await?,

@@ -34,9 +34,9 @@ pub struct SQSMessage {
     pub unsubscribe_url:   String,
 }
 
-pub const SMPC_REQUEST_TYPE_ATTRIBUTE: &str = "message_type";
-pub const IDENTITY_DELETION_REQUEST_TYPE: &str = "identity_deletion";
-pub const UNIQUENESS_REQUEST_TYPE: &str = "uniqueness";
+pub const SMPC_MESSAGE_TYPE_ATTRIBUTE: &str = "message_type";
+pub const IDENTITY_DELETION_MESSAGE_TYPE: &str = "identity_deletion";
+pub const UNIQUENESS_MESSAGE_TYPE: &str = "uniqueness";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct UniquenessRequest {
@@ -275,7 +275,7 @@ pub fn create_message_type_attribute_map(
         .build()
         .unwrap();
     message_attributes_map.insert(
-        SMPC_REQUEST_TYPE_ATTRIBUTE.to_string(),
+        SMPC_MESSAGE_TYPE_ATTRIBUTE.to_string(),
         message_type_attribute,
     );
     message_attributes_map
