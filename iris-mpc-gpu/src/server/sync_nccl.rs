@@ -21,35 +21,25 @@ pub fn sync(comm: &NcclComm, state: &SyncState) -> Result<SyncResult> {
 }
 
 // Change these parameters together - see unittests below.
-/// Maximum number of requests in SyncState.
-pub const MAX_REQUESTS: usize = 128;
 /// The fixed serialization size of SyncState.
-const SERIAL_SIZE: usize = 16384;
+pub const MAX_REQUESTS: usize = 256 * 2;
+const MAX_REQUEST_ID_LEN: usize = 36; // uuidv4 string
+const SERIAL_SIZE: usize =
+    MAX_REQUESTS * (size_of::<usize>() + MAX_REQUEST_ID_LEN) + 2 * size_of::<usize>();
 
 /// Serialize the state to a fixed-size buffer suitable for all_gather.
 fn serialize(state: &SyncState) -> Result<Vec<u8>> {
-    let mut state_ser = vec![0; 8];
-    serde_json::to_writer(&mut state_ser, state)?;
-    // Frame with the buffer length.
-    let buf_len = state_ser.len();
-    if buf_len > SERIAL_SIZE {
+    let mut state_ser = bincode::serialize(state)?;
+    if state_ser.len() > SERIAL_SIZE {
         return Err(eyre!("State too large to serialize"));
     }
-    state_ser[..8].copy_from_slice(&(buf_len as u64).to_le_bytes());
-    // Pad to fixed size.
-    state_ser.resize(SERIAL_SIZE, 0);
+    state_ser.extend(std::iter::repeat(0).take(SERIAL_SIZE - state_ser.len()));
     Ok(state_ser)
 }
 
 /// Deserialize the state from a fixed-size buffer.
 fn deserialize(state_ser: &[u8]) -> Result<SyncState> {
-    // Unframe the buffer.
-    let buf_len = u64::from_le_bytes(state_ser[..8].try_into().unwrap()) as usize;
-    if buf_len > SERIAL_SIZE {
-        return Err(eyre!("State too large to deserialize"));
-    }
-    let state = serde_json::from_slice(&state_ser[8..buf_len])?;
-    Ok(state)
+    Ok(bincode::deserialize(state_ser)?)
 }
 
 /// Deserialize all states concatenated in a buffer (the output of all_gather).
@@ -67,8 +57,6 @@ mod tests {
     #[test]
     #[cfg(feature = "gpu_dependent")]
     fn test_serialize() -> Result<()> {
-        // Make sure we can serialize enough request IDs assuming a maximum length.
-        const MAX_REQUEST_ID_LEN: usize = 100;
         // My state.
         let state = SyncState {
             db_len:              123,
