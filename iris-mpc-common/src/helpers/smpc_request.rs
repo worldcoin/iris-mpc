@@ -269,14 +269,14 @@ pub fn create_message_type_attribute_map(
     message_type: &str,
 ) -> HashMap<String, MessageAttributeValue> {
     let mut message_attributes_map = HashMap::new();
-    let message_type_attribute = MessageAttributeValue::builder()
+    let message_type_value = MessageAttributeValue::builder()
         .data_type("String")
         .string_value(message_type)
         .build()
         .unwrap();
     message_attributes_map.insert(
         SMPC_MESSAGE_TYPE_ATTRIBUTE.to_string(),
-        message_type_attribute,
+        message_type_value,
     );
     message_attributes_map
 }

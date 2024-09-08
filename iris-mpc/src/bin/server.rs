@@ -599,7 +599,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
-        create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
+        create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
     tracing::info!("Replaying results");
     send_results_to_sns(
         store.last_results(max_sync_lookback).await?,
@@ -726,10 +726,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             match_ids,
             store_left,
             store_right,
+            deleted_ids,
         }) = rx.recv().await
         {
             // returned serial_ids are 0 indexed, but we want them to be 1 indexed
-            let result_events = merged_results
+            let uniqueness_results = merged_results
                 .iter()
                 .enumerate()
                 .map(|(i, &idx_result)| {
@@ -772,7 +773,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             let mut tx = store_bg.tx().await?;
 
-            store_bg.insert_results(&mut tx, &result_events).await?;
+            store_bg
+                .insert_results(&mut tx, &uniqueness_results)
+                .await?;
 
             if !codes_and_masks.is_empty() {
                 store_bg
@@ -783,12 +786,34 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             tx.commit().await?;
 
-            tracing::info!("Sending {} uniqueness results", result_events.len());
+            tracing::info!("Sending {} uniqueness results", uniqueness_results.len());
             send_results_to_sns(
-                result_events,
+                uniqueness_results,
                 &sns_client_bg,
                 &config_bg,
                 &uniqueness_result_attributes,
+            )
+            .await?;
+
+            // handling identity deletion results
+            let identity_deletion_results = deleted_ids
+                .iter()
+                .map(|serial_id| {
+                    let result_event = IdentityDeletionResult::new(party_id, *serial_id, true);
+                    serde_json::to_string(&result_event)
+                        .wrap_err("failed to serialize identity deletion result")
+                })
+                .collect::<eyre::Result<Vec<_>>>()?;
+
+            tracing::info!(
+                "Sending {} identity deletion results",
+                identity_deletion_results.len()
+            );
+            send_results_to_sns(
+                identity_deletion_results,
+                &sns_client_bg,
+                &config_bg,
+                &identity_deletion_result_attributes,
             )
             .await?;
         }
@@ -860,28 +885,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 &store,
                 &dummy_shares_for_deletions.0,
                 &dummy_shares_for_deletions.1,
-            )
-            .await?;
-
-            let identity_deletion_results = batch
-                .deletion_requests
-                .iter()
-                .map(|serial_id| {
-                    let result_event = IdentityDeletionResult::new(party_id, *serial_id, true);
-                    serde_json::to_string(&result_event)
-                        .wrap_err("failed to serialize identity deletion result")
-                })
-                .collect::<eyre::Result<Vec<_>>>()?;
-
-            tracing::info!(
-                "Sending {} identity deletion results",
-                identity_deletion_results.len()
-            );
-            send_results_to_sns(
-                identity_deletion_results,
-                &sns_client,
-                &config,
-                &identity_deletion_result_attributes,
             )
             .await?;
 

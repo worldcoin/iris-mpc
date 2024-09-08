@@ -777,6 +777,7 @@ impl ServerActor {
                 match_ids,
                 store_left: query_store_left,
                 store_right: query_store_right,
+                deleted_ids: batch.deletion_requests,
             })
             .unwrap();
 
