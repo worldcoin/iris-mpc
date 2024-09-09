@@ -11,7 +11,7 @@ datadog:
 
 ports:
   - containerPort: 8000
-    name: http
+    name: upgradeprotocol
     protocol: TCP
   - containerPort: 3000
     name: health
@@ -66,8 +66,13 @@ keelPolling:
   # -- Specifies whether keel should poll for container updates
   enabled: true
 
-ingress:
+serverTargetPort: upgradeprotocol
+
+ingressRouteTCP:
   enabled: true
-  ingressClassName: traefik-internal
-  hosts:
-    - upgrade-right.1.stage.smpcv2.worldcoin.dev
+  entryPoints:
+    - websecure
+  services:
+    - name: upgrade-server
+      port: 8000
+      targetPort: upgradeprotocol
