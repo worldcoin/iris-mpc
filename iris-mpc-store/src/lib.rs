@@ -398,7 +398,7 @@ mod tests {
 
     use super::*;
     use futures::TryStreamExt;
-    use iris_mpc_common::helpers::smpc_request::ResultEvent;
+    use iris_mpc_common::helpers::smpc_request::UniquenessResult;
 
     #[tokio::test]
     #[cfg(feature = "db_dependent")]
@@ -493,7 +493,7 @@ mod tests {
         };
         let codes_and_masks = vec![iris; count];
 
-        let result_event = serde_json::to_string(&ResultEvent::new(
+        let result_event = serde_json::to_string(&UniquenessResult::new(
             0,
             Some(1_000_000_000),
             false,

@@ -95,6 +95,7 @@ pub struct ServerJobResult {
     pub match_ids:      Vec<Vec<u32>>,
     pub store_left:     BatchQueryEntries,
     pub store_right:    BatchQueryEntries,
+    pub deleted_ids:    Vec<u32>,
 }
 
 enum Eye {
