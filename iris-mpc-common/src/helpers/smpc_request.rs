@@ -1,5 +1,6 @@
 use super::{key_pair::SharesDecodingError, sha256::calculate_sha256};
 use crate::helpers::key_pair::SharesEncryptionKeyPairs;
+use aws_sdk_kms::error::BuildError;
 use aws_sdk_sns::types::MessageAttributeValue;
 use aws_sdk_sqs::{
     error::SdkError,
@@ -8,7 +9,8 @@ use aws_sdk_sqs::{
 use base64::{engine::general_purpose::STANDARD, Engine};
 use eyre::Report;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
 use std::{collections::HashMap, sync::LazyLock};
 use thiserror::Error;
 use tokio_retry::{
@@ -19,19 +21,95 @@ use tokio_retry::{
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SQSMessage {
     #[serde(rename = "Type")]
-    pub notification_type: String,
+    pub notification_type:  String,
     #[serde(rename = "MessageId")]
-    pub message_id:        String,
+    pub message_id:         String,
     #[serde(rename = "SequenceNumber")]
-    pub sequence_number:   String,
+    pub sequence_number:    String,
     #[serde(rename = "TopicArn")]
-    pub topic_arn:         String,
+    pub topic_arn:          String,
     #[serde(rename = "Message")]
-    pub message:           String,
+    pub message:            String,
     #[serde(rename = "Timestamp")]
-    pub timestamp:         String,
+    pub timestamp:          String,
     #[serde(rename = "UnsubscribeURL")]
-    pub unsubscribe_url:   String,
+    pub unsubscribe_url:    String,
+    #[serde(
+        rename = "MessageAttributes",
+        serialize_with = "serialize_message_attributes",
+        deserialize_with = "deserialize_message_attributes"
+    )]
+    pub message_attributes: HashMap<String, MessageAttributeValue>,
+}
+
+// Deserialize message attributes map from SQS body.
+fn deserialize_message_attributes<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, MessageAttributeValue>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let attributes: HashMap<String, Value> = HashMap::deserialize(deserializer)?;
+    let mut result: HashMap<String, MessageAttributeValue> = HashMap::new();
+
+    for (key, value) in attributes.into_iter() {
+        if let Some(attr_type) = value.get("Type").and_then(|v| v.as_str()) {
+            if let Some(attr_value) = value.get("Value").and_then(|v| v.as_str()) {
+                // Attempt to build the MessageAttributeValue
+                match MessageAttributeValue::builder()
+                    .data_type(attr_type.to_string())
+                    .string_value(attr_value.to_string())
+                    .build()
+                {
+                    Ok(message_attr_value) => {
+                        result.insert(key, message_attr_value);
+                    }
+                    Err(e) => {
+                        // Log the error and skip this attribute
+                        tracing::warn!(
+                            "Failed to build MessageAttributeValue for {}: {:?}",
+                            key,
+                            e
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+// Custom serialization for MessageAttributeValue
+fn serialize_message_attributes<S>(
+    _: &HashMap<String, MessageAttributeValue>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    // intentionally left empty. we do not serialize messages to SQS.
+    let map = serde_json::map::Map::new();
+    map.serialize(serializer)
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MessageAttributeInSqsBody {
+    #[serde(rename = "Type")]
+    pub attribute_type: String,
+    #[serde(rename = "Value")]
+    pub value:          String,
+}
+
+impl MessageAttributeInSqsBody {
+    pub fn get_value(&self) -> Result<MessageAttributeValue, BuildError> {
+        let mut msg_attribute =
+            MessageAttributeValue::builder().data_type(self.attribute_type.clone());
+        if self.attribute_type == "String" {
+            msg_attribute = msg_attribute.string_value(self.value.clone());
+        }
+        msg_attribute.build()
+    }
 }
 
 pub const SMPC_MESSAGE_TYPE_ATTRIBUTE: &str = "message_type";
