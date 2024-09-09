@@ -71,3 +71,12 @@ ingress:
   ingressClassName: traefik-internal
   hosts:
     - not-upgrade-right.1.stage.smpcv2.worldcoin.dev
+
+ingressRouteTCP:
+  enabled: true
+  entryPoints:
+    - websecure
+  service:
+    - name: upgrade-server-right
+      port: 80
+  tls: {}

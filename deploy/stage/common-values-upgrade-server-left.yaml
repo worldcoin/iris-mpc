@@ -11,7 +11,7 @@ datadog:
 
 ports:
   - containerPort: 8000
-    name: upgradeprotocol
+    name: http
     protocol: TCP
   - containerPort: 3000
     name: health
@@ -71,3 +71,12 @@ ingress:
   ingressClassName: traefik-internal
   hosts:
     - not-upgrade-left.1.stage.smpcv2.worldcoin.dev
+
+ingressRouteTCP:
+  enabled: true
+  entryPoints:
+    - websecure
+  service:
+    - name: upgrade-server-left
+      port: 80
+  tls: {}
