@@ -137,10 +137,15 @@ async fn receive_batch(
             for sqs_message in messages {
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
                     .map_err(|e| ReceiveRequestError::json_parse_error("SQS body", e))?;
+                let attributes = sqs_message.attributes.unwrap_or_default();
 
                 let message_attributes = sqs_message.message_attributes.unwrap_or_default();
 
                 let mut batch_metadata = BatchMetadata::default();
+
+                let mut mymap = HashMap::new();
+                mymap.insert("a", "b");
+                tracing::info!("Test map: {:?}", mymap);
 
                 if let Some(trace_id) = message_attributes.get(TRACE_ID_MESSAGE_ATTRIBUTE_NAME) {
                     let trace_id = trace_id.string_value().unwrap();
@@ -150,6 +155,8 @@ async fn receive_batch(
                     let span_id = span_id.string_value().unwrap();
                     batch_metadata.span_id = span_id.to_string();
                 }
+
+                tracing::info!("Received attributes: {:?}", attributes);
 
                 tracing::info!("Received message_attributes: {:?}", message_attributes);
                 tracing::info!(
