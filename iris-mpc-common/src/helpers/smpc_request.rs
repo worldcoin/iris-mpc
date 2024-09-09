@@ -274,9 +274,6 @@ pub fn create_message_type_attribute_map(
         .string_value(message_type)
         .build()
         .unwrap();
-    message_attributes_map.insert(
-        SMPC_MESSAGE_TYPE_ATTRIBUTE.to_string(),
-        message_type_value,
-    );
+    message_attributes_map.insert(SMPC_MESSAGE_TYPE_ATTRIBUTE.to_string(), message_type_value);
     message_attributes_map
 }
