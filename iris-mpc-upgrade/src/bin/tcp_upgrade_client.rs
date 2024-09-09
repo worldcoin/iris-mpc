@@ -52,7 +52,7 @@ async fn prepare_tls_stream_for_writing(address: &str) -> eyre::Result<TlsStream
         OwnedTrustAnchor::from_subject_spki_name_constraints(
             ta.subject,
             ta.spki,
-            ta.name_constraints.clone().map(|nc| nc),
+            ta.name_constraints,
         )
     }));
 
