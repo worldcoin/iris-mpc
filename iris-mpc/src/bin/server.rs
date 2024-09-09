@@ -127,6 +127,7 @@ async fn receive_batch(
     while msg_counter < *CURRENT_BATCH_SIZE.lock().unwrap() {
         let rcv_message_output = client
             .receive_message()
+            .message_attribute_names("All")
             .max_number_of_messages(1)
             .queue_url(queue_url)
             .send()
