@@ -20,6 +20,7 @@ const DB_RNG_SEED: u64 = 0xdeadbeef;
 const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 10;
 const MAX_BATCH_SIZE: usize = 64;
+const MAX_DELETIONS_PER_BATCH: usize = 10;
 
 fn generate_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
     let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
@@ -67,6 +68,8 @@ fn install_tracing() {
 #[tokio::test]
 #[cfg(feature = "gpu_dependent")]
 async fn e2e_test() -> Result<()> {
+    use std::collections::HashSet;
+
     install_tracing();
     env::set_var("NCCL_P2P_LEVEL", "LOC");
     env::set_var("NCCL_NET", "Socket");
@@ -194,6 +197,8 @@ async fn e2e_test() -> Result<()> {
     let mut expected_results: HashMap<String, Option<u32>> = HashMap::new();
     let mut requests: HashMap<String, IrisCode> = HashMap::new();
     let mut responses: HashMap<u32, IrisCode> = HashMap::new();
+    let mut deleted_indices_buffer = vec![];
+    let mut deleted_indices: HashSet<u32> = HashSet::new();
 
     for _ in 0..NUM_BATCHES {
         let mut batch0 = BatchQuery::default();
@@ -203,7 +208,13 @@ async fn e2e_test() -> Result<()> {
         for _ in 0..batch_size {
             let request_id = Uuid::new_v4();
             // Automatic random tests
-            let options = if responses.is_empty() { 2 } else { 3 };
+            let options = if responses.is_empty() {
+                2
+            } else if deleted_indices_buffer.is_empty() {
+                3
+            } else {
+                4
+            };
             let option = rng.gen_range(0..options);
             let template = match option {
                 0 => {
@@ -214,6 +225,9 @@ async fn e2e_test() -> Result<()> {
                 1 => {
                     println!("Sending iris code from db");
                     let db_index = rng.gen_range(0..db.db.len());
+                    if deleted_indices.contains(&(db_index as u32)) {
+                        continue;
+                    }
                     expected_results.insert(request_id.to_string(), Some(db_index as u32));
                     db.db[db_index].clone()
                 }
@@ -225,6 +239,14 @@ async fn e2e_test() -> Result<()> {
                     expected_results.insert(request_id.to_string(), Some(*keys[idx]));
                     iris_code
                 }
+                3 => {
+                    println!("Sending deleted iris code");
+                    let idx = rng.gen_range(0..deleted_indices_buffer.len());
+                    let deleted_idx = deleted_indices_buffer[idx];
+                    deleted_indices_buffer.remove(idx);
+                    expected_results.insert(request_id.to_string(), None);
+                    db.db[deleted_idx as usize].clone()
+                }
                 _ => unreachable!(),
             };
 
@@ -233,8 +255,6 @@ async fn e2e_test() -> Result<()> {
 
             if is_valid {
                 requests.insert(request_id.to_string(), template.clone());
-            } else {
-                requests.insert(request_id.to_string(), IrisCode::default());
             }
 
             let mut shared_code =
@@ -314,6 +334,26 @@ async fn e2e_test() -> Result<()> {
                 .mask
                 .extend(shared_mask[2].all_rotations());
         }
+
+        // Skip empty batch
+        if batch0.request_ids.is_empty() {
+            continue;
+        }
+
+        for _ in 0..rng.gen_range(0..MAX_DELETIONS_PER_BATCH) {
+            let idx = rng.gen_range(0..db.db.len());
+            if deleted_indices.contains(&(idx as u32)) {
+                continue;
+            }
+            deleted_indices_buffer.push(idx as u32);
+            deleted_indices.insert(idx as u32);
+            println!("Deleting index {}", idx);
+
+            batch0.deletion_requests_indices.push(idx as u32);
+            batch1.deletion_requests_indices.push(idx as u32);
+            batch2.deletion_requests_indices.push(idx as u32);
+        }
+
         // TODO: better tests involving two eyes, atm just copy left to right
         batch0.db_right = batch0.db_left.clone();
         batch1.db_right = batch1.db_left.clone();
@@ -351,7 +391,7 @@ async fn e2e_test() -> Result<()> {
 
                 // This was an invalid query, we should not get a response, but they should be
                 // silently ignored
-                assert!(*requests.get(req_id).unwrap() != IrisCode::default());
+                assert!(requests.contains_key(req_id));
 
                 let expected_idx = expected_results.get(req_id).unwrap();
 

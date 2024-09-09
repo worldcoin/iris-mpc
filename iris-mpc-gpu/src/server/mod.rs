@@ -3,7 +3,7 @@ pub mod heartbeat_nccl;
 pub mod sync_nccl;
 
 use crate::dot::ROTATIONS;
-pub use actor::{ServerActor, ServerActorHandle};
+pub use actor::{get_dummy_shares_for_deletion, ServerActor, ServerActorHandle};
 use iris_mpc_common::galois_engine::degree4::{
     GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
 };
@@ -33,7 +33,7 @@ pub struct BatchQuery {
     pub query_right:                BatchQueryEntries,
     pub db_right:                   BatchQueryEntries,
     pub store_right:                BatchQueryEntries,
-    pub deletion_requests:          Vec<u32>,
+    pub deletion_requests_indices:  Vec<u32>, // 0-indexed indicies in of entries to be deleted
     pub deletion_requests_metadata: Vec<BatchMetadata>,
     pub valid_entries:              Vec<bool>,
 }
