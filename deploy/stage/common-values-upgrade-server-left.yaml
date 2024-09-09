@@ -66,16 +66,8 @@ keelPolling:
   # -- Specifies whether keel should poll for container updates
   enabled: true
 
-serverTargetPort: upgradeprotocol
-
 ingress:
   enabled: true
-
-ingressRouteTCP:
-  enabled: true
-  entryPoints:
-    - websecure
-  services:
-    - name: upgrade-server
-      port: 80
-      targetPort: upgradeprotocol
+  ingressClassName: traefik-internal
+  hosts:
+    - upgrade-left.1.stage.smpcv2.worldcoin.dev

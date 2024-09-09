@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:v0.4.9"
+image: "ghcr.io/worldcoin/iris-mpc:v0.4.8"
 
 environment: stage
 replicaCount: 1
@@ -11,7 +11,7 @@ datadog:
 
 ports:
   - containerPort: 8000
-    name: upgradeprotocol
+    name: http
     protocol: TCP
   - containerPort: 3000
     name: health
@@ -66,16 +66,8 @@ keelPolling:
   # -- Specifies whether keel should poll for container updates
   enabled: true
 
-serverTargetPort: upgradeprotocol
-
 ingress:
   enabled: true
-
-ingressRouteTCP:
-  enabled: true
-  entryPoints:
-    - websecure
-  services:
-    - name: upgrade-server
-      port: 80
-      targetPort: upgradeprotocol
+  ingressClassName: traefik-internal
+  hosts:
+    - upgrade-right.1.stage.smpcv2.worldcoin.dev
