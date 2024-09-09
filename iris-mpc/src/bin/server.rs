@@ -138,7 +138,9 @@ async fn receive_batch(
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
                     .map_err(|e| ReceiveRequestError::json_parse_error("SQS body", e))?;
 
-                let message_attributes = sqs_message.message_attributes.unwrap_or_default();
+                // messages arrive to SQS through SNS. So, all the attributes set in SNS are
+                // moved into the SQS body.
+                let message_attributes = message.message_attributes;
 
                 let mut batch_metadata = BatchMetadata::default();
 

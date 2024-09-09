@@ -8,7 +8,8 @@ use aws_sdk_sqs::{
 use base64::{engine::general_purpose::STANDARD, Engine};
 use eyre::Report;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
 use std::{collections::HashMap, sync::LazyLock};
 use thiserror::Error;
 use tokio_retry::{
@@ -19,19 +20,89 @@ use tokio_retry::{
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SQSMessage {
     #[serde(rename = "Type")]
-    pub notification_type: String,
+    pub notification_type:  String,
     #[serde(rename = "MessageId")]
-    pub message_id:        String,
+    pub message_id:         String,
     #[serde(rename = "SequenceNumber")]
-    pub sequence_number:   String,
+    pub sequence_number:    String,
     #[serde(rename = "TopicArn")]
-    pub topic_arn:         String,
+    pub topic_arn:          String,
     #[serde(rename = "Message")]
-    pub message:           String,
+    pub message:            String,
     #[serde(rename = "Timestamp")]
-    pub timestamp:         String,
+    pub timestamp:          String,
     #[serde(rename = "UnsubscribeURL")]
-    pub unsubscribe_url:   String,
+    pub unsubscribe_url:    String,
+    #[serde(
+        rename = "MessageAttributes",
+        serialize_with = "serialize_message_attributes",
+        deserialize_with = "deserialize_message_attributes"
+    )]
+    pub message_attributes: HashMap<String, MessageAttributeValue>,
+}
+
+// Deserialize message attributes map from SQS body.
+// For simplicity, it only deserializes attributes of type String.
+// Update this function if other types are needed (String.Array, Number, and
+// Binary).
+fn deserialize_message_attributes<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, MessageAttributeValue>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let attributes: HashMap<String, Value> = HashMap::deserialize(deserializer)?;
+    let mut result: HashMap<String, MessageAttributeValue> = HashMap::new();
+
+    for (key, value) in attributes.into_iter() {
+        let attr_type = value.get("Type").and_then(|v| v.as_str());
+        let attr_value = value.get("Value").and_then(|v| v.as_str());
+
+        if let Some(message_attr_value) = process_attribute(&key, attr_type, attr_value) {
+            result.insert(key, message_attr_value);
+        }
+    }
+
+    Ok(result)
+}
+
+fn process_attribute(
+    key: &String,
+    attr_type: Option<&str>,
+    attr_value: Option<&str>,
+) -> Option<MessageAttributeValue> {
+    let attr_type = attr_type?;
+    let attr_value = attr_value?;
+
+    if attr_type != "String" {
+        tracing::warn!("Skipped deserializing attribute of type {}", attr_type);
+        return None;
+    }
+
+    match MessageAttributeValue::builder()
+        .data_type(attr_type.to_string())
+        .string_value(attr_value.to_string())
+        .build()
+    {
+        Ok(message_attr_value) => Some(message_attr_value),
+        Err(e) => {
+            tracing::warn!("Failed to build MessageAttributeValue {}: {:?}", key, e);
+            None
+        }
+    }
+}
+
+// MessageAttributes serialization placeholder. It's left empty as we do not
+// send messages to SQS.
+fn serialize_message_attributes<S>(
+    _: &HashMap<String, MessageAttributeValue>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let map = serde_json::map::Map::new();
+    map.serialize(serializer)
 }
 
 pub const SMPC_MESSAGE_TYPE_ATTRIBUTE: &str = "message_type";
