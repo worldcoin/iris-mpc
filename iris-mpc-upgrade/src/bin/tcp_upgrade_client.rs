@@ -16,18 +16,17 @@ use iris_mpc_upgrade::{
 use mpc_uniqueness_check::{bits::Bits, distance::EncodedBits};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-use std::{array, pin::Pin};
+use std::{array, convert::TryFrom, pin::Pin, sync::Arc};
 use tokio::{
-    io::{BufWriter},
+    io::{AsyncWriteExt, BufWriter},
+    net::TcpStream,
 };
-
-use tokio::net::TcpStream;
-use tokio_rustls::{rustls::{ServerName, OwnedTrustAnchor}, TlsConnector, rustls::ClientConfig, client::TlsStream};
-use std::sync::Arc;
+use tokio_rustls::{
+    client::TlsStream,
+    rustls::{ClientConfig, OwnedTrustAnchor, ServerName},
+    TlsConnector,
+};
 use webpki_roots::TLS_SERVER_ROOTS;
-use tokio::io::{AsyncWrite, AsyncRead, AsyncWriteExt, AsyncReadExt};
-use std::convert::TryFrom;
-use std::error::Error;
 
 fn install_tracing() {
     use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -51,9 +50,9 @@ async fn prepare_tls_stream_for_writing(address: &str) -> eyre::Result<TlsStream
     let mut root_cert_store = rustls::RootCertStore::empty();
     root_cert_store.add_trust_anchors(TLS_SERVER_ROOTS.iter().map(|ta| {
         OwnedTrustAnchor::from_subject_spki_name_constraints(
-            ta.subject.as_ref(),
-            ta.spki.as_ref(),
-            ta.name_constraints.clone().map(|nc| nc.as_ref()),
+            ta.subject,
+            ta.spki,
+            ta.name_constraints.clone().map(|nc| nc),
         )
     }));
 
@@ -82,9 +81,9 @@ async fn main() -> eyre::Result<()> {
         panic!("Party id must be 0, 1");
     }
 
-    let tls_stream_1 = prepare_tls_stream_for_writing(&args.server1).await?;
-    let tls_stream_2 = prepare_tls_stream_for_writing(&args.server2).await?;
-    let tls_stream_3 = prepare_tls_stream_for_writing(&args.server3).await?;
+    let tls_stream_1 = prepare_tls_stream_for_writing(&args.server1.to_string()).await?;
+    let tls_stream_2 = prepare_tls_stream_for_writing(&args.server2.to_string()).await?;
+    let tls_stream_3 = prepare_tls_stream_for_writing(&args.server3.to_string()).await?;
 
     tracing::info!("Connecting to servers and syncing migration task parameters...");
     let mut server1 = BufWriter::new(tls_stream_1);
