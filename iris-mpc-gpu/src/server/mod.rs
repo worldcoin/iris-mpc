@@ -3,7 +3,7 @@ pub mod heartbeat_nccl;
 pub mod sync_nccl;
 
 use crate::dot::ROTATIONS;
-pub use actor::{ServerActor, ServerActorHandle};
+pub use actor::{get_dummy_shares_for_deletion, ServerActor, ServerActorHandle};
 use iris_mpc_common::galois_engine::degree4::{
     GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
 };

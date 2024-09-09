@@ -21,18 +21,16 @@ use iris_mpc_common::{
         sync::SyncState,
         task_monitor::TaskMonitor,
     },
-    iris_db::iris::IrisCode,
     IrisCodeDb, IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use iris_mpc_gpu::{
     helpers::device_manager::DeviceManager,
     server::{
-        heartbeat_nccl::start_heartbeat, sync_nccl, BatchMetadata, BatchQuery, ServerActor,
-        ServerJobResult,
+        get_dummy_shares_for_deletion, heartbeat_nccl::start_heartbeat, sync_nccl, BatchMetadata,
+        BatchQuery, ServerActor, ServerJobResult,
     },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
-use rand::{rngs::StdRng, SeedableRng};
 use std::{
     collections::HashMap,
     mem,
@@ -991,19 +989,4 @@ async fn process_identity_deletions(
     }
 
     Ok(())
-}
-
-fn get_dummy_shares_for_deletion(
-    party_id: usize,
-) -> (GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare) {
-    let mut rng: StdRng = StdRng::seed_from_u64(0);
-    let dummy: IrisCode = IrisCode::default();
-    let iris_share: GaloisRingIrisCodeShare =
-        GaloisRingIrisCodeShare::encode_iris_code(&dummy.code, &dummy.mask, &mut rng)[party_id]
-            .clone();
-    let mask_share: GaloisRingTrimmedMaskCodeShare =
-        GaloisRingIrisCodeShare::encode_mask_code(&dummy.mask, &mut rng)[party_id]
-            .clone()
-            .into();
-    (iris_share, mask_share)
 }

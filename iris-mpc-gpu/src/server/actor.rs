@@ -23,8 +23,13 @@ use cudarc::{
 };
 use eyre::eyre;
 use futures::{Future, FutureExt};
-use iris_mpc_common::IrisCodeDbSlice;
+use iris_mpc_common::{
+    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    iris_db::iris::IrisCode,
+    IrisCodeDbSlice,
+};
 use itertools::Itertools;
+use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{collections::HashMap, mem, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
@@ -422,6 +427,39 @@ impl ServerActor {
         );
 
         ///////////////////////////////////////////////////////////////////
+        // PERFORM DELETIONS (IF ANY)
+        ///////////////////////////////////////////////////////////////////
+
+        if !batch.deletion_requests.is_empty() {
+            // Prepare dummy deletion shares
+            let (dummy_queries, dummy_sums) = self.prepare_deletion_shares()?;
+
+            // Overwrite the in-memory db
+            for deletion_index in batch.deletion_requests.clone() {
+                let device_index = deletion_index % self.device_manager.device_count() as u32;
+                let device_db_index = deletion_index / self.device_manager.device_count() as u32;
+                self.device_manager
+                    .device(device_index as usize)
+                    .bind_to_thread()
+                    .unwrap();
+                write_db_at_index(
+                    &self.left_code_db_slices,
+                    &self.left_mask_db_slices,
+                    &self.right_code_db_slices,
+                    &self.right_mask_db_slices,
+                    &dummy_queries,
+                    &dummy_sums,
+                    &dummy_queries,
+                    &dummy_sums,
+                    0,
+                    device_db_index as usize,
+                    device_index as usize,
+                    &self.streams[0],
+                );
+            }
+        }
+
+        ///////////////////////////////////////////////////////////////////
         // SYNC BATCH CONTENTS AND FILTER OUT INVALID ENTRIES
         ///////////////////////////////////////////////////////////////////
 
@@ -688,73 +726,20 @@ impl ServerActor {
                 for i in 0..self.device_manager.device_count() {
                     self.device_manager.device(i).bind_to_thread().unwrap();
                     for insertion_idx in insertion_list[i].clone() {
-                        // Append left to codes and masks db
-                        for (code_length, db, query, sums) in [
-                            (
-                                IRIS_CODE_LENGTH,
-                                &self.left_code_db_slices,
-                                &compact_device_queries_left.code_query_insert,
-                                &compact_device_sums_left.code_query_insert,
-                            ),
-                            (
-                                MASK_CODE_LENGTH,
-                                &self.left_mask_db_slices,
-                                &compact_device_queries_left.mask_query_insert,
-                                &compact_device_sums_left.mask_query_insert,
-                            ),
-                            (
-                                IRIS_CODE_LENGTH,
-                                &self.right_code_db_slices,
-                                &compact_device_queries_right.code_query_insert,
-                                &compact_device_sums_right.code_query_insert,
-                            ),
-                            (
-                                MASK_CODE_LENGTH,
-                                &self.right_mask_db_slices,
-                                &compact_device_queries_right.mask_query_insert,
-                                &compact_device_sums_right.mask_query_insert,
-                            ),
-                        ] {
-                            unsafe {
-                                helpers::dtod_at_offset(
-                                    db.code_gr.limb_0[i],
-                                    self.current_db_sizes[i] * code_length,
-                                    *query.limb_0[i].device_ptr(),
-                                    code_length * 15 + insertion_idx * code_length * ROTATIONS,
-                                    code_length,
-                                    self.streams[0][i].stream,
-                                );
-
-                                helpers::dtod_at_offset(
-                                    db.code_gr.limb_1[i],
-                                    self.current_db_sizes[i] * code_length,
-                                    *query.limb_1[i].device_ptr(),
-                                    code_length * 15 + insertion_idx * code_length * ROTATIONS,
-                                    code_length,
-                                    self.streams[0][i].stream,
-                                );
-
-                                helpers::dtod_at_offset(
-                                    *db.code_sums_gr.limb_0[i].device_ptr(),
-                                    self.current_db_sizes[i] * mem::size_of::<u32>(),
-                                    *sums.limb_0[i].device_ptr(),
-                                    mem::size_of::<u32>() * 15
-                                        + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                                    mem::size_of::<u32>(),
-                                    self.streams[0][i].stream,
-                                );
-
-                                helpers::dtod_at_offset(
-                                    *db.code_sums_gr.limb_1[i].device_ptr(),
-                                    self.current_db_sizes[i] * mem::size_of::<u32>(),
-                                    *sums.limb_1[i].device_ptr(),
-                                    mem::size_of::<u32>() * 15
-                                        + insertion_idx * mem::size_of::<u32>() * ROTATIONS,
-                                    mem::size_of::<u32>(),
-                                    self.streams[0][i].stream,
-                                );
-                            }
-                        }
+                        write_db_at_index(
+                            &self.left_code_db_slices,
+                            &self.left_mask_db_slices,
+                            &self.right_code_db_slices,
+                            &self.right_mask_db_slices,
+                            &compact_device_queries_left,
+                            &compact_device_sums_left,
+                            &compact_device_queries_right,
+                            &compact_device_sums_right,
+                            insertion_idx,
+                            self.current_db_sizes[i],
+                            i,
+                            &self.streams[0],
+                        );
                         self.current_db_sizes[i] += 1;
                     }
 
@@ -1153,6 +1138,47 @@ impl ServerActor {
 
         Ok(valid_merged)
     }
+
+    fn prepare_deletion_shares(&self) -> eyre::Result<(DeviceCompactQuery, DeviceCompactSums)> {
+        let (dummy_code_share, dummy_mask_share) = get_dummy_shares_for_deletion(self.party_id);
+        let compact_query = {
+            let code = preprocess_query(
+                &dummy_code_share
+                    .all_rotations()
+                    .into_iter()
+                    .flat_map(|e| e.coefs)
+                    .collect::<Vec<_>>(),
+            );
+            let mask = preprocess_query(
+                &dummy_mask_share
+                    .all_rotations()
+                    .into_iter()
+                    .flat_map(|e| e.coefs)
+                    .collect::<Vec<_>>(),
+            );
+            CompactQuery {
+                code_query:        code.clone(),
+                mask_query:        mask.clone(),
+                code_query_insert: code,
+                mask_query_insert: mask,
+            }
+        };
+
+        let compact_device_queries = compact_query.htod_transfer(
+            &self.device_manager,
+            &self.streams[0],
+            self.max_batch_size,
+        )?;
+
+        let compact_device_sums = compact_device_queries.query_sums(
+            &self.codes_engine,
+            &self.masks_engine,
+            &self.streams[0],
+            &self.cublas_handles[0],
+        )?;
+
+        Ok((compact_device_queries, compact_device_sums))
+    }
 }
 
 /// Internal helper function to log the timers of measured cuda streams.
@@ -1332,4 +1358,100 @@ fn calculate_insertion_indices(
         }
         c += 1;
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_db_at_index(
+    left_code_db_slices: &SlicedProcessedDatabase,
+    left_mask_db_slices: &SlicedProcessedDatabase,
+    right_code_db_slices: &SlicedProcessedDatabase,
+    right_mask_db_slices: &SlicedProcessedDatabase,
+    compact_device_queries_left: &DeviceCompactQuery,
+    compact_device_sums_left: &DeviceCompactSums,
+    compact_device_queries_right: &DeviceCompactQuery,
+    compact_device_sums_right: &DeviceCompactSums,
+    src_index: usize,
+    dst_index: usize,
+    device_index: usize,
+    streams: &[CudaStream],
+) {
+    for (code_length, db, query, sums) in [
+        (
+            IRIS_CODE_LENGTH,
+            left_code_db_slices,
+            &compact_device_queries_left.code_query_insert,
+            &compact_device_sums_left.code_query_insert,
+        ),
+        (
+            MASK_CODE_LENGTH,
+            left_mask_db_slices,
+            &compact_device_queries_left.mask_query_insert,
+            &compact_device_sums_left.mask_query_insert,
+        ),
+        (
+            IRIS_CODE_LENGTH,
+            right_code_db_slices,
+            &compact_device_queries_right.code_query_insert,
+            &compact_device_sums_right.code_query_insert,
+        ),
+        (
+            MASK_CODE_LENGTH,
+            right_mask_db_slices,
+            &compact_device_queries_right.mask_query_insert,
+            &compact_device_sums_right.mask_query_insert,
+        ),
+    ] {
+        unsafe {
+            helpers::dtod_at_offset(
+                db.code_gr.limb_0[device_index],
+                dst_index * code_length,
+                *query.limb_0[device_index].device_ptr(),
+                code_length * 15 + src_index * code_length * ROTATIONS,
+                code_length,
+                streams[device_index].stream,
+            );
+
+            helpers::dtod_at_offset(
+                db.code_gr.limb_1[device_index],
+                dst_index * code_length,
+                *query.limb_1[device_index].device_ptr(),
+                code_length * 15 + src_index * code_length * ROTATIONS,
+                code_length,
+                streams[device_index].stream,
+            );
+
+            helpers::dtod_at_offset(
+                *db.code_sums_gr.limb_0[device_index].device_ptr(),
+                dst_index * mem::size_of::<u32>(),
+                *sums.limb_0[device_index].device_ptr(),
+                mem::size_of::<u32>() * 15 + src_index * mem::size_of::<u32>() * ROTATIONS,
+                mem::size_of::<u32>(),
+                streams[device_index].stream,
+            );
+
+            helpers::dtod_at_offset(
+                *db.code_sums_gr.limb_1[device_index].device_ptr(),
+                dst_index * mem::size_of::<u32>(),
+                *sums.limb_1[device_index].device_ptr(),
+                mem::size_of::<u32>() * 15 + src_index * mem::size_of::<u32>() * ROTATIONS,
+                mem::size_of::<u32>(),
+                streams[device_index].stream,
+            );
+        }
+    }
+}
+
+pub fn get_dummy_shares_for_deletion(
+    party_id: usize,
+) -> (GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare) {
+    let mut rng: StdRng = StdRng::seed_from_u64(0);
+    let dummy: IrisCode = IrisCode::default();
+    let iris_share: GaloisRingIrisCodeShare =
+        GaloisRingIrisCodeShare::encode_iris_code(&dummy.code, &dummy.mask, &mut rng)[party_id]
+            .clone();
+    let mask_share: GaloisRingTrimmedMaskCodeShare =
+        GaloisRingIrisCodeShare::encode_mask_code(&dummy.mask, &mut rng)[party_id]
+            .clone()
+            .into();
+    (iris_share, mask_share)
 }
