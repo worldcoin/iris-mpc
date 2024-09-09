@@ -74,5 +74,5 @@ ingressRouteTCP:
     - websecure
   services:
     - name: upgrade-server
-      port: 8000
+      port: 80
       targetPort: upgradeprotocol
