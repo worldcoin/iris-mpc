@@ -17,14 +17,14 @@ hawk-pack = { git = "https://github.com/Inversed-Tech/hawk-pack.git" }
 iris-mpc-common = { path = "../iris-mpc-common" }
 itertools.workspace = true
 log = "0.4.22"
-num-traits = "0.2"
+num-traits.workspace = true
 pprof = { version = "0.13", features = ["flamegraph", "criterion"] }
 rand.workspace = true
 rand_core = "0.6.4"
 rayon.workspace = true
 serde.workspace = true
 static_assertions.workspace = true
-thiserror = "1.0"
+thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-test = "0.2.5"
