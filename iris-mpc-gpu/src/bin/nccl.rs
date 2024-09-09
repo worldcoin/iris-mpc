@@ -82,10 +82,10 @@ async fn main() -> eyre::Result<()> {
     for _ in 0..10 {
         let now = Instant::now();
 
+        group_start().unwrap();
         for i in 0..n_devices {
             devs[i].bind_to_thread().unwrap();
 
-            group_start().unwrap();
             match party_id {
                 0 => {
                     comms[i].send(&slices[i], 1).unwrap();
@@ -97,13 +97,13 @@ async fn main() -> eyre::Result<()> {
                 }
                 _ => unreachable!(),
             };
-            group_end().unwrap();
 
             // comms[i].send(&slices[i], 1);
             // comms[i].broadcast(&slices[i], &mut slices1[i], 0).unwrap();
             // comms[i].broadcast(&slices[i], &mut slices2[i], 1).unwrap();
             // comms[i].broadcast(&slices[i], &mut slices3[i], 2).unwrap();
         }
+        group_end().unwrap();
 
         for dev in devs.iter() {
             dev.synchronize().unwrap();
