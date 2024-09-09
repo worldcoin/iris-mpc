@@ -280,18 +280,15 @@ impl<N: NetworkTrait> IrisWorker<N> {
     ) -> Result<bool, Error> {
         let diff = self.rep3_compute_cross_mul(d1, t1, d2, t2)?;
         let protocol = self;
-
-        let mut vdiff = VecShare::with_capacity(1);
-        vdiff.push(diff);
         // Compute bit <- MSB(D2 * T1 - D1 * T2)
-        let bit = protocol.extract_msb_u32::<32>(vdiff)?;
+        let bit = protocol.single_extract_msb_u32::<32>(diff)?;
 
         // Open bit
-        let opened_b = protocol.open_bin_many(bit)?;
-        Ok(opened_b[0] == 1)
+        let opened_b = protocol.open_bin(bit)?;
+        Ok(opened_b.convert())
     }
 
-    pub fn rep3_iris_match_public_output(
+    pub fn rep3_single_iris_match_public_output(
         &mut self,
         iris_to_match: SliceShare<'_, u16>,
         ground_truth: VecShare<u16>,

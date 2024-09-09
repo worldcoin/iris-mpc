@@ -112,7 +112,7 @@ impl VectorStore for Aby3StorePlayer {
         let mut lock = state.lock().await;
         let res = tokio::task::block_in_place(move || {
             let res = (*lock)
-                .rep3_iris_match_public_output(
+                .rep3_single_iris_match_public_output(
                     iris_to_match.as_slice(),
                     ground_truth.clone(),
                     mask_iris,
