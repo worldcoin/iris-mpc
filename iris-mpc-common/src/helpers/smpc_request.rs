@@ -55,31 +55,41 @@ where
     let mut result: HashMap<String, MessageAttributeValue> = HashMap::new();
 
     for (key, value) in attributes.into_iter() {
-        if let Some(attr_type) = value.get("Type").and_then(|v| v.as_str()) {
-            if let Some(attr_value) = value.get("Value").and_then(|v| v.as_str()) {
-                // Attempt to build the MessageAttributeValue
-                match MessageAttributeValue::builder()
-                    .data_type(attr_type.to_string())
-                    .string_value(attr_value.to_string())
-                    .build()
-                {
-                    Ok(message_attr_value) => {
-                        result.insert(key, message_attr_value);
-                    }
-                    Err(e) => {
-                        // Log the error and skip this attribute
-                        tracing::warn!(
-                            "Failed to build MessageAttributeValue for {}: {:?}",
-                            key,
-                            e
-                        );
-                    }
-                }
-            }
+        let attr_type = value.get("Type").and_then(|v| v.as_str());
+        let attr_value = value.get("Value").and_then(|v| v.as_str());
+
+        if let Some(message_attr_value) = process_attribute(&key, attr_type, attr_value) {
+            result.insert(key, message_attr_value);
         }
     }
 
     Ok(result)
+}
+
+fn process_attribute(
+    key: &String,
+    attr_type: Option<&str>,
+    attr_value: Option<&str>,
+) -> Option<MessageAttributeValue> {
+    let attr_type = attr_type?;
+    let attr_value = attr_value?;
+
+    if attr_type != "String" {
+        tracing::warn!("Skipped deserializing attribute of type {}", attr_type);
+        return None;
+    }
+
+    match MessageAttributeValue::builder()
+        .data_type(attr_type.to_string())
+        .string_value(attr_value.to_string())
+        .build()
+    {
+        Ok(message_attr_value) => Some(message_attr_value),
+        Err(e) => {
+            tracing::warn!("Failed to build MessageAttributeValue {}: {:?}", key, e);
+            None
+        }
+    }
 }
 
 // MessageAttributes serialization placeholder. It's left empty as we do not
