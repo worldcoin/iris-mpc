@@ -89,14 +89,16 @@ async fn main() -> eyre::Result<()> {
             match party_id {
                 0 => {
                     comms[i].send(&slices[i], 1).unwrap();
-                    // comms[i].recv(&mut slices1[i], 1).unwrap();
+                    comms[i].recv(&mut slices1[i], 1).unwrap();
                 }
                 1 => {
                     comms[i].recv(&mut slices1[i], 0).unwrap();
-                    // comms[i].send(&slices[i], 0).unwrap();
+                    comms[i].send(&slices[i], 0).unwrap();
                 }
                 _ => unreachable!(),
             };
+
+            println!("device {} done", i);
 
             // comms[i].send(&slices[i], 1);
             // comms[i].broadcast(&slices[i], &mut slices1[i], 0).unwrap();
@@ -113,7 +115,7 @@ async fn main() -> eyre::Result<()> {
             let elapsed = now.elapsed();
             // Throughput multiplied by 4 because every device sends *and* receives the
             // buffer to/from two peers.
-            let throughput = (DUMMY_DATA_LEN as f64 * n_devices as f64 * 1f64)
+            let throughput = (DUMMY_DATA_LEN as f64 * n_devices as f64 * 2f64)
                 / (elapsed.as_millis() as f64)
                 / 1_000_000_000f64
                 * 1_000f64;
