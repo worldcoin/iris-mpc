@@ -68,6 +68,9 @@ keelPolling:
 
 serverTargetPort: upgradeprotocol
 
+ingress:
+  enabled: true
+
 ingressRouteTCP:
   enabled: true
   entryPoints:
