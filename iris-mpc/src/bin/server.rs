@@ -124,10 +124,12 @@ async fn receive_batch(
     let mut handles = vec![];
     let mut msg_counter = 0;
 
+    tracing::info!("Setting message attribute names to All in receive_batch");
     while msg_counter < *CURRENT_BATCH_SIZE.lock().unwrap() {
         let rcv_message_output = client
             .receive_message()
             .message_attribute_names("All")
+            .set_message_attribute_names(Some(vec!["All".to_string()]))
             .max_number_of_messages(1)
             .queue_url(queue_url)
             .send()
