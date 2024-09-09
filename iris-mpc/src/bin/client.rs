@@ -9,7 +9,10 @@ use iris_mpc_common::{
     helpers::{
         key_pair::download_public_key,
         sha256::calculate_sha256,
-        smpc_request::{IrisCodesJSON, UniquenessRequest, UniquenessResult},
+        smpc_request::{
+            create_message_type_attribute_map, IrisCodesJSON, UniquenessRequest, UniquenessResult,
+            UNIQUENESS_MESSAGE_TYPE,
+        },
         sqs_s3_helper::upload_file_and_generate_presigned_url,
     },
     iris_db::{db::IrisDB, iris::IrisCode},
@@ -351,6 +354,8 @@ async fn main() -> eyre::Result<()> {
                     iris_shares_file_hashes,
                 };
 
+                let message_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
+
                 // Send all messages in batch
                 requests_sns_client2
                     .lock()
@@ -359,6 +364,7 @@ async fn main() -> eyre::Result<()> {
                     .topic_arn(request_topic_arn.clone())
                     .message_group_id(ENROLLMENT_REQUEST_TYPE)
                     .message(to_string(&request_message)?)
+                    .set_message_attributes(Some(message_attributes))
                     .send()
                     .await?;
 

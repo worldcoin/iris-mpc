@@ -151,6 +151,19 @@ async fn receive_batch(
                     batch_metadata.span_id = span_id.to_string();
                 }
 
+                tracing::info!("Received message_attributes: {:?}", message_attributes);
+                tracing::info!(
+                    "Received request_type: {:?}",
+                    message_attributes.get(SMPC_MESSAGE_TYPE_ATTRIBUTE)
+                );
+                tracing::info!(
+                    "string value: {:?}",
+                    message_attributes
+                        .get(SMPC_MESSAGE_TYPE_ATTRIBUTE)
+                        .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?
+                        .string_value()
+                );
+
                 let request_type = message_attributes
                     .get(SMPC_MESSAGE_TYPE_ATTRIBUTE)
                     .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?
