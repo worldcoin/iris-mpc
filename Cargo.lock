@@ -2447,12 +2447,15 @@ dependencies = [
  "mpc",
  "rand",
  "rand_chacha",
+ "rustls 0.21.12",
  "serde",
  "serde-big-array",
  "sqlx",
  "tokio",
+ "tokio-rustls 0.24.1",
  "tracing",
  "tracing-subscriber",
+ "webpki-roots",
 ]
 
 [[package]]

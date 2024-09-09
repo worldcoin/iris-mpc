@@ -18,9 +18,16 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use std::{array, pin::Pin};
 use tokio::{
-    io::{AsyncWriteExt, BufWriter},
-    net::TcpStream,
+    io::{BufWriter},
 };
+
+use tokio::net::TcpStream;
+use tokio_rustls::{rustls::{ServerName, OwnedTrustAnchor}, TlsConnector, rustls::ClientConfig, client::TlsStream};
+use std::sync::Arc;
+use webpki_roots::TLS_SERVER_ROOTS;
+use tokio::io::{AsyncWrite, AsyncRead, AsyncWriteExt, AsyncReadExt};
+use std::convert::TryFrom;
+use std::error::Error;
 
 fn install_tracing() {
     use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -36,6 +43,36 @@ fn install_tracing() {
         .init();
 }
 
+async fn prepare_tls_stream_for_writing(address: &str) -> eyre::Result<TlsStream<TcpStream>> {
+    // Create a TCP connection
+    let stream = TcpStream::connect(address).await?;
+
+    // Create a basic client config with the default root certificate store
+    let mut root_cert_store = rustls::RootCertStore::empty();
+    root_cert_store.add_trust_anchors(TLS_SERVER_ROOTS.iter().map(|ta| {
+        OwnedTrustAnchor::from_subject_spki_name_constraints(
+            ta.subject.as_ref(),
+            ta.spki.as_ref(),
+            ta.name_constraints.clone().map(|nc| nc.as_ref()),
+        )
+    }));
+
+    let config = ClientConfig::builder()
+        .with_safe_defaults()
+        .with_root_certificates(root_cert_store)
+        .with_no_client_auth();
+
+    let tls_connector = TlsConnector::from(Arc::new(config));
+
+    // Hostname for SNI (Server Name Indication)
+    let dns_name = ServerName::try_from("localhost").unwrap();
+
+    // Perform the TLS handshake to establish a secure connection
+    let tls_stream: TlsStream<TcpStream> = tls_connector.connect(dns_name, stream).await?;
+
+    Ok(tls_stream)
+}
+
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     install_tracing();
@@ -45,10 +82,14 @@ async fn main() -> eyre::Result<()> {
         panic!("Party id must be 0, 1");
     }
 
+    let tls_stream_1 = prepare_tls_stream_for_writing(&args.server1).await?;
+    let tls_stream_2 = prepare_tls_stream_for_writing(&args.server2).await?;
+    let tls_stream_3 = prepare_tls_stream_for_writing(&args.server3).await?;
+
     tracing::info!("Connecting to servers and syncing migration task parameters...");
-    let mut server1 = BufWriter::new(TcpStream::connect(args.server1).await?);
-    let mut server2 = BufWriter::new(TcpStream::connect(args.server2).await?);
-    let mut server3 = BufWriter::new(TcpStream::connect(args.server3).await?);
+    let mut server1 = BufWriter::new(tls_stream_1);
+    let mut server2 = BufWriter::new(tls_stream_2);
+    let mut server3 = BufWriter::new(tls_stream_3);
     server1.write_u8(args.party_id).await?;
     server2.write_u8(args.party_id).await?;
     server3.write_u8(args.party_id).await?;
