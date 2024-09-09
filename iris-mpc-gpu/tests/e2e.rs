@@ -336,7 +336,7 @@ async fn e2e_test() -> Result<()> {
         }
 
         // Skip empty batch
-        if batch0.request_ids.len() == 0 {
+        if batch0.request_ids.is_empty() {
             continue;
         }
 
