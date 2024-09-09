@@ -1,6 +1,5 @@
 use super::{key_pair::SharesDecodingError, sha256::calculate_sha256};
 use crate::helpers::key_pair::SharesEncryptionKeyPairs;
-use aws_sdk_kms::error::BuildError;
 use aws_sdk_sns::types::MessageAttributeValue;
 use aws_sdk_sqs::{
     error::SdkError,
