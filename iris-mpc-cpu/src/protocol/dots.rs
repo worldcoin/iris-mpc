@@ -63,6 +63,32 @@ impl<N: NetworkTrait> IrisWorker<N> {
         Ok(res)
     }
 
+    pub(crate) async fn rep3_dot_non_blocking(
+        &mut self,
+        a: &VecShare<u16>,
+        b: &VecShare<u16>,
+    ) -> Result<Share<u16>, Error> {
+        if a.len() != IrisCodeArray::IRIS_CODE_SIZE || b.len() != IrisCodeArray::IRIS_CODE_SIZE {
+            return Err(eyre!("Error::InvalidSize"));
+        }
+        let res_a = {
+            let mut rand = self.prf.gen_zero_share();
+            for (a__, b__) in a.iter().zip(b.iter()) {
+                rand += a__ * b__;
+            }
+            rand
+        };
+
+        let bytes_to_send = Utils::ring_to_bytes(&res_a);
+        let _ = self.network.send_next_id(bytes_to_send).await;
+        let response = self.network.receive_prev_id().await?;
+        let res_b = Utils::ring_from_bytes(response)?;
+
+        // Network: reshare
+        let res = Share::new(res_a, res_b);
+        Ok(res)
+    }
+
     pub fn rep3_dot_many(
         &mut self,
         a: SliceShare<'_, u16>,

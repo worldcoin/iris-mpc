@@ -16,6 +16,7 @@ use iris_mpc_common::{
     galois_engine::degree4::GaloisRingIrisCodeShare, id::PartyID, iris_db::iris::IrisCodeArray,
 };
 use static_assertions::const_assert;
+use std::ops::SubAssign;
 
 pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
 pub(crate) const B_BITS: u64 = 16;
@@ -191,6 +192,118 @@ impl<N: NetworkTrait> IrisWorker<N> {
         // Compute code_dots > a/b * mask_dots
         // via MSB(a * mask_dots - b * code_dots)
         self.compare_threshold_masked_many(code_dots, mask_dots)
+    }
+
+    pub async fn rep3_distance_non_blocking(
+        &mut self,
+        x: &VecShare<u16>,
+        y: &VecShare<u16>,
+    ) -> Result<Share<u16>, Error> {
+        self.rep3_dot_non_blocking(x, y).await
+    }
+
+    pub async fn rep3_pairwise_distance(
+        &mut self,
+        lhs_shares: &VecShare<u16>,
+        rhs_shares: &VecShare<u16>,
+        lhs_mask: &IrisCodeArray,
+        rhs_mask: &IrisCodeArray,
+    ) -> Result<(Share<u16>, usize), Error> {
+        let combined_mask = Self::combine_masks(lhs_mask, rhs_mask);
+        let mask_dots = combined_mask.count_ones();
+        let code_dots = self.rep3_dot_non_blocking(lhs_shares, rhs_shares).await?;
+        Ok((code_dots, mask_dots))
+    }
+
+    pub fn rep3_compute_cross_mul(
+        &mut self,
+        d1: Share<u16>,
+        t1: u32,
+        d2: Share<u16>,
+        t2: u32,
+    ) -> Result<Share<u32>, Error> {
+        let protocol = self;
+
+        let mut vd1 = VecShare::<u16>::with_capacity(1);
+        // Do preprocessing to lift d1
+        vd1.push(d1);
+        // Compute (d1 + 2^{15}) % 2^{16}
+        for x in vd1.iter_mut() {
+            x.add_assign_const(1_u16 << 15, protocol.get_party_id());
+        }
+        let mut lifted_d1 = protocol.lift::<16_usize>(vd1)?;
+        // Now we got shares of d1' over 2^32 such that d1' = (d1'_1 + d1'_2 + d1'_3) %
+        // 2^{16} = d1 Next we subtract the 2^15 term we've added previously to
+        // get signed shares over 2^{32}
+        for x in lifted_d1.iter_mut() {
+            x.add_assign_const(
+                ((1_u64 << 32) - (1_u64 << 15)) as u32,
+                protocol.get_party_id(),
+            );
+        }
+
+        // Compute d1 * t2
+        for x in lifted_d1.iter_mut() {
+            *x *= t2;
+        }
+
+        // Do preprocessing to lift d2
+        let mut vd2 = VecShare::<u16>::with_capacity(1);
+        vd2.push(d2);
+        // Same process for d2, compute (d2 + 2^{15}) % 2^{16}
+        for x in vd2.iter_mut() {
+            x.add_assign_const(1_u16 << 15, protocol.get_party_id());
+        }
+        let mut lifted_d2 = protocol.lift::<16_usize>(vd2)?;
+        // Now get rid of the 2^{15} term to get signed shares over 2^{32}
+        for x in lifted_d2.iter_mut() {
+            x.add_assign_const(
+                ((1_u64 << 32) - (1_u64 << 15)) as u32,
+                protocol.get_party_id(),
+            );
+        }
+        // Compute d2 * t1
+        for x in lifted_d2.iter_mut() {
+            *x *= t1;
+        }
+        // Compute d2*t1 - d1*t2
+        lifted_d2.sub_assign(lifted_d1);
+        Ok(lifted_d2.get_at(0))
+    }
+
+    pub fn rep3_lift_and_cross_mul(
+        &mut self,
+        d1: Share<u16>,
+        t1: u32,
+        d2: Share<u16>,
+        t2: u32,
+    ) -> Result<bool, Error> {
+        let diff = self.rep3_compute_cross_mul(d1, t1, d2, t2)?;
+        let protocol = self;
+
+        let mut vdiff = VecShare::with_capacity(1);
+        vdiff.push(diff);
+        // Compute bit <- MSB(D2 * T1 - D1 * T2)
+        let bit = protocol.extract_msb_u32::<32>(vdiff)?;
+
+        // Open bit
+        let opened_b = protocol.open_bin_many(bit)?;
+        Ok(opened_b[0] == 1)
+    }
+
+    pub fn rep3_iris_match_public_output(
+        &mut self,
+        iris_to_match: SliceShare<'_, u16>,
+        ground_truth: VecShare<u16>,
+        mask_iris: &IrisCodeArray,
+        mask_ground_truth: IrisCodeArray,
+    ) -> Result<bool, Error> {
+        let res =
+            self.rep3_compare_iris_public_mask_many(iris_to_match, &[ground_truth], mask_iris, &[
+                mask_ground_truth,
+            ])?;
+        let bit = self.open_t_many(res)?;
+        Ok(bit[0] != 0)
     }
 
     pub fn shamir_compare_iris_public_mask(

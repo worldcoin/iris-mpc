@@ -1,7 +1,6 @@
 use crate::shares::ring_impl::RingElement;
 use hawk_pack::VectorStore;
 use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodeArray, MATCH_THRESHOLD_RATIO};
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Debug, Clone)]
@@ -170,21 +169,10 @@ impl VectorStore for PlaintextStore {
     }
 }
 
-pub fn create_ground_truth_database<R: RngCore>(
-    rng: &mut R,
-    num_items: usize,
-) -> eyre::Result<Vec<IrisCode>> {
-    let mut codes = Vec::with_capacity(num_items);
-    for _ in 0..num_items {
-        let code = IrisCode::random_rng(rng);
-        codes.push(code);
-    }
-    Ok(codes)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::database_generators::create_ground_truth_database;
     use aes_prng::AesRng;
     use rand::SeedableRng;
     use tracing_test::traced_test;

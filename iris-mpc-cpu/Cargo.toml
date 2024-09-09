@@ -15,6 +15,7 @@ eyre.workspace = true
 futures.workspace = true
 hawk-pack = { git = "https://github.com/Inversed-Tech/hawk-pack.git" }
 iris-mpc-common = { path = "../iris-mpc-common" }
+itertools.workspace = true
 log = "0.4.22"
 num-traits = "0.2"
 pprof = { version = "0.13", features = ["flamegraph", "criterion"] }
