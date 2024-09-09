@@ -349,7 +349,7 @@ impl<N: NetworkTrait> IrisWorker<N> {
         x: Share<u32>,
     ) -> Result<Share<Bit>, Error> {
         let (a, b) = self
-            .extract_msb_u32::<{ u16::BITS as usize }>(VecShare::new_vec(vec![x]))?
+            .extract_msb_u32::<{ u32::BITS as usize }>(VecShare::new_vec(vec![x]))?
             .get_at(0)
             .get_ab();
 
