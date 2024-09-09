@@ -43,6 +43,9 @@ pub struct SQSMessage {
 }
 
 // Deserialize message attributes map from SQS body.
+// For simplicity, it only deserializes attributes of type String.
+// Update this function if other types are needed (String.Array, Number, and
+// Binary).
 fn deserialize_message_attributes<'de, D>(
     deserializer: D,
 ) -> Result<HashMap<String, MessageAttributeValue>, D::Error>
@@ -80,7 +83,8 @@ where
     Ok(result)
 }
 
-// Custom serialization for MessageAttributeValue
+// MessageAttributes serialization placeholder. It's left empty as we do not
+// send messages to SQS.
 fn serialize_message_attributes<S>(
     _: &HashMap<String, MessageAttributeValue>,
     serializer: S,
@@ -88,28 +92,8 @@ fn serialize_message_attributes<S>(
 where
     S: Serializer,
 {
-    // intentionally left empty. we do not serialize messages to SQS.
     let map = serde_json::map::Map::new();
     map.serialize(serializer)
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct MessageAttributeInSqsBody {
-    #[serde(rename = "Type")]
-    pub attribute_type: String,
-    #[serde(rename = "Value")]
-    pub value:          String,
-}
-
-impl MessageAttributeInSqsBody {
-    pub fn get_value(&self) -> Result<MessageAttributeValue, BuildError> {
-        let mut msg_attribute =
-            MessageAttributeValue::builder().data_type(self.attribute_type.clone());
-        if self.attribute_type == "String" {
-            msg_attribute = msg_attribute.string_value(self.value.clone());
-        }
-        msg_attribute.build()
-    }
 }
 
 pub const SMPC_MESSAGE_TYPE_ATTRIBUTE: &str = "message_type";

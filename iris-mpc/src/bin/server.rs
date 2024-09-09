@@ -124,12 +124,9 @@ async fn receive_batch(
     let mut handles = vec![];
     let mut msg_counter = 0;
 
-    tracing::info!("Setting message attribute names to All in receive_batch");
     while msg_counter < *CURRENT_BATCH_SIZE.lock().unwrap() {
         let rcv_message_output = client
             .receive_message()
-            .message_attribute_names("All")
-            .set_message_attribute_names(Some(vec!["All".to_string()]))
             .max_number_of_messages(1)
             .queue_url(queue_url)
             .send()
@@ -141,13 +138,11 @@ async fn receive_batch(
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
                     .map_err(|e| ReceiveRequestError::json_parse_error("SQS body", e))?;
 
+                // messages arrive to SQS through SNS. So, all the attributes set in SNS are
+                // moved into the SQS body.
                 let message_attributes = message.message_attributes;
 
                 let mut batch_metadata = BatchMetadata::default();
-
-                let mut mymap = HashMap::new();
-                mymap.insert("a", "b");
-                tracing::info!("Test map: {:?}", mymap);
 
                 if let Some(trace_id) = message_attributes.get(TRACE_ID_MESSAGE_ATTRIBUTE_NAME) {
                     let trace_id = trace_id.string_value().unwrap();
@@ -157,19 +152,6 @@ async fn receive_batch(
                     let span_id = span_id.string_value().unwrap();
                     batch_metadata.span_id = span_id.to_string();
                 }
-
-                tracing::info!("Received message_attributes: {:?}", message_attributes);
-                tracing::info!(
-                    "Received request_type: {:?}",
-                    message_attributes.get(SMPC_MESSAGE_TYPE_ATTRIBUTE)
-                );
-                tracing::info!(
-                    "string value: {:?}",
-                    message_attributes
-                        .get(SMPC_MESSAGE_TYPE_ATTRIBUTE)
-                        .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?
-                        .string_value()
-                );
 
                 let request_type = message_attributes
                     .get(SMPC_MESSAGE_TYPE_ATTRIBUTE)
