@@ -167,8 +167,8 @@ async fn receive_batch(
                                 )
                             })?;
                         batch_query
-                            .deletion_requests
-                            .push(identity_deletion_request.serial_id);
+                            .deletion_requests_indices
+                            .push(identity_deletion_request.serial_id - 1); // serial_id is 1-indexed
                         batch_query.deletion_requests_metadata.push(batch_metadata);
                         client
                             .delete_message()
@@ -796,8 +796,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             // handling identity deletion results
             let identity_deletion_results = deleted_ids
                 .iter()
-                .map(|serial_id| {
-                    let result_event = IdentityDeletionResult::new(party_id, *serial_id, true);
+                .map(|&serial_id| {
+                    let result_event = IdentityDeletionResult::new(party_id, serial_id + 1, true);
                     serde_json::to_string(&result_event)
                         .wrap_err("failed to serialize identity deletion result")
                 })
@@ -951,15 +951,16 @@ async fn process_identity_deletions(
     dummy_iris_share: &GaloisRingIrisCodeShare,
     dummy_mask_share: &GaloisRingTrimmedMaskCodeShare,
 ) -> eyre::Result<()> {
-    if batch.deletion_requests.is_empty() {
+    if batch.deletion_requests_indices.is_empty() {
         return Ok(());
     }
 
-    for (serial_id, tracing_payload) in batch
-        .deletion_requests
+    for (&entry_idx, tracing_payload) in batch
+        .deletion_requests_indices
         .iter()
         .zip(batch.deletion_requests_metadata.iter())
     {
+        let serial_id = entry_idx + 1; // DB serial_id is 1-indexed
         tracing::info!(
             node_id = tracing_payload.node_id,
             dd.trace_id = tracing_payload.trace_id,
@@ -971,7 +972,7 @@ async fn process_identity_deletions(
         // note that both serial_id and postgres db are 1-indexed.
         store
             .update_iris(
-                *serial_id as i64,
+                serial_id as i64,
                 dummy_iris_share,
                 dummy_mask_share,
                 dummy_iris_share,

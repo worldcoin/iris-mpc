@@ -335,6 +335,11 @@ async fn e2e_test() -> Result<()> {
                 .extend(shared_mask[2].all_rotations());
         }
 
+        // Skip empty batch
+        if batch0.request_ids.len() == 0 {
+            continue;
+        }
+
         for _ in 0..rng.gen_range(0..MAX_DELETIONS_PER_BATCH) {
             let idx = rng.gen_range(0..db.db.len());
             if deleted_indices.contains(&(idx as u32)) {
@@ -344,9 +349,9 @@ async fn e2e_test() -> Result<()> {
             deleted_indices.insert(idx as u32);
             println!("Deleting index {}", idx);
 
-            batch0.deletion_requests.push(idx as u32);
-            batch1.deletion_requests.push(idx as u32);
-            batch2.deletion_requests.push(idx as u32);
+            batch0.deletion_requests_indices.push(idx as u32);
+            batch1.deletion_requests_indices.push(idx as u32);
+            batch2.deletion_requests_indices.push(idx as u32);
         }
 
         // TODO: better tests involving two eyes, atm just copy left to right

@@ -430,12 +430,12 @@ impl ServerActor {
         // PERFORM DELETIONS (IF ANY)
         ///////////////////////////////////////////////////////////////////
 
-        if !batch.deletion_requests.is_empty() {
+        if !batch.deletion_requests_indices.is_empty() {
             // Prepare dummy deletion shares
             let (dummy_queries, dummy_sums) = self.prepare_deletion_shares()?;
 
             // Overwrite the in-memory db
-            for deletion_index in batch.deletion_requests.clone() {
+            for deletion_index in batch.deletion_requests_indices.clone() {
                 let device_index = deletion_index % self.device_manager.device_count() as u32;
                 let device_db_index = deletion_index / self.device_manager.device_count() as u32;
                 self.device_manager
@@ -762,7 +762,7 @@ impl ServerActor {
                 match_ids,
                 store_left: query_store_left,
                 store_right: query_store_right,
-                deleted_ids: batch.deletion_requests,
+                deleted_ids: batch.deletion_requests_indices,
             })
             .unwrap();
 
