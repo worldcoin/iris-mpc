@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+source accounts_checker.sh
+
 get_aws_secret() {
   local SECRET_NAME=$1
   local REGION=$2

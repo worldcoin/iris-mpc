@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+source accounts_checker.sh
+
 purge_queues() {
     local PROFILE_NAME=$1
     local REGION=$2
