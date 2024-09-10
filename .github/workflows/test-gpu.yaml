@@ -19,7 +19,16 @@ jobs:
 
       - name: Check shared memory size
         run: df -h
-
+      
+      - name: Update gcc to version 11
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential manpages-dev software-properties-common
+          sudo add-apt-repository ppa:ubuntu-toolchain-r/test
+          sudo apt-get update
+          sudo apt-get install -y gcc-11 g++-11 
+          ln -sf /usr/bin/gcc-11 /usr/bin/gcc
+        
       - name: Install OpenSSL && pkg-config
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
 
