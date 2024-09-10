@@ -64,7 +64,7 @@ async fn prepare_tls_stream_for_writing(address: &str) -> eyre::Result<TlsStream
     let tls_connector = TlsConnector::from(Arc::new(config));
 
     // Hostname for SNI (Server Name Indication)
-    let dns_name = ServerName::try_from("localhost").unwrap();
+    let dns_name = ServerName::try_from(address).unwrap();
 
     // Perform the TLS handshake to establish a secure connection
     let tls_stream: TlsStream<TcpStream> = tls_connector.connect(dns_name, stream).await?;
