@@ -945,7 +945,8 @@ mod tests {
         for i in 0..DB_SIZE * QUERY_SIZE / n_devices {
             assert_eq!(
                 (gpu_result[0][i] + gpu_result[1][i] + gpu_result[2][i]),
-                (db.db[i / (DB_SIZE / n_devices)].mask & db.db[i % (DB_SIZE / n_devices)].mask)
+                (db.db[i / (DB_SIZE / n_devices)].mask
+                    & db.db[(i % (DB_SIZE / n_devices)) * n_devices].mask)
                     .count_ones() as u16
             );
         }
