@@ -1,6 +1,6 @@
 use axum::{routing::get, Router};
 use clap::Parser;
-use eyre::{bail, Context};
+use eyre::{bail, eyre, Context};
 use futures_concurrency::future::Join;
 use iris_mpc_common::{helpers::task_monitor::TaskMonitor, id::PartyID};
 use iris_mpc_store::Store;
@@ -9,15 +9,17 @@ use iris_mpc_upgrade::{
     packets::{MaskShareMessage, TwoToThreeIrisCodeMessage},
     IrisCodeUpgrader, NewIrisShareSink,
 };
+use rustls::ServerConfig;
 use std::{
     sync::{atomic::AtomicUsize, Arc},
     time::{Duration, Instant},
 };
 use tokio::{
-    io::{AsyncReadExt, BufReader},
+    io::{AsyncReadExt, AsyncWriteExt},
     sync::mpsc,
     task::JoinSet,
 };
+use tokio_rustls::TlsAcceptor;
 
 fn install_tracing() {
     use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -89,10 +91,33 @@ async fn main() -> eyre::Result<()> {
     tracing::info!("Spawned processing tasks");
 
     // listen for incoming connections from clients
+    if !args.key.ends_with(".pem") {
+        tracing::warn!("Expected key file to end in \".pem\"");
+    }
+    let key_pem = tokio::fs::read(&args.key).await?;
+    let key = rustls_pemfile::private_key(&mut &key_pem[..])?.ok_or(eyre!(
+        "could not parse {} as a valid private key",
+        args.key.display()
+    ))?;
+
+    if !args.cert_chain.ends_with(".pem") {
+        tracing::warn!("Expected cert_chain file to end in \".pem\"");
+    }
+    let cert_pem = tokio::fs::read(&args.cert_chain).await?;
+    let cert_chain = rustls_pemfile::certs(&mut &cert_pem[..]).collect::<Result<Vec<_>, _>>()?;
+    let server_config = Arc::new(
+        ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(cert_chain, key)?,
+    );
+    let tls_acceptor = TlsAcceptor::from(server_config);
     let client_listener = tokio::net::TcpListener::bind(args.bind_addr).await?;
 
-    let mut client_stream1 = BufReader::new(client_listener.accept().await?.0);
-    let mut client_stream2 = BufReader::new(client_listener.accept().await?.0);
+    let client_stream1_raw = client_listener.accept().await?.0;
+    let mut client_stream1 = tls_acceptor.accept(client_stream1_raw).await?;
+    let client_stream2_raw = client_listener.accept().await?.0;
+    let mut client_stream2 = tls_acceptor.accept(client_stream2_raw).await?;
+
     tracing::info!("Both Clients connected");
     let id1 = client_stream1.read_u8().await?;
     let id2 = client_stream2.read_u8().await?;
@@ -187,6 +212,9 @@ async fn main() -> eyre::Result<()> {
             .await?;
         sending += start.elapsed();
     }
+
+    client_stream1.write_all(&[0]).await?;
+    client_stream2.write_all(&[0]).await?;
 
     tracing::debug!("Receiving took: {}s", receiving.as_secs_f64());
     tracing::debug!("Sending took: {}s", sending.as_secs_f64());

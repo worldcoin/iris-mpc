@@ -2,8 +2,8 @@ use clap::Parser;
 use iris_mpc_common::id::PartyID;
 use std::{
     fmt::{self, Formatter},
-    io,
-    net::{SocketAddr, ToSocketAddrs},
+    net::SocketAddr,
+    path::PathBuf,
     str::FromStr,
 };
 
@@ -32,6 +32,12 @@ pub struct UpgradeServerConfig {
     pub bind_addr: SocketAddr,
 
     #[clap(long)]
+    pub key: PathBuf,
+
+    #[clap(long)]
+    pub cert_chain: PathBuf,
+
+    #[clap(long)]
     pub db_url: String,
 
     #[clap(long)]
@@ -48,6 +54,8 @@ impl std::fmt::Debug for UpgradeServerConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("UpgradeServerConfig")
             .field("bind_addr", &self.bind_addr)
+            .field("key", &self.key)
+            .field("cert", &self.cert_chain)
             .field("db_url", &"<redacted>")
             .field("party_id", &self.party_id)
             .field("threads", &self.threads)
@@ -58,14 +66,17 @@ impl std::fmt::Debug for UpgradeServerConfig {
 
 #[derive(Parser)]
 pub struct UpgradeClientConfig {
-    #[clap(long,  default_value = "127.0.0.1:8000", value_parser = resolve_host)]
-    pub server1: SocketAddr,
+    #[clap(long, default_value = "localhost:8000")]
+    pub server1: String,
 
-    #[clap(long,  default_value = "127.0.0.1:8001", value_parser = resolve_host)]
-    pub server2: SocketAddr,
+    #[clap(long, default_value = "localhost:8001")]
+    pub server2: String,
 
-    #[clap(long,  default_value = "127.0.0.1:8002", value_parser = resolve_host)]
-    pub server3: SocketAddr,
+    #[clap(long, default_value = "localhost:8002")]
+    pub server3: String,
+
+    #[clap(long)]
+    pub trusted_cert: Vec<PathBuf>,
 
     #[clap(long)]
     pub db_start: u64,
@@ -89,22 +100,13 @@ pub struct UpgradeClientConfig {
     pub masks_db_url: String,
 }
 
-fn resolve_host(hostname_port: &str) -> io::Result<SocketAddr> {
-    let socketaddr = hostname_port.to_socket_addrs()?.next().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::AddrNotAvailable,
-            format!("Could not find destination {hostname_port}"),
-        )
-    })?;
-    Ok(socketaddr)
-}
-
 impl std::fmt::Debug for UpgradeClientConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("UpgradeClientConfig")
             .field("server1", &self.server1)
             .field("server2", &self.server2)
             .field("server3", &self.server3)
+            .field("trusted_cert", &self.trusted_cert)
             .field("shares_db_url", &"<redacted>")
             .field("masks_db_url", &"<redacted>")
             .field("db_start", &self.db_start)

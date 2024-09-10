@@ -27,33 +27,35 @@ struct Args {
 async fn main() -> eyre::Result<()> {
     let args = Args::parse();
 
-    if args.db_urls.len() != 7 {
+    if args.db_urls.len() != 9 {
         return Err(eyre::eyre!(
-            "Expect 5 db urls to be provided: old_left_db0, old_left_db1, old_right_db0, \
-             old_right_db1, new_db0, new_db1, new_db2"
+            "Expect 9 db urls to be provided: old_left_db0, old_left_db1, old_left_mask_db, \
+             old_right_db0, old_right_db1, old_right_mask_db, new_db0, new_db1, new_db2"
         ));
     }
 
     let old_left_db0 = V1Db::new(&args.db_urls[0]).await?;
     let old_left_db1 = V1Db::new(&args.db_urls[1]).await?;
-    let old_right_db0 = V1Db::new(&args.db_urls[2]).await?;
-    let old_right_db1 = V1Db::new(&args.db_urls[3]).await?;
+    let old_left_mask_db = V1Db::new(&args.db_urls[2]).await?;
+    let old_right_db0 = V1Db::new(&args.db_urls[3]).await?;
+    let old_right_db1 = V1Db::new(&args.db_urls[4]).await?;
+    let old_right_mask_db = V1Db::new(&args.db_urls[5]).await?;
 
-    let new_db0 = Store::new(&args.db_urls[4], "upgrade").await?;
-    let new_db1 = Store::new(&args.db_urls[5], "upgrade").await?;
-    let new_db2 = Store::new(&args.db_urls[6], "upgrade").await?;
+    let new_db0 = Store::new(&args.db_urls[6], "upgrade").await?;
+    let new_db1 = Store::new(&args.db_urls[7], "upgrade").await?;
+    let new_db2 = Store::new(&args.db_urls[8], "upgrade").await?;
 
     // grab the old shares from the db and reconstruct them
     let old_left_shares0 = old_left_db0
-        .stream_shares(0..args.num_elements)
+        .stream_shares(1..args.num_elements + 1)
         .collect::<Vec<_>>()
         .await;
     let old_left_shares1 = old_left_db1
-        .stream_shares(0..args.num_elements)
+        .stream_shares(1..args.num_elements + 1)
         .collect::<Vec<_>>()
         .await;
-    let old_left_masks = old_left_db0
-        .stream_masks(0..args.num_elements)
+    let old_left_masks = old_left_mask_db
+        .stream_masks(1..args.num_elements + 1)
         .collect::<Vec<_>>()
         .await;
 
@@ -76,15 +78,15 @@ async fn main() -> eyre::Result<()> {
     .collect();
 
     let old_right_shares0 = old_right_db0
-        .stream_shares(0..args.num_elements)
+        .stream_shares(1..args.num_elements + 1)
         .collect::<Vec<_>>()
         .await;
     let old_right_shares1 = old_right_db1
-        .stream_shares(0..args.num_elements)
+        .stream_shares(1..args.num_elements + 1)
         .collect::<Vec<_>>()
         .await;
-    let old_right_masks = old_right_db0
-        .stream_masks(0..args.num_elements)
+    let old_right_masks = old_right_mask_db
+        .stream_masks(1..args.num_elements + 1)
         .collect::<Vec<_>>()
         .await;
 
