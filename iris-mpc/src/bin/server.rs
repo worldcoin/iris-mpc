@@ -469,10 +469,10 @@ async fn initialize_iris_dbs(
     let count_irises = store.count_irises().await?;
     tracing::info!("Initialize iris db: Counted {} entries in DB", count_irises);
 
-    let mut left_codes_db: Vec<u16> = vec![0u16; count_irises * IRIS_CODE_LENGTH];
-    let mut left_masks_db: Vec<u16> = vec![0u16; count_irises * MASK_CODE_LENGTH];
-    let mut right_codes_db: Vec<u16> = vec![0u16; count_irises * IRIS_CODE_LENGTH];
-    let mut right_masks_db: Vec<u16> = vec![0u16; count_irises * MASK_CODE_LENGTH];
+    let mut left_codes_db = vec![0u16; count_irises * IRIS_CODE_LENGTH];
+    let mut left_masks_db = vec![0u16; count_irises * MASK_CODE_LENGTH];
+    let mut right_codes_db = vec![0u16; count_irises * IRIS_CODE_LENGTH];
+    let mut right_masks_db = vec![0u16; count_irises * MASK_CODE_LENGTH];
 
     let parallelism = config
         .database
@@ -487,6 +487,7 @@ async fn initialize_iris_dbs(
     // Load DB from persistent storage.
     let mut store_len = 0;
     let mut stream = store.stream_irises_par(parallelism).await;
+
     while let Some(iris) = stream.try_next().await? {
         if iris.index() >= count_irises {
             return Err(eyre!("Inconsistent iris index {}", iris.index()));

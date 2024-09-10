@@ -255,23 +255,10 @@ impl ServerActor {
             comms.clone(),
         );
 
-        // load left and right eye databases to device
-        let (left_code_db_slices, current_db_sizes) =
-            codes_engine.load_db(left_eye_db.0, db_size, db_size + db_buffer, true);
-        let (left_mask_db_slices, left_mask_db_sizes) =
-            masks_engine.load_db(left_eye_db.1, db_size, db_size + db_buffer, true);
-
-        let (right_code_db_slices, right_db_sizes) =
-            codes_engine.load_db(right_eye_db.0, db_size, db_size + db_buffer, true);
-        let (right_mask_db_slices, right_mask_db_sizes) =
-            masks_engine.load_db(right_eye_db.1, db_size, db_size + db_buffer, true);
-
-        assert!(
-            [left_mask_db_sizes, right_mask_db_sizes, right_db_sizes]
-                .iter()
-                .all(|size| size == &current_db_sizes),
-            "Code and mask db sizes mismatch"
-        );
+        let left_code_db_slices = codes_engine.alloc_db(db_size + db_buffer);
+        let left_mask_db_slices = masks_engine.alloc_db(db_size + db_buffer);
+        let right_code_db_slices = codes_engine.alloc_db(db_size + db_buffer);
+        let right_mask_db_slices = masks_engine.alloc_db(db_size + db_buffer);
 
         // Engines for inflight queries
         let batch_codes_engine = ShareDB::init(
@@ -351,6 +338,8 @@ impl ServerActor {
         let batch_match_list_right = distance_comparator.prepare_db_match_list(n_queries);
 
         let query_db_size = vec![n_queries; device_manager.device_count()];
+
+        let current_db_sizes = vec![0; device_manager.device_count()];
 
         for dev in device_manager.devices() {
             dev.synchronize().unwrap();
