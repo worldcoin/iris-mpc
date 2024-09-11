@@ -107,7 +107,7 @@ async fn e2e_test() -> Result<()> {
         let comms0 = device_manager0
             .instantiate_network_from_ids(0, &ids0)
             .unwrap();
-        let mut actor = match ServerActor::new_with_device_manager_and_comms(
+        let actor = match ServerActor::new_with_device_manager_and_comms(
             0,
             chacha_seeds0,
             device_manager0,
@@ -117,7 +117,8 @@ async fn e2e_test() -> Result<()> {
             DB_BUFFER,
             MAX_BATCH_SIZE,
         ) {
-            Ok((actor, handle)) => {
+            Ok((mut actor, handle)) => {
+                actor.load_full_db(&(&db0.0, &db0.1), &(&db0.0, &db0.1), DB_SIZE);
                 tx0.send(Ok(handle)).unwrap();
                 actor
             }
@@ -126,14 +127,13 @@ async fn e2e_test() -> Result<()> {
                 return;
             }
         };
-        actor.load_full_db(&(&db0.0, &db0.1), &(&db0.0, &db0.1), DB_SIZE);
         actor.run();
     });
     let actor1_task = tokio::task::spawn_blocking(move || {
         let comms1 = device_manager1
             .instantiate_network_from_ids(1, &ids1)
             .unwrap();
-        let mut actor = match ServerActor::new_with_device_manager_and_comms(
+        let actor = match ServerActor::new_with_device_manager_and_comms(
             1,
             chacha_seeds1,
             device_manager1,
@@ -143,7 +143,8 @@ async fn e2e_test() -> Result<()> {
             DB_BUFFER,
             MAX_BATCH_SIZE,
         ) {
-            Ok((actor, handle)) => {
+            Ok((mut actor, handle)) => {
+                actor.load_full_db(&(&db1.0, &db1.1), &(&db1.0, &db1.1), DB_SIZE);
                 tx1.send(Ok(handle)).unwrap();
                 actor
             }
@@ -152,14 +153,13 @@ async fn e2e_test() -> Result<()> {
                 return;
             }
         };
-        actor.load_full_db(&(&db1.0, &db1.1), &(&db1.0, &db1.1), DB_SIZE);
         actor.run();
     });
     let actor2_task = tokio::task::spawn_blocking(move || {
         let comms2 = device_manager2
             .instantiate_network_from_ids(2, &ids2)
             .unwrap();
-        let mut actor = match ServerActor::new_with_device_manager_and_comms(
+        let actor = match ServerActor::new_with_device_manager_and_comms(
             2,
             chacha_seeds2,
             device_manager2,
@@ -169,7 +169,8 @@ async fn e2e_test() -> Result<()> {
             DB_BUFFER,
             MAX_BATCH_SIZE,
         ) {
-            Ok((actor, handle)) => {
+            Ok((mut actor, handle)) => {
+                actor.load_full_db(&(&db2.0, &db2.1), &(&db2.0, &db2.1), DB_SIZE);
                 tx2.send(Ok(handle)).unwrap();
                 actor
             }
@@ -178,7 +179,6 @@ async fn e2e_test() -> Result<()> {
                 return;
             }
         };
-        actor.load_full_db(&(&db2.0, &db2.1), &(&db2.0, &db2.1), DB_SIZE);
         actor.run();
     });
     let mut handle0 = rx0.await??;

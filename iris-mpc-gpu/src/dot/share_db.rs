@@ -357,9 +357,9 @@ impl ShareDB {
             });
 
         // Calculate the number of entries per shard
-        let mut db_lens = vec![db_entries.len() / self.code_length; n_shards];
+        let mut db_lens = vec![db_entries.len() / self.code_length / n_shards; n_shards];
         for i in 0..db_lens.len() {
-            if i < db_entries.len() % n_shards {
+            if i < (db_entries.len() / self.code_length) % n_shards {
                 db_lens[i] += 1;
             }
         }
