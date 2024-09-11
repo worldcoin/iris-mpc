@@ -540,6 +540,22 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let store_len = store.count_irises().await?;
 
+    // Seed the persistent storage with random shares if configured.
+    if store_len < config.init_db_size {
+        tracing::info!("Initialize persistent iris db with randomly generated shares");
+        store
+            .init_db_with_random_shares(
+                RNG_SEED_INIT_DB,
+                party_id,
+                config.init_db_size,
+                config.clear_db_before_init,
+            )
+            .await?;
+    }
+
+    // Fetch again in case we've just initialized the DB
+    let store_len = store.count_irises().await?;
+
     let my_state = SyncState {
         db_len:              store_len as u64,
         deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
@@ -555,19 +571,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Heartbeat starting...");
     rx.await??;
     tracing::info!("Heartbeat started.");
-
-    // Seed the persistent storage with random shares if configured.
-    if store_len < config.init_db_size {
-        tracing::info!("Initialize persistent iris db with randomly generated shares");
-        store
-            .init_db_with_random_shares(
-                RNG_SEED_INIT_DB,
-                party_id,
-                config.init_db_size,
-                config.clear_db_before_init,
-            )
-            .await?;
-    }
 
     // Start the actor in separate task.
     // A bit convoluted, but we need to create the actor on the thread already,
