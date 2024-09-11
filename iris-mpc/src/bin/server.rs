@@ -48,7 +48,7 @@ use tokio::{
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
-const DB_BUFFER: usize = 8 * 1_000;
+const MAX_DB_SIZE: usize = 8 * 2_000;
 const RNG_SEED_INIT_DB: u64 = 42;
 const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_CONCURRENT_REQUESTS: usize = 32;
@@ -619,8 +619,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             device_manager,
             comms,
             8,
-            store_len,
-            DB_BUFFER,
+            MAX_DB_SIZE,
             config.max_batch_size,
         ) {
             Ok((mut actor, handle)) => {

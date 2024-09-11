@@ -113,8 +113,7 @@ async fn e2e_test() -> Result<()> {
             device_manager0,
             comms0,
             8,
-            DB_SIZE,
-            DB_BUFFER,
+            DB_SIZE + DB_BUFFER,
             MAX_BATCH_SIZE,
         ) {
             Ok((mut actor, handle)) => {
@@ -139,8 +138,7 @@ async fn e2e_test() -> Result<()> {
             device_manager1,
             comms1,
             8,
-            DB_SIZE,
-            DB_BUFFER,
+            DB_SIZE + DB_BUFFER,
             MAX_BATCH_SIZE,
         ) {
             Ok((mut actor, handle)) => {
@@ -165,8 +163,7 @@ async fn e2e_test() -> Result<()> {
             device_manager2,
             comms2,
             8,
-            DB_SIZE,
-            DB_BUFFER,
+            DB_SIZE + DB_BUFFER,
             MAX_BATCH_SIZE,
         ) {
             Ok((mut actor, handle)) => {

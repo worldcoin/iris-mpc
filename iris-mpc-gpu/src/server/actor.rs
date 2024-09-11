@@ -106,8 +106,7 @@ impl ServerActor {
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
         job_queue_size: usize,
-        db_size: usize,
-        db_buffer: usize,
+        max_db_size: usize,
         max_batch_size: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let device_manager = Arc::new(DeviceManager::init());
@@ -116,8 +115,7 @@ impl ServerActor {
             chacha_seeds,
             device_manager,
             job_queue_size,
-            db_size,
-            db_buffer,
+            max_db_size,
             max_batch_size,
         )
     }
@@ -127,8 +125,7 @@ impl ServerActor {
         chacha_seeds: ([u32; 8], [u32; 8]),
         device_manager: Arc<DeviceManager>,
         job_queue_size: usize,
-        db_size: usize,
-        db_buffer: usize,
+        max_db_size: usize,
         max_batch_size: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let ids = device_manager.get_ids_from_magic(0);
@@ -139,8 +136,7 @@ impl ServerActor {
             device_manager,
             comms,
             job_queue_size,
-            db_size,
-            db_buffer,
+            max_db_size,
             max_batch_size,
         )
     }
@@ -152,8 +148,7 @@ impl ServerActor {
         device_manager: Arc<DeviceManager>,
         comms: Vec<Arc<NcclComm>>,
         job_queue_size: usize,
-        db_size: usize,
-        db_buffer: usize,
+        max_db_size: usize,
         max_batch_size: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let (tx, rx) = mpsc::channel(job_queue_size);
@@ -163,8 +158,7 @@ impl ServerActor {
             device_manager,
             comms,
             rx,
-            db_size,
-            db_buffer,
+            max_db_size,
             max_batch_size,
         )?;
         Ok((actor, ServerActorHandle { job_queue: tx }))
@@ -177,8 +171,7 @@ impl ServerActor {
         device_manager: Arc<DeviceManager>,
         comms: Vec<Arc<NcclComm>>,
         job_queue: mpsc::Receiver<ServerJob>,
-        db_size: usize,
-        db_buffer: usize,
+        max_db_size: usize,
         max_batch_size: usize,
     ) -> eyre::Result<Self> {
         let mut kdf_nonce = 0;
@@ -219,10 +212,10 @@ impl ServerActor {
             comms.clone(),
         );
 
-        let left_code_db_slices = codes_engine.alloc_db(db_size + db_buffer);
-        let left_mask_db_slices = masks_engine.alloc_db(db_size + db_buffer);
-        let right_code_db_slices = codes_engine.alloc_db(db_size + db_buffer);
-        let right_mask_db_slices = masks_engine.alloc_db(db_size + db_buffer);
+        let left_code_db_slices = codes_engine.alloc_db(max_db_size);
+        let left_mask_db_slices = masks_engine.alloc_db(max_db_size);
+        let right_code_db_slices = codes_engine.alloc_db(max_db_size);
+        let right_mask_db_slices = masks_engine.alloc_db(max_db_size);
 
         // Engines for inflight queries
         let batch_codes_engine = ShareDB::init(
@@ -294,10 +287,10 @@ impl ServerActor {
         let results = distance_comparator.prepare_results();
         let batch_results = distance_comparator.prepare_results();
 
-        let db_match_list_left = distance_comparator
-            .prepare_db_match_list((db_size + db_buffer) / device_manager.device_count());
-        let db_match_list_right = distance_comparator
-            .prepare_db_match_list((db_size + db_buffer) / device_manager.device_count());
+        let db_match_list_left =
+            distance_comparator.prepare_db_match_list(max_db_size / device_manager.device_count());
+        let db_match_list_right =
+            distance_comparator.prepare_db_match_list(max_db_size / device_manager.device_count());
         let batch_match_list_left = distance_comparator.prepare_db_match_list(n_queries);
         let batch_match_list_right = distance_comparator.prepare_db_match_list(n_queries);
 
