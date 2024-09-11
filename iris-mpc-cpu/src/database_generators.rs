@@ -1,5 +1,4 @@
 use crate::shares::{ring_impl::RingElement, share::Share, vecshare::VecShare};
-use eyre::eyre;
 use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodeArray};
 use rand::{Rng, RngCore};
 use std::sync::Arc;
@@ -77,13 +76,13 @@ pub(crate) fn create_shared_database_raw<R: RngCore>(
     }
     let player2_shares = shared_irises
         .pop()
-        .ok_or(eyre!("error popping shared iris"))?;
+        .expect("error popping shared iris for player 2");
     let player1_shares = shared_irises
         .pop()
-        .ok_or(eyre!("error popping a shared iris"))?;
+        .expect("error popping shared iris for player 1");
     let player0_shares = shared_irises
         .pop()
-        .ok_or(eyre! {"error popping a shared iris"})?;
+        .expect("error popping shared iris for player 0");
     Ok(RawSharedDatabase {
         player0_shares,
         player1_shares,
