@@ -335,7 +335,6 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         }
 
         let mut tx = self.tx().await.unwrap();
-        let rng_seeds = (0..db_size).map(|_| rng.gen()).collect::<Vec<_>>();
 
         for i in 0..db_size {
             if (i % 1000) == 0 {
