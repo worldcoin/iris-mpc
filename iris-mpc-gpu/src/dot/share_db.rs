@@ -343,7 +343,7 @@ impl ShareDB {
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn load_full_db(&self, db: &mut SlicedProcessedDatabase, db_entries: &[u16]) {
+    pub fn load_full_db(&self, db: &mut SlicedProcessedDatabase, db_entries: &[u16]) -> Vec<usize> {
         assert!(db_entries.len() % self.code_length == 0);
 
         let code_length = self.code_length;
@@ -365,6 +365,8 @@ impl ShareDB {
         }
 
         self.preprocess_db(db, &db_lens);
+
+        db_lens
     }
 
     pub fn query_sums(

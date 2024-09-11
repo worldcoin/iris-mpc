@@ -379,14 +379,24 @@ impl ServerActor {
             right.1.len()
         );
 
-        self.codes_engine
+        let db_lens1 = self
+            .codes_engine
             .load_full_db(&mut self.left_code_db_slices, left.0);
-        self.masks_engine
+        let db_lens2 = self
+            .masks_engine
             .load_full_db(&mut self.left_mask_db_slices, left.1);
-        self.codes_engine
+        let db_lens3 = self
+            .codes_engine
             .load_full_db(&mut self.right_code_db_slices, right.0);
-        self.masks_engine
+        let db_lens4 = self
+            .masks_engine
             .load_full_db(&mut self.right_mask_db_slices, right.1);
+
+        assert_eq!(db_lens1, db_lens2);
+        assert_eq!(db_lens1, db_lens3);
+        assert_eq!(db_lens1, db_lens4);
+
+        self.current_db_sizes = db_lens1;
     }
 
     pub fn load_single_record(
@@ -425,6 +435,7 @@ impl ServerActor {
             self.device_manager.device_count(),
             MASK_CODE_LENGTH,
         );
+        self.current_db_sizes[index % self.device_manager.device_count()] += 1;
     }
 
     pub fn preprocess_db(&mut self, db_lens: &[usize]) {
