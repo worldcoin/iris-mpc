@@ -1,4 +1,5 @@
 #![allow(clippy::needless_range_loop)]
+use aws_config::retry::RetryConfig;
 use aws_sdk_sns::{config::Region, Client};
 use aws_sdk_sqs::Client as SqsClient;
 use base64::{engine::general_purpose, Engine};
@@ -28,7 +29,7 @@ use tokio::{
 };
 use uuid::Uuid;
 
-const MAX_CONCURRENT_REQUESTS: usize = 32;
+const MAX_CONCURRENT_REQUESTS: usize = 8;
 const BATCH_SIZE: usize = 64;
 const N_BATCHES: usize = 5;
 const N_QUERIES: usize = BATCH_SIZE * N_BATCHES;
@@ -111,7 +112,12 @@ async fn main() -> eyre::Result<()> {
     let n_repeat = n_repeat.unwrap_or(0);
 
     let region_provider = Region::new(request_topic_region);
-    let requests_sns_config = aws_config::from_env().region(region_provider).load().await;
+
+    let requests_sns_config = aws_config::from_env()
+        .region(region_provider)
+        .retry_config(RetryConfig::standard().with_max_attempts(5))
+        .load()
+        .await;
 
     let requests_sns_client = Client::new(&requests_sns_config);
 
@@ -194,7 +200,7 @@ async fn main() -> eyre::Result<()> {
                     assert!(result.matched_serial_ids.is_some());
                     let matched_ids = result.matched_serial_ids.unwrap();
                     assert!(matched_ids.len() == 1);
-                    assert_eq!(expected_result.unwrap() + 1, matched_ids[0]);
+                    assert_eq!(expected_result.unwrap(), matched_ids[0]);
                 }
 
                 results_sqs_client
@@ -257,7 +263,7 @@ async fn main() -> eyre::Result<()> {
                             thread_expected_results2
                                 .lock()
                                 .await
-                                .insert(request_id.to_string(), Some(db_index as u32));
+                                .insert(request_id.to_string(), Some(db_index as u32 + 1));
                             thread_db2.lock().await.db[db_index].clone()
                         }
                         2 => {
@@ -356,7 +362,6 @@ async fn main() -> eyre::Result<()> {
 
                 let message_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
 
-                // Send all messages in batch
                 requests_sns_client2
                     .lock()
                     .await
