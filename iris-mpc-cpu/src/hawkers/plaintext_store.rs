@@ -1,4 +1,3 @@
-use crate::shares::ring_impl::RingElement;
 use hawk_pack::VectorStore;
 use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodeArray, MATCH_THRESHOLD_RATIO};
 use serde::{Deserialize, Serialize};
@@ -31,24 +30,6 @@ impl From<IrisCode> for FormattedIris {
     }
 }
 
-impl From<Vec<RingElement<u16>>> for FormattedIris {
-    fn from(value: Vec<RingElement<u16>>) -> Self {
-        let data: Vec<i8> = (0..IrisCode::IRIS_CODE_SIZE)
-            .map(|i| {
-                let v = value[i].convert();
-                if v > 32768 {
-                    (v as i32 - 65536) as i8
-                } else {
-                    v as i8
-                }
-            })
-            .collect();
-        FormattedIris {
-            data,
-            mask: IrisCodeArray::ONES,
-        }
-    }
-}
 impl FormattedIris {
     #[cfg(test)]
     pub fn compute_real_distance(&self, other: &FormattedIris) -> f64 {
