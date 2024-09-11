@@ -488,12 +488,13 @@ async fn initialize_iris_dbs(
     let mut store_len = 0;
     let mut stream = store.stream_irises_par(parallelism).await;
     while let Some(iris) = stream.try_next().await? {
-        if iris.index() >= count_irises {
-            return Err(eyre!("Inconsistent iris index {}", iris.index()));
+        let iris_index = iris.index() - 1;
+        if iris_index >= count_irises {
+            return Err(eyre!("Inconsistent iris index {}", iris_index));
         }
 
-        let start_code = iris.index() * IRIS_CODE_LENGTH;
-        let start_mask = iris.index() * MASK_CODE_LENGTH;
+        let start_code = iris_index * IRIS_CODE_LENGTH;
+        let start_mask = iris_index * MASK_CODE_LENGTH;
         left_codes_db[start_code..start_code + IRIS_CODE_LENGTH].copy_from_slice(iris.left_code());
         left_masks_db[start_mask..start_mask + MASK_CODE_LENGTH].copy_from_slice(iris.left_mask());
         right_codes_db[start_code..start_code + IRIS_CODE_LENGTH]

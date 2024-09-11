@@ -340,9 +340,8 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
             if (i % 1000) == 0 {
                 tracing::info!("Initializing iris db: Generated {} entries", i);
             }
-            let rng_seeds = (0..db_size).map(|_| rng.gen()).collect::<Vec<_>>();
 
-            let mut rng = StdRng::from_seed(rng_seeds[i]);
+            let mut rng = StdRng::from_seed(rng.gen());
             let iris = IrisCode::random_rng(&mut rng);
 
             let share = GaloisRingIrisCodeShare::encode_iris_code(
