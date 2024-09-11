@@ -72,7 +72,7 @@ impl Aby3StorePlayer {
         let mut lock = state.lock().await;
 
         let d = (*lock)
-            .rep3_dot_non_blocking(&x.data.shares, &y.data.shares)
+            .rep3_dot(&x.data.shares, &y.data.shares)
             .await
             .unwrap();
         let open = (*lock).open_async(d).await.unwrap();

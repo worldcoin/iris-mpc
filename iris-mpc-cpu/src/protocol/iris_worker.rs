@@ -116,7 +116,7 @@ impl<N: NetworkTrait> IrisWorker<N> {
         let mask = Self::combine_masks(mask_a, mask_b);
         let mask_len = mask.count_ones();
 
-        let mut dot = self.rep3_dot(a, b)?;
+        let mut dot = self.rep3_dot_blocking(a, b)?;
 
         // a < b <=> msb(a - b)
         // Given no overflow, which is enforced in constructor
@@ -143,7 +143,7 @@ impl<N: NetworkTrait> IrisWorker<N> {
             .collect::<Vec<_>>();
         let mask_lens: Vec<_> = masks.iter().map(|m| m.count_ones()).collect();
 
-        let mut dots = self.rep3_dot_many(a, b)?;
+        let mut dots = self.rep3_dot_many_blocking(a, b)?;
 
         // a < b <=> msb(a - b)
         // Given no overflow, which is enforced in constructor
@@ -166,8 +166,8 @@ impl<N: NetworkTrait> IrisWorker<N> {
             return Err(eyre!("InvalidSize"));
         }
 
-        let code_dots = self.rep3_dot(a, b)?;
-        let mask_dots = self.rep3_dot(mask_a, mask_b)?;
+        let code_dots = self.rep3_dot_blocking(a, b)?;
+        let mask_dots = self.rep3_dot_blocking(mask_a, mask_b)?;
 
         // Compute code_dots > a/b * mask_dots
         // via MSB(a * mask_dots - b * code_dots)
@@ -186,8 +186,8 @@ impl<N: NetworkTrait> IrisWorker<N> {
             return Err(eyre!("InvalidSize"));
         }
 
-        let code_dots = self.rep3_dot_many(a, b)?;
-        let mask_dots = self.rep3_dot_many(mask_a, mask_b)?;
+        let code_dots = self.rep3_dot_many_blocking(a, b)?;
+        let mask_dots = self.rep3_dot_many_blocking(mask_a, mask_b)?;
 
         // Compute code_dots > a/b * mask_dots
         // via MSB(a * mask_dots - b * code_dots)
@@ -199,7 +199,7 @@ impl<N: NetworkTrait> IrisWorker<N> {
         x: &VecShare<u16>,
         y: &VecShare<u16>,
     ) -> Result<Share<u16>, Error> {
-        self.rep3_dot_non_blocking(x, y).await
+        self.rep3_dot(x, y).await
     }
 
     pub async fn rep3_pairwise_distance(
@@ -211,7 +211,7 @@ impl<N: NetworkTrait> IrisWorker<N> {
     ) -> Result<(Share<u16>, usize), Error> {
         let combined_mask = Self::combine_masks(lhs_mask, rhs_mask);
         let mask_dots = combined_mask.count_ones();
-        let code_dots = self.rep3_dot_non_blocking(lhs_shares, rhs_shares).await?;
+        let code_dots = self.rep3_dot(lhs_shares, rhs_shares).await?;
         Ok((code_dots, mask_dots))
     }
 
