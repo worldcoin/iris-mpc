@@ -641,6 +641,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         );
                     }
 
+                    actor.preprocess_db();
+
                     eyre::Ok(())
                 })?;
 

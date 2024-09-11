@@ -438,15 +438,15 @@ impl ServerActor {
         self.current_db_sizes[index % self.device_manager.device_count()] += 1;
     }
 
-    pub fn preprocess_db(&mut self, db_lens: &[usize]) {
+    pub fn preprocess_db(&mut self) {
         self.codes_engine
-            .preprocess_db(&mut self.left_code_db_slices, db_lens);
+            .preprocess_db(&mut self.left_code_db_slices, &self.current_db_sizes);
         self.masks_engine
-            .preprocess_db(&mut self.left_mask_db_slices, db_lens);
+            .preprocess_db(&mut self.left_mask_db_slices, &self.current_db_sizes);
         self.codes_engine
-            .preprocess_db(&mut self.right_code_db_slices, db_lens);
+            .preprocess_db(&mut self.right_code_db_slices, &self.current_db_sizes);
         self.masks_engine
-            .preprocess_db(&mut self.right_mask_db_slices, db_lens);
+            .preprocess_db(&mut self.right_mask_db_slices, &self.current_db_sizes);
     }
 
     fn process_batch_query(
