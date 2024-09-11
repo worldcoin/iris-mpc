@@ -231,10 +231,7 @@ impl ShareDB {
 
     pub fn alloc_db(&self, max_db_length: usize) -> SlicedProcessedDatabase {
         let max_size = max_db_length / self.device_manager.device_count();
-        let (db0_sums, (db1_sums, (db0, db1))): (
-            Vec<StreamAwareCudaSlice<u32>>,
-            (Vec<StreamAwareCudaSlice<u32>>, (Vec<u64>, Vec<u64>)),
-        ) = self
+        let (db0_sums, (db1_sums, (db0, db1))) = self
             .device_manager
             .devices()
             .iter()

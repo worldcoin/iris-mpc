@@ -21,7 +21,6 @@ use iris_mpc_common::{
         sync::SyncState,
         task_monitor::TaskMonitor,
     },
-    IrisCodeDb, IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use iris_mpc_gpu::{
     helpers::device_manager::DeviceManager,
@@ -448,77 +447,6 @@ async fn initialize_chacha_seeds(
     Ok(chacha_seeds)
 }
 
-async fn initialize_iris_dbs(
-    party_id: usize,
-    store: &Store,
-    config: &Config,
-) -> eyre::Result<(IrisCodeDb, IrisCodeDb, usize)> {
-    // Generate or load DB
-
-    tracing::info!("Initialize persistent iris db with randomly generated shares");
-    store
-        .init_db_with_random_shares(
-            RNG_SEED_INIT_DB,
-            party_id,
-            config.init_db_size,
-            config.clear_db_before_init,
-        )
-        .await
-        .expect("failed to initialise db");
-
-    let count_irises = store.count_irises().await?;
-    tracing::info!("Initialize iris db: Counted {} entries in DB", count_irises);
-
-    let mut left_codes_db = vec![0u16; count_irises * IRIS_CODE_LENGTH];
-    let mut left_masks_db = vec![0u16; count_irises * MASK_CODE_LENGTH];
-    let mut right_codes_db = vec![0u16; count_irises * IRIS_CODE_LENGTH];
-    let mut right_masks_db = vec![0u16; count_irises * MASK_CODE_LENGTH];
-
-    let parallelism = config
-        .database
-        .as_ref()
-        .ok_or(eyre!("Missing database config"))?
-        .load_parallelism;
-
-    tracing::info!(
-        "Initialize iris db: Loading from DB (parallelism: {})",
-        parallelism
-    );
-    // Load DB from persistent storage.
-    let mut store_len = 0;
-    let mut stream = store.stream_irises_par(parallelism).await;
-
-    while let Some(iris) = stream.try_next().await? {
-        if iris.index() >= count_irises {
-            return Err(eyre!("Inconsistent iris index {}", iris.index()));
-        }
-
-        let start_code = iris.index() * IRIS_CODE_LENGTH;
-        let start_mask = iris.index() * MASK_CODE_LENGTH;
-        left_codes_db[start_code..start_code + IRIS_CODE_LENGTH].copy_from_slice(iris.left_code());
-        left_masks_db[start_mask..start_mask + MASK_CODE_LENGTH].copy_from_slice(iris.left_mask());
-        right_codes_db[start_code..start_code + IRIS_CODE_LENGTH]
-            .copy_from_slice(iris.right_code());
-        right_masks_db[start_mask..start_mask + MASK_CODE_LENGTH]
-            .copy_from_slice(iris.right_mask());
-
-        store_len += 1;
-        if (store_len % 10000) == 0 {
-            tracing::info!("Initialize iris db: Loaded {} entries from DB", store_len);
-        }
-    }
-    tracing::info!(
-        "Initialize iris db: Loaded {} entries from DB, done!",
-        store_len
-    );
-
-    Ok((
-        (left_codes_db, left_masks_db),
-        (right_codes_db, right_masks_db),
-        count_irises,
-    ))
-}
-
 async fn send_results_to_sns(
     result_events: Vec<String>,
     sns_client: &SNSClient,
@@ -610,9 +538,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     )
     .await?;
 
-    tracing::info!("Initialize iris db");
-    let (mut left_iris_db, mut right_iris_db, store_len) =
-        initialize_iris_dbs(party_id, &store, &config).await?;
+    let store_len = store.count_irises().await?;
 
     let my_state = SyncState {
         db_len:              store_len as u64,
@@ -630,9 +556,29 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     rx.await??;
     tracing::info!("Heartbeat started.");
 
-    // a bit convoluted, but we need to create the actor on the thread already,
+    // Seed the persistent storage with random shares if configured.
+    if store_len < config.init_db_size {
+        tracing::info!("Initialize persistent iris db with randomly generated shares");
+        store
+            .init_db_with_random_shares(
+                RNG_SEED_INIT_DB,
+                party_id,
+                config.init_db_size,
+                config.clear_db_before_init,
+            )
+            .await?;
+    }
+
+    // Start the actor in separate task.
+    // A bit convoluted, but we need to create the actor on the thread already,
     // since it blocks a lot and is `!Send`, we get back the handle via the oneshot
     // channel
+    let parallelism = config
+        .database
+        .as_ref()
+        .ok_or(eyre!("Missing database config"))?
+        .load_parallelism;
+
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
         let device_manager = Arc::new(DeviceManager::init());
@@ -650,32 +596,23 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             }
         };
 
-        tracing::info!("DB: check if rollback needed");
         if let Some(db_len) = sync_result.must_rollback_storage() {
-            tracing::warn!(
-                "Databases are out-of-sync, rolling back (current len: {}, new len: {})",
-                store_len,
-                db_len
-            );
-            // Rollback the data that we have already loaded.
-            let bit_len_code = db_len * IRIS_CODE_LENGTH;
-            let bit_len_mask = db_len * MASK_CODE_LENGTH;
-
-            // TODO: remove the line below if you removed fake data.
-            let bit_len_code = bit_len_code + (left_iris_db.0.len() - store_len * IRIS_CODE_LENGTH);
-            let bit_len_mask = bit_len_mask + (left_iris_db.1.len() - store_len * MASK_CODE_LENGTH);
-            left_iris_db.0.truncate(bit_len_code);
-            left_iris_db.1.truncate(bit_len_mask);
-            right_iris_db.0.truncate(bit_len_code);
-            right_iris_db.1.truncate(bit_len_mask);
+            tracing::error!("Databases are out-of-sync: {:?}", sync_result);
+            if db_len + max_rollback < store_len {
+                return Err(eyre!(
+                    "Refusing to rollback so much (from {} to {})",
+                    store_len,
+                    db_len,
+                ));
+            }
+            tokio::runtime::Handle::current().block_on(async { store.rollback(db_len).await })?;
+            tracing::error!("Rolled back to db_len={}", db_len);
         }
 
         tracing::info!("Starting server actor");
         match ServerActor::new_with_device_manager_and_comms(
             config.party_id,
             chacha_seeds,
-            (&left_iris_db.0, &left_iris_db.1),
-            (&right_iris_db.0, &right_iris_db.1),
             device_manager,
             comms,
             8,
@@ -683,8 +620,31 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             DB_BUFFER,
             config.max_batch_size,
         ) {
-            Ok((actor, handle)) => {
-                tx.send(Ok((handle, sync_result))).unwrap();
+            Ok((mut actor, handle)) => {
+                tracing::info!(
+                    "Initialize iris db: Loading from DB (parallelism: {})",
+                    parallelism
+                );
+                tokio::runtime::Handle::current().block_on(async {
+                    let mut stream = store.stream_irises_par(parallelism).await;
+
+                    while let Some(iris) = stream.try_next().await? {
+                        if iris.index() > store_len {
+                            return Err(eyre!("Inconsistent iris index {}", iris.index()));
+                        }
+                        actor.load_single_record(
+                            iris.index() - 1,
+                            iris.left_code(),
+                            iris.left_mask(),
+                            iris.right_code(),
+                            iris.right_mask(),
+                        );
+                    }
+
+                    eyre::Ok(())
+                })?;
+
+                tx.send(Ok((handle, sync_result, store))).unwrap();
                 actor.run(); // forever
             }
             Err(e) => {
@@ -695,20 +655,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         Ok(())
     });
 
-    let (mut handle, sync_result) = rx.await??;
-
-    if let Some(db_len) = sync_result.must_rollback_storage() {
-        tracing::error!("Databases are out-of-sync: {:?}", sync_result);
-        if db_len + max_rollback < store_len {
-            return Err(eyre!(
-                "Refusing to rollback so much (from {} to {})",
-                store_len,
-                db_len,
-            ));
-        }
-        store.rollback(db_len).await?;
-        tracing::error!("Rolled back to db_len={}", db_len);
-    }
+    let (mut handle, sync_result, store) = rx.await??;
 
     let mut skip_request_ids = sync_result.deleted_request_ids();
 

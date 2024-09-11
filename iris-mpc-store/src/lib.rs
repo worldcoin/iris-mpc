@@ -78,7 +78,7 @@ struct StoredState {
     request_id: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Store {
     pool: PgPool,
 }
