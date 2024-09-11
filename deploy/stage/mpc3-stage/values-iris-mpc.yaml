@@ -63,7 +63,7 @@ env:
     value: "2"
 
   - name: SMPC__PUBLIC_KEY_BASE_URL
-    value: "https://d24uxaabh702ht.cloudfront.net"
+    value: "https://pki-smpc-stage.worldcoin.org"
 
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
