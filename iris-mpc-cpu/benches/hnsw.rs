@@ -1,9 +1,9 @@
 use aes_prng::AesRng;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode};
 use hawk_pack::{graph_store::GraphMem, hnsw_db::HawkSearcher, VectorStore};
-use iris_mpc_common::iris_db::iris::IrisCode;
+use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use iris_mpc_cpu::{
-    database_generators::{create_ground_truth_database, generate_iris_shares},
+    database_generators::generate_iris_shares,
     hawkers::{aby3_store::create_ready_made_hawk_searcher, plaintext_store::PlaintextStore},
 };
 use rand::SeedableRng;
@@ -42,8 +42,7 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
                 || plain_searcher.clone(),
                 |mut my_db| async move {
                     let mut rng = AesRng::seed_from_u64(0_u64);
-                    let on_the_fly_query =
-                        create_ground_truth_database(&mut rng, 1).unwrap()[0].clone();
+                    let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
                     let query = my_db.vector_store.prepare_query(on_the_fly_query);
                     let neighbors = my_db.search_to_insert(&query).await;
                     my_db.insert_from_search_results(query, neighbors).await;
@@ -79,8 +78,7 @@ fn bench_ready_made_hnsw(c: &mut Criterion) {
                     || secret_searcher.clone(),
                     |mut my_db| async move {
                         let mut rng = AesRng::seed_from_u64(0_u64);
-                        let on_the_fly_query =
-                            create_ground_truth_database(&mut rng, 1).unwrap()[0].clone();
+                        let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
                         let raw_query = generate_iris_shares(&mut rng, on_the_fly_query);
 
                         let query = my_db.vector_store.prepare_query(raw_query);

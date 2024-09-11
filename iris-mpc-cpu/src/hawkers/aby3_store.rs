@@ -1,7 +1,5 @@
 use crate::{
-    database_generators::{
-        create_ground_truth_database, create_shared_database_raw, generate_iris_shares, SharedIris,
-    },
+    database_generators::{create_shared_database_raw, generate_iris_shares, SharedIris},
     hawkers::plaintext_store::{PlaintextStore, PointId},
     prelude::{
         IrisWorker, NetworkEstablisher, PartyTestNetwork, TestNetwork3p, TestNetworkEstablisher,
@@ -9,7 +7,7 @@ use crate::{
 };
 use aes_prng::AesRng;
 use hawk_pack::{graph_store::graph_mem::GraphMem, hnsw_db::HawkSearcher, VectorStore};
-use iris_mpc_common::iris_db::iris::IrisCode;
+use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use rand::{RngCore, SeedableRng};
 use std::{collections::VecDeque, sync::Arc};
 use tokio::sync::Mutex;
@@ -376,7 +374,7 @@ pub async fn create_ready_made_hawk_searcher<R: RngCore + Clone>(
     let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
     let mut rng_searcher2 = rng_searcher1.clone();
 
-    let cleartext_database = create_ground_truth_database(rng, database_size).unwrap();
+    let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
 
     let vector_store = PlaintextStore::default();
     let graph_store = GraphMem::new();
@@ -408,7 +406,7 @@ pub async fn create_from_scratch_hawk_searcher<R: RngCore + Clone>(
     database_size: usize,
 ) -> eyre::Result<HawkSearcher<LocalNetAby3StoreProtocol, GraphMem<LocalNetAby3StoreProtocol>>> {
     let mut rng_searcher = AesRng::from_rng(rng.clone())?;
-    let cleartext_database = create_ground_truth_database(rng, database_size).unwrap();
+    let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
     let shared_irises: Vec<_> = (0..database_size)
         .map(|id| generate_iris_shares(rng, cleartext_database[id].clone()))
         .collect();
@@ -451,7 +449,7 @@ mod tests {
     #[traced_test]
     async fn test_aby3_store_protocol() {
         let mut rng = AesRng::seed_from_u64(0_u64);
-        let cleartext_database = create_ground_truth_database(&mut rng, 10).unwrap();
+        let cleartext_database = IrisDB::new_random_rng(10, &mut rng).db;
         let aby3_store_protocol = setup_local_store_aby3_players().await.unwrap();
         let mut aby3_store_protocol = aby3_store_protocol.prf_key_setup().await.unwrap();
 
@@ -472,7 +470,7 @@ mod tests {
     #[traced_test]
     async fn test_aby3_dot() {
         let mut rng = AesRng::seed_from_u64(0_u64);
-        let cleartext_database = create_ground_truth_database(&mut rng, 10).unwrap();
+        let cleartext_database = IrisDB::new_random_rng(10, &mut rng).db;
 
         let aby3_store_protocol = setup_local_store_aby3_players().await.unwrap();
         let mut aby3_store_protocol = aby3_store_protocol.prf_key_setup().await.unwrap();
@@ -499,7 +497,7 @@ mod tests {
     #[traced_test]
     async fn test_aby3_store_plaintext() {
         let mut rng = AesRng::seed_from_u64(0_u64);
-        let cleartext_database = create_ground_truth_database(&mut rng, 10).unwrap();
+        let cleartext_database = IrisDB::new_random_rng(10, &mut rng).db;
 
         let aby3_store_protocol = setup_local_store_aby3_players().await.unwrap();
         let mut aby3_store_protocol = aby3_store_protocol.prf_key_setup().await.unwrap();
@@ -556,7 +554,7 @@ mod tests {
     async fn test_hnsw() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 10;
-        let cleartext_database = create_ground_truth_database(&mut rng, database_size).unwrap();
+        let cleartext_database = IrisDB::new_random_rng(database_size, &mut rng).db;
 
         let aby3_store_protocol = setup_local_store_aby3_players().await.unwrap();
         let aby3_vector_store = aby3_store_protocol.prf_key_setup().await.unwrap();

@@ -153,11 +153,9 @@ impl VectorStore for PlaintextStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        database_generators::create_ground_truth_database,
-        hawkers::aby3_store::create_ready_made_hawk_searcher,
-    };
+    use crate::hawkers::aby3_store::create_ready_made_hawk_searcher;
     use aes_prng::AesRng;
+    use iris_mpc_common::iris_db::db::IrisDB;
     use rand::SeedableRng;
     use tracing_test::traced_test;
 
@@ -165,7 +163,7 @@ mod tests {
     #[traced_test]
     async fn test_basic_ops() {
         let mut rng = AesRng::seed_from_u64(0_u64);
-        let cleartext_database = create_ground_truth_database(&mut rng, 10).unwrap();
+        let cleartext_database = IrisDB::new_random_rng(10, &mut rng).db;
         let formatted_database: Vec<_> = cleartext_database
             .iter()
             .map(|code| FormattedIris::from(code.clone()))

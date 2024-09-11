@@ -109,15 +109,3 @@ pub fn generate_iris_shares<R: Rng>(rng: &mut R, iris: IrisCode) -> Vec<SharedIr
     }
     res
 }
-
-pub fn create_ground_truth_database<R: RngCore>(
-    rng: &mut R,
-    num_items: usize,
-) -> eyre::Result<Vec<IrisCode>> {
-    let mut codes = Vec::with_capacity(num_items);
-    for _ in 0..num_items {
-        let code = IrisCode::random_rng(rng);
-        codes.push(code);
-    }
-    Ok(codes)
-}
