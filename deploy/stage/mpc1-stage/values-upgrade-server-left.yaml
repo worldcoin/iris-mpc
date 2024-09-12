@@ -7,3 +7,5 @@ args:
   - "0"
   - "--eye"
   - "left"
+  - "--environment"
+  - "$(ENVIRONMENT)"
