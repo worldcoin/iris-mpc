@@ -60,7 +60,8 @@ env:
       secretKeyRef:
         key: DATABASE_URL
         name: application
-
+  - name: ENVIRONMENT
+    value: stage
 
 keelPolling:
   # -- Specifies whether keel should poll for container updates

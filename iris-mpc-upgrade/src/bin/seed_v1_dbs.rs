@@ -12,6 +12,9 @@ struct Args {
 
     #[clap(long)]
     num_elements: u64,
+
+    #[clap(long)]
+    side: String,
 }
 
 #[tokio::main]
@@ -26,20 +29,38 @@ async fn main() -> eyre::Result<()> {
         return Err(eyre::eyre!("Expect 1 masks db urls to be provided"));
     }
 
+    if args.side != "left" && args.side != "right" {
+        return Err(eyre::eyre!("Expect side to be either 'left' or 'right'"));
+    }
+
+    let participant_one_shares_db_name = format!("participant1_{}", args.side);
+    let participant_two_shares_db_name = format!("participant2_{}", args.side);
+    let participant_one_masks_db_name = format!("coordinator_{}", args.side);
+
     let shares_db_config0 = DbConfig {
-        url:     args.shares_db_urls[0].clone(),
+        url:     format!(
+            "{}/{}",
+            args.shares_db_urls[0], participant_one_shares_db_name
+        ),
         migrate: true,
         create:  true,
     };
 
     let shares_db_config1 = DbConfig {
-        url:     args.shares_db_urls[1].clone(),
+        url:     format!(
+            "{}/{}",
+            args.shares_db_urls[1], participant_two_shares_db_name
+        ),
         migrate: true,
         create:  true,
     };
 
     let masks_db_config = DbConfig {
-        url:     args.masks_db_url.clone(),
+        url:     format!(
+            "{}/{}",
+            args.masks_db_url.clone(),
+            participant_one_masks_db_name
+        ),
         migrate: true,
         create:  true,
     };

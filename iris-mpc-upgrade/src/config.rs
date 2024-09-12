@@ -1,7 +1,7 @@
 use clap::Parser;
 use iris_mpc_common::id::PartyID;
 use std::{
-    fmt::{self, Formatter},
+    fmt::{self, Display, Formatter},
     io,
     net::{SocketAddr, ToSocketAddrs},
     str::FromStr,
@@ -12,6 +12,15 @@ use std::{
 pub enum Eye {
     Left  = 0,
     Right = 1,
+}
+
+impl Display for Eye {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Eye::Left => write!(f, "left"),
+            Eye::Right => write!(f, "right"),
+        }
+    }
 }
 
 impl FromStr for Eye {
@@ -42,6 +51,9 @@ pub struct UpgradeServerConfig {
 
     #[clap(long)]
     pub eye: Eye,
+
+    #[clap(long)]
+    pub environment: String,
 }
 
 impl std::fmt::Debug for UpgradeServerConfig {

@@ -19,6 +19,8 @@ use tokio::{
     task::JoinSet,
 };
 
+const APP_NAME: &str = "SMPC";
+
 fn install_tracing() {
     use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -50,7 +52,8 @@ async fn main() -> eyre::Result<()> {
     let finished_counter = Arc::new(AtomicUsize::new(0));
     let mut senders = Vec::with_capacity(args.threads);
 
-    let sink = IrisShareDbSink::new(Store::new(&args.db_url, "upgrade").await?, args.eye);
+    let schema_name = format!("{}_{}_{}", APP_NAME, args.environment, args.party_id);
+    let sink = IrisShareDbSink::new(Store::new(&args.db_url, &schema_name).await?, args.eye);
 
     tracing::info!("Starting healthcheck server.");
 
