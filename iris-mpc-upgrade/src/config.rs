@@ -1,12 +1,11 @@
 use clap::Parser;
 use iris_mpc_common::id::PartyID;
 use std::{
-    fmt::{self, Formatter},
+    fmt::{self, Display, Formatter},
     io,
     net::{SocketAddr, ToSocketAddrs},
     str::FromStr,
 };
-use std::fmt::Display;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]

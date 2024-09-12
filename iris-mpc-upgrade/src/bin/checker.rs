@@ -32,8 +32,8 @@ async fn main() -> eyre::Result<()> {
 
     if args.db_urls.len() != 6 {
         return Err(eyre::eyre!(
-            "Expect 5 db urls to be provided: old_participant_1, old_participant_2, old_coordinator_1, \
-            new_db0, new_db1, new_db2"
+            "Expect 5 db urls to be provided: old_participant_1, old_participant_2, \
+             old_coordinator_1, new_db0, new_db1, new_db2"
         ));
     }
 
@@ -52,9 +52,21 @@ async fn main() -> eyre::Result<()> {
         V1Db::new(format!("{}/{}", args.db_urls[2], "/coordinator_right").as_str()).await?;
 
     let base_schema_name = format!("{}_{}", APP_NAME, args.environment);
-    let new_db0 = Store::new(&args.db_urls[3], format!("{}_{}", base_schema_name, "0").as_str()).await?;
-    let new_db1 = Store::new(&args.db_urls[4], format!("{}_{}", base_schema_name, "1").as_str()).await?;
-    let new_db2 = Store::new(&args.db_urls[5], format!("{}_{}", base_schema_name, "2").as_str()).await?;
+    let new_db0 = Store::new(
+        &args.db_urls[3],
+        format!("{}_{}", base_schema_name, "0").as_str(),
+    )
+    .await?;
+    let new_db1 = Store::new(
+        &args.db_urls[4],
+        format!("{}_{}", base_schema_name, "1").as_str(),
+    )
+    .await?;
+    let new_db2 = Store::new(
+        &args.db_urls[5],
+        format!("{}_{}", base_schema_name, "2").as_str(),
+    )
+    .await?;
 
     // grab the old shares from the db and reconstruct them
     let old_left_shares0 = old_left_shares_db0
