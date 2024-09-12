@@ -350,7 +350,6 @@ impl ShareDB {
         let n_shards = self.device_manager.device_count();
         db_entries
             .par_chunks(self.code_length)
-            .into_par_iter()
             .enumerate()
             .for_each(|(idx, chunk)| {
                 Self::load_single_record(idx, &db.code_gr, chunk, n_shards, code_length);
@@ -807,8 +806,7 @@ mod tests {
             .unwrap();
         let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
         let mut db_slices = engine.alloc_db(DB_SIZE);
-        engine.load_full_db(&mut db_slices, &db);
-        let db_sizes = vec![DB_SIZE / n_devices; n_devices];
+        let db_sizes = engine.load_full_db(&mut db_slices, &db);
 
         engine.dot(
             &preprocessed_query,
@@ -910,8 +908,7 @@ mod tests {
                 .unwrap();
             let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
             let mut db_slices = engine.alloc_db(DB_SIZE);
-            engine.load_full_db(&mut db_slices, &codes_db);
-            let db_sizes = vec![DB_SIZE / n_devices; n_devices];
+            let db_sizes = engine.load_full_db(&mut db_slices, &codes_db);
 
             engine.dot(
                 &preprocessed_query,
@@ -1042,11 +1039,9 @@ mod tests {
             let code_query_sums = codes_engine.query_sums(&code_query, &streams, &blass);
             let mask_query_sums = masks_engine.query_sums(&mask_query, &streams, &blass);
             let mut code_db_slices = codes_engine.alloc_db(DB_SIZE);
-            codes_engine.load_full_db(&mut code_db_slices, &codes_db);
+            let db_sizes = codes_engine.load_full_db(&mut code_db_slices, &codes_db);
             let mut mask_db_slices = masks_engine.alloc_db(DB_SIZE);
-            masks_engine.load_full_db(&mut mask_db_slices, &masks_db);
-            let db_sizes = vec![DB_SIZE / n_devices; n_devices];
-            let mask_db_sizes = vec![DB_SIZE / n_devices; n_devices];
+            let mask_db_sizes = masks_engine.load_full_db(&mut mask_db_slices, &masks_db);
 
             assert_eq!(db_sizes, mask_db_sizes);
 

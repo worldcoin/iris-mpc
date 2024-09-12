@@ -25,7 +25,6 @@ fn bench_memcpy(c: &mut Criterion) {
     let db = random_vec(DB_SIZE, WIDTH, P as u32);
     let query = random_vec(QUERY_SIZE, WIDTH, P as u32);
     let device_manager = Arc::new(DeviceManager::init());
-    let n_devices = device_manager.device_count();
 
     let mut engine = ShareDB::init(
         0,
@@ -40,8 +39,7 @@ fn bench_memcpy(c: &mut Criterion) {
     let streams = device_manager.fork_streams();
     let blass = device_manager.create_cublas(&streams);
     let mut db_slices = engine.alloc_db(DB_SIZE);
-    engine.load_full_db(&mut db_slices, &db);
-    let db_sizes = vec![DB_SIZE / n_devices; n_devices];
+    let db_sizes = engine.load_full_db(&mut db_slices, &db);
 
     group.throughput(Throughput::Elements((DB_SIZE * QUERY_SIZE / 31) as u64));
     group.sample_size(10);
