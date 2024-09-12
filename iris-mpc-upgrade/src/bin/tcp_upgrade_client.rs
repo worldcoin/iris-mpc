@@ -100,12 +100,14 @@ async fn main() -> eyre::Result<()> {
             _ => unreachable!(),
         }
     } else {
+        let shares_db_name = format!("participant{}_{}", args.party_id + 1, args.eye, );
         maybe_shares_db = Some(V1Database {
-            db: V1Db::new(&args.shares_db_url).await?,
+            db: V1Db::new(format!("{}/{}", args.shares_db_url, shares_db_name).as_str()).await?,
         });
 
+        let masks_db_name = format!("coordinator_{}", args.eye);
         maybe_masks_db = Some(V1Database {
-            db: V1Db::new(&args.masks_db_url).await?,
+            db: V1Db::new(format!("{}/{}", args.masks_db_url, masks_db_name).as_str()).await?,
         });
 
         (

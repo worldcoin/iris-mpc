@@ -6,12 +6,22 @@ use std::{
     net::{SocketAddr, ToSocketAddrs},
     str::FromStr,
 };
+use std::fmt::Display;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Eye {
     Left  = 0,
     Right = 1,
+}
+
+impl Display for Eye {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Eye::Left => write!(f, "left"),
+            Eye::Right => write!(f, "right"),
+        }
+    }
 }
 
 impl FromStr for Eye {
@@ -42,6 +52,9 @@ pub struct UpgradeServerConfig {
 
     #[clap(long)]
     pub eye: Eye,
+
+    #[clap(long)]
+    pub environment: String,
 }
 
 impl std::fmt::Debug for UpgradeServerConfig {
