@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 aes-prng = "0.2"
+async-trait = "~0.1"
 bytes = "1.7"
 bytemuck.workspace = true
 eyre.workspace = true
@@ -21,6 +22,9 @@ static_assertions.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-test = "0.2.5"
+dashmap = "6.1.0"
+async-channel = "2.3.1"
+bincode = "1.3.3"
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio"] }
