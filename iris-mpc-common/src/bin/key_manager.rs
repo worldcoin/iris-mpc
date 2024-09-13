@@ -9,7 +9,7 @@ use aws_sdk_secretsmanager::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use clap::{Parser, Subcommand};
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{thread_rng, Rng};
 use reqwest::Client;
 use sodiumoxide::crypto::box_::{curve25519xsalsa20poly1305, PublicKey, SecretKey, Seed};
 
@@ -39,9 +39,6 @@ enum Commands {
     /// Rotate private and public keys
     #[command(arg_required_else_help = true)]
     Rotate {
-        #[arg(short, long, env)]
-        rng_seed: Option<u64>,
-
         #[arg(short, long, env)]
         dry_run: Option<bool>,
 
@@ -80,7 +77,6 @@ async fn main() -> eyre::Result<()> {
 
     match args.command {
         Commands::Rotate {
-            rng_seed,
             dry_run,
             public_key_bucket_name,
         } => {
@@ -88,7 +84,6 @@ async fn main() -> eyre::Result<()> {
                 &shared_config,
                 &bucket_key_name,
                 &private_key_secret_id,
-                rng_seed,
                 dry_run,
                 public_key_bucket_name,
             )
@@ -159,15 +154,10 @@ async fn rotate_keys(
     sdk_config: &SdkConfig,
     bucket_key_name: &str,
     private_key_secret_id: &str,
-    rng_seed: Option<u64>,
     dry_run: Option<bool>,
     public_key_bucket_name: Option<String>,
 ) -> eyre::Result<()> {
-    let mut rng = if let Some(rng_seed) = rng_seed {
-        StdRng::seed_from_u64(rng_seed)
-    } else {
-        StdRng::from_entropy()
-    };
+    let mut rng = thread_rng();
 
     let bucket_name = if let Some(bucket_name) = public_key_bucket_name {
         bucket_name
@@ -189,7 +179,6 @@ async fn rotate_keys(
     if dry_run.unwrap_or(false) {
         println!("Dry run enabled, skipping upload of public key to S3");
         println!("Public key: {}", pub_key_str);
-        println!("Private key: {}", priv_key_str);
 
         let user_pubkey = STANDARD.decode(pub_key_str.as_bytes()).unwrap();
         let decoded_pub_key = PublicKey::from_slice(&user_pubkey).unwrap();
