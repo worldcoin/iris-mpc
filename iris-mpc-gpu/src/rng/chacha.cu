@@ -106,10 +106,10 @@ extern "C" __global__ void chacha12(uint32_t *d_ciphertext, uint32_t *d_state,
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   // the 64-bit counter part is in state[12] and 13, we add our local counter =
   // idx here may not overflow, caller has to ensure that
-  uint64_t counter = state[12] | (state[13] << 32);
+  uint64_t counter = (uint64_t)(state[12]) | ((uint64_t)(state[13]) << 32);
   counter += idx;
-  thread_state[12] = counter & 0xFFFFFFFF;
-  thread_state[13] = counter >> 32;
+  thread_state[12] = (uint32_t)(counter & 0xFFFFFFFF);
+  thread_state[13] = (uint32_t)(counter >> 32);
   // 6 double rounds (8 quarter rounds)
   for (int i = 0; i < 6; i++) {
     QUARTERROUND(thread_state, 0, 4, 8, 12);
@@ -136,8 +136,8 @@ extern "C" __global__ void chacha12(uint32_t *d_ciphertext, uint32_t *d_state,
   thread_state[9] += state[9];
   thread_state[10] += state[10];
   thread_state[11] += state[11];
-  thread_state[12] += counter & 0xFFFFFFFF;
-  thread_state[13] += counter >> 32;
+  thread_state[12] += (uint32_t)(counter & 0xFFFFFFFF);
+  thread_state[13] += (uint32_t)(counter >> 32);
   thread_state[14] += state[14];
   thread_state[15] += state[15];
 
@@ -185,10 +185,10 @@ extern "C" __global__ void chacha12_xor(uint32_t *d_ciphertext,
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   // the 64-bit counter part is in state[12] and 13, we add our local counter =
   // idx here may not overflow, caller has to ensure that
-  uint64_t counter = state[12] | (state[13] << 32);
+  uint64_t counter = (uint64_t)(state[12]) | ((uint64_t)(state[13]) << 32);
   counter += idx;
-  thread_state[12] = counter & 0xFFFFFFFF;
-  thread_state[13] = counter >> 32;
+  thread_state[12] = (uint32_t)(counter & 0xFFFFFFFF);
+  thread_state[13] = (uint32_t)(counter >> 32);
   // 6 double rounds (8 quarter rounds)
   for (int i = 0; i < 6; i++) {
     QUARTERROUND(thread_state, 0, 4, 8, 12);
@@ -215,8 +215,8 @@ extern "C" __global__ void chacha12_xor(uint32_t *d_ciphertext,
   thread_state[9] += state[9];
   thread_state[10] += state[10];
   thread_state[11] += state[11];
-  thread_state[12] += counter & 0xFFFFFFFF;
-  thread_state[13] += counter >> 32;
+  thread_state[12] += (uint32_t)(counter & 0xFFFFFFFF);
+  thread_state[13] += (uint32_t)(counter >> 32);
   thread_state[13] += state[13];
   thread_state[14] += state[14];
   thread_state[15] += state[15];
