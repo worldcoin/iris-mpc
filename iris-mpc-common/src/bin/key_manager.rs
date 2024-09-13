@@ -4,10 +4,12 @@ use aws_sdk_s3::{
     Error as S3Error,
 };
 use aws_sdk_secretsmanager::{
-    operation::{get_secret_value::GetSecretValueOutput, put_secret_value::PutSecretValueOutput},
+    operation::{
+        get_random_password::GetRandomPasswordOutput, get_secret_value::GetSecretValueOutput,
+        put_secret_value::PutSecretValueOutput,
+    },
     Client as SecretsManagerClient, Error as SecretsManagerError,
 };
-use aws_sdk_secretsmanager::operation::get_random_password::GetRandomPasswordOutput;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use clap::{Parser, Subcommand};
 use digest::Digest;
@@ -153,34 +155,34 @@ async fn validate_keys(
     Ok(())
 }
 
-
 async fn get_or_create_secret_string(
     sm_client: &SecretsManagerClient,
-    private_key_seed_secret_id: &str
+    private_key_seed_secret_id: &str,
 ) -> Result<String, SecretsManagerError> {
     // Step 1: Try to retrieve the secret from AWS Secrets Manager
 
-    let secret_string = match get_secret_string_from_asm(sm_client, private_key_seed_secret_id).await
-    {
-        Ok(output) => {
-            if let Some(secret_string) = output.secret_string() {
-                Ok(secret_string.to_string())
-            } else {
-                Err("Secret string not found".to_string())
+    let secret_string =
+        match get_secret_string_from_asm(sm_client, private_key_seed_secret_id).await {
+            Ok(output) => {
+                if let Some(secret_string) = output.secret_string() {
+                    Ok(secret_string.to_string())
+                } else {
+                    Err("Secret string not found".to_string())
+                }
             }
-        }
-        Err(e) => {
-            eprintln!("Error getting secret from SM: {:?}", e);
-            return Err(e);
-        }
-    };
+            Err(e) => {
+                eprintln!("Error getting secret from SM: {:?}", e);
+                return Err(e);
+            }
+        };
 
     if let Ok(secret_string) = secret_string {
         return Ok(secret_string);
     }
 
     // Step 2: If the secret does not exist, create it
-    let new_secret_string = create_secret_string_with_asm(sm_client, private_key_seed_secret_id).await?;
+    let new_secret_string =
+        create_secret_string_with_asm(sm_client, private_key_seed_secret_id).await?;
     Ok(new_secret_string)
 }
 
@@ -189,7 +191,7 @@ fn hash_secret_to_seed(secret: &str) -> [u8; 32] {
     hasher.update(secret);
     let result = hasher.finalize();
     let mut seed = [0u8; 32];
-    seed.copy_from_slice(&result[..32]);  // Take the first 32 bytes
+    seed.copy_from_slice(&result[..32]); // Take the first 32 bytes
     seed
 }
 
@@ -207,7 +209,6 @@ async fn rotate_keys(
     dry_run: Option<bool>,
     public_key_bucket_name: Option<String>,
 ) -> eyre::Result<()> {
-
     let bucket_name = if let Some(bucket_name) = public_key_bucket_name {
         bucket_name
     } else {
@@ -220,7 +221,9 @@ async fn rotate_keys(
     let secret_json = get_or_create_secret_string(&sm_client, private_key_secret_id).await?;
     // Extract the secret seed from the stored secret JSON
     let secret_json: serde_json::Value = serde_json::from_str(&secret_json)?;
-    let seed_str = secret_json["seed"].as_str().ok_or_else(|| eyre::eyre!("Missing seed in secret"))?;
+    let seed_str = secret_json["seed"]
+        .as_str()
+        .ok_or_else(|| eyre::eyre!("Missing seed in secret"))?;
     let secret_seed = hash_secret_to_seed(seed_str);
 
     let (public_key, private_key) = generate_key_pairs_from_secret_seed(secret_seed);
@@ -327,7 +330,6 @@ async fn get_secret_string_from_asm(
         .await?)
 }
 
-
 async fn get_random_password(
     client: &SecretsManagerClient,
 ) -> Result<GetRandomPasswordOutput, SecretsManagerError> {
@@ -342,13 +344,17 @@ async fn create_secret_string_with_asm(
     sm_client: &SecretsManagerClient,
     private_key_seed_secret_id: &str,
 ) -> Result<String, SecretsManagerError> {
-    let new_secret_string = get_random_password(sm_client).await?.random_password.unwrap();
+    let new_secret_string = get_random_password(sm_client)
+        .await?
+        .random_password
+        .unwrap();
 
     // Serialize the secret into a JSON format
     let secret_json = json!({ "seed": new_secret_string }).to_string();
 
     // Create the secret in AWS Secrets Manager
-    sm_client.create_secret()
+    sm_client
+        .create_secret()
         .name(private_key_seed_secret_id)
         .secret_string(&secret_json)
         .send()
@@ -372,19 +378,19 @@ async fn upload_public_key_to_s3(
         .await?)
 }
 
-
 // tests
 #[cfg(test)]
 mod test {
     use super::*;
+    use rand::{distributions::Alphanumeric, thread_rng, Rng};
     use sodiumoxide::crypto::sealedbox;
     use std::{fs::File, io::Read};
-    use rand::{thread_rng, Rng};
-    use rand::distributions::Alphanumeric;
 
     fn generate_large_secret() -> String {
         let mut rng = thread_rng();
-        (0..128).map(|_| rng.sample(Alphanumeric) as char).collect::<String>()
+        (0..128)
+            .map(|_| rng.sample(Alphanumeric) as char)
+            .collect::<String>()
     }
 
     pub fn get_public_key(user_pub_key: &str) -> PublicKey {
