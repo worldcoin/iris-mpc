@@ -136,8 +136,8 @@ extern "C" __global__ void chacha12(uint32_t *d_ciphertext, uint32_t *d_state,
   thread_state[9] += state[9];
   thread_state[10] += state[10];
   thread_state[11] += state[11];
-  thread_state[12] += state[12] + idx;
-  thread_state[13] += state[13];
+  thread_state[12] += counter & 0xFFFFFFFF;
+  thread_state[13] += counter >> 32;
   thread_state[14] += state[14];
   thread_state[15] += state[15];
 
@@ -215,7 +215,8 @@ extern "C" __global__ void chacha12_xor(uint32_t *d_ciphertext,
   thread_state[9] += state[9];
   thread_state[10] += state[10];
   thread_state[11] += state[11];
-  thread_state[12] += state[12] + idx;
+  thread_state[12] += counter & 0xFFFFFFFF;
+  thread_state[13] += counter >> 32;
   thread_state[13] += state[13];
   thread_state[14] += state[14];
   thread_state[15] += state[15];
