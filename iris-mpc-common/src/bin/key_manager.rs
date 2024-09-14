@@ -1,20 +1,13 @@
 use aws_config::SdkConfig;
-use aws_sdk_s3::{
-    config::Region as S3Region, operation::put_object::PutObjectOutput, Client as S3Client,
-    Error as S3Error,
-};
-use aws_sdk_secretsmanager::{
-    operation::{
-        get_random_password::GetRandomPasswordOutput, get_secret_value::GetSecretValueOutput,
-        put_secret_value::PutSecretValueOutput,
-    },
-    Client as SecretsManagerClient, Error as SecretsManagerError,
-};
+use aws_sdk_s3::{config::Region as S3Region, Client as S3Client};
+use aws_sdk_secretsmanager::{Client as SecretsManagerClient, Error as SecretsManagerError};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use clap::{Parser, Subcommand};
 use digest::Digest;
-use reqwest::Client;
-use serde_json::json;
+use iris_mpc_common::helpers::aws::{
+    create_secret_string_with_asm, download_key_from_asm, download_key_from_s3,
+    get_secret_string_from_asm, upload_private_key_to_asm, upload_public_key_to_s3,
+};
 use sha2::Sha256;
 use sodiumoxide::crypto::box_::{PublicKey, SecretKey};
 
@@ -22,8 +15,8 @@ const PUBLIC_KEY_S3_BUCKET_NAME: &str = "wf-smpcv2-stage-public-keys";
 const PUBLIC_KEY_S3_KEY_NAME_PREFIX: &str = "public-key";
 const REGION: &str = "eu-north-1";
 
-/// A fictional versioning CLI
-#[derive(Debug, Parser)] // requires `derive` feature
+/// A CLI tool for managing private and public keys
+#[derive(Debug, Parser)]
 #[command(name = "key-manager")]
 #[command(about = "Key manager CLI", long_about = None)]
 struct KeyManagerCli {
@@ -41,19 +34,16 @@ struct KeyManagerCli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Rotate private and public keys
-    #[command(arg_required_else_help = true)]
+    #[command(about = "Rotate private and public keys")]
     Rotate {
-        #[arg(short, long, env)]
-        dry_run: Option<bool>,
-
-        #[arg(short, long, env)]
+        #[arg(short, long)]
         public_key_bucket_name: Option<String>,
     },
-    /// Validate private key in key manager against public keys (either provided
-    /// or in s3)
+    #[command(
+        about = "Validate private key in key manager against public keys (either provided or in \
+                 s3)"
+    )]
     Validate {
-        // AWSCURRENT or AWSPREVIOUS or a specific version
         #[arg(
             short, long, env, value_parser = clap::builder::PossibleValuesParser::new(& ["AWSCURRENT", "AWSPREVIOUS"])
         )]
@@ -61,9 +51,6 @@ enum Commands {
 
         #[arg(short, long, env)]
         b64_pub_key: Option<String>,
-
-        #[arg(short, long, env)]
-        public_key_bucket_name: Option<String>,
     },
 }
 
@@ -80,16 +67,20 @@ async fn main() -> eyre::Result<()> {
     let private_key_secret_id: String =
         format!("{}/iris-mpc/ecdh-private-key-{}", args.env, args.node_id);
 
+    let private_key_seed_secret_id: String = format!(
+        "{}/iris-mpc/ecdh-private-key-seed-{}",
+        args.env, args.node_id
+    );
+
     match args.command {
         Commands::Rotate {
-            dry_run,
             public_key_bucket_name,
         } => {
             rotate_keys(
                 &shared_config,
                 &bucket_key_name,
                 &private_key_secret_id,
-                dry_run,
+                &private_key_seed_secret_id,
                 public_key_bucket_name,
             )
             .await?;
@@ -97,15 +88,14 @@ async fn main() -> eyre::Result<()> {
         Commands::Validate {
             version_stage,
             b64_pub_key,
-            public_key_bucket_name,
         } => {
             validate_keys(
                 &shared_config,
                 &private_key_secret_id,
                 &version_stage,
                 b64_pub_key,
-                &bucket_key_name,
-                public_key_bucket_name,
+                &args.env,
+                &args.node_id,
             )
             .await?;
         }
@@ -113,100 +103,11 @@ async fn main() -> eyre::Result<()> {
     Ok(())
 }
 
-async fn validate_keys(
-    sdk_config: &SdkConfig,
-    secret_id: &str,
-    version_stage: &str,
-    b64_pub_key: Option<String>,
-    bucket_key_name: &str,
-    public_key_bucket_name: Option<String>,
-) -> eyre::Result<()> {
-    let sm_client = SecretsManagerClient::new(sdk_config);
-
-    let bucket_name = if let Some(bucket_name) = public_key_bucket_name {
-        bucket_name
-    } else {
-        PUBLIC_KEY_S3_BUCKET_NAME.to_string()
-    };
-    // Parse user-provided public key, if present
-    let pub_key = if let Some(b64_pub_key) = b64_pub_key {
-        let user_pubkey = STANDARD.decode(b64_pub_key.as_bytes())?;
-        match PublicKey::from_slice(&user_pubkey) {
-            Some(key) => key,
-            None => panic!("Invalid public key"),
-        }
-    } else {
-        // Otherwise, get the latest one from S3 using HTTPS
-        let user_pubkey_string =
-            download_key_from_s3(bucket_name.as_str(), bucket_key_name).await?;
-        let user_pubkey = STANDARD.decode(user_pubkey_string.as_bytes())?;
-        match PublicKey::from_slice(&user_pubkey) {
-            Some(key) => key,
-            None => panic!("Invalid public key"),
-        }
-    };
-
-    let private_key = download_key_from_asm(&sm_client, secret_id, version_stage).await?;
-    let data = private_key.secret_string.unwrap();
-    let user_privkey = STANDARD.decode(data.as_bytes())?;
-    let decoded_priv_key = SecretKey::from_slice(&user_privkey).unwrap();
-
-    assert_eq!(decoded_priv_key.public_key(), pub_key);
-    Ok(())
-}
-
-async fn get_or_create_secret_string(
-    sm_client: &SecretsManagerClient,
-    private_key_seed_secret_id: &str,
-) -> Result<String, SecretsManagerError> {
-    // Step 1: Try to retrieve the secret from AWS Secrets Manager
-
-    let secret_string =
-        match get_secret_string_from_asm(sm_client, private_key_seed_secret_id).await {
-            Ok(output) => {
-                if let Some(secret_string) = output.secret_string() {
-                    Ok(secret_string.to_string())
-                } else {
-                    Err("Secret string not found".to_string())
-                }
-            }
-            Err(e) => {
-                eprintln!("Error getting secret from SM: {:?}", e);
-                return Err(e);
-            }
-        };
-
-    if let Ok(secret_string) = secret_string {
-        return Ok(secret_string);
-    }
-
-    // Step 2: If the secret does not exist, create it
-    let new_secret_string =
-        create_secret_string_with_asm(sm_client, private_key_seed_secret_id).await?;
-    Ok(new_secret_string)
-}
-
-fn hash_secret_to_seed(secret: &str) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(secret);
-    let result = hasher.finalize();
-    let mut seed = [0u8; 32];
-    seed.copy_from_slice(&result[..32]); // Take the first 32 bytes
-    seed
-}
-
-// Step 3: Generate key pairs using the secret seed
-fn generate_key_pairs_from_secret_seed(secret_seed: [u8; 32]) -> (PublicKey, SecretKey) {
-    let private_key = SecretKey::from_slice(&secret_seed).unwrap();
-    let public_key = private_key.public_key();
-    (public_key, private_key)
-}
-
 async fn rotate_keys(
     sdk_config: &SdkConfig,
     bucket_key_name: &str,
     private_key_secret_id: &str,
-    dry_run: Option<bool>,
+    private_key_seed_secret_id: &str,
     public_key_bucket_name: Option<String>,
 ) -> eyre::Result<()> {
     let bucket_name = if let Some(bucket_name) = public_key_bucket_name {
@@ -218,7 +119,7 @@ async fn rotate_keys(
     let s3_client = S3Client::new(sdk_config);
     let sm_client = SecretsManagerClient::new(sdk_config);
 
-    let secret_json = get_or_create_secret_string(&sm_client, private_key_secret_id).await?;
+    let secret_json = get_or_create_secret_string(&sm_client, private_key_seed_secret_id).await?;
     // Extract the secret seed from the stored secret JSON
     let secret_json: serde_json::Value = serde_json::from_str(&secret_json)?;
     let seed_str = secret_json["seed"]
@@ -227,30 +128,14 @@ async fn rotate_keys(
     let secret_seed = hash_secret_to_seed(seed_str);
 
     let (public_key, private_key) = generate_key_pairs_from_secret_seed(secret_seed);
-    let pub_key_str = STANDARD.encode(public_key);
-    let priv_key_str = STANDARD.encode(private_key.clone());
+    let public_key_str = STANDARD.encode(public_key);
+    let private_key_str = STANDARD.encode(private_key.clone());
 
-    if dry_run.unwrap_or(false) {
-        println!("Dry run enabled, skipping upload of public key to S3");
-        println!("Public key: {}", pub_key_str);
-
-        let user_pubkey = STANDARD.decode(pub_key_str.as_bytes())?;
-        let decoded_pub_key = PublicKey::from_slice(&user_pubkey).unwrap();
-
-        assert_eq!(public_key, decoded_pub_key);
-
-        let user_privkey = STANDARD.decode(priv_key_str.as_bytes())?;
-        let decoded_priv_key = SecretKey::from_slice(&user_privkey).unwrap();
-
-        assert_eq!(private_key, decoded_priv_key);
-
-        return Ok(());
-    }
     match upload_public_key_to_s3(
         &s3_client,
         bucket_name.as_str(),
         bucket_key_name,
-        pub_key_str.as_str(),
+        public_key_str.as_str(),
     )
     .await
     {
@@ -265,7 +150,9 @@ async fn rotate_keys(
         }
     }
 
-    match upload_private_key_to_asm(&sm_client, private_key_secret_id, priv_key_str.as_str()).await
+    println!("private key secret id: {}", private_key_secret_id);
+    match upload_private_key_to_asm(&sm_client, private_key_secret_id, private_key_str.as_str())
+        .await
     {
         Ok(output) => {
             println!("Secret ARN: {}", output.arn.unwrap());
@@ -285,97 +172,89 @@ async fn rotate_keys(
     Ok(())
 }
 
-async fn download_key_from_s3(bucket: &str, key: &str) -> Result<String, reqwest::Error> {
-    print!("Downloading key from S3 bucket: {} key: {}", bucket, key);
-    let s3_url = format!("https://{}.s3.{}.amazonaws.com/{}", bucket, REGION, key);
-    let client = Client::new();
-    let response = client.get(&s3_url).send().await?.text().await?;
-    Ok(response)
-}
-
-async fn download_key_from_asm(
-    client: &SecretsManagerClient,
+async fn validate_keys(
+    sdk_config: &SdkConfig,
     secret_id: &str,
     version_stage: &str,
-) -> Result<GetSecretValueOutput, SecretsManagerError> {
-    Ok(client
-        .get_secret_value()
-        .secret_id(secret_id)
-        .version_stage(version_stage)
-        .send()
-        .await?)
+    b64_pub_key: Option<String>,
+    env: &str,
+    node_id: &str,
+) -> eyre::Result<()> {
+    let sm_client = SecretsManagerClient::new(sdk_config);
+
+    // Parse user-provided public key, if present
+    let pub_key = if let Some(b64_pub_key) = b64_pub_key {
+        let user_pubkey = STANDARD.decode(b64_pub_key.as_bytes())?;
+        match PublicKey::from_slice(&user_pubkey) {
+            Some(key) => key,
+            None => panic!("Invalid public key"),
+        }
+    } else {
+        // Otherwise, get the latest one from S3 using HTTPS
+        let user_pubkey_string = download_key_from_s3(env, node_id).await?;
+
+        println!("user_pubkey_string: {}", user_pubkey_string);
+        let user_pubkey = STANDARD.decode(user_pubkey_string.as_bytes())?;
+        match PublicKey::from_slice(&user_pubkey) {
+            Some(key) => key,
+            None => panic!("Invalid public key"),
+        }
+    };
+
+    let private_key = download_key_from_asm(&sm_client, secret_id, version_stage).await?;
+    let data = private_key.secret_string.unwrap();
+    let user_private_key = STANDARD.decode(data.as_bytes())?;
+    let decoded_private_key = SecretKey::from_slice(&user_private_key).unwrap();
+
+    assert_eq!(decoded_private_key.public_key(), pub_key);
+    Ok(())
 }
 
-async fn upload_private_key_to_asm(
-    client: &SecretsManagerClient,
-    secret_id: &str,
-    content: &str,
-) -> Result<PutSecretValueOutput, SecretsManagerError> {
-    Ok(client
-        .put_secret_value()
-        .secret_string(content)
-        .secret_id(secret_id)
-        .send()
-        .await?)
-}
-
-async fn get_secret_string_from_asm(
-    client: &SecretsManagerClient,
-    secret_id: &str,
-) -> Result<GetSecretValueOutput, SecretsManagerError> {
-    Ok(client
-        .get_secret_value()
-        .secret_id(secret_id)
-        .send()
-        .await?)
-}
-
-async fn get_random_password(
-    client: &SecretsManagerClient,
-) -> Result<GetRandomPasswordOutput, SecretsManagerError> {
-    Ok(client
-        .get_random_password()
-        .password_length(128)
-        .send()
-        .await?)
-}
-
-async fn create_secret_string_with_asm(
+async fn get_or_create_secret_string(
     sm_client: &SecretsManagerClient,
     private_key_seed_secret_id: &str,
 ) -> Result<String, SecretsManagerError> {
-    let new_secret_string = get_random_password(sm_client)
-        .await?
-        .random_password
-        .unwrap();
+    // Step 1: Try to retrieve the secret from AWS Secrets Manager
+    let secret_string =
+        match get_secret_string_from_asm(sm_client, private_key_seed_secret_id).await {
+            Ok(output) => {
+                if let Some(secret_string) = output.secret_string() {
+                    Ok(secret_string.to_string())
+                } else {
+                    Err("Secret string not found".to_string())
+                }
+            }
+            Err(e) => {
+                eprintln!("Error getting secret from SM secret key seed will be created");
+                Err(e.to_string())
+            }
+        };
 
-    // Serialize the secret into a JSON format
-    let secret_json = json!({ "seed": new_secret_string }).to_string();
+    if let Ok(secret_string) = secret_string {
+        return Ok(secret_string);
+    }
 
-    // Create the secret in AWS Secrets Manager
-    sm_client
-        .create_secret()
-        .name(private_key_seed_secret_id)
-        .secret_string(&secret_json)
-        .send()
-        .await?;
-
-    Ok(secret_json)
+    // Step 2: If the secret does not exist, create it
+    let new_secret_string =
+        create_secret_string_with_asm(sm_client, private_key_seed_secret_id).await?;
+    Ok(new_secret_string)
 }
 
-async fn upload_public_key_to_s3(
-    client: &S3Client,
-    bucket: &str,
-    key: &str,
-    content: &str,
-) -> Result<PutObjectOutput, S3Error> {
-    Ok(client
-        .put_object()
-        .bucket(bucket)
-        .key(key)
-        .body(content.to_string().into_bytes().into())
-        .send()
-        .await?)
+// Step 3: Hash the secret to a 32-byte seed
+fn hash_secret_to_seed(secret: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(secret);
+    let result = hasher.finalize();
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&result[..32]); // Take the first 32 bytes
+    seed
+}
+
+// Step 4: Generate key pairs using the secret seed
+fn generate_key_pairs_from_secret_seed(secret_seed: [u8; 32]) -> (PublicKey, SecretKey) {
+    let private_key = SecretKey::from_slice(&secret_seed).unwrap();
+    let public_key = private_key.public_key();
+    (public_key, private_key)
 }
 
 // tests
@@ -386,19 +265,19 @@ mod test {
     use sodiumoxide::crypto::sealedbox;
     use std::{fs::File, io::Read};
 
-    fn generate_large_secret() -> String {
-        let mut rng = thread_rng();
-        (0..128)
-            .map(|_| rng.sample(Alphanumeric) as char)
-            .collect::<String>()
-    }
-
     pub fn get_public_key(user_pub_key: &str) -> PublicKey {
         let user_pubkey = STANDARD.decode(user_pub_key.as_bytes()).unwrap();
         match PublicKey::from_slice(&user_pubkey) {
             Some(key) => key,
             None => panic!("Invalid public key"),
         }
+    }
+
+    fn generate_large_secret() -> String {
+        let mut rng = thread_rng();
+        (0..128)
+            .map(|_| rng.sample(Alphanumeric) as char)
+            .collect::<String>()
     }
 
     #[test]
