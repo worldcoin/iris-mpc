@@ -419,6 +419,8 @@ pub mod degree4 {
 
                 let res = 0.5f64 - (dot_codes as i16) as f64 / (2f64 * dot_masks as f64);
 
+                println!("{} {}", dot_codes, dot_masks);
+
                 // Without rotations
                 if rot_idx == 15 {
                     assert_float_eq!(
