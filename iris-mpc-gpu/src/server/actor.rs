@@ -105,17 +105,23 @@ impl ServerActor {
     pub fn new(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
+        left_eye_db: IrisCodeDbSlice,
+        right_eye_db: IrisCodeDbSlice,
         job_queue_size: usize,
-        max_db_size: usize,
+        db_size: usize,
+        db_buffer: usize,
         max_batch_size: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let device_manager = Arc::new(DeviceManager::init());
         Self::new_with_device_manager(
             party_id,
             chacha_seeds,
+            left_eye_db,
+            right_eye_db,
             device_manager,
             job_queue_size,
-            max_db_size,
+            db_size,
+            db_buffer,
             max_batch_size,
         )
     }
@@ -123,9 +129,12 @@ impl ServerActor {
     pub fn new_with_device_manager(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
+        left_eye_db: IrisCodeDbSlice,
+        right_eye_db: IrisCodeDbSlice,
         device_manager: Arc<DeviceManager>,
         job_queue_size: usize,
-        max_db_size: usize,
+        db_size: usize,
+        db_buffer: usize,
         max_batch_size: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let ids = device_manager.get_ids_from_magic(0);
@@ -133,10 +142,13 @@ impl ServerActor {
         Self::new_with_device_manager_and_comms(
             party_id,
             chacha_seeds,
+            left_eye_db,
+            right_eye_db,
             device_manager,
             comms,
             job_queue_size,
-            max_db_size,
+            db_size,
+            db_buffer,
             max_batch_size,
         )
     }
@@ -145,20 +157,48 @@ impl ServerActor {
     pub fn new_with_device_manager_and_comms(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
+        left_eye_db: IrisCodeDbSlice,
+        right_eye_db: IrisCodeDbSlice,
         device_manager: Arc<DeviceManager>,
         comms: Vec<Arc<NcclComm>>,
         job_queue_size: usize,
-        max_db_size: usize,
+        db_size: usize,
+        db_buffer: usize,
         max_batch_size: usize,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
+        assert!(
+            [left_eye_db.0.len(), right_eye_db.0.len(),]
+                .iter()
+                .all(|&x| x == db_size * IRIS_CODE_LENGTH),
+            "Internal DB mismatch, left and right iris code db sizes differ, expected {}, left \
+             has {}, while right has {}",
+            db_size * IRIS_CODE_LENGTH,
+            left_eye_db.0.len(),
+            right_eye_db.0.len()
+        );
+
+        assert!(
+            [left_eye_db.1.len(), right_eye_db.1.len()]
+                .iter()
+                .all(|&x| x == db_size * MASK_CODE_LENGTH),
+            "Internal DB mismatch, left and right mask code db sizes differ, expected {}, left \
+             has {}, while right has {}",
+            db_size * MASK_CODE_LENGTH,
+            left_eye_db.1.len(),
+            right_eye_db.1.len()
+        );
+
         let (tx, rx) = mpsc::channel(job_queue_size);
         let actor = Self::init(
             party_id,
             chacha_seeds,
+            left_eye_db,
+            right_eye_db,
             device_manager,
             comms,
             rx,
-            max_db_size,
+            db_size,
+            db_buffer,
             max_batch_size,
         )?;
         Ok((actor, ServerActorHandle { job_queue: tx }))
@@ -168,10 +208,13 @@ impl ServerActor {
     fn init(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
+        left_eye_db: IrisCodeDbSlice,
+        right_eye_db: IrisCodeDbSlice,
         device_manager: Arc<DeviceManager>,
         comms: Vec<Arc<NcclComm>>,
         job_queue: mpsc::Receiver<ServerJob>,
-        max_db_size: usize,
+        db_size: usize,
+        db_buffer: usize,
         max_batch_size: usize,
     ) -> eyre::Result<Self> {
         let mut kdf_nonce = 0;
@@ -212,10 +255,23 @@ impl ServerActor {
             comms.clone(),
         );
 
-        let left_code_db_slices = codes_engine.alloc_db(max_db_size);
-        let left_mask_db_slices = masks_engine.alloc_db(max_db_size);
-        let right_code_db_slices = codes_engine.alloc_db(max_db_size);
-        let right_mask_db_slices = masks_engine.alloc_db(max_db_size);
+        // load left and right eye databases to device
+        let (left_code_db_slices, current_db_sizes) =
+            codes_engine.load_db(left_eye_db.0, db_size, db_size + db_buffer, true);
+        let (left_mask_db_slices, left_mask_db_sizes) =
+            masks_engine.load_db(left_eye_db.1, db_size, db_size + db_buffer, true);
+
+        let (right_code_db_slices, right_db_sizes) =
+            codes_engine.load_db(right_eye_db.0, db_size, db_size + db_buffer, true);
+        let (right_mask_db_slices, right_mask_db_sizes) =
+            masks_engine.load_db(right_eye_db.1, db_size, db_size + db_buffer, true);
+
+        assert!(
+            [left_mask_db_sizes, right_mask_db_sizes, right_db_sizes]
+                .iter()
+                .all(|size| size == &current_db_sizes),
+            "Code and mask db sizes mismatch"
+        );
 
         // Engines for inflight queries
         let batch_codes_engine = ShareDB::init(
@@ -287,16 +343,14 @@ impl ServerActor {
         let results = distance_comparator.prepare_results();
         let batch_results = distance_comparator.prepare_results();
 
-        let db_match_list_left =
-            distance_comparator.prepare_db_match_list(max_db_size / device_manager.device_count());
-        let db_match_list_right =
-            distance_comparator.prepare_db_match_list(max_db_size / device_manager.device_count());
+        let db_match_list_left = distance_comparator
+            .prepare_db_match_list((db_size + db_buffer) / device_manager.device_count());
+        let db_match_list_right = distance_comparator
+            .prepare_db_match_list((db_size + db_buffer) / device_manager.device_count());
         let batch_match_list_left = distance_comparator.prepare_db_match_list(n_queries);
         let batch_match_list_right = distance_comparator.prepare_db_match_list(n_queries);
 
         let query_db_size = vec![n_queries; device_manager.device_count()];
-
-        let current_db_sizes = vec![0; device_manager.device_count()];
 
         for dev in device_manager.devices() {
             dev.synchronize().unwrap();
@@ -342,104 +396,6 @@ impl ServerActor {
             let _ = self.process_batch_query(batch, return_channel);
         }
         tracing::info!("Server Actor finished due to all job queues being closed");
-    }
-
-    pub fn load_full_db(
-        &mut self,
-        left: &IrisCodeDbSlice,
-        right: &IrisCodeDbSlice,
-        db_size: usize,
-    ) {
-        assert!(
-            [left.0.len(), right.0.len(),]
-                .iter()
-                .all(|&x| x == db_size * IRIS_CODE_LENGTH),
-            "Internal DB mismatch, left and right iris code db sizes differ, expected {}, left \
-             has {}, while right has {}",
-            db_size * IRIS_CODE_LENGTH,
-            left.0.len(),
-            right.0.len()
-        );
-
-        assert!(
-            [left.1.len(), right.1.len()]
-                .iter()
-                .all(|&x| x == db_size * MASK_CODE_LENGTH),
-            "Internal DB mismatch, left and right mask code db sizes differ, expected {}, left \
-             has {}, while right has {}",
-            db_size * MASK_CODE_LENGTH,
-            left.1.len(),
-            right.1.len()
-        );
-
-        let db_lens1 = self
-            .codes_engine
-            .load_full_db(&mut self.left_code_db_slices, left.0);
-        let db_lens2 = self
-            .masks_engine
-            .load_full_db(&mut self.left_mask_db_slices, left.1);
-        let db_lens3 = self
-            .codes_engine
-            .load_full_db(&mut self.right_code_db_slices, right.0);
-        let db_lens4 = self
-            .masks_engine
-            .load_full_db(&mut self.right_mask_db_slices, right.1);
-
-        assert_eq!(db_lens1, db_lens2);
-        assert_eq!(db_lens1, db_lens3);
-        assert_eq!(db_lens1, db_lens4);
-
-        self.current_db_sizes = db_lens1;
-    }
-
-    pub fn load_single_record(
-        &mut self,
-        index: usize,
-        left_code: &[u16],
-        left_mask: &[u16],
-        right_code: &[u16],
-        right_mask: &[u16],
-    ) {
-        ShareDB::load_single_record(
-            index,
-            &self.left_code_db_slices.code_gr,
-            left_code,
-            self.device_manager.device_count(),
-            IRIS_CODE_LENGTH,
-        );
-        ShareDB::load_single_record(
-            index,
-            &self.left_mask_db_slices.code_gr,
-            left_mask,
-            self.device_manager.device_count(),
-            MASK_CODE_LENGTH,
-        );
-        ShareDB::load_single_record(
-            index,
-            &self.right_code_db_slices.code_gr,
-            right_code,
-            self.device_manager.device_count(),
-            IRIS_CODE_LENGTH,
-        );
-        ShareDB::load_single_record(
-            index,
-            &self.right_mask_db_slices.code_gr,
-            right_mask,
-            self.device_manager.device_count(),
-            MASK_CODE_LENGTH,
-        );
-        self.current_db_sizes[index % self.device_manager.device_count()] += 1;
-    }
-
-    pub fn preprocess_db(&mut self) {
-        self.codes_engine
-            .preprocess_db(&mut self.left_code_db_slices, &self.current_db_sizes);
-        self.masks_engine
-            .preprocess_db(&mut self.left_mask_db_slices, &self.current_db_sizes);
-        self.codes_engine
-            .preprocess_db(&mut self.right_code_db_slices, &self.current_db_sizes);
-        self.masks_engine
-            .preprocess_db(&mut self.right_mask_db_slices, &self.current_db_sizes);
     }
 
     fn process_batch_query(
