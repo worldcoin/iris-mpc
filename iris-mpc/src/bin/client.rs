@@ -310,6 +310,7 @@ async fn main() -> eyre::Result<()> {
     for batch_idx in 0..N_BATCHES {
         let mut handles = Vec::new();
         for batch_query_idx in 0..BATCH_SIZE {
+            sleep(Duration::from_millis(1000)).await;
             let shares_encryption_public_keys2 = shares_encryption_public_keys.clone();
             let requests_sns_client2 = requests_sns_client.clone();
             let thread_db2 = db.clone();
