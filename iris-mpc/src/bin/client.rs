@@ -11,8 +11,9 @@ use iris_mpc_common::{
         key_pair::download_public_key,
         sha256::calculate_sha256,
         smpc_request::{
-            create_message_type_attribute_map, IrisCodesJSON, UniquenessRequest, UniquenessResult,
-            UNIQUENESS_MESSAGE_TYPE,
+            create_message_type_attribute_map, IdentityDeletionRequest, IdentityDeletionResult,
+            IrisCodesJSON, ReceiveRequestError, UniquenessRequest, UniquenessResult,
+            IDENTITY_DELETION_MESSAGE_TYPE, SMPC_MESSAGE_TYPE_ATTRIBUTE, UNIQUENESS_MESSAGE_TYPE,
         },
         sqs_s3_helper::upload_file_and_generate_presigned_url,
     },
@@ -21,7 +22,12 @@ use iris_mpc_common::{
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde_json::to_string;
 use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    cmp::min,
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{
     spawn,
     sync::{Mutex, Semaphore},
@@ -125,6 +131,7 @@ async fn main() -> eyre::Result<()> {
 
     let expected_results: Arc<Mutex<HashMap<String, Option<u32>>>> =
         Arc::new(Mutex::new(HashMap::new()));
+
     let requests: Arc<Mutex<HashMap<String, IrisCode>>> = Arc::new(Mutex::new(HashMap::new()));
     let responses: Arc<Mutex<HashMap<u32, IrisCode>>> = Arc::new(Mutex::new(HashMap::new()));
     let db: Arc<Mutex<IrisDB>> = Arc::new(Mutex::new(db));
@@ -212,6 +219,90 @@ async fn main() -> eyre::Result<()> {
                     .context("Failed to delete message")?;
             }
         }
+
+        // Process another batch of deletion messages. Do not exceed the max batch size
+        let n_deletion_messages = min(thread_responses.lock().await.len(), BATCH_SIZE) * 3;
+
+        println!(
+            "Start validating {} identity deletion and uniqueness responses",
+            n_deletion_messages
+        );
+
+        // Store all deletion results from serial_id to the set of node_ids
+        let mut received_deletion_results: HashMap<u32, HashSet<usize>> = HashMap::new();
+
+        // As we send uniqueness message after each deletion, we expect double the
+        // number of deletion messages in total.
+        for _ in 0..n_deletion_messages * 2 {
+            let msg = results_sqs_client
+                .receive_message()
+                .max_number_of_messages(1)
+                .queue_url(response_queue_url.clone())
+                .send()
+                .await
+                .context("Failed to receive message")?
+                .messages
+                .unwrap_or_default()
+                .first()
+                .unwrap()
+                .clone();
+            let message_attribute = msg.message_attributes.unwrap();
+            let result_type = message_attribute
+                .get(SMPC_MESSAGE_TYPE_ATTRIBUTE)
+                .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?
+                .string_value()
+                .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?;
+
+            match result_type {
+                IDENTITY_DELETION_MESSAGE_TYPE => {
+                    let result: IdentityDeletionResult =
+                        serde_json::from_str(&msg.body.context("No deletion body found")?)
+                            .context("Failed to parse deletion message body")?;
+                    println!("Received deletion result: {:?}", result);
+                    received_deletion_results
+                        .entry(result.serial_id)
+                        .or_default()
+                        .insert(result.node_id);
+                }
+                UNIQUENESS_MESSAGE_TYPE => {
+                    let result: UniquenessResult =
+                        serde_json::from_str(&msg.body.context("No uniqueness body found")?)
+                            .context("Failed to parse uniqueness message body")?;
+                    println!("Received uniqueness result: {:?}", result);
+                    assert!(!result.is_match, "Match found for deleted identity");
+                    assert!(
+                        result.matched_serial_ids.is_none(),
+                        "Matched serial ids found for deleted identity"
+                    );
+                }
+                _ => {
+                    eprintln!("Unknown message type: {}", result_type);
+                }
+            }
+
+            results_sqs_client
+                .delete_message()
+                .queue_url(response_queue_url.clone())
+                .receipt_handle(msg.receipt_handle.unwrap())
+                .send()
+                .await
+                .context("Failed to delete message")?;
+        }
+
+        // assert all deletion messages are received
+        assert_eq!(
+            received_deletion_results.len(),
+            n_deletion_messages,
+            "Missing deletion messages for some serial ids"
+        );
+        for (_, node_ids) in received_deletion_results {
+            assert_eq!(
+                node_ids.len(),
+                3,
+                "Missing deletion messages from some nodes"
+            );
+        }
+
         eyre::Ok(())
     });
 
@@ -324,34 +415,8 @@ async fn main() -> eyre::Result<()> {
                 let shared_mask =
                     GaloisRingIrisCodeShare::encode_mask_code(&template.mask, &mut rng);
 
-                let mut iris_shares_file_hashes: [String; 3] = Default::default();
-                let mut iris_codes_shares_base64: [String; 3] = Default::default();
-
-                for i in 0..3 {
-                    let iris_codes_json = IrisCodesJSON {
-                        iris_version:           "1.0".to_string(),
-                        right_iris_code_shares: shared_code[i].to_base64(),
-                        right_iris_mask_shares: shared_mask[i].to_base64(),
-                        left_iris_code_shares:  shared_code[i].to_base64(),
-                        left_iris_mask_shares:  shared_mask[i].to_base64(),
-                    };
-                    let serialized_iris_codes_json = to_string(&iris_codes_json)
-                        .expect("Serialization failed")
-                        .clone();
-
-                    // calculate hash of the object
-                    let hash_string = calculate_sha256(&serialized_iris_codes_json);
-
-                    // encrypt the object using sealed box and public key
-                    let encrypted_bytes = sealedbox::seal(
-                        serialized_iris_codes_json.as_bytes(),
-                        &shares_encryption_public_keys2[i],
-                    );
-
-                    iris_codes_shares_base64[i] =
-                        general_purpose::STANDARD.encode(&encrypted_bytes);
-                    iris_shares_file_hashes[i] = hash_string;
-                }
+                let (iris_shares_file_hashes, iris_codes_shares_base64) =
+                    calculate_shares(&shares_encryption_public_keys2, shared_code, shared_mask);
 
                 let contents = serde_json::to_vec(&iris_codes_shares_base64)?;
                 let presigned_url = match upload_file_and_generate_presigned_url(
@@ -404,8 +469,132 @@ async fn main() -> eyre::Result<()> {
         sleep(WAIT_AFTER_BATCH).await;
     }
 
+    // send another batch with deletion requests and uniqueness requests with all
+    // deleted identities
+    let thread_responses2 = responses.clone();
+    let shares_encryption_public_keys2 = shares_encryption_public_keys.clone();
+    let requests_sns_client2 = requests_sns_client.clone();
+
+    let mut rng = if let Some(rng_seed) = rng_seed {
+        StdRng::seed_from_u64(rng_seed)
+    } else {
+        StdRng::from_entropy()
+    };
+
+    let n_deletion_messages = min(thread_responses2.lock().await.len(), BATCH_SIZE);
+    println!("Sending {} identity deletion messages", n_deletion_messages);
+    for (serial_id, iris_code) in thread_responses2
+        .lock()
+        .await
+        .iter()
+        .take(n_deletion_messages)
+    {
+        send_identity_deletion_request(&requests_sns_client, &request_topic_arn, *serial_id)
+            .await?;
+        let request_id = Uuid::new_v4();
+
+        let shared_code =
+            GaloisRingIrisCodeShare::encode_iris_code(&iris_code.code, &iris_code.mask, &mut rng);
+        let shared_mask = GaloisRingIrisCodeShare::encode_mask_code(&iris_code.mask, &mut rng);
+
+        let (iris_shares_file_hashes, iris_codes_shares_base64) =
+            calculate_shares(&shares_encryption_public_keys2, shared_code, shared_mask);
+
+        let contents = serde_json::to_vec(&iris_codes_shares_base64)?;
+        let presigned_url = match upload_file_and_generate_presigned_url(
+            &requests_bucket_name,
+            &request_id.to_string(),
+            Box::leak(requests_bucket_region.clone().into_boxed_str()),
+            &contents,
+        )
+        .await
+        {
+            Ok(url) => url,
+            Err(e) => {
+                eprintln!("Failed to upload file: {}", e);
+                // ignore the error and continue
+                return Ok(());
+            }
+        };
+
+        let request_message = UniquenessRequest {
+            batch_size: Some(n_deletion_messages),
+            signup_id: request_id.to_string(),
+            s3_presigned_url: presigned_url,
+            iris_shares_file_hashes,
+        };
+
+        let message_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
+
+        requests_sns_client2
+            .lock()
+            .await
+            .publish()
+            .topic_arn(request_topic_arn.clone())
+            .message_group_id(ENROLLMENT_REQUEST_TYPE)
+            .message(to_string(&request_message)?)
+            .set_message_attributes(Some(message_attributes))
+            .send()
+            .await?;
+    }
+
     // Receive all messages
     recv_thread.await??;
 
+    Ok(())
+}
+
+fn calculate_shares(
+    shares_encryption_public_keys2: &[PublicKey],
+    shared_code: [GaloisRingIrisCodeShare; 3],
+    shared_mask: [GaloisRingIrisCodeShare; 3],
+) -> ([String; 3], [String; 3]) {
+    let mut iris_shares_file_hashes: [String; 3] = Default::default();
+    let mut iris_codes_shares_base64: [String; 3] = Default::default();
+
+    for i in 0..3 {
+        let iris_codes_json = IrisCodesJSON {
+            iris_version:           "1.0".to_string(),
+            right_iris_code_shares: shared_code[i].to_base64(),
+            right_iris_mask_shares: shared_mask[i].to_base64(),
+            left_iris_code_shares:  shared_code[i].to_base64(),
+            left_iris_mask_shares:  shared_mask[i].to_base64(),
+        };
+        let serialized_iris_codes_json = to_string(&iris_codes_json)
+            .expect("Serialization failed")
+            .clone();
+
+        // calculate hash of the object
+        let hash_string = calculate_sha256(&serialized_iris_codes_json);
+
+        // encrypt the object using sealed box and public key
+        let encrypted_bytes = sealedbox::seal(
+            serialized_iris_codes_json.as_bytes(),
+            &shares_encryption_public_keys2[i],
+        );
+
+        iris_codes_shares_base64[i] = general_purpose::STANDARD.encode(&encrypted_bytes);
+        iris_shares_file_hashes[i] = hash_string;
+    }
+    (iris_shares_file_hashes, iris_codes_shares_base64)
+}
+
+async fn send_identity_deletion_request(
+    requests_sns_client: &Arc<Mutex<Client>>,
+    request_topic_arn: &str,
+    serial_id: u32,
+) -> eyre::Result<()> {
+    let message_attributes = create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
+    let deletion_message = IdentityDeletionRequest { serial_id };
+    requests_sns_client
+        .lock()
+        .await
+        .publish()
+        .topic_arn(request_topic_arn)
+        .message_group_id(ENROLLMENT_REQUEST_TYPE)
+        .message(to_string(&deletion_message)?)
+        .set_message_attributes(Some(message_attributes))
+        .send()
+        .await?;
     Ok(())
 }
