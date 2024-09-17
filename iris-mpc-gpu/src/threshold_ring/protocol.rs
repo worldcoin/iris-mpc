@@ -643,7 +643,8 @@ impl Circuits {
         }
     }
 
-    fn otp_encrypt_my_rng_u16(
+    // Encrypt using chacha in my_rng
+    fn chacha1_encrypt_u16(
         &mut self,
         input: &CudaView<u16>,
         idx: usize,
@@ -651,13 +652,14 @@ impl Circuits {
     ) -> CudaSlice<u32> {
         let data_len = input.len();
         assert_eq!(data_len & 1, 0);
-        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
-        let mut rand_u16 = self.fill_my_rng_into_u16(&mut rand, idx, streams);
-        self.single_xor_assign_u16(&mut rand_u16, input, idx, data_len, streams);
-        rand
+        let mut keystream = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
+        let mut keystream_u16 = self.fill_my_rng_into_u16(&mut keystream, idx, streams);
+        self.single_xor_assign_u16(&mut keystream_u16, input, idx, data_len, streams);
+        keystream
     }
 
-    fn otp_encrypt_their_rng_u16(
+    // Encrypt using chacha in their_rng
+    fn chacha2_encrypt_u16(
         &mut self,
         input: &CudaView<u16>,
         idx: usize,
@@ -665,13 +667,14 @@ impl Circuits {
     ) -> CudaSlice<u32> {
         let data_len = input.len();
         assert_eq!(data_len & 1, 0);
-        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
-        let mut rand_u16 = self.fill_their_rng_into_u16(&mut rand, idx, streams);
-        self.single_xor_assign_u16(&mut rand_u16, input, idx, data_len, streams);
-        rand
+        let mut keystream = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
+        let mut keystream_u16 = self.fill_their_rng_into_u16(&mut keystream, idx, streams);
+        self.single_xor_assign_u16(&mut keystream_u16, input, idx, data_len, streams);
+        keystream
     }
 
-    fn otp_decrypt_my_rng_u16(
+    // Decrypt using chacha in my_rng
+    fn chacha1_decrypt_u16(
         &mut self,
         input: &mut CudaView<u16>,
         idx: usize,
@@ -679,12 +682,13 @@ impl Circuits {
     ) {
         let data_len = input.len();
         assert_eq!(data_len & 1, 0);
-        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
-        let rand_u16 = self.fill_my_rng_into_u16(&mut rand, idx, streams);
-        self.single_xor_assign_u16(input, &rand_u16, idx, data_len, streams);
+        let mut keystream = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
+        let keystream_u16 = self.fill_my_rng_into_u16(&mut keystream, idx, streams);
+        self.single_xor_assign_u16(input, &keystream_u16, idx, data_len, streams);
     }
 
-    fn otp_decrypt_their_rng_u16(
+    // Decrypt using chacha in their_rng
+    fn chacha2_decrypt_u16(
         &mut self,
         input: &mut CudaView<u16>,
         idx: usize,
@@ -692,44 +696,46 @@ impl Circuits {
     ) {
         let data_len = input.len();
         assert_eq!(data_len & 1, 0);
-        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
-        let rand_u16 = self.fill_their_rng_into_u16(&mut rand, idx, streams);
-        self.single_xor_assign_u16(input, &rand_u16, idx, data_len, streams);
+        let mut keystream = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
+        let keystream_u16 = self.fill_their_rng_into_u16(&mut keystream, idx, streams);
+        self.single_xor_assign_u16(input, &keystream_u16, idx, data_len, streams);
     }
 
-    fn otp_encrypt_my_rng_u64(
+    // Encrypt using chacha in my_rng
+    fn chacha1_encrypt_u64(
         &mut self,
         input: &ChunkShareView<u64>,
         idx: usize,
         streams: &[CudaStream],
     ) -> CudaSlice<u64> {
         let data_len = input.len();
-        let rand_size = (data_len + 7) / 8; // Multiple of 16 u32
-        let mut rand = unsafe { self.devs[idx].alloc::<u64>(rand_size * 8).unwrap() };
-        self.fill_my_rand_u64(&mut rand, idx, streams);
+        let keystream_size = (data_len + 7) / 8; // Multiple of 16 u32
+        let mut keystream = unsafe { self.devs[idx].alloc::<u64>(keystream_size * 8).unwrap() };
+        self.fill_my_rand_u64(&mut keystream, idx, streams);
         self.single_xor_assign_u64(
-            &mut rand.slice(..data_len),
+            &mut keystream.slice(..data_len),
             &input.a,
             idx,
             data_len,
             streams,
         );
-        rand
+        keystream
     }
 
-    fn otp_decrypt_their_rng_u64(
+    // Decrypt using chacha in their_rng
+    fn chacha2_decrypt_u64(
         &mut self,
         inout: &mut ChunkShareView<u64>,
         idx: usize,
         streams: &[CudaStream],
     ) {
         let data_len = inout.len();
-        let rand_size = (data_len + 7) / 8; // Multiple of 16 u32
-        let mut rand = unsafe { self.devs[idx].alloc::<u64>(rand_size * 8).unwrap() };
-        self.fill_their_rand_u64(&mut rand, idx, streams);
+        let keystream_size = (data_len + 7) / 8; // Multiple of 16 u32
+        let mut keystream = unsafe { self.devs[idx].alloc::<u64>(keystream_size * 8).unwrap() };
+        self.fill_their_rand_u64(&mut keystream, idx, streams);
         self.single_xor_assign_u64(
             &mut inout.b,
-            &rand.slice(..data_len),
+            &keystream.slice(..data_len),
             idx,
             data_len,
             streams,
@@ -753,7 +759,7 @@ impl Circuits {
         streams: &[CudaStream],
     ) {
         let send_bufs =
-            self.otp_encrypt_my_rng_u64(&res.get_range(range.start, range.end), idx, streams);
+            self.chacha1_encrypt_u64(&res.get_range(range.start, range.end), idx, streams);
 
         result::group_start().unwrap();
         self.comms[idx]
@@ -764,7 +770,7 @@ impl Circuits {
             .receive_view(&mut rcv, self.prev_id, &streams[idx])
             .unwrap();
         result::group_end().unwrap();
-        self.otp_decrypt_their_rng_u64(&mut res.get_range(range.start, range.end), idx, streams);
+        self.chacha2_decrypt_u64(&mut res.get_range(range.start, range.end), idx, streams);
     }
 
     fn send_receive_view_with_offset(
@@ -784,7 +790,7 @@ impl Circuits {
             .iter()
             .enumerate()
             .map(|(idx, res)| {
-                self.otp_encrypt_my_rng_u64(&res.get_range(range.start, range.end), idx, streams)
+                self.chacha1_encrypt_u64(&res.get_range(range.start, range.end), idx, streams)
             })
             .collect_vec();
 
@@ -802,11 +808,7 @@ impl Circuits {
         }
         result::group_end().unwrap();
         for (idx, res) in res.iter_mut().enumerate() {
-            self.otp_decrypt_their_rng_u64(
-                &mut res.get_range(range.start, range.end),
-                idx,
-                streams,
-            );
+            self.chacha2_decrypt_u64(&mut res.get_range(range.start, range.end), idx, streams);
         }
     }
 
@@ -816,7 +818,7 @@ impl Circuits {
         let send_bufs = res
             .iter()
             .enumerate()
-            .map(|(idx, res)| self.otp_encrypt_my_rng_u64(res, idx, streams))
+            .map(|(idx, res)| self.chacha1_encrypt_u64(res, idx, streams))
             .collect_vec();
 
         result::group_start().unwrap();
@@ -832,7 +834,7 @@ impl Circuits {
         }
         result::group_end().unwrap();
         for (idx, res) in res.iter_mut().enumerate() {
-            self.otp_decrypt_their_rng_u64(res, idx, streams);
+            self.chacha2_decrypt_u64(res, idx, streams);
         }
     }
 
@@ -842,7 +844,7 @@ impl Circuits {
         idx: usize,
         streams: &[CudaStream],
     ) {
-        let send_bufs = self.otp_encrypt_my_rng_u64(res, idx, streams);
+        let send_bufs = self.chacha1_encrypt_u64(res, idx, streams);
 
         result::group_start().unwrap();
         self.comms[idx]
@@ -852,7 +854,7 @@ impl Circuits {
             .receive_view(&mut res.b, self.prev_id, &streams[idx])
             .unwrap();
         result::group_end().unwrap();
-        self.otp_decrypt_their_rng_u64(res, idx, streams);
+        self.chacha2_decrypt_u64(res, idx, streams);
     }
 
     fn single_xor_assign_u16(
@@ -1065,12 +1067,12 @@ impl Circuits {
         let m0 = m0
             .into_iter()
             .enumerate()
-            .map(|(idx, m0)| self.otp_encrypt_their_rng_u16(&m0, idx, streams))
+            .map(|(idx, m0)| self.chacha2_encrypt_u16(&m0, idx, streams))
             .collect_vec();
         let m1 = m1
             .into_iter()
             .enumerate()
-            .map(|(idx, m1)| self.otp_encrypt_their_rng_u16(&m1, idx, streams))
+            .map(|(idx, m1)| self.chacha2_encrypt_u16(&m1, idx, streams))
             .collect_vec();
 
         result::group_start().unwrap();
@@ -1132,11 +1134,11 @@ impl Circuits {
                 unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
             let rand_ca = self.fill_my_rng_into_u16(&mut rand_ca_alloc, idx, streams);
 
-            // OTP decrypt
+            // ChaCha decrypt
             {
-                self.otp_decrypt_my_rng_u16(m0, idx, streams);
-                self.otp_decrypt_their_rng_u16(wc, idx, streams);
-                self.otp_decrypt_my_rng_u16(m1, idx, streams);
+                self.chacha1_decrypt_u16(m0, idx, streams);
+                self.chacha2_decrypt_u16(wc, idx, streams);
+                self.chacha1_decrypt_u16(m1, idx, streams);
             }
 
             let cfg = Self::launch_config_from_elements_and_threads(
@@ -1165,7 +1167,7 @@ impl Circuits {
                     .unwrap();
             }
             // OTP encrypt
-            send.push(self.otp_encrypt_their_rng_u16(&res.b, idx, streams));
+            send.push(self.chacha2_encrypt_u16(&res.b, idx, streams));
         }
 
         // Reshare to Helper
@@ -1236,7 +1238,7 @@ impl Circuits {
             }
 
             // OTP encrypt
-            send.push(self.otp_encrypt_my_rng_u16(wc, idx, streams));
+            send.push(self.chacha1_encrypt_u16(wc, idx, streams));
         }
 
         result::group_start().unwrap();
@@ -1256,7 +1258,7 @@ impl Circuits {
         // OTP decrypt
         {
             for (idx, res) in outp.iter_mut().enumerate() {
-                self.otp_decrypt_my_rng_u16(&mut res.a, idx, streams);
+                self.chacha1_decrypt_u16(&mut res.a, idx, streams);
             }
         }
 

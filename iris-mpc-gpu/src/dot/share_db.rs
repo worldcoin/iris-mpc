@@ -629,42 +629,42 @@ impl ShareDB {
         rand_trans
     }
 
-    fn otp_encrypt_rng_result(
+    fn chacha_encrypt_result(
         &mut self,
         len: usize,
         idx: usize,
         streams: &[CudaStream],
     ) -> CudaSlice<u32> {
         assert_eq!(len & 3, 0);
-        let mut rand = unsafe {
+        let mut keystream = unsafe {
             self.device_manager
                 .device(idx)
                 .alloc::<u32>(len >> 2)
                 .unwrap()
         };
-        let mut rand_u8 = self.fill_my_rng_into_u8(&mut rand, idx, streams);
+        let mut keystream_u8 = self.fill_my_rng_into_u8(&mut keystream, idx, streams);
         self.single_xor_assign_u8(
-            &mut rand_u8,
+            &mut keystream_u8,
             &self.results[idx].slice(..),
             idx,
             len,
             streams,
         );
-        rand
+        keystream
     }
 
-    fn otp_decrypt_rng_result(&mut self, len: usize, idx: usize, streams: &[CudaStream]) {
+    fn chacha_decrypt_result(&mut self, len: usize, idx: usize, streams: &[CudaStream]) {
         assert_eq!(len & 3, 0);
-        let mut rand = unsafe {
+        let mut keystream = unsafe {
             self.device_manager
                 .device(idx)
                 .alloc::<u32>(len >> 2)
                 .unwrap()
         };
-        let rand_u8 = self.fill_their_rng_into_u8(&mut rand, idx, streams);
+        let keystream_u8 = self.fill_their_rng_into_u8(&mut keystream, idx, streams);
         self.single_xor_assign_u8(
             &mut self.results_peer[idx].slice(..),
-            &rand_u8,
+            &keystream_u8,
             idx,
             len,
             streams,
@@ -678,7 +678,7 @@ impl ShareDB {
         let send_bufs = (0..self.device_manager.device_count())
             .map(|idx| {
                 let len = db_sizes[idx] * self.query_length * 2;
-                self.otp_encrypt_rng_result(len, idx, streams)
+                self.chacha_encrypt_result(len, idx, streams)
             })
             .collect_vec();
 
@@ -701,7 +701,7 @@ impl ShareDB {
         nccl::group_end().unwrap();
         for idx in 0..self.device_manager.device_count() {
             let len = db_sizes[idx] * self.query_length * 2;
-            self.otp_decrypt_rng_result(len, idx, streams);
+            self.chacha_decrypt_result(len, idx, streams);
         }
     }
 
