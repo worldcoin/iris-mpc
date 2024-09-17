@@ -17,6 +17,7 @@ use itertools::{izip, Itertools};
 use std::{ops::Range, sync::Arc};
 
 pub(crate) const B_BITS: usize = 16;
+const SHARERING_BITSIZE: usize = 16;
 
 const DEFAULT_LAUNCH_CONFIG_THREADS: u32 = 64;
 
@@ -344,7 +345,7 @@ pub struct Circuits {
 }
 
 impl Circuits {
-    const BITS: usize = 16 + B_BITS;
+    const BITS: usize = SHARERING_BITSIZE + B_BITS;
 
     pub fn synchronize_all(&self) {
         for dev in self.devs.iter() {
@@ -1478,7 +1479,7 @@ impl Circuits {
         injected: &mut [ChunkShareView<u16>],
         streams: &[CudaStream],
     ) {
-        const K: usize = 16;
+        const K: usize = SHARERING_BITSIZE;
         let mut x1 = Vec::with_capacity(self.n_devices);
         let mut x2 = Vec::with_capacity(self.n_devices);
         let mut x3 = Vec::with_capacity(self.n_devices);
@@ -1515,7 +1516,7 @@ impl Circuits {
         x3: &mut [ChunkShareView<u64>],
         streams: &[CudaStream],
     ) {
-        const K: usize = 16;
+        const K: usize = SHARERING_BITSIZE;
         assert_eq!(self.n_devices, c.len());
         assert_eq!(self.n_devices, x1.len());
         assert_eq!(self.n_devices, x2.len());
@@ -1630,7 +1631,7 @@ impl Circuits {
         Buffers::return_buffer(&mut self.buffers.u64_32c_3, x3_);
     }
 
-    // K is Self::BITS = 16 + B_BITS in our case
+    // K is Self::BITS = SHARERING_BITSIZE + B_BITS in our case
     // The result is located in the first bit of x1
     fn binary_add_3_get_msb(
         &mut self,
