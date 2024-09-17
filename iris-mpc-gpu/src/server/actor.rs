@@ -482,6 +482,14 @@ impl ServerActor {
             for deletion_index in batch.deletion_requests_indices.clone() {
                 let device_index = deletion_index % self.device_manager.device_count() as u32;
                 let device_db_index = deletion_index / self.device_manager.device_count() as u32;
+                if device_db_index as usize >= self.current_db_sizes[device_index as usize] {
+                    tracing::warn!(
+                        "Deletion index {} is out of bounds for device {}",
+                        deletion_index,
+                        device_index
+                    );
+                    continue;
+                }
                 self.device_manager
                     .device(device_index as usize)
                     .bind_to_thread()
