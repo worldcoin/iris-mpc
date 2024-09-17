@@ -254,6 +254,7 @@ impl ChaChaCtx {
 }
 
 #[cfg(test)]
+#[allow(unused)]
 mod tests {
 
     use super::*;

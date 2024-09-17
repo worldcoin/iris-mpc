@@ -89,6 +89,7 @@ impl AesCudaRng {
 }
 
 #[cfg(test)]
+#[allow(unused)]
 mod tests {
     use super::*;
 

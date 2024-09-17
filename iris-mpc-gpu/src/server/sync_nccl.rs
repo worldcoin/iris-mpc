@@ -48,6 +48,7 @@ fn deserialize_all(state_ser: &[u8]) -> Result<Vec<SyncState>> {
 }
 
 #[cfg(test)]
+#[allow(unused)]
 mod tests {
     use super::*;
     use cudarc::{driver::CudaDevice, nccl::Id};

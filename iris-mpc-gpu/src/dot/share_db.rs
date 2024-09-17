@@ -740,6 +740,7 @@ impl ShareDB {
 }
 
 #[cfg(test)]
+#[allow(unused)]
 mod tests {
     use super::{preprocess_query, ShareDB};
     use crate::{

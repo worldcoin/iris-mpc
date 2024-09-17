@@ -222,8 +222,8 @@ WHERE id = $1;
 
         let query = sqlx::query(
             r#"
-INSERT INTO irises (id, left_code, left_mask) 
-VALUES ( $1, $2, $3 ) 
+INSERT INTO irises (id, left_code, left_mask)
+VALUES ( $1, $2, $3 )
 ON CONFLICT (id)
 DO UPDATE SET left_code = EXCLUDED.left_code, left_mask = EXCLUDED.left_mask;
 "#,
@@ -247,8 +247,8 @@ DO UPDATE SET left_code = EXCLUDED.left_code, left_mask = EXCLUDED.left_mask;
 
         let query = sqlx::query(
             r#"
-INSERT INTO irises (id, right_code, right_mask) 
-VALUES ( $1, $2, $3 ) 
+INSERT INTO irises (id, right_code, right_mask)
+VALUES ( $1, $2, $3 )
 ON CONFLICT (id)
 DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask;
 "#,
@@ -413,6 +413,7 @@ fn cast_u8_to_u16(s: &[u8]) -> &[u16] {
 }
 
 #[cfg(test)]
+#[allow(unused)]
 mod tests {
     const DOTENV_TEST: &str = ".env.test";
 
