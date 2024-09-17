@@ -330,12 +330,17 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         let mut rng = StdRng::seed_from_u64(rng_seed);
 
         if clear_db_before_init {
+            tracing::info!("Cleaning up the db before initializing irises");
             // Cleaning up the db before inserting newly generated irises
             self.rollback(0).await?;
         }
 
         let mut tx = self.tx().await?;
 
+        tracing::info!(
+            "DB size before initialization: {}",
+            self.count_irises().await?
+        );
         for i in 0..db_size {
             if (i % 1000) == 0 {
                 tracing::info!("Initializing iris db: Generated {} entries", i);
