@@ -5,11 +5,11 @@ use cudarc::{
 use std::{mem, sync::Arc};
 
 pub struct AesCudaRng {
-    buf_size:   usize,
-    devs:       Vec<Arc<CudaDevice>>,
-    kernels:    Vec<CudaFunction>,
-    rng_chunks: Vec<CudaSlice<u8>>,
-    output_buf: Vec<u8>,
+    buf_size:    usize,
+    devs:        Vec<Arc<CudaDevice>>,
+    rng_kernels: Vec<CudaFunction>,
+    rng_chunks:  Vec<CudaSlice<u8>>,
+    output_buf:  Vec<u8>,
 }
 
 const AES_PTX_SRC: &str = include_str!("aes.cu");
@@ -20,7 +20,7 @@ impl AesCudaRng {
     pub fn init(buf_size: usize) -> Self {
         let n_devices = CudaDevice::count().unwrap() as usize;
         let mut devs = Vec::new();
-        let mut kernels = Vec::new();
+        let mut rng_kernels = Vec::new();
         let ptx = compile_ptx(AES_PTX_SRC).unwrap();
 
         for i in 0..n_devices {
@@ -32,7 +32,7 @@ impl AesCudaRng {
             let function = dev.get_func(AES_FUNCTION_NAME, AES_FUNCTION_NAME).unwrap();
 
             devs.push(dev);
-            kernels.push(function);
+            rng_kernels.push(function);
         }
 
         assert!(buf_size % 16 == 0, "buf_size must be a multiple of 16 atm");
@@ -43,7 +43,7 @@ impl AesCudaRng {
         Self {
             buf_size,
             devs,
-            kernels,
+            rng_kernels,
             rng_chunks,
             output_buf: buf,
         }
@@ -67,7 +67,7 @@ impl AesCudaRng {
         let key_bytes = [0u8; 16];
         let key_slice = self.devs[0].htod_sync_copy(&key_bytes[..]).unwrap();
         unsafe {
-            self.kernels[0]
+            self.rng_kernels[0]
                 .clone()
                 .launch(
                     cfg,

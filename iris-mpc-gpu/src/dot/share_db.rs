@@ -118,7 +118,7 @@ pub struct ShareDB {
     is_remote:             bool,
     query_length:          usize,
     device_manager:        Arc<DeviceManager>,
-    kernels:               Vec<CudaFunction>,
+    matmul_kernels:        Vec<CudaFunction>,
     xor_assign_u8_kernels: Vec<CudaFunction>,
     rngs:                  Vec<(ChaChaCudaRng, ChaChaCudaRng)>,
     comms:                 Vec<Arc<NcclComm>>,
@@ -144,7 +144,7 @@ impl ShareDB {
         let n_devices = device_manager.device_count();
         let ptx = compile_ptx(PTX_SRC).unwrap();
 
-        let mut kernels = Vec::new();
+        let mut matmul_kernels = Vec::new();
 
         for i in 0..n_devices {
             let dev = device_manager.device(i);
@@ -154,7 +154,7 @@ impl ShareDB {
                 .get_func(REDUCE_FUNCTION_NAME, REDUCE_FUNCTION_NAME)
                 .unwrap();
 
-            kernels.push(function);
+            matmul_kernels.push(function);
         }
 
         let xor_assign_u8_kernels = (0..n_devices)
@@ -216,7 +216,7 @@ impl ShareDB {
             peer_id,
             query_length,
             device_manager,
-            kernels,
+            matmul_kernels,
             xor_assign_u8_kernels,
             rngs,
             is_remote: !comms.is_empty(),
@@ -537,7 +537,7 @@ impl ShareDB {
             };
 
             unsafe {
-                self.kernels[idx]
+                self.matmul_kernels[idx]
                     .clone()
                     .launch_on_stream(
                         &streams[idx],
