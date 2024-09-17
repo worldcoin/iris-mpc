@@ -437,7 +437,7 @@ async fn main() -> eyre::Result<()> {
                 };
 
                 let request_message = UniquenessRequest {
-                    batch_size: None,
+                    batch_size: Some(1),
                     signup_id: request_id.to_string(),
                     s3_presigned_url: presigned_url,
                     iris_shares_file_hashes,
@@ -519,7 +519,7 @@ async fn main() -> eyre::Result<()> {
         };
 
         let request_message = UniquenessRequest {
-            batch_size: Some(n_deletion_messages),
+            batch_size: Some(1),
             signup_id: request_id.to_string(),
             s3_presigned_url: presigned_url,
             iris_shares_file_hashes,
