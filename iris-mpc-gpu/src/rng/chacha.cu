@@ -151,6 +151,7 @@ extern "C" __global__ void chacha12(uint32_t *d_ciphertext, uint32_t *d_state,
   uint32_t *thread_state = &buffer[16 + threadIdx.x * 16];
 
   // Copy back into global memory
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
   uint32_t *stream_ptr = &d_ciphertext[idx * 16];
   for (int i = 0; i < 16; i++) {
     if (idx * 16 + i < len) {
@@ -172,6 +173,7 @@ extern "C" __global__ void chacha12_xor(uint32_t *d_ciphertext,
   uint32_t *thread_state = &buffer[16 + threadIdx.x * 16];
 
   // Copy back into global memory via xor
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
   uint32_t *stream_ptr = &d_ciphertext[idx * 16];
   for (int i = 0; i < 16; i++) {
     if (idx * 16 + i < len) {
