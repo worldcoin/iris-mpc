@@ -540,8 +540,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let store_len = store.count_irises().await?;
 
-    // Seed the persistent storage with random shares if configured.
-    if store_len < config.init_db_size {
+    // Seed the persistent storage with random shares if configured and db is still
+    // empty.
+    if store_len == 0 && config.init_db_size > 0 {
         tracing::info!("Initialize persistent iris db with randomly generated shares");
         store
             .init_db_with_random_shares(
@@ -555,6 +556,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     // Fetch again in case we've just initialized the DB
     let store_len = store.count_irises().await?;
+
+    if store_len > MAX_DB_SIZE {
+        tracing::error!("Database size exceeds maximum allowed size: {}", store_len);
+        eyre::bail!("Database size exceeds maximum allowed size: {}", store_len);
+    }
 
     let my_state = SyncState {
         db_len:              store_len as u64,

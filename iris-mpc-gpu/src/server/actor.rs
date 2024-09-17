@@ -96,6 +96,7 @@ pub struct ServerActor {
     current_db_sizes:       Vec<usize>,
     query_db_size:          Vec<usize>,
     max_batch_size:         usize,
+    max_db_size:            usize,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -330,6 +331,7 @@ impl ServerActor {
             batch_match_list_left,
             batch_match_list_right,
             max_batch_size,
+            max_db_size,
         })
     }
 
@@ -768,6 +770,19 @@ impl ServerActor {
 
         // Write back to in-memory db
         let previous_total_db_size = self.current_db_sizes.iter().sum::<usize>();
+        let n_insertions = insertion_list.iter().map(|x| x.len()).sum::<usize>();
+
+        // Check if we actually have space left to write the new entries
+        if previous_total_db_size + n_insertions > self.max_db_size {
+            tracing::error!(
+                "Cannot write new entries, since DB size would be exceeded, current: {}, batch \
+                 insertions: {}, max: {}",
+                previous_total_db_size,
+                n_insertions,
+                self.max_db_size
+            );
+            eyre::bail!("DB size exceeded");
+        }
 
         record_stream_time!(
             &self.device_manager,
@@ -795,7 +810,6 @@ impl ServerActor {
                         self.current_db_sizes[i] += 1;
                     }
 
-                    // DEBUG
                     tracing::debug!(
                         "Updating DB size on device {}: {:?}",
                         i,
