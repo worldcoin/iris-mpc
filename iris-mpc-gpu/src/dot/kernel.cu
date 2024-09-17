@@ -4,17 +4,9 @@
 #define U8 unsigned char
 #define MAX_MATCHES_LEN 256
 
-__device__ bool check_threads(size_t n)
-{
-    size_t threads = device::get_attribute(
-        device, sys::CUdevice_attribute_enum::CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X);
-    return n <= threads;
-}
-
 extern "C" __global__ void xor_assign_u8(U8 *lhs, U8 *rhs, size_t n)
 {
     size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-    assert(check_threads(n));
     if (i < n)
     {
         lhs[i] ^= rhs[i];
@@ -24,7 +16,6 @@ extern "C" __global__ void xor_assign_u8(U8 *lhs, U8 *rhs, size_t n)
 extern "C" __global__ void matmul_correct_and_reduce(int *c, unsigned short *output, int *a0Sums, int *a1Sums, int *b0Sums, int *b1Sums, size_t dbLength, size_t numElements, size_t offset, unsigned short multiplier, unsigned short *rngMasks0, unsigned short *rngMasks1)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    assert(check_threads(numElements));
     if (idx < numElements)
     {
         unsigned int queryIdx = idx / dbLength;
@@ -39,7 +30,6 @@ extern "C" __global__ void matmul_correct_and_reduce(int *c, unsigned short *out
 extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t chunkLength, size_t queryLength, size_t offset, size_t numElements, size_t realChunkLen, size_t totalDbLen)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    assert(check_threads(numElements));
     if (idx < numElements)
     {
         unsigned long long result = result1[idx] ^ result2[idx] ^ result3[idx];
@@ -64,7 +54,6 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
 extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *matchCounter, unsigned int *allMatches)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    assert(check_threads(numElements));
     if (idx < numElements)
     {
         for (int i = 0; i < 64; i++)
@@ -93,7 +82,6 @@ extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, 
 extern "C" __global__ void mergeBatchResults(unsigned long long *matchResultsSelfLeft, unsigned long long *matchResultsSelfRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *__matchCounter, unsigned int *__allMatches)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    assert(check_threads(numElements));
     if (idx < numElements)
     {
         for (int i = 0; i < 64; i++)
