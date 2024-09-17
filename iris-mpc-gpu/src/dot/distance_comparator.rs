@@ -100,6 +100,11 @@ impl DistanceComparator {
         streams: &[CudaStream],
     ) {
         for i in 0..self.device_manager.device_count() {
+            // We need to skip those during the dot phase, so we skip them here as well
+            // matches_bitmap is by default filled with zeros (no matches)
+            if db_sizes[i] == 0 {
+                continue;
+            }
             let num_elements = (db_sizes[i] * self.query_length).div_ceil(64);
             let threads_per_block = 256;
             let blocks_per_grid = num_elements.div_ceil(threads_per_block);

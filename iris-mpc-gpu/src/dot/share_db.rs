@@ -459,6 +459,10 @@ impl ShareDB {
         blass: &[CudaBlas],
     ) {
         for idx in 0..self.device_manager.device_count() {
+            // Skip empty chunks, otherwise this leads to a CUBLAS error
+            if chunk_sizes[idx] == 0 {
+                continue;
+            }
             self.device_manager.device(idx).bind_to_thread().unwrap();
             let query0 = &queries.limb_0[idx];
             let query1 = &queries.limb_1[idx];
