@@ -177,10 +177,10 @@ mod lift_test {
         // TODO
         let mut rng = StdRng::seed_from_u64(42);
 
-        let party_id: usize = env::var("PARTY_ID")
-            .expect("PARTY_ID environment variable not set")
+        let party_id: usize = env::var("SMPC__PARTY_ID")
+            .expect("SMPC__PARTY_ID environment variable not set")
             .parse()
-            .expect("PARTY_ID must be a valid usize");
+            .expect("SMPC__PARTY_ID must be a valid usize");
         let n_devices = CudaDevice::count()? as usize;
 
         // Get inputs
