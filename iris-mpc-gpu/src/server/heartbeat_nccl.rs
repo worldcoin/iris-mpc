@@ -7,7 +7,7 @@ use tokio::{
     task::{spawn_blocking, JoinHandle},
     time::timeout,
 };
-const HEARBEAT_INTERVAL: Duration = Duration::from_secs(5);
+const HEARBEAT_INTERVAL: Duration = Duration::from_secs(60);
 
 pub async fn start_heartbeat(
     party_id: usize,
