@@ -86,6 +86,17 @@ impl DistanceComparator {
         }
     }
 
+    fn check_max_grid_size(&self, size: usize, dev_idx: usize) {
+        let max_grid_dim_x = unsafe {
+            cudarc::driver::result::device::get_attribute(
+                *self.device_manager.devices()[dev_idx].cu_device(),
+                cudarc::driver::sys::CUdevice_attribute_enum::CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X,
+            )
+        }
+        .expect("Fetching CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X should work");
+        assert!(size <= max_grid_dim_x as usize);
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn open_results(
         &self,
@@ -115,6 +126,9 @@ impl DistanceComparator {
                 shared_mem_bytes: 0,
             };
             self.device_manager.device(i).bind_to_thread().unwrap();
+
+            // Check if kernel can be launched
+            self.check_max_grid_size(num_elements, i);
 
             unsafe {
                 self.open_kernels[i]
@@ -196,6 +210,10 @@ impl DistanceComparator {
                 grid_dim:         (blocks_per_grid as u32, 1, 1),
                 shared_mem_bytes: 0,
             };
+
+            // Check if kernel can be launched
+            self.check_max_grid_size(num_elements, i);
+
             unsafe {
                 kernels[i]
                     .clone()

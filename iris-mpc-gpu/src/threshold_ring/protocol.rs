@@ -348,6 +348,17 @@ pub struct Circuits {
 impl Circuits {
     const BITS: usize = SHARERING_BITSIZE + B_BITS;
 
+    fn check_max_grid_size(&self, size: usize, dev_idx: usize) {
+        let max_grid_dim_x = unsafe {
+            cudarc::driver::result::device::get_attribute(
+                *self.devs[dev_idx].cu_device(),
+                cudarc::driver::sys::CUdevice_attribute_enum::CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X,
+            )
+        }
+        .expect("Fetching CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X should work");
+        assert!(size <= max_grid_dim_x as usize);
+    }
+
     pub fn synchronize_all(&self) {
         for dev in self.devs.iter() {
             dev.synchronize().unwrap();
@@ -522,6 +533,9 @@ impl Circuits {
         idx: usize,
         streams: &[CudaStream],
     ) {
+        // Check if kernel can be launched
+        self.check_max_grid_size(self.chunk_size * bits, idx);
+
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
         let size = (self.chunk_size * bits + 7) / 8;
@@ -561,6 +575,9 @@ impl Circuits {
         idx: usize,
         streams: &[CudaStream],
     ) {
+        // Check if kernel can be launched
+        self.check_max_grid_size(src.len(), idx);
+
         assert_eq!(src.len(), des.len());
         let cfg = Self::launch_config_from_elements_and_threads(
             src.len() as u32,
@@ -588,6 +605,9 @@ impl Circuits {
         idx: usize,
         streams: &[CudaStream],
     ) {
+        // Check if kernel can be launched
+        self.check_max_grid_size(self.chunk_size, idx);
+
         let cfg = Self::launch_config_from_elements_and_threads(
             self.chunk_size as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
@@ -619,6 +639,9 @@ impl Circuits {
         idx: usize,
         streams: &[CudaStream],
     ) {
+        // Check if kernel can be launched
+        self.check_max_grid_size(x1.len(), idx);
+
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
         let size = (x1.len() + 7) / 8;
@@ -865,6 +888,9 @@ impl Circuits {
         size: usize,
         streams: &[CudaStream],
     ) {
+        // Check if kernel can be launched
+        self.check_max_grid_size(size, idx);
+
         let cfg = Self::launch_config_from_elements_and_threads(
             size as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
@@ -887,6 +913,9 @@ impl Circuits {
         size: usize,
         streams: &[CudaStream],
     ) {
+        // Check if kernel can be launched
+        self.check_max_grid_size(size, idx);
+
         let cfg = Self::launch_config_from_elements_and_threads(
             size as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
@@ -909,6 +938,9 @@ impl Circuits {
         size: usize,
         streams: &[CudaStream],
     ) {
+        // Check if kernel can be launched
+        self.check_max_grid_size(size, idx);
+
         let cfg = Self::launch_config_from_elements_and_threads(
             size as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
@@ -941,6 +973,9 @@ impl Circuits {
         idx: usize,
         streams: &[CudaStream],
     ) {
+        // Check if kernel can be launched
+        self.check_max_grid_size(self.chunk_size * bits, idx);
+
         let cfg = Self::launch_config_from_elements_and_threads(
             self.chunk_size as u32 * bits as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
@@ -967,6 +1002,9 @@ impl Circuits {
         idx: usize,
         streams: &[CudaStream],
     ) {
+        // Check if kernel can be launched
+        self.check_max_grid_size(self.chunk_size * bits, idx);
+
         let cfg = Self::launch_config_from_elements_and_threads(
             self.chunk_size as u32 * bits as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
@@ -1033,6 +1071,8 @@ impl Circuits {
                 unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
             let rand_wa2 = self.fill_my_rng_into_u16(&mut rand_wa2_alloc, idx, streams);
 
+            // Check if kernel can be launched
+            self.check_max_grid_size(self.chunk_size * 64 * 2, idx);
             let cfg = Self::launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64 * 2,
                 DEFAULT_LAUNCH_CONFIG_THREADS,
@@ -1141,6 +1181,8 @@ impl Circuits {
                 self.chacha1_decrypt_u16(m1, idx, streams);
             }
 
+            // Check if kernel can be launched
+            self.check_max_grid_size(self.chunk_size * 64 * 2, idx);
             let cfg = Self::launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64 * 2,
                 DEFAULT_LAUNCH_CONFIG_THREADS,
@@ -1212,6 +1254,8 @@ impl Circuits {
                 unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
             let rand_wb2 = self.fill_their_rng_into_u16(&mut rand_wb2_alloc, idx, streams);
 
+            // Check if kernel can be launched
+            self.check_max_grid_size(self.chunk_size * 64 * 2, idx);
             let cfg = Self::launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64 * 2,
                 DEFAULT_LAUNCH_CONFIG_THREADS,
@@ -1295,6 +1339,9 @@ impl Circuits {
         );
 
         for (idx, (inp, outp)) in izip!(inp, outp).enumerate() {
+            // Check if kernel can be launched
+            self.check_max_grid_size(self.chunk_size * 2, idx);
+
             unsafe {
                 self.kernels[idx]
                     .transpose_16x64
@@ -1332,6 +1379,9 @@ impl Circuits {
         );
 
         for (idx, (inp, outp)) in izip!(inp, outp).enumerate() {
+            // Check if kernel can be launched
+            self.check_max_grid_size(self.chunk_size * 2, idx);
+
             unsafe {
                 self.kernels[idx]
                     .transpose_32x64
@@ -1368,6 +1418,9 @@ impl Circuits {
 
         // K = 16 is hardcoded in the kernel
         for (idx, (x1, x2, x3)) in izip!(inout1, out2, out3).enumerate() {
+            // Check if kernel can be launched
+            self.check_max_grid_size(self.chunk_size * 64, idx);
+
             unsafe {
                 self.kernels[idx]
                     .split
@@ -1407,6 +1460,9 @@ impl Circuits {
 
         // K = 16 is hardcoded in the kernel
         for (idx, (inp, lifted, x1, x2, x3)) in izip!(inp, lifted, inout1, out2, out3).enumerate() {
+            // Check if kernel can be launched
+            self.check_max_grid_size(self.chunk_size * 64, idx);
+
             unsafe {
                 self.kernels[idx]
                     .lift_split
@@ -1446,6 +1502,9 @@ impl Circuits {
         assert_eq!(self.n_devices, code.len());
 
         for (idx, (m, mc, c)) in izip!(mask_lifted, mask_correction, code).enumerate() {
+            // Check if kernel can be launched
+            self.check_max_grid_size(self.chunk_size * 64, idx);
+
             let cfg = Self::launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64,
                 DEFAULT_LAUNCH_CONFIG_THREADS,

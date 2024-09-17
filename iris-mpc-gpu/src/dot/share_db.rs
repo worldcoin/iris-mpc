@@ -118,7 +118,7 @@ pub struct ShareDB {
     is_remote:             bool,
     query_length:          usize,
     device_manager:        Arc<DeviceManager>,
-    matmul_kernels:        Vec<CudaFunction>,
+    kernels:               Vec<CudaFunction>,
     xor_assign_u8_kernels: Vec<CudaFunction>,
     rngs:                  Vec<(ChaChaCudaRng, ChaChaCudaRng)>,
     comms:                 Vec<Arc<NcclComm>>,
@@ -144,7 +144,7 @@ impl ShareDB {
         let n_devices = device_manager.device_count();
         let ptx = compile_ptx(PTX_SRC).unwrap();
 
-        let mut matmul_kernels = Vec::new();
+        let mut kernels = Vec::new();
 
         for i in 0..n_devices {
             let dev = device_manager.device(i);
@@ -154,7 +154,7 @@ impl ShareDB {
                 .get_func(REDUCE_FUNCTION_NAME, REDUCE_FUNCTION_NAME)
                 .unwrap();
 
-            matmul_kernels.push(function);
+            kernels.push(function);
         }
 
         let xor_assign_u8_kernels = (0..n_devices)
@@ -216,7 +216,7 @@ impl ShareDB {
             peer_id,
             query_length,
             device_manager,
-            matmul_kernels,
+            kernels,
             xor_assign_u8_kernels,
             rngs,
             is_remote: !comms.is_empty(),
@@ -227,6 +227,17 @@ impl ShareDB {
             results_peer,
             code_length,
         }
+    }
+
+    fn check_max_grid_size(&self, size: usize, dev_idx: usize) {
+        let max_grid_dim_x = unsafe {
+            cudarc::driver::result::device::get_attribute(
+                *self.device_manager.devices()[dev_idx].cu_device(),
+                cudarc::driver::sys::CUdevice_attribute_enum::CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X,
+            )
+        }
+        .expect("Fetching CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X should work");
+        assert!(size <= max_grid_dim_x as usize);
     }
 
     pub fn alloc_db(&self, max_db_length: usize) -> SlicedProcessedDatabase {
@@ -536,8 +547,11 @@ impl ShareDB {
                 shared_mem_bytes: 0,
             };
 
+            // Check if kernel can be launched
+            self.check_max_grid_size(num_elements, idx);
+
             unsafe {
-                self.matmul_kernels[idx]
+                self.kernels[idx]
                     .clone()
                     .launch_on_stream(
                         &streams[idx],
@@ -581,6 +595,9 @@ impl ShareDB {
         size: usize,
         streams: &[CudaStream],
     ) {
+        // Check if kernel can be launched
+        self.check_max_grid_size(size, idx);
+
         let threads_per_block = 256;
         let blocks_per_grid = size.div_ceil(threads_per_block);
         let cfg = LaunchConfig {
@@ -629,42 +646,42 @@ impl ShareDB {
         rand_trans
     }
 
-    fn chacha_encrypt_result(
+    fn otp_encrypt_rng_result(
         &mut self,
         len: usize,
         idx: usize,
         streams: &[CudaStream],
     ) -> CudaSlice<u32> {
         assert_eq!(len & 3, 0);
-        let mut keystream = unsafe {
+        let mut rand = unsafe {
             self.device_manager
                 .device(idx)
                 .alloc::<u32>(len >> 2)
                 .unwrap()
         };
-        let mut keystream_u8 = self.fill_my_rng_into_u8(&mut keystream, idx, streams);
+        let mut rand_u8 = self.fill_my_rng_into_u8(&mut rand, idx, streams);
         self.single_xor_assign_u8(
-            &mut keystream_u8,
+            &mut rand_u8,
             &self.results[idx].slice(..),
             idx,
             len,
             streams,
         );
-        keystream
+        rand
     }
 
-    fn chacha_decrypt_result(&mut self, len: usize, idx: usize, streams: &[CudaStream]) {
+    fn otp_decrypt_rng_result(&mut self, len: usize, idx: usize, streams: &[CudaStream]) {
         assert_eq!(len & 3, 0);
-        let mut keystream = unsafe {
+        let mut rand = unsafe {
             self.device_manager
                 .device(idx)
                 .alloc::<u32>(len >> 2)
                 .unwrap()
         };
-        let keystream_u8 = self.fill_their_rng_into_u8(&mut keystream, idx, streams);
+        let rand_u8 = self.fill_their_rng_into_u8(&mut rand, idx, streams);
         self.single_xor_assign_u8(
             &mut self.results_peer[idx].slice(..),
-            &keystream_u8,
+            &rand_u8,
             idx,
             len,
             streams,
@@ -678,7 +695,7 @@ impl ShareDB {
         let send_bufs = (0..self.device_manager.device_count())
             .map(|idx| {
                 let len = db_sizes[idx] * self.query_length * 2;
-                self.chacha_encrypt_result(len, idx, streams)
+                self.otp_encrypt_rng_result(len, idx, streams)
             })
             .collect_vec();
 
@@ -701,7 +718,7 @@ impl ShareDB {
         nccl::group_end().unwrap();
         for idx in 0..self.device_manager.device_count() {
             let len = db_sizes[idx] * self.query_length * 2;
-            self.chacha_decrypt_result(len, idx, streams);
+            self.otp_decrypt_rng_result(len, idx, streams);
         }
     }
 
