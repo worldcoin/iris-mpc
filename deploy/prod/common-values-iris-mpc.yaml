@@ -1,0 +1,63 @@
+image: "ghcr.io/worldcoin/iris-mpc:v0.6.7"
+
+environment: prod
+replicaCount: 1
+
+strategy:
+  type: Recreate
+
+datadog:
+  enabled: true
+
+ports:
+  - containerPort: 3000
+    name: health
+    protocol: TCP
+
+livenessProbe:
+  initialDelaySeconds: 300
+  httpGet:
+    path: /health
+    port: health
+
+readinessProbe:
+  initialDelaySeconds: 300
+  periodSeconds: 30
+  failureThreshold: 10
+  httpGet:
+    path: /health
+    port: health
+
+resources:
+  limits:
+    cpu: 31
+    memory: 120Gi
+    nvidia.com/gpu: 1
+    vpc.amazonaws.com/efa: 1
+  requests:
+    cpu: 30
+    memory: 110Gi
+    nvidia.com/gpu: 1
+    vpc.amazonaws.com/efa: 1
+
+imagePullSecrets:
+  - name: github-secret
+
+nodeSelector:
+  kubernetes.io/arch: amd64
+
+hostNetwork: true
+
+podSecurityContext:
+  runAsUser: 65534
+  runAsGroup: 65534
+
+tolerations:
+  - key: "dedicated"
+    operator: "Equal"
+    value: "gpuGroup"
+    effect: "NoSchedule"
+
+keelPolling:
+  # -- Specifies whether keel should poll for container updates
+  enabled: true

@@ -1,0 +1,83 @@
+image: "ghcr.io/worldcoin/iris-mpc:v0.6.2"
+
+environment: prod
+replicaCount: 1
+
+strategy:
+  type: Recreate
+
+datadog:
+  enabled: true
+
+ports:
+  - containerPort: 8000
+    name: http
+    protocol: TCP
+  - containerPort: 3000
+    name: health
+    protocol: TCP
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: health
+
+readinessProbe:
+  periodSeconds: 30
+  failureThreshold: 10
+  httpGet:
+    path: /health
+    port: health
+
+resources:
+  limits:
+    cpu: 4
+    memory: 1Gi
+  requests:
+    cpu: 4
+    memory: 1Gi
+
+imagePullSecrets:
+  - name: github-secret
+
+nodeSelector:
+  kubernetes.io/arch: amd64
+
+hostNetwork: true
+
+podSecurityContext:
+  runAsUser: 65534
+  runAsGroup: 65534
+
+serviceAccount:
+  create: true
+
+command: [ "/bin/upgrade-server" ]
+
+env:
+  - name: SMPC__DATABASE__URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_URL
+        name: application
+  - name: ENVIRONMENT
+    value: prod
+
+keelPolling:
+  # -- Specifies whether keel should poll for container updates
+  enabled: true
+
+ingress:
+  enabled: true
+  ingressClassName: traefik-internal
+  hosts:
+    - not-upgrade-right.1.prod.smpcv2.worldcoin.dev
+
+ingressRouteTCP:
+  enabled: true
+  entryPoints:
+    - websecure
+  service:
+    - name: upgrade-server-right
+      port: 80
+  tls: {}

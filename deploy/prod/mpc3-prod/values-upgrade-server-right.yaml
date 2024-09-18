@@ -1,0 +1,11 @@
+args:
+  - "--bind-addr"
+  - "0.0.0.0:8000"
+  - "--db-url"
+  - "$(SMPC__DATABASE__URL)"
+  - "--party-id"
+  - "2"
+  - "--eye"
+  - "right"
+  - "--environment"
+  - "$(ENVIRONMENT)"
