@@ -2,8 +2,7 @@ use clap::Parser;
 use iris_mpc_common::id::PartyID;
 use std::{
     fmt::{self, Display, Formatter},
-    io,
-    net::{SocketAddr, ToSocketAddrs},
+    net::SocketAddr,
     str::FromStr,
 };
 
