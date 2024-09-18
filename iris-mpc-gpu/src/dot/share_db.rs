@@ -459,16 +459,20 @@ impl ShareDB {
         blass: &[CudaBlas],
     ) {
         for idx in 0..self.device_manager.device_count() {
+            if chunk_sizes[idx] == 0 {
+                continue;
+            }
+
             self.device_manager.device(idx).bind_to_thread().unwrap();
             let query0 = &queries.limb_0[idx];
             let query1 = &queries.limb_1[idx];
 
             // Prepare randomness to mask results
-            // if self.is_remote {
-            //     let len: usize = (chunk_sizes[idx] * self.query_length).div_ceil(64) *
-            // 64;     self.rngs[idx].0.fill_rng_no_host_copy(len,
-            // &streams[idx]);     self.rngs[idx].1.fill_rng_no_host_copy(len,
-            // &streams[idx]); }
+            if self.is_remote {
+                let len: usize = (chunk_sizes[idx] * self.query_length).div_ceil(64) * 64;
+                self.rngs[idx].0.fill_rng_no_host_copy(len, &streams[idx]);
+                self.rngs[idx].1.fill_rng_no_host_copy(len, &streams[idx]);
+            }
 
             for (i, d) in [db.limb_0[idx], db.limb_1[idx]].into_iter().enumerate() {
                 for (j, q) in [query0, query1].iter().enumerate() {
@@ -504,6 +508,10 @@ impl ShareDB {
         multiplier: u16,
     ) {
         for idx in 0..self.device_manager.device_count() {
+            if chunk_sizes[idx] == 0 {
+                continue;
+            }
+
             assert!(
                 self.rngs[idx].0.cuda_slice().is_some() && self.rngs[idx].1.cuda_slice().is_some()
             );
@@ -659,29 +667,38 @@ impl ShareDB {
         let send_bufs = (0..self.device_manager.device_count())
             .map(|idx| {
                 let len = db_sizes[idx] * self.query_length * 2;
-                self.otp_encrypt_rng_result(len, idx, streams)
+                if len == 0 {
+                    return None;
+                }
+                Some(self.otp_encrypt_rng_result(len, idx, streams))
             })
             .collect_vec();
 
-        let send = &send_bufs;
-
         nccl::group_start().unwrap();
         for idx in 0..self.device_manager.device_count() {
-            let len = db_sizes[idx] * self.query_length * 2;
-            let send_len = len >> 2;
-            let send_view = send[idx].slice(..send_len);
-            self.comms[idx]
-                .send_view(&send_view, next_peer, &streams[idx])
-                .unwrap();
+            match &send_bufs[idx] {
+                Some(buf) => {
+                    let len = db_sizes[idx] * self.query_length * 2;
+                    let send_len = len >> 2;
+                    let send_view = buf.slice(..send_len);
+                    self.comms[idx]
+                        .send_view(&send_view, next_peer, &streams[idx])
+                        .unwrap();
 
-            let mut recv_view = self.results_peer[idx].slice(..len);
-            self.comms[idx]
-                .receive_view(&mut recv_view, prev_peer, &streams[idx])
-                .unwrap();
+                    let mut recv_view = self.results_peer[idx].slice(..len);
+                    self.comms[idx]
+                        .receive_view(&mut recv_view, prev_peer, &streams[idx])
+                        .unwrap();
+                }
+                None => {}
+            }
         }
         nccl::group_end().unwrap();
         for idx in 0..self.device_manager.device_count() {
             let len = db_sizes[idx] * self.query_length * 2;
+            if len == 0 {
+                continue;
+            }
             self.otp_decrypt_rng_result(len, idx, streams);
         }
     }
