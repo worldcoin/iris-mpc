@@ -1,5 +1,6 @@
 use crate::{
     helpers::{
+        check_max_grid_size,
         comm::NcclComm,
         device_manager::DeviceManager,
         query_processor::{
@@ -227,17 +228,6 @@ impl ShareDB {
             results_peer,
             code_length,
         }
-    }
-
-    fn check_max_grid_size(&self, size: usize, dev_idx: usize) {
-        let max_grid_dim_x = unsafe {
-            cudarc::driver::result::device::get_attribute(
-                *self.device_manager.devices()[dev_idx].cu_device(),
-                cudarc::driver::sys::CUdevice_attribute_enum::CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X,
-            )
-        }
-        .expect("Fetching CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X should work");
-        assert!(size <= max_grid_dim_x as usize);
     }
 
     pub fn alloc_db(&self, max_db_length: usize) -> SlicedProcessedDatabase {
@@ -548,7 +538,7 @@ impl ShareDB {
             };
 
             // Check if kernel can be launched
-            self.check_max_grid_size(num_elements, idx);
+            check_max_grid_size(&self.device_manager.devices()[idx], num_elements);
 
             unsafe {
                 self.kernels[idx]
@@ -596,7 +586,7 @@ impl ShareDB {
         streams: &[CudaStream],
     ) {
         // Check if kernel can be launched
-        self.check_max_grid_size(size, idx);
+        check_max_grid_size(&self.device_manager.devices()[idx], size);
 
         let threads_per_block = 256;
         let blocks_per_grid = size.div_ceil(threads_per_block);

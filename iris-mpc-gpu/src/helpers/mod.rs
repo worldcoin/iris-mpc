@@ -11,6 +11,17 @@ pub mod device_manager;
 pub mod id_wrapper;
 pub mod query_processor;
 
+pub fn check_max_grid_size(device: &Arc<CudaDevice>, size: usize) {
+    let max_grid_dim_x = unsafe {
+        cudarc::driver::result::device::get_attribute(
+            *device.cu_device(),
+            cudarc::driver::sys::CUdevice_attribute_enum::CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X,
+        )
+    }
+    .expect("Fetching CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X should work");
+    assert!(size <= max_grid_dim_x as usize);
+}
+
 pub fn device_ptrs<T>(slice: &[CudaSlice<T>]) -> Vec<CUdeviceptr> {
     slice.iter().map(|s| *s.device_ptr()).collect()
 }
