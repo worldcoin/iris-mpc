@@ -662,7 +662,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
                     actor.preprocess_db();
 
-                    tracing::info!("Loaded {} records from db into memory", record_counter);
+                    tracing::info!(
+                        "Loaded {} records from db into memory [DB sizes: {:?}]",
+                        record_counter,
+                        actor.current_db_sizes()
+                    );
 
                     eyre::Ok(())
                 })?;

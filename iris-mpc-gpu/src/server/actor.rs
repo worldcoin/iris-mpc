@@ -346,6 +346,10 @@ impl ServerActor {
         tracing::info!("Server Actor finished due to all job queues being closed");
     }
 
+    pub fn current_db_sizes(&self) -> Vec<usize> {
+        self.current_db_sizes.clone()
+    }
+
     pub fn load_full_db(
         &mut self,
         left: &IrisCodeDbSlice,
