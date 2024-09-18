@@ -907,7 +907,6 @@ impl ServerActor {
                 &mut self.batch_masks_engine,
                 &self.query_db_size,
                 0,
-                batch_streams,
                 batch_cublas,
             );
 
@@ -1037,7 +1036,6 @@ impl ServerActor {
                     mask_db_slices,
                     &dot_chunk_size,
                     offset,
-                    request_streams,
                     request_cublas_handles,
                 );
             });

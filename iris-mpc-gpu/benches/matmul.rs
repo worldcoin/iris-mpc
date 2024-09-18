@@ -55,7 +55,6 @@ fn bench_memcpy(c: &mut Criterion) {
                 &db_slices.code_gr,
                 &db_sizes,
                 0,
-                &streams,
                 &blass,
             );
             engine.dot_reduce(&query_sums, &db_slices.code_sums_gr, &db_sizes, 0, &streams);
