@@ -71,17 +71,7 @@ async fn main() -> eyre::Result<()> {
 
     // read the trusted cert
     let mut root_cert_store = rustls::RootCertStore::empty();
-    for trusted_cert in &args.trusted_cert {
-        let cert_pem = tokio::fs::read(trusted_cert).await?;
-        if !trusted_cert.ends_with(".pem") {
-            tracing::warn!("Expected trusted_chain file to end in \".pem\"");
-        }
-        let cert_chain =
-            rustls_pemfile::certs(&mut &cert_pem[..]).collect::<Result<Vec<_>, _>>()?;
-        for cert in cert_chain {
-            root_cert_store.add(cert)?;
-        }
-    }
+    root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let client_config = Arc::new(
         ClientConfig::builder()
             .with_root_certificates(root_cert_store)

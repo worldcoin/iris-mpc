@@ -32,12 +32,6 @@ pub struct UpgradeServerConfig {
     pub bind_addr: SocketAddr,
 
     #[clap(long)]
-    pub key: PathBuf,
-
-    #[clap(long)]
-    pub cert_chain: PathBuf,
-
-    #[clap(long)]
     pub db_url: String,
 
     #[clap(long)]
@@ -54,8 +48,6 @@ impl std::fmt::Debug for UpgradeServerConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("UpgradeServerConfig")
             .field("bind_addr", &self.bind_addr)
-            .field("key", &self.key)
-            .field("cert", &self.cert_chain)
             .field("db_url", &"<redacted>")
             .field("party_id", &self.party_id)
             .field("threads", &self.threads)
@@ -74,10 +66,7 @@ pub struct UpgradeClientConfig {
 
     #[clap(long, default_value = "localhost:8002")]
     pub server3: String,
-
-    #[clap(long)]
-    pub trusted_cert: Vec<PathBuf>,
-
+    
     #[clap(long)]
     pub db_start: u64,
 
@@ -106,7 +95,6 @@ impl std::fmt::Debug for UpgradeClientConfig {
             .field("server1", &self.server1)
             .field("server2", &self.server2)
             .field("server3", &self.server3)
-            .field("trusted_cert", &self.trusted_cert)
             .field("shares_db_url", &"<redacted>")
             .field("masks_db_url", &"<redacted>")
             .field("db_start", &self.db_start)
