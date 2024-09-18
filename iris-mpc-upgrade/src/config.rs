@@ -2,8 +2,6 @@ use clap::Parser;
 use iris_mpc_common::id::PartyID;
 use std::{
     fmt::{self, Formatter},
-    net::SocketAddr,
-    path::PathBuf,
     str::FromStr,
 };
 
@@ -66,7 +64,7 @@ pub struct UpgradeClientConfig {
 
     #[clap(long, default_value = "localhost:8002")]
     pub server3: String,
-    
+
     #[clap(long)]
     pub db_start: u64,
 
