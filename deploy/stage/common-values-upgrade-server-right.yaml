@@ -67,6 +67,9 @@ keelPolling:
   # -- Specifies whether keel should poll for container updates
   enabled: true
 
+service:
+  enabled: false
+
 ingress:
   enabled: true
   ingressClassName: traefik-internal
