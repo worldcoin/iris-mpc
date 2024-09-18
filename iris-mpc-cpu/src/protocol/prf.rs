@@ -4,9 +4,10 @@ use rand::{distributions::Standard, prelude::Distribution, Rng, SeedableRng};
 
 pub type PrfSeed = <AesRng as SeedableRng>::Seed;
 
+#[derive(Clone, Debug)]
 pub struct Prf {
-    my_prf:   AesRng,
-    prev_prf: AesRng,
+    pub my_prf:   AesRng,
+    pub prev_prf: AesRng,
 }
 
 impl Default for Prf {

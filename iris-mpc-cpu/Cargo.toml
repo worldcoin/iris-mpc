@@ -6,7 +6,7 @@ edition = "2021"
 
 
 [dependencies]
-aes-prng = "0.2"
+aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display"}
 async-trait = "~0.1"
 bytes = "1.7"
 bytemuck.workspace = true

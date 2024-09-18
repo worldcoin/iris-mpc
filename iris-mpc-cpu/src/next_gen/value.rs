@@ -1,3 +1,4 @@
+use crate::shares::ring_impl::RingElement;
 use eyre::eyre;
 use serde::{Deserialize, Serialize};
 
@@ -6,6 +7,8 @@ use serde::{Deserialize, Serialize};
 pub enum NetworkValue {
     Ring16(std::num::Wrapping<u16>),
     Ring32(std::num::Wrapping<u32>),
+    RingElement16(RingElement<u16>),
+    PrfKey([u8; 16]),
 }
 
 impl NetworkValue {

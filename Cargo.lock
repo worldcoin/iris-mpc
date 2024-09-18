@@ -40,6 +40,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aes-prng"
+version = "0.2.1"
+source = "git+https://github.com/tf-encrypted/aes-prng.git?branch=dragos/display#ebe79b1173ab6698c69d18dc464294f1893b44bb"
+dependencies = [
+ "aes",
+ "byteorder",
+ "rand",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1939,7 +1949,7 @@ name = "hawk-pack"
 version = "0.1.0"
 source = "git+https://github.com/Inversed-Tech/hawk-pack.git#07b195fd74a5a05a6e0dd39106894ce194f4ebec"
 dependencies = [
- "aes-prng",
+ "aes-prng 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "criterion",
  "futures",
  "rand",
@@ -2438,7 +2448,7 @@ dependencies = [
 name = "iris-mpc-cpu"
 version = "0.1.0"
 dependencies = [
- "aes-prng",
+ "aes-prng 0.2.1 (git+https://github.com/tf-encrypted/aes-prng.git?branch=dragos/display)",
  "async-channel",
  "async-trait",
  "bincode",

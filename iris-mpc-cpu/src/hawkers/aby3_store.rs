@@ -156,6 +156,7 @@ impl VectorStore for Aby3StorePlayer {
             )
             .await
             .unwrap();
+
         // Now need to compute d2*t1 - d1*t2
         tokio::task::block_in_place(move || {
             (*lock)
@@ -344,14 +345,120 @@ impl VectorStore for LocalNetAby3StoreProtocol {
         let d1 = *distance1;
         let d2 = *distance2;
 
+        let network = TestNetwork3p::new();
+        let [net0, net1, net2] = network.get_party_networks();
+        let mut n0 = VecDeque::from([net0]);
+        let mut n1 = VecDeque::from([net1]);
+        let mut n2 = VecDeque::from([net2]);
+
         let p0 = self.player_0.clone();
-        let h0 = tokio::spawn(async move { p0.less_than(&d1, &d2).await });
+        let h0 = tokio::spawn(async move {
+            let mut n0 = TestNetworkEstablisher::from(n0);
+            let net_channel = n0.open_channel().await.unwrap();
+            let mut protocol = IrisWorker::new(net_channel);
+            // run the setup
+            let _ = protocol.setup_prf().await.unwrap();
+
+            let (x1, y1) = (&p0.points[d1.0.val()], &p0.points[d1.1.val()]);
+            let (x2, y2) = (&p0.points[d2.0.val()], &p0.points[d2.1.val()]);
+            let (d1, t1) = protocol
+                .rep3_pairwise_distance(
+                    &x1.data.shares,
+                    &y1.data.shares,
+                    &x1.data.mask,
+                    &y1.data.mask,
+                )
+                .await
+                .unwrap();
+
+            let (d2, t2) = protocol
+                .rep3_pairwise_distance(
+                    &x2.data.shares,
+                    &y2.data.shares,
+                    &x2.data.mask,
+                    &y2.data.mask,
+                )
+                .await
+                .unwrap();
+            tokio::task::block_in_place(move || {
+                protocol
+                    .rep3_lift_and_cross_mul(d1, t1 as u32, d2, t2 as u32)
+                    .unwrap()
+            })
+        });
 
         let p1 = self.player_1.clone();
-        let h1 = tokio::spawn(async move { p1.less_than(&d1, &d2).await });
+        let h1 = tokio::spawn(async move {
+            let mut n1 = TestNetworkEstablisher::from(n1);
+            let net_channel = n1.open_channel().await.unwrap();
+            let mut protocol = IrisWorker::new(net_channel);
+            // run the setup
+            let _ = protocol.setup_prf().await.unwrap();
+
+            let (x1, y1) = (&p1.points[d1.0.val()], &p1.points[d1.1.val()]);
+            let (x2, y2) = (&p1.points[d2.0.val()], &p1.points[d2.1.val()]);
+            let (d1, t1) = protocol
+                .rep3_pairwise_distance(
+                    &x1.data.shares,
+                    &y1.data.shares,
+                    &x1.data.mask,
+                    &y1.data.mask,
+                )
+                .await
+                .unwrap();
+
+            let (d2, t2) = protocol
+                .rep3_pairwise_distance(
+                    &x2.data.shares,
+                    &y2.data.shares,
+                    &x2.data.mask,
+                    &y2.data.mask,
+                )
+                .await
+                .unwrap();
+
+            tokio::task::block_in_place(move || {
+                protocol
+                    .rep3_lift_and_cross_mul(d1, t1 as u32, d2, t2 as u32)
+                    .unwrap()
+            })
+        });
 
         let p2 = self.player_2.clone();
-        let h2 = tokio::spawn(async move { p2.less_than(&d1, &d2).await });
+        let h2 = tokio::spawn(async move {
+            let mut n2 = TestNetworkEstablisher::from(n2);
+            let net_channel = n2.open_channel().await.unwrap();
+            let mut protocol = IrisWorker::new(net_channel);
+            // run the setup
+            let _ = protocol.setup_prf().await.unwrap();
+
+            let (x1, y1) = (&p2.points[d1.0.val()], &p2.points[d1.1.val()]);
+            let (x2, y2) = (&p2.points[d2.0.val()], &p2.points[d2.1.val()]);
+            let (d1, t1) = protocol
+                .rep3_pairwise_distance(
+                    &x1.data.shares,
+                    &y1.data.shares,
+                    &x1.data.mask,
+                    &y1.data.mask,
+                )
+                .await
+                .unwrap();
+
+            let (d2, t2) = protocol
+                .rep3_pairwise_distance(
+                    &x2.data.shares,
+                    &y2.data.shares,
+                    &x2.data.mask,
+                    &y2.data.mask,
+                )
+                .await
+                .unwrap();
+            tokio::task::block_in_place(move || {
+                protocol
+                    .rep3_lift_and_cross_mul(d1, t1 as u32, d2, t2 as u32)
+                    .unwrap()
+            })
+        });
 
         let (r0, r1, r2) = tokio::join!(h0, h1, h2);
         let r0 = r0.unwrap();
