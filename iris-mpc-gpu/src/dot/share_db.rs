@@ -459,10 +459,6 @@ impl ShareDB {
         blass: &[CudaBlas],
     ) {
         for idx in 0..self.device_manager.device_count() {
-            // Skip empty chunks
-            if chunk_sizes[idx] == 0 {
-                continue;
-            }
             self.device_manager.device(idx).bind_to_thread().unwrap();
             let query0 = &queries.limb_0[idx];
             let query1 = &queries.limb_1[idx];
@@ -508,11 +504,6 @@ impl ShareDB {
         multiplier: u16,
     ) {
         for idx in 0..self.device_manager.device_count() {
-            // Skip empty chunks
-            if chunk_sizes[idx] == 0 {
-                continue;
-            }
-
             assert!(
                 self.rngs[idx].0.cuda_slice().is_some() && self.rngs[idx].1.cuda_slice().is_some()
             );
