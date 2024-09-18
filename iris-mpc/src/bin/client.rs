@@ -248,7 +248,7 @@ async fn main() -> eyre::Result<()> {
                     } else {
                         3
                     };
-                    match rng.gen_range(0..options) {
+                    match 0 {
                         0 => {
                             println!("Sending new iris code");
                             thread_expected_results2
