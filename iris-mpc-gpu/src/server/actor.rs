@@ -863,6 +863,13 @@ impl ServerActor {
                 / now.elapsed().as_secs_f64()
                 / 1e6
         );
+
+        tracing::info!(
+            "Old DB size: {}, New DB size: {}",
+            previous_total_db_size,
+            self.current_db_sizes.iter().sum::<usize>()
+        );
+
         Ok(())
     }
 
