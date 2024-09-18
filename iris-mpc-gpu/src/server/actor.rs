@@ -991,8 +991,6 @@ impl ServerActor {
                 .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(1, DB_CHUNK_SIZE))
                 .collect::<Vec<_>>();
 
-            println!("Chunk size: {:?}", chunk_size);
-
             // We need to pad the chunk size to be a multiple of 4, because the underlying
             // `gemm_ex` expects this. We filter out potential "phantom matches"
             // for the padded data in the `open` later.
