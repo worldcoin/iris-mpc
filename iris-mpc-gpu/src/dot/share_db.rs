@@ -115,7 +115,7 @@ pub struct SlicedProcessedDatabase {
 
 pub struct ShareDB {
     peer_id:               usize,
-    is_remote:             bool,
+    _is_remote:            bool,
     query_length:          usize,
     device_manager:        Arc<DeviceManager>,
     kernels:               Vec<CudaFunction>,
@@ -219,7 +219,7 @@ impl ShareDB {
             kernels,
             xor_assign_u8_kernels,
             rngs,
-            is_remote: !comms.is_empty(),
+            _is_remote: !comms.is_empty(),
             comms,
             intermediate_results,
             ones,
@@ -455,7 +455,7 @@ impl ShareDB {
         db: &CudaVec2DSlicerRawPointer,
         chunk_sizes: &[usize],
         offset: usize,
-        streams: &[CudaStream],
+        _streams: &[CudaStream],
         blass: &[CudaBlas],
     ) {
         for idx in 0..self.device_manager.device_count() {
