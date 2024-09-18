@@ -70,21 +70,6 @@ pub fn gemm(
     alpha: i32,
     beta: i32,
 ) {
-    tracing::info!(
-        "gemm: a: {:?}, b: {:?}, c: {:?}, a_offset: {}, b_offset: {}, c_offset: {}, m: {}, n: {}, \
-         k: {}, alpha: {}, beta: {}",
-        a,
-        b,
-        c,
-        a_offset,
-        b_offset,
-        c_offset,
-        m,
-        n,
-        k,
-        alpha,
-        beta
-    );
     // https://docs.nvidia.com/cuda/cublas/#cublasgemmex:
     // "CUBLAS_COMPUTE_32I and CUBLAS_COMPUTE_32I_PEDANTIC compute types are only supported with A, B being 4-byte aligned and lda, ldb being multiples of 4."
     assert!(m % 4 == 0, "m must be a multiple of 4");
