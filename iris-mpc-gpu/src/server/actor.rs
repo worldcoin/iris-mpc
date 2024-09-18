@@ -988,7 +988,7 @@ impl ServerActor {
             let chunk_size = self
                 .current_db_sizes
                 .iter()
-                .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(1, DB_CHUNK_SIZE))
+                .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(4, DB_CHUNK_SIZE))
                 .collect::<Vec<_>>();
 
             // We need to pad the chunk size to be a multiple of 4, because the underlying
