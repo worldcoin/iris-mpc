@@ -78,7 +78,7 @@ struct StoredState {
     request_id: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Store {
     pool: PgPool,
 }
@@ -330,19 +330,23 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         let mut rng = StdRng::seed_from_u64(rng_seed);
 
         if clear_db_before_init {
+            tracing::info!("Cleaning up the db before initializing irises");
             // Cleaning up the db before inserting newly generated irises
             self.rollback(0).await?;
         }
 
-        let mut tx = self.tx().await.unwrap();
+        let mut tx = self.tx().await?;
 
+        tracing::info!(
+            "DB size before initialization: {}",
+            self.count_irises().await?
+        );
         for i in 0..db_size {
             if (i % 1000) == 0 {
                 tracing::info!("Initializing iris db: Generated {} entries", i);
             }
-            let rng_seeds = (0..db_size).map(|_| rng.gen()).collect::<Vec<_>>();
 
-            let mut rng = StdRng::from_seed(rng_seeds[i]);
+            let mut rng = StdRng::from_seed(rng.gen());
             let iris = IrisCode::random_rng(&mut rng);
 
             let share = GaloisRingIrisCodeShare::encode_iris_code(
@@ -368,10 +372,20 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
                 right_mask: &mask.coefs,
             }])
             .await?;
+
+            if (i % 1000) == 0 {
+                tx.commit().await?;
+                tx = self.tx().await?;
+            }
         }
         tracing::info!("Completed initialization of iris db, committing...");
         tx.commit().await?;
         tracing::info!("Committed");
+
+        tracing::info!(
+            "Initialized iris db with {} entries",
+            self.count_irises().await?
+        );
         Ok(())
     }
 }

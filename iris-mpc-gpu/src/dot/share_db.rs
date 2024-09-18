@@ -18,7 +18,7 @@ use cudarc::{
         CudaBlas,
     },
     driver::{
-        result::{malloc_async, malloc_managed},
+        result::{self, malloc_async, malloc_managed},
         sys::{CUdeviceptr, CUmemAttach_flags},
         CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr, DeviceSlice, LaunchAsync,
         LaunchConfig,
@@ -70,6 +70,21 @@ pub fn gemm(
     alpha: i32,
     beta: i32,
 ) {
+    tracing::info!(
+        "gemm: a: {:?}, b: {:?}, c: {:?}, a_offset: {}, b_offset: {}, c_offset: {}, m: {}, n: {}, \
+         k: {}, alpha: {}, beta: {}",
+        a,
+        b,
+        c,
+        a_offset,
+        b_offset,
+        c_offset,
+        m,
+        n,
+        k,
+        alpha,
+        beta
+    );
     // https://docs.nvidia.com/cuda/cublas/#cublasgemmex:
     // "CUBLAS_COMPUTE_32I and CUBLAS_COMPUTE_32I_PEDANTIC compute types are only supported with A, B being 4-byte aligned and lda, ldb being multiples of 4."
     assert!(m % 4 == 0, "m must be a multiple of 4");
@@ -105,28 +120,6 @@ pub fn gemm(
             let c_str = CStr::from_ptr(lib().cublasGetStatusString(e.0));
             panic!("CUBLAS error: {:?}", c_str.to_str());
         }
-    }
-}
-
-fn chunking<T: Clone>(
-    slice: &[T],
-    n_chunks: usize,
-    chunk_size: usize,
-    element_size: usize,
-    alternating: bool,
-) -> Vec<Vec<T>> {
-    if alternating {
-        let mut result = vec![Vec::new(); n_chunks];
-
-        for (i, chunk) in slice.chunks(element_size).enumerate() {
-            result[i % n_chunks].extend_from_slice(chunk);
-        }
-        result
-    } else {
-        slice
-            .chunks(chunk_size)
-            .map(|chunk| chunk.to_vec())
-            .collect()
     }
 }
 
@@ -251,156 +244,143 @@ impl ShareDB {
         }
     }
 
-    #[allow(clippy::type_complexity)]
-    pub fn load_db(
-        &self,
-        db_entries: &[u16],
-        db_length: usize, // TODO: should handle different sizes for each device
-        max_db_length: usize,
-        alternating_chunks: bool,
-    ) -> (SlicedProcessedDatabase, Vec<usize>) {
-        let mut a1_host = db_entries
-            .par_iter()
-            .map(|&x: &u16| (x >> 8) as i8)
-            .collect::<Vec<_>>();
-        let mut a0_host = db_entries.par_iter().map(|&x| x as i8).collect::<Vec<_>>();
-
-        // TODO: maybe use gemm here already to speed up loading (we'll need to correct
-        // the results as well)
-        a1_host
-            .par_iter_mut()
-            .for_each(|x| *x = (*x as i32 - 128) as i8);
-
-        a0_host
-            .par_iter_mut()
-            .for_each(|x| *x = (*x as i32 - 128) as i8);
-
-        let a1_sums: Vec<u32> = a1_host
-            .par_chunks(self.code_length)
-            .map(|row| row.par_iter().map(|&x| x as u32).sum::<u32>())
-            .collect();
-
-        let a0_sums: Vec<u32> = a0_host
-            .par_chunks(self.code_length)
-            .map(|row| row.par_iter().map(|&x| x as u32).sum::<u32>())
-            .collect();
-
-        // Split up db and load to all devices
-        let chunk_size = db_length / self.device_manager.device_count();
+    pub fn alloc_db(&self, max_db_length: usize) -> SlicedProcessedDatabase {
         let max_size = max_db_length / self.device_manager.device_count();
-
-        // DB sums
-        let db1_sums = chunking(
-            &a1_sums,
-            self.device_manager.device_count(),
-            chunk_size,
-            1,
-            alternating_chunks,
-        );
-        let db0_sums = chunking(
-            &a0_sums,
-            self.device_manager.device_count(),
-            chunk_size,
-            1,
-            alternating_chunks,
-        );
-
-        let db1_sums = db1_sums
+        let (db0_sums, (db1_sums, (db0, db1))) = self
+            .device_manager
+            .devices()
             .iter()
-            .enumerate()
-            .map(|(idx, chunk)| {
-                let mut slice = unsafe { self.device_manager.device(idx).alloc(max_size).unwrap() };
-                self.device_manager
-                    .htod_copy_into(chunk.to_vec(), &mut slice, idx)
-                    .unwrap();
-                StreamAwareCudaSlice::from(slice)
-            })
-            .collect::<Vec<_>>();
-        let db0_sums = db0_sums
-            .iter()
-            .enumerate()
-            .map(|(idx, chunk)| {
-                let mut slice = unsafe { self.device_manager.device(idx).alloc(max_size).unwrap() };
-                self.device_manager
-                    .htod_copy_into(chunk.to_vec(), &mut slice, idx)
-                    .unwrap();
-                StreamAwareCudaSlice::from(slice)
-            })
-            .collect::<Vec<_>>();
-
-        // DB codes
-        let db1 = chunking(
-            &a1_host,
-            self.device_manager.device_count(),
-            chunk_size * self.code_length,
-            self.code_length,
-            alternating_chunks,
-        );
-
-        let db0 = chunking(
-            &a0_host,
-            self.device_manager.device_count(),
-            chunk_size * self.code_length,
-            self.code_length,
-            alternating_chunks,
-        );
-
-        assert!(
-            db0.iter()
-                .zip(db1.iter())
-                .all(|(chunk0, chunk1)| chunk0.len() == chunk1.len()),
-            "db0 and db1 chunks must have the same length"
-        );
-
-        let db_lens = db0
-            .iter()
-            .map(|chunk| chunk.len() / self.code_length)
-            .collect::<Vec<_>>();
-
-        let db1 = db1
-            .iter()
-            .map(|chunk| unsafe {
-                let mem = malloc_managed(
-                    max_size * self.code_length,
-                    CUmemAttach_flags::CU_MEM_ATTACH_GLOBAL,
+            .map(|device| unsafe {
+                (
+                    StreamAwareCudaSlice::from(device.alloc(max_size).unwrap()),
+                    (
+                        StreamAwareCudaSlice::from(device.alloc(max_size).unwrap()),
+                        (
+                            malloc_managed(
+                                max_size * self.code_length,
+                                CUmemAttach_flags::CU_MEM_ATTACH_GLOBAL,
+                            )
+                            .unwrap(),
+                            malloc_managed(
+                                max_size * self.code_length,
+                                CUmemAttach_flags::CU_MEM_ATTACH_GLOBAL,
+                            )
+                            .unwrap(),
+                        ),
+                    ),
                 )
-                .unwrap();
-
-                std::ptr::copy(chunk.as_ptr() as *const _, mem as *mut _, chunk.len());
-                mem
             })
-            .collect::<Vec<_>>();
-        let db0 = db0
-            .iter()
-            .map(|chunk| unsafe {
-                let mem = malloc_managed(
-                    max_size * self.code_length,
-                    CUmemAttach_flags::CU_MEM_ATTACH_GLOBAL,
-                )
-                .unwrap();
-
-                std::ptr::copy(chunk.as_ptr() as *const _, mem as *mut _, chunk.len());
-                mem
-            })
-            .collect::<Vec<_>>();
+            .unzip();
 
         for dev in self.device_manager.devices() {
             dev.synchronize().unwrap();
         }
 
-        (
-            SlicedProcessedDatabase {
-                code_gr:      CudaVec2DSlicerRawPointer {
-                    limb_0: db0,
-                    limb_1: db1,
-                },
-                code_sums_gr: CudaVec2DSlicerU32 {
-                    limb_0: db0_sums,
-                    limb_1: db1_sums,
-                },
+        SlicedProcessedDatabase {
+            code_gr:      CudaVec2DSlicerRawPointer {
+                limb_0: db0,
+                limb_1: db1,
             },
-            db_lens,
-        )
+            code_sums_gr: CudaVec2DSlicerU32 {
+                limb_0: db0_sums,
+                limb_1: db1_sums,
+            },
+        }
+    }
+
+    pub fn load_single_record(
+        index: usize,
+        db: &CudaVec2DSlicerRawPointer,
+        record: &[u16],
+        n_shards: usize,
+        code_length: usize,
+    ) {
+        assert!(record.len() == code_length);
+
+        let a0_host = record
+            .iter()
+            .map(|&x| ((x as i8) as i32 - 128) as i8)
+            .collect::<Vec<_>>();
+
+        let a1_host = record
+            .iter()
+            .map(|&x: &u16| ((x >> 8) as i32 - 128) as i8)
+            .collect::<Vec<_>>();
+
+        let device_index = index % n_shards;
+        let device_db_index = index / n_shards;
+
+        unsafe {
+            std::ptr::copy(
+                a0_host.as_ptr() as *const _,
+                (db.limb_0[device_index] + (device_db_index * code_length) as u64) as *mut _,
+                code_length,
+            );
+
+            std::ptr::copy(
+                a1_host.as_ptr() as *const _,
+                (db.limb_1[device_index] + (device_db_index * code_length) as u64) as *mut _,
+                code_length,
+            );
+        };
+    }
+
+    pub fn preprocess_db(&self, db: &mut SlicedProcessedDatabase, db_lens: &[usize]) {
+        let code_len = self.code_length;
+        for device_index in 0..self.device_manager.device_count() {
+            for (limbs, sum_slices) in [
+                (&db.code_gr.limb_0, &mut db.code_sums_gr.limb_0),
+                (&db.code_gr.limb_1, &mut db.code_sums_gr.limb_1),
+            ] {
+                let sums = (0..db_lens[device_index])
+                    .into_par_iter()
+                    .map(|idx| {
+                        let slice: &[i8] = unsafe {
+                            std::slice::from_raw_parts(
+                                (limbs[device_index] + (idx * code_len) as u64) as *const _,
+                                code_len,
+                            )
+                        };
+                        slice.iter().map(|&x| x as u32).sum::<u32>()
+                    })
+                    .collect::<Vec<_>>();
+
+                self.device_manager
+                    .device(device_index)
+                    .bind_to_thread()
+                    .unwrap();
+                unsafe {
+                    result::memcpy_htod_sync(sum_slices[device_index].cu_device_ptr, &sums)
+                        .unwrap();
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn load_full_db(&self, db: &mut SlicedProcessedDatabase, db_entries: &[u16]) -> Vec<usize> {
+        assert!(db_entries.len() % self.code_length == 0);
+
+        let code_length = self.code_length;
+        let n_shards = self.device_manager.device_count();
+        db_entries
+            .par_chunks(self.code_length)
+            .enumerate()
+            .for_each(|(idx, chunk)| {
+                Self::load_single_record(idx, &db.code_gr, chunk, n_shards, code_length);
+            });
+
+        // Calculate the number of entries per shard
+        let mut db_lens = vec![db_entries.len() / self.code_length / n_shards; n_shards];
+        for i in 0..db_lens.len() {
+            if i < (db_entries.len() / self.code_length) % n_shards {
+                db_lens[i] += 1;
+            }
+        }
+
+        self.preprocess_db(db, &db_lens);
+
+        db_lens
     }
 
     pub fn query_sums(
@@ -499,11 +479,11 @@ impl ShareDB {
             let query1 = &queries.limb_1[idx];
 
             // Prepare randomness to mask results
-            if self.is_remote {
-                let len: usize = (chunk_sizes[idx] * self.query_length).div_ceil(64) * 64;
-                self.rngs[idx].0.fill_rng_no_host_copy(len, &streams[idx]);
-                self.rngs[idx].1.fill_rng_no_host_copy(len, &streams[idx]);
-            }
+            // if self.is_remote {
+            //     let len: usize = (chunk_sizes[idx] * self.query_length).div_ceil(64) *
+            // 64;     self.rngs[idx].0.fill_rng_no_host_copy(len,
+            // &streams[idx]);     self.rngs[idx].1.fill_rng_no_host_copy(len,
+            // &streams[idx]); }
 
             for (i, d) in [db.limb_0[idx], db.limb_1[idx]].into_iter().enumerate() {
                 for (j, q) in [query0, query1].iter().enumerate() {
@@ -767,6 +747,7 @@ mod tests {
         galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
         iris_db::db::IrisDB,
     };
+    use itertools::Itertools;
     use ndarray::Array2;
     use num_traits::FromPrimitive;
     use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -800,6 +781,18 @@ mod tests {
             .collect()
     }
 
+    fn shard_db(db: &[u16], n_shards: usize) -> Vec<u16> {
+        let mut res: Vec<Vec<u16>> = vec![vec![]; n_shards];
+        db.iter()
+            .chunks(WIDTH)
+            .into_iter()
+            .enumerate()
+            .for_each(|(i, chunk)| {
+                res[i % n_shards].extend(chunk);
+            });
+        res.into_iter().flatten().collect::<Vec<_>>()
+    }
+
     /// Test to verify the matmul operation for random matrices in the field
     #[test]
     #[cfg(feature = "gpu_dependent")]
@@ -827,7 +820,8 @@ mod tests {
             .htod_transfer_query(&preprocessed_query, &streams, QUERY_SIZE, IRIS_CODE_LENGTH)
             .unwrap();
         let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
-        let (db_slices, db_sizes) = engine.load_db(&db, DB_SIZE, DB_SIZE, false);
+        let mut db_slices = engine.alloc_db(DB_SIZE);
+        let db_sizes = engine.load_full_db(&mut db_slices, &db);
 
         engine.dot(
             &preprocessed_query,
@@ -840,7 +834,7 @@ mod tests {
         engine.dot_reduce(&query_sums, &db_slices.code_sums_gr, &db_sizes, 0, &streams);
         device_manager.await_streams(&streams);
 
-        let a_nda = random_ndarray::<u16>(db.clone(), DB_SIZE, WIDTH);
+        let a_nda = random_ndarray::<u16>(shard_db(&db, n_devices), DB_SIZE, WIDTH);
         let b_nda = random_ndarray::<u16>(query.clone(), QUERY_SIZE, WIDTH);
         let c_nda = a_nda.dot(&b_nda.t());
 
@@ -928,7 +922,9 @@ mod tests {
                 .htod_transfer_query(&preprocessed_query, &streams, QUERY_SIZE, IRIS_CODE_LENGTH)
                 .unwrap();
             let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
-            let (db_slices, db_sizes) = engine.load_db(&codes_db, DB_SIZE, DB_SIZE, false);
+            let mut db_slices = engine.alloc_db(DB_SIZE);
+            let db_sizes = engine.load_full_db(&mut db_slices, &codes_db);
+
             engine.dot(
                 &preprocessed_query,
                 &db_slices.code_gr,
@@ -945,7 +941,8 @@ mod tests {
         for i in 0..DB_SIZE * QUERY_SIZE / n_devices {
             assert_eq!(
                 (gpu_result[0][i] + gpu_result[1][i] + gpu_result[2][i]),
-                (db.db[i / (DB_SIZE / n_devices)].mask & db.db[i % (DB_SIZE / n_devices)].mask)
+                (db.db[i / (DB_SIZE / n_devices)].mask
+                    & db.db[(i % (DB_SIZE / n_devices)) * n_devices].mask)
                     .count_ones() as u16
             );
         }
@@ -1056,10 +1053,10 @@ mod tests {
                 .unwrap();
             let code_query_sums = codes_engine.query_sums(&code_query, &streams, &blass);
             let mask_query_sums = masks_engine.query_sums(&mask_query, &streams, &blass);
-            let (code_db_slices, db_sizes) =
-                codes_engine.load_db(&codes_db, DB_SIZE, DB_SIZE, false);
-            let (mask_db_slices, mask_db_sizes) =
-                masks_engine.load_db(&masks_db, DB_SIZE, DB_SIZE, false);
+            let mut code_db_slices = codes_engine.alloc_db(DB_SIZE);
+            let db_sizes = codes_engine.load_full_db(&mut code_db_slices, &codes_db);
+            let mut mask_db_slices = masks_engine.alloc_db(DB_SIZE);
+            let mask_db_sizes = masks_engine.load_full_db(&mut mask_db_slices, &masks_db);
 
             assert_eq!(db_sizes, mask_db_sizes);
 
@@ -1111,10 +1108,6 @@ mod tests {
             let code = results_codes[0][i] + results_codes[1][i] + results_codes[2][i];
             let mask = results_masks[0][i] + results_masks[1][i] + results_masks[2][i];
 
-            if i == 0 {
-                tracing::info!("Code: {}, Mask: {}", code, mask);
-            }
-
             reconstructed_codes.push(code);
             reconstructed_masks.push(mask);
         }
@@ -1129,12 +1122,9 @@ mod tests {
         // Compare against plain reference implementation
         let reference_dists = db.calculate_distances(&db.db[0]);
 
-        println!("Dists: {:?}", dists[0..10].to_vec());
-        println!("Ref Dists: {:?}", reference_dists[0..10].to_vec());
-
         // TODO: check for all devices and the whole query
         for i in 0..DB_SIZE / n_devices {
-            assert_float_eq!(dists[i], reference_dists[i], abs <= 1e-6);
+            assert_float_eq!(dists[i], reference_dists[i * n_devices], abs <= 1e-6);
         }
     }
 }

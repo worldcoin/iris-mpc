@@ -1,15 +1,22 @@
 services:
-  old-db-1:
+  old-db-shares-1:
     image: postgres:16
     ports:
       - "6100:5432"
     environment:
       POSTGRES_USER: "postgres"
       POSTGRES_PASSWORD: "postgres"
-  old-db-2:
+  old-db-shares-2:
     image: postgres:16
     ports:
       - "6101:5432"
+    environment:
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+  old-db-masks-1:
+    image: postgres:16
+    ports:
+      - "6111:5432"
     environment:
       POSTGRES_USER: "postgres"
       POSTGRES_PASSWORD: "postgres"
@@ -36,8 +43,9 @@ services:
       POSTGRES_PASSWORD: "postgres"
   db-ui:
     depends_on:
-      - old-db-1
-      - old-db-2
+      - old-db-shares-1
+      - old-db-shares-2
+      - old-db-masks-1
       - new-db-1
       - new-db-2
       - new-db-3

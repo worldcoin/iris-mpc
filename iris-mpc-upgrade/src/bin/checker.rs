@@ -15,47 +15,71 @@ use std::collections::HashMap;
 // quick checking script that recombines the shamir shares for a local server
 // setup and prints the iris code share
 
+const APP_NAME: &str = "SMPC";
+
 #[derive(Debug, Clone, Parser)]
 struct Args {
     #[clap(long)]
     db_urls:      Vec<String>,
     #[clap(long)]
     num_elements: u64,
+    #[clap(long)]
+    environment:  String,
 }
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     let args = Args::parse();
 
-    if args.db_urls.len() != 9 {
+    if args.db_urls.len() != 6 {
         return Err(eyre::eyre!(
-            "Expect 9 db urls to be provided: old_left_db0, old_left_db1, old_left_mask_db, \
-             old_right_db0, old_right_db1, old_right_mask_db, new_db0, new_db1, new_db2"
+            "Expect 5 db urls to be provided: old_participant_1, old_participant_2, \
+             old_coordinator_1, new_db0, new_db1, new_db2"
         ));
     }
 
-    let old_left_db0 = V1Db::new(&args.db_urls[0]).await?;
-    let old_left_db1 = V1Db::new(&args.db_urls[1]).await?;
-    let old_left_mask_db = V1Db::new(&args.db_urls[2]).await?;
-    let old_right_db0 = V1Db::new(&args.db_urls[3]).await?;
-    let old_right_db1 = V1Db::new(&args.db_urls[4]).await?;
-    let old_right_mask_db = V1Db::new(&args.db_urls[5]).await?;
+    let old_left_shares_db0 =
+        V1Db::new(format!("{}/{}", args.db_urls[0], "/participant1_left").as_str()).await?;
+    let old_left_shares_db1 =
+        V1Db::new(format!("{}/{}", args.db_urls[1], "/participant2_left").as_str()).await?;
+    let old_left_masks_db =
+        V1Db::new(format!("{}/{}", args.db_urls[2], "/coordinator_left").as_str()).await?;
 
-    let new_db0 = Store::new(&args.db_urls[6], "upgrade").await?;
-    let new_db1 = Store::new(&args.db_urls[7], "upgrade").await?;
-    let new_db2 = Store::new(&args.db_urls[8], "upgrade").await?;
+    let old_right_shares_db0 =
+        V1Db::new(format!("{}/{}", args.db_urls[0], "/participant1_right").as_str()).await?;
+    let old_right_shares_db1 =
+        V1Db::new(format!("{}/{}", args.db_urls[1], "/participant2_right").as_str()).await?;
+    let old_right_masks_db1 =
+        V1Db::new(format!("{}/{}", args.db_urls[2], "/coordinator_right").as_str()).await?;
+
+    let base_schema_name = format!("{}_{}", APP_NAME, args.environment);
+    let new_db0 = Store::new(
+        &args.db_urls[3],
+        format!("{}_{}", base_schema_name, "0").as_str(),
+    )
+    .await?;
+    let new_db1 = Store::new(
+        &args.db_urls[4],
+        format!("{}_{}", base_schema_name, "1").as_str(),
+    )
+    .await?;
+    let new_db2 = Store::new(
+        &args.db_urls[5],
+        format!("{}_{}", base_schema_name, "2").as_str(),
+    )
+    .await?;
 
     // grab the old shares from the db and reconstruct them
-    let old_left_shares0 = old_left_db0
-        .stream_shares(1..args.num_elements + 1)
+    let old_left_shares0 = old_left_shares_db0
+        .stream_shares(1..args.num_elements+1)
         .collect::<Vec<_>>()
         .await;
-    let old_left_shares1 = old_left_db1
-        .stream_shares(1..args.num_elements + 1)
+    let old_left_shares1 = old_left_shares_db1
+        .stream_shares(1..args.num_elements+1)
         .collect::<Vec<_>>()
         .await;
-    let old_left_masks = old_left_mask_db
-        .stream_masks(1..args.num_elements + 1)
+    let old_left_masks = old_left_masks_db
+        .stream_masks(1..args.num_elements+1)
         .collect::<Vec<_>>()
         .await;
 
@@ -77,16 +101,16 @@ async fn main() -> eyre::Result<()> {
     })
     .collect();
 
-    let old_right_shares0 = old_right_db0
-        .stream_shares(1..args.num_elements + 1)
+    let old_right_shares0 = old_right_shares_db0
+        .stream_shares(1..args.num_elements+1)
         .collect::<Vec<_>>()
         .await;
-    let old_right_shares1 = old_right_db1
-        .stream_shares(1..args.num_elements + 1)
+    let old_right_shares1 = old_right_shares_db1
+        .stream_shares(1..args.num_elements+1)
         .collect::<Vec<_>>()
         .await;
-    let old_right_masks = old_right_mask_db
-        .stream_masks(1..args.num_elements + 1)
+    let old_right_masks = old_right_masks_db1
+        .stream_masks(1..args.num_elements+1)
         .collect::<Vec<_>>()
         .await;
 
