@@ -70,21 +70,6 @@ pub fn gemm(
     alpha: i32,
     beta: i32,
 ) {
-    tracing::info!(
-        "gemm: a: {:?}, b: {:?}, c: {:?}, a_offset: {}, b_offset: {}, c_offset: {}, m: {}, n: {}, \
-         k: {}, alpha: {}, beta: {}",
-        a,
-        b,
-        c,
-        a_offset,
-        b_offset,
-        c_offset,
-        m,
-        n,
-        k,
-        alpha,
-        beta
-    );
     // https://docs.nvidia.com/cuda/cublas/#cublasgemmex:
     // "CUBLAS_COMPUTE_32I and CUBLAS_COMPUTE_32I_PEDANTIC compute types are only supported with A, B being 4-byte aligned and lda, ldb being multiples of 4."
     assert!(m % 4 == 0, "m must be a multiple of 4");
@@ -476,11 +461,11 @@ impl ShareDB {
             let query1 = &queries.limb_1[idx];
 
             // Prepare randomness to mask results
-            // if self.is_remote {
-            //     let len: usize = (chunk_sizes[idx] * self.query_length).div_ceil(64) *
-            // 64;     self.rngs[idx].0.fill_rng_no_host_copy(len,
-            // &streams[idx]);     self.rngs[idx].1.fill_rng_no_host_copy(len,
-            // &streams[idx]); }
+            if self.is_remote {
+                let len: usize = (chunk_sizes[idx] * self.query_length).div_ceil(64) * 64;
+                self.rngs[idx].0.fill_rng_no_host_copy(len, &streams[idx]);
+                self.rngs[idx].1.fill_rng_no_host_copy(len, &streams[idx]);
+            }
 
             for (i, d) in [db.limb_0[idx], db.limb_1[idx]].into_iter().enumerate() {
                 for (j, q) in [query0, query1].iter().enumerate() {

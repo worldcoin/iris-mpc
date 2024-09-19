@@ -643,11 +643,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     "Initialize iris db: Loading from DB (parallelism: {})",
                     parallelism
                 );
-                tokio::runtime::Handle::current().block_on(async {
+                let res = tokio::runtime::Handle::current().block_on(async {
                     let mut stream = store.stream_irises_par(parallelism).await;
                     let mut record_counter = 0;
                     while let Some(iris) = stream.try_next().await? {
-                        if iris.index() > store_len {
+                        if iris.index() > store_len || record_counter != iris.index() - 1 {
+                            tracing::error!("Inconsistent iris index {}", iris.index());
                             return Err(eyre!("Inconsistent iris index {}", iris.index()));
                         }
                         actor.load_single_record(
@@ -669,9 +670,18 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     );
 
                     eyre::Ok(())
-                })?;
+                });
 
-                tx.send(Ok((handle, sync_result, store))).unwrap();
+                match res {
+                    Ok(_) => {
+                        tx.send(Ok((handle, sync_result, store))).unwrap();
+                    }
+                    Err(e) => {
+                        tx.send(Err(e)).unwrap();
+                        return Ok(());
+                    }
+                }
+
                 actor.run(); // forever
             }
             Err(e) => {
