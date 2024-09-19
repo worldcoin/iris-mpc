@@ -647,7 +647,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     let mut stream = store.stream_irises_par(parallelism).await;
                     let mut record_counter = 0;
                     while let Some(iris) = stream.try_next().await? {
-                        if iris.index() > store_len || record_counter != iris.index() - 1 {
+                        if iris.index() > store_len {
                             tracing::error!("Inconsistent iris index {}", iris.index());
                             return Err(eyre!("Inconsistent iris index {}", iris.index()));
                         }
