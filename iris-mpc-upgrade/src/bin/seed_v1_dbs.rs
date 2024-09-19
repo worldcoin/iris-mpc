@@ -64,11 +64,11 @@ async fn main() -> eyre::Result<()> {
     };
 
     let shares_db0 = Db::new(&shares_db_config0).await?;
-    let latest_shares_id_0 = shares_db0.fetch_latest_share_id().await?;
+    let mut latest_shares_id_0 = shares_db0.fetch_latest_share_id().await?;
     let shares_db1 = Db::new(&shares_db_config1).await?;
     let latest_shares_id_1 = shares_db1.fetch_latest_share_id().await?;
     let masks_db = Db::new(&masks_db_config).await?;
-    let latest_masks_id = masks_db.fetch_latest_mask_id().await?;
+    let mut latest_masks_id = masks_db.fetch_latest_mask_id().await?;
 
     if latest_shares_id_0 != latest_shares_id_1 {
         return Err(eyre::eyre!(
@@ -83,6 +83,14 @@ async fn main() -> eyre::Result<()> {
     let mut masks = Vec::with_capacity(args.fill_to as usize);
     let mut shares0 = Vec::with_capacity(args.fill_to as usize);
     let mut shares1 = Vec::with_capacity(args.fill_to as usize);
+
+    if latest_shares_id_0 == 0 {
+        latest_shares_id_0 += 1;
+    }
+
+    if latest_masks_id == 0 {
+        latest_masks_id += 1;
+    }
 
     for i in latest_shares_id_0..args.fill_to {
         let mut iris_code = rng.gen::<Template>();
