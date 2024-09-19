@@ -163,6 +163,7 @@ impl DeviceCompactQuery {
         mask_engine: &mut ShareDB,
         db_sizes: &[usize],
         offset: usize,
+        streams: &[CudaStream],
         blass: &[CudaBlas],
     ) {
         code_engine.dot(
@@ -170,6 +171,7 @@ impl DeviceCompactQuery {
             &(&self.code_query_insert).into(),
             db_sizes,
             offset,
+            streams,
             blass,
         );
 
@@ -178,6 +180,7 @@ impl DeviceCompactQuery {
             &(&self.mask_query_insert).into(),
             db_sizes,
             offset,
+            streams,
             blass,
         );
     }
@@ -194,6 +197,7 @@ impl DeviceCompactQuery {
         sliced_mask_db: &SlicedProcessedDatabase,
         database_sizes: &[usize],
         offset: usize,
+        streams: &[CudaStream],
         blass: &[CudaBlas],
     ) {
         code_engine.dot(
@@ -201,6 +205,7 @@ impl DeviceCompactQuery {
             &sliced_code_db.code_gr,
             database_sizes,
             offset,
+            streams,
             blass,
         );
         mask_engine.dot(
@@ -208,6 +213,7 @@ impl DeviceCompactQuery {
             &sliced_mask_db.code_gr,
             database_sizes,
             offset,
+            streams,
             blass,
         );
     }
