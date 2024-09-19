@@ -41,17 +41,3 @@ services:
     environment:
       POSTGRES_USER: "postgres"
       POSTGRES_PASSWORD: "postgres"
-  db-ui:
-    depends_on:
-      - old-db-shares-1
-      - old-db-shares-2
-      - old-db-masks-1
-      - new-db-1
-      - new-db-2
-      - new-db-3
-    image: dpage/pgadmin4
-    ports:
-      - "15432:80"
-    environment:
-      PGADMIN_DEFAULT_EMAIL: "postgres@postgres.postgres"
-      PGADMIN_DEFAULT_PASSWORD: "postgres"
