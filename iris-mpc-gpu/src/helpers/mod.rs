@@ -38,21 +38,6 @@ pub fn launch_config_from_elements_and_threads(
     }
 }
 
-pub fn transposed_launch_config_from_elements_and_threads(
-    num_elements: u32,
-    threads_per_block: u32,
-    device: &Arc<CudaDevice>,
-) -> LaunchConfig {
-    let blocks_per_grid = num_elements.div_ceil(threads_per_block);
-    // Check if kernel can be launched
-    check_max_grid_size(device, threads_per_block as usize);
-    LaunchConfig {
-        grid_dim:         (threads_per_block, 1, 1),
-        block_dim:        (blocks_per_grid, 1, 1),
-        shared_mem_bytes: 0,
-    }
-}
-
 pub fn device_ptrs<T>(slice: &[CudaSlice<T>]) -> Vec<CUdeviceptr> {
     slice.iter().map(|s| *s.device_ptr()).collect()
 }

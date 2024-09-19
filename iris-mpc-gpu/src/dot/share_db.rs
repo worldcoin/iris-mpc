@@ -2,11 +2,11 @@ use crate::{
     helpers::{
         comm::NcclComm,
         device_manager::DeviceManager,
+        launch_config_from_elements_and_threads,
         query_processor::{
             CudaVec2DSlicer, CudaVec2DSlicerRawPointer, CudaVec2DSlicerU32, CudaVec2DSlicerU8,
             StreamAwareCudaSlice,
         },
-        transposed_launch_config_from_elements_and_threads,
     },
     rng::chacha::ChaChaCudaRng,
     threshold_ring::protocol::ChunkShareView,
@@ -529,7 +529,7 @@ impl ShareDB {
 
             let num_elements = chunk_sizes[idx] * self.query_length;
             let threads_per_block = 256; // ON CHANGE: sync with kernel
-            let cfg = transposed_launch_config_from_elements_and_threads(
+            let cfg = launch_config_from_elements_and_threads(
                 num_elements as u32,
                 threads_per_block as u32,
                 &self.device_manager.devices()[idx],
@@ -581,7 +581,7 @@ impl ShareDB {
         streams: &[CudaStream],
     ) {
         let threads_per_block = 256; // ON CHANGE: sync with kernel
-        let cfg = transposed_launch_config_from_elements_and_threads(
+        let cfg = launch_config_from_elements_and_threads(
             size as u32,
             threads_per_block as u32,
             &self.device_manager.devices()[idx],

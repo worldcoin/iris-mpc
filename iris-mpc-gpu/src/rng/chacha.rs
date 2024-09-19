@@ -1,4 +1,4 @@
-use crate::helpers::transposed_launch_config_from_elements_and_threads;
+use crate::helpers::launch_config_from_elements_and_threads;
 use cudarc::{
     driver::{
         CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaViewMut, DeviceSlice, LaunchAsync,
@@ -46,7 +46,7 @@ impl ChachaCommon {
         let num_ks_calls = len / 16; // we produce 16 u32s per kernel call
         let threads_per_block = 256; // ON CHANGE: sync with kernel
 
-        let cfg = transposed_launch_config_from_elements_and_threads(
+        let cfg = launch_config_from_elements_and_threads(
             num_ks_calls as u32,
             threads_per_block,
             &self.state_gpu_buf.device(),
