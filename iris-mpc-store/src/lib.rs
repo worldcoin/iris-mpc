@@ -269,7 +269,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
             .await?;
 
         // We also need to reset the sequence to avoid gaps in the IDs.
-        sqlx::query("SELECT setval(pg_get_serial_sequence('irises', 'id'), $1 + 1, true)")
+        sqlx::query("SELECT setval(pg_get_serial_sequence('irises', 'id'), $1 + 1, false)")
             .bind(db_len as i64)
             .execute(&self.pool)
             .await?;
