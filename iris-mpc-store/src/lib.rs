@@ -267,9 +267,15 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
             .bind(db_len as i64)
             .execute(&self.pool)
             .await?;
+
+        // We also need to reset the sequence to avoid gaps in the IDs.
+        sqlx::query("SELECT setval(pg_get_serial_sequence('irises', 'id'), $1 + 1)")
+            .bind(db_len as i64)
+            .execute(&self.pool)
+            .await?;
+
         Ok(())
     }
-
     pub async fn insert_results(
         &self,
         tx: &mut Transaction<'_, Postgres>,

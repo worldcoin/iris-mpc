@@ -346,6 +346,10 @@ impl ServerActor {
         tracing::info!("Server Actor finished due to all job queues being closed");
     }
 
+    pub fn current_db_sizes(&self) -> Vec<usize> {
+        self.current_db_sizes.clone()
+    }
+
     pub fn load_full_db(
         &mut self,
         left: &IrisCodeDbSlice,
@@ -863,6 +867,13 @@ impl ServerActor {
                 / now.elapsed().as_secs_f64()
                 / 1e6
         );
+
+        tracing::info!(
+            "Old DB size: {}, New DB size: {}",
+            previous_total_db_size,
+            self.current_db_sizes.iter().sum::<usize>()
+        );
+
         Ok(())
     }
 
@@ -953,6 +964,7 @@ impl ServerActor {
             &db_sizes_batch,
             0,
             &db_sizes_batch,
+            &vec![false; self.device_manager.device_count()],
             batch_streams,
         );
         self.phase2_batch.return_result_buffer(res);
@@ -970,6 +982,8 @@ impl ServerActor {
 
         // ---- START DATABASE DEDUP ----
         tracing::debug!(party_id = self.party_id, "Start DB deduplication");
+        let ignore_device_results: Vec<bool> =
+            self.current_db_sizes.iter().map(|&s| s == 0).collect();
         let mut db_chunk_idx = 0;
         loop {
             tracing::debug!(
@@ -985,7 +999,7 @@ impl ServerActor {
             let chunk_size = self
                 .current_db_sizes
                 .iter()
-                .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(0, DB_CHUNK_SIZE))
+                .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(1, DB_CHUNK_SIZE))
                 .collect::<Vec<_>>();
 
             // We need to pad the chunk size to be a multiple of 4, because the underlying
@@ -1122,6 +1136,7 @@ impl ServerActor {
                     &chunk_size,
                     offset,
                     &self.current_db_sizes,
+                    &ignore_device_results,
                     request_streams,
                 );
                 self.phase2.return_result_buffer(res);
@@ -1294,6 +1309,7 @@ fn open(
     real_db_sizes: &[usize],
     offset: usize,
     total_db_sizes: &[usize],
+    ignore_db_results: &[bool],
     streams: &[CudaStream],
 ) {
     let n_devices = x.len();
@@ -1329,6 +1345,7 @@ fn open(
         real_db_sizes,
         offset,
         total_db_sizes,
+        ignore_db_results,
         streams,
     );
 }

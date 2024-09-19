@@ -88,8 +88,8 @@ async fn main() -> eyre::Result<()> {
         let mut iris_code = rng.gen::<Template>();
         // fix the iris code mask to be valid: all chunks of 2 bits are equal, since
         // they mask the real/imaginary party of the same bit
-        for i in (0..BITS).step_by(2) {
-            iris_code.mask.set(i + 1, iris_code.mask.get(i))
+        for j in (0..BITS).step_by(2) {
+            iris_code.mask.set(j + 1, iris_code.mask.get(j))
         }
         let encoded = mpc_uniqueness_check::distance::encode(&iris_code).share(2, &mut rng);
         shares0.push((i, encoded[0]));
