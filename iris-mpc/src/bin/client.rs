@@ -310,7 +310,6 @@ async fn main() -> eyre::Result<()> {
     for batch_idx in 0..N_BATCHES {
         let mut handles = Vec::new();
         for batch_query_idx in 0..BATCH_SIZE {
-            sleep(Duration::from_millis(1000)).await;
             let shares_encryption_public_keys2 = shares_encryption_public_keys.clone();
             let requests_sns_client2 = requests_sns_client.clone();
             let thread_db2 = db.clone();
@@ -437,7 +436,7 @@ async fn main() -> eyre::Result<()> {
                 };
 
                 let request_message = UniquenessRequest {
-                    batch_size: Some(1),
+                    batch_size: Some(BATCH_SIZE),
                     signup_id: request_id.to_string(),
                     s3_presigned_url: presigned_url,
                     iris_shares_file_hashes,
@@ -472,24 +471,15 @@ async fn main() -> eyre::Result<()> {
 
     // send another batch with deletion requests and uniqueness requests with all
     // deleted identities
-    let thread_responses2 = responses.clone();
-    let shares_encryption_public_keys2 = shares_encryption_public_keys.clone();
-    let requests_sns_client2 = requests_sns_client.clone();
-
     let mut rng = if let Some(rng_seed) = rng_seed {
         StdRng::seed_from_u64(rng_seed)
     } else {
         StdRng::from_entropy()
     };
 
-    let n_deletion_messages = min(thread_responses2.lock().await.len(), BATCH_SIZE);
+    let n_deletion_messages = min(responses.lock().await.len(), BATCH_SIZE);
     println!("Sending {} identity deletion messages", n_deletion_messages);
-    for (serial_id, iris_code) in thread_responses2
-        .lock()
-        .await
-        .iter()
-        .take(n_deletion_messages)
-    {
+    for (serial_id, iris_code) in responses.lock().await.iter().take(n_deletion_messages) {
         send_identity_deletion_request(&requests_sns_client, &request_topic_arn, *serial_id)
             .await?;
         let request_id = Uuid::new_v4();
@@ -499,7 +489,7 @@ async fn main() -> eyre::Result<()> {
         let shared_mask = GaloisRingIrisCodeShare::encode_mask_code(&iris_code.mask, &mut rng);
 
         let (iris_shares_file_hashes, iris_codes_shares_base64) =
-            calculate_shares(&shares_encryption_public_keys2, shared_code, shared_mask);
+            calculate_shares(&shares_encryption_public_keys, shared_code, shared_mask);
 
         let contents = serde_json::to_vec(&iris_codes_shares_base64)?;
         let presigned_url = match upload_file_and_generate_presigned_url(
@@ -519,7 +509,7 @@ async fn main() -> eyre::Result<()> {
         };
 
         let request_message = UniquenessRequest {
-            batch_size: Some(1),
+            batch_size: Some(n_deletion_messages),
             signup_id: request_id.to_string(),
             s3_presigned_url: presigned_url,
             iris_shares_file_hashes,
@@ -527,7 +517,7 @@ async fn main() -> eyre::Result<()> {
 
         let message_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
 
-        requests_sns_client2
+        requests_sns_client
             .lock()
             .await
             .publish()
