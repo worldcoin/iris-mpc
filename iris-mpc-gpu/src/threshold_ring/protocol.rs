@@ -1,7 +1,7 @@
 use crate::{
     helpers::{
-        check_max_grid_size, comm::NcclComm, device_manager::DeviceManager, dtoh_on_stream_sync,
-        htod_on_stream_sync,
+        comm::NcclComm, device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync,
+        launch_config_from_elements_and_threads,
     },
     rng::chacha_corr::ChaChaCudaCorrRng,
     threshold_ring::cuda::PTX_SRC,
@@ -9,7 +9,7 @@ use crate::{
 use cudarc::{
     driver::{
         result::stream, CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, CudaViewMut,
-        DeviceSlice, LaunchAsync, LaunchConfig,
+        DeviceSlice, LaunchAsync,
     },
     nccl::result,
     nvrtc::{self, Ptx},
@@ -443,15 +443,6 @@ impl Circuits {
         &self.comms
     }
 
-    fn launch_config_from_elements_and_threads(n: u32, t: u32) -> LaunchConfig {
-        let num_blocks = (n + t - 1) / t;
-        LaunchConfig {
-            grid_dim:         (num_blocks, 1, 1),
-            block_dim:        (t, 1, 1),
-            shared_mem_bytes: 0,
-        }
-    }
-
     // Fill randomness using the correlated RNG
     fn fill_rand_u64(&mut self, rand: &mut CudaSlice<u64>, idx: usize, streams: &[CudaStream]) {
         let rng = &mut self.rngs[idx];
@@ -523,18 +514,16 @@ impl Circuits {
         idx: usize,
         streams: &[CudaStream],
     ) {
-        // Check if kernel can be launched
-        check_max_grid_size(&self.devs[idx], self.chunk_size * bits);
-
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
         let size = (self.chunk_size * bits + 7) / 8;
         let mut rand = unsafe { self.devs[idx].alloc::<u64>(size * 8).unwrap() };
         self.fill_rand_u64(&mut rand, idx, streams);
 
-        let cfg = Self::launch_config_from_elements_and_threads(
+        let cfg = launch_config_from_elements_and_threads(
             self.chunk_size as u32 * bits as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
         );
 
         unsafe {
@@ -565,13 +554,11 @@ impl Circuits {
         idx: usize,
         streams: &[CudaStream],
     ) {
-        // Check if kernel can be launched
-        check_max_grid_size(&self.devs[idx], src.len());
-
         assert_eq!(src.len(), des.len());
-        let cfg = Self::launch_config_from_elements_and_threads(
+        let cfg = launch_config_from_elements_and_threads(
             src.len() as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
         );
 
         unsafe {
@@ -595,12 +582,10 @@ impl Circuits {
         idx: usize,
         streams: &[CudaStream],
     ) {
-        // Check if kernel can be launched
-        check_max_grid_size(&self.devs[idx], self.chunk_size);
-
-        let cfg = Self::launch_config_from_elements_and_threads(
+        let cfg = launch_config_from_elements_and_threads(
             self.chunk_size as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
         );
 
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
@@ -629,18 +614,16 @@ impl Circuits {
         idx: usize,
         streams: &[CudaStream],
     ) {
-        // Check if kernel can be launched
-        check_max_grid_size(&self.devs[idx], x1.len());
-
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
         let size = (x1.len() + 7) / 8;
         let mut rand = unsafe { self.devs[idx].alloc::<u64>(size * 8).unwrap() };
         self.fill_rand_u64(&mut rand, idx, streams);
 
-        let cfg = Self::launch_config_from_elements_and_threads(
+        let cfg = launch_config_from_elements_and_threads(
             x1.len() as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
         );
 
         unsafe {
@@ -878,12 +861,10 @@ impl Circuits {
         size: usize,
         streams: &[CudaStream],
     ) {
-        // Check if kernel can be launched
-        check_max_grid_size(&self.devs[idx], size);
-
-        let cfg = Self::launch_config_from_elements_and_threads(
+        let cfg = launch_config_from_elements_and_threads(
             size as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
         );
 
         unsafe {
@@ -903,12 +884,10 @@ impl Circuits {
         size: usize,
         streams: &[CudaStream],
     ) {
-        // Check if kernel can be launched
-        check_max_grid_size(&self.devs[idx], size);
-
-        let cfg = Self::launch_config_from_elements_and_threads(
+        let cfg = launch_config_from_elements_and_threads(
             size as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
         );
 
         unsafe {
@@ -928,12 +907,10 @@ impl Circuits {
         size: usize,
         streams: &[CudaStream],
     ) {
-        // Check if kernel can be launched
-        check_max_grid_size(&self.devs[idx], size);
-
-        let cfg = Self::launch_config_from_elements_and_threads(
+        let cfg = launch_config_from_elements_and_threads(
             size as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
         );
 
         unsafe {
@@ -963,12 +940,10 @@ impl Circuits {
         idx: usize,
         streams: &[CudaStream],
     ) {
-        // Check if kernel can be launched
-        check_max_grid_size(&self.devs[idx], self.chunk_size * bits);
-
-        let cfg = Self::launch_config_from_elements_and_threads(
+        let cfg = launch_config_from_elements_and_threads(
             self.chunk_size as u32 * bits as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
         );
 
         unsafe {
@@ -992,12 +967,10 @@ impl Circuits {
         idx: usize,
         streams: &[CudaStream],
     ) {
-        // Check if kernel can be launched
-        check_max_grid_size(&self.devs[idx], self.chunk_size * bits);
-
-        let cfg = Self::launch_config_from_elements_and_threads(
+        let cfg = launch_config_from_elements_and_threads(
             self.chunk_size as u32 * bits as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
         );
 
         unsafe {
@@ -1061,11 +1034,10 @@ impl Circuits {
                 unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
             let rand_wa2 = self.fill_my_rng_into_u16(&mut rand_wa2_alloc, idx, streams);
 
-            // Check if kernel can be launched
-            check_max_grid_size(&self.devs[idx], self.chunk_size * 64 * 2);
-            let cfg = Self::launch_config_from_elements_and_threads(
+            let cfg = launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64 * 2,
                 DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
             );
 
             unsafe {
@@ -1171,11 +1143,10 @@ impl Circuits {
                 self.chacha1_decrypt_u16(m1, idx, streams);
             }
 
-            // Check if kernel can be launched
-            check_max_grid_size(&self.devs[idx], self.chunk_size * 64 * 2);
-            let cfg = Self::launch_config_from_elements_and_threads(
+            let cfg = launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64 * 2,
                 DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
             );
 
             unsafe {
@@ -1244,11 +1215,10 @@ impl Circuits {
                 unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
             let rand_wb2 = self.fill_their_rng_into_u16(&mut rand_wb2_alloc, idx, streams);
 
-            // Check if kernel can be launched
-            check_max_grid_size(&self.devs[idx], self.chunk_size * 64 * 2);
-            let cfg = Self::launch_config_from_elements_and_threads(
+            let cfg = launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64 * 2,
                 DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
             );
 
             unsafe {
@@ -1323,14 +1293,12 @@ impl Circuits {
         assert_eq!(self.n_devices, inp.len());
         assert_eq!(self.n_devices, outp.len());
 
-        let cfg = Self::launch_config_from_elements_and_threads(
-            self.chunk_size as u32 * 2,
-            DEFAULT_LAUNCH_CONFIG_THREADS,
-        );
-
         for (idx, (inp, outp)) in izip!(inp, outp).enumerate() {
-            // Check if kernel can be launched
-            check_max_grid_size(&self.devs[idx], self.chunk_size * 2);
+            let cfg = launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 2,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
 
             unsafe {
                 self.kernels[idx]
@@ -1363,15 +1331,12 @@ impl Circuits {
         assert_eq!(self.n_devices, inp.len());
         assert_eq!(self.n_devices, outp.len());
 
-        let cfg = Self::launch_config_from_elements_and_threads(
-            self.chunk_size as u32 * 2,
-            DEFAULT_LAUNCH_CONFIG_THREADS,
-        );
-
         for (idx, (inp, outp)) in izip!(inp, outp).enumerate() {
-            // Check if kernel can be launched
-            check_max_grid_size(&self.devs[idx], self.chunk_size * 2);
-
+            let cfg = launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 2,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
             unsafe {
                 self.kernels[idx]
                     .transpose_32x64
@@ -1401,15 +1366,13 @@ impl Circuits {
         bits: usize,
         streams: &[CudaStream],
     ) {
-        let cfg = Self::launch_config_from_elements_and_threads(
-            self.chunk_size as u32 * 64,
-            DEFAULT_LAUNCH_CONFIG_THREADS,
-        );
-
         // K = 16 is hardcoded in the kernel
         for (idx, (x1, x2, x3)) in izip!(inout1, out2, out3).enumerate() {
-            // Check if kernel can be launched
-            check_max_grid_size(&self.devs[idx], self.chunk_size * 64);
+            let cfg = launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 64,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
 
             unsafe {
                 self.kernels[idx]
@@ -1443,15 +1406,13 @@ impl Circuits {
         out3: &mut [ChunkShareView<u64>],
         streams: &[CudaStream],
     ) {
-        let cfg = Self::launch_config_from_elements_and_threads(
-            self.chunk_size as u32 * 64,
-            DEFAULT_LAUNCH_CONFIG_THREADS,
-        );
-
         // K = 16 is hardcoded in the kernel
         for (idx, (inp, lifted, x1, x2, x3)) in izip!(inp, lifted, inout1, out2, out3).enumerate() {
-            // Check if kernel can be launched
-            check_max_grid_size(&self.devs[idx], self.chunk_size * 64);
+            let cfg = launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 64,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
 
             unsafe {
                 self.kernels[idx]
@@ -1492,12 +1453,10 @@ impl Circuits {
         assert_eq!(self.n_devices, code.len());
 
         for (idx, (m, mc, c)) in izip!(mask_lifted, mask_correction, code).enumerate() {
-            // Check if kernel can be launched
-            check_max_grid_size(&self.devs[idx], self.chunk_size * 64);
-
-            let cfg = Self::launch_config_from_elements_and_threads(
+            let cfg = launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64,
                 DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
             );
 
             unsafe {
@@ -1880,7 +1839,11 @@ impl Circuits {
         let mut res = input.get_offset(0, 1);
         let helper = input.get_offset(1, 1);
 
-        let cfg = Self::launch_config_from_elements_and_threads(1, DEFAULT_LAUNCH_CONFIG_THREADS);
+        let cfg = launch_config_from_elements_and_threads(
+            1,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[0],
+        );
 
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.

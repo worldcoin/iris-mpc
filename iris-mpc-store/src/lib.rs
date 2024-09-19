@@ -413,7 +413,7 @@ fn cast_u8_to_u16(s: &[u8]) -> &[u16] {
 }
 
 #[cfg(test)]
-#[allow(unused)]
+#[cfg(feature = "db_dependent")]
 mod tests {
     const DOTENV_TEST: &str = ".env.test";
 
@@ -422,7 +422,6 @@ mod tests {
     use iris_mpc_common::helpers::smpc_request::UniquenessResult;
 
     #[tokio::test]
-    #[cfg(feature = "db_dependent")]
     async fn test_store() -> Result<()> {
         // Create a unique schema for this test.
         let schema_name = temporary_name();
@@ -483,7 +482,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature = "db_dependent")]
     async fn test_empty_insert() -> Result<()> {
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
@@ -499,7 +497,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature = "db_dependent")]
     async fn test_insert_many() -> Result<()> {
         let count = 1 << 3;
 
@@ -551,7 +548,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature = "db_dependent")]
     async fn test_init_db_with_random_shares() -> Result<()> {
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
@@ -568,7 +564,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature = "db_dependent")]
     async fn test_rollback() -> Result<()> {
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
@@ -594,7 +589,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature = "db_dependent")]
     async fn test_results() -> Result<()> {
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
@@ -613,7 +607,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature = "db_dependent")]
     async fn test_mark_requests_deleted() -> Result<()> {
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
@@ -635,7 +628,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature = "db_dependent")]
     async fn test_insert_left_right() -> Result<()> {
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
@@ -709,7 +701,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature = "db_dependent")]
     async fn test_update_iris() -> Result<()> {
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;

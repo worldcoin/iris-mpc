@@ -1,12 +1,12 @@
 use crate::{
     helpers::{
-        check_max_grid_size,
         comm::NcclComm,
         device_manager::DeviceManager,
         query_processor::{
             CudaVec2DSlicer, CudaVec2DSlicerRawPointer, CudaVec2DSlicerU32, CudaVec2DSlicerU8,
             StreamAwareCudaSlice,
         },
+        transposed_launch_config_from_elements_and_threads,
     },
     rng::chacha::ChaChaCudaRng,
     threshold_ring::protocol::ChunkShareView,
@@ -22,7 +22,6 @@ use cudarc::{
         result::{self, malloc_async, malloc_managed, mem_prefetch_async},
         sys::{CUdeviceptr, CUmemAttach_flags},
         CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr, DeviceSlice, LaunchAsync,
-        LaunchConfig,
     },
     nccl,
     nvrtc::compile_ptx,
@@ -529,16 +528,12 @@ impl ShareDB {
             );
 
             let num_elements = chunk_sizes[idx] * self.query_length;
-            let threads_per_block = 256;
-            let blocks_per_grid = num_elements.div_ceil(threads_per_block);
-            let cfg = LaunchConfig {
-                block_dim:        (threads_per_block as u32, 1, 1),
-                grid_dim:         (blocks_per_grid as u32, 1, 1),
-                shared_mem_bytes: 0,
-            };
-
-            // Check if kernel can be launched
-            check_max_grid_size(&self.device_manager.devices()[idx], num_elements);
+            let threads_per_block = 256; // ON CHANGE: sync with kernel
+            let cfg = transposed_launch_config_from_elements_and_threads(
+                num_elements as u32,
+                threads_per_block as u32,
+                &self.device_manager.devices()[idx],
+            );
 
             unsafe {
                 self.kernels[idx]
@@ -585,16 +580,12 @@ impl ShareDB {
         size: usize,
         streams: &[CudaStream],
     ) {
-        // Check if kernel can be launched
-        check_max_grid_size(&self.device_manager.devices()[idx], size);
-
-        let threads_per_block = 256;
-        let blocks_per_grid = size.div_ceil(threads_per_block);
-        let cfg = LaunchConfig {
-            block_dim:        (threads_per_block as u32, 1, 1),
-            grid_dim:         (blocks_per_grid as u32, 1, 1),
-            shared_mem_bytes: 0,
-        };
+        let threads_per_block = 256; // ON CHANGE: sync with kernel
+        let cfg = transposed_launch_config_from_elements_and_threads(
+            size as u32,
+            threads_per_block as u32,
+            &self.device_manager.devices()[idx],
+        );
 
         unsafe {
             self.xor_assign_u8_kernels[idx]

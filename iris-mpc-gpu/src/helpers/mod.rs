@@ -3,6 +3,7 @@ use cudarc::driver::{
     result::{self, memcpy_dtoh_async, memcpy_htod_async, stream},
     sys::{CUdeviceptr, CUstream, CUstream_st},
     CudaDevice, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceRepr, DriverError,
+    LaunchConfig,
 };
 use std::sync::Arc;
 
@@ -20,6 +21,36 @@ pub fn check_max_grid_size(device: &Arc<CudaDevice>, size: usize) {
     }
     .expect("Fetching CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X should work");
     assert!(size <= max_grid_dim_x as usize);
+}
+
+pub fn launch_config_from_elements_and_threads(
+    num_elements: u32,
+    threads: u32,
+    device: &Arc<CudaDevice>,
+) -> LaunchConfig {
+    let num_blocks = num_elements.div_ceil(threads);
+    // Check if kernel can be launched
+    check_max_grid_size(device, num_blocks as usize);
+    LaunchConfig {
+        grid_dim:         (num_blocks, 1, 1),
+        block_dim:        (threads, 1, 1),
+        shared_mem_bytes: 0,
+    }
+}
+
+pub fn transposed_launch_config_from_elements_and_threads(
+    num_elements: u32,
+    threads_per_block: u32,
+    device: &Arc<CudaDevice>,
+) -> LaunchConfig {
+    let blocks_per_grid = num_elements.div_ceil(threads_per_block);
+    // Check if kernel can be launched
+    check_max_grid_size(device, threads_per_block as usize);
+    LaunchConfig {
+        grid_dim:         (threads_per_block, 1, 1),
+        block_dim:        (blocks_per_grid, 1, 1),
+        shared_mem_bytes: 0,
+    }
 }
 
 pub fn device_ptrs<T>(slice: &[CudaSlice<T>]) -> Vec<CUdeviceptr> {
