@@ -155,7 +155,7 @@ async fn main() -> eyre::Result<()> {
 
     let num_iris_codes = end - start;
     tracing::info!("Processing {} iris codes", num_iris_codes);
-    
+
     while let Some(share_res) = shares_stream.next().await {
         let (share_id, share) = share_res?;
         let (mask_id, mask) = mask_stream
