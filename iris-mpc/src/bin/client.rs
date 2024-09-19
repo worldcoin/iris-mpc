@@ -520,8 +520,6 @@ async fn main() -> eyre::Result<()> {
         let message_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
 
         requests_sns_client
-            .lock()
-            .await
             .publish()
             .topic_arn(request_topic_arn.clone())
             .message_group_id(ENROLLMENT_REQUEST_TYPE)
@@ -573,15 +571,13 @@ fn calculate_shares(
 }
 
 async fn send_identity_deletion_request(
-    requests_sns_client: &Arc<Mutex<Client>>,
+    requests_sns_client: &Arc<Client>,
     request_topic_arn: &str,
     serial_id: u32,
 ) -> eyre::Result<()> {
     let message_attributes = create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
     let deletion_message = IdentityDeletionRequest { serial_id };
     requests_sns_client
-        .lock()
-        .await
         .publish()
         .topic_arn(request_topic_arn)
         .message_group_id(ENROLLMENT_REQUEST_TYPE)
