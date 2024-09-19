@@ -152,6 +152,7 @@ async fn main() -> eyre::Result<()> {
             // Receive responses
             let msg = results_sqs_client
                 .receive_message()
+                .wait_time_seconds(10)
                 .max_number_of_messages(1)
                 .queue_url(response_queue_url.clone())
                 .send()
@@ -236,6 +237,7 @@ async fn main() -> eyre::Result<()> {
         for _ in 0..n_deletion_messages * 2 {
             let msg = results_sqs_client
                 .receive_message()
+                .wait_time_seconds(10)
                 .max_number_of_messages(1)
                 .queue_url(response_queue_url.clone())
                 .send()
