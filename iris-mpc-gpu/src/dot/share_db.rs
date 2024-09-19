@@ -1040,8 +1040,20 @@ mod tests {
 
             assert_eq!(db_sizes, mask_db_sizes);
 
-            codes_engine.dot(&code_query, &code_db_slices.code_gr, &db_sizes, 0, &blass);
-            masks_engine.dot(&mask_query, &mask_db_slices.code_gr, &db_sizes, 0, &blass);
+            codes_engine.dot(
+                &code_query,
+                &code_db_slices.code_gr,
+                &db_sizes,
+                0,
+                &blass,
+            );
+            masks_engine.dot(
+                &mask_query,
+                &mask_db_slices.code_gr,
+                &db_sizes,
+                0,
+                &blass,
+            );
 
             codes_engine.dot_reduce(
                 &code_query_sums,
