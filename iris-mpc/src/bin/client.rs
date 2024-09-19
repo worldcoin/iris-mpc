@@ -222,7 +222,10 @@ async fn main() -> eyre::Result<()> {
         }
 
         // Process another batch of deletion messages. Do not exceed the max batch size
-        let n_deletion_messages = min(thread_responses.lock().await.len(), BATCH_SIZE) * 3;
+        let n_deletion_messages = {
+            let tmp = thread_responses.lock().await;
+            min(tmp.len(), BATCH_SIZE) * 3
+        };
 
         println!(
             "Start validating {} identity deletion and uniqueness responses",
@@ -355,14 +358,13 @@ async fn main() -> eyre::Result<()> {
                         }
                         1 => {
                             println!("Sending iris code from db");
-                            let db_len = {
-                                let tmp = thread_db2.lock().await;
-                                tmp.db.len()
-                            };
+                            let db_len = thread_db2.lock().await.db.len();
                             let db_index = rng.gen_range(0..db_len);
                             {
-                                let mut tmp = thread_expected_results2.lock().await;
-                                tmp.insert(request_id.to_string(), Some(db_index as u32 + 1));
+                                thread_expected_results2
+                                    .lock()
+                                    .await
+                                    .insert(request_id.to_string(), Some(db_index as u32 + 1));
                             }
                             {
                                 let tmp = thread_db2.lock().await;
@@ -479,11 +481,25 @@ async fn main() -> eyre::Result<()> {
         StdRng::from_entropy()
     };
 
-    let n_deletion_messages = min(responses.lock().await.len(), BATCH_SIZE);
-    println!("Sending {} identity deletion messages", n_deletion_messages);
-    for (serial_id, iris_code) in responses.lock().await.iter().take(n_deletion_messages) {
-        send_identity_deletion_request(&requests_sns_client, &request_topic_arn, *serial_id)
-            .await?;
+    // Process another batch of deletion messages. Do not exceed the max batch size
+    let n_deletion_requests = {
+        let tmp = responses.lock().await;
+        min(tmp.len(), BATCH_SIZE) * 3
+    };
+    let deletion_requests: Vec<(u32, IrisCode)> = {
+        let tmp = responses.lock().await;
+        tmp.iter()
+            .take(n_deletion_requests)
+            .map(|(k, v)| (*k, v.clone()))
+            .collect()
+    };
+    println!(
+        "Sending {} identity deletion messages",
+        deletion_requests.len()
+    );
+
+    for (serial_id, iris_code) in deletion_requests {
+        send_identity_deletion_request(&requests_sns_client, &request_topic_arn, serial_id).await?;
         let request_id = Uuid::new_v4();
 
         let shared_code =
@@ -511,7 +527,7 @@ async fn main() -> eyre::Result<()> {
         };
 
         let request_message = UniquenessRequest {
-            batch_size: Some(n_deletion_messages),
+            batch_size: Some(n_deletion_requests),
             signup_id: request_id.to_string(),
             s3_presigned_url: presigned_url,
             iris_shares_file_hashes,
