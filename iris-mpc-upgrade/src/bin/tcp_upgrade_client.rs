@@ -78,7 +78,7 @@ async fn main() -> eyre::Result<()> {
 
     let mut server1 = TcpStream::connect(&args.server1).await?;
     let mut server2 = TcpStream::connect(&args.server2).await?;
-    let mut server3 = TcpStream::connect(&args.server1).await?;
+    let mut server3 = TcpStream::connect(&args.server3).await?;
 
     tracing::info!("Connecting to servers and syncing migration task parameters...");
     server1.write_u8(args.party_id).await?;
