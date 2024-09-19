@@ -13,8 +13,8 @@ will bring up two old dbs on ports 6200 and 6201, and 3 new dbs on ports 6100,61
 ## Fill DBs with test data
 
 ```bash
-cargo run --release --bin seed-v1-dbs -- --side right --shares-db-urls postgres://postgres:postgres@localhost:6100 --shares-db-urls postgres://postgres:postgres@localhost:6101 --masks-db-url postgres://postgres:postgres@localhost:6111 --num-elements 10000
-cargo run --release --bin seed-v1-dbs -- --side left --shares-db-urls postgres://postgres:postgres@localhost:6100 --shares-db-urls postgres://postgres:postgres@localhost:6101 --masks-db-url postgres://postgres:postgres@localhost:6111 --num-elements 10000
+cargo run --release --bin seed-v1-dbs -- --side right --shares-db-urls postgres://postgres:postgres@localhost:6100 --shares-db-urls postgres://postgres:postgres@localhost:6101 --masks-db-url postgres://postgres:postgres@localhost:6111 --fill-to 10000 --create --migrate
+cargo run --release --bin seed-v1-dbs -- --side left --shares-db-urls postgres://postgres:postgres@localhost:6100 --shares-db-urls postgres://postgres:postgres@localhost:6101 --masks-db-url postgres://postgres:postgres@localhost:6111 --fill-to 10000 --create --migrate
 ```
 
 ## Upgrade for left eye
@@ -40,8 +40,8 @@ cargo run --release --bin upgrade-server -- --bind-addr 127.0.0.1:8002 --db-url 
 Concurrently run:
 
 ```bash
-cargo run --release --bin upgrade-client -- --server1 127.0.0.1:8000 --server2 127.0.0.1:8001 --server3 127.0.0.1:8002 --db-start 0 --db-end 10000 --party-id 0 --eye left --shares-db-url postgres://postgres:postgres@localhost:6100 --masks-db-url postgres://postgres:postgres@localhost:6111
-cargo run --release --bin upgrade-client -- --server1 127.0.0.1:8000 --server2 127.0.0.1:8001 --server3 127.0.0.1:8002 --db-start 0 --db-end 10000 --party-id 1 --eye left --shares-db-url postgres://postgres:postgres@localhost:6101 --masks-db-url postgres://postgres:postgres@localhost:6111
+cargo run --release --bin upgrade-client -- --server1 127.0.0.1:8000 --server2 127.0.0.1:8001 --server3 127.0.0.1:8002 --db-start 1 --db-end 10000 --party-id 0 --eye left --shares-db-url postgres://postgres:postgres@localhost:6100 --masks-db-url postgres://postgres:postgres@localhost:6111
+cargo run --release --bin upgrade-client -- --server1 127.0.0.1:8000 --server2 127.0.0.1:8001 --server3 127.0.0.1:8002 --db-start 1 --db-end 10000 --party-id 1 --eye left --shares-db-url postgres://postgres:postgres@localhost:6101 --masks-db-url postgres://postgres:postgres@localhost:6111
 ```
 
 ## Upgrade for right eye
