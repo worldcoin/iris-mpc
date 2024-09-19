@@ -18,10 +18,7 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use rustls::{pki_types::ServerName, ClientConfig};
 use std::{array, convert::TryFrom, pin::Pin, sync::Arc};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use tokio::{io::AsyncWriteExt, net::TcpStream};
 use tokio_rustls::{client::TlsStream, TlsConnector};
 
 fn install_tracing() {
@@ -269,15 +266,7 @@ async fn main() -> eyre::Result<()> {
         pb.inc(diff);
     }
     tracing::info!("Processing done!");
-    let mut buf = [0u8; 1];
-    server1.read_exact(&mut buf[..]).await?;
-    server2.read_exact(&mut buf[..]).await?;
-    server3.read_exact(&mut buf[..]).await?;
-    server1.shutdown().await?;
-    server2.shutdown().await?;
-    server3.shutdown().await?;
     pb.finish();
-
     Ok(())
 }
 
