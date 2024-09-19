@@ -29,9 +29,9 @@ use tokio::{
 };
 use uuid::Uuid;
 
-const MAX_CONCURRENT_REQUESTS: usize = 8;
+const MAX_CONCURRENT_REQUESTS: usize = 16;
 const BATCH_SIZE: usize = 64;
-const N_BATCHES: usize = 5;
+const N_BATCHES: usize = 100;
 const N_QUERIES: usize = BATCH_SIZE * N_BATCHES;
 const WAIT_AFTER_BATCH: Duration = Duration::from_secs(2);
 const RNG_SEED_SERVER: u64 = 42;
@@ -128,7 +128,7 @@ async fn main() -> eyre::Result<()> {
     let requests: Arc<Mutex<HashMap<String, IrisCode>>> = Arc::new(Mutex::new(HashMap::new()));
     let responses: Arc<Mutex<HashMap<u32, IrisCode>>> = Arc::new(Mutex::new(HashMap::new()));
     let db: Arc<Mutex<IrisDB>> = Arc::new(Mutex::new(db));
-    let requests_sns_client: Arc<Mutex<Client>> = Arc::new(Mutex::new(requests_sns_client));
+    let requests_sns_client: Arc<Client> = Arc::new(requests_sns_client);
 
     let thread_expected_results = expected_results.clone();
     let thread_requests = requests.clone();
@@ -160,9 +160,11 @@ async fn main() -> eyre::Result<()> {
 
                 println!("Received result: {:?}", result);
 
-                let tmp = thread_expected_results.lock().await;
-                let expected_result = tmp.get(&result.signup_id);
-                if expected_result.is_none() {
+                let expected_result_option = {
+                    let tmp = thread_expected_results.lock().await;
+                    tmp.get(&result.signup_id).cloned()
+                };
+                if expected_result_option.is_none() {
                     eprintln!(
                         "No expected result found for request_id: {}, the SQS message is likely \
                          stale, clear the queue",
@@ -179,21 +181,19 @@ async fn main() -> eyre::Result<()> {
 
                     continue;
                 }
-                let expected_result = expected_result.unwrap();
+                let expected_result = expected_result_option.unwrap();
 
                 if expected_result.is_none() {
                     // New insertion
                     assert!(!result.is_match);
-                    let request = thread_requests
-                        .lock()
-                        .await
-                        .get(&result.signup_id)
-                        .unwrap()
-                        .clone();
-                    thread_responses
-                        .lock()
-                        .await
-                        .insert(result.serial_id.unwrap(), request);
+                    let request = {
+                        let tmp = thread_requests.lock().await;
+                        tmp.get(&result.signup_id).unwrap().clone()
+                    };
+                    {
+                        let mut tmp = thread_responses.lock().await;
+                        tmp.insert(result.serial_id.unwrap(), request);
+                    }
                 } else {
                     // Existing entry
                     assert!(result.is_match);
@@ -231,7 +231,7 @@ async fn main() -> eyre::Result<()> {
             let semaphore = Arc::clone(&semaphore);
 
             let handle = tokio::spawn(async move {
-                let _ = semaphore.acquire().await;
+                let _permit = semaphore.acquire().await;
 
                 let mut rng = if let Some(rng_seed) = rng_seed {
                     StdRng::seed_from_u64(rng_seed)
@@ -243,39 +243,56 @@ async fn main() -> eyre::Result<()> {
 
                 let template = if random.is_some() {
                     // Automatic random tests
-                    let options = if thread_responses2.lock().await.len() == 0 {
-                        2
-                    } else {
-                        3
+
+                    let responses_len = {
+                        let tmp = thread_responses2.lock().await;
+                        tmp.len()
                     };
+
+                    let options = if responses_len == 0 { 2 } else { 3 };
+
                     match rng.gen_range(0..options) {
                         0 => {
                             println!("Sending new iris code");
-                            thread_expected_results2
-                                .lock()
-                                .await
-                                .insert(request_id.to_string(), None);
+                            {
+                                let mut tmp = thread_expected_results2.lock().await;
+                                tmp.insert(request_id.to_string(), None);
+                            }
                             IrisCode::random_rng(&mut rng)
                         }
                         1 => {
                             println!("Sending iris code from db");
-                            let db_index = rng.gen_range(0..thread_db2.lock().await.db.len());
-                            thread_expected_results2
-                                .lock()
-                                .await
-                                .insert(request_id.to_string(), Some(db_index as u32 + 1));
-                            thread_db2.lock().await.db[db_index].clone()
+                            let db_len = {
+                                let tmp = thread_db2.lock().await;
+                                tmp.db.len()
+                            };
+                            let db_index = rng.gen_range(0..db_len);
+                            {
+                                let mut tmp = thread_expected_results2.lock().await;
+                                tmp.insert(request_id.to_string(), Some(db_index as u32 + 1));
+                            }
+                            let template = {
+                                let tmp = thread_db2.lock().await;
+                                tmp.db[db_index].clone()
+                            };
+                            template
                         }
                         2 => {
                             println!("Sending freshly inserted iris code");
-                            let tmp = thread_responses2.lock().await;
-                            let keys = tmp.keys().collect::<Vec<_>>();
-                            let idx = rng.gen_range(0..keys.len());
-                            let iris_code = tmp.get(keys[idx]).unwrap().clone();
-                            thread_expected_results2
-                                .lock()
-                                .await
-                                .insert(request_id.to_string(), Some(*keys[idx]));
+                            let (keys_vec, keys_idx) = {
+                                let tmp = thread_responses2.lock().await;
+                                let keys = tmp.keys().cloned().collect::<Vec<_>>();
+                                let idx = rng.gen_range(0..keys.len());
+                                (keys, idx)
+                            };
+                            let iris_code = {
+                                let tmp = thread_responses2.lock().await;
+                                tmp.get(&keys_vec[keys_idx]).unwrap().clone()
+                            };
+                            {
+                                let mut tmp = thread_expected_results2.lock().await;
+                                tmp.insert(request_id.to_string(), Some(keys_vec[keys_idx]));
+                            }
                             iris_code
                         }
                         _ => unreachable!(),
@@ -284,7 +301,11 @@ async fn main() -> eyre::Result<()> {
                     // Manually passed cli arguments
                     if let Some(db_index) = db_index {
                         if batch_query_idx * batch_idx < n_repeat {
-                            thread_db2.lock().await.db[db_index].clone()
+                            let template = {
+                                let tmp = thread_db2.lock().await;
+                                tmp.db[db_index].clone()
+                            };
+                            template
                         } else {
                             IrisCode::random_rng(&mut rng)
                         }
@@ -294,10 +315,10 @@ async fn main() -> eyre::Result<()> {
                     }
                 };
 
-                thread_requests2
-                    .lock()
-                    .await
-                    .insert(request_id.to_string(), template.clone());
+                {
+                    let mut tmp = thread_requests2.lock().await;
+                    tmp.insert(request_id.to_string(), template.clone());
+                }
 
                 let shared_code = GaloisRingIrisCodeShare::encode_iris_code(
                     &template.code,
@@ -363,8 +384,6 @@ async fn main() -> eyre::Result<()> {
                 let message_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
 
                 requests_sns_client2
-                    .lock()
-                    .await
                     .publish()
                     .topic_arn(request_topic_arn.clone())
                     .message_group_id(ENROLLMENT_REQUEST_TYPE)
