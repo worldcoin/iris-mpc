@@ -271,11 +271,10 @@ async fn main() -> eyre::Result<()> {
                                 let mut tmp = thread_expected_results2.lock().await;
                                 tmp.insert(request_id.to_string(), Some(db_index as u32 + 1));
                             }
-                            let template = {
+                            {
                                 let tmp = thread_db2.lock().await;
                                 tmp.db[db_index].clone()
-                            };
-                            template
+                            }
                         }
                         2 => {
                             println!("Sending freshly inserted iris code");
@@ -301,11 +300,8 @@ async fn main() -> eyre::Result<()> {
                     // Manually passed cli arguments
                     if let Some(db_index) = db_index {
                         if batch_query_idx * batch_idx < n_repeat {
-                            let template = {
-                                let tmp = thread_db2.lock().await;
-                                tmp.db[db_index].clone()
-                            };
-                            template
+                            let tmp = thread_db2.lock().await;
+                            tmp.db[db_index].clone()
                         } else {
                             IrisCode::random_rng(&mut rng)
                         }
