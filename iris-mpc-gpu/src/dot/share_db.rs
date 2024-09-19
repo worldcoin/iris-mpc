@@ -747,7 +747,7 @@ impl ShareDB {
 }
 
 #[cfg(test)]
-#[allow(unused)]
+#[cfg(feature = "gpu_dependent")]
 mod tests {
     use super::{preprocess_query, ShareDB};
     use crate::{
@@ -807,7 +807,6 @@ mod tests {
 
     /// Test to verify the matmul operation for random matrices in the field
     #[test]
-    #[cfg(feature = "gpu_dependent")]
     fn check_matmul() {
         let db = random_vec(DB_SIZE, WIDTH, u16::MAX as u32);
         let query = random_vec(QUERY_SIZE, WIDTH, u16::MAX as u32);
@@ -877,7 +876,6 @@ mod tests {
     /// Checks that the result of a matmul of the original data equals the
     /// reconstructed result of individual matmuls on the shamir shares.
     #[test]
-    #[cfg(feature = "gpu_dependent")]
     fn check_shared_matmul() {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let device_manager = Arc::new(DeviceManager::init());
@@ -963,7 +961,6 @@ mod tests {
     /// Calculates the distances between a query and a shamir secret shared db
     /// and checks the result against reference plain implementation.
     #[test]
-    #[cfg(feature = "gpu_dependent")]
     fn check_shared_distances() {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let device_manager = Arc::new(DeviceManager::init());

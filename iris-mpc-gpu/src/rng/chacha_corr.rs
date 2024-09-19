@@ -70,7 +70,7 @@ impl ChaChaCudaCorrRng {
 }
 
 #[cfg(test)]
-#[allow(unused)]
+#[cfg(feature = "gpu_dependent")]
 mod tests {
 
     use super::*;
@@ -78,7 +78,6 @@ mod tests {
     use itertools::izip;
 
     #[test]
-    #[cfg(feature = "gpu_dependent")]
     fn test_chacha_rng() {
         // This call to CudaDevice::new is only used in context of a test - not used in
         // the server binary
@@ -97,7 +96,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "gpu_dependent")]
     fn test_correlation() {
         // This call to CudaDevice::new is only used in context of a test - not used in
         // the server binary

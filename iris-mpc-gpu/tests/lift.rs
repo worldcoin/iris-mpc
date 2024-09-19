@@ -1,4 +1,4 @@
-#[allow(unused)]
+#[cfg(feature = "gpu_dependent")]
 mod lift_test {
     use cudarc::driver::{CudaDevice, CudaStream};
     use iris_mpc_common::iris_db::iris::IrisCodeArray;
@@ -166,7 +166,6 @@ mod lift_test {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore]
-    #[cfg(feature = "gpu_dependent")]
     async fn test_lift() -> eyre::Result<()> {
         use itertools::Itertools;
 

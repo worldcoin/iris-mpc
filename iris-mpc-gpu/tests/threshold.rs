@@ -1,4 +1,4 @@
-#[allow(unused)]
+#[cfg(feature = "gpu_dependent")]
 mod threshold_test {
     use cudarc::driver::{CudaDevice, CudaStream};
     use iris_mpc_common::iris_db::iris::{IrisCodeArray, MATCH_THRESHOLD_RATIO};
@@ -156,7 +156,6 @@ mod threshold_test {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[cfg(feature = "gpu_dependent")]
     #[ignore]
     async fn test_threshold() -> eyre::Result<()> {
         use itertools::Itertools;

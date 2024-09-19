@@ -1,4 +1,4 @@
-#[allow(unused)]
+#[cfg(feature = "gpu_dependent")]
 mod e2e_test {
     use cudarc::nccl::Id;
     use eyre::Result;
@@ -70,7 +70,6 @@ mod e2e_test {
     }
 
     #[tokio::test]
-    #[cfg(feature = "gpu_dependent")]
     async fn e2e_test() -> Result<()> {
         use std::collections::HashSet;
 

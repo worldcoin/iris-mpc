@@ -1,4 +1,4 @@
-#[allow(unused)]
+#[cfg(feature = "gpu_dependent")]
 mod bitinject_test {
     use cudarc::driver::{CudaDevice, CudaStream};
     use iris_mpc_gpu::{
@@ -137,7 +137,6 @@ mod bitinject_test {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[cfg(feature = "gpu_dependent")]
     #[ignore]
     async fn test_bitinject() -> eyre::Result<()> {
         const_assert!(

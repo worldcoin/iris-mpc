@@ -1,4 +1,4 @@
-#[allow(unused)]
+#[cfg(feature = "gpu_dependent")]
 mod extract_msb_mod_test {
 
     use cudarc::driver::{CudaDevice, CudaStream};
@@ -155,7 +155,6 @@ mod extract_msb_mod_test {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[cfg(feature = "gpu_dependent")]
     #[ignore]
     async fn test_extract_msb_mod() -> eyre::Result<()> {
         use itertools::Itertools;
