@@ -11,7 +11,7 @@ struct Args {
     masks_db_url: String,
 
     #[clap(long)]
-    num_elements: u64,
+    fill_to: u64,
 
     #[clap(long)]
     side: String,
@@ -42,40 +42,49 @@ async fn main() -> eyre::Result<()> {
             "{}/{}",
             args.shares_db_urls[0], participant_one_shares_db_name
         ),
-        migrate: true,
-        create:  true,
+        migrate: false,
+        create:  false,
     };
-
     let shares_db_config1 = DbConfig {
         url:     format!(
             "{}/{}",
             args.shares_db_urls[1], participant_two_shares_db_name
         ),
-        migrate: true,
-        create:  true,
+        migrate: false,
+        create:  false,
     };
-
     let masks_db_config = DbConfig {
         url:     format!(
             "{}/{}",
             args.masks_db_url.clone(),
             participant_one_masks_db_name
         ),
-        migrate: true,
-        create:  true,
+        migrate: false,
+        create:  false,
     };
 
     let shares_db0 = Db::new(&shares_db_config0).await?;
+    let latest_shares_id_0 = shares_db0.fetch_latest_share_id().await?;
     let shares_db1 = Db::new(&shares_db_config1).await?;
+    let latest_shares_id_1 = shares_db1.fetch_latest_share_id().await?;
     let masks_db = Db::new(&masks_db_config).await?;
+    let latest_masks_id = masks_db.fetch_latest_mask_id().await?;
+
+    if latest_shares_id_0 != latest_shares_id_1 {
+        return Err(eyre::eyre!(
+            "Shares db have different number of shares: {} {}",
+            latest_shares_id_0,
+            latest_shares_id_1
+        ));
+    }
 
     let mut rng = rand::thread_rng();
 
-    let mut masks = Vec::with_capacity(args.num_elements as usize);
-    let mut shares0 = Vec::with_capacity(args.num_elements as usize);
-    let mut shares1 = Vec::with_capacity(args.num_elements as usize);
+    let mut masks = Vec::with_capacity(args.fill_to as usize);
+    let mut shares0 = Vec::with_capacity(args.fill_to as usize);
+    let mut shares1 = Vec::with_capacity(args.fill_to as usize);
 
-    for i in 1..args.num_elements + 1 {
+    for i in latest_shares_id_0..args.fill_to {
         let mut iris_code = rng.gen::<Template>();
         // fix the iris code mask to be valid: all chunks of 2 bits are equal, since
         // they mask the real/imaginary party of the same bit
@@ -83,12 +92,20 @@ async fn main() -> eyre::Result<()> {
             iris_code.mask.set(j + 1, iris_code.mask.get(j))
         }
         let encoded = mpc_uniqueness_check::distance::encode(&iris_code).share(2, &mut rng);
-        masks.push((i, iris_code.mask));
         shares0.push((i, encoded[0]));
         shares1.push((i, encoded[1]));
     }
-    masks_db.insert_masks(&masks).await?;
+    for i in latest_masks_id..args.fill_to {
+        let mut iris_code = rng.gen::<Template>();
+        // fix the iris code mask to be valid: all chunks of 2 bits are equal, since
+        // they mask the real/imaginary party of the same bit
+        for i in (0..BITS).step_by(2) {
+            iris_code.mask.set(i + 1, iris_code.mask.get(i))
+        }
+        masks.push((i, iris_code.mask));
+    }
 
+    masks_db.insert_masks(&masks).await?;
     shares_db0.insert_shares(&shares0).await?;
     shares_db1.insert_shares(&shares1).await?;
 
