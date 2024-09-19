@@ -1,5 +1,5 @@
 use clap::Parser;
-use eyre::ContextCompat;
+use eyre::{Context, ContextCompat};
 use futures::{Stream, StreamExt};
 use futures_concurrency::future::Join;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -16,11 +16,13 @@ use iris_mpc_upgrade::{
 use mpc_uniqueness_check::{bits::Bits, distance::EncodedBits};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-use std::{array, pin::Pin};
+use rustls::{pki_types::ServerName, ClientConfig};
+use std::{array, convert::TryFrom, pin::Pin, sync::Arc};
 use tokio::{
-    io::{AsyncWriteExt, BufWriter},
+    io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
 };
+use tokio_rustls::{client::TlsStream, TlsConnector};
 
 fn install_tracing() {
     use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -36,6 +38,28 @@ fn install_tracing() {
         .init();
 }
 
+async fn prepare_tls_stream_for_writing(
+    address: &str,
+    client_config: Arc<ClientConfig>,
+) -> eyre::Result<TlsStream<TcpStream>> {
+    // Create a TCP connection
+    let stream = TcpStream::connect(address).await?;
+
+    let tls_connector = TlsConnector::from(client_config);
+
+    // Hostname for SNI (Server Name Indication)
+    // throw away the port number if there is one (e.g. "localhost:8080" ->
+    // "localhost")
+    let address = address.split(":").next().context("splitting address")?;
+    let dns_name =
+        ServerName::try_from(address.to_owned()).context("trying to convert address to SNI")?;
+
+    // Perform the TLS handshake to establish a secure connection
+    let tls_stream: TlsStream<TcpStream> = tls_connector.connect(dns_name, stream).await?;
+
+    Ok(tls_stream)
+}
+
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     install_tracing();
@@ -45,10 +69,20 @@ async fn main() -> eyre::Result<()> {
         panic!("Party id must be 0, 1");
     }
 
+    // read the trusted cert
+    let mut root_cert_store = rustls::RootCertStore::empty();
+    root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let client_config = Arc::new(
+        ClientConfig::builder()
+            .with_root_certificates(root_cert_store)
+            .with_no_client_auth(),
+    );
+
+    let mut server1 = prepare_tls_stream_for_writing(&args.server1, client_config.clone()).await?;
+    let mut server2 = prepare_tls_stream_for_writing(&args.server2, client_config.clone()).await?;
+    let mut server3 = prepare_tls_stream_for_writing(&args.server3, client_config).await?;
+
     tracing::info!("Connecting to servers and syncing migration task parameters...");
-    let mut server1 = BufWriter::new(TcpStream::connect(args.server1).await?);
-    let mut server2 = BufWriter::new(TcpStream::connect(args.server2).await?);
-    let mut server3 = BufWriter::new(TcpStream::connect(args.server3).await?);
     server1.write_u8(args.party_id).await?;
     server2.write_u8(args.party_id).await?;
     server3.write_u8(args.party_id).await?;
@@ -235,6 +269,13 @@ async fn main() -> eyre::Result<()> {
         pb.inc(diff);
     }
     tracing::info!("Processing done!");
+    let mut buf = [0u8; 1];
+    server1.read_exact(&mut buf[..]).await?;
+    server2.read_exact(&mut buf[..]).await?;
+    server3.read_exact(&mut buf[..]).await?;
+    server1.shutdown().await?;
+    server2.shutdown().await?;
+    server3.shutdown().await?;
     pb.finish();
 
     Ok(())

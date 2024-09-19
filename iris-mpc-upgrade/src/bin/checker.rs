@@ -11,6 +11,7 @@ use iris_mpc_upgrade::db::V1Db;
 use itertools::izip;
 use mpc_uniqueness_check::{bits::Bits, distance::EncodedBits};
 use std::collections::HashMap;
+
 // quick checking script that recombines the shamir shares for a local server
 // setup and prints the iris code share
 
@@ -70,15 +71,15 @@ async fn main() -> eyre::Result<()> {
 
     // grab the old shares from the db and reconstruct them
     let old_left_shares0 = old_left_shares_db0
-        .stream_shares(0..args.num_elements)
+        .stream_shares(1..args.num_elements + 1)
         .collect::<Vec<_>>()
         .await;
     let old_left_shares1 = old_left_shares_db1
-        .stream_shares(0..args.num_elements)
+        .stream_shares(1..args.num_elements + 1)
         .collect::<Vec<_>>()
         .await;
     let old_left_masks = old_left_masks_db
-        .stream_masks(0..args.num_elements)
+        .stream_masks(1..args.num_elements + 1)
         .collect::<Vec<_>>()
         .await;
 
@@ -101,15 +102,15 @@ async fn main() -> eyre::Result<()> {
     .collect();
 
     let old_right_shares0 = old_right_shares_db0
-        .stream_shares(0..args.num_elements)
+        .stream_shares(1..args.num_elements + 1)
         .collect::<Vec<_>>()
         .await;
     let old_right_shares1 = old_right_shares_db1
-        .stream_shares(0..args.num_elements)
+        .stream_shares(1..args.num_elements + 1)
         .collect::<Vec<_>>()
         .await;
     let old_right_masks = old_right_masks_db1
-        .stream_masks(0..args.num_elements)
+        .stream_masks(1..args.num_elements + 1)
         .collect::<Vec<_>>()
         .await;
 
