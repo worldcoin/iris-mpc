@@ -456,6 +456,8 @@ impl ServerActor {
         let now = Instant::now();
         let mut events: HashMap<&str, Vec<Vec<CUevent>>> = HashMap::new();
 
+        tracing::info!("Started processing batch");
+
         let mut batch = batch;
         let mut batch_size = batch.store_left.code.len();
         assert!(batch_size > 0 && batch_size <= self.max_batch_size);
@@ -481,6 +483,7 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
 
         if !batch.deletion_requests_indices.is_empty() {
+            tracing::info!("Performing deletions");
             // Prepare dummy deletion shares
             let (dummy_queries, dummy_sums) = self.prepare_deletion_shares()?;
 
@@ -520,7 +523,7 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // SYNC BATCH CONTENTS AND FILTER OUT INVALID ENTRIES
         ///////////////////////////////////////////////////////////////////
-
+        tracing::info!("Syncing batch entries");
         let valid_entries = self.sync_batch_entries(&batch.valid_entries)?;
         let valid_entry_idxs = valid_entries.iter().positions(|&x| x).collect::<Vec<_>>();
         batch_size = valid_entry_idxs.len();
@@ -529,7 +532,7 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // COMPARE LEFT EYE QUERIES
         ///////////////////////////////////////////////////////////////////
-
+        tracing::info!("Comparing left eye queries");
         // *Query* variant including Lagrange interpolation.
         let compact_query_left = {
             let code_query = preprocess_query(
@@ -590,6 +593,7 @@ impl ServerActor {
             &self.cublas_handles[0],
         )?;
 
+        tracing::info!("Comparing left eye queries against DB and self");
         self.compare_query_against_db_and_self(
             &compact_device_queries_left,
             &compact_device_sums_left,
@@ -600,7 +604,7 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // COMPARE RIGHT EYE QUERIES
         ///////////////////////////////////////////////////////////////////
-
+        tracing::info!("Comparing right eye queries");
         // *Query* variant including Lagrange interpolation.
         let compact_query_right = {
             let code_query = preprocess_query(
@@ -661,6 +665,7 @@ impl ServerActor {
             &self.cublas_handles[0],
         )?;
 
+        tracing::info!("Comparing right eye queries against DB and self");
         self.compare_query_against_db_and_self(
             &compact_device_queries_right,
             &compact_device_sums_right,
@@ -671,7 +676,7 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // MERGE LEFT & RIGHT results
         ///////////////////////////////////////////////////////////////////
-
+        tracing::info!("Joining both sides");
         // Merge results and fetch matching indices
         // Format: host_results[device_index][query_index]
         self.distance_comparator.join_db_matches(
