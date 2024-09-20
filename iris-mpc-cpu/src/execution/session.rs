@@ -1,6 +1,6 @@
 use crate::{
     execution::player::{Identity, Role},
-    next_gen::Networking,
+    next_gen_network::Networking,
     protocol::prf::Prf,
 };
 use eyre::eyre;
@@ -38,6 +38,8 @@ pub trait SessionHandles {
     fn own_identity(&self) -> Identity;
     fn identity(&self, role: &Role) -> eyre::Result<&Identity>;
     fn network(&self) -> &NetworkingImpl;
+    fn next_identity(&self) -> eyre::Result<Identity>;
+    fn prev_identity(&self) -> eyre::Result<Identity>;
 }
 
 impl SessionHandles for BootSession {
@@ -80,6 +82,26 @@ impl SessionHandles for BootSession {
     fn network(&self) -> &NetworkingImpl {
         &self.networking
     }
+
+    fn prev_identity(&self) -> eyre::Result<Identity> {
+        let prev_role = self.own_role()?.prev(self.role_assignments.len() as u8);
+        match self.role_assignments.get(&prev_role) {
+            Some(id) => Ok(id.clone()),
+            None => Err(eyre!(
+                "Couldn't find role in role assignment map for prev_identity"
+            )),
+        }
+    }
+
+    fn next_identity(&self) -> eyre::Result<Identity> {
+        let next_role = self.own_role()?.next(self.role_assignments.len() as u8);
+        match self.role_assignments.get(&next_role) {
+            Some(id) => Ok(id.clone()),
+            None => Err(eyre!(
+                "Couldn't find role in role assignment map for next_identity"
+            )),
+        }
+    }
 }
 
 impl SessionHandles for Session {
@@ -97,6 +119,12 @@ impl SessionHandles for Session {
     }
     fn own_role(&self) -> eyre::Result<Role> {
         self.boot_session.own_role()
+    }
+    fn prev_identity(&self) -> eyre::Result<Identity> {
+        self.boot_session.prev_identity()
+    }
+    fn next_identity(&self) -> eyre::Result<Identity> {
+        self.boot_session.next_identity()
     }
 }
 

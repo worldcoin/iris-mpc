@@ -1,4 +1,5 @@
 use super::{int_ring::IntRing2k, ring_impl::RingElement};
+use crate::execution::player::Role;
 use iris_mpc_common::id::PartyID;
 use num_traits::Zero;
 use serde::{Deserialize, Serialize};
@@ -30,6 +31,15 @@ impl<T: IntRing2k> Share<T> {
             PartyID::ID0 => self.a += RingElement(other),
             PartyID::ID1 => self.b += RingElement(other),
             PartyID::ID2 => {}
+        }
+    }
+
+    pub fn add_assign_const_role(&mut self, other: T, role: Role) {
+        match role.zero_based() {
+            0 => self.a += RingElement(other),
+            1 => self.b += RingElement(other),
+            2 => {}
+            _ => unimplemented!(),
         }
     }
 

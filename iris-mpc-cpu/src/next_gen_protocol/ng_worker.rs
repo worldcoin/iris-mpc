@@ -1,15 +1,15 @@
-use super::prf::PrfSeed;
 use crate::{
     execution::{
         player::{Identity, Role, RoleAssignment},
         session::{BootSession, Session, SessionHandles, SessionId},
     },
-    next_gen::{
+    next_gen_network::{
         local::{LocalNetworking, LocalNetworkingStore},
-        value::NetworkValue::{self, PrfKey},
+        value::NetworkValue::{self, PrfKey, RingElement16},
     },
-    protocol::{ng_worker::NetworkValue::RingElement16, prf::Prf},
-    shares::{ring_impl::RingElement, share::Share, vecshare::VecShare},
+    prelude::IrisWorker,
+    protocol::prf::{Prf, PrfSeed},
+    shares::{int_ring::IntRing2k, ring_impl::RingElement, share::Share, vecshare::VecShare},
 };
 use eyre::eyre;
 use iris_mpc_common::iris_db::iris::IrisCodeArray;
@@ -32,7 +32,7 @@ pub async fn setup_replicated_prf(session: &BootSession, my_seed: PrfSeed) -> ey
     // send my_seed to the next party
     let _ = network
         .send(
-            PrfKey(my_seed).to_network(),
+            NetworkValue::PrfKey(my_seed).to_network(),
             session.identity(&next_role)?,
             &session.session_id,
         )
@@ -120,6 +120,37 @@ pub(crate) async fn replicated_dot(
 
     let res = Share::new(res_a, res_b);
     Ok(res)
+}
+
+pub(crate) async fn replicated_pairwise_distance(
+    session: &mut Session,
+    lhs_shares: &Vec<Share<u16>>,
+    rhs_shares: &Vec<Share<u16>>,
+    lhs_mask: &IrisCodeArray,
+    rhs_mask: &IrisCodeArray,
+) -> eyre::Result<(Share<u16>, usize)> {
+    let combined_mask = *lhs_mask & *rhs_mask;
+    let mask_dots = combined_mask.count_ones();
+    let code_dots = replicated_dot(session, lhs_shares, rhs_shares).await?;
+    Ok((code_dots, mask_dots))
+}
+
+pub(crate) async fn replicated_cross_mul(
+    session: &mut Session,
+    d1: Share<u16>,
+    t1: u32,
+    d2: Share<u16>,
+    t2: u32,
+) -> eyre::Result<Share<u32>> {
+    let mut vd1 = VecShare::<u16>::with_capacity(1);
+    // Do preprocessing to lift d1
+    vd1.push(d1);
+    // Compute (d1 + 2^{15}) % 2^{16}
+    for x in vd1.iter_mut() {
+        x.add_assign_const_role(1_u16 << 15, session.own_role()?);
+    }
+
+    unimplemented!()
 }
 
 impl LocalRuntime {

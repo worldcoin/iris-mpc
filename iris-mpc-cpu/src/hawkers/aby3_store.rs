@@ -344,6 +344,7 @@ impl VectorStore for LocalNetAby3StoreProtocol {
     ) -> bool {
         let d1 = *distance1;
         let d2 = *distance2;
+        println!("Computing less than...");
 
         let network = TestNetwork3p::new();
         let [net0, net1, net2] = network.get_party_networks();
@@ -657,7 +658,6 @@ mod tests {
         }
     }
     #[tokio::test(flavor = "multi_thread")]
-    #[traced_test]
     async fn test_hnsw() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 10;
@@ -683,10 +683,12 @@ mod tests {
             let neighbors = db.search_to_insert(query).await;
             db.insert_from_search_results(*query, neighbors).await;
         }
-
+        println!("FINISHED INSERTING");
         // Search for the same codes and find matches.
         for query in queries.iter() {
             let neighbors = db.search_to_insert(query).await;
+            assert_eq!(false, true);
+            tracing::debug!("Finished query");
             assert!(db.is_match(&neighbors).await);
         }
     }
