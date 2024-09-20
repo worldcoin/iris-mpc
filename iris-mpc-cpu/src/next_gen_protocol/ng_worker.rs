@@ -7,6 +7,7 @@ use crate::{
         local::{LocalNetworking, LocalNetworkingStore},
         value::NetworkValue::{self, PrfKey, RingElement16},
     },
+    next_gen_protocol::binary::lift,
     prelude::IrisWorker,
     protocol::prf::{Prf, PrfSeed},
     shares::{int_ring::IntRing2k, ring_impl::RingElement, share::Share, vecshare::VecShare},
@@ -14,7 +15,7 @@ use crate::{
 use eyre::eyre;
 use iris_mpc_common::iris_db::iris::IrisCodeArray;
 use rand::RngCore;
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, ops::SubAssign, sync::Arc};
 use tokio::task::JoinSet;
 
 pub struct LocalRuntime {
@@ -149,8 +150,39 @@ pub(crate) async fn replicated_cross_mul(
     for x in vd1.iter_mut() {
         x.add_assign_const_role(1_u16 << 15, session.own_role()?);
     }
+    let mut lifted_d1 = lift::<16>(session, vd1).await?;
+    // Now we got shares of d1' over 2^32 such that d1' = (d1'_1 + d1'_2 + d1'_3) %
+    // 2^{16} = d1 Next we subtract the 2^15 term we've added previously to
+    // get signed shares over 2^{32}
+    for x in lifted_d1.iter_mut() {
+        x.add_assign_const_role(((1_u64 << 32) - (1_u64 << 15)) as u32, session.own_role()?);
+    }
 
-    unimplemented!()
+    // Compute d1 * t2
+    for x in lifted_d1.iter_mut() {
+        *x *= t2;
+    }
+
+    // Do preprocessing to lift d2
+    let mut vd2 = VecShare::<u16>::with_capacity(1);
+    vd2.push(d2);
+    // Same process for d2, compute (d2 + 2^{15}) % 2^{16}
+    for x in vd2.iter_mut() {
+        x.add_assign_const_role(1_u16 << 15, session.own_role()?);
+    }
+
+    let mut lifted_d2 = lift::<16>(session, vd2).await?;
+    // Now get rid of the 2^{15} term to get signed shares over 2^{32}
+    for x in lifted_d2.iter_mut() {
+        x.add_assign_const_role(((1_u64 << 32) - (1_u64 << 15)) as u32, session.own_role()?);
+    }
+    // Compute d2 * t1
+    for x in lifted_d2.iter_mut() {
+        *x *= t1;
+    }
+    // Compute d2*t1 - d1*t2
+    lifted_d2.sub_assign(lifted_d1);
+    Ok(lifted_d2.get_at(0))
 }
 
 impl LocalRuntime {
