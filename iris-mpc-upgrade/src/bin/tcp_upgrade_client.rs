@@ -2,7 +2,6 @@ use clap::Parser;
 use eyre::{Context, ContextCompat};
 use futures::{Stream, StreamExt};
 use futures_concurrency::future::Join;
-use indicatif::{ProgressBar, ProgressStyle};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     IRIS_CODE_LENGTH,
@@ -20,6 +19,7 @@ use rustls::{pki_types::ServerName, ClientConfig};
 use std::{array, convert::TryFrom, pin::Pin, sync::Arc};
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 use tokio_rustls::{client::TlsStream, TlsConnector};
+use tracing::error;
 
 fn install_tracing() {
     use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -153,17 +153,7 @@ async fn main() -> eyre::Result<()> {
     };
 
     let num_iris_codes = end - start;
-
-    let pb = ProgressBar::new(num_iris_codes).with_message("Migrating iris codes and masks");
-    let pb_style = ProgressStyle::default_bar()
-        .template(
-            "{spinner:.green} {msg} [{elapsed_precise}] [{wide_bar:.green}] {pos:>7}/{len:7} \
-             ({eta})",
-        )
-        .expect("Could not create progress bar");
-    pb.set_style(pb_style);
-
-    let mut cur = start;
+    tracing::info!("Processing {} iris codes", num_iris_codes);
 
     while let Some(share_res) = shares_stream.next().await {
         let (share_id, share) = share_res?;
@@ -178,7 +168,7 @@ async fn main() -> eyre::Result<()> {
             mask_id
         );
         let id = share_id;
-        tracing::trace!("Processing id: {}", id);
+        tracing::info!("Processing id: {}", id);
         let [a, b, c] = {
             let galois_shared_iris_code =
                 GaloisRingIrisCodeShare::reencode_extended_iris_code(&share.0, &mut rng);
@@ -207,16 +197,40 @@ async fn main() -> eyre::Result<()> {
             from: args.party_id,
             data: c,
         };
-        let (a, b, c) = (
+        let (result_a, result_b, result_c) = (
             message_a.send(&mut server1),
             message_b.send(&mut server2),
             message_c.send(&mut server3),
         )
             .join()
             .await;
-        a?;
-        b?;
-        c?;
+
+        // Handle errors for each send operation
+        let mut errors = Vec::new();
+
+        if let Err(e) = result_a {
+            error!("Failed to send message to server1 (party_id: 0): {:?}", e);
+            errors.push(e.to_string());
+        }
+
+        if let Err(e) = result_b {
+            error!("Failed to send message to server2 (party_id: 1): {:?}", e);
+            errors.push(e.to_string());
+        }
+
+        if let Err(e) = result_c {
+            error!("Failed to send message to server3 (party_id: 2): {:?}", e);
+            errors.push(e.to_string());
+        }
+
+        // If any errors occurred, return a combined error
+        if !errors.is_empty() {
+            // Combine all errors into one
+            let combined_error = errors.join("||");
+            // Return the combined error
+            error!(combined_error);
+            return Ok(());
+        }
 
         if args.party_id == 0 {
             let extended_masks = array::from_fn(|i| mask[i] as u16);
@@ -260,13 +274,9 @@ async fn main() -> eyre::Result<()> {
             b?;
             c?;
         }
-        tracing::trace!("Finished id: {}", id);
-        let diff = share_id - cur;
-        cur = share_id;
-        pb.inc(diff);
+        tracing::info!("Finished id: {}", id);
     }
     tracing::info!("Processing done!");
-    pb.finish();
     Ok(())
 }
 
