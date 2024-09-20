@@ -11,3 +11,5 @@ args:
   - "$(ENVIRONMENT)"
   - "--threads"
   - "1"
+  - "--batch-size"
+  - "50"
