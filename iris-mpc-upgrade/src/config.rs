@@ -45,6 +45,9 @@ pub struct UpgradeServerConfig {
     #[clap(long)]
     pub party_id: PartyID,
 
+    #[clap(long)]
+    pub batch_size: u8,
+
     #[clap(long, default_value = "8")]
     pub threads: usize,
 
@@ -86,6 +89,9 @@ pub struct UpgradeClientConfig {
 
     #[clap(long)]
     pub party_id: u8,
+
+    #[clap(long)]
+    pub batch_size: u8,
 
     #[clap(long)]
     pub eye: Eye,

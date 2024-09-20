@@ -14,6 +14,12 @@ struct Args {
     fill_to: u64,
 
     #[clap(long)]
+    create: bool,
+
+    #[clap(long)]
+    migrate: bool,
+
+    #[clap(long)]
     side: String,
 }
 
@@ -42,16 +48,16 @@ async fn main() -> eyre::Result<()> {
             "{}/{}",
             args.shares_db_urls[0], participant_one_shares_db_name
         ),
-        migrate: false,
-        create:  false,
+        migrate: args.migrate,
+        create:  args.create,
     };
     let shares_db_config1 = DbConfig {
         url:     format!(
             "{}/{}",
             args.shares_db_urls[1], participant_two_shares_db_name
         ),
-        migrate: false,
-        create:  false,
+        migrate: args.migrate,
+        create:  args.create,
     };
     let masks_db_config = DbConfig {
         url:     format!(
@@ -59,8 +65,8 @@ async fn main() -> eyre::Result<()> {
             args.masks_db_url.clone(),
             participant_one_masks_db_name
         ),
-        migrate: false,
-        create:  false,
+        migrate: args.migrate,
+        create:  args.create,
     };
 
     let shares_db0 = Db::new(&shares_db_config0).await?;
