@@ -1129,6 +1129,14 @@ impl ServerActor {
             tracing::info!(party_id = self.party_id, "Start PHASE 2");
 
             let max_chunk_size = dot_chunk_size.iter().max().copied().unwrap();
+
+            tracing::info!(
+                max_chunk_size = max_chunk_size,
+                max_batch_size = self.max_batch_size,
+                ROTATIONS = ROTATIONS,
+                "Phase 2 chunk size config"
+            );
+
             let phase_2_chunk_sizes = vec![max_chunk_size; self.device_manager.device_count()];
             let code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
             let mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
