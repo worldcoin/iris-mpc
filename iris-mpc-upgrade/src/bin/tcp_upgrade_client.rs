@@ -169,56 +169,57 @@ async fn main() -> eyre::Result<()> {
         );
         let id = share_id;
         tracing::info!("Processing id: {}", id);
-        let [a, b, c] = {
-            let galois_shared_iris_code =
-                GaloisRingIrisCodeShare::reencode_extended_iris_code(&share.0, &mut rng);
-            [
-                galois_shared_iris_code[0].coefs,
-                galois_shared_iris_code[1].coefs,
-                galois_shared_iris_code[2].coefs,
-            ]
-        };
 
-        let message_a = TwoToThreeIrisCodeMessage {
-            id,
-            party_id: 0,
-            from: args.party_id,
-            data: a,
-        };
-        let message_b = TwoToThreeIrisCodeMessage {
-            id,
-            party_id: 1,
-            from: args.party_id,
-            data: b,
-        };
-        let message_c = TwoToThreeIrisCodeMessage {
-            id,
-            party_id: 2,
-            from: args.party_id,
-            data: c,
-        };
-        let (result_a, result_b, result_c) = (
-            message_a.send(&mut server1),
-            message_b.send(&mut server2),
-            message_c.send(&mut server3),
+        let [mask_share_a, mask_share_b, mask_share_c] =
+            get_shares_from_masks(args.party_id, id, &mask, &mut rng);
+        let [iris_share_a, iris_share_b, iris_share_c] =
+            get_shares_from_shares(args.party_id, id, &share, &mut rng);
+
+        let mut errors = Vec::new();
+
+        if args.party_id == 0 {
+            let (result_mask_a, result_mask_b, result_mask_c) = (
+                mask_share_a.send(&mut server1),
+                mask_share_b.send(&mut server2),
+                mask_share_c.send(&mut server3),
+            )
+                .join()
+                .await;
+            if let Err(e) = result_mask_a {
+                error!("Failed to send message to server1 (party_id: 0): {:?}", e);
+                errors.push(e.to_string());
+            }
+
+            if let Err(e) = result_mask_b {
+                error!("Failed to send message to server2 (party_id: 1): {:?}", e);
+                errors.push(e.to_string());
+            }
+
+            if let Err(e) = result_mask_c {
+                error!("Failed to send message to server3 (party_id: 2): {:?}", e);
+                errors.push(e.to_string());
+            }
+        }
+
+        let (result_share_a, result_share_b, result_share_c) = (
+            iris_share_a.send(&mut server1),
+            iris_share_b.send(&mut server2),
+            iris_share_c.send(&mut server3),
         )
             .join()
             .await;
 
-        // Handle errors for each send operation
-        let mut errors = Vec::new();
-
-        if let Err(e) = result_a {
+        if let Err(e) = result_share_a {
             error!("Failed to send message to server1 (party_id: 0): {:?}", e);
             errors.push(e.to_string());
         }
 
-        if let Err(e) = result_b {
+        if let Err(e) = result_share_b {
             error!("Failed to send message to server2 (party_id: 1): {:?}", e);
             errors.push(e.to_string());
         }
 
-        if let Err(e) = result_c {
+        if let Err(e) = result_share_c {
             error!("Failed to send message to server3 (party_id: 2): {:?}", e);
             errors.push(e.to_string());
         }
@@ -232,58 +233,88 @@ async fn main() -> eyre::Result<()> {
             return Ok(());
         }
 
-        if args.party_id == 0 {
-            let extended_masks = array::from_fn(|i| mask[i] as u16);
-            let [ma, mb, mc] = {
-                let [a, b, c] =
-                    GaloisRingIrisCodeShare::reencode_extended_iris_code(&extended_masks, &mut rng);
-                [
-                    GaloisRingTrimmedMaskCodeShare::from(a).coefs,
-                    GaloisRingTrimmedMaskCodeShare::from(b).coefs,
-                    GaloisRingTrimmedMaskCodeShare::from(c).coefs,
-                ]
-            };
-
-            let masks_a = MaskShareMessage {
-                id,
-                party_id: 0,
-                from: args.party_id,
-                data: ma,
-            };
-            let masks_b = MaskShareMessage {
-                id,
-                party_id: 1,
-                from: args.party_id,
-                data: mb,
-            };
-            let masks_c = MaskShareMessage {
-                id,
-                party_id: 2,
-                from: args.party_id,
-                data: mc,
-            };
-
-            let (a, b, c) = (
-                masks_a.send(&mut server1),
-                masks_b.send(&mut server2),
-                masks_c.send(&mut server3),
-            )
-                .join()
-                .await;
-            a?;
-            b?;
-            c?;
-        }
         tracing::info!("Finished id: {}", id);
     }
     tracing::info!("Processing done!");
     Ok(())
 }
 
-// Real v1 databases
-
 struct V1Database {
     db: V1Db,
+}
+
+fn get_shares_from_shares(
+    party_id: u8,
+    serial_id: u64,
+    share: &EncodedBits,
+    rng: &mut ChaCha20Rng,
+) -> [TwoToThreeIrisCodeMessage; 3] {
+    let [a, b, c] = {
+        let galois_shared_iris_code =
+            GaloisRingIrisCodeShare::reencode_extended_iris_code(&share.0, rng);
+        [
+            galois_shared_iris_code[0].coefs,
+            galois_shared_iris_code[1].coefs,
+            galois_shared_iris_code[2].coefs,
+        ]
+    };
+
+    let message_a = TwoToThreeIrisCodeMessage {
+        id:       serial_id,
+        party_id: 0,
+        from:     party_id,
+        data:     a,
+    };
+    let message_b = TwoToThreeIrisCodeMessage {
+        id:       serial_id,
+        party_id: 1,
+        from:     party_id,
+        data:     b,
+    };
+    let message_c = TwoToThreeIrisCodeMessage {
+        id:       serial_id,
+        party_id: 2,
+        from:     party_id,
+        data:     c,
+    };
+    [message_a, message_b, message_c]
+}
+
+fn get_shares_from_masks(
+    party_id: u8,
+    serial_id: u64,
+    mask: &Bits,
+    rng: &mut ChaCha20Rng,
+) -> [MaskShareMessage; 3] {
+    let extended_masks = array::from_fn(|i| mask[i] as u16);
+    let [ma, mb, mc] = {
+        let [a, b, c] = GaloisRingIrisCodeShare::reencode_extended_iris_code(&extended_masks, rng);
+        [
+            GaloisRingTrimmedMaskCodeShare::from(a).coefs,
+            GaloisRingTrimmedMaskCodeShare::from(b).coefs,
+            GaloisRingTrimmedMaskCodeShare::from(c).coefs,
+        ]
+    };
+
+    let masks_a = MaskShareMessage {
+        id:       serial_id,
+        party_id: 0,
+        from:     party_id,
+        data:     ma,
+    };
+    let masks_b = MaskShareMessage {
+        id:       serial_id,
+        party_id: 1,
+        from:     party_id,
+        data:     mb,
+    };
+    let masks_c = MaskShareMessage {
+        id:       serial_id,
+        party_id: 2,
+        from:     party_id,
+        data:     mc,
+    };
+    [masks_a, masks_b, masks_c]
 }
 
 impl OldIrisShareSource for V1Database {
