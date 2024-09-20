@@ -929,6 +929,8 @@ impl ServerActor {
             tracing::info!(party_id = self.party_id, "batch_dot end");
         });
 
+        self.device_manager.await_streams(batch_streams); // DEBUG
+
         record_stream_time!(
             &self.device_manager,
             batch_streams,
@@ -944,6 +946,8 @@ impl ServerActor {
                 tracing::info!(party_id = self.party_id, "batch_reshare end");
             }
         );
+
+        self.device_manager.await_streams(batch_streams); // DEBUG
 
         let db_sizes_batch =
             vec![self.max_batch_size * ROTATIONS; self.device_manager.device_count()];
@@ -966,6 +970,8 @@ impl ServerActor {
             }
         );
 
+        self.device_manager.await_streams(batch_streams); // DEBUG
+
         tracing::info!(party_id = self.party_id, "phase2_batch start");
 
         let res = self.phase2_batch.take_result_buffer();
@@ -984,6 +990,8 @@ impl ServerActor {
             batch_streams,
         );
         self.phase2_batch.return_result_buffer(res);
+
+        self.device_manager.await_streams(batch_streams); // DEBUG
 
         tracing::info!(party_id = self.party_id, "Finished batch deduplication");
         // ---- END BATCH DEDUP ----
@@ -1044,6 +1052,8 @@ impl ServerActor {
             self.device_manager
                 .await_event(request_streams, &current_dot_event);
 
+            self.device_manager.await_streams(request_streams); // DEBUG
+
             // ---- START PHASE 1 ----
             tracing::info!(party_id = self.party_id, "Start PHASE 1");
 
@@ -1060,6 +1070,8 @@ impl ServerActor {
                 );
             });
 
+            self.device_manager.await_streams(request_streams); // DEBUG
+
             // wait for the exchange result buffers to be ready
             tracing::info!(
                 party_id = self.party_id,
@@ -1068,6 +1080,8 @@ impl ServerActor {
             );
             self.device_manager
                 .await_event(request_streams, &current_exchange_event);
+
+            self.device_manager.await_streams(request_streams); // DEBUG
 
             record_stream_time!(&self.device_manager, batch_streams, events, "db_reduce", {
                 compact_device_sums.compute_dot_reducer_against_db(
@@ -1080,6 +1094,8 @@ impl ServerActor {
                     request_streams,
                 );
             });
+
+            self.device_manager.await_streams(request_streams); // DEBUG
 
             tracing::info!(
                 party_id = self.party_id,
@@ -1096,6 +1112,8 @@ impl ServerActor {
                     .reshare_results(&dot_chunk_size, request_streams);
             });
             tracing::info!(party_id = self.party_id, "End PHASE 1");
+
+            self.device_manager.await_streams(request_streams); // DEBUG
 
             // ---- END PHASE 1 ----
 
@@ -1135,6 +1153,9 @@ impl ServerActor {
                         );
                     }
                 );
+
+                self.device_manager.await_streams(request_streams); // DEBUG
+
                 // we can now record the exchange event since the phase 2 is no longer using the
                 // code_dots/mask_dots which are just reinterpretations of the exchange result
                 // buffers
@@ -1161,6 +1182,8 @@ impl ServerActor {
                     request_streams,
                 );
                 self.phase2.return_result_buffer(res);
+
+                self.device_manager.await_streams(request_streams); // DEBUG
             }
             tracing::info!(
                 party_id = self.party_id,
@@ -1170,6 +1193,8 @@ impl ServerActor {
             self.device_manager
                 .record_event(request_streams, &next_phase2_event);
             tracing::info!(party_id = self.party_id, "End PHASE 2");
+
+            self.device_manager.await_streams(request_streams); // DEBUG
 
             // ---- END PHASE 2 ----
 
