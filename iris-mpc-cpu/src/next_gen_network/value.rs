@@ -11,6 +11,7 @@ pub enum NetworkValue {
     RingElement16(RingElement<u16>),
     RingElement32(RingElement<u32>),
     RingElement64(RingElement<u64>),
+    VecRing16(Vec<RingElement<u16>>),
     VecRing32(Vec<RingElement<u32>>),
     VecRing64(Vec<RingElement<u64>>),
     PrfKey([u8; 16]),

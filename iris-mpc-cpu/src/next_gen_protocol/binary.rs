@@ -14,7 +14,8 @@ use crate::{
 };
 use eyre::{eyre, Error};
 use num_traits::{One, Zero};
-use rand::{distributions::Standard, prelude::Distribution};
+use rand::{distributions::Standard, prelude::Distribution, Rng};
+use std::ops::SubAssign;
 
 pub(crate) fn transposed_padded_len(len: usize) -> usize {
     let padded_len = (len + 63) / 64;
@@ -215,6 +216,211 @@ where
     Ok((res1, res2))
 }
 
+async fn bit_inject_ot_2round_helper(
+    session: &mut Session,
+    input: VecShare<Bit>,
+) -> Result<VecShare<u16>, Error>
+where
+    Standard: Distribution<u16>,
+{
+    let len = input.len();
+    let mut wc = Vec::with_capacity(len);
+    let mut shares = VecShare::with_capacity(len);
+    let prf = session.prf_as_mut();
+
+    for inp in input.into_iter() {
+        // new share
+        let c3 = prf.get_prev_prf().gen::<RingElement<u16>>();
+        shares.push(Share::new(RingElement::zero(), c3));
+
+        // mask of the ot
+        let w0 = prf.get_prev_prf().gen::<RingElement<u16>>();
+        let w1 = prf.get_prev_prf().gen::<RingElement<u16>>();
+
+        let choice = inp.get_a().convert().convert();
+        if choice {
+            wc.push(w1);
+        } else {
+            wc.push(w0);
+        }
+    }
+    let network = session.network().clone();
+    let next_id = session.next_identity()?;
+    let sid = session.session_id();
+    let _ = tokio::spawn(async move {
+        let _ = network
+            .send(NetworkValue::VecRing16(wc).to_network(), &next_id, &sid)
+            .await;
+    })
+    .await;
+
+    let network = session.network().clone();
+    let next_id = session.next_identity()?;
+    let sid = session.session_id();
+    let c1 = tokio::spawn(async move {
+        let reply = network.receive(&next_id, &sid).await;
+        match NetworkValue::from_network(reply) {
+            Ok(NetworkValue::VecRing16(val)) => Ok(val),
+            _ => Err(eyre!("Could not deserialize properly in bit inject")),
+        }
+    })
+    .await??;
+    // Receive Reshare
+
+    for (s, c1) in shares.iter_mut().zip(c1) {
+        s.a = c1;
+    }
+    Ok(shares)
+}
+
+async fn bit_inject_ot_2round_receiver(
+    session: &mut Session,
+    input: VecShare<Bit>,
+) -> Result<VecShare<u16>, Error> {
+    let network = session.network().clone();
+    let next_id = session.next_identity()?;
+    let prev_id = session.prev_identity()?;
+    let sid = session.session_id();
+
+    let (m0, m1, wc) = tokio::spawn(async move {
+        let reply_m0 = network.receive(&next_id, &sid).await;
+        let m0 = match NetworkValue::from_network(reply_m0) {
+            Ok(NetworkValue::VecRing16(val)) => Ok(val),
+            _ => Err(eyre!("Could not deserialize properly in bit inject")),
+        };
+
+        let reply_m1 = network.receive(&next_id, &sid).await;
+        let m1 = match NetworkValue::from_network(reply_m1) {
+            Ok(NetworkValue::VecRing16(val)) => Ok(val),
+            _ => Err(eyre!("Could not deserialize properly in bit inject")),
+        };
+
+        let reply_wc = network.receive(&prev_id, &sid).await;
+        let wc = match NetworkValue::from_network(reply_wc) {
+            Ok(NetworkValue::VecRing16(val)) => Ok(val),
+            _ => Err(eyre!("Could not deserialize properly in bit inject")),
+        };
+        (m0, m1, wc)
+    })
+    .await?;
+
+    let (m0, m1, wc) = (m0?, m1?, wc?);
+
+    let len = input.len();
+    let mut shares = VecShare::with_capacity(len);
+    let mut send = Vec::with_capacity(len);
+
+    let mut prf = session.prf_as_mut();
+    for ((inp, wc), (m0, m1)) in input
+        .into_iter()
+        .zip(wc.into_iter())
+        .zip(m0.into_iter().zip(m1.into_iter()))
+    {
+        // new share
+        let c2 = prf.get_my_prf().gen::<RingElement<u16>>();
+
+        let choice = inp.get_b().convert().convert();
+        let xor = if choice { wc ^ m1 } else { wc ^ m0 };
+
+        send.push(xor);
+        shares.push(Share::new(c2, xor));
+    }
+
+    let network = session.network().clone();
+    let prev_id = session.prev_identity()?;
+    let sid = session.session_id();
+    // Reshare to Helper
+    let _ = tokio::spawn(async move {
+        let _ = network
+            .send(NetworkValue::VecRing16(send).to_network(), &prev_id, &sid)
+            .await;
+    })
+    .await?;
+
+    Ok(shares)
+}
+
+async fn bit_inject_ot_2round_sender(
+    session: &mut Session,
+    input: VecShare<Bit>,
+) -> Result<VecShare<u16>, Error> {
+    let len = input.len();
+    let mut m0 = Vec::with_capacity(len);
+    let mut m1 = Vec::with_capacity(len);
+    let mut shares = VecShare::with_capacity(len);
+
+    let mut prf = session.prf_as_mut();
+    for inp in input.into_iter() {
+        let (a, b) = inp.get_ab();
+        // new shares
+        let (c3, c2) = prf.gen_rands::<RingElement<u16>>();
+        // mask of the ot
+        let w0 = prf.get_my_prf().gen::<RingElement<u16>>();
+        let w1 = prf.get_my_prf().gen::<RingElement<u16>>();
+
+        shares.push(Share::new(c3, c2));
+        let c = c3 + c2;
+        let xor = RingElement(u16::from((a ^ b).convert().convert()));
+        let m0_ = xor - c;
+        let m1_ = (xor ^ RingElement::one()) - c;
+        m0.push(m0_ ^ w0);
+        m1.push(m1_ ^ w1);
+    }
+
+    let network = session.network().clone();
+    let prev_id = session.prev_identity()?;
+    let sid = session.session_id();
+    // TODO(Dragos) Note this can be compressed in a single round.
+    // Reshare to Helper
+    let _ = tokio::spawn(async move {
+        let _ = network
+            .send(NetworkValue::VecRing16(m0).to_network(), &prev_id, &sid)
+            .await;
+        let _ = network
+            .send(NetworkValue::VecRing16(m1).to_network(), &prev_id, &sid)
+            .await;
+    })
+    .await?;
+    Ok(shares)
+}
+
+// TODO this is inbalanced, so a real implementation should actually rotate
+// parties around
+pub(crate) async fn bit_inject_ot_2round(
+    session: &mut Session,
+    input: VecShare<Bit>,
+) -> Result<VecShare<u16>, Error> {
+    let res = match session.own_role()?.zero_based() {
+        0 => {
+            // OT Helper
+            bit_inject_ot_2round_helper(session, input).await?
+        }
+        1 => {
+            // OT Receiver
+            bit_inject_ot_2round_receiver(session, input).await?
+        }
+        2 => {
+            // OT Sender
+            bit_inject_ot_2round_sender(session, input).await?
+        }
+        _ => panic!(),
+    };
+    Ok(res)
+}
+
+pub(crate) fn mul_lift_2k<const K: u64>(val: &Share<u16>) -> Share<u32>
+where
+    u32: From<u16>,
+{
+    let a = (u32::from(val.a.0)) << K;
+    let b = (u32::from(val.b.0)) << K;
+    Share::new(RingElement(a), RingElement(b))
+}
+
+pub(crate) fn mul_lift_2k_many<const K: u64>(vals: SliceShare<u16>) -> VecShare<u32> {
+    VecShare::new_vec(vals.iter().map(|val| mul_lift_2k::<K>(val)).collect())
+}
+
 pub(crate) async fn lift<const K: usize>(
     session: &mut Session,
     shares: VecShare<u16>,
@@ -254,6 +460,26 @@ pub(crate) async fn lift<const K: usize>(
     }
 
     let (mut b1, b2) = binary_add_3_get_two_carries(session, x1, x2, x3, len).await?;
+    b1.extend(b2);
 
-    unimplemented!()
+    // We need bit1 * 2^{ShareRing::K+1} mod 2^{ShareRing::K+K}  and bit2 *
+    // 2^{ShareRing::K+1} mod 2^{ShareRing::K+K} So we inject bit to mod
+    // 2^{K-1} and mod 2^{K-2} and use the mul_lift_2k function TODO: This
+    // one is not optimized: We send too much, since we need less than K
+    // bits
+    debug_assert!(K <= 16); // otherwise u16 does not work
+    let mut b = bit_inject_ot_2round(session, b1).await?;
+    let (b1, b2) = b.split_at_mut(len);
+
+    // Make the result mod 2^{K-1} and mod 2^{K-2} (Not required since we bitextract
+    // the correct one later) Self::share_bit_mod(&mut b1, K as u32);
+    // Self::share_bit_mod(&mut b2, K as u32 - 1);
+
+    let b1 = mul_lift_2k_many::<{ u16::K as u64 }>(b1.to_slice());
+    let b2 = mul_lift_2k_many::<{ u16::K as u64 + 1 }>(b2.to_slice());
+
+    // Finally, compute the result
+    x_a.sub_assign(b1);
+    x_a.sub_assign(b2);
+    Ok(x_a)
 }
