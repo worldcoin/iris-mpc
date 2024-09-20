@@ -11,6 +11,9 @@ env:
   - name: NCCL_COMM_ID
     value: "10.15.48.175:4000"
 
+  - name: NCCL_DEBUG
+    value: "info"
+
   - name: SMPC__ENVIRONMENT
     value: "stage"
 
