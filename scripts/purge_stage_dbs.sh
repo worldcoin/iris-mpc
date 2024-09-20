@@ -42,7 +42,8 @@ echo "Waiting 10s for db-cleaner pod to be ready..."
 sleep 10
 kubectl exec -it db-cleaner -- bash -c "apt update && apt install -y postgresql-client"
 kubectl exec -it db-cleaner -- bash -c "psql -H $MPC_1_DATABASE_URL -c 'SET search_path TO \"SMPC_stage_0\"; TRUNCATE irises RESTART IDENTITY;'"
-kubectl exec -it db-cleaner -- bash -c "psql -H $MPC_1_DATABASE_URL -c 'SET search_path TO \"SMPC_stage_0\"; TRUNCATE results, sync;'"
+kubectl exec -it db-cleaner -- bash -c "psql -H $MPC_1_DATABASE_URL -c 'SET search_path TO \"SMPC_stage_0\"; TRUNCATE sync RESTART IDENTITY;'"
+kubectl exec -it db-cleaner -- bash -c "psql -H $MPC_1_DATABASE_URL -c 'SET search_path TO \"SMPC_stage_0\"; TRUNCATE results;'"
 kubectl delete pod --force db-cleaner
 
 kubectx arn:aws:eks:eu-north-1:381492197851:cluster/mpc2-stage || kubectx smpcv2-stage-2
@@ -52,7 +53,8 @@ echo "Waiting 10s for db-cleaner pod to be ready..."
 sleep 10
 kubectl exec -it db-cleaner -- bash -c "apt update && apt install -y postgresql-client"
 kubectl exec -it db-cleaner -- bash -c "psql -H $MPC_2_DATABASE_URL -c 'SET search_path TO \"SMPC_stage_1\"; TRUNCATE irises RESTART IDENTITY;'"
-kubectl exec -it db-cleaner -- bash -c "psql -H $MPC_2_DATABASE_URL -c 'SET search_path TO \"SMPC_stage_1\"; TRUNCATE results, sync;'"
+kubectl exec -it db-cleaner -- bash -c "psql -H $MPC_2_DATABASE_URL -c 'SET search_path TO \"SMPC_stage_1\"; TRUNCATE sync RESTART IDENTITY;'"
+kubectl exec -it db-cleaner -- bash -c "psql -H $MPC_2_DATABASE_URL -c 'SET search_path TO \"SMPC_stage_1\"; TRUNCATE results;'"
 kubectl delete pod --force db-cleaner
 
 kubectx arn:aws:eks:eu-north-1:590184084615:cluster/mpc3-stage || kubectx smpcv2-stage-3
@@ -62,5 +64,6 @@ echo "Waiting 10s for db-cleaner pod to be ready..."
 sleep 10
 kubectl exec -it db-cleaner -- bash -c "apt update && apt install -y postgresql-client"
 kubectl exec -it db-cleaner -- bash -c "psql -H $MPC_3_DATABASE_URL -c 'SET search_path TO \"SMPC_stage_2\"; TRUNCATE irises RESTART IDENTITY;'"
-kubectl exec -it db-cleaner -- bash -c "psql -H $MPC_3_DATABASE_URL -c 'SET search_path TO \"SMPC_stage_2\"; TRUNCATE results, sync;'"
+kubectl exec -it db-cleaner -- bash -c "psql -H $MPC_3_DATABASE_URL -c 'SET search_path TO \"SMPC_stage_2\"; TRUNCATE sync RESTART IDENTITY;'"
+kubectl exec -it db-cleaner -- bash -c "psql -H $MPC_3_DATABASE_URL -c 'SET search_path TO \"SMPC_stage_2\"; TRUNCATE results;'"
 kubectl delete pod --force db-cleaner
