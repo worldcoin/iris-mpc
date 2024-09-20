@@ -136,6 +136,7 @@ pub(crate) async fn replicated_pairwise_distance(
     Ok((code_dots, mask_dots))
 }
 
+// TODO(Dragos) revisit this as we can probably do 2 lifts at a time.
 pub(crate) async fn replicated_cross_mul(
     session: &mut Session,
     d1: Share<u16>,
@@ -183,6 +184,23 @@ pub(crate) async fn replicated_cross_mul(
     // Compute d2*t1 - d1*t2
     lifted_d2.sub_assign(lifted_d1);
     Ok(lifted_d2.get_at(0))
+}
+
+pub async fn replicated_lift_and_cross_mul(
+    session: &mut Session,
+    d1: Share<u16>,
+    t1: u32,
+    d2: Share<u16>,
+    t2: u32,
+) -> eyre::Result<bool> {
+    let diff = replicated_cross_mul(session, d1, t1, d2, t2).await?;
+    // Compute bit <- MSB(D2 * T1 - D1 * T2)
+    unimplemented!()
+    // let bit = protocol.single_extract_msb_u32::<32>(diff)?;
+
+    // // Open bit
+    // let opened_b = protocol.open_bin(bit)?;
+    // Ok(opened_b.convert())
 }
 
 impl LocalRuntime {
