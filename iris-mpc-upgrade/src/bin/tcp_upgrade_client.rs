@@ -177,30 +177,6 @@ async fn main() -> eyre::Result<()> {
 
         let mut errors = Vec::new();
 
-        if args.party_id == 0 {
-            let (result_mask_a, result_mask_b, result_mask_c) = (
-                mask_share_a.send(&mut server1),
-                mask_share_b.send(&mut server2),
-                mask_share_c.send(&mut server3),
-            )
-                .join()
-                .await;
-            if let Err(e) = result_mask_a {
-                error!("Failed to send message to server1 (party_id: 0): {:?}", e);
-                errors.push(e.to_string());
-            }
-
-            if let Err(e) = result_mask_b {
-                error!("Failed to send message to server2 (party_id: 1): {:?}", e);
-                errors.push(e.to_string());
-            }
-
-            if let Err(e) = result_mask_c {
-                error!("Failed to send message to server3 (party_id: 2): {:?}", e);
-                errors.push(e.to_string());
-            }
-        }
-
         let (result_share_a, result_share_b, result_share_c) = (
             iris_share_a.send(&mut server1),
             iris_share_b.send(&mut server2),
@@ -224,6 +200,29 @@ async fn main() -> eyre::Result<()> {
             errors.push(e.to_string());
         }
 
+        if args.party_id == 0 {
+            let (result_mask_a, result_mask_b, result_mask_c) = (
+                mask_share_a.send(&mut server1),
+                mask_share_b.send(&mut server2),
+                mask_share_c.send(&mut server3),
+            )
+                .join()
+                .await;
+            if let Err(e) = result_mask_a {
+                error!("Failed to send message to server1 (party_id: 0): {:?}", e);
+                errors.push(e.to_string());
+            }
+
+            if let Err(e) = result_mask_b {
+                error!("Failed to send message to server2 (party_id: 1): {:?}", e);
+                errors.push(e.to_string());
+            }
+
+            if let Err(e) = result_mask_c {
+                error!("Failed to send message to server3 (party_id: 2): {:?}", e);
+                errors.push(e.to_string());
+            }
+        }
         // If any errors occurred, return a combined error
         if !errors.is_empty() {
             // Combine all errors into one
