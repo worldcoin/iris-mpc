@@ -2,7 +2,6 @@ use clap::Parser;
 use eyre::{Context, ContextCompat};
 use futures::{Stream, StreamExt};
 use futures_concurrency::future::Join;
-use indicatif::{ProgressBar, ProgressStyle};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     IRIS_CODE_LENGTH,
