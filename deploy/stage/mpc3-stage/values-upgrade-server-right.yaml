@@ -9,3 +9,5 @@ args:
   - "right"
   - "--environment"
   - "$(ENVIRONMENT)"
+  - "--threads"
+  - "1"

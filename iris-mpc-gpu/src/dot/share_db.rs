@@ -18,7 +18,7 @@ use cudarc::{
         CudaBlas,
     },
     driver::{
-        result::{self, malloc_async, malloc_managed},
+        result::{self, malloc_async, malloc_managed, mem_prefetch_async},
         sys::{CUdeviceptr, CUmemAttach_flags},
         CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr, DeviceSlice, LaunchAsync,
         LaunchConfig,
@@ -339,6 +339,25 @@ impl ShareDB {
                         .unwrap();
                 }
             }
+
+            // Try prefetching the db to device already
+            for mem in [&db.code_gr.limb_0, &db.code_gr.limb_1] {
+                unsafe {
+                    mem_prefetch_async(
+                        mem[device_index],
+                        db_lens[device_index] * code_len,
+                        cudarc::driver::sys::CUmemLocation_st {
+                            type_:
+                                cudarc::driver::sys::CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE,
+                            ..Default::default()
+                        },
+                        *self.device_manager.device(device_index).cu_stream(),
+                    )
+                    .unwrap();
+                };
+            }
+
+            self.device_manager.synchronize_all();
         }
     }
 
@@ -464,11 +483,11 @@ impl ShareDB {
             let query1 = &queries.limb_1[idx];
 
             // Prepare randomness to mask results
-            // if self.is_remote {
-            //     let len: usize = (chunk_sizes[idx] * self.query_length).div_ceil(64) *
-            // 64;     self.rngs[idx].0.fill_rng_no_host_copy(len,
-            // &streams[idx]);     self.rngs[idx].1.fill_rng_no_host_copy(len,
-            // &streams[idx]); }
+            if self.is_remote {
+                let len: usize = (chunk_sizes[idx] * self.query_length).div_ceil(64) * 64;
+                self.rngs[idx].0.fill_rng_no_host_copy(len, &streams[idx]);
+                self.rngs[idx].1.fill_rng_no_host_copy(len, &streams[idx]);
+            }
 
             for (i, d) in [db.limb_0[idx], db.limb_1[idx]].into_iter().enumerate() {
                 for (j, q) in [query0, query1].iter().enumerate() {
