@@ -1,4 +1,4 @@
-use crate::helpers::launch_config_from_elements_and_threads;
+use crate::helpers::{launch_config_from_elements_and_threads, DEFAULT_LAUNCH_CONFIG_THREADS};
 use cudarc::{
     driver::{
         CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaViewMut, DeviceSlice, LaunchAsync,
@@ -44,7 +44,7 @@ impl ChachaCommon {
         let len = buf.len();
         assert!(len % 16 == 0, "buffer length must be a multiple of 16");
         let num_ks_calls = len / 16; // we produce 16 u32s per kernel call
-        let threads_per_block = 256; // ON CHANGE: sync with kernel
+        let threads_per_block = DEFAULT_LAUNCH_CONFIG_THREADS; // ON CHANGE: sync with kernel
 
         let cfg = launch_config_from_elements_and_threads(
             num_ks_calls as u32,

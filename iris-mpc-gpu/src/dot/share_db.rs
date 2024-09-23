@@ -7,6 +7,7 @@ use crate::{
             CudaVec2DSlicer, CudaVec2DSlicerRawPointer, CudaVec2DSlicerU32, CudaVec2DSlicerU8,
             StreamAwareCudaSlice,
         },
+        DEFAULT_LAUNCH_CONFIG_THREADS,
     },
     rng::chacha::ChaChaCudaRng,
     threshold_ring::protocol::ChunkShareView,
@@ -528,7 +529,7 @@ impl ShareDB {
             );
 
             let num_elements = chunk_sizes[idx] * self.query_length;
-            let threads_per_block = 256; // ON CHANGE: sync with kernel
+            let threads_per_block = DEFAULT_LAUNCH_CONFIG_THREADS; // ON CHANGE: sync with kernel
             let cfg = launch_config_from_elements_and_threads(
                 num_elements as u32,
                 threads_per_block as u32,
@@ -580,7 +581,7 @@ impl ShareDB {
         size: usize,
         streams: &[CudaStream],
     ) {
-        let threads_per_block = 256; // ON CHANGE: sync with kernel
+        let threads_per_block = DEFAULT_LAUNCH_CONFIG_THREADS; // ON CHANGE: sync with kernel
         let cfg = launch_config_from_elements_and_threads(
             size as u32,
             threads_per_block as u32,

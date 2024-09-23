@@ -12,6 +12,8 @@ pub mod device_manager;
 pub mod id_wrapper;
 pub mod query_processor;
 
+pub(crate) const DEFAULT_LAUNCH_CONFIG_THREADS: u32 = 256;
+
 pub fn check_max_grid_size(device: &Arc<CudaDevice>, size: usize) {
     let max_grid_dim_x = unsafe {
         cudarc::driver::result::device::get_attribute(

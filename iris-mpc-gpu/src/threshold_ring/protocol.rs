@@ -1,7 +1,7 @@
 use crate::{
     helpers::{
         comm::NcclComm, device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync,
-        launch_config_from_elements_and_threads,
+        launch_config_from_elements_and_threads, DEFAULT_LAUNCH_CONFIG_THREADS,
     },
     rng::chacha_corr::ChaChaCudaCorrRng,
     threshold_ring::cuda::PTX_SRC,
@@ -19,8 +19,6 @@ use std::{ops::Range, sync::Arc};
 
 pub(crate) const B_BITS: usize = 16;
 const SHARE_RING_BITSIZE: usize = 16;
-
-const DEFAULT_LAUNCH_CONFIG_THREADS: u32 = 64;
 
 pub struct ChunkShare<T> {
     pub a: CudaSlice<T>,
