@@ -1,3 +1,4 @@
+use super::binary::single_extract_msb_u32;
 use crate::{
     execution::{
         player::{Identity, Role, RoleAssignment},
@@ -7,7 +8,7 @@ use crate::{
         local::{LocalNetworking, LocalNetworkingStore},
         value::NetworkValue::{self, PrfKey, RingElement16},
     },
-    next_gen_protocol::binary::lift,
+    next_gen_protocol::binary::{lift, open_bin},
     prelude::IrisWorker,
     protocol::prf::{Prf, PrfSeed},
     shares::{int_ring::IntRing2k, ring_impl::RingElement, share::Share, vecshare::VecShare},
@@ -195,12 +196,10 @@ pub async fn replicated_lift_and_cross_mul(
 ) -> eyre::Result<bool> {
     let diff = replicated_cross_mul(session, d1, t1, d2, t2).await?;
     // Compute bit <- MSB(D2 * T1 - D1 * T2)
-    unimplemented!()
-    // let bit = protocol.single_extract_msb_u32::<32>(diff)?;
-
-    // // Open bit
-    // let opened_b = protocol.open_bin(bit)?;
-    // Ok(opened_b.convert())
+    let bit = single_extract_msb_u32::<32>(session, diff).await?;
+    // Open bit
+    let opened_b = open_bin(session, bit).await?;
+    Ok(opened_b.convert())
 }
 
 impl LocalRuntime {

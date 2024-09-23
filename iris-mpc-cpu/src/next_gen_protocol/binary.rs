@@ -483,3 +483,146 @@ pub(crate) async fn lift<const K: usize>(
     x_a.sub_assign(b2);
     Ok(x_a)
 }
+
+// MSB related code
+pub(crate) async fn binary_add_3_get_msb(
+    session: &mut Session,
+    x1: Vec<VecShare<u64>>,
+    x2: Vec<VecShare<u64>>,
+    mut x3: Vec<VecShare<u64>>,
+    // truncate_len: usize,
+) -> Result<VecShare<u64>, Error> {
+    let len = x1.len();
+    debug_assert!(len == x2.len() && len == x3.len());
+
+    // Full adder to get 2 * c and s
+    let mut x2x3 = x2;
+    transposed_pack_xor_assign(&mut x2x3, &x3);
+    let s = transposed_pack_xor(&x1, &x2x3);
+    let mut x1x3 = x1;
+    transposed_pack_xor_assign(&mut x1x3, &x3);
+    // 2 * c
+    x1x3.pop().expect("Enough elements present");
+    x2x3.pop().expect("Enough elements present");
+    x3.pop().expect("Enough elements present");
+    let mut c = transposed_pack_and(session, x1x3, x2x3).await?;
+    transposed_pack_xor_assign(&mut c, &x3);
+
+    // Add 2c + s via a ripple carry adder
+    // LSB of c is 0
+    // First round: half adder can be skipped due to LSB of c being 0
+    let mut a = s;
+    let mut b = c;
+
+    // First full adder (carry is 0)
+    let mut c = and_many(session, a[1].as_slice(), b[0].as_slice()).await?;
+
+    // For last round
+    let mut a_msb = a.pop().expect("Enough elements present");
+    let b_msb = b.pop().expect("Enough elements present");
+
+    // 2 -> k-1
+    for (a_, b_) in a.iter_mut().skip(2).zip(b.iter_mut().skip(1)) {
+        *a_ ^= c.as_slice();
+        *b_ ^= c.as_slice();
+        let tmp_c = and_many(session, a_.as_slice(), b_.as_slice()).await?;
+        c ^= tmp_c;
+    }
+
+    a_msb ^= b_msb;
+    a_msb ^= c;
+
+    // Extract bits for outputs
+    let res = a_msb;
+    // let mut res = a_msb.convert_to_bits();
+    // res.truncate(truncate_len);
+
+    Ok(res)
+}
+
+// Extracts bit at position K
+async fn extract_msb<const K: usize>(
+    session: &mut Session,
+    x: Vec<VecShare<u64>>,
+) -> Result<VecShare<u64>, Error> {
+    let len = x.len();
+
+    let mut x1 = Vec::with_capacity(len);
+    let mut x2 = Vec::with_capacity(len);
+    let mut x3 = Vec::with_capacity(len);
+
+    for x_ in x.into_iter() {
+        let len_ = x_.len();
+        let mut x1_ = VecShare::with_capacity(len_);
+        let mut x2_ = VecShare::with_capacity(len_);
+        let mut x3_ = VecShare::with_capacity(len_);
+        for x__ in x_.into_iter() {
+            let (x1__, x2__, x3__) = a2b_pre(session, x__)?;
+            x1_.push(x1__);
+            x2_.push(x2__);
+            x3_.push(x3__);
+        }
+        x1.push(x1_);
+        x2.push(x2_);
+        x3.push(x3_);
+    }
+
+    Ok(binary_add_3_get_msb(session, x1, x2, x3).await?)
+}
+
+pub async fn extract_msb_u32<const K: usize>(
+    session: &mut Session,
+    x_: VecShare<u32>,
+) -> Result<VecShare<u64>, Error> {
+    // let truncate_len = x_.len();
+    let x = x_.transpose_pack_u64_with_len::<K>();
+    Ok(extract_msb::<K>(session, x).await?)
+}
+
+// TODO a dedicated bitextraction for just one element would be more
+// efficient
+pub async fn single_extract_msb_u32<const K: usize>(
+    session: &mut Session,
+    x: Share<u32>,
+) -> Result<Share<Bit>, Error> {
+    let (a, b) = extract_msb_u32::<{ u32::BITS as usize }>(session, VecShare::new_vec(vec![x]))
+        .await?
+        .get_at(0)
+        .get_ab();
+
+    Ok(Share::new(a.get_bit_as_bit(0), b.get_bit_as_bit(0)))
+}
+
+pub async fn open_bin(session: &mut Session, share: Share<Bit>) -> Result<Bit, Error> {
+    // send to next_party
+    let next_party = session.next_identity()?;
+    let network = session.network().clone();
+    let sid = session.session_id();
+    let message = share.b;
+    let _ = tokio::spawn(async move {
+        let _ = network
+            .send(
+                NetworkValue::RingElementBit(message).to_network(),
+                &next_party,
+                &sid,
+            )
+            .await;
+    })
+    .await;
+
+    // receiving from previous party
+    let network = session.network().clone();
+    let sid = session.session_id();
+    let prev_party = session.prev_identity()?;
+    let c = tokio::spawn(async move {
+        let serialized_other_share = network.receive(&prev_party, &sid).await;
+        match NetworkValue::from_network(serialized_other_share) {
+            Ok(NetworkValue::RingElementBit(message)) => Ok(message),
+            _ => Err(eyre!("Error in receiving in and_many operation")),
+        }
+    })
+    .await??;
+
+    /// xor shares with the received share
+    Ok((share.a ^ share.b ^ c).convert())
+}

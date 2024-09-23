@@ -1,4 +1,4 @@
-use crate::shares::{int_ring::IntRing2k, ring_impl::RingElement};
+use crate::shares::{bit::Bit, int_ring::IntRing2k, ring_impl::RingElement};
 use eyre::eyre;
 use num_traits::Zero;
 use serde::{Deserialize, Serialize};
@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub enum NetworkValue {
     Ring16(std::num::Wrapping<u16>),
     Ring32(std::num::Wrapping<u32>),
+    RingElementBit(RingElement<Bit>),
     RingElement16(RingElement<u16>),
     RingElement32(RingElement<u32>),
     RingElement64(RingElement<u64>),
