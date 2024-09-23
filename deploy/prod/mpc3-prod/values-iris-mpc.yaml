@@ -2,23 +2,17 @@ env:
   - name: RUST_LOG
     value: "info"
 
-  - name: NCCL_DEBUG
-    value: "INFO"
-
-  - name: NCCL_PROTO
-    value: "Simple"
+  - name: RUST_BACKTRACE
+    value: "full"
 
   - name: NCCL_SOCKET_IFNAME
     value: "eth0"
 
   - name: NCCL_COMM_ID
-    value: "172.16.0.160:4000"
-
-  - name: RUST_BACKTRACE
-    value: "full"
+    value: "10.15.33.223:4000"
 
   - name: SMPC__ENVIRONMENT
-    value: "stage"
+    value: "prod"
 
   - name: SMPC__SERVICE__SERVICE_NAME
     value: "smpcv2-server"
@@ -66,10 +60,10 @@ env:
         name: application
 
   - name: SMPC__PARTY_ID
-    value: "1"
+    value: "2"
 
   - name: SMPC__PUBLIC_KEY_BASE_URL
-    value: "https://d2my9d2y2jkpfn.cloudfront.net"
+    value: "https://pki-smpc-prod.worldcoin.org"
 
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"

@@ -1,6 +1,6 @@
-image: "ghcr.io/worldcoin/iris-mpc:78fa47be6eb97019be270c8c657f84cc6f35a0e4"
+image: "ghcr.io/worldcoin/iris-mpc:v0.6.2"
 
-environment: stage
+environment: prod
 replicaCount: 1
 
 strategy:
@@ -60,29 +60,25 @@ env:
       secretKeyRef:
         key: DATABASE_URL
         name: application
-  - name: RUST_LOG
-    value: info
   - name: ENVIRONMENT
-    value: stage
+    value: prod
+
 
 keelPolling:
   # -- Specifies whether keel should poll for container updates
   enabled: true
 
-service:
-  enabled: false
-
 ingress:
   enabled: true
   ingressClassName: traefik-internal
   hosts:
-    - not-upgrade-right.1.stage.smpcv2.worldcoin.dev
+    - not-upgrade-left.1.prod.smpcv2.worldcoin.dev
 
 ingressRouteTCP:
   enabled: true
   entryPoints:
     - websecure
   service:
-    - name: upgrade-server-right
+    - name: upgrade-server-left
       port: 80
   tls: {}

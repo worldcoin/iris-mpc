@@ -1,6 +1,6 @@
-image: "ghcr.io/worldcoin/iris-mpc:v0.8.5"
+image: "ghcr.io/worldcoin/iris-mpc:v0.6.7"
 
-environment: stage
+environment: prod
 replicaCount: 1
 
 strategy:

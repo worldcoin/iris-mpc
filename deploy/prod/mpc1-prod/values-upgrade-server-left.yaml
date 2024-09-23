@@ -9,7 +9,3 @@ args:
   - "left"
   - "--environment"
   - "$(ENVIRONMENT)"
-  - "--threads"
-  - "1"
-  - "--batch-size"
-  - "50"

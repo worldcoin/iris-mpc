@@ -661,6 +661,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         record_counter += 1;
                     }
 
+                    tracing::info!("Preprocessing db");
                     actor.preprocess_db();
 
                     tracing::info!(
