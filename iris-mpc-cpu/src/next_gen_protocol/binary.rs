@@ -97,16 +97,13 @@ where
     let network = session.network().clone();
     let sid = session.session_id();
     let message = shares_a.clone();
-    let _ = tokio::spawn(async move {
-        let _ = network
-            .send(
-                NetworkValue::VecRing64(message).to_network(),
-                &next_party,
-                &sid,
-            )
-            .await;
-    })
-    .await;
+    network
+        .send(
+            NetworkValue::VecRing64(message).to_network(),
+            &next_party,
+            &sid,
+        )
+        .await?;
     Ok(shares_a)
 }
 
@@ -117,14 +114,13 @@ pub(crate) async fn and_many_receive(
     let sid = session.session_id();
     let prev_party = session.prev_identity()?;
 
-    let shares_b = tokio::spawn(async move {
+    let shares_b = {
         let serialized_other_share = network.receive(&prev_party, &sid).await;
         match NetworkValue::from_network(serialized_other_share) {
             Ok(NetworkValue::VecRing64(message)) => Ok(message),
             _ => Err(eyre!("Error in receiving in and_many operation")),
         }
-    })
-    .await??;
+    }?;
     Ok(shares_b)
 }
 
@@ -254,26 +250,22 @@ where
     let network = session.network().clone();
     let next_id = session.next_identity()?;
     let sid = session.session_id();
-    let _ = tokio::spawn(async move {
-        let _ = network
-            .send(NetworkValue::VecRing16(wc).to_network(), &next_id, &sid)
-            .await;
-    })
-    .await;
+    network
+        .send(NetworkValue::VecRing16(wc).to_network(), &next_id, &sid)
+        .await?;
 
     let network = session.network().clone();
     let next_id = session.next_identity()?;
     let sid = session.session_id();
-    let c1 = tokio::spawn(async move {
+    let c1 = {
         let reply = network.receive(&next_id, &sid).await;
         match NetworkValue::from_network(reply) {
             Ok(NetworkValue::VecRing16(val)) => Ok(val),
             _ => Err(eyre!("Could not deserialize properly in bit inject")),
         }
-    })
-    .await??;
-    // Receive Reshare
+    }?;
 
+    // Receive Reshare
     for (s, c1) in shares.iter_mut().zip(c1) {
         s.a = c1;
     }
@@ -336,12 +328,9 @@ async fn bit_inject_ot_2round_receiver(
     let prev_id = session.prev_identity()?;
     let sid = session.session_id();
     // Reshare to Helper
-    tokio::spawn(async move {
-        let _ = network
-            .send(NetworkValue::VecRing16(send).to_network(), &prev_id, &sid)
-            .await;
-    })
-    .await?;
+    network
+        .send(NetworkValue::VecRing16(send).to_network(), &prev_id, &sid)
+        .await?;
 
     Ok(shares)
 }
@@ -617,29 +606,25 @@ pub async fn open_bin(session: &mut Session, share: Share<Bit>) -> Result<Bit, E
     let network = session.network().clone();
     let sid = session.session_id();
     let message = share.b;
-    let _ = tokio::spawn(async move {
-        let _ = network
-            .send(
-                NetworkValue::RingElementBit(message).to_network(),
-                &next_party,
-                &sid,
-            )
-            .await;
-    })
-    .await;
+    network
+        .send(
+            NetworkValue::RingElementBit(message).to_network(),
+            &next_party,
+            &sid,
+        )
+        .await?;
 
     // receiving from previous party
     let network = session.network().clone();
     let sid = session.session_id();
     let prev_party = session.prev_identity()?;
-    let c = tokio::spawn(async move {
+    let c = {
         let serialized_other_share = network.receive(&prev_party, &sid).await;
         match NetworkValue::from_network(serialized_other_share) {
             Ok(NetworkValue::RingElementBit(message)) => Ok(message),
             _ => Err(eyre!("Error in receiving in and_many operation")),
         }
-    })
-    .await??;
+    }?;
 
     // xor shares with the received share
     Ok((share.a ^ share.b ^ c).convert())

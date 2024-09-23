@@ -34,13 +34,13 @@ pub async fn setup_replicated_prf(session: &BootSession, my_seed: PrfSeed) -> ey
     let prev_role = session.own_role()?.prev(3);
     let network = session.network();
     // send my_seed to the next party
-    let _ = network
+    network
         .send(
             NetworkValue::PrfKey(my_seed).to_network(),
             session.identity(&next_role)?,
             &session.session_id,
         )
-        .await;
+        .await?;
     // received other seed from the previous party
     let serialized_other_seed = network
         .receive(session.identity(&prev_role)?, &session.session_id)
@@ -83,13 +83,13 @@ pub(crate) async fn replicated_dot(
     let next_role = session.identity(&session.own_role()?.next(3))?;
     let prev_role = session.identity(&session.own_role()?.prev(3))?;
 
-    let _ = network
+    network
         .send(
             RingElement16(res_a).to_network(),
             next_role,
             &session.session_id(),
         )
-        .await;
+        .await?;
 
     let serialized_reply = network.receive(prev_role, &session.session_id()).await;
     let res_b = match NetworkValue::from_network(serialized_reply) {
@@ -128,13 +128,13 @@ pub async fn replicated_dot_many(
     let next_role = session.identity(&session.own_role()?.next(3))?;
     let prev_role = session.identity(&session.own_role()?.prev(3))?;
 
-    let _ = network
+    network
         .send(
             NetworkValue::VecRing16(shares_a.clone()).to_network(),
             next_role,
             &session.session_id(),
         )
-        .await;
+        .await?;
 
     let serialized_reply = network.receive(prev_role, &session.session_id()).await;
     let shares_b = match NetworkValue::from_network(serialized_reply) {
@@ -232,29 +232,25 @@ pub async fn open_t_many(session: &Session, shares: VecShare<u64>) -> eyre::Resu
 
     let shares_b: Vec<_> = shares.iter().map(|s| s.b).collect();
     let message = shares_b;
-    let _ = tokio::spawn(async move {
-        let _ = network
-            .send(
-                NetworkValue::VecRing64(message).to_network(),
-                &next_party,
-                &sid,
-            )
-            .await;
-    })
-    .await;
+    network
+        .send(
+            NetworkValue::VecRing64(message).to_network(),
+            &next_party,
+            &sid,
+        )
+        .await?;
 
     // receiving from previous party
     let network = session.network().clone();
     let sid = session.session_id();
     let prev_party = session.prev_identity()?;
-    let shares_c = tokio::spawn(async move {
+    let shares_c = {
         let serialized_other_share = network.receive(&prev_party, &sid).await;
         match NetworkValue::from_network(serialized_other_share) {
             Ok(NetworkValue::VecRing64(message)) => Ok(message),
             _ => Err(eyre!("Error in receiving in and_many operation")),
         }
-    })
-    .await??;
+    }?;
 
     let res = shares
         .into_iter()
@@ -400,13 +396,13 @@ mod tests {
         let network = session.network();
         let next_role = session.identity(&session.own_role()?.next(3))?;
         let prev_role = session.identity(&session.own_role()?.prev(3))?;
-        let _ = network
+        network
             .send(
                 RingElement16(x.b).to_network(),
                 next_role,
                 &session.session_id(),
             )
-            .await;
+            .await?;
         let serialized_reply = network.receive(prev_role, &session.session_id()).await;
         let missing_share = match NetworkValue::from_network(serialized_reply) {
             Ok(NetworkValue::RingElement16(element)) => element,
