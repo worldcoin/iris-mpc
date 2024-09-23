@@ -5,7 +5,7 @@ use futures_concurrency::future::Join;
 use iris_mpc_common::helpers::task_monitor::TaskMonitor;
 use iris_mpc_store::Store;
 use iris_mpc_upgrade::{
-    config::{Eye, UpgradeServerConfig},
+    config::{Eye, UpgradeServerConfig, BATCH_SUCCESSFUL_ACK, FINAL_BATCH_SUCCESSFUL_ACK},
     packets::{MaskShareMessage, TwoToThreeIrisCodeMessage},
     IrisCodeUpgrader, NewIrisShareSink,
 };
@@ -181,16 +181,16 @@ async fn main() -> eyre::Result<()> {
                 .await?;
         }
         // Send an ACK to the client
-        client_stream1.write_u8(1).await?;
-        client_stream2.write_u8(1).await?;
+        client_stream1.write_u8(BATCH_SUCCESSFUL_ACK).await?;
+        client_stream2.write_u8(BATCH_SUCCESSFUL_ACK).await?;
         client_stream1.flush().await?;
         client_stream2.flush().await?;
 
         let duration = start_time.elapsed();
         tracing::info!("Processed batch in {:.2?}", duration);
     }
-    client_stream2.write_u8(42).await?;
-    client_stream1.write_u8(42).await?;
+    client_stream2.write_u8(FINAL_BATCH_SUCCESSFUL_ACK).await?;
+    client_stream1.write_u8(FINAL_BATCH_SUCCESSFUL_ACK).await?;
     Ok(())
 }
 

@@ -6,6 +6,9 @@ use std::{
     str::FromStr,
 };
 
+pub const BATCH_SUCCESSFUL_ACK: u8 = 1;
+pub const FINAL_BATCH_SUCCESSFUL_ACK: u8 = 42;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Eye {
@@ -48,9 +51,6 @@ pub struct UpgradeServerConfig {
     #[clap(long)]
     pub batch_size: u8,
 
-    #[clap(long, default_value = "8")]
-    pub threads: usize,
-
     #[clap(long)]
     pub eye: Eye,
 
@@ -64,7 +64,6 @@ impl std::fmt::Debug for UpgradeServerConfig {
             .field("bind_addr", &self.bind_addr)
             .field("db_url", &"<redacted>")
             .field("party_id", &self.party_id)
-            .field("threads", &self.threads)
             .field("eye", &self.eye)
             .finish()
     }
@@ -106,7 +105,7 @@ pub struct UpgradeClientConfig {
     pub masks_db_url: String,
 }
 
-impl std::fmt::Debug for UpgradeClientConfig {
+impl fmt::Debug for UpgradeClientConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("UpgradeClientConfig")
             .field("server1", &self.server1)

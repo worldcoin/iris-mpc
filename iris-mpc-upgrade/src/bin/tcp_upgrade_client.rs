@@ -7,7 +7,7 @@ use iris_mpc_common::{
     IRIS_CODE_LENGTH,
 };
 use iris_mpc_upgrade::{
-    config::UpgradeClientConfig,
+    config::{UpgradeClientConfig, BATCH_SUCCESSFUL_ACK, FINAL_BATCH_SUCCESSFUL_ACK},
     db::V1Db,
     packets::{MaskShareMessage, TwoToThreeIrisCodeMessage},
     OldIrisShareSource,
@@ -82,10 +82,6 @@ async fn main() -> eyre::Result<()> {
     let mut server1 = prepare_tls_stream_for_writing(&args.server1, client_config.clone()).await?;
     let mut server2 = prepare_tls_stream_for_writing(&args.server2, client_config.clone()).await?;
     let mut server3 = prepare_tls_stream_for_writing(&args.server3, client_config).await?;
-
-    // let mut server1 = TcpStream::connect(&args.server1).await?;
-    // let mut server2 = TcpStream::connect(&args.server2).await?;
-    // let mut server3 = TcpStream::connect(&args.server3).await?;
 
     tracing::info!("Connecting to servers and syncing migration task parameters...");
     server1.write_u8(args.party_id).await?;
@@ -320,12 +316,12 @@ async fn send_batch_and_wait_for_ack(
         }
     }
 
-    // Handle acknowledgment: Wait for ACK from server 1 (assuming it sends ACK for
-    // all)
     if !errors.is_empty() {
         let combined_error = errors.join(" || ");
         return Err(eyre::eyre!(combined_error));
     }
+
+    // Handle acknowledgment from all servers
     wait_for_ack(server1).await?;
     wait_for_ack(server2).await?;
     wait_for_ack(server3).await?;
@@ -334,13 +330,12 @@ async fn send_batch_and_wait_for_ack(
 
 async fn wait_for_ack(server: &mut TlsStream<TcpStream>) -> eyre::Result<()> {
     match timeout(Duration::from_secs(10), server.read_u8()).await {
-        Ok(Ok(1)) => {
+        Ok(Ok(BATCH_SUCCESSFUL_ACK)) => {
             // Ack received successfully
             tracing::info!("ACK received for batch");
             Ok(())
         }
-        Ok(Ok(42)) => {
-            // Ack received successfully
+        Ok(Ok(FINAL_BATCH_SUCCESSFUL_ACK)) => {
             tracing::info!("ACK received for final batch");
             Ok(())
         }
@@ -530,7 +525,7 @@ impl OldIrisShareSource for MockOldDbParty1 {
     fn stream_masks(
         &self,
         share_id_range: std::ops::Range<u64>,
-    ) -> eyre::Result<impl futures::Stream<Item = eyre::Result<(u64, Bits)>>> {
+    ) -> eyre::Result<impl Stream<Item = eyre::Result<(u64, Bits)>>> {
         let mut id = share_id_range.start;
         Ok(futures::stream::poll_fn(move |_| {
             if id >= share_id_range.end {
