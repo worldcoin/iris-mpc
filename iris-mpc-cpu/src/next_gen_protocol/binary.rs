@@ -1,8 +1,5 @@
 use crate::{
-    execution::{
-        player::Role,
-        session::{Session, SessionHandles},
-    },
+    execution::session::{Session, SessionHandles},
     next_gen_network::value::NetworkValue,
     shares::{
         bit::Bit,
@@ -84,11 +81,9 @@ where
     if a.len() != b.len() {
         return Err(eyre!("InvalidSize in and_many_send"));
     }
-    let mut prf = session.prf_as_mut();
-
     let mut shares_a = Vec::with_capacity(a.len());
     for (a_, b_) in a.iter().zip(b.iter()) {
-        let rand = prf.gen_binary_zero_share::<u64>();
+        let rand = session.prf_as_mut().gen_binary_zero_share::<u64>();
         let mut c = a_ & b_;
         c ^= rand;
         shares_a.push(c);
@@ -226,16 +221,24 @@ where
     let len = input.len();
     let mut wc = Vec::with_capacity(len);
     let mut shares = VecShare::with_capacity(len);
-    let prf = session.prf_as_mut();
 
     for inp in input.into_iter() {
         // new share
-        let c3 = prf.get_prev_prf().gen::<RingElement<u16>>();
+        let c3 = session
+            .prf_as_mut()
+            .get_prev_prf()
+            .gen::<RingElement<u16>>();
         shares.push(Share::new(RingElement::zero(), c3));
 
         // mask of the ot
-        let w0 = prf.get_prev_prf().gen::<RingElement<u16>>();
-        let w1 = prf.get_prev_prf().gen::<RingElement<u16>>();
+        let w0 = session
+            .prf_as_mut()
+            .get_prev_prf()
+            .gen::<RingElement<u16>>();
+        let w1 = session
+            .prf_as_mut()
+            .get_prev_prf()
+            .gen::<RingElement<u16>>();
 
         let choice = inp.get_a().convert().convert();
         if choice {
@@ -310,14 +313,13 @@ async fn bit_inject_ot_2round_receiver(
     let mut shares = VecShare::with_capacity(len);
     let mut send = Vec::with_capacity(len);
 
-    let mut prf = session.prf_as_mut();
     for ((inp, wc), (m0, m1)) in input
         .into_iter()
         .zip(wc.into_iter())
         .zip(m0.into_iter().zip(m1.into_iter()))
     {
         // new share
-        let c2 = prf.get_my_prf().gen::<RingElement<u16>>();
+        let c2 = session.prf_as_mut().get_my_prf().gen::<RingElement<u16>>();
 
         let choice = inp.get_b().convert().convert();
         let xor = if choice { wc ^ m1 } else { wc ^ m0 };
@@ -330,7 +332,7 @@ async fn bit_inject_ot_2round_receiver(
     let prev_id = session.prev_identity()?;
     let sid = session.session_id();
     // Reshare to Helper
-    let _ = tokio::spawn(async move {
+    tokio::spawn(async move {
         let _ = network
             .send(NetworkValue::VecRing16(send).to_network(), &prev_id, &sid)
             .await;
@@ -349,14 +351,13 @@ async fn bit_inject_ot_2round_sender(
     let mut m1 = Vec::with_capacity(len);
     let mut shares = VecShare::with_capacity(len);
 
-    let mut prf = session.prf_as_mut();
     for inp in input.into_iter() {
         let (a, b) = inp.get_ab();
         // new shares
-        let (c3, c2) = prf.gen_rands::<RingElement<u16>>();
+        let (c3, c2) = session.prf_as_mut().gen_rands::<RingElement<u16>>();
         // mask of the ot
-        let w0 = prf.get_my_prf().gen::<RingElement<u16>>();
-        let w1 = prf.get_my_prf().gen::<RingElement<u16>>();
+        let w0 = session.prf_as_mut().get_my_prf().gen::<RingElement<u16>>();
+        let w1 = session.prf_as_mut().get_my_prf().gen::<RingElement<u16>>();
 
         shares.push(Share::new(c3, c2));
         let c = c3 + c2;
@@ -372,7 +373,7 @@ async fn bit_inject_ot_2round_sender(
     let sid = session.session_id();
     // TODO(Dragos) Note this can be compressed in a single round.
     // Reshare to Helper
-    let _ = tokio::spawn(async move {
+    tokio::spawn(async move {
         let _ = network
             .send(NetworkValue::VecRing16(m0).to_network(), &prev_id, &sid)
             .await;
@@ -418,7 +419,7 @@ where
 }
 
 pub(crate) fn mul_lift_2k_many<const K: u64>(vals: SliceShare<u16>) -> VecShare<u32> {
-    VecShare::new_vec(vals.iter().map(|val| mul_lift_2k::<K>(val)).collect())
+    VecShare::new_vec(vals.iter().map(mul_lift_2k::<K>).collect())
 }
 
 pub(crate) async fn lift<const K: usize>(
@@ -449,7 +450,7 @@ pub(crate) async fn lift<const K: usize>(
         let mut x2_ = VecShare::with_capacity(len__);
         let mut x3_ = VecShare::with_capacity(len__);
         for x__ in x_.into_iter() {
-            let (x1__, x2__, x3__) = a2b_pre(&session, x__)?;
+            let (x1__, x2__, x3__) = a2b_pre(session, x__)?;
             x1_.push(x1__);
             x2_.push(x2__);
             x3_.push(x3__);
@@ -567,7 +568,7 @@ async fn extract_msb<const K: usize>(
         x3.push(x3_);
     }
 
-    Ok(binary_add_3_get_msb(session, x1, x2, x3).await?)
+    binary_add_3_get_msb(session, x1, x2, x3).await
 }
 
 pub async fn extract_msb_u32<const K: usize>(
@@ -576,7 +577,7 @@ pub async fn extract_msb_u32<const K: usize>(
 ) -> Result<VecShare<u64>, Error> {
     // let truncate_len = x_.len();
     let x = x_.transpose_pack_u64_with_len::<K>();
-    Ok(extract_msb::<K>(session, x).await?)
+    extract_msb::<K>(session, x).await
 }
 
 pub async fn extract_msb_u16<const K: usize>(
@@ -585,7 +586,7 @@ pub async fn extract_msb_u16<const K: usize>(
 ) -> Result<VecShare<u64>, Error> {
     // let truncate_len = x_.len();
     let x = x_.transpose_pack_u64_with_len::<K>();
-    Ok(extract_msb::<K>(session, x).await?)
+    extract_msb::<K>(session, x).await
 }
 
 // TODO a dedicated bitextraction for just one element would be more
@@ -632,6 +633,6 @@ pub async fn open_bin(session: &mut Session, share: Share<Bit>) -> Result<Bit, E
     })
     .await??;
 
-    /// xor shares with the received share
+    // xor shares with the received share
     Ok((share.a ^ share.b ^ c).convert())
 }

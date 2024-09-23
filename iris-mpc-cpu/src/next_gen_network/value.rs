@@ -1,6 +1,5 @@
-use crate::shares::{bit::Bit, int_ring::IntRing2k, ring_impl::RingElement};
+use crate::shares::{bit::Bit, ring_impl::RingElement};
 use eyre::eyre;
-use num_traits::Zero;
 use serde::{Deserialize, Serialize};
 
 /// Value sent over the network

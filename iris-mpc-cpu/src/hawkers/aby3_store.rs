@@ -1,6 +1,6 @@
 use crate::{
     database_generators::{create_shared_database_raw, generate_iris_shares, SharedIris},
-    execution::{player::Identity, session::SessionId},
+    execution::session::SessionId,
     hawkers::plaintext_store::{PlaintextStore, PointId},
     next_gen_protocol::ng_worker::{
         rep3_single_iris_match_public_output, replicated_lift_and_cross_mul,
@@ -329,7 +329,7 @@ impl VectorStore for LocalNetAby3StoreProtocol {
 
     async fn is_match(&self, distance: &Self::DistanceRef) -> bool {
         // TODO(Dragos) Need to feed in different session
-        let mut ready_sessions = self
+        let ready_sessions = self
             .runtime
             .create_player_sessions(SessionId(0))
             .await
@@ -350,7 +350,7 @@ impl VectorStore for LocalNetAby3StoreProtocol {
                 let (iris_to_match, mask_iris) = (&x.data.shares, &x.data.mask);
                 let (ground_truth, mask_ground_truth) = (&y.data.shares, &y.data.mask);
 
-                let r = rep3_single_iris_match_public_output(
+                rep3_single_iris_match_public_output(
                     &mut player_session,
                     iris_to_match.as_slice(),
                     ground_truth.clone(),
@@ -358,8 +358,7 @@ impl VectorStore for LocalNetAby3StoreProtocol {
                     *mask_ground_truth,
                 )
                 .await
-                .unwrap();
-                r
+                .unwrap()
             });
         }
 
@@ -378,7 +377,7 @@ impl VectorStore for LocalNetAby3StoreProtocol {
     ) -> bool {
         let d1 = *distance1;
         let d2 = *distance2;
-        let mut ready_sessions = self
+        let ready_sessions = self
             .runtime
             .create_player_sessions(SessionId(0))
             .await
@@ -423,16 +422,9 @@ impl VectorStore for LocalNetAby3StoreProtocol {
                 )
                 .await
                 .unwrap();
-                let res = replicated_lift_and_cross_mul(
-                    &mut player_session,
-                    d1,
-                    t1 as u32,
-                    d2,
-                    t2 as u32,
-                )
-                .await
-                .unwrap();
-                res
+                replicated_lift_and_cross_mul(&mut player_session, d1, t1 as u32, d2, t2 as u32)
+                    .await
+                    .unwrap()
             });
         }
 

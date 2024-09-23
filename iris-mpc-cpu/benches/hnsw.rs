@@ -58,7 +58,7 @@ fn bench_ready_made_hnsw(c: &mut Criterion) {
     let mut group = c.benchmark_group("ready_made_hnsw");
     group.sample_size(10);
 
-    for database_size in [10000] {
+    for database_size in [1, 10, 100, 1000] {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()

@@ -5,22 +5,18 @@ use crate::{
         session::{BootSession, Session, SessionHandles, SessionId},
     },
     next_gen_network::{
-        local::{LocalNetworking, LocalNetworkingStore},
-        value::NetworkValue::{self, PrfKey, RingElement16},
+        local::LocalNetworkingStore,
+        value::NetworkValue::{self, RingElement16},
     },
     next_gen_protocol::binary::{lift, open_bin},
-    prelude::IrisWorker,
     protocol::prf::{Prf, PrfSeed},
     shares::{
-        int_ring::IntRing2k,
-        ring_impl::RingElement,
         share::Share,
         vecshare::{SliceShare, VecShare},
     },
 };
 use eyre::eyre;
 use iris_mpc_common::iris_db::iris::{IrisCodeArray, MATCH_THRESHOLD_RATIO};
-use rand::RngCore;
 use std::{collections::HashMap, ops::SubAssign, sync::Arc};
 use tokio::task::JoinSet;
 
@@ -58,51 +54,26 @@ pub async fn setup_replicated_prf(session: &BootSession, my_seed: PrfSeed) -> ey
     Ok(Prf::new(my_seed, other_seed))
 }
 
-pub(crate) async fn setup_session<Rng: RngCore>(session: BootSession, rng: &mut Rng) -> Session {
-    let mut seed = [0_u8; 16];
-    rng.fill_bytes(&mut seed);
-    let prf = setup_replicated_prf(&session, seed).await.unwrap();
-    Session {
-        boot_session: session,
-        setup:        prf,
-    }
-}
-
-pub(crate) async fn open_single(
-    session: &Session,
-    x: Share<u16>,
-) -> eyre::Result<RingElement<u16>> {
-    let network = session.network();
-    let next_role = session.identity(&session.own_role()?.next(3))?;
-    let prev_role = session.identity(&session.own_role()?.prev(3))?;
-    let _ = network
-        .send(
-            RingElement16(x.b).to_network(),
-            next_role,
-            &session.session_id(),
-        )
-        .await;
-    let serialized_reply = network.receive(prev_role, &session.session_id()).await;
-    let missing_share = match NetworkValue::from_network(serialized_reply) {
-        Ok(NetworkValue::RingElement16(element)) => element,
-        _ => return Err(eyre!("Could not deserialize RingElement16")),
-    };
-    let (a, b) = x.get_ab();
-    Ok(a + b + missing_share)
-}
+// pub(crate) async fn setup_session<Rng: RngCore>(session: BootSession, rng:
+// &mut Rng) -> Session {     let mut seed = [0_u8; 16];
+//     rng.fill_bytes(&mut seed);
+//     let prf = setup_replicated_prf(&session, seed).await.unwrap();
+//     Session {
+//         boot_session: session,
+//         setup:        prf,
+//     }
+// }
 
 pub(crate) async fn replicated_dot(
     session: &mut Session,
-    a: &Vec<Share<u16>>,
-    b: &Vec<Share<u16>>,
+    a: &[Share<u16>],
+    b: &[Share<u16>],
 ) -> eyre::Result<Share<u16>> {
     if a.len() != b.len() {
         return Err(eyre!("Error::InvalidSize"));
     }
-    let mut prf = session.prf_as_mut();
-
     let res_a = {
-        let mut rand = prf.gen_zero_share();
+        let mut rand = session.prf_as_mut().gen_zero_share();
         for (a__, b__) in a.iter().zip(b.iter()) {
             rand += a__ * b__;
         }
@@ -141,10 +112,9 @@ pub async fn replicated_dot_many(
     }
 
     let mut shares_a = Vec::with_capacity(len);
-    let mut prf = session.prf_as_mut();
 
     for b_ in b.iter() {
-        let mut rand = prf.gen_zero_share();
+        let mut rand = session.prf_as_mut().gen_zero_share();
         if a.len() != b_.len() {
             return Err(eyre!("Error::InvalidSize"));
         }
@@ -179,8 +149,8 @@ pub async fn replicated_dot_many(
 
 pub(crate) async fn replicated_pairwise_distance(
     session: &mut Session,
-    lhs_shares: &Vec<Share<u16>>,
-    rhs_shares: &Vec<Share<u16>>,
+    lhs_shares: &[Share<u16>],
+    rhs_shares: &[Share<u16>],
     lhs_mask: &IrisCodeArray,
     rhs_mask: &IrisCodeArray,
 ) -> eyre::Result<(Share<u16>, usize)> {
@@ -347,7 +317,7 @@ pub async fn replicated_compare_iris_public_mask_many(
     // a < b <=> msb(a - b)
     // Given no overflow, which is enforced in constructor
     for (dot, mask_len) in dots.iter_mut().zip(mask_lens) {
-        let _ = rep3_get_cmp_diff(session, dot, mask_len)?;
+        rep3_get_cmp_diff(session, dot, mask_len)?;
     }
 
     extract_msb_u16::<{ u16::BITS as usize }>(session, dots).await
@@ -399,7 +369,7 @@ impl LocalRuntime {
 
         let mut jobs = JoinSet::new();
         for (player_id, boot_session) in boot_sessions.iter().enumerate() {
-            let player_seed = self.seeds[player_id].clone();
+            let player_seed = self.seeds[player_id];
             let sess = boot_session.clone();
             jobs.spawn(async move {
                 let prf = setup_replicated_prf(&sess, player_seed).await.unwrap();
@@ -421,15 +391,30 @@ impl LocalRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        execution::session::{self, BootSession, SessionId},
-        shares::ring_impl::RingElement,
-    };
+    use crate::{execution::session::SessionId, shares::ring_impl::RingElement};
     use aes_prng::AesRng;
-    use core::num;
-    use num_traits::identities;
     use rand::{Rng, RngCore, SeedableRng};
     use tokio::task::JoinSet;
+
+    async fn open_single(session: &Session, x: Share<u16>) -> eyre::Result<RingElement<u16>> {
+        let network = session.network();
+        let next_role = session.identity(&session.own_role()?.next(3))?;
+        let prev_role = session.identity(&session.own_role()?.prev(3))?;
+        let _ = network
+            .send(
+                RingElement16(x.b).to_network(),
+                next_role,
+                &session.session_id(),
+            )
+            .await;
+        let serialized_reply = network.receive(prev_role, &session.session_id()).await;
+        let missing_share = match NetworkValue::from_network(serialized_reply) {
+            Ok(NetworkValue::RingElement16(element)) => element,
+            _ => return Err(eyre!("Could not deserialize RingElement16")),
+        };
+        let (a, b) = x.get_ab();
+        Ok(a + b + missing_share)
+    }
 
     #[tokio::test]
     async fn test_async_prf_setup() {
@@ -450,7 +435,7 @@ mod tests {
         // P2: [seed_2, seed_1]
         // This is done by calling next() on the PRFs and see whether they match with
         // the ones created from scratch.
-        let mut prf0 = ready_sessions
+        let prf0 = ready_sessions
             .get_mut(&"alice".into())
             .unwrap()
             .prf_as_mut();
@@ -463,7 +448,7 @@ mod tests {
             Prf::new(seeds[0], seeds[2]).get_prev_prf().next_u64()
         );
 
-        let mut prf1 = ready_sessions.get_mut(&"bob".into()).unwrap().prf_as_mut();
+        let prf1 = ready_sessions.get_mut(&"bob".into()).unwrap().prf_as_mut();
         assert_eq!(
             prf1.get_my_prf().next_u64(),
             Prf::new(seeds[1], seeds[0]).get_my_prf().next_u64()
@@ -473,7 +458,7 @@ mod tests {
             Prf::new(seeds[1], seeds[0]).get_prev_prf().next_u64()
         );
 
-        let mut prf2 = ready_sessions
+        let prf2 = ready_sessions
             .get_mut(&"charlie".into())
             .unwrap()
             .prf_as_mut();
@@ -555,17 +540,16 @@ mod tests {
             seeds.push(seed);
         }
         let local = LocalRuntime::new(identities.clone(), seeds.clone());
-        let mut ready_sessions = local.create_player_sessions(SessionId(0)).await.unwrap();
+        let ready_sessions = local.create_player_sessions(SessionId(0)).await.unwrap();
 
         let mut jobs = JoinSet::new();
-        for player in identities.iter().cloned() {
-            let mut player_session = ready_sessions.get(&player).unwrap().clone();
-            let a = v1_share_map.get(&player).unwrap().clone();
-            let b = v2_share_map.get(&player).unwrap().clone();
+        for player in identities.iter() {
+            let mut player_session = ready_sessions.get(player).unwrap().clone();
+            let a = v1_share_map.get(player).unwrap().clone();
+            let b = v2_share_map.get(player).unwrap().clone();
             jobs.spawn(async move {
                 let out_shared = replicated_dot(&mut player_session, &a, &b).await.unwrap();
-                let out = open_single(&player_session, out_shared).await.unwrap();
-                out
+                open_single(&player_session, out_shared).await.unwrap()
             });
         }
         // check first party output is equal to the expected result.
