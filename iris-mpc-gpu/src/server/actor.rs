@@ -175,6 +175,7 @@ impl ServerActor {
         max_db_size: usize,
         max_batch_size: usize,
     ) -> eyre::Result<Self> {
+        assert!(max_batch_size != 0);
         let mut kdf_nonce = 0;
         let kdf_salt: Salt = Salt::new(HKDF_SHA256, b"IRIS_MPC");
         let n_queries = max_batch_size * ROTATIONS;
@@ -1026,12 +1027,16 @@ impl ServerActor {
                 .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(1, DB_CHUNK_SIZE))
                 .collect::<Vec<_>>();
 
-            // We need to pad the chunk size to be a multiple of 4, because the underlying
-            // `gemm_ex` expects this. We filter out potential "phantom matches"
-            // for the padded data in the `open` later.
+            // We need to pad the chunk size for two reasons:
+            // 1. Chunk size needs to be a multiple of 4, because the underlying
+            // `gemm_ex` expects this.
+            // 2. We are running into NCCL issues if the bytes sent/received are not a
+            //    multiple of 64.
+            // We filter out potential "phantom matches" for the padded data in the `open`
+            // later.
             let dot_chunk_size = chunk_size
                 .iter()
-                .map(|s| s.div_ceil(4) * 4)
+                .map(|s| s.div_ceil(64) * 64)
                 .collect::<Vec<_>>();
 
             // First stream doesn't need to wait
