@@ -171,7 +171,7 @@ impl VectorStore for Aby3StorePlayer {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LocalNetAby3StoreProtocol {
     pub player_0: Aby3StorePlayer,
     pub player_1: Aby3StorePlayer,

@@ -22,7 +22,7 @@ type P2PChannels = Arc<
     >,
 >;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LocalNetworkingStore {
     p2p_channels: P2PChannels,
 }

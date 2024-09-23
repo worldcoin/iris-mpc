@@ -20,7 +20,7 @@ use iris_mpc_common::iris_db::iris::{IrisCodeArray, MATCH_THRESHOLD_RATIO};
 use std::{collections::HashMap, ops::SubAssign, sync::Arc};
 use tokio::task::JoinSet;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LocalRuntime {
     pub identities:       Vec<Identity>,
     pub role_assignments: RoleAssignment,
