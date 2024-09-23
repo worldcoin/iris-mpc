@@ -1,6 +1,6 @@
 use crate::{
     database_generators::{create_shared_database_raw, generate_iris_shares, SharedIris},
-    execution::session::SessionId,
+    execution::{player::Identity, session::SessionId},
     hawkers::plaintext_store::{PlaintextStore, PointId},
     next_gen_protocol::ng_worker::{
         rep3_single_iris_match_public_output, replicated_lift_and_cross_mul,
@@ -11,6 +11,7 @@ use aes_prng::AesRng;
 use hawk_pack::{graph_store::graph_mem::GraphMem, hnsw_db::HawkSearcher, VectorStore};
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use rand::{RngCore, SeedableRng};
+use std::collections::HashMap;
 use tokio::task::JoinSet;
 
 #[derive(Default, Clone)]
@@ -66,10 +67,8 @@ impl Aby3StorePlayer {
 
 #[derive(Debug, Clone)]
 pub struct LocalNetAby3StoreProtocol {
-    pub player_0: Aby3StorePlayer,
-    pub player_1: Aby3StorePlayer,
-    pub player_2: Aby3StorePlayer,
-    pub runtime:  LocalRuntime,
+    pub players: HashMap<Identity, Aby3StorePlayer>,
+    pub runtime: LocalRuntime,
 }
 
 fn setup_local_player_preloaded_db(database: Vec<SharedIris>) -> eyre::Result<Aby3StorePlayer> {
@@ -82,12 +81,12 @@ pub fn setup_local_store_aby3_players() -> eyre::Result<LocalNetAby3StoreProtoco
     let player_1 = Aby3StorePlayer::default();
     let player_2 = Aby3StorePlayer::default();
     let runtime = LocalRuntime::replicated_test_config();
-    Ok(LocalNetAby3StoreProtocol {
-        player_0,
-        player_1,
-        player_2,
-        runtime,
-    })
+    let players = HashMap::from([
+        (Identity::from("alice"), player_0),
+        (Identity::from("bob"), player_1),
+        (Identity::from("charlie"), player_2),
+    ]);
+    Ok(LocalNetAby3StoreProtocol { runtime, players })
 }
 
 pub fn setup_local_aby3_players_with_preloaded_db<R: RngCore>(
@@ -99,20 +98,34 @@ pub fn setup_local_aby3_players_with_preloaded_db<R: RngCore>(
     let player_0 = setup_local_player_preloaded_db(shared_db.player0_shares)?;
     let player_1 = setup_local_player_preloaded_db(shared_db.player1_shares)?;
     let player_2 = setup_local_player_preloaded_db(shared_db.player2_shares)?;
+    let players = HashMap::from([
+        (Identity::from("alice"), player_0),
+        (Identity::from("bob"), player_1),
+        (Identity::from("charlie"), player_2),
+    ]);
     let runtime = LocalRuntime::replicated_test_config();
-    Ok(LocalNetAby3StoreProtocol {
-        player_0,
-        player_1,
-        player_2,
-        runtime,
-    })
+    Ok(LocalNetAby3StoreProtocol { runtime, players })
 }
 
 impl LocalNetAby3StoreProtocol {
     pub fn prepare_query(&mut self, code: Vec<SharedIris>) -> PointId {
-        let pid0 = self.player_0.prepare_query(code[0].clone());
-        let pid1 = self.player_1.prepare_query(code[1].clone());
-        let pid2 = self.player_2.prepare_query(code[2].clone());
+        assert_eq!(code.len(), 3);
+        assert_eq!(self.players.len(), 3);
+        let pid0 = self
+            .players
+            .get_mut(&Identity::from("alice"))
+            .unwrap()
+            .prepare_query(code[0].clone());
+        let pid1 = self
+            .players
+            .get_mut(&Identity::from("bob"))
+            .unwrap()
+            .prepare_query(code[1].clone());
+        let pid2 = self
+            .players
+            .get_mut(&Identity::from("charlie"))
+            .unwrap()
+            .prepare_query(code[2].clone());
         assert_eq!(pid0, pid1);
         assert_eq!(pid1, pid2);
         pid0
@@ -126,12 +139,10 @@ impl VectorStore for LocalNetAby3StoreProtocol {
 
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         // The query is now accepted in the store. It keeps the same ID.
-        let q0 = self.player_0.insert(query);
-        let q1 = self.player_1.insert(query);
-        let q2 = self.player_2.insert(query);
-        assert_eq!(q0, q1);
-        assert_eq!(q1, q2);
-        q0
+        for (_id, storage) in self.players.iter_mut() {
+            storage.insert(query);
+        }
+        *query
     }
 
     async fn eval_distance(
@@ -154,12 +165,7 @@ impl VectorStore for LocalNetAby3StoreProtocol {
         let mut jobs = JoinSet::new();
         for player in self.runtime.identities.clone() {
             let mut player_session = ready_sessions.get(&player).unwrap().clone();
-            let storage = match player.0.as_str() {
-                "alice" => self.player_0.clone(),
-                "bob" => self.player_1.clone(),
-                "charlie" => self.player_2.clone(),
-                _ => panic!(),
-            };
+            let storage = self.players.get(&player).unwrap();
             let x = storage.points[distance.0 .0].clone();
             let y = storage.points[distance.1 .0].clone();
             jobs.spawn(async move {
@@ -202,14 +208,7 @@ impl VectorStore for LocalNetAby3StoreProtocol {
         let mut jobs = JoinSet::new();
         for player in self.runtime.identities.clone() {
             let mut player_session = ready_sessions.get(&player).unwrap().clone();
-            // TODO(Dragos) remove these hardcoded lines by having better fields in the
-            // global struct.
-            let storage = match player.0.as_str() {
-                "alice" => self.player_0.clone(),
-                "bob" => self.player_1.clone(),
-                "charlie" => self.player_2.clone(),
-                _ => panic!(),
-            };
+            let storage = self.players.get(&player).unwrap();
             let (x1, y1) = (
                 storage.points[d1.0.val()].clone(),
                 storage.points[d1.1.val()].clone(),
@@ -457,16 +456,46 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            scratch_secret_searcher.vector_store.player_0.points,
-            secret_searcher.vector_store.player_0.points
+            scratch_secret_searcher
+                .vector_store
+                .players
+                .get(&Identity::from("alice"))
+                .unwrap()
+                .points,
+            secret_searcher
+                .vector_store
+                .players
+                .get(&Identity::from("alice"))
+                .unwrap()
+                .points
         );
         assert_eq!(
-            scratch_secret_searcher.vector_store.player_1.points,
-            secret_searcher.vector_store.player_1.points
+            scratch_secret_searcher
+                .vector_store
+                .players
+                .get(&Identity::from("bob"))
+                .unwrap()
+                .points,
+            secret_searcher
+                .vector_store
+                .players
+                .get(&Identity::from("bob"))
+                .unwrap()
+                .points
         );
         assert_eq!(
-            scratch_secret_searcher.vector_store.player_2.points,
-            secret_searcher.vector_store.player_2.points
+            scratch_secret_searcher
+                .vector_store
+                .players
+                .get(&Identity::from("charlie"))
+                .unwrap()
+                .points,
+            secret_searcher
+                .vector_store
+                .players
+                .get(&Identity::from("charlie"))
+                .unwrap()
+                .points
         );
 
         for i in 0..database_size {
