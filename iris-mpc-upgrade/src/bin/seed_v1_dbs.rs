@@ -137,7 +137,7 @@ async fn main() -> eyre::Result<()> {
         create:  args.create,
     };
     let shares_db_config1 = DbConfig {
-        url:    participant_two_shares_db_url.clone(),
+        url:     participant_two_shares_db_url.clone(),
         migrate: args.migrate,
         create:  args.create,
     };
