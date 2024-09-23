@@ -532,7 +532,7 @@ impl ShareDB {
             let threads_per_block = DEFAULT_LAUNCH_CONFIG_THREADS; // ON CHANGE: sync with kernel
             let cfg = launch_config_from_elements_and_threads(
                 num_elements as u32,
-                threads_per_block as u32,
+                threads_per_block,
                 &self.device_manager.devices()[idx],
             );
 
@@ -584,7 +584,7 @@ impl ShareDB {
         let threads_per_block = DEFAULT_LAUNCH_CONFIG_THREADS; // ON CHANGE: sync with kernel
         let cfg = launch_config_from_elements_and_threads(
             size as u32,
-            threads_per_block as u32,
+            threads_per_block,
             &self.device_manager.devices()[idx],
         );
 
