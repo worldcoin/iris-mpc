@@ -772,6 +772,11 @@ impl Circuits {
         streams: &[CudaStream],
     ) {
         assert_eq!(res.len(), self.n_devices);
+        tracing::info!(
+            "send_receive_view_with_offset: {:?} {}",
+            range,
+            range.len() * 8
+        );
 
         let send_bufs = res
             .iter()

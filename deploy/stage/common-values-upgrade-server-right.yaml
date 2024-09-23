@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:v0.4.8"
+image: "ghcr.io/worldcoin/iris-mpc:v0.8.6"
 
 environment: stage
 replicaCount: 1
@@ -60,11 +60,17 @@ env:
       secretKeyRef:
         key: DATABASE_URL
         name: application
-
+  - name: RUST_LOG
+    value: info
+  - name: ENVIRONMENT
+    value: stage
 
 keelPolling:
   # -- Specifies whether keel should poll for container updates
   enabled: true
+
+service:
+  enabled: false
 
 ingress:
   enabled: true

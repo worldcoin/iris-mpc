@@ -93,6 +93,12 @@ impl DeviceManager {
         }
     }
 
+    pub fn synchronize_all(&self) {
+        for i in 0..self.devices.len() {
+            self.devices[i].synchronize().unwrap();
+        }
+    }
+
     pub fn create_events(&self) -> Vec<CUevent> {
         let mut events = vec![];
         for idx in 0..self.devices.len() {

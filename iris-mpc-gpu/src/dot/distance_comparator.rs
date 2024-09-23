@@ -97,9 +97,15 @@ impl DistanceComparator {
         real_db_sizes: &[usize],
         offset: usize,
         total_db_sizes: &[usize],
+        ignore_db_results: &[bool],
         streams: &[CudaStream],
     ) {
         for i in 0..self.device_manager.device_count() {
+            // Those correspond to 0 length dbs, which were just artificially increased to
+            // length 1 to avoid division by zero in the kernel
+            if ignore_db_results[i] {
+                continue;
+            }
             let num_elements = (db_sizes[i] * self.query_length).div_ceil(64);
             let threads_per_block = 256;
             let blocks_per_grid = num_elements.div_ceil(threads_per_block);
@@ -179,6 +185,9 @@ impl DistanceComparator {
         kernels: &[CudaFunction],
     ) {
         for i in 0..self.device_manager.device_count() {
+            if db_sizes[i] == 0 {
+                continue;
+            }
             let num_elements = (db_sizes[i] * self.query_length / ROTATIONS).div_ceil(64);
             let threads_per_block = 256;
             let blocks_per_grid = num_elements.div_ceil(threads_per_block);

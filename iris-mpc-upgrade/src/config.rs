@@ -1,17 +1,28 @@
 use clap::Parser;
 use iris_mpc_common::id::PartyID;
 use std::{
-    fmt::{self, Formatter},
-    io,
-    net::{SocketAddr, ToSocketAddrs},
+    fmt::{self, Display, Formatter},
+    net::SocketAddr,
     str::FromStr,
 };
+
+pub const BATCH_SUCCESSFUL_ACK: u8 = 1;
+pub const FINAL_BATCH_SUCCESSFUL_ACK: u8 = 42;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Eye {
     Left  = 0,
     Right = 1,
+}
+
+impl Display for Eye {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Eye::Left => write!(f, "left"),
+            Eye::Right => write!(f, "right"),
+        }
+    }
 }
 
 impl FromStr for Eye {
@@ -37,11 +48,14 @@ pub struct UpgradeServerConfig {
     #[clap(long)]
     pub party_id: PartyID,
 
-    #[clap(long, default_value = "8")]
-    pub threads: usize,
+    #[clap(long)]
+    pub batch_size: u8,
 
     #[clap(long)]
     pub eye: Eye,
+
+    #[clap(long)]
+    pub environment: String,
 }
 
 impl std::fmt::Debug for UpgradeServerConfig {
@@ -50,7 +64,6 @@ impl std::fmt::Debug for UpgradeServerConfig {
             .field("bind_addr", &self.bind_addr)
             .field("db_url", &"<redacted>")
             .field("party_id", &self.party_id)
-            .field("threads", &self.threads)
             .field("eye", &self.eye)
             .finish()
     }
@@ -58,14 +71,14 @@ impl std::fmt::Debug for UpgradeServerConfig {
 
 #[derive(Parser)]
 pub struct UpgradeClientConfig {
-    #[clap(long,  default_value = "127.0.0.1:8000", value_parser = resolve_host)]
-    pub server1: SocketAddr,
+    #[clap(long, default_value = "localhost:8000")]
+    pub server1: String,
 
-    #[clap(long,  default_value = "127.0.0.1:8001", value_parser = resolve_host)]
-    pub server2: SocketAddr,
+    #[clap(long, default_value = "localhost:8001")]
+    pub server2: String,
 
-    #[clap(long,  default_value = "127.0.0.1:8002", value_parser = resolve_host)]
-    pub server3: SocketAddr,
+    #[clap(long, default_value = "localhost:8002")]
+    pub server3: String,
 
     #[clap(long)]
     pub db_start: u64,
@@ -75,6 +88,9 @@ pub struct UpgradeClientConfig {
 
     #[clap(long)]
     pub party_id: u8,
+
+    #[clap(long)]
+    pub batch_size: u8,
 
     #[clap(long)]
     pub eye: Eye,
@@ -89,17 +105,7 @@ pub struct UpgradeClientConfig {
     pub masks_db_url: String,
 }
 
-fn resolve_host(hostname_port: &str) -> io::Result<SocketAddr> {
-    let socketaddr = hostname_port.to_socket_addrs()?.next().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::AddrNotAvailable,
-            format!("Could not find destination {hostname_port}"),
-        )
-    })?;
-    Ok(socketaddr)
-}
-
-impl std::fmt::Debug for UpgradeClientConfig {
+impl fmt::Debug for UpgradeClientConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("UpgradeClientConfig")
             .field("server1", &self.server1)

@@ -50,6 +50,8 @@ ORB_QUEUE_NAMES=(
 MPC_1_QUEUE_NAMES=(
 "mpc1-stage.fifo"
 "mpc1-stage-dlq.fifo"
+"mpc1-results-stage.fifo"
+"mpc1-results-stage-dlq.fifo"
 )
 
 MPC_2_QUEUE_NAMES=(

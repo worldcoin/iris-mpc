@@ -1,3 +1,4 @@
+use eyre::Context;
 use futures::Stream;
 use mpc_uniqueness_check::{bits::Bits, encoded_bits::EncodedBits};
 use sqlx::Postgres;
@@ -10,7 +11,9 @@ impl V1Db {
     pub async fn new(url: &str) -> eyre::Result<Self> {
         tracing::info!("Connecting to database");
 
-        let pool = sqlx::Pool::connect(url).await?;
+        let pool = sqlx::Pool::connect(url)
+            .await
+            .with_context(|| format!("when connecting to {}", &url))?;
 
         tracing::info!("Connected to database");
 

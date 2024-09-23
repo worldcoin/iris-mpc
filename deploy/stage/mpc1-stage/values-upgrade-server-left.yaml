@@ -7,3 +7,7 @@ args:
   - "0"
   - "--eye"
   - "left"
+  - "--environment"
+  - "$(ENVIRONMENT)"
+  - "--batch-size"
+  - "50"

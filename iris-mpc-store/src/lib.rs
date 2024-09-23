@@ -78,7 +78,7 @@ struct StoredState {
     request_id: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Store {
     pool: PgPool,
 }
@@ -267,9 +267,15 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
             .bind(db_len as i64)
             .execute(&self.pool)
             .await?;
+
+        // We also need to reset the sequence to avoid gaps in the IDs.
+        sqlx::query("SELECT setval(pg_get_serial_sequence('irises', 'id'), $1 + 1, false)")
+            .bind(db_len as i64)
+            .execute(&self.pool)
+            .await?;
+
         Ok(())
     }
-
     pub async fn insert_results(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -330,12 +336,17 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         let mut rng = StdRng::seed_from_u64(rng_seed);
 
         if clear_db_before_init {
+            tracing::info!("Cleaning up the db before initializing irises");
             // Cleaning up the db before inserting newly generated irises
             self.rollback(0).await?;
         }
 
-        let mut tx = self.tx().await.unwrap();
+        let mut tx = self.tx().await?;
 
+        tracing::info!(
+            "DB size before initialization: {}",
+            self.count_irises().await?
+        );
         for i in 0..db_size {
             if (i % 1000) == 0 {
                 tracing::info!("Initializing iris db: Generated {} entries", i);
@@ -367,10 +378,20 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
                 right_mask: &mask.coefs,
             }])
             .await?;
+
+            if (i % 1000) == 0 {
+                tx.commit().await?;
+                tx = self.tx().await?;
+            }
         }
         tracing::info!("Completed initialization of iris db, committing...");
         tx.commit().await?;
         tracing::info!("Committed");
+
+        tracing::info!(
+            "Initialized iris db with {} entries",
+            self.count_irises().await?
+        );
         Ok(())
     }
 }

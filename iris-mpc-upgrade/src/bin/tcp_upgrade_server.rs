@@ -2,22 +2,17 @@ use axum::{routing::get, Router};
 use clap::Parser;
 use eyre::{bail, Context};
 use futures_concurrency::future::Join;
-use iris_mpc_common::{helpers::task_monitor::TaskMonitor, id::PartyID};
+use iris_mpc_common::helpers::task_monitor::TaskMonitor;
 use iris_mpc_store::Store;
 use iris_mpc_upgrade::{
-    config::{Eye, UpgradeServerConfig},
+    config::{Eye, UpgradeServerConfig, BATCH_SUCCESSFUL_ACK, FINAL_BATCH_SUCCESSFUL_ACK},
     packets::{MaskShareMessage, TwoToThreeIrisCodeMessage},
     IrisCodeUpgrader, NewIrisShareSink,
 };
-use std::{
-    sync::{atomic::AtomicUsize, Arc},
-    time::{Duration, Instant},
-};
-use tokio::{
-    io::{AsyncReadExt, BufReader},
-    sync::mpsc,
-    task::JoinSet,
-};
+use std::time::Instant;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+
+const APP_NAME: &str = "SMPC";
 
 fn install_tracing() {
     use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -46,11 +41,8 @@ async fn main() -> eyre::Result<()> {
 
     println!("Client bind address: {}", args.bind_addr);
 
-    let mut processing_tasks = JoinSet::new();
-    let finished_counter = Arc::new(AtomicUsize::new(0));
-    let mut senders = Vec::with_capacity(args.threads);
-
-    let sink = IrisShareDbSink::new(Store::new(&args.db_url, "upgrade").await?, args.eye);
+    let schema_name = format!("{}_{}_{}", APP_NAME, args.environment, args.party_id);
+    let sink = IrisShareDbSink::new(Store::new(&args.db_url, &schema_name).await?, args.eye);
 
     tracing::info!("Starting healthcheck server.");
 
@@ -69,24 +61,7 @@ async fn main() -> eyre::Result<()> {
     background_tasks.check_tasks();
     tracing::info!("Healthcheck server running on port 3000.");
 
-    for _ in 0..args.threads {
-        let (sender, receiver) = mpsc::channel(32);
-        let finished_counter = Arc::clone(&finished_counter);
-
-        let sink = sink.clone();
-        senders.push(sender);
-        processing_tasks.spawn(async move {
-            match main_task_loop(args.party_id, receiver, finished_counter, sink).await {
-                Ok(_) => Ok(()),
-                Err(e) => {
-                    tracing::error!("Error in processing task: {:?}", e);
-                    Err(e)
-                }
-            }
-        });
-    }
-
-    tracing::info!("Spawned processing tasks");
+    let upgrader = IrisCodeUpgrader::new(args.party_id, sink);
 
     // listen for incoming connections from clients
     let client_listener = tokio::net::TcpListener::bind(args.bind_addr).await?;
@@ -133,91 +108,89 @@ async fn main() -> eyre::Result<()> {
         );
     }
     let num_elements = end1.checked_sub(start1).unwrap();
-    tracing::info!("Doing a batch of {} elements", num_elements);
+    let num_batches = num_elements / u64::from(args.batch_size);
+    tracing::info!(
+        "Batch size: {}, num batches: {}",
+        args.batch_size,
+        num_batches
+    );
 
-    let mut sending = Duration::default();
-    let mut receiving = Duration::default();
-    for i in start1..end1 {
-        let start = Instant::now();
-        let mut message1 = TwoToThreeIrisCodeMessage::default();
-        let mut message2 = TwoToThreeIrisCodeMessage::default();
-        let mut masks = MaskShareMessage::default();
-        let (a, b) = (
-            message1.recv(&mut client_stream1),
-            message2.recv(&mut client_stream2),
-        )
-            .join()
-            .await;
-        a?;
-        b?;
-        masks.recv(&mut client_stream1).await?;
-        if message1.id != i {
-            tracing::error!(
-                "Client messages out of order: got {}, expected {}",
-                message1.id,
-                i
-            );
-            break;
-        }
-        if message1.id != message2.id {
-            tracing::error!(
-                "Client messages out of order: {} != {}",
-                message1.id,
-                message2.id
-            );
-            break;
-        }
-        if masks.id != message1.id {
-            tracing::error!(
-                "Client messages out of order: {} != {}",
-                masks.id,
-                message1.id
-            );
-            break;
-        }
-        receiving += start.elapsed();
-        let start = Instant::now();
+    let mut batch = Vec::new();
 
-        senders[i as usize % args.threads]
-            .send(UpgradeTask {
+    for batch_num in 0..num_batches + 1 {
+        tracing::info!(
+            "Processing batch {} of size: {}",
+            batch_num,
+            args.batch_size
+        );
+        let start_time = Instant::now();
+        let batch_size_1_message = client_stream1.read_u8().await?;
+        let batch_size_2_message = client_stream2.read_u8().await?;
+
+        if batch_size_1_message != batch_size_2_message {
+            bail!(
+                "Invalid batch size: client1: {}, client2: {}",
+                batch_size_1_message,
+                batch_size_2_message,
+            );
+        }
+
+        for _ in 0..batch_size_1_message {
+            let mut message1 = TwoToThreeIrisCodeMessage::default();
+            let mut message2 = TwoToThreeIrisCodeMessage::default();
+            let mut masks = MaskShareMessage::default();
+
+            let (result1, result2) = (
+                message1.recv(&mut client_stream1),
+                message2.recv(&mut client_stream2),
+            )
+                .join()
+                .await;
+
+            if let Err(e) = result1 {
+                tracing::error!("Failed to receive message1: {:?}", e);
+                break;
+            }
+            if let Err(e) = result2 {
+                tracing::error!("Failed to receive message2: {:?}", e);
+                break;
+            }
+
+            masks.recv(&mut client_stream1).await?;
+            if message1.id != message2.id || message1.id != masks.id {
+                tracing::error!(
+                    "Message IDs out of sync: {} != {} != {}",
+                    message1.id,
+                    message2.id,
+                    masks.id
+                );
+                return Err(eyre::eyre!("Message ID mismatch"));
+            }
+
+            batch.push(UpgradeTask {
                 msg1: message1,
                 msg2: message2,
                 masks,
-            })
-            .await?;
-        sending += start.elapsed();
+            });
+        }
+
+        for (i, task) in batch.drain(..).enumerate() {
+            tracing::debug!("Task: {:?}", i);
+            upgrader
+                .finalize(task.msg1.clone(), task.msg2.clone(), task.masks.clone())
+                .await?;
+        }
+        // Send an ACK to the client
+        client_stream1.write_u8(BATCH_SUCCESSFUL_ACK).await?;
+        client_stream2.write_u8(BATCH_SUCCESSFUL_ACK).await?;
+        client_stream1.flush().await?;
+        client_stream2.flush().await?;
+
+        let duration = start_time.elapsed();
+        tracing::info!("Processed batch in {:.2?}", duration);
     }
-
-    tracing::debug!("Receiving took: {}s", receiving.as_secs_f64());
-    tracing::debug!("Sending took: {}s", sending.as_secs_f64());
-    // close all senders
-    drop(senders);
-
-    tracing::info!("Waiting for remaining tasks to finish...");
-    // wait for all tasks should be done, cleanup
-    while let Some(r) = processing_tasks.join_next().await {
-        r??;
-    }
-    tracing::info!("All tasks finished");
-
-    Ok(())
-}
-
-async fn main_task_loop(
-    party_id: PartyID,
-    mut receiver: mpsc::Receiver<UpgradeTask>,
-    finished_counter: Arc<AtomicUsize>,
-    sink: IrisShareDbSink,
-) -> eyre::Result<()> {
-    let upgrader = IrisCodeUpgrader::new(party_id, sink);
-    loop {
-        let UpgradeTask { msg1, msg2, masks } = match receiver.recv().await {
-            Some(x) => x,
-            None => break,
-        };
-        upgrader.finalize(msg1, msg2, masks).await?;
-        finished_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    }
+    client_stream2.write_u8(FINAL_BATCH_SUCCESSFUL_ACK).await?;
+    client_stream1.write_u8(FINAL_BATCH_SUCCESSFUL_ACK).await?;
     Ok(())
 }
 
