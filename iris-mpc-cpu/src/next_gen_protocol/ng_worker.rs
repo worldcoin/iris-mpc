@@ -1,4 +1,4 @@
-use super::binary::single_extract_msb_u32;
+use super::binary::{extract_msb_u16, single_extract_msb_u32};
 use crate::{
     execution::{
         player::{Identity, Role, RoleAssignment},
@@ -11,14 +11,20 @@ use crate::{
     next_gen_protocol::binary::{lift, open_bin},
     prelude::IrisWorker,
     protocol::prf::{Prf, PrfSeed},
-    shares::{int_ring::IntRing2k, ring_impl::RingElement, share::Share, vecshare::VecShare},
+    shares::{
+        int_ring::IntRing2k,
+        ring_impl::RingElement,
+        share::Share,
+        vecshare::{SliceShare, VecShare},
+    },
 };
 use eyre::eyre;
-use iris_mpc_common::iris_db::iris::IrisCodeArray;
+use iris_mpc_common::iris_db::iris::{IrisCodeArray, MATCH_THRESHOLD_RATIO};
 use rand::RngCore;
 use std::{collections::HashMap, ops::SubAssign, sync::Arc};
 use tokio::task::JoinSet;
 
+#[derive(Clone)]
 pub struct LocalRuntime {
     pub identities:       Vec<Identity>,
     pub role_assignments: RoleAssignment,
@@ -124,6 +130,53 @@ pub(crate) async fn replicated_dot(
     Ok(res)
 }
 
+pub async fn replicated_dot_many(
+    session: &mut Session,
+    a: SliceShare<'_, u16>,
+    b: &[VecShare<u16>],
+) -> eyre::Result<VecShare<u16>> {
+    let len = b.len();
+    if a.len() != IrisCodeArray::IRIS_CODE_SIZE {
+        return Err(eyre!("Error::InvalidSize"));
+    }
+
+    let mut shares_a = Vec::with_capacity(len);
+    let mut prf = session.prf_as_mut();
+
+    for b_ in b.iter() {
+        let mut rand = prf.gen_zero_share();
+        if a.len() != b_.len() {
+            return Err(eyre!("Error::InvalidSize"));
+        }
+        for (a__, b__) in a.iter().zip(b_.iter()) {
+            rand += a__ * b__;
+        }
+        shares_a.push(rand);
+    }
+
+    let network = session.network();
+    let next_role = session.identity(&session.own_role()?.next(3))?;
+    let prev_role = session.identity(&session.own_role()?.prev(3))?;
+
+    let _ = network
+        .send(
+            NetworkValue::VecRing16(shares_a.clone()).to_network(),
+            next_role,
+            &session.session_id(),
+        )
+        .await;
+
+    let serialized_reply = network.receive(prev_role, &session.session_id()).await;
+    let shares_b = match NetworkValue::from_network(serialized_reply) {
+        Ok(NetworkValue::VecRing16(element)) => element,
+        _ => return Err(eyre!("Could not deserialize Vec<RingElement16>")),
+    };
+
+    // Network: reshare
+    let res = VecShare::from_ab(shares_a, shares_b);
+    Ok(res)
+}
+
 pub(crate) async fn replicated_pairwise_distance(
     session: &mut Session,
     lhs_shares: &Vec<Share<u16>>,
@@ -202,7 +255,116 @@ pub async fn replicated_lift_and_cross_mul(
     Ok(opened_b.convert())
 }
 
+pub async fn open_t_many(session: &Session, shares: VecShare<u64>) -> eyre::Result<Vec<u64>> {
+    let next_party = session.next_identity()?;
+    let network = session.network().clone();
+    let sid = session.session_id();
+
+    let shares_b: Vec<_> = shares.iter().map(|s| s.b).collect();
+    let message = shares_b;
+    let _ = tokio::spawn(async move {
+        let _ = network
+            .send(
+                NetworkValue::VecRing64(message).to_network(),
+                &next_party,
+                &sid,
+            )
+            .await;
+    })
+    .await;
+
+    // receiving from previous party
+    let network = session.network().clone();
+    let sid = session.session_id();
+    let prev_party = session.prev_identity()?;
+    let shares_c = tokio::spawn(async move {
+        let serialized_other_share = network.receive(&prev_party, &sid).await;
+        match NetworkValue::from_network(serialized_other_share) {
+            Ok(NetworkValue::VecRing64(message)) => Ok(message),
+            _ => Err(eyre!("Error in receiving in and_many operation")),
+        }
+    })
+    .await??;
+
+    let res = shares
+        .into_iter()
+        .zip(shares_c)
+        .map(|(s, c)| {
+            let (a, b) = s.get_ab();
+            (a + b + c).convert()
+        })
+        .collect();
+    Ok(res)
+}
+
+pub async fn rep3_single_iris_match_public_output(
+    session: &mut Session,
+    iris_to_match: SliceShare<'_, u16>,
+    ground_truth: VecShare<u16>,
+    mask_iris: &IrisCodeArray,
+    mask_ground_truth: IrisCodeArray,
+) -> eyre::Result<bool> {
+    let res = replicated_compare_iris_public_mask_many(
+        session,
+        iris_to_match,
+        &[ground_truth],
+        mask_iris,
+        &[mask_ground_truth],
+    )
+    .await?;
+    let bit = open_t_many(session, res).await?;
+    Ok(bit[0] != 0)
+}
+
+pub(crate) fn rep3_get_cmp_diff(
+    session: &Session,
+    dot: &mut Share<u16>,
+    mask_ones: usize,
+) -> eyre::Result<()> {
+    let threshold: u16 = ((mask_ones as f64 * (1. - 2. * MATCH_THRESHOLD_RATIO)) as usize)
+        .try_into()
+        .expect("Sizes are checked in constructor");
+    *dot = dot.sub_from_const_role(threshold, session.own_role()?);
+    Ok(())
+}
+
+pub async fn replicated_compare_iris_public_mask_many(
+    session: &mut Session,
+    a: SliceShare<'_, u16>,
+    b: &[VecShare<u16>],
+    mask_a: &IrisCodeArray,
+    mask_b: &[IrisCodeArray],
+) -> eyre::Result<VecShare<u64>> {
+    let amount = b.len();
+    if (amount != mask_b.len()) || (amount == 0) {
+        return Err(eyre!("InvalidSize"));
+    }
+
+    let masks = mask_b.iter().map(|b| *mask_a & *b).collect::<Vec<_>>();
+    let mask_lens: Vec<_> = masks.iter().map(|m| m.count_ones()).collect();
+    let mut dots = replicated_dot_many(session, a, b).await?;
+
+    // a < b <=> msb(a - b)
+    // Given no overflow, which is enforced in constructor
+    for (dot, mask_len) in dots.iter_mut().zip(mask_lens) {
+        let _ = rep3_get_cmp_diff(session, dot, mask_len)?;
+    }
+
+    extract_msb_u16::<{ u16::BITS as usize }>(session, dots).await
+}
+
 impl LocalRuntime {
+    pub fn replicated_test_config() -> Self {
+        let num_parties = 3;
+        let identities: Vec<Identity> = vec!["alice".into(), "bob".into(), "charlie".into()];
+        let mut seeds = Vec::new();
+        for i in 0..num_parties {
+            let mut seed = [0_u8; 16];
+            seed[0] = i;
+            seeds.push(seed);
+        }
+        LocalRuntime::new(identities, seeds)
+    }
     fn new(identities: Vec<Identity>, seeds: Vec<PrfSeed>) -> Self {
         let role_assignments: RoleAssignment = identities
             .iter()
@@ -219,7 +381,7 @@ impl LocalRuntime {
         }
     }
 
-    async fn create_player_sessions(
+    pub async fn create_player_sessions(
         &self,
         sess_id: SessionId,
     ) -> eyre::Result<HashMap<Identity, Session>> {

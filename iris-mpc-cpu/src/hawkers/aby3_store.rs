@@ -1,6 +1,11 @@
 use crate::{
     database_generators::{create_shared_database_raw, generate_iris_shares, SharedIris},
+    execution::{player::Identity, session::SessionId},
     hawkers::plaintext_store::{PlaintextStore, PointId},
+    next_gen_protocol::ng_worker::{
+        rep3_single_iris_match_public_output, replicated_lift_and_cross_mul,
+        replicated_pairwise_distance, LocalRuntime,
+    },
     prelude::{
         IrisWorker, NetworkEstablisher, PartyTestNetwork, TestNetwork3p, TestNetworkEstablisher,
     },
@@ -10,7 +15,7 @@ use hawk_pack::{graph_store::graph_mem::GraphMem, hnsw_db::HawkSearcher, VectorS
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use rand::{RngCore, SeedableRng};
 use std::{collections::VecDeque, sync::Arc};
-use tokio::sync::Mutex;
+use tokio::{sync::Mutex, task::JoinSet};
 
 #[derive(Clone)]
 pub struct Aby3StorePlayer {
@@ -166,11 +171,12 @@ impl VectorStore for Aby3StorePlayer {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct LocalNetAby3StoreProtocol {
     pub player_0: Aby3StorePlayer,
     pub player_1: Aby3StorePlayer,
     pub player_2: Aby3StorePlayer,
+    pub runtime:  LocalRuntime,
 }
 
 async fn setup_local_player(mut net: TestNetworkEstablisher) -> eyre::Result<Aby3StorePlayer> {
@@ -213,10 +219,12 @@ pub async fn setup_local_store_aby3_players() -> eyre::Result<LocalNetAby3StoreP
     let player_0 = setup_local_player(n0).await?;
     let player_1 = setup_local_player(n1).await?;
     let player_2 = setup_local_player(n2).await?;
+    let runtime = LocalRuntime::replicated_test_config();
     Ok(LocalNetAby3StoreProtocol {
         player_0,
         player_1,
         player_2,
+        runtime,
     })
 }
 
@@ -246,10 +254,12 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore>(
     let player_0 = setup_local_player_preloaded_db(n0, shared_db.player0_shares).await?;
     let player_1 = setup_local_player_preloaded_db(n1, shared_db.player1_shares).await?;
     let player_2 = setup_local_player_preloaded_db(n2, shared_db.player2_shares).await?;
+    let runtime = LocalRuntime::replicated_test_config();
     Ok(LocalNetAby3StoreProtocol {
         player_0,
         player_1,
         player_2,
+        runtime,
     })
 }
 
@@ -318,20 +328,44 @@ impl VectorStore for LocalNetAby3StoreProtocol {
     }
 
     async fn is_match(&self, distance: &Self::DistanceRef) -> bool {
-        let p0 = self.player_0.clone();
-        let distance = *distance;
-        let h0 = tokio::spawn(async move { p0.is_match(&distance).await });
+        // TODO(Dragos) Need to feed in different session
+        let mut ready_sessions = self
+            .runtime
+            .create_player_sessions(SessionId(0))
+            .await
+            .unwrap();
 
-        let p1 = self.player_1.clone();
-        let h1 = tokio::spawn(async move { p1.is_match(&distance).await });
+        let mut jobs = JoinSet::new();
+        for player in self.runtime.identities.clone() {
+            let mut player_session = ready_sessions.get(&player).unwrap().clone();
+            let storage = match player.0.as_str() {
+                "alice" => self.player_0.clone(),
+                "bob" => self.player_1.clone(),
+                "charlie" => self.player_2.clone(),
+                _ => panic!(),
+            };
+            let x = storage.points[distance.0 .0].clone();
+            let y = storage.points[distance.1 .0].clone();
+            jobs.spawn(async move {
+                let (iris_to_match, mask_iris) = (&x.data.shares, &x.data.mask);
+                let (ground_truth, mask_ground_truth) = (&y.data.shares, &y.data.mask);
 
-        let p2 = self.player_2.clone();
-        let h2 = tokio::spawn(async move { p2.is_match(&distance).await });
+                let r = rep3_single_iris_match_public_output(
+                    &mut player_session,
+                    iris_to_match.as_slice(),
+                    ground_truth.clone(),
+                    mask_iris,
+                    *mask_ground_truth,
+                )
+                .await
+                .unwrap();
+                r
+            });
+        }
 
-        let (r0, r1, r2) = tokio::join!(h0, h1, h2);
-        let r0 = r0.unwrap();
-        let r1 = r1.unwrap();
-        let r2 = r2.unwrap();
+        let r0 = jobs.join_next().await.unwrap().unwrap();
+        let r1 = jobs.join_next().await.unwrap().unwrap();
+        let r2 = jobs.join_next().await.unwrap().unwrap();
         assert_eq!(r0, r1);
         assert_eq!(r1, r2);
         r0
@@ -344,127 +378,67 @@ impl VectorStore for LocalNetAby3StoreProtocol {
     ) -> bool {
         let d1 = *distance1;
         let d2 = *distance2;
-        println!("Computing less than...");
+        let mut ready_sessions = self
+            .runtime
+            .create_player_sessions(SessionId(0))
+            .await
+            .unwrap();
 
-        let network = TestNetwork3p::new();
-        let [net0, net1, net2] = network.get_party_networks();
-        let mut n0 = VecDeque::from([net0]);
-        let mut n1 = VecDeque::from([net1]);
-        let mut n2 = VecDeque::from([net2]);
+        let mut jobs = JoinSet::new();
+        for player in self.runtime.identities.clone() {
+            let mut player_session = ready_sessions.get(&player).unwrap().clone();
+            // TODO(Dragos) remove these hardcoded lines by having better fields in the
+            // global struct.
+            let storage = match player.0.as_str() {
+                "alice" => self.player_0.clone(),
+                "bob" => self.player_1.clone(),
+                "charlie" => self.player_2.clone(),
+                _ => panic!(),
+            };
+            let (x1, y1) = (
+                storage.points[d1.0.val()].clone(),
+                storage.points[d1.1.val()].clone(),
+            );
+            let (x2, y2) = (
+                storage.points[d2.0.val()].clone(),
+                storage.points[d2.1.val()].clone(),
+            );
 
-        let p0 = self.player_0.clone();
-        let h0 = tokio::spawn(async move {
-            let mut n0 = TestNetworkEstablisher::from(n0);
-            let net_channel = n0.open_channel().await.unwrap();
-            let mut protocol = IrisWorker::new(net_channel);
-            // run the setup
-            let _ = protocol.setup_prf().await.unwrap();
-
-            let (x1, y1) = (&p0.points[d1.0.val()], &p0.points[d1.1.val()]);
-            let (x2, y2) = (&p0.points[d2.0.val()], &p0.points[d2.1.val()]);
-            let (d1, t1) = protocol
-                .rep3_pairwise_distance(
-                    &x1.data.shares,
-                    &y1.data.shares,
+            jobs.spawn(async move {
+                let (d1, t1) = replicated_pairwise_distance(
+                    &mut player_session,
+                    &x1.data.shares.shares,
+                    &y1.data.shares.shares,
                     &x1.data.mask,
                     &y1.data.mask,
                 )
                 .await
                 .unwrap();
-
-            let (d2, t2) = protocol
-                .rep3_pairwise_distance(
-                    &x2.data.shares,
-                    &y2.data.shares,
+                let (d2, t2) = replicated_pairwise_distance(
+                    &mut player_session,
+                    &x2.data.shares.shares,
+                    &y2.data.shares.shares,
                     &x2.data.mask,
                     &y2.data.mask,
                 )
                 .await
                 .unwrap();
-            tokio::task::block_in_place(move || {
-                protocol
-                    .rep3_lift_and_cross_mul(d1, t1 as u32, d2, t2 as u32)
-                    .unwrap()
-            })
-        });
-
-        let p1 = self.player_1.clone();
-        let h1 = tokio::spawn(async move {
-            let mut n1 = TestNetworkEstablisher::from(n1);
-            let net_channel = n1.open_channel().await.unwrap();
-            let mut protocol = IrisWorker::new(net_channel);
-            // run the setup
-            let _ = protocol.setup_prf().await.unwrap();
-
-            let (x1, y1) = (&p1.points[d1.0.val()], &p1.points[d1.1.val()]);
-            let (x2, y2) = (&p1.points[d2.0.val()], &p1.points[d2.1.val()]);
-            let (d1, t1) = protocol
-                .rep3_pairwise_distance(
-                    &x1.data.shares,
-                    &y1.data.shares,
-                    &x1.data.mask,
-                    &y1.data.mask,
+                let res = replicated_lift_and_cross_mul(
+                    &mut player_session,
+                    d1,
+                    t1 as u32,
+                    d2,
+                    t2 as u32,
                 )
                 .await
                 .unwrap();
+                res
+            });
+        }
 
-            let (d2, t2) = protocol
-                .rep3_pairwise_distance(
-                    &x2.data.shares,
-                    &y2.data.shares,
-                    &x2.data.mask,
-                    &y2.data.mask,
-                )
-                .await
-                .unwrap();
-
-            tokio::task::block_in_place(move || {
-                protocol
-                    .rep3_lift_and_cross_mul(d1, t1 as u32, d2, t2 as u32)
-                    .unwrap()
-            })
-        });
-
-        let p2 = self.player_2.clone();
-        let h2 = tokio::spawn(async move {
-            let mut n2 = TestNetworkEstablisher::from(n2);
-            let net_channel = n2.open_channel().await.unwrap();
-            let mut protocol = IrisWorker::new(net_channel);
-            // run the setup
-            let _ = protocol.setup_prf().await.unwrap();
-
-            let (x1, y1) = (&p2.points[d1.0.val()], &p2.points[d1.1.val()]);
-            let (x2, y2) = (&p2.points[d2.0.val()], &p2.points[d2.1.val()]);
-            let (d1, t1) = protocol
-                .rep3_pairwise_distance(
-                    &x1.data.shares,
-                    &y1.data.shares,
-                    &x1.data.mask,
-                    &y1.data.mask,
-                )
-                .await
-                .unwrap();
-
-            let (d2, t2) = protocol
-                .rep3_pairwise_distance(
-                    &x2.data.shares,
-                    &y2.data.shares,
-                    &x2.data.mask,
-                    &y2.data.mask,
-                )
-                .await
-                .unwrap();
-            tokio::task::block_in_place(move || {
-                protocol
-                    .rep3_lift_and_cross_mul(d1, t1 as u32, d2, t2 as u32)
-                    .unwrap()
-            })
-        });
-
-        let (r0, r1, r2) = tokio::join!(h0, h1, h2);
-        let r0 = r0.unwrap();
-        let r1 = r1.unwrap();
-        let r2 = r2.unwrap();
+        let r0 = jobs.join_next().await.unwrap().unwrap();
+        let r1 = jobs.join_next().await.unwrap().unwrap();
+        let r2 = jobs.join_next().await.unwrap().unwrap();
         assert_eq!(r0, r1);
         assert_eq!(r1, r2);
         r0
@@ -687,7 +661,7 @@ mod tests {
         // Search for the same codes and find matches.
         for query in queries.iter() {
             let neighbors = db.search_to_insert(query).await;
-            assert_eq!(false, true);
+            // assert_eq!(false, true);
             tracing::debug!("Finished query");
             assert!(db.is_match(&neighbors).await);
         }

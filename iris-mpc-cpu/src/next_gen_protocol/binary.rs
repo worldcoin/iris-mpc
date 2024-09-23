@@ -579,6 +579,15 @@ pub async fn extract_msb_u32<const K: usize>(
     Ok(extract_msb::<K>(session, x).await?)
 }
 
+pub async fn extract_msb_u16<const K: usize>(
+    session: &mut Session,
+    x_: VecShare<u16>,
+) -> Result<VecShare<u64>, Error> {
+    // let truncate_len = x_.len();
+    let x = x_.transpose_pack_u64_with_len::<K>();
+    Ok(extract_msb::<K>(session, x).await?)
+}
+
 // TODO a dedicated bitextraction for just one element would be more
 // efficient
 pub async fn single_extract_msb_u32<const K: usize>(
