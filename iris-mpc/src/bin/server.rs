@@ -48,7 +48,6 @@ use tokio::{
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
-const MAX_DB_SIZE: usize = 8 * 2_000;
 const RNG_SEED_INIT_DB: u64 = 42;
 const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_CONCURRENT_REQUESTS: usize = 32;
@@ -565,7 +564,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     tracing::info!("Size of the database after init: {}", store_len);
 
-    if store_len > MAX_DB_SIZE {
+    if store_len > config.max_db_size {
         tracing::error!("Database size exceeds maximum allowed size: {}", store_len);
         eyre::bail!("Database size exceeds maximum allowed size: {}", store_len);
     }
@@ -635,7 +634,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             device_manager,
             comms,
             8,
-            MAX_DB_SIZE,
+            config.max_db_size,
             config.max_batch_size,
         ) {
             Ok((mut actor, handle)) => {
