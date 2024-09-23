@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Value sent over the network
 #[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
 pub enum NetworkValue {
+    PrfKey([u8; 16]),
     Ring16(std::num::Wrapping<u16>),
     Ring32(std::num::Wrapping<u32>),
     RingElementBit(RingElement<Bit>),
@@ -14,7 +15,6 @@ pub enum NetworkValue {
     VecRing16(Vec<RingElement<u16>>),
     VecRing32(Vec<RingElement<u32>>),
     VecRing64(Vec<RingElement<u64>>),
-    PrfKey([u8; 16]),
 }
 
 impl NetworkValue {

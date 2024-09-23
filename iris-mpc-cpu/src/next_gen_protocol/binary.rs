@@ -42,7 +42,11 @@ pub(crate) fn a2b_pre<T: IntRing2k>(
             x3.a = a;
             x2.b = b;
         }
-        _ => unimplemented!(),
+        _ => {
+            return Err(eyre!(
+                "Cannot deal with roles that have index outside of the set [0, 1, 2]"
+            ))
+        }
     }
     Ok((x1, x2, x3))
 }
@@ -404,7 +408,11 @@ pub(crate) async fn bit_inject_ot_2round(
             // OT Sender
             bit_inject_ot_2round_sender(session, input).await?
         }
-        _ => panic!(),
+        _ => {
+            return Err(eyre!(
+                "Cannot deal with roles outside of the set [0, 1, 2] in bit_inject_ot"
+            ))
+        }
     };
     Ok(res)
 }
