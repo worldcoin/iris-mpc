@@ -6,20 +6,15 @@ use crate::{
         rep3_single_iris_match_public_output, replicated_lift_and_cross_mul,
         replicated_pairwise_distance, LocalRuntime,
     },
-    prelude::{
-        IrisWorker, NetworkEstablisher, PartyTestNetwork, TestNetwork3p, TestNetworkEstablisher,
-    },
 };
 use aes_prng::AesRng;
 use hawk_pack::{graph_store::graph_mem::GraphMem, hnsw_db::HawkSearcher, VectorStore};
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use rand::{RngCore, SeedableRng};
-use std::{collections::VecDeque, sync::Arc};
-use tokio::{sync::Mutex, task::JoinSet};
+use tokio::task::JoinSet;
 
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub struct Aby3StorePlayer {
-    state:  Arc<Mutex<IrisWorker<PartyTestNetwork>>>,
     points: Vec<Point>,
 }
 
@@ -39,13 +34,7 @@ struct Point {
 }
 
 impl Aby3StorePlayer {
-    pub fn new(proto: IrisWorker<PartyTestNetwork>) -> Self {
-        Aby3StorePlayer {
-            state:  Arc::new(Mutex::new(proto)),
-            points: vec![],
-        }
-    }
-    pub fn new_with_shared_db(proto: IrisWorker<PartyTestNetwork>, data: Vec<SharedIris>) -> Self {
+    pub fn new_with_shared_db(data: Vec<SharedIris>) -> Self {
         let points: Vec<Point> = data
             .into_iter()
             .map(|d| Point {
@@ -53,13 +42,10 @@ impl Aby3StorePlayer {
                 is_persistent: false,
             })
             .collect();
-        Aby3StorePlayer {
-            state: Arc::new(Mutex::new(proto)),
-            points,
-        }
+        Aby3StorePlayer { points }
     }
 
-    pub fn prepare_query(&mut self, raw_query: SharedIris) -> <Self as VectorStore>::QueryRef {
+    pub fn prepare_query(&mut self, raw_query: SharedIris) -> PointId {
         self.points.push(Point {
             data:          raw_query,
             is_persistent: false,
@@ -68,106 +54,13 @@ impl Aby3StorePlayer {
         let point_id = self.points.len() - 1;
         PointId(point_id)
     }
-
-    pub async fn compute_distance(&self, x: &PointId, y: &PointId) -> u16 {
-        let x = &self.points[x.0];
-        let y = &self.points[y.0];
-
-        let state = Arc::clone(&self.state);
-        let mut lock = state.lock().await;
-
-        let d = (*lock)
-            .rep3_dot(&x.data.shares, &y.data.shares)
-            .await
-            .unwrap();
-        let open = (*lock).open_async(d).await.unwrap();
-        open.0
-    }
 }
 
-impl VectorStore for Aby3StorePlayer {
-    type QueryRef = PointId; // Vector ID, pending insertion.
-    type VectorRef = PointId; // Vector ID, inserted.
-    type DistanceRef = (PointId, PointId); // Lazy distance representation.
-
-    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
+impl Aby3StorePlayer {
+    fn insert(&mut self, query: &PointId) -> PointId {
         // The query is now accepted in the store. It keeps the same ID.
         self.points[query.0].is_persistent = true;
         *query
-    }
-
-    async fn eval_distance(
-        &self,
-        query: &Self::QueryRef,
-        vector: &Self::VectorRef,
-    ) -> Self::DistanceRef {
-        // Do not compute the distance yet, just forward the IDs.
-        (*query, *vector)
-    }
-
-    async fn is_match(&self, distance: &Self::DistanceRef) -> bool {
-        let x = &self.points[distance.0 .0];
-        let y = &self.points[distance.1 .0];
-
-        let (iris_to_match, mask_iris) = (&x.data.shares, &x.data.mask);
-        let (ground_truth, mask_ground_truth) = (&y.data.shares, &y.data.mask);
-        let state = Arc::clone(&self.state);
-        let mut lock = state.lock().await;
-        let res = tokio::task::block_in_place(move || {
-            let res = (*lock)
-                .rep3_single_iris_match_public_output(
-                    iris_to_match.as_slice(),
-                    ground_truth.clone(),
-                    mask_iris,
-                    *mask_ground_truth,
-                )
-                .unwrap();
-            res
-        });
-        res
-    }
-
-    async fn less_than(
-        &self,
-        distance1: &Self::DistanceRef,
-        distance2: &Self::DistanceRef,
-    ) -> bool {
-        let (x1, y1) = (
-            &self.points[distance1.0.val()],
-            &self.points[distance1.1.val()],
-        );
-        let (x2, y2) = (
-            &self.points[distance2.0.val()],
-            &self.points[distance2.1.val()],
-        );
-
-        let state = Arc::clone(&self.state);
-        let mut lock = state.lock().await;
-        let (d1, t1) = (*lock)
-            .rep3_pairwise_distance(
-                &x1.data.shares,
-                &y1.data.shares,
-                &x1.data.mask,
-                &y1.data.mask,
-            )
-            .await
-            .unwrap();
-        let (d2, t2) = (*lock)
-            .rep3_pairwise_distance(
-                &x2.data.shares,
-                &y2.data.shares,
-                &x2.data.mask,
-                &y2.data.mask,
-            )
-            .await
-            .unwrap();
-
-        // Now need to compute d2*t1 - d1*t2
-        tokio::task::block_in_place(move || {
-            (*lock)
-                .rep3_lift_and_cross_mul(d1, t1 as u32, d2, t2 as u32)
-                .unwrap()
-        })
     }
 }
 
@@ -179,46 +72,15 @@ pub struct LocalNetAby3StoreProtocol {
     pub runtime:  LocalRuntime,
 }
 
-async fn setup_local_player(mut net: TestNetworkEstablisher) -> eyre::Result<Aby3StorePlayer> {
-    tracing::info!("setup network..");
-    let net_channel = net.open_channel().await?;
-    let protocol = IrisWorker::new(net_channel);
-    let aby3_store = Aby3StorePlayer::new(protocol);
+fn setup_local_player_preloaded_db(database: Vec<SharedIris>) -> eyre::Result<Aby3StorePlayer> {
+    let aby3_store = Aby3StorePlayer::new_with_shared_db(database);
     Ok(aby3_store)
 }
 
-async fn setup_local_player_preloaded_db(
-    mut net: TestNetworkEstablisher,
-    database: Vec<SharedIris>,
-) -> eyre::Result<Aby3StorePlayer> {
-    tracing::info!("setup network..");
-    let net_channel = net.open_channel().await?;
-    let protocol = IrisWorker::new(net_channel);
-    let aby3_store = Aby3StorePlayer::new_with_shared_db(protocol, database);
-    Ok(aby3_store)
-}
-
-pub async fn setup_local_store_aby3_players() -> eyre::Result<LocalNetAby3StoreProtocol> {
-    let amount_workers = 1;
-    let mut n1 = VecDeque::with_capacity(amount_workers);
-    let mut n2 = VecDeque::with_capacity(amount_workers);
-    let mut n3 = VecDeque::with_capacity(amount_workers);
-
-    for _ in 0..amount_workers {
-        let network = TestNetwork3p::new();
-        let [net1, net2, net3] = network.get_party_networks();
-        n1.push_back(net1);
-        n2.push_back(net2);
-        n3.push_back(net3);
-    }
-
-    let n0 = TestNetworkEstablisher::from(n1);
-    let n1 = TestNetworkEstablisher::from(n2);
-    let n2 = TestNetworkEstablisher::from(n3);
-
-    let player_0 = setup_local_player(n0).await?;
-    let player_1 = setup_local_player(n1).await?;
-    let player_2 = setup_local_player(n2).await?;
+pub fn setup_local_store_aby3_players() -> eyre::Result<LocalNetAby3StoreProtocol> {
+    let player_0 = Aby3StorePlayer::default();
+    let player_1 = Aby3StorePlayer::default();
+    let player_2 = Aby3StorePlayer::default();
     let runtime = LocalRuntime::replicated_test_config();
     Ok(LocalNetAby3StoreProtocol {
         player_0,
@@ -228,62 +90,25 @@ pub async fn setup_local_store_aby3_players() -> eyre::Result<LocalNetAby3StoreP
     })
 }
 
-pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore>(
+pub fn setup_local_aby3_players_with_preloaded_db<R: RngCore>(
     rng: &mut R,
     database: Vec<IrisCode>,
 ) -> eyre::Result<LocalNetAby3StoreProtocol> {
-    let amount_workers = 1;
-    let mut n1 = VecDeque::with_capacity(amount_workers);
-    let mut n2 = VecDeque::with_capacity(amount_workers);
-    let mut n3 = VecDeque::with_capacity(amount_workers);
-
-    for _ in 0..amount_workers {
-        let network = TestNetwork3p::new();
-        let [net1, net2, net3] = network.get_party_networks();
-        n1.push_back(net1);
-        n2.push_back(net2);
-        n3.push_back(net3);
-    }
-
-    let n0 = TestNetworkEstablisher::from(n1);
-    let n1 = TestNetworkEstablisher::from(n2);
-    let n2 = TestNetworkEstablisher::from(n3);
-
     let shared_db = create_shared_database_raw(rng, &database)?;
 
-    let player_0 = setup_local_player_preloaded_db(n0, shared_db.player0_shares).await?;
-    let player_1 = setup_local_player_preloaded_db(n1, shared_db.player1_shares).await?;
-    let player_2 = setup_local_player_preloaded_db(n2, shared_db.player2_shares).await?;
+    let player_0 = setup_local_player_preloaded_db(shared_db.player0_shares)?;
+    let player_1 = setup_local_player_preloaded_db(shared_db.player1_shares)?;
+    let player_2 = setup_local_player_preloaded_db(shared_db.player2_shares)?;
     let runtime = LocalRuntime::replicated_test_config();
     Ok(LocalNetAby3StoreProtocol {
         player_0,
         player_1,
         player_2,
         runtime,
-    })
-}
-
-fn local_call_async_setup(
-    protocol: Arc<Mutex<IrisWorker<PartyTestNetwork>>>,
-) -> tokio::task::JoinHandle<()> {
-    let my_protocol = Arc::clone(&protocol);
-    tracing::info!("Calling async setup...");
-    tokio::spawn(async move {
-        let mut lock = my_protocol.lock().await;
-        (*lock).setup_prf().await.unwrap();
     })
 }
 
 impl LocalNetAby3StoreProtocol {
-    pub async fn prf_key_setup(self) -> eyre::Result<LocalNetAby3StoreProtocol> {
-        let aby3_protocol = self;
-        let h0 = local_call_async_setup(aby3_protocol.player_0.state.clone());
-        let h1 = local_call_async_setup(aby3_protocol.player_1.state.clone());
-        let h2 = local_call_async_setup(aby3_protocol.player_2.state.clone());
-        let (_p0, _p1, _p2) = tokio::join!(h0, h1, h2);
-        Ok(aby3_protocol)
-    }
-
     pub fn prepare_query(&mut self, code: Vec<SharedIris>) -> PointId {
         let pid0 = self.player_0.prepare_query(code[0].clone());
         let pid1 = self.player_1.prepare_query(code[1].clone());
@@ -291,15 +116,6 @@ impl LocalNetAby3StoreProtocol {
         assert_eq!(pid0, pid1);
         assert_eq!(pid1, pid2);
         pid0
-    }
-
-    #[cfg(test)]
-    async fn compute_distance(&mut self, x: &PointId, y: &PointId) -> u16 {
-        let h0 = self.player_0.compute_distance(x, y);
-        let h1 = self.player_1.compute_distance(x, y);
-        let h2 = self.player_2.compute_distance(x, y);
-        let (r0, _r1, _r2) = tokio::join!(h0, h1, h2);
-        r0
     }
 }
 
@@ -310,9 +126,9 @@ impl VectorStore for LocalNetAby3StoreProtocol {
 
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         // The query is now accepted in the store. It keeps the same ID.
-        let q0 = self.player_0.insert(query).await;
-        let q1 = self.player_1.insert(query).await;
-        let q2 = self.player_2.insert(query).await;
+        let q0 = self.player_0.insert(query);
+        let q1 = self.player_1.insert(query);
+        let q2 = self.player_2.insert(query);
         assert_eq!(q0, q1);
         assert_eq!(q1, q2);
         q0
@@ -465,12 +281,10 @@ pub async fn create_ready_made_hawk_searcher<R: RngCore + Clone>(
             .await;
     }
 
-    let protocol_store =
-        setup_local_aby3_players_with_preloaded_db(rng, cleartext_database).await?;
-    let next_proto = protocol_store.prf_key_setup().await?;
+    let protocol_store = setup_local_aby3_players_with_preloaded_db(rng, cleartext_database)?;
     let protocol_graph =
         GraphMem::<LocalNetAby3StoreProtocol>::from_another(cleartext_searcher.graph_store.clone());
-    let secret_searcher = HawkSearcher::new(next_proto, protocol_graph, &mut rng_searcher2);
+    let secret_searcher = HawkSearcher::new(protocol_store, protocol_graph, &mut rng_searcher2);
 
     Ok((cleartext_searcher, secret_searcher))
 }
@@ -484,12 +298,11 @@ pub async fn create_from_scratch_hawk_searcher<R: RngCore + Clone>(
     let shared_irises: Vec<_> = (0..database_size)
         .map(|id| generate_iris_shares(rng, cleartext_database[id].clone()))
         .collect();
-    let aby3_store_protocol = setup_local_store_aby3_players().await.unwrap();
-    let aby3_vector_store = aby3_store_protocol.prf_key_setup().await.unwrap();
+    let aby3_store_protocol = setup_local_store_aby3_players().unwrap();
 
     let graph_store = GraphMem::new();
 
-    let mut searcher = HawkSearcher::new(aby3_vector_store, graph_store, &mut rng_searcher);
+    let mut searcher = HawkSearcher::new(aby3_store_protocol, graph_store, &mut rng_searcher);
     let queries = (0..database_size)
         .map(|id| {
             searcher
@@ -524,8 +337,7 @@ mod tests {
     async fn test_aby3_store_protocol() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let cleartext_database = IrisDB::new_random_rng(10, &mut rng).db;
-        let aby3_store_protocol = setup_local_store_aby3_players().await.unwrap();
-        let mut aby3_store_protocol = aby3_store_protocol.prf_key_setup().await.unwrap();
+        let mut aby3_store_protocol = setup_local_store_aby3_players().unwrap();
 
         let pid0 = aby3_store_protocol.prepare_query(generate_iris_shares(
             &mut rng,
@@ -542,39 +354,11 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
-    async fn test_aby3_dot() {
-        let mut rng = AesRng::seed_from_u64(0_u64);
-        let cleartext_database = IrisDB::new_random_rng(10, &mut rng).db;
-
-        let aby3_store_protocol = setup_local_store_aby3_players().await.unwrap();
-        let mut aby3_store_protocol = aby3_store_protocol.prf_key_setup().await.unwrap();
-        let db_dim = 4;
-
-        let raw_points: Vec<_> = (0..db_dim)
-            .map(|id| generate_iris_shares(&mut rng, cleartext_database[id].clone()))
-            .collect();
-
-        let aby3_preps: Vec<_> = (0..db_dim)
-            .map(|id| aby3_store_protocol.prepare_query(raw_points[id].clone()))
-            .collect();
-        let mut aby3_inserts = Vec::new();
-        for p in aby3_preps.iter() {
-            aby3_inserts.push(aby3_store_protocol.insert(p).await);
-        }
-
-        let _ = aby3_store_protocol
-            .compute_distance(&aby3_inserts[0], &aby3_inserts[1])
-            .await;
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    #[traced_test]
     async fn test_aby3_store_plaintext() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let cleartext_database = IrisDB::new_random_rng(10, &mut rng).db;
 
-        let aby3_store_protocol = setup_local_store_aby3_players().await.unwrap();
-        let mut aby3_store_protocol = aby3_store_protocol.prf_key_setup().await.unwrap();
+        let mut aby3_store_protocol = setup_local_store_aby3_players().unwrap();
         let db_dim = 4;
 
         let aby3_preps: Vec<_> = (0..db_dim)
@@ -629,11 +413,9 @@ mod tests {
         let database_size = 10;
         let cleartext_database = IrisDB::new_random_rng(database_size, &mut rng).db;
 
-        let aby3_store_protocol = setup_local_store_aby3_players().await.unwrap();
-        let aby3_vector_store = aby3_store_protocol.prf_key_setup().await.unwrap();
-
+        let aby3_store_protocol = setup_local_store_aby3_players().unwrap();
         let graph_store = GraphMem::new();
-        let mut db = HawkSearcher::new(aby3_vector_store, graph_store, &mut rng);
+        let mut db = HawkSearcher::new(aby3_store_protocol, graph_store, &mut rng);
 
         let queries = (0..database_size)
             .map(|id| {
