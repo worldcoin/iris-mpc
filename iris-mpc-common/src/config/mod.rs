@@ -55,6 +55,9 @@ pub struct Config {
     #[serde(default)]
     pub init_db_size: usize,
 
+    #[serde(default)]
+    pub max_db_size: usize,
+
     #[serde(default = "default_max_batch_size")]
     pub max_batch_size: usize,
 }
