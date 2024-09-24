@@ -220,13 +220,13 @@ async fn main() -> eyre::Result<()> {
         .await?;
         batch.clear();
     }
-    println!("Final batch sent!!!!!!!!!!!!!!, waiting for acks");
+    tracing::info!("Final batch sent, waiting for acks");
     wait_for_ack(&mut server1).await?;
-    println!("Server 1 ack received");
+    tracing::info!("Server 1 ack received");
     wait_for_ack(&mut server2).await?;
-    println!("Server 2 ack received");
+    tracing::info!("Server 2 ack received");
     wait_for_ack(&mut server3).await?;
-    println!("Server 3 ack received");
+    tracing::info!("Server 3 ack received");
     Ok(())
 }
 
