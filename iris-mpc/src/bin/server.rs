@@ -457,10 +457,12 @@ async fn send_results_to_sns(
     base_message_attributes: &HashMap<String, MessageAttributeValue>,
 ) -> eyre::Result<()> {
     for (i, result_event) in result_events.iter().enumerate() {
-        let trace_attributes =
-            construct_message_attributes(&metadata[i].trace_id, &metadata[i].span_id)?;
         let mut message_attributes = base_message_attributes.clone();
-        message_attributes.extend(trace_attributes);
+        if metadata.len() > i {
+            let trace_attributes =
+                construct_message_attributes(&metadata[i].trace_id, &metadata[i].span_id)?;
+            message_attributes.extend(trace_attributes);
+        }
         sns_client
             .publish()
             .topic_arn(&config.results_topic_arn)
