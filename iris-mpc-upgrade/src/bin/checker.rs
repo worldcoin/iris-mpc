@@ -275,8 +275,8 @@ async fn main() -> eyre::Result<()> {
             args.num_elements
         );
         let (new_code, new_mask) = new_left_db.get(&idx).expect("old id is present in new db");
-        assert_eq!(code, *new_code);
-        assert_eq!(mask, *new_mask);
+        assert_eq!(code, *new_code, "Code for id {} left does not match", idx);
+        assert_eq!(mask, *new_mask, "Mask for id {} left does not match", idx);
     }
     for (idx, (code, mask)) in old_right_db {
         tracing::info!(
@@ -285,8 +285,8 @@ async fn main() -> eyre::Result<()> {
             args.num_elements
         );
         let (new_code, new_mask) = new_right_db.get(&idx).expect("old id is present in new db");
-        assert_eq!(code, *new_code);
-        assert_eq!(mask, *new_mask);
+        assert_eq!(code, *new_code, "Code for id {} right does not match", idx);
+        assert_eq!(mask, *new_mask, "Mask for id {} right does not match", idx);
     }
 
     Ok(())
