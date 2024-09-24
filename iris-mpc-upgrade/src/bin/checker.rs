@@ -146,9 +146,19 @@ async fn main() -> eyre::Result<()> {
     .collect();
 
     // grab shares from new DB and recombine
-    let new_shares0 = new_db0.stream_irises().await.collect::<Vec<_>>().await;
-    let new_shares1 = new_db1.stream_irises().await.collect::<Vec<_>>().await;
-    let new_shares2 = new_db2.stream_irises().await.collect::<Vec<_>>().await;
+    let new_shares0 = new_db0
+        .stream_irises_in_range(1..args.num_elements + 1)
+        .collect::<Vec<_>>()
+        .await;
+
+    let new_shares1 = new_db1
+        .stream_irises_in_range(1..args.num_elements + 1)
+        .collect::<Vec<_>>()
+        .await;
+    let new_shares2 = new_db2
+        .stream_irises_in_range(1..args.num_elements + 1)
+        .collect::<Vec<_>>()
+        .await;
 
     let mut new_left_db = HashMap::new();
     let mut new_right_db = HashMap::new();
@@ -246,6 +256,9 @@ async fn main() -> eyre::Result<()> {
         assert_eq!(enc_right_masks, enc_right_masks2);
 
         new_right_db.insert(iris0.id(), (enc_right_bits, enc_right_masks));
+        if iris0.id() % 1000 == 0 {
+            tracing::info!("Processed {} shares", iris0.id());
+        }
     }
 
     assert_eq!(old_left_db.len(), new_left_db.len());
@@ -253,11 +266,23 @@ async fn main() -> eyre::Result<()> {
     assert_eq!(old_left_db.len(), old_right_db.len());
 
     for (idx, (code, mask)) in old_left_db {
+        if (idx % 1000) == 0 {
+            tracing::info!(
+                "Checking left share / mask: {} / {}",
+                idx,
+                args.num_elements
+            );
+        }
         let (new_code, new_mask) = new_left_db.get(&idx).expect("old id is present in new db");
         assert_eq!(code, *new_code);
         assert_eq!(mask, *new_mask);
     }
     for (idx, (code, mask)) in old_right_db {
+        tracing::info!(
+            "Checking right share / mask: {} / {}",
+            idx,
+            args.num_elements
+        );
         let (new_code, new_mask) = new_right_db.get(&idx).expect("old id is present in new db");
         assert_eq!(code, *new_code);
         assert_eq!(mask, *new_mask);

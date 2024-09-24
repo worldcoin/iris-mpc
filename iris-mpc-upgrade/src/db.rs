@@ -9,7 +9,6 @@ pub struct V1Db {
 
 impl V1Db {
     pub async fn new(url: &str) -> eyre::Result<Self> {
-        println!("Connecting to V1 database: {}", url);
         tracing::info!("Connecting to database");
 
         let pool = sqlx::Pool::connect(url)
@@ -17,7 +16,6 @@ impl V1Db {
             .with_context(|| format!("when connecting to {}", &url))?;
 
         tracing::info!("Connected to database");
-        println!("Connected to V1 database");
         Ok(Self { pool })
     }
 
