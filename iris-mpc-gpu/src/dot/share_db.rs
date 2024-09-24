@@ -2,10 +2,12 @@ use crate::{
     helpers::{
         comm::NcclComm,
         device_manager::DeviceManager,
+        launch_config_from_elements_and_threads,
         query_processor::{
             CudaVec2DSlicer, CudaVec2DSlicerRawPointer, CudaVec2DSlicerU32, CudaVec2DSlicerU8,
             StreamAwareCudaSlice,
         },
+        DEFAULT_LAUNCH_CONFIG_THREADS,
     },
     rng::chacha::ChaChaCudaRng,
     threshold_ring::protocol::ChunkShareView,
@@ -21,7 +23,6 @@ use cudarc::{
         result::{self, malloc_async, malloc_managed, mem_prefetch_async},
         sys::{CUdeviceptr, CUmemAttach_flags},
         CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr, DeviceSlice, LaunchAsync,
-        LaunchConfig,
     },
     nccl,
     nvrtc::compile_ptx,
@@ -528,13 +529,12 @@ impl ShareDB {
             );
 
             let num_elements = chunk_sizes[idx] * self.query_length;
-            let threads_per_block = 256;
-            let blocks_per_grid = num_elements.div_ceil(threads_per_block);
-            let cfg = LaunchConfig {
-                block_dim:        (threads_per_block as u32, 1, 1),
-                grid_dim:         (blocks_per_grid as u32, 1, 1),
-                shared_mem_bytes: 0,
-            };
+            let threads_per_block = DEFAULT_LAUNCH_CONFIG_THREADS; // ON CHANGE: sync with kernel
+            let cfg = launch_config_from_elements_and_threads(
+                num_elements as u32,
+                threads_per_block,
+                &self.device_manager.devices()[idx],
+            );
 
             unsafe {
                 self.kernels[idx]
@@ -581,13 +581,12 @@ impl ShareDB {
         size: usize,
         streams: &[CudaStream],
     ) {
-        let threads_per_block = 256;
-        let blocks_per_grid = size.div_ceil(threads_per_block);
-        let cfg = LaunchConfig {
-            block_dim:        (threads_per_block as u32, 1, 1),
-            grid_dim:         (blocks_per_grid as u32, 1, 1),
-            shared_mem_bytes: 0,
-        };
+        let threads_per_block = DEFAULT_LAUNCH_CONFIG_THREADS; // ON CHANGE: sync with kernel
+        let cfg = launch_config_from_elements_and_threads(
+            size as u32,
+            threads_per_block,
+            &self.device_manager.devices()[idx],
+        );
 
         unsafe {
             self.xor_assign_u8_kernels[idx]
@@ -740,6 +739,7 @@ impl ShareDB {
 }
 
 #[cfg(test)]
+#[cfg(feature = "gpu_dependent")]
 mod tests {
     use super::{preprocess_query, ShareDB};
     use crate::{
@@ -799,7 +799,6 @@ mod tests {
 
     /// Test to verify the matmul operation for random matrices in the field
     #[test]
-    #[cfg(feature = "gpu_dependent")]
     fn check_matmul() {
         let db = random_vec(DB_SIZE, WIDTH, u16::MAX as u32);
         let query = random_vec(QUERY_SIZE, WIDTH, u16::MAX as u32);
@@ -869,7 +868,6 @@ mod tests {
     /// Checks that the result of a matmul of the original data equals the
     /// reconstructed result of individual matmuls on the shamir shares.
     #[test]
-    #[cfg(feature = "gpu_dependent")]
     fn check_shared_matmul() {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let device_manager = Arc::new(DeviceManager::init());
@@ -955,7 +953,6 @@ mod tests {
     /// Calculates the distances between a query and a shamir secret shared db
     /// and checks the result against reference plain implementation.
     #[test]
-    #[cfg(feature = "gpu_dependent")]
     fn check_shared_distances() {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
         let device_manager = Arc::new(DeviceManager::init());

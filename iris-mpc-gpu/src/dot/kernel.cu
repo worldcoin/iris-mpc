@@ -4,9 +4,9 @@
 #define U8 unsigned char
 #define MAX_MATCHES_LEN 256
 
-extern "C" __global__ void xor_assign_u8(U8 *lhs, U8 *rhs, int n)
+extern "C" __global__ void xor_assign_u8(U8 *lhs, U8 *rhs, size_t n)
 {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n)
     {
         lhs[i] ^= rhs[i];

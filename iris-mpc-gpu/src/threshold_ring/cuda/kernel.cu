@@ -98,15 +98,16 @@ __device__ void transpose32x64(U64 *out, U32 *in) {
 
 // Performs the transpose for a and b in parallel
 __device__ void u16_transpose_pack_u64(U64 *out_a, U64 *out_b, U16 *in_a,
-                                       U16 *in_b, int in_len, int out_len) {
+                                       U16 *in_b, size_t in_len,
+                                       size_t out_len) {
   // in has size in_len = 64 * n
   // out has size out_len, where each element is an array of n elements
   // Thus out itslef has n * out_len elements (split into n arrays)
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
 
   assert(in_len % 64 == 0);
   assert(out_len <= 16);
-  int n = in_len / 64;
+  size_t n = in_len / 64;
 
   // Make each transpose in parallel
   if (i < n) {
@@ -131,15 +132,15 @@ __device__ void u16_transpose_pack_u64(U64 *out_a, U64 *out_b, U16 *in_a,
 
 // Performs the transpose for a and b in parallel
 __device__ void u32_transpose_pack_u64(U64 *out_a, U64 *out_b, U32 *in_a,
-                                       U32 *in_b, int in_len, int out_len) {
+                                       U32 *in_b, size_t in_len, size_t out_len) {
   // in has size in_len = 64 * n
   // out has size out_len, where each element is an array of n elements
   // Thus out itslef has n * out_len elements (split into n arrays)
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
 
   assert(in_len % 64 == 0);
   assert(out_len <= 32);
-  int n = in_len / 64;
+  size_t n = in_len / 64;
 
   // Make each transpose in parallel
   if (i < n) {
@@ -210,8 +211,8 @@ __device__ void split_inner(U64 *x1_a, U64 *x1_b, U64 *x2_a, U64 *x2_b,
 ////////////////////////////////////////////////////////////////////////////////
 
 extern "C" __global__ void shared_assign(TYPE *des_a, TYPE *des_b, TYPE *src_a,
-                                         TYPE *src_b, int n) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
+                                         TYPE *src_b, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     des_a[i] = src_a[i];
     des_b[i] = src_b[i];
@@ -220,8 +221,8 @@ extern "C" __global__ void shared_assign(TYPE *des_a, TYPE *des_b, TYPE *src_a,
 
 extern "C" __global__ void shared_xor(TYPE *res_a, TYPE *res_b, TYPE *lhs_a,
                                       TYPE *lhs_b, TYPE *rhs_a, TYPE *rhs_b,
-                                      int n) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
+                                      size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     xor_inner<TYPE>(&res_a[i], &lhs_a[i], &rhs_a[i]);
     xor_inner<TYPE>(&res_b[i], &lhs_b[i], &rhs_b[i]);
@@ -229,30 +230,31 @@ extern "C" __global__ void shared_xor(TYPE *res_a, TYPE *res_b, TYPE *lhs_a,
 }
 
 extern "C" __global__ void shared_xor_assign(TYPE *lhs_a, TYPE *lhs_b,
-                                             TYPE *rhs_a, TYPE *rhs_b, int n) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
+                                             TYPE *rhs_a, TYPE *rhs_b,
+                                             size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     xor_assign_inner<TYPE>(&lhs_a[i], &rhs_a[i]);
     xor_assign_inner<TYPE>(&lhs_b[i], &rhs_b[i]);
   }
 }
 
-extern "C" __global__ void xor_assign_u16(U16 *lhs, U16 *rhs, int n) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
+extern "C" __global__ void xor_assign_u16(U16 *lhs, U16 *rhs, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     xor_assign_inner<U16>(&lhs[i], &rhs[i]);
   }
 }
 
-extern "C" __global__ void xor_assign_u32(U32 *lhs, U32 *rhs, int n) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
+extern "C" __global__ void xor_assign_u32(U32 *lhs, U32 *rhs, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     xor_assign_inner<U32>(&lhs[i], &rhs[i]);
   }
 }
 
-extern "C" __global__ void xor_assign_u64(U64 *lhs, U64 *rhs, int n) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
+extern "C" __global__ void xor_assign_u64(U64 *lhs, U64 *rhs, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     xor_assign_inner<U64>(&lhs[i], &rhs[i]);
   }
@@ -260,8 +262,8 @@ extern "C" __global__ void xor_assign_u64(U64 *lhs, U64 *rhs, int n) {
 
 extern "C" __global__ void shared_and_pre(TYPE *res_a, TYPE *lhs_a, TYPE *lhs_b,
                                           TYPE *rhs_a, TYPE *rhs_b, TYPE *r,
-                                          int n) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
+                                          size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     and_pre_inner<TYPE>(&res_a[i], &lhs_a[i], &lhs_b[i], &rhs_a[i], &rhs_b[i],
                         &r[i]);
@@ -270,8 +272,8 @@ extern "C" __global__ void shared_and_pre(TYPE *res_a, TYPE *lhs_a, TYPE *lhs_b,
 
 extern "C" __global__ void shared_or_pre_assign(TYPE *lhs_a, TYPE *lhs_b,
                                                 TYPE *rhs_a, TYPE *rhs_b,
-                                                TYPE *r, int n) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
+                                                TYPE *r, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     U64 res_a;
     or_pre_inner<TYPE>(&res_a, &lhs_a[i], &lhs_b[i], &rhs_a[i], &rhs_b[i],
@@ -282,21 +284,21 @@ extern "C" __global__ void shared_or_pre_assign(TYPE *lhs_a, TYPE *lhs_b,
 
 extern "C" __global__ void shared_u16_transpose_pack_u64(U64 *out_a, U64 *out_b,
                                                          U16 *in_a, U16 *in_b,
-                                                         int in_len,
-                                                         int out_len) {
+                                                         size_t in_len,
+                                                         size_t out_len) {
   u16_transpose_pack_u64(out_a, out_b, in_a, in_b, in_len, out_len);
 }
 
 extern "C" __global__ void shared_u32_transpose_pack_u64(U64 *out_a, U64 *out_b,
                                                          U32 *in_a, U32 *in_b,
-                                                         int in_len,
-                                                         int out_len) {
+                                                         size_t in_len,
+                                                         size_t out_len) {
   u32_transpose_pack_u64(out_a, out_b, in_a, in_b, in_len, out_len);
 }
 
 extern "C" __global__ void split(U64 *x1_a, U64 *x1_b, U64 *x2_a, U64 *x2_b,
-                                 U64 *x3_a, U64 *x3_b, int n, int id) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
+                                 U64 *x3_a, U64 *x3_b, size_t n, int id) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     split_inner(&x1_a[i], &x1_b[i], &x2_a[i], &x2_b[i], &x3_a[i], &x3_b[i], id);
   }
@@ -305,8 +307,8 @@ extern "C" __global__ void split(U64 *x1_a, U64 *x1_b, U64 *x2_a, U64 *x2_b,
 extern "C" __global__ void lift_split(U16 *in_a, U16 *in_b, U32 *lifted_a,
                                       U32 *lifted_b, U64 *x1_a, U64 *x1_b,
                                       U64 *x2_a, U64 *x2_b, U64 *x3_a,
-                                      U64 *x3_b, int chunk_size, int id) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
+                                      U64 *x3_b, size_t chunk_size, int id) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < 64 * chunk_size) {
     lifted_a[i] = (U32)(in_a[i]);
     lifted_b[i] = (U32)(in_b[i]);
@@ -320,8 +322,8 @@ extern "C" __global__ void lift_split(U16 *in_a, U16 *in_b, U32 *lifted_a,
 extern "C" __global__ void shared_lift_mul_sub(U32 *mask_a, U32 *mask_b,
                                                U16 *mask_corr_a,
                                                U16 *mask_corr_b, U16 *code_a,
-                                               U16 *code_b, int n) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
+                                               U16 *code_b, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     lift_mul_sub(&mask_a[i], &mask_corr_a[i], &mask_corr_a[i + n], &code_a[i]);
     lift_mul_sub(&mask_b[i], &mask_corr_b[i], &mask_corr_b[i + n], &code_b[i]);
@@ -332,16 +334,16 @@ extern "C" __global__ void packed_ot_sender(U16 *out_a, U16 *out_b, U64 *in_a,
                                             U64 *in_b, U16 *m0, U16 *m1,
                                             U16 *rand_ca, U16 *rand_cb,
                                             U16 *rand_wa1, U16 *rand_wa2,
-                                            int n) {
+                                            size_t n) {
   // in is bits packed in 64 bit integers
   // out is each bit injected into 16-bit
   // Thus, in has size n, out has size 64 * n
   // m0, m1, rand_ca, rand_cb, rand_wa1, rand_wa2 are same size as out
 
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < 64 * n) {
-    int wordindex = i / 64;
-    int bitindex = i % 64;
+    size_t wordindex = i / 64;
+    size_t bitindex = i % 64;
     U16 my_bit_a = (in_a[wordindex] >> bitindex) & 1;
     U16 my_bit_b = (in_b[wordindex] >> bitindex) & 1;
     out_a[i] = rand_ca[i];
@@ -355,16 +357,16 @@ extern "C" __global__ void packed_ot_sender(U16 *out_a, U16 *out_b, U64 *in_a,
 
 extern "C" __global__ void packed_ot_receiver(U16 *out_a, U16 *out_b, U64 *in_b,
                                               U16 *m0, U16 *m1, U16 *rand_ca,
-                                              U16 *rand_wc, int n) {
+                                              U16 *rand_wc, size_t n) {
   // in is bits packed in 64 bit integers
   // out is each bit injected into 16-bit
   // Thus, in has size n, out has size 64 * n
   // m0, m1, rand_ca, rand_wc are same size as out
 
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < 64 * n) {
-    int wordindex = i / 64;
-    int bitindex = i % 64;
+    size_t wordindex = i / 64;
+    size_t bitindex = i % 64;
     bool my_bit_b = ((in_b[wordindex] >> bitindex) & 1) == 1;
     out_a[i] = rand_ca[i];
     if (my_bit_b) {
@@ -377,16 +379,16 @@ extern "C" __global__ void packed_ot_receiver(U16 *out_a, U16 *out_b, U64 *in_b,
 
 extern "C" __global__ void packed_ot_helper(U16 *out_b, U64 *in_a, U16 *rand_cb,
                                             U16 *rand_wb1, U16 *rand_wb2,
-                                            U16 *wc, int n) {
+                                            U16 *wc, size_t n) {
   // in is bits packed in 64 bit integers
   // out is each bit injected into U16-bit
   // Thus, in has size n, out has size 64 * n
   // rand_wb1, rand_wb2, wc are same size as out
 
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < 64 * n) {
-    int wordindex = i / 64;
-    int bitindex = i % 64;
+    size_t wordindex = i / 64;
+    size_t bitindex = i % 64;
     bool my_bit_a = ((in_a[wordindex] >> bitindex) & 1) == 1;
     out_b[i] = rand_cb[i];
     if (my_bit_a) {
@@ -399,9 +401,9 @@ extern "C" __global__ void packed_ot_helper(U16 *out_b, U64 *in_a, U16 *rand_cb,
 
 extern "C" __global__ void collapse_u64_helper(U64 *inout_a, U64 *in_b,
                                                U64 *helper_a, U64 *helper_b,
-                                               U64 *r, int next_bitsize) {
+                                               U64 *r, size_t next_bitsize) {
 
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i == 0) {
     U64 mask = (1 << next_bitsize) - 1;
     *helper_a = *inout_a >> next_bitsize;

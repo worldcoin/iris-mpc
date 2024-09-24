@@ -48,6 +48,7 @@ fn deserialize_all(state_ser: &[u8]) -> Result<Vec<SyncState>> {
 }
 
 #[cfg(test)]
+#[cfg(feature = "gpu_dependent")]
 mod tests {
     use super::*;
     use cudarc::{driver::CudaDevice, nccl::Id};
@@ -55,7 +56,6 @@ mod tests {
     use tokio::task::JoinSet;
 
     #[test]
-    #[cfg(feature = "gpu_dependent")]
     fn test_serialize() -> Result<()> {
         // My state.
         let state = SyncState {
@@ -75,7 +75,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature = "gpu_dependent")]
     async fn test_sync() -> Result<()> {
         let n_parties = 3.min(CudaDevice::count()? as usize);
         let net_id = Id::new().unwrap();
@@ -102,7 +101,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature = "gpu_dependent")]
     async fn test_out_of_sync() -> Result<()> {
         let n_parties = 3.min(CudaDevice::count()? as usize);
         let net_id = Id::new().unwrap();

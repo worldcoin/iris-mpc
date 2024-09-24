@@ -221,7 +221,7 @@ pub mod degree4 {
                     coefs: [0; IRIS_CODE_LENGTH],
                 },
             ];
-            for i in (0..12800).step_by(4) {
+            for i in (0..IRIS_CODE_LENGTH).step_by(4) {
                 let element = GaloisRingElement::<basis::A>::from_coefs([
                     iris_code[Self::remap_index(i)],
                     iris_code[Self::remap_index(i + 1)],

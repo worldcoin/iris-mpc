@@ -1,7 +1,10 @@
 use super::ROTATIONS;
-use crate::helpers::device_manager::DeviceManager;
+use crate::helpers::{
+    device_manager::DeviceManager, launch_config_from_elements_and_threads,
+    DEFAULT_LAUNCH_CONFIG_THREADS,
+};
 use cudarc::{
-    driver::{CudaFunction, CudaSlice, CudaStream, CudaView, LaunchAsync, LaunchConfig},
+    driver::{CudaFunction, CudaSlice, CudaStream, CudaView, LaunchAsync},
     nvrtc::compile_ptx,
 };
 use std::{cmp::min, sync::Arc};
@@ -107,13 +110,12 @@ impl DistanceComparator {
                 continue;
             }
             let num_elements = (db_sizes[i] * self.query_length).div_ceil(64);
-            let threads_per_block = 256;
-            let blocks_per_grid = num_elements.div_ceil(threads_per_block);
-            let cfg = LaunchConfig {
-                block_dim:        (threads_per_block as u32, 1, 1),
-                grid_dim:         (blocks_per_grid as u32, 1, 1),
-                shared_mem_bytes: 0,
-            };
+            let threads_per_block = DEFAULT_LAUNCH_CONFIG_THREADS; // ON CHANGE: sync with kernel
+            let cfg = launch_config_from_elements_and_threads(
+                num_elements as u32,
+                threads_per_block,
+                &self.device_manager.devices()[i],
+            );
             self.device_manager.device(i).bind_to_thread().unwrap();
 
             unsafe {
@@ -189,13 +191,13 @@ impl DistanceComparator {
                 continue;
             }
             let num_elements = (db_sizes[i] * self.query_length / ROTATIONS).div_ceil(64);
-            let threads_per_block = 256;
-            let blocks_per_grid = num_elements.div_ceil(threads_per_block);
-            let cfg = LaunchConfig {
-                block_dim:        (threads_per_block as u32, 1, 1),
-                grid_dim:         (blocks_per_grid as u32, 1, 1),
-                shared_mem_bytes: 0,
-            };
+            let threads_per_block = DEFAULT_LAUNCH_CONFIG_THREADS; // ON CHANGE: sync with kernel
+            let cfg = launch_config_from_elements_and_threads(
+                num_elements as u32,
+                threads_per_block,
+                &self.device_manager.devices()[i],
+            );
+
             unsafe {
                 kernels[i]
                     .clone()

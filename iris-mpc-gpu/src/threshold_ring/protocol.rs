@@ -1,6 +1,7 @@
 use crate::{
     helpers::{
         comm::NcclComm, device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync,
+        launch_config_from_elements_and_threads, DEFAULT_LAUNCH_CONFIG_THREADS,
     },
     rng::chacha_corr::ChaChaCudaCorrRng,
     threshold_ring::cuda::PTX_SRC,
@@ -8,7 +9,7 @@ use crate::{
 use cudarc::{
     driver::{
         result::stream, CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, CudaViewMut,
-        DeviceSlice, LaunchAsync, LaunchConfig,
+        DeviceSlice, LaunchAsync,
     },
     nccl::result,
     nvrtc::{self, Ptx},
@@ -17,8 +18,7 @@ use itertools::{izip, Itertools};
 use std::{ops::Range, sync::Arc};
 
 pub(crate) const B_BITS: usize = 16;
-
-const DEFAULT_LAUNCH_CONFIG_THREADS: u32 = 64;
+const SHARE_RING_BITSIZE: usize = 16;
 
 pub struct ChunkShare<T> {
     pub a: CudaSlice<T>,
@@ -209,46 +209,47 @@ impl Kernels {
 }
 
 struct Buffers {
-    u32_64c_1:         Option<Vec<ChunkShare<u32>>>,
-    u64_32c_1:         Option<Vec<ChunkShare<u64>>>,
-    u64_32c_2:         Option<Vec<ChunkShare<u64>>>,
-    u64_32c_3:         Option<Vec<ChunkShare<u64>>>,
-    u64_31c_1:         Option<Vec<ChunkShare<u64>>>,
-    u64_31c_2:         Option<Vec<ChunkShare<u64>>>,
-    u16_128c_1:        Option<Vec<ChunkShare<u16>>>,
-    single_u16_128c_1: Option<Vec<CudaSlice<u16>>>,
-    single_u16_128c_2: Option<Vec<CudaSlice<u16>>>,
-    single_u16_128c_3: Option<Vec<CudaSlice<u16>>>,
-    chunk_size:        usize,
+    lifted_shares: Option<Vec<ChunkShare<u32>>>,
+    lifting_corrections: Option<Vec<ChunkShare<u16>>>,
+    // This is also the buffer where the result is stored:
+    lifted_shares_split1_result: Option<Vec<ChunkShare<u64>>>,
+    lifted_shares_split2: Option<Vec<ChunkShare<u64>>>,
+    lifted_shares_split3: Option<Vec<ChunkShare<u64>>>,
+    binary_adder_s: Option<Vec<ChunkShare<u64>>>,
+    binary_adder_c: Option<Vec<ChunkShare<u64>>>,
+    ot_m0: Option<Vec<CudaSlice<u16>>>,
+    ot_m1: Option<Vec<CudaSlice<u16>>>,
+    ot_wc: Option<Vec<CudaSlice<u16>>>,
+    chunk_size: usize,
 }
 
 impl Buffers {
     fn new(devices: &[Arc<CudaDevice>], chunk_size: usize) -> Self {
-        let u32_64c_1 = Some(Self::allocate_buffer(chunk_size * 64, devices));
-        let u64_32c_1 = Some(Self::allocate_buffer(chunk_size * 32, devices));
-        let u64_32c_2 = Some(Self::allocate_buffer(chunk_size * 32, devices));
-        let u64_32c_3 = Some(Self::allocate_buffer(chunk_size * 32, devices));
+        let lifted_shares = Some(Self::allocate_buffer(chunk_size * 64, devices));
+        let lifted_shares_split1_result = Some(Self::allocate_buffer(chunk_size * 32, devices));
+        let lifted_shares_split2 = Some(Self::allocate_buffer(chunk_size * 32, devices));
+        let lifted_shares_split3 = Some(Self::allocate_buffer(chunk_size * 32, devices));
 
-        let u64_31c_1 = Some(Self::allocate_buffer(chunk_size * 31, devices));
-        let u64_31c_2 = Some(Self::allocate_buffer(chunk_size * 31, devices));
+        let binary_adder_s = Some(Self::allocate_buffer(chunk_size * 31, devices));
+        let binary_adder_c = Some(Self::allocate_buffer(chunk_size * 31, devices));
 
-        let u16_128c_1 = Some(Self::allocate_buffer(chunk_size * 128, devices));
+        let lifting_corrections = Some(Self::allocate_buffer(chunk_size * 128, devices));
 
-        let single_u16_128c_1 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
-        let single_u16_128c_2 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
-        let single_u16_128c_3 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
+        let ot_m0 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
+        let ot_m1 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
+        let ot_wc = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
 
         Buffers {
-            u32_64c_1,
-            u64_32c_1,
-            u64_32c_2,
-            u64_32c_3,
-            u64_31c_1,
-            u64_31c_2,
-            u16_128c_1,
-            single_u16_128c_1,
-            single_u16_128c_2,
-            single_u16_128c_3,
+            lifted_shares,
+            lifting_corrections,
+            lifted_shares_split1_result,
+            lifted_shares_split2,
+            lifted_shares_split3,
+            binary_adder_s,
+            binary_adder_c,
+            ot_m0,
+            ot_m1,
+            ot_wc,
             chunk_size,
         }
     }
@@ -317,16 +318,16 @@ impl Buffers {
     }
 
     fn check_buffers(&self) {
-        assert!(self.u32_64c_1.is_some());
-        assert!(self.u64_32c_1.is_some());
-        assert!(self.u64_32c_2.is_some());
-        assert!(self.u64_32c_3.is_some());
-        assert!(self.u64_31c_1.is_some());
-        assert!(self.u64_31c_2.is_some());
-        assert!(self.u16_128c_1.is_some());
-        assert!(self.single_u16_128c_1.is_some());
-        assert!(self.single_u16_128c_2.is_some());
-        assert!(self.single_u16_128c_3.is_some());
+        assert!(self.lifted_shares.is_some());
+        assert!(self.lifted_shares_split1_result.is_some());
+        assert!(self.lifted_shares_split2.is_some());
+        assert!(self.lifted_shares_split3.is_some());
+        assert!(self.binary_adder_s.is_some());
+        assert!(self.binary_adder_c.is_some());
+        assert!(self.lifting_corrections.is_some());
+        assert!(self.ot_m0.is_some());
+        assert!(self.ot_m1.is_some());
+        assert!(self.ot_wc.is_some());
     }
 }
 
@@ -344,7 +345,7 @@ pub struct Circuits {
 }
 
 impl Circuits {
-    const BITS: usize = 16 + B_BITS;
+    const BITS: usize = SHARE_RING_BITSIZE + B_BITS;
 
     pub fn synchronize_all(&self) {
         for dev in self.devs.iter() {
@@ -418,11 +419,11 @@ impl Circuits {
     }
 
     pub fn take_result_buffer(&mut self) -> Vec<ChunkShare<u64>> {
-        Buffers::take_buffer(&mut self.buffers.u64_32c_1)
+        Buffers::take_buffer(&mut self.buffers.lifted_shares_split1_result)
     }
 
     pub fn return_result_buffer(&mut self, src: Vec<ChunkShare<u64>>) {
-        Buffers::return_buffer(&mut self.buffers.u64_32c_1, src);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_split1_result, src);
     }
 
     pub fn next_id(&self) -> usize {
@@ -438,15 +439,6 @@ impl Circuits {
 
     pub fn comms(&self) -> &[Arc<NcclComm>] {
         &self.comms
-    }
-
-    fn launch_config_from_elements_and_threads(n: u32, t: u32) -> LaunchConfig {
-        let num_blocks = (n + t - 1) / t;
-        LaunchConfig {
-            grid_dim:         (num_blocks, 1, 1),
-            block_dim:        (t, 1, 1),
-            shared_mem_bytes: 0,
-        }
     }
 
     // Fill randomness using the correlated RNG
@@ -526,9 +518,10 @@ impl Circuits {
         let mut rand = unsafe { self.devs[idx].alloc::<u64>(size * 8).unwrap() };
         self.fill_rand_u64(&mut rand, idx, streams);
 
-        let cfg = Self::launch_config_from_elements_and_threads(
+        let cfg = launch_config_from_elements_and_threads(
             self.chunk_size as u32 * bits as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
         );
 
         unsafe {
@@ -560,9 +553,10 @@ impl Circuits {
         streams: &[CudaStream],
     ) {
         assert_eq!(src.len(), des.len());
-        let cfg = Self::launch_config_from_elements_and_threads(
+        let cfg = launch_config_from_elements_and_threads(
             src.len() as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
         );
 
         unsafe {
@@ -586,9 +580,10 @@ impl Circuits {
         idx: usize,
         streams: &[CudaStream],
     ) {
-        let cfg = Self::launch_config_from_elements_and_threads(
+        let cfg = launch_config_from_elements_and_threads(
             self.chunk_size as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
         );
 
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
@@ -623,9 +618,10 @@ impl Circuits {
         let mut rand = unsafe { self.devs[idx].alloc::<u64>(size * 8).unwrap() };
         self.fill_rand_u64(&mut rand, idx, streams);
 
-        let cfg = Self::launch_config_from_elements_and_threads(
+        let cfg = launch_config_from_elements_and_threads(
             x1.len() as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
         );
 
         unsafe {
@@ -641,7 +637,8 @@ impl Circuits {
         }
     }
 
-    fn otp_encrypt_my_rng_u16(
+    // Encrypt using chacha in my_rng
+    fn chacha1_encrypt_u16(
         &mut self,
         input: &CudaView<u16>,
         idx: usize,
@@ -649,13 +646,14 @@ impl Circuits {
     ) -> CudaSlice<u32> {
         let data_len = input.len();
         assert_eq!(data_len & 1, 0);
-        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
-        let mut rand_u16 = self.fill_my_rng_into_u16(&mut rand, idx, streams);
-        self.single_xor_assign_u16(&mut rand_u16, input, idx, data_len, streams);
-        rand
+        let mut keystream = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
+        let mut keystream_u16 = self.fill_my_rng_into_u16(&mut keystream, idx, streams);
+        self.single_xor_assign_u16(&mut keystream_u16, input, idx, data_len, streams);
+        keystream
     }
 
-    fn otp_encrypt_their_rng_u16(
+    // Encrypt using chacha in their_rng
+    fn chacha2_encrypt_u16(
         &mut self,
         input: &CudaView<u16>,
         idx: usize,
@@ -663,13 +661,14 @@ impl Circuits {
     ) -> CudaSlice<u32> {
         let data_len = input.len();
         assert_eq!(data_len & 1, 0);
-        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
-        let mut rand_u16 = self.fill_their_rng_into_u16(&mut rand, idx, streams);
-        self.single_xor_assign_u16(&mut rand_u16, input, idx, data_len, streams);
-        rand
+        let mut keystream = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
+        let mut keystream_u16 = self.fill_their_rng_into_u16(&mut keystream, idx, streams);
+        self.single_xor_assign_u16(&mut keystream_u16, input, idx, data_len, streams);
+        keystream
     }
 
-    fn otp_decrypt_my_rng_u16(
+    // Decrypt using chacha in my_rng
+    fn chacha1_decrypt_u16(
         &mut self,
         input: &mut CudaView<u16>,
         idx: usize,
@@ -677,12 +676,13 @@ impl Circuits {
     ) {
         let data_len = input.len();
         assert_eq!(data_len & 1, 0);
-        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
-        let rand_u16 = self.fill_my_rng_into_u16(&mut rand, idx, streams);
-        self.single_xor_assign_u16(input, &rand_u16, idx, data_len, streams);
+        let mut keystream = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
+        let keystream_u16 = self.fill_my_rng_into_u16(&mut keystream, idx, streams);
+        self.single_xor_assign_u16(input, &keystream_u16, idx, data_len, streams);
     }
 
-    fn otp_decrypt_their_rng_u16(
+    // Decrypt using chacha in their_rng
+    fn chacha2_decrypt_u16(
         &mut self,
         input: &mut CudaView<u16>,
         idx: usize,
@@ -690,44 +690,46 @@ impl Circuits {
     ) {
         let data_len = input.len();
         assert_eq!(data_len & 1, 0);
-        let mut rand = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
-        let rand_u16 = self.fill_their_rng_into_u16(&mut rand, idx, streams);
-        self.single_xor_assign_u16(input, &rand_u16, idx, data_len, streams);
+        let mut keystream = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
+        let keystream_u16 = self.fill_their_rng_into_u16(&mut keystream, idx, streams);
+        self.single_xor_assign_u16(input, &keystream_u16, idx, data_len, streams);
     }
 
-    fn otp_encrypt_my_rng_u64(
+    // Encrypt using chacha in my_rng
+    fn chacha1_encrypt_u64(
         &mut self,
         input: &ChunkShareView<u64>,
         idx: usize,
         streams: &[CudaStream],
     ) -> CudaSlice<u64> {
         let data_len = input.len();
-        let rand_size = (data_len + 7) / 8; // Multiple of 16 u32
-        let mut rand = unsafe { self.devs[idx].alloc::<u64>(rand_size * 8).unwrap() };
-        self.fill_my_rand_u64(&mut rand, idx, streams);
+        let keystream_size = (data_len + 7) / 8; // Multiple of 16 u32
+        let mut keystream = unsafe { self.devs[idx].alloc::<u64>(keystream_size * 8).unwrap() };
+        self.fill_my_rand_u64(&mut keystream, idx, streams);
         self.single_xor_assign_u64(
-            &mut rand.slice(..data_len),
+            &mut keystream.slice(..data_len),
             &input.a,
             idx,
             data_len,
             streams,
         );
-        rand
+        keystream
     }
 
-    fn otp_decrypt_their_rng_u64(
+    // Decrypt using chacha in their_rng
+    fn chacha2_decrypt_u64(
         &mut self,
         inout: &mut ChunkShareView<u64>,
         idx: usize,
         streams: &[CudaStream],
     ) {
         let data_len = inout.len();
-        let rand_size = (data_len + 7) / 8; // Multiple of 16 u32
-        let mut rand = unsafe { self.devs[idx].alloc::<u64>(rand_size * 8).unwrap() };
-        self.fill_their_rand_u64(&mut rand, idx, streams);
+        let keystream_size = (data_len + 7) / 8; // Multiple of 16 u32
+        let mut keystream = unsafe { self.devs[idx].alloc::<u64>(keystream_size * 8).unwrap() };
+        self.fill_their_rand_u64(&mut keystream, idx, streams);
         self.single_xor_assign_u64(
             &mut inout.b,
-            &rand.slice(..data_len),
+            &keystream.slice(..data_len),
             idx,
             data_len,
             streams,
@@ -751,7 +753,7 @@ impl Circuits {
         streams: &[CudaStream],
     ) {
         let send_bufs =
-            self.otp_encrypt_my_rng_u64(&res.get_range(range.start, range.end), idx, streams);
+            self.chacha1_encrypt_u64(&res.get_range(range.start, range.end), idx, streams);
 
         result::group_start().unwrap();
         self.comms[idx]
@@ -762,7 +764,7 @@ impl Circuits {
             .receive_view(&mut rcv, self.prev_id, &streams[idx])
             .unwrap();
         result::group_end().unwrap();
-        self.otp_decrypt_their_rng_u64(&mut res.get_range(range.start, range.end), idx, streams);
+        self.chacha2_decrypt_u64(&mut res.get_range(range.start, range.end), idx, streams);
     }
 
     fn send_receive_view_with_offset(
@@ -782,7 +784,7 @@ impl Circuits {
             .iter()
             .enumerate()
             .map(|(idx, res)| {
-                self.otp_encrypt_my_rng_u64(&res.get_range(range.start, range.end), idx, streams)
+                self.chacha1_encrypt_u64(&res.get_range(range.start, range.end), idx, streams)
             })
             .collect_vec();
 
@@ -800,11 +802,7 @@ impl Circuits {
         }
         result::group_end().unwrap();
         for (idx, res) in res.iter_mut().enumerate() {
-            self.otp_decrypt_their_rng_u64(
-                &mut res.get_range(range.start, range.end),
-                idx,
-                streams,
-            );
+            self.chacha2_decrypt_u64(&mut res.get_range(range.start, range.end), idx, streams);
         }
     }
 
@@ -814,7 +812,7 @@ impl Circuits {
         let send_bufs = res
             .iter()
             .enumerate()
-            .map(|(idx, res)| self.otp_encrypt_my_rng_u64(res, idx, streams))
+            .map(|(idx, res)| self.chacha1_encrypt_u64(res, idx, streams))
             .collect_vec();
 
         result::group_start().unwrap();
@@ -830,7 +828,7 @@ impl Circuits {
         }
         result::group_end().unwrap();
         for (idx, res) in res.iter_mut().enumerate() {
-            self.otp_decrypt_their_rng_u64(res, idx, streams);
+            self.chacha2_decrypt_u64(res, idx, streams);
         }
     }
 
@@ -840,7 +838,7 @@ impl Circuits {
         idx: usize,
         streams: &[CudaStream],
     ) {
-        let send_bufs = self.otp_encrypt_my_rng_u64(res, idx, streams);
+        let send_bufs = self.chacha1_encrypt_u64(res, idx, streams);
 
         result::group_start().unwrap();
         self.comms[idx]
@@ -850,7 +848,7 @@ impl Circuits {
             .receive_view(&mut res.b, self.prev_id, &streams[idx])
             .unwrap();
         result::group_end().unwrap();
-        self.otp_decrypt_their_rng_u64(res, idx, streams);
+        self.chacha2_decrypt_u64(res, idx, streams);
     }
 
     fn single_xor_assign_u16(
@@ -861,9 +859,10 @@ impl Circuits {
         size: usize,
         streams: &[CudaStream],
     ) {
-        let cfg = Self::launch_config_from_elements_and_threads(
+        let cfg = launch_config_from_elements_and_threads(
             size as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
         );
 
         unsafe {
@@ -883,9 +882,10 @@ impl Circuits {
         size: usize,
         streams: &[CudaStream],
     ) {
-        let cfg = Self::launch_config_from_elements_and_threads(
+        let cfg = launch_config_from_elements_and_threads(
             size as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
         );
 
         unsafe {
@@ -905,9 +905,10 @@ impl Circuits {
         size: usize,
         streams: &[CudaStream],
     ) {
-        let cfg = Self::launch_config_from_elements_and_threads(
+        let cfg = launch_config_from_elements_and_threads(
             size as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
         );
 
         unsafe {
@@ -937,9 +938,10 @@ impl Circuits {
         idx: usize,
         streams: &[CudaStream],
     ) {
-        let cfg = Self::launch_config_from_elements_and_threads(
+        let cfg = launch_config_from_elements_and_threads(
             self.chunk_size as u32 * bits as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
         );
 
         unsafe {
@@ -963,9 +965,10 @@ impl Circuits {
         idx: usize,
         streams: &[CudaStream],
     ) {
-        let cfg = Self::launch_config_from_elements_and_threads(
+        let cfg = launch_config_from_elements_and_threads(
             self.chunk_size as u32 * bits as u32,
             DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
         );
 
         unsafe {
@@ -1002,8 +1005,8 @@ impl Circuits {
         outp: &mut [ChunkShareView<u16>],
         streams: &[CudaStream],
     ) {
-        let m0_ = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_1);
-        let m1_ = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_2);
+        let m0_ = Buffers::take_single_buffer(&mut self.buffers.ot_m0);
+        let m1_ = Buffers::take_single_buffer(&mut self.buffers.ot_m1);
         let m0 = Buffers::get_single_buffer_chunk(&m0_, self.chunk_size * 128);
         let m1 = Buffers::get_single_buffer_chunk(&m1_, self.chunk_size * 128);
 
@@ -1029,9 +1032,10 @@ impl Circuits {
                 unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
             let rand_wa2 = self.fill_my_rng_into_u16(&mut rand_wa2_alloc, idx, streams);
 
-            let cfg = Self::launch_config_from_elements_and_threads(
+            let cfg = launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64 * 2,
                 DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
             );
 
             unsafe {
@@ -1063,12 +1067,12 @@ impl Circuits {
         let m0 = m0
             .into_iter()
             .enumerate()
-            .map(|(idx, m0)| self.otp_encrypt_their_rng_u16(&m0, idx, streams))
+            .map(|(idx, m0)| self.chacha2_encrypt_u16(&m0, idx, streams))
             .collect_vec();
         let m1 = m1
             .into_iter()
             .enumerate()
-            .map(|(idx, m1)| self.otp_encrypt_their_rng_u16(&m1, idx, streams))
+            .map(|(idx, m1)| self.chacha2_encrypt_u16(&m1, idx, streams))
             .collect_vec();
 
         result::group_start().unwrap();
@@ -1082,8 +1086,8 @@ impl Circuits {
         }
         result::group_end().unwrap();
 
-        Buffers::return_single_buffer(&mut self.buffers.single_u16_128c_1, m0_);
-        Buffers::return_single_buffer(&mut self.buffers.single_u16_128c_2, m1_);
+        Buffers::return_single_buffer(&mut self.buffers.ot_m0, m0_);
+        Buffers::return_single_buffer(&mut self.buffers.ot_m1, m1_);
     }
 
     fn bit_inject_ot_receiver(
@@ -1092,9 +1096,9 @@ impl Circuits {
         outp: &mut [ChunkShareView<u16>],
         streams: &[CudaStream],
     ) {
-        let m0_ = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_1);
-        let m1_ = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_2);
-        let wc_ = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_3);
+        let m0_ = Buffers::take_single_buffer(&mut self.buffers.ot_m0);
+        let m1_ = Buffers::take_single_buffer(&mut self.buffers.ot_m1);
+        let wc_ = Buffers::take_single_buffer(&mut self.buffers.ot_wc);
         let mut m0 = Buffers::get_single_buffer_chunk(&m0_, self.chunk_size * 128);
         let mut m1 = Buffers::get_single_buffer_chunk(&m1_, self.chunk_size * 128);
         let mut wc = Buffers::get_single_buffer_chunk(&wc_, self.chunk_size * 128);
@@ -1130,16 +1134,17 @@ impl Circuits {
                 unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
             let rand_ca = self.fill_my_rng_into_u16(&mut rand_ca_alloc, idx, streams);
 
-            // OTP decrypt
+            // ChaCha decrypt
             {
-                self.otp_decrypt_my_rng_u16(m0, idx, streams);
-                self.otp_decrypt_their_rng_u16(wc, idx, streams);
-                self.otp_decrypt_my_rng_u16(m1, idx, streams);
+                self.chacha1_decrypt_u16(m0, idx, streams);
+                self.chacha2_decrypt_u16(wc, idx, streams);
+                self.chacha1_decrypt_u16(m1, idx, streams);
             }
 
-            let cfg = Self::launch_config_from_elements_and_threads(
+            let cfg = launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64 * 2,
                 DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
             );
 
             unsafe {
@@ -1163,7 +1168,7 @@ impl Circuits {
                     .unwrap();
             }
             // OTP encrypt
-            send.push(self.otp_encrypt_their_rng_u16(&res.b, idx, streams));
+            send.push(self.chacha2_encrypt_u16(&res.b, idx, streams));
         }
 
         // Reshare to Helper
@@ -1175,9 +1180,9 @@ impl Circuits {
         }
         result::group_end().unwrap();
 
-        Buffers::return_single_buffer(&mut self.buffers.single_u16_128c_1, m0_);
-        Buffers::return_single_buffer(&mut self.buffers.single_u16_128c_2, m1_);
-        Buffers::return_single_buffer(&mut self.buffers.single_u16_128c_3, wc_);
+        Buffers::return_single_buffer(&mut self.buffers.ot_m0, m0_);
+        Buffers::return_single_buffer(&mut self.buffers.ot_m1, m1_);
+        Buffers::return_single_buffer(&mut self.buffers.ot_wc, wc_);
     }
 
     fn bit_inject_ot_helper(
@@ -1186,7 +1191,7 @@ impl Circuits {
         outp: &mut [ChunkShareView<u16>],
         streams: &[CudaStream],
     ) {
-        let wc_ = Buffers::take_single_buffer(&mut self.buffers.single_u16_128c_3);
+        let wc_ = Buffers::take_single_buffer(&mut self.buffers.ot_wc);
         let wc = Buffers::get_single_buffer_chunk(&wc_, self.chunk_size * 128);
 
         let mut send = Vec::with_capacity(inp.len());
@@ -1208,9 +1213,10 @@ impl Circuits {
                 unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
             let rand_wb2 = self.fill_their_rng_into_u16(&mut rand_wb2_alloc, idx, streams);
 
-            let cfg = Self::launch_config_from_elements_and_threads(
+            let cfg = launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64 * 2,
                 DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
             );
 
             unsafe {
@@ -1234,7 +1240,7 @@ impl Circuits {
             }
 
             // OTP encrypt
-            send.push(self.otp_encrypt_my_rng_u16(wc, idx, streams));
+            send.push(self.chacha1_encrypt_u16(wc, idx, streams));
         }
 
         result::group_start().unwrap();
@@ -1254,11 +1260,11 @@ impl Circuits {
         // OTP decrypt
         {
             for (idx, res) in outp.iter_mut().enumerate() {
-                self.otp_decrypt_my_rng_u16(&mut res.a, idx, streams);
+                self.chacha1_decrypt_u16(&mut res.a, idx, streams);
             }
         }
 
-        Buffers::return_single_buffer(&mut self.buffers.single_u16_128c_3, wc_);
+        Buffers::return_single_buffer(&mut self.buffers.ot_wc, wc_);
     }
 
     pub fn bit_inject_ot(
@@ -1285,12 +1291,13 @@ impl Circuits {
         assert_eq!(self.n_devices, inp.len());
         assert_eq!(self.n_devices, outp.len());
 
-        let cfg = Self::launch_config_from_elements_and_threads(
-            self.chunk_size as u32 * 2,
-            DEFAULT_LAUNCH_CONFIG_THREADS,
-        );
-
         for (idx, (inp, outp)) in izip!(inp, outp).enumerate() {
+            let cfg = launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 2,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
             unsafe {
                 self.kernels[idx]
                     .transpose_16x64
@@ -1322,12 +1329,12 @@ impl Circuits {
         assert_eq!(self.n_devices, inp.len());
         assert_eq!(self.n_devices, outp.len());
 
-        let cfg = Self::launch_config_from_elements_and_threads(
-            self.chunk_size as u32 * 2,
-            DEFAULT_LAUNCH_CONFIG_THREADS,
-        );
-
         for (idx, (inp, outp)) in izip!(inp, outp).enumerate() {
+            let cfg = launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 2,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
             unsafe {
                 self.kernels[idx]
                     .transpose_32x64
@@ -1357,13 +1364,14 @@ impl Circuits {
         bits: usize,
         streams: &[CudaStream],
     ) {
-        let cfg = Self::launch_config_from_elements_and_threads(
-            self.chunk_size as u32 * 64,
-            DEFAULT_LAUNCH_CONFIG_THREADS,
-        );
-
         // K = 16 is hardcoded in the kernel
         for (idx, (x1, x2, x3)) in izip!(inout1, out2, out3).enumerate() {
+            let cfg = launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 64,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
             unsafe {
                 self.kernels[idx]
                     .split
@@ -1396,13 +1404,14 @@ impl Circuits {
         out3: &mut [ChunkShareView<u64>],
         streams: &[CudaStream],
     ) {
-        let cfg = Self::launch_config_from_elements_and_threads(
-            self.chunk_size as u32 * 64,
-            DEFAULT_LAUNCH_CONFIG_THREADS,
-        );
-
         // K = 16 is hardcoded in the kernel
         for (idx, (inp, lifted, x1, x2, x3)) in izip!(inp, lifted, inout1, out2, out3).enumerate() {
+            let cfg = launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 64,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
             unsafe {
                 self.kernels[idx]
                     .lift_split
@@ -1442,9 +1451,10 @@ impl Circuits {
         assert_eq!(self.n_devices, code.len());
 
         for (idx, (m, mc, c)) in izip!(mask_lifted, mask_correction, code).enumerate() {
-            let cfg = Self::launch_config_from_elements_and_threads(
+            let cfg = launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64,
                 DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
             );
 
             unsafe {
@@ -1478,14 +1488,14 @@ impl Circuits {
         injected: &mut [ChunkShareView<u16>],
         streams: &[CudaStream],
     ) {
-        const K: usize = 16;
+        const K: usize = SHARE_RING_BITSIZE;
         let mut x1 = Vec::with_capacity(self.n_devices);
         let mut x2 = Vec::with_capacity(self.n_devices);
         let mut x3 = Vec::with_capacity(self.n_devices);
         let mut c = Vec::with_capacity(self.n_devices);
         // No subbuffer taken here, since we extract it manually
-        let buffer1 = Buffers::take_buffer(&mut self.buffers.u64_32c_1);
-        let buffer2 = Buffers::take_buffer(&mut self.buffers.u64_32c_2);
+        let buffer1 = Buffers::take_buffer(&mut self.buffers.lifted_shares_split1_result);
+        let buffer2 = Buffers::take_buffer(&mut self.buffers.lifted_shares_split2);
         for (b1, b2) in izip!(&buffer1, &buffer2) {
             let a = b1.get_offset(0, K * self.chunk_size);
             let b = b1.get_offset(1, K * self.chunk_size);
@@ -1502,8 +1512,8 @@ impl Circuits {
         self.binary_add_3_get_two_carries(&mut c, &mut x1, &mut x2, &mut x3, streams);
         self.bit_inject_ot(&c, injected, streams);
 
-        Buffers::return_buffer(&mut self.buffers.u64_32c_1, buffer1);
-        Buffers::return_buffer(&mut self.buffers.u64_32c_2, buffer2);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_split1_result, buffer1);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_split2, buffer2);
     }
 
     // K is 16 in our case
@@ -1515,7 +1525,7 @@ impl Circuits {
         x3: &mut [ChunkShareView<u64>],
         streams: &[CudaStream],
     ) {
-        const K: usize = 16;
+        const K: usize = SHARE_RING_BITSIZE;
         assert_eq!(self.n_devices, c.len());
         assert_eq!(self.n_devices, x1.len());
         assert_eq!(self.n_devices, x2.len());
@@ -1525,7 +1535,7 @@ impl Circuits {
         let mut s = Vec::with_capacity(self.n_devices);
         let mut carry = Vec::with_capacity(self.n_devices);
         // No subbuffer taken here, since we extract it manually
-        let buffer1 = Buffers::take_buffer(&mut self.buffers.u64_32c_3);
+        let buffer1 = Buffers::take_buffer(&mut self.buffers.lifted_shares_split3);
 
         for (idx, (x1, x2, x3, b)) in izip!(x1, x2, x3.iter_mut(), &buffer1).enumerate() {
             let mut s_ = b.get_offset(0, (K - 1) * self.chunk_size);
@@ -1610,13 +1620,13 @@ impl Circuits {
         // Send/Receive
         self.send_receive_view_with_offset(c, self.chunk_size..2 * self.chunk_size, streams);
 
-        Buffers::return_buffer(&mut self.buffers.u64_32c_3, buffer1);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_split3, buffer1);
     }
 
     pub fn extract_msb(&mut self, x: &mut [ChunkShareView<u32>], streams: &[CudaStream]) {
-        let x1_ = Buffers::take_buffer(&mut self.buffers.u64_32c_1);
-        let x2_ = Buffers::take_buffer(&mut self.buffers.u64_32c_2);
-        let x3_ = Buffers::take_buffer(&mut self.buffers.u64_32c_3);
+        let x1_ = Buffers::take_buffer(&mut self.buffers.lifted_shares_split1_result);
+        let x2_ = Buffers::take_buffer(&mut self.buffers.lifted_shares_split2);
+        let x3_ = Buffers::take_buffer(&mut self.buffers.lifted_shares_split3);
         let mut x1 = Buffers::get_buffer_chunk(&x1_, 32 * self.chunk_size);
         let mut x2 = Buffers::get_buffer_chunk(&x2_, 32 * self.chunk_size);
         let mut x3 = Buffers::get_buffer_chunk(&x3_, 32 * self.chunk_size);
@@ -1625,12 +1635,12 @@ impl Circuits {
         self.split(&mut x1, &mut x2, &mut x3, Self::BITS, streams);
         self.binary_add_3_get_msb(&mut x1, &mut x2, &mut x3, streams);
 
-        Buffers::return_buffer(&mut self.buffers.u64_32c_1, x1_);
-        Buffers::return_buffer(&mut self.buffers.u64_32c_2, x2_);
-        Buffers::return_buffer(&mut self.buffers.u64_32c_3, x3_);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_split1_result, x1_);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_split2, x2_);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_split3, x3_);
     }
 
-    // K is Self::BITS = 16 + B_BITS in our case
+    // K is Self::BITS = SHARE_RING_BITSIZE + B_BITS in our case
     // The result is located in the first bit of x1
     fn binary_add_3_get_msb(
         &mut self,
@@ -1643,8 +1653,8 @@ impl Circuits {
         assert_eq!(self.n_devices, x2.len());
         assert_eq!(self.n_devices, x3.len());
 
-        let s_ = Buffers::take_buffer(&mut self.buffers.u64_31c_1);
-        let carry_ = Buffers::take_buffer(&mut self.buffers.u64_31c_2);
+        let s_ = Buffers::take_buffer(&mut self.buffers.binary_adder_s);
+        let carry_ = Buffers::take_buffer(&mut self.buffers.binary_adder_c);
         let mut s = Buffers::get_buffer_chunk(&s_, self.chunk_size * (Self::BITS - 1));
         let mut carry = Buffers::get_buffer_chunk(&carry_, self.chunk_size * (Self::BITS - 1));
 
@@ -1725,8 +1735,8 @@ impl Circuits {
             self.xor_assign_many(c, &b, idx, streams);
         }
 
-        Buffers::return_buffer(&mut self.buffers.u64_31c_1, s_);
-        Buffers::return_buffer(&mut self.buffers.u64_31c_2, carry_);
+        Buffers::return_buffer(&mut self.buffers.binary_adder_s, s_);
+        Buffers::return_buffer(&mut self.buffers.binary_adder_c, carry_);
 
         // Result is in the first bit of x1
     }
@@ -1827,7 +1837,11 @@ impl Circuits {
         let mut res = input.get_offset(0, 1);
         let helper = input.get_offset(1, 1);
 
-        let cfg = Self::launch_config_from_elements_and_threads(1, DEFAULT_LAUNCH_CONFIG_THREADS);
+        let cfg = launch_config_from_elements_and_threads(
+            1,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[0],
+        );
 
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
@@ -1897,8 +1911,8 @@ impl Circuits {
             assert!(chunk.len() % 64 == 0);
         }
 
-        let x_ = Buffers::take_buffer(&mut self.buffers.u32_64c_1);
-        let corrections_ = Buffers::take_buffer(&mut self.buffers.u16_128c_1);
+        let x_ = Buffers::take_buffer(&mut self.buffers.lifted_shares);
+        let corrections_ = Buffers::take_buffer(&mut self.buffers.lifting_corrections);
         let mut x = Buffers::get_buffer_chunk(&x_, 64 * self.chunk_size);
         let mut corrections = Buffers::get_buffer_chunk(&corrections_, 128 * self.chunk_size);
 
@@ -1906,8 +1920,8 @@ impl Circuits {
         self.lift_mul_sub(&mut x, &corrections, code_dots, streams);
         self.extract_msb(&mut x, streams);
 
-        Buffers::return_buffer(&mut self.buffers.u32_64c_1, x_);
-        Buffers::return_buffer(&mut self.buffers.u16_128c_1, corrections_);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares, x_);
+        Buffers::return_buffer(&mut self.buffers.lifting_corrections, corrections_);
         self.buffers.check_buffers();
 
         // Result is in the first bit of the result buffer
