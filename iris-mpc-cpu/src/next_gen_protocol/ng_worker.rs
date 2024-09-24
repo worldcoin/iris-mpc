@@ -25,7 +25,6 @@ pub struct LocalRuntime {
     pub identities:       Vec<Identity>,
     pub role_assignments: RoleAssignment,
     pub prf_setups:       Option<HashMap<Role, Prf>>,
-    pub net_store:        LocalNetworkingStore,
     pub seeds:            Vec<PrfSeed>,
 }
 
@@ -53,16 +52,6 @@ pub async fn setup_replicated_prf(session: &BootSession, my_seed: PrfSeed) -> ey
     // creating the two PRFs
     Ok(Prf::new(my_seed, other_seed))
 }
-
-// pub(crate) async fn setup_session<Rng: RngCore>(session: BootSession, rng:
-// &mut Rng) -> Session {     let mut seed = [0_u8; 16];
-//     rng.fill_bytes(&mut seed);
-//     let prf = setup_replicated_prf(&session, seed).await.unwrap();
-//     Session {
-//         boot_session: session,
-//         setup:        prf,
-//     }
-// }
 
 pub(crate) async fn replicated_dot(
     session: &mut Session,
@@ -248,7 +237,7 @@ pub async fn open_t_many(session: &Session, shares: VecShare<u64>) -> eyre::Resu
         let serialized_other_share = network.receive(&prev_party, &sid).await;
         match NetworkValue::from_network(serialized_other_share) {
             Ok(NetworkValue::VecRing64(message)) => Ok(message),
-            _ => Err(eyre!("Error in receiving in and_many operation")),
+            _ => Err(eyre!("Error in receiving in open_t_many operation")),
         }
     }?;
 
@@ -337,27 +326,24 @@ impl LocalRuntime {
             .enumerate()
             .map(|(index, id)| (Role::new(index), id.clone()))
             .collect();
-        let net_store = LocalNetworkingStore::from_host_ids(&identities);
         LocalRuntime {
             identities,
             role_assignments,
-            net_store,
             prf_setups: None,
             seeds,
         }
     }
 
-    pub async fn create_player_sessions(
-        &self,
-        sess_id: SessionId,
-    ) -> eyre::Result<HashMap<Identity, Session>> {
+    pub async fn create_player_sessions(&self) -> eyre::Result<HashMap<Identity, Session>> {
+        let network = LocalNetworkingStore::from_host_ids(&self.identities);
+        let sess_id = SessionId::from(0_u128);
         let boot_sessions: Vec<BootSession> = (0..self.seeds.len())
             .map(|i| {
                 let identity = self.identities[i].clone();
                 BootSession {
                     session_id:       sess_id,
                     role_assignments: Arc::new(self.role_assignments.clone()),
-                    networking:       Arc::new(self.net_store.get_local_network(identity.clone())),
+                    networking:       Arc::new(network.get_local_network(identity.clone())),
                     own_identity:     identity,
                 }
             })
@@ -387,7 +373,7 @@ impl LocalRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{execution::session::SessionId, shares::ring_impl::RingElement};
+    use crate::shares::ring_impl::RingElement;
     use aes_prng::AesRng;
     use rand::{Rng, RngCore, SeedableRng};
     use tokio::task::JoinSet;
@@ -423,7 +409,7 @@ mod tests {
             seeds.push(seed);
         }
         let local = LocalRuntime::new(identities.clone(), seeds.clone());
-        let mut ready_sessions = local.create_player_sessions(SessionId(0)).await.unwrap();
+        let mut ready_sessions = local.create_player_sessions().await.unwrap();
 
         // check whether parties have sent/received the correct seeds.
         // P0: [seed_0, seed_2]
@@ -536,7 +522,7 @@ mod tests {
             seeds.push(seed);
         }
         let local = LocalRuntime::new(identities.clone(), seeds.clone());
-        let ready_sessions = local.create_player_sessions(SessionId(0)).await.unwrap();
+        let ready_sessions = local.create_player_sessions().await.unwrap();
 
         let mut jobs = JoinSet::new();
         for player in identities.iter() {

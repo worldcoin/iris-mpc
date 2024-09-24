@@ -622,7 +622,7 @@ pub async fn open_bin(session: &mut Session, share: Share<Bit>) -> Result<Bit, E
         let serialized_other_share = network.receive(&prev_party, &sid).await;
         match NetworkValue::from_network(serialized_other_share) {
             Ok(NetworkValue::RingElementBit(message)) => Ok(message),
-            _ => Err(eyre!("Error in receiving in and_many operation")),
+            _ => Err(eyre!("Error in receiving in open_bin operation")),
         }
     }?;
 

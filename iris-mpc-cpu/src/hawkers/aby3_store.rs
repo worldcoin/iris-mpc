@@ -1,6 +1,6 @@
 use crate::{
     database_generators::{create_shared_database_raw, generate_iris_shares, SharedIris},
-    execution::{player::Identity, session::SessionId},
+    execution::player::Identity,
     hawkers::plaintext_store::{PlaintextStore, PointId},
     next_gen_protocol::ng_worker::{
         rep3_single_iris_match_public_output, replicated_lift_and_cross_mul,
@@ -156,11 +156,7 @@ impl VectorStore for LocalNetAby3StoreProtocol {
 
     async fn is_match(&self, distance: &Self::DistanceRef) -> bool {
         // TODO(Dragos) Need to feed in different session
-        let ready_sessions = self
-            .runtime
-            .create_player_sessions(SessionId(0))
-            .await
-            .unwrap();
+        let ready_sessions = self.runtime.create_player_sessions().await.unwrap();
 
         let mut jobs = JoinSet::new();
         for player in self.runtime.identities.clone() {
@@ -199,11 +195,7 @@ impl VectorStore for LocalNetAby3StoreProtocol {
     ) -> bool {
         let d1 = *distance1;
         let d2 = *distance2;
-        let ready_sessions = self
-            .runtime
-            .create_player_sessions(SessionId(0))
-            .await
-            .unwrap();
+        let ready_sessions = self.runtime.create_player_sessions().await.unwrap();
 
         let mut jobs = JoinSet::new();
         for player in self.runtime.identities.clone() {
