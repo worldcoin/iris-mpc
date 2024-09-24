@@ -257,13 +257,13 @@ async fn receive_batch(
                             }
 
                             let (left_code, left_mask) = decode_iris_message_shares(
-                                iris_message_share.left_iris_code_shares,
-                                iris_message_share.left_iris_mask_shares,
+                                iris_message_share.left_iris_code_share,
+                                iris_message_share.left_mask_code_share,
                             )?;
 
                             let (right_code, right_mask) = decode_iris_message_shares(
-                                iris_message_share.right_iris_code_shares,
-                                iris_message_share.right_iris_mask_shares,
+                                iris_message_share.right_iris_code_share,
+                                iris_message_share.right_mask_code_share,
                             )?;
 
                             // Preprocess shares for left eye.

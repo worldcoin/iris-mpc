@@ -31,13 +31,13 @@ fn sorted_keys<T: Serialize, S: Serializer>(value: &T, serializer: S) -> Result<
 #[derive(Serialize, Debug, Clone, PartialEq)]
 struct IrisCodeSharesJson {
     #[serde(rename = "IRIS_version")]
-    iris_version:           String,
+    iris_version:          String,
     #[serde(rename = "IRIS_shares_version")]
-    iris_shares_version:    String,
-    left_iris_code_shares:  String,
-    left_iris_mask_shares:  String,
-    right_iris_code_shares: String,
-    right_iris_mask_shares: String,
+    iris_shares_version:   String,
+    left_iris_code_share:  String,
+    left_mask_code_share:  String,
+    right_iris_code_share: String,
+    right_mask_code_share: String,
 }
 
 /// Iris code shares.
@@ -109,12 +109,12 @@ fn main() {
         .enumerate()
     {
         let iris_code_shares = IrisCodeSharesJson {
-            iris_version:           IRIS_VERSION.to_string(),
-            iris_shares_version:    IRIS_MPC_VERSION.to_string(),
-            left_iris_code_shares:  li.clone(),
-            left_iris_mask_shares:  lm.clone(),
-            right_iris_code_shares: ri.clone(),
-            right_iris_mask_shares: rm.clone(),
+            iris_version:          IRIS_VERSION.to_string(),
+            iris_shares_version:   IRIS_MPC_VERSION.to_string(),
+            left_iris_code_share:  li.clone(),
+            left_mask_code_share:  lm.clone(),
+            right_iris_code_share: ri.clone(),
+            right_mask_code_share: rm.clone(),
         };
         let json_u8 = serde_json::to_string(&SerializeWithSortedKeys(&iris_code_shares))
             .unwrap()
@@ -144,15 +144,15 @@ mod tests {
     #[test]
     fn test_iris_code_shares_json() {
         let iris_code_shares = IrisCodeSharesJson {
-            iris_version:           IRIS_VERSION.to_string(),
-            iris_shares_version:    IRIS_MPC_VERSION.to_string(),
-            left_iris_code_shares:  "left_iris_code_shares".to_string(),
-            left_iris_mask_shares:  "left_iris_mask_shares".to_string(),
-            right_iris_code_shares: "right_iris_code_shares".to_string(),
-            right_iris_mask_shares: "right_iris_mask_shares".to_string(),
+            iris_version:          IRIS_VERSION.to_string(),
+            iris_shares_version:   IRIS_MPC_VERSION.to_string(),
+            left_iris_code_share:  "left_iris_code_share".to_string(),
+            left_mask_code_share:  "left_mask_code_share".to_string(),
+            right_iris_code_share: "right_iris_code_share".to_string(),
+            right_mask_code_share: "right_mask_code_share".to_string(),
         };
 
-        let expected = r#"{"IRIS_shares_version":"1.0","IRIS_version":"1.1","left_iris_code_shares":"left_iris_code_shares","left_iris_mask_shares":"left_iris_mask_shares","right_iris_code_shares":"right_iris_code_shares","right_iris_mask_shares":"right_iris_mask_shares"}"#;
+        let expected = r#"{"IRIS_shares_version":"1.0","IRIS_version":"1.1","left_iris_code_share":"left_iris_code_share","left_mask_code_share":"left_mask_code_share","right_iris_code_share":"right_iris_code_share","right_mask_code_share":"right_mask_code_share"}"#;
         assert_eq!(
             serde_json::to_string(&SerializeWithSortedKeys(&iris_code_shares)).unwrap(),
             expected
