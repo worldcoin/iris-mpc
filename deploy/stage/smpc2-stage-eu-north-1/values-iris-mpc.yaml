@@ -5,9 +5,6 @@ env:
   - name: NCCL_DEBUG
     value: "INFO"
 
-  - name: NCCL_PROTO
-    value: "Simple"
-
   - name: NCCL_SOCKET_IFNAME
     value: "eth0"
 
