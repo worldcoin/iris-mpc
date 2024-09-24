@@ -39,18 +39,18 @@ async fn main() -> eyre::Result<()> {
     }
 
     let old_left_shares_db0 =
-        V1Db::new(format!("{}/{}", args.db_urls[0], "/participant1_left").as_str()).await?;
+        V1Db::new(format!("{}/{}", args.db_urls[0], "participant1_left").as_str()).await?;
     let old_left_shares_db1 =
-        V1Db::new(format!("{}/{}", args.db_urls[1], "/participant2_left").as_str()).await?;
+        V1Db::new(format!("{}/{}", args.db_urls[1], "participant2_left").as_str()).await?;
     let old_left_masks_db =
-        V1Db::new(format!("{}/{}", args.db_urls[2], "/coordinator_left").as_str()).await?;
+        V1Db::new(format!("{}/{}", args.db_urls[2], "coordinator_left").as_str()).await?;
 
     let old_right_shares_db0 =
-        V1Db::new(format!("{}/{}", args.db_urls[0], "/participant1_right").as_str()).await?;
+        V1Db::new(format!("{}/{}", args.db_urls[0], "participant1_right").as_str()).await?;
     let old_right_shares_db1 =
-        V1Db::new(format!("{}/{}", args.db_urls[1], "/participant2_right").as_str()).await?;
+        V1Db::new(format!("{}/{}", args.db_urls[1], "participant2_right").as_str()).await?;
     let old_right_masks_db1 =
-        V1Db::new(format!("{}/{}", args.db_urls[2], "/coordinator_right").as_str()).await?;
+        V1Db::new(format!("{}/{}", args.db_urls[2], "coordinator_right").as_str()).await?;
 
     let base_schema_name = format!("{}_{}", APP_NAME, args.environment);
     let new_db0 = Store::new(

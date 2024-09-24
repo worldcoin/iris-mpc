@@ -31,7 +31,7 @@ COPY . .
 RUN cargo build --release --target x86_64-unknown-linux-gnu --bin upgrade-server --bin upgrade-client --bin upgrade-checker
 
 
-FROM --platform=linux/amd64 ubuntu:22.04
+    FROM --platform=linux/amd64 ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/upgrade-server /bin/upgrade-server
