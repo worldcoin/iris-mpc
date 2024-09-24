@@ -95,6 +95,10 @@ impl Store {
     }
 
     pub async fn new(url: &str, schema_name: &str) -> Result<Self> {
+        println!(
+            "Connecting to V2 database: {}, shcema: {}",
+            url, schema_name
+        );
         let connect_sql = sql_switch_schema(schema_name)?;
 
         let pool = PgPoolOptions::new()

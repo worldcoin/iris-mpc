@@ -12,8 +12,19 @@ use itertools::izip;
 use mpc_uniqueness_check::{bits::Bits, distance::EncodedBits};
 use std::collections::HashMap;
 
-// quick checking script that recombines the shamir shares for a local server
-// setup and prints the iris code share
+fn install_tracing() {
+    use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+
+    let fmt_layer = fmt::layer().with_target(true).with_line_number(true);
+    let filter_layer = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new("info"))
+        .unwrap();
+
+    tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(fmt_layer)
+        .init();
+}
 
 const APP_NAME: &str = "SMPC";
 
@@ -29,6 +40,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
+    install_tracing();
     let args = Args::parse();
 
     if args.db_urls.len() != 6 {
@@ -53,6 +65,7 @@ async fn main() -> eyre::Result<()> {
         V1Db::new(format!("{}/{}", args.db_urls[2], "coordinator_right").as_str()).await?;
 
     let base_schema_name = format!("{}_{}", APP_NAME, args.environment);
+
     let new_db0 = Store::new(
         &args.db_urls[3],
         format!("{}_{}", base_schema_name, "0").as_str(),
