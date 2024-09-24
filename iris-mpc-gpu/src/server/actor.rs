@@ -834,6 +834,7 @@ impl ServerActor {
             .send(ServerJobResult {
                 merged_results,
                 request_ids: batch.request_ids,
+                metadata: batch.metadata,
                 matches,
                 match_ids,
                 store_left: query_store_left,

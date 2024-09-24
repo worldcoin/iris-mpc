@@ -10,7 +10,10 @@ use iris_mpc_common::{
     config::{json_wrapper::JsonStrWrapper, Config, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
-        aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
+        aws::{
+            construct_message_attributes, SPAN_ID_MESSAGE_ATTRIBUTE_NAME,
+            TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
+        },
         key_pair::SharesEncryptionKeyPairs,
         kms_dh::derive_shared_secret,
         smpc_request::{
@@ -448,17 +451,22 @@ async fn initialize_chacha_seeds(
 
 async fn send_results_to_sns(
     result_events: Vec<String>,
+    metadata: &[BatchMetadata],
     sns_client: &SNSClient,
     config: &Config,
-    message_attributes: &HashMap<String, MessageAttributeValue>,
+    base_message_attributes: &HashMap<String, MessageAttributeValue>,
 ) -> eyre::Result<()> {
-    for result_event in result_events {
+    for (i, result_event) in result_events.iter().enumerate() {
+        let trace_attributes =
+            construct_message_attributes(&metadata[i].trace_id, &metadata[i].span_id)?;
+        let mut message_attributes = base_message_attributes.clone();
+        message_attributes.extend(trace_attributes);
         sns_client
             .publish()
             .topic_arn(&config.results_topic_arn)
             .message(result_event)
             .message_group_id(format!("party-id-{}", config.party_id))
-            .set_message_attributes(Some(message_attributes.clone()))
+            .set_message_attributes(Some(message_attributes))
             .send()
             .await?;
     }
@@ -531,6 +539,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Replaying results");
     send_results_to_sns(
         store.last_results(max_sync_lookback).await?,
+        &Vec::new(),
         &sns_client,
         &config,
         &uniqueness_result_attributes,
@@ -707,6 +716,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         while let Some(ServerJobResult {
             merged_results,
             request_ids,
+            metadata,
             matches,
             match_ids,
             store_left,
@@ -774,6 +784,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             tracing::info!("Sending {} uniqueness results", uniqueness_results.len());
             send_results_to_sns(
                 uniqueness_results,
+                &metadata,
                 &sns_client_bg,
                 &config_bg,
                 &uniqueness_result_attributes,
@@ -796,6 +807,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             );
             send_results_to_sns(
                 identity_deletion_results,
+                &metadata,
                 &sns_client_bg,
                 &config_bg,
                 &identity_deletion_result_attributes,
