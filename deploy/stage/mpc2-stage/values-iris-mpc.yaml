@@ -72,7 +72,7 @@ env:
     value: "100"
 
   - name: SMPC__MAX_DB_SIZE
-    value: "200000"
+    value: "500000"
     
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
