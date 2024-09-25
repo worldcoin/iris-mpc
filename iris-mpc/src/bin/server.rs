@@ -724,6 +724,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let mut skip_request_ids = sync_result.deleted_request_ids();
 
     background_tasks.check_tasks();
+    
+    tracing::info!("Start thread that will be responsible for communicating back the results");
 
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
@@ -731,7 +733,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let config_bg = config.clone();
     let store_bg = store.clone();
     let _result_sender_abort = background_tasks.spawn(async move {
-        
+        tracing::info!("In _result_sender_abort");
         while let Some(ServerJobResult {
             merged_results,
             request_ids,
@@ -743,6 +745,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             deleted_ids,
         }) = rx.recv().await
         {
+            tracing::info!("Received results for {} queries", request_ids.len());
             // returned serial_ids are 0 indexed, but we want them to be 1 indexed
             let uniqueness_results = merged_results
                 .iter()
