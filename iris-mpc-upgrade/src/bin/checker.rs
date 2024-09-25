@@ -31,11 +31,16 @@ const APP_NAME: &str = "SMPC";
 #[derive(Debug, Clone, Parser)]
 struct Args {
     #[clap(long)]
-    db_urls:      Vec<String>,
+    db_urls: Vec<String>,
+
     #[clap(long)]
-    num_elements: u64,
+    from: u64,
+
     #[clap(long)]
-    environment:  String,
+    to: u64,
+
+    #[clap(long)]
+    environment: String,
 }
 
 #[tokio::main]
@@ -84,15 +89,15 @@ async fn main() -> eyre::Result<()> {
 
     // grab the old shares from the db and reconstruct them
     let old_left_shares0 = old_left_shares_db0
-        .stream_shares(1..args.num_elements)
+        .stream_shares(args.from..args.to)
         .collect::<Vec<_>>()
         .await;
     let old_left_shares1 = old_left_shares_db1
-        .stream_shares(1..args.num_elements)
+        .stream_shares(args.from..args.to)
         .collect::<Vec<_>>()
         .await;
     let old_left_masks = old_left_masks_db
-        .stream_masks(1..args.num_elements)
+        .stream_masks(args.from..args.to)
         .collect::<Vec<_>>()
         .await;
 
@@ -115,15 +120,15 @@ async fn main() -> eyre::Result<()> {
     .collect();
 
     let old_right_shares0 = old_right_shares_db0
-        .stream_shares(1..args.num_elements)
+        .stream_shares(args.from..args.to)
         .collect::<Vec<_>>()
         .await;
     let old_right_shares1 = old_right_shares_db1
-        .stream_shares(1..args.num_elements)
+        .stream_shares(args.from..args.to)
         .collect::<Vec<_>>()
         .await;
     let old_right_masks = old_right_masks_db1
-        .stream_masks(1..args.num_elements)
+        .stream_masks(args.from..args.to)
         .collect::<Vec<_>>()
         .await;
 
@@ -147,16 +152,16 @@ async fn main() -> eyre::Result<()> {
 
     // grab shares from new DB and recombine
     let new_shares0 = new_db0
-        .stream_irises_in_range(1..args.num_elements)
+        .stream_irises_in_range(args.from..args.to)
         .collect::<Vec<_>>()
         .await;
 
     let new_shares1 = new_db1
-        .stream_irises_in_range(1..args.num_elements)
+        .stream_irises_in_range(args.from..args.to)
         .collect::<Vec<_>>()
         .await;
     let new_shares2 = new_db2
-        .stream_irises_in_range(1..args.num_elements)
+        .stream_irises_in_range(args.from..args.to)
         .collect::<Vec<_>>()
         .await;
 
@@ -260,7 +265,7 @@ async fn main() -> eyre::Result<()> {
             tracing::info!("Processed {} shares", iris0.id());
         }
     }
-    tracing::info!("Processed {} shares", args.num_elements);
+    tracing::info!("Processed {} shares", args.to - args.from);
 
     assert_eq!(old_left_db.len(), new_left_db.len());
     assert_eq!(old_right_db.len(), new_right_db.len());
