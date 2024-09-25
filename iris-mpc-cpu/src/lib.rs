@@ -1,6 +1,9 @@
 pub mod database_generators;
+pub(crate) mod execution;
 pub mod hawkers;
 pub(crate) mod networks;
+pub(crate) mod next_gen_network;
+pub mod next_gen_protocol;
 pub mod prelude;
 pub(crate) mod protocol;
 pub(crate) mod shares;
