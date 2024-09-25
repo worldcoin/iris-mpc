@@ -697,17 +697,7 @@ impl ServerActor {
 
         self.device_manager.await_streams(&self.streams[0]);
 
-        // Iterate over a list of tracing payloads, and create logs with mappings to
-        // payloads Log at least a "start" event using a log with trace.id
-        // and parent.trace.id
-        for tracing_payload in batch.metadata.iter() {
-            tracing::info!(
-                node_id = tracing_payload.node_id,
-                dd.trace_id = tracing_payload.trace_id,
-                dd.span_id = tracing_payload.span_id,
-                "Protocol finished",
-            );
-        }
+        tracing::info!("Protocol finished");
 
         // Fetch the final results (blocking)
         let mut host_results = self

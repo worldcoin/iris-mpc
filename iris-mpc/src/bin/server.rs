@@ -23,6 +23,7 @@ use iris_mpc_common::{
         },
         sync::SyncState,
         task_monitor::TaskMonitor,
+        tracing::trace_from_message_attributes,
     },
 };
 use iris_mpc_gpu::{
@@ -33,6 +34,11 @@ use iris_mpc_gpu::{
     },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
+use opentelemetry::{
+    global::tracer,
+    trace::{Link, TraceContextExt, Tracer},
+    Context as OtelContext,
+};
 use std::{
     collections::HashMap,
     mem,
@@ -48,6 +54,8 @@ use tokio::{
     task::spawn_blocking,
     time::timeout,
 };
+use tracing::Instrument;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
@@ -151,6 +159,12 @@ async fn receive_batch(
                     let span_id = span_id.string_value().unwrap();
                     batch_metadata.span_id = span_id.to_string();
                 }
+
+                let trace_context = trace_from_message_attributes(
+                    &batch_metadata.trace_id,
+                    &batch_metadata.span_id,
+                )?;
+                batch_query.span_contexts.push(trace_context);
 
                 let request_type = message_attributes
                     .get(SMPC_MESSAGE_TYPE_ATTRIBUTE)
@@ -898,6 +912,25 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             let batch = next_batch.await?;
 
+            // Start a new span for batch processing with the links
+            let tracer = tracer("my_tracer");
+
+            // Extract the SpanContexts from the individual request spans
+            let links: Vec<Link> = batch
+                .span_contexts
+                .iter()
+                .map(|span| Link::new(span.clone(), Vec::new()))
+                .collect();
+
+            let batch_span = tracer
+                .span_builder("batch_processing")
+                .with_links(links)
+                .start(&tracer);
+
+            let otel_context = OtelContext::current_with_span(batch_span);
+            let tracing_span = tracing::span!(tracing::Level::INFO, "batch_processing");
+            tracing_span.set_parent(otel_context);
+
             process_identity_deletions(
                 &batch,
                 &store,
@@ -906,23 +939,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             )
             .await?;
 
-            // Iterate over a list of tracing payloads, and create logs with mappings to
-            // payloads Log at least a "start" event using a log with trace.id and
-            // parent.trace.id
-            for tracing_payload in batch.metadata.iter() {
-                tracing::info!(
-                    node_id = tracing_payload.node_id,
-                    dd.trace_id = tracing_payload.trace_id,
-                    dd.span_id = tracing_payload.span_id,
-                    "Started processing share",
-                );
-            }
+            tracing::info!("Started processing share");
 
             // start trace span - with single TraceId and single ParentTraceID
             tracing::info!("Received batch in {:?}", now.elapsed());
             background_tasks.check_tasks();
 
-            let result_future = handle.submit_batch_query(batch);
+            let result_future = handle.submit_batch_query(batch).instrument(tracing_span);
 
             next_batch = receive_batch(
                 party_id,
@@ -1000,13 +1023,7 @@ async fn process_identity_deletions(
             )
             .await?;
 
-        tracing::info!(
-            node_id = tracing_payload.node_id,
-            dd.trace_id = tracing_payload.trace_id,
-            dd.span_id = tracing_payload.span_id,
-            "Deleted identity with serial id {}",
-            serial_id,
-        );
+        tracing::info!("Deleted identity with serial id {}", serial_id,);
     }
 
     Ok(())

@@ -2481,6 +2481,7 @@ dependencies = [
  "iris-mpc-gpu",
  "iris-mpc-store",
  "ndarray",
+ "opentelemetry",
  "rand",
  "serde_json",
  "sha2",
@@ -2489,6 +2490,7 @@ dependencies = [
  "telemetry-batteries",
  "tokio",
  "tracing",
+ "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
 ]
@@ -2583,6 +2585,7 @@ dependencies = [
  "itertools 0.13.0",
  "ndarray",
  "num-traits",
+ "opentelemetry",
  "rand",
  "rayon",
  "reqwest 0.12.7",

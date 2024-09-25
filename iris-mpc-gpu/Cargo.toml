@@ -26,6 +26,7 @@ serde_json.workspace = true
 sodiumoxide = "0.2.7"
 iris-mpc-common = { path = "../iris-mpc-common" }
 base64 = "0.22.1"
+opentelemetry.workspace = true
 
 [dev-dependencies]
 criterion = "0.5"

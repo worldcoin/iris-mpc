@@ -7,6 +7,7 @@ pub use actor::{get_dummy_shares_for_deletion, ServerActor, ServerActorHandle};
 use iris_mpc_common::galois_engine::degree4::{
     GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
 };
+use opentelemetry::trace::SpanContext;
 use std::collections::HashSet;
 use tokio::sync::oneshot;
 
@@ -27,6 +28,7 @@ pub struct BatchMetadata {
 pub struct BatchQuery {
     pub request_ids:                Vec<String>,
     pub metadata:                   Vec<BatchMetadata>,
+    pub span_contexts:              Vec<SpanContext>,
     pub query_left:                 BatchQueryEntries,
     pub db_left:                    BatchQueryEntries,
     pub store_left:                 BatchQueryEntries,
