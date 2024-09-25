@@ -172,10 +172,12 @@ pub struct SharesS3Object {
 pub struct IrisCodesJSON {
     #[serde(rename = "IRIS_version")]
     pub iris_version:           String,
+    #[serde(rename = "IRIS_shares_version")]
+    pub iris_shares_version:    String,
     pub left_iris_code_shares:  String, // these are base64 encoded strings
     pub right_iris_code_shares: String, // these are base64 encoded strings
-    pub left_iris_mask_shares:  String, // these are base64 encoded strings
-    pub right_iris_mask_shares: String, // these are base64 encoded strings
+    pub left_mask_code_shares:  String, // these are base64 encoded strings
+    pub right_mask_code_shares: String, // these are base64 encoded strings
 }
 
 impl SharesS3Object {

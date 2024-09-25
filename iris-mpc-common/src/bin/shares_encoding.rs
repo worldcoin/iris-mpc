@@ -35,9 +35,9 @@ struct IrisCodeSharesJson {
     #[serde(rename = "IRIS_shares_version")]
     iris_shares_version:    String,
     left_iris_code_shares:  String,
-    left_iris_mask_shares:  String,
+    left_mask_code_shares:  String,
     right_iris_code_shares: String,
-    right_iris_mask_shares: String,
+    right_mask_code_shares: String,
 }
 
 /// Iris code shares.
@@ -112,9 +112,9 @@ fn main() {
             iris_version:           IRIS_VERSION.to_string(),
             iris_shares_version:    IRIS_MPC_VERSION.to_string(),
             left_iris_code_shares:  li.clone(),
-            left_iris_mask_shares:  lm.clone(),
+            left_mask_code_shares:  lm.clone(),
             right_iris_code_shares: ri.clone(),
-            right_iris_mask_shares: rm.clone(),
+            right_mask_code_shares: rm.clone(),
         };
         let json_u8 = serde_json::to_string(&SerializeWithSortedKeys(&iris_code_shares))
             .unwrap()
@@ -147,12 +147,12 @@ mod tests {
             iris_version:           IRIS_VERSION.to_string(),
             iris_shares_version:    IRIS_MPC_VERSION.to_string(),
             left_iris_code_shares:  "left_iris_code_shares".to_string(),
-            left_iris_mask_shares:  "left_iris_mask_shares".to_string(),
+            left_mask_code_shares:  "left_mask_code_shares".to_string(),
             right_iris_code_shares: "right_iris_code_shares".to_string(),
-            right_iris_mask_shares: "right_iris_mask_shares".to_string(),
+            right_mask_code_shares: "right_mask_code_shares".to_string(),
         };
 
-        let expected = r#"{"IRIS_shares_version":"1.0","IRIS_version":"1.1","left_iris_code_shares":"left_iris_code_shares","left_iris_mask_shares":"left_iris_mask_shares","right_iris_code_shares":"right_iris_code_shares","right_iris_mask_shares":"right_iris_mask_shares"}"#;
+        let expected = r#"{"IRIS_shares_version":"1.0","IRIS_version":"1.1","left_iris_code_shares":"left_iris_code_shares","left_mask_code_shares":"left_mask_code_shares","right_iris_code_shares":"right_iris_code_shares","right_mask_code_shares":"right_mask_code_shares"}"#;
         assert_eq!(
             serde_json::to_string(&SerializeWithSortedKeys(&iris_code_shares)).unwrap(),
             expected

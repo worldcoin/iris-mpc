@@ -330,10 +330,11 @@ async fn main() -> eyre::Result<()> {
                 for i in 0..3 {
                     let iris_codes_json = IrisCodesJSON {
                         iris_version:           "1.0".to_string(),
+                        iris_shares_version:    "1.3".to_string(),
                         right_iris_code_shares: shared_code[i].to_base64(),
-                        right_iris_mask_shares: shared_mask[i].to_base64(),
+                        right_mask_code_shares: shared_mask[i].to_base64(),
                         left_iris_code_shares:  shared_code[i].to_base64(),
-                        left_iris_mask_shares:  shared_mask[i].to_base64(),
+                        left_mask_code_shares:  shared_mask[i].to_base64(),
                     };
                     let serialized_iris_codes_json = to_string(&iris_codes_json)
                         .expect("Serialization failed")
