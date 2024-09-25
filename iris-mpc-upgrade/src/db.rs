@@ -16,7 +16,6 @@ impl V1Db {
             .with_context(|| format!("when connecting to {}", &url))?;
 
         tracing::info!("Connected to database");
-
         Ok(Self { pool })
     }
 

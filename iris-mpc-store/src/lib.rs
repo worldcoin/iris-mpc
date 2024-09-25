@@ -95,6 +95,7 @@ impl Store {
     }
 
     pub async fn new(url: &str, schema_name: &str) -> Result<Self> {
+        tracing::info!("Connecting to V2 database with, schema: {}", schema_name);
         let connect_sql = sql_switch_schema(schema_name)?;
 
         let pool = PgPoolOptions::new()
@@ -135,6 +136,22 @@ impl Store {
             .fetch(&self.pool)
     }
 
+    pub fn stream_irises_in_range(
+        &self,
+        id_range: std::ops::Range<u64>,
+    ) -> impl Stream<Item = sqlx::Result<StoredIris>> + '_ {
+        sqlx::query_as(
+            r#"
+            SELECT *
+            FROM irises
+            WHERE id >= $1 AND id < $2
+            ORDER BY id ASC
+            "#,
+        )
+        .bind(i64::try_from(id_range.start).expect("id fits into i64"))
+        .bind(i64::try_from(id_range.end).expect("id fits into i64"))
+        .fetch(&self.pool)
+    }
     /// Stream irises in parallel, without a particular order.
     pub async fn stream_irises_par(
         &self,
