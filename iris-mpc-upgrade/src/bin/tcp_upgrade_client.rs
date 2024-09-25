@@ -22,9 +22,8 @@ use tokio::{
     net::TcpStream,
     time::timeout,
 };
-use tracing::error;
 use tokio_native_tls::{TlsConnector, TlsStream};
-
+use tracing::error;
 
 fn install_tracing() {
     use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -40,9 +39,7 @@ fn install_tracing() {
         .init();
 }
 
-async fn prepare_tls_stream_for_writing(
-    address: &str,
-) -> eyre::Result<TlsStream<TcpStream>> {
+async fn prepare_tls_stream_for_writing(address: &str) -> eyre::Result<TlsStream<TcpStream>> {
     // Create a TCP connection
     let stream = TcpStream::connect(address).await?;
 
@@ -54,7 +51,7 @@ async fn prepare_tls_stream_for_writing(
     let tls_stream: TlsStream<TcpStream> = tls_connector.connect(address, stream).await?;
 
     println!("TLS connection established to {}", address);
-    
+
     Ok(tls_stream)
 }
 
@@ -66,7 +63,7 @@ async fn main() -> eyre::Result<()> {
     if args.party_id > 1 {
         panic!("Party id must be 0, 1");
     }
-    
+
     let mut server1 = prepare_tls_stream_for_writing(&args.server1).await?;
     let mut server2 = prepare_tls_stream_for_writing(&args.server2).await?;
     let mut server3 = prepare_tls_stream_for_writing(&args.server3).await?;
