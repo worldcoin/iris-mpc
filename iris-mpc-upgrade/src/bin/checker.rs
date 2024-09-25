@@ -269,54 +269,38 @@ async fn main() -> eyre::Result<()> {
     tracing::info!("Left / right db lengths match");
 
     for (idx, (code, mask)) in old_left_db {
-        tracing::info!(
-            "Checking left share / mask: {} / {}",
-            idx,
-            args.num_elements
-        );
         let (new_code, new_mask) = new_left_db.get(&idx).expect("old id is present in new db");
         if code != *new_code {
             tracing::error!("Code for id {} left does not match", idx);
             tracing::error!("Old: {:?}", code);
             tracing::error!("New: {:?}", new_code);
-        } else {
+        } else if idx % 250 == 0 {
             tracing::info!("Code for id {} left matches", idx);
         }
         if mask != *new_mask {
             tracing::error!("Mask for id {} left does not match", idx);
             tracing::error!("Old: {:?}", mask);
             tracing::error!("New: {:?}", new_mask);
-        } else {
+        } else if idx % 250 == 0 {
             tracing::info!("Mask for id {} left matches", idx);
         }
-        // assert_eq!(code, *new_code, "Code for id {} left does not match",
-        // idx); assert_eq!(mask, *new_mask, "Mask for id {} left does
-        // not match", idx);
     }
     for (idx, (code, mask)) in old_right_db {
-        tracing::info!(
-            "Checking right share / mask: {} / {}",
-            idx,
-            args.num_elements
-        );
         let (new_code, new_mask) = new_right_db.get(&idx).expect("old id is present in new db");
         if code != *new_code {
             tracing::error!("Code for id {} right does not match", idx);
             tracing::error!("Old: {:?}", code);
             tracing::error!("New: {:?}", new_code);
-        } else {
+        } else if idx % 250 == 0 {
             tracing::info!("Code for id {} right matches", idx);
         }
         if mask != *new_mask {
             tracing::error!("Mask for id {} right does not match", idx);
             tracing::error!("Old: {:?}", mask);
             tracing::error!("New: {:?}", new_mask);
-        } else {
+        } else if idx % 250 == 0 {
             tracing::info!("Mask for id {} right matches", idx);
         }
-        // assert_eq!(code, *new_code, "Code for id {} right does not match",
-        // idx); assert_eq!(mask, *new_mask, "Mask for id {} right does
-        // not match", idx);
     }
 
     Ok(())
