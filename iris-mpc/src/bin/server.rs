@@ -731,6 +731,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let config_bg = config.clone();
     let store_bg = store.clone();
     let _result_sender_abort = background_tasks.spawn(async move {
+        
         while let Some(ServerJobResult {
             merged_results,
             request_ids,

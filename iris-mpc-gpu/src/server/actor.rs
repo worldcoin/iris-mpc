@@ -819,18 +819,23 @@ impl ServerActor {
             }
         );
 
+        tracing::info!("Merged results: {:?}", merged_results);
+        tracing::info!("Matches: {:?}", matches);
+        let res = ServerJobResult {
+            merged_results,
+            request_ids: batch.request_ids,
+            metadata: batch.metadata,
+            matches,
+            match_ids,
+            store_left: query_store_left,
+            store_right: query_store_right,
+            deleted_ids: batch.deletion_requests_indices,
+        };
+        tracing::info!("Res: {:?}", res);
+        
         // Pass to internal sender thread
         return_channel
-            .send(ServerJobResult {
-                merged_results,
-                request_ids: batch.request_ids,
-                metadata: batch.metadata,
-                matches,
-                match_ids,
-                store_left: query_store_left,
-                store_right: query_store_right,
-                deleted_ids: batch.deletion_requests_indices,
-            })
+            .send(res)
             .unwrap();
 
         // Wait for all streams before get timings
