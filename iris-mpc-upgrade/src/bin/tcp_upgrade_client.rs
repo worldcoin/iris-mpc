@@ -1,5 +1,5 @@
 use clap::Parser;
-use eyre::{Context, ContextCompat};
+use eyre::{ContextCompat};
 use futures::{Stream, StreamExt};
 use futures_concurrency::future::Join;
 use iris_mpc_common::{
@@ -15,8 +15,7 @@ use iris_mpc_upgrade::{
 use mpc_uniqueness_check::{bits::Bits, distance::EncodedBits};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-use rustls::{pki_types::ServerName, ClientConfig};
-use std::{array, convert::TryFrom, pin::Pin, sync::Arc, time::Duration};
+use std::{array, convert::TryFrom, pin::Pin, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
