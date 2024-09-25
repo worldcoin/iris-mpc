@@ -1,5 +1,5 @@
 use clap::Parser;
-use eyre::{ContextCompat};
+use eyre::ContextCompat;
 use futures::{Stream, StreamExt};
 use futures_concurrency::future::Join;
 use iris_mpc_common::{
