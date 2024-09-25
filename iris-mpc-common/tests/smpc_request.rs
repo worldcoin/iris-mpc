@@ -32,12 +32,12 @@ mod tests {
 
     fn mock_iris_codes_json() -> IrisCodesJSON {
         IrisCodesJSON {
-            iris_version:          "1.0".to_string(),
-            iris_shares_version:   "1.3".to_string(),
-            left_iris_code_share:  STANDARD.encode("left_iris_code_mock"),
-            right_iris_code_share: STANDARD.encode("right_iris_code_mock"),
-            left_mask_code_share:  STANDARD.encode("left_iris_mask_mock"),
-            right_mask_code_share: STANDARD.encode("right_iris_mask_mock"),
+            iris_version:           "1.0".to_string(),
+            iris_shares_version:    "1.3".to_string(),
+            left_iris_code_shares:  STANDARD.encode("left_iris_code_mock"),
+            right_iris_code_shares: STANDARD.encode("right_iris_code_mock"),
+            left_mask_code_shares:  STANDARD.encode("left_iris_mask_mock"),
+            right_mask_code_shares: STANDARD.encode("right_iris_mask_mock"),
         }
     }
 
@@ -103,12 +103,12 @@ mod tests {
     async fn test_decrypt_iris_share_success() {
         // Mocked base64 encoded JSON string
         let iris_codes_json = IrisCodesJSON {
-            iris_version:          "1.0".to_string(),
-            iris_shares_version:   "1.3".to_string(),
-            left_iris_code_share:  "left_code".to_string(),
-            right_iris_code_share: "right_code".to_string(),
-            left_mask_code_share:  "left_mask".to_string(),
-            right_mask_code_share: "right_mask".to_string(),
+            iris_version:           "1.0".to_string(),
+            iris_shares_version:    "1.3".to_string(),
+            left_iris_code_shares:  "left_code".to_string(),
+            right_iris_code_shares: "right_code".to_string(),
+            left_mask_code_shares:  "left_mask".to_string(),
+            right_mask_code_shares: "right_mask".to_string(),
         };
 
         let decoded_public_key = STANDARD.decode(CURRENT_PUBLIC_KEY.as_bytes()).unwrap();
