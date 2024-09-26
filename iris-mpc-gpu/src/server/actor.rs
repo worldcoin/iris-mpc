@@ -450,7 +450,7 @@ impl ServerActor {
             .preprocess_db(&mut self.right_mask_db_slices, &self.current_db_sizes);
     }
 
-    #[tracing::instrument(skip(self, return_channel))]
+    #[tracing::instrument(skip(self, batch, return_channel))]
     fn process_batch_query(
         &mut self,
         batch: BatchQuery,
