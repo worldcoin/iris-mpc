@@ -2,23 +2,20 @@ env:
   - name: RUST_LOG
     value: "info"
 
-  - name: NCCL_DEBUG
-    value: "INFO"
+  - name: RUST_BACKTRACE
+    value: "full"
 
   - name: NCCL_SOCKET_IFNAME
     value: "eth0"
 
   - name: NCCL_COMM_ID
-    value: "172.16.0.160:4000"
-
-  - name: RUST_BACKTRACE
-    value: "full"
+    value: "10.15.65.120:4000"
 
   - name: SMPC__ENVIRONMENT
     value: "stage"
 
   - name: SMPC__SERVICE__SERVICE_NAME
-    value: "smpcv2-server"
+    value: "smpcv2-server-stage"
 
   - name: SMPC__DATABASE__URL
     valueFrom:
@@ -63,16 +60,19 @@ env:
         name: application
 
   - name: SMPC__PARTY_ID
-    value: "2"
+    value: "1"
 
   - name: SMPC__PUBLIC_KEY_BASE_URL
-    value: "https://d2my9d2y2jkpfn.cloudfront.net"
+    value: "https://pki-smpcv2-stage.worldcoin.org"
 
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
-    value: "10000"
+    value: "100"
 
+  - name: SMPC__MAX_DB_SIZE
+    value: "1000000"
+    
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
