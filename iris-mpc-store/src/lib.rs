@@ -324,7 +324,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
 
     pub async fn update_iris_id_sequence(&self) -> Result<()> {
         sqlx::query(
-            "SELECT setval(pg_get_serial_sequence('irises', 'id'), COALESCE(MAX(id), 0), false) \
+            "SELECT setval(pg_get_serial_sequence('irises', 'id'), COALESCE(MAX(id), 0), true) \
              FROM irises",
         )
         .execute(&self.pool)
