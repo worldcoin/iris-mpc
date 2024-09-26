@@ -28,8 +28,8 @@ use iris_mpc_common::{
 use iris_mpc_gpu::{
     helpers::device_manager::DeviceManager,
     server::{
-        get_dummy_shares_for_deletion, sync_nccl, BatchMetadata, BatchQuery, ServerActor,
-        ServerJobResult,
+        get_dummy_shares_for_deletion, heartbeat_nccl::start_heartbeat, sync_nccl, BatchMetadata,
+        BatchQuery, ServerActor, ServerJobResult,
     },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
@@ -589,14 +589,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let mut background_tasks = TaskMonitor::new();
 
     // DEBUG: disable heartbeat
-    // let (tx, rx) = oneshot::channel();
-    // let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id,
-    // tx));
+    let (tx, rx) = oneshot::channel();
+    let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id, tx));
 
-    // background_tasks.check_tasks();
-    // tracing::info!("Heartbeat starting...");
-    // rx.await??;
-    // tracing::info!("Heartbeat started.");
+    background_tasks.check_tasks();
+    tracing::info!("Heartbeat starting...");
+    rx.await??;
+    tracing::info!("Heartbeat started.");
 
     // Start the actor in separate task.
     // A bit convoluted, but we need to create the actor on the thread already,
