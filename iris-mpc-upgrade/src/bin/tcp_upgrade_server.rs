@@ -61,7 +61,7 @@ async fn main() -> eyre::Result<()> {
     background_tasks.check_tasks();
     tracing::info!("Healthcheck server running on port 3000.");
 
-    let upgrader = IrisCodeUpgrader::new(args.party_id, sink);
+    let upgrader = IrisCodeUpgrader::new(args.party_id, sink.clone());
 
     // listen for incoming connections from clients
     let client_listener = tokio::net::TcpListener::bind(args.bind_addr).await?;
@@ -191,6 +191,9 @@ async fn main() -> eyre::Result<()> {
     }
     client_stream2.write_u8(FINAL_BATCH_SUCCESSFUL_ACK).await?;
     client_stream1.write_u8(FINAL_BATCH_SUCCESSFUL_ACK).await?;
+
+    sink.update_iris_id_sequence().await?;
+
     Ok(())
 }
 
@@ -226,5 +229,9 @@ impl NewIrisShareSink for IrisShareDbSink {
                     .await
             }
         }
+    }
+
+    async fn update_iris_id_sequence(&self) -> eyre::Result<()> {
+        self.store.update_iris_id_sequence().await
     }
 }
