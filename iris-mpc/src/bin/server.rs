@@ -750,7 +750,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .collect::<eyre::Result<Vec<_>>>()?;
 
             // Insert non-matching queries into the persistent store.
-            let codes_and_masks: Vec<StoredIrisRef> = matches
+            let (memory_serial_ids, codes_and_masks): (Vec<u32>, Vec<StoredIrisRef>) = matches
                 .iter()
                 .enumerate()
                 .filter_map(
@@ -759,14 +759,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 )
                 .map(|query_idx| {
                     // Get the original vectors from `receive_batch`.
-                    StoredIrisRef {
+                    (merged_results[query_idx] + 1, StoredIrisRef {
                         left_code:  &store_left.code[query_idx].coefs[..],
                         left_mask:  &store_left.mask[query_idx].coefs[..],
                         right_code: &store_right.code[query_idx].coefs[..],
                         right_mask: &store_right.mask[query_idx].coefs[..],
-                    }
+                    })
                 })
-                .collect();
+                .unzip();
 
             let mut tx = store_bg.tx().await?;
 
@@ -775,10 +775,27 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .await?;
 
             if !codes_and_masks.is_empty() {
-                store_bg
+                let db_serial_ids = store_bg
                     .insert_irises(&mut tx, &codes_and_masks)
                     .await
-                    .wrap_err("failed to persist queries")?;
+                    .wrap_err("failed to persist queries")?
+                    .iter()
+                    .map(|&x| x as u32)
+                    .collect::<Vec<_>>();
+
+                // Check if the serial_ids match between memory and db.
+                if memory_serial_ids != db_serial_ids {
+                    tracing::error!(
+                        "Serial IDs do not match between memory and db: {:?} != {:?}",
+                        memory_serial_ids,
+                        db_serial_ids
+                    );
+                    return Err(eyre!(
+                        "Serial IDs do not match between memory and db: {:?} != {:?}",
+                        memory_serial_ids,
+                        db_serial_ids
+                    ));
+                }
             }
 
             tx.commit().await?;
