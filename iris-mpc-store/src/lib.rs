@@ -304,6 +304,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
 
         Ok(())
     }
+
     pub async fn insert_results(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -318,6 +319,16 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         });
 
         query.build().execute(tx.deref_mut()).await?;
+        Ok(())
+    }
+
+    pub async fn update_iris_id_sequence(&self) -> Result<()> {
+        sqlx::query(
+            "SELECT setval(pg_get_serial_sequence('irises', 'id'), COALESCE(MAX(id), 0), false) \
+             FROM irises",
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
