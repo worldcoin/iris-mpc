@@ -832,11 +832,9 @@ impl ServerActor {
             deleted_ids: batch.deletion_requests_indices,
         };
         tracing::info!("Res: {:?}", res);
-        
+
         // Pass to internal sender thread
-        return_channel
-            .send(res)
-            .unwrap();
+        return_channel.send(res).unwrap();
 
         // Wait for all streams before get timings
         self.device_manager.await_streams(&self.streams[0]);

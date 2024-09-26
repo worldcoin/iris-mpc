@@ -318,7 +318,10 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
             query.push_bind(result);
         });
 
+        tracing::info!("Before insert_results execution");
         query.build().execute(tx.deref_mut()).await?;
+        tracing::info!("After insert_results execution");
+
         Ok(())
     }
 

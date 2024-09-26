@@ -724,7 +724,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let mut skip_request_ids = sync_result.deleted_request_ids();
 
     background_tasks.check_tasks();
-    
+
     tracing::info!("Start thread that will be responsible for communicating back the results");
 
     // Start thread that will be responsible for communicating back the results
@@ -764,10 +764,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             false => None,
                         },
                     );
+                    tracing::info!("result_event: {:?}", result_event);
 
                     serde_json::to_string(&result_event).wrap_err("failed to serialize result")
                 })
                 .collect::<eyre::Result<Vec<_>>>()?;
+
+            tracing::info!("uniqueness_results: {:?}", uniqueness_results);
 
             // Insert non-matching queries into the persistent store.
             let (memory_serial_ids, codes_and_masks): (Vec<u32>, Vec<StoredIrisRef>) = matches
@@ -788,11 +791,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 })
                 .unzip();
 
+            tracing::info!("Start awaiting store_bg tx");
             let mut tx = store_bg.tx().await?;
+            tracing::info!("End awaiting store_bg tx");
 
             store_bg
                 .insert_results(&mut tx, &uniqueness_results)
                 .await?;
+            tracing::info!("Inserted results");
 
             if !codes_and_masks.is_empty() {
                 let db_serial_ids = store_bg
