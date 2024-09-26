@@ -10,7 +10,9 @@ use iris_mpc_common::{
     iris_db::iris::IrisCode,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use sqlx::{migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Transaction};
+use sqlx::{
+    migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Row, Transaction,
+};
 use std::{ops::DerefMut, pin::Pin};
 
 const APP_NAME: &str = "SMPC";
@@ -183,9 +185,9 @@ impl Store {
         &self,
         tx: &mut Transaction<'_, Postgres>,
         codes_and_masks: &[StoredIrisRef<'_>],
-    ) -> Result<()> {
+    ) -> Result<Vec<i64>> {
         if codes_and_masks.is_empty() {
-            return Ok(());
+            return Ok(vec![]);
         }
         let mut query = sqlx::QueryBuilder::new(
             "INSERT INTO irises (left_code, left_mask, right_code, right_mask)",
@@ -197,8 +199,17 @@ impl Store {
             query.push_bind(cast_slice::<u16, u8>(iris.right_mask));
         });
 
-        query.build().execute(tx.deref_mut()).await?;
-        Ok(())
+        query.push(" RETURNING id");
+
+        let ids = query
+            .build()
+            .fetch_all(tx.deref_mut())
+            .await?
+            .iter()
+            .map(|row| row.get::<i64, _>("id"))
+            .collect::<Vec<_>>();
+
+        Ok(ids)
     }
 
     /// Update existing iris with given shares.
