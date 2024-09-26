@@ -1,0 +1,20 @@
+args:
+  - "--bind-addr"
+  - "0.0.0.0:8000"
+  - "--db-url"
+  - "$(SMPC__DATABASE__URL)"
+  - "--party-id"
+  - "0"
+  - "--eye"
+  - "right"
+  - "--environment"
+  - "$(ENVIRONMENT)"
+  - "--batch-size"
+  - "50"
+
+nginxSidecar:
+  env:
+    - name: SSL_CERT_SECRET_ID
+      value: "arn:aws:secretsmanager:us-east-1:$(ORB_STAGE_ACCOUNT_ID):secret:stage/upgrade-protocol-1/certificate-tapMNp"
+    - name: PRIVATE_KEY_SECRET_ID
+      value: "arn:aws:secretsmanager:us-east-1:$(ORB_STAGE_ACCOUNT_ID):secret:stage/upgrade-protocol-1/key-NHqfeb"

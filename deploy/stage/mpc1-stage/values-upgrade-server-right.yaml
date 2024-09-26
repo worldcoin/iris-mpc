@@ -11,3 +11,10 @@ args:
   - "$(ENVIRONMENT)"
   - "--batch-size"
   - "50"
+
+#nginxSidecar:
+#  env:
+#    - name: SSL_CERT_SECRET_ID
+#      value: "arn:aws:secretsmanager:us-east-1:$(ORB_STAGE_ACCOUNT_ID):secret:stage/upgrade-protocol-1/certificate-tapMNp"
+#    - name: PRIVATE_KEY_SECRET_ID
+#      value: "arn:aws:secretsmanager:us-east-1:$(ORB_STAGE_ACCOUNT_ID):secret:stage/upgrade-protocol-1/key-NHqfeb"
