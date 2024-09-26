@@ -185,7 +185,7 @@ impl Store {
         &self,
         tx: &mut Transaction<'_, Postgres>,
         codes_and_masks: &[StoredIrisRef<'_>],
-    ) -> Result<Vec<i32>> {
+    ) -> Result<Vec<i64>> {
         if codes_and_masks.is_empty() {
             return Ok(vec![]);
         }
@@ -206,7 +206,7 @@ impl Store {
             .fetch_all(tx.deref_mut())
             .await?
             .iter()
-            .map(|row| row.get::<i32, _>("id"))
+            .map(|row| row.get::<i64, _>("id"))
             .collect::<Vec<_>>();
 
         Ok(ids)
