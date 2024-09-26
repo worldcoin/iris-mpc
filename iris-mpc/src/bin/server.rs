@@ -792,7 +792,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .unzip();
 
             tracing::info!("Start awaiting store_bg tx");
-            let mut tx = store_bg.tx().await?;
+            let mut tx = store_bg.tx("server.rs").await?;
             tracing::info!("End awaiting store_bg tx");
 
             store_bg
@@ -824,7 +824,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 }
             }
 
+            tracing::info!("Before tx.commit().await");
             tx.commit().await?;
+            tracing::info!("After tx.commit().await");
 
             tracing::info!("Sending {} uniqueness results", uniqueness_results.len());
             send_results_to_sns(

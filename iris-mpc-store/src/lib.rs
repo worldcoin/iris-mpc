@@ -121,7 +121,8 @@ impl Store {
         Ok(Store { pool })
     }
 
-    pub async fn tx(&self) -> Result<Transaction<'_, Postgres>> {
+    pub async fn tx(&self, func_name: &str) -> Result<Transaction<'_, Postgres>> {
+        tracing::info!("Starting transaction for {}", func_name);
         Ok(self.pool.begin().await?)
     }
 
@@ -383,7 +384,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
             self.rollback(0).await?;
         }
 
-        let mut tx = self.tx().await?;
+        let mut tx = self.tx("init_db_with_random_shares").await?;
 
         tracing::info!(
             "DB size before initialization: {}",
@@ -423,7 +424,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
 
             if (i % 1000) == 0 {
                 tx.commit().await?;
-                tx = self.tx().await?;
+                tx = self.tx("init_db_with_random_shares i % 1000").await?;
             }
         }
         tracing::info!("Completed initialization of iris db, committing...");
@@ -496,7 +497,7 @@ mod tests {
                 right_mask: &[],
             },
         ];
-        let mut tx = store.tx().await?;
+        let mut tx = store.tx("test").await?;
         store.insert_irises(&mut tx, &codes_and_masks[0..2]).await?;
         store.insert_irises(&mut tx, &codes_and_masks[2..3]).await?;
         tx.commit().await?;
@@ -528,7 +529,7 @@ mod tests {
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
 
-        let mut tx = store.tx().await?;
+        let mut tx = store.tx("test").await?;
         store.insert_results(&mut tx, &[]).await?;
         store.insert_irises(&mut tx, &[]).await?;
         tx.commit().await?;
@@ -562,7 +563,7 @@ mod tests {
         ))?;
         let result_events = vec![result_event; count];
 
-        let mut tx = store.tx().await?;
+        let mut tx = store.tx("test").await?;
         store.insert_results(&mut tx, &result_events).await?;
         store.insert_irises(&mut tx, &codes_and_masks).await?;
         tx.commit().await?;
@@ -617,7 +618,7 @@ mod tests {
             right_mask: &[101_u16; 12800],
         };
 
-        let mut tx = store.tx().await?;
+        let mut tx = store.tx("test").await?;
         store.insert_irises(&mut tx, &vec![iris; 10]).await?;
         tx.commit().await?;
         store.rollback(5).await?;
@@ -636,7 +637,7 @@ mod tests {
         let store = Store::new(&test_db_url()?, &schema_name).await?;
 
         let result_events = vec!["event1".to_string(), "event2".to_string()];
-        let mut tx = store.tx().await?;
+        let mut tx = store.tx("test").await?;
         store.insert_results(&mut tx, &result_events).await?;
         store.insert_results(&mut tx, &result_events).await?;
         tx.commit().await?;
@@ -754,7 +755,7 @@ mod tests {
             right_code: &[789_u16; 12800],
             right_mask: &[101_u16; 6400],
         };
-        let mut tx = store.tx().await?;
+        let mut tx = store.tx("test").await?;
         store.insert_irises(&mut tx, &vec![iris.clone(); 2]).await?;
         tx.commit().await?;
 
