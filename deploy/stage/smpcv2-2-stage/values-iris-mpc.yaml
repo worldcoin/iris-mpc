@@ -60,7 +60,7 @@ env:
         name: application
 
   - name: SMPC__PARTY_ID
-    value: "1"
+    value: "2"
 
   - name: SMPC__PUBLIC_KEY_BASE_URL
     value: "https://pki-smpcv2-stage.worldcoin.org"
