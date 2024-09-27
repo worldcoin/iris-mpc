@@ -66,7 +66,7 @@ pub async fn start_heartbeat(
         }
     });
 
-    let mut timeout_interval = 2
+    let mut timeout_interval = 10
         * NCCL_START_WAIT_TIME
         * (NCCL_START_RETRIES - 1).try_into()?
         * DeviceManager::init().device_count().try_into()?;
