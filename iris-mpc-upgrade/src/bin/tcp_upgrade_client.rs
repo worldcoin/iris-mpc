@@ -7,7 +7,10 @@ use iris_mpc_common::{
     IRIS_CODE_LENGTH,
 };
 use iris_mpc_upgrade::{
-    config::{UpgradeClientConfig, BATCH_SUCCESSFUL_ACK, FINAL_BATCH_SUCCESSFUL_ACK},
+    config::{
+        UpgradeClientConfig, BATCH_SUCCESSFUL_ACK, BATCH_TIMEOUT_SECONDS,
+        FINAL_BATCH_SUCCESSFUL_ACK,
+    },
     db::V1Db,
     packets::{MaskShareMessage, TwoToThreeIrisCodeMessage},
     OldIrisShareSource,
@@ -329,7 +332,7 @@ async fn send_batch_and_wait_for_ack(
 }
 
 async fn wait_for_ack(server: &mut TlsStream<TcpStream>) -> eyre::Result<()> {
-    match timeout(Duration::from_secs(10), server.read_u8()).await {
+    match timeout(Duration::from_secs(BATCH_TIMEOUT_SECONDS), server.read_u8()).await {
         Ok(Ok(BATCH_SUCCESSFUL_ACK)) => {
             // Ack received successfully
             tracing::info!("ACK received for batch");
@@ -505,7 +508,7 @@ impl OldIrisShareSource for MockOldDbParty1 {
     fn stream_shares(
         &self,
         share_id_range: std::ops::Range<u64>,
-    ) -> eyre::Result<impl futures::Stream<Item = eyre::Result<(u64, EncodedBits)>>> {
+    ) -> eyre::Result<impl Stream<Item = eyre::Result<(u64, EncodedBits)>>> {
         let mut id = share_id_range.start;
         Ok(futures::stream::poll_fn(move |_| {
             if id < share_id_range.end {
@@ -564,7 +567,7 @@ impl OldIrisShareSource for MockOldDbParty2 {
     fn stream_shares(
         &self,
         share_id_range: std::ops::Range<u64>,
-    ) -> eyre::Result<impl futures::Stream<Item = eyre::Result<(u64, EncodedBits)>>> {
+    ) -> eyre::Result<impl Stream<Item = eyre::Result<(u64, EncodedBits)>>> {
         let mut id = share_id_range.start;
         Ok(futures::stream::poll_fn(move |_| {
             if id < share_id_range.end {
@@ -584,7 +587,7 @@ impl OldIrisShareSource for MockOldDbParty2 {
     fn stream_masks(
         &self,
         share_id_range: std::ops::Range<u64>,
-    ) -> eyre::Result<impl futures::Stream<Item = eyre::Result<(u64, Bits)>>> {
+    ) -> eyre::Result<impl Stream<Item = eyre::Result<(u64, Bits)>>> {
         let mut id = share_id_range.start;
         Ok(futures::stream::poll_fn(move |_| {
             if id >= share_id_range.end {
