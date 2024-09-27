@@ -2,14 +2,14 @@ env:
   - name: RUST_LOG
     value: "info"
 
-  - name: RUST_BACKTRACE
-    value: "full"
-
   - name: NCCL_SOCKET_IFNAME
     value: "eth0"
 
   - name: NCCL_COMM_ID
     value: "10.15.65.120:4000"
+
+  - name: RUST_BACKTRACE
+    value: "full"
 
   - name: SMPC__ENVIRONMENT
     value: "stage"
@@ -60,7 +60,7 @@ env:
         name: application
 
   - name: SMPC__PARTY_ID
-    value: "2"
+    value: "0"
 
   - name: SMPC__PUBLIC_KEY_BASE_URL
     value: "https://pki-smpcv2-stage.worldcoin.org"
@@ -73,6 +73,6 @@ env:
 
   - name: SMPC__MAX_DB_SIZE
     value: "1000000"
-    
+
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"

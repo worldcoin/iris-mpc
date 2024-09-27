@@ -4,7 +4,7 @@ args:
   - "--db-url"
   - "$(SMPC__DATABASE__URL)"
   - "--party-id"
-  - "0"
+  - "1"
   - "--eye"
   - "right"
   - "--environment"
