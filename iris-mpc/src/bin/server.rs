@@ -918,8 +918,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             let links: Vec<Link> = batch
                 .span_contexts
                 .iter()
-                .map(|span| Link::new(span.clone(), Vec::new()))
+                .map(|span_ctx| Link::new(span_ctx.clone(), Vec::new()))
                 .collect();
+
+            tracing::info!(
+                "Created span links for batch processing of length {}",
+                links.len()
+            );
 
             let batch_span = tracer
                 .span_builder("batch_processing")
@@ -927,8 +932,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .start(&tracer);
 
             let otel_context = OtelContext::current_with_span(batch_span);
-            let tracing_span = tracing::span!(tracing::Level::INFO, "batch_processing");
-            tracing_span.set_parent(otel_context);
+            tracing::Span::current().set_parent(otel_context);
 
             process_identity_deletions(
                 &batch,
@@ -944,7 +948,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             tracing::info!("Received batch in {:?}", now.elapsed());
             background_tasks.check_tasks();
 
-            let result_future = handle.submit_batch_query(batch).instrument(tracing_span);
+            let result_future = handle
+                .submit_batch_query(batch)
+                .instrument(tracing::Span::current());
 
             next_batch = receive_batch(
                 party_id,
