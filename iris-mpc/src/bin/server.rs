@@ -725,15 +725,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     background_tasks.check_tasks();
 
-    tracing::info!("Start thread that will be responsible for communicating back the results");
-
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
     let sns_client_bg = sns_client.clone();
     let config_bg = config.clone();
     let store_bg = store.clone();
     let _result_sender_abort = background_tasks.spawn(async move {
-        tracing::info!("In _result_sender_abort");
         while let Some(ServerJobResult {
             merged_results,
             request_ids,
@@ -745,7 +742,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             deleted_ids,
         }) = rx.recv().await
         {
-            tracing::info!("Received results for {} queries", request_ids.len());
             // returned serial_ids are 0 indexed, but we want them to be 1 indexed
             let uniqueness_results = merged_results
                 .iter()
@@ -764,13 +760,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             false => None,
                         },
                     );
-                    tracing::info!("result_event: {:?}", result_event);
-
                     serde_json::to_string(&result_event).wrap_err("failed to serialize result")
                 })
                 .collect::<eyre::Result<Vec<_>>>()?;
-
-            tracing::info!("uniqueness_results: {:?}", uniqueness_results);
 
             // Insert non-matching queries into the persistent store.
             let (memory_serial_ids, codes_and_masks): (Vec<u32>, Vec<StoredIrisRef>) = matches
@@ -791,14 +783,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 })
                 .unzip();
 
-            tracing::info!("Start awaiting store_bg tx");
-            let mut tx = store_bg.tx("server.rs").await?;
-            tracing::info!("End awaiting store_bg tx");
+            let mut tx = store_bg.tx().await?;
 
             store_bg
                 .insert_results(&mut tx, &uniqueness_results)
                 .await?;
-            tracing::info!("Inserted results");
 
             if !codes_and_masks.is_empty() {
                 let db_serial_ids = store_bg
@@ -824,9 +813,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 }
             }
 
-            tracing::info!("Before tx.commit().await");
             tx.commit().await?;
-            tracing::info!("After tx.commit().await");
 
             tracing::info!("Sending {} uniqueness results", uniqueness_results.len());
             send_results_to_sns(
