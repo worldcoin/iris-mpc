@@ -25,5 +25,6 @@ pub fn trace_from_message_attributes(trace_id: &str, span_id: &str) -> eyre::Res
         .span_builder("mpcv2-batch-item")
         .start_with_context(&tracer, &parent_ctx);
     span.add_event("Created batch span item", vec![]);
+    tracing::info!("Created batch span item");
     Ok(span.span_context().clone())
 }

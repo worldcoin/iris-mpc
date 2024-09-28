@@ -36,8 +36,7 @@ use iris_mpc_gpu::{
 use iris_mpc_store::{Store, StoredIrisRef};
 use opentelemetry::{
     global::tracer,
-    trace::{Link, TraceContextExt, Tracer},
-    Context as OtelContext,
+    trace::{Link, Tracer},
 };
 use std::{
     collections::HashMap,
@@ -55,7 +54,6 @@ use tokio::{
     time::timeout,
 };
 use tracing::Instrument;
-use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
@@ -926,13 +924,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 links.len()
             );
 
-            let batch_span = tracer
+            tracer
                 .span_builder("batch_processing")
                 .with_links(links)
                 .start(&tracer);
-
-            let otel_context = OtelContext::current_with_span(batch_span);
-            tracing::Span::current().set_parent(otel_context);
 
             process_identity_deletions(
                 &batch,
