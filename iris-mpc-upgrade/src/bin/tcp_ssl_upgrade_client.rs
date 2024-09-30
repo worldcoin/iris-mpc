@@ -32,6 +32,8 @@ async fn prepare_tls_stream_for_writing(address: &str) -> eyre::Result<TlsStream
     let native_tls_connector = tokio_native_tls::native_tls::TlsConnector::new()?;
     let tls_connector = TlsConnector::from(native_tls_connector);
 
+    println!("TLS connecting to {}", address);
+    
     // Perform the TLS handshake to establish a secure connection
     let tls_stream: TlsStream<TcpStream> = tls_connector.connect(address, stream).await?;
 
