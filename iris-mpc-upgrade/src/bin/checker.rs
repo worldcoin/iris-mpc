@@ -303,7 +303,7 @@ fn recombine_enc_bits(
     lag_point_ab: GaloisRingElement<Monomial>,
     lag_point_ba: GaloisRingElement<Monomial>,
 ) -> EncodedBits {
-    let res = _encode_mask_shares(a, b, lag_point_ab, lag_point_ba);
+    let res = _encode_mask_shares(IRIS_CODE_LENGTH, a, b, lag_point_ab, lag_point_ba);
     assert_eq!(res.len(), IRIS_CODE_LENGTH);
     // reorder the bits according to new encoding
     let mut reordered = [0u16; IRIS_CODE_LENGTH];
@@ -319,7 +319,7 @@ fn recombine_enc_masks(
     lag_point_ab: GaloisRingElement<Monomial>,
     lag_point_ba: GaloisRingElement<Monomial>,
 ) -> EncodedBits {
-    let res = _encode_mask_shares(a, b, lag_point_ab, lag_point_ba);
+    let res = _encode_mask_shares(MASK_CODE_LENGTH, a, b, lag_point_ab, lag_point_ba);
     assert_eq!(res.len(), MASK_CODE_LENGTH);
     // reorder the bits according to new encoding
     let mut reordered = [0u16; IRIS_CODE_LENGTH];
@@ -334,12 +334,13 @@ fn recombine_enc_masks(
 }
 
 fn _encode_mask_shares(
+    length: usize,
     a: &[u16],
     b: &[u16],
     lag_point_ab: GaloisRingElement<Monomial>,
     lag_point_ba: GaloisRingElement<Monomial>,
 ) -> Vec<u16> {
-    let mut res = Vec::with_capacity(MASK_CODE_LENGTH);
+    let mut res = Vec::with_capacity(length);
     for (a, b) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
         let share0 = GaloisRingElement::from_coefs(a.to_owned().try_into().unwrap());
         let share1 = GaloisRingElement::from_coefs(b.to_owned().try_into().unwrap());

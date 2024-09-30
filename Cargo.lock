@@ -2640,6 +2640,7 @@ dependencies = [
  "serde-big-array",
  "sqlx",
  "tokio",
+ "tokio-native-tls",
  "tokio-rustls 0.26.0",
  "tracing",
  "tracing-subscriber",

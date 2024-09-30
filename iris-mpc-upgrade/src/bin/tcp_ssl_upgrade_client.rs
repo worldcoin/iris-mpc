@@ -1,5 +1,5 @@
 use clap::Parser;
-use eyre::{Context, ContextCompat};
+use eyre::ContextCompat;
 use futures::{Stream, StreamExt};
 use futures_concurrency::future::Join;
 use iris_mpc_upgrade::{
@@ -15,34 +15,27 @@ use iris_mpc_upgrade::{
 use mpc_uniqueness_check::{bits::Bits, distance::EncodedBits};
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
-use rustls::{pki_types::ServerName, ClientConfig};
-use std::{convert::TryFrom, pin::Pin, sync::Arc, time::Duration};
+use std::{pin::Pin, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
     time::timeout,
 };
-use tokio_rustls::{client::TlsStream, TlsConnector};
+use tokio_native_tls::{TlsConnector, TlsStream};
 use tracing::error;
 
-async fn prepare_tls_stream_for_writing(
-    address: &str,
-    client_config: Arc<ClientConfig>,
-) -> eyre::Result<TlsStream<TcpStream>> {
+async fn prepare_tls_stream_for_writing(address: &str) -> eyre::Result<TlsStream<TcpStream>> {
     // Create a TCP connection
     let stream = TcpStream::connect(address).await?;
 
-    let tls_connector = TlsConnector::from(client_config);
-
-    // Hostname for SNI (Server Name Indication)
-    // throw away the port number if there is one (e.g. "localhost:8080" ->
-    // "localhost")
-    let address = address.split(":").next().context("splitting address")?;
-    let dns_name =
-        ServerName::try_from(address.to_owned()).context("trying to convert address to SNI")?;
+    // Create a TLS connector using tokio_native_tls
+    let native_tls_connector = tokio_native_tls::native_tls::TlsConnector::new()?;
+    let tls_connector = TlsConnector::from(native_tls_connector);
 
     // Perform the TLS handshake to establish a secure connection
-    let tls_stream: TlsStream<TcpStream> = tls_connector.connect(dns_name, stream).await?;
+    let tls_stream: TlsStream<TcpStream> = tls_connector.connect(address, stream).await?;
+
+    println!("TLS connection established to {}", address);
 
     Ok(tls_stream)
 }
@@ -56,18 +49,9 @@ async fn main() -> eyre::Result<()> {
         panic!("Party id must be 0, 1");
     }
 
-    // read the trusted cert
-    let mut root_cert_store = rustls::RootCertStore::empty();
-    root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let client_config = Arc::new(
-        ClientConfig::builder()
-            .with_root_certificates(root_cert_store)
-            .with_no_client_auth(),
-    );
-
-    let mut server1 = prepare_tls_stream_for_writing(&args.server1, client_config.clone()).await?;
-    let mut server2 = prepare_tls_stream_for_writing(&args.server2, client_config.clone()).await?;
-    let mut server3 = prepare_tls_stream_for_writing(&args.server3, client_config).await?;
+    let mut server1 = prepare_tls_stream_for_writing(&args.server1).await?;
+    let mut server2 = prepare_tls_stream_for_writing(&args.server2).await?;
+    let mut server3 = prepare_tls_stream_for_writing(&args.server3).await?;
 
     tracing::info!("Connecting to servers and syncing migration task parameters...");
     server1.write_u8(args.party_id).await?;
