@@ -34,10 +34,6 @@ use iris_mpc_gpu::{
     },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
-use opentelemetry::{
-    global::tracer,
-    trace::{Span, Tracer},
-};
 use std::{
     collections::HashMap,
     mem,
@@ -908,42 +904,19 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             let batch = next_batch.await?;
 
-            // Start a new span for batch processing with the links
-            // let tracer = tracer("mpcv2-batch-tracer");
-
-            // Extract the SpanContexts from the individual request spans
-            // let links: Vec<Link> = batch
-            //     .span_contexts
-            //     .iter()
-            //     .map(|span_ctx| Link::new(span_ctx.clone(), Vec::new()))
-            //     .collect();
-            //
-            // tracing::info!(
-            //     "Created span links for batch processing of length {}",
-            //     links.len()
-            // );
-            //
-            // let mut batch_span = tracer
-            //     .span_builder("batch_processing")
-            //     .with_links(links)
-            //     .start(&tracer);
-            let main_span = span!(Level::INFO, "main_span");
+            let batch_span = span!(Level::INFO, "batch_processing_span");
 
             for span_ctx in batch.clone().span_contexts {
-                tracing::Span::current().add_link(span_ctx.clone());
-                main_span.add_link(span_ctx);
+                batch_span.add_link(span_ctx);
             }
             tracing::Span::current().record("current_batch_size", batch.request_ids.len());
+            let _guard = batch_span.enter();
+            batch_span.record("main_batch_size", batch.request_ids.len());
+            tracing::info!("Main span details: {:?}", batch_span.id());
             tracing::info!("Current span details: {:?}", tracing::Span::current().id());
-            let _entered = main_span.enter();
-            main_span.record("main_batch_size", batch.request_ids.len());
-            tracing::info!("Main span details: {:?}", main_span.id());
 
             tracing::info!("Finished batch trace setup");
 
-            // let otel_context = OtelContext::current_with_span(batch_span);
-            // let otel_context_clone = otel_context.clone();
-            // let _guard = otel_context.attach();
             process_identity_deletions(
                 &batch,
                 &store,
@@ -1001,15 +974,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     Ok(())
 }
 
+#[tracing::instrument(skip(batch, store, dummy_iris_share, dummy_mask_share))]
 async fn process_identity_deletions(
     batch: &BatchQuery,
     store: &Store,
     dummy_iris_share: &GaloisRingIrisCodeShare,
     dummy_mask_share: &GaloisRingTrimmedMaskCodeShare,
 ) -> eyre::Result<()> {
-    let tracer = tracer("mpcv2-batch-tracer");
-    let mut span = tracer.start("process_identity_deletions");
-    span.add_event("Started processing identity deletions", Vec::new());
+    tracing::info!("In process_identity_deletions");
+
     if batch.deletion_requests_indices.is_empty() {
         return Ok(());
     }
@@ -1041,6 +1014,5 @@ async fn process_identity_deletions(
 
         tracing::info!("Deleted identity with serial id {}", serial_id,);
     }
-    span.end();
     Ok(())
 }
