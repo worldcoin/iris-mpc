@@ -28,7 +28,7 @@ FROM --platform=linux/amd64 build-image as build-app
 WORKDIR /src/gpu-iris-mpc
 COPY . .
 
-RUN cargo build --release --target x86_64-unknown-linux-gnu --bin seed-v1-dbs --bin upgrade-server --bin upgrade-client --bin upgrade-checker
+RUN cargo build --release --target x86_64-unknown-linux-gnu --bin seed-v1-dbs --bin upgrade-server --bin upgrade-client --bin upgrade-client-fixed  --bin upgrade-client-no-ssl --bin upgrade-checker
 
 FROM --platform=linux/amd64 ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
@@ -40,6 +40,8 @@ RUN update-ca-certificates
 COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/seed-v1-dbs /bin/seed-v1-dbs
 COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/upgrade-server /bin/upgrade-server
 COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/upgrade-client /bin/upgrade-client
+COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/upgrade-client-fixed /bin/upgrade-client-fixed
+COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/upgrade-client-no-ssl /bin/upgrade-client-no-ssl
 COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/upgrade-checker /bin/upgrade-checker
 
 USER 65534
