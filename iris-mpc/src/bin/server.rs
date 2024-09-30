@@ -589,7 +589,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let mut background_tasks = TaskMonitor::new();
 
     let (tx, rx) = oneshot::channel();
-    let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id, tx));
+    let _heartbeat = background_tasks.spawn(start_heartbeat(
+        config.party_id,
+        tx,
+        config.heartbeat_interval_secs,
+    ));
 
     background_tasks.check_tasks();
     tracing::info!("Heartbeat starting...");

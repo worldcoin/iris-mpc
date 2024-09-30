@@ -7,13 +7,14 @@ use tokio::{
     task::{spawn_blocking, JoinHandle},
     time::timeout,
 };
-const HEARBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 pub async fn start_heartbeat(
     party_id: usize,
     main_tx: oneshot::Sender<eyre::Result<()>>,
+    heartbeat_interval_secs: u64,
 ) -> eyre::Result<()> {
     let (tx, mut rx) = mpsc::channel(1);
+    let heartbeat_interval = Duration::from_secs(heartbeat_interval_secs);
 
     let heartbeat_handle: JoinHandle<eyre::Result<()>> = spawn_blocking(move || {
         let device_manager = Arc::new(DeviceManager::init_with_streams());
@@ -61,7 +62,7 @@ pub async fn start_heartbeat(
                     Ok(())
                 }())?;
             }
-            std::thread::sleep(HEARBEAT_INTERVAL);
+            std::thread::sleep(heartbeat_interval);
             counter += 1;
         }
     });
@@ -74,7 +75,7 @@ pub async fn start_heartbeat(
         match timeout(timeout_interval, rx.recv()).await {
             // The first heartbeat might take a while due to retries. However, after the connection
             // is established, we switch to the normal heartbeat interval.
-            Ok(Some(Ok(_))) => timeout_interval = 2 * HEARBEAT_INTERVAL,
+            Ok(Some(Ok(_))) => timeout_interval = 2 * heartbeat_interval,
             Ok(None) => {
                 tracing::error!("Heartbeat: Channel closed.");
                 break;
