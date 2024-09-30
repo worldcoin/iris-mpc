@@ -1,5 +1,6 @@
 use super::binary::{extract_msb_u16, single_extract_msb_u32};
 use crate::{
+    database_generators::NgSharedIris,
     execution::{
         player::{Identity, Role, RoleAssignment},
         session::{BootSession, Session, SessionHandles, SessionId},
@@ -8,9 +9,13 @@ use crate::{
         local::LocalNetworkingStore,
         value::NetworkValue::{self, RingElement16},
     },
-    next_gen_protocol::binary::{lift, open_bin},
-    protocol::prf::{Prf, PrfSeed},
+    next_gen_protocol::binary::{lift, mul_lift_2k, open_bin},
+    protocol::{
+        iris_worker::{A, A_BITS, B_BITS},
+        prf::{Prf, PrfSeed},
+    },
     shares::{
+        bit::Bit,
         share::Share,
         vecshare::{SliceShare, VecShare},
     },
@@ -149,6 +154,62 @@ pub(crate) async fn replicated_pairwise_distance(
     Ok((code_dots, mask_dots))
 }
 
+/// Computes the dot product between the iris pairs; for both the code and the
+/// mask of the irises. We batch the dot products into a single communication
+/// round;
+pub(crate) async fn ng_replicated_pairwise_distance(
+    session: &mut Session,
+    pairs: &[(NgSharedIris, NgSharedIris)],
+) -> eyre::Result<Vec<Share<u16>>> {
+    let mut exchanged_shares_a = Vec::with_capacity(2 * pairs.len());
+    for pair in pairs.iter() {
+        let (x, y) = pair;
+        let (res_code, res_mask) = {
+            let mut rand_code = session.prf_as_mut().gen_zero_share();
+            for (a__, b__) in x.code.iter().zip(y.code.iter()) {
+                rand_code += a__ * b__;
+            }
+            let mut rand_mask = session.prf_as_mut().gen_zero_share();
+            for (a__, b__) in x.mask.iter().zip(y.mask.iter()) {
+                rand_mask += a__ * b__;
+            }
+            (rand_code, rand_mask)
+        };
+        exchanged_shares_a.push(res_code);
+        exchanged_shares_a.push(res_mask);
+    }
+    let network = session.network();
+    let next_role = session.identity(&session.own_role()?.next(3))?;
+    let prev_role = session.identity(&session.own_role()?.prev(3))?;
+
+    network
+        .send(
+            NetworkValue::VecRing16(exchanged_shares_a.clone()).to_network(),
+            next_role,
+            &session.session_id(),
+        )
+        .await?;
+
+    let serialized_reply = network.receive(prev_role, &session.session_id()).await;
+    let res_b = match NetworkValue::from_network(serialized_reply) {
+        Ok(NetworkValue::VecRing16(element)) => element,
+        _ => return Err(eyre!("Could not deserialize VecRing16")),
+    };
+    if exchanged_shares_a.len() != res_b.len() {
+        Err(eyre!(
+            "Expected a VecRing16 with length {:?} but received with length: {:?}",
+            exchanged_shares_a.len(),
+            res_b.len()
+        ))
+    } else {
+        let mut res = Vec::with_capacity(2 * pairs.len());
+        for (a_share, b_share) in exchanged_shares_a.into_iter().zip(res_b) {
+            res.push(Share::new(a_share, b_share));
+        }
+        Ok(res)
+    }
+}
+
 // TODO(Dragos) revisit this as we can probably do 2 lifts at a time.
 pub(crate) async fn replicated_cross_mul(
     session: &mut Session,
@@ -199,6 +260,100 @@ pub(crate) async fn replicated_cross_mul(
     Ok(lifted_d2.get_at(0))
 }
 
+pub async fn ng_compare_threshold_masked(
+    session: &mut Session,
+    code_dot: Share<u16>,
+    mask_dot: Share<u16>,
+) -> eyre::Result<Share<Bit>> {
+    debug_assert!(A_BITS as u64 <= B_BITS);
+
+    let y = mul_lift_2k::<B_BITS>(&code_dot);
+    let mut x = lift::<{ B_BITS as usize }>(session, VecShare::new_vec(vec![mask_dot])).await?;
+    debug_assert_eq!(x.len(), 1);
+    let mut x = x.pop().expect("Enough elements present");
+    x *= A as u32;
+    x -= y;
+
+    single_extract_msb_u32::<32>(session, x).await
+}
+
+pub(crate) async fn ng_replicated_cross_mul(
+    session: &mut Session,
+    d1: Share<u16>,
+    t1: Share<u16>,
+    d2: Share<u16>,
+    t2: Share<u16>,
+) -> eyre::Result<Share<u32>> {
+    let mut pre_lift = VecShare::<u16>::with_capacity(4);
+    // Do preprocessing to lift all values
+    pre_lift.push(d1);
+    pre_lift.push(t2);
+    pre_lift.push(d2);
+    pre_lift.push(t1);
+
+    // Compute (v + 2^{15}) % 2^{16}, to make values positive.
+    for v in pre_lift.iter_mut() {
+        v.add_assign_const_role(1_u16 << 15, session.own_role()?);
+    }
+    let mut lifted_values = lift::<16>(session, pre_lift).await?;
+    // Now we got shares of d1' over 2^32 such that d1' = (d1'_1 + d1'_2 + d1'_3) %
+    // 2^{16} = d1 Next we subtract the 2^15 term we've added previously to
+    // get signed shares over 2^{32}
+    for v in lifted_values.iter_mut() {
+        v.add_assign_const_role(((1_u64 << 32) - (1_u64 << 15)) as u32, session.own_role()?);
+    }
+
+    // Compute d1 * t2; t2 * d1
+    let mut exchanged_shares_a = Vec::with_capacity(2);
+    let pairs = vec![
+        (
+            lifted_values.shares[0].clone(),
+            lifted_values.shares[1].clone(),
+        ),
+        (
+            lifted_values.shares[2].clone(),
+            lifted_values.shares[3].clone(),
+        ),
+    ];
+    for pair in pairs.iter() {
+        let (x, y) = pair;
+        let res = session.prf_as_mut().gen_zero_share() + x * y;
+        exchanged_shares_a.push(res);
+    }
+
+    let network = session.network();
+    let next_role = session.identity(&session.own_role()?.next(3))?;
+    let prev_role = session.identity(&session.own_role()?.prev(3))?;
+
+    network
+        .send(
+            NetworkValue::VecRing32(exchanged_shares_a.clone()).to_network(),
+            next_role,
+            &session.session_id(),
+        )
+        .await?;
+
+    let serialized_reply = network.receive(prev_role, &session.session_id()).await;
+    let res_b = match NetworkValue::from_network(serialized_reply) {
+        Ok(NetworkValue::VecRing32(element)) => element,
+        _ => return Err(eyre!("Could not deserialize VecRing16")),
+    };
+    if exchanged_shares_a.len() != res_b.len() {
+        return Err(eyre!(
+            "Expected a VecRing32 with length {:?} but received with length: {:?}",
+            exchanged_shares_a.len(),
+            res_b.len()
+        ));
+    }
+
+    // vec![D1 * T2; T2 * D1]
+    let mut res = Vec::with_capacity(2);
+    for (a_share, b_share) in exchanged_shares_a.into_iter().zip(res_b) {
+        res.push(Share::new(a_share, b_share));
+    }
+    Ok(res[1].clone() - res[0].clone())
+}
+
 pub async fn replicated_lift_and_cross_mul(
     session: &mut Session,
     d1: Share<u16>,
@@ -207,6 +362,21 @@ pub async fn replicated_lift_and_cross_mul(
     t2: u32,
 ) -> eyre::Result<bool> {
     let diff = replicated_cross_mul(session, d1, t1, d2, t2).await?;
+    // Compute bit <- MSB(D2 * T1 - D1 * T2)
+    let bit = single_extract_msb_u32::<32>(session, diff).await?;
+    // Open bit
+    let opened_b = open_bin(session, bit).await?;
+    Ok(opened_b.convert())
+}
+
+pub async fn ng_replicated_lift_and_cross_mul(
+    session: &mut Session,
+    d1: Share<u16>,
+    t1: Share<u16>,
+    d2: Share<u16>,
+    t2: Share<u16>,
+) -> eyre::Result<bool> {
+    let diff = ng_replicated_cross_mul(session, d1, t1, d2, t2).await?;
     // Compute bit <- MSB(D2 * T1 - D1 * T2)
     let bit = single_extract_msb_u32::<32>(session, diff).await?;
     // Open bit
@@ -250,6 +420,17 @@ pub async fn open_t_many(session: &Session, shares: VecShare<u64>) -> eyre::Resu
         })
         .collect();
     Ok(res)
+}
+
+pub async fn ng_replicated_is_match(
+    session: &mut Session,
+    pairs: &[(NgSharedIris, NgSharedIris)],
+) -> eyre::Result<bool> {
+    let dots = ng_replicated_pairwise_distance(session, pairs).await?;
+    // compute dots[0] - dots[1]
+    let bit = ng_compare_threshold_masked(session, dots[0].clone(), dots[1].clone()).await?;
+    let opened = open_bin(session, bit).await?;
+    Ok(opened.convert())
 }
 
 pub async fn rep3_single_iris_match_public_output(

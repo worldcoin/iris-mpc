@@ -15,6 +15,12 @@ pub struct SharedIris {
     pub mask:   IrisCodeArray,
 }
 
+#[derive(PartialEq, Eq, Debug, Default, Clone)]
+pub struct NgSharedIris {
+    pub code: VecShareType,
+    pub mask: VecShareType,
+}
+
 #[derive(Clone)]
 pub struct SharedDB {
     pub shares: Arc<Vec<VecShareType>>,
@@ -117,6 +123,20 @@ pub fn generate_iris_shares<R: Rng>(rng: &mut R, iris: IrisCode) -> Vec<SharedIr
         let shares = IrisShare::get_shares(iris.code.get_bit(i), iris.mask.get_bit(i), rng);
         for party_id in 0..3 {
             res[party_id].shares.push(shares[party_id].to_owned());
+        }
+    }
+    res
+}
+
+pub fn ng_generate_iris_shares<R: Rng>(rng: &mut R, iris: IrisCode) -> Vec<NgSharedIris> {
+    let mut res = vec![NgSharedIris::default(); 3];
+    for i in 0..IrisCode::IRIS_CODE_SIZE {
+        // We simulate the parties already knowing the shares of the code.
+        let code_share = IrisShare::get_shares(iris.code.get_bit(i), iris.mask.get_bit(i), rng);
+        let mask_share = create_random_sharing(rng, iris.mask.get_bit(i) as u16);
+        for party_id in 0..3 {
+            res[party_id].code.push(code_share[party_id].to_owned());
+            res[party_id].mask.push(mask_share[party_id].to_owned());
         }
     }
     res
