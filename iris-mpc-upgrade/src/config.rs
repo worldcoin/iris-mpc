@@ -6,6 +6,7 @@ use std::{
     str::FromStr,
 };
 
+pub const BATCH_TIMEOUT_SECONDS: u64 = 30;
 pub const BATCH_SUCCESSFUL_ACK: u8 = 1;
 pub const FINAL_BATCH_SUCCESSFUL_ACK: u8 = 42;
 

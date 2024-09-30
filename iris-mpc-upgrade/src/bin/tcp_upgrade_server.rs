@@ -189,10 +189,16 @@ async fn main() -> eyre::Result<()> {
         let duration = start_time.elapsed();
         tracing::info!("Processed batch in {:.2?}", duration);
     }
-    client_stream2.write_u8(FINAL_BATCH_SUCCESSFUL_ACK).await?;
-    client_stream1.write_u8(FINAL_BATCH_SUCCESSFUL_ACK).await?;
 
+    tracing::info!("Finalizing upgrade");
+    client_stream2.write_u8(FINAL_BATCH_SUCCESSFUL_ACK).await?;
+    tracing::info!("Sent final ACK to client2");
+    client_stream1.write_u8(FINAL_BATCH_SUCCESSFUL_ACK).await?;
+    tracing::info!("Sent final ACK to client1");
+
+    tracing::info!("Updating iris id sequence");
     sink.update_iris_id_sequence().await?;
+    tracing::info!("Iris id sequence updated");
 
     Ok(())
 }
