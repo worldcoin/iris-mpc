@@ -30,9 +30,12 @@ struct Args {
 
     #[clap(long)]
     side: String,
+
+    #[clap(long, value_delimiter = ',', num_args = 1..)]
+    deleted_identities: Option<Vec<i32>>,
 }
 
-const SEED_BATCH_SIZE: usize = 200;
+const SEED_BATCH_SIZE: usize = 10;
 
 async fn insert_masks(pool: sqlx::Pool<Postgres>, masks: &[(u64, Bits)]) -> Result<()> {
     let mut builder = QueryBuilder::new("INSERT INTO masks (id, mask) VALUES ");
@@ -150,9 +153,9 @@ async fn main() -> eyre::Result<()> {
     };
 
     let shares_db0 = Db::new(&shares_db_config0).await?;
-    let mut latest_shares_id_0 = shares_db0.fetch_latest_share_id().await?;
+    let latest_shares_id_0 = shares_db0.fetch_latest_share_id().await?;
     let shares_db1 = Db::new(&shares_db_config1).await?;
-    let mut latest_shares_id_1 = shares_db1.fetch_latest_share_id().await?;
+    let latest_shares_id_1 = shares_db1.fetch_latest_share_id().await?;
     let masks_db = Db::new(&masks_db_config).await?;
     let latest_masks_id = masks_db.fetch_latest_mask_id().await?;
 
@@ -162,27 +165,42 @@ async fn main() -> eyre::Result<()> {
     let mut shares0 = Vec::with_capacity(args.fill_to as usize);
     let mut shares1 = Vec::with_capacity(args.fill_to as usize);
 
-    if latest_shares_id_0 == 0 {
-        latest_shares_id_0 += 1;
-        latest_shares_id_1 += 1;
+    let mut latest_serial_id = min(latest_masks_id, min(latest_shares_id_0, latest_shares_id_1));
+    if latest_serial_id == args.fill_to {
+        return Ok(());
     }
-    let latest_serial_id = min(latest_masks_id, min(latest_shares_id_0, latest_shares_id_1));
+    if latest_serial_id == 0 {
+        latest_serial_id += 1
+    }
 
     let shares_1_pool = create_pool(&participant_one_shares_db_url.clone()).await?;
     let shares_2_pool = create_pool(&participant_two_shares_db_url.clone()).await?;
     let masks_pool = create_pool(&participant_one_masks_db_url.clone()).await?;
 
+    let deleted_serial_ids = args.deleted_identities.unwrap_or_default();
+
     for i in latest_serial_id..args.fill_to {
         let mut iris_code = rng.gen::<Template>();
-        // fix the iris code mask to be valid: all chunks of 2 bits are equal, since
-        // they mask the real/imaginary party of the same bit
-        for j in (0..BITS).step_by(2) {
-            iris_code.mask.set(j + 1, iris_code.mask.get(j))
+        if deleted_serial_ids.contains(&(i as i32)) {
+            if args.side == "left" {
+                shares0.push((i, EncodedBits::MAX));
+                shares1.push((i, EncodedBits::ZERO));
+            } else {
+                shares0.push((i, EncodedBits::ZERO));
+                shares1.push((i, EncodedBits::MAX));
+            }
+            masks.push((i, Bits::MAX));
+        } else {
+            // fix the iris code mask to be valid: all chunks of 2 bits are equal, since
+            // they mask the real/imaginary party of the same bit
+            for j in (0..BITS).step_by(2) {
+                iris_code.mask.set(j + 1, iris_code.mask.get(j))
+            }
+            let encoded = mpc_uniqueness_check::distance::encode(&iris_code).share(2, &mut rng);
+            shares0.push((i, encoded[0]));
+            shares1.push((i, encoded[1]));
+            masks.push((i, iris_code.mask));
         }
-        let encoded = mpc_uniqueness_check::distance::encode(&iris_code).share(2, &mut rng);
-        shares0.push((i, encoded[0]));
-        shares1.push((i, encoded[1]));
-        masks.push((i, iris_code.mask));
 
         if shares0.len() == SEED_BATCH_SIZE {
             println!("Inserting {} shares", shares0.len());

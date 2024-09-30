@@ -95,9 +95,6 @@ pub struct UpgradeClientConfig {
     #[clap(long)]
     pub eye: Eye,
 
-    #[clap(long, default_value = "false")]
-    pub mock: bool,
-
     #[clap(long)]
     pub shares_db_url: String,
 
@@ -117,7 +114,6 @@ impl fmt::Debug for UpgradeClientConfig {
             .field("db_end", &self.db_end)
             .field("party_id", &self.party_id)
             .field("eye", &self.eye)
-            .field("mock", &self.mock)
             .finish()
     }
 }
