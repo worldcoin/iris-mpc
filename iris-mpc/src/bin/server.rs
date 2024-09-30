@@ -36,7 +36,7 @@ use iris_mpc_gpu::{
 use iris_mpc_store::{Store, StoredIrisRef};
 use opentelemetry::{
     global::tracer,
-    trace::{Link, Span, Tracer},
+    trace::{Span, Tracer},
 };
 use std::{
     collections::HashMap,
@@ -53,6 +53,7 @@ use tokio::{
     task::spawn_blocking,
     time::timeout,
 };
+use tracing::Id;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
@@ -907,25 +908,33 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             let batch = next_batch.await?;
 
             // Start a new span for batch processing with the links
-            let tracer = tracer("mpcv2-batch-tracer");
+            // let tracer = tracer("mpcv2-batch-tracer");
 
             // Extract the SpanContexts from the individual request spans
-            let links: Vec<Link> = batch
-                .span_contexts
-                .iter()
-                .map(|span_ctx| Link::new(span_ctx.clone(), Vec::new()))
-                .collect();
+            // let links: Vec<Link> = batch
+            //     .span_contexts
+            //     .iter()
+            //     .map(|span_ctx| Link::new(span_ctx.clone(), Vec::new()))
+            //     .collect();
+            //
+            // tracing::info!(
+            //     "Created span links for batch processing of length {}",
+            //     links.len()
+            // );
+            //
+            // let mut batch_span = tracer
+            //     .span_builder("batch_processing")
+            //     .with_links(links)
+            //     .start(&tracer);
 
-            tracing::info!(
-                "Created span links for batch processing of length {}",
-                links.len()
-            );
+            for span_ctx in batch.clone().span_contexts {
+                let span_id_str = span_ctx.span_id().to_bytes();
+                let span_id = u64::from_be_bytes(span_id_str);
+                tracing::Span::current().follows_from(Id::from_u64(span_id));
+            }
+            let _ = tracing::Span::current().enter();
+            tracing::info!("Finished batch trace setup");
 
-            let mut batch_span = tracer
-                .span_builder("batch_processing")
-                .with_links(links)
-                .start(&tracer);
-            batch_span.add_event("Started processing batch", Vec::new());
             // let otel_context = OtelContext::current_with_span(batch_span);
             // let otel_context_clone = otel_context.clone();
             // let _guard = otel_context.attach();
