@@ -35,9 +35,8 @@ use iris_mpc_gpu::{
 };
 use iris_mpc_store::{Store, StoredIrisRef};
 use opentelemetry::{
-    global::{tracer, ObjectSafeSpan},
-    trace::{FutureExt, Link, TraceContextExt, Tracer},
-    Context as OtelContext,
+    global::tracer,
+    trace::{Link, Span, Tracer},
 };
 use std::{
     collections::HashMap,
@@ -908,7 +907,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             let batch = next_batch.await?;
 
             // Start a new span for batch processing with the links
-            let tracer = tracer("iris-mpc");
+            let tracer = tracer("mpcv2-batch-tracer");
 
             // Extract the SpanContexts from the individual request spans
             let links: Vec<Link> = batch
@@ -922,13 +921,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 links.len()
             );
 
-            let batch_span = tracer
+            let mut batch_span = tracer
                 .span_builder("batch_processing")
                 .with_links(links)
                 .start(&tracer);
-            let otel_context = OtelContext::current_with_span(batch_span);
-            let otel_context_clone = otel_context.clone();
-            let _guard = otel_context.attach();
+            batch_span.add_event("Started processing batch", Vec::new());
+            // let otel_context = OtelContext::current_with_span(batch_span);
+            // let otel_context_clone = otel_context.clone();
+            // let _guard = otel_context.attach();
             process_identity_deletions(
                 &batch,
                 &store,
@@ -943,9 +943,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             tracing::info!("Received batch in {:?}", now.elapsed());
             background_tasks.check_tasks();
 
-            let result_future = handle
-                .submit_batch_query(batch)
-                .with_context(otel_context_clone);
+            let result_future = handle.submit_batch_query(batch);
 
             next_batch = receive_batch(
                 party_id,
@@ -994,8 +992,9 @@ async fn process_identity_deletions(
     dummy_iris_share: &GaloisRingIrisCodeShare,
     dummy_mask_share: &GaloisRingTrimmedMaskCodeShare,
 ) -> eyre::Result<()> {
-    let tracer = tracer("iris-mpc");
+    let tracer = tracer("mpcv2-batch-tracer");
     let mut span = tracer.start("process_identity_deletions");
+    span.add_event("Started processing identity deletions", Vec::new());
     if batch.deletion_requests_indices.is_empty() {
         return Ok(());
     }
