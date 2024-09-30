@@ -20,7 +20,7 @@ use cudarc::{
         CudaBlas,
     },
     driver::{
-        result::{self, malloc_async, malloc_managed, mem_prefetch_async},
+        result::{self, malloc_async, malloc_managed},
         sys::{CUdeviceptr, CUmemAttach_flags},
         CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr, DeviceSlice, LaunchAsync,
     },
@@ -340,25 +340,6 @@ impl ShareDB {
                         .unwrap();
                 }
             }
-
-            // Try prefetching the db to device already
-            for mem in [&db.code_gr.limb_0, &db.code_gr.limb_1] {
-                unsafe {
-                    mem_prefetch_async(
-                        mem[device_index],
-                        db_lens[device_index] * code_len,
-                        cudarc::driver::sys::CUmemLocation_st {
-                            type_:
-                                cudarc::driver::sys::CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE,
-                            ..Default::default()
-                        },
-                        *self.device_manager.device(device_index).cu_stream(),
-                    )
-                    .unwrap();
-                };
-            }
-
-            self.device_manager.synchronize_all();
         }
     }
 
