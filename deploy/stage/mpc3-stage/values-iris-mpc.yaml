@@ -50,6 +50,9 @@ env:
   - name: SMPC__PROCESSING_TIMEOUT_SECS
     value: "60"
 
+  - name: SMPC__HEARTBEAT_INTERVAL_SECS
+    value: "5"
+
   - name: SMPC__PATH
     value: "/data/"
 
