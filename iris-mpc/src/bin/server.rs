@@ -53,7 +53,8 @@ use tokio::{
     task::spawn_blocking,
     time::timeout,
 };
-use tracing::Id;
+use tracing::{span, Level};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
@@ -926,13 +927,18 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             //     .span_builder("batch_processing")
             //     .with_links(links)
             //     .start(&tracer);
+            let main_span = span!(Level::INFO, "main_span");
 
             for span_ctx in batch.clone().span_contexts {
-                let span_id_str = span_ctx.span_id().to_bytes();
-                let span_id = u64::from_be_bytes(span_id_str);
-                tracing::Span::current().follows_from(Id::from_u64(span_id));
+                tracing::Span::current().add_link(span_ctx.clone());
+                main_span.add_link(span_ctx);
             }
-            let _ = tracing::Span::current().enter();
+            tracing::Span::current().record("current_batch_size", batch.request_ids.len());
+            tracing::info!("Current span details: {:?}", tracing::Span::current().id());
+            let _entered = main_span.enter();
+            main_span.record("main_batch_size", batch.request_ids.len());
+            tracing::info!("Main span details: {:?}", main_span.id());
+
             tracing::info!("Finished batch trace setup");
 
             // let otel_context = OtelContext::current_with_span(batch_span);
