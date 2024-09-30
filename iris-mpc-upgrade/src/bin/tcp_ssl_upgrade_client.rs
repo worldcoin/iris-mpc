@@ -3,7 +3,10 @@ use eyre::{Context, ContextCompat};
 use futures::{Stream, StreamExt};
 use futures_concurrency::future::Join;
 use iris_mpc_upgrade::{
-    config::{UpgradeClientConfig, BATCH_SUCCESSFUL_ACK, FINAL_BATCH_SUCCESSFUL_ACK},
+    config::{
+        UpgradeClientConfig, BATCH_SUCCESSFUL_ACK, BATCH_TIMEOUT_SECONDS,
+        FINAL_BATCH_SUCCESSFUL_ACK,
+    },
     db::V1Db,
     packets::{MaskShareMessage, TwoToThreeIrisCodeMessage},
     utils::{get_shares_from_masks, get_shares_from_shares, install_tracing, V1Database},
@@ -298,7 +301,7 @@ async fn send_batch_and_wait_for_ack(
 }
 
 async fn wait_for_ack(server: &mut TlsStream<TcpStream>) -> eyre::Result<()> {
-    match timeout(Duration::from_secs(10), server.read_u8()).await {
+    match timeout(Duration::from_secs(BATCH_TIMEOUT_SECONDS), server.read_u8()).await {
         Ok(Ok(BATCH_SUCCESSFUL_ACK)) => {
             // Ack received successfully
             tracing::info!("ACK received for batch");
