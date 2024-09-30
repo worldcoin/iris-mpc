@@ -35,8 +35,9 @@ use iris_mpc_gpu::{
 };
 use iris_mpc_store::{Store, StoredIrisRef};
 use opentelemetry::{
-    global::tracer,
-    trace::{Link, Tracer},
+    global::{tracer, ObjectSafeSpan},
+    trace::{FutureExt, Link, TraceContextExt, Tracer},
+    Context as OtelContext,
 };
 use std::{
     collections::HashMap,
@@ -53,7 +54,6 @@ use tokio::{
     task::spawn_blocking,
     time::timeout,
 };
-use tracing::Instrument;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
@@ -403,7 +403,6 @@ fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
             None,
             true,
         );
-
         if let Some(metrics_config) = &service.metrics {
             StatsdBattery::init(
                 &metrics_config.host,
@@ -413,7 +412,6 @@ fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
                 Some(&metrics_config.prefix),
             )?;
         }
-
         Ok(tracing_shutdown_handle)
     } else {
         tracing_subscriber::registry()
@@ -910,7 +908,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             let batch = next_batch.await?;
 
             // Start a new span for batch processing with the links
-            let tracer = tracer("my_tracer");
+            let tracer = tracer("iris-mpc");
 
             // Extract the SpanContexts from the individual request spans
             let links: Vec<Link> = batch
@@ -924,11 +922,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 links.len()
             );
 
-            tracer
+            let batch_span = tracer
                 .span_builder("batch_processing")
                 .with_links(links)
                 .start(&tracer);
-
+            let otel_context = OtelContext::current_with_span(batch_span);
+            let otel_context_clone = otel_context.clone();
+            let _guard = otel_context.attach();
             process_identity_deletions(
                 &batch,
                 &store,
@@ -945,7 +945,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             let result_future = handle
                 .submit_batch_query(batch)
-                .instrument(tracing::Span::current());
+                .with_context(otel_context_clone);
 
             next_batch = receive_batch(
                 party_id,
@@ -994,6 +994,8 @@ async fn process_identity_deletions(
     dummy_iris_share: &GaloisRingIrisCodeShare,
     dummy_mask_share: &GaloisRingTrimmedMaskCodeShare,
 ) -> eyre::Result<()> {
+    let tracer = tracer("iris-mpc");
+    let mut span = tracer.start("process_identity_deletions");
     if batch.deletion_requests_indices.is_empty() {
         return Ok(());
     }
@@ -1025,6 +1027,6 @@ async fn process_identity_deletions(
 
         tracing::info!("Deleted identity with serial id {}", serial_id,);
     }
-
+    span.end();
     Ok(())
 }
