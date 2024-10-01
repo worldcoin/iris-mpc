@@ -78,7 +78,7 @@ nginxSidecar:
     enabled: true
     volumeMount:
       - name: mounted-secret-name
-        mountPath: /etc/secrets
+        mountPath: /etc/nginx/cert
     volume:
       - name: mounted-secret-name
         secret:
