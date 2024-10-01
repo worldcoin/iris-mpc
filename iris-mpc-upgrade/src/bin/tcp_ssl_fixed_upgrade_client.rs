@@ -15,19 +15,21 @@ use iris_mpc_upgrade::{
 use mpc_uniqueness_check::{bits::Bits, distance::EncodedBits};
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
-use std::{pin::Pin, time::Duration, fs, io::{self, Error as IoError}};
-use std::io::ErrorKind;
-use std::sync::Arc;
-use rustls::pki_types::ServerName;
+use rustls::{pki_types::ServerName, ClientConfig, RootCertStore};
+use rustls_pemfile::certs;
+use std::{
+    fs,
+    io::{self, Error as IoError, ErrorKind},
+    pin::Pin,
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
     time::timeout,
 };
-use rustls::{ClientConfig, RootCertStore};
-use tokio_rustls::{client::TlsStream, TlsConnector, rustls};
-use rustls_pemfile::certs;
-
+use tokio_rustls::{client::TlsStream, rustls, TlsConnector};
 use tracing::error;
 
 async fn prepare_tls_stream_for_writing(address: &str) -> eyre::Result<TlsStream<TcpStream>> {
@@ -35,7 +37,7 @@ async fn prepare_tls_stream_for_writing(address: &str) -> eyre::Result<TlsStream
     let ca_cert_path = "/usr/local/share/ca-certificates/aws_orb_prod_private_ca.crt";
 
     // Load the custom CA certificate
-    let ca_cert = fs::read(&ca_cert_path)?;
+    let ca_cert = fs::read(ca_cert_path)?;
     let mut ca_reader = &ca_cert[..];
 
     let mut root_cert_store = RootCertStore::empty();
@@ -61,10 +63,12 @@ async fn prepare_tls_stream_for_writing(address: &str) -> eyre::Result<TlsStream
 
     // Perform the TLS handshake
     println!("TLS connecting to {}", address);
-    let tls_stream = connector.connect(server_name, stream).await
+    let tls_stream = connector
+        .connect(server_name, stream)
+        .await
         .map_err(|e| IoError::new(io::ErrorKind::Other, format!("TLS error: {}", e)))?;
     println!("TLS connection established to {}", address);
-    
+
     Ok(tls_stream)
 }
 
