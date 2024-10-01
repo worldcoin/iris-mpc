@@ -54,7 +54,7 @@ async fn prepare_tls_stream_for_writing(address: &str) -> eyre::Result<TlsStream
         address, domain
     );
     // Perform the TLS handshake to establish a secure connection
-    let tls_stream: TlsStream<TcpStream> = tls_connector.connect(address, stream).await?;
+    let tls_stream: TlsStream<TcpStream> = tls_connector.connect(&domain, stream).await?;
 
     println!("TLS connection established to {}", address);
 
