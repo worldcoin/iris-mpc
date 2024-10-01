@@ -9,10 +9,8 @@ strategy:
 datadog:
   enabled: true
 
+# Nginx exposes the only port required here
 ports:
-  - containerPort: 8443
-    name: http
-    protocol: TCP
   - containerPort: 3000
     name: health
     protocol: TCP
