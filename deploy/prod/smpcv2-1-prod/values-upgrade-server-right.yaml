@@ -9,3 +9,5 @@ args:
   - "right"
   - "--environment"
   - "$(ENVIRONMENT)"
+  - "--batch-size"
+  - "50"
