@@ -72,7 +72,6 @@ service:
 
 nginxSidecar:
   enabled: true
-  image: "iris-gpu-upgrade-proto-nginx:1.0.0"
   port: 8443
   secrets:
     enabled: true
