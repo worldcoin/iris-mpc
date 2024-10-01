@@ -74,6 +74,21 @@ nginxSidecar:
   enabled: true
   image: "iris-gpu-upgrade-proto-nginx:1.0.0"
   port: 8443
+  secrets:
+    enabled: true
+    volumeMount:
+      - name: mounted-secret-name
+        mountPath: /etc/secrets
+    volume:
+      - name: mounted-secret-name
+        secret:
+          secretName: application
+          items:
+            - key: certificate.crt
+              path: certificate.crt
+            - key: key.pem
+              path: key.pem
+          optional: false
   config:
     nginx.conf: |
       worker_processes  auto;
