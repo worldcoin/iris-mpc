@@ -10,7 +10,7 @@ datadog:
   enabled: true
 
 ports:
-  - containerPort: 8000
+  - containerPort: 8443
     name: http
     protocol: TCP
   - containerPort: 3000
