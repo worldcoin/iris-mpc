@@ -66,6 +66,10 @@ env:
     value: info
   - name: ENVIRONMENT
     value: stage
+  - name: MY_POD_IP
+    valueFrom:
+      fieldRef:
+        fieldPath: status.podIP
 
 service:
   enabled: false
