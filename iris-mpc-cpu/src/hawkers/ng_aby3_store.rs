@@ -162,7 +162,7 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
             let x = storage.points[distance.0.val()].clone();
             let y = storage.points[distance.1.val()].clone();
             jobs.spawn(async move {
-                ng_replicated_is_match(&mut player_session, &vec![(x.data, y.data)])
+                ng_replicated_is_match(&mut player_session, &[(x.data, y.data)])
                     .await
                     .unwrap()
             });
@@ -196,7 +196,7 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
                 storage.points[d2.1.val()].clone(),
             );
             jobs.spawn(async move {
-                let ds_and_ts = ng_replicated_pairwise_distance(&mut player_session, &vec![
+                let ds_and_ts = ng_replicated_pairwise_distance(&mut player_session, &[
                     (x1.data, y1.data),
                     (x2.data, y2.data),
                 ])

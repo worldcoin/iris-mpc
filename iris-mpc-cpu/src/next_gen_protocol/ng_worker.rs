@@ -305,7 +305,7 @@ pub(crate) async fn ng_replicated_cross_mul(
 
     // Compute d1 * t2; t2 * d1
     let mut exchanged_shares_a = Vec::with_capacity(2);
-    let pairs = vec![
+    let pairs = [
         (
             lifted_values.shares[0].clone(),
             lifted_values.shares[1].clone(),
