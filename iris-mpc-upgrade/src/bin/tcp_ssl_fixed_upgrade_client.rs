@@ -16,6 +16,7 @@ use mpc_uniqueness_check::{bits::Bits, distance::EncodedBits};
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use std::{pin::Pin, time::Duration, fs, io::{self, Error as IoError}};
+use std::io::ErrorKind;
 use std::sync::Arc;
 use rustls::pki_types::ServerName;
 use tokio::{
@@ -38,12 +39,11 @@ async fn prepare_tls_stream_for_writing(address: &str) -> eyre::Result<TlsStream
     let mut ca_reader = &ca_cert[..];
 
     let mut root_cert_store = RootCertStore::empty();
-    let certs = match certs(&mut ca_reader) {
-        Ok(certs) => certs,
-        Err(_) => return Err(IoError::new(io::ErrorKind::InvalidData, "Invalid CA certificate")).into(),
-    };
+    let certs = certs(&mut ca_reader)
+        .map(|res| res.map_err(|_| IoError::new(ErrorKind::InvalidData, "Invalid certificate")))
+        .collect::<Result<Vec<_>, _>>()?;
 
-    root_cert_store.add_parsable_certificates(&certs);
+    root_cert_store.add_parsable_certificates(certs);
 
     // Create a rustls ClientConfig with the custom root certificates
     let config = ClientConfig::builder()
@@ -53,7 +53,7 @@ async fn prepare_tls_stream_for_writing(address: &str) -> eyre::Result<TlsStream
     let connector = TlsConnector::from(Arc::new(config));
 
     // Resolve the server name
-    let server_name = ServerName::try_from(address)
+    let server_name = ServerName::try_from(address.to_owned())
         .map_err(|_| IoError::new(io::ErrorKind::InvalidInput, "Invalid domain name"))?;
 
     // Connect to the server over TCP
