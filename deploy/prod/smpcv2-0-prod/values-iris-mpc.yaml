@@ -6,7 +6,7 @@ env:
     value: "eth0"
 
   - name: NCCL_COMM_ID
-    value: "10.15.33.223:4000"
+    value: "10.15.33.72:4000"
 
   - name: RUST_BACKTRACE
     value: "full"
@@ -15,7 +15,7 @@ env:
     value: "prod"
 
   - name: SMPC__SERVICE__SERVICE_NAME
-    value: "smpcv2-server"
+    value: "smpcv2-server-prod"
 
   - name: SMPC__DATABASE__URL
     valueFrom:
@@ -63,13 +63,16 @@ env:
     value: "0"
 
   - name: SMPC__PUBLIC_KEY_BASE_URL
-    value: "https://pki-smpc-prod.worldcoin.org"
+    value: "https://pki-smpcv2-prod.worldcoin.org"
 
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
-    value: "10000"
+    value: "100"
+
+  - name: SMPC__MAX_DB_SIZE
+    value: "1000000"
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
