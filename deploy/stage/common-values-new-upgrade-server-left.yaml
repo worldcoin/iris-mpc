@@ -69,17 +69,13 @@ env:
   - name: ENVIRONMENT
     value: stage
 
-keelPolling:
-  # -- Specifies whether keel should poll for container updates
-  enabled: true
-
 service:
   enabled: false
 
 nginxSidecar:
   enabled: true
   image: "iris-gpu-upgrade-proto-nginx:1.0.0"
-  port: 80443
+  port: 8443
   config:
     nginx.conf: |
       worker_processes  auto;
@@ -107,7 +103,7 @@ nginxSidecar:
           ssl_certificate /etc/nginx/cert/certificate.crt;
           ssl_certificate_key /etc/nginx/cert/key.pem;
       
-          ssl_protocols TLSv1.2 TLSv1.3;
+          ssl_protocols TLSv1.3;
           ssl_ciphers HIGH:!aNULL:!MD5;
       
           # Enable session resumption to improve performance
