@@ -73,41 +73,17 @@ keelPolling:
 service:
   enabled: false
 
-#nginxSidecar:
-#  enabled: true
-#  image: "iris-gpu-upgrade-proto-nginx:1.0.0"
-#  port: 80443
-#  config:
-#    nginx.conf: |
-#      user  nginx;
-#      worker_processes  auto;
-#
-#      access_log /dev/stdout
-#      error_log  /dev/stderr notice;
-#      pid        /var/run/nginx.pid;
-#
-#
-#      events {
-#        worker_connections  1024;
-#      }
-#
-#      stream {
-#        upstream tcp_backend {
-#          server tcp_server:8000;
-#        }
-#
-#        server {
-#          listen 80443 ssl;
-#          proxy_pass tcp_backend;
-#
-#          ssl_certificate /etc/nginx/cert/certificate.crt;
-#          ssl_certificate_key /etc/nginx/cert/key.pem;
-#
-#          ssl_protocols TLSv1.2 TLSv1.3;
-#          ssl_ciphers HIGH:!aNULL:!MD5;
-#
-#          # Enable session resumption to improve performance
-#          ssl_session_cache shared:SSL:10m;
-#          ssl_session_timeout 1h;
-#        }
-#      }
+ingress:
+  enabled: true
+  ingressClassName: traefik-internal
+  hosts:
+    - not-upgrade-left.1.stage.smpcv2.worldcoin.dev
+
+ingressRouteTCP:
+  enabled: true
+  entryPoints:
+    - websecure
+  service:
+    - name: upgrade-server-left
+      port: 80
+  tls: {}
