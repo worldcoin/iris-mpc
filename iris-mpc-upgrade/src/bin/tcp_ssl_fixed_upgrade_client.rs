@@ -32,6 +32,18 @@ use tokio::{
 use tokio_rustls::{client::TlsStream, rustls, TlsConnector};
 use tracing::error;
 
+fn extract_domain(address: &str) -> Result<String, IoError> {
+    // Try to split the address into domain and port parts.
+    if let Some((domain, _port)) = address.rsplit_once(':') {
+        Ok(domain.to_string())
+    } else {
+        Err(IoError::new(
+            ErrorKind::InvalidInput,
+            "Invalid address format",
+        ))
+    }
+}
+
 async fn prepare_tls_stream_for_writing(address: &str) -> eyre::Result<TlsStream<TcpStream>> {
     // The path to your custom CA certificate file (in PEM format)
     let ca_cert_path = "/usr/local/share/ca-certificates/aws_orb_prod_private_ca.crt";
@@ -54,15 +66,18 @@ async fn prepare_tls_stream_for_writing(address: &str) -> eyre::Result<TlsStream
 
     let connector = TlsConnector::from(Arc::new(config));
 
+    let domain = extract_domain(address)?;
+    println!("Resolving domain {},", domain);
     // Resolve the server name
-    let server_name = ServerName::try_from(address.to_owned())
+    let server_name = ServerName::try_from(domain)
         .map_err(|_| IoError::new(io::ErrorKind::InvalidInput, "Invalid domain name"))?;
 
+    println!("TCP connecting to {}", address);
     // Connect to the server over TCP
     let stream = TcpStream::connect(address).await?;
 
     // Perform the TLS handshake
-    println!("TLS connecting to {}", address);
+    println!("TLS connecting to {}", server_name.to_str());
     let tls_stream = connector
         .connect(server_name, stream)
         .await
