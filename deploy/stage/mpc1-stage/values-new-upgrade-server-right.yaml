@@ -14,6 +14,7 @@ args:
 
 initContainer:
   enabled: true
+  image: "amazon/aws-cli:2.17.62"
   name: "upgrade-proto-dns-records-updater"
   env:
     - name: PARTY_ID
