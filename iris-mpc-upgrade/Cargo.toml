@@ -45,7 +45,7 @@ path = "src/bin/tcp_upgrade_server.rs"
 
 [[bin]]
 name = "upgrade-client"
-path = "src/bin/tcp_upgrade_client.rs"
+path = "src/bin/tcp_ssl_upgrade_client.rs"
 
 [[bin]]
 name = "seed-v1-dbs"

@@ -7,24 +7,10 @@ use iris_mpc_common::{
     IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use iris_mpc_store::Store;
-use iris_mpc_upgrade::db::V1Db;
+use iris_mpc_upgrade::{db::V1Db, utils::install_tracing};
 use itertools::izip;
 use mpc_uniqueness_check::{bits::Bits, distance::EncodedBits};
 use std::collections::HashMap;
-
-fn install_tracing() {
-    use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-
-    let fmt_layer = fmt::layer().with_target(true).with_line_number(true);
-    let filter_layer = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new("info"))
-        .unwrap();
-
-    tracing_subscriber::registry()
-        .with(filter_layer)
-        .with(fmt_layer)
-        .init();
-}
 
 const APP_NAME: &str = "SMPC";
 
@@ -317,16 +303,8 @@ fn recombine_enc_bits(
     lag_point_ab: GaloisRingElement<Monomial>,
     lag_point_ba: GaloisRingElement<Monomial>,
 ) -> EncodedBits {
-    let mut res = Vec::with_capacity(IRIS_CODE_LENGTH);
-    for (a, b) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
-        let share0 = GaloisRingElement::from_coefs(a.to_owned().try_into().unwrap());
-        let share1 = GaloisRingElement::from_coefs(b.to_owned().try_into().unwrap());
-
-        let share = share0 * lag_point_ab + share1 * lag_point_ba;
-        let share = share.to_basis_A();
-        res.extend_from_slice(&share.coefs);
-    }
-    assert!(res.len() == IRIS_CODE_LENGTH);
+    let res = _encode_mask_shares(IRIS_CODE_LENGTH, a, b, lag_point_ab, lag_point_ba);
+    assert_eq!(res.len(), IRIS_CODE_LENGTH);
     // reorder the bits according to new encoding
     let mut reordered = [0u16; IRIS_CODE_LENGTH];
     for (i, bit) in res.into_iter().enumerate() {
@@ -341,16 +319,8 @@ fn recombine_enc_masks(
     lag_point_ab: GaloisRingElement<Monomial>,
     lag_point_ba: GaloisRingElement<Monomial>,
 ) -> EncodedBits {
-    let mut res = Vec::with_capacity(MASK_CODE_LENGTH);
-    for (a, b) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
-        let share0 = GaloisRingElement::from_coefs(a.to_owned().try_into().unwrap());
-        let share1 = GaloisRingElement::from_coefs(b.to_owned().try_into().unwrap());
-
-        let share = share0 * lag_point_ab + share1 * lag_point_ba;
-        let share = share.to_basis_A();
-        res.extend_from_slice(&share.coefs);
-    }
-    assert!(res.len() == MASK_CODE_LENGTH);
+    let res = _encode_mask_shares(MASK_CODE_LENGTH, a, b, lag_point_ab, lag_point_ba);
+    assert_eq!(res.len(), MASK_CODE_LENGTH);
     // reorder the bits according to new encoding
     let mut reordered = [0u16; IRIS_CODE_LENGTH];
     for (i, bit) in res.into_iter().enumerate() {
@@ -361,4 +331,23 @@ fn recombine_enc_masks(
     }
 
     EncodedBits(reordered)
+}
+
+fn _encode_mask_shares(
+    length: usize,
+    a: &[u16],
+    b: &[u16],
+    lag_point_ab: GaloisRingElement<Monomial>,
+    lag_point_ba: GaloisRingElement<Monomial>,
+) -> Vec<u16> {
+    let mut res = Vec::with_capacity(length);
+    for (a, b) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
+        let share0 = GaloisRingElement::from_coefs(a.to_owned().try_into().unwrap());
+        let share1 = GaloisRingElement::from_coefs(b.to_owned().try_into().unwrap());
+
+        let share = share0 * lag_point_ab + share1 * lag_point_ba;
+        let share = share.to_basis_A();
+        res.extend_from_slice(&share.coefs);
+    }
+    res
 }
