@@ -48,13 +48,5 @@ name = "upgrade-client"
 path = "src/bin/tcp_ssl_upgrade_client.rs"
 
 [[bin]]
-name = "upgrade-client-no-ssl"
-path = "src/bin/tcp_upgrade_client.rs"
-
-[[bin]]
-name = "upgrade-client-fixed"
-path = "src/bin/tcp_ssl_fixed_upgrade_client.rs"
-
-[[bin]]
 name = "seed-v1-dbs"
 path = "src/bin/seed_v1_dbs.rs"
