@@ -54,6 +54,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 const REGION: &str = "eu-north-1";
 const RNG_SEED_INIT_DB: u64 = 42;
 const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
+const BATCH_TIMEOUT: Duration = Duration::from_secs(120); // 2 minutes
 const MAX_CONCURRENT_REQUESTS: usize = 32;
 
 static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
@@ -123,8 +124,16 @@ async fn receive_batch(
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
     let mut handles = vec![];
     let mut msg_counter = 0;
+    let mut start_time = Instant::now();
 
     while msg_counter < *CURRENT_BATCH_SIZE.lock().unwrap() {
+        // If we have reached a certain time, we will process the requests regardless of
+        // if it matches the batch size This is to avoid previous requests
+        // waiting more than 2 minutes to be processed if we have a low throughput
+        if start_time.elapsed() >= BATCH_TIMEOUT {
+            tracing::info!("Batch timeout reached. Processing current batch.");
+            break;
+        }
         let rcv_message_output = client
             .receive_message()
             .max_number_of_messages(1)
