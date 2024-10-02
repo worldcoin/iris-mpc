@@ -14,7 +14,7 @@ args:
 
 initContainer:
   enabled: true
-  image: "amazon/aws-cli:2.17.62"
+  name: "upgrade-proto-dns-records-updater"
   env:
     - name: PARTY_ID
       value: "1"
@@ -42,7 +42,7 @@ initContainer:
           }
         ]
       }
-    update-dns-record.sh: |
+    init.sh: |
       #!/usr/bin/env bash
     
       HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$PARTY_ID".stage.smpcv2.worldcoin.dev --query "HostedZones[].Id" --output text)
