@@ -107,6 +107,7 @@ where
 
 pub const SMPC_MESSAGE_TYPE_ATTRIBUTE: &str = "message_type";
 pub const IDENTITY_DELETION_MESSAGE_TYPE: &str = "identity_deletion";
+pub const CIRCUIT_BREAKER_MESSAGE_TYPE: &str = "circuit_breaker";
 pub const UNIQUENESS_MESSAGE_TYPE: &str = "uniqueness";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -115,6 +116,11 @@ pub struct UniquenessRequest {
     pub signup_id:               String,
     pub s3_presigned_url:        String,
     pub iris_shares_file_hashes: [String; 3],
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CircuitBreakerRequest {
+    pub batch_size: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
