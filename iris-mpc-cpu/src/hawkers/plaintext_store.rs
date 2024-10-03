@@ -153,7 +153,7 @@ impl VectorStore for PlaintextStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hawkers::aby3_store::create_ready_made_hawk_searcher;
+    use crate::hawkers::ng_aby3_store::ng_create_ready_made_hawk_searcher;
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
     use rand::SeedableRng;
@@ -225,7 +225,7 @@ mod tests {
     async fn test_plaintext_hnsw_matcher() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 1;
-        let (cleartext_searcher, _) = create_ready_made_hawk_searcher(&mut rng, database_size)
+        let (cleartext_searcher, _) = ng_create_ready_made_hawk_searcher(&mut rng, database_size)
             .await
             .unwrap();
         for i in 0..database_size {

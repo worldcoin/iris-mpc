@@ -4,8 +4,7 @@ use crate::{
     execution::player::Identity,
     hawkers::plaintext_store::PointId,
     next_gen_protocol::ng_worker::{
-        ng_replicated_is_match, ng_replicated_lift_and_cross_mul, ng_replicated_pairwise_distance,
-        LocalRuntime,
+        ng_cross_compare, ng_replicated_is_match, ng_replicated_pairwise_distance, LocalRuntime,
     },
 };
 use aes_prng::AesRng;
@@ -203,7 +202,7 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
                 .await
                 .unwrap();
 
-                ng_replicated_lift_and_cross_mul(
+                ng_cross_compare(
                     &mut player_session,
                     ds_and_ts[0].clone(),
                     ds_and_ts[1].clone(),
