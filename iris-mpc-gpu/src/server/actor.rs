@@ -66,6 +66,8 @@ impl ServerActorHandle {
 }
 
 const DB_CHUNK_SIZE: usize = 512;
+const KDF_SALT: &str = "111a1a93518f670e9bb0c2c68888e2beb9406d4c4ed571dc77b801e676ae3091"; // Random 32 byte salt
+
 pub struct ServerActor {
     job_queue:              mpsc::Receiver<ServerJob>,
     device_manager:         Arc<DeviceManager>,
@@ -177,7 +179,7 @@ impl ServerActor {
     ) -> eyre::Result<Self> {
         assert!(max_batch_size != 0);
         let mut kdf_nonce = 0;
-        let kdf_salt: Salt = Salt::new(HKDF_SHA256, b"IRIS_MPC");
+        let kdf_salt: Salt = Salt::new(HKDF_SHA256, &hex::decode(KDF_SALT)?);
         let n_queries = max_batch_size * ROTATIONS;
 
         // helper closure to generate the next chacha seeds

@@ -60,6 +60,9 @@ pub struct Config {
 
     #[serde(default = "default_max_batch_size")]
     pub max_batch_size: usize,
+
+    #[serde(default = "default_heartbeat_interval_secs")]
+    pub heartbeat_interval_secs: u64,
 }
 
 fn default_processing_timeout_secs() -> u64 {
@@ -68,6 +71,10 @@ fn default_processing_timeout_secs() -> u64 {
 
 fn default_max_batch_size() -> usize {
     64
+}
+
+fn default_heartbeat_interval_secs() -> u64 {
+    30
 }
 
 impl Config {

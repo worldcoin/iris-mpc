@@ -17,9 +17,10 @@ use iris_mpc_common::{
         key_pair::SharesEncryptionKeyPairs,
         kms_dh::derive_shared_secret,
         smpc_request::{
-            create_message_type_attribute_map, IdentityDeletionRequest, IdentityDeletionResult,
-            ReceiveRequestError, SQSMessage, UniquenessRequest, UniquenessResult,
-            IDENTITY_DELETION_MESSAGE_TYPE, SMPC_MESSAGE_TYPE_ATTRIBUTE, UNIQUENESS_MESSAGE_TYPE,
+            create_message_type_attribute_map, CircuitBreakerRequest, IdentityDeletionRequest,
+            IdentityDeletionResult, ReceiveRequestError, SQSMessage, UniquenessRequest,
+            UniquenessResult, CIRCUIT_BREAKER_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE,
+            SMPC_MESSAGE_TYPE_ATTRIBUTE, UNIQUENESS_MESSAGE_TYPE,
         },
         sync::SyncState,
         task_monitor::TaskMonitor,
@@ -28,8 +29,8 @@ use iris_mpc_common::{
 use iris_mpc_gpu::{
     helpers::device_manager::DeviceManager,
     server::{
-        get_dummy_shares_for_deletion, sync_nccl, BatchMetadata, BatchQuery, ServerActor,
-        ServerJobResult,
+        get_dummy_shares_for_deletion, heartbeat_nccl::start_heartbeat, sync_nccl, BatchMetadata,
+        BatchQuery, ServerActor, ServerJobResult,
     },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
@@ -159,6 +160,30 @@ async fn receive_batch(
                     .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?;
 
                 match request_type {
+                    CIRCUIT_BREAKER_MESSAGE_TYPE => {
+                        let circuit_breaker_request: CircuitBreakerRequest =
+                            serde_json::from_str(&message.message).map_err(|e| {
+                                ReceiveRequestError::json_parse_error("circuit_breaker_request", e)
+                            })?;
+                        client
+                            .delete_message()
+                            .queue_url(queue_url)
+                            .receipt_handle(sqs_message.receipt_handle.unwrap())
+                            .send()
+                            .await
+                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
+                        if let Some(batch_size) = circuit_breaker_request.batch_size {
+                            // Updating the batch size to ensure we process the messages in the next
+                            // loop
+                            *CURRENT_BATCH_SIZE.lock().unwrap() =
+                                batch_size.clamp(1, max_batch_size);
+                            tracing::info!(
+                                "Updating batch size to {} due to circuit breaker message",
+                                batch_size
+                            );
+                        }
+                    }
+
                     IDENTITY_DELETION_MESSAGE_TYPE => {
                         // If it's a deletion request, we just store the serial_id and continue.
                         // Deletion will take place when batch process starts.
@@ -588,15 +613,17 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Preparing task monitor");
     let mut background_tasks = TaskMonitor::new();
 
-    // DEBUG: disable heartbeat
-    // let (tx, rx) = oneshot::channel();
-    // let _heartbeat = background_tasks.spawn(start_heartbeat(config.party_id,
-    // tx));
+    let (tx, rx) = oneshot::channel();
+    let _heartbeat = background_tasks.spawn(start_heartbeat(
+        config.party_id,
+        tx,
+        config.heartbeat_interval_secs,
+    ));
 
-    // background_tasks.check_tasks();
-    // tracing::info!("Heartbeat starting...");
-    // rx.await??;
-    // tracing::info!("Heartbeat started.");
+    background_tasks.check_tasks();
+    tracing::info!("Heartbeat starting...");
+    rx.await??;
+    tracing::info!("Heartbeat started.");
 
     // Start the actor in separate task.
     // A bit convoluted, but we need to create the actor on the thread already,
@@ -750,7 +777,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .collect::<eyre::Result<Vec<_>>>()?;
 
             // Insert non-matching queries into the persistent store.
-            let codes_and_masks: Vec<StoredIrisRef> = matches
+            let (memory_serial_ids, codes_and_masks): (Vec<u32>, Vec<StoredIrisRef>) = matches
                 .iter()
                 .enumerate()
                 .filter_map(
@@ -759,14 +786,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 )
                 .map(|query_idx| {
                     // Get the original vectors from `receive_batch`.
-                    StoredIrisRef {
+                    (merged_results[query_idx] + 1, StoredIrisRef {
                         left_code:  &store_left.code[query_idx].coefs[..],
                         left_mask:  &store_left.mask[query_idx].coefs[..],
                         right_code: &store_right.code[query_idx].coefs[..],
                         right_mask: &store_right.mask[query_idx].coefs[..],
-                    }
+                    })
                 })
-                .collect();
+                .unzip();
 
             let mut tx = store_bg.tx().await?;
 
@@ -775,10 +802,27 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .await?;
 
             if !codes_and_masks.is_empty() {
-                store_bg
+                let db_serial_ids = store_bg
                     .insert_irises(&mut tx, &codes_and_masks)
                     .await
-                    .wrap_err("failed to persist queries")?;
+                    .wrap_err("failed to persist queries")?
+                    .iter()
+                    .map(|&x| x as u32)
+                    .collect::<Vec<_>>();
+
+                // Check if the serial_ids match between memory and db.
+                if memory_serial_ids != db_serial_ids {
+                    tracing::error!(
+                        "Serial IDs do not match between memory and db: {:?} != {:?}",
+                        memory_serial_ids,
+                        db_serial_ids
+                    );
+                    return Err(eyre!(
+                        "Serial IDs do not match between memory and db: {:?} != {:?}",
+                        memory_serial_ids,
+                        db_serial_ids
+                    ));
+                }
             }
 
             tx.commit().await?;

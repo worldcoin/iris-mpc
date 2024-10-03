@@ -13,24 +13,25 @@ use std::{
 pub mod config;
 pub mod db;
 pub mod packets;
+pub mod utils;
 
 pub trait OldIrisShareSource {
     /// loads an 1-of-2 additive share of the iris code with id `share_id`
-    fn load_code_share(&self, share_id: u64) -> impl Future<Output = eyre::Result<EncodedBits>>;
+    fn load_code_share(&self, share_id: u64) -> impl Future<Output = Result<EncodedBits>>;
     /// loads the masks of the iris code with id `share_id`
-    fn load_mask(&self, share_id: u64) -> impl Future<Output = eyre::Result<Bits>>;
+    fn load_mask(&self, share_id: u64) -> impl Future<Output = Result<Bits>>;
 
     /// loads the masks of the iris code with id `share_id`
     fn stream_shares(
         &self,
         share_id_range: std::ops::Range<u64>,
-    ) -> eyre::Result<impl Stream<Item = eyre::Result<(u64, EncodedBits)>> + Sized>;
+    ) -> Result<impl Stream<Item = Result<(u64, EncodedBits)>> + Sized>;
 
     /// loads the masks of the iris code with id `share_id`
     fn stream_masks(
         &self,
         share_id_range: std::ops::Range<u64>,
-    ) -> eyre::Result<impl Stream<Item = eyre::Result<(u64, Bits)>> + Sized>;
+    ) -> Result<impl Stream<Item = Result<(u64, Bits)>> + Sized>;
 }
 
 #[allow(async_fn_in_trait)]
@@ -40,7 +41,9 @@ pub trait NewIrisShareSink {
         share_id: u64,
         code_share: &[u16; IRIS_CODE_LENGTH],
         mask_share: &[u16; MASK_CODE_LENGTH],
-    ) -> eyre::Result<()>;
+    ) -> Result<()>;
+
+    async fn update_iris_id_sequence(&self) -> Result<()>;
 }
 
 #[derive(Debug, Clone)]
@@ -63,7 +66,7 @@ impl NewIrisShareSink for IrisShareTestFileSink {
         share_id: u64,
         code_share: &[u16; IRIS_CODE_LENGTH],
         mask_share: &[u16; MASK_CODE_LENGTH],
-    ) -> eyre::Result<()> {
+    ) -> Result<()> {
         let mut file = BufWriter::new(File::create(
             self.path.join(format!("code_share_{}", share_id)),
         )?);
@@ -78,6 +81,10 @@ impl NewIrisShareSink for IrisShareTestFileSink {
             writeln!(file, "{}", s)?;
         }
         file.flush()?;
+        Ok(())
+    }
+
+    async fn update_iris_id_sequence(&self) -> Result<()> {
         Ok(())
     }
 }

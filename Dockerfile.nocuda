@@ -30,9 +30,12 @@ COPY . .
 
 RUN cargo build --release --target x86_64-unknown-linux-gnu --bin seed-v1-dbs --bin upgrade-server --bin upgrade-client --bin upgrade-checker
 
-
 FROM --platform=linux/amd64 ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y ca-certificates
+COPY certs /usr/local/share/ca-certificates/
+RUN update-ca-certificates
 
 COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/seed-v1-dbs /bin/seed-v1-dbs
 COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/upgrade-server /bin/upgrade-server

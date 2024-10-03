@@ -6,6 +6,7 @@ use std::{
     str::FromStr,
 };
 
+pub const BATCH_TIMEOUT_SECONDS: u64 = 30;
 pub const BATCH_SUCCESSFUL_ACK: u8 = 1;
 pub const FINAL_BATCH_SUCCESSFUL_ACK: u8 = 42;
 
@@ -95,9 +96,6 @@ pub struct UpgradeClientConfig {
     #[clap(long)]
     pub eye: Eye,
 
-    #[clap(long, default_value = "false")]
-    pub mock: bool,
-
     #[clap(long)]
     pub shares_db_url: String,
 
@@ -117,7 +115,6 @@ impl fmt::Debug for UpgradeClientConfig {
             .field("db_end", &self.db_end)
             .field("party_id", &self.party_id)
             .field("eye", &self.eye)
-            .field("mock", &self.mock)
             .finish()
     }
 }
