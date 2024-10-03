@@ -20,18 +20,6 @@ impl<T: IntRing2k> Share<T> {
         Self { a, b }
     }
 
-    pub(crate) fn sub_from_const(&self, other: T, id: PartyID) -> Self {
-        let mut a = -self;
-        a.add_assign_const(other, id);
-        a
-    }
-
-    pub(crate) fn sub_from_const_role(&self, other: T, role: Role) -> Self {
-        let mut a = -self;
-        a.add_assign_const_role(other, role);
-        a
-    }
-
     pub fn add_assign_const(&mut self, other: T, id: PartyID) {
         match id {
             PartyID::ID0 => self.a += RingElement(other),

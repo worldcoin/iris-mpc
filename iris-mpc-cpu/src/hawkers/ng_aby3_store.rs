@@ -1,114 +1,112 @@
+use super::plaintext_store::PlaintextStore;
 use crate::{
-    database_generators::{create_shared_database_raw, generate_iris_shares, SharedIris},
+    database_generators::{ng_generate_iris_shares, NgSharedIris},
     execution::player::Identity,
-    hawkers::plaintext_store::{PlaintextStore, PointId},
+    hawkers::plaintext_store::PointId,
     next_gen_protocol::ng_worker::{
-        rep3_single_iris_match_public_output, replicated_lift_and_cross_mul,
-        replicated_pairwise_distance, LocalRuntime,
+        ng_cross_compare, ng_replicated_is_match, ng_replicated_pairwise_distance, LocalRuntime,
     },
 };
 use aes_prng::AesRng;
-use hawk_pack::{graph_store::graph_mem::GraphMem, hnsw_db::HawkSearcher, VectorStore};
+use hawk_pack::{graph_store::GraphMem, hnsw_db::HawkSearcher, VectorStore};
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use rand::{RngCore, SeedableRng};
 use std::collections::HashMap;
 use tokio::task::JoinSet;
 
 #[derive(Default, Clone)]
-pub struct Aby3StorePlayer {
-    points: Vec<Point>,
+pub struct Aby3NgStorePlayer {
+    points: Vec<NgPoint>,
 }
 
-impl std::fmt::Debug for Aby3StorePlayer {
+impl std::fmt::Debug for Aby3NgStorePlayer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.points.fmt(f)
     }
 }
 
 #[derive(Eq, PartialEq, Clone, Debug)]
-struct Point {
+struct NgPoint {
     /// Whatever encoding of a vector.
-    data:          SharedIris,
-    /// Distinguish between queries that are pending, and those that were
-    /// ultimately accepted into the vector store.
-    is_persistent: bool,
+    data: NgSharedIris,
 }
 
-impl Aby3StorePlayer {
-    pub fn new_with_shared_db(data: Vec<SharedIris>) -> Self {
-        let points: Vec<Point> = data
-            .into_iter()
-            .map(|d| Point {
-                data:          d,
-                is_persistent: false,
-            })
-            .collect();
-        Aby3StorePlayer { points }
+impl Aby3NgStorePlayer {
+    pub fn new_with_shared_db(data: Vec<NgSharedIris>) -> Self {
+        let points: Vec<NgPoint> = data.into_iter().map(|d| NgPoint { data: d }).collect();
+        Aby3NgStorePlayer { points }
     }
 
-    pub fn prepare_query(&mut self, raw_query: SharedIris) -> PointId {
-        self.points.push(Point {
-            data:          raw_query,
-            is_persistent: false,
-        });
+    pub fn prepare_query(&mut self, raw_query: NgSharedIris) -> PointId {
+        self.points.push(NgPoint { data: raw_query });
 
         let point_id = self.points.len() - 1;
         PointId(point_id)
     }
 }
 
-impl Aby3StorePlayer {
+impl Aby3NgStorePlayer {
     fn insert(&mut self, query: &PointId) -> PointId {
         // The query is now accepted in the store. It keeps the same ID.
-        self.points[query.0].is_persistent = true;
         *query
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct LocalNetAby3StoreProtocol {
-    pub players: HashMap<Identity, Aby3StorePlayer>,
-    pub runtime: LocalRuntime,
-}
-
-fn setup_local_player_preloaded_db(database: Vec<SharedIris>) -> eyre::Result<Aby3StorePlayer> {
-    let aby3_store = Aby3StorePlayer::new_with_shared_db(database);
+pub fn setup_local_player_preloaded_db(
+    database: Vec<NgSharedIris>,
+) -> eyre::Result<Aby3NgStorePlayer> {
+    let aby3_store = Aby3NgStorePlayer::new_with_shared_db(database);
     Ok(aby3_store)
-}
-
-pub fn setup_local_store_aby3_players() -> eyre::Result<LocalNetAby3StoreProtocol> {
-    let player_0 = Aby3StorePlayer::default();
-    let player_1 = Aby3StorePlayer::default();
-    let player_2 = Aby3StorePlayer::default();
-    let runtime = LocalRuntime::replicated_test_config();
-    let players = HashMap::from([
-        (Identity::from("alice"), player_0),
-        (Identity::from("bob"), player_1),
-        (Identity::from("charlie"), player_2),
-    ]);
-    Ok(LocalNetAby3StoreProtocol { runtime, players })
 }
 
 pub fn setup_local_aby3_players_with_preloaded_db<R: RngCore>(
     rng: &mut R,
     database: Vec<IrisCode>,
-) -> eyre::Result<LocalNetAby3StoreProtocol> {
-    let shared_db = create_shared_database_raw(rng, &database)?;
+) -> eyre::Result<LocalNetAby3NgStoreProtocol> {
+    let mut p0 = Vec::new();
+    let mut p1 = Vec::new();
+    let mut p2 = Vec::new();
 
-    let player_0 = setup_local_player_preloaded_db(shared_db.player0_shares)?;
-    let player_1 = setup_local_player_preloaded_db(shared_db.player1_shares)?;
-    let player_2 = setup_local_player_preloaded_db(shared_db.player2_shares)?;
+    for iris in database {
+        let all_shares = ng_generate_iris_shares(rng, iris);
+        p0.push(all_shares[0].clone());
+        p1.push(all_shares[1].clone());
+        p2.push(all_shares[2].clone());
+    }
+
+    let player_0 = setup_local_player_preloaded_db(p0)?;
+    let player_1 = setup_local_player_preloaded_db(p1)?;
+    let player_2 = setup_local_player_preloaded_db(p2)?;
     let players = HashMap::from([
         (Identity::from("alice"), player_0),
         (Identity::from("bob"), player_1),
         (Identity::from("charlie"), player_2),
     ]);
     let runtime = LocalRuntime::replicated_test_config();
-    Ok(LocalNetAby3StoreProtocol { runtime, players })
+    Ok(LocalNetAby3NgStoreProtocol { runtime, players })
 }
 
-impl LocalNetAby3StoreProtocol {
-    pub fn prepare_query(&mut self, code: Vec<SharedIris>) -> PointId {
+#[derive(Debug, Clone)]
+pub struct LocalNetAby3NgStoreProtocol {
+    pub players: HashMap<Identity, Aby3NgStorePlayer>,
+    pub runtime: LocalRuntime,
+}
+
+pub fn setup_local_store_aby3_players() -> eyre::Result<LocalNetAby3NgStoreProtocol> {
+    let player_0 = Aby3NgStorePlayer::default();
+    let player_1 = Aby3NgStorePlayer::default();
+    let player_2 = Aby3NgStorePlayer::default();
+    let runtime = LocalRuntime::replicated_test_config();
+    let players = HashMap::from([
+        (Identity::from("alice"), player_0),
+        (Identity::from("bob"), player_1),
+        (Identity::from("charlie"), player_2),
+    ]);
+    Ok(LocalNetAby3NgStoreProtocol { runtime, players })
+}
+
+impl LocalNetAby3NgStoreProtocol {
+    pub fn prepare_query(&mut self, code: Vec<NgSharedIris>) -> PointId {
         assert_eq!(code.len(), 3);
         assert_eq!(self.players.len(), 3);
         let pid0 = self
@@ -132,7 +130,7 @@ impl LocalNetAby3StoreProtocol {
     }
 }
 
-impl VectorStore for LocalNetAby3StoreProtocol {
+impl VectorStore for LocalNetAby3NgStoreProtocol {
     type QueryRef = PointId; // Vector ID, pending insertion.
     type VectorRef = PointId; // Vector ID, inserted.
     type DistanceRef = (PointId, PointId); // Lazy distance representation.
@@ -155,31 +153,19 @@ impl VectorStore for LocalNetAby3StoreProtocol {
     }
 
     async fn is_match(&self, distance: &Self::DistanceRef) -> bool {
-        // TODO(Dragos) Need to feed in different session
         let ready_sessions = self.runtime.create_player_sessions().await.unwrap();
-
         let mut jobs = JoinSet::new();
         for player in self.runtime.identities.clone() {
             let mut player_session = ready_sessions.get(&player).unwrap().clone();
             let storage = self.players.get(&player).unwrap();
-            let x = storage.points[distance.0 .0].clone();
-            let y = storage.points[distance.1 .0].clone();
+            let x = storage.points[distance.0.val()].clone();
+            let y = storage.points[distance.1.val()].clone();
             jobs.spawn(async move {
-                let (iris_to_match, mask_iris) = (&x.data.shares, &x.data.mask);
-                let (ground_truth, mask_ground_truth) = (&y.data.shares, &y.data.mask);
-
-                rep3_single_iris_match_public_output(
-                    &mut player_session,
-                    iris_to_match.as_slice(),
-                    ground_truth.clone(),
-                    mask_iris,
-                    *mask_ground_truth,
-                )
-                .await
-                .unwrap()
+                ng_replicated_is_match(&mut player_session, &[(x.data, y.data)])
+                    .await
+                    .unwrap()
             });
         }
-
         let r0 = jobs.join_next().await.unwrap().unwrap();
         let r1 = jobs.join_next().await.unwrap().unwrap();
         let r2 = jobs.join_next().await.unwrap().unwrap();
@@ -196,7 +182,6 @@ impl VectorStore for LocalNetAby3StoreProtocol {
         let d1 = *distance1;
         let d2 = *distance2;
         let ready_sessions = self.runtime.create_player_sessions().await.unwrap();
-
         let mut jobs = JoinSet::new();
         for player in self.runtime.identities.clone() {
             let mut player_session = ready_sessions.get(&player).unwrap().clone();
@@ -209,29 +194,23 @@ impl VectorStore for LocalNetAby3StoreProtocol {
                 storage.points[d2.0.val()].clone(),
                 storage.points[d2.1.val()].clone(),
             );
-
             jobs.spawn(async move {
-                let (d1, t1) = replicated_pairwise_distance(
-                    &mut player_session,
-                    &x1.data.shares.shares,
-                    &y1.data.shares.shares,
-                    &x1.data.mask,
-                    &y1.data.mask,
-                )
+                let ds_and_ts = ng_replicated_pairwise_distance(&mut player_session, &[
+                    (x1.data, y1.data),
+                    (x2.data, y2.data),
+                ])
                 .await
                 .unwrap();
-                let (d2, t2) = replicated_pairwise_distance(
+
+                ng_cross_compare(
                     &mut player_session,
-                    &x2.data.shares.shares,
-                    &y2.data.shares.shares,
-                    &x2.data.mask,
-                    &y2.data.mask,
+                    ds_and_ts[0].clone(),
+                    ds_and_ts[1].clone(),
+                    ds_and_ts[2].clone(),
+                    ds_and_ts[3].clone(),
                 )
                 .await
-                .unwrap();
-                replicated_lift_and_cross_mul(&mut player_session, d1, t1 as u32, d2, t2 as u32)
-                    .await
-                    .unwrap()
+                .unwrap()
             });
         }
 
@@ -244,12 +223,12 @@ impl VectorStore for LocalNetAby3StoreProtocol {
     }
 }
 
-pub async fn create_ready_made_hawk_searcher<R: RngCore + Clone>(
+pub async fn ng_create_ready_made_hawk_searcher<R: RngCore + Clone>(
     rng: &mut R,
     database_size: usize,
 ) -> eyre::Result<(
     HawkSearcher<PlaintextStore, GraphMem<PlaintextStore>>,
-    HawkSearcher<LocalNetAby3StoreProtocol, GraphMem<LocalNetAby3StoreProtocol>>,
+    HawkSearcher<LocalNetAby3NgStoreProtocol, GraphMem<LocalNetAby3NgStoreProtocol>>,
 )> {
     // makes sure the searcher produces same graph structure by having the same rng
     let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
@@ -273,21 +252,23 @@ pub async fn create_ready_made_hawk_searcher<R: RngCore + Clone>(
     }
 
     let protocol_store = setup_local_aby3_players_with_preloaded_db(rng, cleartext_database)?;
-    let protocol_graph =
-        GraphMem::<LocalNetAby3StoreProtocol>::from_another(cleartext_searcher.graph_store.clone());
+    let protocol_graph = GraphMem::<LocalNetAby3NgStoreProtocol>::from_another(
+        cleartext_searcher.graph_store.clone(),
+    );
     let secret_searcher = HawkSearcher::new(protocol_store, protocol_graph, &mut rng_searcher2);
 
     Ok((cleartext_searcher, secret_searcher))
 }
 
-pub async fn create_from_scratch_hawk_searcher<R: RngCore + Clone>(
+pub async fn ng_create_from_scratch_hawk_searcher<R: RngCore + Clone>(
     rng: &mut R,
     database_size: usize,
-) -> eyre::Result<HawkSearcher<LocalNetAby3StoreProtocol, GraphMem<LocalNetAby3StoreProtocol>>> {
+) -> eyre::Result<HawkSearcher<LocalNetAby3NgStoreProtocol, GraphMem<LocalNetAby3NgStoreProtocol>>>
+{
     let mut rng_searcher = AesRng::from_rng(rng.clone())?;
     let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
     let shared_irises: Vec<_> = (0..database_size)
-        .map(|id| generate_iris_shares(rng, cleartext_database[id].clone()))
+        .map(|id| ng_generate_iris_shares(rng, cleartext_database[id].clone()))
         .collect();
     let aby3_store_protocol = setup_local_store_aby3_players().unwrap();
 
@@ -314,92 +295,16 @@ pub async fn create_from_scratch_hawk_searcher<R: RngCore + Clone>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        database_generators::generate_iris_shares, hawkers::plaintext_store::PlaintextStore,
-    };
+    use crate::database_generators::ng_generate_iris_shares;
     use aes_prng::AesRng;
-    use hawk_pack::{graph_store::graph_mem::GraphMem, hnsw_db::HawkSearcher};
+    use hawk_pack::{graph_store::GraphMem, hnsw_db::HawkSearcher};
+    use iris_mpc_common::iris_db::db::IrisDB;
     use itertools::Itertools;
     use rand::SeedableRng;
     use tracing_test::traced_test;
 
     #[tokio::test(flavor = "multi_thread")]
-    #[traced_test]
-    async fn test_aby3_store_protocol() {
-        let mut rng = AesRng::seed_from_u64(0_u64);
-        let cleartext_database = IrisDB::new_random_rng(10, &mut rng).db;
-        let mut aby3_store_protocol = setup_local_store_aby3_players().unwrap();
-
-        let pid0 = aby3_store_protocol.prepare_query(generate_iris_shares(
-            &mut rng,
-            cleartext_database[0].clone(),
-        ));
-        let pid1 = aby3_store_protocol.prepare_query(generate_iris_shares(
-            &mut rng,
-            cleartext_database[1].clone(),
-        ));
-        let q0 = aby3_store_protocol.insert(&pid0).await;
-        let q1 = aby3_store_protocol.insert(&pid1).await;
-        let _ = aby3_store_protocol.less_than(&(q0, q1), &(q0, q1)).await;
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    #[traced_test]
-    async fn test_aby3_store_plaintext() {
-        let mut rng = AesRng::seed_from_u64(0_u64);
-        let cleartext_database = IrisDB::new_random_rng(10, &mut rng).db;
-
-        let mut aby3_store_protocol = setup_local_store_aby3_players().unwrap();
-        let db_dim = 4;
-
-        let aby3_preps: Vec<_> = (0..db_dim)
-            .map(|id| {
-                aby3_store_protocol.prepare_query(generate_iris_shares(
-                    &mut rng,
-                    cleartext_database[id].clone(),
-                ))
-            })
-            .collect();
-        let mut aby3_inserts = Vec::new();
-        for p in aby3_preps.iter() {
-            aby3_inserts.push(aby3_store_protocol.insert(p).await);
-        }
-
-        // Now do the work for the plaintext store
-        let mut plaintext_store = PlaintextStore::default();
-        let plaintext_preps: Vec<_> = (0..db_dim)
-            .map(|id| plaintext_store.prepare_query(cleartext_database[id].clone()))
-            .collect();
-        let mut plaintext_inserts = Vec::new();
-        for p in plaintext_preps.iter() {
-            plaintext_inserts.push(plaintext_store.insert(p).await);
-        }
-        let it1 = (0..db_dim).combinations(2);
-        let it2 = (0..db_dim).combinations(2);
-        for comb1 in it1 {
-            for comb2 in it2.clone() {
-                assert_eq!(
-                    aby3_store_protocol
-                        .less_than(
-                            &(aby3_inserts[comb1[0]], aby3_inserts[comb1[1]]),
-                            &(aby3_inserts[comb2[0]], aby3_inserts[comb2[1]])
-                        )
-                        .await,
-                    plaintext_store
-                        .less_than(
-                            &(plaintext_inserts[comb1[0]], plaintext_inserts[comb1[1]]),
-                            &(plaintext_inserts[comb2[0]], plaintext_inserts[comb2[1]])
-                        )
-                        .await,
-                    "Failed at combo: {:?}, {:?}",
-                    comb1,
-                    comb2
-                )
-            }
-        }
-    }
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_hnsw() {
+    async fn test_ng_hnsw() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 10;
         let cleartext_database = IrisDB::new_random_rng(database_size, &mut rng).db;
@@ -410,7 +315,7 @@ mod tests {
 
         let queries = (0..database_size)
             .map(|id| {
-                db.vector_store.prepare_query(generate_iris_shares(
+                db.vector_store.prepare_query(ng_generate_iris_shares(
                     &mut rng,
                     cleartext_database[id].clone(),
                 ))
@@ -424,26 +329,26 @@ mod tests {
         }
         println!("FINISHED INSERTING");
         // Search for the same codes and find matches.
-        for query in queries.iter() {
+        for (index, query) in queries.iter().enumerate() {
             let neighbors = db.search_to_insert(query).await;
             // assert_eq!(false, true);
             tracing::debug!("Finished query");
-            assert!(db.is_match(&neighbors).await);
+            assert!(db.is_match(&neighbors).await, "failed at index {:?}", index);
         }
     }
 
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
-    async fn test_premade_hnsw() {
+    async fn test_ng_premade_hnsw() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 10;
         let (cleartext_searcher, secret_searcher) =
-            create_ready_made_hawk_searcher(&mut rng, database_size)
+            ng_create_ready_made_hawk_searcher(&mut rng, database_size)
                 .await
                 .unwrap();
 
         let mut rng = AesRng::seed_from_u64(0_u64);
-        let scratch_secret_searcher = create_from_scratch_hawk_searcher(&mut rng, database_size)
+        let scratch_secret_searcher = ng_create_from_scratch_hawk_searcher(&mut rng, database_size)
             .await
             .unwrap();
 
@@ -509,10 +414,66 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
-    async fn test_scratch_hnsw() {
+    async fn test_ng_aby3_store_plaintext() {
+        let mut rng = AesRng::seed_from_u64(0_u64);
+        let cleartext_database = IrisDB::new_random_rng(10, &mut rng).db;
+
+        let mut aby3_store_protocol = setup_local_store_aby3_players().unwrap();
+        let db_dim = 4;
+
+        let aby3_preps: Vec<_> = (0..db_dim)
+            .map(|id| {
+                aby3_store_protocol.prepare_query(ng_generate_iris_shares(
+                    &mut rng,
+                    cleartext_database[id].clone(),
+                ))
+            })
+            .collect();
+        let mut aby3_inserts = Vec::new();
+        for p in aby3_preps.iter() {
+            aby3_inserts.push(aby3_store_protocol.insert(p).await);
+        }
+
+        // Now do the work for the plaintext store
+        let mut plaintext_store = PlaintextStore::default();
+        let plaintext_preps: Vec<_> = (0..db_dim)
+            .map(|id| plaintext_store.prepare_query(cleartext_database[id].clone()))
+            .collect();
+        let mut plaintext_inserts = Vec::new();
+        for p in plaintext_preps.iter() {
+            plaintext_inserts.push(plaintext_store.insert(p).await);
+        }
+        let it1 = (0..db_dim).combinations(2);
+        let it2 = (0..db_dim).combinations(2);
+        for comb1 in it1 {
+            for comb2 in it2.clone() {
+                assert_eq!(
+                    aby3_store_protocol
+                        .less_than(
+                            &(aby3_inserts[comb1[0]], aby3_inserts[comb1[1]]),
+                            &(aby3_inserts[comb2[0]], aby3_inserts[comb2[1]])
+                        )
+                        .await,
+                    plaintext_store
+                        .less_than(
+                            &(plaintext_inserts[comb1[0]], plaintext_inserts[comb1[1]]),
+                            &(plaintext_inserts[comb2[0]], plaintext_inserts[comb2[1]])
+                        )
+                        .await,
+                    "Failed at combo: {:?}, {:?}",
+                    comb1,
+                    comb2
+                )
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
+    async fn test_ng_scratch_hnsw() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 2;
-        let secret_searcher = create_from_scratch_hawk_searcher(&mut rng, database_size)
+        let secret_searcher = ng_create_from_scratch_hawk_searcher(&mut rng, database_size)
             .await
             .unwrap();
 
