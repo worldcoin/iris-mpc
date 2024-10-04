@@ -2512,7 +2512,7 @@ dependencies = [
  "hmac",
  "http 1.1.0",
  "itertools 0.13.0",
- "opentelemetry",
+ "opentelemetry 0.26.0",
  "percent-encoding",
  "rand",
  "rayon",
@@ -3067,7 +3067,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-statsd",
  "mongodb",
- "opentelemetry",
+ "opentelemetry 0.21.0",
  "ordered-float",
  "rand",
  "rayon",
@@ -3299,6 +3299,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "opentelemetry"
+version = "0.26.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "570074cc999d1a58184080966e5bd3bf3a9a4af650c3b05047c2621e7405cd17"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "js-sys",
+ "once_cell",
+ "pin-project-lite",
+ "thiserror",
+]
+
+[[package]]
 name = "opentelemetry-datadog"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3309,7 +3323,7 @@ dependencies = [
  "indexmap",
  "itertools 0.11.0",
  "once_cell",
- "opentelemetry",
+ "opentelemetry 0.21.0",
  "opentelemetry-http",
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
@@ -3328,7 +3342,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "http 0.2.12",
- "opentelemetry",
+ "opentelemetry 0.21.0",
  "reqwest 0.11.27",
 ]
 
@@ -3338,7 +3352,7 @@ version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f5774f1ef1f982ef2a447f6ee04ec383981a3ab99c8e77a1a7b30182e65bbc84"
 dependencies = [
- "opentelemetry",
+ "opentelemetry 0.21.0",
 ]
 
 [[package]]
@@ -3354,7 +3368,7 @@ dependencies = [
  "futures-util",
  "glob",
  "once_cell",
- "opentelemetry",
+ "opentelemetry 0.21.0",
  "ordered-float",
  "percent-encoding",
  "rand",
@@ -4888,7 +4902,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "metrics-exporter-statsd",
- "opentelemetry",
+ "opentelemetry 0.21.0",
  "opentelemetry-datadog",
  "opentelemetry-http",
  "opentelemetry_sdk",
@@ -5235,7 +5249,7 @@ checksum = "c67ac25c5407e7b961fafc6f7e9aa5958fd297aada2d20fa2ae1737357e55596"
 dependencies = [
  "js-sys",
  "once_cell",
- "opentelemetry",
+ "opentelemetry 0.21.0",
  "opentelemetry_sdk",
  "smallvec",
  "tracing",

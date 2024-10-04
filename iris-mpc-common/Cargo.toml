@@ -30,7 +30,7 @@ reqwest = { workspace = true, features = ["blocking", "json"] }
 sodiumoxide = "0.2.7"
 hmac = "0.12"
 http = "1.1.0"
-opentelemetry = "0.21.0"
+opentelemetry = "0.26.0"
 telemetry-batteries.workspace = true
 percent-encoding = "2"
 sha2 = "0.10"
