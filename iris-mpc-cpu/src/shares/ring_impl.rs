@@ -14,7 +14,9 @@ use std::{
     },
 };
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, PartialOrd, Eq, Ord)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, PartialOrd, Eq, Ord, Hash,
+)]
 #[serde(bound = "")]
 #[repr(transparent)]
 pub struct RingElement<T: IntRing2k + std::fmt::Display>(pub T);

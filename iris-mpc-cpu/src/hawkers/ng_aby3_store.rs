@@ -105,8 +105,13 @@ pub fn setup_local_store_aby3_players() -> eyre::Result<LocalNetAby3NgStoreProto
     Ok(LocalNetAby3NgStoreProtocol { runtime, players })
 }
 
-impl LocalNetAby3NgStoreProtocol {
-    pub fn prepare_query(&mut self, code: Vec<NgSharedIris>) -> PointId {
+impl VectorStore for LocalNetAby3NgStoreProtocol {
+    type QueryRef = PointId; // Vector ID, pending insertion.
+    type VectorRef = PointId; // Vector ID, inserted.
+    type DistanceRef = (PointId, PointId); // Lazy distance representation.
+    type Data = Vec<NgSharedIris>;
+
+    fn prepare_query(&mut self, code: Vec<NgSharedIris>) -> PointId {
         assert_eq!(code.len(), 3);
         assert_eq!(self.players.len(), 3);
         let pid0 = self
@@ -128,12 +133,6 @@ impl LocalNetAby3NgStoreProtocol {
         assert_eq!(pid1, pid2);
         pid0
     }
-}
-
-impl VectorStore for LocalNetAby3NgStoreProtocol {
-    type QueryRef = PointId; // Vector ID, pending insertion.
-    type VectorRef = PointId; // Vector ID, inserted.
-    type DistanceRef = (PointId, PointId); // Lazy distance representation.
 
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         // The query is now accepted in the store. It keeps the same ID.
@@ -243,7 +242,7 @@ pub async fn ng_create_ready_made_hawk_searcher<R: RngCore + Clone>(
     for raw_query in cleartext_database.iter() {
         let query = cleartext_searcher
             .vector_store
-            .prepare_query(raw_query.clone());
+            .prepare_query(raw_query.clone().into());
         let neighbors = cleartext_searcher.search_to_insert(&query).await;
         let inserted = cleartext_searcher.vector_store.insert(&query).await;
         cleartext_searcher
@@ -315,10 +314,9 @@ mod tests {
 
         let queries = (0..database_size)
             .map(|id| {
-                db.vector_store.prepare_query(ng_generate_iris_shares(
-                    &mut rng,
-                    cleartext_database[id].clone(),
-                ))
+                db.vector_store.prepare_query(
+                    ng_generate_iris_shares(&mut rng, cleartext_database[id].clone()).into(),
+                )
             })
             .collect::<Vec<_>>();
 
@@ -437,7 +435,7 @@ mod tests {
         // Now do the work for the plaintext store
         let mut plaintext_store = PlaintextStore::default();
         let plaintext_preps: Vec<_> = (0..db_dim)
-            .map(|id| plaintext_store.prepare_query(cleartext_database[id].clone()))
+            .map(|id| plaintext_store.prepare_query(cleartext_database[id].clone().into()))
             .collect();
         let mut plaintext_inserts = Vec::new();
         for p in plaintext_preps.iter() {
