@@ -1,6 +1,7 @@
 use crate::shares::{ring_impl::RingElement, share::Share, vecshare::VecShare};
 use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodeArray};
 use rand::{Rng, RngCore};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 type ShareRing = u16;
@@ -9,13 +10,13 @@ type VecShareType = VecShare<u16>;
 type ShareRingPlain = RingElement<ShareRing>;
 // type ShareType = Share<u16>;
 
-#[derive(PartialEq, Eq, Debug, Default, Clone)]
+#[derive(PartialEq, Eq, Debug, Default, Clone, Serialize, Deserialize, Hash)]
 pub struct SharedIris {
     pub shares: VecShareType,
     pub mask:   IrisCodeArray,
 }
 
-#[derive(PartialEq, Eq, Debug, Default, Clone)]
+#[derive(PartialEq, Eq, Debug, Default, Clone, Serialize, Deserialize, Hash)]
 pub struct NgSharedIris {
     pub code: VecShareType,
     pub mask: VecShareType,
