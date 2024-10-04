@@ -4,13 +4,13 @@ metadata:
   name: db-cleaner
   namespace: iris-mpc
 spec:
-  hostNetwork: true
-  serviceAccountName: iris-mpc  # Add this line
+  nodeSelector:
+    beta.kubernetes.io/instance-type: t3.2xlarge # Use migration node for db-cleaner
   securityContext:
     runAsUser: 0
   containers:
     - name: db-cleaner
-      image: ubuntu
+      image: postgres
       imagePullPolicy: Always
       command: [ "/bin/bash" ]
       args: [ "-c", "while true; do ping localhost; sleep 60; done" ]

@@ -40,7 +40,6 @@ kubens iris-mpc
 kubectl apply -f db-cleaner-helper-pod.yaml
 echo "Waiting 10s for db-cleaner pod to be ready..."
 sleep 10
-kubectl exec -it db-cleaner -- bash -c "apt update && apt install -y postgresql-client"
 kubectl exec -it db-cleaner -- bash -c "psql -H $MPC_1_DATABASE_URL -c 'SET search_path TO \"SMPC_stage_0\"; TRUNCATE irises RESTART IDENTITY;'"
 kubectl exec -it db-cleaner -- bash -c "psql -H $MPC_1_DATABASE_URL -c 'SET search_path TO \"SMPC_stage_0\"; TRUNCATE sync RESTART IDENTITY;'"
 kubectl exec -it db-cleaner -- bash -c "psql -H $MPC_1_DATABASE_URL -c 'SET search_path TO \"SMPC_stage_0\"; TRUNCATE results;'"
@@ -51,7 +50,6 @@ kubens iris-mpc
 kubectl apply -f db-cleaner-helper-pod.yaml
 echo "Waiting 10s for db-cleaner pod to be ready..."
 sleep 10
-kubectl exec -it db-cleaner -- bash -c "apt update && apt install -y postgresql-client"
 kubectl exec -it db-cleaner -- bash -c "psql -H $MPC_2_DATABASE_URL -c 'SET search_path TO \"SMPC_stage_1\"; TRUNCATE irises RESTART IDENTITY;'"
 kubectl exec -it db-cleaner -- bash -c "psql -H $MPC_2_DATABASE_URL -c 'SET search_path TO \"SMPC_stage_1\"; TRUNCATE sync RESTART IDENTITY;'"
 kubectl exec -it db-cleaner -- bash -c "psql -H $MPC_2_DATABASE_URL -c 'SET search_path TO \"SMPC_stage_1\"; TRUNCATE results;'"
@@ -62,7 +60,6 @@ kubens iris-mpc
 kubectl apply -f db-cleaner-helper-pod.yaml
 echo "Waiting 10s for db-cleaner pod to be ready..."
 sleep 10
-kubectl exec -it db-cleaner -- bash -c "apt update && apt install -y postgresql-client"
 kubectl exec -it db-cleaner -- bash -c "psql -H $MPC_3_DATABASE_URL -c 'SET search_path TO \"SMPC_stage_2\"; TRUNCATE irises RESTART IDENTITY;'"
 kubectl exec -it db-cleaner -- bash -c "psql -H $MPC_3_DATABASE_URL -c 'SET search_path TO \"SMPC_stage_2\"; TRUNCATE sync RESTART IDENTITY;'"
 kubectl exec -it db-cleaner -- bash -c "psql -H $MPC_3_DATABASE_URL -c 'SET search_path TO \"SMPC_stage_2\"; TRUNCATE results;'"
