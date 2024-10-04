@@ -23,7 +23,7 @@ rand_chacha = "0.3"
 tokio.workspace = true
 tracing-subscriber.workspace = true
 
-mpc-uniqueness-check = { package = "mpc", git = "https://github.com/worldcoin/mpc-uniqueness-check", rev = "4d38402" }
+mpc-uniqueness-check = { package = "mpc", git = "https://github.com/worldcoin/mpc-uniqueness-check", rev = "ffa9227" }
 indicatif = "0.17.8"
 tokio-rustls = "0.26.0"
 rustls = "0.23.12"
