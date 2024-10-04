@@ -92,7 +92,7 @@ impl<'a, T: IntRing2k> SliceShareMut<'a, T> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Default, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Default, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
 #[serde(bound = "")]
 #[repr(transparent)]
 pub struct VecShare<T: IntRing2k> {
