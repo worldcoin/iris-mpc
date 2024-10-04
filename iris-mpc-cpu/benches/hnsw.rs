@@ -16,7 +16,7 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
     group.sample_size(10);
     group.sampling_mode(SamplingMode::Flat);
 
-    for database_size in [100_usize, 1000, 10000] {
+    for database_size in [10000] {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -30,7 +30,7 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
 
             for _ in 0..database_size {
                 let raw_query = IrisCode::random_rng(&mut rng);
-                let query = vector.prepare_query(raw_query.clone());
+                let query = vector.prepare_query(raw_query.clone().into());
                 let neighbors = searcher
                     .search_to_insert(&mut vector, &mut graph, &query)
                     .await;
@@ -55,7 +55,7 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
                     let searcher = HawkSearcher::default();
                     let mut rng = AesRng::seed_from_u64(0_u64);
                     let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
-                    let query = db_vectors.prepare_query(on_the_fly_query);
+                    let query = db_vectors.prepare_query(on_the_fly_query.into());
                     let neighbors = searcher
                         .search_to_insert(&mut db_vectors, &mut graph, &query)
                         .await;

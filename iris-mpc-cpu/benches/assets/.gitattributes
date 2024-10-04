@@ -1,0 +1,17 @@
+hnsw_db_1000000_hawk_graph_links.csv.zip filter=lfs diff=lfs merge=lfs -text
+hnsw_db_1000000_hawk_vectors.csv.zip filter=lfs diff=lfs merge=lfs -text
+hnsw_db_100000_hawk_graph_links.csv.zip filter=lfs diff=lfs merge=lfs -text
+hnsw_db_100000_hawk_vectors.csv.zip filter=lfs diff=lfs merge=lfs -text
+hnsw_db_200000_hawk_graph_links.csv.zip filter=lfs diff=lfs merge=lfs -text
+hnsw_db_200000_hawk_vectors.csv.zip filter=lfs diff=lfs merge=lfs -text
+100K_rust_format_synthetic_data.dat.zip filter=lfs diff=lfs merge=lfs -text
+processed_masked_irises_chunk_8 filter=lfs diff=lfs merge=lfs -text
+processed_masked_irises_chunk_9 filter=lfs diff=lfs merge=lfs -text
+processed_masked_irises_chunk_3 filter=lfs diff=lfs merge=lfs -text
+processed_masked_irises_chunk_4 filter=lfs diff=lfs merge=lfs -text
+processed_masked_irises_chunk_2 filter=lfs diff=lfs merge=lfs -text
+processed_masked_irises_chunk_5 filter=lfs diff=lfs merge=lfs -text
+processed_masked_irises_chunk_6 filter=lfs diff=lfs merge=lfs -text
+processed_masked_irises_chunk_7 filter=lfs diff=lfs merge=lfs -text
+processed_masked_irises_chunk_0 filter=lfs diff=lfs merge=lfs -text
+processed_masked_irises_chunk_1 filter=lfs diff=lfs merge=lfs -text

@@ -4,12 +4,14 @@ use rand::{
     distributions::{Bernoulli, Distribution},
     Rng,
 };
+use serde::{Deserialize, Serialize};
+use serde_big_array::BigArray;
 
 pub const MATCH_THRESHOLD_RATIO: f64 = 0.375;
 
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct IrisCodeArray(pub [u64; Self::IRIS_CODE_SIZE_U64]);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+pub struct IrisCodeArray(#[serde(with = "BigArray")] pub [u64; Self::IRIS_CODE_SIZE_U64]);
 impl Default for IrisCodeArray {
     fn default() -> Self {
         Self::ZERO
