@@ -83,7 +83,7 @@ fn bench_hnsw_db(c: &mut Criterion) {
     group.sample_size(10);
     group.sampling_mode(SamplingMode::Flat);
 
-    for database_size in [100000, 200000] {
+    for database_size in [100000, 200000, 1000000] {
         let schema_name = format!("hnsw_db_{}", database_size.to_string());
         let temporary_name = || format!("{}_{}", schema_name, rand::random::<u32>());
 
