@@ -355,9 +355,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-secretsmanager"
-version = "1.48.0"
+version = "1.49.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34f0ed64c48d8d703d93791e5315f9c12789f7280e8ee7c2c8fe8c1bc5d91907"
+checksum = "ca2ac19e43e100834e7b9e6f838af7506a5cb8ee7531d1104cb207b3d927e0c2"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
