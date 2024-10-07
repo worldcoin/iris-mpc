@@ -353,6 +353,10 @@ impl ServerActor {
         self.current_db_sizes.clone()
     }
 
+    pub fn set_current_db_sizes(&mut self, sizes: Vec<usize>) {
+        self.current_db_sizes = sizes;
+    }
+
     pub fn load_full_db(
         &mut self,
         left: &IrisCodeDbSlice,
