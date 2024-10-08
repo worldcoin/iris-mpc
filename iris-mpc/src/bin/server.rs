@@ -686,7 +686,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             / actor.current_db_sizes().len();
                         actor.current_db_sizes().len()
                     ]);
-                    return eyre::Ok(());
+                    return Ok(());
                 }
 
                 tracing::info!(
