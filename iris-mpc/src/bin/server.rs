@@ -4,7 +4,7 @@ use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{routing::get, Router};
 use clap::Parser;
-use eyre::{eyre, Context, Ok};
+use eyre::{eyre, Context};
 use futures::TryStreamExt;
 use iris_mpc_common::{
     config::{json_wrapper::JsonStrWrapper, Config, Opt},
