@@ -84,6 +84,13 @@ pub mod degree4 {
             }
             result
         }
+        pub fn trick_dot(&self, other: &GaloisRingTrimmedMaskCodeShare) -> u16 {
+            let mut sum = 0u16;
+            for i in 0..MASK_CODE_LENGTH {
+                sum = sum.wrapping_add(self.coefs[i].wrapping_mul(other.coefs[i]));
+            }
+            sum
+        }
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
