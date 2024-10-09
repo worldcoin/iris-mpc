@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:ac296359ed6764395f105baa894fd53ef0f43c6e"
+image: "ghcr.io/worldcoin/iris-mpc:v0.8.20"
 
 environment: stage
 replicaCount: 1
@@ -9,13 +9,17 @@ strategy:
 datadog:
   enabled: true
 
+# Nginx exposes the only port required here
 ports:
-  - containerPort: 8000
-    name: http
-    protocol: TCP
   - containerPort: 3000
     name: health
     protocol: TCP
+
+startupProbe:
+  enabled: true
+  httpGet:
+    path: /health
+    port: health
 
 livenessProbe:
   httpGet:
@@ -31,10 +35,10 @@ readinessProbe:
 
 resources:
   limits:
-    cpu: 4
+    cpu: 1
     memory: 1Gi
   requests:
-    cpu: 4
+    cpu: 1
     memory: 1Gi
 
 imagePullSecrets:
@@ -42,8 +46,6 @@ imagePullSecrets:
 
 nodeSelector:
   kubernetes.io/arch: amd64
-
-hostNetwork: true
 
 podSecurityContext:
   runAsUser: 65534
@@ -65,25 +67,61 @@ env:
   - name: ENVIRONMENT
     value: stage
 
-
-keelPolling:
-  # -- Specifies whether keel should poll for container updates
-  enabled: true
-
 service:
   enabled: false
 
-ingress:
+nginxSidecar:
   enabled: true
-  ingressClassName: traefik-internal
-  hosts:
-    - not-upgrade-left.1.stage.smpcv2.worldcoin.dev
-
-ingressRouteTCP:
-  enabled: true
-  entryPoints:
-    - websecure
-  service:
-    - name: upgrade-server-left
-      port: 80
-  tls: {}
+  port: 8443
+  secrets:
+    enabled: true
+    volumeMount:
+      - name: mounted-secret-name
+        mountPath: /etc/nginx/cert
+    volume:
+      - name: mounted-secret-name
+        secret:
+          secretName: application
+          items:
+            - key: certificate.crt
+              path: certificate.crt
+            - key: key.pem
+              path: key.pem
+          optional: false
+  config:
+    nginx.conf: |
+      worker_processes  auto;
+      
+      error_log  /dev/stderr notice;
+      pid        /tmp/nginx.pid;
+      
+      events {
+        worker_connections  1024;
+      }
+      
+      stream {
+        log_format basic '$remote_addr [$time_local] '
+                   '$protocol $status $bytes_sent $bytes_received '
+                   '$session_time';
+      
+        upstream tcp_backend {
+          server 127.0.0.1:8000;
+        }
+      
+        server {
+          listen 8443 ssl;
+          proxy_pass tcp_backend;
+      
+          ssl_certificate /etc/nginx/cert/certificate.crt;
+          ssl_certificate_key /etc/nginx/cert/key.pem;
+      
+          ssl_protocols TLSv1.3;
+          ssl_ciphers HIGH:!aNULL:!MD5;
+      
+          # Enable session resumption to improve performance
+          ssl_session_cache shared:SSL:10m;
+          ssl_session_timeout 1h;
+      
+          access_log /dev/stdout basic;
+        }
+      }
