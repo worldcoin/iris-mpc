@@ -1,6 +1,6 @@
 env:
   - name: RUST_LOG
-    value: "info"
+    value: "debug"
 
   - name: RUST_BACKTRACE
     value: "full"
@@ -50,6 +50,9 @@ env:
   - name: SMPC__PROCESSING_TIMEOUT_SECS
     value: "60"
 
+  - name: SMPC__HEARTBEAT_INTERVAL_SECS
+    value: "5"
+
   - name: SMPC__PATH
     value: "/data/"
 
@@ -69,10 +72,10 @@ env:
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
-    value: "100"
+    value: "0"
 
   - name: SMPC__MAX_DB_SIZE
     value: "1000000"
-    
+
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
