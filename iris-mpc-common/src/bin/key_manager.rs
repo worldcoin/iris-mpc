@@ -176,6 +176,9 @@ async fn rotate_keys(
     let pub_key_str = STANDARD.encode(public_key);
     let priv_key_str = STANDARD.encode(private_key.clone());
 
+    tracing::info!("Public key: {}", pub_key_str);
+    tracing::info!("Private key: {}", priv_key_str);
+    
     if dry_run.unwrap_or(false) {
         println!("Dry run enabled, skipping upload of public key to S3");
         println!("Public key: {}", pub_key_str);

@@ -96,6 +96,7 @@ impl SharesEncryptionKeyPairs {
             Ok(sk) => sk,
             Err(e) => return Err(e),
         };
+        tracing::info!("Current sk b64: {}", current_sk_b64_string);
 
         let previous_sk_b64_string = match download_private_key_from_asm(
             &client,
@@ -108,6 +109,7 @@ impl SharesEncryptionKeyPairs {
             Ok(sk) => sk,
             Err(e) => return Err(e),
         };
+        tracing::info!("Previous sk b64: {}", previous_sk_b64_string);
 
         match SharesEncryptionKeyPairs::from_b64_private_key_strings(
             current_sk_b64_string,
