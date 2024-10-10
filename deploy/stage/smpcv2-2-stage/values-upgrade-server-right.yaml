@@ -18,7 +18,7 @@ initContainer:
   name: "upgrade-proto-dns-records-updater"
   env:
     - name: PARTY_ID
-      value: "2"
+      value: "3"
     - name: SIDE
       value: right
     - name: MY_POD_IP
