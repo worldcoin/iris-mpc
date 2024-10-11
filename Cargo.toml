@@ -9,6 +9,11 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+edition = "2021"
+license = "MIT OR (Apache-2.0 WITH LLVM-exception)"
+repository = "https://github.com/worldcoin/iris-mpc"
+
 [workspace.dependencies]
 aws-config = { version = "1.5.4", features = ["behavior-version-latest"] }
 aws-sdk-kms = { version = "1.44.0" }

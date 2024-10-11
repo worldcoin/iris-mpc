@@ -1,9 +1,11 @@
 [package]
 name = "iris-mpc-cpu"
 version = "0.1.0"
-edition = "2021"
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+publish = false
 
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display"}
