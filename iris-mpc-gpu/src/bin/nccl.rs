@@ -77,7 +77,7 @@ async fn main() -> eyre::Result<()> {
         slices1.push(slice1);
         slices2.push(slice2);
         slices3.push(slice3);
-        
+
         println!("device {i} started");
     }
 
