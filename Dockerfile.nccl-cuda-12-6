@@ -1,0 +1,75 @@
+FROM --platform=linux/amd64 ghcr.io/worldcoin/iris-mpc-base:cuda12_6-nccl2_22_3_1 as build-image
+
+WORKDIR /src
+RUN apt-get update && apt-get install -y \
+    curl \
+    build-essential \
+    libssl-dev \
+    texinfo \
+    libcap2-bin \
+    pkg-config \
+    git \
+    devscripts \
+    debhelper \
+    ca-certificates \
+    wget
+
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
+ENV PATH "/root/.cargo/bin:${PATH}"
+ENV RUSTUP_HOME "/root/.rustup"
+ENV CARGO_HOME "/root/.cargo"
+RUN rustup toolchain install nightly-2024-07-10
+RUN rustup default nightly-2024-07-10
+RUN rustup component add cargo
+RUN cargo install cargo-build-deps \
+    && cargo install cargo-edit
+
+FROM --platform=linux/amd64 build-image as build-app
+WORKDIR /src/gpu-iris-mpc
+COPY . .
+RUN cargo build --release --target x86_64-unknown-linux-gnu --bin nccl
+
+FROM --platform=linux/amd64 ghcr.io/worldcoin/iris-mpc-base:cuda12_6-nccl2_22_3_1
+ENV DEBIAN_FRONTEND=noninteractive
+
+ARG GDRCOPY_VERSION=v2.4.1
+ARG EFA_INSTALLER_VERSION=1.34.0
+ARG NCCL_INSTALL_VERSION=v2.22.3-1
+ARG AWS_OFI_NCCL_VERSION=aws
+
+ENV LD_LIBRARY_PATH /usr/local/cuda/extras/CUPTI/lib64:/opt/amazon/openmpi/lib:/opt/nccl/build/lib:/opt/amazon/efa/lib:/opt/aws-ofi-nccl/install/lib:/usr/local/lib:$LD_LIBRARY_PATH
+ENV PATH /opt/amazon/openmpi/bin/:/opt/amazon/efa/bin:$PATH
+
+RUN git clone -b ${GDRCOPY_VERSION} https://github.com/NVIDIA/gdrcopy.git /tmp/gdrcopy \
+    && cd /tmp/gdrcopy \
+    && make prefix=/opt/gdrcopy install
+
+ENV LD_LIBRARY_PATH /opt/gdrcopy/lib:/usr/local/cuda/compat:$LD_LIBRARY_PATH
+ENV LIBRARY_PATH /opt/gdrcopy/lib:/usr/local/cuda/compat/:$LIBRARY_PATH
+ENV CPATH /opt/gdrcopy/include:$CPATH
+ENV PATH /opt/gdrcopy/bin:$PATH
+
+# Install EFA installer
+RUN cd /tmp \
+    && curl -O https://efa-installer.amazonaws.com/aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz \
+    && tar -xf /tmp/aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz \
+    && cd /tmp/aws-efa-installer \
+    && ./efa_installer.sh -y -d --skip-kmod --skip-limit-conf --no-verify | tee /tmp/aws-efa-installer/install.log
+
+# Test EFA installation
+RUN /opt/amazon/efa/bin/fi_info --version
+
+# Install AWS-OFI-NCCL plugin
+RUN cd /tmp \
+    && git clone https://github.com/aws/aws-ofi-nccl.git \
+    && cd /tmp/aws-ofi-nccl \
+    && git checkout ${AWS_OFI_NCCL_VERSION} \
+    && ./autogen.sh \
+    && ./configure --prefix=/opt/aws-ofi-nccl/install \
+       --with-libfabric=/opt/amazon/efa/ \
+       --with-cuda=/usr/local/cuda \
+       --with-nccl=/tmp/nccl/build \
+       --with-mpi=/opt/amazon/openmpi/ \
+    && make && make install
+
+COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/nccl /bin/nccl
