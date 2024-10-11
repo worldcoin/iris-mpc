@@ -4,8 +4,7 @@ use crate::{
     execution::player::Identity,
     hawkers::plaintext_store::PointId,
     next_gen_protocol::ng_worker::{
-        ng_cross_compare, ng_replicated_is_match, ng_replicated_pairwise_distance, open_t_many_16,
-        LocalRuntime,
+        ng_cross_compare, ng_replicated_is_match, ng_replicated_pairwise_distance, LocalRuntime,
     },
 };
 use aes_prng::AesRng;
@@ -202,10 +201,6 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
                 ])
                 .await
                 .unwrap();
-                let opened = open_t_many_16(&player_session, ds_and_ts.clone())
-                    .await
-                    .unwrap();
-                println!("opened ng: {:?}", opened);
                 ng_cross_compare(
                     &mut player_session,
                     ds_and_ts[0].clone(),
@@ -458,7 +453,7 @@ mod tests {
                             &(aby3_inserts[comb2[0]], aby3_inserts[comb2[1]])
                         )
                         .await,
-                    !plaintext_store
+                    plaintext_store
                         .less_than(
                             &(plaintext_inserts[comb1[0]], plaintext_inserts[comb1[1]]),
                             &(plaintext_inserts[comb2[0]], plaintext_inserts[comb2[1]])
