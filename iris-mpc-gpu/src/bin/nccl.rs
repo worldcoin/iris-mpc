@@ -77,20 +77,29 @@ async fn main() -> eyre::Result<()> {
         slices1.push(slice1);
         slices2.push(slice2);
         slices3.push(slice3);
+        
+        println!("device {i} started");
     }
 
-    for _ in 0..10 {
+    println!("Approaching main loop");
+    for iter in 0..10 {
+        println!("Main loop entered, iteration {}", iter);
         let now = Instant::now();
 
         for i in 0..n_devices {
+            println!("Binding to thread, iteration {}, device {}", iter, i);
             devs[i].bind_to_thread().unwrap();
 
+            println!("Broadcasting 0, iteration {}, device {}", iter, i);
             comms[i].broadcast(&slices[i], &mut slices1[i], 0).unwrap();
+            println!("Broadcasting 1, iteration {}, device {}", iter, i);
             comms[i].broadcast(&slices[i], &mut slices2[i], 1).unwrap();
+            println!("Broadcasting 2, iteration {}, device {}", iter, i);
             comms[i].broadcast(&slices[i], &mut slices3[i], 2).unwrap();
         }
 
         for dev in devs.iter() {
+            println!("Synchronising devices, iteration {}", iter);
             dev.synchronize().unwrap();
         }
 
