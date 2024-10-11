@@ -122,7 +122,10 @@ pub(crate) async fn gr_replicated_pairwise_distance(
         let code_dot = x.code.trick_dot(&y.code);
         let mask_dot = x.mask.trick_dot(&y.mask);
         additive_shares.push(RingElement(code_dot));
-        additive_shares.push(RingElement(mask_dot));
+        // When applying the trick dot on trimmed masks, we have to multiply with 2 the
+        // result The intuition being that a GaloisRingTrimmedMask contains half
+        // the elements that a full GaloisRingMask has.
+        additive_shares.push(RingElement(2) * RingElement(mask_dot));
     }
     Ok(additive_shares)
 }
@@ -293,6 +296,44 @@ pub async fn open_t_many(session: &Session, shares: VecShare<u64>) -> eyre::Resu
     Ok(res)
 }
 
+pub async fn open_t_many_16(session: &Session, shares: Vec<Share<u16>>) -> eyre::Result<Vec<u16>> {
+    let next_party = session.next_identity()?;
+    let network = session.network().clone();
+    let sid = session.session_id();
+
+    let shares_b: Vec<_> = shares.iter().map(|s| s.b).collect();
+    let message = shares_b;
+    network
+        .send(
+            NetworkValue::VecRing16(message).to_network(),
+            &next_party,
+            &sid,
+        )
+        .await?;
+
+    // receiving from previous party
+    let network = session.network().clone();
+    let sid = session.session_id();
+    let prev_party = session.prev_identity()?;
+    let shares_c = {
+        let serialized_other_share = network.receive(&prev_party, &sid).await;
+        match NetworkValue::from_network(serialized_other_share) {
+            Ok(NetworkValue::VecRing16(message)) => Ok(message),
+            _ => Err(eyre!("Error in receiving in open_t_many_16 operation")),
+        }
+    }?;
+
+    let res = shares
+        .into_iter()
+        .zip(shares_c)
+        .map(|(s, c)| {
+            let (a, b) = s.get_ab();
+            (a + b + c).convert()
+        })
+        .collect();
+    Ok(res)
+}
+
 pub async fn ng_replicated_is_match(
     session: &mut Session,
     pairs: &[(NgSharedIris, NgSharedIris)],
@@ -310,7 +351,7 @@ pub async fn gr_to_rep3(
 ) -> eyre::Result<Vec<Share<u16>>> {
     let network = session.network().clone();
     let sid = session.session_id();
-    let next_party = session.prev_identity()?;
+    let next_party = session.next_identity()?;
 
     // sending to the next party
     let shares_a = items.clone();
@@ -420,10 +461,13 @@ impl LocalRuntime {
 mod tests {
     use super::*;
     use crate::{
+        database_generators::generate_galois_iris_shares, hawkers::plaintext_store::FormattedIris,
         next_gen_protocol::ng_worker::NetworkValue::RingElement32, shares::ring_impl::RingElement,
     };
     use aes_prng::AesRng;
+    use iris_mpc_common::iris_db::db::IrisDB;
     use rand::{Rng, RngCore, SeedableRng};
+    use rstest::rstest;
 
     async fn open_single(session: &Session, x: Share<u32>) -> eyre::Result<RingElement<u32>> {
         let network = session.network();
@@ -587,5 +631,94 @@ mod tests {
         let t = jobs.join_next().await.unwrap().unwrap();
         assert_eq!(t.0, RingElement(4));
         assert_eq!(t.1, RingElement(6));
+    }
+
+    async fn open_additive(session: &Session, x: Vec<RingElement<u16>>) -> eyre::Result<Vec<u16>> {
+        let network = session.network();
+        let next_role = session.identity(&session.own_role()?.next(3))?;
+        let prev_role = session.identity(&session.own_role()?.prev(3))?;
+        network
+            .send(
+                NetworkValue::VecRing16(x.clone()).to_network(),
+                next_role,
+                &session.session_id(),
+            )
+            .await?;
+        network
+            .send(
+                NetworkValue::VecRing16(x.clone()).to_network(),
+                prev_role,
+                &session.session_id(),
+            )
+            .await?;
+
+        let serialized_reply_0 = network.receive(prev_role, &session.session_id()).await;
+        let serialized_reply_1 = network.receive(next_role, &session.session_id()).await;
+
+        let missing_share_0 = match NetworkValue::from_network(serialized_reply_0) {
+            Ok(NetworkValue::VecRing16(element)) => element,
+            _ => return Err(eyre!("Could not deserialize VecRingElement16")),
+        };
+        let missing_share_1 = match NetworkValue::from_network(serialized_reply_1) {
+            Ok(NetworkValue::VecRing16(element)) => element,
+            _ => return Err(eyre!("Could not deserialize VecRingElement16")),
+        };
+        let opened_value: Vec<u16> = x
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (missing_share_0[i] + missing_share_1[i] + v).convert())
+            .collect();
+        Ok(opened_value)
+    }
+
+    #[tokio::test]
+    #[rstest]
+    #[case(0)]
+    #[case(1)]
+    #[case(2)]
+    async fn test_gr_to_rep3(#[case] seed: u64) {
+        let runtime = LocalRuntime::replicated_test_config();
+        let ready_sessions = runtime.create_player_sessions().await.unwrap();
+        let mut rng = AesRng::seed_from_u64(seed);
+
+        let iris_db = IrisDB::new_random_rng(2, &mut rng).db;
+
+        let first_entry = generate_galois_iris_shares(&mut rng, iris_db[0].clone());
+        let second_entry = generate_galois_iris_shares(&mut rng, iris_db[1].clone());
+
+        let mut jobs = JoinSet::new();
+        for (index, player) in runtime.identities.iter().cloned().enumerate() {
+            let mut player_session = ready_sessions.get(&player).unwrap().clone();
+            let mut own_shares = vec![(first_entry[index].clone(), second_entry[index].clone())];
+            own_shares.iter_mut().for_each(|(_x, y)| {
+                y.code.preprocess_iris_code_query_share();
+                y.mask.preprocess_mask_code_query_share();
+            });
+            // let own_shares = vec![(ng_first_entry[index].clone(),
+            // ng_second_entry[index].clone())];
+            jobs.spawn(async move {
+                let x = gr_replicated_pairwise_distance(&mut player_session, &own_shares)
+                    .await
+                    .unwrap();
+                let opened_x = open_additive(&player_session, x.clone()).await.unwrap();
+                let x_rep = gr_to_rep3(&player_session, x).await.unwrap();
+                let opened_x_rep = open_t_many_16(&player_session, x_rep).await.unwrap();
+                (opened_x, opened_x_rep)
+            });
+        }
+        let output0 = jobs.join_next().await.unwrap().unwrap();
+        let output1 = jobs.join_next().await.unwrap().unwrap();
+        let output2 = jobs.join_next().await.unwrap().unwrap();
+        assert_eq!(output0, output1);
+        assert_eq!(output0, output2);
+
+        let formatted_first = FormattedIris::from(iris_db[0].clone());
+        let formatted_second = FormattedIris::from(iris_db[1].clone());
+        let (plain_d1, plain_d2) = formatted_first.compute_distance(&formatted_second);
+        assert_eq!(output0.0[0], plain_d1 as u16);
+        assert_eq!(output0.0[1], plain_d2 as u16);
+
+        assert_eq!(output0.1[0], plain_d1 as u16);
+        assert_eq!(output0.1[1], plain_d2 as u16);
     }
 }

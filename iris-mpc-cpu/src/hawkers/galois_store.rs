@@ -5,7 +5,7 @@ use crate::{
     hawkers::plaintext_store::PointId,
     next_gen_protocol::ng_worker::{
         gr_replicated_is_match, gr_replicated_pairwise_distance, gr_to_rep3, ng_cross_compare,
-        LocalRuntime,
+        open_t_many_16, LocalRuntime,
     },
 };
 use aes_prng::AesRng;
@@ -41,9 +41,7 @@ impl Aby3NgStorePlayer {
         Aby3NgStorePlayer { points }
     }
 
-    pub fn prepare_query(&mut self, mut raw_query: GaloisRingSharedIris) -> PointId {
-        raw_query.code.preprocess_iris_code_query_share();
-        raw_query.mask.preprocess_mask_code_query_share();
+    pub fn prepare_query(&mut self, raw_query: GaloisRingSharedIris) -> PointId {
         self.points.push(GaloisRingPoint { data: raw_query });
 
         let point_id = self.points.len() - 1;
@@ -165,7 +163,9 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
             let mut player_session = ready_sessions.get(&player).unwrap().clone();
             let storage = self.players.get(&player).unwrap();
             let x = storage.points[distance.0.val()].clone();
-            let y = storage.points[distance.1.val()].clone();
+            let mut y = storage.points[distance.1.val()].clone();
+            y.data.code.preprocess_iris_code_query_share();
+            y.data.mask.preprocess_mask_code_query_share();
             jobs.spawn(async move {
                 gr_replicated_is_match(&mut player_session, &[(x.data, y.data)])
                     .await
@@ -201,13 +201,19 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
                 storage.points[d2.1.val()].clone(),
             );
             jobs.spawn(async move {
-                let ds_and_ts = gr_replicated_pairwise_distance(&mut player_session, &[
-                    (x1.data, y1.data),
-                    (x2.data, y2.data),
-                ])
-                .await
-                .unwrap();
+                let mut pairs = [(x1.data, y1.data), (x2.data, y2.data)];
+                pairs.iter_mut().for_each(|(_x, y)| {
+                    y.code.preprocess_iris_code_query_share();
+                    y.mask.preprocess_mask_code_query_share();
+                });
+                let ds_and_ts = gr_replicated_pairwise_distance(&mut player_session, &pairs)
+                    .await
+                    .unwrap();
                 let ds_and_ts = gr_to_rep3(&player_session, ds_and_ts).await.unwrap();
+                let opened = open_t_many_16(&player_session, ds_and_ts.clone())
+                    .await
+                    .unwrap();
+                println!("opened: {:?}", opened);
 
                 ng_cross_compare(
                     &mut player_session,
@@ -302,7 +308,7 @@ pub async fn ng_create_from_scratch_hawk_searcher<R: RngCore + Clone + CryptoRng
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database_generators::ng_generate_iris_shares;
+    use crate::database_generators::generate_galois_iris_shares;
     use aes_prng::AesRng;
     use hawk_pack::{graph_store::GraphMem, hnsw_db::HawkSearcher};
     use iris_mpc_common::iris_db::db::IrisDB;
@@ -311,7 +317,7 @@ mod tests {
     use tracing_test::traced_test;
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_ng_hnsw() {
+    async fn test_gr_hnsw() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 10;
         let cleartext_database = IrisDB::new_random_rng(database_size, &mut rng).db;
@@ -322,7 +328,7 @@ mod tests {
 
         let queries = (0..database_size)
             .map(|id| {
-                db.vector_store.prepare_query(ng_generate_iris_shares(
+                db.vector_store.prepare_query(generate_galois_iris_shares(
                     &mut rng,
                     cleartext_database[id].clone(),
                 ))
@@ -346,7 +352,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
-    async fn test_ng_premade_hnsw() {
+    async fn test_gr_premade_hnsw() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 10;
         let (cleartext_searcher, secret_searcher) =
@@ -421,7 +427,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
-    async fn test_ng_aby3_store_plaintext() {
+    async fn test_gr_aby3_store_plaintext() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let cleartext_database = IrisDB::new_random_rng(10, &mut rng).db;
 
@@ -430,7 +436,7 @@ mod tests {
 
         let aby3_preps: Vec<_> = (0..db_dim)
             .map(|id| {
-                aby3_store_protocol.prepare_query(ng_generate_iris_shares(
+                aby3_store_protocol.prepare_query(generate_galois_iris_shares(
                     &mut rng,
                     cleartext_database[id].clone(),
                 ))
@@ -477,7 +483,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
-    async fn test_ng_scratch_hnsw() {
+    async fn test_gr_scratch_hnsw() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 2;
         let secret_searcher = ng_create_from_scratch_hawk_searcher(&mut rng, database_size)
