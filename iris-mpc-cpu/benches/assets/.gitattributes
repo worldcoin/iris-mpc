@@ -1,2 +1,7 @@
 hnsw_db_1000000_hawk_graph_links.csv.zip filter=lfs diff=lfs merge=lfs -text
 hnsw_db_1000000_hawk_vectors.csv.zip filter=lfs diff=lfs merge=lfs -text
+hnsw_db_100000_hawk_graph_links.csv.zip filter=lfs diff=lfs merge=lfs -text
+hnsw_db_100000_hawk_vectors.csv.zip filter=lfs diff=lfs merge=lfs -text
+hnsw_db_200000_hawk_graph_links.csv.zip filter=lfs diff=lfs merge=lfs -text
+hnsw_db_200000_hawk_vectors.csv.zip filter=lfs diff=lfs merge=lfs -text
+100K_rust_format_synthetic_data.dat.zip filter=lfs diff=lfs merge=lfs -text

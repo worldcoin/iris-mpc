@@ -1,2 +1,0 @@
-hnsw_db_1000000_3668603835_vectors.csv.zip filter=lfs diff=lfs merge=lfs -text
-hnsw_db_1000000_69454808_hawk_graph_links.csv.zip filter=lfs diff=lfs merge=lfs -text
