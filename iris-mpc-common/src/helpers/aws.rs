@@ -1,6 +1,8 @@
 use aws_sdk_sns::types::MessageAttributeValue;
-use opentelemetry::trace::{SpanContext, SpanId, TraceFlags, TraceId, TraceState};
 use std::collections::HashMap;
+use telemetry_batteries::reexports::opentelemetry::trace::{
+    SpanContext, SpanId, TraceFlags, TraceId, TraceState,
+};
 
 pub const TRACE_ID_MESSAGE_ATTRIBUTE_NAME: &str = "TraceID";
 pub const SPAN_ID_MESSAGE_ATTRIBUTE_NAME: &str = "SpanID";
