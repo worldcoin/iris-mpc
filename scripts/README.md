@@ -10,21 +10,21 @@ sso_region = us-east-1
 sso_account_id = 033662022620
 sso_role_name = AssumeSMPCV2Role
 
-[profile worldcoin-smpcv2-vpc]
-source_profile=worldcoin-iam
-role_arn=arn:aws:iam::590183936500:role/smpcv2-cross-account-role
+[profile worldcoin-smpcv-io-vpc]
+source_profile=wc-iam
+role_arn=arn:aws:iam::302263054573:role/smpcv2-cross-account-role
 
-[profile worldcoin-smpcv2-1]
-source_profile=worldcoin-iam
-role_arn=arn:aws:iam::767397983205:role/smpcv2-cross-account-role
+[profile worldcoin-smpcv-io-0]
+source_profile=wc-iam
+role_arn=arn:aws:iam::024848486749:role/smpcv2-cross-account-role
 
-[profile worldcoin-smpcv2-2]
-source_profile=worldcoin-iam
-role_arn=arn:aws:iam::381492197851:role/smpcv2-cross-account-role
+[profile worldcoin-smpcv-io-1]
+source_profile=wc-iam
+role_arn=arn:aws:iam::024848486818:role/smpcv2-cross-account-role
 
-[profile worldcoin-smpcv2-3]
-source_profile=worldcoin-iam
-role_arn=arn:aws:iam::590184084615:role/smpcv2-cross-account-role
+[profile worldcoin-smpcv-io-2]
+source_profile=wc-iam
+role_arn=arn:aws:iam::024848486770:role/smpcv2-cross-account-role
 ```
 
 ### Orb
