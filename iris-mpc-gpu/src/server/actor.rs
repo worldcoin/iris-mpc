@@ -99,6 +99,7 @@ pub struct ServerActor {
     query_db_size:          Vec<usize>,
     max_batch_size:         usize,
     max_db_size:            usize,
+    disable_persistence:    bool,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -111,6 +112,7 @@ impl ServerActor {
         job_queue_size: usize,
         max_db_size: usize,
         max_batch_size: usize,
+        disable_persistence: bool,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let device_manager = Arc::new(DeviceManager::init());
         Self::new_with_device_manager(
@@ -120,6 +122,7 @@ impl ServerActor {
             job_queue_size,
             max_db_size,
             max_batch_size,
+            disable_persistence,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -130,6 +133,7 @@ impl ServerActor {
         job_queue_size: usize,
         max_db_size: usize,
         max_batch_size: usize,
+        disable_persistence: bool,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let ids = device_manager.get_ids_from_magic(0);
         let comms = device_manager.instantiate_network_from_ids(party_id, &ids)?;
@@ -141,6 +145,7 @@ impl ServerActor {
             job_queue_size,
             max_db_size,
             max_batch_size,
+            disable_persistence,
         )
     }
 
@@ -153,6 +158,7 @@ impl ServerActor {
         job_queue_size: usize,
         max_db_size: usize,
         max_batch_size: usize,
+        disable_persistence: bool,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let (tx, rx) = mpsc::channel(job_queue_size);
         let actor = Self::init(
@@ -163,6 +169,7 @@ impl ServerActor {
             rx,
             max_db_size,
             max_batch_size,
+            disable_persistence,
         )?;
         Ok((actor, ServerActorHandle { job_queue: tx }))
     }
@@ -176,6 +183,7 @@ impl ServerActor {
         job_queue: mpsc::Receiver<ServerJob>,
         max_db_size: usize,
         max_batch_size: usize,
+        disable_persistence: bool,
     ) -> eyre::Result<Self> {
         assert!(max_batch_size != 0);
         let mut kdf_nonce = 0;
@@ -335,6 +343,7 @@ impl ServerActor {
             batch_match_list_right,
             max_batch_size,
             max_db_size,
+            disable_persistence,
         })
     }
 
@@ -800,40 +809,42 @@ impl ServerActor {
             eyre::bail!("DB size exceeded");
         }
 
-        record_stream_time!(
-            &self.device_manager,
-            &self.streams[0],
-            events,
-            "db_write",
-            {
-                for i in 0..self.device_manager.device_count() {
-                    self.device_manager.device(i).bind_to_thread().unwrap();
-                    for insertion_idx in insertion_list[i].clone() {
-                        write_db_at_index(
-                            &self.left_code_db_slices,
-                            &self.left_mask_db_slices,
-                            &self.right_code_db_slices,
-                            &self.right_mask_db_slices,
-                            &compact_device_queries_left,
-                            &compact_device_sums_left,
-                            &compact_device_queries_right,
-                            &compact_device_sums_right,
-                            insertion_idx,
-                            self.current_db_sizes[i],
-                            i,
-                            &self.streams[0],
-                        );
-                        self.current_db_sizes[i] += 1;
-                    }
+        if !self.disable_persistence {
+            record_stream_time!(
+                &self.device_manager,
+                &self.streams[0],
+                events,
+                "db_write",
+                {
+                    for i in 0..self.device_manager.device_count() {
+                        self.device_manager.device(i).bind_to_thread().unwrap();
+                        for insertion_idx in insertion_list[i].clone() {
+                            write_db_at_index(
+                                &self.left_code_db_slices,
+                                &self.left_mask_db_slices,
+                                &self.right_code_db_slices,
+                                &self.right_mask_db_slices,
+                                &compact_device_queries_left,
+                                &compact_device_sums_left,
+                                &compact_device_queries_right,
+                                &compact_device_sums_right,
+                                insertion_idx,
+                                self.current_db_sizes[i],
+                                i,
+                                &self.streams[0],
+                            );
+                            self.current_db_sizes[i] += 1;
+                        }
 
-                    tracing::debug!(
-                        "Updating DB size on device {}: {:?}",
-                        i,
-                        self.current_db_sizes[i]
-                    );
+                        tracing::debug!(
+                            "Updating DB size on device {}: {:?}",
+                            i,
+                            self.current_db_sizes[i]
+                        );
+                    }
                 }
-            }
-        );
+            );
+        }
 
         // Pass to internal sender thread
         return_channel

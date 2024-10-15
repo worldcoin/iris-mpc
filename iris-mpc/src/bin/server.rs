@@ -674,6 +674,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             8,
             config.max_db_size,
             config.max_batch_size,
+            config.disable_persistence,
         ) {
             Ok((mut actor, handle)) => {
                 if config.fake_db_size > 0 {
@@ -814,7 +815,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .insert_results(&mut tx, &uniqueness_results)
                 .await?;
 
-            if !codes_and_masks.is_empty() {
+            if !codes_and_masks.is_empty() && !config_bg.disable_persistence {
                 let db_serial_ids = store_bg
                     .insert_irises(&mut tx, &codes_and_masks)
                     .await
