@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:v0.6.2"
+image: "ghcr.io/worldcoin/iris-mpc:v0.8.23"
 
 environment: prod
 replicaCount: 1
@@ -60,24 +60,66 @@ env:
       secretKeyRef:
         key: DATABASE_URL
         name: application
+  - name: RUST_LOG
+    value: info
   - name: ENVIRONMENT
-    value: prod
+    value: stage
 
-keelPolling:
-  # -- Specifies whether keel should poll for container updates
-  enabled: true
+service:
+  enabled: false
 
-ingress:
+nginxSidecar:
   enabled: true
-  ingressClassName: traefik-internal
-  hosts:
-    - not-upgrade-right.1.prod.smpcv2.worldcoin.dev
-
-ingressRouteTCP:
-  enabled: true
-  entryPoints:
-    - websecure
-  service:
-    - name: upgrade-server-right
-      port: 80
-  tls: {}
+  port: 8443
+  secrets:
+    enabled: true
+    volumeMount:
+      - name: mounted-secret-name
+        mountPath: /etc/nginx/cert
+    volume:
+      - name: mounted-secret-name
+        secret:
+          secretName: application
+          items:
+            - key: certificate.crt
+              path: certificate.crt
+            - key: key.pem
+              path: key.pem
+          optional: false
+  config:
+    nginx.conf: |
+      worker_processes  auto;
+      
+      error_log  /dev/stderr notice;
+      pid        /tmp/nginx.pid;
+      
+      events {
+        worker_connections  1024;
+      }
+      
+      stream {
+        log_format basic '$remote_addr [$time_local] '
+                   '$protocol $status $bytes_sent $bytes_received '
+                   '$session_time';
+      
+        upstream tcp_backend {
+          server 127.0.0.1:8000;
+        }
+      
+        server {
+          listen 8443 ssl;
+          proxy_pass tcp_backend;
+      
+          ssl_certificate /etc/nginx/cert/certificate.crt;
+          ssl_certificate_key /etc/nginx/cert/key.pem;
+      
+          ssl_protocols TLSv1.3;
+          ssl_ciphers HIGH:!aNULL:!MD5;
+      
+          # Enable session resumption to improve performance
+          ssl_session_cache shared:SSL:10m;
+          ssl_session_timeout 1h;
+      
+          access_log /dev/stdout basic;
+        }
+      }
