@@ -63,7 +63,7 @@ env:
   - name: RUST_LOG
     value: info
   - name: ENVIRONMENT
-    value: stage
+    value: prod
 
 service:
   enabled: false
