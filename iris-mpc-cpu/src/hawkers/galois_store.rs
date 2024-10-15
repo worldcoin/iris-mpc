@@ -5,7 +5,7 @@ use crate::{
     hawkers::plaintext_store::PointId,
     next_gen_protocol::ng_worker::{
         gr_replicated_is_match, gr_replicated_pairwise_distance, gr_to_rep3, ng_cross_compare,
-        open_t_many_16, LocalRuntime,
+        LocalRuntime,
     },
 };
 use aes_prng::AesRng;
@@ -210,11 +210,6 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
                     .await
                     .unwrap();
                 let ds_and_ts = gr_to_rep3(&player_session, ds_and_ts).await.unwrap();
-                let opened = open_t_many_16(&player_session, ds_and_ts.clone())
-                    .await
-                    .unwrap();
-                println!("opened: {:?}", opened);
-
                 ng_cross_compare(
                     &mut player_session,
                     ds_and_ts[0].clone(),
@@ -236,7 +231,7 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
     }
 }
 
-pub async fn ng_create_ready_made_hawk_searcher<R: RngCore + Clone + CryptoRng>(
+pub async fn gr_create_ready_made_hawk_searcher<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
 ) -> eyre::Result<(
@@ -356,7 +351,7 @@ mod tests {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 10;
         let (cleartext_searcher, secret_searcher) =
-            ng_create_ready_made_hawk_searcher(&mut rng, database_size)
+            gr_create_ready_made_hawk_searcher(&mut rng, database_size)
                 .await
                 .unwrap();
 
