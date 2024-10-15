@@ -6,3 +6,43 @@ RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86
     && dpkg -i cuda-keyring_1.1-1_all.deb \
     && apt-get update \
     && apt-get install -y cuda-toolkit-12-2 libnccl2=2.22.3-1+cuda12.2 libnccl-dev=2.22.3-1+cuda12.2
+
+ARG GDRCOPY_VERSION=v2.4.1
+ARG EFA_INSTALLER_VERSION=1.34.0
+ARG NCCL_INSTALL_VERSION=v2.22.3-1
+ARG AWS_OFI_NCCL_VERSION=aws
+
+ENV LD_LIBRARY_PATH=/usr/local/cuda/extras/CUPTI/lib64:/opt/amazon/openmpi/lib:/opt/nccl/build/lib:/opt/amazon/efa/lib:/opt/aws-ofi-nccl/install/lib:/usr/local/lib:$LD_LIBRARY_PATH
+ENV PATH=/opt/amazon/openmpi/bin/:/opt/amazon/efa/bin:$PATH
+
+RUN git clone -b ${GDRCOPY_VERSION} https://github.com/NVIDIA/gdrcopy.git /tmp/gdrcopy \
+    && cd /tmp/gdrcopy \
+    && make prefix=/opt/gdrcopy install
+
+ENV LD_LIBRARY_PATH=/opt/gdrcopy/lib:/usr/local/cuda/compat:$LD_LIBRARY_PATH
+ENV LIBRARY_PATH=/opt/gdrcopy/lib:/usr/local/cuda/compat/:$LIBRARY_PATH
+ENV CPATH=/opt/gdrcopy/include:$CPATH
+ENV PATH=/opt/gdrcopy/bin:$PATH
+
+# Install EFA installer
+RUN cd /tmp \
+    && curl -O https://efa-installer.amazonaws.com/aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz \
+    && tar -xf /tmp/aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz \
+    && cd /tmp/aws-efa-installer \
+    && ./efa_installer.sh -y -d --skip-kmod --skip-limit-conf --no-verify | tee /tmp/aws-efa-installer/install.log
+
+# Test EFA installation
+RUN /opt/amazon/efa/bin/fi_info --version
+
+# Install AWS-OFI-NCCL plugin
+RUN cd /tmp \
+    && git clone https://github.com/aws/aws-ofi-nccl.git \
+    && cd /tmp/aws-ofi-nccl \
+    && git checkout ${AWS_OFI_NCCL_VERSION} \
+    && ./autogen.sh \
+    && ./configure --prefix=/opt/aws-ofi-nccl/install \
+       --with-libfabric=/opt/amazon/efa/ \
+       --with-cuda=/usr/local/cuda \
+       --with-nccl=/tmp/nccl/build \
+       --with-mpi=/opt/amazon/openmpi/ \
+    && make && make install
