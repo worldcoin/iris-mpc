@@ -12,7 +12,7 @@ env:
     value: "INFO"
 
   - name: NCCL_COMM_ID
-    value: "iris-mpc-node.1.smpcv2.worldcoin.org:4000"
+    value: "10.15.33.188:4000"
 
   - name: SMPC__ENVIRONMENT
     value: "prod"
