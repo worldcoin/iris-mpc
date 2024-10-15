@@ -115,6 +115,7 @@ impl<S: NewIrisShareSink> IrisCodeUpgrader<S> {
         iris_code_share_1: TwoToThreeIrisCodeMessage,
         mask_share: MaskShareMessage,
     ) -> Result<(), Error> {
+        let start_time = std::time::Instant::now();
         // todo: sanity checks
         let id = iris_code_share_0.id;
         if id != iris_code_share_1.id || id != mask_share.id {
@@ -141,10 +142,15 @@ impl<S: NewIrisShareSink> IrisCodeUpgrader<S> {
         for (a, b) in izip!(result.iter_mut(), part2.iter()) {
             *a = a.wrapping_add(*b);
         }
+        let duration = start_time.elapsed();
+        tracing::info!("Computed iris codes STEP DURATION: {:.2?}", duration);
 
+        let start_time = std::time::Instant::now();
         self.iris_sink
             .store_code_mask_share(id, &result, &mask)
             .await?;
+        let duration = start_time.elapsed();
+        tracing::info!("Stored iris codes STEP DURATION: {:.2?}", duration);
         Ok(())
     }
 }
