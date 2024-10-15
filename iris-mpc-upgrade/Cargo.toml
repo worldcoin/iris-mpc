@@ -1,8 +1,11 @@
 [package]
 name = "iris-mpc-upgrade"
 version = "0.1.0"
-edition = "2021"
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+publish = false
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 axum.workspace = true
@@ -23,13 +26,9 @@ rand_chacha = "0.3"
 tokio.workspace = true
 tracing-subscriber.workspace = true
 
-mpc-uniqueness-check = { package = "mpc", git = "https://github.com/worldcoin/mpc-uniqueness-check", rev = "ffa9227" }
+mpc-uniqueness-check = { package = "mpc", git = "https://github.com/worldcoin/mpc-uniqueness-check", rev = "92d2415b0caca6b89f62d6a164382229c545dc1f" }
 indicatif = "0.17.8"
-tokio-rustls = "0.26.0"
-rustls = "0.23.12"
-rustls-pemfile = "2.1.3"
 rcgen = "0.13.1"
-webpki-roots = "0.26.6"
 tokio-native-tls = "0.3.1"
 
 [dev-dependencies]

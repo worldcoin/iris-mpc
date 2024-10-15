@@ -31,11 +31,12 @@ struct Args {
     #[clap(long)]
     side: String,
 
+    #[clap(long)]
+    batch_size: usize,
+
     #[clap(long, value_delimiter = ',', num_args = 1..)]
     deleted_identities: Option<Vec<i32>>,
 }
-
-const SEED_BATCH_SIZE: usize = 10;
 
 async fn insert_masks(pool: sqlx::Pool<Postgres>, masks: &[(u64, Bits)]) -> Result<()> {
     let mut builder = QueryBuilder::new("INSERT INTO masks (id, mask) VALUES ");
@@ -117,6 +118,8 @@ async fn main() -> eyre::Result<()> {
     if args.side != "left" && args.side != "right" {
         return Err(eyre::eyre!("Expect side to be either 'left' or 'right'"));
     }
+
+    let batch_size = args.batch_size;
 
     let participant_one_shares_db_name = format!("participant1_{}", args.side);
     let participant_two_shares_db_name = format!("participant2_{}", args.side);
@@ -202,17 +205,17 @@ async fn main() -> eyre::Result<()> {
             masks.push((i, iris_code.mask));
         }
 
-        if shares0.len() == SEED_BATCH_SIZE {
+        if shares0.len() == batch_size {
             println!("Inserting {} shares", shares0.len());
             insert_shares(shares_1_pool.clone(), &shares0).await?;
             shares0.clear();
         }
-        if shares1.len() == SEED_BATCH_SIZE {
+        if shares1.len() == batch_size {
             println!("Inserting {} shares", shares1.len());
             insert_shares(shares_2_pool.clone(), &shares1).await?;
             shares1.clear();
         }
-        if masks.len() == SEED_BATCH_SIZE {
+        if masks.len() == batch_size {
             println!("Inserting {} masks", masks.len());
             insert_masks(masks_pool.clone(), &masks).await?;
             masks.clear();

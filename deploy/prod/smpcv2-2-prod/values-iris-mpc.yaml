@@ -9,7 +9,7 @@ env:
     value: "eth0"
 
   - name: NCCL_COMM_ID
-    value: "10.15.33.72:4000"
+    value: "iris-mpc-node.1.smpcv2.worldcoin.org:4000"
 
   - name: SMPC__ENVIRONMENT
     value: "prod"
@@ -63,7 +63,7 @@ env:
     value: "2"
 
   - name: SMPC__PUBLIC_KEY_BASE_URL
-    value: "https://pki-smpcv2-prod.worldcoin.org"
+    value: "https://pki-smpc.worldcoin.org"
 
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"

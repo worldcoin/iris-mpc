@@ -9,6 +9,11 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+edition = "2021"
+license = "MIT OR (Apache-2.0 WITH LLVM-exception)"
+repository = "https://github.com/worldcoin/iris-mpc"
+
 [workspace.dependencies]
 aws-config = { version = "1.5.4", features = ["behavior-version-latest"] }
 aws-sdk-kms = { version = "1.44.0" }
@@ -35,7 +40,7 @@ rand = "0.8"
 rayon = "1.5.1"
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 static_assertions = "1.1"
-telemetry-batteries = { git = "https://github.com/worldcoin/telemetry-batteries.git", rev = "802a4f39f358e077b11c8429b4c65f3e45b85959" }
+telemetry-batteries = { git = "https://github.com/worldcoin/telemetry-batteries.git", rev = "901ea26e478c81e10d5d4355ac628ab7b15afca7" }
 thiserror = "1"
 tokio = { version = "1.40", features = ["full", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4"] }

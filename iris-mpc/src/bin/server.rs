@@ -676,6 +676,19 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             config.max_batch_size,
         ) {
             Ok((mut actor, handle)) => {
+                if config.fake_db_size > 0 {
+                    tracing::warn!(
+                        "Faking db with {} entries, returned results will be random.",
+                        config.fake_db_size
+                    );
+                    actor.set_current_db_sizes(vec![
+                        config.fake_db_size
+                            / actor.current_db_sizes().len();
+                        actor.current_db_sizes().len()
+                    ]);
+                    return Ok(());
+                }
+
                 tracing::info!(
                     "Initialize iris db: Loading from DB (parallelism: {})",
                     parallelism
