@@ -9,7 +9,7 @@ env:
     value: "eth0"
 
   - name: NCCL_COMM_ID
-    value: "10.15.33.72:4000"
+    value: "iris-mpc-node.1.smpcv2.worldcoin.org:4000"
 
   - name: SMPC__ENVIRONMENT
     value: "prod"
@@ -63,7 +63,7 @@ env:
     value: "2"
 
   - name: SMPC__PUBLIC_KEY_BASE_URL
-    value: "https://pki-smpcv2-prod.worldcoin.org"
+    value: "https://pki-smpc.worldcoin.org"
 
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
@@ -76,3 +76,45 @@ env:
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
+
+initContainer:
+  enabled: true
+  image: "amazon/aws-cli:2.17.62"
+  name: "iris-mpc-dns-records-updater"
+  env:
+    - name: PARTY_ID
+      value: "3"
+    - name: MY_NODE_IP
+      valueFrom:
+        fieldRef:
+          fieldPath: status.hostIP
+  configMap:
+    init.sh: |
+      #!/usr/bin/env bash
+
+      # Set up environment variables
+      HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$PARTY_ID".smpcv2.worldcoin.org --query "HostedZones[].Id" --output text)
+      
+      # Generate the JSON content in memory
+      BATCH_JSON=$(cat <<EOF
+      {
+        "Comment": "Upsert the A record for upgrade-server",
+        "Changes": [
+          {
+            "Action": "UPSERT",
+            "ResourceRecordSet": {
+              "Name": "iris-mpc-node.$PARTY_ID.smpcv2.worldcoin.org",
+              "TTL": 5,
+              "Type": "A",
+              "ResourceRecords": [{
+                "Value": "$MY_NODE_IP"
+              }]
+            }
+          }
+        ]
+      }
+      EOF
+      )
+      
+      # Execute AWS CLI command with the generated JSON
+      aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch "$BATCH_JSON"
