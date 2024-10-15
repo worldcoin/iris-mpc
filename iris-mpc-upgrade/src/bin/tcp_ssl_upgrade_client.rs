@@ -87,9 +87,14 @@ async fn main() -> eyre::Result<()> {
     server1.write_u64(start).await?;
     server2.write_u64(start).await?;
     server3.write_u64(start).await?;
+
     server1.write_u64(end).await?;
     server2.write_u64(end).await?;
     server3.write_u64(end).await?;
+
+    server1.write_u8(args.batch_size).await?;
+    server2.write_u8(args.batch_size).await?;
+    server3.write_u8(args.batch_size).await?;
 
     server1.flush().await?;
     server2.flush().await?;
