@@ -52,3 +52,7 @@ harness = false
 [[bench]]
 name = "transpose"
 harness = false
+
+[[bin]]
+name = "nccl"
+path = "src/bin/nccl.rs"
