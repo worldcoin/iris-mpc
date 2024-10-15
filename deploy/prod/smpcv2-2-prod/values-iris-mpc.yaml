@@ -9,10 +9,10 @@ env:
     value: "eth0"
 
   - name: NCCL_DEBUG
-    value: "INFO"
+    value: "trace"
 
   - name: NCCL_COMM_ID
-    value: "10.15.33.188:4000"
+    value: "iris-mpc-node.1.smpcv2.worldcoin.org:4000"
 
   - name: SMPC__ENVIRONMENT
     value: "prod"
