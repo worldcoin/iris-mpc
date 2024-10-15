@@ -88,7 +88,7 @@ pub struct UpgradeClientConfig {
     pub party_id: u8,
 
     #[clap(long)]
-    pub batch_size: u8,
+    pub batch_size: u64,
 
     #[clap(long)]
     pub eye: Eye,

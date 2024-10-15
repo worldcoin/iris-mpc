@@ -108,8 +108,8 @@ async fn main() -> eyre::Result<()> {
         );
     }
 
-    let batch_size1 = client_stream1.read_u8().await?;
-    let batch_size2 = client_stream2.read_u8().await?;
+    let batch_size1 = client_stream1.read_u64().await?;
+    let batch_size2 = client_stream2.read_u64().await?;
 
     if batch_size1 != batch_size2 {
         bail!(
@@ -120,7 +120,7 @@ async fn main() -> eyre::Result<()> {
     }
 
     let num_elements = end1.checked_sub(start1).unwrap();
-    let num_batches = num_elements / u64::from(batch_size1);
+    let num_batches = num_elements / batch_size1;
     tracing::info!("Batch size: {}, num batches: {}", batch_size1, num_batches);
 
     let mut batch = Vec::new();
