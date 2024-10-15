@@ -107,22 +107,26 @@ async fn main() -> eyre::Result<()> {
             end2
         );
     }
+
+    let batch_size1 = client_stream1.read_u8().await?;
+    let batch_size2 = client_stream2.read_u8().await?;
+
+    if batch_size1 != batch_size2 {
+        bail!(
+            "Invalid batch size: client1: {}, client2: {}",
+            batch_size1,
+            batch_size2,
+        );
+    }
+
     let num_elements = end1.checked_sub(start1).unwrap();
-    let num_batches = num_elements / u64::from(args.batch_size);
-    tracing::info!(
-        "Batch size: {}, num batches: {}",
-        args.batch_size,
-        num_batches
-    );
+    let num_batches = num_elements / u64::from(batch_size1);
+    tracing::info!("Batch size: {}, num batches: {}", batch_size1, num_batches);
 
     let mut batch = Vec::new();
 
     for batch_num in 0..num_batches + 1 {
-        tracing::info!(
-            "Processing batch {} of size: {}",
-            batch_num,
-            args.batch_size
-        );
+        tracing::info!("Processing batch {} of size: {}", batch_num, batch_size1);
         let start_time = Instant::now();
         let batch_size_1_message = client_stream1.read_u8().await?;
         let batch_size_2_message = client_stream2.read_u8().await?;

@@ -50,16 +50,13 @@ pub struct UpgradeServerConfig {
     pub party_id: PartyID,
 
     #[clap(long)]
-    pub batch_size: u8,
-
-    #[clap(long)]
     pub eye: Eye,
 
     #[clap(long)]
     pub environment: String,
 }
 
-impl std::fmt::Debug for UpgradeServerConfig {
+impl fmt::Debug for UpgradeServerConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("UpgradeServerConfig")
             .field("bind_addr", &self.bind_addr)
