@@ -142,6 +142,8 @@ async fn main() -> eyre::Result<()> {
     tracing::info!("Processing {} iris codes", num_iris_codes);
 
     let batch_size = args.batch_size;
+    let approx_num_batches = num_iris_codes / batch_size;
+    let mut current_batch_num = 1;
     let mut batch = Vec::with_capacity(batch_size as usize);
 
     while let Some(share_res) = shares_stream.next().await {
@@ -176,7 +178,12 @@ async fn main() -> eyre::Result<()> {
 
         // If the batch is full, send it and wait for the ACK
         if batch.len() == batch_size as usize {
-            tracing::info!("Sending batch of size {}", batch_size);
+            tracing::info!(
+                "Sending batch {}/{} of size {}",
+                current_batch_num,
+                approx_num_batches,
+                batch_size
+            );
             send_batch_and_wait_for_ack(
                 args.party_id,
                 &mut server1,
@@ -186,6 +193,7 @@ async fn main() -> eyre::Result<()> {
             )
             .await?;
             batch.clear(); // Clear the batch once ACK is received
+            current_batch_num += 1;
         }
     }
     // Send the remaining elements in the last batch

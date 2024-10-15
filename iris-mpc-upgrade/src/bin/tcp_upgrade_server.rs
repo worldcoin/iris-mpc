@@ -177,13 +177,25 @@ async fn main() -> eyre::Result<()> {
                 masks,
             });
         }
+        let batch_receive_duration = start_time.elapsed();
+        tracing::info!(
+            "Received batch STEP DURATION: {:.2?}",
+            batch_receive_duration
+        );
 
+        let batch_processing_start_time = Instant::now();
         for (i, task) in batch.drain(..).enumerate() {
             tracing::debug!("Task: {:?}", i);
             upgrader
                 .finalize(task.msg1.clone(), task.msg2.clone(), task.masks.clone())
                 .await?;
         }
+        let batch_processing_duration = batch_processing_start_time.elapsed();
+        tracing::info!(
+            "Processed batch STEP DURATION: {:.2?}",
+            batch_processing_duration
+        );
+
         // Send an ACK to the client
         client_stream1.write_u8(BATCH_SUCCESSFUL_ACK).await?;
         client_stream2.write_u8(BATCH_SUCCESSFUL_ACK).await?;
@@ -191,7 +203,7 @@ async fn main() -> eyre::Result<()> {
         client_stream2.flush().await?;
 
         let duration = start_time.elapsed();
-        tracing::info!("Processed batch in {:.2?}", duration);
+        tracing::info!("Processed batch OVERALL DURATION: {:.2?}", duration);
     }
 
     tracing::info!("Finalizing upgrade");
