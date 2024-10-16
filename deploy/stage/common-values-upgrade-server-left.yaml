@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:v0.8.24"
+image: "ghcr.io/worldcoin/iris-mpc:v0.8.25"
 
 environment: stage
 replicaCount: 1
@@ -46,6 +46,7 @@ imagePullSecrets:
 
 nodeSelector:
   kubernetes.io/arch: amd64
+  beta.kubernetes.io/instance-type: t3.2xlarge
 
 podSecurityContext:
   runAsUser: 65534
