@@ -28,6 +28,12 @@ readinessProbe:
     path: /health
     port: health
 
+startupProbe:
+  enabled: true
+  httpGet:
+    path: /health
+    port: health
+
 resources:
   limits:
     cpu: 192
