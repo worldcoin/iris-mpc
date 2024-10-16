@@ -17,6 +17,12 @@ ports:
     name: health
     protocol: TCP
 
+startupProbe:
+  enabled: true
+  httpGet:
+    path: /health
+    port: health
+
 livenessProbe:
   httpGet:
     path: /health
