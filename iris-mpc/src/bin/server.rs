@@ -677,7 +677,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             config.disable_persistence,
         ) {
             Ok((mut actor, handle)) => {
-                if config.fake_db_size > 0 {
+                let res = if config.fake_db_size > 0 {
                     tracing::warn!(
                         "Faking db with {} entries, returned results will be random.",
                         config.fake_db_size
@@ -687,42 +687,42 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             / actor.current_db_sizes().len();
                         actor.current_db_sizes().len()
                     ]);
-                    return Ok(());
-                }
-
-                tracing::info!(
-                    "Initialize iris db: Loading from DB (parallelism: {})",
-                    parallelism
-                );
-                let res = tokio::runtime::Handle::current().block_on(async {
-                    let mut stream = store.stream_irises_par(parallelism).await;
-                    let mut record_counter = 0;
-                    while let Some(iris) = stream.try_next().await? {
-                        if iris.index() > store_len {
-                            tracing::error!("Inconsistent iris index {}", iris.index());
-                            return Err(eyre!("Inconsistent iris index {}", iris.index()));
-                        }
-                        actor.load_single_record(
-                            iris.index() - 1,
-                            iris.left_code(),
-                            iris.left_mask(),
-                            iris.right_code(),
-                            iris.right_mask(),
-                        );
-                        record_counter += 1;
-                    }
-
-                    tracing::info!("Preprocessing db");
-                    actor.preprocess_db();
-
+                    Ok(())
+                } else {
                     tracing::info!(
-                        "Loaded {} records from db into memory [DB sizes: {:?}]",
-                        record_counter,
-                        actor.current_db_sizes()
+                        "Initialize iris db: Loading from DB (parallelism: {})",
+                        parallelism
                     );
+                    tokio::runtime::Handle::current().block_on(async {
+                        let mut stream = store.stream_irises_par(parallelism).await;
+                        let mut record_counter = 0;
+                        while let Some(iris) = stream.try_next().await? {
+                            if iris.index() > store_len {
+                                tracing::error!("Inconsistent iris index {}", iris.index());
+                                return Err(eyre!("Inconsistent iris index {}", iris.index()));
+                            }
+                            actor.load_single_record(
+                                iris.index() - 1,
+                                iris.left_code(),
+                                iris.left_mask(),
+                                iris.right_code(),
+                                iris.right_mask(),
+                            );
+                            record_counter += 1;
+                        }
 
-                    eyre::Ok(())
-                });
+                        tracing::info!("Preprocessing db");
+                        actor.preprocess_db();
+
+                        tracing::info!(
+                            "Loaded {} records from db into memory [DB sizes: {:?}]",
+                            record_counter,
+                            actor.current_db_sizes()
+                        );
+
+                        eyre::Ok(())
+                    })
+                };
 
                 match res {
                     Ok(_) => {
