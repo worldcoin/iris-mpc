@@ -200,8 +200,8 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
                 storage.points[d2.0.val()].clone(),
                 storage.points[d2.1.val()].clone(),
             );
+            let mut pairs = [(x1.data, y1.data), (x2.data, y2.data)];
             jobs.spawn(async move {
-                let mut pairs = [(x1.data, y1.data), (x2.data, y2.data)];
                 pairs.iter_mut().for_each(|(_x, y)| {
                     y.code.preprocess_iris_code_query_share();
                     y.mask.preprocess_mask_code_query_share();
@@ -221,13 +221,10 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
                 .unwrap()
             });
         }
-
-        let r0 = jobs.join_next().await.unwrap().unwrap();
-        let r1 = jobs.join_next().await.unwrap().unwrap();
-        let r2 = jobs.join_next().await.unwrap().unwrap();
-        assert_eq!(r0, r1);
-        assert_eq!(r1, r2);
-        r0
+        let res = jobs.join_all().await;
+        assert_eq!(res[0], res[1]);
+        assert_eq!(res[0], res[2]);
+        res[0]
     }
 }
 
@@ -424,10 +421,10 @@ mod tests {
     #[traced_test]
     async fn test_gr_aby3_store_plaintext() {
         let mut rng = AesRng::seed_from_u64(0_u64);
-        let cleartext_database = IrisDB::new_random_rng(10, &mut rng).db;
+        let db_dim = 4;
+        let cleartext_database = IrisDB::new_random_rng(db_dim, &mut rng).db;
 
         let mut aby3_store_protocol = setup_local_store_aby3_players().unwrap();
-        let db_dim = 4;
 
         let aby3_preps: Vec<_> = (0..db_dim)
             .map(|id| {
@@ -441,7 +438,6 @@ mod tests {
         for p in aby3_preps.iter() {
             aby3_inserts.push(aby3_store_protocol.insert(p).await);
         }
-
         // Now do the work for the plaintext store
         let mut plaintext_store = PlaintextStore::default();
         let plaintext_preps: Vec<_> = (0..db_dim)
