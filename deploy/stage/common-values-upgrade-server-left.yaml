@@ -46,6 +46,7 @@ imagePullSecrets:
 
 nodeSelector:
   kubernetes.io/arch: amd64
+  beta.kubernetes.io/instance-type: t3.2xlarge
 
 podSecurityContext:
   runAsUser: 65534
