@@ -3,13 +3,8 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use hawk_pack::{graph_store::GraphMem, hnsw_db::HawkSearcher, VectorStore};
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use iris_mpc_cpu::{
-    database_generators::{
-        create_random_sharing, generate_galois_iris_shares, ng_generate_iris_shares,
-    },
-    hawkers::{
-        galois_store::gr_create_ready_made_hawk_searcher,
-        ng_aby3_store::ng_create_ready_made_hawk_searcher, plaintext_store::PlaintextStore,
-    },
+    database_generators::{create_random_sharing, generate_galois_iris_shares},
+    hawkers::{galois_store::gr_create_ready_made_hawk_searcher, plaintext_store::PlaintextStore},
     next_gen_protocol::ng_worker::{
         gr_replicated_pairwise_distance, gr_to_rep3, ng_cross_compare, LocalRuntime,
     },
@@ -149,64 +144,6 @@ fn bench_gr_primitives(c: &mut Criterion) {
     });
 }
 
-fn bench_ng_ready_made_hnsw(c: &mut Criterion) {
-    let mut group = c.benchmark_group("ng_ready_made_hnsw");
-    group.sample_size(10);
-
-    for database_size in [1, 10, 100, 1000, 10000, 100000] {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-
-        let (_, secret_searcher) = rt.block_on(async move {
-            let mut rng = AesRng::seed_from_u64(0_u64);
-            ng_create_ready_made_hawk_searcher(&mut rng, database_size)
-                .await
-                .unwrap()
-        });
-
-        group.bench_function(
-            BenchmarkId::new("ng-big-hnsw-insertions", database_size),
-            |b| {
-                b.to_async(&rt).iter_batched(
-                    || secret_searcher.clone(),
-                    |mut my_db| async move {
-                        let mut rng = AesRng::seed_from_u64(0_u64);
-                        let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
-                        let raw_query = ng_generate_iris_shares(&mut rng, on_the_fly_query);
-
-                        let query = my_db.vector_store.prepare_query(raw_query);
-                        let neighbors = my_db.search_to_insert(&query).await;
-                        my_db.insert_from_search_results(query, neighbors).await;
-                    },
-                    criterion::BatchSize::SmallInput,
-                )
-            },
-        );
-
-        group.bench_function(
-            BenchmarkId::new("ng-big-hnsw-searches", database_size),
-            |b| {
-                b.to_async(&rt).iter_batched(
-                    || secret_searcher.clone(),
-                    |mut my_db| async move {
-                        let mut rng = AesRng::seed_from_u64(0_u64);
-                        let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
-                        let raw_query = ng_generate_iris_shares(&mut rng, on_the_fly_query);
-
-                        let query = my_db.vector_store.prepare_query(raw_query);
-                        let neighbors = my_db.search_to_insert(&query).await;
-                        my_db.is_match(&neighbors).await;
-                    },
-                    criterion::BatchSize::SmallInput,
-                )
-            },
-        );
-    }
-    group.finish();
-}
-
 fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
     let mut group = c.benchmark_group("gr_ready_made_hnsw");
     group.sample_size(10);
@@ -268,7 +205,6 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
 criterion_group! {
     hnsw,
     bench_plaintext_hnsw,
-    bench_ng_ready_made_hnsw,
     bench_gr_ready_made_hnsw,
     bench_hnsw_primitives,
     bench_gr_primitives,
