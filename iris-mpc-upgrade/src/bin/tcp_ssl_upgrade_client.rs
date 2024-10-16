@@ -238,9 +238,9 @@ async fn send_batch_and_wait_for_ack(
     let batch_size = batch.len();
     // Send the batch size to all servers
     let (batch_size_result_a, batch_size_result_b, batch_size_result_c) = (
-        server1.write_u8(batch_size as u8),
-        server2.write_u8(batch_size as u8),
-        server3.write_u8(batch_size as u8),
+        server1.write_u64(batch_size as u64),
+        server2.write_u64(batch_size as u64),
+        server3.write_u64(batch_size as u64),
     )
         .join()
         .await;
