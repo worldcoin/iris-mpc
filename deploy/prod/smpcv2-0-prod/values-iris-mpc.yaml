@@ -5,9 +5,6 @@ env:
   - name: NCCL_SOCKET_IFNAME
     value: "eth0"
 
-  - name: NCCL_DEBUG
-    value: "trace"
-
   - name: NCCL_COMM_ID
     value: "iris-mpc-node.1.smpcv2.worldcoin.org:4000"
 
@@ -79,6 +76,12 @@ env:
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
+
+  - name: SMPC__FAKE_DB_SIZE
+    value: "6000000"
+
+  - name: SMPC__DISABLE_PERSISTENCE
+    value: "true"
 
 initContainer:
   enabled: true
