@@ -6,7 +6,7 @@ use std::{
     str::FromStr,
 };
 
-pub const BATCH_TIMEOUT_SECONDS: u64 = 30;
+pub const BATCH_TIMEOUT_SECONDS: u64 = 60;
 pub const BATCH_SUCCESSFUL_ACK: u8 = 1;
 pub const FINAL_BATCH_SUCCESSFUL_ACK: u8 = 42;
 
@@ -98,6 +98,9 @@ pub struct UpgradeClientConfig {
 
     #[clap(long)]
     pub masks_db_url: String,
+
+    #[clap(long)]
+    pub batch_timeout_secs: Option<u64>,
 }
 
 impl fmt::Debug for UpgradeClientConfig {
