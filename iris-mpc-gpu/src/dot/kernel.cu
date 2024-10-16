@@ -51,7 +51,7 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
     }
 }
 
-extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *matchCounter, unsigned int *allMatches)
+extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *matchCounterLeft, unsigned int *matchCounterRight, unsigned int *partialResultsLeft, unsigned int *partialResultsRight)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
@@ -67,6 +67,20 @@ extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, 
             if (queryIdx >= queryLength || dbIdx >= dbLength)
                 continue;
 
+            // Check for partial results (only used for debugging)
+            if (matchLeft)
+            {
+                unsigned int queryMatchCounter = atomicAdd(&matchCounterLeft[queryIdx], 1);
+                if (queryMatchCounter < MAX_MATCHES_LEN)
+                    partialResultsLeft[MAX_MATCHES_LEN * queryIdx + queryMatchCounter] = dbIdx;
+            }
+            if (matchRight)
+            {
+                unsigned int queryMatchCounter = atomicAdd(&matchCounterRight[queryIdx], 1);
+                if (queryMatchCounter < MAX_MATCHES_LEN)
+                    partialResultsRight[MAX_MATCHES_LEN * queryIdx + queryMatchCounter] = dbIdx;
+            }
+
             // Current *AND* policy: only match, if both eyes match
             if (matchLeft && matchRight)
             {
@@ -79,7 +93,7 @@ extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, 
     }
 }
 
-extern "C" __global__ void mergeBatchResults(unsigned long long *matchResultsSelfLeft, unsigned long long *matchResultsSelfRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *__matchCounter, unsigned int *__allMatches)
+extern "C" __global__ void mergeBatchResults(unsigned long long *matchResultsSelfLeft, unsigned long long *matchResultsSelfRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *__matchCounter, unsigned int *__allMatches, unsigned int *__matchCounterLeft, unsigned int *__matchCounterRight, unsigned int *__partialResultsLeft, unsigned int *__partialResultsRight)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)

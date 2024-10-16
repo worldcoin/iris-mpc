@@ -27,18 +27,26 @@ pub struct DistanceComparator {
     pub final_results_init_host: Vec<u32>,
     pub match_counters:          Vec<CudaSlice<u32>>,
     pub all_matches:             Vec<CudaSlice<u32>>,
+    pub match_counters_left:     Vec<CudaSlice<u32>>,
+    pub match_counters_right:    Vec<CudaSlice<u32>>,
+    pub partial_results_left:    Vec<CudaSlice<u32>>,
+    pub partial_results_right:   Vec<CudaSlice<u32>>,
 }
 
 impl DistanceComparator {
     pub fn init(query_length: usize, device_manager: Arc<DeviceManager>) -> Self {
         let ptx = compile_ptx(PTX_SRC).unwrap();
-        let mut open_kernels = Vec::new();
+        let mut open_kernels: Vec<CudaFunction> = Vec::new();
         let mut merge_db_kernels = Vec::new();
         let mut merge_batch_kernels = Vec::new();
         let mut opened_results = vec![];
         let mut final_results = vec![];
-        let mut match_counters: Vec<CudaSlice<u32>> = vec![];
-        let mut all_matches: Vec<CudaSlice<u32>> = vec![];
+        let mut match_counters = vec![];
+        let mut match_counters_left = vec![];
+        let mut match_counters_right = vec![];
+        let mut all_matches = vec![];
+        let mut partial_results_left = vec![];
+        let mut partial_results_right = vec![];
 
         let devices_count = device_manager.device_count();
 
@@ -63,7 +71,19 @@ impl DistanceComparator {
             opened_results.push(device.htod_copy(results_init_host.clone()).unwrap());
             final_results.push(device.htod_copy(final_results_init_host.clone()).unwrap());
             match_counters.push(device.alloc_zeros(query_length / ROTATIONS).unwrap());
+            match_counters_left.push(device.alloc_zeros(query_length / ROTATIONS).unwrap());
+            match_counters_right.push(device.alloc_zeros(query_length / ROTATIONS).unwrap());
             all_matches.push(
+                device
+                    .alloc_zeros(ALL_MATCHES_LEN * query_length / ROTATIONS)
+                    .unwrap(),
+            );
+            partial_results_left.push(
+                device
+                    .alloc_zeros(ALL_MATCHES_LEN * query_length / ROTATIONS)
+                    .unwrap(),
+            );
+            partial_results_right.push(
                 device
                     .alloc_zeros(ALL_MATCHES_LEN * query_length / ROTATIONS)
                     .unwrap(),
@@ -85,7 +105,11 @@ impl DistanceComparator {
             results_init_host,
             final_results_init_host,
             match_counters,
+            match_counters_left,
+            match_counters_right,
             all_matches,
+            partial_results_left,
+            partial_results_right,
         }
     }
 
@@ -213,6 +237,10 @@ impl DistanceComparator {
                             num_elements as u64,
                             &self.match_counters[i],
                             &self.all_matches[i],
+                            &self.match_counters_left[i],
+                            &self.match_counters_right[i],
+                            &self.partial_results_left[i],
+                            &self.partial_results_right[i],
                         ),
                     )
                     .unwrap();
@@ -233,26 +261,30 @@ impl DistanceComparator {
         results
     }
 
-    pub fn fetch_match_counters(&self) -> Vec<Vec<u32>> {
+    pub fn fetch_match_counters(&self, counters: &[CudaSlice<u32>]) -> Vec<Vec<u32>> {
         let mut results = vec![];
         for i in 0..self.device_manager.device_count() {
             results.push(
                 self.device_manager
                     .device(i)
-                    .dtoh_sync_copy(&self.match_counters[i])
+                    .dtoh_sync_copy(&counters[i])
                     .unwrap(),
             );
         }
         results
     }
 
-    pub fn fetch_all_match_ids(&self, match_counters: Vec<Vec<u32>>) -> Vec<Vec<u32>> {
+    pub fn fetch_all_match_ids(
+        &self,
+        match_counters: Vec<Vec<u32>>,
+        matches: &[CudaSlice<u32>],
+    ) -> Vec<Vec<u32>> {
         let mut results = vec![];
         for i in 0..self.device_manager.device_count() {
             results.push(
                 self.device_manager
                     .device(i)
-                    .dtoh_sync_copy(&self.all_matches[i])
+                    .dtoh_sync_copy(&matches[i])
                     .unwrap(),
             );
         }

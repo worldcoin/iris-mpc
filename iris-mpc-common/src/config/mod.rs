@@ -66,6 +66,9 @@ pub struct Config {
 
     #[serde(default)]
     pub fake_db_size: usize,
+
+    #[serde(default)]
+    pub return_partial_results: bool,
 }
 
 fn default_processing_timeout_secs() -> u64 {

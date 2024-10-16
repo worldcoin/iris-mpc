@@ -674,6 +674,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             8,
             config.max_db_size,
             config.max_batch_size,
+            config.return_partial_results,
         ) {
             Ok((mut actor, handle)) => {
                 if config.fake_db_size > 0 {
@@ -761,6 +762,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             metadata,
             matches,
             match_ids,
+            partial_match_ids_left,
+            partial_match_ids_right,
             store_left,
             store_right,
             deleted_ids,
@@ -781,6 +784,24 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         request_ids[i].clone(),
                         match matches[i] {
                             true => Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
+                            false => None,
+                        },
+                        match matches[i] {
+                            true => Some(
+                                partial_match_ids_left[i]
+                                    .iter()
+                                    .map(|x| x + 1)
+                                    .collect::<Vec<_>>(),
+                            ),
+                            false => None,
+                        },
+                        match matches[i] {
+                            true => Some(
+                                partial_match_ids_right[i]
+                                    .iter()
+                                    .map(|x| x + 1)
+                                    .collect::<Vec<_>>(),
+                            ),
                             false => None,
                         },
                     );
