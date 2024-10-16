@@ -69,6 +69,9 @@ pub struct Config {
 
     #[serde(default)]
     pub return_partial_results: bool,
+
+    #[serde(default)]
+    pub disable_persistence: bool,
 }
 
 fn default_processing_timeout_secs() -> u64 {

@@ -66,6 +66,12 @@ async fn main() -> eyre::Result<()> {
     install_tracing();
     let args = UpgradeClientConfig::parse();
 
+    let batch_timeout = if let Some(batch_timeout) = args.batch_timeout_secs {
+        batch_timeout
+    } else {
+        BATCH_TIMEOUT_SECONDS
+    };
+
     if args.party_id > 1 {
         panic!("Party id must be 0, 1");
     }
@@ -186,6 +192,7 @@ async fn main() -> eyre::Result<()> {
             );
             send_batch_and_wait_for_ack(
                 args.party_id,
+                batch_timeout,
                 &mut server1,
                 &mut server2,
                 &mut server3,
@@ -202,6 +209,7 @@ async fn main() -> eyre::Result<()> {
         tracing::info!("Sending final batch of size {}", batch.len());
         send_batch_and_wait_for_ack(
             args.party_id,
+            batch_timeout,
             &mut server1,
             &mut server2,
             &mut server3,
@@ -211,17 +219,18 @@ async fn main() -> eyre::Result<()> {
         batch.clear();
     }
     tracing::info!("Final batch sent, waiting for acks");
-    wait_for_ack(&mut server1).await?;
+    wait_for_ack(&mut server1, batch_timeout).await?;
     tracing::info!("Server 1 ack received");
-    wait_for_ack(&mut server2).await?;
+    wait_for_ack(&mut server2, batch_timeout).await?;
     tracing::info!("Server 2 ack received");
-    wait_for_ack(&mut server3).await?;
+    wait_for_ack(&mut server3, batch_timeout).await?;
     tracing::info!("Server 3 ack received");
     Ok(())
 }
 
 async fn send_batch_and_wait_for_ack(
     party_id: u8,
+    batch_timeout: u64,
     server1: &mut TlsStream<TcpStream>,
     server2: &mut TlsStream<TcpStream>,
     server3: &mut TlsStream<TcpStream>,
@@ -238,9 +247,9 @@ async fn send_batch_and_wait_for_ack(
     let batch_size = batch.len();
     // Send the batch size to all servers
     let (batch_size_result_a, batch_size_result_b, batch_size_result_c) = (
-        server1.write_u8(batch_size as u8),
-        server2.write_u8(batch_size as u8),
-        server3.write_u8(batch_size as u8),
+        server1.write_u64(batch_size as u64),
+        server2.write_u64(batch_size as u64),
+        server3.write_u64(batch_size as u64),
     )
         .join()
         .await;
@@ -312,14 +321,14 @@ async fn send_batch_and_wait_for_ack(
     }
 
     // Handle acknowledgment from all servers
-    wait_for_ack(server1).await?;
-    wait_for_ack(server2).await?;
-    wait_for_ack(server3).await?;
+    wait_for_ack(server1, batch_timeout).await?;
+    wait_for_ack(server2, batch_timeout).await?;
+    wait_for_ack(server3, batch_timeout).await?;
     Ok(())
 }
 
-async fn wait_for_ack(server: &mut TlsStream<TcpStream>) -> eyre::Result<()> {
-    match timeout(Duration::from_secs(BATCH_TIMEOUT_SECONDS), server.read_u8()).await {
+async fn wait_for_ack(server: &mut TlsStream<TcpStream>, batch_timeout: u64) -> eyre::Result<()> {
+    match timeout(Duration::from_secs(batch_timeout), server.read_u8()).await {
         Ok(Ok(BATCH_SUCCESSFUL_ACK)) => {
             // Ack received successfully
             tracing::info!("ACK received for batch");

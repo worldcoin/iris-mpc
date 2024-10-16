@@ -128,8 +128,8 @@ async fn main() -> eyre::Result<()> {
     for batch_num in 0..num_batches + 1 {
         tracing::info!("Processing batch {} of size: {}", batch_num, batch_size1);
         let start_time = Instant::now();
-        let batch_size_1_message = client_stream1.read_u8().await?;
-        let batch_size_2_message = client_stream2.read_u8().await?;
+        let batch_size_1_message = client_stream1.read_u64().await?;
+        let batch_size_2_message = client_stream2.read_u64().await?;
 
         if batch_size_1_message != batch_size_2_message {
             bail!(

@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:v0.8.23"
+image: "ghcr.io/worldcoin/iris-mpc:v0.8.25"
 
 environment: prod
 replicaCount: 1
@@ -16,6 +16,12 @@ ports:
   - containerPort: 3000
     name: health
     protocol: TCP
+
+startupProbe:
+  enabled: true
+  httpGet:
+    path: /health
+    port: health
 
 livenessProbe:
   httpGet:
@@ -42,6 +48,7 @@ imagePullSecrets:
 
 nodeSelector:
   kubernetes.io/arch: amd64
+  beta.kubernetes.io/instance-type: t3.2xlarge
 
 hostNetwork: true
 

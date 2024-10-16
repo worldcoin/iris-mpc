@@ -119,6 +119,7 @@ mod e2e_test {
                 DB_SIZE + DB_BUFFER,
                 MAX_BATCH_SIZE,
                 true,
+                false,
             ) {
                 Ok((mut actor, handle)) => {
                     actor.load_full_db(&(&db0.0, &db0.1), &(&db0.0, &db0.1), DB_SIZE);
@@ -145,6 +146,7 @@ mod e2e_test {
                 DB_SIZE + DB_BUFFER,
                 MAX_BATCH_SIZE,
                 true,
+                false,
             ) {
                 Ok((mut actor, handle)) => {
                     actor.load_full_db(&(&db1.0, &db1.1), &(&db1.0, &db1.1), DB_SIZE);
@@ -171,6 +173,7 @@ mod e2e_test {
                 DB_SIZE + DB_BUFFER,
                 MAX_BATCH_SIZE,
                 true,
+                false,
             ) {
                 Ok((mut actor, handle)) => {
                     actor.load_full_db(&(&db2.0, &db2.1), &(&db2.0, &db2.1), DB_SIZE);
