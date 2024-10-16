@@ -694,8 +694,6 @@ mod tests {
                 y.code.preprocess_iris_code_query_share();
                 y.mask.preprocess_mask_code_query_share();
             });
-            // let own_shares = vec![(ng_first_entry[index].clone(),
-            // ng_second_entry[index].clone())];
             jobs.spawn(async move {
                 let x = gr_replicated_pairwise_distance(&mut player_session, &own_shares)
                     .await
