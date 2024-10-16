@@ -327,8 +327,8 @@ async fn send_batch_and_wait_for_ack(
     Ok(())
 }
 
-async fn wait_for_ack(server: &mut TlsStream<TcpStream>, batch_timout: u64) -> eyre::Result<()> {
-    match timeout(Duration::from_secs(batch_timout), server.read_u8()).await {
+async fn wait_for_ack(server: &mut TlsStream<TcpStream>, batch_timeout: u64) -> eyre::Result<()> {
+    match timeout(Duration::from_secs(batch_timeout), server.read_u8()).await {
         Ok(Ok(BATCH_SUCCESSFUL_ACK)) => {
             // Ack received successfully
             tracing::info!("ACK received for batch");
