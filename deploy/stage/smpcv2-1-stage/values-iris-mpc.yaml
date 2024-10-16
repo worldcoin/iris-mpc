@@ -76,3 +76,15 @@ env:
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
+
+initContainer:
+  enabled: true
+  image: "amazon/aws-cli:2.17.62"
+  name: "iris-mpc-copy-cuda-libs"
+  configMap:
+    init.sh: |
+      #!/usr/bin/env bash
+
+      cd /libs
+      aws s3 cp s3://wf-smpcv2-stage-libs/libcublas.so.12.2.5.6 .
+      aws s3 cp s3://wf-smpcv2-stage-libs/libcublasLt.so.12.2.5.6 .
