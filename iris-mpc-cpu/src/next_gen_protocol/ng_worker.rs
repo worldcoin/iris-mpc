@@ -14,7 +14,9 @@ use crate::{
         iris_worker::{A, A_BITS, B_BITS},
         prf::{Prf, PrfSeed},
     },
-    shares::{bit::Bit, ring_impl::RingElement, share::Share, vecshare::VecShare},
+    shares::{
+        bit::Bit, int_ring::IntRing2k, ring_impl::RingElement, share::Share, vecshare::VecShare,
+    },
 };
 use eyre::eyre;
 use std::{collections::HashMap, sync::Arc};
@@ -258,7 +260,12 @@ pub async fn ng_cross_compare(
     Ok(opened_b.convert())
 }
 
-pub async fn open_t_many(session: &Session, shares: VecShare<u64>) -> eyre::Result<Vec<u64>> {
+pub async fn open_t_many<T>(session: &Session, shares: Vec<Share<T>>) -> eyre::Result<Vec<T>>
+where
+    T: IntRing2k,
+    NetworkValue: From<Vec<RingElement<T>>>,
+    Vec<RingElement<T>>: TryFrom<NetworkValue, Error = eyre::Error>,
+{
     let next_party = session.next_identity()?;
     let network = session.network().clone();
     let sid = session.session_id();
@@ -266,11 +273,7 @@ pub async fn open_t_many(session: &Session, shares: VecShare<u64>) -> eyre::Resu
     let shares_b: Vec<_> = shares.iter().map(|s| s.b).collect();
     let message = shares_b;
     network
-        .send(
-            NetworkValue::VecRing64(message).to_network(),
-            &next_party,
-            &sid,
-        )
+        .send(NetworkValue::from(message).to_network(), &next_party, &sid)
         .await?;
 
     // receiving from previous party
@@ -279,48 +282,8 @@ pub async fn open_t_many(session: &Session, shares: VecShare<u64>) -> eyre::Resu
     let prev_party = session.prev_identity()?;
     let shares_c = {
         let serialized_other_share = network.receive(&prev_party, &sid).await;
-        match NetworkValue::from_network(serialized_other_share) {
-            Ok(NetworkValue::VecRing64(message)) => Ok(message),
-            _ => Err(eyre!("Error in receiving in open_t_many operation")),
-        }
-    }?;
-
-    let res = shares
-        .into_iter()
-        .zip(shares_c)
-        .map(|(s, c)| {
-            let (a, b) = s.get_ab();
-            (a + b + c).convert()
-        })
-        .collect();
-    Ok(res)
-}
-
-pub async fn open_t_many_16(session: &Session, shares: Vec<Share<u16>>) -> eyre::Result<Vec<u16>> {
-    let next_party = session.next_identity()?;
-    let network = session.network().clone();
-    let sid = session.session_id();
-
-    let shares_b: Vec<_> = shares.iter().map(|s| s.b).collect();
-    let message = shares_b;
-    network
-        .send(
-            NetworkValue::VecRing16(message).to_network(),
-            &next_party,
-            &sid,
-        )
-        .await?;
-
-    // receiving from previous party
-    let network = session.network().clone();
-    let sid = session.session_id();
-    let prev_party = session.prev_identity()?;
-    let shares_c = {
-        let serialized_other_share = network.receive(&prev_party, &sid).await;
-        match NetworkValue::from_network(serialized_other_share) {
-            Ok(NetworkValue::VecRing16(message)) => Ok(message),
-            _ => Err(eyre!("Error in receiving in open_t_many_16 operation")),
-        }
+        let net_message = NetworkValue::from_network(serialized_other_share)?;
+        Vec::<RingElement<T>>::try_from(net_message)
     }?;
 
     let res = shares
@@ -705,7 +668,7 @@ mod tests {
                     .unwrap();
                 let opened_x = open_additive(&player_session, x.clone()).await.unwrap();
                 let x_rep = gr_to_rep3(&mut player_session, x).await.unwrap();
-                let opened_x_rep = open_t_many_16(&player_session, x_rep).await.unwrap();
+                let opened_x_rep = open_t_many(&player_session, x_rep).await.unwrap();
                 (opened_x, opened_x_rep)
             });
         }
