@@ -29,6 +29,8 @@ serde_json.workspace = true
 sodiumoxide = "0.2.7"
 iris-mpc-common = { path = "../iris-mpc-common" }
 base64 = "0.22.1"
+metrics = "0.22.1"
+metrics-exporter-statsd = "0.7"
 
 [dev-dependencies]
 criterion = "0.5"
