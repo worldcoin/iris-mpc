@@ -110,8 +110,8 @@ pub(crate) async fn ng_replicated_pairwise_distance(
 }
 
 /// Computes the dot product between the iris pairs; for both the code and the
-/// mask of the irises. We batch the dot products into a single communication
-/// round;
+/// mask of the irises. We pack the dot products of the code and mask into one
+/// vector to be able to reshare it later.
 pub async fn gr_replicated_pairwise_distance(
     _session: &mut Session,
     pairs: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
