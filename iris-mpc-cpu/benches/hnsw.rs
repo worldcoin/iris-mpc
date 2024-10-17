@@ -127,7 +127,7 @@ fn bench_gr_primitives(c: &mut Criterion) {
                     let ds_and_ts = gr_replicated_pairwise_distance(&mut player_session, &pairs)
                         .await
                         .unwrap();
-                    let ds_and_ts = gr_to_rep3(&player_session, ds_and_ts).await.unwrap();
+                    let ds_and_ts = gr_to_rep3(&mut player_session, ds_and_ts).await.unwrap();
                     ng_cross_compare(
                         &mut player_session,
                         ds_and_ts[0].clone(),

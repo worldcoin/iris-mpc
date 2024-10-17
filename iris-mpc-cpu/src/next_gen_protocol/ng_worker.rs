@@ -345,19 +345,24 @@ pub async fn ng_replicated_is_match(
     Ok(opened.convert())
 }
 
+/// Converts additive sharing (from trick_dot output) to a replicated sharing by
+/// masking it with a zero sharing
 pub async fn gr_to_rep3(
-    session: &Session,
+    session: &mut Session,
     items: Vec<RingElement<u16>>,
 ) -> eyre::Result<Vec<Share<u16>>> {
     let network = session.network().clone();
     let sid = session.session_id();
     let next_party = session.next_identity()?;
 
+    let masked_items: Vec<_> = items
+        .iter()
+        .map(|x| session.prf_as_mut().gen_zero_share() + x)
+        .collect();
     // sending to the next party
-    let shares_a = items.clone();
     network
         .send(
-            NetworkValue::VecRing16(items).to_network(),
+            NetworkValue::VecRing16(masked_items.clone()).to_network(),
             &next_party,
             &sid,
         )
@@ -374,7 +379,7 @@ pub async fn gr_to_rep3(
             _ => Err(eyre!("Error in receiving in gr_to_rep3 operation")),
         }
     }?;
-    let res: Vec<Share<u16>> = shares_a
+    let res: Vec<Share<u16>> = masked_items
         .into_iter()
         .zip(shares_b)
         .map(|(a, b)| Share::new(a, b))
@@ -699,7 +704,7 @@ mod tests {
                     .await
                     .unwrap();
                 let opened_x = open_additive(&player_session, x.clone()).await.unwrap();
-                let x_rep = gr_to_rep3(&player_session, x).await.unwrap();
+                let x_rep = gr_to_rep3(&mut player_session, x).await.unwrap();
                 let opened_x_rep = open_t_many_16(&player_session, x_rep).await.unwrap();
                 (opened_x, opened_x_rep)
             });
