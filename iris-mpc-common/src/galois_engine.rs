@@ -62,6 +62,18 @@ pub mod degree4 {
         }
     }
 
+    impl From<&GaloisRingIrisCodeShare> for GaloisRingTrimmedMaskCodeShare {
+        fn from(iris_share: &GaloisRingIrisCodeShare) -> Self {
+            let mut coefs = [0; MASK_CODE_LENGTH];
+            coefs.copy_from_slice(&iris_share.coefs[..MASK_CODE_LENGTH]);
+
+            GaloisRingTrimmedMaskCodeShare {
+                id: iris_share.id,
+                coefs,
+            }
+        }
+    }
+
     impl GaloisRingTrimmedMaskCodeShare {
         pub fn default_for_party(party_id: usize) -> Self {
             GaloisRingTrimmedMaskCodeShare {

@@ -116,15 +116,15 @@ pub fn generate_galois_iris_shares<R: Rng + CryptoRng>(
     vec![
         GaloisRingSharedIris {
             code: code_shares[0].clone(),
-            mask: mask_shares[0].clone().into(),
+            mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares[0]),
         },
         GaloisRingSharedIris {
             code: code_shares[1].clone(),
-            mask: mask_shares[1].clone().into(),
+            mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares[1]),
         },
         GaloisRingSharedIris {
             code: code_shares[2].clone(),
-            mask: mask_shares[2].clone().into(),
+            mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares[2]),
         },
     ]
 }
