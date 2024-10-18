@@ -80,12 +80,6 @@ env:
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
 
-  - name: SMPC__FAKE_DB_SIZE
-    value: "6000000"
-
-  - name: SMPC__DISABLE_PERSISTENCE
-    value: "true"
-
 initContainer:
   enabled: true
   image: "amazon/aws-cli:2.17.62"
