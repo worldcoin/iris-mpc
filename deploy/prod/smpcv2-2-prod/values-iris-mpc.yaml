@@ -2,6 +2,9 @@ env:
   - name: RUST_LOG
     value: "info"
 
+  - name: NCCL_DEBUG
+    value: "INFO"
+
   - name: RUST_BACKTRACE
     value: "full"
 
