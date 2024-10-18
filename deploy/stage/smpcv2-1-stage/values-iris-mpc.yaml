@@ -77,6 +77,23 @@ env:
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
 
+  - name: SMPC__SERVICE__METRICS__HOST
+    valueFrom:
+      fieldRef:
+        fieldPath: status.hostIP
+
+  - name: SMPC__SERVICE__METRICS__PORT
+    value: "8125"
+
+  - name: SMPC__SERVICE__METRICS__QUEUE_SIZE
+    value: "5000"
+
+  - name: SMPC__SERVICE__METRICS__BUFFER_SIZE
+    value: "1024"
+  
+  - name: SMPC__SERVICE__METRICS__PREFIX
+    value: "smpcv2-1"
+
 initContainer:
   enabled: true
   image: "amazon/aws-cli:2.17.62"

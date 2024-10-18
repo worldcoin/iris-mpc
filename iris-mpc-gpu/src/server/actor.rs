@@ -883,20 +883,26 @@ impl ServerActor {
 
         // ---- END RESULT PROCESSING ----
         log_timers(events);
-
+        let processed_mil_elements_per_second = (self.max_batch_size * previous_total_db_size)
+            as f64
+            / now.elapsed().as_secs_f64()
+            / 1e6;
         tracing::info!(
             "Batch took {:?} [{:.2} Melems/s]",
             now.elapsed(),
-            (self.max_batch_size * previous_total_db_size) as f64
-                / now.elapsed().as_secs_f64()
-                / 1e6
+            processed_mil_elements_per_second
         );
 
+        metrics::histogram!("processed_melems_per_second")
+            .record(processed_mil_elements_per_second);
+
+        let new_db_size = self.current_db_sizes.iter().sum::<usize>();
         tracing::info!(
             "Old DB size: {}, New DB size: {}",
             previous_total_db_size,
-            self.current_db_sizes.iter().sum::<usize>()
+            new_db_size
         );
+        metrics::gauge!("db_size").set(new_db_size as f64);
 
         Ok(())
     }
@@ -1277,7 +1283,7 @@ fn log_timers(events: HashMap<&str, Vec<Vec<CUevent>>>) {
             .sum();
 
         tracing::info!("Event {}: {:?} ms", name, duration);
-        // TODO: send to metrics
+        metrics::histogram!("event_duration", "event_name" => name.to_string()).record(duration);
     }
 }
 
