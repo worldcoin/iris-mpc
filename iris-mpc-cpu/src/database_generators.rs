@@ -1,6 +1,9 @@
 use crate::shares::{ring_impl::RingElement, share::Share, vecshare::VecShare};
-use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodeArray};
-use rand::{Rng, RngCore};
+use iris_mpc_common::{
+    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    iris_db::iris::{IrisCode, IrisCodeArray},
+};
+use rand::{CryptoRng, Rng, RngCore};
 use std::sync::Arc;
 
 type ShareRing = u16;
@@ -19,6 +22,12 @@ pub struct SharedIris {
 pub struct NgSharedIris {
     pub code: VecShareType,
     pub mask: VecShareType,
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct GaloisRingSharedIris {
+    pub code: GaloisRingIrisCodeShare,
+    pub mask: GaloisRingTrimmedMaskCodeShare,
 }
 
 #[derive(Clone)]
@@ -96,4 +105,26 @@ pub fn ng_generate_iris_shares<R: Rng>(rng: &mut R, iris: IrisCode) -> Vec<NgSha
         }
     }
     res
+}
+
+pub fn generate_galois_iris_shares<R: Rng + CryptoRng>(
+    rng: &mut R,
+    iris: IrisCode,
+) -> Vec<GaloisRingSharedIris> {
+    let code_shares = GaloisRingIrisCodeShare::encode_iris_code(&iris.code, &iris.mask, rng);
+    let mask_shares = GaloisRingIrisCodeShare::encode_mask_code(&iris.mask, rng);
+    vec![
+        GaloisRingSharedIris {
+            code: code_shares[0].clone(),
+            mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares[0]),
+        },
+        GaloisRingSharedIris {
+            code: code_shares[1].clone(),
+            mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares[1]),
+        },
+        GaloisRingSharedIris {
+            code: code_shares[2].clone(),
+            mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares[2]),
+        },
+    ]
 }

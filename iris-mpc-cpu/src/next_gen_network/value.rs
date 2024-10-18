@@ -26,3 +26,21 @@ impl NetworkValue {
         bincode::deserialize::<Self>(&serialized?).map_err(|_e| eyre!("failed to parse value"))
     }
 }
+
+impl From<Vec<RingElement<u16>>> for NetworkValue {
+    fn from(value: Vec<RingElement<u16>>) -> Self {
+        NetworkValue::VecRing16(value)
+    }
+}
+
+impl TryFrom<NetworkValue> for Vec<RingElement<u16>> {
+    type Error = eyre::Error;
+    fn try_from(value: NetworkValue) -> eyre::Result<Self> {
+        match value {
+            NetworkValue::VecRing16(x) => Ok(x),
+            _ => Err(eyre!(
+                "could not convert Network Value into Vec<RingElement<u16>>"
+            )),
+        }
+    }
+}

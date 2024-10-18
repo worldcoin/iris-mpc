@@ -55,13 +55,16 @@ impl FormattedIris {
             .zip(other.data.iter())
             .fold(0_i32, |sum, (i, j)| sum + (*i as i32) * (*j as i32))
     }
+    pub fn compute_distance(&self, other: &Self) -> (i16, usize) {
+        let combined_mask = self.mask & other.mask;
+        let dot = self.dot_on_code(other) as i16;
+        (dot, combined_mask.count_ones())
+    }
 }
 
 impl PlaintextPoint {
     fn compute_distance(&self, other: &PlaintextPoint) -> (i16, usize) {
-        let combined_mask = self.data.mask & other.data.mask;
-        let dot = self.data.dot_on_code(&other.data) as i16;
-        (dot, combined_mask.count_ones())
+        self.data.compute_distance(&other.data)
     }
 
     fn is_close(&self, other: &PlaintextPoint) -> bool {
@@ -107,7 +110,6 @@ impl PlaintextStore {
         );
         let (d1, t1) = x1.compute_distance(y1);
         let (d2, t2) = x2.compute_distance(y2);
-
         let cross_1 = d2 as i32 * t1 as i32;
         let cross_2 = d1 as i32 * t2 as i32;
         (cross_1, cross_2)
@@ -153,7 +155,7 @@ impl VectorStore for PlaintextStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hawkers::ng_aby3_store::ng_create_ready_made_hawk_searcher;
+    use crate::hawkers::galois_store::gr_create_ready_made_hawk_searcher;
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
     use rand::SeedableRng;
@@ -225,7 +227,7 @@ mod tests {
     async fn test_plaintext_hnsw_matcher() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 1;
-        let (cleartext_searcher, _) = ng_create_ready_made_hawk_searcher(&mut rng, database_size)
+        let (cleartext_searcher, _) = gr_create_ready_made_hawk_searcher(&mut rng, database_size)
             .await
             .unwrap();
         for i in 0..database_size {
