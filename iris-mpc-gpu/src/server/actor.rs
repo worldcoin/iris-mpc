@@ -99,6 +99,7 @@ pub struct ServerActor {
     query_db_size:          Vec<usize>,
     max_batch_size:         usize,
     max_db_size:            usize,
+    return_partial_results: bool,
     disable_persistence:    bool,
 }
 
@@ -112,6 +113,7 @@ impl ServerActor {
         job_queue_size: usize,
         max_db_size: usize,
         max_batch_size: usize,
+        return_partial_results: bool,
         disable_persistence: bool,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let device_manager = Arc::new(DeviceManager::init());
@@ -122,6 +124,7 @@ impl ServerActor {
             job_queue_size,
             max_db_size,
             max_batch_size,
+            return_partial_results,
             disable_persistence,
         )
     }
@@ -133,6 +136,7 @@ impl ServerActor {
         job_queue_size: usize,
         max_db_size: usize,
         max_batch_size: usize,
+        return_partial_results: bool,
         disable_persistence: bool,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let ids = device_manager.get_ids_from_magic(0);
@@ -145,6 +149,7 @@ impl ServerActor {
             job_queue_size,
             max_db_size,
             max_batch_size,
+            return_partial_results,
             disable_persistence,
         )
     }
@@ -158,6 +163,7 @@ impl ServerActor {
         job_queue_size: usize,
         max_db_size: usize,
         max_batch_size: usize,
+        return_partial_results: bool,
         disable_persistence: bool,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let (tx, rx) = mpsc::channel(job_queue_size);
@@ -169,6 +175,7 @@ impl ServerActor {
             rx,
             max_db_size,
             max_batch_size,
+            return_partial_results,
             disable_persistence,
         )?;
         Ok((actor, ServerActorHandle { job_queue: tx }))
@@ -183,6 +190,7 @@ impl ServerActor {
         job_queue: mpsc::Receiver<ServerJob>,
         max_db_size: usize,
         max_batch_size: usize,
+        return_partial_results: bool,
         disable_persistence: bool,
     ) -> eyre::Result<Self> {
         assert!(max_batch_size != 0);
@@ -343,6 +351,7 @@ impl ServerActor {
             batch_match_list_right,
             max_batch_size,
             max_db_size,
+            return_partial_results,
             disable_persistence,
         })
     }
@@ -759,7 +768,7 @@ impl ServerActor {
         // Fetch and truncate the match counters
         let match_counters_devices = self
             .distance_comparator
-            .fetch_match_counters()
+            .fetch_match_counters(&self.distance_comparator.match_counters)
             .into_iter()
             .map(|x| x[..batch_size].to_vec())
             .collect::<Vec<_>>();
@@ -776,9 +785,10 @@ impl ServerActor {
                 });
 
         // Transfer all match ids
-        let match_ids = self
-            .distance_comparator
-            .fetch_all_match_ids(match_counters_devices);
+        let match_ids = self.distance_comparator.fetch_all_match_ids(
+            match_counters_devices,
+            &self.distance_comparator.all_matches,
+        );
 
         // Check if there are more matches than we fetch
         // TODO: In the future we might want to dynamically allocate more memory here
@@ -792,6 +802,28 @@ impl ServerActor {
                 );
             }
         }
+
+        let (partial_match_ids_left, partial_match_ids_right) = if self.return_partial_results {
+            // Transfer the partial results to the host
+            let partial_match_counters_left = self
+                .distance_comparator
+                .fetch_match_counters(&self.distance_comparator.match_counters_left);
+            let partial_match_counters_right = self
+                .distance_comparator
+                .fetch_match_counters(&self.distance_comparator.match_counters_right);
+
+            let partial_results_left = self.distance_comparator.fetch_all_match_ids(
+                partial_match_counters_left,
+                &self.distance_comparator.partial_results_left,
+            );
+            let partial_results_right = self.distance_comparator.fetch_all_match_ids(
+                partial_match_counters_right,
+                &self.distance_comparator.partial_results_right,
+            );
+            (partial_results_left, partial_results_right)
+        } else {
+            (vec![], vec![])
+        };
 
         // Write back to in-memory db
         let previous_total_db_size = self.current_db_sizes.iter().sum::<usize>();
@@ -854,6 +886,8 @@ impl ServerActor {
                 metadata: batch.metadata,
                 matches,
                 match_ids,
+                partial_match_ids_left,
+                partial_match_ids_right,
                 store_left: query_store_left,
                 store_right: query_store_right,
                 deleted_ids: batch.deletion_requests_indices,
@@ -877,6 +911,20 @@ impl ServerActor {
         reset_slice(
             self.device_manager.devices(),
             &self.distance_comparator.match_counters,
+            0,
+            &self.streams[0],
+        );
+
+        reset_slice(
+            self.device_manager.devices(),
+            &self.distance_comparator.match_counters_left,
+            0,
+            &self.streams[0],
+        );
+
+        reset_slice(
+            self.device_manager.devices(),
+            &self.distance_comparator.match_counters_right,
             0,
             &self.streams[0],
         );

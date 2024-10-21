@@ -118,6 +118,7 @@ mod e2e_test {
                 8,
                 DB_SIZE + DB_BUFFER,
                 MAX_BATCH_SIZE,
+                true,
                 false,
             ) {
                 Ok((mut actor, handle)) => {
@@ -144,6 +145,7 @@ mod e2e_test {
                 8,
                 DB_SIZE + DB_BUFFER,
                 MAX_BATCH_SIZE,
+                true,
                 false,
             ) {
                 Ok((mut actor, handle)) => {
@@ -170,6 +172,7 @@ mod e2e_test {
                 8,
                 DB_SIZE + DB_BUFFER,
                 MAX_BATCH_SIZE,
+                true,
                 false,
             ) {
                 Ok((mut actor, handle)) => {
@@ -390,14 +393,24 @@ mod e2e_test {
                     request_ids: thread_request_ids,
                     matches,
                     merged_results,
+                    match_ids,
+                    partial_match_ids_left,
+                    partial_match_ids_right,
                     ..
                 } = res;
-                for ((req_id, &was_match), &idx) in thread_request_ids
-                    .iter()
-                    .zip(matches.iter())
-                    .zip(merged_results.iter())
+                for (((((req_id, was_match), idx), partial_left), partial_right), match_id) in
+                    thread_request_ids
+                        .iter()
+                        .zip(matches.iter())
+                        .zip(merged_results.iter())
+                        .zip(partial_match_ids_left.iter())
+                        .zip(partial_match_ids_right.iter())
+                        .zip(match_ids.iter())
                 {
                     assert!(requests.contains_key(req_id));
+
+                    assert_eq!(partial_left, partial_right);
+                    assert_eq!(partial_left, match_id);
 
                     // This was an invalid query, we should not get a response, but they should be
                     // silently ignored
@@ -407,11 +420,11 @@ mod e2e_test {
 
                     if let Some(expected_idx) = expected_idx {
                         assert!(was_match);
-                        assert_eq!(expected_idx, &idx);
+                        assert_eq!(expected_idx, idx);
                     } else {
                         assert!(!was_match);
                         let request = requests.get(req_id).unwrap().clone();
-                        responses.insert(idx, request);
+                        responses.insert(*idx, request);
                     }
                 }
             }

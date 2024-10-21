@@ -68,6 +68,9 @@ pub struct Config {
     pub fake_db_size: usize,
 
     #[serde(default)]
+    pub return_partial_results: bool,
+
+    #[serde(default)]
     pub disable_persistence: bool,
 }
 
