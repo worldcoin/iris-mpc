@@ -3,7 +3,7 @@ env:
     value: "info"
 
   - name: RUST_BACKTRACE
-    value: "full"
+    value: "1"
 
   - name: NCCL_SOCKET_IFNAME
     value: "eth0"
