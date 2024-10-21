@@ -1,25 +1,15 @@
 use super::binary::single_extract_msb_u32;
 use crate::{
-    database_generators::{GaloisRingSharedIris, NgSharedIris},
-    execution::{
-        player::{Identity, Role, RoleAssignment},
-        session::{BootSession, Session, SessionHandles, SessionId},
-    },
-    network::{
-        local::LocalNetworkingStore,
-        value::NetworkValue::{self},
-    },
+    database_generators::GaloisRingSharedIris,
+    execution::session::{BootSession, Session, SessionHandles},
+    network::value::NetworkValue::{self},
     protocol::{
         binary::{lift, mul_lift_2k, open_bin},
         prf::{Prf, PrfSeed},
     },
-    shares::{
-        bit::Bit, int_ring::IntRing2k, ring_impl::RingElement, share::Share, vecshare::VecShare,
-    },
+    shares::{bit::Bit, ring_impl::RingElement, share::Share, vecshare::VecShare},
 };
 use eyre::eyre;
-use std::{collections::HashMap, sync::Arc};
-use tokio::task::JoinSet;
 
 pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
 pub(crate) const B_BITS: u64 = 16;
@@ -27,14 +17,10 @@ pub(crate) const B: u64 = 1 << B_BITS;
 pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
 pub(crate) const A_BITS: u32 = u64::BITS - A.leading_zeros();
 
-#[derive(Debug, Clone)]
-pub struct LocalRuntime {
-    pub identities:       Vec<Identity>,
-    pub role_assignments: RoleAssignment,
-    pub prf_setups:       Option<HashMap<Role, Prf>>,
-    pub seeds:            Vec<PrfSeed>,
-}
-
+/// Setup the PRF seeds in the replicated protocol.
+/// Each party sends to the next party a random seed.
+/// At the end, each party will hold two seeds which are the basis of the
+/// replicated protocols.
 pub async fn setup_replicated_prf(session: &BootSession, my_seed: PrfSeed) -> eyre::Result<Prf> {
     let next_role = session.own_role()?.next(3);
     let prev_role = session.own_role()?.prev(3);
@@ -60,84 +46,13 @@ pub async fn setup_replicated_prf(session: &BootSession, my_seed: PrfSeed) -> ey
     Ok(Prf::new(my_seed, other_seed))
 }
 
-/// Computes the dot product between the iris pairs; for both the code and the
-/// mask of the irises. We batch the dot products into a single communication
-/// round;
-pub(crate) async fn ng_replicated_pairwise_distance(
-    session: &mut Session,
-    pairs: &[(NgSharedIris, NgSharedIris)],
-) -> eyre::Result<Vec<Share<u16>>> {
-    let mut exchanged_shares_a = Vec::with_capacity(2 * pairs.len());
-    for pair in pairs.iter() {
-        let (x, y) = pair;
-        let (res_code, res_mask) = {
-            let mut rand_code = session.prf_as_mut().gen_zero_share();
-            for (a__, b__) in x.code.iter().zip(y.code.iter()) {
-                rand_code += a__ * b__;
-            }
-            let mut rand_mask = session.prf_as_mut().gen_zero_share();
-            for (a__, b__) in x.mask.iter().zip(y.mask.iter()) {
-                rand_mask += a__ * b__;
-            }
-            (rand_code, rand_mask)
-        };
-        exchanged_shares_a.push(res_code);
-        exchanged_shares_a.push(res_mask);
-    }
-    let network = session.network();
-    let next_role = session.identity(&session.own_role()?.next(3))?;
-    let prev_role = session.identity(&session.own_role()?.prev(3))?;
-
-    network
-        .send(
-            NetworkValue::VecRing16(exchanged_shares_a.clone()).to_network(),
-            next_role,
-            &session.session_id(),
-        )
-        .await?;
-
-    let serialized_reply = network.receive(prev_role, &session.session_id()).await;
-    let res_b = match NetworkValue::from_network(serialized_reply) {
-        Ok(NetworkValue::VecRing16(element)) => element,
-        _ => return Err(eyre!("Could not deserialize VecRing16")),
-    };
-    if exchanged_shares_a.len() != res_b.len() {
-        Err(eyre!(
-            "Expected a VecRing16 with length {:?} but received with length: {:?}",
-            exchanged_shares_a.len(),
-            res_b.len()
-        ))
-    } else {
-        let mut res = Vec::with_capacity(2 * pairs.len());
-        for (a_share, b_share) in exchanged_shares_a.into_iter().zip(res_b) {
-            res.push(Share::new(a_share, b_share));
-        }
-        Ok(res)
-    }
-}
-
-/// Computes the dot product between the iris pairs; for both the code and the
-/// mask of the irises. We pack the dot products of the code and mask into one
-/// vector to be able to reshare it later.
-pub async fn gr_replicated_pairwise_distance(
-    _session: &mut Session,
-    pairs: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
-) -> eyre::Result<Vec<RingElement<u16>>> {
-    let mut additive_shares = Vec::with_capacity(2 * pairs.len());
-    for pair in pairs.iter() {
-        let (x, y) = pair;
-        let code_dot = x.code.trick_dot(&y.code);
-        let mask_dot = x.mask.trick_dot(&y.mask);
-        additive_shares.push(RingElement(code_dot));
-        // When applying the trick dot on trimmed masks, we have to multiply with 2 the
-        // result The intuition being that a GaloisRingTrimmedMask contains half
-        // the elements that a full GaloisRingMask has.
-        additive_shares.push(RingElement(2) * RingElement(mask_dot));
-    }
-    Ok(additive_shares)
-}
-
-pub async fn ng_compare_threshold_masked(
+/// Takes as input two code and mask dot products between two Irises: i, j.
+/// i.e. code_dot = <i.code, j.code> and mask_dot = <i.mask, j.mask>
+/// Then lifts the two dot products to the larger ring (Z_{2^32}), multiplies
+/// with some predefined constants B = 2^16
+/// A = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64)
+/// and then compares mask_dot * A < code_dot * B.
+pub async fn compare_threshold(
     session: &mut Session,
     code_dot: Share<u16>,
     mask_dot: Share<u16>,
@@ -173,7 +88,7 @@ pub(crate) async fn batch_signed_lift(
 }
 
 /// Computes [D1 * T2; D2 * T1] via lifting
-pub(crate) async fn ng_cross_mul_via_lift(
+pub(crate) async fn cross_mul_via_lift(
     session: &mut Session,
     d1: Share<u16>,
     t1: Share<u16>,
@@ -249,14 +164,14 @@ pub(crate) async fn ng_cross_mul_via_lift(
 /// ie: d1 = dot(c_x, c_y); t1 = dot(m_x, m_y). d2, t2 are replicated shares
 /// that come from an iris code and mask dot product, ie:
 /// d2 = dot(c_u, c_w), t2 = dot(m_u, m_w)
-pub async fn ng_cross_compare(
+pub async fn cross_compare(
     session: &mut Session,
     d1: Share<u16>,
     t1: Share<u16>,
     d2: Share<u16>,
     t2: Share<u16>,
 ) -> eyre::Result<bool> {
-    let (d1t2, d2t1) = ng_cross_mul_via_lift(session, d1, t1, d2, t2).await?;
+    let (d1t2, d2t1) = cross_mul_via_lift(session, d1, t1, d2, t2).await?;
     let diff = d2t1 - d1t2;
     // Compute bit <- MSB(D2 * T1 - D1 * T2)
     let bit = single_extract_msb_u32::<32>(session, diff).await?;
@@ -265,57 +180,30 @@ pub async fn ng_cross_compare(
     Ok(opened_b.convert())
 }
 
-pub async fn open_t_many<T>(session: &Session, shares: Vec<Share<T>>) -> eyre::Result<Vec<T>>
-where
-    T: IntRing2k,
-    NetworkValue: From<Vec<RingElement<T>>>,
-    Vec<RingElement<T>>: TryFrom<NetworkValue, Error = eyre::Error>,
-{
-    let next_party = session.next_identity()?;
-    let network = session.network().clone();
-    let sid = session.session_id();
-
-    let shares_b: Vec<_> = shares.iter().map(|s| s.b).collect();
-    let message = shares_b;
-    network
-        .send(NetworkValue::from(message).to_network(), &next_party, &sid)
-        .await?;
-
-    // receiving from previous party
-    let network = session.network().clone();
-    let sid = session.session_id();
-    let prev_party = session.prev_identity()?;
-    let shares_c = {
-        let serialized_other_share = network.receive(&prev_party, &sid).await;
-        let net_message = NetworkValue::from_network(serialized_other_share)?;
-        Vec::<RingElement<T>>::try_from(net_message)
-    }?;
-
-    let res = shares
-        .into_iter()
-        .zip(shares_c)
-        .map(|(s, c)| {
-            let (a, b) = s.get_ab();
-            (a + b + c).convert()
-        })
-        .collect();
-    Ok(res)
-}
-
-pub async fn ng_replicated_is_match(
-    session: &mut Session,
-    pairs: &[(NgSharedIris, NgSharedIris)],
-) -> eyre::Result<bool> {
-    let dots = ng_replicated_pairwise_distance(session, pairs).await?;
-    // compute dots[0] - dots[1]
-    let bit = ng_compare_threshold_masked(session, dots[0].clone(), dots[1].clone()).await?;
-    let opened = open_bin(session, bit).await?;
-    Ok(opened.convert())
+/// Computes the dot product between the iris pairs; for both the code and the
+/// mask of the irises. We pack the dot products of the code and mask into one
+/// vector to be able to reshare it later.
+pub async fn galois_ring_pairwise_distance(
+    _session: &mut Session,
+    pairs: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
+) -> eyre::Result<Vec<RingElement<u16>>> {
+    let mut additive_shares = Vec::with_capacity(2 * pairs.len());
+    for pair in pairs.iter() {
+        let (x, y) = pair;
+        let code_dot = x.code.trick_dot(&y.code);
+        let mask_dot = x.mask.trick_dot(&y.mask);
+        additive_shares.push(RingElement(code_dot));
+        // When applying the trick dot on trimmed masks, we have to multiply with 2 the
+        // result The intuition being that a GaloisRingTrimmedMask contains half
+        // the elements that a full GaloisRingMask has.
+        additive_shares.push(RingElement(2) * RingElement(mask_dot));
+    }
+    Ok(additive_shares)
 }
 
 /// Converts additive sharing (from trick_dot output) to a replicated sharing by
 /// masking it with a zero sharing
-pub async fn gr_to_rep3(
+pub async fn galois_ring_to_rep3(
     session: &mut Session,
     items: Vec<RingElement<u16>>,
 ) -> eyre::Result<Vec<Share<u16>>> {
@@ -323,10 +211,12 @@ pub async fn gr_to_rep3(
     let sid = session.session_id();
     let next_party = session.next_identity()?;
 
+    // make sure we mask the input with a zero sharing
     let masked_items: Vec<_> = items
         .iter()
         .map(|x| session.prf_as_mut().gen_zero_share() + x)
         .collect();
+
     // sending to the next party
     network
         .send(
@@ -344,7 +234,7 @@ pub async fn gr_to_rep3(
         let serialized_other_share = network.receive(&prev_party, &sid).await;
         match NetworkValue::from_network(serialized_other_share) {
             Ok(NetworkValue::VecRing16(message)) => Ok(message),
-            _ => Err(eyre!("Error in receiving in gr_to_rep3 operation")),
+            _ => Err(eyre!("Error in receiving in galois_ring_to_rep3 operation")),
         }
     }?;
     let res: Vec<Share<u16>> = masked_items
@@ -355,92 +245,41 @@ pub async fn gr_to_rep3(
     Ok(res)
 }
 
-pub async fn gr_replicated_is_match(
+/// Checks whether first Iris entry in the pair matches the Iris in the second
+/// entry. This is done in the following manner:
+/// Compute the dot product between the two Irises.
+/// Convert the partial shamir share result to a replicated sharing and then
+/// Compare the distance using the MATCH_THRESHOLD_RATIO from the
+/// `compare_threshold` function.
+pub async fn galois_ring_is_match(
     session: &mut Session,
     pairs: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
 ) -> eyre::Result<bool> {
-    let additive_dots = gr_replicated_pairwise_distance(session, pairs).await?;
-    let rep_dots = gr_to_rep3(session, additive_dots).await?;
+    assert_eq!(pairs.len(), 1);
+    let additive_dots = galois_ring_pairwise_distance(session, pairs).await?;
+    let rep_dots = galois_ring_to_rep3(session, additive_dots).await?;
     // compute dots[0] - dots[1]
-    let bit =
-        ng_compare_threshold_masked(session, rep_dots[0].clone(), rep_dots[1].clone()).await?;
+    let bit = compare_threshold(session, rep_dots[0].clone(), rep_dots[1].clone()).await?;
     let opened = open_bin(session, bit).await?;
     Ok(opened.convert())
-}
-
-impl LocalRuntime {
-    pub fn replicated_test_config() -> Self {
-        let num_parties = 3;
-        let identities: Vec<Identity> = vec!["alice".into(), "bob".into(), "charlie".into()];
-        let mut seeds = Vec::new();
-        for i in 0..num_parties {
-            let mut seed = [0_u8; 16];
-            seed[0] = i;
-            seeds.push(seed);
-        }
-        LocalRuntime::new(identities, seeds)
-    }
-    fn new(identities: Vec<Identity>, seeds: Vec<PrfSeed>) -> Self {
-        let role_assignments: RoleAssignment = identities
-            .iter()
-            .enumerate()
-            .map(|(index, id)| (Role::new(index), id.clone()))
-            .collect();
-        LocalRuntime {
-            identities,
-            role_assignments,
-            prf_setups: None,
-            seeds,
-        }
-    }
-
-    pub async fn create_player_sessions(&self) -> eyre::Result<HashMap<Identity, Session>> {
-        let network = LocalNetworkingStore::from_host_ids(&self.identities);
-        let sess_id = SessionId::from(0_u128);
-        let boot_sessions: Vec<BootSession> = (0..self.seeds.len())
-            .map(|i| {
-                let identity = self.identities[i].clone();
-                BootSession {
-                    session_id:       sess_id,
-                    role_assignments: Arc::new(self.role_assignments.clone()),
-                    networking:       Arc::new(network.get_local_network(identity.clone())),
-                    own_identity:     identity,
-                }
-            })
-            .collect();
-
-        let mut jobs = JoinSet::new();
-        for (player_id, boot_session) in boot_sessions.iter().enumerate() {
-            let player_seed = self.seeds[player_id];
-            let sess = boot_session.clone();
-            jobs.spawn(async move {
-                let prf = setup_replicated_prf(&sess, player_seed).await.unwrap();
-                (sess, prf)
-            });
-        }
-        let mut complete_sessions = HashMap::new();
-        while let Some(t) = jobs.join_next().await {
-            let (boot_session, prf) = t.unwrap();
-            complete_sessions.insert(boot_session.own_identity(), Session {
-                boot_session,
-                setup: prf,
-            });
-        }
-        Ok(complete_sessions)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        database_generators::generate_galois_iris_shares, hawkers::plaintext_store::FormattedIris,
-        protocol::ng_worker::NetworkValue::RingElement32, shares::ring_impl::RingElement,
+        database_generators::generate_galois_iris_shares,
+        execution::{local::LocalRuntime, player::Identity},
+        hawkers::plaintext_store::FormattedIris,
+        protocol::ops::NetworkValue::RingElement32,
+        shares::{int_ring::IntRing2k, ring_impl::RingElement},
     };
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
     use rand::{Rng, RngCore, SeedableRng};
     use rstest::rstest;
+    use std::collections::HashMap;
+    use tokio::task::JoinSet;
 
     async fn open_single(session: &Session, x: Share<u32>) -> eyre::Result<RingElement<u32>> {
         let network = session.network();
@@ -460,6 +299,43 @@ mod tests {
         };
         let (a, b) = x.get_ab();
         Ok(a + b + missing_share)
+    }
+
+    async fn open_t_many<T>(session: &Session, shares: Vec<Share<T>>) -> eyre::Result<Vec<T>>
+    where
+        T: IntRing2k,
+        NetworkValue: From<Vec<RingElement<T>>>,
+        Vec<RingElement<T>>: TryFrom<NetworkValue, Error = eyre::Error>,
+    {
+        let next_party = session.next_identity()?;
+        let network = session.network().clone();
+        let sid = session.session_id();
+
+        let shares_b: Vec<_> = shares.iter().map(|s| s.b).collect();
+        let message = shares_b;
+        network
+            .send(NetworkValue::from(message).to_network(), &next_party, &sid)
+            .await?;
+
+        // receiving from previous party
+        let network = session.network().clone();
+        let sid = session.session_id();
+        let prev_party = session.prev_identity()?;
+        let shares_c = {
+            let serialized_other_share = network.receive(&prev_party, &sid).await;
+            let net_message = NetworkValue::from_network(serialized_other_share)?;
+            Vec::<RingElement<T>>::try_from(net_message)
+        }?;
+
+        let res = shares
+            .into_iter()
+            .zip(shares_c)
+            .map(|(s, c)| {
+                let (a, b) = s.get_ab();
+                (a + b + c).convert()
+            })
+            .collect();
+        Ok(res)
     }
 
     #[tokio::test]
@@ -585,7 +461,7 @@ mod tests {
             let mut player_session = ready_sessions.get(player).unwrap().clone();
             let four_shares = four_share_map.get(player).unwrap().clone();
             jobs.spawn(async move {
-                let out_shared = ng_cross_mul_via_lift(
+                let out_shared = cross_mul_via_lift(
                     &mut player_session,
                     four_shares[0].clone(),
                     four_shares[1].clone(),
@@ -649,7 +525,7 @@ mod tests {
     #[case(0)]
     #[case(1)]
     #[case(2)]
-    async fn test_gr_to_rep3(#[case] seed: u64) {
+    async fn test_galois_ring_to_rep3(#[case] seed: u64) {
         let runtime = LocalRuntime::replicated_test_config();
         let ready_sessions = runtime.create_player_sessions().await.unwrap();
         let mut rng = AesRng::seed_from_u64(seed);
@@ -668,11 +544,11 @@ mod tests {
                 y.mask.preprocess_mask_code_query_share();
             });
             jobs.spawn(async move {
-                let x = gr_replicated_pairwise_distance(&mut player_session, &own_shares)
+                let x = galois_ring_pairwise_distance(&mut player_session, &own_shares)
                     .await
                     .unwrap();
                 let opened_x = open_additive(&player_session, x.clone()).await.unwrap();
-                let x_rep = gr_to_rep3(&mut player_session, x).await.unwrap();
+                let x_rep = galois_ring_to_rep3(&mut player_session, x).await.unwrap();
                 let opened_x_rep = open_t_many(&player_session, x_rep).await.unwrap();
                 (opened_x, opened_x_rep)
             });

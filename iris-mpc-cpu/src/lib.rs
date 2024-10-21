@@ -1,5 +1,5 @@
 pub mod database_generators;
-pub(crate) mod execution;
+pub mod execution;
 pub mod hawkers;
 pub(crate) mod network;
 pub mod prelude;

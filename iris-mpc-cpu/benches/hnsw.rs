@@ -4,10 +4,9 @@ use hawk_pack::{graph_store::GraphMem, hnsw_db::HawkSearcher, VectorStore};
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use iris_mpc_cpu::{
     database_generators::{create_random_sharing, generate_galois_iris_shares},
+    execution::local::LocalRuntime,
     hawkers::{galois_store::gr_create_ready_made_hawk_searcher, plaintext_store::PlaintextStore},
-    protocol::ng_worker::{
-        gr_replicated_pairwise_distance, gr_to_rep3, ng_cross_compare, LocalRuntime,
-    },
+    protocol::ops::{cross_compare, galois_ring_pairwise_distance, galois_ring_to_rep3},
 };
 use rand::SeedableRng;
 use tokio::task::JoinSet;
@@ -82,7 +81,7 @@ fn bench_hnsw_primitives(c: &mut Criterion) {
                 let t2i = t2[index].clone();
                 let mut player_session = ready_sessions.get(player).unwrap().clone();
                 jobs.spawn(async move {
-                    ng_cross_compare(&mut player_session, d1i, t1i, d2i, t2i)
+                    cross_compare(&mut player_session, d1i, t1i, d2i, t2i)
                         .await
                         .unwrap()
                 });
@@ -124,11 +123,13 @@ fn bench_gr_primitives(c: &mut Criterion) {
                     y2.code.preprocess_iris_code_query_share();
                     y2.mask.preprocess_mask_code_query_share();
                     let pairs = [(x1, y1), (x2, y2)];
-                    let ds_and_ts = gr_replicated_pairwise_distance(&mut player_session, &pairs)
+                    let ds_and_ts = galois_ring_pairwise_distance(&mut player_session, &pairs)
                         .await
                         .unwrap();
-                    let ds_and_ts = gr_to_rep3(&mut player_session, ds_and_ts).await.unwrap();
-                    ng_cross_compare(
+                    let ds_and_ts = galois_ring_to_rep3(&mut player_session, ds_and_ts)
+                        .await
+                        .unwrap();
+                    cross_compare(
                         &mut player_session,
                         ds_and_ts[0].clone(),
                         ds_and_ts[1].clone(),
