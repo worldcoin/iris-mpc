@@ -1,6 +1,6 @@
 use crate::{
     execution::{player::Identity, session::SessionId},
-    next_gen_network::Networking,
+    network::Networking,
 };
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -102,7 +102,7 @@ impl Networking for LocalNetworking {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::next_gen_network::value::NetworkValue;
+    use crate::network::value::NetworkValue;
     use std::num::Wrapping;
 
     #[tokio::test]
