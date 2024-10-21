@@ -26,7 +26,8 @@ dotenvy.workspace = true
 rand.workspace = true
 base64.workspace = true
 uuid.workspace = true
-
+opentelemetry = { version = "0.24.0", features = ["trace"] }
+tracing-opentelemetry.workspace = true
 sodiumoxide = "0.2.7"
 iris-mpc-gpu = { path = "../iris-mpc-gpu" }
 iris-mpc-common = { path = "../iris-mpc-common" }

@@ -55,6 +55,7 @@ impl ServerActorHandle {
         &mut self,
         batch: BatchQuery,
     ) -> impl Future<Output = ServerJobResult> {
+        tracing::info!("Submitting batch query to the Actor job queue");
         let (tx, rx) = oneshot::channel();
         let job = ServerJob {
             batch,
@@ -464,6 +465,7 @@ impl ServerActor {
             .preprocess_db(&mut self.right_mask_db_slices, &self.current_db_sizes);
     }
 
+    #[tracing::instrument(skip(self, batch, return_channel))]
     fn process_batch_query(
         &mut self,
         batch: BatchQuery,
@@ -712,17 +714,7 @@ impl ServerActor {
 
         self.device_manager.await_streams(&self.streams[0]);
 
-        // Iterate over a list of tracing payloads, and create logs with mappings to
-        // payloads Log at least a "start" event using a log with trace.id
-        // and parent.trace.id
-        for tracing_payload in batch.metadata.iter() {
-            tracing::info!(
-                node_id = tracing_payload.node_id,
-                dd.trace_id = tracing_payload.trace_id,
-                dd.span_id = tracing_payload.span_id,
-                "Protocol finished",
-            );
-        }
+        tracing::info!("Protocol finished");
 
         // Fetch the final results (blocking)
         let mut host_results = self
@@ -907,6 +899,7 @@ impl ServerActor {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self, compact_device_queries, compact_device_sums, events, eye_db))]
     fn compare_query_against_db_and_self(
         &mut self,
         compact_device_queries: &DeviceCompactQuery,
@@ -1190,6 +1183,7 @@ impl ServerActor {
         }
     }
 
+    #[tracing::instrument(skip(self, valid_entries))]
     fn sync_batch_entries(&mut self, valid_entries: &[bool]) -> eyre::Result<Vec<bool>> {
         let mut buffer = self
             .device_manager
@@ -1223,6 +1217,7 @@ impl ServerActor {
         Ok(valid_merged)
     }
 
+    #[tracing::instrument(skip(self))]
     fn prepare_deletion_shares(&self) -> eyre::Result<(DeviceCompactQuery, DeviceCompactSums)> {
         let (dummy_code_share, dummy_mask_share) = get_dummy_shares_for_deletion(self.party_id);
         let compact_query = {
