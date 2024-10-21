@@ -3,7 +3,7 @@ use crate::{
     database_generators::{generate_galois_iris_shares, GaloisRingSharedIris},
     execution::player::Identity,
     hawkers::plaintext_store::PointId,
-    next_gen_protocol::ng_worker::{
+    protocol::ng_worker::{
         gr_replicated_is_match, gr_replicated_pairwise_distance, gr_to_rep3, ng_cross_compare,
         LocalRuntime,
     },

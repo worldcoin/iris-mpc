@@ -1,6 +1,6 @@
 use crate::{
     execution::player::{Identity, Role},
-    next_gen_network::Networking,
+    network::Networking,
     protocol::prf::Prf,
 };
 use eyre::eyre;

@@ -5,7 +5,7 @@ use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use iris_mpc_cpu::{
     database_generators::{create_random_sharing, generate_galois_iris_shares},
     hawkers::{galois_store::gr_create_ready_made_hawk_searcher, plaintext_store::PlaintextStore},
-    next_gen_protocol::ng_worker::{
+    protocol::ng_worker::{
         gr_replicated_pairwise_distance, gr_to_rep3, ng_cross_compare, LocalRuntime,
     },
 };

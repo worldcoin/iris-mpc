@@ -5,13 +5,12 @@ use crate::{
         player::{Identity, Role, RoleAssignment},
         session::{BootSession, Session, SessionHandles, SessionId},
     },
-    next_gen_network::{
+    network::{
         local::LocalNetworkingStore,
         value::NetworkValue::{self},
     },
-    next_gen_protocol::binary::{lift, mul_lift_2k, open_bin},
     protocol::{
-        iris_worker::{A, A_BITS, B_BITS},
+        binary::{lift, mul_lift_2k, open_bin},
         prf::{Prf, PrfSeed},
     },
     shares::{
@@ -21,6 +20,12 @@ use crate::{
 use eyre::eyre;
 use std::{collections::HashMap, sync::Arc};
 use tokio::task::JoinSet;
+
+pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
+pub(crate) const B_BITS: u64 = 16;
+pub(crate) const B: u64 = 1 << B_BITS;
+pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
+pub(crate) const A_BITS: u32 = u64::BITS - A.leading_zeros();
 
 #[derive(Debug, Clone)]
 pub struct LocalRuntime {
@@ -430,7 +435,7 @@ mod tests {
     use super::*;
     use crate::{
         database_generators::generate_galois_iris_shares, hawkers::plaintext_store::FormattedIris,
-        next_gen_protocol::ng_worker::NetworkValue::RingElement32, shares::ring_impl::RingElement,
+        protocol::ng_worker::NetworkValue::RingElement32, shares::ring_impl::RingElement,
     };
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
