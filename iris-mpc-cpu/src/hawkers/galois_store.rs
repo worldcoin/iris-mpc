@@ -1,11 +1,10 @@
 use super::plaintext_store::PlaintextStore;
 use crate::{
     database_generators::{generate_galois_iris_shares, GaloisRingSharedIris},
-    execution::player::Identity,
+    execution::{local::LocalRuntime, player::Identity},
     hawkers::plaintext_store::PointId,
-    next_gen_protocol::ng_worker::{
-        gr_replicated_is_match, gr_replicated_pairwise_distance, gr_to_rep3, ng_cross_compare,
-        LocalRuntime,
+    protocol::ops::{
+        cross_compare, galois_ring_is_match, galois_ring_pairwise_distance, galois_ring_to_rep3,
     },
 };
 use aes_prng::AesRng;
@@ -167,7 +166,7 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
             y.data.code.preprocess_iris_code_query_share();
             y.data.mask.preprocess_mask_code_query_share();
             jobs.spawn(async move {
-                gr_replicated_is_match(&mut player_session, &[(x.data, y.data)])
+                galois_ring_is_match(&mut player_session, &[(x.data, y.data)])
                     .await
                     .unwrap()
             });
@@ -206,11 +205,13 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
                     y.code.preprocess_iris_code_query_share();
                     y.mask.preprocess_mask_code_query_share();
                 });
-                let ds_and_ts = gr_replicated_pairwise_distance(&mut player_session, &pairs)
+                let ds_and_ts = galois_ring_pairwise_distance(&mut player_session, &pairs)
                     .await
                     .unwrap();
-                let ds_and_ts = gr_to_rep3(&mut player_session, ds_and_ts).await.unwrap();
-                ng_cross_compare(
+                let ds_and_ts = galois_ring_to_rep3(&mut player_session, ds_and_ts)
+                    .await
+                    .unwrap();
+                cross_compare(
                     &mut player_session,
                     ds_and_ts[0].clone(),
                     ds_and_ts[1].clone(),
