@@ -1,6 +1,5 @@
 use hawk_pack::VectorStore;
 use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodeArray, MATCH_THRESHOLD_RATIO};
-use serde::{Deserialize, Serialize};
 
 #[derive(Default, Debug, Clone)]
 pub struct PlaintextStore {
@@ -75,14 +74,7 @@ impl PlaintextPoint {
     }
 }
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PointId(pub usize);
-
-impl PointId {
-    pub fn val(&self) -> usize {
-        self.0
-    }
-}
+pub type PointId=u32;
 
 impl PlaintextStore {
     pub fn prepare_query(&mut self, raw_query: IrisCode) -> <Self as VectorStore>::QueryRef {
@@ -92,7 +84,7 @@ impl PlaintextStore {
         });
 
         let point_id = self.points.len() - 1;
-        PointId(point_id)
+        point_id as PointId
     }
 
     pub fn distance_computation(
@@ -101,12 +93,12 @@ impl PlaintextStore {
         distance2: &(PointId, PointId),
     ) -> (i32, i32) {
         let (x1, y1) = (
-            &self.points[distance1.0.val()],
-            &self.points[distance1.1.val()],
+            &self.points[distance1.0 as usize],
+            &self.points[distance1.1 as usize],
         );
         let (x2, y2) = (
-            &self.points[distance2.0.val()],
-            &self.points[distance2.1.val()],
+            &self.points[distance2.0 as usize],
+            &self.points[distance2.1 as usize],
         );
         let (d1, t1) = x1.compute_distance(y1);
         let (d2, t2) = x2.compute_distance(y2);
@@ -123,7 +115,7 @@ impl VectorStore for PlaintextStore {
 
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         // The query is now accepted in the store. It keeps the same ID.
-        self.points[query.0].is_persistent = true;
+        self.points[*query as usize].is_persistent = true;
         *query
     }
 
@@ -137,8 +129,8 @@ impl VectorStore for PlaintextStore {
     }
 
     async fn is_match(&self, distance: &Self::DistanceRef) -> bool {
-        let x = &self.points[distance.0 .0];
-        let y = &self.points[distance.1 .0];
+        let x = &self.points[distance.0 as usize];
+        let y = &self.points[distance.1 as usize];
         x.is_close(y)
     }
 
@@ -235,7 +227,7 @@ mod tests {
                 .unwrap();
         for i in 0..database_size {
             let cleartext_neighbors = searcher
-                .search_to_insert(&mut ptxt_vector, &mut ptxt_graph, &PointId(i))
+                .search_to_insert(&mut ptxt_vector, &mut ptxt_graph, &(i as PointId))
                 .await;
             assert!(searcher.is_match(&ptxt_vector, &cleartext_neighbors).await,);
         }

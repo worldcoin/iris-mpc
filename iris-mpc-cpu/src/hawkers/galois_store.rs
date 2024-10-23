@@ -50,7 +50,7 @@ impl Aby3NgStorePlayer {
         self.points.push(GaloisRingPoint { data: raw_query });
 
         let point_id = self.points.len() - 1;
-        PointId(point_id)
+        point_id as PointId
     }
 }
 
@@ -186,8 +186,8 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
         for player in self.runtime.identities.clone() {
             let mut player_session = ready_sessions.get(&player).unwrap().clone();
             let storage = self.players.get(&player).unwrap();
-            let query_point = storage.points[query.val()].clone();
-            let vector_point = storage.points[vector.val()].clone();
+            let query_point = storage.points[*query as usize].clone();
+            let vector_point = storage.points[*vector as usize].clone();
             let pairs = vec![(query_point.data, vector_point.data)];
             jobs.spawn(async move {
                 let ds_and_ts = eval_pairwise_distances(pairs, &mut player_session).await;
@@ -211,11 +211,11 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
         for player in self.runtime.identities.clone() {
             let mut player_session = ready_sessions.get(&player).unwrap().clone();
             let storage = self.players.get(&player).unwrap();
-            let query_point = storage.points[query.val()].clone();
+            let query_point = storage.points[*query as usize].clone();
             let pairs = vectors
                 .iter()
                 .map(|vector_id| {
-                    let vector_point = storage.points[vector_id.val()].clone();
+                    let vector_point = storage.points[*vector_id as usize].clone();
                     (query_point.data.clone(), vector_point.data)
                 })
                 .collect::<Vec<_>>();
@@ -542,7 +542,7 @@ mod tests {
 
         for i in 0..database_size {
             let cleartext_neighbors = hawk_searcher
-                .search_to_insert(&mut cleartext_data.0, &mut cleartext_data.1, &PointId(i))
+                .search_to_insert(&mut cleartext_data.0, &mut cleartext_data.1, &(i as PointId))
                 .await;
             assert!(
                 hawk_searcher
@@ -551,7 +551,7 @@ mod tests {
             );
 
             let secret_neighbors = hawk_searcher
-                .search_to_insert(&mut secret_data.0, &mut secret_data.1, &PointId(i))
+                .search_to_insert(&mut secret_data.0, &mut secret_data.1, &(i as PointId))
                 .await;
             assert!(
                 hawk_searcher
@@ -560,7 +560,7 @@ mod tests {
             );
 
             let scratch_secret_neighbors = hawk_searcher
-                .search_to_insert(&mut vector_store, &mut graph_store, &PointId(i))
+                .search_to_insert(&mut vector_store, &mut graph_store, &(i as PointId))
                 .await;
             assert!(
                 hawk_searcher
@@ -638,7 +638,7 @@ mod tests {
 
         for i in 0..database_size {
             let secret_neighbors = searcher
-                .search_to_insert(&mut vector, &mut graph, &PointId(i))
+                .search_to_insert(&mut vector, &mut graph, &(i as PointId))
                 .await;
             assert!(
                 searcher.is_match(&vector, &secret_neighbors).await,
