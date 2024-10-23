@@ -44,7 +44,7 @@ impl Aby3NgStorePlayer {
         self.points.push(GaloisRingPoint { data: raw_query });
 
         let point_id = self.points.len() - 1;
-        PointId(point_id)
+        point_id as PointId
     }
 }
 
@@ -161,8 +161,8 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
         for player in self.runtime.identities.clone() {
             let mut player_session = ready_sessions.get(&player).unwrap().clone();
             let storage = self.players.get(&player).unwrap();
-            let x = storage.points[distance.0.val()].clone();
-            let mut y = storage.points[distance.1.val()].clone();
+            let x = storage.points[distance.0 as usize].clone();
+            let mut y = storage.points[distance.1 as usize].clone();
             y.data.code.preprocess_iris_code_query_share();
             y.data.mask.preprocess_mask_code_query_share();
             jobs.spawn(async move {
@@ -192,12 +192,12 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
             let mut player_session = ready_sessions.get(&player).unwrap().clone();
             let storage = self.players.get(&player).unwrap();
             let (x1, y1) = (
-                storage.points[d1.0.val()].clone(),
-                storage.points[d1.1.val()].clone(),
+                storage.points[d1.0 as usize].clone(),
+                storage.points[d1.1 as usize].clone(),
             );
             let (x2, y2) = (
-                storage.points[d2.0.val()].clone(),
-                storage.points[d2.1.val()].clone(),
+                storage.points[d2.0 as usize].clone(),
+                storage.points[d2.1 as usize].clone(),
             );
             let mut pairs = [(x1.data, y1.data), (x2.data, y2.data)];
             jobs.spawn(async move {
@@ -402,14 +402,14 @@ mod tests {
         );
 
         for i in 0..database_size {
-            let cleartext_neighbors = cleartext_searcher.search_to_insert(&PointId(i)).await;
+            let cleartext_neighbors = cleartext_searcher.search_to_insert(&(i as PointId)).await;
             assert!(cleartext_searcher.is_match(&cleartext_neighbors).await,);
 
-            let secret_neighbors = secret_searcher.search_to_insert(&PointId(i)).await;
+            let secret_neighbors = secret_searcher.search_to_insert(&(i as PointId)).await;
             assert!(secret_searcher.is_match(&secret_neighbors).await);
 
             let scratch_secret_neighbors =
-                scratch_secret_searcher.search_to_insert(&PointId(i)).await;
+                scratch_secret_searcher.search_to_insert(&(i as PointId)).await;
             assert!(
                 scratch_secret_searcher
                     .is_match(&scratch_secret_neighbors)
@@ -483,7 +483,7 @@ mod tests {
             .unwrap();
 
         for i in 0..database_size {
-            let secret_neighbors = secret_searcher.search_to_insert(&PointId(i)).await;
+            let secret_neighbors = secret_searcher.search_to_insert(&(i as PointId)).await;
             assert!(
                 secret_searcher.is_match(&secret_neighbors).await,
                 "Failed at index {:?}",
