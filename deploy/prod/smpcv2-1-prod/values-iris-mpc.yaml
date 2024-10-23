@@ -30,7 +30,7 @@ env:
     value: "true"
 
   - name: SMPC__DATABASE__LOAD_PARALLELISM
-    value: "64"
+    value: "128"
 
   - name: SMPC__AWS__REGION
     value: "eu-north-1"
