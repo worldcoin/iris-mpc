@@ -34,16 +34,14 @@ use iris_mpc_gpu::{
     },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
+use metrics_exporter_statsd::StatsdBuilder;
 use std::{
     collections::HashMap,
     mem,
     sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
 };
-use telemetry_batteries::{
-    metrics::statsd::StatsdBattery,
-    tracing::{datadog::DatadogBattery, TracingShutdownHandle},
-};
+use telemetry_batteries::tracing::{datadog::DatadogBattery, TracingShutdownHandle};
 use tokio::{
     sync::{mpsc, oneshot, Semaphore},
     task::spawn_blocking,
@@ -418,15 +416,16 @@ fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
         );
 
         if let Some(metrics_config) = &service.metrics {
-            StatsdBattery::init(
-                &metrics_config.host,
-                metrics_config.port,
-                metrics_config.queue_size,
-                metrics_config.buffer_size,
-                Some(&metrics_config.prefix),
-            )?;
-        }
+            tracing::info!("Initializing metrics using config...");
+            let recorder = StatsdBuilder::from(&metrics_config.host, metrics_config.port)
+                .with_queue_size(metrics_config.queue_size)
+                .with_buffer_size(metrics_config.buffer_size)
+                .histogram_is_distribution()
+                .build(Some(&metrics_config.prefix))?;
 
+            metrics::set_global_recorder(recorder)?;
+        }
+        metrics::counter!("metrics.test").increment(1);
         Ok(tracing_shutdown_handle)
     } else {
         tracing_subscriber::registry()
