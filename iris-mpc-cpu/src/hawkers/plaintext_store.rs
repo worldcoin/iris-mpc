@@ -1,5 +1,5 @@
 use hawk_pack::VectorStore;
-use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodeArray, MATCH_THRESHOLD_RATIO};
+use iris_mpc_common::iris_db::iris::IrisCode;
 
 #[derive(Default, Debug, Clone)]
 pub struct PlaintextStore {
@@ -7,79 +7,47 @@ pub struct PlaintextStore {
 }
 
 #[derive(Default, Debug, Clone)]
-pub struct FormattedIris {
-    data: Vec<i8>,
-    mask: IrisCodeArray,
-}
+pub struct PlaintextIris(pub IrisCode);
 
-impl From<IrisCode> for FormattedIris {
-    fn from(value: IrisCode) -> Self {
-        let data: Vec<i8> = (0..IrisCode::IRIS_CODE_SIZE)
-            .map(|i| {
-                let bi = value.code.get_bit(i);
-                let mi = value.mask.get_bit(i);
-                let bi_mi = (bi & mi) as i8;
-                (mi as i8) - 2 * bi_mi
-            })
-            .collect();
-        FormattedIris {
-            data,
-            mask: value.mask,
-        }
+impl PlaintextIris {
+    /// Return the fractional Hamming distance with another PlaintextIris,
+    /// represented as u16 numerator and denominator.
+    pub fn distance_fraction(&self, other: &Self) -> (u16, u16) {
+        let combined_mask = self.0.mask & other.0.mask;
+        let combined_mask_len = combined_mask.count_ones();
+
+        let combined_code = (self.0.code ^ other.0.code) & combined_mask;
+        let code_distance = combined_code.count_ones();
+
+        (code_distance as u16, combined_mask_len as u16)
     }
-}
 
-impl FormattedIris {
-    #[cfg(test)]
-    pub fn compute_real_distance(&self, other: &FormattedIris) -> f64 {
-        let hd = self.dot_on_code(other);
-        let mask_ones = (self.mask & other.mask).count_ones();
-        ((mask_ones as f64) - (hd as f64)) / (2. * mask_ones as f64)
+    /// Return the fractional Hamming distance with another PlaintextIris,
+    /// represented as the i16 dot product of associated masked-bit vectors
+    /// and the u16 size of the common unmasked region
+    pub fn dot_distance_fraction(&self, other: &Self) -> (i16, u16) {
+        let (code_distance, combined_mask_len) = self.distance_fraction(other);
+        let dot_product = combined_mask_len.wrapping_sub(2 * code_distance) as i16;
+
+        (dot_product, combined_mask_len)
     }
 }
 
 #[derive(Clone, Default, Debug)]
 pub struct PlaintextPoint {
     /// Whatever encoding of a vector.
-    data:          FormattedIris,
+    data:          PlaintextIris,
     /// Distinguish between queries that are pending, and those that were
     /// ultimately accepted into the vector store.
     is_persistent: bool,
 }
 
-impl FormattedIris {
-    pub fn dot_on_code(&self, other: &Self) -> i32 {
-        self.data
-            .iter()
-            .zip(other.data.iter())
-            .fold(0_i32, |sum, (i, j)| sum + (*i as i32) * (*j as i32))
-    }
-    pub fn compute_distance(&self, other: &Self) -> (i16, usize) {
-        let combined_mask = self.mask & other.mask;
-        let dot = self.dot_on_code(other) as i16;
-        (dot, combined_mask.count_ones())
-    }
-}
-
-impl PlaintextPoint {
-    fn compute_distance(&self, other: &PlaintextPoint) -> (i16, usize) {
-        self.data.compute_distance(&other.data)
-    }
-
-    fn is_close(&self, other: &PlaintextPoint) -> bool {
-        let hd = self.data.dot_on_code(&other.data);
-        let mask_ones = (self.data.mask & other.data.mask).count_ones();
-        let threshold = (mask_ones as f64) * (1. - 2. * MATCH_THRESHOLD_RATIO);
-        (threshold as i32 - hd) < 0
-    }
-}
-
-pub type PointId=u32;
+pub type PointId = u32;
 
 impl PlaintextStore {
     pub fn prepare_query(&mut self, raw_query: IrisCode) -> <Self as VectorStore>::QueryRef {
         self.points.push(PlaintextPoint {
-            data:          FormattedIris::from(raw_query),
+            data:          PlaintextIris(raw_query),
             is_persistent: false,
         });
 
@@ -87,6 +55,10 @@ impl PlaintextStore {
         point_id as PointId
     }
 
+    /// Compare two distances between pairs of iris codes
+    ///
+    /// Returns terms obtained by cross-multiplying numerators with opposite
+    /// denominators.
     pub fn distance_computation(
         &self,
         distance1: &(PointId, PointId),
@@ -100,10 +72,12 @@ impl PlaintextStore {
             &self.points[distance2.0 as usize],
             &self.points[distance2.1 as usize],
         );
-        let (d1, t1) = x1.compute_distance(y1);
-        let (d2, t2) = x2.compute_distance(y2);
-        let cross_1 = d2 as i32 * t1 as i32;
-        let cross_2 = d1 as i32 * t2 as i32;
+        let (a, b) = x1.data.distance_fraction(&y1.data);
+        let (c, d) = x2.data.distance_fraction(&y2.data);
+        let cross_1 = a as i32 * d as i32;
+        let cross_2 = c as i32 * b as i32;
+
+        // for Hamming distances a/b and c/d, return (a*d, b*c)
         (cross_1, cross_2)
     }
 }
@@ -131,7 +105,7 @@ impl VectorStore for PlaintextStore {
     async fn is_match(&self, distance: &Self::DistanceRef) -> bool {
         let x = &self.points[distance.0 as usize];
         let y = &self.points[distance.1 as usize];
-        x.is_close(y)
+        x.data.0.is_close(&y.data.0)
     }
 
     async fn less_than(
@@ -139,8 +113,8 @@ impl VectorStore for PlaintextStore {
         distance1: &Self::DistanceRef,
         distance2: &Self::DistanceRef,
     ) -> bool {
-        let (d2t1, d1t2) = self.distance_computation(distance1, distance2);
-        (d2t1 - d1t2) < 0
+        let (cross_1, cross_2) = self.distance_computation(distance1, distance2);
+        (cross_1 - cross_2) < 0
     }
 }
 
@@ -161,7 +135,7 @@ mod tests {
         let cleartext_database = IrisDB::new_random_rng(10, &mut rng).db;
         let formatted_database: Vec<_> = cleartext_database
             .iter()
-            .map(|code| FormattedIris::from(code.clone()))
+            .map(|code| PlaintextIris(code.clone()))
             .collect();
         let mut plaintext_store = PlaintextStore::default();
 
@@ -175,43 +149,44 @@ mod tests {
         let q2 = plaintext_store.insert(&pid2).await;
         let q3 = plaintext_store.insert(&pid3).await;
 
-        let c1 = plaintext_store.less_than(&(q0, q1), &(q2, q3)).await;
+        let db0 = &formatted_database[0].0;
+        let db1 = &formatted_database[1].0;
+        let db2 = &formatted_database[2].0;
+        let db3 = &formatted_database[3].0;
 
-        let d01 = formatted_database[0].compute_real_distance(&formatted_database[1]);
-        let d23 = formatted_database[2].compute_real_distance(&formatted_database[3]);
-        assert_eq!(c1, d01 < d23);
+        assert_eq!(
+            plaintext_store.less_than(&(q0, q1), &(q2, q3)).await,
+            db0.get_distance(db1) < db2.get_distance(db3)
+        );
 
-        let c2 = plaintext_store.less_than(&(q2, q3), &(q0, q1)).await;
-        assert_eq!(c2, d23 < d01);
+        assert_eq!(
+            plaintext_store.less_than(&(q2, q3), &(q0, q1)).await,
+            db2.get_distance(db3) < db0.get_distance(db1)
+        );
 
         assert_eq!(
             plaintext_store.less_than(&(q0, q2), &(q1, q3)).await,
-            formatted_database[0].compute_real_distance(&formatted_database[2])
-                < formatted_database[1].compute_real_distance(&formatted_database[3])
+            db0.get_distance(db2) < db1.get_distance(db3)
         );
 
         assert_eq!(
             plaintext_store.less_than(&(q0, q3), &(q1, q2)).await,
-            formatted_database[0].compute_real_distance(&formatted_database[3])
-                < formatted_database[1].compute_real_distance(&formatted_database[2])
+            db0.get_distance(db3) < db1.get_distance(db2)
         );
 
         assert_eq!(
             plaintext_store.less_than(&(q1, q0), &(q2, q3)).await,
-            formatted_database[1].compute_real_distance(&formatted_database[0])
-                < formatted_database[2].compute_real_distance(&formatted_database[3])
+            db1.get_distance(db0) < db2.get_distance(db3)
         );
 
         assert_eq!(
             plaintext_store.less_than(&(q1, q2), &(q3, q0)).await,
-            formatted_database[1].compute_real_distance(&formatted_database[2])
-                < formatted_database[3].compute_real_distance(&formatted_database[0])
+            db1.get_distance(db2) < db3.get_distance(db0)
         );
 
         assert_eq!(
             plaintext_store.less_than(&(q0, q2), &(q0, q1)).await,
-            formatted_database[0].compute_real_distance(&formatted_database[2])
-                < formatted_database[0].compute_real_distance(&formatted_database[1])
+            db0.get_distance(db2) < db0.get_distance(db1)
         );
     }
 

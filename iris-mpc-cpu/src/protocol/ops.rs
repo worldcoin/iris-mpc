@@ -281,7 +281,7 @@ mod tests {
     use crate::{
         database_generators::generate_galois_iris_shares,
         execution::{local::LocalRuntime, player::Identity},
-        hawkers::plaintext_store::FormattedIris,
+        hawkers::plaintext_store::PlaintextIris,
         protocol::ops::NetworkValue::RingElement32,
         shares::{int_ring::IntRing2k, ring_impl::RingElement},
     };
@@ -570,9 +570,9 @@ mod tests {
         assert_eq!(output0, output1);
         assert_eq!(output0, output2);
 
-        let formatted_first = FormattedIris::from(iris_db[0].clone());
-        let formatted_second = FormattedIris::from(iris_db[1].clone());
-        let (plain_d1, plain_d2) = formatted_first.compute_distance(&formatted_second);
+        let plaintext_first = PlaintextIris(iris_db[0].clone());
+        let plaintext_second = PlaintextIris(iris_db[1].clone());
+        let (plain_d1, plain_d2) = plaintext_first.dot_distance_fraction(&plaintext_second);
         assert_eq!(output0.0[0], plain_d1 as u16);
         assert_eq!(output0.0[1], plain_d2 as u16);
 
