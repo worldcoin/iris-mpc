@@ -322,6 +322,7 @@ impl LocalNetAby3NgStoreProtocol {
             for (source_v, queue) in links {
                 let mut shared_queue = vec![];
                 for (target_v, _) in queue.as_vec_ref() {
+                    // recompute distances of graph edges from scratch
                     let shared_distance = self.eval_distance(source_v, target_v).await;
                     shared_queue.push((*target_v, shared_distance));
                 }
@@ -604,20 +605,21 @@ mod tests {
         let it2 = (0..db_dim).combinations(2);
         for comb1 in it1 {
             for comb2 in it2.clone() {
-                let distance1 = aby3_store_protocol
+                let dist1_aby3 = aby3_store_protocol
                     .eval_distance(&aby3_inserts[comb1[0]], &aby3_inserts[comb1[1]])
                     .await;
-                let distance2 = aby3_store_protocol
+                let dist2_aby3 = aby3_store_protocol
                     .eval_distance(&aby3_inserts[comb2[0]], &aby3_inserts[comb2[1]])
                     .await;
+                let dist1_plain = plaintext_store
+                    .eval_distance(&plaintext_inserts[comb1[0]], &plaintext_inserts[comb1[1]])
+                    .await;
+                let dist2_plain = plaintext_store
+                    .eval_distance(&plaintext_inserts[comb2[0]], &plaintext_inserts[comb2[1]])
+                    .await;
                 assert_eq!(
-                    aby3_store_protocol.less_than(&distance1, &distance2).await,
-                    plaintext_store
-                        .less_than(
-                            &(plaintext_inserts[comb1[0]], plaintext_inserts[comb1[1]]),
-                            &(plaintext_inserts[comb2[0]], plaintext_inserts[comb2[1]])
-                        )
-                        .await,
+                    aby3_store_protocol.less_than(&dist1_aby3, &dist2_aby3).await,
+                    plaintext_store.less_than(&dist1_plain, &dist2_plain).await,
                     "Failed at combo: {:?}, {:?}",
                     comb1,
                     comb2

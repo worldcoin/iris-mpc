@@ -1,5 +1,5 @@
 use hawk_pack::VectorStore;
-use iris_mpc_common::iris_db::iris::IrisCode;
+use iris_mpc_common::iris_db::iris::{IrisCode, MATCH_THRESHOLD_RATIO};
 
 #[derive(Default, Debug, Clone)]
 pub struct PlaintextStore {
@@ -85,7 +85,7 @@ impl PlaintextStore {
 impl VectorStore for PlaintextStore {
     type QueryRef = PointId; // Vector ID, pending insertion.
     type VectorRef = PointId; // Vector ID, inserted.
-    type DistanceRef = (PointId, PointId); // Lazy distance representation.
+    type DistanceRef = (u16, u16);
 
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         // The query is now accepted in the store. It keeps the same ID.
@@ -98,14 +98,14 @@ impl VectorStore for PlaintextStore {
         query: &Self::QueryRef,
         vector: &Self::VectorRef,
     ) -> Self::DistanceRef {
-        // Do not compute the distance yet, just forward the IDs.
-        (*query, *vector)
+        let query_code = &self.points[*query as usize];
+        let vector_code = &self.points[*vector as usize];
+        query_code.data.distance_fraction(&vector_code.data)
     }
 
     async fn is_match(&self, distance: &Self::DistanceRef) -> bool {
-        let x = &self.points[distance.0 as usize];
-        let y = &self.points[distance.1 as usize];
-        x.data.0.is_close(&y.data.0)
+        let (a, b) = *distance; // a/b
+        (a as f64) < (b as f64) * MATCH_THRESHOLD_RATIO
     }
 
     async fn less_than(
@@ -113,8 +113,9 @@ impl VectorStore for PlaintextStore {
         distance1: &Self::DistanceRef,
         distance2: &Self::DistanceRef,
     ) -> bool {
-        let (cross_1, cross_2) = self.distance_computation(distance1, distance2);
-        (cross_1 - cross_2) < 0
+        let (a, b) = *distance1; // a/b
+        let (c, d) = *distance2; // c/d
+        (a as i32) * (d as i32) - (b as i32) * (c as i32) < 0
     }
 }
 
@@ -149,43 +150,54 @@ mod tests {
         let q2 = plaintext_store.insert(&pid2).await;
         let q3 = plaintext_store.insert(&pid3).await;
 
+        let d01 = plaintext_store.eval_distance(&q0, &q1).await;
+        let d02 = plaintext_store.eval_distance(&q0, &q2).await;
+        let d03 = plaintext_store.eval_distance(&q0, &q3).await;
+        let d12 = plaintext_store.eval_distance(&q1, &q2).await;
+        let d13 = plaintext_store.eval_distance(&q1, &q3).await;
+        let d23 = plaintext_store.eval_distance(&q2, &q3).await;
+
+        let d10 = plaintext_store.eval_distance(&q1, &q0).await;
+        let d30 = plaintext_store.eval_distance(&q3, &q0).await;
+
         let db0 = &formatted_database[0].0;
         let db1 = &formatted_database[1].0;
         let db2 = &formatted_database[2].0;
         let db3 = &formatted_database[3].0;
 
         assert_eq!(
-            plaintext_store.less_than(&(q0, q1), &(q2, q3)).await,
+            plaintext_store.less_than(&d01, &d23).await,
             db0.get_distance(db1) < db2.get_distance(db3)
         );
 
         assert_eq!(
-            plaintext_store.less_than(&(q2, q3), &(q0, q1)).await,
+            plaintext_store.less_than(&d23, &d01).await,
             db2.get_distance(db3) < db0.get_distance(db1)
         );
 
         assert_eq!(
-            plaintext_store.less_than(&(q0, q2), &(q1, q3)).await,
+            plaintext_store.less_than(&d02, &d13).await,
             db0.get_distance(db2) < db1.get_distance(db3)
         );
 
         assert_eq!(
-            plaintext_store.less_than(&(q0, q3), &(q1, q2)).await,
+            plaintext_store.less_than(&d03, &d12).await,
             db0.get_distance(db3) < db1.get_distance(db2)
         );
 
+
         assert_eq!(
-            plaintext_store.less_than(&(q1, q0), &(q2, q3)).await,
+            plaintext_store.less_than(&d10, &d23).await,
             db1.get_distance(db0) < db2.get_distance(db3)
         );
 
         assert_eq!(
-            plaintext_store.less_than(&(q1, q2), &(q3, q0)).await,
+            plaintext_store.less_than(&d12, &d30).await,
             db1.get_distance(db2) < db3.get_distance(db0)
         );
 
         assert_eq!(
-            plaintext_store.less_than(&(q0, q2), &(q0, q1)).await,
+            plaintext_store.less_than(&d02, &d01).await,
             db0.get_distance(db2) < db0.get_distance(db1)
         );
     }
