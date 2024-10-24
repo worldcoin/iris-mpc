@@ -34,16 +34,14 @@ use iris_mpc_gpu::{
     },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
+use metrics_exporter_statsd::StatsdBuilder;
 use std::{
     collections::HashMap,
     mem,
     sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
 };
-use telemetry_batteries::{
-    metrics::statsd::StatsdBattery,
-    tracing::{datadog::DatadogBattery, TracingShutdownHandle},
-};
+use telemetry_batteries::tracing::{datadog::DatadogBattery, TracingShutdownHandle};
 use tokio::{
     sync::{mpsc, oneshot, Semaphore},
     task::spawn_blocking,
@@ -165,6 +163,8 @@ async fn receive_batch(
                             serde_json::from_str(&message.message).map_err(|e| {
                                 ReceiveRequestError::json_parse_error("circuit_breaker_request", e)
                             })?;
+                        metrics::counter!("request.received", "type" => "circuit_breaker")
+                            .increment(1);
                         client
                             .delete_message()
                             .queue_url(queue_url)
@@ -194,6 +194,8 @@ async fn receive_batch(
                                     e,
                                 )
                             })?;
+                        metrics::counter!("request.received", "type" => "identity_deletion")
+                            .increment(1);
                         batch_query
                             .deletion_requests_indices
                             .push(identity_deletion_request.serial_id - 1); // serial_id is 1-indexed
@@ -215,7 +217,8 @@ async fn receive_batch(
                             serde_json::from_str(&message.message).map_err(|e| {
                                 ReceiveRequestError::json_parse_error("Uniqueness request", e)
                             })?;
-
+                        metrics::counter!("request.received", "type" => "uniqueness_verification")
+                            .increment(1);
                         store
                             .mark_requests_deleted(&[smpc_request.signup_id.clone()])
                             .await
@@ -418,15 +421,15 @@ fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
         );
 
         if let Some(metrics_config) = &service.metrics {
-            StatsdBattery::init(
-                &metrics_config.host,
-                metrics_config.port,
-                metrics_config.queue_size,
-                metrics_config.buffer_size,
-                Some(&metrics_config.prefix),
-            )?;
-        }
+            tracing::info!("Initializing metrics using config...");
+            let recorder = StatsdBuilder::from(&metrics_config.host, metrics_config.port)
+                .with_queue_size(metrics_config.queue_size)
+                .with_buffer_size(metrics_config.buffer_size)
+                .histogram_is_distribution()
+                .build(Some(&metrics_config.prefix))?;
 
+            metrics::set_global_recorder(recorder)?;
+        }
         Ok(tracing_shutdown_handle)
     } else {
         tracing_subscriber::registry()
@@ -437,7 +440,7 @@ fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
             )
             .init();
 
-        Ok(TracingShutdownHandle)
+        Ok(TracingShutdownHandle {})
     }
 }
 
@@ -480,6 +483,7 @@ async fn send_results_to_sns(
     sns_client: &SNSClient,
     config: &Config,
     base_message_attributes: &HashMap<String, MessageAttributeValue>,
+    message_type: &str,
 ) -> eyre::Result<()> {
     for (i, result_event) in result_events.iter().enumerate() {
         let mut message_attributes = base_message_attributes.clone();
@@ -496,6 +500,7 @@ async fn send_results_to_sns(
             .set_message_attributes(Some(message_attributes))
             .send()
             .await?;
+        metrics::counter!("result.sent", "type" => message_type.to_owned()).increment(1);
     }
     Ok(())
 }
@@ -570,6 +575,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         &sns_client,
         &config,
         &uniqueness_result_attributes,
+        UNIQUENESS_MESSAGE_TYPE,
     )
     .await?;
 
@@ -859,6 +865,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 &sns_client_bg,
                 &config_bg,
                 &uniqueness_result_attributes,
+                UNIQUENESS_MESSAGE_TYPE,
             )
             .await?;
 
@@ -882,6 +889,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 &sns_client_bg,
                 &config_bg,
                 &identity_deletion_result_attributes,
+                IDENTITY_DELETION_MESSAGE_TYPE,
             )
             .await?;
         }
