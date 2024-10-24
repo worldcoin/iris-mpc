@@ -20,7 +20,7 @@ env:
   - name: SMPC__DATABASE__URL
     valueFrom:
       secretKeyRef:
-        key: DATABASE_URL_AURORA
+        key: DATABASE_AURORA_URL
         name: application
 
   - name: SMPC__DATABASE__MIGRATE
