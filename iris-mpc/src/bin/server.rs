@@ -34,14 +34,17 @@ use iris_mpc_gpu::{
     },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
-use metrics_exporter_statsd::StatsdBuilder;
 use std::{
+    backtrace::Backtrace,
     collections::HashMap,
-    mem,
+    mem, panic,
     sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
 };
-use telemetry_batteries::tracing::{datadog::DatadogBattery, TracingShutdownHandle};
+use telemetry_batteries::{
+    metrics::statsd::StatsdBattery,
+    tracing::{datadog::DatadogBattery, TracingShutdownHandle},
+};
 use tokio::{
     sync::{mpsc, oneshot, Semaphore},
     task::spawn_blocking,
@@ -421,15 +424,46 @@ fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
         );
 
         if let Some(metrics_config) = &service.metrics {
-            tracing::info!("Initializing metrics using config...");
-            let recorder = StatsdBuilder::from(&metrics_config.host, metrics_config.port)
-                .with_queue_size(metrics_config.queue_size)
-                .with_buffer_size(metrics_config.buffer_size)
-                .histogram_is_distribution()
-                .build(Some(&metrics_config.prefix))?;
-
-            metrics::set_global_recorder(recorder)?;
+            StatsdBattery::init(
+                &metrics_config.host,
+                metrics_config.port,
+                metrics_config.queue_size,
+                metrics_config.buffer_size,
+                Some(&metrics_config.prefix),
+            )?;
         }
+
+        // Set a custom panic hook to print backtraces on one line
+        panic::set_hook(Box::new(|panic_info| {
+            let message = match panic_info.payload().downcast_ref::<&str>() {
+                Some(s) => *s,
+                None => match panic_info.payload().downcast_ref::<String>() {
+                    Some(s) => s.as_str(),
+                    None => "Unknown panic message",
+                },
+            };
+            let location = if let Some(location) = panic_info.location() {
+                format!(
+                    "{}:{}:{}",
+                    location.file(),
+                    location.line(),
+                    location.column()
+                )
+            } else {
+                "Unknown location".to_string()
+            };
+
+            let backtrace = Backtrace::capture();
+            let backtrace_string = format!("{:?}", backtrace);
+
+            let backtrace_single_line = backtrace_string.replace('\n', " | ");
+
+            tracing::error!(
+                { backtrace = %backtrace_single_line, location = %location},
+                "Panic occurred with message: {}",
+                message
+            );
+        }));
         Ok(tracing_shutdown_handle)
     } else {
         tracing_subscriber::registry()
