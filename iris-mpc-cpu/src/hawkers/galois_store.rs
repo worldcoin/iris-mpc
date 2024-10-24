@@ -408,8 +408,9 @@ mod tests {
             let secret_neighbors = secret_searcher.search_to_insert(&(i as PointId)).await;
             assert!(secret_searcher.is_match(&secret_neighbors).await);
 
-            let scratch_secret_neighbors =
-                scratch_secret_searcher.search_to_insert(&(i as PointId)).await;
+            let scratch_secret_neighbors = scratch_secret_searcher
+                .search_to_insert(&(i as PointId))
+                .await;
             assert!(
                 scratch_secret_searcher
                     .is_match(&scratch_secret_neighbors)
