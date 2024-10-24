@@ -233,69 +233,88 @@ pub async fn gr_create_ready_made_hawk_searcher<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
 ) -> eyre::Result<(
-    HawkSearcher<PlaintextStore, GraphMem<PlaintextStore>>,
-    HawkSearcher<LocalNetAby3NgStoreProtocol, GraphMem<LocalNetAby3NgStoreProtocol>>,
+    (PlaintextStore, GraphMem<PlaintextStore>),
+    (
+        LocalNetAby3NgStoreProtocol,
+        GraphMem<LocalNetAby3NgStoreProtocol>,
+    ),
 )> {
     // makes sure the searcher produces same graph structure by having the same rng
     let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
-    let mut rng_searcher2 = rng_searcher1.clone();
-
     let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
 
-    let vector_store = PlaintextStore::default();
-    let graph_store = GraphMem::new();
-    let mut cleartext_searcher = HawkSearcher::new(vector_store, graph_store, &mut rng_searcher1);
+    let mut plaintext_vector_store = PlaintextStore::default();
+    let mut plaintext_graph_store = GraphMem::new();
+    let plaintext_api = HawkSearcher::new();
 
     for raw_query in cleartext_database.iter() {
-        let query = cleartext_searcher
-            .vector_store
-            .prepare_query(raw_query.clone());
-        let neighbors = cleartext_searcher.search_to_insert(&query).await;
-        let inserted = cleartext_searcher.vector_store.insert(&query).await;
-        cleartext_searcher
-            .insert_from_search_results(inserted, neighbors)
+        let query = plaintext_vector_store.prepare_query(raw_query.clone());
+        let neighbors = plaintext_api
+            .search_to_insert(
+                &mut plaintext_vector_store,
+                &mut plaintext_graph_store,
+                &query,
+            )
+            .await;
+        let inserted = plaintext_vector_store.insert(&query).await;
+        plaintext_api
+            .insert_from_search_results(
+                &mut plaintext_vector_store,
+                &mut plaintext_graph_store,
+                &mut rng_searcher1,
+                inserted,
+                neighbors,
+            )
             .await;
     }
 
     let protocol_store = setup_local_aby3_players_with_preloaded_db(rng, cleartext_database)?;
-    let protocol_graph = GraphMem::<LocalNetAby3NgStoreProtocol>::from_another(
-        cleartext_searcher.graph_store.clone(),
-    );
-    let secret_searcher = HawkSearcher::new(protocol_store, protocol_graph, &mut rng_searcher2);
+    let protocol_graph =
+        GraphMem::<LocalNetAby3NgStoreProtocol>::from_another(plaintext_graph_store.clone());
 
-    Ok((cleartext_searcher, secret_searcher))
+    let plaintext = (plaintext_vector_store, plaintext_graph_store);
+    let secret = (protocol_store, protocol_graph);
+    Ok((plaintext, secret))
 }
 
 pub async fn ng_create_from_scratch_hawk_searcher<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
-) -> eyre::Result<HawkSearcher<LocalNetAby3NgStoreProtocol, GraphMem<LocalNetAby3NgStoreProtocol>>>
-{
+) -> eyre::Result<(
+    LocalNetAby3NgStoreProtocol,
+    GraphMem<LocalNetAby3NgStoreProtocol>,
+)> {
     let mut rng_searcher = AesRng::from_rng(rng.clone())?;
     let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
     let shared_irises: Vec<_> = (0..database_size)
         .map(|id| generate_galois_iris_shares(rng, cleartext_database[id].clone()))
         .collect();
-    let aby3_store_protocol = setup_local_store_aby3_players().unwrap();
 
-    let graph_store = GraphMem::new();
+    let searcher = HawkSearcher::new();
+    let mut aby3_store_protocol = setup_local_store_aby3_players().unwrap();
+    let mut graph_store = GraphMem::new();
 
-    let mut searcher = HawkSearcher::new(aby3_store_protocol, graph_store, &mut rng_searcher);
     let queries = (0..database_size)
-        .map(|id| {
-            searcher
-                .vector_store
-                .prepare_query(shared_irises[id].clone())
-        })
+        .map(|id| aby3_store_protocol.prepare_query(shared_irises[id].clone()))
         .collect::<Vec<_>>();
 
     // insert queries
     for query in queries.iter() {
-        let neighbors = searcher.search_to_insert(query).await;
-        searcher.insert_from_search_results(*query, neighbors).await;
+        let neighbors = searcher
+            .search_to_insert(&mut aby3_store_protocol, &mut graph_store, query)
+            .await;
+        searcher
+            .insert_from_search_results(
+                &mut aby3_store_protocol,
+                &mut graph_store,
+                &mut rng_searcher,
+                *query,
+                neighbors,
+            )
+            .await;
     }
 
-    Ok(searcher)
+    Ok((aby3_store_protocol, graph_store))
 }
 
 #[cfg(test)]
