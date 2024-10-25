@@ -86,10 +86,20 @@ pub struct Store {
 }
 
 impl Store {
-    /// Connect to a database based on Config URL, environment, and party_id.
+    // Connect to a database based on Config URL, environment, and party_id.
     pub async fn new_from_config(config: &Config) -> Result<Self> {
         let db_config = config
-            .database
+            .write_database
+            .as_ref()
+            .ok_or(eyre!("Missing database config"))?;
+        let schema_name = format!("{}_{}_{}", APP_NAME, config.environment, config.party_id);
+        Self::new(&db_config.url, &schema_name).await
+    }
+
+    // Connect to a database based on Config URL, environment, and party_id.
+    pub async fn new_reader_from_config(config: &Config) -> Result<Self> {
+        let db_config = config
+            .read_database
             .as_ref()
             .ok_or(eyre!("Missing database config"))?;
         let schema_name = format!("{}_{}_{}", APP_NAME, config.environment, config.party_id);
@@ -803,7 +813,7 @@ mod tests {
     fn test_db_url() -> Result<String> {
         dotenvy::from_filename(DOTENV_TEST)?;
         Ok(Config::load_config(APP_NAME)?
-            .database
+            .write_database// in test it is of not consequence if read or write
             .ok_or(eyre!("Missing database config"))?
             .url)
     }

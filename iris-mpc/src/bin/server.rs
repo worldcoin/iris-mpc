@@ -576,8 +576,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     assert!(max_sync_lookback <= sync_nccl::MAX_REQUESTS);
     tracing::info!("Set batch size to {}", config.max_batch_size);
 
-    tracing::info!("Creating new storage from: {:?}", config);
-    let store = Store::new_from_config(&config).await?;
+    tracing::info!("Creating new storages from: {:?}", config);
+    let write_store = Store::new_from_config(&config).await?;
+    let read_store = Store::new_from_config(&config).await?;
 
     tracing::info!("Initialising AWS services");
 
@@ -604,7 +605,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
     tracing::info!("Replaying results");
     send_results_to_sns(
-        store.last_results(max_sync_lookback).await?,
+        write_store.last_results(max_sync_lookback).await?,
         &Vec::new(),
         &sns_client,
         &config,
@@ -613,7 +614,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     )
     .await?;
 
-    let store_len = store.count_irises().await?;
+    let store_len = read_store.count_irises().await?;
 
     tracing::info!("Size of the database before init: {}", store_len);
 
@@ -625,7 +626,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             config.init_db_size
         );
         tracing::info!("Resetting the db: {}", config.clear_db_before_init);
-        store
+        write_store
             .init_db_with_random_shares(
                 RNG_SEED_INIT_DB,
                 party_id,
@@ -636,7 +637,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     }
 
     // Fetch again in case we've just initialized the DB
-    let store_len = store.count_irises().await?;
+    let store_len = read_store.count_irises().await?;
 
     tracing::info!("Size of the database after init: {}", store_len);
 
@@ -647,7 +648,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let my_state = SyncState {
         db_len:              store_len as u64,
-        deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
+        deleted_request_ids: read_store.last_deleted_requests(max_sync_lookback).await?,
     };
 
     tracing::info!("Preparing task monitor");
@@ -670,7 +671,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     // since it blocks a lot and is `!Send`, we get back the handle via the oneshot
     // channel
     let parallelism = config
-        .database
+        .read_database
         .as_ref()
         .ok_or(eyre!("Missing database config"))?
         .load_parallelism;
@@ -701,7 +702,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     db_len,
                 ));
             }
-            tokio::runtime::Handle::current().block_on(async { store.rollback(db_len).await })?;
+            tokio::runtime::Handle::current().block_on(async { write_store.rollback(db_len).await })?;
             tracing::error!("Rolled back to db_len={}", db_len);
         }
 
@@ -734,7 +735,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         parallelism
                     );
                     tokio::runtime::Handle::current().block_on(async {
-                        let mut stream = store.stream_irises_par(parallelism).await;
+                        let mut stream = read_store.stream_irises_par(parallelism).await;
                         let mut record_counter = 0;
                         while let Some(iris) = stream.try_next().await? {
                             if record_counter % 100_000 == 0 {
@@ -772,7 +773,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
                 match res {
                     Ok(_) => {
-                        tx.send(Ok((handle, sync_result, store))).unwrap();
+                        tx.send(Ok((handle, sync_result, write_store))).unwrap();
                     }
                     Err(e) => {
                         tx.send(Err(e)).unwrap();
@@ -790,7 +791,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         Ok(())
     });
 
-    let (mut handle, sync_result, store) = rx.await??;
+    let (mut handle, sync_result, write_store) = rx.await??;
 
     let mut skip_request_ids = sync_result.deleted_request_ids();
 
@@ -800,7 +801,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
     let sns_client_bg = sns_client.clone();
     let config_bg = config.clone();
-    let store_bg = store.clone();
+    let store_bg = write_store.clone();
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
             merged_results,
@@ -977,7 +978,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             party_id,
             &sqs_client,
             &config.requests_queue_url,
-            &store,
+            &write_store,
             &skip_request_ids,
             shares_encryption_key_pair.clone(),
             config.max_batch_size,
@@ -992,7 +993,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             process_identity_deletions(
                 &batch,
-                &store,
+                &write_store,
                 &dummy_shares_for_deletions.0,
                 &dummy_shares_for_deletions.1,
             )
@@ -1020,7 +1021,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 party_id,
                 &sqs_client,
                 &config.requests_queue_url,
-                &store,
+                &write_store,
                 &skip_request_ids,
                 shares_encryption_key_pair.clone(),
                 config.max_batch_size,

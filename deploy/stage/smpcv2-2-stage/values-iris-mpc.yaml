@@ -17,19 +17,28 @@ env:
   - name: SMPC__SERVICE__SERVICE_NAME
     value: "smpcv2-server-stage"
 
-  - name: SMPC__DATABASE__URL
+  - name: SMPC__WRITE_DATABASE__URL
     valueFrom:
       secretKeyRef:
         key: DATABASE_AURORA_URL
         name: application
 
-  - name: SMPC__DATABASE__MIGRATE
+  - name: SMPC__WRITE_DATABASE__MIGRATE
     value: "true"
 
-  - name: SMPC__DATABASE__CREATE
+  - name: SMPC__WRITE_DATABASE__CREATE
     value: "true"
 
-  - name: SMPC__DATABASE__LOAD_PARALLELISM
+  - name: SMPC__WRITE_DATABASE__LOAD_PARALLELISM
+    value: "8"
+
+  - name: SMPC__READ_DATABASE__URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_RO_URL
+        name: application
+
+  - name: SMPC__READ_DATABASE__LOAD_PARALLELISM
     value: "8"
 
   - name: SMPC__AWS__REGION

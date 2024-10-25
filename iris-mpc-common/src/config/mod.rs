@@ -38,7 +38,10 @@ pub struct Config {
     pub service: Option<ServiceConfig>,
 
     #[serde(default)]
-    pub database: Option<DbConfig>,
+    pub read_database: Option<ReadDbConfig>,
+
+    #[serde(default)]
+    pub write_database: Option<WriteDbConfig>,
 
     #[serde(default)]
     pub aws: Option<AwsConfig>,
@@ -115,7 +118,15 @@ impl Config {
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
-pub struct DbConfig {
+pub struct ReadDbConfig {
+    pub url: String,
+
+    #[serde(default = "default_load_parallelism")]
+    pub load_parallelism: usize,
+}
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct WriteDbConfig {
     pub url: String,
 
     #[serde(default)]
@@ -132,12 +143,21 @@ fn default_load_parallelism() -> usize {
     8
 }
 
-impl fmt::Debug for DbConfig {
+impl fmt::Debug for WriteDbConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DbConfig")
             .field("url", &"********") // Mask the URL
             .field("migrate", &self.migrate)
             .field("create", &self.create)
+            .finish()
+    }
+}
+
+impl fmt::Debug for ReadDbConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReadDbConfig")
+            .field("url", &"********") // Mask the URL
+            .field("parallelism", &self.load_parallelism)
             .finish()
     }
 }
