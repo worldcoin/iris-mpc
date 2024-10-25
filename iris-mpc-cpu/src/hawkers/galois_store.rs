@@ -268,10 +268,10 @@ impl LocalNetAby3NgStoreProtocol {
                 let mut shared_queue = vec![];
                 for (target_v, _) in queue.as_vec_ref() {
                     let shared_distance = self.eval_distance(source_v, target_v).await;
-                    shared_queue.push((target_v.clone(), shared_distance));
+                    shared_queue.push((*target_v, shared_distance));
                 }
                 shared_links.insert(
-                    source_v.clone(),
+                    *source_v,
                     FurthestQueue::from_ascending_vec(shared_queue),
                 );
             }
