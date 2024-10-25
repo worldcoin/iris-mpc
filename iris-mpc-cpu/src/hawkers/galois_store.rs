@@ -245,11 +245,11 @@ pub async fn gr_create_ready_made_hawk_searcher<R: RngCore + Clone + CryptoRng>(
 
     let mut plaintext_vector_store = PlaintextStore::default();
     let mut plaintext_graph_store = GraphMem::new();
-    let plaintext_api = HawkSearcher::default();
+    let searcher = HawkSearcher::default();
 
     for raw_query in cleartext_database.iter() {
         let query = plaintext_vector_store.prepare_query(raw_query.clone());
-        let neighbors = plaintext_api
+        let neighbors = searcher
             .search_to_insert(
                 &mut plaintext_vector_store,
                 &mut plaintext_graph_store,
@@ -257,7 +257,7 @@ pub async fn gr_create_ready_made_hawk_searcher<R: RngCore + Clone + CryptoRng>(
             )
             .await;
         let inserted = plaintext_vector_store.insert(&query).await;
-        plaintext_api
+        searcher
             .insert_from_search_results(
                 &mut plaintext_vector_store,
                 &mut plaintext_graph_store,
