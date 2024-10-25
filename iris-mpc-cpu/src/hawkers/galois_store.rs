@@ -245,7 +245,7 @@ pub async fn gr_create_ready_made_hawk_searcher<R: RngCore + Clone + CryptoRng>(
 
     let mut plaintext_vector_store = PlaintextStore::default();
     let mut plaintext_graph_store = GraphMem::new();
-    let plaintext_api = HawkSearcher::new();
+    let plaintext_api = HawkSearcher::default();
 
     for raw_query in cleartext_database.iter() {
         let query = plaintext_vector_store.prepare_query(raw_query.clone());
@@ -290,7 +290,7 @@ pub async fn ng_create_from_scratch_hawk_searcher<R: RngCore + Clone + CryptoRng
         .map(|id| generate_galois_iris_shares(rng, cleartext_database[id].clone()))
         .collect();
 
-    let searcher = HawkSearcher::new();
+    let searcher = HawkSearcher::default();
     let mut aby3_store_protocol = setup_local_store_aby3_players().unwrap();
     let mut graph_store = GraphMem::new();
 
@@ -334,13 +334,13 @@ mod tests {
         let database_size = 10;
         let cleartext_database = IrisDB::new_random_rng(database_size, &mut rng).db;
 
-        let aby3_store_protocol = setup_local_store_aby3_players().unwrap();
-        let graph_store = GraphMem::new();
-        let mut db = HawkSearcher::new(aby3_store_protocol, graph_store, &mut rng);
+        let mut aby3_store = setup_local_store_aby3_players().unwrap();
+        let mut aby3_graph = GraphMem::new();
+        let db = HawkSearcher::default();
 
         let queries = (0..database_size)
             .map(|id| {
-                db.vector_store.prepare_query(generate_galois_iris_shares(
+                aby3_store.prepare_query(generate_galois_iris_shares(
                     &mut rng,
                     cleartext_database[id].clone(),
                 ))
@@ -349,16 +349,31 @@ mod tests {
 
         // insert queries
         for query in queries.iter() {
-            let neighbors = db.search_to_insert(query).await;
-            db.insert_from_search_results(*query, neighbors).await;
+            let neighbors = db
+                .search_to_insert(&mut aby3_store, &mut aby3_graph, query)
+                .await;
+            db.insert_from_search_results(
+                &mut aby3_store,
+                &mut aby3_graph,
+                &mut rng,
+                *query,
+                neighbors,
+            )
+            .await;
         }
         println!("FINISHED INSERTING");
         // Search for the same codes and find matches.
         for (index, query) in queries.iter().enumerate() {
-            let neighbors = db.search_to_insert(query).await;
+            let neighbors = db
+                .search_to_insert(&mut aby3_store, &mut aby3_graph, query)
+                .await;
             // assert_eq!(false, true);
             tracing::debug!("Finished query");
-            assert!(db.is_match(&neighbors).await, "failed at index {:?}", index);
+            assert!(
+                db.is_match(&aby3_store, &neighbors).await,
+                "failed at index {:?}",
+                index
+            );
         }
     }
 
@@ -367,71 +382,83 @@ mod tests {
     async fn test_gr_premade_hnsw() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 10;
-        let (cleartext_searcher, secret_searcher) =
+        let (mut cleartext_data, mut secret_data) =
             gr_create_ready_made_hawk_searcher(&mut rng, database_size)
                 .await
                 .unwrap();
 
         let mut rng = AesRng::seed_from_u64(0_u64);
-        let scratch_secret_searcher = ng_create_from_scratch_hawk_searcher(&mut rng, database_size)
-            .await
-            .unwrap();
+        let (mut vector_store, mut graph_store) =
+            ng_create_from_scratch_hawk_searcher(&mut rng, database_size)
+                .await
+                .unwrap();
 
         assert_eq!(
-            scratch_secret_searcher
-                .vector_store
+            vector_store
                 .players
                 .get(&Identity::from("alice"))
                 .unwrap()
                 .points,
-            secret_searcher
-                .vector_store
+            secret_data
+                .0
                 .players
                 .get(&Identity::from("alice"))
                 .unwrap()
                 .points
         );
         assert_eq!(
-            scratch_secret_searcher
-                .vector_store
+            vector_store
                 .players
                 .get(&Identity::from("bob"))
                 .unwrap()
                 .points,
-            secret_searcher
-                .vector_store
+            secret_data
+                .0
                 .players
                 .get(&Identity::from("bob"))
                 .unwrap()
                 .points
         );
         assert_eq!(
-            scratch_secret_searcher
-                .vector_store
+            vector_store
                 .players
                 .get(&Identity::from("charlie"))
                 .unwrap()
                 .points,
-            secret_searcher
-                .vector_store
+            secret_data
+                .0
                 .players
                 .get(&Identity::from("charlie"))
                 .unwrap()
                 .points
         );
+        let hawk_searcher = HawkSearcher::default();
 
         for i in 0..database_size {
-            let cleartext_neighbors = cleartext_searcher.search_to_insert(&PointId(i)).await;
-            assert!(cleartext_searcher.is_match(&cleartext_neighbors).await,);
-
-            let secret_neighbors = secret_searcher.search_to_insert(&PointId(i)).await;
-            assert!(secret_searcher.is_match(&secret_neighbors).await);
-
-            let scratch_secret_neighbors =
-                scratch_secret_searcher.search_to_insert(&PointId(i)).await;
+            let cleartext_neighbors = hawk_searcher
+                .search_to_insert(&mut cleartext_data.0, &mut cleartext_data.1, &PointId(i))
+                .await;
             assert!(
-                scratch_secret_searcher
-                    .is_match(&scratch_secret_neighbors)
+                hawk_searcher
+                    .is_match(&cleartext_data.0, &cleartext_neighbors)
+                    .await,
+            );
+
+            let secret_neighbors = hawk_searcher
+                .search_to_insert(&mut secret_data.0, &mut secret_data.1, &PointId(i))
+                .await;
+            assert!(
+                hawk_searcher
+                    .is_match(&secret_data.0, &secret_neighbors)
+                    .await
+            );
+
+            let scratch_secret_neighbors = hawk_searcher
+                .search_to_insert(&mut vector_store, &mut graph_store, &PointId(i))
+                .await;
+            assert!(
+                hawk_searcher
+                    .is_match(&vector_store, &scratch_secret_neighbors)
                     .await,
             );
         }
@@ -497,14 +524,17 @@ mod tests {
     async fn test_gr_scratch_hnsw() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 2;
-        let secret_searcher = ng_create_from_scratch_hawk_searcher(&mut rng, database_size)
+        let searcher = HawkSearcher::default();
+        let (mut vector, mut graph) = ng_create_from_scratch_hawk_searcher(&mut rng, database_size)
             .await
             .unwrap();
 
         for i in 0..database_size {
-            let secret_neighbors = secret_searcher.search_to_insert(&PointId(i)).await;
+            let secret_neighbors = searcher
+                .search_to_insert(&mut vector, &mut graph, &PointId(i))
+                .await;
             assert!(
-                secret_searcher.is_match(&secret_neighbors).await,
+                searcher.is_match(&vector, &secret_neighbors).await,
                 "Failed at index {:?}",
                 i
             );
