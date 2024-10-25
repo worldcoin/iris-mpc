@@ -8,7 +8,7 @@ use std::ops::{
     SubAssign,
 };
 
-#[derive(Clone, Debug, PartialEq, Default, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Default, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
 #[serde(bound = "")]
 pub struct Share<T: IntRing2k> {
     pub a: RingElement<T>,

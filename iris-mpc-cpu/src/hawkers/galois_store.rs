@@ -4,13 +4,19 @@ use crate::{
     execution::{local::LocalRuntime, player::Identity},
     hawkers::plaintext_store::PointId,
     protocol::ops::{
-        cross_compare, galois_ring_is_match, galois_ring_pairwise_distance, galois_ring_to_rep3,
+        cross_compare, galois_ring_pairwise_distance, galois_ring_to_rep3, is_dot_zero,
     },
+    shares::{int_ring::IntRing2k, share::Share},
 };
 use aes_prng::AesRng;
-use hawk_pack::{graph_store::GraphMem, hnsw_db::HawkSearcher, VectorStore};
+use hawk_pack::{
+    graph_store::{graph_mem::Layer, GraphMem},
+    hnsw_db::{FurthestQueue, HawkSearcher},
+    GraphStore, VectorStore,
+};
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use rand::{CryptoRng, RngCore, SeedableRng};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::task::JoinSet;
 
@@ -133,10 +139,18 @@ impl LocalNetAby3NgStoreProtocol {
     }
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(bound = "")]
+pub struct DistanceShare<T: IntRing2k> {
+    code_dot: Share<T>,
+    mask_dot: Share<T>,
+    player:   Identity,
+}
+
 impl VectorStore for LocalNetAby3NgStoreProtocol {
     type QueryRef = PointId; // Vector ID, pending insertion.
     type VectorRef = PointId; // Vector ID, inserted.
-    type DistanceRef = (PointId, PointId); // Lazy distance representation.
+    type DistanceRef = Vec<DistanceShare<u16>>; // Distance represented as shares.
 
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         // The query is now accepted in the store. It keeps the same ID.
@@ -151,22 +165,44 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
         query: &Self::QueryRef,
         vector: &Self::VectorRef,
     ) -> Self::DistanceRef {
-        // Do not compute the distance yet, just forward the IDs.
-        (*query, *vector)
-    }
-
-    async fn is_match(&self, distance: &Self::DistanceRef) -> bool {
         let ready_sessions = self.runtime.create_player_sessions().await.unwrap();
         let mut jobs = JoinSet::new();
         for player in self.runtime.identities.clone() {
             let mut player_session = ready_sessions.get(&player).unwrap().clone();
             let storage = self.players.get(&player).unwrap();
-            let x = storage.points[distance.0.val()].clone();
-            let mut y = storage.points[distance.1.val()].clone();
-            y.data.code.preprocess_iris_code_query_share();
-            y.data.mask.preprocess_mask_code_query_share();
+            let query_point = storage.points[query.val()].clone();
+            let vector_point = storage.points[vector.val()].clone();
+            let mut pairs = [(query_point.data, vector_point.data)];
             jobs.spawn(async move {
-                galois_ring_is_match(&mut player_session, &[(x.data, y.data)])
+                pairs.iter_mut().for_each(|(_x, y)| {
+                    y.code.preprocess_iris_code_query_share();
+                    y.mask.preprocess_mask_code_query_share();
+                });
+                let ds_and_ts = galois_ring_pairwise_distance(&mut player_session, &pairs)
+                    .await
+                    .unwrap();
+                let ds_and_ts = galois_ring_to_rep3(&mut player_session, ds_and_ts)
+                    .await
+                    .unwrap();
+                DistanceShare {
+                    code_dot: ds_and_ts[0].clone(),
+                    mask_dot: ds_and_ts[1].clone(),
+                    player:   player.clone(),
+                }
+            });
+        }
+        jobs.join_all().await
+    }
+
+    async fn is_match(&self, distance: &Self::DistanceRef) -> bool {
+        let ready_sessions = self.runtime.create_player_sessions().await.unwrap();
+        let mut jobs = JoinSet::new();
+        for distance_share in distance.iter() {
+            let mut player_session = ready_sessions.get(&distance_share.player).unwrap().clone();
+            let code_dot = distance_share.code_dot.clone();
+            let mask_dot = distance_share.mask_dot.clone();
+            jobs.spawn(async move {
+                is_dot_zero(&mut player_session, code_dot, mask_dot)
                     .await
                     .unwrap()
             });
@@ -184,48 +220,65 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
         distance1: &Self::DistanceRef,
         distance2: &Self::DistanceRef,
     ) -> bool {
-        let d1 = *distance1;
-        let d2 = *distance2;
         let ready_sessions = self.runtime.create_player_sessions().await.unwrap();
         let mut jobs = JoinSet::new();
-        for player in self.runtime.identities.clone() {
-            let mut player_session = ready_sessions.get(&player).unwrap().clone();
-            let storage = self.players.get(&player).unwrap();
-            let (x1, y1) = (
-                storage.points[d1.0.val()].clone(),
-                storage.points[d1.1.val()].clone(),
-            );
-            let (x2, y2) = (
-                storage.points[d2.0.val()].clone(),
-                storage.points[d2.1.val()].clone(),
-            );
-            let mut pairs = [(x1.data, y1.data), (x2.data, y2.data)];
-            jobs.spawn(async move {
-                pairs.iter_mut().for_each(|(_x, y)| {
-                    y.code.preprocess_iris_code_query_share();
-                    y.mask.preprocess_mask_code_query_share();
-                });
-                let ds_and_ts = galois_ring_pairwise_distance(&mut player_session, &pairs)
-                    .await
-                    .unwrap();
-                let ds_and_ts = galois_ring_to_rep3(&mut player_session, ds_and_ts)
-                    .await
-                    .unwrap();
-                cross_compare(
-                    &mut player_session,
-                    ds_and_ts[0].clone(),
-                    ds_and_ts[1].clone(),
-                    ds_and_ts[2].clone(),
-                    ds_and_ts[3].clone(),
-                )
-                .await
-                .unwrap()
-            });
+        for share1 in distance1.iter() {
+            for share2 in distance2.iter() {
+                if share1.player == share2.player {
+                    let mut player_session = ready_sessions.get(&share1.player).unwrap().clone();
+                    let code_dot1 = share1.code_dot.clone();
+                    let mask_dot1 = share1.mask_dot.clone();
+                    let code_dot2 = share2.code_dot.clone();
+                    let mask_dot2 = share2.mask_dot.clone();
+                    jobs.spawn(async move {
+                        cross_compare(
+                            &mut player_session,
+                            code_dot1,
+                            mask_dot1,
+                            code_dot2,
+                            mask_dot2,
+                        )
+                        .await
+                        .unwrap()
+                    });
+                }
+            }
         }
         let res = jobs.join_all().await;
         assert_eq!(res[0], res[1]);
         assert_eq!(res[0], res[2]);
         res[0]
+    }
+}
+
+impl LocalNetAby3NgStoreProtocol {
+    async fn graph_from_plain(
+        &self,
+        graph_store: GraphMem<PlaintextStore>,
+    ) -> GraphMem<LocalNetAby3NgStoreProtocol> {
+        let ep = graph_store.get_entry_point().await;
+
+        let layers = graph_store.get_layers();
+
+        let mut shared_layers = vec![];
+        for layer in layers {
+            let links = layer.get_links_map();
+            let mut shared_links = HashMap::new();
+            for (source_v, queue) in links {
+                let mut shared_queue = vec![];
+                for (target_v, _) in queue.as_vec_ref() {
+                    let shared_distance = self.eval_distance(source_v, target_v).await;
+                    shared_queue.push((target_v.clone(), shared_distance));
+                }
+                shared_links.insert(
+                    source_v.clone(),
+                    FurthestQueue::from_ascending_vec(shared_queue),
+                );
+            }
+            shared_layers.push(Layer::from_links(shared_links));
+        }
+
+        GraphMem::from_precomputed(ep, shared_layers)
     }
 }
 
@@ -258,9 +311,9 @@ pub async fn gr_create_ready_made_hawk_searcher<R: RngCore + Clone + CryptoRng>(
     }
 
     let protocol_store = setup_local_aby3_players_with_preloaded_db(rng, cleartext_database)?;
-    let protocol_graph = GraphMem::<LocalNetAby3NgStoreProtocol>::from_another(
-        cleartext_searcher.graph_store.clone(),
-    );
+    let protocol_graph = protocol_store
+        .graph_from_plain(cleartext_searcher.graph_store.clone())
+        .await;
     let secret_searcher = HawkSearcher::new(protocol_store, protocol_graph, &mut rng_searcher2);
 
     Ok((cleartext_searcher, secret_searcher))
@@ -452,13 +505,14 @@ mod tests {
         let it2 = (0..db_dim).combinations(2);
         for comb1 in it1 {
             for comb2 in it2.clone() {
+                let distance1 = aby3_store_protocol
+                    .eval_distance(&aby3_inserts[comb1[0]], &aby3_inserts[comb1[1]])
+                    .await;
+                let distance2 = aby3_store_protocol
+                    .eval_distance(&aby3_inserts[comb2[0]], &aby3_inserts[comb2[1]])
+                    .await;
                 assert_eq!(
-                    aby3_store_protocol
-                        .less_than(
-                            &(aby3_inserts[comb1[0]], aby3_inserts[comb1[1]]),
-                            &(aby3_inserts[comb2[0]], aby3_inserts[comb2[1]])
-                        )
-                        .await,
+                    aby3_store_protocol.less_than(&distance1, &distance2).await,
                     plaintext_store
                         .less_than(
                             &(plaintext_inserts[comb1[0]], plaintext_inserts[comb1[1]]),
