@@ -29,8 +29,8 @@ use iris_mpc_common::{
 use iris_mpc_gpu::{
     helpers::device_manager::DeviceManager,
     server::{
-        get_dummy_shares_for_deletion, heartbeat_nccl::start_heartbeat, sync_nccl, BatchMetadata,
-        BatchQuery, ServerActor, ServerJobResult,
+        get_dummy_shares_for_deletion, sync_nccl, BatchMetadata, BatchQuery, ServerActor,
+        ServerJobResult,
     },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
@@ -54,6 +54,7 @@ const REGION: &str = "eu-north-1";
 const RNG_SEED_INIT_DB: u64 = 42;
 const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_CONCURRENT_REQUESTS: usize = 32;
+const HEARTBEAT_INITIAL_RETRIES: usize = 5;
 
 static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
 
@@ -650,18 +651,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Preparing task monitor");
     let mut background_tasks = TaskMonitor::new();
 
-    let (tx, rx) = oneshot::channel();
-    let _heartbeat = background_tasks.spawn(start_heartbeat(
-        config.party_id,
-        tx,
-        config.heartbeat_interval_secs,
-    ));
-
-    background_tasks.check_tasks();
-    tracing::info!("Heartbeat starting...");
-    rx.await??;
-    tracing::info!("Heartbeat started.");
-
     // Start the actor in separate task.
     // A bit convoluted, but we need to create the actor on the thread already,
     // since it blocks a lot and is `!Send`, we get back the handle via the oneshot
@@ -954,7 +943,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Starting healthcheck server.");
 
     let _health_check_abort = background_tasks.spawn(async move {
-        let app = Router::new().route("/health", get(|| async {})); // implicit 200 return
+        // Generate a random UUID for each run.
+        let uuid = uuid::Uuid::new_v4().to_string();
+        let app = Router::new().route("/health", get(|| async { uuid })); // implicit 200 return
         let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
             .await
             .wrap_err("healthcheck listener bind error")?;
@@ -967,6 +958,64 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     background_tasks.check_tasks();
     tracing::info!("Healthcheck server running on port 3000.");
+
+    let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
+    let mut heartbeat_tx = Some(heartbeat_tx);
+    let all_nodes = config.node_hostnames.clone();
+    let _heartbeat = background_tasks.spawn(async move {
+        let next_node = &all_nodes[(config.party_id + 1) % 3];
+        let prev_node = &all_nodes[(config.party_id + 2) % 3];
+        let mut last_response = vec![String::default(), String::default()];
+        let mut connected = vec![false, false];
+        let mut retries = vec![0, 0];
+
+        loop {
+            for (i, host) in [next_node, prev_node].iter().enumerate() {
+                let res = reqwest::get(format!("http://{}:30000/health", host)).await;
+                if res.is_err() || !res.as_ref().unwrap().status().is_success() {
+                    // If it's the first time after startup, we allow a few retries to let the other
+                    // nodes start up as well.
+                    if last_response[i] == String::default()
+                        && retries[i] < HEARTBEAT_INITIAL_RETRIES
+                    {
+                        retries[i] += 1;
+                        tracing::warn!("Node {} did not respond with success, retrying...", host);
+                        continue;
+                    }
+                    // The other node seems to be down or returned an error.
+                    panic!(
+                        "Node {} did not respond with success, killing server...",
+                        host
+                    );
+                }
+
+                let uuid = res.unwrap().text().await?;
+                if last_response[i] == String::default() {
+                    last_response[i] = uuid;
+                    connected[i] = true;
+
+                    // If all nodes are connected, notify the main thread.
+                    if connected.iter().all(|&c| c) {
+                        if let Some(tx) = heartbeat_tx.take() {
+                            tx.send(()).unwrap();
+                        }
+                    }
+                } else if uuid != last_response[i] {
+                    // If the UUID response is different, the node has restarted without us
+                    // noticing. Our main NCCL connections cannot recover from
+                    // this, so we panic.
+                    panic!("Node {} seems to have restarted, killing server...", host);
+                }
+            }
+
+            tokio::time::sleep(Duration::from_secs(config.heartbeat_interval_secs)).await;
+        }
+    });
+
+    tracing::info!("Heartbeat starting...");
+    heartbeat_rx.await?;
+    tracing::info!("Heartbeat on all nodes started.");
+    background_tasks.check_tasks();
 
     let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 

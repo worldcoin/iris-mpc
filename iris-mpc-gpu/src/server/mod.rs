@@ -1,5 +1,4 @@
 mod actor;
-pub mod heartbeat_nccl;
 pub mod sync_nccl;
 
 use crate::dot::ROTATIONS;

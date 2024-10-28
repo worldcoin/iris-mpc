@@ -72,6 +72,9 @@ pub struct Config {
 
     #[serde(default)]
     pub disable_persistence: bool,
+
+    #[serde(default)]
+    pub node_hostnames: Vec<String>,
 }
 
 fn default_processing_timeout_secs() -> u64 {
