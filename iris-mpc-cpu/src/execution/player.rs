@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Runtime identity of party.
+/// Runtime identity of party; this is usually the IP/hostname of the party
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Identity(pub String);
 

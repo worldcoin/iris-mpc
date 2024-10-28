@@ -157,6 +157,7 @@ mod tests {
     use super::*;
     use crate::hawkers::galois_store::gr_create_ready_made_hawk_searcher;
     use aes_prng::AesRng;
+    use hawk_pack::hnsw_db::HawkSearcher;
     use iris_mpc_common::iris_db::db::IrisDB;
     use rand::SeedableRng;
     use tracing_test::traced_test;
@@ -227,12 +228,16 @@ mod tests {
     async fn test_plaintext_hnsw_matcher() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 1;
-        let (cleartext_searcher, _) = gr_create_ready_made_hawk_searcher(&mut rng, database_size)
-            .await
-            .unwrap();
+        let searcher = HawkSearcher::default();
+        let ((mut ptxt_vector, mut ptxt_graph), _) =
+            gr_create_ready_made_hawk_searcher(&mut rng, database_size)
+                .await
+                .unwrap();
         for i in 0..database_size {
-            let cleartext_neighbors = cleartext_searcher.search_to_insert(&PointId(i)).await;
-            assert!(cleartext_searcher.is_match(&cleartext_neighbors).await,);
+            let cleartext_neighbors = searcher
+                .search_to_insert(&mut ptxt_vector, &mut ptxt_graph, &PointId(i))
+                .await;
+            assert!(searcher.is_match(&ptxt_vector, &cleartext_neighbors).await,);
         }
     }
 }
