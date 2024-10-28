@@ -711,6 +711,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             8,
             config.max_db_size,
             config.max_batch_size,
+            config.return_partial_results,
             config.disable_persistence,
         ) {
             Ok((mut actor, handle)) => {
@@ -805,6 +806,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             metadata,
             matches,
             match_ids,
+            partial_match_ids_left,
+            partial_match_ids_right,
             store_left,
             store_right,
             deleted_ids,
@@ -826,6 +829,24 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         match matches[i] {
                             true => Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
                             false => None,
+                        },
+                        match partial_match_ids_left[i].is_empty() {
+                            false => Some(
+                                partial_match_ids_left[i]
+                                    .iter()
+                                    .map(|x| x + 1)
+                                    .collect::<Vec<_>>(),
+                            ),
+                            true => None,
+                        },
+                        match partial_match_ids_right[i].is_empty() {
+                            false => Some(
+                                partial_match_ids_right[i]
+                                    .iter()
+                                    .map(|x| x + 1)
+                                    .collect::<Vec<_>>(),
+                            ),
+                            true => None,
                         },
                     );
 

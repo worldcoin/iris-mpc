@@ -94,6 +94,9 @@ env:
   - name: SMPC__SERVICE__METRICS__PREFIX
     value: "smpcv2-2"
 
+  - name: SMPC__RETURN_PARTIAL_RESULTS
+    value: "true"
+
 initContainer:
   enabled: true
   image: "amazon/aws-cli:2.17.62"
