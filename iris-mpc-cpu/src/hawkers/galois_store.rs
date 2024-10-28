@@ -269,8 +269,11 @@ pub async fn gr_create_ready_made_hawk_searcher<R: RngCore + Clone + CryptoRng>(
     }
 
     let protocol_store = setup_local_aby3_players_with_preloaded_db(rng, cleartext_database)?;
-    let protocol_graph =
-        GraphMem::<LocalNetAby3NgStoreProtocol>::from_another(plaintext_graph_store.clone());
+    let protocol_graph = GraphMem::<LocalNetAby3NgStoreProtocol>::from_another(
+        plaintext_graph_store.clone(),
+        |vx| vx,
+        |dx| dx,
+    );
 
     let plaintext = (plaintext_vector_store, plaintext_graph_store);
     let secret = (protocol_store, protocol_graph);
