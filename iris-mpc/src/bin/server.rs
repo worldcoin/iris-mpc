@@ -965,9 +965,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let _heartbeat = background_tasks.spawn(async move {
         let next_node = &all_nodes[(config.party_id + 1) % 3];
         let prev_node = &all_nodes[(config.party_id + 2) % 3];
-        let mut last_response = vec![String::default(), String::default()];
-        let mut connected = vec![false, false];
-        let mut retries = vec![0, 0];
+        let mut last_response = [String::default(), String::default()];
+        let mut connected = [false, false];
+        let mut retries = [0, 0];
 
         loop {
             for (i, host) in [next_node, prev_node].iter().enumerate() {
