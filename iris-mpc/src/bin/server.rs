@@ -830,23 +830,23 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             true => Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
                             false => None,
                         },
-                        match matches[i] {
-                            true => Some(
+                        match partial_match_ids_left[i].is_empty() {
+                            false => Some(
                                 partial_match_ids_left[i]
                                     .iter()
                                     .map(|x| x + 1)
                                     .collect::<Vec<_>>(),
                             ),
-                            false => None,
+                            true => None,
                         },
-                        match matches[i] {
-                            true => Some(
+                        match partial_match_ids_right[i].is_empty() {
+                            false => Some(
                                 partial_match_ids_right[i]
                                     .iter()
                                     .map(|x| x + 1)
                                     .collect::<Vec<_>>(),
                             ),
-                            false => None,
+                            true => None,
                         },
                     );
 
