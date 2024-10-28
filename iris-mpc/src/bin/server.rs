@@ -971,7 +971,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
         loop {
             for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(format!("http://{}:30000/health", host)).await;
+                let res = reqwest::get(format!("http://{}:3000/health", host)).await;
                 if res.is_err() || !res.as_ref().unwrap().status().is_success() {
                     // If it's the first time after startup, we allow a few retries to let the other
                     // nodes start up as well.
