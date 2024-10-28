@@ -26,9 +26,9 @@ impl std::fmt::Debug for Aby3NgStorePlayer {
 }
 
 #[derive(Eq, PartialEq, Clone, Debug)]
-struct GaloisRingPoint {
+pub struct GaloisRingPoint {
     /// Whatever encoding of a vector.
-    data: GaloisRingSharedIris,
+    pub data: GaloisRingSharedIris,
 }
 
 impl Aby3NgStorePlayer {
@@ -154,7 +154,8 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
         // Do not compute the distance yet, just forward the IDs.
         (*query, *vector)
     }
-
+    /// maybe retrieve session as part of the struct implementing the vector
+    /// store?
     async fn is_match(&self, distance: &Self::DistanceRef) -> bool {
         let ready_sessions = self.runtime.create_player_sessions().await.unwrap();
         let mut jobs = JoinSet::new();
