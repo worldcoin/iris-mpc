@@ -97,6 +97,9 @@ env:
   - name: SMPC__RETURN_PARTIAL_RESULTS
     value: "true"
 
+  - name: SMPC__DISABLE_PERSISTENCE
+    value: "true"
+
 initContainer:
   enabled: true
   image: "amazon/aws-cli:2.17.62"

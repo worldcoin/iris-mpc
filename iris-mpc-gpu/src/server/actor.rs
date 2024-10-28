@@ -841,7 +841,9 @@ impl ServerActor {
             eyre::bail!("DB size exceeded");
         }
 
-        if !self.disable_persistence {
+        if self.disable_persistence {
+            tracing::info!("Persistence is disabled, not writing to DB");
+        } else {
             record_stream_time!(
                 &self.device_manager,
                 &self.streams[0],
