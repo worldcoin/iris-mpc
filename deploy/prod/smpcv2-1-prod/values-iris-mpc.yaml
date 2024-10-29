@@ -100,6 +100,9 @@ env:
   - name: SMPC__DISABLE_PERSISTENCE
     value: "true"
 
+  - name: SMPC__NODE_HOSTNAMES
+    value: '["iris-mpc-node.1.smpcv2.worldcoin.org","iris-mpc-node.2.smpcv2.worldcoin.org","iris-mpc-node.3.smpcv2.worldcoin.org"]'
+
 initContainer:
   enabled: true
   image: "amazon/aws-cli:2.17.62"
