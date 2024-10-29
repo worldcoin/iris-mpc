@@ -548,7 +548,7 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // SYNC BATCH CONTENTS AND FILTER OUT INVALID ENTRIES
         ///////////////////////////////////////////////////////////////////
-        tracing::debug!("Syncing batch entries");
+        tracing::info!("Syncing batch entries");
         let valid_entries = self.sync_batch_entries(&batch.valid_entries)?;
         let valid_entry_idxs = valid_entries.iter().positions(|&x| x).collect::<Vec<_>>();
         batch_size = valid_entry_idxs.len();
@@ -557,7 +557,7 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // COMPARE LEFT EYE QUERIES
         ///////////////////////////////////////////////////////////////////
-        tracing::debug!("Comparing left eye queries");
+        tracing::info!("Comparing left eye queries");
         // *Query* variant including Lagrange interpolation.
         let compact_query_left = {
             let code_query = preprocess_query(
@@ -618,7 +618,7 @@ impl ServerActor {
             &self.cublas_handles[0],
         )?;
 
-        tracing::debug!("Comparing left eye queries against DB and self");
+        tracing::info!("Comparing left eye queries against DB and self");
         self.compare_query_against_db_and_self(
             &compact_device_queries_left,
             &compact_device_sums_left,
@@ -629,7 +629,7 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // COMPARE RIGHT EYE QUERIES
         ///////////////////////////////////////////////////////////////////
-        tracing::debug!("Comparing right eye queries");
+        tracing::info!("Comparing right eye queries");
         // *Query* variant including Lagrange interpolation.
         let compact_query_right = {
             let code_query = preprocess_query(
@@ -690,7 +690,7 @@ impl ServerActor {
             &self.cublas_handles[0],
         )?;
 
-        tracing::debug!("Comparing right eye queries against DB and self");
+        tracing::info!("Comparing right eye queries against DB and self");
         self.compare_query_against_db_and_self(
             &compact_device_queries_right,
             &compact_device_sums_right,
@@ -701,7 +701,7 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // MERGE LEFT & RIGHT results
         ///////////////////////////////////////////////////////////////////
-        tracing::debug!("Joining both sides");
+        tracing::info!("Joining both sides");
         // Merge results and fetch matching indices
         // Format: host_results[device_index][query_index]
         self.distance_comparator.join_db_matches(
@@ -870,7 +870,7 @@ impl ServerActor {
                             self.current_db_sizes[i] += 1;
                         }
 
-                        tracing::debug!(
+                        tracing::info!(
                             "Updating DB size on device {}: {:?}",
                             i,
                             self.current_db_sizes[i]
@@ -979,10 +979,10 @@ impl ServerActor {
         };
 
         // ---- START BATCH DEDUP ----
-        tracing::debug!(party_id = self.party_id, "Starting batch deduplication");
+        tracing::info!(party_id = self.party_id, "Starting batch deduplication");
 
         record_stream_time!(&self.device_manager, batch_streams, events, "batch_dot", {
-            tracing::debug!(party_id = self.party_id, "batch_dot start");
+            tracing::info!(party_id = self.party_id, "batch_dot start");
 
             compact_device_queries.compute_dot_products(
                 &mut self.batch_codes_engine,
@@ -992,7 +992,7 @@ impl ServerActor {
                 batch_streams,
                 batch_cublas,
             );
-            tracing::debug!(party_id = self.party_id, "compute_dot_reducers start");
+            tracing::info!(party_id = self.party_id, "compute_dot_reducers start");
 
             compact_device_sums.compute_dot_reducers(
                 &mut self.batch_codes_engine,
@@ -1001,7 +1001,7 @@ impl ServerActor {
                 0,
                 batch_streams,
             );
-            tracing::debug!(party_id = self.party_id, "batch_dot end");
+            tracing::info!(party_id = self.party_id, "batch_dot end");
         });
 
         record_stream_time!(
@@ -1010,13 +1010,13 @@ impl ServerActor {
             events,
             "batch_reshare",
             {
-                tracing::debug!(party_id = self.party_id, "batch_reshare start");
+                tracing::info!(party_id = self.party_id, "batch_reshare start");
                 self.batch_codes_engine
                     .reshare_results(&self.query_db_size, batch_streams);
-                tracing::debug!(party_id = self.party_id, "batch_reshare masks start");
+                tracing::info!(party_id = self.party_id, "batch_reshare masks start");
                 self.batch_masks_engine
                     .reshare_results(&self.query_db_size, batch_streams);
-                tracing::debug!(party_id = self.party_id, "batch_reshare end");
+                tracing::info!(party_id = self.party_id, "batch_reshare end");
             }
         );
 
@@ -1031,17 +1031,17 @@ impl ServerActor {
             events,
             "batch_threshold",
             {
-                tracing::debug!(party_id = self.party_id, "batch_threshold start");
+                tracing::info!(party_id = self.party_id, "batch_threshold start");
                 self.phase2_batch.compare_threshold_masked_many(
                     &code_dots_batch,
                     &mask_dots_batch,
                     batch_streams,
                 );
-                tracing::debug!(party_id = self.party_id, "batch_threshold end");
+                tracing::info!(party_id = self.party_id, "batch_threshold end");
             }
         );
 
-        tracing::debug!(party_id = self.party_id, "phase2_batch start");
+        tracing::info!(party_id = self.party_id, "phase2_batch start");
 
         let res = self.phase2_batch.take_result_buffer();
         let chunk_size = self.phase2_batch.chunk_size();
@@ -1060,7 +1060,7 @@ impl ServerActor {
         );
         self.phase2_batch.return_result_buffer(res);
 
-        tracing::debug!(party_id = self.party_id, "Finished batch deduplication");
+        tracing::info!(party_id = self.party_id, "Finished batch deduplication");
         // ---- END BATCH DEDUP ----
 
         // Create new initial events
@@ -1072,7 +1072,7 @@ impl ServerActor {
         let mut next_phase2_event = self.device_manager.create_events();
 
         // ---- START DATABASE DEDUP ----
-        tracing::debug!(party_id = self.party_id, "Start DB deduplication");
+        tracing::info!(party_id = self.party_id, "Start DB deduplication");
         let ignore_device_results: Vec<bool> =
             self.current_db_sizes.iter().map(|&s| s == 0).collect();
         let mut db_chunk_idx = 0;
@@ -1229,10 +1229,10 @@ impl ServerActor {
         // ---- END DATABASE DEDUP ----
 
         // Wait for protocol to finish
-        tracing::debug!(party_id = self.party_id, "waiting for db search to finish");
+        tracing::info!(party_id = self.party_id, "waiting for db search to finish");
         self.device_manager.await_streams(&self.streams[0]);
         self.device_manager.await_streams(&self.streams[1]);
-        tracing::debug!(party_id = self.party_id, "db search finished");
+        tracing::info!(party_id = self.party_id, "db search finished");
 
         // Reset the results buffers for reuse
         for dst in &[&self.results, &self.batch_results, &self.final_results] {
@@ -1416,7 +1416,7 @@ fn get_merged_results(host_results: &[Vec<u32>], n_devices: usize) -> Vec<u32> {
 
         results.push(match_entry);
 
-        tracing::debug!(
+        tracing::info!(
             "Query {}: match={} [index: {}]",
             j,
             match_entry != NON_MATCH_ID,
