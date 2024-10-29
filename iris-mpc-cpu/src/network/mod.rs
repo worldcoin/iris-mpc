@@ -16,3 +16,4 @@ pub trait Networking {
 
 pub mod local;
 pub mod value;
+pub mod grpc;
