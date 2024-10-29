@@ -375,9 +375,8 @@ pub async fn gr_create_ready_made_hawk_searcher<R: RngCore + Clone + CryptoRng>(
 
     let protocol_store = setup_local_aby3_players_with_preloaded_db(rng, cleartext_database)?;
     let protocol_graph = protocol_store
-        .graph_from_plain(cleartext_searcher.graph_store.clone())
+        .graph_from_plain(plaintext_graph_store.clone())
         .await;
-    let secret_searcher = HawkSearcher::new(protocol_store, protocol_graph, &mut rng_searcher2);
 
     let plaintext = (plaintext_vector_store, plaintext_graph_store);
     let secret = (protocol_store, protocol_graph);

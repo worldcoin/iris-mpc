@@ -330,6 +330,7 @@ version = "1.57.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8888c238bf93c77c5df8274b3999fd7fc1bb3fb658616f40dfde9e4fcd9efd94"
 dependencies = [
+ "ahash",
  "aws-credential-types",
  "aws-runtime",
  "aws-sigv4",
@@ -2121,7 +2122,7 @@ dependencies = [
 [[package]]
 name = "hawk-pack"
 version = "0.1.0"
-source = "git+https://github.com/Inversed-Tech/hawk-pack.git?branch=old-main-with-graph-conversion#b6cd5c438f7432f4bd5f448666a0bef8202cb358"
+source = "git+https://github.com/Inversed-Tech/hawk-pack.git?branch=getters-for-graph-conversion#8ab2615615ba44b1560fa0f34128d66e7cbab99c"
 dependencies = [
  "aes-prng 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "criterion",
