@@ -22,33 +22,52 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
             .build()
             .unwrap();
 
-        let plain_searcher = rt.block_on(async move {
+        let (vector, graph) = rt.block_on(async move {
             let mut rng = AesRng::seed_from_u64(0_u64);
-            let vector_store = PlaintextStore::default();
-            let graph_store = GraphMem::new();
-            let mut plain_searcher = HawkSearcher::new(vector_store, graph_store, &mut rng);
+            let mut vector = PlaintextStore::default();
+            let mut graph = GraphMem::new();
+            let searcher = HawkSearcher::default();
 
             for _ in 0..database_size {
                 let raw_query = IrisCode::random_rng(&mut rng);
-                let query = plain_searcher.vector_store.prepare_query(raw_query.clone());
-                let neighbors = plain_searcher.search_to_insert(&query).await;
-                let inserted = plain_searcher.vector_store.insert(&query).await;
-                plain_searcher
-                    .insert_from_search_results(inserted, neighbors)
+                let query = vector.prepare_query(raw_query.clone());
+                let neighbors = searcher
+                    .search_to_insert(&mut vector, &mut graph, &query)
+                    .await;
+                let inserted = vector.insert(&query).await;
+                searcher
+                    .insert_from_search_results(
+                        &mut vector,
+                        &mut graph,
+                        &mut rng,
+                        inserted,
+                        neighbors,
+                    )
                     .await;
             }
-            plain_searcher
+            (vector, graph)
         });
 
         group.bench_function(BenchmarkId::new("insert", database_size), |b| {
             b.to_async(&rt).iter_batched(
-                || plain_searcher.clone(),
-                |mut my_db| async move {
+                || (vector.clone(), graph.clone()),
+                |(mut db_vectors, mut graph)| async move {
+                    let searcher = HawkSearcher::default();
                     let mut rng = AesRng::seed_from_u64(0_u64);
                     let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
-                    let query = my_db.vector_store.prepare_query(on_the_fly_query);
-                    let neighbors = my_db.search_to_insert(&query).await;
-                    my_db.insert_from_search_results(query, neighbors).await;
+                    let query = db_vectors.prepare_query(on_the_fly_query);
+                    let neighbors = searcher
+                        .search_to_insert(&mut db_vectors, &mut graph, &query)
+                        .await;
+                    searcher
+                        .insert_from_search_results(
+                            &mut db_vectors,
+                            &mut graph,
+                            &mut rng,
+                            query,
+                            neighbors,
+                        )
+                        .await;
                 },
                 criterion::BatchSize::SmallInput,
             )
@@ -167,14 +186,25 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
             |b| {
                 b.to_async(&rt).iter_batched(
                     || secret_searcher.clone(),
-                    |mut my_db| async move {
+                    |(mut db_vectors, mut db_graph)| async move {
+                        let searcher = HawkSearcher::default();
                         let mut rng = AesRng::seed_from_u64(0_u64);
                         let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
                         let raw_query = generate_galois_iris_shares(&mut rng, on_the_fly_query);
 
-                        let query = my_db.vector_store.prepare_query(raw_query);
-                        let neighbors = my_db.search_to_insert(&query).await;
-                        my_db.insert_from_search_results(query, neighbors).await;
+                        let query = db_vectors.prepare_query(raw_query);
+                        let neighbors = searcher
+                            .search_to_insert(&mut db_vectors, &mut db_graph, &query)
+                            .await;
+                        searcher
+                            .insert_from_search_results(
+                                &mut db_vectors,
+                                &mut db_graph,
+                                &mut rng,
+                                query,
+                                neighbors,
+                            )
+                            .await;
                     },
                     criterion::BatchSize::SmallInput,
                 )
@@ -186,14 +216,17 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
             |b| {
                 b.to_async(&rt).iter_batched(
                     || secret_searcher.clone(),
-                    |mut my_db| async move {
+                    |(mut db_vectors, mut db_graph)| async move {
+                        let searcher = HawkSearcher::default();
                         let mut rng = AesRng::seed_from_u64(0_u64);
                         let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
                         let raw_query = generate_galois_iris_shares(&mut rng, on_the_fly_query);
 
-                        let query = my_db.vector_store.prepare_query(raw_query);
-                        let neighbors = my_db.search_to_insert(&query).await;
-                        my_db.is_match(&neighbors).await;
+                        let query = db_vectors.prepare_query(raw_query);
+                        let neighbors = searcher
+                            .search_to_insert(&mut db_vectors, &mut db_graph, &query)
+                            .await;
+                        searcher.is_match(&db_vectors, &neighbors).await;
                     },
                     criterion::BatchSize::SmallInput,
                 )
