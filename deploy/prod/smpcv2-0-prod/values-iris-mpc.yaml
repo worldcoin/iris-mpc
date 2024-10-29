@@ -103,7 +103,7 @@ env:
 initContainer:
   enabled: true
   image: "amazon/aws-cli:2.17.62"
-  name: "iris-mpc-dns-records-updater"
+  name: "iris-mpc-dns-records-updater-and-cuda-libs"
   env:
     - name: PARTY_ID
       value: "1"
