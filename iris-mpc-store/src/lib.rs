@@ -556,6 +556,8 @@ mod tests {
             false,
             "A".repeat(64),
             None,
+            None,
+            None,
         ))?;
         let result_events = vec![result_event; count];
 

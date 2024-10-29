@@ -20,7 +20,7 @@ env:
   - name: SMPC__DATABASE__URL
     valueFrom:
       secretKeyRef:
-        key: DATABASE_URL
+        key: DATABASE_AURORA_URL
         name: application
 
   - name: SMPC__DATABASE__MIGRATE
@@ -89,10 +89,13 @@ env:
     value: "5000"
 
   - name: SMPC__SERVICE__METRICS__BUFFER_SIZE
-    value: "1024"
+    value: "256"
   
   - name: SMPC__SERVICE__METRICS__PREFIX
     value: "smpcv2-1"
+
+  - name: SMPC__RETURN_PARTIAL_RESULTS
+    value: "true"
 
 initContainer:
   enabled: true
