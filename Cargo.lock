@@ -326,11 +326,10 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-s3"
-version = "1.57.0"
+version = "1.58.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8888c238bf93c77c5df8274b3999fd7fc1bb3fb658616f40dfde9e4fcd9efd94"
+checksum = "0656a79cf5e6ab0d4bb2465cd750a7a2fd7ea26c062183ed94225f5782e22365"
 dependencies = [
- "ahash",
  "aws-credential-types",
  "aws-runtime",
  "aws-sigv4",
@@ -2122,7 +2121,7 @@ dependencies = [
 [[package]]
 name = "hawk-pack"
 version = "0.1.0"
-source = "git+https://github.com/Inversed-Tech/hawk-pack.git?branch=getters-for-graph-conversion#8ab2615615ba44b1560fa0f34128d66e7cbab99c"
+source = "git+https://github.com/Inversed-Tech/hawk-pack.git?rev=400db13#400db13435acbdb6500ed3c8584c66281bf9e000"
 dependencies = [
  "aes-prng 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "criterion",
@@ -2365,7 +2364,7 @@ dependencies = [
  "hyper 1.5.0",
  "hyper-util",
  "log",
- "rustls 0.23.15",
+ "rustls 0.23.16",
  "rustls-native-certs 0.8.0",
  "rustls-pki-types",
  "tokio",
@@ -2404,9 +2403,9 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.9"
+version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41296eb09f183ac68eec06e03cdbea2e759633d4067b2f6552fc2e009bcad08b"
+checksum = "df2dcfbe0677734ab2f3ffa7fa7bfd4706bfdc1ef393f2ee30184aed67e631b4"
 dependencies = [
  "bytes",
  "futures-channel",
@@ -2564,7 +2563,7 @@ dependencies = [
  "metrics-exporter-statsd 0.7.0",
  "ndarray",
  "rand",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "serde_json",
  "sha2",
  "sodiumoxide",
@@ -2602,7 +2601,7 @@ dependencies = [
  "percent-encoding",
  "rand",
  "rayon",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "ring",
  "serde",
  "serde-big-array",
@@ -2670,7 +2669,7 @@ dependencies = [
  "num-traits",
  "rand",
  "rayon",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "ring",
  "serde",
  "serde_json",
@@ -2849,9 +2848,9 @@ dependencies = [
 
 [[package]]
 name = "libm"
-version = "0.2.10"
+version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a00419de735aac21d53b0de5ce2c03bd3627277cf471300f27ebc89f7d828047"
+checksum = "8355be11b20d696c8f18f6cc018c4e372165b1fa8126cef092399c9951984ffa"
 
 [[package]]
 name = "libredox"
@@ -3431,7 +3430,7 @@ dependencies = [
  "opentelemetry-http",
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "rmp",
  "ryu",
  "thiserror",
@@ -3448,7 +3447,7 @@ dependencies = [
  "bytes",
  "http 1.1.0",
  "opentelemetry",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
 ]
 
 [[package]]
@@ -4039,9 +4038,9 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.12.8"
+version = "0.12.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f713147fbe92361e52392c73b8c9e48c04c6625bce969ef54dc901e58e042a7b"
+checksum = "a77c62af46e79de0a562e1a9849205ffcb7fc1238876e9bd743357570e04046f"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -4267,9 +4266,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.15"
+version = "0.23.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fbb44d7acc4e873d613422379f69f237a1b141928c02f6bc6ccfddddc2d7993"
+checksum = "eee87ff5d9b36712a58574e12e9f0ea80f915a5b0ac518d322b24a465617925e"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -4463,9 +4462,9 @@ checksum = "388a1df253eca08550bef6c72392cfe7c30914bf41df5269b68cbd6ff8f570a3"
 
 [[package]]
 name = "serde"
-version = "1.0.213"
+version = "1.0.214"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ea7893ff5e2466df8d720bb615088341b295f849602c6956047f8f80f0e9bc1"
+checksum = "f55c3193aca71c12ad7890f1785d2b73e1b9f63a0bbc353c08ef26fe03fc56b5"
 dependencies = [
  "serde_derive",
 ]
@@ -4490,9 +4489,9 @@ dependencies = [
 
 [[package]]
 name = "serde_derive"
-version = "1.0.213"
+version = "1.0.214"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e85ad2009c50b58e87caa8cd6dac16bdf511bbfb7af6c33df902396aa480fa5"
+checksum = "de523f781f095e28fa605cdce0f8307e451cc0fd14e2eb4cd2e98a355b147766"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5078,7 +5077,7 @@ dependencies = [
  "opentelemetry-http",
  "opentelemetry_sdk",
  "rand",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "serde",
  "serde_json",
  "thiserror",
@@ -5264,7 +5263,7 @@ version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c7bc40d0e5a97695bb96e27995cd3a08538541b0a846f65bba7a359f36700d4"
 dependencies = [
- "rustls 0.23.15",
+ "rustls 0.23.16",
  "rustls-pki-types",
  "tokio",
 ]
