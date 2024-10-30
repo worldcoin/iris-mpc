@@ -63,6 +63,9 @@ pub struct Config {
 
     #[serde(default = "default_heartbeat_interval_secs")]
     pub heartbeat_interval_secs: u64,
+    
+    #[serde(default = "default_heartbeat_initial_retries")]
+    pub heartbeat_initial_retries: u64,
 
     #[serde(default)]
     pub fake_db_size: usize,
@@ -87,6 +90,10 @@ fn default_max_batch_size() -> usize {
 
 fn default_heartbeat_interval_secs() -> u64 {
     30
+}
+
+fn default_heartbeat_initial_retries() -> u64 {
+    10
 }
 
 impl Config {
