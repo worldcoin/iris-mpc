@@ -668,7 +668,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     background_tasks.check_tasks();
     tracing::info!("Healthcheck server running on port 3000.");
-    
+
     // Start the actor in separate task.
     // A bit convoluted, but we need to create the actor on the thread already,
     // since it blocks a lot and is `!Send`, we get back the handle via the oneshot
@@ -958,7 +958,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     background_tasks.check_tasks();
 
     tracing::info!("All systems ready.");
-    
+
     let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
     // Main loop
