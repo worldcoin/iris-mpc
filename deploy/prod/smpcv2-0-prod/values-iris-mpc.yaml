@@ -56,6 +56,9 @@ env:
   - name: SMPC__HEARTBEAT_INTERVAL_SECS
     value: "2"
 
+  - name: SMPC__HEARTBEAT_INITIAL_RETRIES
+    value: "50"
+
   - name: SMPC__PATH
     value: "/data/"
 
