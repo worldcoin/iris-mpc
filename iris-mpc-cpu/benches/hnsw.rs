@@ -5,7 +5,10 @@ use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use iris_mpc_cpu::{
     database_generators::{create_random_sharing, generate_galois_iris_shares},
     execution::local::LocalRuntime,
-    hawkers::{galois_store::gr_create_ready_made_hawk_searcher, plaintext_store::PlaintextStore},
+    hawkers::{
+        galois_store::gr_create_ready_made_hawk_searcher, plaintext_store::PlaintextStore,
+        session_based::session_based_ready_made_hawk_searcher,
+    },
     protocol::ops::{cross_compare, galois_ring_pairwise_distance, galois_ring_to_rep3},
 };
 use rand::SeedableRng;
@@ -232,6 +235,29 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                 )
             },
         );
+    }
+    group.finish();
+}
+
+fn bench_session_based_hnsw(c: &mut Criterion) {
+    let mut group = c.benchmark_group("session_based_hnsw");
+    group.sample_size(10);
+
+    for database_size in [1, 10, 100, 1000, 10000, 100000] {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let (_, secret_data) = rt.block_on(async move {
+            session_based_ready_made_hawk_searcher(&mut rng, database_size)
+                .await
+                .unwrap()
+        });
+        let ((p0_store, p1_store, p2_store), graph) = secret_data;
+        let runtime = LocalRuntime::replicated_test_config();
+        let ready_sessions = runtime.create_player_sessions().await.unwrap();
+        // TODO: Insert bench code
     }
     group.finish();
 }

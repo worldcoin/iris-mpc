@@ -156,7 +156,7 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
     }
     /// maybe retrieve session as part of the struct implementing the vector
     /// store?
-    async fn is_match(&self, distance: &Self::DistanceRef) -> bool {
+    async fn is_match(&mut self, distance: &Self::DistanceRef) -> bool {
         let ready_sessions = self.runtime.create_player_sessions().await.unwrap();
         let mut jobs = JoinSet::new();
         for player in self.runtime.identities.clone() {
@@ -181,7 +181,7 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
     }
 
     async fn less_than(
-        &self,
+        &mut self,
         distance1: &Self::DistanceRef,
         distance2: &Self::DistanceRef,
     ) -> bool {
@@ -374,7 +374,7 @@ mod tests {
             // assert_eq!(false, true);
             tracing::debug!("Finished query");
             assert!(
-                db.is_match(&aby3_store, &neighbors).await,
+                db.is_match(&mut aby3_store, &neighbors).await,
                 "failed at index {:?}",
                 index
             );
@@ -444,7 +444,7 @@ mod tests {
                 .await;
             assert!(
                 hawk_searcher
-                    .is_match(&cleartext_data.0, &cleartext_neighbors)
+                    .is_match(&mut cleartext_data.0, &cleartext_neighbors)
                     .await,
             );
 
@@ -453,7 +453,7 @@ mod tests {
                 .await;
             assert!(
                 hawk_searcher
-                    .is_match(&secret_data.0, &secret_neighbors)
+                    .is_match(&mut secret_data.0, &secret_neighbors)
                     .await
             );
 
@@ -462,7 +462,7 @@ mod tests {
                 .await;
             assert!(
                 hawk_searcher
-                    .is_match(&vector_store, &scratch_secret_neighbors)
+                    .is_match(&mut vector_store, &scratch_secret_neighbors)
                     .await,
             );
         }
@@ -538,7 +538,7 @@ mod tests {
                 .search_to_insert(&mut vector, &mut graph, &PointId(i))
                 .await;
             assert!(
-                searcher.is_match(&vector, &secret_neighbors).await,
+                searcher.is_match(&mut vector, &secret_neighbors).await,
                 "Failed at index {:?}",
                 i
             );

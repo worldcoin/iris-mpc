@@ -136,14 +136,14 @@ impl VectorStore for PlaintextStore {
         (*query, *vector)
     }
 
-    async fn is_match(&self, distance: &Self::DistanceRef) -> bool {
+    async fn is_match(&mut self, distance: &Self::DistanceRef) -> bool {
         let x = &self.points[distance.0 .0];
         let y = &self.points[distance.1 .0];
         x.is_close(y)
     }
 
     async fn less_than(
-        &self,
+        &mut self,
         distance1: &Self::DistanceRef,
         distance2: &Self::DistanceRef,
     ) -> bool {
@@ -237,7 +237,11 @@ mod tests {
             let cleartext_neighbors = searcher
                 .search_to_insert(&mut ptxt_vector, &mut ptxt_graph, &PointId(i))
                 .await;
-            assert!(searcher.is_match(&ptxt_vector, &cleartext_neighbors).await,);
+            assert!(
+                searcher
+                    .is_match(&mut ptxt_vector, &cleartext_neighbors)
+                    .await,
+            );
         }
     }
 }
