@@ -651,6 +651,24 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Preparing task monitor");
     let mut background_tasks = TaskMonitor::new();
 
+    tracing::info!("Starting healthcheck server.");
+    let _health_check_abort = background_tasks.spawn(async move {
+        // Generate a random UUID for each run.
+        let uuid = uuid::Uuid::new_v4().to_string();
+        let app = Router::new().route("/health", get(|| async { uuid })); // implicit 200 return
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+            .await
+            .wrap_err("healthcheck listener bind error")?;
+        axum::serve(listener, app)
+            .await
+            .wrap_err("healthcheck listener server launch error")?;
+
+        Ok(())
+    });
+
+    background_tasks.check_tasks();
+    tracing::info!("Healthcheck server running on port 3000.");
+    
     // Start the actor in separate task.
     // A bit convoluted, but we need to create the actor on the thread already,
     // since it blocks a lot and is `!Send`, we get back the handle via the oneshot
@@ -940,24 +958,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     background_tasks.check_tasks();
 
     tracing::info!("All systems ready.");
-    tracing::info!("Starting healthcheck server.");
-
-    let _health_check_abort = background_tasks.spawn(async move {
-        // Generate a random UUID for each run.
-        let uuid = uuid::Uuid::new_v4().to_string();
-        let app = Router::new().route("/health", get(|| async { uuid })); // implicit 200 return
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
-            .await
-            .wrap_err("healthcheck listener bind error")?;
-        axum::serve(listener, app)
-            .await
-            .wrap_err("healthcheck listener server launch error")?;
-
-        Ok(())
-    });
-
-    background_tasks.check_tasks();
-    tracing::info!("Healthcheck server running on port 3000.");
 
     let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
     let mut heartbeat_tx = Some(heartbeat_tx);
