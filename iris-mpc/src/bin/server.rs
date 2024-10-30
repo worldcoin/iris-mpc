@@ -54,7 +54,6 @@ const REGION: &str = "eu-north-1";
 const RNG_SEED_INIT_DB: u64 = 42;
 const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_CONCURRENT_REQUESTS: usize = 32;
-const HEARTBEAT_INITIAL_RETRIES: usize = 5;
 
 static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
 
