@@ -33,7 +33,7 @@ iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 sha2 = "0.10.8"
 metrics = "0.22.1"
-metrics-exporter-statsd = "0.7"
+metrics-exporter-statsd = "0.8"
 
 [dev-dependencies]
 criterion = "0.5"
