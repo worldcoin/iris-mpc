@@ -2564,6 +2564,7 @@ dependencies = [
  "metrics-exporter-statsd 0.7.0",
  "ndarray",
  "rand",
+ "reqwest 0.12.8",
  "serde_json",
  "sha2",
  "sodiumoxide",
