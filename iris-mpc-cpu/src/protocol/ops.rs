@@ -264,6 +264,17 @@ pub async fn galois_ring_is_match(
     Ok(opened.convert())
 }
 
+/// Checks that the given dot product is zero.
+pub async fn is_dot_zero(
+    session: &mut Session,
+    code_dot: Share<u16>,
+    mask_dot: Share<u16>,
+) -> eyre::Result<bool> {
+    let bit = compare_threshold(session, code_dot, mask_dot).await?;
+    let opened = open_bin(session, bit).await?;
+    Ok(opened.convert())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
