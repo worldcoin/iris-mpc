@@ -128,7 +128,7 @@ initContainer:
     - name: MY_NODE_IP
       valueFrom:
         fieldRef:
-          fieldPath: status.podIP
+          fieldPath: status.hostIP
   configMap:
     init.sh: |
       #!/usr/bin/env bash
