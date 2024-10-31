@@ -13,9 +13,9 @@ ports:
   - containerPort: 3000
     name: health
     protocol: TCP
-  - containerPort: 4000
-    name: nccl
-    protocol: TCP
+#  - containerPort: 4000
+#    name: nccl
+#    protocol: TCP
 
 livenessProbe:
   initialDelaySeconds: 300
@@ -60,7 +60,7 @@ imagePullSecrets:
 nodeSelector:
   kubernetes.io/arch: amd64
 
-hostNetwork: false
+hostNetwork: true
 
 podSecurityContext:
   runAsUser: 65534
