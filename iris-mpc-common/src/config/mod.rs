@@ -1,6 +1,6 @@
 use crate::config::json_wrapper::JsonStrWrapper;
 use clap::Parser;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 
 pub mod json_wrapper;
@@ -64,11 +64,20 @@ pub struct Config {
     #[serde(default = "default_heartbeat_interval_secs")]
     pub heartbeat_interval_secs: u64,
 
+    #[serde(default = "default_heartbeat_initial_retries")]
+    pub heartbeat_initial_retries: u64,
+
     #[serde(default)]
     pub fake_db_size: usize,
 
     #[serde(default)]
+    pub return_partial_results: bool,
+
+    #[serde(default)]
     pub disable_persistence: bool,
+
+    #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
+    pub node_hostnames: Vec<String>,
 }
 
 fn default_processing_timeout_secs() -> u64 {
@@ -81,6 +90,10 @@ fn default_max_batch_size() -> usize {
 
 fn default_heartbeat_interval_secs() -> u64 {
     30
+}
+
+fn default_heartbeat_initial_retries() -> u64 {
+    10
 }
 
 impl Config {
@@ -168,4 +181,12 @@ pub struct MetricsConfig {
     pub queue_size:  usize,
     pub buffer_size: usize,
     pub prefix:      String,
+}
+
+fn deserialize_yaml_json_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: String = Deserialize::deserialize(deserializer)?;
+    serde_json::from_str(&value).map_err(serde::de::Error::custom)
 }

@@ -2,6 +2,9 @@ env:
   - name: RUST_LOG
     value: "info"
 
+  - name: NCCL_DEBUG
+    value: "INFO"
+
   - name: NCCL_SOCKET_IFNAME
     value: "eth0"
 
@@ -20,7 +23,7 @@ env:
   - name: SMPC__DATABASE__URL
     valueFrom:
       secretKeyRef:
-        key: DATABASE_URL
+        key: DATABASE_AURORA_URL
         name: application
 
   - name: SMPC__DATABASE__MIGRATE
@@ -30,7 +33,7 @@ env:
     value: "true"
 
   - name: SMPC__DATABASE__LOAD_PARALLELISM
-    value: "2"
+    value: "80"
 
   - name: SMPC__AWS__REGION
     value: "eu-north-1"
@@ -48,7 +51,13 @@ env:
         name: application
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "60"
+    value: "600"
+
+  - name: SMPC__HEARTBEAT_INTERVAL_SECS
+    value: "2"
+
+  - name: SMPC__HEARTBEAT_INITIAL_RETRIES
+    value: "50"
 
   - name: SMPC__PATH
     value: "/data/"
@@ -74,13 +83,42 @@ env:
   - name: SMPC__MAX_DB_SIZE
     value: "10000000"
 
+  - name: SMPC__FAKE_DB_SIZE
+    value: "1000000"
+
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
+
+  - name: SMPC__SERVICE__METRICS__HOST
+    valueFrom:
+      fieldRef:
+        fieldPath: status.hostIP
+
+  - name: SMPC__SERVICE__METRICS__PORT
+    value: "8125"
+
+  - name: SMPC__SERVICE__METRICS__QUEUE_SIZE
+    value: "5000"
+
+  - name: SMPC__SERVICE__METRICS__BUFFER_SIZE
+    value: "1024"
+  
+  - name: SMPC__SERVICE__METRICS__PREFIX
+    value: "smpcv2-0"
+
+  - name: SMPC__RETURN_PARTIAL_RESULTS
+    value: "true"
+
+  - name: SMPC__DISABLE_PERSISTENCE
+    value: "true"
+
+  - name: SMPC__NODE_HOSTNAMES
+    value: '["iris-mpc-node.1.smpcv2.worldcoin.org","iris-mpc-node.2.smpcv2.worldcoin.org","iris-mpc-node.3.smpcv2.worldcoin.org"]'
 
 initContainer:
   enabled: true
   image: "amazon/aws-cli:2.17.62"
-  name: "iris-mpc-dns-records-updater"
+  name: "iris-mpc-dns-records-updater-and-cuda-libs"
   env:
     - name: PARTY_ID
       value: "1"

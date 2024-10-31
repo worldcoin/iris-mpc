@@ -29,21 +29,20 @@ use iris_mpc_common::{
 use iris_mpc_gpu::{
     helpers::device_manager::DeviceManager,
     server::{
-        get_dummy_shares_for_deletion, heartbeat_nccl::start_heartbeat, sync_nccl, BatchMetadata,
-        BatchQuery, ServerActor, ServerJobResult,
+        get_dummy_shares_for_deletion, sync_nccl, BatchMetadata, BatchQuery, ServerActor,
+        ServerJobResult,
     },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
+use metrics_exporter_statsd::StatsdBuilder;
 use std::{
+    backtrace::Backtrace,
     collections::HashMap,
-    mem,
+    mem, panic,
     sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
 };
-use telemetry_batteries::{
-    metrics::statsd::StatsdBattery,
-    tracing::{datadog::DatadogBattery, TracingShutdownHandle},
-};
+use telemetry_batteries::tracing::{datadog::DatadogBattery, TracingShutdownHandle};
 use tokio::{
     sync::{mpsc, oneshot, Semaphore},
     task::spawn_blocking,
@@ -165,6 +164,8 @@ async fn receive_batch(
                             serde_json::from_str(&message.message).map_err(|e| {
                                 ReceiveRequestError::json_parse_error("circuit_breaker_request", e)
                             })?;
+                        metrics::counter!("request.received", "type" => "circuit_breaker")
+                            .increment(1);
                         client
                             .delete_message()
                             .queue_url(queue_url)
@@ -194,6 +195,8 @@ async fn receive_batch(
                                     e,
                                 )
                             })?;
+                        metrics::counter!("request.received", "type" => "identity_deletion")
+                            .increment(1);
                         batch_query
                             .deletion_requests_indices
                             .push(identity_deletion_request.serial_id - 1); // serial_id is 1-indexed
@@ -215,7 +218,8 @@ async fn receive_batch(
                             serde_json::from_str(&message.message).map_err(|e| {
                                 ReceiveRequestError::json_parse_error("Uniqueness request", e)
                             })?;
-
+                        metrics::counter!("request.received", "type" => "uniqueness_verification")
+                            .increment(1);
                         store
                             .mark_requests_deleted(&[smpc_request.signup_id.clone()])
                             .await
@@ -418,15 +422,45 @@ fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
         );
 
         if let Some(metrics_config) = &service.metrics {
-            StatsdBattery::init(
-                &metrics_config.host,
-                metrics_config.port,
-                metrics_config.queue_size,
-                metrics_config.buffer_size,
-                Some(&metrics_config.prefix),
-            )?;
+            let recorder = StatsdBuilder::from(&metrics_config.host, metrics_config.port)
+                .with_queue_size(metrics_config.queue_size)
+                .with_buffer_size(metrics_config.buffer_size)
+                .histogram_is_distribution()
+                .build(Some(&metrics_config.prefix))?;
+            metrics::set_global_recorder(recorder)?;
         }
 
+        // Set a custom panic hook to print backtraces on one line
+        panic::set_hook(Box::new(|panic_info| {
+            let message = match panic_info.payload().downcast_ref::<&str>() {
+                Some(s) => *s,
+                None => match panic_info.payload().downcast_ref::<String>() {
+                    Some(s) => s.as_str(),
+                    None => "Unknown panic message",
+                },
+            };
+            let location = if let Some(location) = panic_info.location() {
+                format!(
+                    "{}:{}:{}",
+                    location.file(),
+                    location.line(),
+                    location.column()
+                )
+            } else {
+                "Unknown location".to_string()
+            };
+
+            let backtrace = Backtrace::capture();
+            let backtrace_string = format!("{:?}", backtrace);
+
+            let backtrace_single_line = backtrace_string.replace('\n', " | ");
+
+            tracing::error!(
+                { backtrace = %backtrace_single_line, location = %location},
+                "Panic occurred with message: {}",
+                message
+            );
+        }));
         Ok(tracing_shutdown_handle)
     } else {
         tracing_subscriber::registry()
@@ -437,7 +471,7 @@ fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
             )
             .init();
 
-        Ok(TracingShutdownHandle)
+        Ok(TracingShutdownHandle {})
     }
 }
 
@@ -480,6 +514,7 @@ async fn send_results_to_sns(
     sns_client: &SNSClient,
     config: &Config,
     base_message_attributes: &HashMap<String, MessageAttributeValue>,
+    message_type: &str,
 ) -> eyre::Result<()> {
     for (i, result_event) in result_events.iter().enumerate() {
         let mut message_attributes = base_message_attributes.clone();
@@ -496,6 +531,7 @@ async fn send_results_to_sns(
             .set_message_attributes(Some(message_attributes))
             .send()
             .await?;
+        metrics::counter!("result.sent", "type" => message_type.to_owned()).increment(1);
     }
     Ok(())
 }
@@ -570,6 +606,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         &sns_client,
         &config,
         &uniqueness_result_attributes,
+        UNIQUENESS_MESSAGE_TYPE,
     )
     .await?;
 
@@ -612,18 +649,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     tracing::info!("Preparing task monitor");
     let mut background_tasks = TaskMonitor::new();
-
-    let (tx, rx) = oneshot::channel();
-    let _heartbeat = background_tasks.spawn(start_heartbeat(
-        config.party_id,
-        tx,
-        config.heartbeat_interval_secs,
-    ));
-
-    background_tasks.check_tasks();
-    tracing::info!("Heartbeat starting...");
-    rx.await??;
-    tracing::info!("Heartbeat started.");
 
     // Start the actor in separate task.
     // A bit convoluted, but we need to create the actor on the thread already,
@@ -674,6 +699,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             8,
             config.max_db_size,
             config.max_batch_size,
+            config.return_partial_results,
             config.disable_persistence,
         ) {
             Ok((mut actor, handle)) => {
@@ -768,6 +794,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             metadata,
             matches,
             match_ids,
+            partial_match_ids_left,
+            partial_match_ids_right,
             store_left,
             store_right,
             deleted_ids,
@@ -789,6 +817,24 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         match matches[i] {
                             true => Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
                             false => None,
+                        },
+                        match partial_match_ids_left[i].is_empty() {
+                            false => Some(
+                                partial_match_ids_left[i]
+                                    .iter()
+                                    .map(|x| x + 1)
+                                    .collect::<Vec<_>>(),
+                            ),
+                            true => None,
+                        },
+                        match partial_match_ids_right[i].is_empty() {
+                            false => Some(
+                                partial_match_ids_right[i]
+                                    .iter()
+                                    .map(|x| x + 1)
+                                    .collect::<Vec<_>>(),
+                            ),
+                            true => None,
                         },
                     );
 
@@ -859,6 +905,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 &sns_client_bg,
                 &config_bg,
                 &uniqueness_result_attributes,
+                UNIQUENESS_MESSAGE_TYPE,
             )
             .await?;
 
@@ -882,6 +929,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 &sns_client_bg,
                 &config_bg,
                 &identity_deletion_result_attributes,
+                IDENTITY_DELETION_MESSAGE_TYPE,
             )
             .await?;
         }
@@ -894,7 +942,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Starting healthcheck server.");
 
     let _health_check_abort = background_tasks.spawn(async move {
-        let app = Router::new().route("/health", get(|| async {})); // implicit 200 return
+        // Generate a random UUID for each run.
+        let uuid = uuid::Uuid::new_v4().to_string();
+        let app = Router::new().route("/health", get(|| async { uuid })); // implicit 200 return
         let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
             .await
             .wrap_err("healthcheck listener bind error")?;
@@ -907,6 +957,64 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     background_tasks.check_tasks();
     tracing::info!("Healthcheck server running on port 3000.");
+
+    let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
+    let mut heartbeat_tx = Some(heartbeat_tx);
+    let all_nodes = config.node_hostnames.clone();
+    let _heartbeat = background_tasks.spawn(async move {
+        let next_node = &all_nodes[(config.party_id + 1) % 3];
+        let prev_node = &all_nodes[(config.party_id + 2) % 3];
+        let mut last_response = [String::default(), String::default()];
+        let mut connected = [false, false];
+        let mut retries = [0, 0];
+
+        loop {
+            for (i, host) in [next_node, prev_node].iter().enumerate() {
+                let res = reqwest::get(format!("http://{}:3000/health", host)).await;
+                if res.is_err() || !res.as_ref().unwrap().status().is_success() {
+                    // If it's the first time after startup, we allow a few retries to let the other
+                    // nodes start up as well.
+                    if last_response[i] == String::default()
+                        && retries[i] < config.heartbeat_initial_retries
+                    {
+                        retries[i] += 1;
+                        tracing::warn!("Node {} did not respond with success, retrying...", host);
+                        continue;
+                    }
+                    // The other node seems to be down or returned an error.
+                    panic!(
+                        "Node {} did not respond with success, killing server...",
+                        host
+                    );
+                }
+
+                let uuid = res.unwrap().text().await?;
+                if last_response[i] == String::default() {
+                    last_response[i] = uuid;
+                    connected[i] = true;
+
+                    // If all nodes are connected, notify the main thread.
+                    if connected.iter().all(|&c| c) {
+                        if let Some(tx) = heartbeat_tx.take() {
+                            tx.send(()).unwrap();
+                        }
+                    }
+                } else if uuid != last_response[i] {
+                    // If the UUID response is different, the node has restarted without us
+                    // noticing. Our main NCCL connections cannot recover from
+                    // this, so we panic.
+                    panic!("Node {} seems to have restarted, killing server...", host);
+                }
+            }
+
+            tokio::time::sleep(Duration::from_secs(config.heartbeat_interval_secs)).await;
+        }
+    });
+
+    tracing::info!("Heartbeat starting...");
+    heartbeat_rx.await?;
+    tracing::info!("Heartbeat on all nodes started.");
+    background_tasks.check_tasks();
 
     let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
