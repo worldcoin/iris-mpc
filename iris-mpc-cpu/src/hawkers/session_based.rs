@@ -264,187 +264,212 @@ mod tests {
     use tokio::task::JoinSet;
     use tracing_test::traced_test;
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_session_based_hnsw() {
-        let mut rng = AesRng::seed_from_u64(0_u64);
-        let database_size = 10;
-        let cleartext_database = IrisDB::new_random_rng(database_size, &mut rng).db;
-
-        let (p0_store, p1_store, p2_store) =
-            storage_setup_preloaded_db(&mut rng, cleartext_database).unwrap();
-
-        let runtime = LocalRuntime::replicated_test_config();
-        let ready_sessions = runtime.create_player_sessions().await.unwrap();
-
-        let mut set = JoinSet::new();
-
-        for (player_no, player_identity) in runtime.identities.iter().enumerate() {
-            let session = ready_sessions.get(player_identity).unwrap().clone();
-            let store = match player_no {
-                0 => p0_store.clone(),
-                1 => p1_store.clone(),
-                2 => p2_store.clone(),
-                _ => unimplemented!(),
-            };
-            let mut session_store = SessionBasedStorage {
-                player_storage: store,
-                session,
-            };
-            let mut session_graph = GraphMem::new();
-            let searcher = HawkSearcher::default();
-            let queries: Vec<_> = (0..database_size).map(PointId).collect();
-
-            set.spawn(async move {
-                // insert queries
+    #[test]
+    fn test_session_based_hnsw() {
+        /// TODO: Increasing the stack thread is required only when running
+        /// cargo test This works without any limits when running in
+        /// benchmark mode but there are some slight issues with the thread
+        /// stack size in cargo test
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_stack_size(10000000)
+            .build()
+            .unwrap()
+            .block_on(async {
                 let mut rng = AesRng::seed_from_u64(0_u64);
-                for query in queries.iter() {
-                    let _ = session_based_insert(
-                        &searcher,
-                        &mut session_store,
-                        &mut session_graph,
-                        query,
-                        &mut rng,
-                    )
-                    .await;
+                let database_size = 10;
+                let cleartext_database = IrisDB::new_random_rng(database_size, &mut rng).db;
+
+                let (p0_store, p1_store, p2_store) =
+                    storage_setup_preloaded_db(&mut rng, cleartext_database).unwrap();
+
+                let runtime = LocalRuntime::replicated_test_config();
+                let ready_sessions = runtime.create_player_sessions().await.unwrap();
+
+                let mut set = JoinSet::new();
+
+                for (player_no, player_identity) in runtime.identities.iter().enumerate() {
+                    let session = ready_sessions.get(player_identity).unwrap().clone();
+                    let store = match player_no {
+                        0 => p0_store.clone(),
+                        1 => p1_store.clone(),
+                        2 => p2_store.clone(),
+                        _ => unimplemented!(),
+                    };
+                    let mut session_store = SessionBasedStorage {
+                        player_storage: store,
+                        session,
+                    };
+                    let mut session_graph = GraphMem::new();
+                    let searcher = HawkSearcher::default();
+                    let queries: Vec<_> = (0..database_size).map(PointId).collect();
+
+                    set.spawn(async move {
+                        // insert queries
+                        let mut rng = AesRng::seed_from_u64(0_u64);
+                        for query in queries.iter() {
+                            let _ = session_based_insert(
+                                &searcher,
+                                &mut session_store,
+                                &mut session_graph,
+                                query,
+                                &mut rng,
+                            )
+                            .await;
+                        }
+                        for query in queries.iter() {
+                            let match_result = session_based_match(
+                                &searcher,
+                                &mut session_store,
+                                &mut session_graph,
+                                query,
+                                &mut rng,
+                            )
+                            .await;
+                            assert!(match_result.unwrap())
+                        }
+                    });
                 }
-                for query in queries.iter() {
-                    let match_result = session_based_match(
-                        &searcher,
-                        &mut session_store,
-                        &mut session_graph,
-                        query,
-                        &mut rng,
-                    )
-                    .await;
-                    assert!(match_result.unwrap())
-                }
-            });
-        }
-        let _ = set.join_all().await;
+                let _ = set.join_all().await;
+            })
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test]
     #[traced_test]
-    async fn test_session_based_premade_hnsw() {
-        let mut rng = AesRng::seed_from_u64(0_u64);
-        let database_size = 10;
-        let (_, secret_data) = session_based_ready_made_hawk_searcher(&mut rng, database_size)
-            .await
-            .unwrap();
-        let ((p0_store, p1_store, p2_store), graph) = secret_data;
-
-        let runtime = LocalRuntime::replicated_test_config();
-        let ready_sessions = runtime.create_player_sessions().await.unwrap();
-        let mut set = JoinSet::new();
-        for (player_no, player_identity) in runtime.identities.iter().enumerate() {
-            let session = ready_sessions.get(player_identity).unwrap().clone();
-            let store = match player_no {
-                0 => p0_store.clone(),
-                1 => p1_store.clone(),
-                2 => p2_store.clone(),
-                _ => unimplemented!(),
-            };
-            let mut session_store = SessionBasedStorage {
-                player_storage: store,
-                session,
-            };
-            let mut session_graph = graph.clone();
-            let searcher = HawkSearcher::default();
-            let queries: Vec<_> = (0..database_size).map(PointId).collect();
-
-            set.spawn(async move {
-                // insert queries
+    fn test_session_based_premade_hnsw() {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_stack_size(10000000)
+            .build()
+            .unwrap()
+            .block_on(async {
                 let mut rng = AesRng::seed_from_u64(0_u64);
-                for query in queries.iter() {
-                    let match_result = session_based_match(
-                        &searcher,
-                        &mut session_store,
-                        &mut session_graph,
-                        query,
-                        &mut rng,
-                    )
-                    .await;
-                    assert!(match_result.unwrap())
+                let database_size = 10;
+                let (_, secret_data) =
+                    session_based_ready_made_hawk_searcher(&mut rng, database_size)
+                        .await
+                        .unwrap();
+                let ((p0_store, p1_store, p2_store), graph) = secret_data;
+
+                let runtime = LocalRuntime::replicated_test_config();
+                let ready_sessions = runtime.create_player_sessions().await.unwrap();
+                let mut set = JoinSet::new();
+                for (player_no, player_identity) in runtime.identities.iter().enumerate() {
+                    let session = ready_sessions.get(player_identity).unwrap().clone();
+                    let store = match player_no {
+                        0 => p0_store.clone(),
+                        1 => p1_store.clone(),
+                        2 => p2_store.clone(),
+                        _ => unimplemented!(),
+                    };
+                    let mut session_store = SessionBasedStorage {
+                        player_storage: store,
+                        session,
+                    };
+                    let mut session_graph = graph.clone();
+                    let searcher = HawkSearcher::default();
+                    let queries: Vec<_> = (0..database_size).map(PointId).collect();
+
+                    set.spawn(async move {
+                        // insert queries
+                        let mut rng = AesRng::seed_from_u64(0_u64);
+                        for query in queries.iter() {
+                            let match_result = session_based_match(
+                                &searcher,
+                                &mut session_store,
+                                &mut session_graph,
+                                query,
+                                &mut rng,
+                            )
+                            .await;
+                            assert!(match_result.unwrap())
+                        }
+                    });
                 }
+                let _ = set.join_all().await;
             });
-        }
-        let _ = set.join_all().await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[test]
     #[traced_test]
-    async fn test_session_based_less_than() {
-        let mut rng = AesRng::seed_from_u64(0_u64);
-        let database_size = 4;
-        let cleartext_database = IrisDB::new_random_rng(database_size, &mut rng).db;
-        // Now do the work for the plaintext store
-        let mut plaintext_store = PlaintextStore::default();
-        let plaintext_preps: Vec<_> = (0..database_size)
-            .map(|id| plaintext_store.prepare_query(cleartext_database[id].clone()))
-            .collect();
-        let mut plaintext_inserts = Vec::new();
-        for p in plaintext_preps.iter() {
-            plaintext_inserts.push(plaintext_store.insert(p).await);
-        }
+    fn test_session_based_less_than() {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_stack_size(10000000)
+            .build()
+            .unwrap()
+            .block_on(async {
+                let mut rng = AesRng::seed_from_u64(0_u64);
+                let database_size = 4;
+                let cleartext_database = IrisDB::new_random_rng(database_size, &mut rng).db; // Now do the work for the plaintext store
+                let mut plaintext_store = PlaintextStore::default();
+                let plaintext_preps: Vec<_> = (0..database_size)
+                    .map(|id| plaintext_store.prepare_query(cleartext_database[id].clone()))
+                    .collect();
+                let mut plaintext_inserts = Vec::new();
+                for p in plaintext_preps.iter() {
+                    plaintext_inserts.push(plaintext_store.insert(p).await);
+                }
 
-        let (p0_store, p1_store, p2_store) =
-            storage_setup_preloaded_db(&mut rng, cleartext_database).unwrap();
+                let (p0_store, p1_store, p2_store) =
+                    storage_setup_preloaded_db(&mut rng, cleartext_database).unwrap();
 
-        let runtime = LocalRuntime::replicated_test_config();
-        let ready_sessions = runtime.create_player_sessions().await.unwrap();
-        let mut set = JoinSet::new();
+                let runtime = LocalRuntime::replicated_test_config();
+                let ready_sessions = runtime.create_player_sessions().await.unwrap();
+                let mut set = JoinSet::new();
 
-        for (player_no, player_identity) in runtime.identities.iter().enumerate() {
-            let session = ready_sessions.get(player_identity).unwrap().clone();
-            let store = match player_no {
-                0 => p0_store.clone(),
-                1 => p1_store.clone(),
-                2 => p2_store.clone(),
-                _ => unimplemented!(),
-            };
-            let mut session_store = SessionBasedStorage {
-                player_storage: store,
-                session,
-            };
-            let queries: Vec<_> = (0..database_size).map(PointId).collect();
+                for (player_no, player_identity) in runtime.identities.iter().enumerate() {
+                    let session = ready_sessions.get(player_identity).unwrap().clone();
+                    let store = match player_no {
+                        0 => p0_store.clone(),
+                        1 => p1_store.clone(),
+                        2 => p2_store.clone(),
+                        _ => unimplemented!(),
+                    };
+                    let mut session_store = SessionBasedStorage {
+                        player_storage: store,
+                        session,
+                    };
+                    let queries: Vec<_> = (0..database_size).map(PointId).collect();
 
-            set.spawn(async move {
+                    set.spawn(async move {
+                        let it1 = (0..database_size).combinations(2);
+                        let it2 = (0..database_size).combinations(2);
+                        let mut results = Vec::new();
+                        for comb1 in it1 {
+                            for comb2 in it2.clone() {
+                                results.push(
+                                    session_store
+                                        .less_than(
+                                            &(queries[comb1[0]], queries[comb1[1]]),
+                                            &(queries[comb2[0]], queries[comb2[1]]),
+                                        )
+                                        .await,
+                                );
+                            }
+                        }
+                        results
+                    });
+                }
                 let it1 = (0..database_size).combinations(2);
                 let it2 = (0..database_size).combinations(2);
-                let mut results = Vec::new();
+                let mut plain_results = Vec::new();
                 for comb1 in it1 {
                     for comb2 in it2.clone() {
-                        results.push(
-                            session_store
+                        plain_results.push(
+                            plaintext_store
                                 .less_than(
-                                    &(queries[comb1[0]], queries[comb1[1]]),
-                                    &(queries[comb2[0]], queries[comb2[1]]),
+                                    &(plaintext_inserts[comb1[0]], plaintext_inserts[comb1[1]]),
+                                    &(plaintext_inserts[comb2[0]], plaintext_inserts[comb2[1]]),
                                 )
                                 .await,
                         );
                     }
                 }
-                results
+                let parties_outputs = set.join_all().await;
+                assert_eq!(parties_outputs[0], plain_results);
+                assert_eq!(parties_outputs[1], plain_results);
+                assert_eq!(parties_outputs[2], plain_results);
             });
-        }
-        let it1 = (0..database_size).combinations(2);
-        let it2 = (0..database_size).combinations(2);
-        let mut plain_results = Vec::new();
-        for comb1 in it1 {
-            for comb2 in it2.clone() {
-                plain_results.push(
-                    plaintext_store
-                        .less_than(
-                            &(plaintext_inserts[comb1[0]], plaintext_inserts[comb1[1]]),
-                            &(plaintext_inserts[comb2[0]], plaintext_inserts[comb2[1]]),
-                        )
-                        .await,
-                );
-            }
-        }
-        let parties_outputs = set.join_all().await;
-        assert_eq!(parties_outputs[0], plain_results);
-        assert_eq!(parties_outputs[1], plain_results);
-        assert_eq!(parties_outputs[2], plain_results);
     }
 }
