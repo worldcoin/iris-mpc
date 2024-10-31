@@ -57,8 +57,6 @@ imagePullSecrets:
 nodeSelector:
   kubernetes.io/arch: amd64
 
-hostNetwork: true
-
 podSecurityContext:
   runAsUser: 65534
   runAsGroup: 65534
