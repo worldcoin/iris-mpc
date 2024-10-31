@@ -9,7 +9,7 @@ env:
     value: "1"
 
   - name: NCCL_SOCKET_IFNAME
-    value: "eth"
+    value: "eth0"
 
   - name: FI_EFA_USE_DEVICE_RDMA
     value: "1"
