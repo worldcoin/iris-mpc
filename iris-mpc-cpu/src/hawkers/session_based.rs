@@ -1,14 +1,14 @@
 use super::{galois_store::GaloisRingPoint, plaintext_store::PlaintextStore};
 use crate::{
     database_generators::{generate_galois_iris_shares, GaloisRingSharedIris},
-    execution::{player, session::Session},
+    execution::session::Session,
     hawkers::plaintext_store::PointId,
     protocol::ops::{
         cross_compare, galois_ring_is_match, galois_ring_pairwise_distance, galois_ring_to_rep3,
     },
 };
 use aes_prng::AesRng;
-use hawk_pack::{graph_store::GraphMem, hnsw_db::HawkSearcher, GraphStore, VectorStore};
+use hawk_pack::{graph_store::GraphMem, hnsw_db::HawkSearcher, VectorStore};
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use rand::{CryptoRng, RngCore, SeedableRng};
 
@@ -188,10 +188,10 @@ pub async fn session_based_match(
     vector_store: &mut SessionBasedStorage,
     graph_store: &mut GraphMem<SessionBasedStorage>,
     query: &PointId,
-    rng: &mut impl RngCore,
+    _rng: &mut impl RngCore,
 ) -> eyre::Result<bool> {
     let neighbors = searcher
-        .search_to_insert(vector_store, graph_store, &query)
+        .search_to_insert(vector_store, graph_store, query)
         .await;
     Ok(searcher.is_match(vector_store, &neighbors).await)
 }
@@ -247,10 +247,7 @@ pub async fn session_based_ready_made_hawk_searcher<R: RngCore + Clone + CryptoR
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        database_generators::generate_galois_iris_shares, execution::local::LocalRuntime,
-        hawkers::galois_store::setup_local_store_aby3_players,
-    };
+    use crate::execution::local::LocalRuntime;
     use aes_prng::AesRng;
     use hawk_pack::{graph_store::GraphMem, hnsw_db::HawkSearcher};
     use iris_mpc_common::iris_db::db::IrisDB;
@@ -274,7 +271,7 @@ mod tests {
         let mut set = JoinSet::new();
 
         for (player_no, player_identity) in runtime.identities.iter().enumerate() {
-            let session = ready_sessions.get(&player_identity).unwrap().clone();
+            let session = ready_sessions.get(player_identity).unwrap().clone();
             let store = match player_no {
                 0 => p0_store.clone(),
                 1 => p1_store.clone(),
@@ -287,7 +284,7 @@ mod tests {
             };
             let mut session_graph = GraphMem::new();
             let searcher = HawkSearcher::default();
-            let queries: Vec<_> = (0..database_size).map(|i| PointId(i)).collect();
+            let queries: Vec<_> = (0..database_size).map(PointId).collect();
 
             set.spawn(async move {
                 // insert queries
@@ -311,7 +308,7 @@ mod tests {
                         &mut rng,
                     )
                     .await;
-                    assert_eq!(match_result.unwrap(), true)
+                    assert!(match_result.unwrap())
                 }
             });
         }
@@ -332,7 +329,7 @@ mod tests {
         let ready_sessions = runtime.create_player_sessions().await.unwrap();
         let mut set = JoinSet::new();
         for (player_no, player_identity) in runtime.identities.iter().enumerate() {
-            let session = ready_sessions.get(&player_identity).unwrap().clone();
+            let session = ready_sessions.get(player_identity).unwrap().clone();
             let store = match player_no {
                 0 => p0_store.clone(),
                 1 => p1_store.clone(),
@@ -345,7 +342,7 @@ mod tests {
             };
             let mut session_graph = graph.clone();
             let searcher = HawkSearcher::default();
-            let queries: Vec<_> = (0..database_size).map(|i| PointId(i)).collect();
+            let queries: Vec<_> = (0..database_size).map(PointId).collect();
 
             set.spawn(async move {
                 // insert queries
@@ -359,7 +356,7 @@ mod tests {
                         &mut rng,
                     )
                     .await;
-                    assert_eq!(match_result.unwrap(), true)
+                    assert!(match_result.unwrap())
                 }
             });
         }
@@ -390,7 +387,7 @@ mod tests {
         let mut set = JoinSet::new();
 
         for (player_no, player_identity) in runtime.identities.iter().enumerate() {
-            let session = ready_sessions.get(&player_identity).unwrap().clone();
+            let session = ready_sessions.get(player_identity).unwrap().clone();
             let store = match player_no {
                 0 => p0_store.clone(),
                 1 => p1_store.clone(),
@@ -401,8 +398,7 @@ mod tests {
                 player_storage: store,
                 session,
             };
-            let searcher = HawkSearcher::default();
-            let queries: Vec<_> = (0..database_size).map(|i| PointId(i)).collect();
+            let queries: Vec<_> = (0..database_size).map(PointId).collect();
 
             set.spawn(async move {
                 let it1 = (0..database_size).combinations(2);

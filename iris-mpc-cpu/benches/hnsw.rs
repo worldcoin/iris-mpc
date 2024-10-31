@@ -229,7 +229,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                         let neighbors = searcher
                             .search_to_insert(&mut db_vectors, &mut db_graph, &query)
                             .await;
-                        searcher.is_match(&db_vectors, &neighbors).await;
+                        searcher.is_match(&mut db_vectors, &neighbors).await;
                     },
                     criterion::BatchSize::SmallInput,
                 )
@@ -250,13 +250,15 @@ fn bench_session_based_hnsw(c: &mut Criterion) {
             .unwrap();
 
         let (_, secret_data) = rt.block_on(async move {
+            let mut rng = AesRng::seed_from_u64(0_u64);
             session_based_ready_made_hawk_searcher(&mut rng, database_size)
                 .await
                 .unwrap()
         });
         let ((p0_store, p1_store, p2_store), graph) = secret_data;
         let runtime = LocalRuntime::replicated_test_config();
-        let ready_sessions = runtime.create_player_sessions().await.unwrap();
+        let ready_sessions =
+            rt.block_on(async move { runtime.create_player_sessions().await.unwrap() });
         // TODO: Insert bench code
     }
     group.finish();
@@ -268,6 +270,7 @@ criterion_group! {
     bench_gr_ready_made_hnsw,
     bench_hnsw_primitives,
     bench_gr_primitives,
+    bench_session_based_hnsw,
 }
 
 criterion_main!(hnsw);
