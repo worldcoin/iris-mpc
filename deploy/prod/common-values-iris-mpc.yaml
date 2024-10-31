@@ -13,6 +13,9 @@ ports:
   - containerPort: 3000
     name: health
     protocol: TCP
+  - containerPort: 4000
+    name: nccl
+    protocol: TCP
 
 livenessProbe:
   initialDelaySeconds: 300
