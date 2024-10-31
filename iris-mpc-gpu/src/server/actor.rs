@@ -31,7 +31,7 @@ use iris_mpc_common::{
 use itertools::Itertools;
 use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
-use std::{collections::HashMap, mem, slice::SliceIndex, sync::Arc, time::Instant};
+use std::{collections::HashMap, mem, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
 
 macro_rules! record_stream_time {
@@ -478,7 +478,6 @@ impl ServerActor {
         batch: BatchQuery,
         return_channel: oneshot::Sender<ServerJobResult>,
     ) -> eyre::Result<()> {
-        let now = Instant::now();
         let mut events: HashMap<&str, Vec<Vec<CUevent>>> = HashMap::new();
 
         tracing::info!("Started processing batch");
@@ -503,9 +502,9 @@ impl ServerActor {
             "Query batch sizes mismatch"
         );
 
-        ///////////////////////////////////////////////////////////////////
-        /// DEBUG: performance testing
-        ///////////////////////////////////////////////////////////////////
+        //////////////////////////////////////////////////////////////////
+        // DEBUG: performance testing
+        //////////////////////////////////////////////////////////////////
         let mut slices = vec![];
         let mut slices1 = vec![];
         let mut slices2 = vec![];
