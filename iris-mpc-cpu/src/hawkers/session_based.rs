@@ -55,6 +55,15 @@ pub struct SessionBasedStorage {
     session:            Session,
 }
 
+impl SessionBasedStorage {
+    pub fn new(session: Session, storage: PlayerStorage) -> Self {
+        SessionBasedStorage {
+            player_storage: storage,
+            session,
+        }
+    }
+}
+
 impl std::fmt::Debug for SessionBasedStorage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.player_storage.fmt(f)
@@ -208,12 +217,11 @@ pub async fn session_based_ready_made_hawk_searcher<R: RngCore + Clone + CryptoR
 )> {
     // makes sure the searcher produces same graph structure by having the same rng
     let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
-    let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
+    let cleartext_database = IrisDB::new_random_par(database_size, rng).db;
 
     let mut plaintext_vector_store = PlaintextStore::default();
     let mut plaintext_graph_store = GraphMem::new();
     let searcher = HawkSearcher::default();
-
     for raw_query in cleartext_database.iter() {
         let query = plaintext_vector_store.prepare_query(raw_query.clone());
         let neighbors = searcher

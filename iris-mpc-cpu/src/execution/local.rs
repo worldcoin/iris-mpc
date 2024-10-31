@@ -46,6 +46,10 @@ impl LocalRuntime {
         }
     }
 
+    pub fn get_identities(&self) -> Vec<Identity> {
+        self.identities.clone()
+    }
+
     pub async fn create_player_sessions(&self) -> eyre::Result<HashMap<Identity, Session>> {
         let network = LocalNetworkingStore::from_host_ids(&self.identities);
         let sess_id = SessionId::from(0_u128);

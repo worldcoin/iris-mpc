@@ -6,12 +6,16 @@ use iris_mpc_cpu::{
     database_generators::{create_random_sharing, generate_galois_iris_shares},
     execution::local::LocalRuntime,
     hawkers::{
-        galois_store::gr_create_ready_made_hawk_searcher, plaintext_store::PlaintextStore,
-        session_based::session_based_ready_made_hawk_searcher,
+        galois_store::gr_create_ready_made_hawk_searcher,
+        plaintext_store::PlaintextStore,
+        session_based::{
+            session_based_insert, session_based_ready_made_hawk_searcher, SessionBasedStorage,
+        },
     },
     protocol::ops::{cross_compare, galois_ring_pairwise_distance, galois_ring_to_rep3},
 };
 use rand::SeedableRng;
+use std::collections::HashMap;
 use tokio::task::JoinSet;
 
 fn bench_plaintext_hnsw(c: &mut Criterion) {
@@ -249,17 +253,77 @@ fn bench_session_based_hnsw(c: &mut Criterion) {
             .build()
             .unwrap();
 
+        println!("Creating plaintext graph...");
         let (_, secret_data) = rt.block_on(async move {
             let mut rng = AesRng::seed_from_u64(0_u64);
             session_based_ready_made_hawk_searcher(&mut rng, database_size)
                 .await
                 .unwrap()
         });
+
         let ((p0_store, p1_store, p2_store), graph) = secret_data;
         let runtime = LocalRuntime::replicated_test_config();
+        let identities = runtime.get_identities();
         let ready_sessions =
             rt.block_on(async move { runtime.create_player_sessions().await.unwrap() });
-        // TODO: Insert bench code
+
+        let mut stores = HashMap::new();
+        stores.insert(identities[0].clone(), p0_store);
+        stores.insert(identities[1].clone(), p1_store);
+        stores.insert(identities[2].clone(), p2_store);
+
+        let mut rng = AesRng::seed_from_u64(0_u64);
+        let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
+        let raw_query = generate_galois_iris_shares(&mut rng, on_the_fly_query);
+        let mut shares = HashMap::new();
+        shares.insert(identities[0].clone(), raw_query[0].clone());
+        shares.insert(identities[1].clone(), raw_query[1].clone());
+        shares.insert(identities[2].clone(), raw_query[2].clone());
+
+        println!("Running the benchmark...");
+        group.bench_function(BenchmarkId::new("insert", database_size), |b| {
+            b.to_async(&rt).iter_batched(
+                || {
+                    (
+                        ready_sessions.clone(),
+                        shares.clone(),
+                        stores.clone(),
+                        graph.clone(),
+                    )
+                },
+                |(sessions, shares, stores, graph)| {
+                    let identities = identities.clone();
+                    async move {
+                        let identities = identities.clone();
+                        let mut set = JoinSet::new();
+                        for player_identity in identities.iter() {
+                            let session = sessions.get(player_identity).unwrap().clone();
+                            let store = stores.get(player_identity).unwrap().clone();
+                            let raw_query = shares.get(player_identity).unwrap().clone();
+
+                            let mut session_store = SessionBasedStorage::new(session, store);
+                            let mut session_graph = graph.clone();
+                            let query = session_store.prepare_query(raw_query);
+
+                            set.spawn(async move {
+                                let searcher = HawkSearcher::default();
+                                let mut rng = AesRng::seed_from_u64(0_u64);
+                                let _ = session_based_insert(
+                                    &searcher,
+                                    &mut session_store,
+                                    &mut session_graph,
+                                    &query,
+                                    &mut rng,
+                                )
+                                .await;
+                            });
+                        }
+                        let _ = set.join_all().await;
+                    }
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
     }
     group.finish();
 }
