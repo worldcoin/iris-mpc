@@ -114,6 +114,9 @@ impl VectorStore for SessionBasedStorage {
         *query
     }
 
+    // TODO: Here we need to adapt to the `eval_distance` implemented in the
+    // galois_store. Once that is done, we can implement the
+    // "eval_distance_batch" in here as well.
     async fn eval_distance(
         &self,
         query: &Self::QueryRef,
