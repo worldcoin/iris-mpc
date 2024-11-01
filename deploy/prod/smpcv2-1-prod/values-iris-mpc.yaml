@@ -54,14 +54,14 @@ env:
         name: application
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "600"
+    value: "120"
 
   - name: SMPC__HEARTBEAT_INTERVAL_SECS
     value: "2"
 
   - name: SMPC__HEARTBEAT_INITIAL_RETRIES
     value: "50"
-    
+
   - name: SMPC__PATH
     value: "/data/"
 
@@ -91,7 +91,7 @@ env:
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
-  
+
   - name: SMPC__SERVICE__METRICS__HOST
     valueFrom:
       fieldRef:
@@ -105,7 +105,7 @@ env:
 
   - name: SMPC__SERVICE__METRICS__BUFFER_SIZE
     value: "1024"
-  
+
   - name: SMPC__SERVICE__METRICS__PREFIX
     value: "smpcv2-1"
 
