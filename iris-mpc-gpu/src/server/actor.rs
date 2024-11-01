@@ -1241,25 +1241,34 @@ impl ServerActor {
     }
 
     fn sync_batch_entries(&mut self, valid_entries: &[bool]) -> eyre::Result<Vec<bool>> {
+        tracing::info!(party_id = self.party_id, "sync_batch_entries start");
         let mut buffer = self
             .device_manager
             .device(0)
             .alloc_zeros(valid_entries.len() * self.comms[0].world_size())
             .unwrap();
 
+        tracing::info!(party_id = self.party_id, "htod_copy start");
+
         let buffer_self = self
             .device_manager
             .device(0)
             .htod_copy(valid_entries.iter().map(|&x| x as u8).collect::<Vec<_>>())?;
 
+        tracing::info!(party_id = self.party_id, "all_gather start");
+
         self.comms[0]
             .all_gather(&buffer_self, &mut buffer)
             .map_err(|e| eyre!(format!("{:?}", e)))?;
+
+        tracing::info!(party_id = self.party_id, "dtoh_sync_copy start");
 
         let results = self.device_manager.device(0).dtoh_sync_copy(&buffer)?;
         let results: Vec<_> = results
             .chunks_exact(results.len() / self.comms[0].world_size())
             .collect();
+
+        tracing::info!(party_id = self.party_id, "sync_batch_entries end");
 
         let mut valid_merged = vec![];
         for i in 0..results[0].len() {
