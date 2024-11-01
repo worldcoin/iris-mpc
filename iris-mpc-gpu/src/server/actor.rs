@@ -522,38 +522,45 @@ impl ServerActor {
             slices3.push(slice3);
         }
 
-        let now = Instant::now();
-
-        for i in 0..self.device_manager.device_count() {
-            self.device_manager.device(i).bind_to_thread().unwrap();
-
-            self.comms[i]
-                .broadcast(&slices[i], &mut slices1[i], 0)
-                .unwrap();
-            self.comms[i]
-                .broadcast(&slices[i], &mut slices2[i], 1)
-                .unwrap();
-            self.comms[i]
-                .broadcast(&slices[i], &mut slices3[i], 2)
-                .unwrap();
-        }
-
         for dev in self.device_manager.devices() {
             dev.synchronize().unwrap();
         }
 
-        let elapsed = now.elapsed();
+        for i in 0..5 {
+            let now = Instant::now();
 
-        let throughput = (DUMMY_DATA_LEN as f64 * self.device_manager.device_count() as f64 * 4f64)
-            / (elapsed.as_millis() as f64)
-            / 1_000_000_000f64
-            * 1_000f64;
-        tracing::info!(
-            "received in {:?} [{:.2} GB/s] [{:.2} Gbps]",
-            elapsed,
-            throughput,
-            throughput * 8f64
-        );
+            for i in 0..self.device_manager.device_count() {
+                self.device_manager.device(i).bind_to_thread().unwrap();
+
+                self.comms[i]
+                    .broadcast(&slices[i], &mut slices1[i], 0)
+                    .unwrap();
+                self.comms[i]
+                    .broadcast(&slices[i], &mut slices2[i], 1)
+                    .unwrap();
+                self.comms[i]
+                    .broadcast(&slices[i], &mut slices3[i], 2)
+                    .unwrap();
+            }
+
+            for dev in self.device_manager.devices() {
+                dev.synchronize().unwrap();
+            }
+
+            let elapsed = now.elapsed();
+
+            let throughput =
+                (DUMMY_DATA_LEN as f64 * self.device_manager.device_count() as f64 * 4f64)
+                    / (elapsed.as_millis() as f64)
+                    / 1_000_000_000f64
+                    * 1_000f64;
+            tracing::info!(
+                "received in {:?} [{:.2} GB/s] [{:.2} Gbps]",
+                elapsed,
+                throughput,
+                throughput * 8f64
+            );
+        }
 
         let now = Instant::now();
 
