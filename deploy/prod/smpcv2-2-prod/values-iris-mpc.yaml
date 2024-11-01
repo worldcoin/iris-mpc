@@ -54,7 +54,7 @@ env:
         name: application
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "600"
+    value: "120"
 
   - name: SMPC__HEARTBEAT_INTERVAL_SECS
     value: "2"
