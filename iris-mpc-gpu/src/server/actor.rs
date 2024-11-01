@@ -31,7 +31,7 @@ use iris_mpc_common::{
 use itertools::Itertools;
 use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
-use std::{collections::HashMap, mem, slice::SliceIndex, sync::Arc, time::Instant};
+use std::{collections::HashMap, mem, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
 
 macro_rules! record_stream_time {
