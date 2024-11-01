@@ -1241,6 +1241,12 @@ impl ServerActor {
     }
 
     fn sync_batch_entries(&mut self, valid_entries: &[bool]) -> eyre::Result<Vec<bool>> {
+        tracing::info!(
+            party_id = self.party_id,
+            "valid_entries {:?} ({})",
+            valid_entries,
+            valid_entries.len()
+        );
         tracing::info!(party_id = self.party_id, "sync_batch_entries start");
         let mut buffer = self
             .device_manager
