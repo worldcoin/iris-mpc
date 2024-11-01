@@ -31,7 +31,7 @@ use iris_mpc_common::{
 use itertools::Itertools;
 use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
-use std::{collections::HashMap, mem, slice::SliceIndex, sync::Arc, time::Instant};
+use std::{collections::HashMap, mem, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
 
 macro_rules! record_stream_time {
@@ -502,67 +502,6 @@ impl ServerActor {
                 && batch_size * ROTATIONS == batch.db_right.mask.len(),
             "Query batch sizes mismatch"
         );
-
-        ///////////////////////////////////////////////////////////////////
-        /// DEBUG: performance testing
-        ///////////////////////////////////////////////////////////////////
-        let mut slices = vec![];
-        let mut slices1 = vec![];
-        let mut slices2 = vec![];
-        let mut slices3 = vec![];
-        const DUMMY_DATA_LEN: usize = 5 * (1 << 30);
-        for dev in self.device_manager.devices() {
-            let slice: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
-            let slice1: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
-            let slice2: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
-            let slice3: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
-            slices.push(Some(slice));
-            slices1.push(slice1);
-            slices2.push(slice2);
-            slices3.push(slice3);
-        }
-
-        for dev in self.device_manager.devices() {
-            dev.synchronize().unwrap();
-        }
-
-        for i in 0..5 {
-            let now = Instant::now();
-
-            for i in 0..self.device_manager.device_count() {
-                self.device_manager.device(i).bind_to_thread().unwrap();
-
-                self.comms[i]
-                    .broadcast(&slices[i], &mut slices1[i], 0)
-                    .unwrap();
-                self.comms[i]
-                    .broadcast(&slices[i], &mut slices2[i], 1)
-                    .unwrap();
-                self.comms[i]
-                    .broadcast(&slices[i], &mut slices3[i], 2)
-                    .unwrap();
-            }
-
-            for dev in self.device_manager.devices() {
-                dev.synchronize().unwrap();
-            }
-
-            let elapsed = now.elapsed();
-
-            let throughput =
-                (DUMMY_DATA_LEN as f64 * self.device_manager.device_count() as f64 * 4f64)
-                    / (elapsed.as_millis() as f64)
-                    / 1_000_000_000f64
-                    * 1_000f64;
-            tracing::info!(
-                "received in {:?} [{:.2} GB/s] [{:.2} Gbps]",
-                elapsed,
-                throughput,
-                throughput * 8f64
-            );
-        }
-
-        let now = Instant::now();
 
         ///////////////////////////////////////////////////////////////////
         // PERFORM DELETIONS (IF ANY)
