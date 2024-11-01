@@ -61,7 +61,7 @@ env:
 
   - name: SMPC__HEARTBEAT_INITIAL_RETRIES
     value: "50"
-    
+
   - name: SMPC__PATH
     value: "/data/"
 
@@ -81,17 +81,17 @@ env:
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
-    value: "100"
+    value: "0"
 
   - name: SMPC__MAX_DB_SIZE
     value: "10000000"
 
   - name: SMPC__FAKE_DB_SIZE
-    value: "1000000"
+    value: "6500000"
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
-  
+
   - name: SMPC__SERVICE__METRICS__HOST
     valueFrom:
       fieldRef:
@@ -105,7 +105,7 @@ env:
 
   - name: SMPC__SERVICE__METRICS__BUFFER_SIZE
     value: "1024"
-  
+
   - name: SMPC__SERVICE__METRICS__PREFIX
     value: "smpcv2-1"
 
