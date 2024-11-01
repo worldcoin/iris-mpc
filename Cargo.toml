@@ -18,7 +18,7 @@ repository = "https://github.com/worldcoin/iris-mpc"
 aws-config = { version = "1.5.4", features = ["behavior-version-latest"] }
 aws-sdk-kms = { version = "1.44.0" }
 aws-sdk-sns = { version = "1.44.0" }
-aws-sdk-sqs = { version = "1.36.0" }
+aws-sdk-sqs = { version = "1.48.0" }
 aws-sdk-s3 = { version = "1.50.0" }
 aws-sdk-secretsmanager = { version = "1.47.0" }
 axum = "0.7"
