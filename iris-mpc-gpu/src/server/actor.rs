@@ -1255,11 +1255,15 @@ impl ServerActor {
             .device(0)
             .htod_copy(valid_entries.iter().map(|&x| x as u8).collect::<Vec<_>>())?;
 
+        self.device_manager.device(0).synchronize()?;
+
         tracing::info!(party_id = self.party_id, "all_gather start");
 
         self.comms[0]
             .all_gather(&buffer_self, &mut buffer)
             .map_err(|e| eyre!(format!("{:?}", e)))?;
+
+        self.device_manager.device(0).synchronize()?;
 
         tracing::info!(party_id = self.party_id, "dtoh_sync_copy start");
 
