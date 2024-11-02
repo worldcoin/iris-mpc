@@ -492,14 +492,14 @@ impl ServerActor {
                 && batch_size == batch.metadata.len()
                 && batch_size == batch.store_right.code.len()
                 && batch_size == batch.store_right.mask.len()
-                && batch_size * ROTATIONS == batch.query_left.code.len()
-                && batch_size * ROTATIONS == batch.query_left.mask.len()
-                && batch_size * ROTATIONS == batch.query_right.code.len()
-                && batch_size * ROTATIONS == batch.query_right.mask.len()
-                && batch_size * ROTATIONS == batch.db_left.code.len()
-                && batch_size * ROTATIONS == batch.db_left.mask.len()
-                && batch_size * ROTATIONS == batch.db_right.code.len()
-                && batch_size * ROTATIONS == batch.db_right.mask.len(),
+                && batch_size * ROTATIONS * IRIS_CODE_LENGTH == batch.query_left.code.len()
+                && batch_size * ROTATIONS * MASK_CODE_LENGTH == batch.query_left.mask.len()
+                && batch_size * ROTATIONS * IRIS_CODE_LENGTH == batch.query_right.code.len()
+                && batch_size * ROTATIONS * MASK_CODE_LENGTH == batch.query_right.mask.len()
+                && batch_size * ROTATIONS * IRIS_CODE_LENGTH == batch.db_left.code.len()
+                && batch_size * ROTATIONS * MASK_CODE_LENGTH == batch.db_left.mask.len()
+                && batch_size * ROTATIONS * IRIS_CODE_LENGTH == batch.db_right.code.len()
+                && batch_size * ROTATIONS * MASK_CODE_LENGTH == batch.db_right.mask.len(),
             "Query batch sizes mismatch"
         );
 
