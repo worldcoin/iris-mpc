@@ -326,21 +326,39 @@ mod e2e_test {
                 batch1.store_left.code.push(shared_code[1].clone());
                 batch1.store_left.mask.push(shared_mask[1].clone());
                 // with rotations
-                batch1.db_left.code.extend(shared_code[1].all_rotations());
-                batch1.db_left.mask.extend(shared_mask[1].all_rotations());
+                batch1.db_left.code.extend(preprocess_query(
+                    &shared_code[1]
+                        .all_rotations()
+                        .into_iter()
+                        .flat_map(|e| e.coefs)
+                        .collect::<Vec<_>>(),
+                ));
+                batch1.db_left.mask.extend(preprocess_query(
+                    &shared_mask[1]
+                        .all_rotations()
+                        .into_iter()
+                        .flat_map(|e| e.coefs)
+                        .collect::<Vec<_>>(),
+                ));
                 // with rotations
                 GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_code[1]);
                 GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(
                     &mut shared_mask[1],
                 );
-                batch1
-                    .query_left
-                    .code
-                    .extend(shared_code[1].all_rotations());
-                batch1
-                    .query_left
-                    .mask
-                    .extend(shared_mask[1].all_rotations());
+                batch1.query_left.code.extend(preprocess_query(
+                    &shared_code[1]
+                        .all_rotations()
+                        .into_iter()
+                        .flat_map(|e| e.coefs)
+                        .collect::<Vec<_>>(),
+                ));
+                batch1.query_left.mask.extend(preprocess_query(
+                    &shared_mask[1]
+                        .all_rotations()
+                        .into_iter()
+                        .flat_map(|e| e.coefs)
+                        .collect::<Vec<_>>(),
+                ));
 
                 // batch 2
                 batch2.valid_entries.push(true);
@@ -350,21 +368,39 @@ mod e2e_test {
                 batch2.store_left.code.push(shared_code[2].clone());
                 batch2.store_left.mask.push(shared_mask[2].clone());
                 // with rotations
-                batch2.db_left.code.extend(shared_code[2].all_rotations());
-                batch2.db_left.mask.extend(shared_mask[2].all_rotations());
+                batch2.db_left.code.extend(preprocess_query(
+                    &shared_code[2]
+                        .all_rotations()
+                        .into_iter()
+                        .flat_map(|e| e.coefs)
+                        .collect::<Vec<_>>(),
+                ));
+                batch2.db_left.mask.extend(preprocess_query(
+                    &shared_mask[2]
+                        .all_rotations()
+                        .into_iter()
+                        .flat_map(|e| e.coefs)
+                        .collect::<Vec<_>>(),
+                ));
                 // with rotations
                 GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_code[2]);
                 GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(
                     &mut shared_mask[2],
                 );
-                batch2
-                    .query_left
-                    .code
-                    .extend(shared_code[2].all_rotations());
-                batch2
-                    .query_left
-                    .mask
-                    .extend(shared_mask[2].all_rotations());
+                batch2.query_left.code.extend(preprocess_query(
+                    &shared_code[2]
+                        .all_rotations()
+                        .into_iter()
+                        .flat_map(|e| e.coefs)
+                        .collect::<Vec<_>>(),
+                ));
+                batch2.query_left.mask.extend(preprocess_query(
+                    &shared_mask[2]
+                        .all_rotations()
+                        .into_iter()
+                        .flat_map(|e| e.coefs)
+                        .collect::<Vec<_>>(),
+                ));
             }
 
             // Skip empty batch
