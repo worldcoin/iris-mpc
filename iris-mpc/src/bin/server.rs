@@ -397,57 +397,81 @@ async fn receive_batch(
 
         batch_query.store_left.code.push(store_iris_shares_left);
         batch_query.store_left.mask.push(store_mask_shares_left);
-        batch_query.db_left.code.extend(preprocess_query(
-            &db_iris_shares_left
-                .into_iter()
-                .flat_map(|e| e.coefs)
-                .collect::<Vec<_>>(),
-        ));
-        batch_query.db_left.mask.extend(preprocess_query(
-            &db_mask_shares_left
-                .into_iter()
-                .flat_map(|e| e.coefs)
-                .collect::<Vec<_>>(),
-        ));
-        batch_query.query_left.code.extend(preprocess_query(
-            &iris_shares_left
-                .into_iter()
-                .flat_map(|e| e.coefs)
-                .collect::<Vec<_>>(),
-        ));
-        batch_query.query_left.mask.extend(preprocess_query(
-            &mask_shares_left
-                .into_iter()
-                .flat_map(|e| e.coefs)
-                .collect::<Vec<_>>(),
-        ));
+        extend_inner(
+            &mut batch_query.db_left.code,
+            preprocess_query(
+                &db_iris_shares_left
+                    .into_iter()
+                    .flat_map(|e| e.coefs)
+                    .collect::<Vec<_>>(),
+            ),
+        );
+        extend_inner(
+            &mut batch_query.db_left.mask,
+            preprocess_query(
+                &db_mask_shares_left
+                    .into_iter()
+                    .flat_map(|e| e.coefs)
+                    .collect::<Vec<_>>(),
+            ),
+        );
+        extend_inner(
+            &mut batch_query.query_left.code,
+            preprocess_query(
+                &iris_shares_left
+                    .into_iter()
+                    .flat_map(|e| e.coefs)
+                    .collect::<Vec<_>>(),
+            ),
+        );
+        extend_inner(
+            &mut batch_query.query_left.mask,
+            preprocess_query(
+                &mask_shares_left
+                    .into_iter()
+                    .flat_map(|e| e.coefs)
+                    .collect::<Vec<_>>(),
+            ),
+        );
 
         batch_query.store_right.code.push(store_iris_shares_right);
         batch_query.store_right.mask.push(store_mask_shares_right);
-        batch_query.db_right.code.extend(preprocess_query(
-            &db_iris_shares_right
-                .into_iter()
-                .flat_map(|e| e.coefs)
-                .collect::<Vec<_>>(),
-        ));
-        batch_query.db_right.mask.extend(preprocess_query(
-            &db_mask_shares_right
-                .into_iter()
-                .flat_map(|e| e.coefs)
-                .collect::<Vec<_>>(),
-        ));
-        batch_query.query_right.code.extend(preprocess_query(
-            &iris_shares_right
-                .into_iter()
-                .flat_map(|e| e.coefs)
-                .collect::<Vec<_>>(),
-        ));
-        batch_query.query_right.mask.extend(preprocess_query(
-            &mask_shares_right
-                .into_iter()
-                .flat_map(|e| e.coefs)
-                .collect::<Vec<_>>(),
-        ));
+        extend_inner(
+            &mut batch_query.db_right.code,
+            preprocess_query(
+                &db_iris_shares_right
+                    .into_iter()
+                    .flat_map(|e| e.coefs)
+                    .collect::<Vec<_>>(),
+            ),
+        );
+        extend_inner(
+            &mut batch_query.db_right.mask,
+            preprocess_query(
+                &db_mask_shares_right
+                    .into_iter()
+                    .flat_map(|e| e.coefs)
+                    .collect::<Vec<_>>(),
+            ),
+        );
+        extend_inner(
+            &mut batch_query.query_right.code,
+            preprocess_query(
+                &iris_shares_right
+                    .into_iter()
+                    .flat_map(|e| e.coefs)
+                    .collect::<Vec<_>>(),
+            ),
+        );
+        extend_inner(
+            &mut batch_query.query_right.mask,
+            preprocess_query(
+                &mask_shares_right
+                    .into_iter()
+                    .flat_map(|e| e.coefs)
+                    .collect::<Vec<_>>(),
+            ),
+        );
     }
 
     Ok(batch_query)
@@ -1209,4 +1233,10 @@ async fn process_identity_deletions(
     }
 
     Ok(())
+}
+
+fn extend_inner(a: &mut Vec<Vec<u8>>, b: Vec<Vec<u8>>) {
+    for (a, b) in a.iter_mut().zip(b) {
+        a.extend(b);
+    }
 }
