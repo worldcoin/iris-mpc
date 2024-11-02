@@ -1130,27 +1130,39 @@ impl ServerActor {
             self.device_manager
                 .await_event(request_streams, &current_exchange_event);
 
-            record_stream_time!(&self.device_manager, batch_streams, events, "db_reduce", {
-                compact_device_sums.compute_dot_reducer_against_db(
-                    &mut self.codes_engine,
-                    &mut self.masks_engine,
-                    code_db_slices,
-                    mask_db_slices,
-                    &dot_chunk_size,
-                    offset,
-                    request_streams,
-                );
-            });
+            record_stream_time!(
+                &self.device_manager,
+                request_streams,
+                events,
+                "db_reduce",
+                {
+                    compact_device_sums.compute_dot_reducer_against_db(
+                        &mut self.codes_engine,
+                        &mut self.masks_engine,
+                        code_db_slices,
+                        mask_db_slices,
+                        &dot_chunk_size,
+                        offset,
+                        request_streams,
+                    );
+                }
+            );
 
             self.device_manager
                 .record_event(request_streams, &next_dot_event);
 
-            record_stream_time!(&self.device_manager, batch_streams, events, "db_reshare", {
-                self.codes_engine
-                    .reshare_results(&dot_chunk_size, request_streams);
-                self.masks_engine
-                    .reshare_results(&dot_chunk_size, request_streams);
-            });
+            record_stream_time!(
+                &self.device_manager,
+                request_streams,
+                events,
+                "db_reshare",
+                {
+                    self.codes_engine
+                        .reshare_results(&dot_chunk_size, request_streams);
+                    self.masks_engine
+                        .reshare_results(&dot_chunk_size, request_streams);
+                }
+            );
 
             // ---- END PHASE 1 ----
 
@@ -1170,9 +1182,10 @@ impl ServerActor {
                 );
                 self.phase2
                     .set_chunk_size(max_chunk_size * self.max_batch_size * ROTATIONS / 64);
+
                 record_stream_time!(
                     &self.device_manager,
-                    batch_streams,
+                    request_streams,
                     events,
                     "db_threshold",
                     {
@@ -1190,20 +1203,22 @@ impl ServerActor {
                     .record_event(request_streams, &next_exchange_event);
 
                 let res = self.phase2.take_result_buffer();
-                open(
-                    &mut self.phase2,
-                    &res,
-                    &self.distance_comparator,
-                    db_match_bitmap,
-                    max_chunk_size * self.max_batch_size * ROTATIONS / 64,
-                    &dot_chunk_size,
-                    &chunk_size,
-                    offset,
-                    &self.current_db_sizes,
-                    &ignore_device_results,
-                    request_streams,
-                );
-                self.phase2.return_result_buffer(res);
+                record_stream_time!(&self.device_manager, request_streams, events, "db_open", {
+                    open(
+                        &mut self.phase2,
+                        &res,
+                        &self.distance_comparator,
+                        db_match_bitmap,
+                        max_chunk_size * self.max_batch_size * ROTATIONS / 64,
+                        &dot_chunk_size,
+                        &chunk_size,
+                        offset,
+                        &self.current_db_sizes,
+                        &ignore_device_results,
+                        request_streams,
+                    );
+                    self.phase2.return_result_buffer(res);
+                });
             }
             self.device_manager
                 .record_event(request_streams, &next_phase2_event);
@@ -1336,19 +1351,11 @@ impl ServerActor {
 
 /// Internal helper function to log the timers of measured cuda streams.
 fn log_timers(events: HashMap<&str, Vec<Vec<CUevent>>>) {
-    for (name, event_vecs) in &events {
+    for (name, event_vecs) in events {
+        assert!(event_vecs.len() % 2 == 0);
         let duration: f32 = event_vecs
-            .chunks(2)
-            .map(|pair| {
-                let (start_events, end_events) = (&pair[0], &pair[1]);
-                let total_duration: f32 = start_events
-                    .iter()
-                    .zip(end_events.iter())
-                    .map(|(start, end)| unsafe { elapsed(*start, *end) }.unwrap())
-                    .sum();
-
-                total_duration / start_events.len() as f32
-            })
+            .iter()
+            .map(|pair| unsafe { elapsed(pair[0], pair[1]) }.unwrap())
             .sum();
 
         tracing::info!("Event {}: {:?} ms", name, duration);
