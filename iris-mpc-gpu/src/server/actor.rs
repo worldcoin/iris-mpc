@@ -1203,28 +1203,22 @@ impl ServerActor {
                     .record_event(request_streams, &next_exchange_event);
 
                 let res = self.phase2.take_result_buffer();
-                record_stream_time!(
-                    &self.device_manager,
-                    request_streams,
-                    events,
-                    "db_threshold",
-                    {
-                        open(
-                            &mut self.phase2,
-                            &res,
-                            &self.distance_comparator,
-                            db_match_bitmap,
-                            max_chunk_size * self.max_batch_size * ROTATIONS / 64,
-                            &dot_chunk_size,
-                            &chunk_size,
-                            offset,
-                            &self.current_db_sizes,
-                            &ignore_device_results,
-                            request_streams,
-                        );
-                        self.phase2.return_result_buffer(res);
-                    }
-                );
+                record_stream_time!(&self.device_manager, request_streams, events, "db_open", {
+                    open(
+                        &mut self.phase2,
+                        &res,
+                        &self.distance_comparator,
+                        db_match_bitmap,
+                        max_chunk_size * self.max_batch_size * ROTATIONS / 64,
+                        &dot_chunk_size,
+                        &chunk_size,
+                        offset,
+                        &self.current_db_sizes,
+                        &ignore_device_results,
+                        request_streams,
+                    );
+                    self.phase2.return_result_buffer(res);
+                });
             }
             self.device_manager
                 .record_event(request_streams, &next_phase2_event);
