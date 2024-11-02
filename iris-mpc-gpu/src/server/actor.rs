@@ -1351,11 +1351,20 @@ impl ServerActor {
 
 /// Internal helper function to log the timers of measured cuda streams.
 fn log_timers(events: HashMap<&str, Vec<Vec<CUevent>>>) {
-    for (name, event_vecs) in events {
-        assert!(event_vecs.len() % 2 == 0);
+    for (name, event_vecs) in &events {
         let duration: f32 = event_vecs
-            .iter()
-            .map(|pair| unsafe { elapsed(pair[0], pair[1]) }.unwrap())
+            .chunks(2)
+            .map(|pair| {
+                // Calculate the average duration per device
+                let (start_events, end_events) = (&pair[0], &pair[1]);
+                let total_duration: f32 = start_events
+                    .iter()
+                    .zip(end_events.iter())
+                    .map(|(start, end)| unsafe { elapsed(*start, *end) }.unwrap())
+                    .sum();
+
+                total_duration / start_events.len() as f32
+            })
             .sum();
 
         tracing::info!("Event {}: {:?} ms", name, duration);
