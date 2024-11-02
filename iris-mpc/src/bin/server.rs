@@ -399,7 +399,7 @@ async fn receive_batch(
         batch_query.store_left.mask.push(store_mask_shares_left);
         extend_inner(
             &mut batch_query.db_left.code,
-            preprocess_query(
+            &preprocess_query(
                 &db_iris_shares_left
                     .into_iter()
                     .flat_map(|e| e.coefs)
@@ -408,7 +408,7 @@ async fn receive_batch(
         );
         extend_inner(
             &mut batch_query.db_left.mask,
-            preprocess_query(
+            &preprocess_query(
                 &db_mask_shares_left
                     .into_iter()
                     .flat_map(|e| e.coefs)
@@ -417,7 +417,7 @@ async fn receive_batch(
         );
         extend_inner(
             &mut batch_query.query_left.code,
-            preprocess_query(
+            &preprocess_query(
                 &iris_shares_left
                     .into_iter()
                     .flat_map(|e| e.coefs)
@@ -426,7 +426,7 @@ async fn receive_batch(
         );
         extend_inner(
             &mut batch_query.query_left.mask,
-            preprocess_query(
+            &preprocess_query(
                 &mask_shares_left
                     .into_iter()
                     .flat_map(|e| e.coefs)
@@ -438,7 +438,7 @@ async fn receive_batch(
         batch_query.store_right.mask.push(store_mask_shares_right);
         extend_inner(
             &mut batch_query.db_right.code,
-            preprocess_query(
+            &preprocess_query(
                 &db_iris_shares_right
                     .into_iter()
                     .flat_map(|e| e.coefs)
@@ -447,7 +447,7 @@ async fn receive_batch(
         );
         extend_inner(
             &mut batch_query.db_right.mask,
-            preprocess_query(
+            &preprocess_query(
                 &db_mask_shares_right
                     .into_iter()
                     .flat_map(|e| e.coefs)
@@ -456,7 +456,7 @@ async fn receive_batch(
         );
         extend_inner(
             &mut batch_query.query_right.code,
-            preprocess_query(
+            &preprocess_query(
                 &iris_shares_right
                     .into_iter()
                     .flat_map(|e| e.coefs)
@@ -465,7 +465,7 @@ async fn receive_batch(
         );
         extend_inner(
             &mut batch_query.query_right.mask,
-            preprocess_query(
+            &preprocess_query(
                 &mask_shares_right
                     .into_iter()
                     .flat_map(|e| e.coefs)
@@ -1235,7 +1235,7 @@ async fn process_identity_deletions(
     Ok(())
 }
 
-fn extend_inner(a: &mut Vec<Vec<u8>>, b: Vec<Vec<u8>>) {
+fn extend_inner(a: &mut [Vec<u8>], b: &[Vec<u8>]) {
     for (a, b) in a.iter_mut().zip(b) {
         a.extend(b);
     }

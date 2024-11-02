@@ -284,39 +284,51 @@ mod e2e_test {
                 batch0.store_left.code.push(shared_code[0].clone());
                 batch0.store_left.mask.push(shared_mask[0].clone());
                 // with rotations
-                batch0.db_left.code.extend(preprocess_query(
-                    &shared_code[0]
-                        .all_rotations()
-                        .into_iter()
-                        .flat_map(|e| e.coefs)
-                        .collect::<Vec<_>>(),
-                ));
-                batch0.db_left.mask.extend(preprocess_query(
-                    &shared_mask[0]
-                        .all_rotations()
-                        .into_iter()
-                        .flat_map(|e| e.coefs)
-                        .collect::<Vec<_>>(),
-                ));
+                extend_inner(
+                    &mut batch0.db_left.code,
+                    &preprocess_query(
+                        &shared_code[0]
+                            .all_rotations()
+                            .into_iter()
+                            .flat_map(|e| e.coefs)
+                            .collect::<Vec<_>>(),
+                    ),
+                );
+                extend_inner(
+                    &mut batch0.db_left.mask,
+                    &preprocess_query(
+                        &shared_mask[0]
+                            .all_rotations()
+                            .into_iter()
+                            .flat_map(|e| e.coefs)
+                            .collect::<Vec<_>>(),
+                    ),
+                );
                 // with rotations
                 GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_code[0]);
                 GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(
                     &mut shared_mask[0],
                 );
-                batch0.query_left.code.extend(preprocess_query(
-                    &shared_code[0]
-                        .all_rotations()
-                        .into_iter()
-                        .flat_map(|e| e.coefs)
-                        .collect::<Vec<_>>(),
-                ));
-                batch0.query_left.mask.extend(preprocess_query(
-                    &shared_mask[0]
-                        .all_rotations()
-                        .into_iter()
-                        .flat_map(|e| e.coefs)
-                        .collect::<Vec<_>>(),
-                ));
+                extend_inner(
+                    &mut batch0.query_left.code,
+                    &preprocess_query(
+                        &shared_code[0]
+                            .all_rotations()
+                            .into_iter()
+                            .flat_map(|e| e.coefs)
+                            .collect::<Vec<_>>(),
+                    ),
+                );
+                extend_inner(
+                    &mut batch0.query_left.mask,
+                    &preprocess_query(
+                        &shared_mask[0]
+                            .all_rotations()
+                            .into_iter()
+                            .flat_map(|e| e.coefs)
+                            .collect::<Vec<_>>(),
+                    ),
+                );
 
                 // batch 1
                 batch1.valid_entries.push(true);
@@ -326,39 +338,51 @@ mod e2e_test {
                 batch1.store_left.code.push(shared_code[1].clone());
                 batch1.store_left.mask.push(shared_mask[1].clone());
                 // with rotations
-                batch1.db_left.code.extend(preprocess_query(
-                    &shared_code[1]
-                        .all_rotations()
-                        .into_iter()
-                        .flat_map(|e| e.coefs)
-                        .collect::<Vec<_>>(),
-                ));
-                batch1.db_left.mask.extend(preprocess_query(
-                    &shared_mask[1]
-                        .all_rotations()
-                        .into_iter()
-                        .flat_map(|e| e.coefs)
-                        .collect::<Vec<_>>(),
-                ));
+                extend_inner(
+                    &mut batch1.db_left.code,
+                    &preprocess_query(
+                        &shared_code[1]
+                            .all_rotations()
+                            .into_iter()
+                            .flat_map(|e| e.coefs)
+                            .collect::<Vec<_>>(),
+                    ),
+                );
+                extend_inner(
+                    &mut batch1.db_left.mask,
+                    &preprocess_query(
+                        &shared_mask[1]
+                            .all_rotations()
+                            .into_iter()
+                            .flat_map(|e| e.coefs)
+                            .collect::<Vec<_>>(),
+                    ),
+                );
                 // with rotations
                 GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_code[1]);
                 GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(
                     &mut shared_mask[1],
                 );
-                batch1.query_left.code.extend(preprocess_query(
-                    &shared_code[1]
-                        .all_rotations()
-                        .into_iter()
-                        .flat_map(|e| e.coefs)
-                        .collect::<Vec<_>>(),
-                ));
-                batch1.query_left.mask.extend(preprocess_query(
-                    &shared_mask[1]
-                        .all_rotations()
-                        .into_iter()
-                        .flat_map(|e| e.coefs)
-                        .collect::<Vec<_>>(),
-                ));
+                extend_inner(
+                    &mut batch1.query_left.code,
+                    &preprocess_query(
+                        &shared_code[1]
+                            .all_rotations()
+                            .into_iter()
+                            .flat_map(|e| e.coefs)
+                            .collect::<Vec<_>>(),
+                    ),
+                );
+                extend_inner(
+                    &mut batch1.query_left.mask,
+                    &preprocess_query(
+                        &shared_mask[1]
+                            .all_rotations()
+                            .into_iter()
+                            .flat_map(|e| e.coefs)
+                            .collect::<Vec<_>>(),
+                    ),
+                );
 
                 // batch 2
                 batch2.valid_entries.push(true);
@@ -368,39 +392,51 @@ mod e2e_test {
                 batch2.store_left.code.push(shared_code[2].clone());
                 batch2.store_left.mask.push(shared_mask[2].clone());
                 // with rotations
-                batch2.db_left.code.extend(preprocess_query(
-                    &shared_code[2]
-                        .all_rotations()
-                        .into_iter()
-                        .flat_map(|e| e.coefs)
-                        .collect::<Vec<_>>(),
-                ));
-                batch2.db_left.mask.extend(preprocess_query(
-                    &shared_mask[2]
-                        .all_rotations()
-                        .into_iter()
-                        .flat_map(|e| e.coefs)
-                        .collect::<Vec<_>>(),
-                ));
+                extend_inner(
+                    &mut batch2.db_left.code,
+                    &preprocess_query(
+                        &shared_code[2]
+                            .all_rotations()
+                            .into_iter()
+                            .flat_map(|e| e.coefs)
+                            .collect::<Vec<_>>(),
+                    ),
+                );
+                extend_inner(
+                    &mut batch2.db_left.mask,
+                    &preprocess_query(
+                        &shared_mask[2]
+                            .all_rotations()
+                            .into_iter()
+                            .flat_map(|e| e.coefs)
+                            .collect::<Vec<_>>(),
+                    ),
+                );
                 // with rotations
                 GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_code[2]);
                 GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(
                     &mut shared_mask[2],
                 );
-                batch2.query_left.code.extend(preprocess_query(
-                    &shared_code[2]
-                        .all_rotations()
-                        .into_iter()
-                        .flat_map(|e| e.coefs)
-                        .collect::<Vec<_>>(),
-                ));
-                batch2.query_left.mask.extend(preprocess_query(
-                    &shared_mask[2]
-                        .all_rotations()
-                        .into_iter()
-                        .flat_map(|e| e.coefs)
-                        .collect::<Vec<_>>(),
-                ));
+                extend_inner(
+                    &mut batch2.query_left.code,
+                    &preprocess_query(
+                        &shared_code[2]
+                            .all_rotations()
+                            .into_iter()
+                            .flat_map(|e| e.coefs)
+                            .collect::<Vec<_>>(),
+                    ),
+                );
+                extend_inner(
+                    &mut batch2.query_left.mask,
+                    &preprocess_query(
+                        &shared_mask[2]
+                            .all_rotations()
+                            .into_iter()
+                            .flat_map(|e| e.coefs)
+                            .collect::<Vec<_>>(),
+                    ),
+                );
             }
 
             // Skip empty batch
@@ -494,5 +530,11 @@ mod e2e_test {
         actor2_task.await.unwrap();
 
         Ok(())
+    }
+
+    fn extend_inner(a: &mut [Vec<u8>], b: &[Vec<u8>]) {
+        for (a, b) in a.iter_mut().zip(b) {
+            a.extend(b);
+        }
     }
 }
