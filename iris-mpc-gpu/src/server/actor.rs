@@ -559,47 +559,11 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         tracing::info!("Comparing left eye queries");
         // *Query* variant including Lagrange interpolation.
-        let compact_query_left = {
-            let code_query = preprocess_query(
-                &batch
-                    .query_left
-                    .code
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-
-            let mask_query = preprocess_query(
-                &batch
-                    .query_left
-                    .mask
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-            // *Storage* variant (no interpolation).
-            let code_query_insert = preprocess_query(
-                &batch
-                    .db_left
-                    .code
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-            let mask_query_insert = preprocess_query(
-                &batch
-                    .db_left
-                    .mask
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-            CompactQuery {
-                code_query,
-                mask_query,
-                code_query_insert,
-                mask_query_insert,
-            }
+        let compact_query_left = CompactQuery {
+            code_query:        batch.query_left.code,
+            mask_query:        batch.query_left.mask,
+            code_query_insert: batch.db_left.code,
+            mask_query_insert: batch.db_left.mask,
         };
         let query_store_left = batch.store_left;
 
@@ -631,47 +595,11 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         tracing::info!("Comparing right eye queries");
         // *Query* variant including Lagrange interpolation.
-        let compact_query_right = {
-            let code_query = preprocess_query(
-                &batch
-                    .query_right
-                    .code
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-
-            let mask_query = preprocess_query(
-                &batch
-                    .query_right
-                    .mask
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-            // *Storage* variant (no interpolation).
-            let code_query_insert = preprocess_query(
-                &batch
-                    .db_right
-                    .code
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-            let mask_query_insert = preprocess_query(
-                &batch
-                    .db_right
-                    .mask
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-            CompactQuery {
-                code_query,
-                mask_query,
-                code_query_insert,
-                mask_query_insert,
-            }
+        let compact_query_right = CompactQuery {
+            code_query:        batch.query_right.code,
+            mask_query:        batch.query_right.mask,
+            code_query_insert: batch.db_right.code,
+            mask_query_insert: batch.db_right.mask,
         };
         let query_store_right = batch.store_right;
 
@@ -1351,11 +1279,20 @@ impl ServerActor {
 
 /// Internal helper function to log the timers of measured cuda streams.
 fn log_timers(events: HashMap<&str, Vec<Vec<CUevent>>>) {
-    for (name, event_vecs) in events {
-        assert!(event_vecs.len() % 2 == 0);
+    for (name, event_vecs) in &events {
         let duration: f32 = event_vecs
-            .iter()
-            .map(|pair| unsafe { elapsed(pair[0], pair[1]) }.unwrap())
+            .chunks(2)
+            .map(|pair| {
+                // Calculate the average duration per device
+                let (start_events, end_events) = (&pair[0], &pair[1]);
+                let total_duration: f32 = start_events
+                    .iter()
+                    .zip(end_events.iter())
+                    .map(|(start, end)| unsafe { elapsed(*start, *end) }.unwrap())
+                    .sum();
+
+                total_duration / start_events.len() as f32
+            })
             .sum();
 
         tracing::info!("Event {}: {:?} ms", name, duration);

@@ -16,6 +16,12 @@ pub struct BatchQueryEntries {
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct BatchQueryPreprocessedEntries {
+    pub code: Vec<Vec<u8>>,
+    pub mask: Vec<Vec<u8>>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BatchMetadata {
     pub node_id:  String,
     pub trace_id: String,
@@ -26,11 +32,11 @@ pub struct BatchMetadata {
 pub struct BatchQuery {
     pub request_ids:                Vec<String>,
     pub metadata:                   Vec<BatchMetadata>,
-    pub query_left:                 BatchQueryEntries,
-    pub db_left:                    BatchQueryEntries,
+    pub query_left:                 BatchQueryPreprocessedEntries,
+    pub db_left:                    BatchQueryPreprocessedEntries,
     pub store_left:                 BatchQueryEntries,
-    pub query_right:                BatchQueryEntries,
-    pub db_right:                   BatchQueryEntries,
+    pub query_right:                BatchQueryPreprocessedEntries,
+    pub db_right:                   BatchQueryPreprocessedEntries,
     pub store_right:                BatchQueryEntries,
     pub deletion_requests_indices:  Vec<u32>, // 0-indexed indicies in of entries to be deleted
     pub deletion_requests_metadata: Vec<BatchMetadata>,
