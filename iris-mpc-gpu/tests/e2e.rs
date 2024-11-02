@@ -7,6 +7,7 @@ mod e2e_test {
         iris_db::{db::IrisDB, iris::IrisCode},
     };
     use iris_mpc_gpu::{
+        dot::share_db::preprocess_query,
         helpers::device_manager::DeviceManager,
         server::{BatchQuery, ServerActor, ServerJobResult},
     };
@@ -283,21 +284,39 @@ mod e2e_test {
                 batch0.store_left.code.push(shared_code[0].clone());
                 batch0.store_left.mask.push(shared_mask[0].clone());
                 // with rotations
-                batch0.db_left.code.extend(shared_code[0].all_rotations());
-                batch0.db_left.mask.extend(shared_mask[0].all_rotations());
+                batch0.db_left.code.extend(preprocess_query(
+                    &shared_code[0]
+                        .all_rotations()
+                        .into_iter()
+                        .flat_map(|e| e.coefs)
+                        .collect::<Vec<_>>(),
+                ));
+                batch0.db_left.mask.extend(preprocess_query(
+                    &shared_mask[0]
+                        .all_rotations()
+                        .into_iter()
+                        .flat_map(|e| e.coefs)
+                        .collect::<Vec<_>>(),
+                ));
                 // with rotations
                 GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_code[0]);
                 GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(
                     &mut shared_mask[0],
                 );
-                batch0
-                    .query_left
-                    .code
-                    .extend(shared_code[0].all_rotations());
-                batch0
-                    .query_left
-                    .mask
-                    .extend(shared_mask[0].all_rotations());
+                batch0.query_left.code.extend(preprocess_query(
+                    &shared_code[0]
+                        .all_rotations()
+                        .into_iter()
+                        .flat_map(|e| e.coefs)
+                        .collect::<Vec<_>>(),
+                ));
+                batch0.query_left.mask.extend(preprocess_query(
+                    &shared_mask[0]
+                        .all_rotations()
+                        .into_iter()
+                        .flat_map(|e| e.coefs)
+                        .collect::<Vec<_>>(),
+                ));
 
                 // batch 1
                 batch1.valid_entries.push(true);
