@@ -492,7 +492,7 @@ impl ServerActor {
                 && batch_size == batch.metadata.len()
                 && batch_size == batch.store_right.code.len()
                 && batch_size == batch.store_right.mask.len()
-                && batch_size * ROTATIONS * IRIS_CODE_LENGTH
+                && batch_size * ROTATIONS * IRIS_CODE_LENGTH * 2
                     == batch
                         .query_left
                         .code
