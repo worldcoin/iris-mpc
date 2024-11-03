@@ -15,10 +15,19 @@ pub struct BatchQueryEntries {
     pub mask: Vec<GaloisRingTrimmedMaskCodeShare>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BatchQueryPreprocessedEntries {
     pub code: Vec<Vec<u8>>,
     pub mask: Vec<Vec<u8>>,
+}
+
+impl Default for BatchQueryPreprocessedEntries {
+    fn default() -> Self {
+        Self {
+            code: vec![vec![], vec![]],
+            mask: vec![vec![], vec![]],
+        }
+    }
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
