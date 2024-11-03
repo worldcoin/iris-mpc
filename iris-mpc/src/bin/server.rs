@@ -1236,6 +1236,7 @@ async fn process_identity_deletions(
 }
 
 fn extend_inner(a: &mut [Vec<u8>], b: &[Vec<u8>]) {
+    assert_eq!(a.len(), b.len());
     for (a, b) in a.iter_mut().zip(b) {
         a.extend(b);
     }

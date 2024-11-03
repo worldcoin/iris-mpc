@@ -486,78 +486,78 @@ impl ServerActor {
         let mut batch = batch;
         let mut batch_size = batch.store_left.code.len();
         assert!(batch_size > 0 && batch_size <= self.max_batch_size);
-        // assert!(
-        //     batch_size == batch.store_left.mask.len()
-        //         && batch_size == batch.request_ids.len()
-        //         && batch_size == batch.metadata.len()
-        //         && batch_size == batch.store_right.code.len()
-        //         && batch_size == batch.store_right.mask.len()
-        //         && batch_size * ROTATIONS * IRIS_CODE_LENGTH * 2
-        //             == batch
-        //                 .query_left
-        //                 .code
-        //                 .iter()
-        //                 .flatten()
-        //                 .collect::<Vec<_>>()
-        //                 .len()
-        //         && batch_size * ROTATIONS * MASK_CODE_LENGTH * 2
-        //             == batch
-        //                 .query_left
-        //                 .mask
-        //                 .iter()
-        //                 .flatten()
-        //                 .collect::<Vec<_>>()
-        //                 .len()
-        //         && batch_size * ROTATIONS * IRIS_CODE_LENGTH * 2
-        //             == batch
-        //                 .query_right
-        //                 .code
-        //                 .iter()
-        //                 .flatten()
-        //                 .collect::<Vec<_>>()
-        //                 .len()
-        //         && batch_size * ROTATIONS * MASK_CODE_LENGTH * 2
-        //             == batch
-        //                 .query_right
-        //                 .mask
-        //                 .iter()
-        //                 .flatten()
-        //                 .collect::<Vec<_>>()
-        //                 .len()
-        //         && batch_size * ROTATIONS * IRIS_CODE_LENGTH * 2
-        //             == batch
-        //                 .db_left
-        //                 .code
-        //                 .iter()
-        //                 .flatten()
-        //                 .collect::<Vec<_>>()
-        //                 .len()
-        //         && batch_size * ROTATIONS * MASK_CODE_LENGTH * 2
-        //             == batch
-        //                 .db_left
-        //                 .mask
-        //                 .iter()
-        //                 .flatten()
-        //                 .collect::<Vec<_>>()
-        //                 .len()
-        //         && batch_size * ROTATIONS * IRIS_CODE_LENGTH * 2
-        //             == batch
-        //                 .db_right
-        //                 .code
-        //                 .iter()
-        //                 .flatten()
-        //                 .collect::<Vec<_>>()
-        //                 .len()
-        //         && batch_size * ROTATIONS * MASK_CODE_LENGTH * 2
-        //             == batch
-        //                 .db_right
-        //                 .mask
-        //                 .iter()
-        //                 .flatten()
-        //                 .collect::<Vec<_>>()
-        //                 .len(),
-        //     "Query batch sizes mismatch"
-        // );
+        assert!(
+            batch_size == batch.store_left.mask.len()
+                && batch_size == batch.request_ids.len()
+                && batch_size == batch.metadata.len()
+                && batch_size == batch.store_right.code.len()
+                && batch_size == batch.store_right.mask.len()
+                && batch_size * ROTATIONS * IRIS_CODE_LENGTH * 2
+                    == batch
+                        .query_left
+                        .code
+                        .iter()
+                        .flatten()
+                        .collect::<Vec<_>>()
+                        .len()
+                && batch_size * ROTATIONS * MASK_CODE_LENGTH * 2
+                    == batch
+                        .query_left
+                        .mask
+                        .iter()
+                        .flatten()
+                        .collect::<Vec<_>>()
+                        .len()
+                && batch_size * ROTATIONS * IRIS_CODE_LENGTH * 2
+                    == batch
+                        .query_right
+                        .code
+                        .iter()
+                        .flatten()
+                        .collect::<Vec<_>>()
+                        .len()
+                && batch_size * ROTATIONS * MASK_CODE_LENGTH * 2
+                    == batch
+                        .query_right
+                        .mask
+                        .iter()
+                        .flatten()
+                        .collect::<Vec<_>>()
+                        .len()
+                && batch_size * ROTATIONS * IRIS_CODE_LENGTH * 2
+                    == batch
+                        .db_left
+                        .code
+                        .iter()
+                        .flatten()
+                        .collect::<Vec<_>>()
+                        .len()
+                && batch_size * ROTATIONS * MASK_CODE_LENGTH * 2
+                    == batch
+                        .db_left
+                        .mask
+                        .iter()
+                        .flatten()
+                        .collect::<Vec<_>>()
+                        .len()
+                && batch_size * ROTATIONS * IRIS_CODE_LENGTH * 2
+                    == batch
+                        .db_right
+                        .code
+                        .iter()
+                        .flatten()
+                        .collect::<Vec<_>>()
+                        .len()
+                && batch_size * ROTATIONS * MASK_CODE_LENGTH * 2
+                    == batch
+                        .db_right
+                        .mask
+                        .iter()
+                        .flatten()
+                        .collect::<Vec<_>>()
+                        .len(),
+            "Query batch sizes mismatch"
+        );
 
         ///////////////////////////////////////////////////////////////////
         // PERFORM DELETIONS (IF ANY)

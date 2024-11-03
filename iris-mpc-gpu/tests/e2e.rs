@@ -533,8 +533,9 @@ mod e2e_test {
     }
 
     fn extend_inner(a: &mut [Vec<u8>], b: &[Vec<u8>]) {
-        for (a, b) in a.iter_mut().zip(b) {
-            a.extend(b);
+        assert_eq!(a.len(), b.len());
+        for i in 0..a.len() {
+            a[i].extend(&b[i]);
         }
     }
 }

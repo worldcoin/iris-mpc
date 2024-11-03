@@ -24,8 +24,8 @@ pub struct BatchQueryPreprocessedEntries {
 impl Default for BatchQueryPreprocessedEntries {
     fn default() -> Self {
         Self {
-            code: vec![vec![], vec![]],
-            mask: vec![vec![], vec![]],
+            code: vec![vec![]; 2],
+            mask: vec![vec![]; 2],
         }
     }
 }
