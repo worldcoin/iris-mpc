@@ -1,16 +1,17 @@
 use hawk_pack::VectorStore;
 use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodeArray, MATCH_THRESHOLD_RATIO};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Default, Debug, Clone)]
 pub struct PlaintextStore {
-    pub points: Vec<PlaintextPoint>,
+    pub points: BTreeMap<PointId, PlaintextPoint>,
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct FormattedIris {
-    data: Vec<i8>,
-    mask: IrisCodeArray,
+    pub data: Vec<i8>,
+    pub mask: IrisCodeArray,
 }
 
 impl From<IrisCode> for FormattedIris {
@@ -39,13 +40,22 @@ impl FormattedIris {
     }
 }
 
-#[derive(Clone, Default, Debug)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct PlaintextPoint {
     /// Whatever encoding of a vector.
-    data:          FormattedIris,
+    pub data:          FormattedIris,
     /// Distinguish between queries that are pending, and those that were
     /// ultimately accepted into the vector store.
-    is_persistent: bool,
+    pub is_persistent: bool,
+}
+
+impl From<IrisCode> for PlaintextPoint {
+    fn from(value: IrisCode) -> Self {
+        Self {
+            data:          FormattedIris::from(value),
+            is_persistent: false,
+        }
+    }
 }
 
 impl FormattedIris {
@@ -63,11 +73,11 @@ impl FormattedIris {
 }
 
 impl PlaintextPoint {
-    fn compute_distance(&self, other: &PlaintextPoint) -> (i16, usize) {
+    pub fn compute_distance(&self, other: &PlaintextPoint) -> (i16, usize) {
         self.data.compute_distance(&other.data)
     }
 
-    fn is_close(&self, other: &PlaintextPoint) -> bool {
+    pub fn is_close(&self, other: &PlaintextPoint) -> bool {
         let hd = self.data.dot_on_code(&other.data);
         let mask_ones = (self.data.mask & other.data.mask).count_ones();
         let threshold = (mask_ones as f64) * (1. - 2. * MATCH_THRESHOLD_RATIO);
@@ -75,7 +85,7 @@ impl PlaintextPoint {
     }
 }
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct PointId(pub usize);
 
 impl PointId {
@@ -85,28 +95,18 @@ impl PointId {
 }
 
 impl PlaintextStore {
-    pub fn prepare_query(&mut self, raw_query: IrisCode) -> <Self as VectorStore>::QueryRef {
-        self.points.push(PlaintextPoint {
-            data:          FormattedIris::from(raw_query),
-            is_persistent: false,
-        });
-
-        let point_id = self.points.len() - 1;
-        PointId(point_id)
-    }
-
     pub fn distance_computation(
         &self,
         distance1: &(PointId, PointId),
         distance2: &(PointId, PointId),
     ) -> (i32, i32) {
         let (x1, y1) = (
-            &self.points[distance1.0.val()],
-            &self.points[distance1.1.val()],
+            &self.points.get(&distance1.0).unwrap(),
+            &self.points.get(&distance1.1).unwrap(),
         );
         let (x2, y2) = (
-            &self.points[distance2.0.val()],
-            &self.points[distance2.1.val()],
+            &self.points.get(&distance2.0).unwrap(),
+            &self.points.get(&distance2.1).unwrap(),
         );
         let (d1, t1) = x1.compute_distance(y1);
         let (d2, t2) = x2.compute_distance(y2);
@@ -120,10 +120,18 @@ impl VectorStore for PlaintextStore {
     type QueryRef = PointId; // Vector ID, pending insertion.
     type VectorRef = PointId; // Vector ID, inserted.
     type DistanceRef = (PointId, PointId); // Lazy distance representation.
+    type Data = PlaintextPoint;
+
+    fn prepare_query(&mut self, raw_query: PlaintextPoint) -> PointId {
+        let point_id = PointId(self.points.len());
+        self.points.insert(point_id, raw_query);
+
+        point_id
+    }
 
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         // The query is now accepted in the store. It keeps the same ID.
-        self.points[query.0].is_persistent = true;
+        self.points.get_mut(query).unwrap().is_persistent = true;
         *query
     }
 
@@ -137,8 +145,8 @@ impl VectorStore for PlaintextStore {
     }
 
     async fn is_match(&self, distance: &Self::DistanceRef) -> bool {
-        let x = &self.points[distance.0 .0];
-        let y = &self.points[distance.1 .0];
+        let x = &self.points.get(&distance.0).unwrap();
+        let y = &self.points.get(&distance.1).unwrap();
         x.is_close(y)
     }
 
@@ -173,10 +181,10 @@ mod tests {
             .collect();
         let mut plaintext_store = PlaintextStore::default();
 
-        let pid0 = plaintext_store.prepare_query(cleartext_database[0].clone());
-        let pid1 = plaintext_store.prepare_query(cleartext_database[1].clone());
-        let pid2 = plaintext_store.prepare_query(cleartext_database[2].clone());
-        let pid3 = plaintext_store.prepare_query(cleartext_database[3].clone());
+        let pid0 = plaintext_store.prepare_query(cleartext_database[0].clone().into());
+        let pid1 = plaintext_store.prepare_query(cleartext_database[1].clone().into());
+        let pid2 = plaintext_store.prepare_query(cleartext_database[2].clone().into());
+        let pid3 = plaintext_store.prepare_query(cleartext_database[3].clone().into());
 
         let q0 = plaintext_store.insert(&pid0).await;
         let q1 = plaintext_store.insert(&pid1).await;

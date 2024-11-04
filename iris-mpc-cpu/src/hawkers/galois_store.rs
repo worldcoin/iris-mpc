@@ -114,31 +114,6 @@ pub fn setup_local_store_aby3_players() -> eyre::Result<LocalNetAby3NgStoreProto
     Ok(LocalNetAby3NgStoreProtocol { runtime, players })
 }
 
-impl LocalNetAby3NgStoreProtocol {
-    pub fn prepare_query(&mut self, code: Vec<GaloisRingSharedIris>) -> PointId {
-        assert_eq!(code.len(), 3);
-        assert_eq!(self.players.len(), 3);
-        let pid0 = self
-            .players
-            .get_mut(&Identity::from("alice"))
-            .unwrap()
-            .prepare_query(code[0].clone());
-        let pid1 = self
-            .players
-            .get_mut(&Identity::from("bob"))
-            .unwrap()
-            .prepare_query(code[1].clone());
-        let pid2 = self
-            .players
-            .get_mut(&Identity::from("charlie"))
-            .unwrap()
-            .prepare_query(code[2].clone());
-        assert_eq!(pid0, pid1);
-        assert_eq!(pid1, pid2);
-        pid0
-    }
-}
-
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound = "")]
 pub struct DistanceShare<T: IntRing2k> {
@@ -167,6 +142,30 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
     type QueryRef = PointId; // Vector ID, pending insertion.
     type VectorRef = PointId; // Vector ID, inserted.
     type DistanceRef = Vec<DistanceShare<u16>>; // Distance represented as shares.
+    type Data = Vec<GaloisRingSharedIris>;
+
+    fn prepare_query(&mut self, code: Vec<GaloisRingSharedIris>) -> PointId {
+        assert_eq!(code.len(), 3);
+        assert_eq!(self.players.len(), 3);
+        let pid0 = self
+            .players
+            .get_mut(&Identity::from("alice"))
+            .unwrap()
+            .prepare_query(code[0].clone());
+        let pid1 = self
+            .players
+            .get_mut(&Identity::from("bob"))
+            .unwrap()
+            .prepare_query(code[1].clone());
+        let pid2 = self
+            .players
+            .get_mut(&Identity::from("charlie"))
+            .unwrap()
+            .prepare_query(code[2].clone());
+        assert_eq!(pid0, pid1);
+        assert_eq!(pid1, pid2);
+        pid0
+    }
 
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         // The query is now accepted in the store. It keeps the same ID.
@@ -353,7 +352,7 @@ pub async fn gr_create_ready_made_hawk_searcher<R: RngCore + Clone + CryptoRng>(
     let searcher = HawkSearcher::default();
 
     for raw_query in cleartext_database.iter() {
-        let query = plaintext_vector_store.prepare_query(raw_query.clone());
+        let query = plaintext_vector_store.prepare_query(raw_query.clone().into());
         let neighbors = searcher
             .search_to_insert(
                 &mut plaintext_vector_store,
@@ -594,7 +593,7 @@ mod tests {
         // Now do the work for the plaintext store
         let mut plaintext_store = PlaintextStore::default();
         let plaintext_preps: Vec<_> = (0..db_dim)
-            .map(|id| plaintext_store.prepare_query(cleartext_database[id].clone()))
+            .map(|id| plaintext_store.prepare_query(cleartext_database[id].clone().into()))
             .collect();
         let mut plaintext_inserts = Vec::new();
         for p in plaintext_preps.iter() {
