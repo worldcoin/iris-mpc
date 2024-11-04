@@ -1,7 +1,7 @@
 mod actor;
 pub mod sync_nccl;
 
-use crate::dot::ROTATIONS;
+use crate::dot::{share_db::preprocess_query, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS};
 pub use actor::{get_dummy_shares_for_deletion, ServerActor, ServerActorHandle};
 use iris_mpc_common::galois_engine::degree4::{
     GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
@@ -13,6 +13,30 @@ use tokio::sync::oneshot;
 pub struct BatchQueryEntries {
     pub code: Vec<GaloisRingIrisCodeShare>,
     pub mask: Vec<GaloisRingTrimmedMaskCodeShare>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct BatchQueryEntriesPreprocessed {
+    pub code: Vec<Vec<u8>>,
+    pub mask: Vec<Vec<u8>>,
+}
+
+impl From<BatchQueryEntries> for BatchQueryEntriesPreprocessed {
+    fn from(value: BatchQueryEntries) -> Self {
+        Self {
+            code: preprocess_query(&value.code.iter().flat_map(|e| e.coefs).collect::<Vec<_>>()),
+            mask: preprocess_query(&value.mask.iter().flat_map(|e| e.coefs).collect::<Vec<_>>()),
+        }
+    }
+}
+
+impl BatchQueryEntriesPreprocessed {
+    pub fn len(&self) -> usize {
+        let codes = self.code.iter().map(|x| x.len()).sum::<usize>() / IRIS_CODE_LENGTH / 2;
+        let masks = self.mask.iter().map(|x| x.len()).sum::<usize>() / MASK_CODE_LENGTH / 2;
+        assert!(codes == masks);
+        codes
+    }
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
@@ -29,9 +53,13 @@ pub struct BatchQuery {
     pub query_left:                 BatchQueryEntries,
     pub db_left:                    BatchQueryEntries,
     pub store_left:                 BatchQueryEntries,
+    pub query_left_preprocessed:    BatchQueryEntriesPreprocessed,
+    pub db_left_preprocessed:       BatchQueryEntriesPreprocessed,
     pub query_right:                BatchQueryEntries,
     pub db_right:                   BatchQueryEntries,
     pub store_right:                BatchQueryEntries,
+    pub query_right_preprocessed:   BatchQueryEntriesPreprocessed,
+    pub db_right_preprocessed:      BatchQueryEntriesPreprocessed,
     pub deletion_requests_indices:  Vec<u32>, // 0-indexed indicies in of entries to be deleted
     pub deletion_requests_metadata: Vec<BatchMetadata>,
     pub valid_entries:              Vec<bool>,

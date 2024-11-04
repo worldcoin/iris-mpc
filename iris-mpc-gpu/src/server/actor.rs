@@ -499,7 +499,11 @@ impl ServerActor {
                 && batch_size * ROTATIONS == batch.db_left.code.len()
                 && batch_size * ROTATIONS == batch.db_left.mask.len()
                 && batch_size * ROTATIONS == batch.db_right.code.len()
-                && batch_size * ROTATIONS == batch.db_right.mask.len(),
+                && batch_size * ROTATIONS == batch.db_right.mask.len()
+                && batch_size * ROTATIONS == batch.query_left_preprocessed.len()
+                && batch_size * ROTATIONS == batch.query_right_preprocessed.len()
+                && batch_size * ROTATIONS == batch.db_left_preprocessed.len()
+                && batch_size * ROTATIONS == batch.db_right_preprocessed.len(),
             "Query batch sizes mismatch"
         );
 
@@ -559,47 +563,11 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         tracing::info!("Comparing left eye queries");
         // *Query* variant including Lagrange interpolation.
-        let compact_query_left = {
-            let code_query = preprocess_query(
-                &batch
-                    .query_left
-                    .code
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-
-            let mask_query = preprocess_query(
-                &batch
-                    .query_left
-                    .mask
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-            // *Storage* variant (no interpolation).
-            let code_query_insert = preprocess_query(
-                &batch
-                    .db_left
-                    .code
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-            let mask_query_insert = preprocess_query(
-                &batch
-                    .db_left
-                    .mask
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-            CompactQuery {
-                code_query,
-                mask_query,
-                code_query_insert,
-                mask_query_insert,
-            }
+        let compact_query_left = CompactQuery {
+            code_query:        batch.query_left_preprocessed.code.clone(),
+            mask_query:        batch.query_left_preprocessed.mask.clone(),
+            code_query_insert: batch.db_left_preprocessed.code.clone(),
+            mask_query_insert: batch.db_left_preprocessed.mask.clone(),
         };
         let query_store_left = batch.store_left;
 
@@ -631,47 +599,11 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         tracing::info!("Comparing right eye queries");
         // *Query* variant including Lagrange interpolation.
-        let compact_query_right = {
-            let code_query = preprocess_query(
-                &batch
-                    .query_right
-                    .code
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-
-            let mask_query = preprocess_query(
-                &batch
-                    .query_right
-                    .mask
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-            // *Storage* variant (no interpolation).
-            let code_query_insert = preprocess_query(
-                &batch
-                    .db_right
-                    .code
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-            let mask_query_insert = preprocess_query(
-                &batch
-                    .db_right
-                    .mask
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-            CompactQuery {
-                code_query,
-                mask_query,
-                code_query_insert,
-                mask_query_insert,
-            }
+        let compact_query_right = CompactQuery {
+            code_query:        batch.query_right_preprocessed.code.clone(),
+            mask_query:        batch.query_right_preprocessed.mask.clone(),
+            code_query_insert: batch.db_right_preprocessed.code.clone(),
+            mask_query_insert: batch.db_right_preprocessed.mask.clone(),
         };
         let query_store_right = batch.store_right;
 

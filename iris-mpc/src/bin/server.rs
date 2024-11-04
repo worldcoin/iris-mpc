@@ -29,8 +29,8 @@ use iris_mpc_common::{
 use iris_mpc_gpu::{
     helpers::device_manager::DeviceManager,
     server::{
-        get_dummy_shares_for_deletion, sync_nccl, BatchMetadata, BatchQuery, ServerActor,
-        ServerJobResult,
+        get_dummy_shares_for_deletion, sync_nccl, BatchMetadata, BatchQuery,
+        BatchQueryEntriesPreprocessed, ServerActor, ServerJobResult,
     },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
@@ -408,6 +408,16 @@ async fn receive_batch(
         batch_query.query_right.code.extend(iris_shares_right);
         batch_query.query_right.mask.extend(mask_shares_right);
     }
+
+    // Preprocess query shares here already to avoid blocking the actor
+    batch_query.query_left_preprocessed =
+        BatchQueryEntriesPreprocessed::from(batch_query.query_left.clone());
+    batch_query.query_right_preprocessed =
+        BatchQueryEntriesPreprocessed::from(batch_query.query_right.clone());
+    batch_query.db_left_preprocessed =
+        BatchQueryEntriesPreprocessed::from(batch_query.db_left.clone());
+    batch_query.db_right_preprocessed =
+        BatchQueryEntriesPreprocessed::from(batch_query.db_right.clone());
 
     Ok(batch_query)
 }
