@@ -37,6 +37,10 @@ impl BatchQueryEntriesPreprocessed {
         assert!(codes == masks);
         codes
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
