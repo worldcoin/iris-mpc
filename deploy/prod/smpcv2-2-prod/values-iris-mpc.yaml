@@ -86,11 +86,11 @@ env:
   - name: SMPC__INIT_DB_SIZE
     value: "0"
 
-  - name: SMPC__MAX_DB_SIZE
-    value: "10000000"
-
   - name: SMPC__FAKE_DB_SIZE
-    value: "6500000"
+    value: "15000000"
+
+  - name: SMPC__MAX_BATCH_SIZE
+    value: "256"
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
