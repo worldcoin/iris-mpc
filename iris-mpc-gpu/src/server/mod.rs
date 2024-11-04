@@ -87,6 +87,17 @@ macro_rules! filter_by_indices_with_rotations {
     };
 }
 
+macro_rules! filter_by_indices_with_rotations_and_code_length {
+    ($data:expr, $indices:expr, $code_length:expr) => {
+        $data = $data
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| $indices.contains((&(i / ROTATIONS / $code_length))))
+            .map(|(_, v)| v.clone())
+            .collect();
+    };
+}
+
 impl BatchQuery {
     pub fn retain(&mut self, indices: &[usize]) {
         let indices_set: HashSet<usize> = indices.iter().cloned().collect();
@@ -104,7 +115,29 @@ impl BatchQuery {
         filter_by_indices_with_rotations!(self.query_right.mask, indices_set);
         filter_by_indices_with_rotations!(self.db_right.code, indices_set);
         filter_by_indices_with_rotations!(self.db_right.mask, indices_set);
+        Self::filter_preprocessed_entry(&mut self.query_left_preprocessed, &indices_set);
+        Self::filter_preprocessed_entry(&mut self.db_left_preprocessed, &indices_set);
+        Self::filter_preprocessed_entry(&mut self.query_right_preprocessed, &indices_set);
+        Self::filter_preprocessed_entry(&mut self.db_right_preprocessed, &indices_set);
         filter_by_indices!(self.valid_entries, indices_set);
+    }
+
+    fn filter_preprocessed_entry(
+        entry: &mut BatchQueryEntriesPreprocessed,
+        indices: &HashSet<usize>,
+    ) {
+        for i in 0..2 {
+            filter_by_indices_with_rotations_and_code_length!(
+                entry.code[i],
+                indices,
+                IRIS_CODE_LENGTH
+            );
+            filter_by_indices_with_rotations_and_code_length!(
+                entry.mask[i],
+                indices,
+                MASK_CODE_LENGTH
+            );
+        }
     }
 }
 
