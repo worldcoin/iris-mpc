@@ -23,19 +23,32 @@ pub struct BatchQueryEntriesPreprocessed {
 
 impl From<BatchQueryEntries> for BatchQueryEntriesPreprocessed {
     fn from(value: BatchQueryEntries) -> Self {
+        let code_coefs = &value.code.iter().flat_map(|e| e.coefs).collect::<Vec<_>>();
+        let mask_coefs = &value.mask.iter().flat_map(|e| e.coefs).collect::<Vec<_>>();
+
+        assert_eq!(
+            code_coefs.len() / IRIS_CODE_LENGTH,
+            mask_coefs.len() / MASK_CODE_LENGTH
+        );
+
         Self {
-            code: preprocess_query(&value.code.iter().flat_map(|e| e.coefs).collect::<Vec<_>>()),
-            mask: preprocess_query(&value.mask.iter().flat_map(|e| e.coefs).collect::<Vec<_>>()),
+            code: preprocess_query(code_coefs),
+            mask: preprocess_query(mask_coefs),
         }
     }
 }
 
 impl BatchQueryEntriesPreprocessed {
     pub fn len(&self) -> usize {
-        let codes = self.code.iter().map(|x| x.len()).sum::<usize>() / IRIS_CODE_LENGTH / 2;
-        let masks = self.mask.iter().map(|x| x.len()).sum::<usize>() / MASK_CODE_LENGTH / 2;
-        assert!(codes == masks);
-        codes
+        assert_eq!(self.code.len(), self.mask.len());
+        self.code.iter().zip(self.mask.iter()).for_each(|(c, m)| {
+            assert_eq!(c.len() / IRIS_CODE_LENGTH, m.len() / MASK_CODE_LENGTH);
+        });
+        if self.code.is_empty() {
+            0
+        } else {
+            self.code[0].len() / IRIS_CODE_LENGTH
+        }
     }
 
     pub fn is_empty(&self) -> bool {
