@@ -57,7 +57,7 @@ env:
         name: application
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "240"
+    value: "120"
 
   - name: SMPC__HEARTBEAT_INTERVAL_SECS
     value: "2"
@@ -87,13 +87,13 @@ env:
     value: "0"
 
   - name: SMPC__MAX_DB_SIZE
-    value: "16000000"
+    value: "10000000"
 
   - name: SMPC__FAKE_DB_SIZE
-    value: "15000000"
+    value: "0"
 
   - name: SMPC__MAX_BATCH_SIZE
-    value: "256"
+    value: "64"
 
   - name: SMPC__SERVICE__METRICS__HOST
     valueFrom:
