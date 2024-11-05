@@ -1517,7 +1517,7 @@ impl Circuits {
 
             unsafe {
                 self.kernels[idx]
-                    .lift_mul_sub
+                    .finalize_lift
                     .clone()
                     .launch_on_stream(
                         &streams[idx],
@@ -2081,7 +2081,16 @@ impl Circuits {
             self.extract_msb(&mut x, streams);
 
             // Result is in the first bit of the result buffer
+            let mut result = self.take_result_buffer();
+
+            let mut bits = Vec::with_capacity(self.n_devices);
+            for r in result.iter() {
+                // Result is in the first bit of the input
+                bits.push(r.get_offset(0, self.chunk_size));
+            }
             todo!("Bitinject and add to result_buckets");
+
+            self.return_result_buffer(result);
         }
 
         Buffers::return_buffer(&mut self.buffers.lifted_shares, x_);
