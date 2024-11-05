@@ -543,7 +543,11 @@ mod tests {
 
         for i in 0..database_size {
             let cleartext_neighbors = hawk_searcher
-                .search_to_insert(&mut cleartext_data.0, &mut cleartext_data.1, &(i as PointId))
+                .search_to_insert(
+                    &mut cleartext_data.0,
+                    &mut cleartext_data.1,
+                    &(i as PointId),
+                )
                 .await;
             assert!(
                 hawk_searcher
@@ -618,7 +622,9 @@ mod tests {
                     .eval_distance(&plaintext_inserts[comb2[0]], &plaintext_inserts[comb2[1]])
                     .await;
                 assert_eq!(
-                    aby3_store_protocol.less_than(&dist1_aby3, &dist2_aby3).await,
+                    aby3_store_protocol
+                        .less_than(&dist1_aby3, &dist2_aby3)
+                        .await,
                     plaintext_store.less_than(&dist1_plain, &dist2_plain).await,
                     "Failed at combo: {:?}, {:?}",
                     comb1,

@@ -185,7 +185,6 @@ mod tests {
             db0.get_distance(db3) < db1.get_distance(db2)
         );
 
-
         assert_eq!(
             plaintext_store.less_than(&d10, &d23).await,
             db1.get_distance(db0) < db2.get_distance(db3)
