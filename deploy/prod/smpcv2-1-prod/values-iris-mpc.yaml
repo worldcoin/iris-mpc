@@ -116,7 +116,7 @@ env:
     value: "true"
 
   - name: SMPC__DISABLE_PERSISTENCE
-    value: "false"
+    value: "true"
 
   - name: SMPC__NODE_HOSTNAMES
     value: '["iris-mpc-node.1.smpcv2.worldcoin.org","iris-mpc-node.2.smpcv2.worldcoin.org","iris-mpc-node.3.smpcv2.worldcoin.org"]'
