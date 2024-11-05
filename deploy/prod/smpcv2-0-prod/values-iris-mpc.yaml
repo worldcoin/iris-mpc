@@ -95,6 +95,9 @@ env:
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
 
+  - name: DUMMY_RESTART
+    value: "true"
+
   - name: SMPC__SERVICE__METRICS__HOST
     valueFrom:
       fieldRef:
