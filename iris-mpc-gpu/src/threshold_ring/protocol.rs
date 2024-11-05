@@ -1012,6 +1012,44 @@ impl Circuits {
         Buffers::allocate_buffer(size, &self.devs)
     }
 
+    fn bit_inject_arithmetic_xor(
+        &mut self,
+        inp: &[ChunkShareView<u64>],
+        outp: &mut [ChunkShareView<u32>],
+        streams: &[CudaStream],
+    ) {
+        debug_assert_eq!(self.n_devices, inp.len());
+        debug_assert_eq!(self.n_devices, outp.len());
+
+        let mut x1_ = Buffers::take_buffer(&mut self.buffers.lifted_shares_split2);
+        let mut x2_ = Buffers::take_buffer(&mut self.buffers.lifted_shares_split3);
+
+        // Reuse the existing buffers to have less memory
+        // the transmute_mut is safe because we know that one u64 is 2 u32s, and the
+        // buffer is aligned properly for the transmute
+        let mut x1_a = Vec::with_capacity(x1_.len());
+        let mut x1_b = Vec::with_capacity(x1_.len());
+        for x in x1_.iter_mut() {
+            let a: CudaViewMut<u32> = unsafe { x.a.transmute_mut(64 * self.chunk_size).unwrap() };
+            let b: CudaViewMut<u32> = unsafe { x.b.transmute_mut(64 * self.chunk_size).unwrap() };
+            x1_a.push(a);
+            x1_b.push(b);
+        }
+        let mut x2_a = Vec::with_capacity(x2_.len());
+        let mut x2_b = Vec::with_capacity(x2_.len());
+        for x in x2_.iter_mut() {
+            let a: CudaViewMut<u32> = unsafe { x.a.transmute_mut(64 * self.chunk_size).unwrap() };
+            let b: CudaViewMut<u32> = unsafe { x.b.transmute_mut(64 * self.chunk_size).unwrap() };
+            x2_a.push(a);
+            x2_b.push(b);
+        }
+
+        todo!("Perform the actual injection");
+
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_split2, x1_);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_split3, x2_);
+    }
+
     fn bit_inject_ot_sender(
         &mut self,
         inp: &[ChunkShareView<u64>],
@@ -2054,7 +2092,7 @@ impl Circuits {
         mask_dots: &[ChunkShareView<u16>],
         streams: &[CudaStream],
         thresholds_a: &[u16], // Thresholds are given as a/b, where b=2^16
-        buckets: &mut [ChunkShare<u64>],
+        buckets: &mut [ChunkShare<u32>],
     ) {
         assert_eq!(self.n_devices, code_dots.len());
         assert_eq!(self.n_devices, mask_dots.len());
@@ -2076,19 +2114,21 @@ impl Circuits {
         self.lift_mpc(mask_dots, &mut masks, &mut corrections, streams);
         self.finalize_lifts(&mut masks, &mut codes, &corrections, code_dots, streams);
 
-        for a in thresholds_a {
+        for (a, bucket) in thresholds_a.iter().zip(buckets.iter_mut()) {
             self.lifted_sub(&mut x, &masks, &codes, *a as u32, streams);
             self.extract_msb(&mut x, streams);
 
             // Result is in the first bit of the result buffer
-            let mut result = self.take_result_buffer();
-
+            let result = self.take_result_buffer();
             let mut bits = Vec::with_capacity(self.n_devices);
             for r in result.iter() {
                 // Result is in the first bit of the input
                 bits.push(r.get_offset(0, self.chunk_size));
             }
-            todo!("Bitinject and add to result_buckets");
+
+            // Expand the result buffer to the x buffer and perform arithmetic xor
+            self.bit_inject_arithmetic_xor(&bits, &mut x, streams);
+            todo!("Add to buckets");
 
             self.return_result_buffer(result);
         }
