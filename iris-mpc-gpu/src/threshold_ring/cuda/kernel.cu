@@ -180,6 +180,10 @@ __device__ void finalize_lift(U32 *mask, U32 *code_lift, U16 *mask_corr1,
   mul_lift_b(code_lift, code);
 }
 
+__device__ void lifted_sub(U32 *mask, U32 *code, U32 *output, U32 a) {
+  *output = *mask * a - *code;
+}
+
 __device__ void split_inner(U64 *x1_a, U64 *x1_b, U64 *x2_a, U64 *x2_b,
                             U64 *x3_a, U64 *x3_b, int id) {
   U64 tmp_a = *x1_a;
@@ -357,6 +361,18 @@ shared_finalize_lift(U32 *mask_a, U32 *mask_b, U32 *code_lift_a,
                   &mask_corr_a[i + n], &code_a[i]);
     finalize_lift(&mask_b[i], &code_lift_b[i], &mask_corr_b[i],
                   &mask_corr_b[i + n], &code_b[i]);
+  }
+}
+
+// Puts the results into output_a and output_b
+extern "C" __global__ void shared_lifted_sub(U32 *mask_a, U32 *mask_b,
+                                             U32 *code_a, U32 *code_b,
+                                             U32 *output_a, U32 *output_b,
+                                             U32 a, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    lifted_sub(&mask_a[i], &code_a[i], output_a[i], a);
+    lifted_sub(&mask_b[i], &code_b[i], output_n[i], a);
   }
 }
 

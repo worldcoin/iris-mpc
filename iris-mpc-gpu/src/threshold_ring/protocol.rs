@@ -132,6 +132,7 @@ struct Kernels {
     pub(crate) split:                 CudaFunction,
     pub(crate) lift_split:            CudaFunction,
     pub(crate) lift_mul_sub:          CudaFunction,
+    pub(crate) lifted_sub:            CudaFunction,
     pub(crate) finalize_lift:         CudaFunction,
     pub(crate) transpose_32x64:       CudaFunction,
     pub(crate) transpose_16x64:       CudaFunction,
@@ -157,6 +158,7 @@ impl Kernels {
             "lift_split",
             "shared_lift_mul_sub",
             "shared_finalize_lift",
+            "shared_lifted_sub",
             "shared_u32_transpose_pack_u64",
             "shared_u16_transpose_pack_u64",
             "packed_ot_sender",
@@ -180,6 +182,7 @@ impl Kernels {
         let finalize_lift = dev
             .get_func(Self::MOD_NAME, "shared_finalize_lift")
             .unwrap();
+        let lifted_sub = dev.get_func(Self::MOD_NAME, "shared_lifted_sub").unwrap();
         let transpose_32x64 = dev
             .get_func(Self::MOD_NAME, "shared_u32_transpose_pack_u64")
             .unwrap();
@@ -202,6 +205,7 @@ impl Kernels {
             split,
             lift_split,
             lift_mul_sub,
+            lifted_sub,
             finalize_lift,
             transpose_32x64,
             transpose_16x64,
@@ -216,7 +220,8 @@ impl Kernels {
 
 struct Buffers {
     lifted_shares: Option<Vec<ChunkShare<u32>>>,
-    lifted_shares2: Option<Vec<ChunkShare<u32>>>,
+    lifted_shares_buckets1: Option<Vec<ChunkShare<u32>>>,
+    lifted_shares_buckets2: Option<Vec<ChunkShare<u32>>>,
     lifting_corrections: Option<Vec<ChunkShare<u16>>>,
     // This is also the buffer where the result is stored:
     lifted_shares_split1_result: Option<Vec<ChunkShare<u64>>>,
@@ -233,7 +238,8 @@ struct Buffers {
 impl Buffers {
     fn new(devices: &[Arc<CudaDevice>], chunk_size: usize) -> Self {
         let lifted_shares = Some(Self::allocate_buffer(chunk_size * 64, devices));
-        let lifted_shares2 = Some(Self::allocate_buffer(chunk_size * 64, devices));
+        let lifted_shares_buckets1 = Some(Self::allocate_buffer(chunk_size * 64, devices));
+        let lifted_shares_buckets2 = Some(Self::allocate_buffer(chunk_size * 64, devices));
         let lifted_shares_split1_result = Some(Self::allocate_buffer(chunk_size * 32, devices));
         let lifted_shares_split2 = Some(Self::allocate_buffer(chunk_size * 32, devices));
         let lifted_shares_split3 = Some(Self::allocate_buffer(chunk_size * 32, devices));
@@ -249,7 +255,8 @@ impl Buffers {
 
         Buffers {
             lifted_shares,
-            lifted_shares2,
+            lifted_shares_buckets1,
+            lifted_shares_buckets2,
             lifting_corrections,
             lifted_shares_split1_result,
             lifted_shares_split2,
@@ -328,7 +335,8 @@ impl Buffers {
 
     fn check_buffers(&self) {
         assert!(self.lifted_shares.is_some());
-        assert!(self.lifted_shares2.is_some());
+        assert!(self.lifted_shares_buckets1.is_some());
+        assert!(self.lifted_shares_buckets2.is_some());
         assert!(self.lifted_shares_split1_result.is_some());
         assert!(self.lifted_shares_split2.is_some());
         assert!(self.lifted_shares_split3.is_some());
@@ -1531,6 +1539,48 @@ impl Circuits {
         }
     }
 
+    pub fn lifted_sub(
+        &mut self,
+        output: &mut [ChunkShareView<u32>],
+        mask_lifted: &[ChunkShareView<u32>],
+        code_lifted: &[ChunkShareView<u32>],
+        a: u32,
+        streams: &[CudaStream],
+    ) {
+        assert_eq!(self.n_devices, mask_lifted.len());
+        assert_eq!(self.n_devices, code_lifted.len());
+        assert_eq!(self.n_devices, output.len());
+
+        for (idx, (m, c, o)) in izip!(mask_lifted, code_lifted, output).enumerate() {
+            let cfg = launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 64,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
+            unsafe {
+                self.kernels[idx]
+                    .lifted_sub
+                    .clone()
+                    .launch_on_stream(
+                        &streams[idx],
+                        cfg,
+                        (
+                            &m.a,
+                            &m.b,
+                            &c.a,
+                            &c.b,
+                            &o.a,
+                            &o.b,
+                            a,
+                            self.chunk_size as u32 * 64,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
     // input should be of size: n_devices * input_size
     // outputs the uncorrected lifted shares and the injected correction values
     pub fn lift_mpc(
@@ -2013,11 +2063,13 @@ impl Circuits {
             assert!(chunk.len() % 64 == 0);
         }
 
-        let x1_ = Buffers::take_buffer(&mut self.buffers.lifted_shares);
-        let x2_ = Buffers::take_buffer(&mut self.buffers.lifted_shares2);
+        let x_ = Buffers::take_buffer(&mut self.buffers.lifted_shares);
+        let x1_ = Buffers::take_buffer(&mut self.buffers.lifted_shares_buckets1);
+        let x2_ = Buffers::take_buffer(&mut self.buffers.lifted_shares_buckets2);
         let corrections_ = Buffers::take_buffer(&mut self.buffers.lifting_corrections);
         let mut masks = Buffers::get_buffer_chunk(&x1_, 64 * self.chunk_size);
         let mut codes = Buffers::get_buffer_chunk(&x1_, 64 * self.chunk_size);
+        let mut x = Buffers::get_buffer_chunk(&x_, 64 * self.chunk_size);
         let mut corrections = Buffers::get_buffer_chunk(&corrections_, 128 * self.chunk_size);
 
         // Start with lifting masks
@@ -2025,11 +2077,16 @@ impl Circuits {
         self.finalize_lifts(&mut masks, &mut codes, &corrections, code_dots, streams);
 
         for a in thresholds_a {
-            // todo calculate the comparisons
+            self.lifted_sub(&mut x, &masks, &codes, *a as u32, streams);
+            self.extract_msb(&mut x, streams);
+
+            // Result is in the first bit of the result buffer
+            todo!("Bitinject and add to result_buckets");
         }
 
-        Buffers::return_buffer(&mut self.buffers.lifted_shares, x1_);
-        Buffers::return_buffer(&mut self.buffers.lifted_shares2, x2_);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares, x_);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_buckets1, x1_);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_buckets2, x2_);
         Buffers::return_buffer(&mut self.buffers.lifting_corrections, corrections_);
         self.buffers.check_buffers();
     }
