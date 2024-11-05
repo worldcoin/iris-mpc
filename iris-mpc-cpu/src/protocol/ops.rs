@@ -574,9 +574,9 @@ mod tests {
         let plaintext_second = PlaintextIris(iris_db[1].clone());
         let (plain_d1, plain_d2) = plaintext_first.dot_distance_fraction(&plaintext_second);
         assert_eq!(output0.0[0], plain_d1 as u16);
-        assert_eq!(output0.0[1], plain_d2 as u16);
+        assert_eq!(output0.0[1], plain_d2);
 
         assert_eq!(output0.1[0], plain_d1 as u16);
-        assert_eq!(output0.1[1], plain_d2 as u16);
+        assert_eq!(output0.1[1], plain_d2);
     }
 }
