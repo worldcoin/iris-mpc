@@ -132,6 +132,7 @@ struct Kernels {
     pub(crate) split:                 CudaFunction,
     pub(crate) lift_split:            CudaFunction,
     pub(crate) lift_mul_sub:          CudaFunction,
+    pub(crate) finalize_lift:         CudaFunction,
     pub(crate) transpose_32x64:       CudaFunction,
     pub(crate) transpose_16x64:       CudaFunction,
     pub(crate) ot_sender:             CudaFunction,
@@ -155,6 +156,7 @@ impl Kernels {
             "split",
             "lift_split",
             "shared_lift_mul_sub",
+            "shared_finalize_lift",
             "shared_u32_transpose_pack_u64",
             "shared_u16_transpose_pack_u64",
             "packed_ot_sender",
@@ -175,6 +177,9 @@ impl Kernels {
         let split = dev.get_func(Self::MOD_NAME, "split").unwrap();
         let lift_split = dev.get_func(Self::MOD_NAME, "lift_split").unwrap();
         let lift_mul_sub = dev.get_func(Self::MOD_NAME, "shared_lift_mul_sub").unwrap();
+        let finalize_lift = dev
+            .get_func(Self::MOD_NAME, "shared_finalize_lift")
+            .unwrap();
         let transpose_32x64 = dev
             .get_func(Self::MOD_NAME, "shared_u32_transpose_pack_u64")
             .unwrap();
@@ -197,6 +202,7 @@ impl Kernels {
             split,
             lift_split,
             lift_mul_sub,
+            finalize_lift,
             transpose_32x64,
             transpose_16x64,
             ot_sender,
@@ -210,6 +216,7 @@ impl Kernels {
 
 struct Buffers {
     lifted_shares: Option<Vec<ChunkShare<u32>>>,
+    lifted_shares2: Option<Vec<ChunkShare<u32>>>,
     lifting_corrections: Option<Vec<ChunkShare<u16>>>,
     // This is also the buffer where the result is stored:
     lifted_shares_split1_result: Option<Vec<ChunkShare<u64>>>,
@@ -226,6 +233,7 @@ struct Buffers {
 impl Buffers {
     fn new(devices: &[Arc<CudaDevice>], chunk_size: usize) -> Self {
         let lifted_shares = Some(Self::allocate_buffer(chunk_size * 64, devices));
+        let lifted_shares2 = Some(Self::allocate_buffer(chunk_size * 64, devices));
         let lifted_shares_split1_result = Some(Self::allocate_buffer(chunk_size * 32, devices));
         let lifted_shares_split2 = Some(Self::allocate_buffer(chunk_size * 32, devices));
         let lifted_shares_split3 = Some(Self::allocate_buffer(chunk_size * 32, devices));
@@ -241,6 +249,7 @@ impl Buffers {
 
         Buffers {
             lifted_shares,
+            lifted_shares2,
             lifting_corrections,
             lifted_shares_split1_result,
             lifted_shares_split2,
@@ -319,6 +328,7 @@ impl Buffers {
 
     fn check_buffers(&self) {
         assert!(self.lifted_shares.is_some());
+        assert!(self.lifted_shares2.is_some());
         assert!(self.lifted_shares_split1_result.is_some());
         assert!(self.lifted_shares_split2.is_some());
         assert!(self.lifted_shares_split3.is_some());
@@ -1475,6 +1485,52 @@ impl Circuits {
         }
     }
 
+    pub fn finalize_lifts(
+        &mut self,
+        mask_lifted: &mut [ChunkShareView<u32>],
+        code_lifted: &mut [ChunkShareView<u32>],
+        mask_correction: &[ChunkShareView<u16>],
+        code: &[ChunkShareView<u16>],
+        streams: &[CudaStream],
+    ) {
+        assert_eq!(self.n_devices, mask_lifted.len());
+        assert_eq!(self.n_devices, code_lifted.len());
+        assert_eq!(self.n_devices, mask_correction.len());
+        assert_eq!(self.n_devices, code.len());
+
+        for (idx, (m, cl, mc, c)) in
+            izip!(mask_lifted, code_lifted, mask_correction, code).enumerate()
+        {
+            let cfg = launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 64,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
+            unsafe {
+                self.kernels[idx]
+                    .lift_mul_sub
+                    .clone()
+                    .launch_on_stream(
+                        &streams[idx],
+                        cfg,
+                        (
+                            &m.a,
+                            &m.b,
+                            &cl.a,
+                            &cl.b,
+                            &mc.a,
+                            &mc.b,
+                            &c.a,
+                            &c.b,
+                            self.chunk_size as u32 * 64,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
     // input should be of size: n_devices * input_size
     // outputs the uncorrected lifted shares and the injected correction values
     pub fn lift_mpc(
@@ -1940,5 +1996,41 @@ impl Circuits {
         self.buffers.check_buffers();
 
         // Result is in the lowest bit of the result buffer on the first gpu
+    }
+
+    pub fn compare_multiple_thresholds(
+        &mut self,
+        code_dots: &[ChunkShareView<u16>],
+        mask_dots: &[ChunkShareView<u16>],
+        streams: &[CudaStream],
+        thresholds_a: &[u16], // Thresholds are given as a/b, where b=2^16
+        buckets: &mut [ChunkShare<u64>],
+    ) {
+        assert_eq!(self.n_devices, code_dots.len());
+        assert_eq!(self.n_devices, mask_dots.len());
+        assert_eq!(thresholds_a.len(), buckets.len());
+        for chunk in code_dots.iter().chain(mask_dots.iter()) {
+            assert!(chunk.len() % 64 == 0);
+        }
+
+        let x1_ = Buffers::take_buffer(&mut self.buffers.lifted_shares);
+        let x2_ = Buffers::take_buffer(&mut self.buffers.lifted_shares2);
+        let corrections_ = Buffers::take_buffer(&mut self.buffers.lifting_corrections);
+        let mut masks = Buffers::get_buffer_chunk(&x1_, 64 * self.chunk_size);
+        let mut codes = Buffers::get_buffer_chunk(&x1_, 64 * self.chunk_size);
+        let mut corrections = Buffers::get_buffer_chunk(&corrections_, 128 * self.chunk_size);
+
+        // Start with lifting masks
+        self.lift_mpc(mask_dots, &mut masks, &mut corrections, streams);
+        self.finalize_lifts(&mut masks, &mut codes, &corrections, code_dots, streams);
+
+        for a in thresholds_a {
+            // todo calculate the comparisons
+        }
+
+        Buffers::return_buffer(&mut self.buffers.lifted_shares, x1_);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares2, x2_);
+        Buffers::return_buffer(&mut self.buffers.lifting_corrections, corrections_);
+        self.buffers.check_buffers();
     }
 }
