@@ -661,6 +661,30 @@ impl Circuits {
         }
     }
 
+    fn arithmetic_xor_pre_assign(
+        &mut self,
+        x1: &mut ChunkShareView<u32>,
+        x2: &ChunkShareView<u32>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) {
+        let cfg = launch_config_from_elements_and_threads(
+            x1.len() as u32,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
+        );
+
+        // TODO both randomness required
+
+        unsafe {
+            self.kernels[idx]
+                .arithmetic_xor_assign
+                .clone()
+                .launch_on_stream(&streams[idx], cfg, (&x1.a, &x1.b, &x2.a, &x2.b, x1.len()))
+                .unwrap();
+        }
+    }
+
     // Encrypt using chacha in my_rng
     fn chacha1_encrypt_u16(
         &mut self,
