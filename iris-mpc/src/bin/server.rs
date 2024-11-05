@@ -235,7 +235,8 @@ async fn receive_batch(
 
                         if skip_request_ids.contains(&smpc_request.signup_id) {
                             // Some party (maybe us) already meant to delete this request, so we
-                            // skip it.
+                            // skip it. Ignore this message when calculating the batch size.
+                            msg_counter -= 1;
                             continue;
                         }
 
