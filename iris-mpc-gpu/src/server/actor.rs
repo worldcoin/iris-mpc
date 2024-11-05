@@ -875,6 +875,7 @@ impl ServerActor {
             processed_mil_elements_per_second
         );
 
+        metrics::histogram!("batch_duration").record(now.elapsed().as_secs_f64());
         metrics::histogram!("processed_melems_per_second")
             .record(processed_mil_elements_per_second);
 
@@ -884,7 +885,10 @@ impl ServerActor {
             previous_total_db_size,
             new_db_size
         );
+
         metrics::gauge!("db_size").set(new_db_size as f64);
+        metrics::gauge!("batch_size").set(batch_size as f64);
+        metrics::gauge!("max_batch_size").set(self.max_batch_size as f64);
 
         Ok(())
     }
