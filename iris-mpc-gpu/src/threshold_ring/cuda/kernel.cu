@@ -216,6 +216,37 @@ __device__ void split_inner(U64 *x1_a, U64 *x1_b, U64 *x2_a, U64 *x2_b,
   }
 }
 
+__device__ void split_for_arithmetic_xor_inner(U32 *x1_a, U32 *x1_b, U32 *x2_a,
+                                               U32 *x2_b, U32 *x3_a, U32 *x3_b,
+                                               U32 inp_a, U32 inp_b, int id) {
+  switch (id) {
+  case 0:
+    *x1_a = inp_a;
+    *x1_b = 0;
+    *x2_a = 0;
+    *x2_b = 0;
+    *x3_a = 0;
+    *x3_b = inp_b;
+    break;
+  case 1:
+    *x1_a = 0;
+    *x1_b = inp_b;
+    *x2_a = inp_a;
+    *x2_b = 0;
+    *x3_a = 0;
+    *x3_b = 0;
+    break;
+  case 2:
+    *x1_a = 0;
+    *x1_b = 0;
+    *x2_a = 0;
+    *x2_b = inp_b;
+    *x3_a = inp_a;
+    *x3_b = 0;
+    break;
+  }
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // Test kernels
 ////////////////////////////////////////////////////////////////////////////////
@@ -311,6 +342,20 @@ extern "C" __global__ void split(U64 *x1_a, U64 *x1_b, U64 *x2_a, U64 *x2_b,
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     split_inner(&x1_a[i], &x1_b[i], &x2_a[i], &x2_b[i], &x3_a[i], &x3_b[i], id);
+  }
+}
+
+extern "C" __global__ void
+split_for_arithmetic_xor(U32 *x1_a, U32 *x1_b, U32 *x2_a, U32 *x2_b, U32 *x3_a,
+                         U32 *x3_b, U64 *in_a, U64 *in_b, size_t n, int id) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < 64 * n) {
+    size_t wordindex = i / 64;
+    size_t bitindex = i % 64;
+    U32 my_bit_a = (in_a[wordindex] >> bitindex) & 1;
+    U32 my_bit_b = (in_b[wordindex] >> bitindex) & 1;
+    split_for_arithmetic_xor_inner(&x1_a[i], &x1_b[i], &x2_a[i], &x2_b[i],
+                                   &x3_a[i], &x3_b[i], my_bit_a, my_bit_b, id);
   }
 }
 

@@ -139,6 +139,7 @@ struct Kernels {
     pub(crate) ot_sender:             CudaFunction,
     pub(crate) ot_receiver:           CudaFunction,
     pub(crate) ot_helper:             CudaFunction,
+    pub(crate) split_arithmetic_xor:  CudaFunction,
     pub(crate) assign:                CudaFunction,
     pub(crate) collapse_u64_helper:   CudaFunction,
 }
@@ -164,6 +165,7 @@ impl Kernels {
             "packed_ot_sender",
             "packed_ot_receiver",
             "packed_ot_helper",
+            "split_for_arithmetic_xor",
             "shared_assign",
             "collapse_u64_helper",
         ])
@@ -192,6 +194,9 @@ impl Kernels {
         let ot_sender = dev.get_func(Self::MOD_NAME, "packed_ot_sender").unwrap();
         let ot_receiver = dev.get_func(Self::MOD_NAME, "packed_ot_receiver").unwrap();
         let ot_helper = dev.get_func(Self::MOD_NAME, "packed_ot_helper").unwrap();
+        let split_arithmetic_xor = dev
+            .get_func(Self::MOD_NAME, "split_for_arithmetic_xor")
+            .unwrap();
         let assign = dev.get_func(Self::MOD_NAME, "shared_assign").unwrap();
         let collapse_u64_helper = dev.get_func(Self::MOD_NAME, "collapse_u64_helper").unwrap();
 
@@ -212,6 +217,7 @@ impl Kernels {
             ot_sender,
             ot_receiver,
             ot_helper,
+            split_arithmetic_xor,
             assign,
             collapse_u64_helper,
         }
@@ -1012,6 +1018,52 @@ impl Circuits {
         Buffers::allocate_buffer(size, &self.devs)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn split_for_arithmetic_xor(
+        &mut self,
+        inp: &[ChunkShareView<u64>],
+        x1: &mut [ChunkShareView<u32>],
+        x2: &mut [ChunkShareView<u32>],
+        x3: &mut [ChunkShareView<u32>],
+        streams: &[CudaStream],
+    ) {
+        debug_assert_eq!(self.n_devices, inp.len());
+        debug_assert_eq!(self.n_devices, x1.len());
+        debug_assert_eq!(self.n_devices, x2.len());
+        debug_assert_eq!(self.n_devices, x3.len());
+
+        for (idx, (inp, x1, x2, x3)) in izip!(inp, x1, x2, x3).enumerate() {
+            let cfg = launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 64,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
+            unsafe {
+                self.kernels[idx]
+                    .split_arithmetic_xor
+                    .clone()
+                    .launch_on_stream(
+                        &streams[idx],
+                        cfg,
+                        (
+                            &x1.a,
+                            &x1.b,
+                            &x2.a,
+                            &x2.b,
+                            &x3.a,
+                            &x3.b,
+                            &inp.a,
+                            &inp.b,
+                            self.chunk_size,
+                            self.peer_id as u32,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
     fn bit_inject_arithmetic_xor(
         &mut self,
         inp: &[ChunkShareView<u64>],
@@ -1027,22 +1079,22 @@ impl Circuits {
         // Reuse the existing buffers to have less memory
         // the transmute_mut is safe because we know that one u64 is 2 u32s, and the
         // buffer is aligned properly for the transmute
-        let mut x1_a = Vec::with_capacity(x1_.len());
-        let mut x1_b = Vec::with_capacity(x1_.len());
+        let mut x1 = Vec::with_capacity(x1_.len());
         for x in x1_.iter_mut() {
-            let a: CudaViewMut<u32> = unsafe { x.a.transmute_mut(64 * self.chunk_size).unwrap() };
-            let b: CudaViewMut<u32> = unsafe { x.b.transmute_mut(64 * self.chunk_size).unwrap() };
-            x1_a.push(a);
-            x1_b.push(b);
+            let a: CudaView<u32> = unsafe { x.a.transmute(64 * self.chunk_size).unwrap() };
+            let b: CudaView<u32> = unsafe { x.b.transmute(64 * self.chunk_size).unwrap() };
+            let view = ChunkShareView { a, b };
+            x1.push(view);
         }
-        let mut x2_a = Vec::with_capacity(x2_.len());
-        let mut x2_b = Vec::with_capacity(x2_.len());
+        let mut x2 = Vec::with_capacity(x2_.len());
         for x in x2_.iter_mut() {
-            let a: CudaViewMut<u32> = unsafe { x.a.transmute_mut(64 * self.chunk_size).unwrap() };
-            let b: CudaViewMut<u32> = unsafe { x.b.transmute_mut(64 * self.chunk_size).unwrap() };
-            x2_a.push(a);
-            x2_b.push(b);
+            let a: CudaView<u32> = unsafe { x.a.transmute(64 * self.chunk_size).unwrap() };
+            let b: CudaView<u32> = unsafe { x.b.transmute(64 * self.chunk_size).unwrap() };
+            let view = ChunkShareView { a, b };
+            x2.push(view);
         }
+
+        self.split_for_arithmetic_xor(inp, &mut x1, &mut x2, outp, streams);
 
         todo!("Perform the actual injection");
 
