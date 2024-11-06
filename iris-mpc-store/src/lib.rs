@@ -321,7 +321,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
     }
 
     pub async fn get_irises_sequence_id(&self) -> Result<usize> {
-        let id: (i64,) = sqlx::query_as("SELECT currval(pg_get_serial_sequence('irises', 'id'))")
+        let id: (i64,) = sqlx::query_as("SELECT last_value FROM irises_id_seq")
             .fetch_one(&self.pool)
             .await?;
         Ok(id.0 as usize)
