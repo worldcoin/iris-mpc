@@ -20,7 +20,7 @@ aws-sdk-kms = { version = "1.44.0" }
 aws-sdk-sns = { version = "1.44.0" }
 aws-sdk-sqs = { version = "1.36.0" }
 aws-sdk-s3 = { version = "1.50.0" }
-aws-sdk-secretsmanager = { version = "1.47.0" }
+aws-sdk-secretsmanager = { version = "1.52.0" }
 axum = "0.7"
 clap = { version = "4", features = ["derive", "env"] }
 base64 = "0.22.1"
