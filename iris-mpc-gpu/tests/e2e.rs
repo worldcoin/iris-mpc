@@ -8,7 +8,7 @@ mod e2e_test {
     };
     use iris_mpc_gpu::{
         helpers::device_manager::DeviceManager,
-        server::{BatchQuery, ServerActor, ServerJobResult},
+        server::{BatchQuery, BatchQueryEntriesPreprocessed, ServerActor, ServerJobResult},
     };
     use rand::{rngs::StdRng, Rng, SeedableRng};
     use std::{collections::HashMap, env, sync::Arc};
@@ -378,6 +378,11 @@ mod e2e_test {
             batch1.store_right = batch1.store_left.clone();
             batch2.store_right = batch2.store_left.clone();
 
+            // Preprocess the batches
+            preprocess_batch(&mut batch0)?;
+            preprocess_batch(&mut batch1)?;
+            preprocess_batch(&mut batch2)?;
+
             // send batches to servers
             let res0_fut = handle0.submit_batch_query(batch0).await;
             let res1_fut = handle1.submit_batch_query(batch1).await;
@@ -438,6 +443,16 @@ mod e2e_test {
         actor1_task.await.unwrap();
         actor2_task.await.unwrap();
 
+        Ok(())
+    }
+
+    fn preprocess_batch(batch: &mut BatchQuery) -> Result<()> {
+        batch.query_left_preprocessed =
+            BatchQueryEntriesPreprocessed::from(batch.query_left.clone());
+        batch.query_right_preprocessed =
+            BatchQueryEntriesPreprocessed::from(batch.query_right.clone());
+        batch.db_left_preprocessed = BatchQueryEntriesPreprocessed::from(batch.db_left.clone());
+        batch.db_right_preprocessed = BatchQueryEntriesPreprocessed::from(batch.db_right.clone());
         Ok(())
     }
 }

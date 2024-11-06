@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:v0.8.36"
+image: "ghcr.io/worldcoin/iris-mpc:v0.8.43"
 
 environment: prod
 replicaCount: 1
@@ -13,6 +13,9 @@ ports:
   - containerPort: 3000
     name: health
     protocol: TCP
+#  - containerPort: 4000
+#    name: nccl
+#    protocol: TCP
 
 livenessProbe:
   initialDelaySeconds: 300
@@ -30,8 +33,8 @@ readinessProbe:
 
 startupProbe:
   enabled: true
-  initialDelaySeconds: 600
-  failureThreshold: 200
+  initialDelaySeconds: 900
+  failureThreshold: 10
   periodSeconds: 30
   httpGet:
     path: /health

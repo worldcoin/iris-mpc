@@ -9,7 +9,13 @@ env:
     value: "1"
 
   - name: NCCL_SOCKET_IFNAME
-    value: "eth0"
+    value: "eth"
+
+  - name: FI_EFA_USE_DEVICE_RDMA
+    value: "1"
+
+  - name: NCCL_IB_TIMEOUT
+    value: "30"
 
   - name: NCCL_COMM_ID
     value: "iris-mpc-node.1.smpcv2.worldcoin.org:4000"
@@ -51,13 +57,13 @@ env:
         name: application
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "600"
+    value: "120"
 
   - name: SMPC__HEARTBEAT_INTERVAL_SECS
     value: "2"
 
   - name: SMPC__HEARTBEAT_INITIAL_RETRIES
-    value: "50"
+    value: "1000"
 
   - name: SMPC__PATH
     value: "/data/"
@@ -78,13 +84,13 @@ env:
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
-    value: "100"
+    value: "0"
 
   - name: SMPC__MAX_DB_SIZE
     value: "10000000"
 
   - name: SMPC__FAKE_DB_SIZE
-    value: "1000000"
+    value: "0"
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
@@ -102,7 +108,7 @@ env:
 
   - name: SMPC__SERVICE__METRICS__BUFFER_SIZE
     value: "1024"
-  
+
   - name: SMPC__SERVICE__METRICS__PREFIX
     value: "smpcv2-2"
 
@@ -110,7 +116,7 @@ env:
     value: "true"
 
   - name: SMPC__DISABLE_PERSISTENCE
-    value: "true"
+    value: "false"
 
   - name: SMPC__NODE_HOSTNAMES
     value: '["iris-mpc-node.1.smpcv2.worldcoin.org","iris-mpc-node.2.smpcv2.worldcoin.org","iris-mpc-node.3.smpcv2.worldcoin.org"]'

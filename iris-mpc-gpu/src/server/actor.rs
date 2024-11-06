@@ -31,7 +31,7 @@ use iris_mpc_common::{
 use itertools::Itertools;
 use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
-use std::{collections::HashMap, mem, slice::SliceIndex, sync::Arc, time::Instant};
+use std::{collections::HashMap, mem, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
 
 macro_rules! record_stream_time {
@@ -499,63 +499,13 @@ impl ServerActor {
                 && batch_size * ROTATIONS == batch.db_left.code.len()
                 && batch_size * ROTATIONS == batch.db_left.mask.len()
                 && batch_size * ROTATIONS == batch.db_right.code.len()
-                && batch_size * ROTATIONS == batch.db_right.mask.len(),
+                && batch_size * ROTATIONS == batch.db_right.mask.len()
+                && batch_size * ROTATIONS == batch.query_left_preprocessed.len()
+                && batch_size * ROTATIONS == batch.query_right_preprocessed.len()
+                && batch_size * ROTATIONS == batch.db_left_preprocessed.len()
+                && batch_size * ROTATIONS == batch.db_right_preprocessed.len(),
             "Query batch sizes mismatch"
         );
-
-        ///////////////////////////////////////////////////////////////////
-        /// DEBUG: performance testing
-        ///////////////////////////////////////////////////////////////////
-        let mut slices = vec![];
-        let mut slices1 = vec![];
-        let mut slices2 = vec![];
-        let mut slices3 = vec![];
-        const DUMMY_DATA_LEN: usize = 5 * (1 << 30);
-        for dev in self.device_manager.devices() {
-            let slice: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
-            let slice1: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
-            let slice2: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
-            let slice3: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
-            slices.push(Some(slice));
-            slices1.push(slice1);
-            slices2.push(slice2);
-            slices3.push(slice3);
-        }
-
-        let now = Instant::now();
-
-        for i in 0..self.device_manager.device_count() {
-            self.device_manager.device(i).bind_to_thread().unwrap();
-
-            self.comms[i]
-                .broadcast(&slices[i], &mut slices1[i], 0)
-                .unwrap();
-            self.comms[i]
-                .broadcast(&slices[i], &mut slices2[i], 1)
-                .unwrap();
-            self.comms[i]
-                .broadcast(&slices[i], &mut slices3[i], 2)
-                .unwrap();
-        }
-
-        for dev in self.device_manager.devices() {
-            dev.synchronize().unwrap();
-        }
-
-        let elapsed = now.elapsed();
-
-        let throughput = (DUMMY_DATA_LEN as f64 * self.device_manager.device_count() as f64 * 4f64)
-            / (elapsed.as_millis() as f64)
-            / 1_000_000_000f64
-            * 1_000f64;
-        tracing::info!(
-            "received in {:?} [{:.2} GB/s] [{:.2} Gbps]",
-            elapsed,
-            throughput,
-            throughput * 8f64
-        );
-
-        let now = Instant::now();
 
         ///////////////////////////////////////////////////////////////////
         // PERFORM DELETIONS (IF ANY)
@@ -613,47 +563,11 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         tracing::info!("Comparing left eye queries");
         // *Query* variant including Lagrange interpolation.
-        let compact_query_left = {
-            let code_query = preprocess_query(
-                &batch
-                    .query_left
-                    .code
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-
-            let mask_query = preprocess_query(
-                &batch
-                    .query_left
-                    .mask
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-            // *Storage* variant (no interpolation).
-            let code_query_insert = preprocess_query(
-                &batch
-                    .db_left
-                    .code
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-            let mask_query_insert = preprocess_query(
-                &batch
-                    .db_left
-                    .mask
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-            CompactQuery {
-                code_query,
-                mask_query,
-                code_query_insert,
-                mask_query_insert,
-            }
+        let compact_query_left = CompactQuery {
+            code_query:        batch.query_left_preprocessed.code.clone(),
+            mask_query:        batch.query_left_preprocessed.mask.clone(),
+            code_query_insert: batch.db_left_preprocessed.code.clone(),
+            mask_query_insert: batch.db_left_preprocessed.mask.clone(),
         };
         let query_store_left = batch.store_left;
 
@@ -685,47 +599,11 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         tracing::info!("Comparing right eye queries");
         // *Query* variant including Lagrange interpolation.
-        let compact_query_right = {
-            let code_query = preprocess_query(
-                &batch
-                    .query_right
-                    .code
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-
-            let mask_query = preprocess_query(
-                &batch
-                    .query_right
-                    .mask
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-            // *Storage* variant (no interpolation).
-            let code_query_insert = preprocess_query(
-                &batch
-                    .db_right
-                    .code
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-            let mask_query_insert = preprocess_query(
-                &batch
-                    .db_right
-                    .mask
-                    .into_iter()
-                    .flat_map(|e| e.coefs)
-                    .collect::<Vec<_>>(),
-            );
-            CompactQuery {
-                code_query,
-                mask_query,
-                code_query_insert,
-                mask_query_insert,
-            }
+        let compact_query_right = CompactQuery {
+            code_query:        batch.query_right_preprocessed.code.clone(),
+            mask_query:        batch.query_right_preprocessed.mask.clone(),
+            code_query_insert: batch.db_right_preprocessed.code.clone(),
+            mask_query_insert: batch.db_right_preprocessed.mask.clone(),
         };
         let query_store_right = batch.store_right;
 
@@ -1184,27 +1062,39 @@ impl ServerActor {
             self.device_manager
                 .await_event(request_streams, &current_exchange_event);
 
-            record_stream_time!(&self.device_manager, batch_streams, events, "db_reduce", {
-                compact_device_sums.compute_dot_reducer_against_db(
-                    &mut self.codes_engine,
-                    &mut self.masks_engine,
-                    code_db_slices,
-                    mask_db_slices,
-                    &dot_chunk_size,
-                    offset,
-                    request_streams,
-                );
-            });
+            record_stream_time!(
+                &self.device_manager,
+                request_streams,
+                events,
+                "db_reduce",
+                {
+                    compact_device_sums.compute_dot_reducer_against_db(
+                        &mut self.codes_engine,
+                        &mut self.masks_engine,
+                        code_db_slices,
+                        mask_db_slices,
+                        &dot_chunk_size,
+                        offset,
+                        request_streams,
+                    );
+                }
+            );
 
             self.device_manager
                 .record_event(request_streams, &next_dot_event);
 
-            record_stream_time!(&self.device_manager, batch_streams, events, "db_reshare", {
-                self.codes_engine
-                    .reshare_results(&dot_chunk_size, request_streams);
-                self.masks_engine
-                    .reshare_results(&dot_chunk_size, request_streams);
-            });
+            record_stream_time!(
+                &self.device_manager,
+                request_streams,
+                events,
+                "db_reshare",
+                {
+                    self.codes_engine
+                        .reshare_results(&dot_chunk_size, request_streams);
+                    self.masks_engine
+                        .reshare_results(&dot_chunk_size, request_streams);
+                }
+            );
 
             // ---- END PHASE 1 ----
 
@@ -1224,9 +1114,10 @@ impl ServerActor {
                 );
                 self.phase2
                     .set_chunk_size(max_chunk_size * self.max_batch_size * ROTATIONS / 64);
+
                 record_stream_time!(
                     &self.device_manager,
-                    batch_streams,
+                    request_streams,
                     events,
                     "db_threshold",
                     {
@@ -1244,20 +1135,22 @@ impl ServerActor {
                     .record_event(request_streams, &next_exchange_event);
 
                 let res = self.phase2.take_result_buffer();
-                open(
-                    &mut self.phase2,
-                    &res,
-                    &self.distance_comparator,
-                    db_match_bitmap,
-                    max_chunk_size * self.max_batch_size * ROTATIONS / 64,
-                    &dot_chunk_size,
-                    &chunk_size,
-                    offset,
-                    &self.current_db_sizes,
-                    &ignore_device_results,
-                    request_streams,
-                );
-                self.phase2.return_result_buffer(res);
+                record_stream_time!(&self.device_manager, request_streams, events, "db_open", {
+                    open(
+                        &mut self.phase2,
+                        &res,
+                        &self.distance_comparator,
+                        db_match_bitmap,
+                        max_chunk_size * self.max_batch_size * ROTATIONS / 64,
+                        &dot_chunk_size,
+                        &chunk_size,
+                        offset,
+                        &self.current_db_sizes,
+                        &ignore_device_results,
+                        request_streams,
+                    );
+                    self.phase2.return_result_buffer(res);
+                });
             }
             self.device_manager
                 .record_event(request_streams, &next_phase2_event);
@@ -1295,25 +1188,44 @@ impl ServerActor {
     }
 
     fn sync_batch_entries(&mut self, valid_entries: &[bool]) -> eyre::Result<Vec<bool>> {
+        tracing::info!(
+            party_id = self.party_id,
+            "valid_entries {:?} ({})",
+            valid_entries,
+            valid_entries.len()
+        );
+        tracing::info!(party_id = self.party_id, "sync_batch_entries start");
         let mut buffer = self
             .device_manager
             .device(0)
             .alloc_zeros(valid_entries.len() * self.comms[0].world_size())
             .unwrap();
 
+        tracing::info!(party_id = self.party_id, "htod_copy start");
+
         let buffer_self = self
             .device_manager
             .device(0)
             .htod_copy(valid_entries.iter().map(|&x| x as u8).collect::<Vec<_>>())?;
 
+        self.device_manager.device(0).synchronize()?;
+
+        tracing::info!(party_id = self.party_id, "all_gather start");
+
         self.comms[0]
             .all_gather(&buffer_self, &mut buffer)
             .map_err(|e| eyre!(format!("{:?}", e)))?;
+
+        self.device_manager.device(0).synchronize()?;
+
+        tracing::info!(party_id = self.party_id, "dtoh_sync_copy start");
 
         let results = self.device_manager.device(0).dtoh_sync_copy(&buffer)?;
         let results: Vec<_> = results
             .chunks_exact(results.len() / self.comms[0].world_size())
             .collect();
+
+        tracing::info!(party_id = self.party_id, "sync_batch_entries end");
 
         let mut valid_merged = vec![];
         for i in 0..results[0].len() {
@@ -1375,6 +1287,7 @@ fn log_timers(events: HashMap<&str, Vec<Vec<CUevent>>>) {
         let duration: f32 = event_vecs
             .chunks(2)
             .map(|pair| {
+                // Calculate the average duration per device
                 let (start_events, end_events) = (&pair[0], &pair[1]);
                 let total_duration: f32 = start_events
                     .iter()
