@@ -290,21 +290,34 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         Ok(())
     }
 
+    async fn set_sequence_id(
+        &self,
+        id: usize,
+        executor: impl sqlx::Executor<'_, Database = Postgres>,
+    ) -> Result<()> {
+        sqlx::query("SELECT setval(pg_get_serial_sequence('irises', 'id'), $1 + 1, false)")
+            .bind(id as i64)
+            .execute(executor)
+            .await?;
+        Ok(())
+    }
+
     pub async fn rollback(&self, db_len: usize) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+
         sqlx::query("DELETE FROM irises WHERE id > $1")
             .bind(db_len as i64)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
 
+        self.set_sequence_id(db_len, &mut *tx).await?;
+
+        tx.commit().await?;
         Ok(())
     }
 
     pub async fn set_irises_sequence_id(&self, id: usize) -> Result<()> {
-        sqlx::query("SELECT setval(pg_get_serial_sequence('irises', 'id'), $1 + 1, false)")
-            .bind(id as i64)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
+        self.set_sequence_id(id, &self.pool).await
     }
 
     pub async fn get_irises_sequence_id(&self) -> Result<usize> {
