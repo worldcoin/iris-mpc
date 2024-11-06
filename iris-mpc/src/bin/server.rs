@@ -648,6 +648,36 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     tracing::info!("Size of the database after init: {}", store_len);
 
+    // Check if the sequence id is consistent with the number of irises
+    let iris_sequence_id = store.get_irises_sequence_id().await?;
+    if iris_sequence_id != store_len {
+        tracing::warn!(
+            "Detected inconsistent iris sequence id {} != {}, resetting...",
+            iris_sequence_id,
+            store_len
+        );
+
+        // Reset the sequence id
+        store.set_irises_sequence_id(store_len).await?;
+
+        // Fetch again and check that the sequence id is consistent now
+        let store_len = store.count_irises().await?;
+        let iris_sequence_id = store.get_irises_sequence_id().await?;
+
+        if iris_sequence_id != store_len {
+            tracing::error!(
+                "Iris sequence id is still inconsistent: {} != {}",
+                iris_sequence_id,
+                store_len
+            );
+            eyre::bail!(
+                "Iris sequence id is still inconsistent: {} != {}",
+                iris_sequence_id,
+                store_len
+            );
+        }
+    }
+
     if store_len > config.max_db_size {
         tracing::error!("Database size exceeds maximum allowed size: {}", store_len);
         eyre::bail!("Database size exceeds maximum allowed size: {}", store_len);

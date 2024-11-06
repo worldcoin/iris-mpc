@@ -296,13 +296,22 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
             .execute(&self.pool)
             .await?;
 
-        // We also need to reset the sequence to avoid gaps in the IDs.
+        Ok(())
+    }
+
+    pub async fn set_irises_sequence_id(&self, id: usize) -> Result<()> {
         sqlx::query("SELECT setval(pg_get_serial_sequence('irises', 'id'), $1 + 1, false)")
-            .bind(db_len as i64)
+            .bind(id as i64)
             .execute(&self.pool)
             .await?;
-
         Ok(())
+    }
+
+    pub async fn get_irises_sequence_id(&self) -> Result<usize> {
+        let id: (i64,) = sqlx::query_as("SELECT currval(pg_get_serial_sequence('irises', 'id'))")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(id.0 as usize)
     }
 
     pub async fn insert_results(
