@@ -1,0 +1,15 @@
+[package]
+name = "iris-mpc-py"
+version = "0.1.0"
+publish = false
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "iris_mpc_py"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = "0.22.0"
