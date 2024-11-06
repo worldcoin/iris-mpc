@@ -1,3 +1,5 @@
+use std::ops::{Index, IndexMut};
+
 use hawk_pack::VectorStore;
 use iris_mpc_common::iris_db::iris::{IrisCode, MATCH_THRESHOLD_RATIO};
 
@@ -42,7 +44,34 @@ pub struct PlaintextPoint {
     is_persistent: bool,
 }
 
-pub type PointId = u32;
+#[derive(Copy, Debug, Clone, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
+pub struct PointId(u32);
+
+impl <T> Index<PointId> for Vec<T> {
+    type Output = T;
+
+    fn index(&self, index: PointId) -> &Self::Output {
+        self.index(index.0 as usize)
+    }
+}
+
+impl <T> IndexMut<PointId> for Vec<T> {
+    fn index_mut(&mut self, index: PointId) -> &mut Self::Output {
+        self.index_mut(index.0 as usize)
+    }
+}
+
+impl From<usize> for PointId {
+    fn from(value: usize) -> Self {
+        PointId(value as u32)
+    }
+}
+
+impl From<u32> for PointId {
+    fn from(value: u32) -> Self {
+        PointId(value)
+    }
+}
 
 impl PlaintextStore {
     pub fn prepare_query(&mut self, raw_query: IrisCode) -> <Self as VectorStore>::QueryRef {
@@ -52,7 +81,7 @@ impl PlaintextStore {
         });
 
         let point_id = self.points.len() - 1;
-        point_id as PointId
+        point_id.into()
     }
 
     /// Compare two distances between pairs of iris codes
@@ -65,12 +94,12 @@ impl PlaintextStore {
         distance2: &(PointId, PointId),
     ) -> (i32, i32) {
         let (x1, y1) = (
-            &self.points[distance1.0 as usize],
-            &self.points[distance1.1 as usize],
+            &self.points[distance1.0],
+            &self.points[distance1.1],
         );
         let (x2, y2) = (
-            &self.points[distance2.0 as usize],
-            &self.points[distance2.1 as usize],
+            &self.points[distance2.0],
+            &self.points[distance2.1],
         );
         let (a, b) = x1.data.distance_fraction(&y1.data);
         let (c, d) = x2.data.distance_fraction(&y2.data);
@@ -89,7 +118,7 @@ impl VectorStore for PlaintextStore {
 
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         // The query is now accepted in the store. It keeps the same ID.
-        self.points[*query as usize].is_persistent = true;
+        self.points[*query].is_persistent = true;
         *query
     }
 
@@ -98,8 +127,8 @@ impl VectorStore for PlaintextStore {
         query: &Self::QueryRef,
         vector: &Self::VectorRef,
     ) -> Self::DistanceRef {
-        let query_code = &self.points[*query as usize];
-        let vector_code = &self.points[*vector as usize];
+        let query_code = &self.points[*query];
+        let vector_code = &self.points[*vector];
         query_code.data.distance_fraction(&vector_code.data)
     }
 
@@ -213,7 +242,7 @@ mod tests {
                 .unwrap();
         for i in 0..database_size {
             let cleartext_neighbors = searcher
-                .search_to_insert(&mut ptxt_vector, &mut ptxt_graph, &(i as PointId))
+                .search_to_insert(&mut ptxt_vector, &mut ptxt_graph, &i.into())
                 .await;
             assert!(searcher.is_match(&ptxt_vector, &cleartext_neighbors).await,);
         }
