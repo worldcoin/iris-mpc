@@ -23,8 +23,8 @@ template <typename T> __device__ void xor_assign_inner(T *lhs, T *rhs) {
 // Computes the local part of the multiplication (including randomness)
 template <typename T>
 __device__ void arithmetic_xor_inner(T *res_a, T *lhs_a, T *lhs_b, T *rhs_a,
-                                     T *rhs_b, T *r) {
-  T mul = (*lhs_a * *rhs_a) + (*lhs_b * *rhs_a) + (*lhs_a * *rhs_b) + *r;
+                                     T *rhs_b, T *r1, T *r2) {
+  T mul = (*lhs_a * *rhs_a) + (*lhs_b * *rhs_a) + (*lhs_a * *rhs_b) + *r1 - *r2;
   *res_a = lhs_a + rhs_a - 2 * mul;
 }
 
@@ -310,13 +310,13 @@ extern "C" __global__ void xor_assign_u64(U64 *lhs, U64 *rhs, size_t n) {
 }
 
 extern "C" __global__ void
-shared_arithmetic_xor_pre_assign(U32 *lhs_a, U32 *lhs_b, U32 *rhs_a, U32 *rhs_b,
-                                 U32 *r, size_t n) {
+shared_arithmetic_xor_pre_assign_u32(U32 *lhs_a, U32 *lhs_b, U32 *rhs_a,
+                                     U32 *rhs_b, U32 *r1, U32 *r2, size_t n) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     U32 res_a;
     arithmetic_xor_inner<U32>(&res_a, &lhs_a[i], &lhs_b[i], &rhs_a[i],
-                              &rhs_b[i], &r[i]);
+                              &rhs_b[i], &r1[i], &r2[i]);
     lhs_a[i] = res_a;
   }
 }

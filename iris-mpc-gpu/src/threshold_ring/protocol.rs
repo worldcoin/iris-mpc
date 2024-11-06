@@ -140,6 +140,7 @@ struct Kernels {
     pub(crate) ot_receiver:           CudaFunction,
     pub(crate) ot_helper:             CudaFunction,
     pub(crate) split_arithmetic_xor:  CudaFunction,
+    pub(crate) arithmetic_xor_assign: CudaFunction,
     pub(crate) assign:                CudaFunction,
     pub(crate) collapse_u64_helper:   CudaFunction,
 }
@@ -166,6 +167,7 @@ impl Kernels {
             "packed_ot_receiver",
             "packed_ot_helper",
             "split_for_arithmetic_xor",
+            "shared_arithmetic_xor_pre_assign_u32",
             "shared_assign",
             "collapse_u64_helper",
         ])
@@ -197,6 +199,9 @@ impl Kernels {
         let split_arithmetic_xor = dev
             .get_func(Self::MOD_NAME, "split_for_arithmetic_xor")
             .unwrap();
+        let arithmetic_xor_assign = dev
+            .get_func(Self::MOD_NAME, "shared_arithmetic_xor_pre_assign_u32")
+            .unwrap();
         let assign = dev.get_func(Self::MOD_NAME, "shared_assign").unwrap();
         let collapse_u64_helper = dev.get_func(Self::MOD_NAME, "collapse_u64_helper").unwrap();
 
@@ -218,6 +223,7 @@ impl Kernels {
             ot_receiver,
             ot_helper,
             split_arithmetic_xor,
+            arithmetic_xor_assign,
             assign,
             collapse_u64_helper,
         }
@@ -674,13 +680,29 @@ impl Circuits {
             &self.devs[idx],
         );
 
-        // TODO both randomness required
+        let rng = &mut self.rngs[idx];
+        let stream = &streams[idx];
+        let dev = &self.devs[idx];
+
+        // SAFETY: Only unsafe because memory is not initialized. But, we fill
+        // afterwards.
+        let size = (x1.len() + 15) / 16;
+        let size = size * 16;
+        let mut my_rand = unsafe { dev.alloc::<u32>(size).unwrap() };
+        let mut their_rand = unsafe { dev.alloc::<u32>(size).unwrap() };
+
+        rng.fill_my_rng_into(&mut my_rand.slice_mut(..), stream);
+        rng.fill_their_rng_into(&mut their_rand.slice_mut(..), stream);
 
         unsafe {
             self.kernels[idx]
                 .arithmetic_xor_assign
                 .clone()
-                .launch_on_stream(&streams[idx], cfg, (&x1.a, &x1.b, &x2.a, &x2.b, x1.len()))
+                .launch_on_stream(
+                    stream,
+                    cfg,
+                    (&x1.a, &x1.b, &x2.a, &x2.b, &my_rand, &their_rand, x1.len()),
+                )
                 .unwrap();
         }
     }
