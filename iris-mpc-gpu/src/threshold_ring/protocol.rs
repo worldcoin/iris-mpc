@@ -128,6 +128,7 @@ struct Kernels {
     pub(crate) xor:                   CudaFunction,
     pub(crate) xor_assign:            CudaFunction,
     pub(crate) single_xor_assign_u16: CudaFunction,
+    pub(crate) single_xor_assign_u32: CudaFunction,
     pub(crate) single_xor_assign_u64: CudaFunction,
     pub(crate) split:                 CudaFunction,
     pub(crate) lift_split:            CudaFunction,
@@ -153,6 +154,7 @@ impl Kernels {
             "shared_xor",
             "shared_xor_assign",
             "xor_assign_u16",
+            "xor_assign_u32",
             "xor_assign_u64",
             "shared_and_pre",
             "shared_or_pre_assign",
@@ -179,6 +181,7 @@ impl Kernels {
         let xor = dev.get_func(Self::MOD_NAME, "shared_xor").unwrap();
         let xor_assign = dev.get_func(Self::MOD_NAME, "shared_xor_assign").unwrap();
         let single_xor_assign_u16 = dev.get_func(Self::MOD_NAME, "xor_assign_u16").unwrap();
+        let single_xor_assign_u32 = dev.get_func(Self::MOD_NAME, "xor_assign_u32").unwrap();
         let single_xor_assign_u64 = dev.get_func(Self::MOD_NAME, "xor_assign_u64").unwrap();
         let split = dev.get_func(Self::MOD_NAME, "split").unwrap();
         let lift_split = dev.get_func(Self::MOD_NAME, "lift_split").unwrap();
@@ -211,6 +214,7 @@ impl Kernels {
             xor,
             xor_assign,
             single_xor_assign_u16,
+            single_xor_assign_u32,
             single_xor_assign_u64,
             split,
             lift_split,
@@ -667,7 +671,7 @@ impl Circuits {
         }
     }
 
-    fn arithmetic_xor_pre_assign(
+    fn arithmetic_xor_many_pre_assign(
         &mut self,
         x1: &mut ChunkShareView<u32>,
         x2: &ChunkShareView<u32>,
@@ -806,6 +810,47 @@ impl Circuits {
         );
     }
 
+    // Encrypt using chacha in my_rng
+    fn chacha1_encrypt_u32(
+        &mut self,
+        input: &ChunkShareView<u32>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) -> CudaSlice<u32> {
+        let data_len = input.len();
+        let keystream_size = (data_len + 15) / 16; // Multiple of 16 u32
+        let mut keystream = unsafe { self.devs[idx].alloc::<u32>(keystream_size * 16).unwrap() };
+        self.rngs[idx].fill_my_rng_into(&mut keystream.slice_mut(..), &streams[idx]);
+        self.single_xor_assign_u32(
+            &mut keystream.slice(..data_len),
+            &input.a,
+            idx,
+            data_len,
+            streams,
+        );
+        keystream
+    }
+
+    // Decrypt using chacha in their_rng
+    fn chacha2_decrypt_u32(
+        &mut self,
+        inout: &mut ChunkShareView<u32>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) {
+        let data_len = inout.len();
+        let keystream_size = (data_len + 15) / 16; // Multiple of 16 u32
+        let mut keystream = unsafe { self.devs[idx].alloc::<u32>(keystream_size * 16).unwrap() };
+        self.rngs[idx].fill_their_rng_into(&mut keystream.slice_mut(..), &streams[idx]);
+        self.single_xor_assign_u32(
+            &mut inout.b,
+            &keystream.slice(..data_len),
+            idx,
+            data_len,
+            streams,
+        );
+    }
+
     fn packed_send_receive_view(
         &mut self,
         res: &mut [ChunkShareView<u64>],
@@ -897,6 +942,32 @@ impl Circuits {
         }
     }
 
+    fn send_receive_view_u32(&mut self, res: &mut [ChunkShareView<u32>], streams: &[CudaStream]) {
+        assert_eq!(res.len(), self.n_devices);
+
+        let send_bufs = res
+            .iter()
+            .enumerate()
+            .map(|(idx, res)| self.chacha1_encrypt_u32(res, idx, streams))
+            .collect_vec();
+
+        result::group_start().unwrap();
+        for (idx, res) in send_bufs.iter().enumerate() {
+            self.comms[idx]
+                .send(res, self.next_id, &streams[idx])
+                .unwrap();
+        }
+        for (idx, res) in res.iter_mut().enumerate() {
+            self.comms[idx]
+                .receive_view(&mut res.b, self.prev_id, &streams[idx])
+                .unwrap();
+        }
+        result::group_end().unwrap();
+        for (idx, res) in res.iter_mut().enumerate() {
+            self.chacha2_decrypt_u32(res, idx, streams);
+        }
+    }
+
     fn send_receive_view_single_gpu(
         &mut self,
         res: &mut ChunkShareView<u64>,
@@ -933,6 +1004,29 @@ impl Circuits {
         unsafe {
             self.kernels[idx]
                 .single_xor_assign_u16
+                .clone()
+                .launch_on_stream(&streams[idx], cfg, (&*x1, x2, size))
+                .unwrap();
+        }
+    }
+
+    fn single_xor_assign_u32(
+        &self,
+        x1: &mut CudaView<u32>,
+        x2: &CudaView<u32>,
+        idx: usize,
+        size: usize,
+        streams: &[CudaStream],
+    ) {
+        let cfg = launch_config_from_elements_and_threads(
+            size as u32,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
+        );
+
+        unsafe {
+            self.kernels[idx]
+                .single_xor_assign_u32
                 .clone()
                 .launch_on_stream(&streams[idx], cfg, (&*x1, x2, size))
                 .unwrap();
@@ -1140,7 +1234,15 @@ impl Circuits {
             x2.push(view);
         }
 
+        // Split to x1, x2, x3
         self.split_for_arithmetic_xor(inp, &mut x1, &mut x2, outp, streams);
+
+        // First arithmetic xor: x3 ^= x1
+        for (idx, (x3, x1)) in izip!(outp.iter_mut(), x1.iter()).enumerate() {
+            self.arithmetic_xor_many_pre_assign(x3, x1, idx, streams);
+        }
+        // Send/Receive
+        self.send_receive_view_u32(outp, streams);
 
         todo!("Perform the actual injection");
 
