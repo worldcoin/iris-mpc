@@ -250,7 +250,7 @@ fn bench_session_based_hnsw(c: &mut Criterion) {
     let mut group = c.benchmark_group("session_based_hnsw");
     group.sample_size(10);
 
-    for database_size in [1, 10, 100, 1000, 10000, 100000] {
+    for database_size in [1, 10, 100, 1000, 10_000, 100_000] {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -269,7 +269,9 @@ fn bench_session_based_hnsw(c: &mut Criterion) {
         let ready_sessions =
             rt.block_on(async move { runtime.create_player_sessions().await.unwrap() });
 
-        let stores: HashMap<Identity, PlayerStorage> = (0..2)
+        let num_parties = 3;
+
+        let stores: HashMap<Identity, PlayerStorage> = (0..num_parties)
             .map(|i| {
                 let store = setup.player_stores.get(i).unwrap().clone();
                 (identities[i].clone(), store)
@@ -279,7 +281,7 @@ fn bench_session_based_hnsw(c: &mut Criterion) {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
         let raw_query = generate_galois_iris_shares(&mut rng, on_the_fly_query);
-        let shares: HashMap<Identity, GaloisRingSharedIris> = (0..2)
+        let shares: HashMap<Identity, GaloisRingSharedIris> = (0..num_parties)
             .map(|i| (identities[i].clone(), raw_query[i].clone()))
             .collect();
 
@@ -333,10 +335,10 @@ fn bench_session_based_hnsw(c: &mut Criterion) {
 
 criterion_group! {
     hnsw,
-    bench_plaintext_hnsw,
-    bench_gr_ready_made_hnsw,
-    bench_hnsw_primitives,
-    bench_gr_primitives,
+    //bench_plaintext_hnsw,
+    //bench_gr_ready_made_hnsw,
+    //bench_hnsw_primitives,
+    //bench_gr_primitives,
     bench_session_based_hnsw,
 }
 

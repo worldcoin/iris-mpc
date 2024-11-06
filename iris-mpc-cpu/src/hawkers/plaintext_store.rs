@@ -1,6 +1,5 @@
 use hawk_pack::VectorStore;
 use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodeArray, MATCH_THRESHOLD_RATIO};
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Debug, Clone)]
@@ -51,11 +50,10 @@ pub struct PlaintextPoint {
 
 impl FormattedIris {
     pub fn dot_on_code(&self, other: &Self) -> i32 {
-        (&self.data, &other.data)
-            .into_par_iter()
-            .map(|(x, y)| (x * y))
-            .fold(|| 0_i32, |acc: i32, item| acc + (item as i32))
-            .sum::<i32>()
+        self.data
+            .iter()
+            .zip(other.data.iter())
+            .fold(0_i32, |sum, (i, j)| sum + (*i as i32) * (*j as i32))
     }
     pub fn compute_distance(&self, other: &Self) -> (i16, usize) {
         let combined_mask = self.mask & other.mask;
@@ -130,7 +128,7 @@ impl VectorStore for PlaintextStore {
     }
 
     async fn eval_distance(
-        &self,
+        &mut self,
         query: &Self::QueryRef,
         vector: &Self::VectorRef,
     ) -> Self::DistanceRef {

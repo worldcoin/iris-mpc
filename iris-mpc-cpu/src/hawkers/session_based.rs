@@ -1,14 +1,16 @@
-use super::{galois_store::GaloisRingPoint, plaintext_store::PlaintextStore};
+use std::collections::HashMap;
+
+use super::{galois_store::{eval_pairwise_distances, DistanceShare, GaloisRingPoint}, plaintext_store::{self, PlaintextStore}};
 use crate::{
     database_generators::{generate_galois_iris_shares, GaloisRingSharedIris},
-    execution::session::Session,
+    execution::session::{Session, SessionHandles},
     hawkers::plaintext_store::PointId,
     protocol::ops::{
-        cross_compare, galois_ring_is_match, galois_ring_pairwise_distance, galois_ring_to_rep3,
+        cross_compare, galois_ring_is_match, galois_ring_pairwise_distance, galois_ring_to_rep3, is_dot_zero,
     },
 };
 use aes_prng::AesRng;
-use hawk_pack::{graph_store::GraphMem, hnsw_db::HawkSearcher, VectorStore};
+use hawk_pack::{graph_store::{graph_mem::Layer, GraphMem}, hnsw_db::{FurthestQueue, HawkSearcher}, GraphStore, VectorStore};
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use rand::{CryptoRng, RngCore, SeedableRng};
 
@@ -123,7 +125,7 @@ impl SessionBasedStorage {
 impl VectorStore for SessionBasedStorage {
     type QueryRef = PointId; // Vector ID, pending insertion.
     type VectorRef = PointId; // Vector ID, inserted.
-    type DistanceRef = (PointId, PointId); // Lazy distance representation.
+    type DistanceRef = DistanceShare<u16>; // Distance represented as shares.
 
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         self.player_storage.insert(query);
@@ -134,24 +136,30 @@ impl VectorStore for SessionBasedStorage {
     // galois_store. Once that is done, we can implement the
     // "eval_distance_batch" in here as well.
     async fn eval_distance(
-        &self,
+        &mut self,
         query: &Self::QueryRef,
         vector: &Self::VectorRef,
     ) -> Self::DistanceRef {
-        // Do not compute the distance yet, just forward the IDs.
-        (*query, *vector)
+        let storage = self.get_storage();
+        let query_point = storage.points[query.val()].clone();
+        let vector_point = storage.points[vector.val()].clone();
+        let pairs = vec![(query_point.data, vector_point.data)];
+        let mut session = self.session_as_mut();
+        let ds_and_ts = eval_pairwise_distances(pairs, &mut session).await;
+        DistanceShare::new (
+            ds_and_ts[0].clone(),
+            ds_and_ts[1].clone(),
+            //TODO: this might be unnecessary
+            self.session.own_identity(),
+        )
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> bool {
-        let storage = self.get_storage();
-        let x = storage.get_point(distance.0.val());
-        let mut y = storage.get_point(distance.1.val());
-        let session = self.session_as_mut();
-        y.data.code.preprocess_iris_code_query_share();
-        y.data.mask.preprocess_mask_code_query_share();
-        galois_ring_is_match(session, &[(x.data, y.data)])
-            .await
-            .unwrap()
+        let mut session = self.session_as_mut();
+
+        is_dot_zero(&mut session, distance.code_dot(), distance.mask_dot())
+                    .await
+                    .unwrap()
     }
 
     async fn less_than(
@@ -159,35 +167,13 @@ impl VectorStore for SessionBasedStorage {
         distance1: &Self::DistanceRef,
         distance2: &Self::DistanceRef,
     ) -> bool {
-        let d1 = *distance1;
-        let d2 = *distance2;
-
-        let player_storage = self.get_storage();
-        let (x1, y1) = (
-            player_storage.get_point(d1.0.val()),
-            player_storage.get_point(d1.1.val()),
-        );
-        let (x2, y2) = (
-            player_storage.get_point(d2.0.val()),
-            player_storage.get_point(d2.1.val()),
-        );
-
         let session = self.session_as_mut();
-        let mut pairs = [(x1.data, y1.data), (x2.data, y2.data)];
-        pairs.iter_mut().for_each(|(_x, y)| {
-            y.code.preprocess_iris_code_query_share();
-            y.mask.preprocess_mask_code_query_share();
-        });
-        let ds_and_ts = galois_ring_pairwise_distance(session, &pairs)
-            .await
-            .unwrap();
-        let ds_and_ts = galois_ring_to_rep3(session, ds_and_ts).await.unwrap();
         cross_compare(
             session,
-            ds_and_ts[0].clone(),
-            ds_and_ts[1].clone(),
-            ds_and_ts[2].clone(),
-            ds_and_ts[3].clone(),
+            distance1.code_dot(),
+            distance1.mask_dot(),
+            distance2.code_dot(),
+            distance2.mask_dot(),
         )
         .await
         .unwrap()
@@ -227,8 +213,37 @@ pub async fn session_based_match(
 pub struct SessionBasedSetup {
     pub plaintext_store: PlaintextStore,
     pub plaintext_graph: GraphMem<PlaintextStore>,
-    pub session_graph:   GraphMem<SessionBasedStorage>,
+    pub session_graphs:   Vec<GraphMem<SessionBasedStorage>>, //each player has its own graph
     pub player_stores:   PlayerStorageEnsemble,
+}
+
+async fn session_graph_from_plain(
+    plaintext_store: PlaintextStore,
+    graph_store: GraphMem<PlaintextStore>,
+    player_id: usize
+) -> GraphMem<SessionBasedStorage> {
+    let ep = graph_store.get_entry_point().await;
+
+    let layers = graph_store.get_layers();
+
+    let mut shared_layers = vec![];
+    for layer in layers {
+        let links = layer.get_links_map();
+        let mut shared_links = HashMap::new();
+        for (source_id, queue) in links {
+            let mut shared_queue = vec![];
+            let source_v = plaintext_store.points[source_id.val()].clone();
+            for (target_id, _) in queue.as_vec_ref() {
+                let target_v = plaintext_store.points[target_id.val()].clone();
+                let shared_distance = source_v.compute_distance(&target_v);
+                shared_queue.push((*target_v, shared_distance));
+            }
+            shared_links.insert(*source_v, FurthestQueue::from_ascending_vec(shared_queue));
+        }
+        shared_layers.push(Layer::from_links(shared_links));
+    }
+
+    GraphMem::from_precomputed(ep, shared_layers)
 }
 
 pub async fn session_based_ready_made_hawk_searcher<R: RngCore + Clone + CryptoRng>(
@@ -263,6 +278,20 @@ pub async fn session_based_ready_made_hawk_searcher<R: RngCore + Clone + CryptoR
             .await;
     }
     let player_storage_ensemble = storage_setup_preloaded_db(rng, cleartext_database)?;
+
+    let session_graphs = {
+        for player_id in 0..3 {
+            let player_storage = player_storage_ensemble.get(player_id).unwrap();
+            let distance_map = |lazy_distance: (PointId, PointId)| -> DistanceShare<u16> {
+                let (query, vector) = lazy_distance;
+                let distance = player_storage.eval_distance(&query, &vector).await;
+                DistanceShare::new(distance, distance, player_storage_ensemble.storages[0].points[0].data.0)
+            };
+        }
+        
+    };
+
+    
     let session_graph = GraphMem::<SessionBasedStorage>::from_another(
         plaintext_graph_store.clone(),
         |vx| vx,
@@ -272,7 +301,7 @@ pub async fn session_based_ready_made_hawk_searcher<R: RngCore + Clone + CryptoR
         plaintext_store: plaintext_vector_store,
         plaintext_graph: plaintext_graph_store,
         player_stores: player_storage_ensemble,
-        session_graph,
+        session_graphs,
     })
 }
 

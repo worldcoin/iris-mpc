@@ -147,7 +147,28 @@ pub struct DistanceShare<T: IntRing2k> {
     player:   Identity,
 }
 
-async fn eval_pairwise_distances(
+impl<T> DistanceShare<T>
+where
+    T: IntRing2k,
+{
+    pub fn new(code_dot: Share<T>, mask_dot: Share<T>, player: Identity) -> Self {
+        DistanceShare {
+            code_dot,
+            mask_dot,
+            player,
+        }
+    }
+
+    pub fn code_dot(&self) -> Share<T> {
+        self.code_dot.clone()
+    }
+
+    pub fn mask_dot(&self) -> Share<T> {
+        self.mask_dot.clone()
+    }
+}
+
+pub async fn eval_pairwise_distances(
     mut pairs: Vec<(GaloisRingSharedIris, GaloisRingSharedIris)>,
     player_session: &mut Session,
 ) -> Vec<Share<u16>> {
@@ -177,7 +198,7 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
     }
 
     async fn eval_distance(
-        &self,
+        &mut self,
         query: &Self::QueryRef,
         vector: &Self::VectorRef,
     ) -> Self::DistanceRef {
@@ -202,7 +223,7 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
     }
 
     async fn eval_distance_batch(
-        &self,
+        &mut self,
         query: &Self::QueryRef,
         vectors: &[Self::VectorRef],
     ) -> Vec<Self::DistanceRef> {
@@ -308,7 +329,7 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
 
 impl LocalNetAby3NgStoreProtocol {
     async fn graph_from_plain(
-        &self,
+        &mut self,
         graph_store: GraphMem<PlaintextStore>,
     ) -> GraphMem<LocalNetAby3NgStoreProtocol> {
         let ep = graph_store.get_entry_point().await;
@@ -373,7 +394,7 @@ pub async fn gr_create_ready_made_hawk_searcher<R: RngCore + Clone + CryptoRng>(
             .await;
     }
 
-    let protocol_store = setup_local_aby3_players_with_preloaded_db(rng, cleartext_database)?;
+    let mut protocol_store = setup_local_aby3_players_with_preloaded_db(rng, cleartext_database)?;
     let protocol_graph = protocol_store
         .graph_from_plain(plaintext_graph_store.clone())
         .await;
