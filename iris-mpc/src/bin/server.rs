@@ -1015,6 +1015,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     // noticing. Our main NCCL connections cannot recover from
                     // this, so we panic.
                     panic!("Node {} seems to have restarted, killing server...", host);
+                } else {
+                    tracing::info!("Heartbeat: Node {} is healthy", host);
                 }
             }
 
@@ -1067,6 +1069,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             let batch = next_batch.await?;
 
+            // start trace span - with single TraceId and single ParentTraceID
+            tracing::info!("Received batch in {:?}", now.elapsed());
+
+            metrics::histogram!("receive_batch_duration").record(now.elapsed().as_secs_f64());
+
             process_identity_deletions(
                 &batch,
                 &store,
@@ -1087,8 +1094,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 );
             }
 
-            // start trace span - with single TraceId and single ParentTraceID
-            tracing::info!("Received batch in {:?}", now.elapsed());
             background_tasks.check_tasks();
 
             let result_future = handle.submit_batch_query(batch);
