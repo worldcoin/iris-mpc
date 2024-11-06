@@ -1,7 +1,6 @@
-use std::ops::{Index, IndexMut};
-
 use hawk_pack::VectorStore;
 use iris_mpc_common::iris_db::iris::{IrisCode, MATCH_THRESHOLD_RATIO};
+use std::ops::{Index, IndexMut};
 
 #[derive(Default, Debug, Clone)]
 pub struct PlaintextStore {
@@ -47,7 +46,7 @@ pub struct PlaintextPoint {
 #[derive(Copy, Debug, Clone, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
 pub struct PointId(u32);
 
-impl <T> Index<PointId> for Vec<T> {
+impl<T> Index<PointId> for Vec<T> {
     type Output = T;
 
     fn index(&self, index: PointId) -> &Self::Output {
@@ -55,7 +54,7 @@ impl <T> Index<PointId> for Vec<T> {
     }
 }
 
-impl <T> IndexMut<PointId> for Vec<T> {
+impl<T> IndexMut<PointId> for Vec<T> {
     fn index_mut(&mut self, index: PointId) -> &mut Self::Output {
         self.index_mut(index.0 as usize)
     }
@@ -93,14 +92,8 @@ impl PlaintextStore {
         distance1: &(PointId, PointId),
         distance2: &(PointId, PointId),
     ) -> (i32, i32) {
-        let (x1, y1) = (
-            &self.points[distance1.0],
-            &self.points[distance1.1],
-        );
-        let (x2, y2) = (
-            &self.points[distance2.0],
-            &self.points[distance2.1],
-        );
+        let (x1, y1) = (&self.points[distance1.0], &self.points[distance1.1]);
+        let (x2, y2) = (&self.points[distance2.0], &self.points[distance2.1]);
         let (a, b) = x1.data.distance_fraction(&y1.data);
         let (c, d) = x2.data.distance_fraction(&y2.data);
         let cross_1 = a as i32 * d as i32;

@@ -7,10 +7,10 @@ use rand::SeedableRng;
 const DATABASE_SIZE: usize = 1_000;
 
 fn main() {
-	let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
 
     let (_vector, _graph) = rt.block_on(async move {
         let mut rng = AesRng::seed_from_u64(0_u64);
@@ -26,15 +26,11 @@ fn main() {
                 .await;
             let inserted = vector.insert(&query).await;
             searcher
-                .insert_from_search_results(
-                    &mut vector,
-                    &mut graph,
-                    &mut rng,
-                    inserted,
-                    neighbors,
-                )
+                .insert_from_search_results(&mut vector, &mut graph, &mut rng, inserted, neighbors)
                 .await;
-            if idx % 100 == 99 { println!("{}", idx+1); }
+            if idx % 100 == 99 {
+                println!("{}", idx + 1);
+            }
         }
         (vector, graph)
     });

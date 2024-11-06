@@ -543,11 +543,7 @@ mod tests {
 
         for i in 0..database_size {
             let cleartext_neighbors = hawk_searcher
-                .search_to_insert(
-                    &mut cleartext_data.0,
-                    &mut cleartext_data.1,
-                    &i.into(),
-                )
+                .search_to_insert(&mut cleartext_data.0, &mut cleartext_data.1, &i.into())
                 .await;
             assert!(
                 hawk_searcher
