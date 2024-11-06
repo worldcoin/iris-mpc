@@ -82,26 +82,6 @@ impl PlaintextStore {
         let point_id = self.points.len() - 1;
         point_id.into()
     }
-
-    /// Compare two distances between pairs of iris codes
-    ///
-    /// Returns terms obtained by cross-multiplying numerators with opposite
-    /// denominators.
-    pub fn distance_computation(
-        &self,
-        distance1: &(PointId, PointId),
-        distance2: &(PointId, PointId),
-    ) -> (i32, i32) {
-        let (x1, y1) = (&self.points[distance1.0], &self.points[distance1.1]);
-        let (x2, y2) = (&self.points[distance2.0], &self.points[distance2.1]);
-        let (a, b) = x1.data.distance_fraction(&y1.data);
-        let (c, d) = x2.data.distance_fraction(&y2.data);
-        let cross_1 = a as i32 * d as i32;
-        let cross_2 = c as i32 * b as i32;
-
-        // for Hamming distances a/b and c/d, return (a*d, b*c)
-        (cross_1, cross_2)
-    }
 }
 
 impl VectorStore for PlaintextStore {
