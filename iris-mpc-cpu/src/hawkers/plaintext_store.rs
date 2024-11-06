@@ -28,6 +28,14 @@ impl PlaintextIris {
     /// and the u16 size of the common unmasked region
     pub fn dot_distance_fraction(&self, other: &Self) -> (i16, u16) {
         let (code_distance, combined_mask_len) = self.distance_fraction(other);
+
+        // `code_distance` gives the number of common unmasked bits which are
+        // different between two iris codes, and `combined_mask_len` gives the
+        // total number of common unmasked bits.  The dot product of masked-bit
+        // vectors adds 1 for each unmasked bit which is equal, and subtracts 1
+        // for each unmasked bit which is unequal; so this can be computed by
+        // starting with 1 for every unmasked bit, and subtracting 2 for every
+        // unequal unmasked bit, as follows.
         let dot_product = combined_mask_len.wrapping_sub(2 * code_distance) as i16;
 
         (dot_product, combined_mask_len)
