@@ -1244,7 +1244,12 @@ impl Circuits {
         // Send/Receive
         self.send_receive_view_u32(outp, streams);
 
-        todo!("Perform the actual injection");
+        // Second arithmetic xor: x3 ^= x2
+        for (idx, (x3, x2)) in izip!(outp.iter_mut(), x2.iter()).enumerate() {
+            self.arithmetic_xor_many_pre_assign(x3, x2, idx, streams);
+        }
+        // Send/Receive
+        self.send_receive_view_u32(outp, streams);
 
         Buffers::return_buffer(&mut self.buffers.lifted_shares_split2, x1_);
         Buffers::return_buffer(&mut self.buffers.lifted_shares_split3, x2_);
