@@ -9,7 +9,7 @@ use iris_mpc_common::{
     galois_engine::degree4::GaloisRingIrisCodeShare,
     helpers::{
         key_pair::download_public_key,
-        sha256::calculate_sha256,
+        sha256::calculate_sha256_string,
         smpc_request::{
             create_message_type_attribute_map, IrisCodesJSON, UniquenessRequest, UniquenessResult,
             UNIQUENESS_MESSAGE_TYPE,
@@ -341,7 +341,7 @@ async fn main() -> eyre::Result<()> {
                         .clone();
 
                     // calculate hash of the object
-                    let hash_string = calculate_sha256(&serialized_iris_codes_json);
+                    let hash_string = calculate_sha256_string(&serialized_iris_codes_json);
 
                     // encrypt the object using sealed box and public key
                     let encrypted_bytes = sealedbox::seal(
