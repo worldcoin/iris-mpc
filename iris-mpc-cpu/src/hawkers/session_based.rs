@@ -23,7 +23,23 @@ impl PlayerStorage {
     }
 }
 
-type PlayerStorageEnsemble = (PlayerStorage, PlayerStorage, PlayerStorage);
+pub struct PlayerStorageEnsemble {
+    storages: Vec<PlayerStorage>,
+}
+
+impl PlayerStorageEnsemble {
+    pub fn new(p0: PlayerStorage, p1: PlayerStorage, p2: PlayerStorage) -> Self {
+        PlayerStorageEnsemble {
+            storages: vec![p0, p1, p2],
+        }
+    }
+    pub fn get(&self, player_id: usize) -> eyre::Result<&PlayerStorage> {
+        if player_id > 2 {
+            return Err(eyre::eyre!("Invalid player number"));
+        }
+        Ok(&self.storages[player_id])
+    }
+}
 
 impl PlayerStorage {
     fn insert(&mut self, query: &PointId) -> PointId {
@@ -88,7 +104,7 @@ pub fn storage_setup_preloaded_db<R: RngCore + CryptoRng>(
     let player_0 = PlayerStorage::new_with_shared_db(p0);
     let player_1 = PlayerStorage::new_with_shared_db(p1);
     let player_2 = PlayerStorage::new_with_shared_db(p2);
-    Ok((player_0, player_1, player_2))
+    Ok(PlayerStorageEnsemble::new(player_0, player_1, player_2))
 }
 
 impl SessionBasedStorage {
@@ -208,16 +224,17 @@ pub async fn session_based_match(
     Ok(searcher.is_match(vector_store, &neighbors).await)
 }
 
+pub struct SessionBasedSetup {
+    pub plaintext_store: PlaintextStore,
+    pub plaintext_graph: GraphMem<PlaintextStore>,
+    pub session_graph:   GraphMem<SessionBasedStorage>,
+    pub player_stores:   PlayerStorageEnsemble,
+}
+
 pub async fn session_based_ready_made_hawk_searcher<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
-) -> eyre::Result<(
-    (PlaintextStore, GraphMem<PlaintextStore>),
-    (
-        (PlayerStorage, PlayerStorage, PlayerStorage),
-        GraphMem<SessionBasedStorage>,
-    ),
-)> {
+) -> eyre::Result<SessionBasedSetup> {
     // makes sure the searcher produces same graph structure by having the same rng
     let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
     let cleartext_database = IrisDB::new_random_par(database_size, rng).db;
@@ -245,14 +262,18 @@ pub async fn session_based_ready_made_hawk_searcher<R: RngCore + Clone + CryptoR
             )
             .await;
     }
-    let (p0_store, p1_store, p2_store) = storage_setup_preloaded_db(rng, cleartext_database)?;
+    let player_storage_ensemble = storage_setup_preloaded_db(rng, cleartext_database)?;
     let session_graph = GraphMem::<SessionBasedStorage>::from_another(
         plaintext_graph_store.clone(),
         |vx| vx,
         |dx| dx,
     );
-    let plaintext = (plaintext_vector_store, plaintext_graph_store);
-    Ok((plaintext, ((p0_store, p1_store, p2_store), session_graph)))
+    Ok(SessionBasedSetup {
+        plaintext_store: plaintext_vector_store,
+        plaintext_graph: plaintext_graph_store,
+        player_stores: player_storage_ensemble,
+        session_graph,
+    })
 }
 
 #[cfg(test)]
@@ -269,10 +290,10 @@ mod tests {
 
     #[test]
     fn test_session_based_hnsw() {
-        /// TODO: Increasing the stack thread is required only when running
-        /// cargo test This works without any limits when running in
-        /// benchmark mode but there are some slight issues with the thread
-        /// stack size in cargo test
+        // TODO: Increasing the stack thread is required only when running
+        // cargo test This works without any limits when running in
+        // benchmark mode but there are some slight issues with the thread
+        // stack size in cargo test
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .thread_stack_size(10000000)
@@ -283,7 +304,7 @@ mod tests {
                 let database_size = 10;
                 let cleartext_database = IrisDB::new_random_rng(database_size, &mut rng).db;
 
-                let (p0_store, p1_store, p2_store) =
+                let players_storage =
                     storage_setup_preloaded_db(&mut rng, cleartext_database).unwrap();
 
                 let runtime = LocalRuntime::replicated_test_config();
@@ -293,14 +314,9 @@ mod tests {
 
                 for (player_no, player_identity) in runtime.identities.iter().enumerate() {
                     let session = ready_sessions.get(player_identity).unwrap().clone();
-                    let store = match player_no {
-                        0 => p0_store.clone(),
-                        1 => p1_store.clone(),
-                        2 => p2_store.clone(),
-                        _ => unimplemented!(),
-                    };
+                    let store = players_storage.get(player_no).unwrap();
                     let mut session_store = SessionBasedStorage {
-                        player_storage: store,
+                        player_storage: store.clone(),
                         session,
                     };
                     let mut session_graph = GraphMem::new();
@@ -348,25 +364,20 @@ mod tests {
             .block_on(async {
                 let mut rng = AesRng::seed_from_u64(0_u64);
                 let database_size = 10;
-                let (_, secret_data) =
-                    session_based_ready_made_hawk_searcher(&mut rng, database_size)
-                        .await
-                        .unwrap();
-                let ((p0_store, p1_store, p2_store), graph) = secret_data;
+                let setup = session_based_ready_made_hawk_searcher(&mut rng, database_size)
+                    .await
+                    .unwrap();
+                let players_storage = setup.player_stores;
+                let graph = setup.session_graph;
 
                 let runtime = LocalRuntime::replicated_test_config();
                 let ready_sessions = runtime.create_player_sessions().await.unwrap();
                 let mut set = JoinSet::new();
                 for (player_no, player_identity) in runtime.identities.iter().enumerate() {
                     let session = ready_sessions.get(player_identity).unwrap().clone();
-                    let store = match player_no {
-                        0 => p0_store.clone(),
-                        1 => p1_store.clone(),
-                        2 => p2_store.clone(),
-                        _ => unimplemented!(),
-                    };
+                    let store = players_storage.get(player_no).unwrap();
                     let mut session_store = SessionBasedStorage {
-                        player_storage: store,
+                        player_storage: store.clone(),
                         session,
                     };
                     let mut session_graph = graph.clone();
@@ -414,7 +425,7 @@ mod tests {
                     plaintext_inserts.push(plaintext_store.insert(p).await);
                 }
 
-                let (p0_store, p1_store, p2_store) =
+                let players_storage =
                     storage_setup_preloaded_db(&mut rng, cleartext_database).unwrap();
 
                 let runtime = LocalRuntime::replicated_test_config();
@@ -423,14 +434,9 @@ mod tests {
 
                 for (player_no, player_identity) in runtime.identities.iter().enumerate() {
                     let session = ready_sessions.get(player_identity).unwrap().clone();
-                    let store = match player_no {
-                        0 => p0_store.clone(),
-                        1 => p1_store.clone(),
-                        2 => p2_store.clone(),
-                        _ => unimplemented!(),
-                    };
+                    let store = players_storage.get(player_no).unwrap();
                     let mut session_store = SessionBasedStorage {
-                        player_storage: store,
+                        player_storage: store.clone(),
                         session,
                     };
                     let queries: Vec<_> = (0..database_size).map(PointId).collect();

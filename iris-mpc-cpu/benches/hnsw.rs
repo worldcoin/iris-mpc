@@ -3,13 +3,16 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use hawk_pack::{graph_store::GraphMem, hnsw_db::HawkSearcher, VectorStore};
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use iris_mpc_cpu::{
-    database_generators::{create_random_sharing, generate_galois_iris_shares},
-    execution::local::LocalRuntime,
+    database_generators::{
+        create_random_sharing, generate_galois_iris_shares, GaloisRingSharedIris,
+    },
+    execution::{local::LocalRuntime, player::Identity},
     hawkers::{
         galois_store::gr_create_ready_made_hawk_searcher,
         plaintext_store::PlaintextStore,
         session_based::{
-            session_based_insert, session_based_ready_made_hawk_searcher, SessionBasedStorage,
+            session_based_insert, session_based_ready_made_hawk_searcher, PlayerStorage,
+            SessionBasedStorage,
         },
     },
     protocol::ops::{cross_compare, galois_ring_pairwise_distance, galois_ring_to_rep3},
@@ -254,31 +257,31 @@ fn bench_session_based_hnsw(c: &mut Criterion) {
             .unwrap();
 
         println!("Creating plaintext graph...");
-        let (_, secret_data) = rt.block_on(async move {
+        let setup = rt.block_on(async move {
             let mut rng = AesRng::seed_from_u64(0_u64);
             session_based_ready_made_hawk_searcher(&mut rng, database_size)
                 .await
                 .unwrap()
         });
 
-        let ((p0_store, p1_store, p2_store), graph) = secret_data;
         let runtime = LocalRuntime::replicated_test_config();
         let identities = runtime.get_identities();
         let ready_sessions =
             rt.block_on(async move { runtime.create_player_sessions().await.unwrap() });
 
-        let mut stores = HashMap::new();
-        stores.insert(identities[0].clone(), p0_store);
-        stores.insert(identities[1].clone(), p1_store);
-        stores.insert(identities[2].clone(), p2_store);
+        let stores: HashMap<Identity, PlayerStorage> = (0..2)
+            .map(|i| {
+                let store = setup.player_stores.get(i).unwrap().clone();
+                (identities[i].clone(), store)
+            })
+            .collect();
 
         let mut rng = AesRng::seed_from_u64(0_u64);
         let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
         let raw_query = generate_galois_iris_shares(&mut rng, on_the_fly_query);
-        let mut shares = HashMap::new();
-        shares.insert(identities[0].clone(), raw_query[0].clone());
-        shares.insert(identities[1].clone(), raw_query[1].clone());
-        shares.insert(identities[2].clone(), raw_query[2].clone());
+        let shares: HashMap<Identity, GaloisRingSharedIris> = (0..2)
+            .map(|i| (identities[i].clone(), raw_query[i].clone()))
+            .collect();
 
         println!("Running the benchmark...");
         group.bench_function(BenchmarkId::new("insert", database_size), |b| {
@@ -288,7 +291,7 @@ fn bench_session_based_hnsw(c: &mut Criterion) {
                         ready_sessions.clone(),
                         shares.clone(),
                         stores.clone(),
-                        graph.clone(),
+                        setup.session_graph.clone(),
                     )
                 },
                 |(sessions, shares, stores, graph)| {
