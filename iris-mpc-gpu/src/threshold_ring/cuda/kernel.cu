@@ -268,6 +268,15 @@ extern "C" __global__ void shared_assign(TYPE *des_a, TYPE *des_b, TYPE *src_a,
   }
 }
 
+extern "C" __global__ void shared_assign_u32(U32 *des_a, U32 *des_b, U32 *src_a,
+                                             U32 *src_b, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    des_a[i] = src_a[i];
+    des_b[i] = src_b[i];
+  }
+}
+
 extern "C" __global__ void shared_xor(TYPE *res_a, TYPE *res_b, TYPE *lhs_a,
                                       TYPE *lhs_b, TYPE *rhs_a, TYPE *rhs_b,
                                       size_t n) {
@@ -523,5 +532,35 @@ extern "C" __global__ void collapse_u64_helper(U64 *inout_a, U64 *in_b,
     U64 res_a;
     or_pre_inner<TYPE>(&res_a, inout_a, in_b, helper_a, helper_b, r);
     *inout_a = res_a & mask;
+  }
+}
+
+extern "C" __global__ void collapse_sum_assign(u32 *inout_a, U32 *inout_b,
+                                               size_t n) {
+
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i == 1) {
+    for (size_t j = 1; j < n; j++) {
+      inout_a[0] += inout_a[j];
+    }
+  } else if (i == 2) {
+    for (size_t j = 1; j < n; j++) {
+      inout_b[0] += inout_b[j];
+    }
+  }
+}
+
+extern "C" __global__ void collapse_sum(u32 *inout_a, U32 *inout_b, input_a,
+                                        input_b, size_t inout_index, size_t n) {
+
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i == 1) {
+    for (size_t j = 0; j < n; j++) {
+      inout_a[inout_index] += input_a[j];
+    }
+  } else if (i == 2) {
+    for (size_t j = 0; j < n; j++) {
+      inout_b[inout_index] += input_b[j];
+    }
   }
 }

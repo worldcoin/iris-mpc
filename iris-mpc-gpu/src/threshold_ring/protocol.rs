@@ -142,8 +142,11 @@ struct Kernels {
     pub(crate) ot_helper:             CudaFunction,
     pub(crate) split_arithmetic_xor:  CudaFunction,
     pub(crate) arithmetic_xor_assign: CudaFunction,
-    pub(crate) assign:                CudaFunction,
+    pub(crate) assign_u32:            CudaFunction,
+    pub(crate) assign_u64:            CudaFunction,
     pub(crate) collapse_u64_helper:   CudaFunction,
+    pub(crate) collapse_sum_assign:   CudaFunction,
+    pub(crate) collapse_sum:          CudaFunction,
 }
 
 impl Kernels {
@@ -171,7 +174,10 @@ impl Kernels {
             "split_for_arithmetic_xor",
             "shared_arithmetic_xor_pre_assign_u32",
             "shared_assign",
+            "shared_assign_u32",
             "collapse_u64_helper",
+            "collapse_sum_assign",
+            "collapse_sum",
         ])
         .unwrap();
         let and = dev.get_func(Self::MOD_NAME, "shared_and_pre").unwrap();
@@ -205,8 +211,11 @@ impl Kernels {
         let arithmetic_xor_assign = dev
             .get_func(Self::MOD_NAME, "shared_arithmetic_xor_pre_assign_u32")
             .unwrap();
-        let assign = dev.get_func(Self::MOD_NAME, "shared_assign").unwrap();
+        let assign_u64 = dev.get_func(Self::MOD_NAME, "shared_assign").unwrap();
+        let assign_u32 = dev.get_func(Self::MOD_NAME, "shared_assign").unwrap();
         let collapse_u64_helper = dev.get_func(Self::MOD_NAME, "collapse_u64_helper").unwrap();
+        let collapse_sum_assign = dev.get_func(Self::MOD_NAME, "collapse_sum_assign").unwrap();
+        let collapse_sum = dev.get_func(Self::MOD_NAME, "collapse_sum").unwrap();
 
         Kernels {
             and,
@@ -228,8 +237,11 @@ impl Kernels {
             ot_helper,
             split_arithmetic_xor,
             arithmetic_xor_assign,
-            assign,
+            assign_u32,
+            assign_u64,
             collapse_u64_helper,
+            collapse_sum_assign,
+            collapse_sum,
         }
     }
 }
@@ -595,7 +607,34 @@ impl Circuits {
 
         unsafe {
             self.kernels[idx]
-                .assign
+                .assign_u64
+                .clone()
+                .launch_on_stream(
+                    &streams[idx],
+                    cfg,
+                    (&des.a, &des.b, &src.a, &src.b, src.len() as i32),
+                )
+                .unwrap();
+        }
+    }
+
+    fn assign_view_u32(
+        &mut self,
+        des: &mut ChunkShareView<u32>,
+        src: &ChunkShareView<u32>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) {
+        assert_eq!(src.len(), des.len());
+        let cfg = launch_config_from_elements_and_threads(
+            src.len() as u32,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
+        );
+
+        unsafe {
+            self.kernels[idx]
+                .assign_u32
                 .clone()
                 .launch_on_stream(
                     &streams[idx],
@@ -2150,17 +2189,17 @@ impl Circuits {
         }
     }
 
-    fn collect_graphic_result(&mut self, bits: &mut [ChunkShareView<u64>], streams: &[CudaStream]) {
+    fn collect_graphic_result(&mut self, data: &mut [ChunkShareView<u64>], streams: &[CudaStream]) {
         assert!(self.n_devices <= self.chunk_size);
         let dev0 = &self.devs[0];
         let stream0 = &streams[0];
-        let bit0 = &bits[0];
+        let data0 = &data[0];
 
         // Get results onto CPU
         let mut a = Vec::with_capacity(self.n_devices - 1);
         let mut b = Vec::with_capacity(self.n_devices - 1);
-        for (dev, stream, bit) in izip!(self.get_devices(), streams, bits.iter()).skip(1) {
-            let src = bit.get_range(0, 1);
+        for (dev, stream, d) in izip!(self.get_devices(), streams, data.iter()).skip(1) {
+            let src = d.get_range(0, 1);
 
             let mut a_ = dtoh_on_stream_sync(&src.a, &dev, stream).unwrap();
             let mut b_ = dtoh_on_stream_sync(&src.b, &dev, stream).unwrap();
@@ -2170,12 +2209,44 @@ impl Circuits {
         }
 
         // Put results onto first GPU
-        let mut des = bit0.get_range(1, self.n_devices);
+        let mut des = data0.get_range(1, self.n_devices);
         let a = htod_on_stream_sync(&a, dev0, stream0).unwrap();
         let b = htod_on_stream_sync(&b, dev0, stream0).unwrap();
         let c = ChunkShare::new(a, b);
 
         self.assign_view(&mut des, &c.as_view(), 0, streams);
+    }
+
+    fn collect_graphic_result_u32(
+        &mut self,
+        data: &mut [ChunkShareView<u32>],
+        streams: &[CudaStream],
+    ) {
+        assert!(self.n_devices <= self.chunk_size);
+        let dev0 = &self.devs[0];
+        let stream0 = &streams[0];
+        let data0 = &data[0];
+
+        // Get results onto CPU
+        let mut a = Vec::with_capacity(self.n_devices - 1);
+        let mut b = Vec::with_capacity(self.n_devices - 1);
+        for (dev, stream, d) in izip!(self.get_devices(), streams, data.iter()).skip(1) {
+            let src = d.get_range(0, 1);
+
+            let mut a_ = dtoh_on_stream_sync(&src.a, &dev, stream).unwrap();
+            let mut b_ = dtoh_on_stream_sync(&src.b, &dev, stream).unwrap();
+
+            a.push(a_.pop().unwrap());
+            b.push(b_.pop().unwrap());
+        }
+
+        // Put results onto first GPU
+        let mut des = data0.get_range(1, self.n_devices);
+        let a = htod_on_stream_sync(&a, dev0, stream0).unwrap();
+        let b = htod_on_stream_sync(&b, dev0, stream0).unwrap();
+        let c = ChunkShare::new(a, b);
+
+        self.assign_view_u32(&mut des, &c.as_view(), 0, streams);
     }
 
     fn collapse_u64(&mut self, input: &mut ChunkShare<u64>, streams: &[CudaStream]) {
@@ -2242,6 +2313,62 @@ impl Circuits {
         // Result is in the first bit of the first GPU
     }
 
+    fn collapse_sum(&mut self, injected_bits: &mut [ChunkShareView<u32>], streams: &[CudaStream]) {
+        for (idx, data) in injected_bits.iter_mut().enumerate() {
+            let cfg = launch_config_from_elements_and_threads(
+                2,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
+            unsafe {
+                self.kernels[idx]
+                    .collapse_sum_assign
+                    .clone()
+                    .launch_on_stream(&streams[idx], cfg, (&data.a, &data.b, self.chunk_size * 64))
+                    .unwrap();
+            }
+        }
+    }
+
+    fn collapse_sum_on_gpu(
+        &mut self,
+        inout: &mut ChunkShare<u32>,
+        inputs: &[ChunkShareView<u32>],
+        size: usize,
+        inout_idx: usize,
+        inputs_idx: usize,
+        streams: &[CudaStream],
+    ) {
+        assert_eq!(self.n_devices, inputs.len());
+        assert!(size <= inputs[inputs_idx].len());
+
+        let cfg = launch_config_from_elements_and_threads(
+            2,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[inputs_idx],
+        );
+
+        unsafe {
+            self.kernels[inputs_idx]
+                .collapse_sum
+                .clone()
+                .launch_on_stream(
+                    &streams[inputs_idx],
+                    cfg,
+                    (
+                        &inout.a,
+                        &inout.b,
+                        &inputs[inputs_idx].a,
+                        &inputs[inputs_idx].b,
+                        inout_idx,
+                        size,
+                    ),
+                )
+                .unwrap();
+        }
+    }
+
     // input should be of size: n_devices * input_size
     // Result is in the first bit of the result buffer
     pub fn compare_threshold_masked_many(
@@ -2297,7 +2424,7 @@ impl Circuits {
         mask_dots: &[ChunkShareView<u16>],
         streams: &[CudaStream],
         thresholds_a: &[u16], // Thresholds are given as a/b, where b=2^16
-        buckets: &mut [ChunkShare<u32>],
+        buckets: &mut ChunkShare<u32>, // Each element in the chunkshares is one bucket
     ) {
         assert_eq!(self.n_devices, code_dots.len());
         assert_eq!(self.n_devices, mask_dots.len());
@@ -2315,11 +2442,12 @@ impl Circuits {
         let mut x = Buffers::get_buffer_chunk(&x_, 64 * self.chunk_size);
         let mut corrections = Buffers::get_buffer_chunk(&corrections_, 128 * self.chunk_size);
 
-        // Start with lifting masks
+        // Start with lifting
         self.lift_mpc(mask_dots, &mut masks, &mut corrections, streams);
         self.finalize_lifts(&mut masks, &mut codes, &corrections, code_dots, streams);
 
-        for (a, bucket) in thresholds_a.iter().zip(buckets.iter_mut()) {
+        for (bucket_idx, a) in thresholds_a.iter().enumerate() {
+            // Continue with threshold comparison
             self.lifted_sub(&mut x, &masks, &codes, *a as u32, streams);
             self.extract_msb(&mut x, streams);
 
@@ -2333,7 +2461,12 @@ impl Circuits {
 
             // Expand the result buffer to the x buffer and perform arithmetic xor
             self.bit_inject_arithmetic_xor(&bits, &mut x, streams);
-            todo!("Add to buckets");
+            // Sum all elements in x to get the result in the first 32 bit word on each GPU
+            self.collapse_sum(&mut x, streams);
+            // Get data onto the first GPU
+            self.collect_graphic_result_u32(&mut x, streams);
+            // Accumulate first result onto bucket
+            self.collapse_sum_on_gpu(buckets, &x, self.n_devices, bucket_idx, 0, streams);
 
             self.return_result_buffer(result);
         }
