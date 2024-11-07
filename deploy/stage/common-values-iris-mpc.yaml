@@ -81,4 +81,4 @@ libsDir:
 
 preStop:
   # sleepPeriod is a variable in common-app to specify k8s terminationGracePeriodSeconds
-  sleepPeriod: 180 # 3x SMPC__PROCESSING_TIMEOUT_SECS
+  sleepPeriod: 60 # 3x SMPC__PROCESSING_TIMEOUT_SECS
