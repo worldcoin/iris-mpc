@@ -293,21 +293,21 @@ fn bench_session_based_hnsw(c: &mut Criterion) {
                         ready_sessions.clone(),
                         shares.clone(),
                         stores.clone(),
-                        setup.session_graph.clone(),
+                        setup.session_graphs.clone(),
                     )
                 },
-                |(sessions, shares, stores, graph)| {
+                |(sessions, shares, stores, graphs)| {
                     let identities = identities.clone();
                     async move {
                         let identities = identities.clone();
                         let mut set = JoinSet::new();
-                        for player_identity in identities.iter() {
+                        for (player_count, player_identity) in identities.iter().enumerate() {
                             let session = sessions.get(player_identity).unwrap().clone();
                             let store = stores.get(player_identity).unwrap().clone();
                             let raw_query = shares.get(player_identity).unwrap().clone();
 
                             let mut session_store = SessionBasedStorage::new(session, store);
-                            let mut session_graph = graph.clone();
+                            let mut session_graph = graphs[player_count].clone();
                             let query = session_store.prepare_query(raw_query);
 
                             set.spawn(async move {
@@ -335,10 +335,10 @@ fn bench_session_based_hnsw(c: &mut Criterion) {
 
 criterion_group! {
     hnsw,
-    //bench_plaintext_hnsw,
-    //bench_gr_ready_made_hnsw,
-    //bench_hnsw_primitives,
-    //bench_gr_primitives,
+    bench_plaintext_hnsw,
+    bench_gr_ready_made_hnsw,
+    bench_hnsw_primitives,
+    bench_gr_primitives,
     bench_session_based_hnsw,
 }
 

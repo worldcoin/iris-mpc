@@ -1,28 +1,21 @@
-use std::collections::HashMap;
-
-use super::{galois_store::{eval_pairwise_distances, DistanceShare, GaloisRingPoint}, plaintext_store::{self, PlaintextStore}};
+use super::{
+    galois_store::{eval_pairwise_distances, DistanceShare, GaloisRingPoint},
+    plaintext_store::{PlaintextStore, PointId},
+};
 use crate::{
     database_generators::{generate_galois_iris_shares, GaloisRingSharedIris},
-    execution::session::{Session, SessionHandles},
-    hawkers::plaintext_store::PointId,
-    protocol::ops::{
-        cross_compare, galois_ring_is_match, galois_ring_pairwise_distance, galois_ring_to_rep3, is_dot_zero,
-    },
+    execution::session::Session,
+    protocol::ops::{cross_compare, is_dot_zero},
+    shares::{ring_impl::RingElement, share::Share},
 };
 use aes_prng::AesRng;
-use hawk_pack::{graph_store::{graph_mem::Layer, GraphMem}, hnsw_db::{FurthestQueue, HawkSearcher}, GraphStore, VectorStore};
+use hawk_pack::{graph_store::GraphMem, hnsw_db::HawkSearcher, VectorStore};
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use rand::{CryptoRng, RngCore, SeedableRng};
 
 #[derive(Debug, Default, Clone)]
 pub struct PlayerStorage {
     points: Vec<GaloisRingPoint>,
-}
-
-impl PlayerStorage {
-    fn get_point(&self, index: usize) -> GaloisRingPoint {
-        self.points[index].clone()
-    }
 }
 
 pub struct PlayerStorageEnsemble {
@@ -63,7 +56,7 @@ impl PlayerStorage {
         self.points.push(GaloisRingPoint { data: raw_query });
 
         let point_id = self.points.len() - 1;
-        PointId(point_id)
+        point_id.into()
     }
 }
 
@@ -141,25 +134,24 @@ impl VectorStore for SessionBasedStorage {
         vector: &Self::VectorRef,
     ) -> Self::DistanceRef {
         let storage = self.get_storage();
-        let query_point = storage.points[query.val()].clone();
-        let vector_point = storage.points[vector.val()].clone();
+        let query_point = storage.points[*query].clone();
+        let vector_point = storage.points[*vector].clone();
         let pairs = vec![(query_point.data, vector_point.data)];
-        let mut session = self.session_as_mut();
-        let ds_and_ts = eval_pairwise_distances(pairs, &mut session).await;
-        DistanceShare::new (
+        let session = self.session_as_mut();
+        let ds_and_ts = eval_pairwise_distances(pairs, session).await;
+        DistanceShare::new(
             ds_and_ts[0].clone(),
             ds_and_ts[1].clone(),
-            //TODO: this might be unnecessary
-            self.session.own_identity(),
+            // TODO: this might be unnecessary
+            None,
         )
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> bool {
-        let mut session = self.session_as_mut();
-
-        is_dot_zero(&mut session, distance.code_dot(), distance.mask_dot())
-                    .await
-                    .unwrap()
+        let session = self.session_as_mut();
+        is_dot_zero(session, distance.code_dot(), distance.mask_dot())
+            .await
+            .unwrap()
     }
 
     async fn less_than(
@@ -213,37 +205,8 @@ pub async fn session_based_match(
 pub struct SessionBasedSetup {
     pub plaintext_store: PlaintextStore,
     pub plaintext_graph: GraphMem<PlaintextStore>,
-    pub session_graphs:   Vec<GraphMem<SessionBasedStorage>>, //each player has its own graph
+    pub session_graphs:  Vec<GraphMem<SessionBasedStorage>>, // each player has its own graph
     pub player_stores:   PlayerStorageEnsemble,
-}
-
-async fn session_graph_from_plain(
-    plaintext_store: PlaintextStore,
-    graph_store: GraphMem<PlaintextStore>,
-    player_id: usize
-) -> GraphMem<SessionBasedStorage> {
-    let ep = graph_store.get_entry_point().await;
-
-    let layers = graph_store.get_layers();
-
-    let mut shared_layers = vec![];
-    for layer in layers {
-        let links = layer.get_links_map();
-        let mut shared_links = HashMap::new();
-        for (source_id, queue) in links {
-            let mut shared_queue = vec![];
-            let source_v = plaintext_store.points[source_id.val()].clone();
-            for (target_id, _) in queue.as_vec_ref() {
-                let target_v = plaintext_store.points[target_id.val()].clone();
-                let shared_distance = source_v.compute_distance(&target_v);
-                shared_queue.push((*target_v, shared_distance));
-            }
-            shared_links.insert(*source_v, FurthestQueue::from_ascending_vec(shared_queue));
-        }
-        shared_layers.push(Layer::from_links(shared_links));
-    }
-
-    GraphMem::from_precomputed(ep, shared_layers)
 }
 
 pub async fn session_based_ready_made_hawk_searcher<R: RngCore + Clone + CryptoRng>(
@@ -279,24 +242,33 @@ pub async fn session_based_ready_made_hawk_searcher<R: RngCore + Clone + CryptoR
     }
     let player_storage_ensemble = storage_setup_preloaded_db(rng, cleartext_database)?;
 
-    let session_graphs = {
-        for player_id in 0..3 {
-            let player_storage = player_storage_ensemble.get(player_id).unwrap();
-            let distance_map = |lazy_distance: (PointId, PointId)| -> DistanceShare<u16> {
-                let (query, vector) = lazy_distance;
-                let distance = player_storage.eval_distance(&query, &vector).await;
-                DistanceShare::new(distance, distance, player_storage_ensemble.storages[0].points[0].data.0)
-            };
+    let distribute_trivial_shares = |value: u16, player_id: usize| -> Share<u16> {
+        let zero = RingElement(0_u16);
+        match player_id {
+            0 => Share::new(RingElement(value), zero),
+            1 => Share::new(zero, RingElement(value)),
+            2 => Share::new(zero, zero),
+            _ => unreachable!(),
         }
-        
     };
 
-    
-    let session_graph = GraphMem::<SessionBasedStorage>::from_another(
-        plaintext_graph_store.clone(),
-        |vx| vx,
-        |dx| dx,
-    );
+    let mut session_graphs = vec![];
+    {
+        for player_id in 0..3 {
+            let distance_map = |plain_distance: (u16, u16)| -> DistanceShare<u16> {
+                let code_dot_share = distribute_trivial_shares(plain_distance.0, player_id);
+                let mask_dot_share = distribute_trivial_shares(plain_distance.1, player_id);
+                DistanceShare::new(code_dot_share, mask_dot_share, None)
+            };
+            let player_graph = GraphMem::<SessionBasedStorage>::from_another(
+                plaintext_graph_store.clone(),
+                |vx| vx,
+                distance_map,
+            );
+            session_graphs.push(player_graph);
+        }
+    };
+
     Ok(SessionBasedSetup {
         plaintext_store: plaintext_vector_store,
         plaintext_graph: plaintext_graph_store,
@@ -350,7 +322,7 @@ mod tests {
                     };
                     let mut session_graph = GraphMem::new();
                     let searcher = HawkSearcher::default();
-                    let queries: Vec<_> = (0..database_size).map(PointId).collect();
+                    let queries: Vec<PointId> = (0..database_size).map(|q| q.into()).collect();
 
                     set.spawn(async move {
                         // insert queries
@@ -397,7 +369,6 @@ mod tests {
                     .await
                     .unwrap();
                 let players_storage = setup.player_stores;
-                let graph = setup.session_graph;
 
                 let runtime = LocalRuntime::replicated_test_config();
                 let ready_sessions = runtime.create_player_sessions().await.unwrap();
@@ -409,9 +380,9 @@ mod tests {
                         player_storage: store.clone(),
                         session,
                     };
-                    let mut session_graph = graph.clone();
+                    let mut session_graph = setup.session_graphs[player_no].clone();
                     let searcher = HawkSearcher::default();
-                    let queries: Vec<_> = (0..database_size).map(PointId).collect();
+                    let queries: Vec<PointId> = (0..database_size).map(|q| q.into()).collect();
 
                     set.spawn(async move {
                         // insert queries
@@ -468,22 +439,21 @@ mod tests {
                         player_storage: store.clone(),
                         session,
                     };
-                    let queries: Vec<_> = (0..database_size).map(PointId).collect();
+                    let queries: Vec<_> = (0..database_size).map(|q| q.into()).collect();
 
                     set.spawn(async move {
                         let it1 = (0..database_size).combinations(2);
                         let it2 = (0..database_size).combinations(2);
                         let mut results = Vec::new();
                         for comb1 in it1 {
+                            let dist1 = session_store
+                                .eval_distance(&queries[comb1[0]], &queries[comb1[1]])
+                                .await;
                             for comb2 in it2.clone() {
-                                results.push(
-                                    session_store
-                                        .less_than(
-                                            &(queries[comb1[0]], queries[comb1[1]]),
-                                            &(queries[comb2[0]], queries[comb2[1]]),
-                                        )
-                                        .await,
-                                );
+                                let dist2 = session_store
+                                    .eval_distance(&queries[comb2[0]], &queries[comb2[1]])
+                                    .await;
+                                results.push(session_store.less_than(&dist1, &dist2).await);
                             }
                         }
                         results
@@ -493,15 +463,17 @@ mod tests {
                 let it2 = (0..database_size).combinations(2);
                 let mut plain_results = Vec::new();
                 for comb1 in it1 {
+                    let dist1 = plaintext_store
+                        .eval_distance(&plaintext_inserts[comb1[0]], &plaintext_inserts[comb1[1]])
+                        .await;
                     for comb2 in it2.clone() {
-                        plain_results.push(
-                            plaintext_store
-                                .less_than(
-                                    &(plaintext_inserts[comb1[0]], plaintext_inserts[comb1[1]]),
-                                    &(plaintext_inserts[comb2[0]], plaintext_inserts[comb2[1]]),
-                                )
-                                .await,
-                        );
+                        let dist2 = plaintext_store
+                            .eval_distance(
+                                &plaintext_inserts[comb2[0]],
+                                &plaintext_inserts[comb2[1]],
+                            )
+                            .await;
+                        plain_results.push(plaintext_store.less_than(&dist1, &dist2).await);
                     }
                 }
                 let parties_outputs = set.join_all().await;

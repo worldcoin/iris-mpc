@@ -50,7 +50,7 @@ impl Aby3NgStorePlayer {
         self.points.push(GaloisRingPoint { data: raw_query });
 
         let point_id = self.points.len() - 1;
-        PointId(point_id)
+        point_id.into()
     }
 }
 
@@ -144,14 +144,14 @@ impl LocalNetAby3NgStoreProtocol {
 pub struct DistanceShare<T: IntRing2k> {
     code_dot: Share<T>,
     mask_dot: Share<T>,
-    player:   Identity,
+    player:   Option<Identity>,
 }
 
 impl<T> DistanceShare<T>
 where
     T: IntRing2k,
 {
-    pub fn new(code_dot: Share<T>, mask_dot: Share<T>, player: Identity) -> Self {
+    pub fn new(code_dot: Share<T>, mask_dot: Share<T>, player: Option<Identity>) -> Self {
         DistanceShare {
             code_dot,
             mask_dot,
@@ -207,15 +207,15 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
         for player in self.runtime.identities.clone() {
             let mut player_session = ready_sessions.get(&player).unwrap().clone();
             let storage = self.players.get(&player).unwrap();
-            let query_point = storage.points[query.val()].clone();
-            let vector_point = storage.points[vector.val()].clone();
+            let query_point = storage.points[*query].clone();
+            let vector_point = storage.points[*vector].clone();
             let pairs = vec![(query_point.data, vector_point.data)];
             jobs.spawn(async move {
                 let ds_and_ts = eval_pairwise_distances(pairs, &mut player_session).await;
                 DistanceShare {
                     code_dot: ds_and_ts[0].clone(),
                     mask_dot: ds_and_ts[1].clone(),
-                    player:   player.clone(),
+                    player:   Some(player.clone()),
                 }
             });
         }
@@ -232,11 +232,11 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
         for player in self.runtime.identities.clone() {
             let mut player_session = ready_sessions.get(&player).unwrap().clone();
             let storage = self.players.get(&player).unwrap();
-            let query_point = storage.points[query.val()].clone();
+            let query_point = storage.points[*query].clone();
             let pairs = vectors
                 .iter()
                 .map(|vector_id| {
-                    let vector_point = storage.points[vector_id.val()].clone();
+                    let vector_point = storage.points[*vector_id].clone();
                     (query_point.data.clone(), vector_point.data)
                 })
                 .collect::<Vec<_>>();
@@ -247,7 +247,7 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
                     .map(|dot_products| DistanceShare {
                         code_dot: dot_products[0].clone(),
                         mask_dot: dot_products[1].clone(),
-                        player:   player.clone(),
+                        player:   Some(player.clone()),
                     })
                     .collect::<Vec<_>>()
             });
@@ -274,7 +274,10 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
         let ready_sessions = self.runtime.create_player_sessions().await.unwrap();
         let mut jobs = JoinSet::new();
         for distance_share in distance.iter() {
-            let mut player_session = ready_sessions.get(&distance_share.player).unwrap().clone();
+            let mut player_session = ready_sessions
+                .get(distance_share.player.as_ref().unwrap())
+                .unwrap()
+                .clone();
             let code_dot = distance_share.code_dot.clone();
             let mask_dot = distance_share.mask_dot.clone();
             jobs.spawn(async move {
@@ -301,7 +304,10 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
         for share1 in distance1.iter() {
             for share2 in distance2.iter() {
                 if share1.player == share2.player {
-                    let mut player_session = ready_sessions.get(&share1.player).unwrap().clone();
+                    let mut player_session = ready_sessions
+                        .get(share1.player.as_ref().unwrap())
+                        .unwrap()
+                        .clone();
                     let code_dot1 = share1.code_dot.clone();
                     let mask_dot1 = share1.mask_dot.clone();
                     let code_dot2 = share2.code_dot.clone();
@@ -343,6 +349,7 @@ impl LocalNetAby3NgStoreProtocol {
             for (source_v, queue) in links {
                 let mut shared_queue = vec![];
                 for (target_v, _) in queue.as_vec_ref() {
+                    // recompute distances of graph edges from scratch
                     let shared_distance = self.eval_distance(source_v, target_v).await;
                     shared_queue.push((*target_v, shared_distance));
                 }
@@ -563,7 +570,7 @@ mod tests {
 
         for i in 0..database_size {
             let cleartext_neighbors = hawk_searcher
-                .search_to_insert(&mut cleartext_data.0, &mut cleartext_data.1, &PointId(i))
+                .search_to_insert(&mut cleartext_data.0, &mut cleartext_data.1, &i.into())
                 .await;
             assert!(
                 hawk_searcher
@@ -572,7 +579,7 @@ mod tests {
             );
 
             let secret_neighbors = hawk_searcher
-                .search_to_insert(&mut secret_data.0, &mut secret_data.1, &PointId(i))
+                .search_to_insert(&mut secret_data.0, &mut secret_data.1, &i.into())
                 .await;
             assert!(
                 hawk_searcher
@@ -581,7 +588,7 @@ mod tests {
             );
 
             let scratch_secret_neighbors = hawk_searcher
-                .search_to_insert(&mut vector_store, &mut graph_store, &PointId(i))
+                .search_to_insert(&mut vector_store, &mut graph_store, &i.into())
                 .await;
             assert!(
                 hawk_searcher
@@ -625,20 +632,23 @@ mod tests {
         let it2 = (0..db_dim).combinations(2);
         for comb1 in it1 {
             for comb2 in it2.clone() {
-                let distance1 = aby3_store_protocol
+                let dist1_aby3 = aby3_store_protocol
                     .eval_distance(&aby3_inserts[comb1[0]], &aby3_inserts[comb1[1]])
                     .await;
-                let distance2 = aby3_store_protocol
+                let dist2_aby3 = aby3_store_protocol
                     .eval_distance(&aby3_inserts[comb2[0]], &aby3_inserts[comb2[1]])
                     .await;
+                let dist1_plain = plaintext_store
+                    .eval_distance(&plaintext_inserts[comb1[0]], &plaintext_inserts[comb1[1]])
+                    .await;
+                let dist2_plain = plaintext_store
+                    .eval_distance(&plaintext_inserts[comb2[0]], &plaintext_inserts[comb2[1]])
+                    .await;
                 assert_eq!(
-                    aby3_store_protocol.less_than(&distance1, &distance2).await,
-                    plaintext_store
-                        .less_than(
-                            &(plaintext_inserts[comb1[0]], plaintext_inserts[comb1[1]]),
-                            &(plaintext_inserts[comb2[0]], plaintext_inserts[comb2[1]])
-                        )
+                    aby3_store_protocol
+                        .less_than(&dist1_aby3, &dist2_aby3)
                         .await,
+                    plaintext_store.less_than(&dist1_plain, &dist2_plain).await,
                     "Failed at combo: {:?}, {:?}",
                     comb1,
                     comb2
@@ -659,7 +669,7 @@ mod tests {
 
         for i in 0..database_size {
             let secret_neighbors = searcher
-                .search_to_insert(&mut vector, &mut graph, &PointId(i))
+                .search_to_insert(&mut vector, &mut graph, &i.into())
                 .await;
             assert!(
                 searcher.is_match(&mut vector, &secret_neighbors).await,
