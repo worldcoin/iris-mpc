@@ -7,7 +7,12 @@ use crate::{
         binary::{lift, mul_lift_2k, open_bin},
         prf::{Prf, PrfSeed},
     },
-    shares::{bit::Bit, ring_impl::RingElement, share::Share, vecshare::VecShare},
+    shares::{
+        bit::Bit,
+        ring_impl::RingElement,
+        share::{DistanceShare, Share},
+        vecshare::VecShare,
+    },
 };
 use eyre::eyre;
 
@@ -267,10 +272,14 @@ pub async fn galois_ring_is_match(
 /// Checks that the given dot product is zero.
 pub async fn is_dot_zero(
     session: &mut Session,
-    code_dot: Share<u16>,
-    mask_dot: Share<u16>,
+    dot_share: &DistanceShare<u16>,
 ) -> eyre::Result<bool> {
-    let bit = compare_threshold(session, code_dot, mask_dot).await?;
+    let bit = compare_threshold(
+        session,
+        dot_share.code_dot.clone(),
+        dot_share.mask_dot.clone(),
+    )
+    .await?;
     let opened = open_bin(session, bit).await?;
     Ok(opened.convert())
 }

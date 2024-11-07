@@ -1,5 +1,5 @@
 use super::{int_ring::IntRing2k, ring_impl::RingElement};
-use crate::execution::player::Role;
+use crate::execution::player::{Identity, Role};
 use iris_mpc_common::id::PartyID;
 use num_traits::Zero;
 use serde::{Deserialize, Serialize};
@@ -316,6 +316,42 @@ impl<T: IntRing2k> Shl<u32> for Share<T> {
         Self {
             a: self.a << rhs,
             b: self.b << rhs,
+        }
+    }
+}
+
+// Additive share of a Hamming distance value
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(bound = "")]
+pub struct DistanceShare<T: IntRing2k> {
+    pub code_dot: Share<T>,
+    pub mask_dot: Share<T>,
+}
+
+impl<T> DistanceShare<T>
+where
+    T: IntRing2k,
+{
+    pub fn new(code_dot: Share<T>, mask_dot: Share<T>) -> Self {
+        DistanceShare { code_dot, mask_dot }
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(bound = "")]
+pub struct AuthDistanceShare<T: IntRing2k> {
+    pub share:  DistanceShare<T>,
+    pub player: Identity,
+}
+
+impl<T> AuthDistanceShare<T>
+where
+    T: IntRing2k,
+{
+    pub fn new(code_dot: Share<T>, mask_dot: Share<T>, player: Identity) -> Self {
+        AuthDistanceShare {
+            share: DistanceShare::new(code_dot, mask_dot),
+            player,
         }
     }
 }

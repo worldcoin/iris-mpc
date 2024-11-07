@@ -1,12 +1,15 @@
 use super::{
-    galois_store::{eval_pairwise_distances, DistanceShare, GaloisRingPoint},
+    galois_store::{eval_pairwise_distances, GaloisRingPoint},
     plaintext_store::{PlaintextStore, PointId},
 };
 use crate::{
     database_generators::{generate_galois_iris_shares, GaloisRingSharedIris},
     execution::session::Session,
     protocol::ops::{cross_compare, is_dot_zero},
-    shares::{ring_impl::RingElement, share::Share},
+    shares::{
+        ring_impl::RingElement,
+        share::{DistanceShare, Share},
+    },
 };
 use aes_prng::AesRng;
 use hawk_pack::{graph_store::GraphMem, hnsw_db::HawkSearcher, VectorStore};
@@ -139,19 +142,12 @@ impl VectorStore for SessionBasedStorage {
         let pairs = vec![(query_point.data, vector_point.data)];
         let session = self.session_as_mut();
         let ds_and_ts = eval_pairwise_distances(pairs, session).await;
-        DistanceShare::new(
-            ds_and_ts[0].clone(),
-            ds_and_ts[1].clone(),
-            // TODO: this might be unnecessary
-            None,
-        )
+        DistanceShare::new(ds_and_ts[0].clone(), ds_and_ts[1].clone())
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> bool {
         let session = self.session_as_mut();
-        is_dot_zero(session, distance.code_dot(), distance.mask_dot())
-            .await
-            .unwrap()
+        is_dot_zero(session, distance).await.unwrap()
     }
 
     async fn less_than(
@@ -162,10 +158,10 @@ impl VectorStore for SessionBasedStorage {
         let session = self.session_as_mut();
         cross_compare(
             session,
-            distance1.code_dot(),
-            distance1.mask_dot(),
-            distance2.code_dot(),
-            distance2.mask_dot(),
+            distance1.code_dot.clone(),
+            distance1.mask_dot.clone(),
+            distance2.code_dot.clone(),
+            distance2.mask_dot.clone(),
         )
         .await
         .unwrap()
@@ -258,7 +254,7 @@ pub async fn session_based_ready_made_hawk_searcher<R: RngCore + Clone + CryptoR
             let distance_map = |plain_distance: (u16, u16)| -> DistanceShare<u16> {
                 let code_dot_share = distribute_trivial_shares(plain_distance.0, player_id);
                 let mask_dot_share = distribute_trivial_shares(plain_distance.1, player_id);
-                DistanceShare::new(code_dot_share, mask_dot_share, None)
+                DistanceShare::new(code_dot_share, mask_dot_share)
             };
             let player_graph = GraphMem::<SessionBasedStorage>::from_another(
                 plaintext_graph_store.clone(),

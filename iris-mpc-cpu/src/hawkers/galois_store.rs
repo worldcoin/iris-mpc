@@ -6,7 +6,7 @@ use crate::{
     protocol::ops::{
         cross_compare, galois_ring_pairwise_distance, galois_ring_to_rep3, is_dot_zero,
     },
-    shares::{int_ring::IntRing2k, share::Share},
+    shares::share::{AuthDistanceShare, Share},
 };
 use aes_prng::AesRng;
 use hawk_pack::{
@@ -16,7 +16,6 @@ use hawk_pack::{
 };
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use rand::{CryptoRng, RngCore, SeedableRng};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::task::JoinSet;
 
@@ -139,35 +138,6 @@ impl LocalNetAby3NgStoreProtocol {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(bound = "")]
-pub struct DistanceShare<T: IntRing2k> {
-    code_dot: Share<T>,
-    mask_dot: Share<T>,
-    player:   Option<Identity>,
-}
-
-impl<T> DistanceShare<T>
-where
-    T: IntRing2k,
-{
-    pub fn new(code_dot: Share<T>, mask_dot: Share<T>, player: Option<Identity>) -> Self {
-        DistanceShare {
-            code_dot,
-            mask_dot,
-            player,
-        }
-    }
-
-    pub fn code_dot(&self) -> Share<T> {
-        self.code_dot.clone()
-    }
-
-    pub fn mask_dot(&self) -> Share<T> {
-        self.mask_dot.clone()
-    }
-}
-
 pub async fn eval_pairwise_distances(
     mut pairs: Vec<(GaloisRingSharedIris, GaloisRingSharedIris)>,
     player_session: &mut Session,
@@ -187,7 +157,7 @@ pub async fn eval_pairwise_distances(
 impl VectorStore for LocalNetAby3NgStoreProtocol {
     type QueryRef = PointId; // Vector ID, pending insertion.
     type VectorRef = PointId; // Vector ID, inserted.
-    type DistanceRef = Vec<DistanceShare<u16>>; // Distance represented as shares.
+    type DistanceRef = Vec<AuthDistanceShare<u16>>; // Distance represented as shares.
 
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         // The query is now accepted in the store. It keeps the same ID.
@@ -212,11 +182,7 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
             let pairs = vec![(query_point.data, vector_point.data)];
             jobs.spawn(async move {
                 let ds_and_ts = eval_pairwise_distances(pairs, &mut player_session).await;
-                DistanceShare {
-                    code_dot: ds_and_ts[0].clone(),
-                    mask_dot: ds_and_ts[1].clone(),
-                    player:   Some(player.clone()),
-                }
+                AuthDistanceShare::new(ds_and_ts[0].clone(), ds_and_ts[1].clone(), player)
             });
         }
         jobs.join_all().await
@@ -244,16 +210,18 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
                 let ds_and_ts = eval_pairwise_distances(pairs, &mut player_session).await;
                 ds_and_ts
                     .chunks(2)
-                    .map(|dot_products| DistanceShare {
-                        code_dot: dot_products[0].clone(),
-                        mask_dot: dot_products[1].clone(),
-                        player:   Some(player.clone()),
+                    .map(|dot_products| {
+                        AuthDistanceShare::new(
+                            dot_products[0].clone(),
+                            dot_products[1].clone(),
+                            player.clone(),
+                        )
                     })
                     .collect::<Vec<_>>()
             });
         }
-        // Now we have a vector of 3 vectors of DistanceShares, we need to transpose it
-        // to a vector of DistanceRef
+        // Now we have a vector of 3 vectors of AuthDistanceShares, we need to transpose
+        // it to a vector of DistanceRef
         let mut all_shares = jobs
             .join_all()
             .await
@@ -274,17 +242,9 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
         let ready_sessions = self.runtime.create_player_sessions().await.unwrap();
         let mut jobs = JoinSet::new();
         for distance_share in distance.iter() {
-            let mut player_session = ready_sessions
-                .get(distance_share.player.as_ref().unwrap())
-                .unwrap()
-                .clone();
-            let code_dot = distance_share.code_dot.clone();
-            let mask_dot = distance_share.mask_dot.clone();
-            jobs.spawn(async move {
-                is_dot_zero(&mut player_session, code_dot, mask_dot)
-                    .await
-                    .unwrap()
-            });
+            let mut player_session = ready_sessions.get(&distance_share.player).unwrap().clone();
+            let share = distance_share.share.clone();
+            jobs.spawn(async move { is_dot_zero(&mut player_session, &share).await.unwrap() });
         }
         let r0 = jobs.join_next().await.unwrap().unwrap();
         let r1 = jobs.join_next().await.unwrap().unwrap();
@@ -304,14 +264,11 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
         for share1 in distance1.iter() {
             for share2 in distance2.iter() {
                 if share1.player == share2.player {
-                    let mut player_session = ready_sessions
-                        .get(share1.player.as_ref().unwrap())
-                        .unwrap()
-                        .clone();
-                    let code_dot1 = share1.code_dot.clone();
-                    let mask_dot1 = share1.mask_dot.clone();
-                    let code_dot2 = share2.code_dot.clone();
-                    let mask_dot2 = share2.mask_dot.clone();
+                    let mut player_session = ready_sessions.get(&share1.player).unwrap().clone();
+                    let code_dot1 = share1.share.code_dot.clone();
+                    let mask_dot1 = share1.share.mask_dot.clone();
+                    let code_dot2 = share2.share.code_dot.clone();
+                    let mask_dot2 = share2.share.mask_dot.clone();
                     jobs.spawn(async move {
                         cross_compare(
                             &mut player_session,

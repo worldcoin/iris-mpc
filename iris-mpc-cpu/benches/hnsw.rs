@@ -335,10 +335,12 @@ fn bench_session_based_hnsw(c: &mut Criterion) {
 
 criterion_group! {
     hnsw,
+    /*
     bench_plaintext_hnsw,
     bench_gr_ready_made_hnsw,
     bench_hnsw_primitives,
     bench_gr_primitives,
+    */
     bench_session_based_hnsw,
 }
 
