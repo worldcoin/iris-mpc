@@ -109,6 +109,7 @@ fn preprocess_iris_message_shares(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn receive_batch(
     party_id: usize,
     client: &Client,
@@ -117,7 +118,13 @@ async fn receive_batch(
     skip_request_ids: &[String],
     shares_encryption_key_pairs: SharesEncryptionKeyPairs,
     max_batch_size: usize,
-) -> eyre::Result<BatchQuery, ReceiveRequestError> {
+    shutdown_handler: &ShutdownHandler,
+) -> eyre::Result<Option<BatchQuery>, ReceiveRequestError> {
+    if shutdown_handler.is_shutting_down() {
+        tracing::info!("Stopping batch receive due to shutdown signal...");
+        return Ok(None);
+    }
+
     let mut batch_query = BatchQuery::default();
 
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
@@ -421,7 +428,7 @@ async fn receive_batch(
     batch_query.db_right_preprocessed =
         BatchQueryEntriesPreprocessed::from(batch_query.db_right.clone());
 
-    Ok(batch_query)
+    Ok(Some(batch_query))
 }
 
 fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
@@ -1097,19 +1104,20 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             &skip_request_ids,
             shares_encryption_key_pair.clone(),
             config.max_batch_size,
+            &shutdown_handler,
         );
 
         let dummy_shares_for_deletions = get_dummy_shares_for_deletion(party_id);
 
         loop {
-            if shutdown_handler.is_shutting_down() {
-                tracing::info!("Exiting from main loop gracefully due to shutdown signal...");
-                return Ok(());
-            }
-
             let now = Instant::now();
 
-            let batch = next_batch.await?;
+            let _batch = next_batch.await?;
+            if _batch.is_none() {
+                tracing::info!("No more batches to process, exiting main loop");
+                return Ok(());
+            }
+            let batch = _batch.unwrap();
 
             // start trace span - with single TraceId and single ParentTraceID
             tracing::info!("Received batch in {:?}", now.elapsed());
@@ -1148,6 +1156,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 &skip_request_ids,
                 shares_encryption_key_pair.clone(),
                 config.max_batch_size,
+                &shutdown_handler,
             );
 
             // await the result
