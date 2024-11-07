@@ -295,7 +295,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         id: usize,
         executor: impl sqlx::Executor<'_, Database = Postgres>,
     ) -> Result<()> {
-        sqlx::query("SELECT setval(pg_get_serial_sequence('irises', 'id'), $1 + 1, false)")
+        sqlx::query("SELECT setval(pg_get_serial_sequence('irises', 'id'), $1, true)")
             .bind(id as i64)
             .execute(executor)
             .await?;
