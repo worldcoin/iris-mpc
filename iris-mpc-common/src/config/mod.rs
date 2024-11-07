@@ -78,6 +78,9 @@ pub struct Config {
 
     #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
     pub node_hostnames: Vec<String>,
+
+    #[serde(default = "default_shutdown_last_results_sync_timeout_secs")]
+    pub shutdown_last_results_sync_timeout_secs: u64,
 }
 
 fn default_processing_timeout_secs() -> u64 {
@@ -93,6 +96,10 @@ fn default_heartbeat_interval_secs() -> u64 {
 }
 
 fn default_heartbeat_initial_retries() -> u64 {
+    10
+}
+
+fn default_shutdown_last_results_sync_timeout_secs() -> u64 {
     10
 }
 

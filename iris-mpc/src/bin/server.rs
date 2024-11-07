@@ -16,6 +16,7 @@ use iris_mpc_common::{
         },
         key_pair::SharesEncryptionKeyPairs,
         kms_dh::derive_shared_secret,
+        shutdown_handler::ShutdownHandler,
         smpc_request::{
             create_message_type_attribute_map, CircuitBreakerRequest, IdentityDeletionRequest,
             IdentityDeletionResult, ReceiveRequestError, SQSMessage, UniquenessRequest,
@@ -108,6 +109,7 @@ fn preprocess_iris_message_shares(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn receive_batch(
     party_id: usize,
     client: &Client,
@@ -116,7 +118,13 @@ async fn receive_batch(
     skip_request_ids: &[String],
     shares_encryption_key_pairs: SharesEncryptionKeyPairs,
     max_batch_size: usize,
-) -> eyre::Result<BatchQuery, ReceiveRequestError> {
+    shutdown_handler: &ShutdownHandler,
+) -> eyre::Result<Option<BatchQuery>, ReceiveRequestError> {
+    if shutdown_handler.is_shutting_down() {
+        tracing::info!("Stopping batch receive due to shutdown signal...");
+        return Ok(None);
+    }
+
     let mut batch_query = BatchQuery::default();
 
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
@@ -420,7 +428,7 @@ async fn receive_batch(
     batch_query.db_right_preprocessed =
         BatchQueryEntriesPreprocessed::from(batch_query.db_right.clone());
 
-    Ok(batch_query)
+    Ok(Some(batch_query))
 }
 
 fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
@@ -577,6 +585,9 @@ async fn main() -> eyre::Result<()> {
 }
 
 async fn server_main(config: Config) -> eyre::Result<()> {
+    let shutdown_handler = ShutdownHandler::new(config.shutdown_last_results_sync_timeout_secs);
+    shutdown_handler.wait_for_shutdown_signal().await;
+
     // Load batch_size config
     *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
     let max_sync_lookback: usize = config.max_batch_size * 2;
@@ -828,6 +839,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let sns_client_bg = sns_client.clone();
     let config_bg = config.clone();
     let store_bg = store.clone();
+    let shutdown_handler_bg = shutdown_handler.clone();
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
             merged_results,
@@ -973,6 +985,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 IDENTITY_DELETION_MESSAGE_TYPE,
             )
             .await?;
+
+            shutdown_handler_bg.decrement_batches_pending_completion();
         }
 
         Ok(())
@@ -1090,6 +1104,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             &skip_request_ids,
             shares_encryption_key_pair.clone(),
             config.max_batch_size,
+            &shutdown_handler,
         );
 
         let dummy_shares_for_deletions = get_dummy_shares_for_deletion(party_id);
@@ -1097,7 +1112,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         loop {
             let now = Instant::now();
 
-            let batch = next_batch.await?;
+            let _batch = next_batch.await?;
+            if _batch.is_none() {
+                tracing::info!("No more batches to process, exiting main loop");
+                return Ok(());
+            }
+            let batch = _batch.unwrap();
 
             // start trace span - with single TraceId and single ParentTraceID
             tracing::info!("Received batch in {:?}", now.elapsed());
@@ -1136,6 +1156,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 &skip_request_ids,
                 shares_encryption_key_pair.clone(),
                 config.max_batch_size,
+                &shutdown_handler,
             );
 
             // await the result
@@ -1145,13 +1166,21 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             tx.send(result).await?;
 
+            shutdown_handler.increment_batches_pending_completion()
             // wrap up span context
         }
     }
     .await;
 
     match res {
-        Ok(_) => {}
+        Ok(_) => {
+            tracing::info!(
+                "Main loop exited normally. Waiting for last batch results to be processed before \
+                 shutting down..."
+            );
+
+            shutdown_handler.wait_for_pending_batches_completion().await;
+        }
         Err(e) => {
             tracing::error!("ServerActor processing error: {:?}", e);
             // drop actor handle to initiate shutdown
