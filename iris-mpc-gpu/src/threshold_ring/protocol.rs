@@ -1467,7 +1467,7 @@ impl Circuits {
                             &c.a,
                             &c.b,
                             self.peer_id as u32,
-                            self.chunk_size as u32 * 64,
+                            self.chunk_size * 64,
                         ),
                     )
                     .unwrap();
