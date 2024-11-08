@@ -86,31 +86,11 @@ async fn shutdown_signal() {
         tracing::info!("SIGTERM received.");
     };
 
-    #[cfg(unix)]
-    let interrupt = async {
-        signal::unix::signal(signal::unix::SignalKind::interrupt())
-            .expect("failed to install SIGINT handler")
-            .recv()
-            .await;
-        tracing::info!("SIGINT received.");
-    };
-
-    #[cfg(unix)]
-    let quit = async {
-        signal::unix::signal(signal::unix::SignalKind::quit())
-            .expect("failed to install SIGQUIT handler")
-            .recv()
-            .await;
-        tracing::info!("SIGQUIT received.");
-    };
-
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
 
     tokio::select! {
         _ = ctrl_c => {},
         _ = terminate => {},
-        _ = interrupt => {},
-        _ = quit => {},
     }
 }
