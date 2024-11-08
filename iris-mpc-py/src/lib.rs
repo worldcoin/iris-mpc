@@ -1,9 +1,7 @@
-use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodeArray};
-use pyo3::{exceptions::PyAttributeError, prelude::*};
-use iris_mpc_cpu::{
-    hawkers::plaintext_store::PlaintextStore, py_bindings
-};
 use hawk_pack::graph_store::GraphMem;
+use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodeArray};
+use iris_mpc_cpu::{hawkers::plaintext_store::PlaintextStore, py_bindings};
+use pyo3::{exceptions::PyAttributeError, prelude::*};
 
 #[pyclass]
 #[derive(Clone)]
@@ -11,7 +9,6 @@ struct PyIrisCodeArray(IrisCodeArray);
 
 #[pymethods]
 impl PyIrisCodeArray {
-
     #[new]
     fn new_py(input: String) -> Self {
         Self::from_base64(input)
@@ -68,8 +65,9 @@ impl PyIrisCode {
     }
 
     #[staticmethod]
-    fn from_open_iris_template<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Self> {
-        let dict_obj = obj.call_method0("serialize")
+    fn from_open_iris_template(obj: &Bound<PyAny>) -> PyResult<Self> {
+        let dict_obj = obj
+            .call_method0("serialize")
             .map_err(|_| PyAttributeError::new_err("Object has no method 'serialize'"))?;
 
         // Extract the base64-encoded strings from the dictionary
@@ -81,13 +79,16 @@ impl PyIrisCode {
         let mask: PyIrisCodeArray = mask_codes_str.extract()?;
 
         // Step 5: Construct and return PyIrisCode
-        Ok(PyIrisCode{ code, mask } )
+        Ok(PyIrisCode { code, mask })
     }
 }
 
 impl PyIrisCode {
     fn to_iris_code(&self) -> IrisCode {
-        IrisCode { code: self.code.0.clone(), mask: self.mask.0.clone() }
+        IrisCode {
+            code: self.code.0,
+            mask: self.mask.0,
+        }
     }
 }
 
@@ -103,7 +104,7 @@ impl From<IrisCode> for PyIrisCode {
 #[pyclass]
 struct PyHnsw {
     vector: PlaintextStore,
-    graph: GraphMem<PlaintextStore>,
+    graph:  GraphMem<PlaintextStore>,
 }
 
 #[pymethods]
@@ -111,19 +112,13 @@ impl PyHnsw {
     #[new]
     fn new_py() -> Self {
         let (vector, graph) = py_bindings::gen_empty_index();
-        PyHnsw {
-            vector,
-            graph,
-        }
+        PyHnsw { vector, graph }
     }
 
     #[staticmethod]
     fn gen_uniform(size: usize) -> PyHnsw {
         let (vector, graph) = py_bindings::gen_uniform_random_index(size);
-        PyHnsw {
-            vector,
-            graph,
-        }
+        PyHnsw { vector, graph }
     }
 
     fn insert_uniform_random(&mut self) -> u32 {

@@ -3,5 +3,5 @@ pub mod execution;
 pub mod hawkers;
 pub(crate) mod network;
 pub mod protocol;
-pub(crate) mod shares;
 pub mod py_bindings;
+pub(crate) mod shares;

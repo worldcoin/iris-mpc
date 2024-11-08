@@ -1,8 +1,7 @@
-
+use crate::hawkers::plaintext_store::PlaintextStore;
 use aes_prng::AesRng;
 use hawk_pack::{graph_store::GraphMem, hnsw_db::HawkSearcher, VectorStore};
 use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodeArray};
-use crate::hawkers::plaintext_store::PlaintextStore;
 use rand::{rngs::ThreadRng, SeedableRng};
 
 // pub fn gen_zero_iris_code_array_str() -> String {
@@ -18,7 +17,6 @@ pub fn gen_uniform_iris_code_array() -> IrisCodeArray {
     IrisCodeArray::random_rng(&mut rng)
 }
 
-
 pub fn gen_empty_index() -> (PlaintextStore, GraphMem<PlaintextStore>) {
     let vector = PlaintextStore::default();
     let graph = GraphMem::new();
@@ -27,7 +25,6 @@ pub fn gen_empty_index() -> (PlaintextStore, GraphMem<PlaintextStore>) {
 }
 
 pub fn gen_uniform_random_index(size: usize) -> (PlaintextStore, GraphMem<PlaintextStore>) {
-    
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -56,7 +53,11 @@ pub fn gen_uniform_random_index(size: usize) -> (PlaintextStore, GraphMem<Plaint
     })
 }
 
-pub fn insert_iris(vector: &mut PlaintextStore, graph: &mut GraphMem<PlaintextStore>, iris: IrisCode) -> u32 {
+pub fn insert_iris(
+    vector: &mut PlaintextStore,
+    graph: &mut GraphMem<PlaintextStore>,
+    iris: IrisCode,
+) -> u32 {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -68,9 +69,7 @@ pub fn insert_iris(vector: &mut PlaintextStore, graph: &mut GraphMem<PlaintextSt
 
         // let raw_query = IrisCode::random_rng(&mut rng);
         let query = vector.prepare_query(iris);
-        let neighbors = searcher
-            .search_to_insert(vector, graph, &query)
-            .await;
+        let neighbors = searcher.search_to_insert(vector, graph, &query).await;
         let inserted = vector.insert(&query).await;
         searcher
             .insert_from_search_results(vector, graph, &mut rng, inserted, neighbors)
@@ -79,21 +78,23 @@ pub fn insert_iris(vector: &mut PlaintextStore, graph: &mut GraphMem<PlaintextSt
     })
 }
 
-pub fn search_iris(vector: &mut PlaintextStore, graph: &mut GraphMem<PlaintextStore>, query: IrisCode) -> (u32, f64) {
+pub fn search_iris(
+    vector: &mut PlaintextStore,
+    graph: &mut GraphMem<PlaintextStore>,
+    query: IrisCode,
+) -> (u32, f64) {
     let rt = tokio::runtime::Builder::new_multi_thread()
-    .enable_all()
-    .build()
-    .unwrap();
+        .enable_all()
+        .build()
+        .unwrap();
 
     rt.block_on(async move {
         let searcher = HawkSearcher::default();
         let query = vector.prepare_query(query);
-        let neighbors = searcher
-            .search_to_insert(vector, graph, &query)
-            .await;
+        let neighbors = searcher.search_to_insert(vector, graph, &query).await;
         let nearest = neighbors[0].get_nearest().unwrap();
-        let dist = (nearest.1.0 as f64) / (nearest.1.1 as f64);
-        (nearest.0.0, dist)
+        let dist = (nearest.1 .0 as f64) / (nearest.1 .1 as f64);
+        (nearest.0 .0, dist)
     })
 }
 
