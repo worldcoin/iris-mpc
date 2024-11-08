@@ -42,17 +42,19 @@ impl PlaintextIris {
     }
 }
 
+// TODO refactor away is_persistent flag; should probably be stored in a
+// separate buffer instead whenever working with non-persistent iris codes
 #[derive(Clone, Default, Debug)]
 pub struct PlaintextPoint {
     /// Whatever encoding of a vector.
-    data:          PlaintextIris,
+    pub data:          PlaintextIris,
     /// Distinguish between queries that are pending, and those that were
     /// ultimately accepted into the vector store.
-    is_persistent: bool,
+    pub is_persistent: bool,
 }
 
 #[derive(Copy, Debug, Clone, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
-pub struct PointId(u32);
+pub struct PointId(pub u32);
 
 impl<T> Index<PointId> for Vec<T> {
     type Output = T;

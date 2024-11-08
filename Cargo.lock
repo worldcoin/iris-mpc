@@ -2685,6 +2685,9 @@ dependencies = [
 name = "iris-mpc-py"
 version = "0.1.0"
 dependencies = [
+ "hawk-pack",
+ "iris-mpc-common",
+ "iris-mpc-cpu",
  "pyo3",
 ]
 
