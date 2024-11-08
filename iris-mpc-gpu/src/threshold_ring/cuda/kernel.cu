@@ -335,6 +335,8 @@ extern "C" __global__ void shared_lift_mul_sub(U32 *mask_a, U32 *mask_b,
     case 1:
       mask_b[i] += 1; // Transforms the <= into <
       break;
+    default:
+      break;
     }
   }
 }
