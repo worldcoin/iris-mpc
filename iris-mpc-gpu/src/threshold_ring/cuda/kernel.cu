@@ -132,7 +132,8 @@ __device__ void u16_transpose_pack_u64(U64 *out_a, U64 *out_b, U16 *in_a,
 
 // Performs the transpose for a and b in parallel
 __device__ void u32_transpose_pack_u64(U64 *out_a, U64 *out_b, U32 *in_a,
-                                       U32 *in_b, size_t in_len, size_t out_len) {
+                                       U32 *in_b, size_t in_len,
+                                       size_t out_len) {
   // in has size in_len = 64 * n
   // out has size out_len, where each element is an array of n elements
   // Thus out itslef has n * out_len elements (split into n arrays)
@@ -168,10 +169,10 @@ __device__ void lift_mul_sub(U32 *mask, U16 *mask_corr1, U16 *mask_corr2,
   *mask -= (U32)(*mask_corr1) << 16;
   *mask -= (U32)(*mask_corr2) << 17;
 
-  U32 a;
-  mul_lift_b(&a, code);
+  U32 lifted;
+  mul_lift_b(&lifted, code);
   *mask *= A;
-  *mask -= a;
+  *mask -= lifted;
 }
 
 __device__ void split_inner(U64 *x1_a, U64 *x1_b, U64 *x2_a, U64 *x2_b,
@@ -322,11 +323,21 @@ extern "C" __global__ void lift_split(U16 *in_a, U16 *in_b, U32 *lifted_a,
 extern "C" __global__ void shared_lift_mul_sub(U32 *mask_a, U32 *mask_b,
                                                U16 *mask_corr_a,
                                                U16 *mask_corr_b, U16 *code_a,
-                                               U16 *code_b, size_t n) {
+                                               U16 *code_b, int id, size_t n) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     lift_mul_sub(&mask_a[i], &mask_corr_a[i], &mask_corr_a[i + n], &code_a[i]);
     lift_mul_sub(&mask_b[i], &mask_corr_b[i], &mask_corr_b[i + n], &code_b[i]);
+    switch (id) {
+    case 0:
+      mask_a[i] += 1; // Transforms the <= into <
+      break;
+    case 1:
+      mask_b[i] += 1; // Transforms the <= into <
+      break;
+    default:
+      break;
+    }
   }
 }
 
