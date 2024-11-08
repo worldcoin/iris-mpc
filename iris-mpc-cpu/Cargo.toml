@@ -17,7 +17,7 @@ bytemuck.workspace = true
 dashmap = "6.1.0"
 eyre.workspace = true
 futures.workspace = true
-hawk-pack = { git = "https://github.com/Inversed-Tech/hawk-pack.git", rev = "400db13" }
+hawk-pack = { git = "https://github.com/Inversed-Tech/hawk-pack.git", rev = "4e6de24" }
 iris-mpc-common = { path = "../iris-mpc-common" }
 itertools.workspace = true
 num-traits.workspace = true
