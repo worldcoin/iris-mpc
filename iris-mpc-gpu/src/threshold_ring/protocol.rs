@@ -1813,7 +1813,7 @@ impl Circuits {
                             &mc.b,
                             &c.a,
                             &c.b,
-                            self.chunk_size as u32 * 64,
+                            self.chunk_size * 64,
                         ),
                     )
                     .unwrap();
@@ -1855,7 +1855,8 @@ impl Circuits {
                             &o.a,
                             &o.b,
                             a,
-                            self.chunk_size as u32 * 64,
+                            self.peer_id as u32,
+                            self.chunk_size * 64,
                         ),
                     )
                     .unwrap();

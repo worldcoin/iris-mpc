@@ -442,11 +442,21 @@ shared_finalize_lift(U32 *mask_a, U32 *mask_b, U32 *code_lift_a,
 extern "C" __global__ void shared_lifted_sub(U32 *mask_a, U32 *mask_b,
                                              U32 *code_a, U32 *code_b,
                                              U32 *output_a, U32 *output_b,
-                                             U32 a, size_t n) {
+                                             U32 a, int id, size_t n) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     lifted_sub(&mask_a[i], &code_a[i], output_a[i], a);
     lifted_sub(&mask_b[i], &code_b[i], output_n[i], a);
+    switch (id) {
+    case 0:
+      mask_a[i] += 1; // Transforms the <= into <
+      break;
+    case 1:
+      mask_b[i] += 1; // Transforms the <= into <
+      break;
+    default:
+      break;
+    }
   }
 }
 
