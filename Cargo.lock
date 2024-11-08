@@ -2121,7 +2121,7 @@ dependencies = [
 [[package]]
 name = "hawk-pack"
 version = "0.1.0"
-source = "git+https://github.com/Inversed-Tech/hawk-pack.git?rev=400db13#400db13435acbdb6500ed3c8584c66281bf9e000"
+source = "git+https://github.com/Inversed-Tech/hawk-pack.git?rev=4e6de24#4e6de24f7422923f8cccd8571ef03407e8dbbb99"
 dependencies = [
  "aes-prng 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "criterion",
