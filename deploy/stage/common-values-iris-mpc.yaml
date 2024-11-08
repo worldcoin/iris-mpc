@@ -80,5 +80,8 @@ libsDir:
       file: "libcublas.so.12.2.5.6"
 
 preStop:
-  # sleepPeriod is a variable in common-app to specify k8s terminationGracePeriodSeconds
-  sleepPeriod: 60 # 3x SMPC__PROCESSING_TIMEOUT_SECS
+  # preStop.sleepPeriod specifies the time spent in Terminating state before SIGTERM is sent
+  sleepPeriod: 10
+
+# terminationGracePeriodSeconds specifies the grace time between SIGTERM and SIGKILL
+terminationGracePeriodSeconds: 180 # 3x SMPC__PROCESSING_TIMEOUT_SECS
