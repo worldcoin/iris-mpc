@@ -14,5 +14,5 @@ crate-type = ["cdylib"]
 [dependencies]
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-cpu = { path = "../iris-mpc-cpu" }
-hawk-pack = { git = "https://github.com/Inversed-Tech/hawk-pack.git", rev = "400db13" }
+hawk-pack.workspace = true
 pyo3 = "0.22.0"
