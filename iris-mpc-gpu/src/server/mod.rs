@@ -96,10 +96,10 @@ macro_rules! filter_by_indices {
 macro_rules! filter_by_indices_with_rotations {
     ($data:expr, $indices:expr) => {
         $data = $data
-            .iter()
+            .chunks(ROTATIONS)
             .enumerate()
-            .filter(|(i, _)| $indices.contains((&(i / ROTATIONS))))
-            .map(|(_, v)| v.clone())
+            .filter(|(i, _)| $indices.contains(i))
+            .flat_map(|(_, chunk)| chunk.iter().cloned())
             .collect();
     };
 }
@@ -107,10 +107,10 @@ macro_rules! filter_by_indices_with_rotations {
 macro_rules! filter_by_indices_with_rotations_and_code_length {
     ($data:expr, $indices:expr, $code_length:expr) => {
         $data = $data
-            .iter()
+            .chunks($code_length * ROTATIONS)
             .enumerate()
-            .filter(|(i, _)| $indices.contains((&(i / ROTATIONS / $code_length))))
-            .map(|(_, v)| v.clone())
+            .filter(|(i, _)| $indices.contains(i))
+            .flat_map(|(_, chunk)| chunk.iter().cloned())
             .collect();
     };
 }
