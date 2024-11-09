@@ -35,14 +35,15 @@ use std::{collections::HashMap, mem, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
 
 macro_rules! record_stream_time {
-    ($manager:expr, $streams:expr, $map:expr, $label:expr, $block:block) => {
+    ($manager:expr, $streams:expr, $map:expr, $label:expr, $block:block) => {{
         let evt0 = $manager.create_events();
         let evt1 = $manager.create_events();
         $manager.record_event($streams, &evt0);
-        $block
+        let res = $block;
         $manager.record_event($streams, &evt1);
-        $map.entry($label).or_default().extend(vec![evt0, evt1])
-    };
+        $map.entry($label).or_default().extend(vec![evt0, evt1]);
+        res
+    }};
 }
 
 #[derive(Debug, Clone)]
@@ -572,7 +573,7 @@ impl ServerActor {
         };
         let query_store_left = batch.store_left;
 
-        record_stream_time!(
+        let (compact_device_queries_left, compact_device_sums_left) = record_stream_time!(
             &self.device_manager,
             &self.streams[0],
             events,
@@ -592,6 +593,8 @@ impl ServerActor {
                     &self.streams[0],
                     &self.cublas_handles[0],
                 )?;
+
+                (compact_device_queries_left, compact_device_sums_left)
             }
         );
 
@@ -616,7 +619,7 @@ impl ServerActor {
         };
         let query_store_right = batch.store_right;
 
-        record_stream_time!(
+        let (compact_device_queries_right, compact_device_sums_right) = record_stream_time!(
             &self.device_manager,
             &self.streams[0],
             events,
@@ -644,6 +647,8 @@ impl ServerActor {
                     &mut events,
                     Eye::Right,
                 );
+
+                (compact_device_queries_right, compact_device_sums_right)
             }
         );
 
