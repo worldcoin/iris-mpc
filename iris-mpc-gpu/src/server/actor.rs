@@ -640,16 +640,16 @@ impl ServerActor {
                     &self.cublas_handles[0],
                 )?;
 
-                tracing::info!("Comparing right eye queries against DB and self");
-                self.compare_query_against_db_and_self(
-                    &compact_device_queries_right,
-                    &compact_device_sums_right,
-                    &mut events,
-                    Eye::Right,
-                );
-
                 (compact_device_queries_right, compact_device_sums_right)
             }
+        );
+
+        tracing::info!("Comparing right eye queries against DB and self");
+        self.compare_query_against_db_and_self(
+            &compact_device_queries_right,
+            &compact_device_sums_right,
+            &mut events,
+            Eye::Right,
         );
 
         ///////////////////////////////////////////////////////////////////
