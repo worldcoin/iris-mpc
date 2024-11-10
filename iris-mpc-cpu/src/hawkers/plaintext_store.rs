@@ -1,13 +1,14 @@
 use hawk_pack::VectorStore;
 use iris_mpc_common::iris_db::iris::{IrisCode, MATCH_THRESHOLD_RATIO};
+use serde::{Deserialize, Serialize};
 use std::ops::{Index, IndexMut};
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct PlaintextStore {
     pub points: Vec<PlaintextPoint>,
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct PlaintextIris(pub IrisCode);
 
 impl PlaintextIris {
@@ -44,7 +45,7 @@ impl PlaintextIris {
 
 // TODO refactor away is_persistent flag; should probably be stored in a
 // separate buffer instead whenever working with non-persistent iris codes
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub struct PlaintextPoint {
     /// Whatever encoding of a vector.
     pub data:          PlaintextIris,
@@ -53,7 +54,7 @@ pub struct PlaintextPoint {
     pub is_persistent: bool,
 }
 
-#[derive(Copy, Debug, Clone, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
+#[derive(Copy, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PointId(pub u32);
 
 impl<T> Index<PointId> for Vec<T> {
