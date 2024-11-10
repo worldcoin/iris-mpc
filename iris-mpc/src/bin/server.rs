@@ -675,7 +675,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         let store_len = store.count_irises().await?;
         let iris_sequence_id = store.get_irises_sequence_id().await?;
 
-        if iris_sequence_id != store_len {
+        // If db is empty, we set the sequence id to 1 with advance_nextval false
+        let empty_db_sequence_ok = store_len == 0 && iris_sequence_id == 1;
+
+        if iris_sequence_id != store_len || !empty_db_sequence_ok {
             tracing::error!(
                 "Iris sequence id is still inconsistent: {} != {}",
                 iris_sequence_id,
