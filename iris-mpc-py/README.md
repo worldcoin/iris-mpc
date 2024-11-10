@@ -49,7 +49,7 @@ iris_method_1 = PyIrisCode.from_open_iris_template(oi_template)
 b64_encoding = oi_template.serialize()
 
 code = PyIrisCodeArray.from_b64(b64_encoding["iris_codes"])
-mask = PyIrisCodeArray.from_b64(b64_encoding["iris_codes"])
+mask = PyIrisCodeArray.from_b64(b64_encoding["mask_codes"])
 iris_method_2 = PyIrisCode(code, mask)
 
 # You can now use the imported iris code object as demonstrated above
