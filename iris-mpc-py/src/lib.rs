@@ -1,6 +1,5 @@
-use hawk_pack::graph_store::GraphMem;
 use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodeArray};
-use iris_mpc_cpu::{hawkers::plaintext_store::PlaintextStore, py_bindings};
+use iris_mpc_cpu::py_bindings::{self, PlaintextHnsw};
 use pyo3::{exceptions::PyAttributeError, prelude::*};
 
 #[pyclass]
@@ -46,22 +45,24 @@ impl From<IrisCodeArray> for PyIrisCodeArray {
 }
 
 #[pyclass]
-struct PyIrisCode {
-    #[pyo3(get)]
-    code: PyIrisCodeArray,
-
-    #[pyo3(get)]
-    mask: PyIrisCodeArray,
-}
+struct PyIrisCode(IrisCode);
 
 #[pymethods]
 impl PyIrisCode {
     #[new]
     fn new_py(code: &PyIrisCodeArray, mask: &PyIrisCodeArray) -> Self {
-        Self {
-            code: code.clone(),
-            mask: mask.clone(),
-        }
+        Self(IrisCode {
+            code: code.0,
+            mask: mask.0,
+        })
+    }
+
+    fn code(&self) -> PyIrisCodeArray {
+        PyIrisCodeArray(self.0.code)
+    }
+
+    fn mask(&self) -> PyIrisCodeArray {
+        PyIrisCodeArray(self.0.mask)
     }
 
     #[staticmethod]
@@ -79,71 +80,68 @@ impl PyIrisCode {
         let mask: PyIrisCodeArray = mask_codes_str.extract()?;
 
         // Step 5: Construct and return PyIrisCode
-        Ok(PyIrisCode { code, mask })
-    }
-}
-
-impl PyIrisCode {
-    fn to_iris_code(&self) -> IrisCode {
-        IrisCode {
-            code: self.code.0,
-            mask: self.mask.0,
-        }
+        Ok(Self(IrisCode {
+            code: code.0,
+            mask: mask.0,
+        }))
     }
 }
 
 impl From<IrisCode> for PyIrisCode {
     fn from(value: IrisCode) -> Self {
-        Self {
-            code: value.code.into(),
-            mask: value.mask.into(),
-        }
+        Self(value)
     }
 }
 
 #[pyclass]
-struct PyHnsw {
-    vector: PlaintextStore,
-    graph:  GraphMem<PlaintextStore>,
-}
+struct PyHnsw(PlaintextHnsw);
 
 #[pymethods]
 impl PyHnsw {
     #[new]
     fn new_py() -> Self {
-        let (vector, graph) = py_bindings::gen_empty_index();
-        PyHnsw { vector, graph }
+        Self(PlaintextHnsw::default())
     }
 
     #[staticmethod]
     fn gen_uniform(size: usize) -> PyHnsw {
-        let (vector, graph) = py_bindings::gen_uniform_random_index(size);
-        PyHnsw { vector, graph }
+        PyHnsw(PlaintextHnsw::gen_uniform_random(size))
     }
 
     fn insert_uniform_random(&mut self) -> u32 {
-        py_bindings::insert_random(&mut self.vector, &mut self.graph)
+        self.0.insert_uniform_random().0
     }
 
     fn insert(&mut self, iris: &PyIrisCode) -> u32 {
-        // let iris = IrisCode { code: iris.code.0.clone(), mask: iris.mask.0.clone() };
-        py_bindings::insert_iris(&mut self.vector, &mut self.graph, iris.to_iris_code())
+        self.0.insert(iris.0.clone()).0
     }
 
     /// Search HNSW index and return nearest ID and its distance from query
     fn search(&mut self, query: &PyIrisCode) -> (u32, f64) {
-        py_bindings::search_iris(&mut self.vector, &mut self.graph, query.to_iris_code())
+        let (id, dist) = self.0.search(query.0.clone());
+        (id.0, dist)
     }
 
     fn get_iris(&self, id: u32) -> PyIrisCode {
-        self.vector.points[id as usize].data.0.clone().into()
+        self.0.vector.points[id as usize].data.0.clone().into()
     }
 
     fn len(&self) -> usize {
-        self.vector.points.len()
+        self.0.vector.points.len()
     }
 
-    // TODO de/serialize hnsw state
+    fn write_to_file(&self, filename: &str) -> PyResult<()> {
+        self.0
+            .write_to_file(filename)
+            .map_err(|_| PyAttributeError::new_err("Unable to write to file"))
+    }
+
+    #[staticmethod]
+    fn read_from_file(filename: &str) -> PyResult<Self> {
+        let result = PlaintextHnsw::read_from_file(filename)
+            .map_err(|_| PyAttributeError::new_err("Unable to read from file"))?;
+        Ok(PyHnsw(result))
+    }
 }
 
 #[pymodule]
