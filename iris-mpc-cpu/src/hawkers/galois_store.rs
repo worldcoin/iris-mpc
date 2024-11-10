@@ -177,7 +177,7 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
     }
 
     async fn eval_distance(
-        &self,
+        &mut self,
         query: &Self::QueryRef,
         vector: &Self::VectorRef,
     ) -> Self::DistanceRef {
@@ -202,7 +202,7 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
     }
 
     async fn eval_distance_batch(
-        &self,
+        &mut self,
         query: &Self::QueryRef,
         vectors: &[Self::VectorRef],
     ) -> Vec<Self::DistanceRef> {
@@ -249,7 +249,7 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
             .collect::<Vec<Self::DistanceRef>>()
     }
 
-    async fn is_match(&self, distance: &Self::DistanceRef) -> bool {
+    async fn is_match(&mut self, distance: &Self::DistanceRef) -> bool {
         let ready_sessions = self.runtime.create_player_sessions().await.unwrap();
         let mut jobs = JoinSet::new();
         for distance_share in distance.iter() {
@@ -271,7 +271,7 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
     }
 
     async fn less_than(
-        &self,
+        &mut self,
         distance1: &Self::DistanceRef,
         distance2: &Self::DistanceRef,
     ) -> bool {
@@ -308,7 +308,7 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
 
 impl LocalNetAby3NgStoreProtocol {
     async fn graph_from_plain(
-        &self,
+        &mut self,
         graph_store: GraphMem<PlaintextStore>,
     ) -> GraphMem<LocalNetAby3NgStoreProtocol> {
         let ep = graph_store.get_entry_point().await;
@@ -374,7 +374,7 @@ pub async fn gr_create_ready_made_hawk_searcher<R: RngCore + Clone + CryptoRng>(
             .await;
     }
 
-    let protocol_store = setup_local_aby3_players_with_preloaded_db(rng, cleartext_database)?;
+    let mut protocol_store = setup_local_aby3_players_with_preloaded_db(rng, cleartext_database)?;
     let protocol_graph = protocol_store
         .graph_from_plain(plaintext_graph_store.clone())
         .await;
@@ -477,7 +477,7 @@ mod tests {
             // assert_eq!(false, true);
             tracing::debug!("Finished query");
             assert!(
-                db.is_match(&aby3_store, &neighbors).await,
+                db.is_match(&mut aby3_store, &neighbors).await,
                 "failed at index {:?}",
                 index
             );
@@ -547,7 +547,7 @@ mod tests {
                 .await;
             assert!(
                 hawk_searcher
-                    .is_match(&cleartext_data.0, &cleartext_neighbors)
+                    .is_match(&mut cleartext_data.0, &cleartext_neighbors)
                     .await,
             );
 
@@ -556,7 +556,7 @@ mod tests {
                 .await;
             assert!(
                 hawk_searcher
-                    .is_match(&secret_data.0, &secret_neighbors)
+                    .is_match(&mut secret_data.0, &secret_neighbors)
                     .await
             );
 
@@ -565,7 +565,7 @@ mod tests {
                 .await;
             assert!(
                 hawk_searcher
-                    .is_match(&vector_store, &scratch_secret_neighbors)
+                    .is_match(&mut vector_store, &scratch_secret_neighbors)
                     .await,
             );
         }
@@ -645,7 +645,7 @@ mod tests {
                 .search_to_insert(&mut vector, &mut graph, &i.into())
                 .await;
             assert!(
-                searcher.is_match(&vector, &secret_neighbors).await,
+                searcher.is_match(&mut vector, &secret_neighbors).await,
                 "Failed at index {:?}",
                 i
             );

@@ -3,6 +3,7 @@ pub mod aws_sigv4;
 pub mod key_pair;
 pub mod kms_dh;
 pub mod sha256;
+pub mod shutdown_handler;
 pub mod smpc_request;
 pub mod sqs_s3_helper;
 pub mod sync;

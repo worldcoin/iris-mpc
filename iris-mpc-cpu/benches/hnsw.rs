@@ -226,7 +226,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                         let neighbors = searcher
                             .search_to_insert(&mut db_vectors, &mut db_graph, &query)
                             .await;
-                        searcher.is_match(&db_vectors, &neighbors).await;
+                        searcher.is_match(&mut db_vectors, &neighbors).await;
                     },
                     criterion::BatchSize::SmallInput,
                 )

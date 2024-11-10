@@ -107,7 +107,7 @@ impl VectorStore for PlaintextStore {
     }
 
     async fn eval_distance(
-        &self,
+        &mut self,
         query: &Self::QueryRef,
         vector: &Self::VectorRef,
     ) -> Self::DistanceRef {
@@ -116,13 +116,13 @@ impl VectorStore for PlaintextStore {
         query_code.data.distance_fraction(&vector_code.data)
     }
 
-    async fn is_match(&self, distance: &Self::DistanceRef) -> bool {
+    async fn is_match(&mut self, distance: &Self::DistanceRef) -> bool {
         let (a, b) = *distance; // a/b
         (a as f64) < (b as f64) * MATCH_THRESHOLD_RATIO
     }
 
     async fn less_than(
-        &self,
+        &mut self,
         distance1: &Self::DistanceRef,
         distance2: &Self::DistanceRef,
     ) -> bool {
@@ -228,7 +228,11 @@ mod tests {
             let cleartext_neighbors = searcher
                 .search_to_insert(&mut ptxt_vector, &mut ptxt_graph, &i.into())
                 .await;
-            assert!(searcher.is_match(&ptxt_vector, &cleartext_neighbors).await,);
+            assert!(
+                searcher
+                    .is_match(&mut ptxt_vector, &cleartext_neighbors)
+                    .await,
+            );
         }
     }
 }

@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:v0.8.43"
+image: "ghcr.io/worldcoin/iris-mpc:v0.9.7"
 
 environment: prod
 replicaCount: 1
@@ -90,3 +90,10 @@ tmpDir:
   enabled: true
   size: 5Gi
   mountPath: /dev/shm
+
+preStop:
+  # preStop.sleepPeriod specifies the time spent in Terminating state before SIGTERM is sent
+  sleepPeriod: 10
+
+# terminationGracePeriodSeconds specifies the grace time between SIGTERM and SIGKILL
+terminationGracePeriodSeconds: 360 # 3x SMPC__PROCESSING_TIMEOUT_SECS
