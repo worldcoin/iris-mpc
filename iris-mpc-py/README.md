@@ -10,11 +10,9 @@ Installation of Python bindings from the PyO3 library code can be accomplished u
 
 - Optionally install `patchelf` library with `pip install patchelf` for support for patching wheel files that link other shared libraries
 
-- Build and install current bindings as a module in the current Python environment by navigating to the `iris-mpc-py` directory and running `maturin develop`
+- Build and install current bindings as a module in the current Python environment by navigating to the `iris-mpc-py` directory and running `maturin develop --release --features enable`
 
-- Build a wheel file suitable for installation using `pip install` by instead running `maturin build`; the `.whl` file is specific to the building architecture and Python version, and can be found in `iris_mpc/target/wheels` directory
-
-- Use the `--release` flag to build the project in optimized release mode for performance
+- Build a wheel file suitable for installation using `pip install` by instead running `maturin build --release --features enable`; the `.whl` file is specific to the building architecture and Python version, and can be found in `iris_mpc/target/wheels` directory
 
 See the [Maturin User Guide Tutorial](https://www.maturin.rs/tutorial#build-and-install-the-module-with-maturin-develop) for additional details.
 

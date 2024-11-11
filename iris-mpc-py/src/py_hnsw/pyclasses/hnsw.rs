@@ -1,7 +1,6 @@
-use iris_mpc_cpu::py_bindings::PlaintextHnsw;
-
-use pyo3::{exceptions::PyAttributeError, prelude::*};
 use super::iris_code::PyIrisCode;
+use iris_mpc_cpu::py_bindings::PlaintextHnsw;
+use pyo3::{exceptions::PyAttributeError, prelude::*};
 
 #[pyclass]
 pub struct PyHnsw(pub PlaintextHnsw);

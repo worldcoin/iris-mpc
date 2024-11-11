@@ -1,5 +1,5 @@
-use iris_mpc_common::iris_db::iris::IrisCode;
 use super::iris_code_array::PyIrisCodeArray;
+use iris_mpc_common::iris_db::iris::IrisCode;
 use pyo3::{exceptions::PyAttributeError, prelude::*};
 
 #[pyclass]

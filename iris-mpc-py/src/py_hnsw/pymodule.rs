@@ -1,8 +1,4 @@
-use super::pyclasses::{
-    iris_code_array::PyIrisCodeArray,
-    iris_code::PyIrisCode,
-    hnsw::PyHnsw,
-};
+use super::pyclasses::{hnsw::PyHnsw, iris_code::PyIrisCode, iris_code_array::PyIrisCodeArray};
 use pyo3::prelude::*;
 
 #[pymodule]
