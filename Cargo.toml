@@ -29,7 +29,7 @@ bytemuck = { version = "1.17", features = ["derive"] }
 dotenvy = "0.15"
 eyre = "0.6"
 futures = "0.3.30"
-hawk-pack = { git = "https://github.com/Inversed-Tech/hawk-pack.git", rev = "5b344068" }
+hawk-pack = { git = "https://github.com/Inversed-Tech/hawk-pack.git", rev = "29e888ed" }
 hex = "0.4.3"
 itertools = "0.13"
 num-traits = "0.2"

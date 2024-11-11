@@ -1,7 +1,7 @@
 use crate::hawkers::plaintext_store::{PlaintextStore, PointId};
 use aes_prng::AesRng;
 use bincode;
-use hawk_pack::{graph_store::GraphMem, hnsw_db::HawkSearcher, VectorStore};
+use hawk_pack::{graph_store::GraphMem, hnsw_db::{Params, HawkSearcher}, VectorStore};
 use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodeArray};
 use rand::{rngs::ThreadRng, SeedableRng};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -27,42 +27,36 @@ impl Default for PlaintextHnsw {
     }
 }
 
+#[allow(non_snake_case)]
 impl PlaintextHnsw {
-    pub fn gen_uniform_random(size: usize) -> Self {
+    pub fn new(M: usize, ef_constr: usize, ef_search: usize) -> Self {
+        Self {
+            searcher: HawkSearcher {
+                params: Params::new_standard(ef_constr, ef_search, M),
+            },
+            vector: PlaintextStore::default(),
+            graph: GraphMem::new(),
+        }
+    }
+
+    pub fn search(&mut self, query: IrisCode) -> (PointId, f64) {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .unwrap();
 
         rt.block_on(async move {
-            let mut rng = AesRng::seed_from_u64(0_u64);
-            let mut hnsw = Self::default();
-
-            for idx in 0..size {
-                let raw_query = IrisCode::random_rng(&mut rng);
-                let query = hnsw.vector.prepare_query(raw_query.clone());
-                let neighbors = hnsw
-                    .searcher
-                    .search_to_insert(&mut hnsw.vector, &mut hnsw.graph, &query)
-                    .await;
-                let inserted = hnsw.vector.insert(&query).await;
-                hnsw.searcher
-                    .insert_from_search_results(
-                        &mut hnsw.vector,
-                        &mut hnsw.graph,
-                        &mut rng,
-                        inserted,
-                        neighbors,
-                    )
-                    .await;
-                if idx % 10 == 9 {
-                    println!("{}", idx + 1);
-                }
-            }
-            hnsw
+            let query = self.vector.prepare_query(query);
+            let neighbors = self
+                .searcher
+                .search_to_insert(&mut self.vector, &mut self.graph, &query)
+                .await;
+            let (nearest, (dist_num, dist_denom)) = neighbors[0].get_nearest().unwrap();
+            (*nearest, (*dist_num as f64) / (*dist_denom as f64))
         })
     }
 
+    // TODO could instead take iterator of IrisCodes to make more flexible
     pub fn insert(&mut self, iris: IrisCode) -> PointId {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -91,28 +85,44 @@ impl PlaintextHnsw {
         })
     }
 
-    pub fn search(&mut self, query: IrisCode) -> (PointId, f64) {
+    pub fn insert_uniform_random(&mut self) -> PointId {
+        let mut rng = ThreadRng::default();
+        let raw_query = IrisCode::random_rng(&mut rng);
+
+        self.insert(raw_query)
+    }
+
+    pub fn fill_uniform_random(&mut self, num: usize) {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .unwrap();
 
         rt.block_on(async move {
-            let query = self.vector.prepare_query(query);
-            let neighbors = self
-                .searcher
-                .search_to_insert(&mut self.vector, &mut self.graph, &query)
-                .await;
-            let (nearest, (dist_num, dist_denom)) = neighbors[0].get_nearest().unwrap();
-            (*nearest, (*dist_num as f64) / (*dist_denom as f64))
+            let mut rng = AesRng::seed_from_u64(0_u64);
+
+            for idx in 0..num {
+                let raw_query = IrisCode::random_rng(&mut rng);
+                let query = self.vector.prepare_query(raw_query.clone());
+                let neighbors = self
+                    .searcher
+                    .search_to_insert(&mut self.vector, &mut self.graph, &query)
+                    .await;
+                let inserted = self.vector.insert(&query).await;
+                self.searcher
+                    .insert_from_search_results(
+                        &mut self.vector,
+                        &mut self.graph,
+                        &mut rng,
+                        inserted,
+                        neighbors,
+                    )
+                    .await;
+                if idx % 100 == 99 {
+                    println!("{}", idx + 1);
+                }
+            }
         })
-    }
-
-    pub fn insert_uniform_random(&mut self) -> PointId {
-        let mut rng = ThreadRng::default();
-        let raw_query = IrisCode::random_rng(&mut rng);
-
-        self.insert(raw_query)
     }
 
     pub fn write_to_file(&self, filename: &str) -> bincode::Result<()> {

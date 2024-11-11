@@ -2,6 +2,8 @@
 
 This package provides Python bindings for some functionalities in the `iris-mpc` workspace, currently focused on execution of the HNSW k-nearest neighbors graph search algorithm over plaintext iris codes for testing and data analysis.
 
+## Installation
+
 Installation of Python bindings from the PyO3 library code can be accomplished using the Maturin Python package as follows:
 
 - Install Maturin in the target Python environment, e.g. the venv used for data analysis, using `pip install maturin`
@@ -16,12 +18,15 @@ Installation of Python bindings from the PyO3 library code can be accomplished u
 
 See the [Maturin User Guide Tutorial](https://www.maturin.rs/tutorial#build-and-install-the-module-with-maturin-develop) for additional details.
 
+## Usage
+
 Once successfully installed, the native rust module `iris_mpc_py` can be imported in your Python environment as usual with `import iris_mpc_py`.  Example usage:
 
 ```python
 from iris_mpc_py import PyHnsw, PyIrisCode, PyIrisCodeArray
 
-hnsw = PyHnsw.gen_uniform(1000)
+hnsw = PyHnsw(32, 32) # M, ef
+hnsw.fill_uniform_random(1000)
 
 code = PyIrisCodeArray.uniform()
 mask = PyIrisCodeArray.uniform()
@@ -31,9 +36,12 @@ iris = PyIrisCode(code, mask)
 iris_id = hnsw.insert(iris)
 print("Inserted iris id:", iris_id)
 
-retrieved_iris_id, retrieved_iris_dist = hnsw.get_iris(iris_id)
-print("Retrieved iris id:", retrieved_iris_id) # should be iris_d
-print("Retrieved iris distance:", retrieved_iris_dist) # should be 0.0
+nearest_id, nearest_dist = hnsw.search(iris)
+print("Nearest iris id:", nearest_id) # should be iris_d
+print("Nearest iris distance:", nearest_dist) # should be 0.0
+
+hnsw.write_to_file("hnsw_example.dat")
+hnsw_again = PyHnsw.read_from_file("hnsw_example.dat")
 ```
 
 Basic interoperability with Open IRIS iris templates is implemented but not yet tested.  Usage should be something like the following:

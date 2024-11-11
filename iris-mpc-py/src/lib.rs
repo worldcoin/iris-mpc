@@ -4,12 +4,12 @@ use pyo3::{exceptions::PyAttributeError, prelude::*};
 
 #[pyclass]
 #[derive(Clone)]
-struct PyIrisCodeArray(IrisCodeArray);
+pub struct PyIrisCodeArray(pub IrisCodeArray);
 
 #[pymethods]
 impl PyIrisCodeArray {
     #[new]
-    fn new_py(input: String) -> Self {
+    fn new(input: String) -> Self {
         Self::from_base64(input)
     }
 
@@ -45,12 +45,12 @@ impl From<IrisCodeArray> for PyIrisCodeArray {
 }
 
 #[pyclass]
-struct PyIrisCode(IrisCode);
+pub struct PyIrisCode(pub IrisCode);
 
 #[pymethods]
 impl PyIrisCode {
     #[new]
-    fn new_py(code: &PyIrisCodeArray, mask: &PyIrisCodeArray) -> Self {
+    fn new(code: &PyIrisCodeArray, mask: &PyIrisCodeArray) -> Self {
         Self(IrisCode {
             code: code.0,
             mask: mask.0,
@@ -94,18 +94,18 @@ impl From<IrisCode> for PyIrisCode {
 }
 
 #[pyclass]
-struct PyHnsw(PlaintextHnsw);
+pub struct PyHnsw(pub PlaintextHnsw);
 
 #[pymethods]
+#[allow(non_snake_case)]
 impl PyHnsw {
     #[new]
-    fn new_py() -> Self {
-        Self(PlaintextHnsw::default())
+    fn new(M: usize, ef: usize) -> Self {
+        Self(PlaintextHnsw::new(M, ef, ef))
     }
 
-    #[staticmethod]
-    fn gen_uniform(size: usize) -> PyHnsw {
-        PyHnsw(PlaintextHnsw::gen_uniform_random(size))
+    fn fill_uniform_random(&mut self, num: usize) {
+        self.0.fill_uniform_random(num);
     }
 
     fn insert_uniform_random(&mut self) -> u32 {
