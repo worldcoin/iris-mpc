@@ -7,7 +7,7 @@ version = 2
 ignore = [
 	{ id = "RUSTSEC-2021-0137", reason = "we will switch to alkali eventually" },
 	# https://github.com/mehcode/config-rs/issues/563
-	{ id = "RUSTSEC-2024-0320", reason = "waiting for `config` crate to remove the dependency" },
+	{ id = "RUSTSEC-2024-0384", reason = "waiting for `web-time` crate to remove the dependency" },
 	{ id = "RUSTSEC-2024-0388", reason = "waiting for `mongodb` crate to remove the deprecated dependency" },
 ]
 
