@@ -1,7 +1,11 @@
 use crate::hawkers::plaintext_store::{PlaintextStore, PointId};
 use aes_prng::AesRng;
 use bincode;
-use hawk_pack::{graph_store::GraphMem, hnsw_db::{Params, HawkSearcher}, VectorStore};
+use hawk_pack::{
+    graph_store::GraphMem,
+    hnsw_db::{HawkSearcher, Params},
+    VectorStore,
+};
 use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodeArray};
 use rand::{rngs::ThreadRng, SeedableRng};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -34,8 +38,8 @@ impl PlaintextHnsw {
             searcher: HawkSearcher {
                 params: Params::new_standard(ef_constr, ef_search, M),
             },
-            vector: PlaintextStore::default(),
-            graph: GraphMem::new(),
+            vector:   PlaintextStore::default(),
+            graph:    GraphMem::new(),
         }
     }
 
