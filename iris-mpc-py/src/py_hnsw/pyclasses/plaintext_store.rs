@@ -1,4 +1,3 @@
-
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use pyo3::{exceptions::PyIOError, prelude::*};
 
@@ -7,7 +6,6 @@ use pyo3::{exceptions::PyIOError, prelude::*};
 pub struct PyPlaintextStore(pub PlaintextStore);
 
 #[pymethods]
-#[allow(non_snake_case)]
 impl PyPlaintextStore {
     #[new]
     fn new() -> Self {

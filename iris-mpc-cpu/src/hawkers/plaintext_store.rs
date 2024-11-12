@@ -54,7 +54,7 @@ pub struct PlaintextPoint {
     pub is_persistent: bool,
 }
 
-#[derive(Copy, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PointId(pub u32);
 
 impl<T> Index<PointId> for Vec<T> {

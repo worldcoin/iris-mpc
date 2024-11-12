@@ -14,21 +14,11 @@ use std::{
     io::{BufReader, BufWriter},
 };
 
-#[derive(Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct PlaintextHnsw {
     pub searcher: HawkSearcher,
     pub vector:   PlaintextStore,
     pub graph:    GraphMem<PlaintextStore>,
-}
-
-impl Default for PlaintextHnsw {
-    fn default() -> Self {
-        Self {
-            searcher: HawkSearcher::default(),
-            vector:   PlaintextStore::default(),
-            graph:    GraphMem::new(),
-        }
-    }
 }
 
 #[allow(non_snake_case)]
@@ -143,14 +133,14 @@ pub fn gen_uniform_iris_code_array() -> IrisCodeArray {
     IrisCodeArray::random_rng(&mut rng)
 }
 
-fn write_serde_bin<T: Serialize>(data: &T, filename: &str) -> bincode::Result<()> {
+pub fn write_serde_bin<T: Serialize>(data: &T, filename: &str) -> bincode::Result<()> {
     let file = File::create(filename).map_err(bincode::ErrorKind::Io)?;
     let writer = BufWriter::new(file);
     bincode::serialize_into(writer, data)?;
     Ok(())
 }
 
-fn read_serde_bin<T: DeserializeOwned>(filename: &str) -> bincode::Result<T> {
+pub fn read_serde_bin<T: DeserializeOwned>(filename: &str) -> bincode::Result<T> {
     let file = File::open(filename).map_err(bincode::ErrorKind::Io)?;
     let reader = BufReader::new(file);
     let data = bincode::deserialize_from(reader)?;
