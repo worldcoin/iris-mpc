@@ -6,7 +6,7 @@ use hawk_pack::{
     hnsw_db::{HawkSearcher, Params},
     VectorStore,
 };
-use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodeArray};
+use iris_mpc_common::iris_db::iris::IrisCode;
 use rand::{rngs::ThreadRng, SeedableRng};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
@@ -126,11 +126,6 @@ impl PlaintextHnsw {
     pub fn read_from_file(filename: &str) -> bincode::Result<Self> {
         read_serde_bin(filename)
     }
-}
-
-pub fn gen_uniform_iris_code_array() -> IrisCodeArray {
-    let mut rng = ThreadRng::default();
-    IrisCodeArray::random_rng(&mut rng)
 }
 
 pub fn write_serde_bin<T: Serialize>(data: &T, filename: &str) -> bincode::Result<()> {

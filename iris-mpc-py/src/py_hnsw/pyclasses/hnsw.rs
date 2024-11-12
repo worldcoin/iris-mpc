@@ -22,10 +22,6 @@ impl PyHnsw {
         self.0.fill_uniform_random(num);
     }
 
-    fn insert_uniform_random(&mut self) -> u32 {
-        self.0.insert_uniform_random().0
-    }
-
     fn insert(&mut self, iris: &PyIrisCode) -> u32 {
         self.0.insert(iris.0.clone()).0
     }

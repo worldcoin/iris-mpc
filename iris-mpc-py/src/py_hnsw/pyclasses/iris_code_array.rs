@@ -1,6 +1,6 @@
 use iris_mpc_common::iris_db::iris::IrisCodeArray;
-use iris_mpc_cpu::py_bindings::gen_uniform_iris_code_array;
 use pyo3::prelude::*;
+use rand::rngs::ThreadRng;
 
 #[pyclass]
 #[derive(Clone, Default)]
@@ -33,8 +33,9 @@ impl PyIrisCodeArray {
     }
 
     #[staticmethod]
-    fn uniform() -> Self {
-        Self(gen_uniform_iris_code_array())
+    fn uniform_random() -> Self {
+        let mut rng = ThreadRng::default();
+        Self(IrisCodeArray::random_rng(&mut rng))
     }
 }
 

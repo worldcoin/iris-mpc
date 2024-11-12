@@ -2690,6 +2690,7 @@ dependencies = [
  "iris-mpc-common",
  "iris-mpc-cpu",
  "pyo3",
+ "rand",
 ]
 
 [[package]]

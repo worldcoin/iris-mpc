@@ -16,6 +16,7 @@ iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-cpu = { path = "../iris-mpc-cpu" }
 hawk-pack.workspace = true
 pyo3 = { version = "0.22.0", optional = true }
+rand.workspace = true
 
 [features]
 default = ["enable"]

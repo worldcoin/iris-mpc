@@ -21,15 +21,12 @@ See the [Maturin User Guide Tutorial](https://www.maturin.rs/tutorial#build-and-
 Once successfully installed, the native rust module `iris_mpc_py` can be imported in your Python environment as usual with `import iris_mpc_py`.  Example usage:
 
 ```python
-from iris_mpc_py import PyHnsw, PyIrisCode, PyIrisCodeArray
+from iris_mpc_py import PyHnsw, PyIrisCode
 
 hnsw = PyHnsw(32, 32) # M, ef
 hnsw.fill_uniform_random(1000)
 
-code = PyIrisCodeArray.uniform()
-mask = PyIrisCodeArray.uniform()
-
-iris = PyIrisCode(code, mask)
+iris = PyIrisCode.uniform_random()
 
 iris_id = hnsw.insert(iris)
 print("Inserted iris id:", iris_id)

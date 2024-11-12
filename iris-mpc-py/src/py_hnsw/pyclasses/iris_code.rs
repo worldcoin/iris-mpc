@@ -1,5 +1,6 @@
 use super::iris_code_array::PyIrisCodeArray;
 use iris_mpc_common::iris_db::iris::IrisCode;
+use rand::rngs::ThreadRng;
 use pyo3::{prelude::*, types::PyDict};
 
 #[pyclass]
@@ -24,6 +25,12 @@ impl PyIrisCode {
     #[getter]
     fn mask(&self) -> PyIrisCodeArray {
         PyIrisCodeArray(self.0.mask)
+    }
+
+    #[staticmethod]
+    fn uniform_random() -> Self {
+        let mut rng = ThreadRng::default();
+        Self(IrisCode::random_rng(&mut rng))
     }
 
     #[pyo3(signature = (version=None))]
