@@ -18,5 +18,5 @@ hawk-pack.workspace = true
 pyo3 = { version = "0.22.0", optional = true }
 
 [features]
-default = []
+default = ["enable"]
 enable = ["pyo3"]
