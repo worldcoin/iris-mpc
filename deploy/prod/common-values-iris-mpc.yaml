@@ -32,9 +32,8 @@ readinessProbe:
     port: health
 
 startupProbe:
-  enabled: true
   initialDelaySeconds: 900
-  failureThreshold: 10
+  failureThreshold: 20
   periodSeconds: 30
   httpGet:
     path: /health
