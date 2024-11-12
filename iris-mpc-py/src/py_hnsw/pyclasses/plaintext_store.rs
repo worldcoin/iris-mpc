@@ -2,7 +2,7 @@ use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use pyo3::{exceptions::PyIOError, prelude::*};
 
 #[pyclass]
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct PyPlaintextStore(pub PlaintextStore);
 
 #[pymethods]

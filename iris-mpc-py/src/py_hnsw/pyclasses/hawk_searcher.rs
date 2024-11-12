@@ -3,7 +3,7 @@ use hawk_pack::hnsw_db::{HawkSearcher, Params};
 use pyo3::{exceptions::PyIOError, prelude::*};
 
 #[pyclass]
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct PyHawkSearcher(pub HawkSearcher);
 
 #[pymethods]

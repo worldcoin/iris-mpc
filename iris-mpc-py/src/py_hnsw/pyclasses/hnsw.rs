@@ -1,16 +1,21 @@
-use super::iris_code::PyIrisCode;
+use super::{hawk_searcher::PyHawkSearcher, plaintext_store::PyPlaintextStore, graph_store::PyGraphStore, iris_code::PyIrisCode};
 use iris_mpc_cpu::py_bindings::PlaintextHnsw;
-use pyo3::{exceptions::PyAttributeError, prelude::*};
+use pyo3::prelude::*;
 
 #[pyclass]
+#[derive(Clone, Default)]
 pub struct PyHnsw(pub PlaintextHnsw);
 
 #[pymethods]
 #[allow(non_snake_case)]
 impl PyHnsw {
     #[new]
-    fn new(M: usize, ef: usize) -> Self {
-        Self(PlaintextHnsw::new(M, ef, ef))
+    fn new(searcher: PyHawkSearcher, vector: PyPlaintextStore, graph: PyGraphStore) -> Self {
+        Self(PlaintextHnsw {
+            searcher: searcher.0,
+            vector: vector.0,
+            graph: graph.0
+        })
     }
 
     fn fill_uniform_random(&mut self, num: usize) {
@@ -37,18 +42,5 @@ impl PyHnsw {
 
     fn len(&self) -> usize {
         self.0.vector.points.len()
-    }
-
-    fn write_to_file(&self, filename: &str) -> PyResult<()> {
-        self.0
-            .write_to_file(filename)
-            .map_err(|_| PyAttributeError::new_err("Unable to write to file"))
-    }
-
-    #[staticmethod]
-    fn read_from_file(filename: &str) -> PyResult<Self> {
-        let result = PlaintextHnsw::read_from_file(filename)
-            .map_err(|_| PyAttributeError::new_err("Unable to read from file"))?;
-        Ok(PyHnsw(result))
     }
 }

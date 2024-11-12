@@ -3,7 +3,7 @@ use hawk_pack::graph_store::GraphMem;
 use pyo3::{exceptions::PyIOError, prelude::*};
 
 #[pyclass]
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct PyGraphStore(pub GraphMem<PlaintextStore>);
 
 #[pymethods]

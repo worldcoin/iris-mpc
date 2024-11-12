@@ -3,7 +3,7 @@ use iris_mpc_cpu::py_bindings::gen_uniform_iris_code_array;
 use pyo3::prelude::*;
 
 #[pyclass]
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct PyIrisCodeArray(pub IrisCodeArray);
 
 #[pymethods]

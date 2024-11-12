@@ -3,6 +3,7 @@ use iris_mpc_common::iris_db::iris::IrisCode;
 use pyo3::{prelude::*, types::PyDict};
 
 #[pyclass]
+#[derive(Clone, Default)]
 pub struct PyIrisCode(pub IrisCode);
 
 #[pymethods]

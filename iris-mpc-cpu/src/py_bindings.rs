@@ -14,7 +14,7 @@ use std::{
     io::{BufReader, BufWriter},
 };
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct PlaintextHnsw {
     pub searcher: HawkSearcher,
     pub vector:   PlaintextStore,
