@@ -1,3 +1,4 @@
+pub mod hawk_searcher;
 pub mod hnsw;
 pub mod iris_code;
 pub mod iris_code_array;
