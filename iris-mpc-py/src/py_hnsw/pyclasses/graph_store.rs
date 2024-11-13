@@ -9,18 +9,18 @@ pub struct PyGraphStore(pub GraphMem<PlaintextStore>);
 #[pymethods]
 impl PyGraphStore {
     #[new]
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
     #[staticmethod]
-    fn read_from_bin(filename: String) -> PyResult<Self> {
+    pub fn read_from_bin(filename: String) -> PyResult<Self> {
         let result = py_bindings::io::read_bin(&filename)
             .map_err(|_| PyIOError::new_err("Unable to read from file"))?;
         Ok(Self(result))
     }
 
-    fn write_to_bin(&self, filename: String) -> PyResult<()> {
+    pub fn write_to_bin(&self, filename: String) -> PyResult<()> {
         py_bindings::io::write_bin(&self.0, &filename)
             .map_err(|_| PyIOError::new_err("Unable to write to file"))
     }

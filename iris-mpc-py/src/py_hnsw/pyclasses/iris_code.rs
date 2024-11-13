@@ -10,7 +10,7 @@ pub struct PyIrisCode(pub IrisCode);
 #[pymethods]
 impl PyIrisCode {
     #[new]
-    fn new(code: &PyIrisCodeArray, mask: &PyIrisCodeArray) -> Self {
+    pub fn new(code: &PyIrisCodeArray, mask: &PyIrisCodeArray) -> Self {
         Self(IrisCode {
             code: code.0,
             mask: mask.0,
@@ -18,23 +18,23 @@ impl PyIrisCode {
     }
 
     #[getter]
-    fn code(&self) -> PyIrisCodeArray {
+    pub fn code(&self) -> PyIrisCodeArray {
         PyIrisCodeArray(self.0.code)
     }
 
     #[getter]
-    fn mask(&self) -> PyIrisCodeArray {
+    pub fn mask(&self) -> PyIrisCodeArray {
         PyIrisCodeArray(self.0.mask)
     }
 
     #[staticmethod]
-    fn uniform_random() -> Self {
+    pub fn uniform_random() -> Self {
         let mut rng = ThreadRng::default();
         Self(IrisCode::random_rng(&mut rng))
     }
 
     #[pyo3(signature = (version=None))]
-    fn to_open_iris_template_dict<'py>(
+    pub fn to_open_iris_template_dict<'py>(
         &self,
         py: Python<'py>,
         version: Option<String>,
@@ -42,21 +42,21 @@ impl PyIrisCode {
         let dict = PyDict::new_bound(py);
 
         dict.set_item("iris_codes", self.0.code.to_base64().unwrap())?;
-        dict.set_item("iris_masks", self.0.mask.to_base64().unwrap())?;
+        dict.set_item("mask_codes", self.0.mask.to_base64().unwrap())?;
         dict.set_item("iris_code_version", version)?;
 
         Ok(dict)
     }
 
     #[staticmethod]
-    fn from_open_iris_template_dict(dict_obj: &Bound<PyDict>) -> PyResult<Self> {
+    pub fn from_open_iris_template_dict(dict_obj: &Bound<PyDict>) -> PyResult<Self> {
         // Extract base64-encoded iris code arrays
-        let iris_codes_str = dict_obj.get_item("iris_codes")?.unwrap();
-        let mask_codes_str = dict_obj.get_item("mask_codes")?.unwrap();
+        let iris_codes_str: String = dict_obj.get_item("iris_codes")?.unwrap().extract()?;
+        let mask_codes_str: String = dict_obj.get_item("mask_codes")?.unwrap().extract()?;
 
         // Convert the base64 strings into PyIrisCodeArrays
-        let code: PyIrisCodeArray = iris_codes_str.extract()?;
-        let mask: PyIrisCodeArray = mask_codes_str.extract()?;
+        let code = PyIrisCodeArray::from_base64(iris_codes_str);
+        let mask = PyIrisCodeArray::from_base64(mask_codes_str);
 
         // Construct and return PyIrisCode
         Ok(Self(IrisCode {

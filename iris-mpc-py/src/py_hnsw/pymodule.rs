@@ -11,6 +11,5 @@ fn iris_mpc_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyPlaintextStore>()?;
     m.add_class::<PyGraphStore>()?;
     m.add_class::<PyHawkSearcher>()?;
-    // m.add_function(wrap_pyfunction!(hnsw_insert, m)?)?;
     Ok(())
 }

@@ -11,33 +11,33 @@ pub struct PyHawkSearcher(pub HawkSearcher);
 #[allow(non_snake_case)]
 impl PyHawkSearcher {
     #[new]
-    fn new(M: usize, ef_constr: usize, ef_search: usize) -> Self {
+    pub fn new(M: usize, ef_constr: usize, ef_search: usize) -> Self {
         Self::new_standard(ef_constr, ef_search, M)
     }
 
     #[staticmethod]
-    fn new_standard(M: usize, ef_constr: usize, ef_search: usize) -> Self {
+    pub fn new_standard(M: usize, ef_constr: usize, ef_search: usize) -> Self {
         let params = Params::new_standard(ef_constr, ef_search, M);
         Self(HawkSearcher { params })
     }
 
     #[staticmethod]
-    fn new_uniform(M: usize, ef: usize) -> Self {
+    pub fn new_uniform(M: usize, ef: usize) -> Self {
         let params = Params::new_uniform(ef, M);
         Self(HawkSearcher { params })
     }
 
-    fn insert(
+    pub fn insert(
         &self,
+        iris: PyIrisCode,
         vector: &mut PyPlaintextStore,
         graph: &mut PyGraphStore,
-        iris: PyIrisCode,
     ) -> u32 {
         let id = py_bindings::hnsw::insert(iris.0, &self.0, &mut vector.0, &mut graph.0);
         id.0
     }
 
-    fn insert_uniform_random(
+    pub fn insert_uniform_random(
         &self,
         vector: &mut PyPlaintextStore,
         graph: &mut PyGraphStore,
@@ -46,17 +46,17 @@ impl PyHawkSearcher {
         id.0
     }
 
-    fn fill_uniform_random(
+    pub fn fill_uniform_random(
         &self,
+        num: usize,
         vector: &mut PyPlaintextStore,
         graph: &mut PyGraphStore,
-        num: usize,
     ) {
         py_bindings::hnsw::fill_uniform_random(num, &self.0, &mut vector.0, &mut graph.0);
     }
 
     #[pyo3(signature = (filename, vector, graph, limit=None))]
-    fn fill_from_ndjson_file(
+    pub fn fill_from_ndjson_file(
         &self,
         filename: String,
         vector: &mut PyPlaintextStore,
@@ -73,7 +73,7 @@ impl PyHawkSearcher {
     }
 
     /// Search HNSW index and return nearest ID and its distance from query
-    fn search(
+    pub fn search(
         &mut self,
         query: &PyIrisCode,
         vector: &mut PyPlaintextStore,
@@ -85,13 +85,13 @@ impl PyHawkSearcher {
     }
 
     #[staticmethod]
-    fn read_from_json(filename: String) -> PyResult<Self> {
+    pub fn read_from_json(filename: String) -> PyResult<Self> {
         let result = py_bindings::io::read_json(&filename)
             .map_err(|_| PyIOError::new_err("Unable to read from file"))?;
         Ok(Self(result))
     }
 
-    fn write_to_json(&self, filename: String) -> PyResult<()> {
+    pub fn write_to_json(&self, filename: String) -> PyResult<()> {
         py_bindings::io::write_json(&self.0, &filename)
             .map_err(|_| PyIOError::new_err("Unable to write to file"))
     }
