@@ -1,4 +1,5 @@
-use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
+use super::iris_code::PyIrisCode;
+use iris_mpc_cpu::{hawkers::plaintext_store::PlaintextStore, py_bindings};
 use pyo3::{exceptions::PyIOError, prelude::*};
 
 #[pyclass]
@@ -12,16 +13,20 @@ impl PyPlaintextStore {
         Self::default()
     }
 
+    fn get_iris(&self, id: u32) -> PyIrisCode {
+        self.0.points[id as usize].data.0.clone().into()
+    }
+
     #[staticmethod]
-    fn read_from_ndjson(filename: String, len: usize) -> PyResult<Self> {
-        let result = PlaintextStore::read_ndjson_file(&filename, len)
+    #[pyo3(signature = (filename, len=None))]
+    fn read_from_ndjson(filename: String, len: Option<usize>) -> PyResult<Self> {
+        let result = py_bindings::plaintext_store::from_ndjson_file(&filename, len)
             .map_err(|_| PyIOError::new_err("Unable to read from file"))?;
         Ok(Self(result))
     }
 
     fn write_to_ndjson(&self, filename: String) -> PyResult<()> {
-        self.0
-            .write_ndjson_file(&filename)
+        py_bindings::plaintext_store::to_ndjson_file(&self.0, &filename)
             .map_err(|_| PyIOError::new_err("Unable to write to file"))
     }
 }

@@ -148,6 +148,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.93"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4c95c10ba0b00a02636238b814946408b1322d5ac4760326e6fb8ec956d85775"
+
+[[package]]
 name = "arraydeque"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2625,6 +2631,7 @@ name = "iris-mpc-cpu"
 version = "0.1.0"
 dependencies = [
  "aes-prng 0.2.1 (git+https://github.com/tf-encrypted/aes-prng.git?branch=dragos/display)",
+ "anyhow",
  "async-channel",
  "async-trait",
  "bincode",

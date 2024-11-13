@@ -1,7 +1,7 @@
 use super::iris_code_array::PyIrisCodeArray;
 use iris_mpc_common::iris_db::iris::IrisCode;
-use rand::rngs::ThreadRng;
 use pyo3::{prelude::*, types::PyDict};
+use rand::rngs::ThreadRng;
 
 #[pyclass]
 #[derive(Clone, Default)]
@@ -34,7 +34,11 @@ impl PyIrisCode {
     }
 
     #[pyo3(signature = (version=None))]
-    fn to_open_iris_template_dict<'py>(&self, py: Python<'py>, version: Option<String>) -> PyResult<Bound<'py, PyDict>> {
+    fn to_open_iris_template_dict<'py>(
+        &self,
+        py: Python<'py>,
+        version: Option<String>,
+    ) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new_bound(py);
 
         dict.set_item("iris_codes", self.0.code.to_base64().unwrap())?;

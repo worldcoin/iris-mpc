@@ -29,6 +29,7 @@ static_assertions.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-test = "0.2.5"
+anyhow = "1.0.93"
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio"] }
