@@ -1,6 +1,6 @@
 # Python Bindings
 
-This package provides Python bindings for some functionalities in the `iris-mpc` workspace, currently focused on execution of the HNSW k-nearest neighbors graph search algorithm over plaintext iris codes for testing and data analysis.
+This package provides Python bindings for some functionalities in the `iris-mpc` workspace, currently focused on execution of the HNSW k-nearest neighbors graph search algorithm over plaintext iris codes for testing and data analysis.  For compatibility, compilation of this crate is disabled from the workspace root, but enabled from within the crate subdirectory via the Cargo default feature flag `enable`.
 
 ## Installation
 
@@ -10,9 +10,9 @@ Installation of Python bindings from the PyO3 library code can be accomplished u
 
 - Optionally install `patchelf` library with `pip install patchelf` for support for patching wheel files that link other shared libraries
 
-- Build and install current bindings as a module in the current Python environment by navigating to the `iris-mpc-py` directory and running `maturin develop --release --features enable`
+- Build and install current bindings as a module in the current Python environment by navigating to the `iris-mpc-py` directory and running `maturin develop --release`
 
-- Build a wheel file suitable for installation using `pip install` by instead running `maturin build --release --features enable`; the `.whl` file is specific to the building architecture and Python version, and can be found in `iris_mpc/target/wheels` directory
+- Build a wheel file suitable for installation using `pip install` by instead running `maturin build --release`; the `.whl` file is specific to the building architecture and Python version, and can be found in `iris_mpc/target/wheels` directory
 
 See the [Maturin User Guide Tutorial](https://www.maturin.rs/tutorial#build-and-install-the-module-with-maturin-develop) for additional details.
 
@@ -21,39 +21,73 @@ See the [Maturin User Guide Tutorial](https://www.maturin.rs/tutorial#build-and-
 Once successfully installed, the native rust module `iris_mpc_py` can be imported in your Python environment as usual with `import iris_mpc_py`.  Example usage:
 
 ```python
-from iris_mpc_py import PyHnsw, PyIrisCode
+from iris_mpc_py import PyHawkSearcher, PyPlaintextStore, PyGraphStore, PyIrisCode
 
-hnsw = PyHnsw(32, 32) # M, ef
-hnsw.fill_uniform_random(1000)
+hnsw = PyHawkSearcher.new_uniform(32, 32) # M, ef
+vector = PyPlaintextStore()
+graph = PyGraphStore()
+
+hnsw.fill_uniform_random(1000, vector, graph)
 
 iris = PyIrisCode.uniform_random()
-
-iris_id = hnsw.insert(iris)
+iris_id = hnsw.insert(iris, vector, graph)
 print("Inserted iris id:", iris_id)
 
-nearest_id, nearest_dist = hnsw.search(iris)
-print("Nearest iris id:", nearest_id) # should be iris_d
+nearest_id, nearest_dist = hnsw.search(iris, vector, graph)
+print("Nearest iris id:", nearest_id) # should be iris_id
 print("Nearest iris distance:", nearest_dist) # should be 0.0
-
-hnsw.write_to_file("hnsw_example.dat")
-hnsw_again = PyHnsw.read_from_file("hnsw_example.dat")
 ```
 
-Basic interoperability with Open IRIS iris templates is implemented but not yet tested.  Usage should be something like the following:
+To write the HNSW vector and graph indices to file and read them back:
 
 ```python
-# Type of object is: iris.io.dataclasses.IrisTemplate
-oi_template = TEMPLATE_FROM_OPEN_IRIS
+hnsw.write_to_json("searcher.json")
+vector.write_to_ndjson("vector.ndjson")
+graph.write_to_bin("graph.dat")
 
-# transform directly from template object
-iris_method_1 = PyIrisCode.from_open_iris_template(oi_template)
-
-# or, using lower level primitives
-b64_encoding = oi_template.serialize()
-
-code = PyIrisCodeArray.from_b64(b64_encoding["iris_codes"])
-mask = PyIrisCodeArray.from_b64(b64_encoding["mask_codes"])
-iris_method_2 = PyIrisCode(code, mask)
-
-# You can now use the imported iris code object as demonstrated above
+hnsw2 = PyHawkSearcher.read_from_json("searcher.json")
+vector2 = PyPlaintextStore.read_from_ndjson("vector.ndjson")
+graph2 = PyGraphStore.read_from_bin("graph.dat")
 ```
+
+As an efficiency feature, the data from the vector store is read in a streamed fashion.  This means that for a large database of iris codes, the first `num` can be read from file without loading the entire database into memory.  This can be used in two ways; first, a vector store can be initialized from the large databse file for use with a previously generated HNSW index:
+
+```python
+# Serialized HNSW graph constructed from the first 10k entries of database file
+vector = PyPlaintextStore.read_from_ndjson("large_vector_database.ndjson", 10000)
+graph = PyGraphStore.read_from_bin("graph.dat")
+```
+
+Second, to construct an HNSW index dynamically from streamed database entries:
+
+```python
+hnsw = PyHawkSearcher.new_uniform(32, 32)
+vector = PyPlaintextStore()
+graph = PyGraphStore()
+hnsw.fill_from_ndjson_file("large_vector_database.ndjson", vector, graph, 10000)
+```
+
+To generate a vector database directly for use in this way:
+
+```python
+# Generate 100k uniform random iris codes
+vector_init = PyPlaintextStore()
+for i in range(1,100000):
+	vector_init.insert(PyIrisCode.uniform_random())
+vector_init.write_to_ndjson("vector.ndjson")
+```
+
+Basic interoperability with Open IRIS iris templates is provided by way of a common base64 encoding scheme, provided by the `iris.io.dataclasses.IrisTemplate` methods `serialize` and `deserialize`.  These methods use a base64 encoding of iris code and mask code arrays represented as a Python `dict` with base64-encoded fields `iris_codes`, `mask_codes`, and a version string `iris_code_version` to check for compatibility.  The `PyIrisCode` class interacts with this representation as follows:
+
+```python
+serialized_iris_code = {
+	"iris_codes": "...",
+	"mask_codes": "...",
+	"iris_code_version": "1.0",
+}
+
+iris = PyIrisCode.from_open_iris_template_dict(serialized_iris_code)
+reserialized_iris_code = iris.to_open_iris_template_dict("1.0")
+```
+
+Note that the `to_open_iris_template_dict` method takes an optional argument which fills the `iris_code_version` field of the resulting Python `dict` since the `PyIrisCode` object does not preserve this data.
