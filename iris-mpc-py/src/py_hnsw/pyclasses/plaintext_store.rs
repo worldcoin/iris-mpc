@@ -33,6 +33,10 @@ impl PyPlaintextStore {
         self.0.points.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.0.points.is_empty()
+    }
+
     #[staticmethod]
     #[pyo3(signature = (filename, len=None))]
     pub fn read_from_ndjson(filename: String, len: Option<usize>) -> PyResult<Self> {
