@@ -16,7 +16,6 @@ ports:
     protocol: TCP
 
 startupProbe:
-  enabled: true
   httpGet:
     path: /health
     port: health

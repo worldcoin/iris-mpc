@@ -29,7 +29,6 @@ readinessProbe:
     port: health
 
 startupProbe:
-  enabled: true
   initialDelaySeconds: 300
   httpGet:
     path: /health
