@@ -451,26 +451,15 @@ pub mod degree4 {
         use crate::galois::degree4::basis;
 
         #[test]
-        fn inverses() {
-            for g_e in [
-                GaloisRingElement::ONE,
-                -GaloisRingElement::ONE,
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[2],
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[3],
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[1]
-                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[2],
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[1]
-                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[3],
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[2]
-                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[1],
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[2]
-                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[3],
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[3]
-                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[1],
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[3]
-                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[2],
-            ] {
-                assert_eq!(g_e.inverse() * g_e, GaloisRingElement::ONE);
+        fn exceptional_sequence_is_pairwise_diff_invertible() {
+            for i in 0..GaloisRingElement::EXCEPTIONAL_SEQUENCE.len() {
+                for j in 0..GaloisRingElement::EXCEPTIONAL_SEQUENCE.len() {
+                    if i != j {
+                        let diff = GaloisRingElement::EXCEPTIONAL_SEQUENCE[i]
+                            - GaloisRingElement::EXCEPTIONAL_SEQUENCE[j];
+                        assert_eq!(diff.inverse() * diff, GaloisRingElement::ONE);
+                    }
+                }
             }
         }
 
