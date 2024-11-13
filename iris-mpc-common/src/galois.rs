@@ -34,12 +34,23 @@ pub mod degree4 {
             coefs: [1, 0, 0, 0],
             basis: PhantomData,
         };
-        pub const EXCEPTIONAL_SEQUENCE: [GaloisRingElement<Monomial>; 5] = [
-            GaloisRingElement::ZERO,
-            GaloisRingElement::ONE,
+        pub const EXCEPTIONAL_SEQUENCE: [GaloisRingElement<Monomial>; 16] = [
+            GaloisRingElement::from_coefs([0, 0, 0, 0]),
+            GaloisRingElement::from_coefs([1, 0, 0, 0]),
             GaloisRingElement::from_coefs([0, 1, 0, 0]),
             GaloisRingElement::from_coefs([1, 1, 0, 0]),
             GaloisRingElement::from_coefs([0, 0, 1, 0]),
+            GaloisRingElement::from_coefs([1, 0, 1, 0]),
+            GaloisRingElement::from_coefs([0, 1, 1, 0]),
+            GaloisRingElement::from_coefs([1, 1, 1, 0]),
+            GaloisRingElement::from_coefs([0, 0, 0, 1]),
+            GaloisRingElement::from_coefs([1, 0, 0, 1]),
+            GaloisRingElement::from_coefs([0, 1, 0, 1]),
+            GaloisRingElement::from_coefs([1, 1, 0, 1]),
+            GaloisRingElement::from_coefs([0, 0, 1, 1]),
+            GaloisRingElement::from_coefs([1, 0, 1, 1]),
+            GaloisRingElement::from_coefs([0, 1, 1, 1]),
+            GaloisRingElement::from_coefs([1, 1, 1, 1]),
         ];
         pub fn encode1(x: &[u16]) -> Option<Vec<Self>> {
             if x.len() % 4 != 0 {
@@ -68,40 +79,47 @@ pub mod degree4 {
             )
         }
 
+        /// Inverse of the element, if it exists
+        ///
+        /// # Panics
+        ///
+        /// This function panics if the element has no inverse
         pub fn inverse(&self) -> Self {
             // hard-coded inverses for some elements we need
             // too lazy to implement the general case in rust
             // and we do not need the general case, since this is only used for the lagrange
             // polys, which can be pre-computed anyway
 
-            if *self == GaloisRingElement::ZERO {
-                panic!("Division by zero");
+            if self.coefs.iter().all(|x| x % 2 == 0) {
+                panic!("Element has no inverse");
             }
 
-            if *self == GaloisRingElement::ONE {
-                return GaloisRingElement::ONE;
-            }
+            // inversion by exponentition by (p^r -1) * p^(m-1) - 1, with p = 2, r = 4, m =
+            // 16
+            const P: u32 = 2;
+            const R: u32 = 4;
+            const M: u32 = 16;
+            const EXP: u32 = (P.pow(R) - 1) * P.pow(M - 1) - 1;
 
-            if *self == -GaloisRingElement::ONE {
-                return -GaloisRingElement::ONE;
-            }
-            if *self == GaloisRingElement::from_coefs([0, 1, 0, 0]) {
-                return GaloisRingElement::from_coefs([65535, 0, 0, 1]);
-            }
-            if *self == GaloisRingElement::from_coefs([0, 65535, 0, 0]) {
-                return GaloisRingElement::from_coefs([1, 0, 0, 65535]);
-            }
-            if *self == GaloisRingElement::from_coefs([1, 1, 0, 0]) {
-                return GaloisRingElement::from_coefs([2, 65535, 1, 65535]);
-            }
-            if *self == GaloisRingElement::from_coefs([1, 65535, 0, 0]) {
-                return GaloisRingElement::from_coefs([0, 65535, 65535, 65535]);
-            }
-            if *self == GaloisRingElement::from_coefs([65535, 1, 0, 0]) {
-                return GaloisRingElement::from_coefs([0, 1, 1, 1]);
-            }
+            self.pow(EXP)
+        }
 
-            panic!("No inverse for {:?} in LUT", self);
+        /// Basic exponentiation by squaring, not constant time
+        pub fn pow(&self, mut exp: u32) -> Self {
+            if exp == 0 {
+                return Self::ONE;
+            }
+            let mut x = self.clone();
+            let mut y = Self::ONE;
+            while exp > 1 {
+                if exp % 2 == 1 {
+                    y = x * y;
+                    exp = exp - 1;
+                }
+                x = x * x;
+                exp = exp / 2;
+            }
+            x * y
         }
 
         #[allow(non_snake_case)]
@@ -452,6 +470,17 @@ pub mod degree4 {
                 GaloisRingElement::EXCEPTIONAL_SEQUENCE[3]
                     - GaloisRingElement::EXCEPTIONAL_SEQUENCE[2],
             ] {
+                assert_eq!(g_e.inverse() * g_e, GaloisRingElement::ONE);
+            }
+        }
+
+        #[test]
+        fn random_inverses() {
+            for _ in 0..100 {
+                let mut g_e = GaloisRingElement::random(&mut rand::thread_rng());
+                // make it have an inverse
+                g_e.coefs.iter_mut().for_each(|x| *x |= 1);
+
                 assert_eq!(g_e.inverse() * g_e, GaloisRingElement::ONE);
             }
         }
