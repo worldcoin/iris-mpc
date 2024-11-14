@@ -1,6 +1,6 @@
 FROM --platform=linux/amd64 ubuntu:22.04 as build-image
 
-RUN apt-get update && apt-get install -y pkg-config wget libssl-dev ca-certificates \
+RUN apt-get update && apt-get install -y pkg-config wget libssl-dev ca-certificates protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
     && dpkg -i cuda-keyring_1.1-1_all.deb \
@@ -41,8 +41,8 @@ RUN cd /tmp \
     && git checkout ${AWS_OFI_NCCL_VERSION} \
     && ./autogen.sh \
     && ./configure --prefix=/opt/aws-ofi-nccl/install \
-       --with-libfabric=/opt/amazon/efa/ \
-       --with-cuda=/usr/local/cuda \
-       --with-nccl=/tmp/nccl/build \
-       --with-mpi=/opt/amazon/openmpi/ \
+    --with-libfabric=/opt/amazon/efa/ \
+    --with-cuda=/usr/local/cuda \
+    --with-nccl=/tmp/nccl/build \
+    --with-mpi=/opt/amazon/openmpi/ \
     && make && make install
