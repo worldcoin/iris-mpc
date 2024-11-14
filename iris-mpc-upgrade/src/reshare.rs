@@ -1,3 +1,5 @@
+//! # Iris Code Resharing
+//!
 //! This module has functionality for resharing a secret shared iris code to a
 //! new party, producing a valid share for the new party, without leaking
 //! information about the individual shares of the sending parties.
@@ -12,11 +14,9 @@ use crate::proto::{
 use iris_mpc_common::{
     galois::degree4::{basis::Monomial, GaloisRingElement, ShamirGaloisRingShare},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
-    id::PartyID,
-    iris_db::shamir_iris::ShamirIris,
     IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
-use iris_mpc_store::{Store, StoredIris, StoredIrisRef, StoredIrisRefWithId};
+use iris_mpc_store::{Store, StoredIrisRefWithId};
 use itertools::{izip, Itertools};
 use rand::{CryptoRng, Rng, SeedableRng};
 use sha2::{Digest, Sha256};
@@ -88,8 +88,7 @@ impl IrisCodeReshareSenderHelper {
         code_share
             .coefs
             .into_iter()
-            .map(|x| x.to_le_bytes())
-            .flatten()
+            .flat_map(|x| x.to_le_bytes())
             .collect()
     }
     fn reshare_mask(
@@ -114,8 +113,7 @@ impl IrisCodeReshareSenderHelper {
         mask_share
             .coefs
             .into_iter()
-            .map(|x| x.to_le_bytes())
-            .flatten()
+            .flat_map(|x| x.to_le_bytes())
             .collect()
     }
 
@@ -177,7 +175,7 @@ impl IrisCodeReshareSenderHelper {
             "The iris code id is out of the range of the current batch"
         );
         let mut digest = Sha256::new();
-        digest.update(&self.common_seed);
+        digest.update(self.common_seed);
         digest.update(iris_code_id.to_le_bytes());
         let mut rng = rand_chacha::ChaChaRng::from_seed(digest.finalize().into());
         let left_reshared_code = self.reshare_code(left_code_share, &mut rng);
@@ -546,6 +544,7 @@ impl IrisCodeReshareReceiverHelper {
 /// other parties. This should be inserted into the database.
 pub struct RecombinedIrisCodeBatch {
     range_start_inclusive: i64,
+    #[expect(unused)]
     range_end_exclusive:   i64,
     left_iris_codes:       Vec<GaloisRingIrisCodeShare>,
     left_masks:            Vec<GaloisRingTrimmedMaskCodeShare>,
