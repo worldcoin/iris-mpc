@@ -11,7 +11,7 @@ repository.workspace = true
 axum.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
-clap.workspace = true
+clap = { workspace = true, features = ["env"] }
 eyre.workspace = true
 bytemuck.workspace = true
 sqlx.workspace = true

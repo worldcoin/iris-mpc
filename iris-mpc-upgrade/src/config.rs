@@ -118,3 +118,39 @@ impl fmt::Debug for UpgradeClientConfig {
             .finish()
     }
 }
+
+#[derive(Parser)]
+pub struct ReShareClientConfig {
+    #[clap(long, default_value = "http://localhost:8000", env("SERVER_URL"))]
+    pub server_url: String,
+
+    #[clap(long)]
+    pub db_start: u64,
+
+    #[clap(long)]
+    pub db_end: u64,
+
+    #[clap(long)]
+    pub party_id: u8,
+
+    #[clap(long)]
+    pub other_party_id: u8,
+
+    #[clap(long)]
+    pub target_party_id: u8,
+
+    #[clap(long)]
+    pub batch_size: u64,
+
+    #[clap(long)]
+    pub eye: Eye,
+
+    #[clap(long)]
+    pub db_url: String,
+
+    #[clap(long)]
+    pub batch_timeout_secs: Option<u64>,
+
+    #[clap(long)]
+    pub environment: String,
+}

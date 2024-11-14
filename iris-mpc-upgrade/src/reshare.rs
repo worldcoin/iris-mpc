@@ -124,7 +124,7 @@ impl IrisCodeReshareSenderHelper {
     /// # Panics
     ///
     /// Panics if this is called while a batch is already being built.
-    pub fn start_reshare_batch(&mut self, start_db_index: u64, end_db_index: u64) {
+    pub fn start_reshare_batch(&mut self, start_db_index: i64, end_db_index: i64) {
         assert!(
             self.current_packet.is_none(),
             "We expected no batch to be currently being built, but it is..."
@@ -149,7 +149,7 @@ impl IrisCodeReshareSenderHelper {
     /// of the current batch.
     pub fn add_reshare_iris_to_batch(
         &mut self,
-        iris_code_id: u64,
+        iris_code_id: i64,
         left_code_share: GaloisRingIrisCodeShare,
         left_mask_share: GaloisRingTrimmedMaskCodeShare,
         right_code_share: GaloisRingIrisCodeShare,
@@ -536,8 +536,8 @@ impl IrisCodeReshareReceiverHelper {
 /// A batch of recombined iris codes, produced by resharing iris codes from two
 /// other parties. This should be inserted into the database.
 pub struct RecombinedIrisCodeBatch {
-    range_start_inclusive: u64,
-    range_end_exclusive:   u64,
+    range_start_inclusive: i64,
+    range_end_exclusive:   i64,
     left_iris_codes:       Vec<GaloisRingIrisCodeShare>,
     left_masks:            Vec<GaloisRingTrimmedMaskCodeShare>,
     right_iris_codes:      Vec<GaloisRingIrisCodeShare>,
@@ -603,14 +603,14 @@ mod tests {
         let mut reshare_helper_1_0_2 = IrisCodeReshareSenderHelper::new(1, 0, 2, [0; 32]);
         let mut reshare_helper_2 = IrisCodeReshareReceiverHelper::new(2, 0, 1, 100);
 
-        reshare_helper_0_1_2.start_reshare_batch(0, DB_SIZE as u64);
+        reshare_helper_0_1_2.start_reshare_batch(0, DB_SIZE as i64);
         for (idx, ((left_code, left_mask), (right_code, right_mask))) in party0_db_left
             .iter()
             .zip(party0_db_right.iter())
             .enumerate()
         {
             reshare_helper_0_1_2.add_reshare_iris_to_batch(
-                idx as u64,
+                idx as i64,
                 left_code.clone(),
                 left_mask.clone(),
                 right_code.clone(),
@@ -619,14 +619,14 @@ mod tests {
         }
         let reshare_request_0_1_2 = reshare_helper_0_1_2.finalize_reshare_batch();
 
-        reshare_helper_1_0_2.start_reshare_batch(0, DB_SIZE as u64);
+        reshare_helper_1_0_2.start_reshare_batch(0, DB_SIZE as i64);
         for (idx, ((left_code, left_mask), (right_code, right_mask))) in party1_db_left
             .iter()
             .zip(party1_db_right.iter())
             .enumerate()
         {
             reshare_helper_1_0_2.add_reshare_iris_to_batch(
-                idx as u64,
+                idx as i64,
                 left_code.clone(),
                 left_mask.clone(),
                 right_code.clone(),

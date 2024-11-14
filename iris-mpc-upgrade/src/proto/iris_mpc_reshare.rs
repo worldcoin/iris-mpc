@@ -18,10 +18,10 @@ pub struct IrisCodeReShareRequest {
     pub other_id: u64,
     #[prost(uint64, tag = "3")]
     pub receiver_id: u64,
-    #[prost(uint64, tag = "4")]
-    pub id_range_start_inclusive: u64,
-    #[prost(uint64, tag = "5")]
-    pub id_range_end_non_inclusive: u64,
+    #[prost(int64, tag = "4")]
+    pub id_range_start_inclusive: i64,
+    #[prost(int64, tag = "5")]
+    pub id_range_end_non_inclusive: i64,
     #[prost(message, repeated, tag = "6")]
     pub iris_code_re_shares: ::prost::alloc::vec::Vec<IrisCodeReShare>,
 }

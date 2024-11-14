@@ -13,8 +13,8 @@ message IrisCodeReShareRequest {
     uint64 SenderId = 1;
     uint64 OtherId = 2;
     uint64 ReceiverId = 3;
-    uint64 IdRangeStartInclusive = 4;
-    uint64 IdRangeEndNonInclusive = 5;
+    int64 IdRangeStartInclusive = 4;
+    int64 IdRangeEndNonInclusive = 5;
     repeated IrisCodeReShare IrisCodeReShares = 6;
 }
 
