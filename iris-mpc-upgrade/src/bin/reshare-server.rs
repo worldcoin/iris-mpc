@@ -4,6 +4,7 @@ use iris_mpc_upgrade::{
     config::ReShareServerConfig,
     proto::iris_mpc_reshare::iris_code_re_share_service_server::IrisCodeReShareServiceServer,
     reshare::{GrpcReshareServer, IrisCodeReshareReceiverHelper},
+    utils::install_tracing,
 };
 use tonic::transport::Server;
 
@@ -11,6 +12,7 @@ const APP_NAME: &str = "SMPC";
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
+    install_tracing();
     let config = ReShareServerConfig::parse();
 
     let schema_name = format!("{}_{}_{}", APP_NAME, config.environment, config.party_id);
@@ -24,7 +26,9 @@ async fn main() -> eyre::Result<()> {
     );
 
     let grpc_server =
-        IrisCodeReShareServiceServer::new(GrpcReshareServer::new(store, receiver_helper));
+        IrisCodeReShareServiceServer::new(GrpcReshareServer::new(store, receiver_helper))
+            .max_decoding_message_size(100 * 1024 * 1024)
+            .max_encoding_message_size(100 * 1024 * 1024);
 
     Server::builder()
         .add_service(grpc_server)

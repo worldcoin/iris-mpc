@@ -10,12 +10,14 @@ use iris_mpc_upgrade::{
         iris_code_re_share_service_client::IrisCodeReShareServiceClient, IrisCodeReShareStatus,
     },
     reshare::IrisCodeReshareSenderHelper,
+    utils::install_tracing,
 };
 
 const APP_NAME: &str = "SMPC";
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
+    install_tracing();
     let config = ReShareClientConfig::parse();
 
     // TODO: derive a common seed for the two participating parties
@@ -34,7 +36,10 @@ async fn main() -> eyre::Result<()> {
         common_seed,
     );
 
-    let mut grpc_client = IrisCodeReShareServiceClient::connect(config.server_url).await?;
+    let mut grpc_client = IrisCodeReShareServiceClient::connect(config.server_url)
+        .await?
+        .max_decoding_message_size(100 * 1024 * 1024)
+        .max_encoding_message_size(100 * 1024 * 1024);
 
     while let Some(chunk) = iris_stream_chunks.next().await {
         let iris_codes = chunk.into_iter().collect::<Result<Vec<_>, sqlx::Error>>()?;
@@ -76,6 +81,11 @@ async fn main() -> eyre::Result<()> {
                 },
             );
         }
+        tracing::info!(
+            "Submitting reshare request for iris codes {} to {}",
+            db_chunk_start,
+            db_chunk_end
+        );
 
         let request = iris_reshare_helper.finalize_reshare_batch();
         let mut timeout = tokio::time::Duration::from_millis(100);
