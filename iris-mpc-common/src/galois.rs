@@ -109,15 +109,15 @@ pub mod degree4 {
             if exp == 0 {
                 return Self::ONE;
             }
-            let mut x = self.clone();
+            let mut x = *self;
             let mut y = Self::ONE;
             while exp > 1 {
                 if exp % 2 == 1 {
                     y = x * y;
-                    exp = exp - 1;
+                    exp -= 1;
                 }
                 x = x * x;
-                exp = exp / 2;
+                exp /= 2;
             }
             x * y
         }
