@@ -143,7 +143,37 @@ pub struct ReShareClientConfig {
     pub batch_size: u64,
 
     #[clap(long)]
-    pub eye: Eye,
+    pub db_url: String,
+
+    #[clap(long)]
+    pub batch_timeout_secs: Option<u64>,
+
+    #[clap(long)]
+    pub environment: String,
+}
+
+#[derive(Parser)]
+pub struct ReShareServerConfig {
+    #[clap(long, default_value = "0.0.0.0:8000", env("BIND_ADDR"))]
+    pub bind_addr: SocketAddr,
+
+    #[clap(long)]
+    pub db_start: u64,
+
+    #[clap(long)]
+    pub db_end: u64,
+
+    #[clap(long)]
+    pub party_id: u8,
+
+    #[clap(long)]
+    pub sender1_party_id: u8,
+
+    #[clap(long)]
+    pub sender2_party_id: u8,
+
+    #[clap(long)]
+    pub batch_size: u64,
 
     #[clap(long)]
     pub db_url: String,
@@ -153,4 +183,7 @@ pub struct ReShareClientConfig {
 
     #[clap(long)]
     pub environment: String,
+
+    #[clap(long, default_value = "10")]
+    pub max_buffer_size: usize,
 }

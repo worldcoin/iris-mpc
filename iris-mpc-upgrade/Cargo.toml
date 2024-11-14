@@ -61,3 +61,7 @@ path = "src/bin/tcp_ssl_upgrade_client.rs"
 [[bin]]
 name = "seed-v1-dbs"
 path = "src/bin/seed_v1_dbs.rs"
+
+[[bin]]
+name = "seed-v2-dbs"
+path = "src/bin/seed_v2_dbs.rs"

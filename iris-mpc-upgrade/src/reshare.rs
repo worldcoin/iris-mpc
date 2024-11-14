@@ -4,7 +4,10 @@
 
 use crate::proto::{
     self,
-    iris_mpc_reshare::{IrisCodeReShare, IrisCodeReShareRequest},
+    iris_mpc_reshare::{
+        iris_code_re_share_service_server, IrisCodeReShare, IrisCodeReShareRequest,
+        IrisCodeReShareStatus,
+    },
 };
 use iris_mpc_common::{
     galois::degree4::{basis::Monomial, GaloisRingElement, ShamirGaloisRingShare},
@@ -13,12 +16,12 @@ use iris_mpc_common::{
     iris_db::shamir_iris::ShamirIris,
     IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
-use iris_mpc_store::StoredIris;
+use iris_mpc_store::{Store, StoredIris, StoredIrisRef, StoredIrisRefWithId};
 use itertools::{izip, Itertools};
 use rand::{CryptoRng, Rng, SeedableRng};
 use sha2::{Digest, Sha256};
-use std::collections::VecDeque;
-use tracing_subscriber::field::RecordFields;
+use std::{collections::VecDeque, sync::Mutex};
+use tonic::Response;
 
 pub struct IrisCodeReshareSenderHelper {
     my_party_id:     usize,
@@ -234,8 +237,8 @@ pub struct IrisCodeReshareReceiverHelper {
     sender1_party_id: usize,
     sender2_party_id: usize,
     max_buffer_size:  usize,
-    sender_1_buffer:  VecDeque<IrisCodeReShareRequest>,
-    sender_2_buffer:  VecDeque<IrisCodeReShareRequest>,
+    sender_1_buffer:  Mutex<VecDeque<IrisCodeReShareRequest>>,
+    sender_2_buffer:  Mutex<VecDeque<IrisCodeReShareRequest>>,
 }
 
 impl IrisCodeReshareReceiverHelper {
@@ -250,8 +253,8 @@ impl IrisCodeReshareReceiverHelper {
             sender1_party_id,
             sender2_party_id,
             max_buffer_size,
-            sender_1_buffer: VecDeque::new(),
-            sender_2_buffer: VecDeque::new(),
+            sender_1_buffer: Mutex::new(VecDeque::new()),
+            sender_2_buffer: Mutex::new(VecDeque::new()),
         }
     }
 
@@ -307,26 +310,28 @@ impl IrisCodeReshareReceiverHelper {
     }
 
     pub fn add_request_batch(
-        &mut self,
+        &self,
         request: IrisCodeReShareRequest,
     ) -> Result<(), IrisCodeReShareError> {
         self.check_valid(&request)?;
         if request.sender_id as usize == self.sender1_party_id {
-            if self.sender_1_buffer.len() + 1 >= self.max_buffer_size {
+            let mut sender_1_buffer = self.sender_1_buffer.lock().unwrap();
+            if sender_1_buffer.len() + 1 >= self.max_buffer_size {
                 return Err(IrisCodeReShareError::TooManyRequests {
                     party_id:       self.sender1_party_id,
                     other_party_id: self.sender2_party_id,
                 });
             }
-            self.sender_1_buffer.push_back(request);
+            sender_1_buffer.push_back(request);
         } else if request.sender_id as usize == self.sender2_party_id {
-            if self.sender_2_buffer.len() + 1 >= self.max_buffer_size {
+            let mut sender_2_buffer = self.sender_2_buffer.lock().unwrap();
+            if sender_2_buffer.len() + 1 >= self.max_buffer_size {
                 return Err(IrisCodeReShareError::TooManyRequests {
                     party_id:       self.sender2_party_id,
                     other_party_id: self.sender1_party_id,
                 });
             }
-            self.sender_2_buffer.push_back(request);
+            sender_2_buffer.push_back(request);
         } else {
             // check valid should have caught this
             unreachable!()
@@ -516,14 +521,18 @@ impl IrisCodeReshareReceiverHelper {
     }
 
     pub fn try_handle_batch(
-        &mut self,
+        &self,
     ) -> Result<Option<RecombinedIrisCodeBatch>, IrisCodeReShareError> {
-        if self.sender_1_buffer.is_empty() || self.sender_2_buffer.is_empty() {
+        let mut sender_1_buffer = self.sender_1_buffer.lock().unwrap();
+        let mut sender_2_buffer = self.sender_2_buffer.lock().unwrap();
+        if sender_1_buffer.is_empty() || sender_2_buffer.is_empty() {
             return Ok(None);
         }
 
-        let sender_1_batch = self.sender_1_buffer.pop_front().unwrap();
-        let sender_2_batch = self.sender_2_buffer.pop_front().unwrap();
+        let sender_1_batch = sender_1_buffer.pop_front().unwrap();
+        let sender_2_batch = sender_2_buffer.pop_front().unwrap();
+        drop(sender_1_buffer);
+        drop(sender_2_buffer);
 
         self.check_requests_matching(&sender_1_batch, &sender_2_batch)?;
 
@@ -544,15 +553,123 @@ pub struct RecombinedIrisCodeBatch {
     right_masks:           Vec<GaloisRingTrimmedMaskCodeShare>,
 }
 
+impl RecombinedIrisCodeBatch {
+    pub async fn insert_into_store(self, store: &Store) -> eyre::Result<()> {
+        let to_be_inserted = izip!(
+            &self.left_iris_codes,
+            &self.left_masks,
+            &self.right_iris_codes,
+            &self.right_masks
+        )
+        .enumerate()
+        .map(|(idx, (left_iris, left_mask, right_iris, right_mask))| {
+            let id = self.range_start_inclusive + idx as i64;
+            StoredIrisRefWithId {
+                id,
+                left_code: &left_iris.coefs,
+                left_mask: &left_mask.coefs,
+                right_code: &right_iris.coefs,
+                right_mask: &right_mask.coefs,
+            }
+        })
+        .collect::<Vec<_>>();
+        let mut tx = store.tx().await?;
+        store.insert_irises_at_id(&mut tx, &to_be_inserted).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+}
+
+pub struct GrpcReshareServer {
+    store:           Store,
+    receiver_helper: IrisCodeReshareReceiverHelper,
+}
+
+impl GrpcReshareServer {
+    pub fn new(store: Store, receiver_helper: IrisCodeReshareReceiverHelper) -> Self {
+        Self {
+            store,
+            receiver_helper,
+        }
+    }
+}
+
+#[tonic::async_trait]
+impl iris_code_re_share_service_server::IrisCodeReShareService for GrpcReshareServer {
+    async fn re_share(
+        &self,
+        request: tonic::Request<proto::iris_mpc_reshare::IrisCodeReShareRequest>,
+    ) -> std::result::Result<
+        tonic::Response<proto::iris_mpc_reshare::IrisCodeReShareResponse>,
+        tonic::Status,
+    > {
+        match self.receiver_helper.add_request_batch(request.into_inner()) {
+            Ok(()) => (),
+            Err(err) => {
+                tracing::warn!(error = err.to_string(), "Error handling reshare request");
+                match err {
+                    IrisCodeReShareError::InvalidRequest { reason } => {
+                        return Ok(Response::new(
+                            proto::iris_mpc_reshare::IrisCodeReShareResponse {
+                                status:  IrisCodeReShareStatus::Error as i32,
+                                message: reason,
+                            },
+                        ));
+                    }
+                    IrisCodeReShareError::TooManyRequests { .. } => {
+                        return Ok(Response::new(
+                            proto::iris_mpc_reshare::IrisCodeReShareResponse {
+                                status:  IrisCodeReShareStatus::FullQueue as i32,
+                                message: err.to_string(),
+                            },
+                        ))
+                    }
+                }
+            }
+        }
+        // we received a batch, try to handle it
+        match self.receiver_helper.try_handle_batch() {
+            Ok(Some(batch)) => {
+                // write the reshared iris codes to the database
+                match batch.insert_into_store(&self.store).await {
+                    Ok(()) => (),
+                    Err(err) => {
+                        tracing::error!(
+                            error = err.to_string(),
+                            "Error inserting reshared iris codes into DB"
+                        );
+                    }
+                }
+            }
+            Ok(None) => (),
+            Err(err) => {
+                tracing::warn!(error = err.to_string(), "Error handling reshare request");
+                return Ok(Response::new(
+                    proto::iris_mpc_reshare::IrisCodeReShareResponse {
+                        status:  IrisCodeReShareStatus::Error as i32,
+                        message: err.to_string(),
+                    },
+                ));
+            }
+        }
+
+        Ok(Response::new(
+            proto::iris_mpc_reshare::IrisCodeReShareResponse {
+                status:  IrisCodeReShareStatus::Ok as i32,
+                message: Default::default(),
+            },
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::IrisCodeReshareSenderHelper;
     use crate::reshare::IrisCodeReshareReceiverHelper;
     use iris_mpc_common::{
-        galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
-        iris_db::db::IrisDB,
+        galois_engine::degree4::FullGaloisRingIrisCodeShare, iris_db::db::IrisDB,
     };
-    use itertools::MultiUnzip;
+    use itertools::Itertools;
     use rand::thread_rng;
 
     #[test]
@@ -566,16 +683,8 @@ mod tests {
             .db
             .iter()
             .map(|x| {
-                let [share0, share1, share2] =
-                    GaloisRingIrisCodeShare::encode_iris_code(&x.code, &x.mask, &mut thread_rng());
-                let [mask0, mask1, mask2] =
-                    GaloisRingIrisCodeShare::encode_mask_code(&x.mask, &mut thread_rng());
-
-                (
-                    (share0, GaloisRingTrimmedMaskCodeShare::from(mask0)),
-                    (share1, GaloisRingTrimmedMaskCodeShare::from(mask1)),
-                    (share2, GaloisRingTrimmedMaskCodeShare::from(mask2)),
-                )
+                let [a, b, c] = FullGaloisRingIrisCodeShare::encode_iris_code(x, &mut thread_rng());
+                (a, b, c)
             })
             .multiunzip();
         let (party0_db_right, party1_db_right, party2_db_right): (Vec<_>, Vec<_>, Vec<_>) =
@@ -583,54 +692,44 @@ mod tests {
                 .db
                 .iter()
                 .map(|x| {
-                    let [share0, share1, share2] = GaloisRingIrisCodeShare::encode_iris_code(
-                        &x.code,
-                        &x.mask,
-                        &mut thread_rng(),
-                    );
-                    let [mask0, mask1, mask2] =
-                        GaloisRingIrisCodeShare::encode_mask_code(&x.mask, &mut thread_rng());
-
-                    (
-                        (share0, GaloisRingTrimmedMaskCodeShare::from(mask0)),
-                        (share1, GaloisRingTrimmedMaskCodeShare::from(mask1)),
-                        (share2, GaloisRingTrimmedMaskCodeShare::from(mask2)),
-                    )
+                    let [a, b, c] =
+                        FullGaloisRingIrisCodeShare::encode_iris_code(x, &mut thread_rng());
+                    (a, b, c)
                 })
                 .multiunzip();
 
         let mut reshare_helper_0_1_2 = IrisCodeReshareSenderHelper::new(0, 1, 2, [0; 32]);
         let mut reshare_helper_1_0_2 = IrisCodeReshareSenderHelper::new(1, 0, 2, [0; 32]);
-        let mut reshare_helper_2 = IrisCodeReshareReceiverHelper::new(2, 0, 1, 100);
+        let reshare_helper_2 = IrisCodeReshareReceiverHelper::new(2, 0, 1, 100);
 
         reshare_helper_0_1_2.start_reshare_batch(0, DB_SIZE as i64);
-        for (idx, ((left_code, left_mask), (right_code, right_mask))) in party0_db_left
+        for (idx, (left, right)) in party0_db_left
             .iter()
             .zip(party0_db_right.iter())
             .enumerate()
         {
             reshare_helper_0_1_2.add_reshare_iris_to_batch(
                 idx as i64,
-                left_code.clone(),
-                left_mask.clone(),
-                right_code.clone(),
-                right_mask.clone(),
+                left.code.clone(),
+                left.mask.clone(),
+                right.code.clone(),
+                right.mask.clone(),
             );
         }
         let reshare_request_0_1_2 = reshare_helper_0_1_2.finalize_reshare_batch();
 
         reshare_helper_1_0_2.start_reshare_batch(0, DB_SIZE as i64);
-        for (idx, ((left_code, left_mask), (right_code, right_mask))) in party1_db_left
+        for (idx, (left, right)) in party1_db_left
             .iter()
             .zip(party1_db_right.iter())
             .enumerate()
         {
             reshare_helper_1_0_2.add_reshare_iris_to_batch(
                 idx as i64,
-                left_code.clone(),
-                left_mask.clone(),
-                right_code.clone(),
-                right_mask.clone(),
+                left.code.clone(),
+                left.mask.clone(),
+                right.code.clone(),
+                right.mask.clone(),
             );
         }
         let reshare_request_1_0_2 = reshare_helper_1_0_2.finalize_reshare_batch();
@@ -644,15 +743,15 @@ mod tests {
 
         let reshare_batch = reshare_helper_2.try_handle_batch().unwrap().unwrap();
 
-        for (idx, ((left_code, left_mask), (right_code, right_mask))) in party2_db_left
+        for (idx, ((left, right))) in party2_db_left
             .iter()
             .zip(party2_db_right.iter())
             .enumerate()
         {
-            assert_eq!(left_code, &reshare_batch.left_iris_codes[idx]);
-            assert_eq!(left_mask, &reshare_batch.left_masks[idx]);
-            assert_eq!(right_code, &reshare_batch.right_iris_codes[idx]);
-            assert_eq!(right_mask, &reshare_batch.right_masks[idx]);
+            assert_eq!(&left.code, &reshare_batch.left_iris_codes[idx]);
+            assert_eq!(&left.mask, &reshare_batch.left_masks[idx]);
+            assert_eq!(&right.code, &reshare_batch.right_iris_codes[idx]);
+            assert_eq!(&right.mask, &reshare_batch.right_masks[idx]);
         }
     }
 }

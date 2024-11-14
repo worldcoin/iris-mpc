@@ -75,6 +75,15 @@ pub struct StoredIrisRef<'a> {
     pub right_mask: &'a [u16],
 }
 
+#[derive(Clone)]
+pub struct StoredIrisRefWithId<'a> {
+    pub id:         i64,
+    pub left_code:  &'a [u16],
+    pub left_mask:  &'a [u16],
+    pub right_code: &'a [u16],
+    pub right_mask: &'a [u16],
+}
+
 #[derive(sqlx::FromRow, Debug, Default)]
 struct StoredState {
     request_id: String,
@@ -210,6 +219,36 @@ impl Store {
             .collect::<Vec<_>>();
 
         Ok(ids)
+    }
+
+    pub async fn insert_irises_at_id(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        codes_and_masks: &[StoredIrisRefWithId<'_>],
+    ) -> Result<()> {
+        if codes_and_masks.is_empty() {
+            return Ok(());
+        }
+        let mut query = sqlx::QueryBuilder::new(
+            "INSERT INTO irises (id, left_code, left_mask, right_code, right_mask)",
+        );
+        query.push_values(codes_and_masks, |mut query, iris| {
+            query.push_bind(iris.id);
+            query.push_bind(cast_slice::<u16, u8>(iris.left_code));
+            query.push_bind(cast_slice::<u16, u8>(iris.left_mask));
+            query.push_bind(cast_slice::<u16, u8>(iris.right_code));
+            query.push_bind(cast_slice::<u16, u8>(iris.right_mask));
+        });
+        query.push(
+            r#"
+ON CONFLICT (id)
+DO UPDATE SET left_code = EXCLUDED.left_code, left_mask = EXCLUDED.left_mask, right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask;
+"#,
+        );
+
+        query.build().execute(tx.deref_mut()).await?;
+
+        Ok(())
     }
 
     /// Update existing iris with given shares.
