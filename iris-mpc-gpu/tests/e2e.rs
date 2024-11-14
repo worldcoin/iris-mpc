@@ -202,7 +202,12 @@ mod e2e_test {
 
         // make a test query and send it to server
 
-        let db = IrisDB::new_random_par(DB_SIZE, &mut StdRng::seed_from_u64(DB_RNG_SEED));
+        let mut db = IrisDB::new_random_par(DB_SIZE, &mut StdRng::seed_from_u64(DB_RNG_SEED));
+
+        // Set the masks to all 1s for the first 10%
+        for i in 0..DB_SIZE / 10 {
+            db.db[i].mask = IrisCodeArray::ONES;
+        }
 
         let mut rng = StdRng::seed_from_u64(INTERNAL_RNG_SEED);
 
@@ -245,13 +250,14 @@ mod e2e_test {
                     }
                     2 => {
                         println!("Sending iris code on the threshold");
-                        let db_index = rng.gen_range(0..db.db.len() / 10);
+                        let db_index = rng.gen_range(0..DB_SIZE / 10);
                         if deleted_indices.contains(&(db_index as u32)) {
                             continue;
                         }
                         expected_results.insert(request_id.to_string(), Some(db_index as u32));
                         let mut code = db.db[db_index].clone();
-                        for i in 0..THRESHOLD_ABSOLUTE - 50 {
+                        assert!(code.mask == IrisCodeArray::ONES);
+                        for i in 0..THRESHOLD_ABSOLUTE - 1 {
                             code.code.flip_bit(i);
                         }
                         code
