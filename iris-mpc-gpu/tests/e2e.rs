@@ -257,7 +257,7 @@ mod e2e_test {
                         expected_results.insert(request_id.to_string(), Some(db_index as u32));
                         let mut code = db.db[db_index].clone();
                         assert!(code.mask == IrisCodeArray::ONES);
-                        for i in 0..THRESHOLD_ABSOLUTE - 1 {
+                        for i in 0..THRESHOLD_ABSOLUTE {
                             code.code.flip_bit(i);
                         }
                         code
