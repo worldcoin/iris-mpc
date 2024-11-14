@@ -3,8 +3,10 @@ syntax = "proto3";
 package iris_mpc_reshare;
 
 message IrisCodeReShare {
-    bytes IrisCodeShare = 1;
-    bytes MaskShare = 2;
+    bytes LeftIrisCodeShare = 1;
+    bytes LeftMaskShare = 2;
+    bytes RightIrisCodeShare = 3;
+    bytes RightMaskShare = 4;
 }
 
 message IrisCodeReShareRequest {

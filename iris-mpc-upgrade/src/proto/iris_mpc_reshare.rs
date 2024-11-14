@@ -2,9 +2,13 @@
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct IrisCodeReShare {
     #[prost(bytes = "vec", tag = "1")]
-    pub iris_code_share: ::prost::alloc::vec::Vec<u8>,
+    pub left_iris_code_share: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "2")]
-    pub mask_share: ::prost::alloc::vec::Vec<u8>,
+    pub left_mask_share: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "3")]
+    pub right_iris_code_share: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "4")]
+    pub right_mask_share: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct IrisCodeReShareRequest {

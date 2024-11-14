@@ -13,6 +13,7 @@ use iris_mpc_common::{
     iris_db::shamir_iris::ShamirIris,
     IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
+use iris_mpc_store::StoredIris;
 use itertools::{izip, Itertools};
 use rand::{CryptoRng, Rng, SeedableRng};
 use sha2::{Digest, Sha256};
@@ -149,8 +150,10 @@ impl IrisCodeReshareSenderHelper {
     pub fn add_reshare_iris_to_batch(
         &mut self,
         iris_code_id: u64,
-        code_share: GaloisRingIrisCodeShare,
-        mask_share: GaloisRingTrimmedMaskCodeShare,
+        left_code_share: GaloisRingIrisCodeShare,
+        left_mask_share: GaloisRingTrimmedMaskCodeShare,
+        right_code_share: GaloisRingIrisCodeShare,
+        right_mask_share: GaloisRingTrimmedMaskCodeShare,
     ) {
         assert!(
             self.current_packet.is_some(),
@@ -174,12 +177,16 @@ impl IrisCodeReshareSenderHelper {
         digest.update(&self.common_seed);
         digest.update(iris_code_id.to_le_bytes());
         let mut rng = rand_chacha::ChaChaRng::from_seed(digest.finalize().into());
-        let reshared_code = self.reshare_code(code_share, &mut rng);
-        let reshared_mask = self.reshare_mask(mask_share, &mut rng);
+        let left_reshared_code = self.reshare_code(left_code_share, &mut rng);
+        let left_reshared_mask = self.reshare_mask(left_mask_share, &mut rng);
+        let right_reshared_code = self.reshare_code(right_code_share, &mut rng);
+        let right_reshared_mask = self.reshare_mask(right_mask_share, &mut rng);
 
         let reshare = IrisCodeReShare {
-            iris_code_share: reshared_code,
-            mask_share:      reshared_mask,
+            left_iris_code_share:  left_reshared_code,
+            left_mask_share:       left_reshared_mask,
+            right_iris_code_share: right_reshared_code,
+            right_mask_share:      right_reshared_mask,
         };
         self.current_packet
             .as_mut()
@@ -285,10 +292,17 @@ impl IrisCodeReshareReceiverHelper {
         }
 
         // Check that the iris code shares are of the correct length
-        request.iris_code_re_shares.iter().all(|reshare| {
-            reshare.iris_code_share.len() == IRIS_CODE_LENGTH * std::mem::size_of::<u16>()
-                && reshare.mask_share.len() == MASK_CODE_LENGTH * std::mem::size_of::<u16>()
-        });
+        if !request.iris_code_re_shares.iter().all(|reshare| {
+            reshare.left_iris_code_share.len() == IRIS_CODE_LENGTH * std::mem::size_of::<u16>()
+                && reshare.left_mask_share.len() == MASK_CODE_LENGTH * std::mem::size_of::<u16>()
+                && reshare.right_iris_code_share.len()
+                    == IRIS_CODE_LENGTH * std::mem::size_of::<u16>()
+                && reshare.right_mask_share.len() == MASK_CODE_LENGTH * std::mem::size_of::<u16>()
+        }) {
+            return Err(IrisCodeReShareError::InvalidRequest {
+                reason: "Invalid iris code/mask share length".to_string(),
+            });
+        }
         Ok(())
     }
 
@@ -351,17 +365,19 @@ impl IrisCodeReshareReceiverHelper {
         request2: IrisCodeReShareRequest,
     ) -> Result<RecombinedIrisCodeBatch, IrisCodeReShareError> {
         let len = request1.iris_code_re_shares.len();
-        let mut code = Vec::with_capacity(len);
-        let mut mask = Vec::with_capacity(len);
+        let mut left_code = Vec::with_capacity(len);
+        let mut left_mask = Vec::with_capacity(len);
+        let mut right_code = Vec::with_capacity(len);
+        let mut right_mask = Vec::with_capacity(len);
 
         for (reshare1, reshare2) in
             izip!(request1.iris_code_re_shares, request2.iris_code_re_shares)
         {
             // build galois shares from the u8 Vecs
-            let mut code_share1 = GaloisRingIrisCodeShare {
+            let mut left_code_share1 = GaloisRingIrisCodeShare {
                 id:    self.my_party_id + 1,
                 coefs: reshare1
-                    .iris_code_share
+                    .left_iris_code_share
                     .chunks_exact(std::mem::size_of::<u16>())
                     .map(|x| u16::from_le_bytes(x.try_into().unwrap()))
                     .collect_vec()
@@ -369,10 +385,10 @@ impl IrisCodeReshareReceiverHelper {
                     // we checked this beforehand in check_valid
                     .expect("Invalid iris code share length"),
             };
-            let mut mask_share1 = GaloisRingTrimmedMaskCodeShare {
+            let mut left_mask_share1 = GaloisRingTrimmedMaskCodeShare {
                 id:    self.my_party_id + 1,
                 coefs: reshare1
-                    .mask_share
+                    .left_mask_share
                     .chunks_exact(std::mem::size_of::<u16>())
                     .map(|x| u16::from_le_bytes(x.try_into().unwrap()))
                     // we checked this beforehand in check_valid
@@ -380,10 +396,10 @@ impl IrisCodeReshareReceiverHelper {
                     .try_into()
                     .expect("Invalid mask share length"),
             };
-            let code_share2 = GaloisRingIrisCodeShare {
+            let left_code_share2 = GaloisRingIrisCodeShare {
                 id:    self.my_party_id + 1,
                 coefs: reshare2
-                    .iris_code_share
+                    .left_iris_code_share
                     .chunks_exact(std::mem::size_of::<u16>())
                     .map(|x| u16::from_le_bytes(x.try_into().unwrap()))
                     .collect_vec()
@@ -391,10 +407,10 @@ impl IrisCodeReshareReceiverHelper {
                     // we checked this beforehand in check_valid
                     .expect("Invalid iris code share length"),
             };
-            let mask_share2 = GaloisRingTrimmedMaskCodeShare {
+            let left_mask_share2 = GaloisRingTrimmedMaskCodeShare {
                 id:    self.my_party_id + 1,
                 coefs: reshare2
-                    .mask_share
+                    .left_mask_share
                     .chunks_exact(std::mem::size_of::<u16>())
                     .map(|x| u16::from_le_bytes(x.try_into().unwrap()))
                     // we checked this beforehand in check_valid
@@ -404,30 +420,98 @@ impl IrisCodeReshareReceiverHelper {
             };
 
             // add them together
-            code_share1
+            left_code_share1
                 .coefs
                 .iter_mut()
-                .zip(code_share2.coefs.iter())
+                .zip(left_code_share2.coefs.iter())
                 .for_each(|(x, y)| {
                     *x = x.wrapping_add(*y);
                 });
-            mask_share1
+            left_mask_share1
                 .coefs
                 .iter_mut()
-                .zip(mask_share2.coefs.iter())
+                .zip(left_mask_share2.coefs.iter())
                 .for_each(|(x, y)| {
                     *x = x.wrapping_add(*y);
                 });
 
-            code.push(code_share1);
-            mask.push(mask_share1);
+            left_code.push(left_code_share1);
+            left_mask.push(left_mask_share1);
+
+            // now the right eye
+            // build galois shares from the u8 Vecs
+            let mut right_code_share1 = GaloisRingIrisCodeShare {
+                id:    self.my_party_id + 1,
+                coefs: reshare1
+                    .right_iris_code_share
+                    .chunks_exact(std::mem::size_of::<u16>())
+                    .map(|x| u16::from_le_bytes(x.try_into().unwrap()))
+                    .collect_vec()
+                    .try_into()
+                    // we checked this beforehand in check_valid
+                    .expect("Invalid iris code share length"),
+            };
+            let mut right_mask_share1 = GaloisRingTrimmedMaskCodeShare {
+                id:    self.my_party_id + 1,
+                coefs: reshare1
+                    .right_mask_share
+                    .chunks_exact(std::mem::size_of::<u16>())
+                    .map(|x| u16::from_le_bytes(x.try_into().unwrap()))
+                    // we checked this beforehand in check_valid
+                    .collect_vec()
+                    .try_into()
+                    .expect("Invalid mask share length"),
+            };
+            let right_code_share2 = GaloisRingIrisCodeShare {
+                id:    self.my_party_id + 1,
+                coefs: reshare2
+                    .right_iris_code_share
+                    .chunks_exact(std::mem::size_of::<u16>())
+                    .map(|x| u16::from_le_bytes(x.try_into().unwrap()))
+                    .collect_vec()
+                    .try_into()
+                    // we checked this beforehand in check_valid
+                    .expect("Invalid iris code share length"),
+            };
+            let right_mask_share2 = GaloisRingTrimmedMaskCodeShare {
+                id:    self.my_party_id + 1,
+                coefs: reshare2
+                    .right_mask_share
+                    .chunks_exact(std::mem::size_of::<u16>())
+                    .map(|x| u16::from_le_bytes(x.try_into().unwrap()))
+                    // we checked this beforehand in check_valid
+                    .collect_vec()
+                    .try_into()
+                    .expect("Invalid mask share length"),
+            };
+
+            // add them together
+            right_code_share1
+                .coefs
+                .iter_mut()
+                .zip(right_code_share2.coefs.iter())
+                .for_each(|(x, y)| {
+                    *x = x.wrapping_add(*y);
+                });
+            right_mask_share1
+                .coefs
+                .iter_mut()
+                .zip(right_mask_share2.coefs.iter())
+                .for_each(|(x, y)| {
+                    *x = x.wrapping_add(*y);
+                });
+
+            right_code.push(right_code_share1);
+            right_mask.push(right_mask_share1);
         }
 
         Ok(RecombinedIrisCodeBatch {
             range_start_inclusive: request1.id_range_start_inclusive,
             range_end_exclusive:   request1.id_range_end_non_inclusive,
-            iris_codes:            code,
-            masks:                 mask,
+            left_iris_codes:       left_code,
+            left_masks:            left_mask,
+            right_iris_codes:      right_code,
+            right_masks:           right_mask,
         })
     }
 
@@ -454,8 +538,10 @@ impl IrisCodeReshareReceiverHelper {
 pub struct RecombinedIrisCodeBatch {
     range_start_inclusive: u64,
     range_end_exclusive:   u64,
-    iris_codes:            Vec<GaloisRingIrisCodeShare>,
-    masks:                 Vec<GaloisRingTrimmedMaskCodeShare>,
+    left_iris_codes:       Vec<GaloisRingIrisCodeShare>,
+    left_masks:            Vec<GaloisRingTrimmedMaskCodeShare>,
+    right_iris_codes:      Vec<GaloisRingIrisCodeShare>,
+    right_masks:           Vec<GaloisRingTrimmedMaskCodeShare>,
 }
 
 #[cfg(test)]
@@ -473,9 +559,10 @@ mod tests {
     fn test_basic_resharing() {
         const DB_SIZE: usize = 100;
 
-        let db = IrisDB::new_random_rng(DB_SIZE, &mut thread_rng());
+        let left_db = IrisDB::new_random_rng(DB_SIZE, &mut thread_rng());
+        let right_db = IrisDB::new_random_rng(DB_SIZE, &mut thread_rng());
 
-        let (party0_db, party1_db, party2_db): (Vec<_>, Vec<_>, Vec<_>) = db
+        let (party0_db_left, party1_db_left, party2_db_left): (Vec<_>, Vec<_>, Vec<_>) = left_db
             .db
             .iter()
             .map(|x| {
@@ -491,20 +578,60 @@ mod tests {
                 )
             })
             .multiunzip();
+        let (party0_db_right, party1_db_right, party2_db_right): (Vec<_>, Vec<_>, Vec<_>) =
+            right_db
+                .db
+                .iter()
+                .map(|x| {
+                    let [share0, share1, share2] = GaloisRingIrisCodeShare::encode_iris_code(
+                        &x.code,
+                        &x.mask,
+                        &mut thread_rng(),
+                    );
+                    let [mask0, mask1, mask2] =
+                        GaloisRingIrisCodeShare::encode_mask_code(&x.mask, &mut thread_rng());
+
+                    (
+                        (share0, GaloisRingTrimmedMaskCodeShare::from(mask0)),
+                        (share1, GaloisRingTrimmedMaskCodeShare::from(mask1)),
+                        (share2, GaloisRingTrimmedMaskCodeShare::from(mask2)),
+                    )
+                })
+                .multiunzip();
 
         let mut reshare_helper_0_1_2 = IrisCodeReshareSenderHelper::new(0, 1, 2, [0; 32]);
         let mut reshare_helper_1_0_2 = IrisCodeReshareSenderHelper::new(1, 0, 2, [0; 32]);
         let mut reshare_helper_2 = IrisCodeReshareReceiverHelper::new(2, 0, 1, 100);
 
         reshare_helper_0_1_2.start_reshare_batch(0, DB_SIZE as u64);
-        for (idx, (code, mask)) in party0_db.iter().enumerate() {
-            reshare_helper_0_1_2.add_reshare_iris_to_batch(idx as u64, code.clone(), mask.clone());
+        for (idx, ((left_code, left_mask), (right_code, right_mask))) in party0_db_left
+            .iter()
+            .zip(party0_db_right.iter())
+            .enumerate()
+        {
+            reshare_helper_0_1_2.add_reshare_iris_to_batch(
+                idx as u64,
+                left_code.clone(),
+                left_mask.clone(),
+                right_code.clone(),
+                right_mask.clone(),
+            );
         }
         let reshare_request_0_1_2 = reshare_helper_0_1_2.finalize_reshare_batch();
 
         reshare_helper_1_0_2.start_reshare_batch(0, DB_SIZE as u64);
-        for (idx, (code, mask)) in party1_db.iter().enumerate() {
-            reshare_helper_1_0_2.add_reshare_iris_to_batch(idx as u64, code.clone(), mask.clone());
+        for (idx, ((left_code, left_mask), (right_code, right_mask))) in party1_db_left
+            .iter()
+            .zip(party1_db_right.iter())
+            .enumerate()
+        {
+            reshare_helper_1_0_2.add_reshare_iris_to_batch(
+                idx as u64,
+                left_code.clone(),
+                left_mask.clone(),
+                right_code.clone(),
+                right_mask.clone(),
+            );
         }
         let reshare_request_1_0_2 = reshare_helper_1_0_2.finalize_reshare_batch();
 
@@ -517,9 +644,15 @@ mod tests {
 
         let reshare_batch = reshare_helper_2.try_handle_batch().unwrap().unwrap();
 
-        for (idx, (code, mask)) in party2_db.iter().enumerate() {
-            assert_eq!(code, &reshare_batch.iris_codes[idx]);
-            assert_eq!(mask, &reshare_batch.masks[idx]);
+        for (idx, ((left_code, left_mask), (right_code, right_mask))) in party2_db_left
+            .iter()
+            .zip(party2_db_right.iter())
+            .enumerate()
+        {
+            assert_eq!(left_code, &reshare_batch.left_iris_codes[idx]);
+            assert_eq!(left_mask, &reshare_batch.left_masks[idx]);
+            assert_eq!(right_code, &reshare_batch.right_iris_codes[idx]);
+            assert_eq!(right_mask, &reshare_batch.right_masks[idx]);
         }
     }
 }
