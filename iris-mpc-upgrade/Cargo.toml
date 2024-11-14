@@ -30,9 +30,21 @@ mpc-uniqueness-check = { package = "mpc", git = "https://github.com/worldcoin/mp
 indicatif = "0.17.8"
 rcgen = "0.13.1"
 tokio-native-tls = "0.3.1"
+tonic = { version = "0.12.3", features = [
+    "tls",
+    "tls-native-roots",
+    "transport",
+] }
+prost = "0.13.3"
+sha2 = "0.10.8"
+thiserror.workspace = true
 
 [dev-dependencies]
 float_eq = "1"
+
+
+[build-dependencies]
+tonic-build = "0.12.3"
 
 [[bin]]
 name = "upgrade-checker"

@@ -417,6 +417,28 @@ pub mod degree4 {
             res
         }
 
+        // zero-indexed party ids here, party i will map to i+1 in the exceptional
+        // sequence
+        pub fn deg_1_lagrange_poly_at_v(
+            my_id: usize,
+            other_id: usize,
+            v: usize,
+        ) -> GaloisRingElement<Monomial> {
+            assert!(my_id < 15);
+            assert!(other_id < 15);
+            assert!(v < 15);
+            let i = my_id + 1;
+            let j = other_id + 1;
+            let v = v + 1;
+            let mut res = GaloisRingElement::EXCEPTIONAL_SEQUENCE[v]
+                - GaloisRingElement::EXCEPTIONAL_SEQUENCE[j];
+            res = res
+                * (GaloisRingElement::EXCEPTIONAL_SEQUENCE[i]
+                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[j])
+                    .inverse();
+            res
+        }
+
         pub fn deg_2_lagrange_polys_at_zero() -> [GaloisRingElement<Monomial>; 3] {
             let mut res = [GaloisRingElement::ONE; 3];
             for i in 1..=3 {

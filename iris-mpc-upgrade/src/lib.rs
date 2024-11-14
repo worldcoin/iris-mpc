@@ -13,6 +13,8 @@ use std::{
 pub mod config;
 pub mod db;
 pub mod packets;
+pub mod proto;
+pub mod reshare;
 pub mod utils;
 
 pub trait OldIrisShareSource {

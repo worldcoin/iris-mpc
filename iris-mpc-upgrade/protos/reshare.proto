@@ -1,0 +1,32 @@
+
+syntax = "proto3";
+package iris_mpc_reshare;
+
+message IrisCodeReShare {
+    bytes IrisCodeShare = 1;
+    bytes MaskShare = 2;
+}
+
+message IrisCodeReShareRequest {
+    uint64 SenderId = 1;
+    uint64 OtherId = 2;
+    uint64 ReceiverId = 3;
+    uint64 IdRangeStartInclusive = 4;
+    uint64 IdRangeEndNonInclusive = 5;
+    repeated IrisCodeReShare IrisCodeReShares = 6;
+}
+
+message IrisCodeReShareResponse {
+    IrisCodeReShareStatus Status = 1;
+    string Message = 2;
+}
+
+enum IrisCodeReShareStatus {
+    IRIS_CODE_RE_SHARE_STATUS_OK = 0;
+    IRIS_CODE_RE_SHARE_STATUS_FULL_QUEUE = 1;
+    IRIS_CODE_RE_SHARE_STATUS_ERROR = 2;
+}
+
+service IrisCodeReShareService {
+    rpc ReShare(IrisCodeReShareRequest) returns (IrisCodeReShareResponse);
+}
