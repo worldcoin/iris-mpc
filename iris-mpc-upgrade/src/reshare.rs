@@ -2,22 +2,22 @@
 //! new party, producing a valid share for the new party, without leaking
 //! information about the individual shares of the sending parties.
 
-use crate::{
-    config::Eye,
-    proto::{
-        self,
-        iris_mpc_reshare::{IrisCodeReShare, IrisCodeReShareRequest},
-    },
+use crate::proto::{
+    self,
+    iris_mpc_reshare::{IrisCodeReShare, IrisCodeReShareRequest},
 };
 use iris_mpc_common::{
     galois::degree4::{basis::Monomial, GaloisRingElement, ShamirGaloisRingShare},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    id::PartyID,
+    iris_db::shamir_iris::ShamirIris,
     IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use itertools::{izip, Itertools};
 use rand::{CryptoRng, Rng, SeedableRng};
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
+use tracing_subscriber::field::RecordFields;
 
 pub struct IrisCodeReshareSenderHelper {
     my_party_id:     usize,
@@ -26,7 +26,6 @@ pub struct IrisCodeReshareSenderHelper {
     lagrange_helper: GaloisRingElement<Monomial>,
     common_seed:     [u8; 32],
     current_packet:  Option<IrisCodeReShareRequest>,
-    eye:             Eye,
 }
 
 impl IrisCodeReshareSenderHelper {
@@ -34,7 +33,6 @@ impl IrisCodeReshareSenderHelper {
         my_party_id: usize,
         other_party_id: usize,
         target_party_id: usize,
-        eye: Eye,
         common_seed: [u8; 32],
     ) -> Self {
         let lagrange_helper = ShamirGaloisRingShare::deg_1_lagrange_poly_at_v(
@@ -49,7 +47,6 @@ impl IrisCodeReshareSenderHelper {
             lagrange_helper,
             common_seed,
             current_packet: None,
-            eye,
         }
     }
     fn reshare_with_random_additive_zero(
@@ -132,16 +129,12 @@ impl IrisCodeReshareSenderHelper {
             "We expected no batch to be currently being built, but it is..."
         );
         self.current_packet = Some(IrisCodeReShareRequest {
-            sender_id: self.my_party_id as u64,
-            other_id: self.other_party_id as u64,
-            receiver_id: self.target_party_id as u64,
-            id_range_start_inclusive: start_db_index,
+            sender_id:                  self.my_party_id as u64,
+            other_id:                   self.other_party_id as u64,
+            receiver_id:                self.target_party_id as u64,
+            id_range_start_inclusive:   start_db_index,
             id_range_end_non_inclusive: end_db_index,
-            iris_code_re_shares: Vec::new(),
-            eye: match self.eye {
-                Eye::Left => proto::iris_mpc_reshare::Eye::Left as i32,
-                Eye::Right => proto::iris_mpc_reshare::Eye::Right as i32,
-            },
+            iris_code_re_shares:        Vec::new(),
         });
     }
 
@@ -234,7 +227,6 @@ pub struct IrisCodeReshareReceiverHelper {
     sender1_party_id: usize,
     sender2_party_id: usize,
     max_buffer_size:  usize,
-    eye:              Eye,
     sender_1_buffer:  VecDeque<IrisCodeReShareRequest>,
     sender_2_buffer:  VecDeque<IrisCodeReShareRequest>,
 }
@@ -244,7 +236,6 @@ impl IrisCodeReshareReceiverHelper {
         my_party_id: usize,
         sender1_party_id: usize,
         sender2_party_id: usize,
-        eye: Eye,
         max_buffer_size: usize,
     ) -> Self {
         Self {
@@ -254,7 +245,6 @@ impl IrisCodeReshareReceiverHelper {
             max_buffer_size,
             sender_1_buffer: VecDeque::new(),
             sender_2_buffer: VecDeque::new(),
-            eye,
         }
     }
 
@@ -291,16 +281,6 @@ impl IrisCodeReshareReceiverHelper {
         {
             return Err(IrisCodeReShareError::InvalidRequest {
                 reason: "Invalid number of iris codes in received request".to_string(),
-            });
-        }
-        if request.eye
-            != match self.eye {
-                Eye::Left => proto::iris_mpc_reshare::Eye::Left as i32,
-                Eye::Right => proto::iris_mpc_reshare::Eye::Right as i32,
-            }
-        {
-            return Err(IrisCodeReShareError::InvalidRequest {
-                reason: "Received a request for the wrong eye".to_string(),
             });
         }
 
@@ -481,7 +461,7 @@ pub struct RecombinedIrisCodeBatch {
 #[cfg(test)]
 mod tests {
     use super::IrisCodeReshareSenderHelper;
-    use crate::{config::Eye, reshare::IrisCodeReshareReceiverHelper};
+    use crate::reshare::IrisCodeReshareReceiverHelper;
     use iris_mpc_common::{
         galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
         iris_db::db::IrisDB,
@@ -512,11 +492,9 @@ mod tests {
             })
             .multiunzip();
 
-        let mut reshare_helper_0_1_2 =
-            IrisCodeReshareSenderHelper::new(0, 1, 2, Eye::Left, [0; 32]);
-        let mut reshare_helper_1_0_2 =
-            IrisCodeReshareSenderHelper::new(1, 0, 2, Eye::Left, [0; 32]);
-        let mut reshare_helper_2 = IrisCodeReshareReceiverHelper::new(2, 0, 1, Eye::Left, 100);
+        let mut reshare_helper_0_1_2 = IrisCodeReshareSenderHelper::new(0, 1, 2, [0; 32]);
+        let mut reshare_helper_1_0_2 = IrisCodeReshareSenderHelper::new(1, 0, 2, [0; 32]);
+        let mut reshare_helper_2 = IrisCodeReshareReceiverHelper::new(2, 0, 1, 100);
 
         reshare_helper_0_1_2.start_reshare_batch(0, DB_SIZE as u64);
         for (idx, (code, mask)) in party0_db.iter().enumerate() {

@@ -20,8 +20,6 @@ pub struct IrisCodeReShareRequest {
     pub id_range_end_non_inclusive: u64,
     #[prost(message, repeated, tag = "6")]
     pub iris_code_re_shares: ::prost::alloc::vec::Vec<IrisCodeReShare>,
-    #[prost(enumeration = "Eye", tag = "7")]
-    pub eye: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct IrisCodeReShareResponse {
@@ -55,32 +53,6 @@ impl IrisCodeReShareStatus {
             "IRIS_CODE_RE_SHARE_STATUS_OK" => Some(Self::Ok),
             "IRIS_CODE_RE_SHARE_STATUS_FULL_QUEUE" => Some(Self::FullQueue),
             "IRIS_CODE_RE_SHARE_STATUS_ERROR" => Some(Self::Error),
-            _ => None,
-        }
-    }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum Eye {
-    Left = 0,
-    Right = 1,
-}
-impl Eye {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Self::Left => "EYE_LEFT",
-            Self::Right => "EYE_RIGHT",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "EYE_LEFT" => Some(Self::Left),
-            "EYE_RIGHT" => Some(Self::Right),
             _ => None,
         }
     }
