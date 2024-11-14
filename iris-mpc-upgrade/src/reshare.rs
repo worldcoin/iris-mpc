@@ -742,7 +742,7 @@ mod tests {
 
         let reshare_batch = reshare_helper_2.try_handle_batch().unwrap().unwrap();
 
-        for (idx, ((left, right))) in party2_db_left
+        for (idx, (left, right)) in party2_db_left
             .iter()
             .zip(party2_db_right.iter())
             .enumerate()
