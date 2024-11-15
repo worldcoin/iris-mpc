@@ -254,7 +254,7 @@ mod e2e_test {
                         if deleted_indices.contains(&(db_index as u32)) {
                             continue;
                         }
-                        let variation = rng.gen_range(-10..10);
+                        let variation = rng.gen_range(-1..=1);
                         expected_results.insert(
                             request_id.to_string(),
                             if variation > 0 {
