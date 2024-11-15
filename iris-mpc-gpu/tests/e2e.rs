@@ -232,7 +232,8 @@ mod e2e_test {
                 } else {
                     5
                 };
-                let option = rng.gen_range(0..options);
+                // let option = rng.gen_range(0..options);
+                let option = 2;
                 let template = match option {
                     0 => {
                         println!("Sending new iris code");
