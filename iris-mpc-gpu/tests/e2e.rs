@@ -216,6 +216,7 @@ mod e2e_test {
         let mut responses: HashMap<u32, IrisCode> = HashMap::new();
         let mut deleted_indices_buffer = vec![];
         let mut deleted_indices: HashSet<u32> = HashSet::new();
+        let mut disallowed_queries = Vec::new();
 
         for _ in 0..NUM_BATCHES {
             let mut batch0 = BatchQuery::default();
@@ -250,7 +251,12 @@ mod e2e_test {
                     }
                     2 => {
                         println!("Sending iris code on the threshold");
-                        let db_index = rng.gen_range(0..DB_SIZE / 10);
+                        let db_index = loop {
+                            let db_index = rng.gen_range(0..DB_SIZE / 10);
+                            if !disallowed_queries.contains(&db_index) {
+                                break db_index;
+                            }
+                        };
                         if deleted_indices.contains(&(db_index as u32)) {
                             continue;
                         }
@@ -259,6 +265,8 @@ mod e2e_test {
                             request_id.to_string(),
                             if variation > 0 {
                                 // we flip more than the threshold so this should not match
+                                // however it would afterwards so we no longer pick it
+                                disallowed_queries.push(db_index);
                                 None
                             } else {
                                 // we flip less or equal to than the threshold so this should match
