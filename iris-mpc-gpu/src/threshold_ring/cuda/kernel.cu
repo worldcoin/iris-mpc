@@ -330,10 +330,10 @@ extern "C" __global__ void shared_lift_mul_sub(U32 *mask_a, U32 *mask_b,
     lift_mul_sub(&mask_b[i], &mask_corr_b[i], &mask_corr_b[i + n], &code_b[i]);
     switch (id) {
     case 0:
-      mask_a[i] += 1; // Transforms the <= into <
+      mask_a[i] -= 1; // Transforms the <= into <
       break;
     case 1:
-      mask_b[i] += 1; // Transforms the <= into <
+      mask_b[i] -= 1; // Transforms the <= into <
       break;
     default:
       break;
