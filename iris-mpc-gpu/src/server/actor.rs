@@ -1132,6 +1132,20 @@ impl ServerActor {
             let phase_2_chunk_sizes = vec![max_chunk_size; self.device_manager.device_count()];
             let code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
             let mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
+            if db_chunk_idx == 0 {
+                let code = self
+                    .device_manager
+                    .device(0)
+                    .dtoh_sync_copy(&code_dots[0].a)
+                    .unwrap();
+                let mask = self
+                    .device_manager
+                    .device(0)
+                    .dtoh_sync_copy(&mask_dots[0].a)
+                    .unwrap();
+                tracing::warn!("First chunk code: {:?}", &code[..31]);
+                tracing::warn!("First chunk code: {:?}", &mask[..31]);
+            }
             {
                 assert_eq!(
                     (max_chunk_size * self.max_batch_size * ROTATIONS) % 64,
