@@ -1133,6 +1133,7 @@ impl ServerActor {
             let code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
             let mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
             if db_chunk_idx == 0 {
+                self.device_manager.await_streams(&request_streams);
                 let code = self
                     .device_manager
                     .device(0)
