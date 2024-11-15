@@ -798,6 +798,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             record_counter += 1;
                         }
 
+                        assert_eq!(
+                            record_counter, store_len,
+                            "Loaded record count does not match db size"
+                        );
+
                         tracing::info!("Preprocessing db");
                         actor.preprocess_db();
 
