@@ -255,10 +255,20 @@ mod e2e_test {
                         if deleted_indices.contains(&(db_index as u32)) {
                             continue;
                         }
-                        expected_results.insert(request_id.to_string(), None);
+                        let variation = rng.gen_range(-10..10);
+                        expected_results.insert(
+                            request_id.to_string(),
+                            if variation > 0 {
+                                // we flip more than the threshold so this should not match
+                                None
+                            } else {
+                                // we flip less or equal to than the threshold so this should match
+                                Some(db_index as u32)
+                            },
+                        );
                         let mut code = db.db[db_index].clone();
                         assert!(code.mask == IrisCodeArray::ONES);
-                        for i in 0..THRESHOLD_ABSOLUTE + 1 {
+                        for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
                             code.code.flip_bit(i);
                         }
                         code
