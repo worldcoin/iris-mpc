@@ -860,6 +860,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             store_left,
             store_right,
             deleted_ids,
+            matched_batch_request_ids,
         }) = rx.recv().await
         {
             // returned serial_ids are 0 indexed, but we want them to be 1 indexed
@@ -897,6 +898,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             ),
                             true => None,
                         },
+                        Some(matched_batch_request_ids[i].clone()),
                     );
 
                     serde_json::to_string(&result_event).wrap_err("failed to serialize result")

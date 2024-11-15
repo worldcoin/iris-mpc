@@ -779,6 +779,26 @@ impl ServerActor {
             (vec![], vec![])
         };
 
+        // Check for batch matches
+        let matched_batch_request_ids = match_ids
+            .iter()
+            .map(|ids| {
+                ids.iter()
+                    .filter(|&&x| x > (u32::MAX - self.max_batch_size as u32))
+                    .map(|&x| batch.request_ids[(u32::MAX - x) as usize].clone())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        let match_ids_filtered = match_ids
+            .into_iter()
+            .map(|ids| {
+                ids.into_iter()
+                    .filter(|&x| x <= (u32::MAX - self.max_batch_size as u32))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
         // Write back to in-memory db
         let previous_total_db_size = self.current_db_sizes.iter().sum::<usize>();
         let n_insertions = insertion_list.iter().map(|x| x.len()).sum::<usize>();
@@ -841,12 +861,13 @@ impl ServerActor {
                 request_ids: batch.request_ids,
                 metadata: batch.metadata,
                 matches,
-                match_ids,
+                match_ids: match_ids_filtered,
                 partial_match_ids_left,
                 partial_match_ids_right,
                 store_left: query_store_left,
                 store_right: query_store_right,
                 deleted_ids: batch.deletion_requests_indices,
+                matched_batch_request_ids,
             })
             .unwrap();
 
