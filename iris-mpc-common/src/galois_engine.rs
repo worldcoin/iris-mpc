@@ -297,9 +297,9 @@ pub mod degree4 {
         pub fn all_rotations(&self) -> Vec<GaloisRingIrisCodeShare> {
             let mut reference = self.clone();
             let mut result = vec![];
-            rotate_coefs_left(&mut reference.coefs, 16);
+            // rotate_coefs_left(&mut reference.coefs, 16);
             for _ in 0..31 {
-                rotate_coefs_right(&mut reference.coefs, 1);
+                // rotate_coefs_right(&mut reference.coefs, 1);
                 result.push(reference.clone());
             }
             result
