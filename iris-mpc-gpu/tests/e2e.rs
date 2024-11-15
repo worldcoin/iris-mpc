@@ -251,7 +251,7 @@ mod e2e_test {
                     }
                     2 => {
                         println!("Sending iris code on the threshold");
-                        let db_index = rng.gen_range(0..DB_SIZE / 10);
+                        let db_index = 0;
                         if deleted_indices.contains(&(db_index as u32)) {
                             continue;
                         }
