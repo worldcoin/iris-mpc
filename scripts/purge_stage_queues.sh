@@ -47,24 +47,22 @@ ORB_QUEUE_NAMES=(
 "iris-mpc-results-eu-central-1.fifo"
 )
 
-MPC_1_QUEUE_NAMES=(
-"mpc1-stage.fifo"
-"mpc1-stage-dlq.fifo"
-"mpc1-results-stage.fifo"
-"mpc1-results-stage-dlq.fifo"
+SMPC_0_QUEUE_NAMES=(
+"smpcv2-0-stage.fifo"
+"smpcv2-0-stage-dlq.fifo"
 )
 
-MPC_2_QUEUE_NAMES=(
-"mpc2-stage.fifo"
-"mpc2-stage-dlq.fifo"
+SMPC_1_QUEUE_NAMES=(
+"smpcv2-1-stage.fifo"
+"smpcv2-1-stage-dlq.fifo"
 )
 
-MPC_3_QUEUE_NAMES=(
-"mpc3-stage.fifo"
-"mpc3-stage-dlq.fifo"
+SMPC_2_QUEUE_NAMES=(
+"smpcv2-2-stage.fifo"
+"smpcv2-2-stage-dlq.fifo"
 )
 
 purge_queues "worldcoin-stage" "eu-central-1" "${ORB_QUEUE_NAMES[@]}"
-purge_queues "worldcoin-smpcv2-1" "eu-north-1" "${MPC_1_QUEUE_NAMES[@]}"
-purge_queues "worldcoin-smpcv2-2" "eu-north-1" "${MPC_2_QUEUE_NAMES[@]}"
-purge_queues "worldcoin-smpcv2-3" "eu-north-1" "${MPC_3_QUEUE_NAMES[@]}"
+purge_queues "worldcoin-smpcv-io-0" "eu-north-1" "${SMPC_0_QUEUE_NAMES[@]}"
+purge_queues "worldcoin-smpcv-io-1" "eu-north-1" "${SMPC_1_QUEUE_NAMES[@]}"
+purge_queues "worldcoin-smpcv-io-2" "eu-north-1" "${SMPC_2_QUEUE_NAMES[@]}"
