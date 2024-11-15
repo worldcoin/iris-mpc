@@ -1145,7 +1145,7 @@ impl ServerActor {
                     .dtoh_sync_copy(&mask_dots[0].a)
                     .unwrap();
                 tracing::warn!("First chunk code: {:?}", &code[..31]);
-                tracing::warn!("First chunk code: {:?}", &mask[..31]);
+                tracing::warn!("First mask code: {:?}", &mask[..31]);
             }
             {
                 assert_eq!(
