@@ -223,7 +223,9 @@ mod e2e_test {
             let mut batch1 = BatchQuery::default();
             let mut batch2 = BatchQuery::default();
             let batch_size = rng.gen_range(1..MAX_BATCH_SIZE);
-            let mut batch_templates: Vec<Option<IrisCode>> = vec![];
+            let mut new_templates_in_batch: Vec<(usize, IrisCode)> = vec![];
+            let mut skip_invalidate = false;
+
             for idx in 0..batch_size {
                 let request_id = Uuid::new_v4();
                 // Automatic random tests
@@ -236,23 +238,23 @@ mod e2e_test {
                 };
 
                 let pick_from_batch = rng.gen_range(0..10);
-                let template = if pick_from_batch == 0 && idx > batch_size / 2 {
-                    loop {
-                        let batch_idx = rng.gen_range(0..batch_templates.len());
-                        let template = batch_templates[batch_idx].clone();
-                        if let Some(template) = template {
-                            expected_results
-                                .insert(request_id.to_string(), (Some(batch_idx as u32), true));
-                            break template;
-                        }
-                    }
+                let template = if pick_from_batch == 0 && new_templates_in_batch.len() > 0 {
+                    skip_invalidate = true;
+                    let (batch_idx, template) = new_templates_in_batch
+                        [rng.gen_range(0..new_templates_in_batch.len())]
+                    .clone();
+                    expected_results.insert(request_id.to_string(), (Some(batch_idx as u32), true));
+                    template
                 } else {
                     let option = rng.gen_range(0..options);
                     match option {
                         0 => {
                             println!("Sending new iris code");
+                            skip_invalidate = true;
                             expected_results.insert(request_id.to_string(), (None, false));
-                            IrisCode::random_rng(&mut rng)
+                            let template = IrisCode::random_rng(&mut rng);
+                            new_templates_in_batch.push((idx, template.clone()));
+                            template
                         }
                         1 => {
                             println!("Sending iris code from db");
@@ -317,14 +319,11 @@ mod e2e_test {
                     }
                 };
 
-                // Invalidate 10% of the queries
-                let is_valid = rng.gen_range(0..10) != 0;
+                // Invalidate 10% of the queries, but ignore the batch duplicates
+                let is_valid = rng.gen_range(0..10) != 0 || skip_invalidate;
 
                 if is_valid {
                     requests.insert(request_id.to_string(), template.clone());
-                    batch_templates.push(Some(template.clone()));
-                } else {
-                    batch_templates.push(None);
                 }
 
                 let mut shared_code = GaloisRingIrisCodeShare::encode_iris_code(
@@ -494,14 +493,17 @@ mod e2e_test {
 
                     let (expected_idx, is_batch_match) = expected_results.get(req_id).unwrap();
 
-                    println!("xxx {:?}", req_id);
-                    if *is_batch_match {
-                        tracing::info!("Batch match for {:?}", matched_batch_req_ids);
-                    }
-
                     if let Some(expected_idx) = expected_idx {
                         assert!(was_match);
-                        assert_eq!(expected_idx, idx);
+                        if !is_batch_match {
+                            assert_eq!(expected_idx, idx);
+                        } else {
+                            println!("matched_batch_req_ids: {:?}", matched_batch_req_ids);
+                            println!("thread_request_ids: {:?}", thread_request_ids);
+                            println!("expected_idx: {:?}", expected_idx);
+                            assert!(matched_batch_req_ids
+                                .contains(&thread_request_ids[*expected_idx as usize]));
+                        }
                     } else {
                         assert!(!was_match);
                         let request = requests.get(req_id).unwrap().clone();
