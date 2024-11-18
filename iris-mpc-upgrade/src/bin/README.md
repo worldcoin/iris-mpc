@@ -87,6 +87,17 @@ cargo run --release --bin upgrade-checker -- --environment dev --num-elements 10
 
 The aim of the reshare protocol is to allow 2 existing parties in SMPCv2 to work together to recover the share of another party using a simple MPC functionality.
 
+## Internal Server structure
+
+The current internal structure of this service works as follows:
+
+* The receiving party hosts a GRPC server to receive reshare batches from the two sending parties.
+* The two sending parties send reshare batches via GRPC.
+* The GPRC server collects reshare request batches from the two clients and stores it internally.
+* Once matching requests from both parties are collected, the server processes the requests and stores them to the DB.
+
+Currently, the matching is not very robust and requires that both clients send batches for the exact ranges (i.e., client 1 and 2 send batch for ids 1-100, it cannot handle client 1 sending 1-100 and client 2 sending 1-50 and 51-100).
+
 ## Example Protocol run
 
 In this example we start a reshare process where parties 0 and 1 are the senders (i.e., clients) and party 2 is the receiver (i.e., server).
