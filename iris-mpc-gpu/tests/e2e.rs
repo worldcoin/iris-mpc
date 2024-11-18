@@ -239,7 +239,7 @@ mod e2e_test {
                 };
 
                 let pick_from_batch = rng.gen_range(0..10);
-                let template = if pick_from_batch == 0 && new_templates_in_batch.len() > 0 {
+                let template = if pick_from_batch == 0 && !new_templates_in_batch.is_empty() {
                     let random_idx = rng.gen_range(0..new_templates_in_batch.len());
                     let (batch_idx, duplicate_request_id, template) =
                         new_templates_in_batch[random_idx].clone();
