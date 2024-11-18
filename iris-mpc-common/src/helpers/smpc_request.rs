@@ -313,6 +313,7 @@ pub struct UniquenessResult {
 }
 
 impl UniquenessResult {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         node_id: usize,
         serial_id: Option<u32>,
