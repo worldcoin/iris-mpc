@@ -223,8 +223,9 @@ mod e2e_test {
             let mut batch1 = BatchQuery::default();
             let mut batch2 = BatchQuery::default();
             let batch_size = rng.gen_range(1..MAX_BATCH_SIZE);
-            let mut new_templates_in_batch: Vec<(usize, IrisCode)> = vec![];
+            let mut new_templates_in_batch: Vec<(usize, String, IrisCode)> = vec![];
             let mut skip_invalidate = false;
+            let mut batch_duplicates: HashMap<String, String> = HashMap::new();
 
             for idx in 0..batch_size {
                 let request_id = Uuid::new_v4();
@@ -239,21 +240,26 @@ mod e2e_test {
 
                 let pick_from_batch = rng.gen_range(0..10);
                 let template = if pick_from_batch == 0 && new_templates_in_batch.len() > 0 {
-                    skip_invalidate = true;
-                    let (batch_idx, template) = new_templates_in_batch
-                        [rng.gen_range(0..new_templates_in_batch.len())]
-                    .clone();
+                    let random_idx = rng.gen_range(0..new_templates_in_batch.len());
+                    let (batch_idx, duplicate_request_id, template) =
+                        new_templates_in_batch[random_idx].clone();
                     expected_results.insert(request_id.to_string(), (Some(batch_idx as u32), true));
+                    batch_duplicates.insert(request_id.to_string(), duplicate_request_id);
+                    skip_invalidate = true;
                     template
                 } else {
                     let option = rng.gen_range(0..options);
                     match option {
                         0 => {
                             println!("Sending new iris code");
-                            skip_invalidate = true;
                             expected_results.insert(request_id.to_string(), (None, false));
                             let template = IrisCode::random_rng(&mut rng);
-                            new_templates_in_batch.push((idx, template.clone()));
+                            new_templates_in_batch.push((
+                                idx,
+                                request_id.to_string(),
+                                template.clone(),
+                            ));
+                            skip_invalidate = true;
                             template
                         }
                         1 => {
@@ -498,11 +504,9 @@ mod e2e_test {
                         if !is_batch_match {
                             assert_eq!(expected_idx, idx);
                         } else {
-                            println!("matched_batch_req_ids: {:?}", matched_batch_req_ids);
-                            println!("thread_request_ids: {:?}", thread_request_ids);
-                            println!("expected_idx: {:?}", expected_idx);
+                            assert!(batch_duplicates.contains_key(req_id));
                             assert!(matched_batch_req_ids
-                                .contains(&thread_request_ids[*expected_idx as usize]));
+                                .contains(batch_duplicates.get(req_id).unwrap()));
                         }
                     } else {
                         assert!(!was_match);
