@@ -449,10 +449,10 @@ extern "C" __global__ void shared_lifted_sub(U32 *mask_a, U32 *mask_b,
     lifted_sub(&mask_b[i], &code_b[i], output_n[i], a);
     switch (id) {
     case 0:
-      mask_a[i] += 1; // Transforms the <= into <
+      mask_a[i] -= 1; // Transforms the <= into <
       break;
     case 1:
-      mask_b[i] += 1; // Transforms the <= into <
+      mask_b[i] -= 1; // Transforms the <= into <
       break;
     default:
       break;
