@@ -33,7 +33,7 @@ readinessProbe:
 
 startupProbe:
   initialDelaySeconds: 900
-  failureThreshold: 20
+  failureThreshold: 40
   periodSeconds: 30
   httpGet:
     path: /health
