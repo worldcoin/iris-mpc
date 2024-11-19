@@ -51,6 +51,7 @@ impl LocalNetworkingStore {
     }
 }
 
+#[derive(Debug)]
 pub struct LocalNetworking {
     p2p_channels: P2PChannels,
     pub owner:    Identity,
