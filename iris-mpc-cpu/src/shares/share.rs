@@ -319,3 +319,20 @@ impl<T: IntRing2k> Shl<u32> for Share<T> {
         }
     }
 }
+
+// Additive share of a Hamming distance value
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(bound = "")]
+pub struct DistanceShare<T: IntRing2k> {
+    pub code_dot: Share<T>,
+    pub mask_dot: Share<T>,
+}
+
+impl<T> DistanceShare<T>
+where
+    T: IntRing2k,
+{
+    pub fn new(code_dot: Share<T>, mask_dot: Share<T>) -> Self {
+        DistanceShare { code_dot, mask_dot }
+    }
+}

@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package party_node;
+
+service PartyNode {
+    rpc SendMessage (SendRequest) returns (SendResponse);
+}
+
+message SendRequest {
+    string sender_id = 1;
+    uint64 session_id = 2;
+    bytes data = 3;
+}
+
+message SendResponse {}

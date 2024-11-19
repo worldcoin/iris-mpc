@@ -14,5 +14,6 @@ pub trait Networking {
     async fn receive(&self, sender: &Identity, session_id: &SessionId) -> eyre::Result<Vec<u8>>;
 }
 
+pub mod grpc;
 pub mod local;
 pub mod value;
