@@ -40,7 +40,7 @@ impl Role {
     }
 
     /// Retrieve index of Role (zero indexed)
-    pub fn zero_based(&self) -> usize {
+    pub fn index(&self) -> usize {
         self.0 as usize
     }
 

@@ -7,7 +7,12 @@ use crate::{
         binary::{lift, mul_lift_2k, open_bin},
         prf::{Prf, PrfSeed},
     },
-    shares::{bit::Bit, ring_impl::RingElement, share::Share, vecshare::VecShare},
+    shares::{
+        bit::Bit,
+        ring_impl::RingElement,
+        share::{DistanceShare, Share},
+        vecshare::VecShare,
+    },
 };
 use eyre::eyre;
 
@@ -264,13 +269,12 @@ pub async fn galois_ring_is_match(
     Ok(opened.convert())
 }
 
-/// Checks that the given dot product is zero.
-pub async fn is_dot_zero(
+/// Compares the given distance to a threshold and reveal the result.
+pub async fn compare_threshold_and_open(
     session: &mut Session,
-    code_dot: Share<u16>,
-    mask_dot: Share<u16>,
+    distance: DistanceShare<u16>,
 ) -> eyre::Result<bool> {
-    let bit = compare_threshold(session, code_dot, mask_dot).await?;
+    let bit = compare_threshold(session, distance.code_dot, distance.mask_dot).await?;
     let opened = open_bin(session, bit).await?;
     Ok(opened.convert())
 }
@@ -280,7 +284,10 @@ mod tests {
     use super::*;
     use crate::{
         database_generators::generate_galois_iris_shares,
-        execution::{local::LocalRuntime, player::Identity},
+        execution::{
+            local::{generate_local_identities, LocalRuntime},
+            player::Identity,
+        },
         hawkers::plaintext_store::PlaintextIris,
         protocol::ops::NetworkValue::RingElement32,
         shares::{int_ring::IntRing2k, ring_impl::RingElement},
@@ -352,15 +359,16 @@ mod tests {
     #[tokio::test]
     async fn test_async_prf_setup() {
         let num_parties = 3;
-        let identities: Vec<Identity> = vec!["alice".into(), "bob".into(), "charlie".into()];
+        let identities = generate_local_identities();
         let mut seeds = Vec::new();
         for i in 0..num_parties {
             let mut seed = [0_u8; 16];
             seed[0] = i;
             seeds.push(seed);
         }
-        let local = LocalRuntime::new(identities.clone(), seeds.clone());
-        let mut ready_sessions = local.create_player_sessions().await.unwrap();
+        let mut runtime = LocalRuntime::new(identities.clone(), seeds.clone())
+            .await
+            .unwrap();
 
         // check whether parties have sent/received the correct seeds.
         // P0: [seed_0, seed_2]
@@ -368,7 +376,8 @@ mod tests {
         // P2: [seed_2, seed_1]
         // This is done by calling next() on the PRFs and see whether they match with
         // the ones created from scratch.
-        let prf0 = ready_sessions
+        let prf0 = runtime
+            .sessions
             .get_mut(&"alice".into())
             .unwrap()
             .prf_as_mut();
@@ -381,7 +390,11 @@ mod tests {
             Prf::new(seeds[0], seeds[2]).get_prev_prf().next_u64()
         );
 
-        let prf1 = ready_sessions.get_mut(&"bob".into()).unwrap().prf_as_mut();
+        let prf1 = runtime
+            .sessions
+            .get_mut(&"bob".into())
+            .unwrap()
+            .prf_as_mut();
         assert_eq!(
             prf1.get_my_prf().next_u64(),
             Prf::new(seeds[1], seeds[0]).get_my_prf().next_u64()
@@ -391,7 +404,8 @@ mod tests {
             Prf::new(seeds[1], seeds[0]).get_prev_prf().next_u64()
         );
 
-        let prf2 = ready_sessions
+        let prf2 = runtime
+            .sessions
             .get_mut(&"charlie".into())
             .unwrap()
             .prf_as_mut();
@@ -464,12 +478,13 @@ mod tests {
             seed[0] = i;
             seeds.push(seed);
         }
-        let local = LocalRuntime::new(identities.clone(), seeds.clone());
-        let ready_sessions = local.create_player_sessions().await.unwrap();
+        let runtime = LocalRuntime::new(identities.clone(), seeds.clone())
+            .await
+            .unwrap();
 
         let mut jobs = JoinSet::new();
         for player in identities.iter() {
-            let mut player_session = ready_sessions.get(player).unwrap().clone();
+            let mut player_session = runtime.sessions.get(player).unwrap().clone();
             let four_shares = four_share_map.get(player).unwrap().clone();
             jobs.spawn(async move {
                 let out_shared = cross_mul_via_lift(
@@ -537,8 +552,7 @@ mod tests {
     #[case(1)]
     #[case(2)]
     async fn test_galois_ring_to_rep3(#[case] seed: u64) {
-        let runtime = LocalRuntime::replicated_test_config();
-        let ready_sessions = runtime.create_player_sessions().await.unwrap();
+        let runtime = LocalRuntime::replicated_test_config().await.unwrap();
         let mut rng = AesRng::seed_from_u64(seed);
 
         let iris_db = IrisDB::new_random_rng(2, &mut rng).db;
@@ -548,7 +562,7 @@ mod tests {
 
         let mut jobs = JoinSet::new();
         for (index, player) in runtime.identities.iter().cloned().enumerate() {
-            let mut player_session = ready_sessions.get(&player).unwrap().clone();
+            let mut player_session = runtime.sessions.get(&player).unwrap().clone();
             let mut own_shares = vec![(first_entry[index].clone(), second_entry[index].clone())];
             own_shares.iter_mut().for_each(|(_x, y)| {
                 y.code.preprocess_iris_code_query_share();
