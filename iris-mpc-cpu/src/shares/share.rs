@@ -29,7 +29,7 @@ impl<T: IntRing2k> Share<T> {
     }
 
     pub fn add_assign_const_role(&mut self, other: T, role: Role) {
-        match role.zero_based() {
+        match role.index() {
             0 => self.a += RingElement(other),
             1 => self.b += RingElement(other),
             2 => {}

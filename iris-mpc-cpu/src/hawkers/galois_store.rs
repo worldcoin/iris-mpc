@@ -132,7 +132,7 @@ impl LocalNetAby3NgStoreProtocol {
                 }
             })
             .unwrap()
-            .zero_based()
+            .index()
     }
 }
 
@@ -191,6 +191,8 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
         vector: &Self::VectorRef,
     ) -> Self::DistanceRef {
         let mut player_session = self.get_owner_session();
+        // TODO: decouple queries and vectors. Ideally, queries should be kept in a
+        // separate store.
         let query_point = self.storage.points[*query].clone();
         let vector_point = self.storage.points[*vector].clone();
         let pairs = vec![(query_point.data, vector_point.data)];

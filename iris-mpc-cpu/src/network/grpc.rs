@@ -317,8 +317,8 @@ mod tests {
                 // Send messages
                 for (player_id, player) in players.iter().enumerate() {
                     let role = Role::new(player_id);
-                    let next = role.next(3).zero_based();
-                    let prev = role.prev(3).zero_based();
+                    let next = role.next(3).index();
+                    let prev = role.prev(3).index();
 
                     let player = player.clone();
                     let next_id = identities[next].clone();
