@@ -784,7 +784,7 @@ impl ServerActor {
             .iter()
             .map(|ids| {
                 ids.iter()
-                    .filter(|&&x| x > (u32::MAX - self.max_batch_size as u32))
+                    .filter(|&&x| x > (u32::MAX - batch_size as u32)) // ignore matches outside the batch size (dummy matches)
                     .map(|&x| batch.request_ids[(u32::MAX - x) as usize].clone())
                     .collect::<Vec<_>>()
             })
