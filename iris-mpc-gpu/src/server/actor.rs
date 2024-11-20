@@ -16,7 +16,7 @@ use crate::{
 use cudarc::{
     cublas::CudaBlas,
     driver::{
-        result::{self, event::elapsed},
+        result::{self, event::elapsed, mem_get_info},
         sys::CUevent,
         CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceSlice,
     },
@@ -932,6 +932,21 @@ impl ServerActor {
         metrics::gauge!("db_size").set(new_db_size as f64);
         metrics::gauge!("batch_size").set(batch_size as f64);
         metrics::gauge!("max_batch_size").set(self.max_batch_size as f64);
+
+        // Update GPU memory metrics
+        let mut sum_free = 0;
+        let mut sum_total = 0;
+        for i in 0..self.device_manager.device_count() {
+            // Set the current context so we can use mem_get_info
+            let _device = CudaDevice::new(i).unwrap();
+            let (free, total) = mem_get_info()?;
+            metrics::gauge!(format!("gpu_memory_free_{}", i)).set(free as f64);
+            metrics::gauge!(format!("gpu_memory_total_{}", i)).set(total as f64);
+            sum_free += free;
+            sum_total += total;
+        }
+        metrics::gauge!("gpu_memory_free_sum").set(sum_free as f64);
+        metrics::gauge!("gpu_memory_total_sum").set(sum_total as f64);
 
         Ok(())
     }
