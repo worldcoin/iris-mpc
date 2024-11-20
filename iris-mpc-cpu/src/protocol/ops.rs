@@ -552,7 +552,7 @@ mod tests {
     #[case(1)]
     #[case(2)]
     async fn test_galois_ring_to_rep3(#[case] seed: u64) {
-        let runtime = LocalRuntime::replicated_test_config().await.unwrap();
+        let runtime = LocalRuntime::mock_setup_with_channel().await.unwrap();
         let mut rng = AesRng::seed_from_u64(seed);
 
         let iris_db = IrisDB::new_random_rng(2, &mut rng).db;

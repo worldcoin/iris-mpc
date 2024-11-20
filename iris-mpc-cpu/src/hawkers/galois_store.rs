@@ -7,6 +7,7 @@ use crate::{
         session::Session,
     },
     hawkers::plaintext_store::PointId,
+    network::NetworkType,
     protocol::ops::{
         compare_threshold_and_open, cross_compare, galois_ring_pairwise_distance,
         galois_ring_to_rep3,
@@ -75,6 +76,7 @@ pub fn setup_local_player_preloaded_db(
 pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
     rng: &mut R,
     database: Vec<IrisCode>,
+    network_t: NetworkType,
 ) -> eyre::Result<Vec<LocalNetAby3NgStoreProtocol>> {
     let identities = generate_local_identities();
 
@@ -91,7 +93,7 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
         .into_iter()
         .map(|player_irises| setup_local_player_preloaded_db(player_irises).unwrap())
         .collect();
-    let runtime = LocalRuntime::replicated_test_config().await?;
+    let runtime = LocalRuntime::mock_setup(network_t).await?;
 
     let local_stores = identities
         .into_iter()
@@ -134,8 +136,10 @@ impl LocalNetAby3NgStoreProtocol {
     }
 }
 
-pub async fn setup_local_store_aby3_players() -> eyre::Result<Vec<LocalNetAby3NgStoreProtocol>> {
-    let runtime = LocalRuntime::replicated_test_config().await?;
+pub async fn setup_local_store_aby3_players(
+    network_t: NetworkType,
+) -> eyre::Result<Vec<LocalNetAby3NgStoreProtocol>> {
+    let runtime = LocalRuntime::mock_setup(network_t).await?;
     let players = generate_local_identities();
     let local_stores = players
         .into_iter()
@@ -277,117 +281,116 @@ impl LocalNetAby3NgStoreProtocol {
     }
 }
 
-pub async fn gr_create_ready_made_hawk_searcher<R: RngCore + Clone + CryptoRng>(
-    rng: &mut R,
-    database_size: usize,
-) -> eyre::Result<(
-    (PlaintextStore, GraphMem<PlaintextStore>),
-    Vec<(
-        LocalNetAby3NgStoreProtocol,
-        GraphMem<LocalNetAby3NgStoreProtocol>,
-    )>,
-)> {
-    // makes sure the searcher produces same graph structure by having the same rng
-    let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
-    let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
+impl LocalNetAby3NgStoreProtocol {
+    /// Generates 3 pairs of vector stores and graphs from a random plaintext
+    /// vector store and graph, which are returned as well.
+    pub async fn lazy_random_setup<R: RngCore + Clone + CryptoRng>(
+        rng: &mut R,
+        database_size: usize,
+        network_t: NetworkType,
+    ) -> eyre::Result<(
+        (PlaintextStore, GraphMem<PlaintextStore>),
+        Vec<(Self, GraphMem<Self>)>,
+    )> {
+        let (cleartext_database, plaintext_vector_store, plaintext_graph_store) =
+            PlaintextStore::create_random(rng, database_size).await?;
 
-    let mut plaintext_vector_store = PlaintextStore::default();
-    let mut plaintext_graph_store = GraphMem::new();
-    let searcher = HawkSearcher::default();
+        let protocol_stores =
+            setup_local_aby3_players_with_preloaded_db(rng, cleartext_database, network_t).await?;
 
-    for raw_query in cleartext_database.iter() {
-        let query = plaintext_vector_store.prepare_query(raw_query.clone());
-        let neighbors = searcher
-            .search_to_insert(
-                &mut plaintext_vector_store,
-                &mut plaintext_graph_store,
-                &query,
-            )
-            .await;
-        let inserted = plaintext_vector_store.insert(&query).await;
-        searcher
-            .insert_from_search_results(
-                &mut plaintext_vector_store,
-                &mut plaintext_graph_store,
-                &mut rng_searcher1,
-                inserted,
-                neighbors,
-            )
-            .await;
+        let mut jobs = JoinSet::new();
+        for store in protocol_stores.iter() {
+            let mut store = store.clone();
+            let plaintext_graph_store = plaintext_graph_store.clone();
+            jobs.spawn(async move {
+                (
+                    store.clone(),
+                    store.graph_from_plain(&plaintext_graph_store).await,
+                )
+            });
+        }
+        let mut secret_shared_stores = jobs.join_all().await;
+        secret_shared_stores.sort_by_key(|(store, _)| store.get_owner_index());
+        let plaintext = (plaintext_vector_store, plaintext_graph_store);
+        Ok((plaintext, secret_shared_stores))
     }
 
-    let protocol_stores =
-        setup_local_aby3_players_with_preloaded_db(rng, cleartext_database).await?;
+    /// Generates 3 pairs of vector stores and graphs from a random plaintext
+    /// vector store and graph, which are returned as well. Networking is
+    /// based on local async_channel.
+    pub async fn lazy_random_setup_with_local_channel<R: RngCore + Clone + CryptoRng>(
+        rng: &mut R,
+        database_size: usize,
+    ) -> eyre::Result<(
+        (PlaintextStore, GraphMem<PlaintextStore>),
+        Vec<(
+            LocalNetAby3NgStoreProtocol,
+            GraphMem<LocalNetAby3NgStoreProtocol>,
+        )>,
+    )> {
+        Self::lazy_random_setup(rng, database_size, NetworkType::LocalChannel).await
+    }
 
-    let mut jobs = JoinSet::new();
-    for store in protocol_stores.iter() {
-        let mut store = store.clone();
-        let plaintext_graph_store = plaintext_graph_store.clone();
-        jobs.spawn(async move {
-            (
-                store.clone(),
-                store.graph_from_plain(&plaintext_graph_store).await,
-            )
+    /// Generates 3 pairs of vector stores and graphs corresponding to each
+    /// local player.
+    pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
+        rng: &mut R,
+        database_size: usize,
+        network_t: NetworkType,
+    ) -> eyre::Result<Vec<(Self, GraphMem<Self>)>> {
+        let rng_searcher = AesRng::from_rng(rng.clone())?;
+        let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
+        let shared_irises: Vec<_> = (0..database_size)
+            .map(|id| generate_galois_iris_shares(rng, cleartext_database[id].clone()))
+            .collect();
+
+        let mut local_stores = setup_local_store_aby3_players(network_t).await?;
+
+        let mut jobs = JoinSet::new();
+        for store in local_stores.iter_mut() {
+            let mut store = store.clone();
+            let role = store.get_owner_index();
+            let mut rng_searcher = rng_searcher.clone();
+            let queries = (0..database_size)
+                .map(|id| store.prepare_query(shared_irises[id][role].clone()))
+                .collect::<Vec<_>>();
+            jobs.spawn(async move {
+                let mut graph_store = GraphMem::new();
+                let searcher = HawkSearcher::default();
+                // insert queries
+                for query in queries.iter() {
+                    let neighbors = searcher
+                        .search_to_insert(&mut store, &mut graph_store, query)
+                        .await;
+                    searcher
+                        .insert_from_search_results(
+                            &mut store,
+                            &mut graph_store,
+                            &mut rng_searcher,
+                            *query,
+                            neighbors,
+                        )
+                        .await;
+                }
+                (store, graph_store)
+            });
+        }
+        let mut result = jobs.join_all().await;
+        // preserve order of players
+        result.sort_by(|(store1, _), (store2, _)| {
+            store1.get_owner_index().cmp(&store2.get_owner_index())
         });
+        Ok(result)
     }
-    let mut secret_shared_stores = jobs.join_all().await;
-    secret_shared_stores.sort_by_key(|(store, _)| store.get_owner_index());
-    let plaintext = (plaintext_vector_store, plaintext_graph_store);
-    Ok((plaintext, secret_shared_stores))
-}
 
-pub async fn ng_create_from_scratch_hawk_searcher<R: RngCore + Clone + CryptoRng>(
-    rng: &mut R,
-    database_size: usize,
-) -> eyre::Result<
-    Vec<(
-        LocalNetAby3NgStoreProtocol,
-        GraphMem<LocalNetAby3NgStoreProtocol>,
-    )>,
-> {
-    let rng_searcher = AesRng::from_rng(rng.clone())?;
-    let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
-    let shared_irises: Vec<_> = (0..database_size)
-        .map(|id| generate_galois_iris_shares(rng, cleartext_database[id].clone()))
-        .collect();
-
-    let mut local_stores = setup_local_store_aby3_players().await?;
-
-    let mut jobs = JoinSet::new();
-    for store in local_stores.iter_mut() {
-        let mut store = store.clone();
-        let role = store.get_owner_index();
-        let mut rng_searcher = rng_searcher.clone();
-        let queries = (0..database_size)
-            .map(|id| store.prepare_query(shared_irises[id][role].clone()))
-            .collect::<Vec<_>>();
-        jobs.spawn(async move {
-            let mut graph_store = GraphMem::new();
-            let searcher = HawkSearcher::default();
-            // insert queries
-            for query in queries.iter() {
-                let neighbors = searcher
-                    .search_to_insert(&mut store, &mut graph_store, query)
-                    .await;
-                searcher
-                    .insert_from_search_results(
-                        &mut store,
-                        &mut graph_store,
-                        &mut rng_searcher,
-                        *query,
-                        neighbors,
-                    )
-                    .await;
-            }
-            (store, graph_store)
-        });
+    /// Generates 3 pairs of vector stores and graphs corresponding to each
+    /// local player. Networking is based on local async_channel.
+    pub async fn shared_random_setup_with_local_channel<R: RngCore + Clone + CryptoRng>(
+        rng: &mut R,
+        database_size: usize,
+    ) -> eyre::Result<Vec<(Self, GraphMem<Self>)>> {
+        Self::shared_random_setup(rng, database_size, NetworkType::LocalChannel).await
     }
-    let mut result = jobs.join_all().await;
-    // preserve order of players
-    result.sort_by(|(store1, _), (store2, _)| {
-        store1.get_owner_index().cmp(&store2.get_owner_index())
-    });
-    Ok(result)
 }
 
 #[cfg(test)]
@@ -410,7 +413,9 @@ mod tests {
             .map(|iris| generate_galois_iris_shares(&mut rng, iris.clone()))
             .collect();
 
-        let mut stores = setup_local_store_aby3_players().await.unwrap();
+        let mut stores = setup_local_store_aby3_players(NetworkType::LocalChannel)
+            .await
+            .unwrap();
 
         let mut jobs = JoinSet::new();
         for store in stores.iter_mut() {
@@ -468,15 +473,20 @@ mod tests {
     async fn test_gr_premade_hnsw() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 10;
-        let (mut cleartext_data, secret_data) =
-            gr_create_ready_made_hawk_searcher(&mut rng, database_size)
-                .await
-                .unwrap();
+        let network_t = NetworkType::LocalChannel;
+        let (mut cleartext_data, secret_data) = LocalNetAby3NgStoreProtocol::lazy_random_setup(
+            &mut rng,
+            database_size,
+            network_t.clone(),
+        )
+        .await
+        .unwrap();
 
         let mut rng = AesRng::seed_from_u64(0_u64);
-        let vector_graph_stores = ng_create_from_scratch_hawk_searcher(&mut rng, database_size)
-            .await
-            .unwrap();
+        let vector_graph_stores =
+            LocalNetAby3NgStoreProtocol::shared_random_setup(&mut rng, database_size, network_t)
+                .await
+                .unwrap();
 
         for ((v_from_scratch, _), (premade_v, _)) in
             vector_graph_stores.iter().zip(secret_data.iter())
@@ -541,7 +551,9 @@ mod tests {
             .iter()
             .map(|iris| generate_galois_iris_shares(&mut rng, iris.clone()))
             .collect();
-        let mut local_stores = setup_local_store_aby3_players().await.unwrap();
+        let mut local_stores = setup_local_store_aby3_players(NetworkType::LocalChannel)
+            .await
+            .unwrap();
         // Now do the work for the plaintext store
         let mut plaintext_store = PlaintextStore::default();
         let plaintext_preps: Vec<_> = (0..db_dim)
@@ -625,9 +637,13 @@ mod tests {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 2;
         let searcher = HawkSearcher::default();
-        let mut vectors_and_graphs = ng_create_from_scratch_hawk_searcher(&mut rng, database_size)
-            .await
-            .unwrap();
+        let mut vectors_and_graphs = LocalNetAby3NgStoreProtocol::shared_random_setup(
+            &mut rng,
+            database_size,
+            NetworkType::LocalChannel,
+        )
+        .await
+        .unwrap();
 
         for i in 0..database_size {
             let mut jobs = JoinSet::new();

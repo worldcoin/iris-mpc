@@ -1,12 +1,22 @@
 use super::Networking;
-use crate::{execution::player::Identity, network::SessionId};
-use dashmap::{DashMap, Entry};
-use eyre::OptionExt;
+use crate::{
+    execution::{local::get_free_local_addresses, player::Identity},
+    network::SessionId,
+};
+use backoff::{future::retry, ExponentialBackoff};
+use dashmap::DashMap;
+use eyre::{eyre, OptionExt};
 use party_node::{
-    party_node_client::PartyNodeClient, party_node_server::PartyNode, SendRequest, SendResponse,
+    party_node_client::PartyNodeClient,
+    party_node_server::{PartyNode, PartyNodeServer},
+    SendRequest, SendResponse,
 };
 use std::sync::Arc;
-use tonic::{async_trait, transport::Channel, Request, Response, Status};
+use tonic::{
+    async_trait,
+    transport::{Channel, Server},
+    Request, Response, Status,
+};
 
 mod party_node {
     tonic::include_proto!("party_node");
@@ -51,10 +61,13 @@ impl MessageQueueStore {
     }
 
     fn get_channel(&self, party_id: &Identity) -> eyre::Result<QueueChannel> {
-        let channel = self
-            .queues
-            .get(party_id)
-            .ok_or_eyre(format!("Channel not found for party {:?}", party_id))?;
+        let channel = self.queues.get(party_id).ok_or_eyre(format!(
+            "Channel not found for party {:?}, existing channels: alice {}, bob {}, charlie {}",
+            party_id,
+            self.queues.contains_key(&Identity("alice".into())),
+            self.queues.contains_key(&Identity("bob".into())),
+            self.queues.contains_key(&Identity("charlie".into()))
+        ))?;
         Ok((*channel).clone())
     }
 
@@ -64,14 +77,14 @@ impl MessageQueueStore {
         channel.sender.send(value).await.map_err(|e| e.into())
     }
 
-    pub fn pop_front(&self, party_id: &Identity) -> eyre::Result<Vec<u8>> {
+    pub async fn pop_front(&self, party_id: &Identity) -> eyre::Result<Vec<u8>> {
         let channel = self.get_channel(party_id)?;
-        channel.receiver.try_recv().map_err(|e| e.into())
+        channel.receiver.recv().await.map_err(|e| e.into())
     }
 }
 
 #[derive(Clone)]
-struct GrpcNetworking {
+pub struct GrpcNetworking {
     party_id:       Identity,
     // other party id -> client to call that party
     clients:        Arc<DashMap<Identity, PartyNodeClient<Channel>>>,
@@ -92,6 +105,19 @@ impl GrpcNetworking {
         self.clients.insert(party_id, client);
         Ok(())
     }
+
+    pub async fn create_session(&self, session_id: SessionId) -> eyre::Result<()> {
+        if self.message_queues.contains_key(&session_id) {
+            return Err(eyre!("Session already exists"));
+        }
+
+        let queue = MessageQueueStore::new();
+        for client in self.clients.iter() {
+            queue.add_channel(client.key());
+        }
+        self.message_queues.insert(session_id, queue);
+        Ok(())
+    }
 }
 
 // Server implementation
@@ -110,16 +136,13 @@ impl PartyNode for GrpcNetworking {
             )));
         }
         let session_id = SessionId::from(request.session_id);
-        let maybe_queue = self.message_queues.entry(session_id);
-        let message_queue = match maybe_queue {
-            Entry::Occupied(entry) => entry.get().clone(),
-            Entry::Vacant(entry) => {
-                let new_queue = MessageQueueStore::new();
-                new_queue.add_channel(&sender_id);
-                entry.insert(new_queue.clone());
-                new_queue
-            }
-        };
+        let message_queue = self
+            .message_queues
+            .get(&session_id)
+            .ok_or(Status::not_found(format!(
+                "Session {:?} hasn't been created",
+                session_id
+            )))?;
         message_queue
             .push_back(&sender_id, request.data)
             .await
@@ -137,19 +160,39 @@ impl Networking for GrpcNetworking {
         receiver: &Identity,
         session_id: &SessionId,
     ) -> eyre::Result<()> {
-        // Send message via gRPC client
-        let mut client = self
-            .clients
-            .get(receiver)
-            .ok_or_eyre(format!("Client not found {:?}", receiver))?
-            .clone();
-        let request = Request::new(SendRequest {
-            sender_id:  self.party_id.0.clone(),
-            session_id: session_id.0,
-            data:       value,
-        });
-        let _response = client.send_message(request).await?;
-        Ok(())
+        let backoff = ExponentialBackoff {
+            max_elapsed_time: Some(std::time::Duration::from_secs(2)),
+            max_interval: std::time::Duration::from_secs(1),
+            multiplier: 1.1,
+            ..Default::default()
+        };
+        retry(backoff, || async {
+            // Send message via gRPC client
+            let mut client = self
+                .clients
+                .get(receiver)
+                .ok_or_eyre(format!("Client not found {:?}", receiver))?
+                .clone();
+            let request = Request::new(SendRequest {
+                sender_id:  self.party_id.0.clone(),
+                session_id: session_id.0,
+                data:       value.clone(),
+            });
+            println!(
+                "Sending message {:?} from {:?} to {:?}",
+                value, self.party_id, receiver
+            );
+            let _response = client
+                .send_message(request)
+                .await
+                .map_err(|err| eyre!(err.to_string()))?;
+            println!(
+                "SUCCESS: Sending message {:?} from {:?} to {:?}",
+                value, self.party_id, receiver
+            );
+            Ok(())
+        })
+        .await
     }
 
     async fn receive(&self, sender: &Identity, session_id: &SessionId) -> eyre::Result<Vec<u8>> {
@@ -157,132 +200,195 @@ impl Networking for GrpcNetworking {
         self.message_queues
             .get(session_id)
             .ok_or_eyre(format!(
-                "No messages are found for session {}",
-                session_id.0
+                "Session {session_id:?} hasn't been added to message queues"
             ))?
             .pop_front(sender)
+            .await
     }
+}
+
+pub async fn setup_local_grpc_networking(
+    parties: Vec<Identity>,
+) -> eyre::Result<Vec<GrpcNetworking>> {
+    let players = parties
+        .iter()
+        .map(|party| GrpcNetworking::new(party.clone()))
+        .collect::<Vec<GrpcNetworking>>();
+
+    let addresses = get_free_local_addresses(players.len())?;
+
+    let players_addresses = players
+        .iter()
+        .cloned()
+        .zip(addresses.iter().cloned())
+        .collect::<Vec<_>>();
+
+    // Initialize servers
+    for (player, addr) in &players_addresses {
+        let player = player.clone();
+        let socket = addr.parse().unwrap();
+        tokio::spawn(async move {
+            Server::builder()
+                .add_service(PartyNodeServer::new(player))
+                .serve(socket)
+                .await
+                .unwrap();
+        });
+    }
+
+    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+    // Connect to each other
+    for (player, addr) in &players_addresses {
+        for (other_player, other_addr) in &players_addresses.clone() {
+            if addr != other_addr {
+                let other_addr = format!("http://{}", other_addr);
+                player
+                    .connect_to_party(other_player.party_id.clone(), &other_addr)
+                    .await
+                    .unwrap();
+            }
+        }
+    }
+
+    Ok(players)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::execution::{local::generate_local_identities, player::Role};
-    use party_node::party_node_server::PartyNodeServer;
+    use crate::{
+        execution::{local::generate_local_identities, player::Role},
+        hawkers::galois_store::LocalNetAby3NgStoreProtocol,
+    };
+    use aes_prng::AesRng;
+    use hawk_pack::hnsw_db::HawkSearcher;
+    use rand::SeedableRng;
+    use std::time::Duration;
     use tokio::task::JoinSet;
-    use tonic::transport::Server;
+    use tracing_test::traced_test;
 
-    #[tokio::test]
-    async fn test_three_parties() {
-        let parties = generate_local_identities();
-
-        let players = parties
-            .iter()
-            .map(|party| GrpcNetworking::new(party.clone()))
-            .collect::<Vec<GrpcNetworking>>();
-
-        let addresses = ["[::1]:50051", "[::1]:50052", "[::1]:50053"];
-
-        let players_addresses = players
-            .iter()
-            .cloned()
-            .zip(addresses.iter().cloned())
-            .collect::<Vec<_>>();
-
-        // Initialize servers
-        for (player, addr) in &players_addresses {
-            let player = player.clone();
-            let socket = addr.parse().unwrap();
-            tokio::spawn(async move {
-                Server::builder()
-                    .add_service(PartyNodeServer::new(player))
-                    .serve(socket)
-                    .await
-                    .unwrap();
-            });
-        }
-
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-
-        // Connect to each other
-        for (player, addr) in &players_addresses {
-            for (other_player, other_addr) in &players_addresses.clone() {
-                if addr != other_addr {
-                    let other_addr = format!("http://{}", other_addr);
-                    player
-                        .connect_to_party(other_player.party_id.clone(), &other_addr)
-                        .await
-                        .unwrap();
-                }
-            }
-        }
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
+    async fn test_grpc_comms_correct() -> eyre::Result<()> {
+        let identities = generate_local_identities();
+        let players = setup_local_grpc_networking(identities.clone()).await?;
 
         let mut jobs = JoinSet::new();
 
         // Simple session with one message sent from one party to another
         {
-            let players = players.clone();
-            let parties = parties.clone();
+            let alice = players[0].clone();
+            let bob = players[1].clone();
+
+            let session_id = SessionId::from(0);
+
             jobs.spawn(async move {
-                let session_id = SessionId::from(0);
                 // Send a message from the first party to the second party
-                let message = b"Hey, player 1. I'm player 0. Do you copy?".to_vec();
-                players[0]
-                    .send(message.clone(), &parties[1], &session_id)
-                    .await
-                    .unwrap();
-                let received_message = players[1].receive(&parties[0], &session_id).await.unwrap();
-                assert_eq!(message, received_message);
-                // Check that there are no messages left
-                let received_message = players[1].receive(&parties[0], &session_id).await;
-                assert!(received_message.is_err());
+                let message = b"Hey, Bob. I'm Alice. Do you copy?".to_vec();
+                let message_copy = message.clone();
+
+                let task1 = tokio::spawn(async move {
+                    alice.create_session(session_id).await.unwrap();
+                    // Add a delay to ensure that the session is created before sending
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    alice
+                        .send(message.clone(), &"bob".into(), &session_id)
+                        .await
+                        .unwrap();
+                });
+                let task2 = tokio::spawn(async move {
+                    bob.create_session(session_id).await.unwrap();
+                    // Add a delay to ensure that the session is created before receiving
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    let received_message = bob.receive(&"alice".into(), &session_id).await.unwrap();
+                    assert_eq!(message_copy, received_message);
+                });
+                let _ = tokio::try_join!(task1, task2).unwrap();
             });
         }
 
-        // Each party sending and receiving a message
+        // Each party sending and receiving messages to each other
         {
-            let players = players.clone();
-            let parties = parties.clone();
             jobs.spawn(async move {
                 let session_id = SessionId::from(1);
+
+                let mut tasks = JoinSet::new();
                 // Send messages
                 for (player_id, player) in players.iter().enumerate() {
                     let role = Role::new(player_id);
                     let next = role.next(3).zero_based();
-
-                    let sent_msg =
-                        format!("From player {} to player {} with love", player_id, next)
-                            .into_bytes();
-                    player
-                        .send(sent_msg.clone(), &parties[next], &session_id)
-                        .await
-                        .unwrap();
-                }
-                // Receive and check messages
-                for (player_id, player) in players.iter().enumerate() {
-                    let role = Role::new(player_id);
                     let prev = role.prev(3).zero_based();
 
-                    let received_msg = player
-                        .receive(&parties[prev], &session_id)
-                        .await
-                        .unwrap();
-                    let expected_msg =
-                        format!("From player {} to player {} with love", prev, player_id)
-                            .into_bytes();
-                    assert_eq!(received_msg, expected_msg);
+                    let player = player.clone();
+                    let next_id = identities[next].clone();
+                    let prev_id = identities[prev].clone();
+
+                    tasks.spawn(async move {
+                        player.create_session(session_id).await.unwrap();
+                        // Add a delay to ensure that the session is created before
+                        // sending/receiving
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+
+                        // Sending
+                        let msg_to_next =
+                            format!("From player {} to player {} with love", player_id, next)
+                                .into_bytes();
+                        let msg_to_prev =
+                            format!("From player {} to player {} with love", player_id, prev)
+                                .into_bytes();
+                        player
+                            .send(msg_to_next.clone(), &next_id, &session_id)
+                            .await
+                            .unwrap();
+                        player
+                            .send(msg_to_prev.clone(), &prev_id, &session_id)
+                            .await
+                            .unwrap();
+
+                        // Receiving
+                        let received_msg_from_prev =
+                            player.receive(&prev_id, &session_id).await.unwrap();
+                        let expected_msg_from_prev =
+                            format!("From player {} to player {} with love", prev, player_id)
+                                .into_bytes();
+                        assert_eq!(received_msg_from_prev, expected_msg_from_prev);
+                        let received_msg_from_next =
+                            player.receive(&next_id, &session_id).await.unwrap();
+                        let expected_msg_from_next =
+                            format!("From player {} to player {} with love", next, player_id)
+                                .into_bytes();
+                        assert_eq!(received_msg_from_next, expected_msg_from_next);
+                    });
                 }
+                tasks.join_all().await;
             });
         }
 
-        // Send to a wrong party
+        jobs.join_all().await;
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
+    async fn test_grpc_comms_fail() -> eyre::Result<()> {
+        let parties = generate_local_identities();
+
+        let players = setup_local_grpc_networking(parties.clone()).await?;
+
+        let mut jobs = JoinSet::new();
+
+        // Send to a non-existing party
         {
-            let players = players.clone();
+            let alice = players[0].clone();
             jobs.spawn(async move {
                 let session_id = SessionId::from(2);
-                let message = b"Hey, player Eve. I'm player 0. Do you copy?".to_vec();
-                let res = players[0]
-                    .send(message.clone(), &Identity::from("Eve"), &session_id)
+                alice.create_session(session_id).await.unwrap();
+
+                let message = b"Hey, Eve. I'm Alice. Do you copy?".to_vec();
+                let res = alice
+                    .send(message.clone(), &Identity::from("eve"), &session_id)
                     .await;
                 assert!(res.is_err());
             });
@@ -290,27 +396,96 @@ mod tests {
 
         // Receive from a wrong party
         {
-            let players = players.clone();
+            let alice = players[0].clone();
             jobs.spawn(async move {
                 let session_id = SessionId::from(3);
-                let res = players[0]
-                    .receive(&Identity::from("Eve"), &session_id)
+                alice.create_session(session_id).await.unwrap();
+
+                let res = alice.receive(&Identity::from("eve"), &session_id).await;
+                assert!(res.is_err());
+            });
+        }
+
+        // Send to itself
+        {
+            let alice = players[0].clone();
+            jobs.spawn(async move {
+                let session_id = SessionId::from(4);
+                alice.create_session(session_id).await.unwrap();
+
+                let message = b"Hey, Alice. I'm Alice. Do you copy?".to_vec();
+                let res = alice
+                    .send(message.clone(), &Identity::from("alice"), &session_id)
                     .await;
                 assert!(res.is_err());
             });
         }
 
-        // Receive from a party that hasn't sent anything
+        // Add the same session
         {
-            let players = players.clone();
-            let parties = parties.clone();
+            let alice = players[0].clone();
             jobs.spawn(async move {
                 let session_id = SessionId::from(4);
-                let res = players[0].receive(&parties[1], &session_id).await;
+
+                // Delay to ensure that the session is created in the previous example
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let res = alice.create_session(session_id).await;
+
+                assert!(res.is_err());
+            });
+        }
+
+        // Retrieve from a non-existing session
+        {
+            let alice = players[0].clone();
+            jobs.spawn(async move {
+                let session_id = SessionId::from(50);
+
+                let message = b"Hey, Bob. I'm Alice. Do you copy?".to_vec();
+                let res = alice
+                    .send(message.clone(), &Identity::from("bob"), &session_id)
+                    .await;
+                assert!(res.is_err());
+                let res = alice.receive(&Identity::from("bob"), &session_id).await;
                 assert!(res.is_err());
             });
         }
 
         jobs.join_all().await;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_hnsw_local() {
+        let mut rng = AesRng::seed_from_u64(0_u64);
+        let database_size = 2;
+        let searcher = HawkSearcher::default();
+        let mut vectors_and_graphs = LocalNetAby3NgStoreProtocol::shared_random_setup(
+            &mut rng,
+            database_size,
+            crate::network::NetworkType::GrpcChannel,
+        )
+        .await
+        .unwrap();
+
+        for i in 0..database_size {
+            let mut jobs = JoinSet::new();
+            for (store, graph) in vectors_and_graphs.iter_mut() {
+                let mut store = store.clone();
+                let mut graph = graph.clone();
+                let searcher = searcher.clone();
+                jobs.spawn(async move {
+                    let secret_neighbors = searcher
+                        .search_to_insert(&mut store, &mut graph, &i.into())
+                        .await;
+                    searcher.is_match(&mut store, &secret_neighbors).await
+                });
+            }
+            let res = jobs.join_all().await;
+            for (party_index, r) in res.iter().enumerate() {
+                assert!(r, "Failed at index {:?} by party {:?}", i, party_index);
+            }
+        }
     }
 }
