@@ -102,7 +102,7 @@ impl DeviceManager {
         events
     }
 
-    pub fn destroy_events(&self, events: &[CUevent]) {
+    pub fn destroy_events(&self, events: Vec<CUevent>) {
         for event in events {
             unsafe { event::destroy(event).unwrap() };
         }
