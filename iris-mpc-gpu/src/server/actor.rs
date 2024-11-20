@@ -1204,6 +1204,11 @@ impl ServerActor {
 
             // ---- END PHASE 2 ----
 
+            // Destroy events
+            self.device_manager.destroy_events(current_dot_event);
+            self.device_manager.destroy_events(current_exchange_event);
+            self.device_manager.destroy_events(current_phase2_event);
+
             // Update events for synchronization
             current_dot_event = next_dot_event;
             current_exchange_event = next_exchange_event;
