@@ -104,7 +104,7 @@ In this example we start a reshare process where parties 0 and 1 are the senders
 
 ### Bring up some DBs and seed them
 
-Here, the seed-v2-dbs binary just creates fully replicated DB for 3 parties, in DBs with ports 6200,6201,6202. Additionally, there is also another DB at 6204, which we will use as a target for the reshare protocol to fill into.
+Here, the seed-v2-dbs binary just creates fully replicated DB for 3 parties, in DBs with ports 6200,6201,6202. Additionally, there is also another DB at 6203, which we will use as a target for the reshare protocol to fill into.
 
 ```bash
 docker-compose up -d
