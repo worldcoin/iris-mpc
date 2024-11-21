@@ -291,27 +291,6 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         Ok(())
     }
 
-    async fn set_sequence_id(
-        &self,
-        id: usize,
-        executor: impl sqlx::Executor<'_, Database = Postgres>,
-    ) -> Result<()> {
-        if id == 0 {
-            // If requested id is 0 (only used in tests), reset the sequence to 1 with
-            // advance_nextval set to false. This is because serial id starts from 1.
-            sqlx::query("SELECT setval(pg_get_serial_sequence('irises', 'id'), 1, false)")
-                .execute(executor)
-                .await?;
-        } else {
-            sqlx::query("SELECT setval(pg_get_serial_sequence('irises', 'id'), $1, true)")
-                .bind(id as i64)
-                .execute(executor)
-                .await?;
-        }
-
-        Ok(())
-    }
-
     pub async fn rollback(&self, db_len: usize) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
@@ -634,7 +613,7 @@ mod tests {
         let mut irises = vec![];
         for i in 0..10 {
             let iris = StoredIrisRef {
-                id:         (i + 1) as i64,
+                id:         (i + 1) as usize,
                 left_code:  &[123_u16; 12800],
                 left_mask:  &[456_u16; 12800],
                 right_code: &[789_u16; 12800],
@@ -824,10 +803,10 @@ mod tests {
         assert_eq!(cast_u8_to_u16(&got[0].right_mask), updated_right_mask.coefs);
 
         // assert the other iris in db is not updated
-        assert_eq!(cast_u8_to_u16(&got[1].left_code), iris.left_code);
-        assert_eq!(cast_u8_to_u16(&got[1].left_mask), iris.left_mask);
-        assert_eq!(cast_u8_to_u16(&got[1].right_code), iris.right_code);
-        assert_eq!(cast_u8_to_u16(&got[1].right_mask), iris.right_mask);
+        assert_eq!(cast_u8_to_u16(&got[1].left_code), iris2.left_code);
+        assert_eq!(cast_u8_to_u16(&got[1].left_mask), iris2.left_mask);
+        assert_eq!(cast_u8_to_u16(&got[1].right_code), iris2.right_code);
+        assert_eq!(cast_u8_to_u16(&got[1].right_mask), iris2.right_mask);
 
         cleanup(&store, &schema_name).await?;
         Ok(())
