@@ -191,9 +191,10 @@ impl Store {
             return Ok(vec![]);
         }
         let mut query = sqlx::QueryBuilder::new(
-            "INSERT INTO irises (left_code, left_mask, right_code, right_mask)",
+            "INSERT INTO irises (id, left_code, left_mask, right_code, right_mask)",
         );
         query.push_values(codes_and_masks, |mut query, iris| {
+            query.push_bind(iris.id as i64);
             query.push_bind(cast_slice::<u16, u8>(iris.left_code));
             query.push_bind(cast_slice::<u16, u8>(iris.left_mask));
             query.push_bind(cast_slice::<u16, u8>(iris.right_code));
