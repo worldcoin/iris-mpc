@@ -406,7 +406,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
             // inserting shares and masks in the db. Reusing the same share and mask for
             // left and right
             self.insert_irises(&mut tx, &[StoredIrisRef {
-                id:         (i + 1) as usize,
+                id:         i + 1,
                 left_code:  &share.coefs,
                 left_mask:  &mask.coefs,
                 right_code: &share.coefs,
