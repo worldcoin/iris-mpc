@@ -15,8 +15,6 @@ initContainer:
   env:
     - name: PARTY_ID
       value: "2"
-    - name: SIDE
-      value: right
     - name: MY_POD_IP
       valueFrom:
         fieldRef:
@@ -36,7 +34,7 @@ initContainer:
           {
             "Action": "UPSERT",
             "ResourceRecordSet": {
-              "Name": "reshare-$SIDE.$PARTY_ID.stage.smpcv2.worldcoin.dev",
+              "Name": "reshare-server.$PARTY_ID.stage.smpcv2.worldcoin.dev",
               "TTL": 5,
               "Type": "A",
               "ResourceRecords": [{
