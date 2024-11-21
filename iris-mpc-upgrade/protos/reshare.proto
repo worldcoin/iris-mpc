@@ -16,6 +16,7 @@ message IrisCodeReShareRequest {
     int64 IdRangeStartInclusive = 4;
     int64 IdRangeEndNonInclusive = 5;
     repeated IrisCodeReShare IrisCodeReShares = 6;
+    bytes ClientCorrelationSanityCheck = 7;
 }
 
 message IrisCodeReShareResponse {

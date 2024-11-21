@@ -660,33 +660,19 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Size of the database after init: {}", store_len);
 
     // Check if the sequence id is consistent with the number of irises
-    let iris_sequence_id = store.get_irises_sequence_id().await?;
-    if iris_sequence_id != store_len {
-        tracing::warn!(
-            "Detected inconsistent iris sequence id {} != {}, resetting...",
-            iris_sequence_id,
+    let max_serial_id = store.get_max_serial_id().await?;
+    if max_serial_id != store_len {
+        tracing::error!(
+            "Detected inconsistency between max serial id {} and db size {}.",
+            max_serial_id,
             store_len
         );
 
-        // Reset the sequence id
-        store.set_irises_sequence_id(store_len).await?;
-
-        // Fetch again and check that the sequence id is consistent now
-        let store_len = store.count_irises().await?;
-        let iris_sequence_id = store.get_irises_sequence_id().await?;
-
-        if iris_sequence_id != store_len {
-            tracing::error!(
-                "Iris sequence id is still inconsistent: {} != {}",
-                iris_sequence_id,
-                store_len
-            );
-            eyre::bail!(
-                "Iris sequence id is still inconsistent: {} != {}",
-                iris_sequence_id,
-                store_len
-            );
-        }
+        eyre::bail!(
+            "Detected inconsistency between max serial id {} and db size {}.",
+            max_serial_id,
+            store_len
+        );
     }
 
     if store_len > config.max_db_size {
@@ -728,6 +714,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 return Ok(());
             }
         };
+        tracing::info!("Database store length is: {}", store_len);
 
         if let Some(db_len) = sync_result.must_rollback_storage() {
             tracing::error!("Databases are out-of-sync: {:?}", sync_result);
@@ -738,8 +725,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     db_len,
                 ));
             }
+            tracing::warn!(
+                "Rolling back from database length {} to other nodes length {}",
+                store_len,
+                db_len
+            );
             tokio::runtime::Handle::current().block_on(async { store.rollback(db_len).await })?;
-            tracing::error!("Rolled back to db_len={}", db_len);
+            metrics::counter!("db.sync.rollback").increment(1);
         }
 
         tracing::info!("Starting server actor");
@@ -794,6 +786,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             );
                             record_counter += 1;
                         }
+
+                        assert_eq!(
+                            record_counter, store_len,
+                            "Loaded record count does not match db size"
+                        );
 
                         tracing::info!("Preprocessing db");
                         actor.preprocess_db();
@@ -852,6 +849,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             store_left,
             store_right,
             deleted_ids,
+            matched_batch_request_ids,
         }) = rx.recv().await
         {
             // returned serial_ids are 0 indexed, but we want them to be 1 indexed
@@ -889,6 +887,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             ),
                             true => None,
                         },
+                        Some(matched_batch_request_ids[i].clone()),
                     );
 
                     serde_json::to_string(&result_event).wrap_err("failed to serialize result")
@@ -896,7 +895,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .collect::<eyre::Result<Vec<_>>>()?;
 
             // Insert non-matching queries into the persistent store.
-            let (memory_serial_ids, codes_and_masks): (Vec<u32>, Vec<StoredIrisRef>) = matches
+            let (memory_serial_ids, codes_and_masks): (Vec<i64>, Vec<StoredIrisRef>) = matches
                 .iter()
                 .enumerate()
                 .filter_map(
@@ -904,8 +903,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     |(query_idx, is_match)| if !is_match { Some(query_idx) } else { None },
                 )
                 .map(|query_idx| {
+                    let serial_id = (merged_results[query_idx] + 1) as i64;
                     // Get the original vectors from `receive_batch`.
-                    (merged_results[query_idx] + 1, StoredIrisRef {
+                    (serial_id, StoredIrisRef {
+                        id:         serial_id,
                         left_code:  &store_left.code[query_idx].coefs[..],
                         left_mask:  &store_left.mask[query_idx].coefs[..],
                         right_code: &store_right.code[query_idx].coefs[..],
@@ -921,13 +922,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .await?;
 
             if !codes_and_masks.is_empty() && !config_bg.disable_persistence {
-                let db_serial_ids = store_bg
-                    .insert_irises(&mut tx, &codes_and_masks)
-                    .await
-                    .wrap_err("failed to persist queries")?
-                    .iter()
-                    .map(|&x| x as u32)
-                    .collect::<Vec<_>>();
+                let db_serial_ids = store_bg.insert_irises(&mut tx, &codes_and_masks).await?;
 
                 // Check if the serial_ids match between memory and db.
                 if memory_serial_ids != db_serial_ids {

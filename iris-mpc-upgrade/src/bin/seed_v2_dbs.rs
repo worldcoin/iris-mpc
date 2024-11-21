@@ -2,7 +2,7 @@ use clap::Parser;
 use iris_mpc_common::{
     galois_engine::degree4::FullGaloisRingIrisCodeShare, iris_db::iris::IrisCode,
 };
-use iris_mpc_store::{Store, StoredIrisRefWithId};
+use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::Itertools;
 use rand::thread_rng;
 use std::cmp::min;
@@ -91,7 +91,7 @@ async fn main() -> eyre::Result<()> {
         let party1_insert = party1
             .iter()
             .zip(range_chunk.iter())
-            .map(|((left, right), id)| StoredIrisRefWithId {
+            .map(|((left, right), id)| StoredIrisRef {
                 id:         *id as i64,
                 left_code:  &left.code.coefs,
                 left_mask:  &left.mask.coefs,
@@ -101,13 +101,15 @@ async fn main() -> eyre::Result<()> {
             .collect_vec();
 
         let mut tx = store1.tx().await?;
-        store1.insert_irises_at_id(&mut tx, &party1_insert).await?;
+        store1
+            .insert_irises_overriding(&mut tx, &party1_insert)
+            .await?;
         tx.commit().await?;
 
         let party2_insert = party2
             .iter()
             .zip(range_chunk.iter())
-            .map(|((left, right), id)| StoredIrisRefWithId {
+            .map(|((left, right), id)| StoredIrisRef {
                 id:         *id as i64,
                 left_code:  &left.code.coefs,
                 left_mask:  &left.mask.coefs,
@@ -116,13 +118,15 @@ async fn main() -> eyre::Result<()> {
             })
             .collect_vec();
         let mut tx = store2.tx().await?;
-        store2.insert_irises_at_id(&mut tx, &party2_insert).await?;
+        store2
+            .insert_irises_overriding(&mut tx, &party2_insert)
+            .await?;
         tx.commit().await?;
 
         let party3_insert = party3
             .iter()
             .zip(range_chunk.iter())
-            .map(|((left, right), id)| StoredIrisRefWithId {
+            .map(|((left, right), id)| StoredIrisRef {
                 id:         *id as i64,
                 left_code:  &left.code.coefs,
                 left_mask:  &left.mask.coefs,
@@ -131,7 +135,9 @@ async fn main() -> eyre::Result<()> {
             })
             .collect_vec();
         let mut tx = store3.tx().await?;
-        store3.insert_irises_at_id(&mut tx, &party3_insert).await?;
+        store3
+            .insert_irises_overriding(&mut tx, &party3_insert)
+            .await?;
         tx.commit().await?;
     }
 

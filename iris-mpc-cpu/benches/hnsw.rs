@@ -89,8 +89,7 @@ fn bench_hnsw_primitives(c: &mut Criterion) {
             let t1 = create_random_sharing(&mut rng, 10_u16);
             let t2 = create_random_sharing(&mut rng, 10_u16);
 
-            let runtime = LocalRuntime::replicated_test_config();
-            let ready_sessions = runtime.create_player_sessions().await.unwrap();
+            let runtime = LocalRuntime::replicated_test_config().await.unwrap();
 
             let mut jobs = JoinSet::new();
             for (index, player) in runtime.identities.iter().enumerate() {
@@ -98,7 +97,7 @@ fn bench_hnsw_primitives(c: &mut Criterion) {
                 let d2i = d2[index].clone();
                 let t1i = t1[index].clone();
                 let t2i = t2[index].clone();
-                let mut player_session = ready_sessions.get(player).unwrap().clone();
+                let mut player_session = runtime.sessions.get(player).unwrap().clone();
                 jobs.spawn(async move {
                     cross_compare(&mut player_session, d1i, t1i, d2i, t2i)
                         .await
@@ -117,8 +116,7 @@ fn bench_gr_primitives(c: &mut Criterion) {
             .build()
             .unwrap();
         b.to_async(&rt).iter(|| async move {
-            let runtime = LocalRuntime::replicated_test_config();
-            let ready_sessions = runtime.create_player_sessions().await.unwrap();
+            let runtime = LocalRuntime::replicated_test_config().await.unwrap();
             let mut rng = AesRng::seed_from_u64(0);
             let iris_db = IrisDB::new_random_rng(4, &mut rng).db;
 
@@ -135,7 +133,7 @@ fn bench_gr_primitives(c: &mut Criterion) {
                 let x2 = x2[index].clone();
                 let mut y2 = y2[index].clone();
 
-                let mut player_session = ready_sessions.get(player).unwrap().clone();
+                let mut player_session = runtime.sessions.get(player).unwrap().clone();
                 jobs.spawn(async move {
                     y1.code.preprocess_iris_code_query_share();
                     y1.mask.preprocess_mask_code_query_share();
@@ -186,25 +184,39 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
             |b| {
                 b.to_async(&rt).iter_batched(
                     || secret_searcher.clone(),
-                    |(mut db_vectors, mut db_graph)| async move {
+                    |vectors_graphs| async move {
                         let searcher = HawkSearcher::default();
                         let mut rng = AesRng::seed_from_u64(0_u64);
                         let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
                         let raw_query = generate_galois_iris_shares(&mut rng, on_the_fly_query);
 
-                        let query = db_vectors.prepare_query(raw_query);
-                        let neighbors = searcher
-                            .search_to_insert(&mut db_vectors, &mut db_graph, &query)
-                            .await;
-                        searcher
-                            .insert_from_search_results(
-                                &mut db_vectors,
-                                &mut db_graph,
-                                &mut rng,
-                                query,
-                                neighbors,
-                            )
-                            .await;
+                        let mut jobs = JoinSet::new();
+
+                        for (vector_store, graph_store) in vectors_graphs.into_iter() {
+                            let mut vector_store = vector_store;
+                            let mut graph_store = graph_store;
+
+                            let player_index = vector_store.get_owner_index();
+                            let query = vector_store.prepare_query(raw_query[player_index].clone());
+                            let searcher = searcher.clone();
+                            let mut rng = rng.clone();
+                            jobs.spawn(async move {
+                                let neighbors = searcher
+                                    .search_to_insert(&mut vector_store, &mut graph_store, &query)
+                                    .await;
+                                searcher
+                                    .insert_from_search_results(
+                                        &mut vector_store,
+                                        &mut graph_store,
+                                        &mut rng,
+                                        query,
+                                        neighbors,
+                                    )
+                                    .await;
+                            });
+                        }
+
+                        jobs.join_all().await;
                     },
                     criterion::BatchSize::SmallInput,
                 )
@@ -216,17 +228,27 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
             |b| {
                 b.to_async(&rt).iter_batched(
                     || secret_searcher.clone(),
-                    |(mut db_vectors, mut db_graph)| async move {
+                    |vectors_graphs| async move {
                         let searcher = HawkSearcher::default();
                         let mut rng = AesRng::seed_from_u64(0_u64);
                         let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
                         let raw_query = generate_galois_iris_shares(&mut rng, on_the_fly_query);
 
-                        let query = db_vectors.prepare_query(raw_query);
-                        let neighbors = searcher
-                            .search_to_insert(&mut db_vectors, &mut db_graph, &query)
-                            .await;
-                        searcher.is_match(&mut db_vectors, &neighbors).await;
+                        let mut jobs = JoinSet::new();
+                        for (vector_store, graph_store) in vectors_graphs.into_iter() {
+                            let mut vector_store = vector_store;
+                            let mut graph_store = graph_store;
+                            let player_index = vector_store.get_owner_index();
+                            let query = vector_store.prepare_query(raw_query[player_index].clone());
+                            let searcher = searcher.clone();
+                            jobs.spawn(async move {
+                                let neighbors = searcher
+                                    .search_to_insert(&mut vector_store, &mut graph_store, &query)
+                                    .await;
+                                searcher.is_match(&mut vector_store, &neighbors).await;
+                            });
+                        }
+                        jobs.join_all().await;
                     },
                     criterion::BatchSize::SmallInput,
                 )

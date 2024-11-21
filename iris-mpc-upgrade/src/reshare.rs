@@ -16,7 +16,7 @@ use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
-use iris_mpc_store::{Store, StoredIrisRefWithId};
+use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::{izip, Itertools};
 use rand::{CryptoRng, Rng, SeedableRng};
 use sha2::{Digest, Sha256};
@@ -130,13 +130,20 @@ impl IrisCodeReshareSenderHelper {
             self.current_packet.is_none(),
             "We expected no batch to be currently being built, but it is..."
         );
+        let mut digest = Sha256::new();
+        digest.update(self.common_seed);
+        digest.update(start_db_index.to_le_bytes());
+        digest.update(end_db_index.to_le_bytes());
+        digest.update(b"ReShareSanityCheck");
+
         self.current_packet = Some(IrisCodeReShareRequest {
-            sender_id:                  self.my_party_id as u64,
-            other_id:                   self.other_party_id as u64,
-            receiver_id:                self.target_party_id as u64,
-            id_range_start_inclusive:   start_db_index,
+            sender_id: self.my_party_id as u64,
+            other_id: self.other_party_id as u64,
+            receiver_id: self.target_party_id as u64,
+            id_range_start_inclusive: start_db_index,
             id_range_end_non_inclusive: end_db_index,
-            iris_code_re_shares:        Vec::new(),
+            iris_code_re_shares: Vec::new(),
+            client_correlation_sanity_check: digest.finalize().as_slice().to_vec(),
         });
     }
 
@@ -359,6 +366,14 @@ impl IrisCodeReshareReceiverHelper {
                 ),
             });
         }
+
+        if request1.client_correlation_sanity_check != request2.client_correlation_sanity_check {
+            return Err(IrisCodeReShareError::InvalidRequest {
+                reason: "Received requests with different correlation sanity checks, recheck the \
+                         used Keys for common secret derivation"
+                    .to_string(),
+            });
+        }
         Ok(())
     }
 
@@ -563,7 +578,7 @@ impl RecombinedIrisCodeBatch {
         .enumerate()
         .map(|(idx, (left_iris, left_mask, right_iris, right_mask))| {
             let id = self.range_start_inclusive + idx as i64;
-            StoredIrisRefWithId {
+            StoredIrisRef {
                 id,
                 left_code: &left_iris.coefs,
                 left_mask: &left_mask.coefs,
@@ -573,7 +588,9 @@ impl RecombinedIrisCodeBatch {
         })
         .collect::<Vec<_>>();
         let mut tx = store.tx().await?;
-        store.insert_irises_at_id(&mut tx, &to_be_inserted).await?;
+        store
+            .insert_irises_overriding(&mut tx, &to_be_inserted)
+            .await?;
         tx.commit().await?;
         Ok(())
     }
