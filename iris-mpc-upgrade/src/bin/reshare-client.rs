@@ -32,7 +32,7 @@ async fn derive_common_seed(config: &ReShareClientConfig) -> eyre::Result<[u8; 3
 
     let hk = Hkdf::<Sha256>::new(
         // sesstion id is used as salt
-        Some(&config.reshare_run_session_id.as_bytes()),
+        Some(config.reshare_run_session_id.as_bytes()),
         &shared_secret,
     );
     let mut common_seed = [0u8; 32];
