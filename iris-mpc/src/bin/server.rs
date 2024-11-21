@@ -889,7 +889,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .collect::<eyre::Result<Vec<_>>>()?;
 
             // Insert non-matching queries into the persistent store.
-            let (memory_serial_ids, codes_and_masks): (Vec<usize>, Vec<StoredIrisRef>) = matches
+            let (memory_serial_ids, codes_and_masks): (Vec<i64>, Vec<StoredIrisRef>) = matches
                 .iter()
                 .enumerate()
                 .filter_map(
@@ -897,7 +897,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     |(query_idx, is_match)| if !is_match { Some(query_idx) } else { None },
                 )
                 .map(|query_idx| {
-                    let serial_id = (merged_results[query_idx] + 1) as usize;
+                    let serial_id = (merged_results[query_idx] + 1) as i64;
                     // Get the original vectors from `receive_batch`.
                     (serial_id, StoredIrisRef {
                         id:         serial_id,
@@ -916,13 +916,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .await?;
 
             if !codes_and_masks.is_empty() && !config_bg.disable_persistence {
-                let db_serial_ids = store_bg
-                    .insert_irises(&mut tx, &codes_and_masks)
-                    .await
-                    .wrap_err("failed to persist queries")?
-                    .iter()
-                    .map(|&x| x as usize)
-                    .collect::<Vec<_>>();
+                let db_serial_ids = store_bg.insert_irises(&mut tx, &codes_and_masks).await?;
 
                 // Check if the serial_ids match between memory and db.
                 if memory_serial_ids != db_serial_ids {

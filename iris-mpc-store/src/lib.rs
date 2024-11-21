@@ -69,7 +69,7 @@ impl StoredIris {
 
 #[derive(Clone)]
 pub struct StoredIrisRef<'a> {
-    pub id:         usize,
+    pub id:         i64,
     pub left_code:  &'a [u16],
     pub left_mask:  &'a [u16],
     pub right_code: &'a [u16],
@@ -407,7 +407,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
             // inserting shares and masks in the db. Reusing the same share and mask for
             // left and right
             self.insert_irises(&mut tx, &[StoredIrisRef {
-                id:         i + 1,
+                id:         (i + 1) as i64,
                 left_code:  &share.coefs,
                 left_mask:  &mask.coefs,
                 right_code: &share.coefs,
@@ -537,7 +537,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_many() -> Result<()> {
-        let count = 1 << 3;
+        let count: usize = 1 << 3;
 
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
@@ -546,7 +546,7 @@ mod tests {
 
         for i in 0..count {
             let iris = StoredIrisRef {
-                id:         i + 1,
+                id:         (i + 1) as i64,
                 left_code:  &[123_u16; 12800],
                 left_mask:  &[456_u16; 12800],
                 right_code: &[789_u16; 12800],
@@ -618,7 +618,7 @@ mod tests {
         let mut irises = vec![];
         for i in 0..10 {
             let iris = StoredIrisRef {
-                id:         (i + 1) as usize,
+                id:         (i + 1) as i64,
                 left_code:  &[123_u16; 12800],
                 left_mask:  &[456_u16; 12800],
                 right_code: &[789_u16; 12800],
