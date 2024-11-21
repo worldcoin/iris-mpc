@@ -69,6 +69,7 @@ impl StoredIris {
 
 #[derive(Clone)]
 pub struct StoredIrisRef<'a> {
+    pub id:         usize,
     pub left_code:  &'a [u16],
     pub left_mask:  &'a [u16],
     pub right_code: &'a [u16],
@@ -319,18 +320,12 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
             .execute(&mut *tx)
             .await?;
 
-        self.set_sequence_id(db_len, &mut *tx).await?;
-
         tx.commit().await?;
         Ok(())
     }
 
-    pub async fn set_irises_sequence_id(&self, id: usize) -> Result<()> {
-        self.set_sequence_id(id, &self.pool).await
-    }
-
-    pub async fn get_irises_sequence_id(&self) -> Result<usize> {
-        let id: (i64,) = sqlx::query_as("SELECT last_value FROM irises_id_seq")
+    pub async fn get_max_serial_id(&self) -> Result<usize> {
+        let id: (i64,) = sqlx::query_as("SELECT MAX(id) FROM irises")
             .fetch_one(&self.pool)
             .await?;
         Ok(id.0 as usize)
@@ -350,16 +345,6 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         });
 
         query.build().execute(tx.deref_mut()).await?;
-        Ok(())
-    }
-
-    pub async fn update_iris_id_sequence(&self) -> Result<()> {
-        sqlx::query(
-            "SELECT setval(pg_get_serial_sequence('irises', 'id'), COALESCE(MAX(id), 0), true) \
-             FROM irises",
-        )
-        .execute(&self.pool)
-        .await?;
         Ok(())
     }
 
@@ -442,6 +427,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
             // inserting shares and masks in the db. Reusing the same share and mask for
             // left and right
             self.insert_irises(&mut tx, &[StoredIrisRef {
+                id:         (i + 1) as usize,
                 left_code:  &share.coefs,
                 left_mask:  &mask.coefs,
                 right_code: &share.coefs,
@@ -505,18 +491,21 @@ mod tests {
 
         let codes_and_masks = &[
             StoredIrisRef {
+                id:         1,
                 left_code:  &[1, 2, 3, 4],
                 left_mask:  &[5, 6, 7, 8],
                 right_code: &[9, 10, 11, 12],
                 right_mask: &[13, 14, 15, 16],
             },
             StoredIrisRef {
+                id:         2,
                 left_code:  &[1117, 18, 19, 20],
                 left_mask:  &[21, 1122, 23, 24],
                 right_code: &[25, 26, 1127, 28],
                 right_mask: &[29, 30, 31, 1132],
             },
             StoredIrisRef {
+                id:         3,
                 left_code:  &[17, 18, 19, 20],
                 left_mask:  &[21, 22, 23, 24],
                 // Empty is allowed until stereo is implemented.
@@ -574,6 +563,7 @@ mod tests {
         let store = Store::new(&test_db_url()?, &schema_name).await?;
 
         let iris = StoredIrisRef {
+            id:         1,
             left_code:  &[123_u16; 12800],
             left_mask:  &[456_u16; 12800],
             right_code: &[789_u16; 12800],
@@ -641,15 +631,20 @@ mod tests {
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
 
-        let iris = StoredIrisRef {
-            left_code:  &[123_u16; 12800],
-            left_mask:  &[456_u16; 12800],
-            right_code: &[789_u16; 12800],
-            right_mask: &[101_u16; 12800],
-        };
+        let mut irises = vec![];
+        for i in 0..10 {
+            let iris = StoredIrisRef {
+                id:         (i + 1) as i64,
+                left_code:  &[123_u16; 12800],
+                left_mask:  &[456_u16; 12800],
+                right_code: &[789_u16; 12800],
+                right_mask: &[101_u16; 12800],
+            };
+            irises.push(iris);
+        }
 
         let mut tx = store.tx().await?;
-        store.insert_irises(&mut tx, &vec![iris; 10]).await?;
+        store.insert_irises(&mut tx, &irises).await?;
         tx.commit().await?;
         store.rollback(5).await?;
 
@@ -779,31 +774,35 @@ mod tests {
         let store = Store::new(&test_db_url()?, &schema_name).await?;
 
         // insert two irises into db
-        let iris = StoredIrisRef {
+        let iris1 = StoredIrisRef {
+            id:         1,
             left_code:  &[123_u16; 12800],
             left_mask:  &[456_u16; 6400],
             right_code: &[789_u16; 12800],
             right_mask: &[101_u16; 6400],
         };
+        let mut iris2 = iris1.clone();
+        iris2.id = 2;
+
         let mut tx = store.tx().await?;
-        store.insert_irises(&mut tx, &vec![iris.clone(); 2]).await?;
+        store.insert_irises(&mut tx, &vec![iris1, iris2]).await?;
         tx.commit().await?;
 
         // update iris with id 1 in db
         let updated_left_code = GaloisRingIrisCodeShare {
-            id:    0,
+            id:    1,
             coefs: [666_u16; 12800],
         };
         let updated_left_mask = GaloisRingTrimmedMaskCodeShare {
-            id:    0,
+            id:    1,
             coefs: [777_u16; 6400],
         };
         let updated_right_code = GaloisRingIrisCodeShare {
-            id:    0,
+            id:    1,
             coefs: [888_u16; 12800],
         };
         let updated_right_mask = GaloisRingTrimmedMaskCodeShare {
-            id:    0,
+            id:    1,
             coefs: [999_u16; 6400],
         };
         store

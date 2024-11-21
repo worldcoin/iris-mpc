@@ -42,8 +42,6 @@ pub trait NewIrisShareSink {
         code_share: &[u16; IRIS_CODE_LENGTH],
         mask_share: &[u16; MASK_CODE_LENGTH],
     ) -> Result<()>;
-
-    async fn update_iris_id_sequence(&self) -> Result<()>;
 }
 
 #[derive(Debug, Clone)]
@@ -81,10 +79,6 @@ impl NewIrisShareSink for IrisShareTestFileSink {
             writeln!(file, "{}", s)?;
         }
         file.flush()?;
-        Ok(())
-    }
-
-    async fn update_iris_id_sequence(&self) -> Result<()> {
         Ok(())
     }
 }
