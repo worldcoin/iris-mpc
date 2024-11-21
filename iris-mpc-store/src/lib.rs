@@ -542,14 +542,18 @@ mod tests {
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
 
-        let iris = StoredIrisRef {
-            id:         1,
-            left_code:  &[123_u16; 12800],
-            left_mask:  &[456_u16; 12800],
-            right_code: &[789_u16; 12800],
-            right_mask: &[101_u16; 12800],
-        };
-        let codes_and_masks = vec![iris; count];
+        let mut codes_and_masks = vec![];
+
+        for i in 0..count {
+            let iris = StoredIrisRef {
+                id:         i + 1,
+                left_code:  &[123_u16; 12800],
+                left_mask:  &[456_u16; 12800],
+                right_code: &[789_u16; 12800],
+                right_mask: &[101_u16; 12800],
+            };
+            codes_and_masks.push(iris);
+        }
 
         let result_event = serde_json::to_string(&UniquenessResult::new(
             0,
