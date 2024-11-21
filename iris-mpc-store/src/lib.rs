@@ -764,7 +764,9 @@ mod tests {
         iris2.id = 2;
 
         let mut tx = store.tx().await?;
-        store.insert_irises(&mut tx, &vec![iris1, iris2]).await?;
+        store
+            .insert_irises(&mut tx, &vec![iris1, iris2.clone()])
+            .await?;
         tx.commit().await?;
 
         // update iris with id 1 in db
