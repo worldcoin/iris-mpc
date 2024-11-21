@@ -32,7 +32,8 @@ async fn derive_common_seed(config: &ReShareClientConfig) -> eyre::Result<[u8; 3
     let mut common_seed = [0u8; 32];
     // expand the common seed bound to the context "ReShare-Protocol-Client"
     hk.expand(b"ReShare-Protocol-Client", &mut common_seed)
-        .unwrap();
+        .map_err(|e| eyre::eyre!("error during HKDF expansion: {}", e))?;
+    tracing::error!("derived common: {:?}", common_seed);
     Ok(common_seed)
 }
 
