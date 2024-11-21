@@ -5,8 +5,6 @@ args:
   - "$(SMPC__DATABASE__URL)"
   - "--party-id"
   - "1"
-  - "--eye"
-  - "left"
   - "--environment"
   - "$(ENVIRONMENT)"
 
