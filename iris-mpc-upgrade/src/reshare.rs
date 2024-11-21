@@ -16,7 +16,7 @@ use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
-use iris_mpc_store::{Store, StoredIrisRefWithId};
+use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::{izip, Itertools};
 use rand::{CryptoRng, Rng, SeedableRng};
 use sha2::{Digest, Sha256};
@@ -578,7 +578,7 @@ impl RecombinedIrisCodeBatch {
         .enumerate()
         .map(|(idx, (left_iris, left_mask, right_iris, right_mask))| {
             let id = self.range_start_inclusive + idx as i64;
-            StoredIrisRefWithId {
+            StoredIrisRef {
                 id,
                 left_code: &left_iris.coefs,
                 left_mask: &left_mask.coefs,
@@ -588,7 +588,9 @@ impl RecombinedIrisCodeBatch {
         })
         .collect::<Vec<_>>();
         let mut tx = store.tx().await?;
-        store.insert_irises_at_id(&mut tx, &to_be_inserted).await?;
+        store
+            .insert_irises_overriding(&mut tx, &to_be_inserted)
+            .await?;
         tx.commit().await?;
         Ok(())
     }

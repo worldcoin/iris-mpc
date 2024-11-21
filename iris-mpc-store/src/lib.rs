@@ -76,15 +76,6 @@ pub struct StoredIrisRef<'a> {
     pub right_mask: &'a [u16],
 }
 
-#[derive(Clone)]
-pub struct StoredIrisRefWithId<'a> {
-    pub id:         i64,
-    pub left_code:  &'a [u16],
-    pub left_mask:  &'a [u16],
-    pub right_code: &'a [u16],
-    pub right_mask: &'a [u16],
-}
-
 #[derive(sqlx::FromRow, Debug, Default)]
 struct StoredState {
     request_id: String,
@@ -223,10 +214,10 @@ impl Store {
         Ok(ids)
     }
 
-    pub async fn insert_irises_at_id(
+    pub async fn insert_irises_overriding(
         &self,
         tx: &mut Transaction<'_, Postgres>,
-        codes_and_masks: &[StoredIrisRefWithId<'_>],
+        codes_and_masks: &[StoredIrisRef<'_>],
     ) -> Result<()> {
         if codes_and_masks.is_empty() {
             return Ok(());
