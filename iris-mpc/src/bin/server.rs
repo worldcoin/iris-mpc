@@ -731,6 +731,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 return Ok(());
             }
         };
+        tracing::info!("Database store length is: {}", store_len);
 
         if let Some(db_len) = sync_result.must_rollback_storage() {
             tracing::error!("Databases are out-of-sync: {:?}", sync_result);
@@ -741,8 +742,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     db_len,
                 ));
             }
+            tracing::warn!(
+                "Rolling back from database length {} to other nodes length {}",
+                store_len,
+                db_len
+            );
             tokio::runtime::Handle::current().block_on(async { store.rollback(db_len).await })?;
-            tracing::error!("Rolled back to db_len={}", db_len);
+            metrics::counter!("db.sync.rollback").increment(1);
         }
 
         tracing::info!("Starting server actor");
