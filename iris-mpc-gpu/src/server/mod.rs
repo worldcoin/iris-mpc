@@ -166,16 +166,17 @@ pub struct ServerJob {
 
 #[derive(Debug, Clone)]
 pub struct ServerJobResult {
-    pub merged_results:          Vec<u32>,
-    pub request_ids:             Vec<String>,
-    pub metadata:                Vec<BatchMetadata>,
-    pub matches:                 Vec<bool>,
-    pub match_ids:               Vec<Vec<u32>>,
-    pub partial_match_ids_left:  Vec<Vec<u32>>,
-    pub partial_match_ids_right: Vec<Vec<u32>>,
-    pub store_left:              BatchQueryEntries,
-    pub store_right:             BatchQueryEntries,
-    pub deleted_ids:             Vec<u32>,
+    pub merged_results:            Vec<u32>,
+    pub request_ids:               Vec<String>,
+    pub metadata:                  Vec<BatchMetadata>,
+    pub matches:                   Vec<bool>,
+    pub match_ids:                 Vec<Vec<u32>>,
+    pub partial_match_ids_left:    Vec<Vec<u32>>,
+    pub partial_match_ids_right:   Vec<Vec<u32>>,
+    pub store_left:                BatchQueryEntries,
+    pub store_right:               BatchQueryEntries,
+    pub deleted_ids:               Vec<u32>,
+    pub matched_batch_request_ids: Vec<Vec<String>>,
 }
 
 enum Eye {

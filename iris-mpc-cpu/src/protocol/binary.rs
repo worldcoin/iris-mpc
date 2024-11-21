@@ -29,7 +29,7 @@ pub(crate) fn a2b_pre<T: IntRing2k>(
     let mut x2 = Share::zero();
     let mut x3 = Share::zero();
 
-    match session.own_role()?.zero_based() {
+    match session.own_role()?.index() {
         0 => {
             x1.a = a;
             x3.b = b;
@@ -384,7 +384,7 @@ pub(crate) async fn bit_inject_ot_2round(
     session: &mut Session,
     input: VecShare<Bit>,
 ) -> Result<VecShare<u16>, Error> {
-    let res = match session.own_role()?.zero_based() {
+    let res = match session.own_role()?.index() {
         0 => {
             // OT Helper
             bit_inject_ot_2round_helper(session, input).await?

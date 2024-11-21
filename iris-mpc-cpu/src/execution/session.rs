@@ -5,7 +5,7 @@ use crate::{
 };
 use eyre::eyre;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SessionId(pub u128);
@@ -18,7 +18,7 @@ impl From<u128> for SessionId {
 
 pub type NetworkingImpl = Arc<dyn Networking + Send + Sync>;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Session {
     pub boot_session: BootSession,
     pub setup:        Prf,
@@ -30,6 +30,17 @@ pub struct BootSession {
     pub role_assignments: Arc<HashMap<Role, Identity>>,
     pub networking:       NetworkingImpl,
     pub own_identity:     Identity,
+}
+
+impl Debug for BootSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // TODO: incorporate networking into debug output
+        f.debug_struct("BootSession")
+            .field("session_id", &self.session_id)
+            .field("role_assignments", &self.role_assignments)
+            .field("own_identity", &self.own_identity)
+            .finish()
+    }
 }
 
 pub trait SessionHandles {

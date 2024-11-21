@@ -4,57 +4,55 @@ use crate::{
         session::{BootSession, Session, SessionHandles, SessionId},
     },
     network::local::LocalNetworkingStore,
-    protocol::{
-        ops::setup_replicated_prf,
-        prf::{Prf, PrfSeed},
-    },
+    protocol::{ops::setup_replicated_prf, prf::PrfSeed},
 };
 use std::{collections::HashMap, sync::Arc};
 use tokio::task::JoinSet;
+
+pub fn generate_local_identities() -> Vec<Identity> {
+    vec![
+        Identity::from("alice"),
+        Identity::from("bob"),
+        Identity::from("charlie"),
+    ]
+}
 
 #[derive(Debug, Clone)]
 pub struct LocalRuntime {
     pub identities:       Vec<Identity>,
     pub role_assignments: RoleAssignment,
-    pub prf_setups:       Option<HashMap<Role, Prf>>,
     pub seeds:            Vec<PrfSeed>,
+    // only one session per player is created
+    pub sessions:         HashMap<Identity, Session>,
 }
 
 impl LocalRuntime {
-    pub fn replicated_test_config() -> Self {
+    pub async fn replicated_test_config() -> eyre::Result<Self> {
         let num_parties = 3;
-        let identities: Vec<Identity> = vec!["alice".into(), "bob".into(), "charlie".into()];
+        let identities = generate_local_identities();
         let mut seeds = Vec::new();
         for i in 0..num_parties {
             let mut seed = [0_u8; 16];
             seed[0] = i;
             seeds.push(seed);
         }
-        LocalRuntime::new(identities, seeds)
+        LocalRuntime::new(identities, seeds).await
     }
-    pub fn new(identities: Vec<Identity>, seeds: Vec<PrfSeed>) -> Self {
+
+    pub async fn new(identities: Vec<Identity>, seeds: Vec<PrfSeed>) -> eyre::Result<Self> {
         let role_assignments: RoleAssignment = identities
             .iter()
             .enumerate()
             .map(|(index, id)| (Role::new(index), id.clone()))
             .collect();
-        LocalRuntime {
-            identities,
-            role_assignments,
-            prf_setups: None,
-            seeds,
-        }
-    }
-
-    pub async fn create_player_sessions(&self) -> eyre::Result<HashMap<Identity, Session>> {
-        let network = LocalNetworkingStore::from_host_ids(&self.identities);
+        let network = LocalNetworkingStore::from_host_ids(&identities);
         let sess_id = SessionId::from(0_u128);
-        let boot_sessions: Vec<BootSession> = (0..self.seeds.len())
+        let boot_sessions: Vec<BootSession> = (0..seeds.len())
             .map(|i| {
-                let identity = self.identities[i].clone();
+                let identity = identities[i].clone();
                 BootSession {
                     session_id:       sess_id,
-                    role_assignments: Arc::new(self.role_assignments.clone()),
+                    role_assignments: Arc::new(role_assignments.clone()),
                     networking:       Arc::new(network.get_local_network(identity.clone())),
                     own_identity:     identity,
                 }
@@ -63,21 +61,26 @@ impl LocalRuntime {
 
         let mut jobs = JoinSet::new();
         for (player_id, boot_session) in boot_sessions.iter().enumerate() {
-            let player_seed = self.seeds[player_id];
+            let player_seed = seeds[player_id];
             let sess = boot_session.clone();
             jobs.spawn(async move {
                 let prf = setup_replicated_prf(&sess, player_seed).await.unwrap();
                 (sess, prf)
             });
         }
-        let mut complete_sessions = HashMap::new();
+        let mut sessions = HashMap::new();
         while let Some(t) = jobs.join_next().await {
             let (boot_session, prf) = t.unwrap();
-            complete_sessions.insert(boot_session.own_identity(), Session {
+            sessions.insert(boot_session.own_identity(), Session {
                 boot_session,
                 setup: prf,
             });
         }
-        Ok(complete_sessions)
+        Ok(LocalRuntime {
+            identities,
+            role_assignments,
+            seeds,
+            sessions,
+        })
     }
 }
