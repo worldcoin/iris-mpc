@@ -1,7 +1,9 @@
 use clap::Parser;
 use futures::StreamExt;
-use iris_mpc_common::galois_engine::degree4::{
-    GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
+use hkdf::Hkdf;
+use iris_mpc_common::{
+    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    helpers::kms_dh::derive_shared_secret,
 };
 use iris_mpc_store::Store;
 use iris_mpc_upgrade::{
@@ -15,17 +17,31 @@ use iris_mpc_upgrade::{
     reshare::IrisCodeReshareSenderHelper,
     utils::install_tracing,
 };
-use sqlx::encode;
+use sha2::Sha256;
 
 const APP_NAME: &str = "SMPC";
+
+async fn derive_common_seed(config: &ReShareClientConfig) -> eyre::Result<[u8; 32]> {
+    let shared_secret =
+        derive_shared_secret(&config.my_kms_key_arn, &config.other_kms_key_arn).await?;
+    let hk = Hkdf::<Sha256>::new(
+        // sesstion id is used as salt
+        Some(&config.reshare_run_session_id.as_bytes()),
+        &shared_secret,
+    );
+    let mut common_seed = [0u8; 32];
+    // expand the common seed bound to the context "ReShare-Protocol-Client"
+    hk.expand(b"ReShare-Protocol-Client", &mut common_seed)
+        .unwrap();
+    Ok(common_seed)
+}
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     install_tracing();
     let config = ReShareClientConfig::parse();
 
-    // TODO: derive a common seed for the two participating parties
-    let common_seed = [0u8; 32];
+    let common_seed = derive_common_seed(&config).await?;
 
     let schema_name = format!("{}_{}_{}", APP_NAME, config.environment, config.party_id);
     let store = Store::new(&config.db_url, &schema_name).await?;

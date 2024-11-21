@@ -2773,6 +2773,7 @@ dependencies = [
  "float_eq",
  "futures",
  "futures-concurrency",
+ "hkdf",
  "indicatif",
  "iris-mpc-common",
  "iris-mpc-store",
