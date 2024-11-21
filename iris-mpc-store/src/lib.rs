@@ -770,7 +770,7 @@ mod tests {
 
         let mut tx = store.tx().await?;
         store
-            .insert_irises(&mut tx, &vec![iris1, iris2.clone()])
+            .insert_irises(&mut tx, &[iris1, iris2.clone()])
             .await?;
         tx.commit().await?;
 
