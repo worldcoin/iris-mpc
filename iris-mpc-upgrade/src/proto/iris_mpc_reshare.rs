@@ -24,6 +24,8 @@ pub struct IrisCodeReShareRequest {
     pub id_range_end_non_inclusive: i64,
     #[prost(message, repeated, tag = "6")]
     pub iris_code_re_shares: ::prost::alloc::vec::Vec<IrisCodeReShare>,
+    #[prost(bytes = "vec", tag = "7")]
+    pub client_correlation_sanity_check: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct IrisCodeReShareResponse {

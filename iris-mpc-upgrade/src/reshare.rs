@@ -130,13 +130,20 @@ impl IrisCodeReshareSenderHelper {
             self.current_packet.is_none(),
             "We expected no batch to be currently being built, but it is..."
         );
+        let mut digest = Sha256::new();
+        digest.update(self.common_seed);
+        digest.update(start_db_index.to_le_bytes());
+        digest.update(end_db_index.to_le_bytes());
+        digest.update(b"ReShareSanityCheck");
+
         self.current_packet = Some(IrisCodeReShareRequest {
-            sender_id:                  self.my_party_id as u64,
-            other_id:                   self.other_party_id as u64,
-            receiver_id:                self.target_party_id as u64,
-            id_range_start_inclusive:   start_db_index,
+            sender_id: self.my_party_id as u64,
+            other_id: self.other_party_id as u64,
+            receiver_id: self.target_party_id as u64,
+            id_range_start_inclusive: start_db_index,
             id_range_end_non_inclusive: end_db_index,
-            iris_code_re_shares:        Vec::new(),
+            iris_code_re_shares: Vec::new(),
+            client_correlation_sanity_check: digest.finalize().as_slice().to_vec(),
         });
     }
 
@@ -357,6 +364,14 @@ impl IrisCodeReshareReceiverHelper {
                     request2.id_range_end_non_inclusive,
                     request2.sender_id,
                 ),
+            });
+        }
+
+        if request1.client_correlation_sanity_check != request2.client_correlation_sanity_check {
+            return Err(IrisCodeReShareError::InvalidRequest {
+                reason: "Received requests with different correlation sanity checks, recheck the \
+                         used Keys for common secret derivation"
+                    .to_string(),
             });
         }
         Ok(())

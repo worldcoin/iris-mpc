@@ -9,12 +9,12 @@ pub mod iris_mpc_reshare;
 
 pub fn get_size_of_reshare_iris_code_share_batch(batch_size: usize) -> usize {
     let dummy = iris_mpc_reshare::IrisCodeReShareRequest {
-        sender_id:                  0,
-        other_id:                   1,
-        receiver_id:                2,
-        id_range_start_inclusive:   0,
+        sender_id: 0,
+        other_id: 1,
+        receiver_id: 2,
+        id_range_start_inclusive: 0,
         id_range_end_non_inclusive: batch_size as i64,
-        iris_code_re_shares:        vec![
+        iris_code_re_shares: vec![
             IrisCodeReShare {
                 left_iris_code_share:  vec![1u8; IRIS_CODE_LENGTH * size_of::<u16>()],
                 left_mask_share:       vec![2u8; MASK_CODE_LENGTH * size_of::<u16>()],
@@ -23,6 +23,7 @@ pub fn get_size_of_reshare_iris_code_share_batch(batch_size: usize) -> usize {
             };
             batch_size
         ],
+        client_correlation_sanity_check: vec![7u8; 32],
     };
 
     dummy.encoded_len()
