@@ -2,7 +2,9 @@ use clap::Parser;
 use iris_mpc_store::Store;
 use iris_mpc_upgrade::{
     config::ReShareServerConfig,
-    proto::iris_mpc_reshare::iris_code_re_share_service_server::IrisCodeReShareServiceServer,
+    proto::{
+        self, iris_mpc_reshare::iris_code_re_share_service_server::IrisCodeReShareServiceServer,
+    },
     reshare::{GrpcReshareServer, IrisCodeReshareReceiverHelper},
     utils::install_tracing,
 };
@@ -25,10 +27,19 @@ async fn main() -> eyre::Result<()> {
         config.max_buffer_size,
     );
 
+    let encoded_message_size =
+        proto::get_size_of_reshare_iris_code_share_batch(config.batch_size as usize);
+    if encoded_message_size > 100 * 1024 * 1024 {
+        tracing::warn!(
+            "encoded batch message size is large: {}MB",
+            encoded_message_size as f64 / 1024.0 / 1024.0
+        );
+    }
+    let encoded_message_size_with_buf = (encoded_message_size as f64 * 1.1) as usize;
     let grpc_server =
         IrisCodeReShareServiceServer::new(GrpcReshareServer::new(store, receiver_helper))
-            .max_decoding_message_size(100 * 1024 * 1024)
-            .max_encoding_message_size(100 * 1024 * 1024);
+            .max_decoding_message_size(encoded_message_size_with_buf)
+            .max_encoding_message_size(encoded_message_size_with_buf);
 
     Server::builder()
         .add_service(grpc_server)

@@ -6,12 +6,16 @@ use iris_mpc_common::galois_engine::degree4::{
 use iris_mpc_store::Store;
 use iris_mpc_upgrade::{
     config::ReShareClientConfig,
-    proto::iris_mpc_reshare::{
-        iris_code_re_share_service_client::IrisCodeReShareServiceClient, IrisCodeReShareStatus,
+    proto::{
+        self,
+        iris_mpc_reshare::{
+            iris_code_re_share_service_client::IrisCodeReShareServiceClient, IrisCodeReShareStatus,
+        },
     },
     reshare::IrisCodeReshareSenderHelper,
     utils::install_tracing,
 };
+use sqlx::encode;
 
 const APP_NAME: &str = "SMPC";
 
@@ -36,10 +40,20 @@ async fn main() -> eyre::Result<()> {
         common_seed,
     );
 
+    let encoded_message_size =
+        proto::get_size_of_reshare_iris_code_share_batch(config.batch_size as usize);
+    if encoded_message_size > 100 * 1024 * 1024 {
+        tracing::warn!(
+            "encoded batch message size is large: {}MB",
+            encoded_message_size as f64 / 1024.0 / 1024.0
+        );
+    }
+    let encoded_message_size_with_buf = (encoded_message_size as f64 * 1.1) as usize;
+
     let mut grpc_client = IrisCodeReShareServiceClient::connect(config.server_url)
         .await?
-        .max_decoding_message_size(100 * 1024 * 1024)
-        .max_encoding_message_size(100 * 1024 * 1024);
+        .max_decoding_message_size(encoded_message_size_with_buf)
+        .max_encoding_message_size(encoded_message_size_with_buf);
 
     while let Some(chunk) = iris_stream_chunks.next().await {
         let iris_codes = chunk.into_iter().collect::<Result<Vec<_>, sqlx::Error>>()?;
