@@ -13,9 +13,10 @@ pub mod party_node_client {
         dead_code,
         missing_docs,
         clippy::wildcard_imports,
-        clippy::let_unit_value
+        clippy::let_unit_value,
     )]
-    use tonic::codegen::{http::Uri, *};
+    use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
     #[derive(Debug, Clone)]
     pub struct PartyNodeClient<T> {
         inner: tonic::client::Grpc<T>,
@@ -59,15 +60,16 @@ pub mod party_node_client {
                     <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
                 >,
             >,
-            <T as tonic::codegen::Service<http::Request<tonic::body::BoxBody>>>::Error:
-                Into<StdError> + std::marker::Send + std::marker::Sync,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
         {
             PartyNodeClient::new(InterceptedService::new(inner, interceptor))
         }
         /// Compress requests with the given encoding.
         ///
-        /// This requires the server to support it otherwise it might respond
-        /// with an error.
+        /// This requires the server to support it otherwise it might respond with an
+        /// error.
         #[must_use]
         pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
             self.inner = self.inner.send_compressed(encoding);
@@ -99,11 +101,18 @@ pub mod party_node_client {
             &mut self,
             request: impl tonic::IntoRequest<super::SendRequest>,
         ) -> std::result::Result<tonic::Response<super::SendResponse>, tonic::Status> {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static("/party_node.PartyNode/SendMessage");
+            let path = http::uri::PathAndQuery::from_static(
+                "/party_node.PartyNode/SendMessage",
+            );
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("party_node.PartyNode", "SendMessage"));
@@ -118,11 +127,10 @@ pub mod party_node_server {
         dead_code,
         missing_docs,
         clippy::wildcard_imports,
-        clippy::let_unit_value
+        clippy::let_unit_value,
     )]
     use tonic::codegen::*;
-    /// Generated trait containing gRPC methods that should be implemented for
-    /// use with PartyNodeServer.
+    /// Generated trait containing gRPC methods that should be implemented for use with PartyNodeServer.
     #[async_trait]
     pub trait PartyNode: std::marker::Send + std::marker::Sync + 'static {
         async fn send_message(
@@ -151,7 +159,10 @@ pub mod party_node_server {
                 max_encoding_message_size: None,
             }
         }
-        pub fn with_interceptor<F>(inner: T, interceptor: F) -> InterceptedService<Self, F>
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
         where
             F: tonic::service::Interceptor,
         {
@@ -163,8 +174,7 @@ pub mod party_node_server {
             self.accept_compression_encodings.enable(encoding);
             self
         }
-        /// Compress responses with the given encoding, if the client supports
-        /// it.
+        /// Compress responses with the given encoding, if the client supports it.
         #[must_use]
         pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
             self.send_compression_encodings.enable(encoding);
@@ -207,9 +217,13 @@ pub mod party_node_server {
                 "/party_node.PartyNode/SendMessage" => {
                     #[allow(non_camel_case_types)]
                     struct SendMessageSvc<T: PartyNode>(pub Arc<T>);
-                    impl<T: PartyNode> tonic::server::UnaryService<super::SendRequest> for SendMessageSvc<T> {
+                    impl<T: PartyNode> tonic::server::UnaryService<super::SendRequest>
+                    for SendMessageSvc<T> {
                         type Response = super::SendResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::SendRequest>,
@@ -243,19 +257,23 @@ pub mod party_node_server {
                     };
                     Box::pin(fut)
                 }
-                _ => Box::pin(async move {
-                    let mut response = http::Response::new(empty_body());
-                    let headers = response.headers_mut();
-                    headers.insert(
-                        tonic::Status::GRPC_STATUS,
-                        (tonic::Code::Unimplemented as i32).into(),
-                    );
-                    headers.insert(
-                        http::header::CONTENT_TYPE,
-                        tonic::metadata::GRPC_CONTENT_TYPE,
-                    );
-                    Ok(response)
-                }),
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(empty_body());
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
             }
         }
     }
