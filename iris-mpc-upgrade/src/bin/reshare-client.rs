@@ -102,7 +102,7 @@ async fn main() -> eyre::Result<()> {
         );
 
         let request = iris_reshare_helper.finalize_reshare_batch();
-        let mut timeout = tokio::time::Duration::from_millis(100);
+        let mut timeout = tokio::time::Duration::from_millis(config.retry_backoff_millis);
         loop {
             let resp = grpc_client.re_share(request.clone()).await?;
             let resp = resp.into_inner();
@@ -113,7 +113,7 @@ async fn main() -> eyre::Result<()> {
                 x if x == IrisCodeReShareStatus::FullQueue as i32 => {
                     tokio::time::sleep(timeout).await;
                     // todo: linear backoff strategy ok?
-                    timeout += tokio::time::Duration::from_millis(100);
+                    timeout += tokio::time::Duration::from_millis(config.retry_backoff_millis);
                     continue;
                 }
                 x if x == IrisCodeReShareStatus::Error as i32 => {
