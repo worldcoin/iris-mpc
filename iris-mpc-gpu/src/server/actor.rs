@@ -937,8 +937,8 @@ impl ServerActor {
         let mut sum_free = 0;
         let mut sum_total = 0;
         for i in 0..self.device_manager.device_count() {
-            // Set the current context so we can use mem_get_info
-            let _device = CudaDevice::new(i).unwrap();
+            let device = self.device_manager.device(i);
+            unsafe { result::ctx::set_current(*device.cu_primary_ctx()) }.unwrap();
             let (free, total) = mem_get_info()?;
             metrics::gauge!(format!("gpu_memory_free_{}", i)).set(free as f64);
             metrics::gauge!(format!("gpu_memory_total_{}", i)).set(total as f64);
