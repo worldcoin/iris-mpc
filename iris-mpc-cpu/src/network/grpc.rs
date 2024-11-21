@@ -2,25 +2,22 @@ use super::Networking;
 use crate::{
     execution::{local::get_free_local_addresses, player::Identity},
     network::SessionId,
+    proto_generated::party_node::{
+        party_node_client::PartyNodeClient,
+        party_node_server::{PartyNode, PartyNodeServer},
+        SendRequest, SendResponse,
+    },
 };
 use backoff::{future::retry, ExponentialBackoff};
 use dashmap::DashMap;
 use eyre::{eyre, OptionExt};
-use party_node::{
-    party_node_client::PartyNodeClient,
-    party_node_server::{PartyNode, PartyNodeServer},
-    SendRequest, SendResponse,
-};
-use std::sync::Arc;
+use std::{str::FromStr, sync::Arc};
 use tonic::{
     async_trait,
+    metadata::AsciiMetadataValue,
     transport::{Channel, Server},
     Request, Response, Status,
 };
-
-mod party_node {
-    tonic::include_proto!("party_node");
-}
 
 type TonicResult<T> = Result<T, Status>;
 
@@ -127,15 +124,29 @@ impl PartyNode for GrpcNetworking {
         &self,
         request: Request<SendRequest>,
     ) -> TonicResult<Response<SendResponse>> {
-        let request = request.into_inner();
-        let sender_id = Identity::from(request.sender_id);
+        let sender_id: Identity = request
+            .metadata()
+            .get("sender_id")
+            .ok_or(Status::unauthenticated("Sender ID not found"))?
+            .to_str()
+            .map_err(|_| Status::unauthenticated("Sender ID not found"))?
+            .to_string()
+            .into();
         if sender_id == self.party_id {
             return Err(Status::unauthenticated(format!(
                 "Sender ID coincides with receiver ID: {:?}",
                 sender_id
             )));
         }
-        let session_id = SessionId::from(request.session_id);
+        let session_id: u64 = request
+            .metadata()
+            .get("session_id")
+            .ok_or(Status::not_found("Seesion ID no found"))?
+            .to_str()
+            .map_err(|_| Status::not_found("Session ID not found"))?
+            .parse()
+            .map_err(|_| Status::invalid_argument("Session ID not a u64 number"))?;
+        let session_id = SessionId::from(session_id);
         let message_queue = self
             .message_queues
             .get(&session_id)
@@ -144,7 +155,7 @@ impl PartyNode for GrpcNetworking {
                 session_id
             )))?;
         message_queue
-            .push_back(&sender_id, request.data)
+            .push_back(&sender_id, request.into_inner().data)
             .await
             .map_err(err_to_status)?;
         Ok(Response::new(SendResponse {}))
@@ -173,22 +184,32 @@ impl Networking for GrpcNetworking {
                 .get(receiver)
                 .ok_or_eyre(format!("Client not found {:?}", receiver))?
                 .clone();
-            let request = Request::new(SendRequest {
-                sender_id:  self.party_id.0.clone(),
-                session_id: session_id.0,
-                data:       value.clone(),
+            let mut request = Request::new(SendRequest {
+                data: value.clone(),
             });
-            println!(
+            request.metadata_mut().append(
+                "sender_id",
+                AsciiMetadataValue::from_str(&self.party_id.0).unwrap(),
+            );
+            request.metadata_mut().append(
+                "session_id",
+                AsciiMetadataValue::from_str(&session_id.0.to_string()).unwrap(),
+            );
+            tracing::trace!(
                 "Sending message {:?} from {:?} to {:?}",
-                value, self.party_id, receiver
+                value,
+                self.party_id,
+                receiver
             );
             let _response = client
                 .send_message(request)
                 .await
                 .map_err(|err| eyre!(err.to_string()))?;
-            println!(
+            tracing::trace!(
                 "SUCCESS: Sending message {:?} from {:?} to {:?}",
-                value, self.party_id, receiver
+                value,
+                self.party_id,
+                receiver
             );
             Ok(())
         })
@@ -215,7 +236,7 @@ pub async fn setup_local_grpc_networking(
         .map(|party| GrpcNetworking::new(party.clone()))
         .collect::<Vec<GrpcNetworking>>();
 
-    let addresses = get_free_local_addresses(players.len())?;
+    let addresses = get_free_local_addresses(players.len()).await?;
 
     let players_addresses = players
         .iter()

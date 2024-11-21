@@ -7,8 +7,6 @@ service PartyNode {
 }
 
 message SendRequest {
-    string sender_id = 1;
-    uint64 session_id = 2;
     bytes data = 3;
 }
 

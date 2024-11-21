@@ -2889,6 +2889,7 @@ dependencies = [
  "tonic",
  "tonic-build",
  "tracing",
+ "tracing-subscriber",
  "tracing-test",
 ]
 
