@@ -30,7 +30,7 @@ jobs:
           sudo ln -sf /usr/bin/gcc-11 /usr/bin/gcc
           gcc --version
 
-      - name: Install OpenSSL && pkg-config  && prtobuf-compiler
+      - name: Install OpenSSL && pkg-config && protobuf-compiler
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev protobuf-compiler
 
       - name: Install CUDA and NCCL dependencies
