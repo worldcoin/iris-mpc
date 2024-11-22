@@ -29,7 +29,7 @@ FROM --platform=linux/amd64 build-image as build-app
 WORKDIR /src/gpu-iris-mpc
 COPY . .
 
-RUN cargo build --release --target x86_64-unknown-linux-gnu --bin seed-v1-dbs --bin upgrade-server --bin upgrade-client --bin upgrade-checker
+RUN cargo build --release --target x86_64-unknown-linux-gnu --bin seed-v1-dbs --bin upgrade-server --bin upgrade-client --bin upgrade-checker --bin reshare-server
 
 FROM --platform=linux/amd64 ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
@@ -42,6 +42,7 @@ COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/
 COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/upgrade-server /bin/upgrade-server
 COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/upgrade-client /bin/upgrade-client
 COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/upgrade-checker /bin/upgrade-checker
+COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/reshare-server /bin/reshare-server
 
 USER 65534
 ENTRYPOINT ["/bin/upgrade-server"]
