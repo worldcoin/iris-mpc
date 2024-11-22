@@ -66,3 +66,11 @@ path = "src/bin/seed_v1_dbs.rs"
 [[bin]]
 name = "seed-v2-dbs"
 path = "src/bin/seed_v2_dbs.rs"
+
+[[bin]]
+name = "reshare-server"
+path = "src/bin/reshare-server.rs"
+
+[[bin]]
+name = "reshare-client"
+path = "src/bin/reshare-client.rs"

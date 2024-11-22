@@ -28,7 +28,7 @@ RUN cargo install cargo-build-deps \
 FROM --platform=linux/amd64 build-image as build-app
 WORKDIR /src/gpu-iris-mpc
 COPY . .
-RUN cargo build --release --target x86_64-unknown-linux-gnu --bin nccl --bin server --bin client --bin key-manager --bin upgrade-server --bin upgrade-client --bin upgrade-checker
+RUN cargo build --release --target x86_64-unknown-linux-gnu --bin nccl --bin server --bin client --bin key-manager --bin upgrade-server --bin upgrade-client --bin upgrade-checker --bin reshare-server --bin reshare-client
 
 FROM --platform=linux/amd64 ghcr.io/worldcoin/iris-mpc-base:cuda12_2-nccl2_22_3_1
 ENV DEBIAN_FRONTEND=noninteractive
@@ -41,6 +41,8 @@ COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/
 COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/upgrade-server /bin/upgrade-server
 COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/upgrade-client /bin/upgrade-client
 COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/upgrade-checker /bin/upgrade-checker
+COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/reshare-server /bin/reshare-server
+COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/reshare-server /bin/reshare-client
 
 USER 65534
 ENTRYPOINT ["/bin/server"]
