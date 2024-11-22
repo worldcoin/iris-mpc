@@ -782,6 +782,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "backoff"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b62ddb9cb1ec0a098ad4bbf9344d0713fa193ae1a80af55febcff2627b6a00c1"
+dependencies = [
+ "futures-core",
+ "getrandom",
+ "instant",
+ "pin-project-lite",
+ "rand",
+ "tokio",
+]
+
+[[package]]
 name = "backtrace"
 version = "0.3.71"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2689,7 +2703,9 @@ version = "0.1.0"
 dependencies = [
  "aes-prng 0.2.1 (git+https://github.com/tf-encrypted/aes-prng.git?branch=dragos%2Fdisplay)",
  "async-channel",
+ "async-stream 0.2.1",
  "async-trait",
+ "backoff",
  "bincode",
  "bytemuck",
  "bytes",
@@ -2701,12 +2717,18 @@ dependencies = [
  "iris-mpc-common",
  "itertools 0.13.0",
  "num-traits",
+ "prost",
  "rand",
  "rstest",
  "serde",
+ "serde_json",
  "static_assertions",
  "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-build",
  "tracing",
+ "tracing-subscriber",
  "tracing-test",
 ]
 

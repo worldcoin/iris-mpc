@@ -8,10 +8,10 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct SessionId(pub u128);
+pub struct SessionId(pub u64);
 
-impl From<u128> for SessionId {
-    fn from(id: u128) -> Self {
+impl From<u64> for SessionId {
+    fn from(id: u64) -> Self {
         SessionId(id)
     }
 }

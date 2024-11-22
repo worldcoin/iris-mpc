@@ -5,7 +5,7 @@ use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use iris_mpc_cpu::{
     database_generators::{create_random_sharing, generate_galois_iris_shares},
     execution::local::LocalRuntime,
-    hawkers::{galois_store::gr_create_ready_made_hawk_searcher, plaintext_store::PlaintextStore},
+    hawkers::{galois_store::LocalNetAby3NgStoreProtocol, plaintext_store::PlaintextStore},
     protocol::ops::{cross_compare, galois_ring_pairwise_distance, galois_ring_to_rep3},
 };
 use rand::SeedableRng;
@@ -89,7 +89,7 @@ fn bench_hnsw_primitives(c: &mut Criterion) {
             let t1 = create_random_sharing(&mut rng, 10_u16);
             let t2 = create_random_sharing(&mut rng, 10_u16);
 
-            let runtime = LocalRuntime::replicated_test_config().await.unwrap();
+            let runtime = LocalRuntime::mock_setup_with_channel().await.unwrap();
 
             let mut jobs = JoinSet::new();
             for (index, player) in runtime.identities.iter().enumerate() {
@@ -116,7 +116,7 @@ fn bench_gr_primitives(c: &mut Criterion) {
             .build()
             .unwrap();
         b.to_async(&rt).iter(|| async move {
-            let runtime = LocalRuntime::replicated_test_config().await.unwrap();
+            let runtime = LocalRuntime::mock_setup_with_channel().await.unwrap();
             let mut rng = AesRng::seed_from_u64(0);
             let iris_db = IrisDB::new_random_rng(4, &mut rng).db;
 
@@ -174,9 +174,12 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
 
         let (_, secret_searcher) = rt.block_on(async move {
             let mut rng = AesRng::seed_from_u64(0_u64);
-            gr_create_ready_made_hawk_searcher(&mut rng, database_size)
-                .await
-                .unwrap()
+            LocalNetAby3NgStoreProtocol::lazy_random_setup_with_local_channel(
+                &mut rng,
+                database_size,
+            )
+            .await
+            .unwrap()
         });
 
         group.bench_function(
@@ -215,7 +218,6 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                                     .await;
                             });
                         }
-
                         jobs.join_all().await;
                     },
                     criterion::BatchSize::SmallInput,
