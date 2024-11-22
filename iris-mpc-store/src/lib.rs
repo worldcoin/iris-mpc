@@ -214,6 +214,36 @@ impl Store {
         Ok(ids)
     }
 
+    pub async fn insert_irises_overriding(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        codes_and_masks: &[StoredIrisRef<'_>],
+    ) -> Result<()> {
+        if codes_and_masks.is_empty() {
+            return Ok(());
+        }
+        let mut query = sqlx::QueryBuilder::new(
+            "INSERT INTO irises (id, left_code, left_mask, right_code, right_mask)",
+        );
+        query.push_values(codes_and_masks, |mut query, iris| {
+            query.push_bind(iris.id);
+            query.push_bind(cast_slice::<u16, u8>(iris.left_code));
+            query.push_bind(cast_slice::<u16, u8>(iris.left_mask));
+            query.push_bind(cast_slice::<u16, u8>(iris.right_code));
+            query.push_bind(cast_slice::<u16, u8>(iris.right_mask));
+        });
+        query.push(
+            r#"
+ON CONFLICT (id)
+DO UPDATE SET left_code = EXCLUDED.left_code, left_mask = EXCLUDED.left_mask, right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask;
+"#,
+        );
+
+        query.build().execute(tx.deref_mut()).await?;
+
+        Ok(())
+    }
+
     /// Update existing iris with given shares.
     pub async fn update_iris(
         &self,
