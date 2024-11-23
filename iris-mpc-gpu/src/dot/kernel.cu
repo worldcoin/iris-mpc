@@ -108,7 +108,7 @@ extern "C" __global__ void mergeBatchResults(unsigned long long *matchResultsSel
                 continue;
 
             // Query is already considering rotations, ignore rotated db entries
-            if ((dbIdx - ROTATIONS) % ALL_ROTATIONS != 0)
+            if ((dbIdx < ROTATIONS) || ((dbIdx - ROTATIONS) % ALL_ROTATIONS != 0))
                 continue;
 
             // Only consider results above the diagonal
