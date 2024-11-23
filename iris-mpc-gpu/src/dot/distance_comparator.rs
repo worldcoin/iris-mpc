@@ -289,7 +289,7 @@ impl DistanceComparator {
             );
         }
 
-        let batch_match_idx: u32 = u32::MAX - (self.query_length / ROTATIONS); // batch matches have an index of u32::MAX - index
+        let batch_match_idx: u32 = u32::MAX - (self.query_length / ROTATIONS) as u32; // batch matches have an index of u32::MAX - index
         let mut matches_per_query = vec![vec![]; match_counters[0].len()];
         let n_devices = self.device_manager.device_count();
         for i in 0..self.device_manager.device_count() {
