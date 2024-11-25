@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:v0.8.25"
+image: "ghcr.io/worldcoin/iris-mpc:v0.10.2"
 
 environment: stage
 replicaCount: 1
@@ -11,7 +11,7 @@ datadog:
 
 # Nginx exposes the only port required here
 ports:
-  - containerPort: 3000
+  - containerPort: 3001
     name: health
     protocol: TCP
 
@@ -34,11 +34,11 @@ readinessProbe:
 
 resources:
   limits:
-    cpu: 1
-    memory: 1Gi
+    cpu: 4
+    memory: 16Gi
   requests:
-    cpu: 1
-    memory: 1Gi
+    cpu: 4
+    memory: 16Gi
 
 imagePullSecrets:
   - name: github-secret
@@ -72,7 +72,7 @@ service:
 
 nginxSidecar:
   enabled: true
-  port: 8443
+  port: 6443
   secrets:
     enabled: true
     volumeMount:
@@ -106,7 +106,7 @@ nginxSidecar:
         access_log /dev/stdout basic;
 
         server {
-          listen 8443 ssl;
+          listen 6443 ssl;
           http2 on;
       
           ssl_certificate /etc/nginx/cert/certificate.crt;
