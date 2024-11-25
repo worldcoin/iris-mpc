@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     libssl-dev \
     ca-certificates \
+    protobuf-compiler \
     wget
 
 RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \

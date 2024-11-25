@@ -1,5 +1,10 @@
-use hawk_pack::VectorStore;
-use iris_mpc_common::iris_db::iris::{IrisCode, MATCH_THRESHOLD_RATIO};
+use aes_prng::AesRng;
+use hawk_pack::{graph_store::GraphMem, hnsw_db::HawkSearcher, VectorStore};
+use iris_mpc_common::iris_db::{
+    db::IrisDB,
+    iris::{IrisCode, MATCH_THRESHOLD_RATIO},
+};
+use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::ops::{Index, IndexMut};
 
@@ -132,10 +137,51 @@ impl VectorStore for PlaintextStore {
     }
 }
 
+impl PlaintextStore {
+    pub async fn create_random<R: RngCore + Clone + CryptoRng>(
+        rng: &mut R,
+        database_size: usize,
+    ) -> eyre::Result<(Vec<IrisCode>, Self, GraphMem<Self>)> {
+        // makes sure the searcher produces same graph structure by having the same rng
+        let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
+        let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
+
+        let mut plaintext_vector_store = PlaintextStore::default();
+        let mut plaintext_graph_store = GraphMem::new();
+        let searcher = HawkSearcher::default();
+
+        for raw_query in cleartext_database.iter() {
+            let query = plaintext_vector_store.prepare_query(raw_query.clone());
+            let neighbors = searcher
+                .search_to_insert(
+                    &mut plaintext_vector_store,
+                    &mut plaintext_graph_store,
+                    &query,
+                )
+                .await;
+            let inserted = plaintext_vector_store.insert(&query).await;
+            searcher
+                .insert_from_search_results(
+                    &mut plaintext_vector_store,
+                    &mut plaintext_graph_store,
+                    &mut rng_searcher1,
+                    inserted,
+                    neighbors,
+                )
+                .await;
+        }
+
+        Ok((
+            cleartext_database,
+            plaintext_vector_store,
+            plaintext_graph_store,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hawkers::galois_store::gr_create_ready_made_hawk_searcher;
     use aes_prng::AesRng;
     use hawk_pack::hnsw_db::HawkSearcher;
     use iris_mpc_common::iris_db::db::IrisDB;
@@ -220,8 +266,8 @@ mod tests {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 1;
         let searcher = HawkSearcher::default();
-        let ((mut ptxt_vector, mut ptxt_graph), _) =
-            gr_create_ready_made_hawk_searcher(&mut rng, database_size)
+        let (_, mut ptxt_vector, mut ptxt_graph) =
+            PlaintextStore::create_random(&mut rng, database_size)
                 .await
                 .unwrap();
         for i in 0..database_size {

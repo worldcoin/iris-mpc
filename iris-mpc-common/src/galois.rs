@@ -1,323 +1,3 @@
-pub mod degree2 {
-    use crate::id::PartyID;
-    use rand::{CryptoRng, Rng};
-    /// An element of the Galois ring `$\mathbb{Z}_{2^{16}}[x]/(x^2 - x - 1)$`.
-    #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-    pub struct GaloisRingElement {
-        pub coefs: [u16; 2],
-    }
-
-    impl GaloisRingElement {
-        pub const ZERO: GaloisRingElement = GaloisRingElement { coefs: [0, 0] };
-        pub const ONE: GaloisRingElement = GaloisRingElement { coefs: [1, 0] };
-        pub const EXCEPTIONAL_SEQUENCE: [GaloisRingElement; 4] = [
-            GaloisRingElement::ZERO,
-            GaloisRingElement::ONE,
-            GaloisRingElement { coefs: [0, 1] },
-            GaloisRingElement { coefs: [1, 1] },
-        ];
-
-        pub fn random(rng: &mut (impl Rng + CryptoRng)) -> Self {
-            GaloisRingElement { coefs: rng.gen() }
-        }
-
-        pub fn inverse(&self) -> Self {
-            // hard-coded inverses for some elements we need
-            // too lazy to implement the general case in rust
-            // and we do not need the general case, since this is only used for the lagrange
-            // polys, which can be pre-computed anyway
-
-            if *self == GaloisRingElement::ZERO {
-                panic!("Division by zero");
-            }
-
-            if *self == GaloisRingElement::ONE {
-                return GaloisRingElement::ONE;
-            }
-
-            if *self == -GaloisRingElement::ONE {
-                return -GaloisRingElement::ONE;
-            }
-            if *self == (GaloisRingElement { coefs: [0, 1] }) {
-                return GaloisRingElement { coefs: [65535, 1] };
-            }
-            if *self == (GaloisRingElement { coefs: [0, 65535] }) {
-                return GaloisRingElement { coefs: [1, 65535] };
-            }
-            if *self == (GaloisRingElement { coefs: [1, 1] }) {
-                return GaloisRingElement { coefs: [2, 65535] };
-            }
-            if *self == (GaloisRingElement { coefs: [1, 65535] }) {
-                return GaloisRingElement { coefs: [0, 65535] };
-            }
-            if *self == (GaloisRingElement { coefs: [65535, 1] }) {
-                return GaloisRingElement { coefs: [0, 1] };
-            }
-
-            panic!("No inverse for {:?} in LUT", self);
-        }
-    }
-
-    impl std::ops::Add for GaloisRingElement {
-        type Output = Self;
-        fn add(self, rhs: Self) -> Self::Output {
-            self.add(&rhs)
-        }
-    }
-    impl std::ops::Add<&GaloisRingElement> for GaloisRingElement {
-        type Output = Self;
-        fn add(mut self, rhs: &Self) -> Self::Output {
-            for i in 0..2 {
-                self.coefs[i] = self.coefs[i].wrapping_add(rhs.coefs[i]);
-            }
-            self
-        }
-    }
-
-    impl std::ops::Sub for GaloisRingElement {
-        type Output = Self;
-        fn sub(self, rhs: Self) -> Self::Output {
-            self.sub(&rhs)
-        }
-    }
-    impl std::ops::Sub<&GaloisRingElement> for GaloisRingElement {
-        type Output = Self;
-        fn sub(mut self, rhs: &Self) -> Self::Output {
-            for i in 0..2 {
-                self.coefs[i] = self.coefs[i].wrapping_sub(rhs.coefs[i]);
-            }
-            self
-        }
-    }
-
-    impl std::ops::Neg for GaloisRingElement {
-        type Output = Self;
-
-        fn neg(self) -> Self::Output {
-            GaloisRingElement {
-                coefs: [self.coefs[0].wrapping_neg(), self.coefs[1].wrapping_neg()],
-            }
-        }
-    }
-
-    impl std::ops::Mul for GaloisRingElement {
-        type Output = Self;
-        fn mul(self, rhs: Self) -> Self::Output {
-            self.mul(&rhs)
-        }
-    }
-    impl std::ops::Mul<&GaloisRingElement> for GaloisRingElement {
-        type Output = Self;
-        fn mul(self, rhs: &Self) -> Self::Output {
-            GaloisRingElement {
-                coefs: [
-                    (self.coefs[0].wrapping_mul(rhs.coefs[0]))
-                        .wrapping_add(self.coefs[1].wrapping_mul(rhs.coefs[1])),
-                    (self.coefs[0].wrapping_mul(rhs.coefs[1]))
-                        .wrapping_add(self.coefs[1].wrapping_mul(rhs.coefs[0]))
-                        .wrapping_add(self.coefs[1].wrapping_mul(rhs.coefs[1])),
-                ],
-            }
-        }
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct ShamirGaloisRingShare {
-        pub id: usize,
-        pub y:  GaloisRingElement,
-    }
-    impl std::ops::Add for ShamirGaloisRingShare {
-        type Output = Self;
-        fn add(self, rhs: Self) -> Self::Output {
-            assert_eq!(self.id, rhs.id, "ids must be euqal");
-            ShamirGaloisRingShare {
-                id: self.id,
-                y:  self.y + rhs.y,
-            }
-        }
-    }
-    impl std::ops::Mul for ShamirGaloisRingShare {
-        type Output = Self;
-        fn mul(self, rhs: Self) -> Self::Output {
-            assert_eq!(self.id, rhs.id, "ids must be euqal");
-            ShamirGaloisRingShare {
-                id: self.id,
-                y:  self.y * rhs.y,
-            }
-        }
-    }
-    impl std::ops::Sub for ShamirGaloisRingShare {
-        type Output = Self;
-        fn sub(self, rhs: Self) -> Self::Output {
-            assert_eq!(self.id, rhs.id, "ids must be euqal");
-            ShamirGaloisRingShare {
-                id: self.id,
-                y:  self.y - rhs.y,
-            }
-        }
-    }
-
-    impl ShamirGaloisRingShare {
-        pub fn encode_3<R: CryptoRng + Rng>(
-            input: &GaloisRingElement,
-            rng: &mut R,
-        ) -> [ShamirGaloisRingShare; 3] {
-            let coefs = [*input, GaloisRingElement::random(rng)];
-            (1..=3)
-                .map(|i| {
-                    let element = GaloisRingElement::EXCEPTIONAL_SEQUENCE[i];
-                    let share = coefs[0] + coefs[1] * element;
-                    ShamirGaloisRingShare { id: i, y: share }
-                })
-                .collect::<Vec<_>>()
-                .as_slice()
-                .try_into()
-                .unwrap()
-        }
-
-        pub fn encode_3_mat<R: CryptoRng + Rng>(
-            input: &[u16; 2],
-            rng: &mut R,
-        ) -> [ShamirGaloisRingShare; 3] {
-            let invec = [input[0], input[1], rng.gen(), rng.gen()];
-            let share1 = ShamirGaloisRingShare {
-                id: 1,
-                y:  GaloisRingElement {
-                    coefs: [
-                        invec[0].wrapping_add(invec[2]),
-                        invec[1].wrapping_add(invec[3]),
-                    ],
-                },
-            };
-            let share2 = ShamirGaloisRingShare {
-                id: 2,
-                y:  GaloisRingElement {
-                    coefs: [
-                        invec[0].wrapping_add(invec[3]),
-                        invec[1].wrapping_add(invec[2]).wrapping_add(invec[3]),
-                    ],
-                },
-            };
-            let share3 = ShamirGaloisRingShare {
-                id: 3,
-                y:  GaloisRingElement {
-                    coefs: [
-                        share2.y.coefs[0].wrapping_add(invec[2]),
-                        share2.y.coefs[1].wrapping_add(invec[3]),
-                    ],
-                },
-            };
-            [share1, share2, share3]
-        }
-
-        pub fn deg_1_lagrange_polys_at_zero(
-            my_id: PartyID,
-            other_id: PartyID,
-        ) -> GaloisRingElement {
-            let mut res = GaloisRingElement::ONE;
-            let i = usize::from(my_id) + 1;
-            let j = usize::from(other_id) + 1;
-            res = res * (-GaloisRingElement::EXCEPTIONAL_SEQUENCE[j]);
-            res = res
-                * (GaloisRingElement::EXCEPTIONAL_SEQUENCE[i]
-                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[j])
-                    .inverse();
-            res
-        }
-
-        pub fn deg_2_lagrange_polys_at_zero() -> [GaloisRingElement; 3] {
-            let mut res = [GaloisRingElement::ONE; 3];
-            for i in 1..=3 {
-                for j in 1..=3 {
-                    if j != i {
-                        res[i - 1] = res[i - 1] * (-GaloisRingElement::EXCEPTIONAL_SEQUENCE[j]);
-                        res[i - 1] = res[i - 1]
-                            * (GaloisRingElement::EXCEPTIONAL_SEQUENCE[i]
-                                - GaloisRingElement::EXCEPTIONAL_SEQUENCE[j])
-                                .inverse();
-                    }
-                }
-            }
-            res
-        }
-
-        pub fn reconstruct_deg_2_shares(shares: &[ShamirGaloisRingShare; 3]) -> GaloisRingElement {
-            let lagrange_polys_at_zero = Self::deg_2_lagrange_polys_at_zero();
-            shares
-                .iter()
-                .map(|s| s.y * lagrange_polys_at_zero[s.id - 1])
-                .reduce(|a, b| a + b)
-                .unwrap()
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::{GaloisRingElement, ShamirGaloisRingShare};
-        use rand::thread_rng;
-
-        #[test]
-        fn inverses() {
-            for g_e in [
-                GaloisRingElement::ONE,
-                -GaloisRingElement::ONE,
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[2],
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[3],
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[1]
-                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[2],
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[1]
-                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[3],
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[2]
-                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[1],
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[2]
-                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[3],
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[3]
-                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[1],
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[3]
-                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[2],
-            ] {
-                assert_eq!(g_e.inverse() * g_e, GaloisRingElement::ONE);
-            }
-        }
-        #[test]
-        fn sharing() {
-            let input1 = GaloisRingElement::random(&mut rand::thread_rng());
-            let input2 = GaloisRingElement::random(&mut rand::thread_rng());
-
-            let shares1 = ShamirGaloisRingShare::encode_3(&input1, &mut thread_rng());
-            let shares2 = ShamirGaloisRingShare::encode_3(&input2, &mut thread_rng());
-            let shares_mul = [
-                shares1[0] * shares2[0],
-                shares1[1] * shares2[1],
-                shares1[2] * shares2[2],
-            ];
-
-            let reconstructed = ShamirGaloisRingShare::reconstruct_deg_2_shares(&shares_mul);
-            let expected = input1 * input2;
-
-            assert_eq!(reconstructed, expected);
-        }
-        #[test]
-        fn sharing_mat() {
-            let input1 = GaloisRingElement::random(&mut rand::thread_rng());
-            let input2 = GaloisRingElement::random(&mut rand::thread_rng());
-
-            let shares1 = ShamirGaloisRingShare::encode_3_mat(&input1.coefs, &mut thread_rng());
-            let shares2 = ShamirGaloisRingShare::encode_3_mat(&input2.coefs, &mut thread_rng());
-            let shares_mul = [
-                shares1[0] * shares2[0],
-                shares1[1] * shares2[1],
-                shares1[2] * shares2[2],
-            ];
-
-            let reconstructed = ShamirGaloisRingShare::reconstruct_deg_2_shares(&shares_mul);
-            let expected = input1 * input2;
-
-            assert_eq!(reconstructed, expected);
-        }
-    }
-}
-
 pub mod degree4 {
     use crate::id::PartyID;
     use basis::{Basis, Monomial};
@@ -354,12 +34,23 @@ pub mod degree4 {
             coefs: [1, 0, 0, 0],
             basis: PhantomData,
         };
-        pub const EXCEPTIONAL_SEQUENCE: [GaloisRingElement<Monomial>; 5] = [
-            GaloisRingElement::ZERO,
-            GaloisRingElement::ONE,
+        pub const EXCEPTIONAL_SEQUENCE: [GaloisRingElement<Monomial>; 16] = [
+            GaloisRingElement::from_coefs([0, 0, 0, 0]),
+            GaloisRingElement::from_coefs([1, 0, 0, 0]),
             GaloisRingElement::from_coefs([0, 1, 0, 0]),
             GaloisRingElement::from_coefs([1, 1, 0, 0]),
             GaloisRingElement::from_coefs([0, 0, 1, 0]),
+            GaloisRingElement::from_coefs([1, 0, 1, 0]),
+            GaloisRingElement::from_coefs([0, 1, 1, 0]),
+            GaloisRingElement::from_coefs([1, 1, 1, 0]),
+            GaloisRingElement::from_coefs([0, 0, 0, 1]),
+            GaloisRingElement::from_coefs([1, 0, 0, 1]),
+            GaloisRingElement::from_coefs([0, 1, 0, 1]),
+            GaloisRingElement::from_coefs([1, 1, 0, 1]),
+            GaloisRingElement::from_coefs([0, 0, 1, 1]),
+            GaloisRingElement::from_coefs([1, 0, 1, 1]),
+            GaloisRingElement::from_coefs([0, 1, 1, 1]),
+            GaloisRingElement::from_coefs([1, 1, 1, 1]),
         ];
         pub fn encode1(x: &[u16]) -> Option<Vec<Self>> {
             if x.len() % 4 != 0 {
@@ -388,40 +79,47 @@ pub mod degree4 {
             )
         }
 
+        /// Inverse of the element, if it exists
+        ///
+        /// # Panics
+        ///
+        /// This function panics if the element has no inverse
         pub fn inverse(&self) -> Self {
             // hard-coded inverses for some elements we need
             // too lazy to implement the general case in rust
             // and we do not need the general case, since this is only used for the lagrange
             // polys, which can be pre-computed anyway
 
-            if *self == GaloisRingElement::ZERO {
-                panic!("Division by zero");
+            if self.coefs.iter().all(|x| x % 2 == 0) {
+                panic!("Element has no inverse");
             }
 
-            if *self == GaloisRingElement::ONE {
-                return GaloisRingElement::ONE;
-            }
+            // inversion by exponentition by (p^r -1) * p^(m-1) - 1, with p = 2, r = 4, m =
+            // 16
+            const P: u32 = 2;
+            const R: u32 = 4;
+            const M: u32 = 16;
+            const EXP: u32 = (P.pow(R) - 1) * P.pow(M - 1) - 1;
 
-            if *self == -GaloisRingElement::ONE {
-                return -GaloisRingElement::ONE;
-            }
-            if *self == GaloisRingElement::from_coefs([0, 1, 0, 0]) {
-                return GaloisRingElement::from_coefs([65535, 0, 0, 1]);
-            }
-            if *self == GaloisRingElement::from_coefs([0, 65535, 0, 0]) {
-                return GaloisRingElement::from_coefs([1, 0, 0, 65535]);
-            }
-            if *self == GaloisRingElement::from_coefs([1, 1, 0, 0]) {
-                return GaloisRingElement::from_coefs([2, 65535, 1, 65535]);
-            }
-            if *self == GaloisRingElement::from_coefs([1, 65535, 0, 0]) {
-                return GaloisRingElement::from_coefs([0, 65535, 65535, 65535]);
-            }
-            if *self == GaloisRingElement::from_coefs([65535, 1, 0, 0]) {
-                return GaloisRingElement::from_coefs([0, 1, 1, 1]);
-            }
+            self.pow(EXP)
+        }
 
-            panic!("No inverse for {:?} in LUT", self);
+        /// Basic exponentiation by squaring, not constant time
+        pub fn pow(&self, mut exp: u32) -> Self {
+            if exp == 0 {
+                return Self::ONE;
+            }
+            let mut x = *self;
+            let mut y = Self::ONE;
+            while exp > 1 {
+                if exp % 2 == 1 {
+                    y = x * y;
+                    exp -= 1;
+                }
+                x = x * x;
+                exp /= 2;
+            }
+            x * y
         }
 
         #[allow(non_snake_case)]
@@ -719,6 +417,28 @@ pub mod degree4 {
             res
         }
 
+        // zero-indexed party ids here, party i will map to i+1 in the exceptional
+        // sequence
+        pub fn deg_1_lagrange_poly_at_v(
+            my_id: usize,
+            other_id: usize,
+            v: usize,
+        ) -> GaloisRingElement<Monomial> {
+            assert!(my_id < 15);
+            assert!(other_id < 15);
+            assert!(v < 15);
+            let i = my_id + 1;
+            let j = other_id + 1;
+            let v = v + 1;
+            let mut res = GaloisRingElement::EXCEPTIONAL_SEQUENCE[v]
+                - GaloisRingElement::EXCEPTIONAL_SEQUENCE[j];
+            res = res
+                * (GaloisRingElement::EXCEPTIONAL_SEQUENCE[i]
+                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[j])
+                    .inverse();
+            res
+        }
+
         pub fn deg_2_lagrange_polys_at_zero() -> [GaloisRingElement<Monomial>; 3] {
             let mut res = [GaloisRingElement::ONE; 3];
             for i in 1..=3 {
@@ -753,25 +473,25 @@ pub mod degree4 {
         use crate::galois::degree4::basis;
 
         #[test]
-        fn inverses() {
-            for g_e in [
-                GaloisRingElement::ONE,
-                -GaloisRingElement::ONE,
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[2],
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[3],
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[1]
-                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[2],
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[1]
-                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[3],
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[2]
-                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[1],
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[2]
-                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[3],
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[3]
-                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[1],
-                GaloisRingElement::EXCEPTIONAL_SEQUENCE[3]
-                    - GaloisRingElement::EXCEPTIONAL_SEQUENCE[2],
-            ] {
+        fn exceptional_sequence_is_pairwise_diff_invertible() {
+            for i in 0..GaloisRingElement::EXCEPTIONAL_SEQUENCE.len() {
+                for j in 0..GaloisRingElement::EXCEPTIONAL_SEQUENCE.len() {
+                    if i != j {
+                        let diff = GaloisRingElement::EXCEPTIONAL_SEQUENCE[i]
+                            - GaloisRingElement::EXCEPTIONAL_SEQUENCE[j];
+                        assert_eq!(diff.inverse() * diff, GaloisRingElement::ONE);
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn random_inverses() {
+            for _ in 0..100 {
+                let mut g_e = GaloisRingElement::random(&mut rand::thread_rng());
+                // make it have an inverse
+                g_e.coefs.iter_mut().for_each(|x| *x |= 1);
+
                 assert_eq!(g_e.inverse() * g_e, GaloisRingElement::ONE);
             }
         }

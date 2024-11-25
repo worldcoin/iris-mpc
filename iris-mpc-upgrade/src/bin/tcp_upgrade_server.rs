@@ -212,10 +212,6 @@ async fn main() -> eyre::Result<()> {
     client_stream1.write_u8(FINAL_BATCH_SUCCESSFUL_ACK).await?;
     tracing::info!("Sent final ACK to client1");
 
-    tracing::info!("Updating iris id sequence");
-    sink.update_iris_id_sequence().await?;
-    tracing::info!("Iris id sequence updated");
-
     Ok(())
 }
 
@@ -251,9 +247,5 @@ impl NewIrisShareSink for IrisShareDbSink {
                     .await
             }
         }
-    }
-
-    async fn update_iris_id_sequence(&self) -> eyre::Result<()> {
-        self.store.update_iris_id_sequence().await
     }
 }

@@ -289,6 +289,7 @@ impl DistanceComparator {
             );
         }
 
+        let batch_match_idx: u32 = u32::MAX - (self.query_length / ROTATIONS) as u32; // batch matches have an index of u32::MAX - index
         let mut matches_per_query = vec![vec![]; match_counters[0].len()];
         let n_devices = self.device_manager.device_count();
         for i in 0..self.device_manager.device_count() {
@@ -297,7 +298,14 @@ impl DistanceComparator {
                 let len = match_counters[i][j] as usize;
                 let ids = results[i][offset..offset + min(len, ALL_MATCHES_LEN)]
                     .iter()
-                    .map(|idx| idx * n_devices as u32 + i as u32)
+                    .map(|&idx| {
+                        if idx > batch_match_idx {
+                            idx
+                        } else {
+                            idx * n_devices as u32 + i as u32
+                        }
+                    })
+                    .filter(|&idx| idx < batch_match_idx || i == 0) // take all normal matches, but only batch matches from device 0
                     .collect::<Vec<_>>();
                 matches_per_query[j].extend_from_slice(&ids);
                 offset += ALL_MATCHES_LEN;

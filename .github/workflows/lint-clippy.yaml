@@ -4,7 +4,7 @@ on:
   push:
 
 concurrency:
-  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
   cancel-in-progress: true
 
 permissions:
@@ -21,6 +21,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      - name: Install Dependencies
+        run: sudo apt install protobuf-compiler
       - name: Install Rust nightly
         run: rustup toolchain install nightly-2024-07-10
       - name: Set Rust nightly as default

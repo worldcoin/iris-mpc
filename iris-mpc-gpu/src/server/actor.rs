@@ -16,7 +16,7 @@ use crate::{
 use cudarc::{
     cublas::CudaBlas,
     driver::{
-        result::{self, event::elapsed},
+        result::{self, event::elapsed, mem_get_info},
         sys::CUevent,
         CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceSlice,
     },
@@ -66,7 +66,7 @@ impl ServerActorHandle {
     }
 }
 
-const DB_CHUNK_SIZE: usize = 1 << 15;
+const DB_CHUNK_SIZE: usize = 1 << 14;
 const KDF_SALT: &str = "111a1a93518f670e9bb0c2c68888e2beb9406d4c4ed571dc77b801e676ae3091"; // Random 32 byte salt
 
 pub struct ServerActor {
@@ -779,6 +779,26 @@ impl ServerActor {
             (vec![], vec![])
         };
 
+        // Check for batch matches
+        let matched_batch_request_ids = match_ids
+            .iter()
+            .map(|ids| {
+                ids.iter()
+                    .filter(|&&x| x > (u32::MAX - batch_size as u32)) // ignore matches outside the batch size (dummy matches)
+                    .map(|&x| batch.request_ids[(u32::MAX - x) as usize].clone())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        let match_ids_filtered = match_ids
+            .into_iter()
+            .map(|ids| {
+                ids.into_iter()
+                    .filter(|&x| x <= (u32::MAX - self.max_batch_size as u32))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
         // Write back to in-memory db
         let previous_total_db_size = self.current_db_sizes.iter().sum::<usize>();
         let n_insertions = insertion_list.iter().map(|x| x.len()).sum::<usize>();
@@ -841,12 +861,13 @@ impl ServerActor {
                 request_ids: batch.request_ids,
                 metadata: batch.metadata,
                 matches,
-                match_ids,
+                match_ids: match_ids_filtered,
                 partial_match_ids_left,
                 partial_match_ids_right,
                 store_left: query_store_left,
                 store_right: query_store_right,
                 deleted_ids: batch.deletion_requests_indices,
+                matched_batch_request_ids,
             })
             .unwrap();
 
@@ -911,6 +932,21 @@ impl ServerActor {
         metrics::gauge!("db_size").set(new_db_size as f64);
         metrics::gauge!("batch_size").set(batch_size as f64);
         metrics::gauge!("max_batch_size").set(self.max_batch_size as f64);
+
+        // Update GPU memory metrics
+        let mut sum_free = 0;
+        let mut sum_total = 0;
+        for i in 0..self.device_manager.device_count() {
+            let device = self.device_manager.device(i);
+            unsafe { result::ctx::set_current(*device.cu_primary_ctx()) }.unwrap();
+            let (free, total) = mem_get_info()?;
+            metrics::gauge!(format!("gpu_memory_free_{}", i)).set(free as f64);
+            metrics::gauge!(format!("gpu_memory_total_{}", i)).set(total as f64);
+            sum_free += free;
+            sum_total += total;
+        }
+        metrics::gauge!("gpu_memory_free_sum").set(sum_free as f64);
+        metrics::gauge!("gpu_memory_total_sum").set(sum_total as f64);
 
         Ok(())
     }
@@ -1182,6 +1218,11 @@ impl ServerActor {
                 .record_event(request_streams, &next_phase2_event);
 
             // ---- END PHASE 2 ----
+
+            // Destroy events
+            self.device_manager.destroy_events(current_dot_event);
+            self.device_manager.destroy_events(current_exchange_event);
+            self.device_manager.destroy_events(current_phase2_event);
 
             // Update events for synchronization
             current_dot_event = next_dot_event;
