@@ -96,6 +96,9 @@ pub struct GrpcConfig {
     pub timeout_duration: Duration,
 }
 
+// WARNING: this implementation assumes that messages for a specific player
+// within one session are sent in order and consecutively. Don't send messages
+// to the same player in parallel within the same session. Use batching instead.
 #[derive(Clone)]
 pub struct GrpcNetworking {
     party_id:         Identity,
