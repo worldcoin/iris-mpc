@@ -2418,7 +2418,7 @@ dependencies = [
  "hyper 1.5.0",
  "hyper-util",
  "log",
- "rustls 0.23.16",
+ "rustls 0.23.18",
  "rustls-native-certs 0.8.0",
  "rustls-pki-types",
  "tokio",
@@ -2703,7 +2703,7 @@ version = "0.1.0"
 dependencies = [
  "aes-prng 0.2.1 (git+https://github.com/tf-encrypted/aes-prng.git?branch=dragos%2Fdisplay)",
  "async-channel",
- "async-stream 0.2.1",
+ "async-stream",
  "async-trait",
  "backoff",
  "bincode",
@@ -4426,9 +4426,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.16"
+version = "0.23.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eee87ff5d9b36712a58574e12e9f0ea80f915a5b0ac518d322b24a465617925e"
+checksum = "9c9cc1d47e243d655ace55ed38201c19ae02c148ae56412ab8750e8f0166ab7f"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -5424,7 +5424,7 @@ version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c7bc40d0e5a97695bb96e27995cd3a08538541b0a846f65bba7a359f36700d4"
 dependencies = [
- "rustls 0.23.16",
+ "rustls 0.23.18",
  "rustls-pki-types",
  "tokio",
 ]
