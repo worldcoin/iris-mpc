@@ -92,7 +92,7 @@ fn default_max_batch_size() -> usize {
 }
 
 fn default_heartbeat_interval_secs() -> u64 {
-    30
+    2
 }
 
 fn default_heartbeat_initial_retries() -> u64 {
