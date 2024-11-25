@@ -1,12 +1,20 @@
 args:
   - "--bind-addr"
-  - "0.0.0.0:8000"
+  - "0.0.0.0:7000"
   - "--db-url"
   - "$(SMPC__DATABASE__URL)"
   - "--party-id"
   - "1"
   - "--environment"
   - "$(ENVIRONMENT)"
+  - "--sender1-party-id"
+  - "0"
+  - "--sender2-party-id"
+  - "2"
+  - "--batch-size"
+  - "100"
+  - "--max-buffer-size"
+  - "10"
 
 initContainer:
   enabled: true
