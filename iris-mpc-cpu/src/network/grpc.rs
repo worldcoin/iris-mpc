@@ -11,10 +11,13 @@ use crate::{
 use backoff::{future::retry, ExponentialBackoff};
 use dashmap::DashMap;
 use eyre::eyre;
-use std::{collections::HashMap, str::FromStr, sync::Arc};
-use tokio::sync::{
-    mpsc::{self, UnboundedSender},
-    Mutex,
+use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
+use tokio::{
+    sync::{
+        mpsc::{self, UnboundedSender},
+        Mutex,
+    },
+    time::timeout,
 };
 use tokio_stream::StreamExt;
 use tonic::{
@@ -88,6 +91,11 @@ impl OutgoingStream {
     }
 }
 
+#[derive(Default, Clone)]
+pub struct GrpcConfig {
+    pub timeout_duration: Duration,
+}
+
 #[derive(Clone)]
 pub struct GrpcNetworking {
     party_id:         Identity,
@@ -97,15 +105,18 @@ pub struct GrpcNetworking {
     outgoing_streams: Arc<DashMap<Identity, OutgoingStream>>,
     // session id -> incoming message streams
     message_queues:   Arc<DashMap<SessionId, MessageQueueStore>>,
+
+    pub config: GrpcConfig,
 }
 
 impl GrpcNetworking {
-    pub fn new(party_id: Identity) -> Self {
+    pub fn new(party_id: Identity, config: GrpcConfig) -> Self {
         GrpcNetworking {
             party_id,
             clients: Arc::new(Mutex::new(HashMap::new())),
             outgoing_streams: Arc::new(DashMap::new()),
             message_queues: Arc::new(DashMap::new()),
+            config,
         }
     }
 
@@ -254,16 +265,32 @@ impl Networking for GrpcNetworking {
             "Session {session_id:?} hasn't been added to message queues"
         )))?;
 
-        queue.pop(sender).await
+        tracing::trace!(
+            "Player {:?} is receiving message from {:?} in session {:?}",
+            self.party_id,
+            sender,
+            session_id
+        );
+
+        match timeout(self.config.timeout_duration, queue.pop(sender)).await {
+            Ok(res) => res,
+            Err(_) => Err(eyre!(
+                "Timeout while waiting for message from {sender:?} in session {session_id:?}"
+            )),
+        }
     }
 }
 
 pub async fn setup_local_grpc_networking(
     parties: Vec<Identity>,
 ) -> eyre::Result<Vec<GrpcNetworking>> {
+    let config = GrpcConfig {
+        timeout_duration: Duration::from_secs(1),
+    };
+
     let players = parties
         .iter()
-        .map(|party| GrpcNetworking::new(party.clone()))
+        .map(|party| GrpcNetworking::new(party.clone(), config.clone()))
         .collect::<Vec<GrpcNetworking>>();
 
     let addresses = get_free_local_addresses(players.len()).await?;
@@ -512,6 +539,19 @@ mod tests {
                     .send(message.clone(), &Identity::from("bob"), &session_id)
                     .await;
                 assert!(res.is_err());
+                let res = alice.receive(&Identity::from("bob"), &session_id).await;
+                assert!(res.is_err());
+            });
+        }
+
+        // Receive from a party that didn't send a message
+        {
+            let alice = players[0].clone();
+            let players = players.clone();
+            jobs.spawn(async move {
+                let session_id = SessionId::from(4);
+                create_session_helper(session_id, &players).await.unwrap();
+
                 let res = alice.receive(&Identity::from("bob"), &session_id).await;
                 assert!(res.is_err());
             });
