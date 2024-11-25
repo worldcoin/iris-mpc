@@ -136,15 +136,10 @@ impl OldIrisShareSource for V1Database {
 }
 
 pub async fn spawn_healthcheck_server(healthcheck_port: usize) -> eyre::Result<()> {
-    // Create the health check route
     let app = Router::new().route("/health", get(|| async {})); // Implicit 200 response
-
-    // Bind the listener to the specified port
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", healthcheck_port))
         .await
         .wrap_err("Healthcheck listener bind error")?;
-
-    // Serve the app
     axum::serve(listener, app)
         .await
         .wrap_err("healthcheck listener server launch error")?;
