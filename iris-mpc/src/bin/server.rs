@@ -2,7 +2,7 @@
 
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::{config::Region, Client};
-use axum::{routing::get, Router};
+use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
 use eyre::{eyre, Context};
 use futures::TryStreamExt;
@@ -36,11 +36,15 @@ use iris_mpc_gpu::{
 };
 use iris_mpc_store::{Store, StoredIrisRef};
 use metrics_exporter_statsd::StatsdBuilder;
+use reqwest::StatusCode;
 use std::{
     backtrace::Backtrace,
     collections::HashMap,
     mem, panic,
-    sync::{Arc, LazyLock, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, LazyLock, Mutex,
+    },
     time::{Duration, Instant},
 };
 use telemetry_batteries::tracing::{datadog::DatadogBattery, TracingShutdownHandle};
@@ -680,13 +684,115 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         eyre::bail!("Database size exceeds maximum allowed size: {}", store_len);
     }
 
+    tracing::info!("Preparing task monitor");
+    let mut background_tasks = TaskMonitor::new();
+
+    // --------------------------------------------------------------------------
+    // ANCHOR: Starting Healthcheck and Readiness server
+    // --------------------------------------------------------------------------
+    tracing::info!("⚓️ ANCHOR: Starting Healthcheck and Readiness server");
+
+    let is_ready_flag = Arc::new(AtomicBool::new(false));
+    let is_ready_flag_cloned = Arc::clone(&is_ready_flag);
+
+    let _health_check_abort = background_tasks.spawn({
+        let uuid = uuid::Uuid::new_v4().to_string();
+        async move {
+            // Generate a random UUID for each run.
+            let app = Router::new()
+                .route("/health", get(move || async move { uuid.to_string() }))
+                .route(
+                    "/ready",
+                    get({
+                        // We are only ready once this flag is set to true.
+                        let is_ready_flag = Arc::clone(&is_ready_flag);
+                        move || async move {
+                            if is_ready_flag.load(Ordering::SeqCst) {
+                                "ready".into_response()
+                            } else {
+                                StatusCode::SERVICE_UNAVAILABLE.into_response()
+                            }
+                        }
+                    }),
+                );
+            let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+                .await
+                .wrap_err("healthcheck listener bind error")?;
+            axum::serve(listener, app)
+                .await
+                .wrap_err("healthcheck listener server launch error")?;
+
+            Ok::<(), eyre::Error>(())
+        }
+    });
+
+    background_tasks.check_tasks();
+    tracing::info!("Healthcheck and Readiness server running on port 3000.");
+
+    let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
+    let mut heartbeat_tx = Some(heartbeat_tx);
+    let all_nodes = config.node_hostnames.clone();
+    let _heartbeat = background_tasks.spawn(async move {
+        let next_node = &all_nodes[(config.party_id + 1) % 3];
+        let prev_node = &all_nodes[(config.party_id + 2) % 3];
+        let mut last_response = [String::default(), String::default()];
+        let mut connected = [false, false];
+        let mut retries = [0, 0];
+
+        loop {
+            for (i, host) in [next_node, prev_node].iter().enumerate() {
+                let res = reqwest::get(format!("http://{}:3000/health", host)).await;
+                if res.is_err() || !res.as_ref().unwrap().status().is_success() {
+                    // If it's the first time after startup, we allow a few retries to let the other
+                    // nodes start up as well.
+                    if last_response[i] == String::default()
+                        && retries[i] < config.heartbeat_initial_retries
+                    {
+                        retries[i] += 1;
+                        tracing::warn!("Node {} did not respond with success, retrying...", host);
+                        continue;
+                    }
+                    // The other node seems to be down or returned an error.
+                    panic!(
+                        "Node {} did not respond with success, killing server...",
+                        host
+                    );
+                }
+
+                let uuid = res.unwrap().text().await?;
+                if last_response[i] == String::default() {
+                    last_response[i] = uuid;
+                    connected[i] = true;
+
+                    // If all nodes are connected, notify the main thread.
+                    if connected.iter().all(|&c| c) {
+                        if let Some(tx) = heartbeat_tx.take() {
+                            tx.send(()).unwrap();
+                        }
+                    }
+                } else if uuid != last_response[i] {
+                    // If the UUID response is different, the node has restarted without us
+                    // noticing. Our main NCCL connections cannot recover from
+                    // this, so we panic.
+                    panic!("Node {} seems to have restarted, killing server...", host);
+                } else {
+                    tracing::info!("Heartbeat: Node {} is healthy", host);
+                }
+            }
+
+            tokio::time::sleep(Duration::from_secs(config.heartbeat_interval_secs)).await;
+        }
+    });
+
+    tracing::info!("Heartbeat starting...");
+    heartbeat_rx.await?;
+    tracing::info!("Heartbeat on all nodes started.");
+    background_tasks.check_tasks();
+
     let my_state = SyncState {
         db_len:              store_len as u64,
         deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
     };
-
-    tracing::info!("Preparing task monitor");
-    let mut background_tasks = TaskMonitor::new();
 
     // Start the actor in separate task.
     // A bit convoluted, but we need to create the actor on the thread already,
@@ -703,10 +809,17 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         let device_manager = Arc::new(DeviceManager::init());
         let ids = device_manager.get_ids_from_magic(0);
 
-        tracing::info!("Starting NCCL");
+        // --------------------------------------------------------------------------
+        // ANCHOR: Starting NCCL
+        // --------------------------------------------------------------------------
+        tracing::info!("⚓️ ANCHOR: Starting NCCL");
         let comms = device_manager.instantiate_network_from_ids(config.party_id, &ids)?;
+        // FYI: If any of the nodes die after this, all connections are broken.
 
-        tracing::info!("NCCL: getting sync results");
+        // --------------------------------------------------------------------------
+        // ANCHOR: Syncing latest node state
+        // --------------------------------------------------------------------------
+        tracing::info!("⚓️ ANCHOR: Syncing latest node state");
         let sync_result = match sync_nccl::sync(&comms[0], &my_state) {
             Ok(res) => res,
             Err(e) => {
@@ -733,6 +846,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             tokio::runtime::Handle::current().block_on(async { store.rollback(db_len).await })?;
             metrics::counter!("db.sync.rollback").increment(1);
         }
+
+        // --------------------------------------------------------------------------
+        // ANCHOR: Load the database
+        // --------------------------------------------------------------------------
+        tracing::info!("⚓️ ANCHOR: Load the database");
 
         tracing::info!("Starting server actor");
         match ServerActor::new_with_device_manager_and_comms(
@@ -988,89 +1106,55 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     });
     background_tasks.check_tasks();
 
-    tracing::info!("All systems ready.");
-    tracing::info!("Starting healthcheck server.");
+    // --------------------------------------------------------------------------
+    // ANCHOR: Enable readiness and check all nodes
+    // --------------------------------------------------------------------------
+    tracing::info!("⚓️ ANCHOR: Enable readiness and check all nodes");
 
-    let _health_check_abort = background_tasks.spawn(async move {
-        // Generate a random UUID for each run.
-        let uuid = uuid::Uuid::new_v4().to_string();
-        let app = Router::new().route("/health", get(|| async { uuid })); // implicit 200 return
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
-            .await
-            .wrap_err("healthcheck listener bind error")?;
-        axum::serve(listener, app)
-            .await
-            .wrap_err("healthcheck listener server launch error")?;
+    // Set the readiness flag to true, which will make the readiness server return a
+    // 200 status code.
+    is_ready_flag_cloned.store(true, std::sync::atomic::Ordering::SeqCst);
 
-        Ok(())
-    });
-
-    background_tasks.check_tasks();
-    tracing::info!("Healthcheck server running on port 3000.");
-
-    let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
-    let mut heartbeat_tx = Some(heartbeat_tx);
+    // Check other nodes and wait until all nodes are ready.
+    let (readiness_tx, readiness_rx) = oneshot::channel();
+    let mut readiness_tx = Some(readiness_tx);
     let all_nodes = config.node_hostnames.clone();
     let _heartbeat = background_tasks.spawn(async move {
         let next_node = &all_nodes[(config.party_id + 1) % 3];
         let prev_node = &all_nodes[(config.party_id + 2) % 3];
-        let mut last_response = [String::default(), String::default()];
         let mut connected = [false, false];
-        let mut retries = [0, 0];
 
         loop {
             for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(format!("http://{}:3000/health", host)).await;
-                if res.is_err() || !res.as_ref().unwrap().status().is_success() {
-                    // If it's the first time after startup, we allow a few retries to let the other
-                    // nodes start up as well.
-                    if last_response[i] == String::default()
-                        && retries[i] < config.heartbeat_initial_retries
-                    {
-                        retries[i] += 1;
-                        tracing::warn!("Node {} did not respond with success, retrying...", host);
-                        continue;
-                    }
-                    // The other node seems to be down or returned an error.
-                    panic!(
-                        "Node {} did not respond with success, killing server...",
-                        host
-                    );
-                }
+                let res = reqwest::get(format!("http://{}:3000/ready", host)).await;
 
-                let uuid = res.unwrap().text().await?;
-                if last_response[i] == String::default() {
-                    last_response[i] = uuid;
+                if res.is_ok() && res.as_ref().unwrap().status().is_success() {
                     connected[i] = true;
-
                     // If all nodes are connected, notify the main thread.
                     if connected.iter().all(|&c| c) {
-                        if let Some(tx) = heartbeat_tx.take() {
+                        if let Some(tx) = readiness_tx.take() {
                             tx.send(()).unwrap();
                         }
                     }
-                } else if uuid != last_response[i] {
-                    // If the UUID response is different, the node has restarted without us
-                    // noticing. Our main NCCL connections cannot recover from
-                    // this, so we panic.
-                    panic!("Node {} seems to have restarted, killing server...", host);
-                } else {
-                    tracing::info!("Heartbeat: Node {} is healthy", host);
                 }
             }
 
-            tokio::time::sleep(Duration::from_secs(config.heartbeat_interval_secs)).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     });
 
-    tracing::info!("Heartbeat starting...");
-    heartbeat_rx.await?;
-    tracing::info!("Heartbeat on all nodes started.");
+    tracing::info!("Waiting for all nodes to be ready...");
+    readiness_rx.await?;
+    tracing::info!("All nodes are ready.");
     background_tasks.check_tasks();
+
+    // --------------------------------------------------------------------------
+    // ANCHOR: Start the main loop
+    // --------------------------------------------------------------------------
+    tracing::info!("⚓️ ANCHOR: Start the main loop");
 
     let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
-    // Main loop
     let res: eyre::Result<()> = async {
         tracing::info!("Entering main loop");
         // **Tensor format of queries**
