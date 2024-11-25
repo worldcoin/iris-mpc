@@ -10,6 +10,7 @@ use crate::{
     },
 };
 use eyre::{eyre, Error};
+use itertools::Itertools;
 use num_traits::{One, Zero};
 use rand::{distributions::Standard, prelude::Distribution, Rng};
 use std::ops::SubAssign;
@@ -283,21 +284,12 @@ async fn bit_inject_ot_2round_receiver(
 
     let (m0, m1, wc) = tokio::spawn(async move {
         let reply_m0_and_m1 = network.receive(&next_id, &sid).await;
-        let m0_and_m1 = match NetworkValue::from_network(reply_m0_and_m1) {
-            Ok(NetworkValue::Tuple(val)) => {
-                if val.len() == 2 {
-                    Ok((val[0].clone(), val[1].clone()))
-                } else {
-                    Err(eyre!(
-                        "Could not deserialize m0 and m1 properly in bit inject: wrong length"
-                    ))
-                }
-            }
-            _ => Err(eyre!(
-                "Could not deserialize m0 and m1 properly in bit inject"
-            )),
-        };
-        let (m0, m1) = m0_and_m1.unwrap();
+        let m0_and_m1 = NetworkValue::vec_from_network(reply_m0_and_m1).unwrap();
+        assert!(
+            m0_and_m1.len() == 2,
+            "Deserialized vec in bit inject is wrong length"
+        );
+        let (m0, m1) = m0_and_m1.into_iter().collect_tuple().unwrap();
 
         let m0 = match m0 {
             NetworkValue::VecRing16(val) => Ok(val),
@@ -380,14 +372,15 @@ async fn bit_inject_ot_2round_sender(
     let prev_id = session.prev_identity()?;
     let sid = session.session_id();
     // TODO(Dragos) Note this can be compressed in a single round.
-    let m0_and_m1: NetworkValue = [m0, m1]
+    let m0_and_m1: Vec<NetworkValue> = [m0, m1]
         .into_iter()
         .map(NetworkValue::VecRing16)
-        .collect::<Vec<_>>()
-        .into();
+        .collect::<Vec<_>>();
     // Reshare to Helper
     tokio::spawn(async move {
-        let _ = network.send(m0_and_m1.to_network(), &prev_id, &sid).await;
+        let _ = network
+            .send(NetworkValue::vec_to_network(&m0_and_m1), &prev_id, &sid)
+            .await;
     })
     .await?;
     Ok(shares)

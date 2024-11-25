@@ -15,8 +15,6 @@ pub enum NetworkValue {
     VecRing16(Vec<RingElement<u16>>),
     VecRing32(Vec<RingElement<u32>>),
     VecRing64(Vec<RingElement<u64>>),
-    // Can contain network values of different types
-    Tuple(Vec<NetworkValue>),
 }
 
 impl NetworkValue {
@@ -28,23 +26,18 @@ impl NetworkValue {
         bincode::deserialize::<Self>(&serialized?).map_err(|_e| eyre!("Failed to parse value"))
     }
 
-    pub fn to_vector(&self) -> eyre::Result<Vec<Self>> {
-        match self {
-            NetworkValue::Tuple(x) => Ok(x.clone()),
-            _ => Err(eyre!("NetworkValue is not a tuple, but {:?}", self)),
-        }
+    pub fn vec_to_network(values: &Vec<Self>) -> Vec<u8> {
+        bincode::serialize(&values).unwrap()
+    }
+
+    pub fn vec_from_network(serialized: eyre::Result<Vec<u8>>) -> eyre::Result<Vec<Self>> {
+        bincode::deserialize::<Vec<Self>>(&serialized?).map_err(|_e| eyre!("Failed to parse value"))
     }
 }
 
 impl From<Vec<RingElement<u16>>> for NetworkValue {
     fn from(value: Vec<RingElement<u16>>) -> Self {
         NetworkValue::VecRing16(value)
-    }
-}
-
-impl From<Vec<NetworkValue>> for NetworkValue {
-    fn from(value: Vec<NetworkValue>) -> Self {
-        NetworkValue::Tuple(value)
     }
 }
 
@@ -71,14 +64,9 @@ mod tests {
             .iter()
             .map(|v| NetworkValue::RingElement16(*v))
             .collect::<Vec<_>>();
-        let network_value: NetworkValue = network_values.clone().into();
-        let serialized = network_value.to_network();
-        let result = NetworkValue::from_network(Ok(serialized))?;
-        assert!(matches!(result, NetworkValue::Tuple(_)));
-        let result_vec = result.to_vector()?;
+        let serialized = NetworkValue::vec_to_network(&network_values);
+        let result_vec = NetworkValue::vec_from_network(Ok(serialized))?;
         assert_eq!(network_values, result_vec);
-        let fail = result_vec[0].clone().to_vector();
-        assert!(fail.is_err());
 
         Ok(())
     }
