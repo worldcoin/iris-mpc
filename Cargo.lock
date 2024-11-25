@@ -2723,7 +2723,6 @@ name = "iris-mpc-cpu"
 version = "0.1.0"
 dependencies = [
  "aes-prng 0.2.1 (git+https://github.com/tf-encrypted/aes-prng.git?branch=dragos%2Fdisplay)",
- "anyhow",
  "async-channel",
  "async-stream 0.2.1",
  "async-trait",
