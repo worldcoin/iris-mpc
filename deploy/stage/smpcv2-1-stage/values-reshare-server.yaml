@@ -1,6 +1,6 @@
 args:
   - "--bind-addr"
-  - "0.0.0.0:8000"
+  - "0.0.0.0:7000"
   - "--db-url"
   - "$(SMPC__DATABASE__URL)"
   - "--party-id"

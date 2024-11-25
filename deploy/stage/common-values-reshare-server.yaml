@@ -120,8 +120,8 @@ nginxSidecar:
           ssl_session_timeout 1h;
       
           location / {
-            # Forward gRPC traffic to the gRPC server on port 8000
-            grpc_pass grpc://127.0.0.1:8000;
+            # Forward gRPC traffic to the gRPC server on port 7000
+            grpc_pass grpc://127.0.0.1:7000;
             error_page 502 = /error502grpc;    # Custom error page for GRPC backend issues
           }
       
