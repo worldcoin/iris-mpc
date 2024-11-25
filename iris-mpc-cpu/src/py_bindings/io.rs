@@ -1,5 +1,5 @@
-use eyre::Result;
 use bincode;
+use eyre::Result;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json;
 use std::{
