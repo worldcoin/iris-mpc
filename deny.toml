@@ -9,6 +9,7 @@ ignore = [
 	# https://github.com/mehcode/config-rs/issues/563
 	{ id = "RUSTSEC-2024-0384", reason = "waiting for `web-time` crate to remove the dependency" },
 	{ id = "RUSTSEC-2024-0388", reason = "waiting for `mongodb` crate to remove the deprecated dependency" },
+	{ id = "RUSTSEC-2024-0399", reason = "waiting for `mongodb` and other creates crate update dependency" },
 ]
 
 [sources]
