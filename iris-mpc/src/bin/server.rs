@@ -54,6 +54,7 @@ use tokio::{
     time::timeout,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use serde::{Serialize, Deserialize};
 
 const REGION: &str = "eu-north-1";
 const RNG_SEED_INIT_DB: u64 = 42;
@@ -695,12 +696,27 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let is_ready_flag = Arc::new(AtomicBool::new(false));
     let is_ready_flag_cloned = Arc::clone(&is_ready_flag);
 
+    #[derive(Serialize, Deserialize)]
+    struct ReadyProbeResponse {
+        image_name: String,
+        uuid: String,
+    }
+
     let _health_check_abort = background_tasks.spawn({
         let uuid = uuid::Uuid::new_v4().to_string();
+        let ready_probe_response = ReadyProbeResponse {
+            image_name: config.image_name.clone(),
+            uuid,
+        };
+        let serialized_response =
+            bincode::serialize(&ready_probe_response).expect("Serialization failed");
         async move {
             // Generate a random UUID for each run.
             let app = Router::new()
-                .route("/health", get(move || async move { uuid.to_string() }))
+                .route(
+                    "/health", 
+                    get(move || async move { base64::encode(&serialized_response) })
+                )
                 .route(
                     "/ready",
                     get({
@@ -759,9 +775,21 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     );
                 }
 
-                let uuid = res.unwrap().text().await?;
+                let response = res.unwrap().text().await?;
+                let decoded_response = base64::decode(response).expect("Base64 decode failed");
+                let probe_response: ReadyProbeResponse =
+                    bincode::deserialize(&decoded_response).expect("Deserialization failed");
+                if probe_response.image_name != config.image_name{
+                    // we do not create a panic as we still can continue to process when this occurs.
+                    tracing::error!(
+                        "Host {} is using image {} which differs from current node image: {}",
+                        host,
+                        probe_response.image_name,
+                        config.image_name
+                    );
+                }
                 if last_response[i] == String::default() {
-                    last_response[i] = uuid;
+                    last_response[i] = probe_response.uuid;
                     connected[i] = true;
 
                     // If all nodes are connected, notify the main thread.
@@ -770,7 +798,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             tx.send(()).unwrap();
                         }
                     }
-                } else if uuid != last_response[i] {
+                } else if probe_response.uuid != last_response[i] {
                     // If the UUID response is different, the node has restarted without us
                     // noticing. Our main NCCL connections cannot recover from
                     // this, so we panic.

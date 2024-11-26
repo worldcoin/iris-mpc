@@ -81,6 +81,9 @@ pub struct Config {
 
     #[serde(default = "default_shutdown_last_results_sync_timeout_secs")]
     pub shutdown_last_results_sync_timeout_secs: u64,
+
+    #[serde(default)]
+    pub image_name: String,
 }
 
 fn default_processing_timeout_secs() -> u64 {
