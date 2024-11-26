@@ -11,7 +11,7 @@ use crate::{
 use backoff::{future::retry, ExponentialBackoff};
 use dashmap::DashMap;
 use eyre::eyre;
-use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
+use std::{str::FromStr, sync::Arc, time::Duration};
 use tokio::{
     sync::{
         mpsc::{self, UnboundedSender},
@@ -65,29 +65,38 @@ impl MessageQueueStore {
     }
 }
 
-struct OutgoingStream {
-    streams: HashMap<SessionId, Arc<UnboundedSender<SendRequest>>>,
+struct OutgoingStreams {
+    streams: DashMap<(SessionId, Identity), Arc<UnboundedSender<SendRequest>>>,
 }
 
-impl OutgoingStream {
+impl OutgoingStreams {
     fn new() -> Self {
-        OutgoingStream {
-            streams: HashMap::new(),
+        OutgoingStreams {
+            streams: DashMap::new(),
         }
     }
 
-    fn add_session_stream(&mut self, session_id: SessionId, stream: UnboundedSender<SendRequest>) {
-        self.streams.insert(session_id, Arc::new(stream));
+    fn add_session_stream(
+        &self,
+        session_id: SessionId,
+        receiver_id: Identity,
+        stream: UnboundedSender<SendRequest>,
+    ) {
+        self.streams
+            .insert((session_id, receiver_id), Arc::new(stream));
     }
 
     fn get_stream(
         &self,
-        session_id: &SessionId,
+        session_id: SessionId,
+        receiver_id: Identity,
     ) -> eyre::Result<Arc<UnboundedSender<SendRequest>>> {
         self.streams
-            .get(session_id)
-            .cloned()
-            .ok_or(eyre!("Streams for Session {session_id:?} not found"))
+            .get(&(session_id, receiver_id.clone()))
+            .ok_or(eyre!(
+                "Streams for session {session_id:?} and receiver {receiver_id:?} not found"
+            ))
+            .map(|s| s.value().clone())
     }
 }
 
@@ -105,7 +114,7 @@ pub struct GrpcNetworking {
     // other party id -> client to call that party
     clients:          Arc<DashMap<Identity, PartyNodeClient<Channel>>>,
     // other party id -> outgoing streams to send messages to that party in different sessions
-    outgoing_streams: Arc<DashMap<Identity, OutgoingStream>>,
+    outgoing_streams: Arc<OutgoingStreams>,
     // session id -> incoming message streams
     message_queues:   Arc<DashMap<SessionId, MessageQueueStore>>,
 
@@ -117,7 +126,7 @@ impl GrpcNetworking {
         GrpcNetworking {
             party_id,
             clients: Arc::new(DashMap::new()),
-            outgoing_streams: Arc::new(DashMap::new()),
+            outgoing_streams: Arc::new(OutgoingStreams::new()),
             message_queues: Arc::new(DashMap::new()),
             config,
         }
@@ -126,8 +135,6 @@ impl GrpcNetworking {
     pub async fn connect_to_party(&self, party_id: Identity, address: &str) -> eyre::Result<()> {
         let client = PartyNodeClient::connect(address.to_string()).await?;
         self.clients.insert(party_id.clone(), client);
-        self.outgoing_streams
-            .insert(party_id.clone(), OutgoingStream::new());
         Ok(())
     }
 
@@ -142,9 +149,7 @@ impl GrpcNetworking {
         for mut client in self.clients.iter_mut() {
             let (tx, rx) = mpsc::unbounded_channel();
             self.outgoing_streams
-                .get_mut(client.key())
-                .ok_or(eyre!("Client {:?} not found", client.key()))?
-                .add_session_stream(session_id, tx);
+                .add_session_stream(session_id, client.key().clone(), tx);
             let receiving_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
             let mut request = Request::new(receiving_stream);
             request.metadata_mut().insert(
@@ -231,9 +236,7 @@ impl Networking for GrpcNetworking {
         retry(backoff, || async {
             let outgoing_stream = self
                 .outgoing_streams
-                .get(receiver)
-                .ok_or(eyre!("Outgoing stream for {receiver:?} not found"))?
-                .get_stream(session_id)?;
+                .get_stream(*session_id, receiver.clone())?;
 
             // Send message via the outgoing stream
             let request = SendRequest {
