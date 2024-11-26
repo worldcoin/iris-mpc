@@ -103,7 +103,7 @@ pub struct GrpcConfig {
 pub struct GrpcNetworking {
     party_id:         Identity,
     // other party id -> client to call that party
-    clients:          Arc<Mutex<HashMap<Identity, PartyNodeClient<Channel>>>>,
+    clients:          Arc<DashMap<Identity, PartyNodeClient<Channel>>>,
     // other party id -> outgoing streams to send messages to that party in different sessions
     outgoing_streams: Arc<DashMap<Identity, OutgoingStream>>,
     // session id -> incoming message streams
@@ -116,7 +116,7 @@ impl GrpcNetworking {
     pub fn new(party_id: Identity, config: GrpcConfig) -> Self {
         GrpcNetworking {
             party_id,
-            clients: Arc::new(Mutex::new(HashMap::new())),
+            clients: Arc::new(DashMap::new()),
             outgoing_streams: Arc::new(DashMap::new()),
             message_queues: Arc::new(DashMap::new()),
             config,
@@ -125,7 +125,7 @@ impl GrpcNetworking {
 
     pub async fn connect_to_party(&self, party_id: Identity, address: &str) -> eyre::Result<()> {
         let client = PartyNodeClient::connect(address.to_string()).await?;
-        self.clients.lock().await.insert(party_id.clone(), client);
+        self.clients.insert(party_id.clone(), client);
         self.outgoing_streams
             .insert(party_id.clone(), OutgoingStream::new());
         Ok(())
@@ -139,12 +139,11 @@ impl GrpcNetworking {
             ));
         }
 
-        let mut clients = self.clients.lock().await;
-        for (client_id, client) in clients.iter_mut() {
+        for mut client in self.clients.iter_mut() {
             let (tx, rx) = mpsc::unbounded_channel();
             self.outgoing_streams
-                .get_mut(client_id)
-                .ok_or(eyre!("Client {client_id:?} not found"))?
+                .get_mut(client.key())
+                .ok_or(eyre!("Client {:?} not found", client.key()))?
                 .add_session_stream(session_id, tx);
             let receiving_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
             let mut request = Request::new(receiving_stream);
@@ -156,7 +155,7 @@ impl GrpcNetworking {
                 "session_id",
                 AsciiMetadataValue::from_str(&session_id.0.to_string()).unwrap(),
             );
-            let _response = client.send_message(request).await?;
+            let _response = client.value_mut().send_message(request).await?;
         }
         Ok(())
     }
