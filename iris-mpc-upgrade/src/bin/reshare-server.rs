@@ -1,4 +1,5 @@
 use clap::Parser;
+use iris_mpc_common::helpers::task_monitor::TaskMonitor;
 use iris_mpc_store::Store;
 use iris_mpc_upgrade::{
     config::ReShareServerConfig,
@@ -6,7 +7,7 @@ use iris_mpc_upgrade::{
         self, iris_mpc_reshare::iris_code_re_share_service_server::IrisCodeReShareServiceServer,
     },
     reshare::{GrpcReshareServer, IrisCodeReshareReceiverHelper},
-    utils::install_tracing,
+    utils::{install_tracing, spawn_healthcheck_server},
 };
 use tonic::transport::Server;
 
@@ -16,6 +17,22 @@ const APP_NAME: &str = "SMPC";
 async fn main() -> eyre::Result<()> {
     install_tracing();
     let config = ReShareServerConfig::parse();
+
+    tracing::info!("Starting healthcheck server.");
+
+    let mut background_tasks = TaskMonitor::new();
+    let _health_check_abort = background_tasks
+        .spawn(async move { spawn_healthcheck_server(config.healthcheck_port).await });
+    background_tasks.check_tasks();
+    tracing::info!(
+        "Healthcheck server running on port {}.",
+        config.healthcheck_port.clone()
+    );
+
+    tracing::info!(
+        "Healthcheck server running on port {}.",
+        config.healthcheck_port
+    );
 
     let schema_name = format!("{}_{}_{}", APP_NAME, config.environment, config.party_id);
     let store = Store::new(&config.db_url, &schema_name).await?;

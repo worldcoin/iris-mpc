@@ -396,7 +396,7 @@ impl IrisCodeReshareReceiverHelper {
                 id:    self.my_party_id + 1,
                 coefs: reshare1
                     .left_iris_code_share
-                    .chunks_exact(std::mem::size_of::<u16>())
+                    .chunks_exact(size_of::<u16>())
                     .map(|x| u16::from_le_bytes(x.try_into().unwrap()))
                     .collect_vec()
                     .try_into()
@@ -407,7 +407,7 @@ impl IrisCodeReshareReceiverHelper {
                 id:    self.my_party_id + 1,
                 coefs: reshare1
                     .left_mask_share
-                    .chunks_exact(std::mem::size_of::<u16>())
+                    .chunks_exact(size_of::<u16>())
                     .map(|x| u16::from_le_bytes(x.try_into().unwrap()))
                     // we checked this beforehand in check_valid
                     .collect_vec()
@@ -418,7 +418,7 @@ impl IrisCodeReshareReceiverHelper {
                 id:    self.my_party_id + 1,
                 coefs: reshare2
                     .left_iris_code_share
-                    .chunks_exact(std::mem::size_of::<u16>())
+                    .chunks_exact(size_of::<u16>())
                     .map(|x| u16::from_le_bytes(x.try_into().unwrap()))
                     .collect_vec()
                     .try_into()
@@ -429,7 +429,7 @@ impl IrisCodeReshareReceiverHelper {
                 id:    self.my_party_id + 1,
                 coefs: reshare2
                     .left_mask_share
-                    .chunks_exact(std::mem::size_of::<u16>())
+                    .chunks_exact(size_of::<u16>())
                     .map(|x| u16::from_le_bytes(x.try_into().unwrap()))
                     // we checked this beforehand in check_valid
                     .collect_vec()
@@ -462,7 +462,7 @@ impl IrisCodeReshareReceiverHelper {
                 id:    self.my_party_id + 1,
                 coefs: reshare1
                     .right_iris_code_share
-                    .chunks_exact(std::mem::size_of::<u16>())
+                    .chunks_exact(size_of::<u16>())
                     .map(|x| u16::from_le_bytes(x.try_into().unwrap()))
                     .collect_vec()
                     .try_into()
@@ -473,7 +473,7 @@ impl IrisCodeReshareReceiverHelper {
                 id:    self.my_party_id + 1,
                 coefs: reshare1
                     .right_mask_share
-                    .chunks_exact(std::mem::size_of::<u16>())
+                    .chunks_exact(size_of::<u16>())
                     .map(|x| u16::from_le_bytes(x.try_into().unwrap()))
                     // we checked this beforehand in check_valid
                     .collect_vec()
@@ -484,7 +484,7 @@ impl IrisCodeReshareReceiverHelper {
                 id:    self.my_party_id + 1,
                 coefs: reshare2
                     .right_iris_code_share
-                    .chunks_exact(std::mem::size_of::<u16>())
+                    .chunks_exact(size_of::<u16>())
                     .map(|x| u16::from_le_bytes(x.try_into().unwrap()))
                     .collect_vec()
                     .try_into()
@@ -614,33 +614,26 @@ impl GrpcReshareServer {
 impl iris_code_re_share_service_server::IrisCodeReShareService for GrpcReshareServer {
     async fn re_share(
         &self,
-        request: tonic::Request<proto::iris_mpc_reshare::IrisCodeReShareRequest>,
-    ) -> std::result::Result<
-        tonic::Response<proto::iris_mpc_reshare::IrisCodeReShareResponse>,
-        tonic::Status,
-    > {
+        request: tonic::Request<IrisCodeReShareRequest>,
+    ) -> Result<Response<proto::iris_mpc_reshare::IrisCodeReShareResponse>, tonic::Status> {
         match self.receiver_helper.add_request_batch(request.into_inner()) {
             Ok(()) => (),
             Err(err) => {
                 tracing::warn!(error = err.to_string(), "Error handling reshare request");
-                match err {
-                    IrisCodeReShareError::InvalidRequest { reason } => {
-                        return Ok(Response::new(
-                            proto::iris_mpc_reshare::IrisCodeReShareResponse {
-                                status:  IrisCodeReShareStatus::Error as i32,
-                                message: reason,
-                            },
-                        ));
-                    }
-                    IrisCodeReShareError::TooManyRequests { .. } => {
-                        return Ok(Response::new(
-                            proto::iris_mpc_reshare::IrisCodeReShareResponse {
-                                status:  IrisCodeReShareStatus::FullQueue as i32,
-                                message: err.to_string(),
-                            },
-                        ))
-                    }
-                }
+                return match err {
+                    IrisCodeReShareError::InvalidRequest { reason } => Ok(Response::new(
+                        proto::iris_mpc_reshare::IrisCodeReShareResponse {
+                            status:  IrisCodeReShareStatus::Error as i32,
+                            message: reason,
+                        },
+                    )),
+                    IrisCodeReShareError::TooManyRequests { .. } => Ok(Response::new(
+                        proto::iris_mpc_reshare::IrisCodeReShareResponse {
+                            status:  IrisCodeReShareStatus::FullQueue as i32,
+                            message: err.to_string(),
+                        },
+                    )),
+                };
             }
         }
         // we received a batch, try to handle it
