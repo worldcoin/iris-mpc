@@ -2,9 +2,6 @@ env:
   - name: RUST_LOG
     value: "info"
 
-  - name: NCCL_DEBUG
-    value: "INFO"
-
   - name: RUST_BACKTRACE
     value: "1"
 
@@ -63,7 +60,7 @@ env:
     value: "2"
 
   - name: SMPC__HEARTBEAT_INITIAL_RETRIES
-    value: "1000"
+    value: "30"
 
   - name: SMPC__PATH
     value: "/data/"

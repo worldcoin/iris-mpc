@@ -3,6 +3,8 @@ use crate::{
     packets::{MaskShareMessage, TwoToThreeIrisCodeMessage},
     OldIrisShareSource,
 };
+use axum::{routing::get, Router};
+use eyre::Context;
 use futures::{Stream, StreamExt};
 use iris_mpc_common::galois_engine::degree4::{
     GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
@@ -131,4 +133,15 @@ impl OldIrisShareSource for V1Database {
             Err(e) => Err(e.into()),
         }))
     }
+}
+
+pub async fn spawn_healthcheck_server(healthcheck_port: usize) -> eyre::Result<()> {
+    let app = Router::new().route("/health", get(|| async {})); // Implicit 200 response
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", healthcheck_port))
+        .await
+        .wrap_err("Healthcheck listener bind error")?;
+    axum::serve(listener, app)
+        .await
+        .wrap_err("healthcheck listener server launch error")?;
+    Ok(())
 }

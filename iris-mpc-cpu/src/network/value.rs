@@ -23,7 +23,15 @@ impl NetworkValue {
     }
 
     pub fn from_network(serialized: eyre::Result<Vec<u8>>) -> eyre::Result<Self> {
-        bincode::deserialize::<Self>(&serialized?).map_err(|_e| eyre!("failed to parse value"))
+        bincode::deserialize::<Self>(&serialized?).map_err(|_e| eyre!("Failed to parse value"))
+    }
+
+    pub fn vec_to_network(values: &Vec<Self>) -> Vec<u8> {
+        bincode::serialize(&values).unwrap()
+    }
+
+    pub fn vec_from_network(serialized: eyre::Result<Vec<u8>>) -> eyre::Result<Vec<Self>> {
+        bincode::deserialize::<Vec<Self>>(&serialized?).map_err(|_e| eyre!("Failed to parse value"))
     }
 }
 
@@ -39,8 +47,27 @@ impl TryFrom<NetworkValue> for Vec<RingElement<u16>> {
         match value {
             NetworkValue::VecRing16(x) => Ok(x),
             _ => Err(eyre!(
-                "could not convert Network Value into Vec<RingElement<u16>>"
+                "Could not convert Network Value into Vec<RingElement<u16>>"
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_from_vec() -> eyre::Result<()> {
+        let values = (0..2).map(RingElement).collect::<Vec<_>>();
+        let network_values = values
+            .iter()
+            .map(|v| NetworkValue::RingElement16(*v))
+            .collect::<Vec<_>>();
+        let serialized = NetworkValue::vec_to_network(&network_values);
+        let result_vec = NetworkValue::vec_from_network(Ok(serialized))?;
+        assert_eq!(network_values, result_vec);
+
+        Ok(())
     }
 }

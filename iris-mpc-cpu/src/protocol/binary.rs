@@ -10,6 +10,7 @@ use crate::{
     },
 };
 use eyre::{eyre, Error};
+use itertools::Itertools;
 use num_traits::{One, Zero};
 use rand::{distributions::Standard, prelude::Distribution, Rng};
 use std::ops::SubAssign;
@@ -282,15 +283,21 @@ async fn bit_inject_ot_2round_receiver(
     let sid = session.session_id();
 
     let (m0, m1, wc) = tokio::spawn(async move {
-        let reply_m0 = network.receive(&next_id, &sid).await;
-        let m0 = match NetworkValue::from_network(reply_m0) {
-            Ok(NetworkValue::VecRing16(val)) => Ok(val),
+        let reply_m0_and_m1 = network.receive(&next_id, &sid).await;
+        let m0_and_m1 = NetworkValue::vec_from_network(reply_m0_and_m1).unwrap();
+        assert!(
+            m0_and_m1.len() == 2,
+            "Deserialized vec in bit inject is wrong length"
+        );
+        let (m0, m1) = m0_and_m1.into_iter().collect_tuple().unwrap();
+
+        let m0 = match m0 {
+            NetworkValue::VecRing16(val) => Ok(val),
             _ => Err(eyre!("Could not deserialize properly in bit inject")),
         };
 
-        let reply_m1 = network.receive(&next_id, &sid).await;
-        let m1 = match NetworkValue::from_network(reply_m1) {
-            Ok(NetworkValue::VecRing16(val)) => Ok(val),
+        let m1 = match m1 {
+            NetworkValue::VecRing16(val) => Ok(val),
             _ => Err(eyre!("Could not deserialize properly in bit inject")),
         };
 
@@ -365,20 +372,21 @@ async fn bit_inject_ot_2round_sender(
     let prev_id = session.prev_identity()?;
     let sid = session.session_id();
     // TODO(Dragos) Note this can be compressed in a single round.
+    let m0_and_m1: Vec<NetworkValue> = [m0, m1]
+        .into_iter()
+        .map(NetworkValue::VecRing16)
+        .collect::<Vec<_>>();
     // Reshare to Helper
     tokio::spawn(async move {
         let _ = network
-            .send(NetworkValue::VecRing16(m0).to_network(), &prev_id, &sid)
-            .await;
-        let _ = network
-            .send(NetworkValue::VecRing16(m1).to_network(), &prev_id, &sid)
+            .send(NetworkValue::vec_to_network(&m0_and_m1), &prev_id, &sid)
             .await;
     })
     .await?;
     Ok(shares)
 }
 
-// TODO this is inbalanced, so a real implementation should actually rotate
+// TODO this is unbalanced, so a real implementation should actually rotate
 // parties around
 pub(crate) async fn bit_inject_ot_2round(
     session: &mut Session,

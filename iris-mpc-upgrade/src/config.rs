@@ -54,6 +54,9 @@ pub struct UpgradeServerConfig {
 
     #[clap(long)]
     pub environment: String,
+
+    #[clap(long)]
+    pub healthcheck_port: usize,
 }
 
 impl fmt::Debug for UpgradeServerConfig {
@@ -217,4 +220,7 @@ pub struct ReShareServerConfig {
     /// from the other client)
     #[clap(long, default_value = "10")]
     pub max_buffer_size: usize,
+
+    #[clap(long, default_value = "3000")]
+    pub healthcheck_port: usize,
 }

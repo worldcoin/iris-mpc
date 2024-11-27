@@ -5,14 +5,10 @@ use iris_mpc_common::iris_db::{
     iris::{IrisCode, MATCH_THRESHOLD_RATIO},
 };
 use rand::{CryptoRng, RngCore, SeedableRng};
+use serde::{Deserialize, Serialize};
 use std::ops::{Index, IndexMut};
 
-#[derive(Default, Debug, Clone)]
-pub struct PlaintextStore {
-    pub points: Vec<PlaintextPoint>,
-}
-
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct PlaintextIris(pub IrisCode);
 
 impl PlaintextIris {
@@ -47,17 +43,19 @@ impl PlaintextIris {
     }
 }
 
-#[derive(Clone, Default, Debug)]
+// TODO refactor away is_persistent flag; should probably be stored in a
+// separate buffer instead whenever working with non-persistent iris codes
+#[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub struct PlaintextPoint {
     /// Whatever encoding of a vector.
-    data:          PlaintextIris,
+    pub data:          PlaintextIris,
     /// Distinguish between queries that are pending, and those that were
     /// ultimately accepted into the vector store.
-    is_persistent: bool,
+    pub is_persistent: bool,
 }
 
-#[derive(Copy, Debug, Clone, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
-pub struct PointId(u32);
+#[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PointId(pub u32);
 
 impl<T> Index<PointId> for Vec<T> {
     type Output = T;
@@ -83,6 +81,11 @@ impl From<u32> for PointId {
     fn from(value: u32) -> Self {
         PointId(value)
     }
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct PlaintextStore {
+    pub points: Vec<PlaintextPoint>,
 }
 
 impl PlaintextStore {
