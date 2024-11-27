@@ -10,13 +10,21 @@ use crate::{
 };
 use backoff::{future::retry, ExponentialBackoff};
 use dashmap::DashMap;
-use eyre::{eyre, OptionExt};
-use std::{str::FromStr, sync::Arc};
+use eyre::eyre;
+use std::{str::FromStr, sync::Arc, time::Duration};
+use tokio::{
+    sync::{
+        mpsc::{self, UnboundedSender},
+        Mutex,
+    },
+    time::timeout,
+};
+use tokio_stream::StreamExt;
 use tonic::{
     async_trait,
     metadata::AsciiMetadataValue,
     transport::{Channel, Server},
-    Request, Response, Status,
+    Request, Response, Status, Streaming,
 };
 
 type TonicResult<T> = Result<T, Status>;
@@ -25,15 +33,8 @@ fn err_to_status(e: eyre::Error) -> Status {
     Status::internal(e.to_string())
 }
 
-#[derive(Clone)]
-struct QueueChannel {
-    pub sender:   Arc<async_channel::Sender<Vec<u8>>>,
-    pub receiver: Arc<async_channel::Receiver<Vec<u8>>>,
-}
-
-#[derive(Clone)]
 struct MessageQueueStore {
-    queues: DashMap<Identity, QueueChannel>,
+    queues: DashMap<Identity, Mutex<Streaming<SendRequest>>>,
 }
 
 impl MessageQueueStore {
@@ -43,76 +44,124 @@ impl MessageQueueStore {
         }
     }
 
-    pub fn add_channel(&self, party_id: &Identity) -> QueueChannel {
-        // check that the party_id is not already in the queues
-        if self.queues.contains_key(party_id) {
-            return self.queues.get(party_id).unwrap().clone();
+    fn insert(&self, sender_id: Identity, stream: Streaming<SendRequest>) -> eyre::Result<()> {
+        if self.queues.contains_key(&sender_id) {
+            return Err(eyre!("Player {:?} already has a message queue", sender_id));
         }
-        let (sender, receiver) = async_channel::unbounded();
-        let channel = QueueChannel {
-            sender:   Arc::new(sender),
-            receiver: Arc::new(receiver),
-        };
-        self.queues.insert(party_id.clone(), channel.clone());
-        channel
+        self.queues.insert(sender_id, Mutex::new(stream));
+        Ok(())
     }
 
-    fn get_channel(&self, party_id: &Identity) -> eyre::Result<QueueChannel> {
-        let channel = self.queues.get(party_id).ok_or_eyre(format!(
-            "Channel not found for party {:?}, existing channels: alice {}, bob {}, charlie {}",
-            party_id,
-            self.queues.contains_key(&Identity("alice".into())),
-            self.queues.contains_key(&Identity("bob".into())),
-            self.queues.contains_key(&Identity("charlie".into()))
-        ))?;
-        Ok((*channel).clone())
-    }
+    async fn pop(&self, sender_id: &Identity) -> eyre::Result<Vec<u8>> {
+        let queue = self.queues.get(sender_id).ok_or(eyre!(format!(
+            "RECEIVE: Sender {sender_id:?} hasn't been found in the message queues"
+        )))?;
 
-    pub async fn push_back(&self, party_id: &Identity, value: Vec<u8>) -> eyre::Result<()> {
-        let channel = self.get_channel(party_id)?;
-        // sends the value via the channel sender; if failed, returns an error
-        channel.sender.send(value).await.map_err(|e| e.into())
-    }
+        let mut queue = queue.lock().await;
 
-    pub async fn pop_front(&self, party_id: &Identity) -> eyre::Result<Vec<u8>> {
-        let channel = self.get_channel(party_id)?;
-        channel.receiver.recv().await.map_err(|e| e.into())
+        let msg = queue.next().await.ok_or(eyre!("No message received"))??;
+
+        Ok(msg.data)
     }
 }
 
+struct OutgoingStreams {
+    streams: DashMap<(SessionId, Identity), Arc<UnboundedSender<SendRequest>>>,
+}
+
+impl OutgoingStreams {
+    fn new() -> Self {
+        OutgoingStreams {
+            streams: DashMap::new(),
+        }
+    }
+
+    fn add_session_stream(
+        &self,
+        session_id: SessionId,
+        receiver_id: Identity,
+        stream: UnboundedSender<SendRequest>,
+    ) {
+        self.streams
+            .insert((session_id, receiver_id), Arc::new(stream));
+    }
+
+    fn get_stream(
+        &self,
+        session_id: SessionId,
+        receiver_id: Identity,
+    ) -> eyre::Result<Arc<UnboundedSender<SendRequest>>> {
+        self.streams
+            .get(&(session_id, receiver_id.clone()))
+            .ok_or(eyre!(
+                "Streams for session {session_id:?} and receiver {receiver_id:?} not found"
+            ))
+            .map(|s| s.value().clone())
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct GrpcConfig {
+    pub timeout_duration: Duration,
+}
+
+// WARNING: this implementation assumes that messages for a specific player
+// within one session are sent in order and consecutively. Don't send messages
+// to the same player in parallel within the same session. Use batching instead.
 #[derive(Clone)]
 pub struct GrpcNetworking {
-    party_id:       Identity,
+    party_id:         Identity,
     // other party id -> client to call that party
-    clients:        Arc<DashMap<Identity, PartyNodeClient<Channel>>>,
-    message_queues: Arc<DashMap<SessionId, MessageQueueStore>>,
+    clients:          Arc<DashMap<Identity, PartyNodeClient<Channel>>>,
+    // other party id -> outgoing streams to send messages to that party in different sessions
+    outgoing_streams: Arc<OutgoingStreams>,
+    // session id -> incoming message streams
+    message_queues:   Arc<DashMap<SessionId, MessageQueueStore>>,
+
+    pub config: GrpcConfig,
 }
 
 impl GrpcNetworking {
-    pub fn new(party_id: Identity) -> Self {
+    pub fn new(party_id: Identity, config: GrpcConfig) -> Self {
         GrpcNetworking {
             party_id,
             clients: Arc::new(DashMap::new()),
+            outgoing_streams: Arc::new(OutgoingStreams::new()),
             message_queues: Arc::new(DashMap::new()),
+            config,
         }
     }
 
     pub async fn connect_to_party(&self, party_id: Identity, address: &str) -> eyre::Result<()> {
         let client = PartyNodeClient::connect(address.to_string()).await?;
-        self.clients.insert(party_id, client);
+        self.clients.insert(party_id.clone(), client);
         Ok(())
     }
 
     pub async fn create_session(&self, session_id: SessionId) -> eyre::Result<()> {
         if self.message_queues.contains_key(&session_id) {
-            return Err(eyre!("Session already exists"));
+            return Err(eyre!(
+                "Player {:?} has already created session {session_id:?}",
+                self.party_id
+            ));
         }
 
-        let queue = MessageQueueStore::new();
-        for client in self.clients.iter() {
-            queue.add_channel(client.key());
+        for mut client in self.clients.iter_mut() {
+            let (tx, rx) = mpsc::unbounded_channel();
+            self.outgoing_streams
+                .add_session_stream(session_id, client.key().clone(), tx);
+            let receiving_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
+            let mut request = Request::new(receiving_stream);
+            request.metadata_mut().insert(
+                "sender_id",
+                AsciiMetadataValue::from_str(&self.party_id.0).unwrap(),
+            );
+            request.metadata_mut().insert(
+                "session_id",
+                AsciiMetadataValue::from_str(&session_id.0.to_string()).unwrap(),
+            );
+            let _response = client.value_mut().send_message(request).await?;
         }
-        self.message_queues.insert(session_id, queue);
         Ok(())
     }
 }
@@ -122,14 +171,14 @@ impl GrpcNetworking {
 impl PartyNode for GrpcNetworking {
     async fn send_message(
         &self,
-        request: Request<SendRequest>,
+        request: Request<Streaming<SendRequest>>,
     ) -> TonicResult<Response<SendResponse>> {
         let sender_id: Identity = request
             .metadata()
             .get("sender_id")
             .ok_or(Status::unauthenticated("Sender ID not found"))?
             .to_str()
-            .map_err(|_| Status::unauthenticated("Sender ID not found"))?
+            .map_err(|_| Status::unauthenticated("Sender ID is not a string"))?
             .to_string()
             .into();
         if sender_id == self.party_id {
@@ -141,23 +190,30 @@ impl PartyNode for GrpcNetworking {
         let session_id: u64 = request
             .metadata()
             .get("session_id")
-            .ok_or(Status::not_found("Seesion ID no found"))?
+            .ok_or(Status::not_found("Session ID not found"))?
             .to_str()
-            .map_err(|_| Status::not_found("Session ID not found"))?
+            .map_err(|_| Status::not_found("Session ID malformed"))?
             .parse()
-            .map_err(|_| Status::invalid_argument("Session ID not a u64 number"))?;
+            .map_err(|_| Status::invalid_argument("Session ID is not a u64 number"))?;
         let session_id = SessionId::from(session_id);
+
+        let incoming_stream = request.into_inner();
+
+        tracing::trace!(
+            "Player {:?}. Creating session {:?} for player {:?}",
+            self.party_id,
+            session_id,
+            sender_id
+        );
         let message_queue = self
             .message_queues
-            .get(&session_id)
-            .ok_or(Status::not_found(format!(
-                "Session {:?} hasn't been created",
-                session_id
-            )))?;
+            .entry(session_id)
+            .or_insert(MessageQueueStore::new());
+
         message_queue
-            .push_back(&sender_id, request.into_inner().data)
-            .await
+            .insert(sender_id, incoming_stream)
             .map_err(err_to_status)?;
+
         Ok(Response::new(SendResponse {}))
     }
 }
@@ -178,38 +234,30 @@ impl Networking for GrpcNetworking {
             ..Default::default()
         };
         retry(backoff, || async {
-            // Send message via gRPC client
-            let mut client = self
-                .clients
-                .get(receiver)
-                .ok_or_eyre(format!("Client not found {:?}", receiver))?
-                .clone();
-            let mut request = Request::new(SendRequest {
+            let outgoing_stream = self
+                .outgoing_streams
+                .get_stream(*session_id, receiver.clone())?;
+
+            // Send message via the outgoing stream
+            let request = SendRequest {
                 data: value.clone(),
-            });
-            request.metadata_mut().append(
-                "sender_id",
-                AsciiMetadataValue::from_str(&self.party_id.0).unwrap(),
-            );
-            request.metadata_mut().append(
-                "session_id",
-                AsciiMetadataValue::from_str(&session_id.0.to_string()).unwrap(),
-            );
+            };
             tracing::trace!(
-                "Sending message {:?} from {:?} to {:?}",
+                "INIT: Sending message {:?} from {:?} to {:?} in session {:?}",
                 value,
                 self.party_id,
-                receiver
+                receiver,
+                session_id
             );
-            let _response = client
-                .send_message(request)
-                .await
-                .map_err(|err| eyre!(err.to_string()))?;
+            outgoing_stream
+                .send(request)
+                .map_err(|e| eyre!(e.to_string()))?;
             tracing::trace!(
-                "SUCCESS: Sending message {:?} from {:?} to {:?}",
+                "SUCCESS: Sending message {:?} from {:?} to {:?} in session {:?}",
                 value,
                 self.party_id,
-                receiver
+                receiver,
+                session_id
             );
             Ok(())
         })
@@ -218,22 +266,36 @@ impl Networking for GrpcNetworking {
 
     async fn receive(&self, sender: &Identity, session_id: &SessionId) -> eyre::Result<Vec<u8>> {
         // Just retrieve the first message from the corresponding queue
-        self.message_queues
-            .get(session_id)
-            .ok_or_eyre(format!(
-                "Session {session_id:?} hasn't been added to message queues"
-            ))?
-            .pop_front(sender)
-            .await
+        let queue = self.message_queues.get(session_id).ok_or(eyre!(format!(
+            "Session {session_id:?} hasn't been added to message queues"
+        )))?;
+
+        tracing::trace!(
+            "Player {:?} is receiving message from {:?} in session {:?}",
+            self.party_id,
+            sender,
+            session_id
+        );
+
+        match timeout(self.config.timeout_duration, queue.pop(sender)).await {
+            Ok(res) => res,
+            Err(_) => Err(eyre!(
+                "Timeout while waiting for message from {sender:?} in session {session_id:?}"
+            )),
+        }
     }
 }
 
 pub async fn setup_local_grpc_networking(
     parties: Vec<Identity>,
 ) -> eyre::Result<Vec<GrpcNetworking>> {
+    let config = GrpcConfig {
+        timeout_duration: Duration::from_secs(1),
+    };
+
     let players = parties
         .iter()
-        .map(|party| GrpcNetworking::new(party.clone()))
+        .map(|party| GrpcNetworking::new(party.clone(), config.clone()))
         .collect::<Vec<GrpcNetworking>>();
 
     let addresses = get_free_local_addresses(players.len()).await?;
@@ -285,9 +347,23 @@ mod tests {
     use aes_prng::AesRng;
     use hawk_pack::hnsw_db::HawkSearcher;
     use rand::SeedableRng;
-    use std::time::Duration;
     use tokio::task::JoinSet;
     use tracing_test::traced_test;
+
+    async fn create_session_helper(
+        session_id: SessionId,
+        players: &[GrpcNetworking],
+    ) -> eyre::Result<()> {
+        let mut jobs = JoinSet::new();
+        for player in players.iter() {
+            let player = player.clone();
+            jobs.spawn(async move {
+                player.create_session(session_id).await.unwrap();
+            });
+        }
+        jobs.join_all().await;
+        Ok(())
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
@@ -299,29 +375,27 @@ mod tests {
 
         // Simple session with one message sent from one party to another
         {
-            let alice = players[0].clone();
-            let bob = players[1].clone();
+            let players = players.clone();
 
             let session_id = SessionId::from(0);
 
             jobs.spawn(async move {
+                create_session_helper(session_id, &players).await.unwrap();
+
+                let alice = players[0].clone();
+                let bob = players[1].clone();
+
                 // Send a message from the first party to the second party
                 let message = b"Hey, Bob. I'm Alice. Do you copy?".to_vec();
                 let message_copy = message.clone();
 
                 let task1 = tokio::spawn(async move {
-                    alice.create_session(session_id).await.unwrap();
-                    // Add a delay to ensure that the session is created before sending
-                    tokio::time::sleep(Duration::from_millis(100)).await;
                     alice
                         .send(message.clone(), &"bob".into(), &session_id)
                         .await
                         .unwrap();
                 });
                 let task2 = tokio::spawn(async move {
-                    bob.create_session(session_id).await.unwrap();
-                    // Add a delay to ensure that the session is created before receiving
-                    tokio::time::sleep(Duration::from_millis(100)).await;
                     let received_message = bob.receive(&"alice".into(), &session_id).await.unwrap();
                     assert_eq!(message_copy, received_message);
                 });
@@ -333,6 +407,8 @@ mod tests {
         {
             jobs.spawn(async move {
                 let session_id = SessionId::from(1);
+
+                create_session_helper(session_id, &players).await.unwrap();
 
                 let mut tasks = JoinSet::new();
                 // Send messages
@@ -346,11 +422,6 @@ mod tests {
                     let prev_id = identities[prev].clone();
 
                     tasks.spawn(async move {
-                        player.create_session(session_id).await.unwrap();
-                        // Add a delay to ensure that the session is created before
-                        // sending/receiving
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-
                         // Sending
                         let msg_to_next =
                             format!("From player {} to player {} with love", player_id, next)
@@ -402,11 +473,12 @@ mod tests {
 
         // Send to a non-existing party
         {
-            let alice = players[0].clone();
+            let players = players.clone();
             jobs.spawn(async move {
-                let session_id = SessionId::from(2);
-                alice.create_session(session_id).await.unwrap();
+                let session_id = SessionId::from(0);
+                create_session_helper(session_id, &players).await.unwrap();
 
+                let alice = players[0].clone();
                 let message = b"Hey, Eve. I'm Alice. Do you copy?".to_vec();
                 let res = alice
                     .send(message.clone(), &Identity::from("eve"), &session_id)
@@ -417,10 +489,12 @@ mod tests {
 
         // Receive from a wrong party
         {
-            let alice = players[0].clone();
+            let players = players.clone();
             jobs.spawn(async move {
-                let session_id = SessionId::from(3);
-                alice.create_session(session_id).await.unwrap();
+                let session_id = SessionId::from(1);
+                create_session_helper(session_id, &players).await.unwrap();
+
+                let alice = players[0].clone();
 
                 let res = alice.receive(&Identity::from("eve"), &session_id).await;
                 assert!(res.is_err());
@@ -429,10 +503,12 @@ mod tests {
 
         // Send to itself
         {
-            let alice = players[0].clone();
+            let players = players.clone();
             jobs.spawn(async move {
-                let session_id = SessionId::from(4);
-                alice.create_session(session_id).await.unwrap();
+                let session_id = SessionId::from(2);
+                create_session_helper(session_id, &players).await.unwrap();
+
+                let alice = players[0].clone();
 
                 let message = b"Hey, Alice. I'm Alice. Do you copy?".to_vec();
                 let res = alice
@@ -444,19 +520,20 @@ mod tests {
 
         // Add the same session
         {
-            let alice = players[0].clone();
+            let players = players.clone();
             jobs.spawn(async move {
-                let session_id = SessionId::from(4);
+                let session_id = SessionId::from(3);
+                create_session_helper(session_id, &players).await.unwrap();
 
-                // Delay to ensure that the session is created in the previous example
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                let alice = players[0].clone();
+
                 let res = alice.create_session(session_id).await;
 
                 assert!(res.is_err());
             });
         }
 
-        // Retrieve from a non-existing session
+        // Send and retrieve from a non-existing session
         {
             let alice = players[0].clone();
             jobs.spawn(async move {
@@ -472,12 +549,26 @@ mod tests {
             });
         }
 
+        // Receive from a party that didn't send a message
+        {
+            let alice = players[0].clone();
+            let players = players.clone();
+            jobs.spawn(async move {
+                let session_id = SessionId::from(4);
+                create_session_helper(session_id, &players).await.unwrap();
+
+                let res = alice.receive(&Identity::from("bob"), &session_id).await;
+                assert!(res.is_err());
+            });
+        }
+
         jobs.join_all().await;
 
         Ok(())
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_hnsw_local() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 2;

@@ -3,11 +3,11 @@ syntax = "proto3";
 package party_node;
 
 service PartyNode {
-    rpc SendMessage (SendRequest) returns (SendResponse);
+    rpc SendMessage (stream SendRequest) returns (SendResponse);
 }
 
 message SendRequest {
-    bytes data = 3;
+    bytes data = 1;
 }
 
 message SendResponse {}
