@@ -3,6 +3,7 @@
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{response::IntoResponse, routing::get, Router};
+use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use eyre::{eyre, Context};
 use futures::TryStreamExt;
@@ -37,6 +38,7 @@ use iris_mpc_gpu::{
 use iris_mpc_store::{Store, StoredIrisRef};
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
+use serde::{Deserialize, Serialize};
 use std::{
     backtrace::Backtrace,
     collections::HashMap,
@@ -54,7 +56,6 @@ use tokio::{
     time::timeout,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use serde::{Serialize, Deserialize};
 
 const REGION: &str = "eu-north-1";
 const RNG_SEED_INIT_DB: u64 = 42;
@@ -699,7 +700,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     #[derive(Serialize, Deserialize)]
     struct ReadyProbeResponse {
         image_name: String,
-        uuid: String,
+        uuid:       String,
     }
 
     let _health_check_abort = background_tasks.spawn({
@@ -712,25 +713,28 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             bincode::serialize(&ready_probe_response).expect("Serialization failed");
         async move {
             // Generate a random UUID for each run.
-            let app = Router::new()
-                .route(
-                    "/health", 
-                    get(move || async move { base64::encode(&serialized_response) })
-                )
-                .route(
-                    "/ready",
-                    get({
-                        // We are only ready once this flag is set to true.
-                        let is_ready_flag = Arc::clone(&is_ready_flag);
-                        move || async move {
-                            if is_ready_flag.load(Ordering::SeqCst) {
-                                "ready".into_response()
-                            } else {
-                                StatusCode::SERVICE_UNAVAILABLE.into_response()
+            let app =
+                Router::new()
+                    .route(
+                        "/health",
+                        get(move || async move {
+                            general_purpose::STANDARD.encode(&serialized_response)
+                        }),
+                    )
+                    .route(
+                        "/ready",
+                        get({
+                            // We are only ready once this flag is set to true.
+                            let is_ready_flag = Arc::clone(&is_ready_flag);
+                            move || async move {
+                                if is_ready_flag.load(Ordering::SeqCst) {
+                                    "ready".into_response()
+                                } else {
+                                    StatusCode::SERVICE_UNAVAILABLE.into_response()
+                                }
                             }
-                        }
-                    }),
-                );
+                        }),
+                    );
             let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
                 .await
                 .wrap_err("healthcheck listener bind error")?;
@@ -748,6 +752,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
     let mut heartbeat_tx = Some(heartbeat_tx);
     let all_nodes = config.node_hostnames.clone();
+    let image_name = config.image_name.clone();
     let _heartbeat = background_tasks.spawn(async move {
         let next_node = &all_nodes[(config.party_id + 1) % 3];
         let prev_node = &all_nodes[(config.party_id + 2) % 3];
@@ -776,16 +781,19 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 }
 
                 let response = res.unwrap().text().await?;
-                let decoded_response = base64::decode(response).expect("Base64 decode failed");
+                let decoded_response = general_purpose::STANDARD
+                    .decode(&response)
+                    .expect("Failed to decode readyness probe response");
                 let probe_response: ReadyProbeResponse =
                     bincode::deserialize(&decoded_response).expect("Deserialization failed");
-                if probe_response.image_name != config.image_name{
-                    // we do not create a panic as we still can continue to process when this occurs.
+                if probe_response.image_name != image_name {
+                    // Do not create a panic as we still can continue to process before its
+                    // updated
                     tracing::error!(
                         "Host {} is using image {} which differs from current node image: {}",
                         host,
-                        probe_response.image_name,
-                        config.image_name
+                        probe_response.image_name.clone(),
+                        image_name
                     );
                 }
                 if last_response[i] == String::default() {
