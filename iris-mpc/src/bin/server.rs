@@ -3,7 +3,6 @@
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{response::IntoResponse, routing::get, Router};
-use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use eyre::{eyre, Context};
 use futures::TryStreamExt;
@@ -709,32 +708,29 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             image_name: config.image_name.clone(),
             uuid,
         };
-        let serialized_response =
-            bincode::serialize(&ready_probe_response).expect("Serialization failed");
+        let serialized_response = serde_json::to_string(&ready_probe_response)
+            .expect("Serialization to JSON to probe response failed");
         async move {
             // Generate a random UUID for each run.
-            let app =
-                Router::new()
-                    .route(
-                        "/health",
-                        get(move || async move {
-                            general_purpose::STANDARD.encode(&serialized_response)
-                        }),
-                    )
-                    .route(
-                        "/ready",
-                        get({
-                            // We are only ready once this flag is set to true.
-                            let is_ready_flag = Arc::clone(&is_ready_flag);
-                            move || async move {
-                                if is_ready_flag.load(Ordering::SeqCst) {
-                                    "ready".into_response()
-                                } else {
-                                    StatusCode::SERVICE_UNAVAILABLE.into_response()
-                                }
+            let app = Router::new()
+                .route(
+                    "/health",
+                    get(move || async move { serialized_response.clone() }),
+                )
+                .route(
+                    "/ready",
+                    get({
+                        // We are only ready once this flag is set to true.
+                        let is_ready_flag = Arc::clone(&is_ready_flag);
+                        move || async move {
+                            if is_ready_flag.load(Ordering::SeqCst) {
+                                "ready".into_response()
+                            } else {
+                                StatusCode::SERVICE_UNAVAILABLE.into_response()
                             }
-                        }),
-                    );
+                        }
+                    }),
+                );
             let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
                 .await
                 .wrap_err("healthcheck listener bind error")?;
@@ -780,12 +776,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     );
                 }
 
-                let response = res.unwrap().text().await?;
-                let decoded_response = general_purpose::STANDARD
-                    .decode(&response)
-                    .expect("Failed to decode readyness probe response");
-                let probe_response: ReadyProbeResponse =
-                    bincode::deserialize(&decoded_response).expect("Deserialization failed");
+                let probe_response = res
+                    .unwrap()
+                    .json::<ReadyProbeResponse>()
+                    .await
+                    .expect("Deserialization of probe response failed");
                 if probe_response.image_name != image_name {
                     // Do not create a panic as we still can continue to process before its
                     // updated
