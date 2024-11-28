@@ -1,0 +1,239 @@
+use crate::StoredIris;
+use async_trait::async_trait;
+use aws_sdk_s3::{error::SdkError, Client};
+use bytes::Bytes;
+use futures::{stream, Stream, StreamExt};
+use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
+use rayon::{iter::ParallelIterator, prelude::ParallelBridge};
+use serde::Deserialize;
+use std::{io::Cursor, mem, pin::Pin};
+use tokio::task;
+
+const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
+    + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
+    + mem::size_of::<u32>(); // 75 KB
+const CSV_BUFFER_CAPACITY: usize = SINGLE_ELEMENT_SIZE * 10;
+
+#[async_trait]
+pub trait ObjectStore: Send + Sync + 'static {
+    async fn get_object(&self, key: &str) -> eyre::Result<Bytes>;
+    async fn list_objects(&self) -> eyre::Result<Vec<String>>;
+}
+
+// Real S3 implementation
+pub struct S3Store {
+    client: Client,
+    bucket: String,
+}
+
+#[async_trait]
+impl ObjectStore for S3Store {
+    async fn get_object(&self, key: &str) -> eyre::Result<Bytes> {
+        let result = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await?;
+
+        let data = result.body.collect().await?;
+        Ok(data.into_bytes())
+    }
+
+    async fn list_objects(&self) -> eyre::Result<Vec<String>> {
+        let objects = self
+            .client
+            .list_objects_v2()
+            .bucket(&self.bucket)
+            .send()
+            .await?;
+
+        let mut keys = Vec::new();
+        for object in objects.contents() {
+            if let Some(key) = object.key() {
+                keys.push(key.to_string());
+            }
+        }
+        Ok(keys)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct CsvIrisRecord {
+    id:         String,
+    left_code:  String,
+    left_mask:  String,
+    right_code: String,
+    right_mask: String,
+}
+
+fn hex_to_bytes(hex: &str, byte_len: usize) -> eyre::Result<Vec<u8>> {
+    if hex.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut bytes = Vec::with_capacity(byte_len);
+    hex::decode_to_slice(hex, &mut bytes)?;
+    Ok(bytes)
+}
+
+pub async fn fetch_and_parse_chunks(
+    store: impl ObjectStore + Clone,
+    concurrency: usize,
+) -> Pin<Box<dyn Stream<Item = eyre::Result<StoredIris>> + Send>> {
+    let chunks = store.list_objects().await.unwrap();
+    stream::iter(chunks)
+        .filter_map(|chunk| async move {
+            if chunk.ends_with(".bin") {
+                Some(chunk)
+            } else {
+                None
+            }
+        })
+        .map(move |chunk| {
+            let store = store.clone();
+            task::spawn(async move {
+                let result = store.get_object(&chunk).await?;
+
+                task::spawn_blocking(move || {
+                    let cursor = Cursor::new(result);
+                    let reader = csv::ReaderBuilder::new()
+                        .has_headers(true)
+                        .buffer_capacity(CSV_BUFFER_CAPACITY)
+                        .from_reader(cursor);
+
+                    let records: Vec<eyre::Result<StoredIris>> = reader
+                        .into_deserialize()
+                        .par_bridge()
+                        .map(|r: Result<CsvIrisRecord, _>| {
+                            let raw = r.map_err(|e| eyre::eyre!("CSV parse error: {}", e))?;
+
+                            Ok(StoredIris {
+                                id:         raw.id.parse()?,
+                                left_code:  hex_to_bytes(
+                                    &raw.left_code,
+                                    IRIS_CODE_LENGTH * mem::size_of::<u16>(),
+                                )?,
+                                left_mask:  hex_to_bytes(
+                                    &raw.left_mask,
+                                    MASK_CODE_LENGTH * mem::size_of::<u16>(),
+                                )?,
+                                right_code: hex_to_bytes(
+                                    &raw.right_code,
+                                    IRIS_CODE_LENGTH * mem::size_of::<u16>(),
+                                )?,
+                                right_mask: hex_to_bytes(
+                                    &raw.right_mask,
+                                    MASK_CODE_LENGTH * mem::size_of::<u16>(),
+                                )?,
+                            })
+                        })
+                        .collect();
+
+                    Ok::<_, eyre::Error>(stream::iter(records))
+                })
+                .await?
+            })
+        })
+        .buffer_unordered(concurrency)
+        .flat_map(|result| match result {
+            Ok(Ok(stream)) => stream.boxed(),
+            Ok(Err(e)) => stream::once(async move { Err(e) }).boxed(),
+            Err(e) => stream::once(async move { Err(eyre::eyre!("Task error: {}", e)) }).boxed(),
+        })
+        .boxed()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cmp::min;
+
+    #[derive(Default, Clone)]
+    pub struct MockStore {
+        objects: std::collections::HashMap<String, Vec<u8>>,
+    }
+
+    impl MockStore {
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        pub fn add_test_data(&mut self, key: &str, records: Vec<StoredIris>) {
+            let mut csv = Vec::new();
+            {
+                let mut writer = csv::Writer::from_writer(&mut csv);
+                writer
+                    .write_record(&["id", "left_code", "left_mask", "right_code", "right_mask"])
+                    .unwrap();
+
+                for record in records {
+                    writer
+                        .write_record(&[
+                            record.id.to_string(),
+                            hex::encode(record.left_code),
+                            hex::encode(record.left_mask),
+                            hex::encode(record.right_code),
+                            hex::encode(record.right_mask),
+                        ])
+                        .unwrap();
+                }
+            }
+            self.objects.insert(key.to_string(), csv);
+        }
+    }
+
+    #[async_trait]
+    impl ObjectStore for MockStore {
+        async fn get_object(&self, key: &str) -> eyre::Result<Bytes> {
+            self.objects
+                .get(key)
+                .cloned()
+                .map(Bytes::from)
+                .ok_or_else(|| eyre::eyre!("Object not found: {}", key))
+        }
+
+        async fn list_objects(&self) -> eyre::Result<Vec<String>> {
+            Ok(self.objects.keys().cloned().collect())
+        }
+    }
+
+    fn dummy_entry(id: usize) -> StoredIris {
+        StoredIris {
+            id:         id as i64,
+            left_code:  vec![0u8; IRIS_CODE_LENGTH * 2],
+            left_mask:  vec![0u8; MASK_CODE_LENGTH * 2],
+            right_code: vec![0u8; IRIS_CODE_LENGTH * 2],
+            right_mask: vec![0u8; MASK_CODE_LENGTH * 2],
+        }
+    }
+
+    #[tokio::test]
+    async fn test_fetch_and_parse_chunks() {
+        const MOCK_ENTRIES: usize = 107;
+        const MOCK_CHUNK_SIZE: usize = 10;
+        let mut store = MockStore::new();
+
+        for i in 0..MOCK_ENTRIES {
+            let chunk_idx = i / MOCK_CHUNK_SIZE;
+            let start_idx = chunk_idx * MOCK_CHUNK_SIZE;
+            let end_idx = min((chunk_idx + 1) * MOCK_CHUNK_SIZE, MOCK_ENTRIES) - 1;
+            store.add_test_data(
+                &format!("{start_idx}_{end_idx}.bin"),
+                (start_idx..=end_idx).map(|i| dummy_entry(i)).collect(),
+            );
+        }
+
+        assert_eq!(
+            store.list_objects().await.unwrap().len(),
+            MOCK_ENTRIES.div_ceil(MOCK_CHUNK_SIZE)
+        );
+
+        let mut chunks = fetch_and_parse_chunks(store, 1).await;
+        let mut count = 0;
+        while let Some(chunk) = chunks.next().await {
+            count += 1;
+        }
+        assert_eq!(count, MOCK_ENTRIES);
+    }
+}
