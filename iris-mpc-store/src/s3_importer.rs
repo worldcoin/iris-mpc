@@ -106,9 +106,8 @@ pub async fn fetch_and_parse_chunks(
         })
         .map(move |chunk| {
             let store = store.clone();
-            task::spawn(async move {
+            async move {
                 let result = store.get_object(&chunk).await?;
-
                 task::spawn_blocking(move || {
                     let cursor = Cursor::new(result);
                     let reader = csv::ReaderBuilder::new()
@@ -147,13 +146,12 @@ pub async fn fetch_and_parse_chunks(
                     Ok::<_, eyre::Error>(stream::iter(records))
                 })
                 .await?
-            })
+            }
         })
         .buffer_unordered(concurrency)
         .flat_map(|result| match result {
-            Ok(Ok(stream)) => stream.boxed(),
-            Ok(Err(e)) => stream::once(async move { Err(e) }).boxed(),
-            Err(e) => stream::once(async move { Err(eyre::eyre!("Task error: {}", e)) }).boxed(),
+            Ok(stream) => stream.boxed(),
+            Err(e) => stream::once(async move { Err(e) }).boxed(),
         })
         .boxed()
 }
