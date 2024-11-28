@@ -4,7 +4,7 @@ use bytemuck::cast_slice;
 use eyre::{eyre, Result};
 use futures::{
     stream::{self},
-    Stream,
+    Stream, TryStreamExt,
 };
 use iris_mpc_common::{
     config::Config,
@@ -163,7 +163,7 @@ impl Store {
         &self,
         min_last_modified_at: i64,
         partitions: usize,
-    ) -> impl Stream<Item = Result<StoredIris, sqlx::Error>> + '_ {
+    ) -> impl Stream<Item = eyre::Result<StoredIris>> + '_ {
         let count = self.count_irises().await.expect("Failed count_irises");
         let partition_size = count.div_ceil(partitions).max(1);
 
@@ -179,10 +179,11 @@ impl Store {
             .bind(start_id as i64)
             .bind(end_id as i64)
             .bind(min_last_modified_at as i64)
-            .fetch(&self.pool);
+            .fetch(&self.pool)
+            .map_err(Into::into);
 
             partition_streams.push(Box::pin(partition_stream)
-                as Pin<Box<dyn Stream<Item = Result<StoredIris, sqlx::Error>> + Send>>);
+                as Pin<Box<dyn Stream<Item = eyre::Result<StoredIris>> + Send>>);
         }
 
         stream::select_all(partition_streams)
