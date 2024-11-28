@@ -4,7 +4,6 @@ use aws_sdk_s3::Client;
 use bytes::Bytes;
 use futures::{stream, Stream, StreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
-use itertools::Itertools;
 use rayon::{iter::ParallelIterator, prelude::ParallelBridge};
 use serde::Deserialize;
 use std::{io::Cursor, mem, pin::Pin};
@@ -55,13 +54,11 @@ impl ObjectStore for S3Store {
             .send()
             .await?;
 
-        let mut keys = Vec::new();
-        for object in objects.contents() {
-            if let Some(key) = object.key() {
-                keys.push(key.to_string());
-            }
-        }
-        Ok(keys)
+        Ok(objects
+            .contents()
+            .iter()
+            .filter_map(|obj| obj.key().map(String::from))
+            .collect())
     }
 }
 
@@ -87,15 +84,9 @@ pub async fn last_snapshot_timestamp(store: impl ObjectStore) -> eyre::Result<u6
     store
         .list_objects()
         .await?
-        .iter()
-        .filter(|f| f.ends_with(".timestamp"))
-        .map(|f| {
-            f.replace(".timestamp", "")
-                .parse::<u64>()
-                .map_err(|_| eyre::eyre!("Invalid timestamp"))
-        })
-        .collect::<Result<Vec<_>, _>>()?
         .into_iter()
+        .filter(|f| f.ends_with(".timestamp"))
+        .filter_map(|f| f.replace(".timestamp", "").parse::<u64>().ok())
         .max()
         .ok_or_else(|| eyre::eyre!("No snapshot found"))
 }
