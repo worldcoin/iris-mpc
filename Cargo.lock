@@ -2644,6 +2644,7 @@ name = "iris-mpc"
 version = "0.1.0"
 dependencies = [
  "aws-config",
+ "aws-sdk-s3",
  "aws-sdk-sns",
  "aws-sdk-sqs",
  "axum",

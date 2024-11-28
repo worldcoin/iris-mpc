@@ -1,5 +1,6 @@
 #![allow(clippy::needless_range_loop)]
 
+use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{response::IntoResponse, routing::get, Router};
@@ -34,7 +35,9 @@ use iris_mpc_gpu::{
         BatchQueryEntriesPreprocessed, ServerActor, ServerJobResult,
     },
 };
-use iris_mpc_store::{Store, StoredIrisRef};
+use iris_mpc_store::{
+    fetch_and_parse_chunks, last_snapshot_timestamp, S3Store, Store, StoredIrisRef,
+};
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
 use std::{
@@ -609,6 +612,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);
+    let s3_client = S3Client::new(&shared_config);
     let shares_encryption_key_pair =
         match SharesEncryptionKeyPairs::from_storage(config.clone()).await {
             Ok(key_pair) => key_pair,
@@ -804,6 +808,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         .ok_or(eyre!("Missing database config"))?
         .load_parallelism;
 
+    let load_chunks_parallelism = config.load_chunks_parallelism;
+
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
         let device_manager = Arc::new(DeviceManager::init());
@@ -882,6 +888,38 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         parallelism
                     );
                     tokio::runtime::Handle::current().block_on(async {
+                        // First fetch last snapshot from S3
+                        let s3_store = S3Store::new(s3_client, config.db_chunks_bucket_name);
+                        let last_snapshot_timestamp = last_snapshot_timestamp(&s3_store).await?;
+                        let mut stream =
+                            fetch_and_parse_chunks(&s3_store, load_chunks_parallelism).await;
+
+                        let now = Instant::now();
+                        let mut record_counter = 0;
+                        while let Some(chunk) = stream.try_next().await? {
+                            actor.load_single_record(
+                                iris.index() - 1,
+                                iris.left_code(),
+                                iris.left_mask(),
+                                iris.right_code(),
+                                iris.right_mask(),
+                            );
+                            record_counter += 1;
+
+                            if record_counter % 100_000 == 0 {
+                                let elapsed = now.elapsed();
+                                tracing::info!(
+                                    "Loaded {} records from s3 into memory in {:?} ({:.2} \
+                                     entries/s)",
+                                    record_counter,
+                                    elapsed,
+                                    record_counter as f64 / elapsed.as_secs_f64()
+                                );
+                            }
+                        }
+
+                        // Then sync everything that was modified after snapshot generation
+                        // TODO: filter by last_modified_at > last_snapshot_timestamp
                         let mut stream = store.stream_irises_par(parallelism).await;
                         let mut record_counter = 0;
                         while let Some(iris) = stream.try_next().await? {

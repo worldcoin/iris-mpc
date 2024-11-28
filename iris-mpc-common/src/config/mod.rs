@@ -81,6 +81,16 @@ pub struct Config {
 
     #[serde(default = "default_shutdown_last_results_sync_timeout_secs")]
     pub shutdown_last_results_sync_timeout_secs: u64,
+
+    #[serde(default)]
+    pub db_chunks_bucket_name: String,
+
+    #[serde(default = "default_load_chunks_parallelism")]
+    pub load_chunks_parallelism: usize,
+}
+
+fn default_load_chunks_parallelism() -> usize {
+    32
 }
 
 fn default_processing_timeout_secs() -> u64 {

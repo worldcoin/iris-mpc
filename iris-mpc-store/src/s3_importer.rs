@@ -4,6 +4,7 @@ use aws_sdk_s3::Client;
 use bytes::Bytes;
 use futures::{stream, Stream, StreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
+use itertools::Itertools;
 use rayon::{iter::ParallelIterator, prelude::ParallelBridge};
 use serde::Deserialize;
 use std::{io::Cursor, mem, pin::Pin};
@@ -80,6 +81,23 @@ fn hex_to_bytes(hex: &str, byte_len: usize) -> eyre::Result<Vec<u8>> {
     let mut bytes = vec![0; byte_len];
     hex::decode_to_slice(hex, &mut bytes)?;
     Ok(bytes)
+}
+
+pub async fn last_snapshot_timestamp(store: impl ObjectStore) -> eyre::Result<u64> {
+    store
+        .list_objects()
+        .await?
+        .iter()
+        .filter(|f| f.ends_with(".timestamp"))
+        .map(|f| {
+            f.replace(".timestamp", "")
+                .parse::<u64>()
+                .map_err(|_| eyre::eyre!("Invalid timestamp"))
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .max()
+        .ok_or_else(|| eyre::eyre!("No snapshot found"))
 }
 
 pub async fn fetch_and_parse_chunks(
