@@ -1,6 +1,6 @@
 use crate::StoredIris;
 use async_trait::async_trait;
-use aws_sdk_s3::{error::SdkError, Client};
+use aws_sdk_s3::Client;
 use bytes::Bytes;
 use futures::{stream, Stream, StreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
@@ -20,10 +20,15 @@ pub trait ObjectStore: Send + Sync + 'static {
     async fn list_objects(&self) -> eyre::Result<Vec<String>>;
 }
 
-// Real S3 implementation
 pub struct S3Store {
     client: Client,
     bucket: String,
+}
+
+impl S3Store {
+    pub fn new(client: Client, bucket: String) -> Self {
+        Self { client, bucket }
+    }
 }
 
 #[async_trait]
@@ -72,7 +77,7 @@ fn hex_to_bytes(hex: &str, byte_len: usize) -> eyre::Result<Vec<u8>> {
     if hex.is_empty() {
         return Ok(vec![]);
     }
-    let mut bytes = Vec::with_capacity(byte_len);
+    let mut bytes = vec![0; byte_len];
     hex::decode_to_slice(hex, &mut bytes)?;
     Ok(bytes)
 }
@@ -147,7 +152,8 @@ pub async fn fetch_and_parse_chunks(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cmp::min;
+    use rand::Rng;
+    use std::{cmp::min, collections::HashSet};
 
     #[derive(Default, Clone)]
     pub struct MockStore {
@@ -198,13 +204,20 @@ mod tests {
         }
     }
 
+    fn random_bytes(len: usize) -> Vec<u8> {
+        let mut rng = rand::thread_rng();
+        let mut v = vec![0u8; len];
+        v.fill_with(|| rng.gen());
+        v
+    }
+
     fn dummy_entry(id: usize) -> StoredIris {
         StoredIris {
             id:         id as i64,
-            left_code:  vec![0u8; IRIS_CODE_LENGTH * 2],
-            left_mask:  vec![0u8; MASK_CODE_LENGTH * 2],
-            right_code: vec![0u8; IRIS_CODE_LENGTH * 2],
-            right_mask: vec![0u8; MASK_CODE_LENGTH * 2],
+            left_code:  random_bytes(IRIS_CODE_LENGTH * mem::size_of::<u16>()),
+            left_mask:  random_bytes(MASK_CODE_LENGTH * mem::size_of::<u16>()),
+            right_code: random_bytes(IRIS_CODE_LENGTH * mem::size_of::<u16>()),
+            right_mask: random_bytes(MASK_CODE_LENGTH * mem::size_of::<u16>()),
         }
     }
 
@@ -214,10 +227,9 @@ mod tests {
         const MOCK_CHUNK_SIZE: usize = 10;
         let mut store = MockStore::new();
 
-        for i in 0..MOCK_ENTRIES {
-            let chunk_idx = i / MOCK_CHUNK_SIZE;
-            let start_idx = chunk_idx * MOCK_CHUNK_SIZE;
-            let end_idx = min((chunk_idx + 1) * MOCK_CHUNK_SIZE, MOCK_ENTRIES) - 1;
+        for i in 0..MOCK_ENTRIES.div_ceil(MOCK_CHUNK_SIZE) {
+            let start_idx = i * MOCK_CHUNK_SIZE;
+            let end_idx = min((i + 1) * MOCK_CHUNK_SIZE, MOCK_ENTRIES) - 1;
             store.add_test_data(
                 &format!("{start_idx}_{end_idx}.bin"),
                 (start_idx..=end_idx).map(|i| dummy_entry(i)).collect(),
@@ -231,9 +243,13 @@ mod tests {
 
         let mut chunks = fetch_and_parse_chunks(store, 1).await;
         let mut count = 0;
+        let mut ids: HashSet<usize> = HashSet::from_iter(0..MOCK_ENTRIES);
         while let Some(chunk) = chunks.next().await {
+            let chunk = chunk.unwrap();
+            ids.remove(&(chunk.id as usize));
             count += 1;
         }
         assert_eq!(count, MOCK_ENTRIES);
+        assert!(ids.is_empty());
     }
 }
