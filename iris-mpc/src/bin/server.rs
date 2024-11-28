@@ -710,6 +710,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         };
         let serialized_response = serde_json::to_string(&ready_probe_response)
             .expect("Serialization to JSON to probe response failed");
+        tracing::info!("Healthcheck probe response: {}", serialized_response);
         async move {
             // Generate a random UUID for each run.
             let app = Router::new()
