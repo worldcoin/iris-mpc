@@ -80,21 +80,21 @@ fn hex_to_bytes(hex: &str, byte_len: usize) -> eyre::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-pub async fn last_snapshot_timestamp(store: impl ObjectStore) -> eyre::Result<u64> {
+pub async fn last_snapshot_timestamp(store: &impl ObjectStore) -> eyre::Result<i64> {
     store
         .list_objects()
         .await?
         .into_iter()
         .filter(|f| f.ends_with(".timestamp"))
-        .filter_map(|f| f.replace(".timestamp", "").parse::<u64>().ok())
+        .filter_map(|f| f.replace(".timestamp", "").parse::<i64>().ok())
         .max()
         .ok_or_else(|| eyre::eyre!("No snapshot found"))
 }
 
 pub async fn fetch_and_parse_chunks(
-    store: impl ObjectStore + Clone,
+    store: &impl ObjectStore,
     concurrency: usize,
-) -> Pin<Box<dyn Stream<Item = eyre::Result<StoredIris>> + Send>> {
+) -> Pin<Box<dyn Stream<Item = eyre::Result<StoredIris>> + Send + '_>> {
     let chunks = store.list_objects().await.unwrap();
     stream::iter(chunks)
         .filter_map(|chunk| async move {
@@ -248,7 +248,7 @@ mod tests {
             MOCK_ENTRIES.div_ceil(MOCK_CHUNK_SIZE)
         );
 
-        let mut chunks = fetch_and_parse_chunks(store, 1).await;
+        let mut chunks = fetch_and_parse_chunks(&store, 1).await;
         let mut count = 0;
         let mut ids: HashSet<usize> = HashSet::from_iter(0..MOCK_ENTRIES);
         while let Some(chunk) = chunks.next().await {

@@ -900,6 +900,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         .load_parallelism;
 
     let load_chunks_parallelism = config.load_chunks_parallelism;
+    let db_chunks_bucket_name = config.db_chunks_bucket_name.clone();
 
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
@@ -980,14 +981,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     );
                     tokio::runtime::Handle::current().block_on(async {
                         // First fetch last snapshot from S3
-                        let s3_store = S3Store::new(s3_client, config.db_chunks_bucket_name);
+                        let s3_store = S3Store::new(s3_client, db_chunks_bucket_name);
                         let last_snapshot_timestamp = last_snapshot_timestamp(&s3_store).await?;
                         let mut stream =
                             fetch_and_parse_chunks(&s3_store, load_chunks_parallelism).await;
 
                         let now = Instant::now();
                         let mut record_counter = 0;
-                        while let Some(chunk) = stream.try_next().await? {
+                        while let Some(iris) = stream.try_next().await? {
                             actor.load_single_record(
                                 iris.index() - 1,
                                 iris.left_code(),
@@ -1010,8 +1011,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         }
 
                         // Then sync everything that was modified after snapshot generation
-                        // TODO: filter by last_modified_at > last_snapshot_timestamp
-                        let mut stream = store.stream_irises_par(parallelism).await;
+                        let mut stream = store
+                            .stream_irises_par(last_snapshot_timestamp, parallelism)
+                            .await;
                         let mut record_counter = 0;
                         while let Some(iris) = stream.try_next().await? {
                             if record_counter % 100_000 == 0 {
