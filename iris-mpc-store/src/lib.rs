@@ -1,3 +1,5 @@
+mod s3_importer;
+
 use bytemuck::cast_slice;
 use eyre::{eyre, Result};
 use futures::{
