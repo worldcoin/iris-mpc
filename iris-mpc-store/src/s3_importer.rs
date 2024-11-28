@@ -104,49 +104,46 @@ pub async fn fetch_and_parse_chunks(
                 None
             }
         })
-        .map(move |chunk| {
-            let store = store.clone();
-            async move {
-                let result = store.get_object(&chunk).await?;
-                task::spawn_blocking(move || {
-                    let cursor = Cursor::new(result);
-                    let reader = csv::ReaderBuilder::new()
-                        .has_headers(true)
-                        .buffer_capacity(CSV_BUFFER_CAPACITY)
-                        .from_reader(cursor);
+        .map(move |chunk| async move {
+            let result = store.get_object(&chunk).await?;
+            task::spawn_blocking(move || {
+                let cursor = Cursor::new(result);
+                let reader = csv::ReaderBuilder::new()
+                    .has_headers(true)
+                    .buffer_capacity(CSV_BUFFER_CAPACITY)
+                    .from_reader(cursor);
 
-                    let records: Vec<eyre::Result<StoredIris>> = reader
-                        .into_deserialize()
-                        .par_bridge()
-                        .map(|r: Result<CsvIrisRecord, _>| {
-                            let raw = r.map_err(|e| eyre::eyre!("CSV parse error: {}", e))?;
+                let records: Vec<eyre::Result<StoredIris>> = reader
+                    .into_deserialize()
+                    .par_bridge()
+                    .map(|r: Result<CsvIrisRecord, _>| {
+                        let raw = r.map_err(|e| eyre::eyre!("CSV parse error: {}", e))?;
 
-                            Ok(StoredIris {
-                                id:         raw.id.parse()?,
-                                left_code:  hex_to_bytes(
-                                    &raw.left_code,
-                                    IRIS_CODE_LENGTH * mem::size_of::<u16>(),
-                                )?,
-                                left_mask:  hex_to_bytes(
-                                    &raw.left_mask,
-                                    MASK_CODE_LENGTH * mem::size_of::<u16>(),
-                                )?,
-                                right_code: hex_to_bytes(
-                                    &raw.right_code,
-                                    IRIS_CODE_LENGTH * mem::size_of::<u16>(),
-                                )?,
-                                right_mask: hex_to_bytes(
-                                    &raw.right_mask,
-                                    MASK_CODE_LENGTH * mem::size_of::<u16>(),
-                                )?,
-                            })
+                        Ok(StoredIris {
+                            id:         raw.id.parse()?,
+                            left_code:  hex_to_bytes(
+                                &raw.left_code,
+                                IRIS_CODE_LENGTH * mem::size_of::<u16>(),
+                            )?,
+                            left_mask:  hex_to_bytes(
+                                &raw.left_mask,
+                                MASK_CODE_LENGTH * mem::size_of::<u16>(),
+                            )?,
+                            right_code: hex_to_bytes(
+                                &raw.right_code,
+                                IRIS_CODE_LENGTH * mem::size_of::<u16>(),
+                            )?,
+                            right_mask: hex_to_bytes(
+                                &raw.right_mask,
+                                MASK_CODE_LENGTH * mem::size_of::<u16>(),
+                            )?,
                         })
-                        .collect();
+                    })
+                    .collect();
 
-                    Ok::<_, eyre::Error>(stream::iter(records))
-                })
-                .await?
-            }
+                Ok::<_, eyre::Error>(stream::iter(records))
+            })
+            .await?
         })
         .buffer_unordered(concurrency)
         .flat_map(|result| match result {

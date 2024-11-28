@@ -6,7 +6,7 @@ use aws_sdk_sqs::{config::Region, Client};
 use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
 use eyre::{eyre, Context};
-use futures::TryStreamExt;
+use futures::{stream::select_all, TryStreamExt};
 use iris_mpc_common::{
     config::{json_wrapper::JsonStrWrapper, Config, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -42,7 +42,7 @@ use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
 use std::{
     backtrace::Backtrace,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     mem, panic,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -892,49 +892,37 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         // First fetch last snapshot from S3
                         let s3_store = S3Store::new(s3_client, db_chunks_bucket_name);
                         let last_snapshot_timestamp = last_snapshot_timestamp(&s3_store).await?;
-                        let mut stream =
+                        let stream_s3 =
                             fetch_and_parse_chunks(&s3_store, load_chunks_parallelism).await;
+
+                        let stream_db = Box::pin(
+                            store
+                                .stream_irises_par(last_snapshot_timestamp, parallelism)
+                                .await,
+                        );
+
+                        let mut stream = select_all(vec![stream_s3, stream_db]);
 
                         let now = Instant::now();
                         let mut record_counter = 0;
+                        let mut all_serial_ids: HashSet<i64> =
+                            HashSet::from_iter(1..=(store_len as i64));
                         while let Some(iris) = stream.try_next().await? {
-                            actor.load_single_record(
-                                iris.index() - 1,
-                                iris.left_code(),
-                                iris.left_mask(),
-                                iris.right_code(),
-                                iris.right_mask(),
-                            );
-                            record_counter += 1;
-
                             if record_counter % 100_000 == 0 {
                                 let elapsed = now.elapsed();
                                 tracing::info!(
-                                    "Loaded {} records from s3 into memory in {:?} ({:.2} \
-                                     entries/s)",
+                                    "Loaded {} records into memory in {:?} ({:.2} entries/s)",
                                     record_counter,
                                     elapsed,
                                     record_counter as f64 / elapsed.as_secs_f64()
                                 );
                             }
-                        }
 
-                        // Then sync everything that was modified after snapshot generation
-                        let mut stream = store
-                            .stream_irises_par(last_snapshot_timestamp, parallelism)
-                            .await;
-                        let mut record_counter = 0;
-                        while let Some(iris) = stream.try_next().await? {
-                            if record_counter % 100_000 == 0 {
-                                tracing::info!(
-                                    "Loaded {} records from db into memory",
-                                    record_counter
-                                );
+                            if iris.index() == 0 || iris.index() > store_len {
+                                tracing::error!("Invalid iris index {}", iris.index());
+                                return Err(eyre!("Invalid iris index {}", iris.index()));
                             }
-                            if iris.index() > store_len {
-                                tracing::error!("Inconsistent iris index {}", iris.index());
-                                return Err(eyre!("Inconsistent iris index {}", iris.index()));
-                            }
+
                             actor.load_single_record(
                                 iris.index() - 1,
                                 iris.left_code(),
@@ -942,13 +930,18 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                 iris.right_code(),
                                 iris.right_mask(),
                             );
+
+                            all_serial_ids.remove(&(iris.index() as i64 - 1));
                             record_counter += 1;
                         }
 
-                        assert_eq!(
-                            record_counter, store_len,
-                            "Loaded record count does not match db size"
-                        );
+                        if !all_serial_ids.is_empty() {
+                            tracing::error!("Not all serial_ids were loaded: {:?}", all_serial_ids);
+                            return Err(eyre!(
+                                "Not all serial_ids were loaded: {:?}",
+                                all_serial_ids
+                            ));
+                        }
 
                         tracing::info!("Preprocessing db");
                         actor.preprocess_db();
