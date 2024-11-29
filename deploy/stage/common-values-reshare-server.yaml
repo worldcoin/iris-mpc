@@ -105,11 +105,11 @@ nginxSidecar:
                    '$session_time';
       
         upstream tcp_backend {
-          server 127.0.0.1:8000;
+          server 127.0.0.1:7000;
         }
       
         server {
-          listen 8443 ssl;
+          listen 6443 ssl;
           proxy_pass tcp_backend;
       
           ssl_certificate /etc/nginx/cert/certificate.crt;
