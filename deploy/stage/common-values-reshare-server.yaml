@@ -54,7 +54,7 @@ podSecurityContext:
 serviceAccount:
   create: true
 
-command: [ "chown", "-R" "65534:65534", "/var/cache/", "&&", "/bin/reshare-server" ]
+command: [ "/bin/reshare-server" ]
 
 env:
   - name: SMPC__DATABASE__URL
@@ -71,6 +71,7 @@ service:
   enabled: false
 
 nginxSidecar:
+  image: "nginxinc/nginx-unprivileged:1.27"
   enabled: true
   port: 6443
   secrets:
@@ -104,7 +105,7 @@ nginxSidecar:
                    '$status $bytes_sent';
 
           server {
-            listen 8443 ssl http2;
+            listen 6443 ssl http2;
             http2 on;
       
             ssl_certificate /etc/nginx/cert/certificate.crt;
