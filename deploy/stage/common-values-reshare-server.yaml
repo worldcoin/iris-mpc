@@ -96,40 +96,40 @@ nginxSidecar:
       pid        /tmp/nginx.pid;
       
       events {
-        worker_connections  1024;
+          worker_connections  1024;
       }
       
       http {
-        log_format basic '$remote_addr [$time_local] '
+          log_format basic '$remote_addr [$time_local] '
                    '$status $bytes_sent';
 
-        server {
-          listen 6443 ssl;
-          http2 on;
+          server {
+            listen 6443 ssl;
+            http2 on;
       
-          ssl_certificate /etc/nginx/cert/certificate.crt;
-          ssl_certificate_key /etc/nginx/cert/key.pem;
+            ssl_certificate /etc/nginx/cert/certificate.crt;
+            ssl_certificate_key /etc/nginx/cert/key.pem;
+        
+            ssl_protocols TLSv1.3;
+            ssl_ciphers HIGH:!aNULL:!MD5;
+        
+            # Enable session resumption to improve performance
+            ssl_session_cache shared:SSL:10m;
+            ssl_session_timeout 1h;
+            
+            location / {
+              # Forward gRPC traffic to the gRPC server on port 7000
+              grpc_pass grpc://127.0.0.1:7000;
+              error_page 502 = /error502grpc;    # Custom error page for GRPC backend issues
+            }
+        
+            # Custom error page
+            location = /error502grpc {
+              internal;
+              default_type text/plain;
+              return 502 "Bad Gateway: gRPC server unreachable.";
+            }
       
-          ssl_protocols TLSv1.3;
-          ssl_ciphers HIGH:!aNULL:!MD5;
-      
-          # Enable session resumption to improve performance
-          ssl_session_cache shared:SSL:10m;
-          ssl_session_timeout 1h;
-          
-          access_log /dev/stdout basic;
-          
-          location / {
-            # Forward gRPC traffic to the gRPC server on port 7000
-            grpc_pass grpc://127.0.0.1:7000;
-            error_page 502 = /error502grpc;    # Custom error page for GRPC backend issues
+            access_log /dev/stdout basic;
           }
-      
-          # Custom error page
-          location = /error502grpc {
-            internal;
-            default_type text/plain;
-            return 502 "Bad Gateway: gRPC server unreachable.";
-          }
-        }
       }
