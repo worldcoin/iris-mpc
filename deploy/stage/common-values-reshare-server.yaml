@@ -71,7 +71,6 @@ service:
   enabled: false
 
 nginxSidecar:
-  image: "nginxinc/nginx:1.27"
   enabled: true
   port: 6443
   secrets:
