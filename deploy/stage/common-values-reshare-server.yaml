@@ -54,7 +54,7 @@ podSecurityContext:
 serviceAccount:
   create: true
 
-command: [ "/bin/reshare-server" ]
+command: [ "chown", "-R" "65534:65534", "/var/cache/", "&&", "/bin/reshare-server" ]
 
 env:
   - name: SMPC__DATABASE__URL
@@ -104,7 +104,7 @@ nginxSidecar:
                    '$status $bytes_sent';
 
           server {
-            listen 6443 ssl;
+            listen 8443 ssl http2;
             http2 on;
       
             ssl_certificate /etc/nginx/cert/certificate.crt;
@@ -112,7 +112,7 @@ nginxSidecar:
         
             ssl_protocols TLSv1.3;
             ssl_ciphers HIGH:!aNULL:!MD5;
-        
+
             # Enable session resumption to improve performance
             ssl_session_cache shared:SSL:10m;
             ssl_session_timeout 1h;
@@ -122,14 +122,15 @@ nginxSidecar:
               grpc_pass grpc://127.0.0.1:7000;
               error_page 502 = /error502grpc;    # Custom error page for GRPC backend issues
             }
-        
+
             # Custom error page
             location = /error502grpc {
               internal;
               default_type text/plain;
               return 502 "Bad Gateway: gRPC server unreachable.";
             }
-      
+            
             access_log /dev/stdout basic;
+      
           }
       }
