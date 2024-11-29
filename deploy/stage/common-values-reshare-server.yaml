@@ -99,18 +99,13 @@ nginxSidecar:
         worker_connections  1024;
       }
       
-      stream {
+      http {
         log_format basic '$remote_addr [$time_local] '
-                   '$protocol $status $bytes_sent $bytes_received '
-                   '$session_time';
-      
-        upstream tcp_backend {
-          server 127.0.0.1:7000;
-        }
-      
+                   '$status $bytes_sent';
+
         server {
           listen 6443 ssl;
-          proxy_pass tcp_backend;
+          http2 on;
       
           ssl_certificate /etc/nginx/cert/certificate.crt;
           ssl_certificate_key /etc/nginx/cert/key.pem;
@@ -121,7 +116,20 @@ nginxSidecar:
           # Enable session resumption to improve performance
           ssl_session_cache shared:SSL:10m;
           ssl_session_timeout 1h;
-      
+          
           access_log /dev/stdout basic;
+          
+          location / {
+            # Forward gRPC traffic to the gRPC server on port 7000
+            grpc_pass grpc://127.0.0.1:7000;
+            error_page 502 = /error502grpc;    # Custom error page for GRPC backend issues
+          }
+      
+          # Custom error page
+          location = /error502grpc {
+            internal;
+            default_type text/plain;
+            return 502 "Bad Gateway: gRPC server unreachable.";
+          }
         }
       }
