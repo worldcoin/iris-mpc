@@ -101,10 +101,7 @@ env:
     value: '["iris-mpc-node.1.stage.smpcv2.worldcoin.dev","iris-mpc-node.2.stage.smpcv2.worldcoin.dev","iris-mpc-node.3.stage.smpcv2.worldcoin.dev"]'
 
   - name: SMPC__IMAGE_NAME
-    valueFrom:
-      resourceFieldRef:
-        containerName: iris-mpc
-        resource: image
+    value: $(IMAGE_NAME)
 
 initContainer:
   enabled: true
