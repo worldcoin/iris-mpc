@@ -48,8 +48,8 @@ nodeSelector:
   beta.kubernetes.io/instance-type: t3.2xlarge
 
 podSecurityContext:
-  runAsUser: 65534
-  runAsGroup: 65534
+  runAsUser: 405
+  runAsGroup: 405
 
 serviceAccount:
   create: true
