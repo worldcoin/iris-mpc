@@ -65,6 +65,10 @@ impl LocalRuntime {
         Self::mock_setup(NetworkType::LocalChannel).await
     }
 
+    pub async fn mock_setup_with_grpc() -> eyre::Result<Self> {
+        Self::mock_setup(NetworkType::GrpcChannel).await
+    }
+
     pub async fn new_with_network_type(
         identities: Vec<Identity>,
         seeds: Vec<PrfSeed>,
