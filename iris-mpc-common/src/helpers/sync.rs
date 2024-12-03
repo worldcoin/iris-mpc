@@ -45,6 +45,7 @@ impl SyncResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::macos::raw::stat;
 
     #[test]
     fn test_compare_states_sync() {
@@ -79,11 +80,17 @@ mod tests {
         ];
 
         let sync_res = SyncResult {
-            my_state:   states[0].clone(),
+            my_state:   states[2].clone(),
             all_states: states.clone(),
         };
         assert_eq!(sync_res.must_rollback_storage(), Some(123)); // most late.
         assert_eq!(sync_res.deleted_request_ids(), deleted_request_ids);
+
+        let sync_res_2 = SyncResult {
+            my_state:   states[0].clone(),
+            all_states: states.clone(),
+        };
+        assert_eq!(sync_res_2.must_rollback_storage(), Some(123)); // most late.
     }
 
     fn some_state() -> SyncState {

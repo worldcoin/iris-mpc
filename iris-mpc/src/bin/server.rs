@@ -19,9 +19,10 @@ use iris_mpc_common::{
         shutdown_handler::ShutdownHandler,
         smpc_request::{
             create_message_type_attribute_map, CircuitBreakerRequest, IdentityDeletionRequest,
-            IdentityDeletionResult, ReceiveRequestError, SQSMessage, UniquenessRequest,
-            UniquenessResult, CIRCUIT_BREAKER_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE,
-            SMPC_MESSAGE_TYPE_ATTRIBUTE, UNIQUENESS_MESSAGE_TYPE,
+            IdentityDeletionResult, ReceiveRequestError, RollbackEvent, SQSMessage,
+            UniquenessRequest, UniquenessResult, CIRCUIT_BREAKER_MESSAGE_TYPE,
+            IDENTITY_DELETION_MESSAGE_TYPE, ROLLBACK_MESSAGE_TYPE, SMPC_MESSAGE_TYPE_ATTRIBUTE,
+            UNIQUENESS_MESSAGE_TYPE,
         },
         sync::SyncState,
         task_monitor::TaskMonitor,
@@ -560,6 +561,24 @@ async fn send_results_to_sns(
     Ok(())
 }
 
+async fn send_rollback_to_sns(
+    rollback_event: String,
+    sns_client: &SNSClient,
+    config: &Config,
+) -> eyre::Result<()> {
+    let message_attributes = create_message_type_attribute_map(ROLLBACK_MESSAGE_TYPE);
+    sns_client
+        .publish()
+        .topic_arn(&config.results_topic_arn)
+        .message(rollback_event)
+        .message_group_id(format!("party-id-{}", config.party_id))
+        .set_message_attributes(Some(message_attributes))
+        .send()
+        .await?;
+    metrics::counter!("result.sent", "type" => ROLLBACK_MESSAGE_TYPE.to_owned()).increment(1);
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     dotenvy::dotenv().ok();
@@ -870,6 +889,17 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     db_len,
                 ));
             }
+            // In order to let signup-service be informed of the rollback for that specific
+            // node Note: We can only let signup-service know of uniqueness
+            // results linked to rollbacks
+            let rollback_event = RollbackEvent {
+                node_id:       config.party_id,
+                new_serial_id: db_len as u32,
+                old_serial_id: store_len as u32,
+            };
+            let rollback_response = serde_json::to_string(&rollback_event).unwrap();
+            send_rollback_to_sns(rollback_response, &sns_client, &config).await?;
+
             tracing::warn!(
                 "Rolling back from database length {} to other nodes length {}",
                 store_len,

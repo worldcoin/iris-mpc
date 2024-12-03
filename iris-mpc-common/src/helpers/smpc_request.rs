@@ -109,6 +109,7 @@ pub const SMPC_MESSAGE_TYPE_ATTRIBUTE: &str = "message_type";
 pub const IDENTITY_DELETION_MESSAGE_TYPE: &str = "identity_deletion";
 pub const CIRCUIT_BREAKER_MESSAGE_TYPE: &str = "circuit_breaker";
 pub const UNIQUENESS_MESSAGE_TYPE: &str = "uniqueness";
+pub const ROLLBACK_MESSAGE_TYPE: &str = "rollback";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct UniquenessRequest {
@@ -310,6 +311,13 @@ pub struct UniquenessResult {
     pub matched_serial_ids_left:   Option<Vec<u32>>,
     pub matched_serial_ids_right:  Option<Vec<u32>>,
     pub matched_batch_request_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RollbackEvent {
+    pub node_id:       usize,
+    pub old_serial_id: u32,
+    pub new_serial_id: u32,
 }
 
 impl UniquenessResult {
