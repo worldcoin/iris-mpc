@@ -12,7 +12,10 @@ use crate::{
         compare_threshold_and_open, cross_compare, galois_ring_pairwise_distance,
         galois_ring_to_rep3,
     },
-    shares::share::{DistanceShare, Share},
+    shares::{
+        ring_impl::RingElement,
+        share::{DistanceShare, Share},
+    },
 };
 use aes_prng::AesRng;
 use hawk_pack::{
@@ -253,9 +256,23 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
 }
 
 impl LocalNetAby3NgStoreProtocol {
+    pub fn get_trivial_share(&self, distance: u16) -> Share<u16> {
+        let player = self.get_owner_index();
+        let distance_elem = RingElement(distance);
+        let zero_elem = RingElement(0_u16);
+
+        match player {
+            0 => Share::new(distance_elem, zero_elem),
+            1 => Share::new(zero_elem, distance_elem),
+            2 => Share::new(zero_elem, zero_elem),
+            _ => panic!("Invalid player index"),
+        }
+    }
+
     async fn graph_from_plain(
         &mut self,
         graph_store: &GraphMem<PlaintextStore>,
+        recompute: bool,
     ) -> GraphMem<LocalNetAby3NgStoreProtocol> {
         let ep = graph_store.get_entry_point().await;
 
@@ -267,9 +284,16 @@ impl LocalNetAby3NgStoreProtocol {
             let mut shared_links = HashMap::new();
             for (source_v, queue) in links {
                 let mut shared_queue = vec![];
-                for (target_v, _) in queue.as_vec_ref() {
-                    // recompute distances of graph edges from scratch
-                    let distance = self.eval_distance(source_v, target_v).await;
+                for (target_v, dist) in queue.as_vec_ref() {
+                    let distance = if recompute {
+                        // recompute distances of graph edges from scratch
+                        self.eval_distance(source_v, target_v).await
+                    } else {
+                        DistanceShare::new(
+                            self.get_trivial_share(dist.0),
+                            self.get_trivial_share(dist.1),
+                        )
+                    };
                     shared_queue.push((*target_v, distance.clone()));
                 }
                 shared_links.insert(
@@ -286,10 +310,15 @@ impl LocalNetAby3NgStoreProtocol {
 impl LocalNetAby3NgStoreProtocol {
     /// Generates 3 pairs of vector stores and graphs from a random plaintext
     /// vector store and graph, which are returned as well.
+    /// The network type is specified by the user.
+    /// A recompute flag is used to determine whether to recompute the distances
+    /// from stored shares. If recompute is set to false, the distances are
+    /// naively converted from plaintext.
     pub async fn lazy_random_setup<R: RngCore + Clone + CryptoRng>(
         rng: &mut R,
         database_size: usize,
         network_t: NetworkType,
+        recompute: bool,
     ) -> eyre::Result<(
         (PlaintextStore, GraphMem<PlaintextStore>),
         Vec<(Self, GraphMem<Self>)>,
@@ -307,7 +336,9 @@ impl LocalNetAby3NgStoreProtocol {
             jobs.spawn(async move {
                 (
                     store.clone(),
-                    store.graph_from_plain(&plaintext_graph_store).await,
+                    store
+                        .graph_from_plain(&plaintext_graph_store, recompute)
+                        .await,
                 )
             });
         }
@@ -323,6 +354,7 @@ impl LocalNetAby3NgStoreProtocol {
     pub async fn lazy_random_setup_with_local_channel<R: RngCore + Clone + CryptoRng>(
         rng: &mut R,
         database_size: usize,
+        recompute: bool,
     ) -> eyre::Result<(
         (PlaintextStore, GraphMem<PlaintextStore>),
         Vec<(
@@ -330,7 +362,7 @@ impl LocalNetAby3NgStoreProtocol {
             GraphMem<LocalNetAby3NgStoreProtocol>,
         )>,
     )> {
-        Self::lazy_random_setup(rng, database_size, NetworkType::LocalChannel).await
+        Self::lazy_random_setup(rng, database_size, NetworkType::LocalChannel, recompute).await
     }
 
     /// Generates 3 pairs of vector stores and graphs corresponding to each
@@ -480,6 +512,7 @@ mod tests {
             &mut rng,
             database_size,
             network_t.clone(),
+            true,
         )
         .await
         .unwrap();

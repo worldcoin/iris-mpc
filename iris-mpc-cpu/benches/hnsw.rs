@@ -177,6 +177,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
             LocalNetAby3NgStoreProtocol::lazy_random_setup_with_local_channel(
                 &mut rng,
                 database_size,
+                false,
             )
             .await
             .unwrap()
