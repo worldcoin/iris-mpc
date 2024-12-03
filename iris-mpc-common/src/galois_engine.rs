@@ -44,9 +44,10 @@ pub mod degree4 {
             .for_each(|chunk| chunk.rotate_left(by * 4));
     }
 
-    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub struct GaloisRingTrimmedMaskCodeShare {
         pub id:    usize,
+        #[serde(with = "BigArray")]
         pub coefs: [u16; MASK_CODE_LENGTH],
     }
 

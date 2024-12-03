@@ -16,6 +16,7 @@ backoff = {version="0.4.0", features = ["tokio"]}
 bincode.workspace = true
 bytes = "1.7"
 bytemuck.workspace = true
+clap.workspace = true
 dashmap = "6.1.0"
 eyre.workspace = true
 futures.workspace = true
@@ -35,6 +36,7 @@ tonic = "0.12.3"
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-test = "0.2.5"
+uuid.workspace = true
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio"] }
@@ -48,3 +50,7 @@ harness = false
 
 [[example]]
 name = "hnsw-ex"
+
+[[bin]]
+name = "local_hnsw"
+path = "bin/local_hnsw.rs"
