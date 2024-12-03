@@ -188,7 +188,7 @@ mod tests {
             {
                 let mut writer = csv::Writer::from_writer(&mut csv);
                 writer
-                    .write_record(&["id", "left_code", "left_mask", "right_code", "right_mask"])
+                    .write_record(["id", "left_code", "left_mask", "right_code", "right_mask"])
                     .unwrap();
 
                 for record in records {
@@ -250,7 +250,7 @@ mod tests {
             let end_idx = min((i + 1) * MOCK_CHUNK_SIZE, MOCK_ENTRIES) - 1;
             store.add_test_data(
                 &format!("{start_idx}_{end_idx}.bin"),
-                (start_idx..=end_idx).map(|i| dummy_entry(i)).collect(),
+                (start_idx..=end_idx).map(dummy_entry).collect(),
             );
         }
 
