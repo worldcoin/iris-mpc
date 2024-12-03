@@ -223,6 +223,7 @@ impl LocalNetAby3NgStoreProtocol {
     }
 }
 
+/// Assumes that the first iris of each pair is preprocessed.
 async fn eval_pairwise_distances(
     pairs: Vec<(GaloisRingSharedIris, GaloisRingSharedIris)>,
     player_session: &mut Session,
