@@ -57,7 +57,7 @@ pub struct Query {
     pub processed_query: GaloisRingPoint,
 }
 
-type QueryId = Arc<Query>;
+type QueryRef = Arc<Query>;
 
 #[derive(Default, Clone)]
 pub struct Aby3NgStorePlayer {
@@ -75,7 +75,7 @@ impl Aby3NgStorePlayer {
         Aby3NgStorePlayer { points: data }
     }
 
-    pub fn prepare_query(&mut self, raw_query: GaloisRingSharedIris) -> QueryId {
+    pub fn prepare_query(&mut self, raw_query: GaloisRingSharedIris) -> QueryRef {
         let mut preprocessed_query = raw_query.clone();
         preprocessed_query.code.preprocess_iris_code_query_share();
         preprocessed_query.mask.preprocess_mask_code_query_share();
@@ -92,7 +92,7 @@ impl Aby3NgStorePlayer {
 }
 
 impl Aby3NgStorePlayer {
-    fn insert(&mut self, query: &QueryId) -> VectorId {
+    fn insert(&mut self, query: &QueryRef) -> VectorId {
         // The query is now accepted in the store.
         self.points.push(query.query.clone());
 
@@ -188,7 +188,7 @@ pub async fn setup_local_store_aby3_players(
 }
 
 impl LocalNetAby3NgStoreProtocol {
-    pub fn prepare_query(&mut self, code: GaloisRingSharedIris) -> QueryId {
+    pub fn prepare_query(&mut self, code: GaloisRingSharedIris) -> QueryRef {
         self.storage.prepare_query(code)
     }
 }
@@ -207,7 +207,7 @@ async fn eval_pairwise_distances(
 }
 
 impl VectorStore for LocalNetAby3NgStoreProtocol {
-    type QueryRef = QueryId; // Point ID, pending insertion.
+    type QueryRef = QueryRef; // Point ID, pending insertion.
     type VectorRef = VectorId; // Point ID, inserted.
     type DistanceRef = DistanceShare<u16>; // Distance represented as shares.
 
