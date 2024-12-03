@@ -87,6 +87,9 @@ pub struct Config {
 
     #[serde(default = "default_load_chunks_parallelism")]
     pub load_chunks_parallelism: usize,
+
+    #[serde(default)]
+    pub image_name: String,
 }
 
 fn default_load_chunks_parallelism() -> usize {

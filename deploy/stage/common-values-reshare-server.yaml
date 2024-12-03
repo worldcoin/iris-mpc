@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:v0.10.2"
+image: "ghcr.io/worldcoin/iris-mpc:v0.10.4"
 
 environment: stage
 replicaCount: 1
@@ -48,8 +48,8 @@ nodeSelector:
   beta.kubernetes.io/instance-type: t3.2xlarge
 
 podSecurityContext:
-  runAsUser: 65534
-  runAsGroup: 65534
+  runAsUser: 405
+  runAsGroup: 405
 
 serviceAccount:
   create: true
@@ -91,20 +91,24 @@ nginxSidecar:
   config:
     nginx.conf: |
       worker_processes  auto;
-      
+  
       error_log  /dev/stderr notice;
       pid        /tmp/nginx.pid;
-      
+  
       events {
         worker_connections  1024;
       }
-      
+  
       http {
+        proxy_temp_path       /tmp/proxy_temp;
+        client_body_temp_path /tmp/client_temp;
+        fastcgi_temp_path     /tmp/fastcgi_temp;
+        uwsgi_temp_path       /tmp/uwsgi_temp;
+        scgi_temp_path        /tmp/scgi_temp;
+  
         log_format basic '$remote_addr [$time_local] '
-                   '$status $bytes_sent';
+          '$status $bytes_sent';
       
-        access_log /dev/stdout basic;
-
         server {
           listen 6443 ssl;
           http2 on;
@@ -131,5 +135,7 @@ nginxSidecar:
             default_type text/plain;
             return 502 "Bad Gateway: gRPC server unreachable.";
           }
+  
+          access_log /dev/stdout basic;
         }
       }

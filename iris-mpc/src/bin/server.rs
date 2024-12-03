@@ -40,6 +40,7 @@ use iris_mpc_store::{
 };
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
+use serde::{Deserialize, Serialize};
 use std::{
     backtrace::Backtrace,
     collections::{HashMap, HashSet},
@@ -699,12 +700,28 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let is_ready_flag = Arc::new(AtomicBool::new(false));
     let is_ready_flag_cloned = Arc::clone(&is_ready_flag);
 
+    #[derive(Serialize, Deserialize)]
+    struct ReadyProbeResponse {
+        image_name: String,
+        uuid:       String,
+    }
+
     let _health_check_abort = background_tasks.spawn({
         let uuid = uuid::Uuid::new_v4().to_string();
+        let ready_probe_response = ReadyProbeResponse {
+            image_name: config.image_name.clone(),
+            uuid,
+        };
+        let serialized_response = serde_json::to_string(&ready_probe_response)
+            .expect("Serialization to JSON to probe response failed");
+        tracing::info!("Healthcheck probe response: {}", serialized_response);
         async move {
             // Generate a random UUID for each run.
             let app = Router::new()
-                .route("/health", get(move || async move { uuid.to_string() }))
+                .route(
+                    "/health",
+                    get(move || async move { serialized_response.clone() }),
+                )
                 .route(
                     "/ready",
                     get({
@@ -736,6 +753,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
     let mut heartbeat_tx = Some(heartbeat_tx);
     let all_nodes = config.node_hostnames.clone();
+    let image_name = config.image_name.clone();
     let _heartbeat = background_tasks.spawn(async move {
         let next_node = &all_nodes[(config.party_id + 1) % 3];
         let prev_node = &all_nodes[(config.party_id + 2) % 3];
@@ -763,9 +781,23 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     );
                 }
 
-                let uuid = res.unwrap().text().await?;
+                let probe_response = res
+                    .unwrap()
+                    .json::<ReadyProbeResponse>()
+                    .await
+                    .expect("Deserialization of probe response failed");
+                if probe_response.image_name != image_name {
+                    // Do not create a panic as we still can continue to process before its
+                    // updated
+                    tracing::error!(
+                        "Host {} is using image {} which differs from current node image: {}",
+                        host,
+                        probe_response.image_name.clone(),
+                        image_name
+                    );
+                }
                 if last_response[i] == String::default() {
-                    last_response[i] = uuid;
+                    last_response[i] = probe_response.uuid;
                     connected[i] = true;
 
                     // If all nodes are connected, notify the main thread.
@@ -774,7 +806,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             tx.send(()).unwrap();
                         }
                     }
-                } else if uuid != last_response[i] {
+                } else if probe_response.uuid != last_response[i] {
                     // If the UUID response is different, the node has restarted without us
                     // noticing. Our main NCCL connections cannot recover from
                     // this, so we panic.

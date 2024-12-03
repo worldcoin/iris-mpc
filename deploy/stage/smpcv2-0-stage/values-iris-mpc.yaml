@@ -69,7 +69,7 @@ env:
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
-    value: "0"
+    value: "10"
 
   - name: SMPC__MAX_DB_SIZE
     value: "1000000"
@@ -99,6 +99,9 @@ env:
 
   - name: SMPC__NODE_HOSTNAMES
     value: '["iris-mpc-node.1.stage.smpcv2.worldcoin.dev","iris-mpc-node.2.stage.smpcv2.worldcoin.dev","iris-mpc-node.3.stage.smpcv2.worldcoin.dev"]'
+
+  - name: SMPC__IMAGE_NAME
+    value: $(IMAGE_NAME)
 
 initContainer:
   enabled: true
