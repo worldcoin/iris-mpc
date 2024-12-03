@@ -178,7 +178,7 @@ impl Store {
             )
             .bind(start_id as i64)
             .bind(end_id as i64)
-            .bind(min_last_modified_at as i64)
+            .bind(min_last_modified_at)
             .fetch(&self.pool)
             .map_err(Into::into);
 

@@ -47,18 +47,32 @@ impl ObjectStore for S3Store {
     }
 
     async fn list_objects(&self) -> eyre::Result<Vec<String>> {
-        let objects = self
-            .client
-            .list_objects_v2()
-            .bucket(&self.bucket)
-            .send()
-            .await?;
+        let mut objects = Vec::new();
+        let mut continuation_token = None;
 
-        Ok(objects
-            .contents()
-            .iter()
-            .filter_map(|obj| obj.key().map(String::from))
-            .collect())
+        loop {
+            let mut request = self.client.list_objects_v2().bucket(&self.bucket);
+
+            if let Some(token) = continuation_token {
+                request = request.continuation_token(token);
+            }
+
+            let response = request.send().await?;
+
+            objects.extend(
+                response
+                    .contents()
+                    .iter()
+                    .filter_map(|obj| obj.key().map(String::from)),
+            );
+
+            match response.next_continuation_token() {
+                Some(token) => continuation_token = Some(token.to_string()),
+                None => break,
+            }
+        }
+
+        Ok(objects)
     }
 }
 
