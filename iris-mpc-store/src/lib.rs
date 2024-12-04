@@ -485,7 +485,7 @@ mod tests {
 
     use super::*;
     use futures::TryStreamExt;
-    use iris_mpc_common::helpers::smpc_request::UniquenessResult;
+    use iris_mpc_common::helpers::smpc_response::UniquenessResult;
 
     #[tokio::test]
     async fn test_store() -> Result<()> {
