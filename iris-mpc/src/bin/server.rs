@@ -18,10 +18,13 @@ use iris_mpc_common::{
         kms_dh::derive_shared_secret,
         shutdown_handler::ShutdownHandler,
         smpc_request::{
-            create_message_type_attribute_map, CircuitBreakerRequest, IdentityDeletionRequest,
-            IdentityDeletionResult, ReceiveRequestError, SQSMessage, UniquenessRequest,
-            UniquenessResult, CIRCUIT_BREAKER_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE,
-            SMPC_MESSAGE_TYPE_ATTRIBUTE, UNIQUENESS_MESSAGE_TYPE,
+            CircuitBreakerRequest, IdentityDeletionRequest, ReceiveRequestError, SQSMessage,
+            UniquenessRequest, CIRCUIT_BREAKER_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE,
+            UNIQUENESS_MESSAGE_TYPE,
+        },
+        smpc_response::{
+            create_message_type_attribute_map, IdentityDeletionResult, UniquenessResult,
+            ERROR_FAILED_TO_GET_IRIS_SHARES, SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
         sync::SyncState,
         task_monitor::TaskMonitor,
@@ -118,13 +121,16 @@ fn preprocess_iris_message_shares(
 async fn receive_batch(
     party_id: usize,
     client: &Client,
-    queue_url: &String,
+    sns_client: &SNSClient,
+    config: &Config,
     store: &Store,
     skip_request_ids: &[String],
     shares_encryption_key_pairs: SharesEncryptionKeyPairs,
-    max_batch_size: usize,
     shutdown_handler: &ShutdownHandler,
+    error_result_attributes: &HashMap<String, MessageAttributeValue>,
 ) -> eyre::Result<Option<BatchQuery>, ReceiveRequestError> {
+    let max_batch_size = config.clone().max_batch_size;
+    let queue_url = &config.clone().requests_queue_url;
     if shutdown_handler.is_shutting_down() {
         tracing::info!("Stopping batch receive due to shutdown signal...");
         return Ok(None);
@@ -349,8 +355,7 @@ async fn receive_batch(
             tokio::time::sleep(SQS_POLLING_INTERVAL).await;
         }
     }
-
-    for handle in handles {
+    for (index, handle) in handles.into_iter().enumerate() {
         let (
             (
                 (
@@ -380,6 +385,17 @@ async fn receive_batch(
                 tracing::error!("Failed to process iris shares: {:?}", e);
                 // If we failed to process the iris shares, we include a dummy entry in the
                 // batch in order to keep the same order across nodes
+
+                send_error_results_to_sns(
+                    batch_query.request_ids[index].clone(),
+                    &batch_query.metadata[index],
+                    sns_client,
+                    config,
+                    error_result_attributes,
+                    UNIQUENESS_MESSAGE_TYPE,
+                    ERROR_FAILED_TO_GET_IRIS_SHARES,
+                )
+                .await?;
                 let dummy_code_share = GaloisRingIrisCodeShare::default_for_party(party_id);
                 let dummy_mask_share = GaloisRingTrimmedMaskCodeShare::default_for_party(party_id);
                 (
@@ -532,6 +548,43 @@ async fn initialize_chacha_seeds(
     Ok(chacha_seeds)
 }
 
+async fn send_error_results_to_sns(
+    signup_id: String,
+    metadata: &BatchMetadata,
+    sns_client: &SNSClient,
+    config: &Config,
+    base_message_attributes: &HashMap<String, MessageAttributeValue>,
+    message_type: &str,
+    error_reason: &str,
+) -> eyre::Result<()> {
+    let message: UniquenessResult = UniquenessResult {
+        node_id: config.party_id,
+        serial_id: None,
+        is_match: false,
+        signup_id,
+        matched_serial_ids: None,
+        matched_serial_ids_left: None,
+        matched_serial_ids_right: None,
+        matched_batch_request_ids: None,
+        error: Some(true),
+        error_reason: Some(String::from(error_reason)),
+    };
+    let message_serialised = serde_json::to_string(&message)?;
+    let mut message_attributes = base_message_attributes.clone();
+    let trace_attributes = construct_message_attributes(&metadata.trace_id, &metadata.span_id)?;
+    message_attributes.extend(trace_attributes);
+    sns_client
+        .publish()
+        .topic_arn(&config.results_topic_arn)
+        .message(message_serialised)
+        .message_group_id(format!("party-id-{}", config.party_id))
+        .set_message_attributes(Some(message_attributes))
+        .send()
+        .await?;
+    metrics::counter!("result.sent", "type" => message_type.to_owned()+"_error").increment(1);
+
+    Ok(())
+}
 async fn send_results_to_sns(
     result_events: Vec<String>,
     metadata: &[BatchMetadata],
@@ -1186,7 +1239,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("⚓️ ANCHOR: Start the main loop");
 
     let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
-
+    let error_result_attribute = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let res: eyre::Result<()> = async {
         tracing::info!("Entering main loop");
         // **Tensor format of queries**
@@ -1210,12 +1263,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         let mut next_batch = receive_batch(
             party_id,
             &sqs_client,
-            &config.requests_queue_url,
+            &sns_client,
+            &config,
             &store,
             &skip_request_ids,
             shares_encryption_key_pair.clone(),
-            config.max_batch_size,
             &shutdown_handler,
+            &error_result_attribute,
         );
 
         let dummy_shares_for_deletions = get_dummy_shares_for_deletion(party_id);
@@ -1262,12 +1316,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             next_batch = receive_batch(
                 party_id,
                 &sqs_client,
-                &config.requests_queue_url,
+                &sns_client,
+                &config,
                 &store,
                 &skip_request_ids,
                 shares_encryption_key_pair.clone(),
-                config.max_batch_size,
                 &shutdown_handler,
+                &error_result_attribute,
             );
 
             // await the result

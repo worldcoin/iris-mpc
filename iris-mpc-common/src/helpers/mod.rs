@@ -5,6 +5,7 @@ pub mod kms_dh;
 pub mod sha256;
 pub mod shutdown_handler;
 pub mod smpc_request;
+pub mod smpc_response;
 pub mod sqs_s3_helper;
 pub mod sync;
 pub mod task_monitor;
