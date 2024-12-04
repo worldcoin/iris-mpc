@@ -712,7 +712,7 @@ impl ServerActor {
         let insertion_list = distribute_insertions(&insertion_list, &self.current_db_sizes);
 
         // Calculate the new indices for the inserted queries
-        let matches = calculate_insertion_indices(
+        let mut matches = calculate_insertion_indices(
             &mut merged_results,
             &insertion_list,
             &self.current_db_sizes,
@@ -757,6 +757,15 @@ impl ServerActor {
             }
         }
 
+        // Check for supermatchers for v1 compatibility and mark them as non-unique
+        const SUPERMATCH_THRESHOLD: usize = 4_000;
+        for i in 0..batch_size {
+            if match_counters[i] > SUPERMATCH_THRESHOLD {
+                matches[i] = true;
+            }
+        }
+
+        // Fetch the partial matches
         let (partial_match_ids_left, partial_match_ids_right) = if self.return_partial_results {
             // Transfer the partial results to the host
             let partial_match_counters_left = self
