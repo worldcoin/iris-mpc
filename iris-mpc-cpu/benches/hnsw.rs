@@ -174,7 +174,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
 
         let (_, secret_searcher) = rt.block_on(async move {
             let mut rng = AesRng::seed_from_u64(0_u64);
-            LocalNetAby3NgStoreProtocol::lazy_random_setup_with_grpc(&mut rng, database_size)
+            LocalNetAby3NgStoreProtocol::lazy_random_setup_with_grpc(&mut rng, database_size, false)
                 .await
                 .unwrap()
         });
