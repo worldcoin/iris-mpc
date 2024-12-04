@@ -23,20 +23,8 @@ use hawk_pack::{
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt::Debug, vec};
+use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
 use tokio::task::JoinSet;
-use uuid::Uuid;
-
-#[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct QueryId {
-    id: PointId,
-}
-
-impl From<PointId> for QueryId {
-    fn from(id: PointId) -> Self {
-        QueryId { id }
-    }
-}
 
 #[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct VectorId {
@@ -63,16 +51,17 @@ impl From<usize> for VectorId {
 
 type GaloisRingPoint = GaloisRingSharedIris;
 
-#[derive(Clone)]
-struct Query {
+#[derive(Clone, Serialize, Deserialize, Hash, Eq, PartialEq, Debug)]
+pub struct Query {
     pub query:           GaloisRingPoint,
     pub processed_query: GaloisRingPoint,
 }
 
+type QueryRef = Arc<Query>;
+
 #[derive(Default, Clone)]
 pub struct Aby3NgStorePlayer {
-    points:  Vec<GaloisRingPoint>,
-    queries: HashMap<QueryId, Query>,
+    points: Vec<GaloisRingPoint>,
 }
 
 impl std::fmt::Debug for Aby3NgStorePlayer {
@@ -83,35 +72,18 @@ impl std::fmt::Debug for Aby3NgStorePlayer {
 
 impl Aby3NgStorePlayer {
     pub fn new_with_shared_db(data: Vec<GaloisRingSharedIris>) -> Self {
-        Aby3NgStorePlayer {
-            points:  data,
-            queries: HashMap::new(),
-        }
+        Aby3NgStorePlayer { points: data }
     }
 
-    pub fn prepare_query(&mut self, raw_query: GaloisRingSharedIris) -> QueryId {
+    pub fn prepare_query(&mut self, raw_query: GaloisRingSharedIris) -> QueryRef {
         let mut preprocessed_query = raw_query.clone();
         preprocessed_query.code.preprocess_iris_code_query_share();
         preprocessed_query.mask.preprocess_mask_code_query_share();
 
-        let query_id = QueryId {
-            id: (Uuid::new_v4().as_u64_pair().0 as usize).into(),
-        };
-
-        self.queries.insert(query_id, Query {
+        Arc::new(Query {
             query:           raw_query,
             processed_query: preprocessed_query,
-        });
-
-        query_id
-    }
-
-    pub fn get_query(&self, query_id: &QueryId) -> &GaloisRingPoint {
-        &self.queries[query_id].query
-    }
-
-    pub fn get_processed_query(&self, query_id: &QueryId) -> &GaloisRingPoint {
-        &self.queries[query_id].processed_query
+        })
     }
 
     pub fn get_vector(&self, vector: &VectorId) -> &GaloisRingPoint {
@@ -120,11 +92,9 @@ impl Aby3NgStorePlayer {
 }
 
 impl Aby3NgStorePlayer {
-    fn insert(&mut self, query: &QueryId) -> VectorId {
+    fn insert(&mut self, query: &QueryRef) -> VectorId {
         // The query is now accepted in the store.
-        self.points.push(self.get_query(query).clone());
-        // Remove query from the list of queries.
-        self.queries.remove(query);
+        self.points.push(query.query.clone());
 
         let new_id = self.points.len() - 1;
         VectorId { id: new_id.into() }
@@ -218,11 +188,12 @@ pub async fn setup_local_store_aby3_players(
 }
 
 impl LocalNetAby3NgStoreProtocol {
-    pub fn prepare_query(&mut self, code: GaloisRingSharedIris) -> QueryId {
+    pub fn prepare_query(&mut self, code: GaloisRingSharedIris) -> QueryRef {
         self.storage.prepare_query(code)
     }
 }
 
+/// Assumes that the first iris of each pair is preprocessed.
 async fn eval_pairwise_distances(
     pairs: Vec<(GaloisRingSharedIris, GaloisRingSharedIris)>,
     player_session: &mut Session,
@@ -236,7 +207,7 @@ async fn eval_pairwise_distances(
 }
 
 impl VectorStore for LocalNetAby3NgStoreProtocol {
-    type QueryRef = QueryId; // Point ID, pending insertion.
+    type QueryRef = QueryRef; // Point ID, pending insertion.
     type VectorRef = VectorId; // Point ID, inserted.
     type DistanceRef = DistanceShare<u16>; // Distance represented as shares.
 
@@ -250,9 +221,8 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
         vector: &Self::VectorRef,
     ) -> Self::DistanceRef {
         let mut player_session = self.get_owner_session();
-        let query_point = self.storage.get_processed_query(query);
         let vector_point = self.storage.get_vector(vector);
-        let pairs = vec![(query_point.clone(), vector_point.clone())];
+        let pairs = vec![(query.processed_query.clone(), vector_point.clone())];
         let ds_and_ts = eval_pairwise_distances(pairs, &mut player_session).await;
         DistanceShare::new(ds_and_ts[0].clone(), ds_and_ts[1].clone())
     }
@@ -263,12 +233,11 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
         vectors: &[Self::VectorRef],
     ) -> Vec<Self::DistanceRef> {
         let mut player_session = self.get_owner_session();
-        let query_point = self.storage.get_processed_query(query);
         let pairs = vectors
             .iter()
             .map(|vector_id| {
                 let vector_point = self.storage.get_vector(vector_id);
-                (query_point.clone(), vector_point.clone())
+                (query.processed_query.clone(), vector_point.clone())
             })
             .collect::<Vec<_>>();
         let ds_and_ts = eval_pairwise_distances(pairs, &mut player_session).await;

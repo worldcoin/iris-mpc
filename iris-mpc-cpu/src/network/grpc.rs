@@ -234,13 +234,11 @@ impl Networking for GrpcNetworking {
             ..Default::default()
         };
         let outgoing_stream = self
-                .outgoing_streams
-                .get_stream(*session_id, receiver.clone())?;
+            .outgoing_streams
+            .get_stream(*session_id, receiver.clone())?;
 
         // Send message via the outgoing stream
-        let request = SendRequest {
-            data: value,
-        };
+        let request = SendRequest { data: value };
         retry(backoff, || async {
             tracing::trace!(
                 "INIT: Sending message {:?} from {:?} to {:?} in session {:?}",

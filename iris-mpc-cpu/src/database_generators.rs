@@ -4,11 +4,12 @@ use iris_mpc_common::{
     iris_db::iris::IrisCode,
 };
 use rand::{CryptoRng, Rng, RngCore};
+use serde::{Deserialize, Serialize};
 
 type ShareRing = u16;
 type ShareRingPlain = RingElement<ShareRing>;
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize, Hash)]
 pub struct GaloisRingSharedIris {
     pub code: GaloisRingIrisCodeShare,
     pub mask: GaloisRingTrimmedMaskCodeShare,
