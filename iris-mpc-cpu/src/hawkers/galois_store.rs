@@ -19,14 +19,48 @@ use crate::{
 };
 use aes_prng::AesRng;
 use hawk_pack::{
-    graph_store::{graph_mem::Layer, GraphMem},
+    graph_store::{graph_mem::Layer, EntryPoint, GraphMem},
     hnsw_db::{FurthestQueue, HawkSearcher},
     GraphStore, VectorStore,
 };
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use rand::{CryptoRng, RngCore, SeedableRng};
-use std::{collections::HashMap, fmt::Debug, vec};
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
 use tokio::task::JoinSet;
+
+#[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct VectorId {
+    id: PointId,
+}
+
+impl From<PointId> for VectorId {
+    fn from(id: PointId) -> Self {
+        VectorId { id }
+    }
+}
+
+impl From<&PointId> for VectorId {
+    fn from(id: &PointId) -> Self {
+        VectorId { id: *id }
+    }
+}
+
+impl From<usize> for VectorId {
+    fn from(id: usize) -> Self {
+        VectorId { id: id.into() }
+    }
+}
+
+type GaloisRingPoint = GaloisRingSharedIris;
+
+#[derive(Clone, Serialize, Deserialize, Hash, Eq, PartialEq, Debug)]
+pub struct Query {
+    pub query:           GaloisRingPoint,
+    pub processed_query: GaloisRingPoint,
+}
+
+type QueryRef = Arc<Query>;
 
 #[derive(Default, Clone)]
 pub struct Aby3NgStorePlayer {
@@ -39,33 +73,34 @@ impl std::fmt::Debug for Aby3NgStorePlayer {
     }
 }
 
-#[derive(Eq, PartialEq, Clone, Debug)]
-struct GaloisRingPoint {
-    /// Whatever encoding of a vector.
-    data: GaloisRingSharedIris,
-}
-
 impl Aby3NgStorePlayer {
     pub fn new_with_shared_db(data: Vec<GaloisRingSharedIris>) -> Self {
-        let points: Vec<GaloisRingPoint> = data
-            .into_iter()
-            .map(|d| GaloisRingPoint { data: d })
-            .collect();
-        Aby3NgStorePlayer { points }
+        Aby3NgStorePlayer { points: data }
     }
 
-    pub fn prepare_query(&mut self, raw_query: GaloisRingSharedIris) -> PointId {
-        self.points.push(GaloisRingPoint { data: raw_query });
+    pub fn prepare_query(&mut self, raw_query: GaloisRingSharedIris) -> QueryRef {
+        let mut preprocessed_query = raw_query.clone();
+        preprocessed_query.code.preprocess_iris_code_query_share();
+        preprocessed_query.mask.preprocess_mask_code_query_share();
 
-        let point_id = self.points.len() - 1;
-        point_id.into()
+        Arc::new(Query {
+            query:           raw_query,
+            processed_query: preprocessed_query,
+        })
+    }
+
+    pub fn get_vector(&self, vector: &VectorId) -> &GaloisRingPoint {
+        &self.points[vector.id]
     }
 }
 
 impl Aby3NgStorePlayer {
-    fn insert(&mut self, query: &PointId) -> PointId {
-        // The query is now accepted in the store. It keeps the same ID.
-        *query
+    fn insert(&mut self, query: &QueryRef) -> VectorId {
+        // The query is now accepted in the store.
+        self.points.push(query.query.clone());
+
+        let new_id = self.points.len() - 1;
+        VectorId { id: new_id.into() }
     }
 }
 
@@ -156,19 +191,16 @@ pub async fn setup_local_store_aby3_players(
 }
 
 impl LocalNetAby3NgStoreProtocol {
-    pub fn prepare_query(&mut self, code: GaloisRingSharedIris) -> PointId {
+    pub fn prepare_query(&mut self, code: GaloisRingSharedIris) -> QueryRef {
         self.storage.prepare_query(code)
     }
 }
 
+/// Assumes that the first iris of each pair is preprocessed.
 async fn eval_pairwise_distances(
-    mut pairs: Vec<(GaloisRingSharedIris, GaloisRingSharedIris)>,
+    pairs: Vec<(GaloisRingSharedIris, GaloisRingSharedIris)>,
     player_session: &mut Session,
 ) -> Vec<Share<u16>> {
-    pairs.iter_mut().for_each(|(_x, y)| {
-        y.code.preprocess_iris_code_query_share();
-        y.mask.preprocess_mask_code_query_share();
-    });
     let ds_and_ts = galois_ring_pairwise_distance(player_session, &pairs)
         .await
         .unwrap();
@@ -178,14 +210,12 @@ async fn eval_pairwise_distances(
 }
 
 impl VectorStore for LocalNetAby3NgStoreProtocol {
-    type QueryRef = PointId; // Vector ID, pending insertion.
-    type VectorRef = PointId; // Vector ID, inserted.
+    type QueryRef = QueryRef; // Point ID, pending insertion.
+    type VectorRef = VectorId; // Point ID, inserted.
     type DistanceRef = DistanceShare<u16>; // Distance represented as shares.
 
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
-        // The query is now accepted in the store. It keeps the same ID.
-        self.storage.insert(query);
-        *query
+        self.storage.insert(query)
     }
 
     async fn eval_distance(
@@ -194,11 +224,8 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
         vector: &Self::VectorRef,
     ) -> Self::DistanceRef {
         let mut player_session = self.get_owner_session();
-        // TODO: decouple queries and vectors. Ideally, queries should be kept in a
-        // separate store.
-        let query_point = self.storage.points[*query].clone();
-        let vector_point = self.storage.points[*vector].clone();
-        let pairs = vec![(query_point.data, vector_point.data)];
+        let vector_point = self.storage.get_vector(vector);
+        let pairs = vec![(query.processed_query.clone(), vector_point.clone())];
         let ds_and_ts = eval_pairwise_distances(pairs, &mut player_session).await;
         DistanceShare::new(ds_and_ts[0].clone(), ds_and_ts[1].clone())
     }
@@ -209,12 +236,11 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
         vectors: &[Self::VectorRef],
     ) -> Vec<Self::DistanceRef> {
         let mut player_session = self.get_owner_session();
-        let query_point = self.storage.points[*query].clone();
         let pairs = vectors
             .iter()
             .map(|vector_id| {
-                let vector_point = self.storage.points[*vector_id].clone();
-                (query_point.data.clone(), vector_point.data)
+                let vector_point = self.storage.get_vector(vector_id);
+                (query.processed_query.clone(), vector_point.clone())
             })
             .collect::<Vec<_>>();
         let ds_and_ts = eval_pairwise_distances(pairs, &mut player_session).await;
@@ -269,12 +295,31 @@ impl LocalNetAby3NgStoreProtocol {
         }
     }
 
+    async fn eval_distance_vectors(
+        &mut self,
+        vector1: &<LocalNetAby3NgStoreProtocol as VectorStore>::VectorRef,
+        vector2: &<LocalNetAby3NgStoreProtocol as VectorStore>::VectorRef,
+    ) -> <LocalNetAby3NgStoreProtocol as VectorStore>::DistanceRef {
+        let mut player_session = self.get_owner_session();
+        let point1 = self.storage.get_vector(vector1);
+        let mut point2 = self.storage.get_vector(vector2).clone();
+        point2.code.preprocess_iris_code_query_share();
+        point2.mask.preprocess_mask_code_query_share();
+        let pairs = vec![(point1.clone(), point2.clone())];
+        let ds_and_ts = eval_pairwise_distances(pairs, &mut player_session).await;
+        DistanceShare::new(ds_and_ts[0].clone(), ds_and_ts[1].clone())
+    }
+
     async fn graph_from_plain(
         &mut self,
         graph_store: &GraphMem<PlaintextStore>,
-        recompute: bool,
+        recompute_distances: bool,
     ) -> GraphMem<LocalNetAby3NgStoreProtocol> {
         let ep = graph_store.get_entry_point().await;
+        let new_ep = ep.map(|ep| EntryPoint {
+            vector_ref:  VectorId { id: ep.vector_ref },
+            layer_count: ep.layer_count,
+        });
 
         let layers = graph_store.get_layers();
 
@@ -283,27 +328,29 @@ impl LocalNetAby3NgStoreProtocol {
             let links = layer.get_links_map();
             let mut shared_links = HashMap::new();
             for (source_v, queue) in links {
+                let source_v = source_v.into();
                 let mut shared_queue = vec![];
                 for (target_v, dist) in queue.as_vec_ref() {
-                    let distance = if recompute {
+                    let target_v = target_v.into();
+                    let distance = if recompute_distances {
                         // recompute distances of graph edges from scratch
-                        self.eval_distance(source_v, target_v).await
+                        self.eval_distance_vectors(&source_v, &target_v).await
                     } else {
                         DistanceShare::new(
                             self.get_trivial_share(dist.0),
                             self.get_trivial_share(dist.1),
                         )
                     };
-                    shared_queue.push((*target_v, distance.clone()));
+                    shared_queue.push((target_v, distance.clone()));
                 }
                 shared_links.insert(
-                    *source_v,
+                    source_v,
                     FurthestQueue::from_ascending_vec(shared_queue.clone()),
                 );
             }
             shared_layers.push(Layer::from_links(shared_links));
         }
-        GraphMem::from_precomputed(ep.clone(), shared_layers)
+        GraphMem::from_precomputed(new_ep, shared_layers)
     }
 }
 
@@ -318,7 +365,7 @@ impl LocalNetAby3NgStoreProtocol {
         rng: &mut R,
         database_size: usize,
         network_t: NetworkType,
-        recompute: bool,
+        recompute_distances: bool,
     ) -> eyre::Result<(
         (PlaintextStore, GraphMem<PlaintextStore>),
         Vec<(Self, GraphMem<Self>)>,
@@ -337,7 +384,7 @@ impl LocalNetAby3NgStoreProtocol {
                 (
                     store.clone(),
                     store
-                        .graph_from_plain(&plaintext_graph_store, recompute)
+                        .graph_from_plain(&plaintext_graph_store, recompute_distances)
                         .await,
                 )
             });
@@ -354,7 +401,7 @@ impl LocalNetAby3NgStoreProtocol {
     pub async fn lazy_random_setup_with_local_channel<R: RngCore + Clone + CryptoRng>(
         rng: &mut R,
         database_size: usize,
-        recompute: bool,
+        recompute_distances: bool,
     ) -> eyre::Result<(
         (PlaintextStore, GraphMem<PlaintextStore>),
         Vec<(
@@ -362,7 +409,36 @@ impl LocalNetAby3NgStoreProtocol {
             GraphMem<LocalNetAby3NgStoreProtocol>,
         )>,
     )> {
-        Self::lazy_random_setup(rng, database_size, NetworkType::LocalChannel, recompute).await
+        Self::lazy_random_setup(
+            rng,
+            database_size,
+            NetworkType::LocalChannel,
+            recompute_distances,
+        )
+        .await
+    }
+
+    /// Generates 3 pairs of vector stores and graphs from a random plaintext
+    /// vector store and graph, which are returned as well. Networking is
+    /// based on gRPC.
+    pub async fn lazy_random_setup_with_grpc<R: RngCore + Clone + CryptoRng>(
+        rng: &mut R,
+        database_size: usize,
+        recompute_distances: bool,
+    ) -> eyre::Result<(
+        (PlaintextStore, GraphMem<PlaintextStore>),
+        Vec<(
+            LocalNetAby3NgStoreProtocol,
+            GraphMem<LocalNetAby3NgStoreProtocol>,
+        )>,
+    )> {
+        Self::lazy_random_setup(
+            rng,
+            database_size,
+            NetworkType::GrpcChannel,
+            recompute_distances,
+        )
+        .await
     }
 
     /// Generates 3 pairs of vector stores and graphs corresponding to each
@@ -396,12 +472,13 @@ impl LocalNetAby3NgStoreProtocol {
                     let neighbors = searcher
                         .search_to_insert(&mut store, &mut graph_store, query)
                         .await;
+                    let inserted_query = store.insert(query).await;
                     searcher
                         .insert_from_search_results(
                             &mut store,
                             &mut graph_store,
                             &mut rng_searcher,
-                            *query,
+                            inserted_query,
                             neighbors,
                         )
                         .await;
@@ -424,6 +501,15 @@ impl LocalNetAby3NgStoreProtocol {
         database_size: usize,
     ) -> eyre::Result<Vec<(Self, GraphMem<Self>)>> {
         Self::shared_random_setup(rng, database_size, NetworkType::LocalChannel).await
+    }
+
+    /// Generates 3 pairs of vector stores and graphs corresponding to each
+    /// local player. Networking is based on gRPC.
+    pub async fn shared_random_setup_with_grpc<R: RngCore + Clone + CryptoRng>(
+        rng: &mut R,
+        database_size: usize,
+    ) -> eyre::Result<Vec<(Self, GraphMem<Self>)>> {
+        Self::shared_random_setup(rng, database_size, NetworkType::GrpcChannel).await
     }
 }
 
@@ -463,28 +549,32 @@ mod tests {
                 let mut aby3_graph = GraphMem::new();
                 let db = HawkSearcher::default();
 
+                let mut inserted = vec![];
                 // insert queries
                 for query in queries.iter() {
                     let neighbors = db
                         .search_to_insert(&mut store, &mut aby3_graph, query)
                         .await;
+                    let inserted_query = store.insert(query).await;
+                    inserted.push(inserted_query);
                     db.insert_from_search_results(
                         &mut store,
                         &mut aby3_graph,
                         &mut rng,
-                        *query,
+                        inserted_query,
                         neighbors,
                     )
                     .await;
                 }
-                println!("FINISHED INSERTING");
+                tracing::debug!("FINISHED INSERTING");
                 // Search for the same codes and find matches.
                 let mut matching_results = vec![];
-                for query in queries.iter() {
+                for v in inserted.into_iter() {
+                    let query = store.prepare_query(store.storage.get_vector(&v).clone());
                     let neighbors = db
-                        .search_to_insert(&mut store, &mut aby3_graph, query)
+                        .search_to_insert(&mut store, &mut aby3_graph, &query)
                         .await;
-                    tracing::debug!("Finished query");
+                    tracing::debug!("Finished checking query");
                     matching_results.push(db.is_match(&mut store, &neighbors).await)
                 }
                 matching_results
@@ -545,10 +635,9 @@ mod tests {
                 let hawk_searcher = hawk_searcher.clone();
                 let mut v = v.clone();
                 let mut g = g.clone();
+                let q = v.prepare_query(v.storage.get_vector(&i.into()).clone());
                 jobs.spawn(async move {
-                    let secret_neighbors = hawk_searcher
-                        .search_to_insert(&mut v, &mut g, &i.into())
-                        .await;
+                    let secret_neighbors = hawk_searcher.search_to_insert(&mut v, &mut g, &q).await;
 
                     hawk_searcher.is_match(&mut v, &secret_neighbors).await
                 });
@@ -561,9 +650,9 @@ mod tests {
                 let mut v = v.clone();
                 let mut g = g.clone();
                 jobs.spawn(async move {
-                    let secret_neighbors = hawk_searcher
-                        .search_to_insert(&mut v, &mut g, &i.into())
-                        .await;
+                    let query = v.prepare_query(v.storage.get_vector(&i.into()).clone());
+                    let secret_neighbors =
+                        hawk_searcher.search_to_insert(&mut v, &mut g, &query).await;
 
                     hawk_searcher.is_match(&mut v, &secret_neighbors).await
                 });
@@ -644,10 +733,16 @@ mod tests {
                     let index21 = comb2[1];
                     jobs.spawn(async move {
                         let dist1_aby3 = store
-                            .eval_distance(&player_inserts[index10], &player_inserts[index11])
+                            .eval_distance_vectors(
+                                &player_inserts[index10],
+                                &player_inserts[index11],
+                            )
                             .await;
                         let dist2_aby3 = store
-                            .eval_distance(&player_inserts[index20], &player_inserts[index21])
+                            .eval_distance_vectors(
+                                &player_inserts[index20],
+                                &player_inserts[index21],
+                            )
                             .await;
                         store.less_than(&dist1_aby3, &dist2_aby3).await
                     });
@@ -686,10 +781,10 @@ mod tests {
                 let mut store = store.clone();
                 let mut graph = graph.clone();
                 let searcher = searcher.clone();
+                let q = store.prepare_query(store.storage.get_vector(&i.into()).clone());
                 jobs.spawn(async move {
-                    let secret_neighbors = searcher
-                        .search_to_insert(&mut store, &mut graph, &i.into())
-                        .await;
+                    let secret_neighbors =
+                        searcher.search_to_insert(&mut store, &mut graph, &q).await;
                     searcher.is_match(&mut store, &secret_neighbors).await
                 });
             }

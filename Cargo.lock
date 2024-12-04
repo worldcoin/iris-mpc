@@ -2711,6 +2711,7 @@ dependencies = [
  "bincode",
  "bytemuck",
  "bytes",
+ "clap",
  "criterion",
  "dashmap",
  "eyre",
@@ -2732,6 +2733,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tracing-test",
+ "uuid",
 ]
 
 [[package]]

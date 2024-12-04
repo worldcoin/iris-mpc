@@ -89,7 +89,7 @@ fn bench_hnsw_primitives(c: &mut Criterion) {
             let t1 = create_random_sharing(&mut rng, 10_u16);
             let t2 = create_random_sharing(&mut rng, 10_u16);
 
-            let runtime = LocalRuntime::mock_setup_with_channel().await.unwrap();
+            let runtime = LocalRuntime::mock_setup_with_grpc().await.unwrap();
 
             let mut jobs = JoinSet::new();
             for (index, player) in runtime.identities.iter().enumerate() {
@@ -116,7 +116,7 @@ fn bench_gr_primitives(c: &mut Criterion) {
             .build()
             .unwrap();
         b.to_async(&rt).iter(|| async move {
-            let runtime = LocalRuntime::mock_setup_with_channel().await.unwrap();
+            let runtime = LocalRuntime::mock_setup_with_grpc().await.unwrap();
             let mut rng = AesRng::seed_from_u64(0);
             let iris_db = IrisDB::new_random_rng(4, &mut rng).db;
 
@@ -174,13 +174,9 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
 
         let (_, secret_searcher) = rt.block_on(async move {
             let mut rng = AesRng::seed_from_u64(0_u64);
-            LocalNetAby3NgStoreProtocol::lazy_random_setup_with_local_channel(
-                &mut rng,
-                database_size,
-                false,
-            )
-            .await
-            .unwrap()
+            LocalNetAby3NgStoreProtocol::lazy_random_setup_with_grpc(&mut rng, database_size, false)
+                .await
+                .unwrap()
         });
 
         group.bench_function(
@@ -208,12 +204,13 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                                 let neighbors = searcher
                                     .search_to_insert(&mut vector_store, &mut graph_store, &query)
                                     .await;
+                                let inserted_query = vector_store.insert(&query).await;
                                 searcher
                                     .insert_from_search_results(
                                         &mut vector_store,
                                         &mut graph_store,
                                         &mut rng,
-                                        query,
+                                        inserted_query,
                                         neighbors,
                                     )
                                     .await;
@@ -263,10 +260,10 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
 
 criterion_group! {
     hnsw,
-    bench_plaintext_hnsw,
+    //bench_plaintext_hnsw,
     bench_gr_ready_made_hnsw,
-    bench_hnsw_primitives,
-    bench_gr_primitives,
+    //bench_hnsw_primitives,
+    //bench_gr_primitives,
 }
 
 criterion_main!(hnsw);

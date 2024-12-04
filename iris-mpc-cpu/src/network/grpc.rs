@@ -587,10 +587,10 @@ mod tests {
                 let mut store = store.clone();
                 let mut graph = graph.clone();
                 let searcher = searcher.clone();
+                let q = store.prepare_query(store.storage.get_vector(&i.into()).clone());
                 jobs.spawn(async move {
-                    let secret_neighbors = searcher
-                        .search_to_insert(&mut store, &mut graph, &i.into())
-                        .await;
+                    let secret_neighbors =
+                        searcher.search_to_insert(&mut store, &mut graph, &q).await;
                     searcher.is_match(&mut store, &secret_neighbors).await
                 });
             }
