@@ -1,5 +1,6 @@
 #![allow(clippy::needless_range_loop)]
 
+use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{response::IntoResponse, routing::get, Router};
@@ -122,6 +123,7 @@ async fn receive_batch(
     party_id: usize,
     client: &Client,
     sns_client: &SNSClient,
+    s3_client: &Arc<S3Client>,
     config: &Config,
     store: &Store,
     skip_request_ids: &[String],
@@ -275,17 +277,21 @@ async fn receive_batch(
                         batch_query.metadata.push(batch_metadata);
 
                         let semaphore = Arc::clone(&semaphore);
+                        let s3_client_arc = Arc::clone(s3_client);
+                        let bucket_name = config.shares_bucket_name.clone();
                         let handle = tokio::spawn(async move {
                             let _ = semaphore.acquire().await?;
 
-                            let base_64_encoded_message_payload =
-                                match smpc_request.get_iris_data_by_party_id(party_id).await {
-                                    Ok(iris_message_share) => iris_message_share,
-                                    Err(e) => {
-                                        tracing::error!("Failed to get iris shares: {:?}", e);
-                                        eyre::bail!("Failed to get iris shares: {:?}", e);
-                                    }
-                                };
+                            let base_64_encoded_message_payload = match smpc_request
+                                .get_iris_data_by_party_id(party_id, &bucket_name, &s3_client_arc)
+                                .await
+                            {
+                                Ok(iris_message_share) => iris_message_share,
+                                Err(e) => {
+                                    tracing::error!("Failed to get iris shares: {:?}", e);
+                                    eyre::bail!("Failed to get iris shares: {:?}", e);
+                                }
+                            };
 
                             let iris_message_share = match smpc_request.decrypt_iris_share(
                                 base_64_encoded_message_payload,
@@ -664,6 +670,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);
+    let s3_client = Arc::new(S3Client::new(&shared_config));
     let shares_encryption_key_pair =
         match SharesEncryptionKeyPairs::from_storage(config.clone()).await {
             Ok(key_pair) => key_pair,
@@ -1265,6 +1272,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             party_id,
             &sqs_client,
             &sns_client,
+            &s3_client,
             &config,
             &store,
             &skip_request_ids,
@@ -1318,6 +1326,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 party_id,
                 &sqs_client,
                 &sns_client,
+                &s3_client,
                 &config,
                 &store,
                 &skip_request_ids,

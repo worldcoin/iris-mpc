@@ -47,6 +47,8 @@ pub enum SharesDecodingError {
         url:     String,
         message: String,
     },
+    #[error("Received error message from S3 for key {}: {}", .key, .message)]
+    S3ResponseContent { key: String, message: String },
     #[error(transparent)]
     SerdeError(#[from] serde_json::error::Error),
     #[error(transparent)]

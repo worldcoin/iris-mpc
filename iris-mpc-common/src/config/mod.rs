@@ -49,6 +49,9 @@ pub struct Config {
     #[serde(default)]
     pub public_key_base_url: String,
 
+    #[serde(default = "default_shares_bucket_name")]
+    pub shares_bucket_name: String,
+
     #[serde(default)]
     pub clear_db_before_init: bool,
 
@@ -104,6 +107,10 @@ fn default_heartbeat_initial_retries() -> u64 {
 
 fn default_shutdown_last_results_sync_timeout_secs() -> u64 {
     10
+}
+
+fn default_shares_bucket_name() -> String {
+    "wf-mpc-prod-smpcv2-sns-requests".to_string()
 }
 
 impl Config {
