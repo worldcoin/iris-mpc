@@ -24,7 +24,7 @@ use iris_mpc_common::{
         },
         smpc_response::{
             create_message_type_attribute_map, IdentityDeletionResult, UniquenessResult,
-            ERROR_FAILED_TO_GET_IRIS_SHARES, SMPC_MESSAGE_TYPE_ATTRIBUTE,
+            ERROR_FAILED_TO_PROCESS_IRIS_SHARES, SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
         sync::SyncState,
         task_monitor::TaskMonitor,
@@ -383,9 +383,8 @@ async fn receive_batch(
             Ok(res) => (res, true),
             Err(e) => {
                 tracing::error!("Failed to process iris shares: {:?}", e);
-                // If we failed to process the iris shares, we include a dummy entry in the
-                // batch in order to keep the same order across nodes
-
+                // Return error message back to the signup-service if failed to process iris
+                // shares
                 send_error_results_to_sns(
                     batch_query.request_ids[index].clone(),
                     &batch_query.metadata[index],
@@ -393,9 +392,11 @@ async fn receive_batch(
                     config,
                     error_result_attributes,
                     UNIQUENESS_MESSAGE_TYPE,
-                    ERROR_FAILED_TO_GET_IRIS_SHARES,
+                    ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
                 )
                 .await?;
+                // If we failed to process the iris shares, we include a dummy entry in the
+                // batch in order to keep the same order across nodes
                 let dummy_code_share = GaloisRingIrisCodeShare::default_for_party(party_id);
                 let dummy_mask_share = GaloisRingTrimmedMaskCodeShare::default_for_party(party_id);
                 (

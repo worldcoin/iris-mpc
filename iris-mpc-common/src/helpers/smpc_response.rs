@@ -1,11 +1,11 @@
-use crate::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
 use aws_sdk_sns::types::MessageAttributeValue;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub const SMPC_MESSAGE_TYPE_ATTRIBUTE: &str = "message_type";
 // Error Reasons
-pub const ERROR_FAILED_TO_GET_IRIS_SHARES: &str = "failed_to_process_iris_shares";
+pub const ERROR_FAILED_TO_PROCESS_IRIS_SHARES: &str = "failed_to_process_iris_shares";
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UniquenessResult {
     pub node_id:                   usize,

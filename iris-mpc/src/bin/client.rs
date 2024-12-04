@@ -10,10 +10,8 @@ use iris_mpc_common::{
     helpers::{
         key_pair::download_public_key,
         sha256::calculate_sha256,
-        smpc_request::{
-            create_message_type_attribute_map, IrisCodesJSON, UniquenessRequest, UniquenessResult,
-            UNIQUENESS_MESSAGE_TYPE,
-        },
+        smpc_request::{IrisCodesJSON, UniquenessRequest, UNIQUENESS_MESSAGE_TYPE},
+        smpc_response::{create_message_type_attribute_map, UniquenessResult},
         sqs_s3_helper::upload_file_and_generate_presigned_url,
     },
     iris_db::{db::IrisDB, iris::IrisCode},
