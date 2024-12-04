@@ -9,6 +9,8 @@ args:
   - "right"
   - "--environment"
   - "$(ENVIRONMENT)"
+  - "--healthcheck-port"
+  - "3000"
 
 initContainer:
   enabled: true
