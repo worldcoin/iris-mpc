@@ -116,7 +116,7 @@ pub async fn fetch_and_parse_chunks(
     let chunks = store.list_objects().await.unwrap();
     stream::iter(chunks)
         .filter_map(|chunk| async move {
-            if chunk.ends_with(".bin") {
+            if chunk.ends_with(".csv") {
                 Some(chunk)
             } else {
                 None
