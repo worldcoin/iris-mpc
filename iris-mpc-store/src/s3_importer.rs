@@ -100,8 +100,8 @@ pub async fn last_snapshot_timestamp(store: &impl ObjectStore) -> eyre::Result<i
     tracing::info!("All objects in db chunks s3: {:?}", objects);
     objects
         .into_iter()
-        .filter(|f| f.ends_with(".timestamp"))
-        .filter_map(|f| f.replace(".timestamp", "").parse::<i64>().ok())
+        .filter(|f| f.starts_with("output/") && f.ends_with(".timestamp"))
+        .filter_map(|f| f.replace(".timestamp", "").replace("output/", "").parse::<i64>().ok())
         .max()
         .ok_or_else(|| eyre::eyre!("No snapshot found"))
 }
