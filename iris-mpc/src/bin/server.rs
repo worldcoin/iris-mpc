@@ -963,7 +963,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                 iris.right_mask(),
                             );
 
-                            all_serial_ids.remove(&(iris.index() as i64 - 1));
+                            all_serial_ids.remove(&(iris.index() as i64));
                             record_counter += 1;
                         }
 
