@@ -50,6 +50,7 @@ serde-big-array.workspace = true
 
 [dev-dependencies]
 float_eq = "1"
+aws-credential-types = "1.2.1"
 
 [[bin]]
 name = "key-manager"

@@ -1,5 +1,6 @@
 use super::{key_pair::SharesDecodingError, sha256::calculate_sha256};
 use crate::helpers::key_pair::SharesEncryptionKeyPairs;
+use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::types::MessageAttributeValue;
 use aws_sdk_sqs::{
     error::SdkError,
@@ -7,15 +8,10 @@ use aws_sdk_sqs::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use eyre::Report;
-use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
-use std::{collections::HashMap, sync::LazyLock};
+use std::{collections::HashMap, sync::Arc};
 use thiserror::Error;
-use tokio_retry::{
-    strategy::{jitter, FixedInterval},
-    Retry,
-};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SQSMessage {
@@ -113,7 +109,7 @@ pub const UNIQUENESS_MESSAGE_TYPE: &str = "uniqueness";
 pub struct UniquenessRequest {
     pub batch_size:              Option<usize>,
     pub signup_id:               String,
-    pub s3_presigned_url:        String,
+    pub s3_key:                  String,
     pub iris_shares_file_hashes: [String; 3],
 }
 
@@ -196,51 +192,45 @@ impl SharesS3Object {
     }
 }
 
-static S3_HTTP_CLIENT: LazyLock<Client> = LazyLock::new(Client::new);
-
 impl UniquenessRequest {
     pub async fn get_iris_data_by_party_id(
         &self,
         party_id: usize,
+        bucket_name: &String,
+        s3_client: &Arc<S3Client>,
     ) -> Result<String, SharesDecodingError> {
-        // Send a GET request to the presigned URL
-        let retry_strategy = FixedInterval::from_millis(200).map(jitter).take(5);
-        let response = Retry::spawn(retry_strategy, || async {
-            S3_HTTP_CLIENT
-                .get(self.s3_presigned_url.clone())
-                .send()
-                .await
-        })
-        .await?;
-
-        // Ensure the request was successful
-        if response.status().is_success() {
-            // Parse the JSON response into the SharesS3Object struct
-            let shares_file: SharesS3Object = match response.json().await {
-                Ok(file) => file,
-                Err(e) => {
-                    tracing::error!("Failed to parse JSON: {}", e);
-                    return Err(SharesDecodingError::RequestError(e));
+        let response = s3_client
+            .get_object()
+            .bucket(bucket_name)
+            .key(self.s3_key.as_str())
+            .send()
+            .await
+            .map_err(|err| {
+                tracing::error!("Failed to download file: {}", err);
+                SharesDecodingError::S3ResponseContent {
+                    key:     self.s3_key.clone(),
+                    message: err.to_string(),
                 }
-            };
+            })?;
 
-            // Construct the field name dynamically
-            let field_name = format!("iris_share_{}", party_id);
-            // Access the field dynamically
-            if let Some(value) = shares_file.get(party_id) {
-                Ok(value.to_string())
-            } else {
-                tracing::error!("Failed to find field: {}", field_name);
-                Err(SharesDecodingError::SecretStringNotFound)
+        let object_body = response.body.collect().await.map_err(|e| {
+            tracing::error!("Failed to get object body: {}", e);
+            SharesDecodingError::S3ResponseContent {
+                key:     self.s3_key.clone(),
+                message: e.to_string(),
             }
-        } else {
-            tracing::error!("Failed to download file: {}", response.status());
-            Err(SharesDecodingError::ResponseContent {
-                status:  response.status(),
-                url:     self.s3_presigned_url.clone(),
-                message: response.text().await.unwrap_or_default(),
-            })
-        }
+        })?;
+
+        let bytes = object_body.into_bytes();
+
+        let shares_file: SharesS3Object = serde_json::from_slice(&bytes)?;
+
+        let field_name = format!("iris_share_{}", party_id);
+
+        shares_file.get(party_id).cloned().ok_or_else(|| {
+            tracing::error!("Failed to find field: {}", field_name);
+            SharesDecodingError::SecretStringNotFound
+        })
     }
 
     pub fn decrypt_iris_share(

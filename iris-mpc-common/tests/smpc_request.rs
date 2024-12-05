@@ -1,6 +1,7 @@
 mod tests {
+    use aws_credential_types::{provider::SharedCredentialsProvider, Credentials};
+    use aws_sdk_s3::Client as S3Client;
     use base64::{engine::general_purpose::STANDARD, Engine};
-    use http::StatusCode;
     use iris_mpc_common::helpers::{
         key_pair::{SharesDecodingError, SharesEncryptionKeyPairs},
         sha256::calculate_sha256,
@@ -8,10 +9,8 @@ mod tests {
     };
     use serde_json::json;
     use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
-    use wiremock::{
-        matchers::{method, path},
-        Mock, MockServer, ResponseTemplate,
-    };
+    use std::sync::Arc;
+    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
 
     const PREVIOUS_PUBLIC_KEY: &str = "1UY8lKlS7aVj5ZnorSfLIHlG3jg+L4ToVi4K+mLKqFQ=";
     const PREVIOUS_PRIVATE_KEY: &str = "X26wWfzP5fKMP7QMz0X3eZsEeF4NhJU92jT69wZg6x8=";
@@ -45,7 +44,7 @@ mod tests {
         UniquenessRequest {
             batch_size:              Some(1),
             signup_id:               "signup_mock".to_string(),
-            s3_presigned_url:        "https://example.com/mock".to_string(),
+            s3_key:                  "mock".to_string(),
             iris_shares_file_hashes: hashes,
         }
     }
@@ -54,7 +53,7 @@ mod tests {
         UniquenessRequest {
             batch_size:              None,
             signup_id:               "test_signup_id".to_string(),
-            s3_presigned_url:        "https://example.com/package".to_string(),
+            s3_key:                  "package".to_string(),
             iris_shares_file_hashes: [
                 "hash_0".to_string(),
                 "hash_1".to_string(),
@@ -66,26 +65,46 @@ mod tests {
     #[tokio::test]
     async fn test_retrieve_iris_shares_from_s3_success() {
         let mock_server = MockServer::start().await;
-
-        // Simulate a successful response from the presigned URL
+        let bucket_name = "bobTheBucket";
+        let key = "kateTheKey";
         let response_body = json!({
             "iris_share_0": "share_0_data",
             "iris_share_1": "share_1_data",
             "iris_share_2": "share_2_data"
         });
 
-        let template = ResponseTemplate::new(StatusCode::OK).set_body_json(response_body.clone());
+        let data = response_body.to_string();
 
         Mock::given(method("GET"))
-            .and(path("/test_presign_url"))
-            .respond_with(template)
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Content-Type", "application/octet-stream")
+                    .set_body_raw(data, "application/octet-stream"),
+            )
             .mount(&mock_server)
             .await;
+
+        let credentials =
+            Credentials::new("test-access-key", "test-secret-key", None, None, "test");
+        let credentials_provider = SharedCredentialsProvider::new(credentials);
+        // Configure the S3Client to point to the mock server
+        let config = aws_config::from_env()
+            .region("us-west-2")
+            .endpoint_url(mock_server.uri())
+            .credentials_provider(credentials_provider)
+            .load()
+            .await;
+        let s3_config = aws_sdk_s3::config::Builder::from(&config)
+            .endpoint_url(mock_server.uri())
+            .force_path_style(true)
+            .build();
+
+        let s3_client = Arc::new(S3Client::from_conf(s3_config));
 
         let smpc_request = UniquenessRequest {
             batch_size:              None,
             signup_id:               "test_signup_id".to_string(),
-            s3_presigned_url:        mock_server.uri().clone() + "/test_presign_url",
+            s3_key:                  key.to_string(),
             iris_shares_file_hashes: [
                 "hash_0".to_string(),
                 "hash_1".to_string(),
@@ -93,7 +112,9 @@ mod tests {
             ],
         };
 
-        let result = smpc_request.get_iris_data_by_party_id(0).await;
+        let result = smpc_request
+            .get_iris_data_by_party_id(0, &bucket_name.to_string(), &s3_client)
+            .await;
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "share_0_data".to_string());
