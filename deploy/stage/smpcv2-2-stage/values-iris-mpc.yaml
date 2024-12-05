@@ -65,6 +65,9 @@ env:
   - name: SMPC__PUBLIC_KEY_BASE_URL
     value: "https://pki-smpcv2-stage.worldcoin.org"
 
+  - name: SMPC__DB_CHUNKS_BUCKET_NAME
+    value: "iris-mpc-db-exporter-store-node-2-stage-eu-north-1"
+
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
 
