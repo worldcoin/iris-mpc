@@ -65,6 +65,9 @@ env:
   - name: SMPC__PUBLIC_KEY_BASE_URL
     value: "https://pki-smpcv2-stage.worldcoin.org"
 
+  - name: SMPC__SHARES_BUCKET_NAME
+    value: "wf-smpcv2-stage-sns-requests"
+
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
 
@@ -90,7 +93,7 @@ env:
 
   - name: SMPC__SERVICE__METRICS__BUFFER_SIZE
     value: "256"
-  
+
   - name: SMPC__SERVICE__METRICS__PREFIX
     value: "smpcv2-0"
 
