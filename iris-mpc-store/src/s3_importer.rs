@@ -114,6 +114,7 @@ pub async fn fetch_and_parse_chunks(
     stream::iter(chunks)
         .filter_map(|chunk| async move {
             if chunk.ends_with(".csv") {
+                tracing::info!("Processing chunk: {}", chunk);
                 Some(chunk)
             } else {
                 None
