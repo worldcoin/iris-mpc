@@ -8,6 +8,8 @@ use rayon::{iter::ParallelIterator, prelude::ParallelBridge};
 use serde::Deserialize;
 use std::{io::Cursor, mem, pin::Pin};
 use tokio::task;
+use tracing::log;
+use tracing::log::log;
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -95,9 +97,11 @@ fn hex_to_bytes(hex: &str, byte_len: usize) -> eyre::Result<Vec<u8>> {
 }
 
 pub async fn last_snapshot_timestamp(store: &impl ObjectStore) -> eyre::Result<i64> {
-    store
+    let objects =  store
         .list_objects()
-        .await?
+        .await?;
+    log::info!("All objects in db chunks s3: {:?}", objects);
+    objects
         .into_iter()
         .filter(|f| f.ends_with(".timestamp"))
         .filter_map(|f| f.replace(".timestamp", "").parse::<i64>().ok())
