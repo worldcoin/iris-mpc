@@ -95,9 +95,9 @@ fn hex_to_bytes(hex: &str, byte_len: usize) -> eyre::Result<Vec<u8>> {
 }
 
 pub async fn last_snapshot_timestamp(store: &impl ObjectStore) -> eyre::Result<i64> {
-    let objects = store.list_objects().await?;
-    tracing::info!("All objects in db chunks s3: {:?}", objects);
-    objects
+    store
+        .list_objects()
+        .await?
         .into_iter()
         .filter(|f| f.starts_with("output/") && f.ends_with(".timestamp"))
         .filter_map(|f| {
