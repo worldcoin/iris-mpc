@@ -1,6 +1,6 @@
 use aes_prng::AesRng;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode};
-use hawk_pack::{graph_store::GraphMem, hnsw_db::HawkSearcher, VectorStore};
+use hawk_pack::{graph_store::GraphMem, HawkSearcher};
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use iris_mpc_cpu::{
     database_generators::{create_random_sharing, generate_galois_iris_shares},
@@ -31,18 +31,8 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
             for _ in 0..database_size {
                 let raw_query = IrisCode::random_rng(&mut rng);
                 let query = vector.prepare_query(raw_query.clone());
-                let neighbors = searcher
-                    .search_to_insert(&mut vector, &mut graph, &query)
-                    .await;
-                let inserted = vector.insert(&query).await;
                 searcher
-                    .insert_from_search_results(
-                        &mut vector,
-                        &mut graph,
-                        &mut rng,
-                        inserted,
-                        neighbors,
-                    )
+                    .insert(&mut vector, &mut graph, &query, &mut rng)
                     .await;
             }
             (vector, graph)
@@ -56,17 +46,8 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
                     let mut rng = AesRng::seed_from_u64(0_u64);
                     let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
                     let query = db_vectors.prepare_query(on_the_fly_query);
-                    let neighbors = searcher
-                        .search_to_insert(&mut db_vectors, &mut graph, &query)
-                        .await;
                     searcher
-                        .insert_from_search_results(
-                            &mut db_vectors,
-                            &mut graph,
-                            &mut rng,
-                            query,
-                            neighbors,
-                        )
+                        .insert(&mut db_vectors, &mut graph, &query, &mut rng)
                         .await;
                 },
                 criterion::BatchSize::SmallInput,
@@ -201,18 +182,8 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                             let searcher = searcher.clone();
                             let mut rng = rng.clone();
                             jobs.spawn(async move {
-                                let neighbors = searcher
-                                    .search_to_insert(&mut vector_store, &mut graph_store, &query)
-                                    .await;
-                                let inserted_query = vector_store.insert(&query).await;
                                 searcher
-                                    .insert_from_search_results(
-                                        &mut vector_store,
-                                        &mut graph_store,
-                                        &mut rng,
-                                        inserted_query,
-                                        neighbors,
-                                    )
+                                    .insert(&mut vector_store, &mut graph_store, &query, &mut rng)
                                     .await;
                             });
                         }
@@ -243,9 +214,9 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                             let searcher = searcher.clone();
                             jobs.spawn(async move {
                                 let neighbors = searcher
-                                    .search_to_insert(&mut vector_store, &mut graph_store, &query)
+                                    .search(&mut vector_store, &mut graph_store, &query, 1)
                                     .await;
-                                searcher.is_match(&mut vector_store, &neighbors).await;
+                                searcher.is_match(&mut vector_store, &[neighbors]).await;
                             });
                         }
                         jobs.join_all().await;
