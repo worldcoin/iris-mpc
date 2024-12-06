@@ -955,8 +955,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                              record: {}",
                                             iris.id()
                                         );
+                                        continue;
                                     }
-                                    continue;
+                                    iris
                                 }
                             };
                             if record_counter % 100_000 == 0 {
