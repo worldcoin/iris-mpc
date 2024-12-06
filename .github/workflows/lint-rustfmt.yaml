@@ -1,0 +1,26 @@
+name: Lint Rustfmt
+
+on:
+  push:
+
+concurrency:
+  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  cancel-in-progress: true
+
+jobs:
+  # TODO: change this to lint-rustfmt once we've updated required jobs
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Show errors inline
+        uses: r7kamura/rust-problem-matchers@v1
+      - name: Install Rust nightly
+        run: rustup toolchain install nightly-2024-07-10
+      - name: Set Rust nightly as default
+        run: rustup default nightly-2024-07-10
+      - name: Install Rustfmt for formatting
+        run: rustup component add rustfmt
+      - name: Run Rustfmt
+        run: cargo fmt -- --check

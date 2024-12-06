@@ -1,0 +1,168 @@
+env:
+  - name: RUST_LOG
+    value: "info"
+
+  - name: RUST_BACKTRACE
+    value: "1"
+
+  - name: NCCL_SOCKET_IFNAME
+    value: "eth"
+
+  - name: FI_EFA_USE_DEVICE_RDMA
+    value: "1"
+
+  - name: NCCL_IB_TIMEOUT
+    value: "30"
+
+  - name: NCCL_COMM_ID
+    value: "iris-mpc-node.1.smpcv2.worldcoin.org:4000"
+
+  - name: SMPC__ENVIRONMENT
+    value: "prod"
+
+  - name: SMPC__SERVICE__SERVICE_NAME
+    value: "smpcv2-server-prod"
+
+  - name: SMPC__DATABASE__URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_URL
+        name: application
+
+  - name: SMPC__DATABASE__MIGRATE
+    value: "true"
+
+  - name: SMPC__DATABASE__CREATE
+    value: "true"
+
+  - name: SMPC__DATABASE__LOAD_PARALLELISM
+    value: "80"
+
+  - name: SMPC__AWS__REGION
+    value: "eu-north-1"
+
+  - name: SMPC__REQUESTS_QUEUE_URL
+    valueFrom:
+      secretKeyRef:
+        key: SQS_URL
+        name: application
+
+  - name: SMPC__RESULTS_TOPIC_ARN
+    valueFrom:
+      secretKeyRef:
+        key: SNS_RESULTS_ARN
+        name: application
+
+  - name: SMPC__PROCESSING_TIMEOUT_SECS
+    value: "120"
+
+  - name: SMPC__HEARTBEAT_INTERVAL_SECS
+    value: "2"
+
+  - name: SMPC__HEARTBEAT_INITIAL_RETRIES
+    value: "30"
+
+  - name: SMPC__PATH
+    value: "/data/"
+
+  - name: SMPC__KMS_KEY_ARNS
+    valueFrom:
+      secretKeyRef:
+        key: KMS_KEYS
+        name: application
+
+  - name: SMPC__PARTY_ID
+    value: "2"
+
+  - name: SMPC__PUBLIC_KEY_BASE_URL
+    value: "https://pki-smpc.worldcoin.org"
+
+  - name: SMPC__CLEAR_DB_BEFORE_INIT
+    value: "true"
+
+  - name: SMPC__INIT_DB_SIZE
+    value: "0"
+
+  - name: SMPC__MAX_DB_SIZE
+    value: "10000000"
+
+  - name: SMPC__FAKE_DB_SIZE
+    value: "0"
+
+  - name: SMPC__MAX_BATCH_SIZE
+    value: "64"
+
+  - name: SMPC__SERVICE__METRICS__HOST
+    valueFrom:
+      fieldRef:
+        fieldPath: status.hostIP
+
+  - name: SMPC__SERVICE__METRICS__PORT
+    value: "8125"
+
+  - name: SMPC__SERVICE__METRICS__QUEUE_SIZE
+    value: "5000"
+
+  - name: SMPC__SERVICE__METRICS__BUFFER_SIZE
+    value: "1024"
+
+  - name: SMPC__SERVICE__METRICS__PREFIX
+    value: "smpcv2-2"
+
+  - name: SMPC__RETURN_PARTIAL_RESULTS
+    value: "true"
+
+  - name: SMPC__DISABLE_PERSISTENCE
+    value: "false"
+
+  - name: SMPC__NODE_HOSTNAMES
+    value: '["iris-mpc-node.1.smpcv2.worldcoin.org","iris-mpc-node.2.smpcv2.worldcoin.org","iris-mpc-node.3.smpcv2.worldcoin.org"]'
+
+  - name: SMPC__IMAGE_NAME
+    value: $(IMAGE_NAME)
+
+initContainer:
+  enabled: true
+  image: "amazon/aws-cli:2.17.62"
+  name: "iris-mpc-dns-records-updater-and-cuda-libs"
+  env:
+    - name: PARTY_ID
+      value: "3"
+    - name: MY_NODE_IP
+      valueFrom:
+        fieldRef:
+          fieldPath: status.hostIP
+  configMap:
+    init.sh: |
+      #!/usr/bin/env bash
+
+      # Set up environment variables
+      HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$PARTY_ID".smpcv2.worldcoin.org --query "HostedZones[].Id" --output text)
+
+      # Generate the JSON content in memory
+      BATCH_JSON=$(cat <<EOF
+      {
+        "Comment": "Upsert the A record for iris-mpc NCCL_COMM_ID",
+        "Changes": [
+          {
+            "Action": "UPSERT",
+            "ResourceRecordSet": {
+              "Name": "iris-mpc-node.$PARTY_ID.smpcv2.worldcoin.org",
+              "TTL": 5,
+              "Type": "A",
+              "ResourceRecords": [{
+                "Value": "$MY_NODE_IP"
+              }]
+            }
+          }
+        ]
+      }
+      EOF
+      )
+
+      # Execute AWS CLI command with the generated JSON
+      aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch "$BATCH_JSON"
+
+      cd /libs
+      aws s3 cp s3://wf-smpcv2-prod-libs/libcublas.so.12.2.5.6 .
+      aws s3 cp s3://wf-smpcv2-prod-libs/libcublasLt.so.12.2.5.6 .

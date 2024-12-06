@@ -1,0 +1,28 @@
+[package]
+name = "iris-mpc-store"
+version = "0.1.0"
+publish = false
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+iris-mpc-common = { path = "../iris-mpc-common" }
+bytemuck.workspace = true
+futures.workspace = true
+sqlx.workspace = true
+eyre.workspace = true
+itertools.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+rand.workspace = true
+
+[dev-dependencies]
+rand.workspace = true
+dotenvy.workspace = true
+tokio.workspace = true
+
+[features]
+db_dependent = []

@@ -1,0 +1,94 @@
+image: "ghcr.io/worldcoin/iris-mpc:v0.10.4"
+
+environment: prod
+replicaCount: 1
+
+strategy:
+  type: Recreate
+
+datadog:
+  enabled: true
+
+ports:
+  - containerPort: 3000
+    name: health
+    protocol: TCP
+#  - containerPort: 4000
+#    name: nccl
+#    protocol: TCP
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: health
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: health
+
+startupProbe:
+  initialDelaySeconds: 900
+  failureThreshold: 40
+  periodSeconds: 30
+  httpGet:
+    path: /ready
+    port: health
+
+resources:
+  limits:
+    cpu: 192
+    memory: 1000Gi
+    nvidia.com/gpu: 8
+    hugepages-2Mi: 5Gi
+    vpc.amazonaws.com/efa: 32
+  requests:
+    cpu: 190
+    memory: 1000Gi
+    nvidia.com/gpu: 8
+    hugepages-2Mi: 5Gi
+    vpc.amazonaws.com/efa: 32
+
+imagePullSecrets:
+  - name: github-secret
+
+nodeSelector:
+  kubernetes.io/arch: amd64
+
+hostNetwork: true
+
+podSecurityContext:
+  runAsUser: 65534
+  runAsGroup: 65534
+
+tolerations:
+  - key: "dedicated"
+    operator: "Equal"
+    value: "gpuGroup"
+    effect: "NoSchedule"
+
+keelPolling:
+  # -- Specifies whether keel should poll for container updates
+  enabled: true
+
+libsDir:
+  enabled: true
+  path: "/libs"
+  size: 2Gi
+  files:
+    - path: "/usr/local/cuda-12.2/targets/x86_64-linux/lib/libcublasLt.so.12.2.5.6"
+      file: "libcublasLt.so.12.2.5.6"
+    - path: "/usr/local/cuda-12.2/targets/x86_64-linux/lib/libcublas.so.12.2.5.6"
+      file: "libcublas.so.12.2.5.6"
+
+tmpDir:
+  enabled: true
+  size: 5Gi
+  mountPath: /dev/shm
+
+preStop:
+  # preStop.sleepPeriod specifies the time spent in Terminating state before SIGTERM is sent
+  sleepPeriod: 10
+
+# terminationGracePeriodSeconds specifies the grace time between SIGTERM and SIGKILL
+terminationGracePeriodSeconds: 360 # 3x SMPC__PROCESSING_TIMEOUT_SECS

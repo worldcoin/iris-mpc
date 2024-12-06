@@ -1,0 +1,56 @@
+[package]
+name = "iris-mpc-cpu"
+version = "0.1.0"
+publish = false
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display"}
+async-channel = "2.3.1"
+async-stream = "0.3.6"
+async-trait = "~0.1"
+backoff = {version="0.4.0", features = ["tokio"]}
+bincode.workspace = true
+bytes = "1.7"
+bytemuck.workspace = true
+clap.workspace = true
+dashmap = "6.1.0"
+eyre.workspace = true
+futures.workspace = true
+hawk-pack.workspace = true
+iris-mpc-common = { path = "../iris-mpc-common" }
+itertools.workspace = true
+num-traits.workspace = true
+prost = "0.13"
+rand.workspace = true
+rstest = "0.23.0"
+serde.workspace = true
+serde_json.workspace = true
+static_assertions.workspace = true
+tokio.workspace = true
+tokio-stream = "0.1"
+tonic = "0.12.3"
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-test = "0.2.5"
+uuid.workspace = true
+
+[dev-dependencies]
+criterion = { version = "0.5.1", features = ["async_tokio"] }
+
+[build-dependencies]
+tonic-build = "0.12.3"
+
+[[bench]]
+name = "hnsw"
+harness = false
+
+[[example]]
+name = "hnsw-ex"
+
+[[bin]]
+name = "local_hnsw"
+path = "bin/local_hnsw.rs"

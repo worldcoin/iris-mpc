@@ -1,0 +1,74 @@
+services:
+  old-db-shares-1:
+    image: postgres:16
+    ports:
+      - "6100:5432"
+    environment:
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+  old-db-shares-2:
+    image: postgres:16
+    ports:
+      - "6101:5432"
+    environment:
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+  old-db-masks-1:
+    image: postgres:16
+    ports:
+      - "6111:5432"
+    environment:
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+  new-db-1:
+    image: postgres:16
+    ports:
+      - "6200:5432"
+    environment:
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+  new-db-2:
+    image: postgres:16
+    ports:
+      - "6201:5432"
+    environment:
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+  new-db-3:
+    image: postgres:16
+    ports:
+      - "6202:5432"
+    environment:
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+  new-db-4:
+    image: postgres:16
+    ports:
+      - "6203:5432"
+    environment:
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+  localstack:
+    image: localstack/localstack
+    ports:
+      - "127.0.0.1:4566:4566"
+      - "127.0.0.1:4571:4571"
+    environment:
+      - SERVICES=kms
+      - DEFAULT_REGION=us-east-1
+  reshare-server-2:
+    image: ghcr.io/worldcoin/iris-mpc:146c2cae43dbeb586144d9d37d152a6b2bfacdd4
+    platform: linux/x86_64
+    entrypoint: reshare-server
+    command: "--party-id 2 --sender1-party-id 0 --sender2-party-id 1 --bind-addr 0.0.0.0:7000 --environment testing --db-url postgres://postgres:postgres@new-db-4:5432 --batch-size 100 --healthcheck-port 3000"
+    ports:
+      - "7000:7000"
+  nginx:
+    image: nginx:1.27.1
+    depends_on:
+      - reshare-server-2
+    ports:
+      - "6443:6443"
+    volumes:
+      - ./nginx/cert:/etc/nginx/cert:ro
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro

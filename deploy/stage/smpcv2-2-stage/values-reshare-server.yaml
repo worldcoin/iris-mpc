@@ -1,0 +1,61 @@
+args:
+  - "--bind-addr"
+  - "0.0.0.0:7000"
+  - "--db-url"
+  - "$(SMPC__DATABASE__URL)"
+  - "--party-id"
+  - "2"
+  - "--environment"
+  - "$(ENVIRONMENT)"
+  - "--sender1-party-id"
+  - "1"
+  - "--sender2-party-id"
+  - "2"
+  - "--batch-size"
+  - "100"
+  - "--max-buffer-size"
+  - "10"
+  - "--healthcheck-port"
+  - "3001"
+
+initContainer:
+  enabled: true
+  image: "amazon/aws-cli:2.17.62"
+  name: "reshare-proto-dns-records-updater"
+  env:
+    - name: PARTY_ID
+      value: "3"
+    - name: MY_POD_IP
+      valueFrom:
+        fieldRef:
+          fieldPath: status.podIP
+  configMap:
+    init.sh: |
+      #!/usr/bin/env bash
+
+      # Set up environment variables
+      HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$PARTY_ID".stage.smpcv2.worldcoin.dev --query "HostedZones[].Id" --output text)
+      
+      # Generate the JSON content in memory
+      BATCH_JSON=$(cat <<EOF
+      {
+        "Comment": "Upsert the A record for upgrade-server",
+        "Changes": [
+          {
+            "Action": "UPSERT",
+            "ResourceRecordSet": {
+              "Name": "reshare-server.$PARTY_ID.stage.smpcv2.worldcoin.dev",
+              "TTL": 5,
+              "Type": "A",
+              "ResourceRecords": [{
+                "Value": "$MY_POD_IP"
+              }]
+            }
+          }
+        ]
+      }
+      EOF
+      )
+      
+      # Execute AWS CLI command with the generated JSON
+      aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch "$BATCH_JSON"
