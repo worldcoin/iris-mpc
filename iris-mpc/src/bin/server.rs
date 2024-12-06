@@ -6,7 +6,7 @@ use aws_sdk_sqs::{config::Region, Client};
 use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
 use eyre::{eyre, Context};
-use futures::{stream::select_all, TryStreamExt};
+use futures::{stream::select_all, StreamExt, TryStreamExt};
 use iris_mpc_common::{
     config::{json_wrapper::JsonStrWrapper, Config, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -36,7 +36,7 @@ use iris_mpc_gpu::{
     },
 };
 use iris_mpc_store::{
-    fetch_and_parse_chunks, last_snapshot_timestamp, S3Store, Store, StoredIrisRef,
+    fetch_and_parse_chunks, last_snapshot_timestamp, IrisSource, S3Store, Store, StoredIrisRef,
 };
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
@@ -924,14 +924,16 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         // First fetch last snapshot from S3
                         let s3_store = S3Store::new(s3_client, db_chunks_bucket_name);
                         let last_snapshot_timestamp = last_snapshot_timestamp(&s3_store).await?;
-                        let stream_s3 =
-                            fetch_and_parse_chunks(&s3_store, load_chunks_parallelism).await;
+                        let stream_s3 = fetch_and_parse_chunks(&s3_store, load_chunks_parallelism)
+                            .await
+                            .map(|result| result.map(IrisSource::S3))
+                            .boxed();
 
-                        let stream_db = Box::pin(
-                            store
-                                .stream_irises_par(last_snapshot_timestamp, parallelism)
-                                .await,
-                        );
+                        let stream_db = store
+                            .stream_irises_par(last_snapshot_timestamp, parallelism)
+                            .await
+                            .map(|result| result.map(IrisSource::DB))
+                            .boxed();
 
                         let mut stream = select_all(vec![stream_s3, stream_db]);
 
@@ -939,7 +941,24 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         let mut record_counter = 0;
                         let mut all_serial_ids: HashSet<i64> =
                             HashSet::from_iter(1..=(store_len as i64));
-                        while let Some(iris) = stream.try_next().await? {
+                        let mut serial_ids_from_db: HashSet<i64> = HashSet::new();
+                        while let Some(result) = stream.try_next().await? {
+                            let iris = match result {
+                                IrisSource::DB(iris) => {
+                                    serial_ids_from_db.insert(iris.id());
+                                    iris
+                                }
+                                IrisSource::S3(iris) => {
+                                    if serial_ids_from_db.contains(&iris.id()) {
+                                        tracing::warn!(
+                                            "Skip overriding record already loaded via DB with S3 \
+                                             record: {}",
+                                            iris.id()
+                                        );
+                                    }
+                                    continue;
+                                }
+                            };
                             if record_counter % 100_000 == 0 {
                                 let elapsed = now.elapsed();
                                 tracing::info!(
@@ -966,6 +985,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             all_serial_ids.remove(&(iris.index() as i64));
                             record_counter += 1;
                         }
+
+                        // Clear the memory allocated by temp HashSet
+                        serial_ids_from_db.clear();
+                        serial_ids_from_db.shrink_to_fit();
 
                         if !all_serial_ids.is_empty() {
                             tracing::error!("Not all serial_ids were loaded: {:?}", all_serial_ids);

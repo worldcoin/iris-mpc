@@ -8,7 +8,6 @@ use rayon::{iter::ParallelIterator, prelude::ParallelBridge};
 use serde::Deserialize;
 use std::{io::Cursor, mem, pin::Pin};
 use tokio::task;
-use tracing::log;
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -101,7 +100,12 @@ pub async fn last_snapshot_timestamp(store: &impl ObjectStore) -> eyre::Result<i
     objects
         .into_iter()
         .filter(|f| f.starts_with("output/") && f.ends_with(".timestamp"))
-        .filter_map(|f| f.replace(".timestamp", "").replace("output/", "").parse::<i64>().ok())
+        .filter_map(|f| {
+            f.replace(".timestamp", "")
+                .replace("output/", "")
+                .parse::<i64>()
+                .ok()
+        })
         .max()
         .ok_or_else(|| eyre::eyre!("No snapshot found"))
 }

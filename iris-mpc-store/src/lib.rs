@@ -34,6 +34,12 @@ fn sql_switch_schema(schema_name: &str) -> Result<String> {
     ))
 }
 
+// Enum to define the source of the irises
+pub enum IrisSource {
+    S3(StoredIris),
+    DB(StoredIris),
+}
+
 #[derive(sqlx::FromRow, Debug, Default, PartialEq, Eq)]
 pub struct StoredIris {
     #[allow(dead_code)]
