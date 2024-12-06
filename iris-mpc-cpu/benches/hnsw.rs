@@ -6,7 +6,9 @@ use iris_mpc_cpu::{
     database_generators::{create_random_sharing, generate_galois_iris_shares},
     execution::local::LocalRuntime,
     hawkers::{galois_store::LocalNetAby3NgStoreProtocol, plaintext_store::PlaintextStore},
-    protocol::ops::{cross_compare, galois_ring_pairwise_distance, galois_ring_to_rep3},
+    protocol::ops::{
+        batch_signed_lift_vec, cross_compare, galois_ring_pairwise_distance, galois_ring_to_rep3,
+    },
 };
 use rand::SeedableRng;
 use tokio::task::JoinSet;
@@ -99,9 +101,23 @@ fn bench_hnsw_primitives(c: &mut Criterion) {
                 let t2i = t2[index].clone();
                 let mut player_session = runtime.sessions.get(player).unwrap().clone();
                 jobs.spawn(async move {
-                    cross_compare(&mut player_session, d1i, t1i, d2i, t2i)
-                        .await
-                        .unwrap()
+                    let ds_and_ts = batch_signed_lift_vec(&mut player_session, vec![
+                        d1i.clone(),
+                        d2i.clone(),
+                        t1i.clone(),
+                        t2i.clone(),
+                    ])
+                    .await
+                    .unwrap();
+                    cross_compare(
+                        &mut player_session,
+                        ds_and_ts[0].clone(),
+                        ds_and_ts[1].clone(),
+                        ds_and_ts[2].clone(),
+                        ds_and_ts[3].clone(),
+                    )
+                    .await
+                    .unwrap()
                 });
             }
             let _outputs = black_box(jobs.join_all().await);
@@ -144,6 +160,9 @@ fn bench_gr_primitives(c: &mut Criterion) {
                         .await
                         .unwrap();
                     let ds_and_ts = galois_ring_to_rep3(&mut player_session, ds_and_ts)
+                        .await
+                        .unwrap();
+                    let ds_and_ts = batch_signed_lift_vec(&mut player_session, ds_and_ts)
                         .await
                         .unwrap();
                     cross_compare(
