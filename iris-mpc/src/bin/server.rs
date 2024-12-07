@@ -6,7 +6,7 @@ use aws_sdk_sqs::{config::Region, Client};
 use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
 use eyre::{eyre, Context};
-use futures::{stream::select_all, TryStreamExt};
+use futures::{stream::select_all, StreamExt, TryStreamExt};
 use iris_mpc_common::{
     config::{json_wrapper::JsonStrWrapper, Config, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -39,7 +39,7 @@ use iris_mpc_gpu::{
     },
 };
 use iris_mpc_store::{
-    fetch_and_parse_chunks, last_snapshot_timestamp, S3Store, Store, StoredIrisRef,
+    fetch_and_parse_chunks, last_snapshot_timestamp, IrisSource, S3Store, Store, StoredIrisRef,
 };
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
@@ -52,6 +52,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, LazyLock, Mutex,
     },
+    time,
     time::{Duration, Instant},
 };
 use telemetry_batteries::tracing::{datadog::DatadogBattery, TracingShutdownHandle};
@@ -983,22 +984,51 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         // First fetch last snapshot from S3
                         let s3_store = S3Store::new(s3_client, db_chunks_bucket_name);
                         let last_snapshot_timestamp = last_snapshot_timestamp(&s3_store).await?;
-                        let stream_s3 =
-                            fetch_and_parse_chunks(&s3_store, load_chunks_parallelism).await;
+                        let min_last_modified_at =
+                            last_snapshot_timestamp - config.db_load_safety_overlap_seconds;
+                        let stream_s3 = fetch_and_parse_chunks(&s3_store, load_chunks_parallelism)
+                            .await
+                            .map(|result| result.map(IrisSource::S3))
+                            .boxed();
 
-                        let stream_db = Box::pin(
-                            store
-                                .stream_irises_par(last_snapshot_timestamp, parallelism)
-                                .await,
-                        );
+                        let stream_db = store
+                            .stream_irises_par(min_last_modified_at, parallelism)
+                            .await
+                            .map(|result| result.map(IrisSource::DB))
+                            .boxed();
 
                         let mut stream = select_all(vec![stream_s3, stream_db]);
 
                         let now = Instant::now();
+                        let mut now_load_summary = Instant::now();
+                        let mut time_waiting_for_stream = time::Duration::from_secs(0);
+                        let mut time_loading_into_memory = time::Duration::from_secs(0);
                         let mut record_counter = 0;
                         let mut all_serial_ids: HashSet<i64> =
                             HashSet::from_iter(1..=(store_len as i64));
-                        while let Some(iris) = stream.try_next().await? {
+                        let mut serial_ids_from_db: HashSet<i64> = HashSet::new();
+                        while let Some(result) = stream.try_next().await? {
+                            time_waiting_for_stream += now_load_summary.elapsed();
+                            now_load_summary = Instant::now();
+
+                            let iris = match result {
+                                IrisSource::DB(iris) => {
+                                    serial_ids_from_db.insert(iris.id());
+                                    iris
+                                }
+                                IrisSource::S3(iris) => {
+                                    if serial_ids_from_db.contains(&iris.id()) {
+                                        tracing::warn!(
+                                            "Skip overriding record already loaded via DB with S3 \
+                                             record: {}",
+                                            iris.id()
+                                        );
+                                        continue;
+                                    }
+                                    iris
+                                }
+                            };
+
                             if record_counter % 100_000 == 0 {
                                 let elapsed = now.elapsed();
                                 tracing::info!(
@@ -1021,10 +1051,24 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                 iris.right_code(),
                                 iris.right_mask(),
                             );
+                            time_loading_into_memory += now_load_summary.elapsed();
+                            now_load_summary = Instant::now();
 
-                            all_serial_ids.remove(&(iris.index() as i64 - 1));
+                            all_serial_ids.remove(&(iris.index() as i64));
                             record_counter += 1;
                         }
+
+                        tracing::info!(
+                            "Loading summary => Loaded {:?} items. Waited for stream: {:?}s, \
+                             Loaded into memory: {:?}s",
+                            record_counter,
+                            time_waiting_for_stream,
+                            time_loading_into_memory,
+                        );
+
+                        // Clear the memory allocated by temp HashSet
+                        serial_ids_from_db.clear();
+                        serial_ids_from_db.shrink_to_fit();
 
                         if !all_serial_ids.is_empty() {
                             tracing::error!("Not all serial_ids were loaded: {:?}", all_serial_ids);

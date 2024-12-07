@@ -99,8 +99,13 @@ pub async fn last_snapshot_timestamp(store: &impl ObjectStore) -> eyre::Result<i
         .list_objects()
         .await?
         .into_iter()
-        .filter(|f| f.ends_with(".timestamp"))
-        .filter_map(|f| f.replace(".timestamp", "").parse::<i64>().ok())
+        .filter(|f| f.starts_with("output/") && f.ends_with(".timestamp"))
+        .filter_map(|f| {
+            f.replace(".timestamp", "")
+                .replace("output/", "")
+                .parse::<i64>()
+                .ok()
+        })
         .max()
         .ok_or_else(|| eyre::eyre!("No snapshot found"))
 }
@@ -112,7 +117,8 @@ pub async fn fetch_and_parse_chunks(
     let chunks = store.list_objects().await.unwrap();
     stream::iter(chunks)
         .filter_map(|chunk| async move {
-            if chunk.ends_with(".bin") {
+            if chunk.ends_with(".csv") {
+                tracing::info!("Processing chunk: {}", chunk);
                 Some(chunk)
             } else {
                 None
@@ -244,13 +250,13 @@ mod tests {
         const MOCK_ENTRIES: usize = 107;
         const MOCK_CHUNK_SIZE: usize = 10;
         let mut store = MockStore::new();
-
-        for i in 0..MOCK_ENTRIES.div_ceil(MOCK_CHUNK_SIZE) {
-            let start_idx = i * MOCK_CHUNK_SIZE;
-            let end_idx = min((i + 1) * MOCK_CHUNK_SIZE, MOCK_ENTRIES) - 1;
+        let n_chunks = MOCK_ENTRIES.div_ceil(MOCK_CHUNK_SIZE);
+        for i in 0..n_chunks {
+            let start_serial_id = i * MOCK_CHUNK_SIZE + 1;
+            let end_serial_id = min((i + 1) * MOCK_CHUNK_SIZE, MOCK_ENTRIES);
             store.add_test_data(
-                &format!("{start_idx}_{end_idx}.bin"),
-                (start_idx..=end_idx).map(dummy_entry).collect(),
+                &format!("{start_serial_id}.csv"),
+                (start_serial_id..=end_serial_id).map(dummy_entry).collect(),
             );
         }
 
@@ -261,7 +267,7 @@ mod tests {
 
         let mut chunks = fetch_and_parse_chunks(&store, 1).await;
         let mut count = 0;
-        let mut ids: HashSet<usize> = HashSet::from_iter(0..MOCK_ENTRIES);
+        let mut ids: HashSet<usize> = HashSet::from_iter(1..MOCK_ENTRIES);
         while let Some(chunk) = chunks.next().await {
             let chunk = chunk.unwrap();
             ids.remove(&(chunk.id as usize));
