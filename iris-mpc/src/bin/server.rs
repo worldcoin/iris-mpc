@@ -49,6 +49,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, LazyLock, Mutex,
     },
+    time,
     time::{Duration, Instant},
 };
 use telemetry_batteries::tracing::{datadog::DatadogBattery, TracingShutdownHandle};
@@ -938,11 +939,17 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         let mut stream = select_all(vec![stream_s3, stream_db]);
 
                         let now = Instant::now();
+                        let mut now_load_summary = Instant::now();
+                        let mut time_waiting_for_stream = time::Duration::from_secs(0);
+                        let mut time_loading_into_memory = time::Duration::from_secs(0);
                         let mut record_counter = 0;
                         let mut all_serial_ids: HashSet<i64> =
                             HashSet::from_iter(1..=(store_len as i64));
                         let mut serial_ids_from_db: HashSet<i64> = HashSet::new();
                         while let Some(result) = stream.try_next().await? {
+                            time_waiting_for_stream += now_load_summary.elapsed();
+                            now_load_summary = Instant::now();
+
                             let iris = match result {
                                 IrisSource::DB(iris) => {
                                     serial_ids_from_db.insert(iris.id());
@@ -960,6 +967,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                     iris
                                 }
                             };
+
                             if record_counter % 100_000 == 0 {
                                 let elapsed = now.elapsed();
                                 tracing::info!(
@@ -982,10 +990,20 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                 iris.right_code(),
                                 iris.right_mask(),
                             );
+                            time_loading_into_memory += now_load_summary.elapsed();
+                            now_load_summary = Instant::now();
 
                             all_serial_ids.remove(&(iris.index() as i64));
                             record_counter += 1;
                         }
+
+                        tracing::info!(
+                            "Loading summary => Loaded {:?} items. Waited for stream: {:?}s, \
+                             Loaded into memory: {:?}s",
+                            record_counter,
+                            time_waiting_for_stream,
+                            time_loading_into_memory,
+                        );
 
                         // Clear the memory allocated by temp HashSet
                         serial_ids_from_db.clear();
