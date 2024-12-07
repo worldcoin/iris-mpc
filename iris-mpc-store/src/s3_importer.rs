@@ -6,7 +6,7 @@ use futures::{stream, Stream, StreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use rayon::{iter::ParallelIterator, prelude::ParallelBridge};
 use serde::Deserialize;
-use std::{io::Cursor, mem, pin::Pin};
+use std::{io::Cursor, mem, pin::Pin, sync::Arc};
 use tokio::task;
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -21,12 +21,12 @@ pub trait ObjectStore: Send + Sync + 'static {
 }
 
 pub struct S3Store {
-    client: Client,
+    client: Arc<Client>,
     bucket: String,
 }
 
 impl S3Store {
-    pub fn new(client: Client, bucket: String) -> Self {
+    pub fn new(client: Arc<Client>, bucket: String) -> Self {
         Self { client, bucket }
     }
 }

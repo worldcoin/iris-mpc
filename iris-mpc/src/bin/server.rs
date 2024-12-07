@@ -674,6 +674,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);
     let s3_client = Arc::new(S3Client::new(&shared_config));
+    let s3_client_clone = Arc::clone(&s3_client);
     let shares_encryption_key_pair =
         match SharesEncryptionKeyPairs::from_storage(config.clone()).await {
             Ok(key_pair) => key_pair,
@@ -980,9 +981,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         "Initialize iris db: Loading from DB (parallelism: {})",
                         parallelism
                     );
+                    let s3_store = S3Store::new(s3_client_clone, db_chunks_bucket_name);
                     tokio::runtime::Handle::current().block_on(async {
                         // First fetch last snapshot from S3
-                        let s3_store = S3Store::new(s3_client, db_chunks_bucket_name);
                         let last_snapshot_timestamp = last_snapshot_timestamp(&s3_store).await?;
                         let min_last_modified_at =
                             last_snapshot_timestamp - config.db_load_safety_overlap_seconds;
