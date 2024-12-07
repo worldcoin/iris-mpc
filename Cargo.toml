@@ -6,7 +6,6 @@ members = [
     "iris-mpc-common",
     "iris-mpc-upgrade",
     "iris-mpc-store",
-    "iris-mpc-py",
 ]
 resolver = "2"
 
@@ -22,9 +21,12 @@ aws-sdk-sns = { version = "1.44.0" }
 aws-sdk-sqs = { version = "1.36.0" }
 aws-sdk-s3 = { version = "1.50.0" }
 aws-sdk-secretsmanager = { version = "1.47.0" }
+async-trait = "0.1.83"
 axum = "0.7"
 clap = { version = "4", features = ["derive", "env"] }
+csv = "1.3.1"
 base64 = "0.22.1"
+bytes = "1.5"
 bytemuck = { version = "1.17", features = ["derive"] }
 dotenvy = "0.15"
 eyre = "0.6"
