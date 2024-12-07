@@ -90,6 +90,12 @@ pub struct Config {
 
     #[serde(default)]
     pub image_name: String,
+
+    /// Defines the safety overlap to load the DB records >last_modified_at in
+    /// seconds This is to ensure we don't miss any records that were
+    /// updated during the DB export to S3
+    #[serde(default = "default_db_load_safety_overlap_seconds")]
+    pub db_load_safety_overlap_seconds: i64,
 }
 
 fn default_load_chunks_parallelism() -> usize {
@@ -114,6 +120,10 @@ fn default_heartbeat_initial_retries() -> u64 {
 
 fn default_shutdown_last_results_sync_timeout_secs() -> u64 {
     10
+}
+
+fn default_db_load_safety_overlap_seconds() -> i64 {
+    60
 }
 
 impl Config {

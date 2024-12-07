@@ -925,13 +925,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         // First fetch last snapshot from S3
                         let s3_store = S3Store::new(s3_client, db_chunks_bucket_name);
                         let last_snapshot_timestamp = last_snapshot_timestamp(&s3_store).await?;
+                        let min_last_modified_at =
+                            last_snapshot_timestamp - config.db_load_safety_overlap_seconds;
                         let stream_s3 = fetch_and_parse_chunks(&s3_store, load_chunks_parallelism)
                             .await
                             .map(|result| result.map(IrisSource::S3))
                             .boxed();
 
                         let stream_db = store
-                            .stream_irises_par(last_snapshot_timestamp, parallelism)
+                            .stream_irises_par(min_last_modified_at, parallelism)
                             .await
                             .map(|result| result.map(IrisSource::DB))
                             .boxed();
