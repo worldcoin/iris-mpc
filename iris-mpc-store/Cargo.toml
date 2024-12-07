@@ -24,7 +24,6 @@ serde_json.workspace = true
 tracing.workspace = true
 tokio.workspace = true
 rand.workspace = true
-regex.workspace = true
 rayon.workspace = true
 
 [dev-dependencies]
