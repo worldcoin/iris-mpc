@@ -6,7 +6,7 @@ use futures::{stream, Stream, StreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use rayon::{iter::ParallelIterator, prelude::ParallelBridge};
 use serde::Deserialize;
-use std::{io::Cursor, mem, pin::Pin, sync::Arc};
+use std::{io::Cursor, mem, pin::Pin, sync::Arc, time, time::Instant};
 use tokio::task;
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -115,7 +115,10 @@ pub async fn fetch_and_parse_chunks(
     concurrency: usize,
 ) -> Pin<Box<dyn Stream<Item = eyre::Result<StoredIris>> + Send + '_>> {
     let chunks = store.list_objects().await.unwrap();
-    stream::iter(chunks)
+    let mut total_get_object_time = time::Duration::from_secs(0);
+    let mut total_csv_parse_time = time::Duration::from_secs(0);
+
+    let result_stream = stream::iter(chunks)
         .filter_map(|chunk| async move {
             if chunk.ends_with(".csv") {
                 tracing::info!("Processing chunk: {}", chunk);
@@ -125,8 +128,14 @@ pub async fn fetch_and_parse_chunks(
             }
         })
         .map(move |chunk| async move {
+            let mut now = Instant::now();
             let result = store.get_object(&chunk).await?;
-            task::spawn_blocking(move || {
+            let get_object_time = now.elapsed();
+            tracing::info!("Got chunk object: {} in {:?}", chunk, get_object_time,);
+            total_get_object_time += get_object_time;
+
+            now = Instant::now();
+            let task = task::spawn_blocking(move || {
                 let cursor = Cursor::new(result);
                 let reader = csv::ReaderBuilder::new()
                     .has_headers(true)
@@ -163,14 +172,25 @@ pub async fn fetch_and_parse_chunks(
 
                 Ok::<_, eyre::Error>(stream::iter(records))
             })
-            .await?
+            .await?;
+            let csv_parse_time = now.elapsed();
+            tracing::info!("Parsed csv chunk: {} in {:?}", chunk, csv_parse_time,);
+            total_csv_parse_time += csv_parse_time;
+            task
         })
         .buffer_unordered(concurrency)
         .flat_map(|result| match result {
             Ok(stream) => stream.boxed(),
             Err(e) => stream::once(async move { Err(e) }).boxed(),
         })
-        .boxed()
+        .boxed();
+    tracing::info!(
+        "fetch_and_parse_chunks summary => Total get_object time: {:?}, Total csv parse time: {:?}",
+        total_get_object_time,
+        total_csv_parse_time,
+    );
+
+    result_stream
 }
 
 #[cfg(test)]
