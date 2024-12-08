@@ -1,5 +1,8 @@
 use super::{graph_store::PyGraphStore, iris_code::PyIrisCode, plaintext_store::PyPlaintextStore};
-use hawk_pack::hnsw_db::{HawkSearcher, Params};
+use hawk_pack::{
+    hawk_searcher::{HawkerParams, N_PARAM_LAYERS},
+    HawkSearcher,
+};
 use iris_mpc_cpu::py_bindings;
 use pyo3::{exceptions::PyIOError, prelude::*};
 
@@ -17,13 +20,36 @@ impl PyHawkSearcher {
 
     #[staticmethod]
     pub fn new_standard(M: usize, ef_constr: usize, ef_search: usize) -> Self {
-        let params = Params::new_standard(ef_constr, ef_search, M);
+        let params = HawkerParams::new(ef_constr, ef_search, M);
         Self(HawkSearcher { params })
     }
 
     #[staticmethod]
     pub fn new_uniform(M: usize, ef: usize) -> Self {
-        let params = Params::new_uniform(ef, M);
+        let params = HawkerParams::new_uniform(ef, M);
+        Self(HawkSearcher { params })
+    }
+
+    /// Construct `HawkSearcher` with fully general parameters, specifying the
+    /// values of various parameters used during construction and search at
+    /// different levels of the graph hierarchy.
+    #[staticmethod]
+    pub fn new_general(
+        M: [usize; N_PARAM_LAYERS],
+        M_max: [usize; N_PARAM_LAYERS],
+        ef_constr_search: [usize; N_PARAM_LAYERS],
+        ef_constr_insert: [usize; N_PARAM_LAYERS],
+        ef_search: [usize; N_PARAM_LAYERS],
+        layer_probability: f64,
+    ) -> Self {
+        let params = HawkerParams {
+            M,
+            M_max,
+            ef_constr_search,
+            ef_constr_insert,
+            ef_search,
+            layer_probability,
+        };
         Self(HawkSearcher { params })
     }
 
