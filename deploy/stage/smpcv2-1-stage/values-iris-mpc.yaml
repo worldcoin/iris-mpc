@@ -72,7 +72,7 @@ env:
     value: "iris-mpc-db-exporter-store-node-1-stage-eu-north-1"
 
   - name: SMPC__LOAD_CHUNKS_PARALLELISM
-    value: "64"
+    value: "16"
 
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
