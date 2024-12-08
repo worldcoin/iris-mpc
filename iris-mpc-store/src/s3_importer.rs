@@ -4,7 +4,6 @@ use aws_sdk_s3::Client;
 use bytes::Bytes;
 use futures::{stream, Stream, StreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
-use rayon::{iter::ParallelIterator, prelude::ParallelBridge};
 use serde::Deserialize;
 use std::{io::Cursor, mem, pin::Pin, sync::Arc};
 use tokio::task;
@@ -133,10 +132,8 @@ pub async fn fetch_and_parse_chunks(
                     .buffer_capacity(CSV_BUFFER_CAPACITY)
                     .from_reader(cursor);
 
-                let records: Vec<eyre::Result<StoredIris>> = reader
-                    .into_deserialize()
-                    .par_bridge()
-                    .map(|r: Result<CsvIrisRecord, _>| {
+                Ok::<_, eyre::Error>(stream::iter(reader.into_deserialize()).map(
+                    |r: Result<CsvIrisRecord, _>| {
                         let raw = r.map_err(|e| eyre::eyre!("CSV parse error: {}", e))?;
 
                         Ok(StoredIris {
@@ -158,10 +155,8 @@ pub async fn fetch_and_parse_chunks(
                                 MASK_CODE_LENGTH * mem::size_of::<u16>(),
                             )?,
                         })
-                    })
-                    .collect();
-
-                Ok::<_, eyre::Error>(stream::iter(records))
+                    },
+                ))
             })
             .await?
         })
