@@ -1008,12 +1008,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         let mut all_serial_ids: HashSet<i64> =
                             HashSet::from_iter(1..=(store_len as i64));
                         let mut serial_ids_from_db: HashSet<i64> = HashSet::new();
+                        let mut n_loaded_from_db = 0;
+                        let mut n_loaded_from_s3 = 0;
                         while let Some(result) = stream.try_next().await? {
                             time_waiting_for_stream += now_load_summary.elapsed();
                             now_load_summary = Instant::now();
 
                             let iris = match result {
                                 IrisSource::DB(iris) => {
+                                    n_loaded_from_db += 1;
                                     serial_ids_from_db.insert(iris.id());
                                     iris
                                 }
@@ -1026,6 +1029,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                         );
                                         continue;
                                     }
+                                    n_loaded_from_s3 += 1;
                                     iris
                                 }
                             };
@@ -1060,9 +1064,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         }
 
                         tracing::info!(
-                            "Loading summary => Loaded {:?} items. Waited for stream: {:?}s, \
-                             Loaded into memory: {:?}s",
+                            "Loading summary => Loaded {:?} items. {} from DB, {} from S3. Waited \
+                             for stream: {:?}, Loaded into memory: {:?}",
                             record_counter,
+                            n_loaded_from_db,
+                            n_loaded_from_s3,
                             time_waiting_for_stream,
                             time_loading_into_memory,
                         );
