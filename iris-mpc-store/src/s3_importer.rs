@@ -1,11 +1,17 @@
-use crate::StoredIris;
+use std::mem;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::Instant;
+
 use async_trait::async_trait;
-use aws_sdk_s3::{primitives::ByteStream, Client};
+use aws_sdk_s3::primitives::ByteStream;
+use aws_sdk_s3::Client;
 use csv_async::AsyncReaderBuilder;
 use futures::{stream, Stream, StreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use serde::Deserialize;
-use std::{mem, pin::Pin, sync::Arc, time::Instant};
+
+use crate::StoredIris;
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -39,6 +45,12 @@ impl ObjectStore for S3Store {
             .key(key)
             .send()
             .await?;
+
+        if let Some(bytes) = result.body.bytes() {
+            tracing::info!(n = bytes.len(), "S3 Object Downloaded");
+        } else {
+            tracing::info!("S3 Object Streaming");
+        }
 
         Ok(result.body)
     }
@@ -180,9 +192,12 @@ pub async fn fetch_and_parse_chunks(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::cmp::min;
+    use std::collections::HashSet;
+
     use rand::Rng;
-    use std::{cmp::min, collections::HashSet};
+
+    use super::*;
 
     #[derive(Default, Clone)]
     pub struct MockStore {
@@ -261,10 +276,12 @@ mod tests {
         for i in 0..n_chunks {
             let start_serial_id = i * MOCK_CHUNK_SIZE + 1;
             let end_serial_id = min((i + 1) * MOCK_CHUNK_SIZE, MOCK_ENTRIES);
-            store.add_test_data(
-                &format!("{start_serial_id}.csv"),
-                (start_serial_id..=end_serial_id).map(dummy_entry).collect(),
-            ).await;
+            store
+                .add_test_data(
+                    &format!("{start_serial_id}.csv"),
+                    (start_serial_id..=end_serial_id).map(dummy_entry).collect(),
+                )
+                .await;
         }
 
         assert_eq!(
