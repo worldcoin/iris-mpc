@@ -162,11 +162,16 @@ fn bench_gr_primitives(c: &mut Criterion) {
     });
 }
 
+/// To run this benchmark, you need to generate the data first by running the
+/// following commands:
+///
+/// cargo build --release
+/// ./target/release/generate_benchmark_data
 fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
     let mut group = c.benchmark_group("gr_ready_made_hnsw");
     group.sample_size(10);
 
-    for database_size in [1, 10, 100, 1000, 10000, 100000] {
+    for database_size in [1, 10, 100, 1000, 10_000, 100_000] {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -174,9 +179,16 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
 
         let (_, secret_searcher) = rt.block_on(async move {
             let mut rng = AesRng::seed_from_u64(0_u64);
-            LocalNetAby3NgStoreProtocol::lazy_random_setup_with_grpc(&mut rng, database_size, false)
-                .await
-                .unwrap()
+            LocalNetAby3NgStoreProtocol::lazy_setup_from_files_with_grpc(
+                "./data/irises.ndjson",
+                "./data/store.ndjson",
+                &format!("./data/graph_{}.ndjson", database_size),
+                &mut rng,
+                database_size,
+                false,
+            )
+            .await
+            .unwrap()
         });
 
         group.bench_function(

@@ -12,6 +12,7 @@ use crate::{
         compare_threshold_and_open, cross_compare, galois_ring_pairwise_distance,
         galois_ring_to_rep3,
     },
+    py_bindings::{io::read_bin, plaintext_store::from_ndjson_file},
     shares::{
         ring_impl::RingElement,
         share::{DistanceShare, Share},
@@ -355,6 +356,85 @@ impl LocalNetAby3NgStoreProtocol {
 }
 
 impl LocalNetAby3NgStoreProtocol {
+    /// Generates 3 pairs of vector stores and graphs from a plaintext
+    /// vector store and graph read from disk, which are returned as well.
+    /// The network type is specified by the user.
+    /// A recompute flag is used to determine whether to recompute the distances
+    /// from stored shares. If recompute is set to false, the distances are
+    /// naively converted from plaintext.
+    pub async fn lazy_setup_from_files<R: RngCore + Clone + CryptoRng>(
+        irises_file: &str,
+        plainstore_file: &str,
+        plaingraph_file: &str,
+        rng: &mut R,
+        database_size: usize,
+        network_t: NetworkType,
+        recompute_distances: bool,
+    ) -> eyre::Result<(
+        (PlaintextStore, GraphMem<PlaintextStore>),
+        Vec<(Self, GraphMem<Self>)>,
+    )> {
+        if database_size > 100_000 {
+            return Err(eyre::eyre!("Database size too large, max. 100,000"));
+        }
+        let cleartext_database: Vec<IrisCode> = read_bin::<Vec<IrisCode>>(irises_file)
+            .map_err(|e| eyre::eyre!("Cannot find iris codes: {e}"))?
+            .into_iter()
+            .take(database_size)
+            .collect();
+        let plaintext_vector_store = from_ndjson_file(plainstore_file, Some(database_size))
+            .map_err(|e| eyre::eyre!("Cannot find store: {e}"))?;
+        let plaintext_graph_store: GraphMem<PlaintextStore> =
+            read_bin(plaingraph_file).map_err(|e| eyre::eyre!("Cannot find graph: {e}"))?;
+
+        let protocol_stores =
+            setup_local_aby3_players_with_preloaded_db(rng, cleartext_database, network_t).await?;
+
+        let mut jobs = JoinSet::new();
+        for store in protocol_stores.iter() {
+            let mut store = store.clone();
+            let plaintext_graph_store = plaintext_graph_store.clone();
+            jobs.spawn(async move {
+                (
+                    store.clone(),
+                    store
+                        .graph_from_plain(&plaintext_graph_store, recompute_distances)
+                        .await,
+                )
+            });
+        }
+        let mut secret_shared_stores = jobs.join_all().await;
+        secret_shared_stores.sort_by_key(|(store, _)| store.get_owner_index());
+        let plaintext = (plaintext_vector_store, plaintext_graph_store);
+        Ok((plaintext, secret_shared_stores))
+    }
+
+    /// Generates 3 pairs of vector stores and graphs from a plaintext
+    /// vector store and graph read from disk, which are returned as well.
+    /// Networking is based on gRPC.
+    pub async fn lazy_setup_from_files_with_grpc<R: RngCore + Clone + CryptoRng>(
+        irises_file: &str,
+        plainstore_file: &str,
+        plaingraph_file: &str,
+        rng: &mut R,
+        database_size: usize,
+        recompute_distances: bool,
+    ) -> eyre::Result<(
+        (PlaintextStore, GraphMem<PlaintextStore>),
+        Vec<(Self, GraphMem<Self>)>,
+    )> {
+        Self::lazy_setup_from_files(
+            irises_file,
+            plainstore_file,
+            plaingraph_file,
+            rng,
+            database_size,
+            NetworkType::GrpcChannel,
+            recompute_distances,
+        )
+        .await
+    }
+
     /// Generates 3 pairs of vector stores and graphs from a random plaintext
     /// vector store and graph, which are returned as well.
     /// The network type is specified by the user.
