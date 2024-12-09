@@ -9,7 +9,7 @@ use iris_mpc_store::Store;
 use iris_mpc_upgrade::{
     config::ReShareClientConfig,
     proto::{
-        self,
+        get_size_of_reshare_iris_code_share_batch,
         iris_mpc_reshare::{
             iris_code_re_share_service_client::IrisCodeReShareServiceClient, IrisCodeReShareStatus,
         },
@@ -18,6 +18,7 @@ use iris_mpc_upgrade::{
     utils::install_tracing,
 };
 use sha2::Sha256;
+use tonic::transport::{Certificate, Channel, ClientTlsConfig};
 
 const APP_NAME: &str = "SMPC";
 
@@ -45,6 +46,10 @@ async fn derive_common_seed(config: &ReShareClientConfig) -> eyre::Result<[u8; 3
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     install_tracing();
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+
     let config = ReShareClientConfig::parse();
 
     let common_seed = derive_common_seed(&config).await?;
@@ -63,7 +68,7 @@ async fn main() -> eyre::Result<()> {
     );
 
     let encoded_message_size =
-        proto::get_size_of_reshare_iris_code_share_batch(config.batch_size as usize);
+        get_size_of_reshare_iris_code_share_batch(config.batch_size as usize);
     if encoded_message_size > 100 * 1024 * 1024 {
         tracing::warn!(
             "encoded batch message size is large: {}MB",
@@ -72,8 +77,20 @@ async fn main() -> eyre::Result<()> {
     }
     let encoded_message_size_with_buf = (encoded_message_size as f64 * 1.1) as usize;
 
-    let mut grpc_client = IrisCodeReShareServiceClient::connect(config.server_url)
-        .await?
+    let pem = tokio::fs::read(config.client_tls_cert_path)
+        .await
+        .expect("oh no, the cert file wasn't loaded");
+    let cert = Certificate::from_pem(pem.clone());
+
+    let tls = ClientTlsConfig::new().ca_certificate(cert);
+
+    // build a tonic transport channel ourselves, since we want to add a tls config
+    let channel = Channel::from_shared(config.server_url.clone())?
+        .tls_config(tls)?
+        .connect()
+        .await?;
+
+    let mut grpc_client = IrisCodeReShareServiceClient::new(channel)
         .max_decoding_message_size(encoded_message_size_with_buf)
         .max_encoding_message_size(encoded_message_size_with_buf);
 

@@ -39,6 +39,7 @@ prost = "0.13.3"
 sha2 = "0.10.8"
 thiserror.workspace = true
 hkdf = "0.12.4"
+rustls = { version = "0.23.16", features = ["ring"] }
 
 [dev-dependencies]
 float_eq = "1"
@@ -74,3 +75,8 @@ path = "src/bin/reshare-server.rs"
 [[bin]]
 name = "reshare-client"
 path = "src/bin/reshare-client.rs"
+
+[[bin]]
+name = "ping-pong"
+path = "src/bin/ping-pong-client.rs"
+
