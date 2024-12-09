@@ -10,6 +10,7 @@ use iris_mpc_common::{
     config::Config,
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     iris_db::iris::IrisCode,
+    IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store};
@@ -17,7 +18,7 @@ use serde::{Deserialize, Deserializer};
 use sqlx::{
     migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Row, Transaction,
 };
-use std::{ops::DerefMut, pin::Pin};
+use std::{mem, ops::DerefMut, pin::Pin};
 
 const APP_NAME: &str = "SMPC";
 const MAX_CONNECTIONS: u32 = 100;
@@ -46,13 +47,13 @@ pub struct StoredIris {
     #[allow(dead_code)]
     #[serde(deserialize_with = "parse_id")]
     id:         i64, // BIGSERIAL
-    #[serde(deserialize_with = "hex_to_bytes_deserializer")]
+    #[serde(deserialize_with = "iris_code_deserializer")]
     left_code:  Vec<u8>, // BYTEA
-    #[serde(deserialize_with = "hex_to_bytes_deserializer")]
+    #[serde(deserialize_with = "iris_mask_deserializer")]
     left_mask:  Vec<u8>, // BYTEA
-    #[serde(deserialize_with = "hex_to_bytes_deserializer")]
+    #[serde(deserialize_with = "iris_code_deserializer")]
     right_code: Vec<u8>, // BYTEA
-    #[serde(deserialize_with = "hex_to_bytes_deserializer")]
+    #[serde(deserialize_with = "iris_mask_deserializer")]
     right_mask: Vec<u8>, // BYTEA
 }
 
@@ -64,19 +65,31 @@ where
     s.parse::<i64>().map_err(serde::de::Error::custom)
 }
 
-fn hex_to_bytes_deserializer<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+fn iris_code_deserializer<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let s: &str = Deserialize::deserialize(deserializer)?;
-    hex_to_bytes(s).map_err(serde::de::Error::custom)
+    let vec_size = IRIS_CODE_LENGTH * mem::size_of::<u16>();
+    let hex: &str = Deserialize::deserialize(deserializer)?;
+    hex_to_bytes(hex, vec_size).map_err(serde::de::Error::custom)
 }
 
-fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, hex::FromHexError> {
+fn iris_mask_deserializer<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let vec_size = MASK_CODE_LENGTH * mem::size_of::<u16>();
+    let hex: &str = Deserialize::deserialize(deserializer)?;
+    hex_to_bytes(hex, vec_size).map_err(serde::de::Error::custom)
+}
+
+fn hex_to_bytes(hex: &str, byte_len: usize) -> Result<Vec<u8>, hex::FromHexError> {
     if hex.is_empty() {
-        return Ok(vec![]);
+        return Ok(Vec::new());
     }
-    hex::decode(hex)
+    let mut bytes = vec![0u8; byte_len];
+    hex::decode_to_slice(hex, &mut bytes)?;
+    Ok(bytes)
 }
 
 impl StoredIris {

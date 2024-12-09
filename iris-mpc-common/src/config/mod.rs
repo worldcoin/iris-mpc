@@ -94,6 +94,9 @@ pub struct Config {
     #[serde(default = "default_load_chunks_parallelism")]
     pub load_chunks_parallelism: usize,
 
+    #[serde(default = "default_s3_load_buffer_items")]
+    pub s3_load_buffer_items: usize,
+
     /// Defines the safety overlap to load the DB records >last_modified_at in
     /// seconds This is to ensure we don't miss any records that were
     /// updated during the DB export to S3
@@ -131,6 +134,10 @@ fn default_shares_bucket_name() -> String {
 
 fn default_db_load_safety_overlap_seconds() -> i64 {
     60
+}
+
+fn default_s3_load_buffer_items() -> usize {
+    10
 }
 
 impl Config {

@@ -94,8 +94,12 @@ pub async fn last_snapshot_timestamp(store: &impl ObjectStore) -> eyre::Result<i
 pub async fn fetch_and_parse_chunks(
     store: &impl ObjectStore,
     concurrency: usize,
+    s3_load_buffer_items: usize,
 ) -> Pin<Box<dyn Stream<Item = eyre::Result<StoredIris>> + Send + '_>> {
     let chunks = store.list_objects().await.unwrap();
+    let buffer_capacity = s3_load_buffer_items * CSV_BUFFER_CAPACITY;
+    tracing::info!("CSV buffer capacity: {}", buffer_capacity);
+
     stream::iter(chunks)
         .filter_map(|chunk| async move {
             if chunk.ends_with(".csv") {
@@ -111,7 +115,7 @@ pub async fn fetch_and_parse_chunks(
                 let cursor = Cursor::new(result);
                 let reader = csv::ReaderBuilder::new()
                     .has_headers(true)
-                    .buffer_capacity(CSV_BUFFER_CAPACITY)
+                    .buffer_capacity(buffer_capacity)
                     .from_reader(cursor);
 
                 let records: Vec<eyre::Result<StoredIris>> = reader
@@ -227,7 +231,7 @@ mod tests {
             MOCK_ENTRIES.div_ceil(MOCK_CHUNK_SIZE)
         );
 
-        let mut chunks = fetch_and_parse_chunks(&store, 1).await;
+        let mut chunks = fetch_and_parse_chunks(&store, 1, 10).await;
         let mut count = 0;
         let mut ids: HashSet<usize> = HashSet::from_iter(1..MOCK_ENTRIES);
         while let Some(chunk) = chunks.next().await {
