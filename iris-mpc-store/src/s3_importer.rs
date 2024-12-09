@@ -7,7 +7,12 @@ use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use rayon::{iter::ParallelIterator, prelude::ParallelBridge};
 use serde::Deserialize;
 use std::{io::Cursor, mem, pin::Pin, sync::Arc, time, time::Instant};
+use std::io::BufReader;
+use aws_sdk_s3::primitives::ByteStream;
+use csv_async::AsyncReaderBuilder;
+use tokio::io::AsyncBufReadExt;
 use tokio::task;
+use tokio_util::compat::TokioAsyncReadCompatExt; // For the conversion to `futures::AsyncRead`
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -16,7 +21,7 @@ const CSV_BUFFER_CAPACITY: usize = SINGLE_ELEMENT_SIZE * 10;
 
 #[async_trait]
 pub trait ObjectStore: Send + Sync + 'static {
-    async fn get_object(&self, key: &str) -> eyre::Result<Bytes>;
+    async fn get_object(&self, key: &str) -> eyre::Result<ByteStream>;
     async fn list_objects(&self) -> eyre::Result<Vec<String>>;
 }
 
@@ -33,7 +38,7 @@ impl S3Store {
 
 #[async_trait]
 impl ObjectStore for S3Store {
-    async fn get_object(&self, key: &str) -> eyre::Result<Bytes> {
+    async fn get_object(&self, key: &str) -> eyre::Result<ByteStream> {
         let result = self
             .client
             .get_object()
@@ -42,8 +47,7 @@ impl ObjectStore for S3Store {
             .send()
             .await?;
 
-        let data = result.body.collect().await?;
-        Ok(data.into_bytes())
+        Ok(result.body)
     }
 
     async fn list_objects(&self) -> eyre::Result<Vec<String>> {
@@ -115,10 +119,8 @@ pub async fn fetch_and_parse_chunks(
     concurrency: usize,
 ) -> Pin<Box<dyn Stream<Item = eyre::Result<StoredIris>> + Send + '_>> {
     let chunks = store.list_objects().await.unwrap();
-    let mut total_get_object_time = time::Duration::from_secs(0);
-    let mut total_csv_parse_time = time::Duration::from_secs(0);
 
-    let result_stream = stream::iter(chunks)
+    stream::iter(chunks)
         .filter_map(|chunk| async move {
             if chunk.ends_with(".csv") {
                 tracing::info!("Processing chunk: {}", chunk);
@@ -130,18 +132,31 @@ pub async fn fetch_and_parse_chunks(
         .map(move |chunk| async move {
             let mut now = Instant::now();
             let result = store.get_object(&chunk).await?;
+            let async_read = result.into_async_read();
+            // Wrap it with a BufReader for efficient streaming
+            let buffered_reader = tokio::io::BufReader::new(async_read).compat();
+
             let get_object_time = now.elapsed();
             tracing::info!("Got chunk object: {} in {:?}", chunk, get_object_time,);
-            total_get_object_time += get_object_time;
 
+            
+            
             now = Instant::now();
             let task = task::spawn_blocking(move || {
-                let cursor = Cursor::new(result);
-                let reader = csv::ReaderBuilder::new()
+
+                let mut reader = AsyncReaderBuilder::new()
                     .has_headers(true)
                     .buffer_capacity(CSV_BUFFER_CAPACITY)
-                    .from_reader(cursor);
+                    .create_deserializer(buffered_reader);
 
+                while Some(result) = reader.deserialize::<CsvIrisRecord>().await {
+                    match result { 
+                        Ok(raw) => {
+                            
+                        }
+                    }
+                }
+                
                 let records: Vec<eyre::Result<StoredIris>> = reader
                     .into_deserialize()
                     .par_bridge()
@@ -175,7 +190,6 @@ pub async fn fetch_and_parse_chunks(
             .await?;
             let csv_parse_time = now.elapsed();
             tracing::info!("Parsed csv chunk: {} in {:?}", chunk, csv_parse_time,);
-            total_csv_parse_time += csv_parse_time;
             task
         })
         .buffer_unordered(concurrency)
@@ -183,14 +197,7 @@ pub async fn fetch_and_parse_chunks(
             Ok(stream) => stream.boxed(),
             Err(e) => stream::once(async move { Err(e) }).boxed(),
         })
-        .boxed();
-    tracing::info!(
-        "fetch_and_parse_chunks summary => Total get_object time: {:?}, Total csv parse time: {:?}",
-        total_get_object_time,
-        total_csv_parse_time,
-    );
-
-    result_stream
+        .boxed()
 }
 
 #[cfg(test)]
@@ -235,11 +242,11 @@ mod tests {
 
     #[async_trait]
     impl ObjectStore for MockStore {
-        async fn get_object(&self, key: &str) -> eyre::Result<Bytes> {
+        async fn get_object(&self, key: &str) -> eyre::Result<ByteStream> {
             self.objects
                 .get(key)
                 .cloned()
-                .map(Bytes::from)
+                .map(ByteStream::from)
                 .ok_or_else(|| eyre::eyre!("Object not found: {}", key))
         }
 

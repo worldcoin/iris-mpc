@@ -13,7 +13,7 @@ bytes.workspace = true
 async-trait.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
 bytemuck.workspace = true
-csv.workspace = true
+csv-async.workspace = true
 futures.workspace = true
 sqlx.workspace = true
 eyre.workspace = true
@@ -25,6 +25,7 @@ tracing.workspace = true
 tokio.workspace = true
 rand.workspace = true
 rayon.workspace = true
+tokio-util = { version = "0.7", features = ["compat"] }
 
 [dev-dependencies]
 rand.workspace = true
