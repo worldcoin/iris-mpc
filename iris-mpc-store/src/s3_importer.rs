@@ -1,21 +1,11 @@
 use crate::StoredIris;
 use async_trait::async_trait;
-use aws_sdk_s3::Client;
-use bytes::Bytes;
-use futures::{AsyncBufReadExt, stream, Stream, StreamExt, TryStreamExt};
-use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
-use rayon::{iter::ParallelIterator, prelude::ParallelBridge};
-use serde::Deserialize;
-use std::{io::Cursor, mem, pin::Pin, sync::Arc, time, time::Instant};
-use std::io::BufReader;
-use aws_sdk_s3::primitives::ByteStream;
+use aws_sdk_s3::{primitives::ByteStream, Client};
 use csv_async::AsyncReaderBuilder;
-use tokio::io::AsyncBufReadExt;
-use tokio::task;
-use tokio_util::compat::TokioAsyncReadCompatExt;
-use tokio_util::io::StreamReader;
-use thiserror::Error;
-// For the conversion to `futures::AsyncRead`
+use futures::{stream, Stream, StreamExt};
+use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
+use serde::Deserialize;
+use std::{mem, pin::Pin, sync::Arc, time::Instant};
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -38,11 +28,6 @@ impl S3Store {
         Self { client, bucket }
     }
 }
-
-// /// Converts a `ByteStream` from `ObjectStore` into an asynchronous reader.
-// fn byte_stream_to_async_reader(byte_stream: impl Stream<Item = Result<Bytes, std::io::Error>> + Unpin) -> impl tokio::io::AsyncRead + Unpin {
-//     StreamReader::new(byte_stream)
-// }
 
 #[async_trait]
 impl ObjectStore for S3Store {
@@ -142,55 +127,45 @@ pub async fn fetch_and_parse_chunks(
             let result = store.get_object(&chunk).await?;
             let async_read = result.into_async_read();
 
-            // Wrap it with a BufReader for efficient streaming
-            // let buffered_reader = tokio::io::BufReader::new(async_read).compat();
-
             let get_object_time = now.elapsed();
             tracing::info!("Got chunk object: {} in {:?}", chunk, get_object_time,);
 
             now = Instant::now();
-            // buffered_reader.lines().try_for_each(|_| async { Ok(()) }).await?;
-            let task = task::spawn(async move {
 
-                let mut reader = AsyncReaderBuilder::new()
-                    .has_headers(true)
-                    .buffer_capacity(CSV_BUFFER_CAPACITY)
-                    .create_deserializer(async_read);
-                
-                let records: Vec<eyre::Result<StoredIris>> = reader
-                    .into_deserialize()
-                    .par_bridge()
-                    .map(|r: Result<CsvIrisRecord, _>| {
-                        let raw = r.map_err(|e| eyre::eyre!("CSV parse error: {}", e))?;
+            let reader = AsyncReaderBuilder::new()
+                .has_headers(true)
+                .buffer_capacity(CSV_BUFFER_CAPACITY)
+                .create_deserializer(async_read);
 
-                        Ok(StoredIris {
-                            id:         raw.id.parse()?,
-                            left_code:  hex_to_bytes(
-                                &raw.left_code,
-                                IRIS_CODE_LENGTH * mem::size_of::<u16>(),
-                            )?,
-                            left_mask:  hex_to_bytes(
-                                &raw.left_mask,
-                                MASK_CODE_LENGTH * mem::size_of::<u16>(),
-                            )?,
-                            right_code: hex_to_bytes(
-                                &raw.right_code,
-                                IRIS_CODE_LENGTH * mem::size_of::<u16>(),
-                            )?,
-                            right_mask: hex_to_bytes(
-                                &raw.right_mask,
-                                MASK_CODE_LENGTH * mem::size_of::<u16>(),
-                            )?,
-                        })
+            let records = reader
+                .into_deserialize()
+                .map(|r: Result<CsvIrisRecord, _>| {
+                    let raw = r.map_err(|e| eyre::eyre!("CSV parse error: {}", e))?;
+
+                    Ok(StoredIris {
+                        id:         raw.id.parse()?,
+                        left_code:  hex_to_bytes(
+                            &raw.left_code,
+                            IRIS_CODE_LENGTH * mem::size_of::<u16>(),
+                        )?,
+                        left_mask:  hex_to_bytes(
+                            &raw.left_mask,
+                            MASK_CODE_LENGTH * mem::size_of::<u16>(),
+                        )?,
+                        right_code: hex_to_bytes(
+                            &raw.right_code,
+                            IRIS_CODE_LENGTH * mem::size_of::<u16>(),
+                        )?,
+                        right_mask: hex_to_bytes(
+                            &raw.right_mask,
+                            MASK_CODE_LENGTH * mem::size_of::<u16>(),
+                        )?,
                     })
-                    .collect();
-
-                Ok::<_, eyre::Error>(stream::iter(records))
-            })
-            .await?;
+                });
             let csv_parse_time = now.elapsed();
             tracing::info!("Parsed csv chunk: {} in {:?}", chunk, csv_parse_time,);
-            task
+
+            Ok::<_, eyre::Error>(records)
         })
         .buffer_unordered(concurrency)
         .flat_map(|result| match result {
@@ -216,13 +191,14 @@ mod tests {
             Self::default()
         }
 
-        pub fn add_test_data(&mut self, key: &str, records: Vec<StoredIris>) {
+        pub async fn add_test_data(&mut self, key: &str, records: Vec<StoredIris>) {
             let mut csv = Vec::new();
             {
-                let mut writer = csv::Writer::from_writer(&mut csv);
+                let mut writer = csv_async::AsyncWriter::from_writer(&mut csv);
                 writer
                     .write_record(["id", "left_code", "left_mask", "right_code", "right_mask"])
-                    .unwrap();
+                    .await
+                    .expect("Couldn't write headers into csv");
 
                 for record in records {
                     writer
@@ -233,7 +209,8 @@ mod tests {
                             hex::encode(record.right_code),
                             hex::encode(record.right_mask),
                         ])
-                        .unwrap();
+                        .await
+                        .expect("Couldn't write record into csv");
                 }
             }
             self.objects.insert(key.to_string(), csv);
@@ -284,7 +261,7 @@ mod tests {
             store.add_test_data(
                 &format!("{start_serial_id}.csv"),
                 (start_serial_id..=end_serial_id).map(dummy_entry).collect(),
-            );
+            ).await;
         }
 
         assert_eq!(

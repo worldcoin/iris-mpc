@@ -23,10 +23,8 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tokio.workspace = true
-thiserror.workspace = true
 rand.workspace = true
 rayon.workspace = true
-tokio-util = { version = "0.7", features = ["compat"] }
 
 [dev-dependencies]
 rand.workspace = true
