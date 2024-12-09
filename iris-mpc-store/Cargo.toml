@@ -8,16 +8,23 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+aws-sdk-s3.workspace = true
+bytes.workspace = true
+async-trait.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
 bytemuck.workspace = true
+csv.workspace = true
 futures.workspace = true
 sqlx.workspace = true
 eyre.workspace = true
+hex.workspace = true
 itertools.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+tokio.workspace = true
 rand.workspace = true
+rayon.workspace = true
 
 [dev-dependencies]
 rand.workspace = true
