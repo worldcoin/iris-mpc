@@ -18,7 +18,7 @@ pub use s3_importer::{fetch_and_parse_chunks, last_snapshot_timestamp, ObjectSto
 use sqlx::{
     migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Row, Transaction,
 };
-use std::{ops::DerefMut, pin::Pin, u32};
+use std::{ops::DerefMut, pin::Pin};
 
 const APP_NAME: &str = "SMPC";
 const MAX_CONNECTIONS: u32 = 100;
