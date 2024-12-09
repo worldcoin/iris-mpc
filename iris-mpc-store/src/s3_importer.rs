@@ -2,7 +2,7 @@ use crate::StoredIris;
 use async_trait::async_trait;
 use aws_sdk_s3::Client;
 use bytes::Bytes;
-use futures::{stream, Stream, StreamExt};
+use futures::{AsyncBufReadExt, stream, Stream, StreamExt, TryStreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use rayon::{iter::ParallelIterator, prelude::ParallelBridge};
 use serde::Deserialize;
@@ -12,7 +12,10 @@ use aws_sdk_s3::primitives::ByteStream;
 use csv_async::AsyncReaderBuilder;
 use tokio::io::AsyncBufReadExt;
 use tokio::task;
-use tokio_util::compat::TokioAsyncReadCompatExt; // For the conversion to `futures::AsyncRead`
+use tokio_util::compat::TokioAsyncReadCompatExt;
+use tokio_util::io::StreamReader;
+use thiserror::Error;
+// For the conversion to `futures::AsyncRead`
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -35,6 +38,11 @@ impl S3Store {
         Self { client, bucket }
     }
 }
+
+// /// Converts a `ByteStream` from `ObjectStore` into an asynchronous reader.
+// fn byte_stream_to_async_reader(byte_stream: impl Stream<Item = Result<Bytes, std::io::Error>> + Unpin) -> impl tokio::io::AsyncRead + Unpin {
+//     StreamReader::new(byte_stream)
+// }
 
 #[async_trait]
 impl ObjectStore for S3Store {
@@ -133,29 +141,21 @@ pub async fn fetch_and_parse_chunks(
             let mut now = Instant::now();
             let result = store.get_object(&chunk).await?;
             let async_read = result.into_async_read();
+
             // Wrap it with a BufReader for efficient streaming
-            let buffered_reader = tokio::io::BufReader::new(async_read).compat();
+            // let buffered_reader = tokio::io::BufReader::new(async_read).compat();
 
             let get_object_time = now.elapsed();
             tracing::info!("Got chunk object: {} in {:?}", chunk, get_object_time,);
 
-            
-            
             now = Instant::now();
-            let task = task::spawn_blocking(move || {
+            // buffered_reader.lines().try_for_each(|_| async { Ok(()) }).await?;
+            let task = task::spawn(async move {
 
                 let mut reader = AsyncReaderBuilder::new()
                     .has_headers(true)
                     .buffer_capacity(CSV_BUFFER_CAPACITY)
-                    .create_deserializer(buffered_reader);
-
-                while Some(result) = reader.deserialize::<CsvIrisRecord>().await {
-                    match result { 
-                        Ok(raw) => {
-                            
-                        }
-                    }
-                }
+                    .create_deserializer(async_read);
                 
                 let records: Vec<eyre::Result<StoredIris>> = reader
                     .into_deserialize()
