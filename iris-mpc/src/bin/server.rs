@@ -997,8 +997,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             last_snapshot_timestamp,
                             min_last_modified_at
                         );
-                                let stream_s3 =
-                                    fetch_and_parse_chunks(&s3_store, load_chunks_parallelism)
+                                let stream_s3 = fetch_and_parse_chunks(
+                                    &s3_store,
+                                    load_chunks_parallelism,
+                                    db_chunks_folder_name,
+                                )
                                         .await
                                         .map(|result| result.map(IrisSource::S3))
                                         .boxed();
