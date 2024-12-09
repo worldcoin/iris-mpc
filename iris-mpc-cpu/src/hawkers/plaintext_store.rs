@@ -177,6 +177,50 @@ impl PlaintextStore {
             plaintext_graph_store,
         ))
     }
+
+    pub async fn create_random_store<R: RngCore + Clone + CryptoRng>(
+        rng: &mut R,
+        database_size: usize,
+    ) -> eyre::Result<(Vec<IrisCode>, Self)> {
+        let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
+
+        let mut plaintext_vector_store = PlaintextStore::default();
+
+        for raw_query in cleartext_database.iter() {
+            let query = plaintext_vector_store.prepare_query(raw_query.clone());
+            let _ = plaintext_vector_store.insert(&query).await;
+        }
+
+        Ok((cleartext_database, plaintext_vector_store))
+    }
+
+    pub async fn create_graph<R: RngCore + Clone + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+        graph_size: usize,
+    ) -> eyre::Result<GraphMem<Self>> {
+        let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
+
+        let mut plaintext_graph_store = GraphMem::new();
+        let searcher = HawkSearcher::default();
+
+        for i in 0..graph_size {
+            let neighbors = searcher
+                .search_to_insert(self, &mut plaintext_graph_store, &i.into())
+                .await;
+            searcher
+                .insert_from_search_results(
+                    self,
+                    &mut plaintext_graph_store,
+                    &mut rng_searcher1,
+                    i.into(),
+                    neighbors,
+                )
+                .await;
+        }
+
+        Ok(plaintext_graph_store)
+    }
 }
 
 #[cfg(test)]
