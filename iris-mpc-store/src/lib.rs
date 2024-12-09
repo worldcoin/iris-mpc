@@ -1,3 +1,5 @@
+#![feature(int_roundings)]
+
 mod s3_importer;
 
 use bytemuck::cast_slice;
@@ -73,6 +75,43 @@ impl StoredIris {
     }
     pub fn id(&self) -> i64 {
         self.id
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, eyre::Error> {
+        let mut cursor = 0;
+
+        // Helper closure to extract a slice of a given size
+        let extract_slice =
+            |bytes: &[u8], cursor: &mut usize, size: usize| -> Result<Vec<u8>, eyre::Error> {
+                if *cursor + size > bytes.len() {
+                    return Err(eyre!("Exceeded total bytes while extracting slice",));
+                }
+                let slice = &bytes[*cursor..*cursor + size];
+                *cursor += size;
+                Ok(slice.to_vec())
+            };
+
+        // Parse `id` (i64)
+        let id_bytes = extract_slice(bytes, &mut cursor, 4)?;
+        let id = i64::from_be_bytes(
+            id_bytes
+                .try_into()
+                .map_err(|_| eyre!("Failed to convert id bytes to i64"))?,
+        );
+
+        // parse codes and masks
+        let left_code = extract_slice(bytes, &mut cursor, 25_600)?;
+        let left_mask = extract_slice(bytes, &mut cursor, 12_800)?;
+        let right_code = extract_slice(bytes, &mut cursor, 25_600)?;
+        let right_mask = extract_slice(bytes, &mut cursor, 12_800)?;
+
+        Ok(StoredIris {
+            id,
+            left_code,
+            left_mask,
+            right_code,
+            right_mask,
+        })
     }
 }
 
