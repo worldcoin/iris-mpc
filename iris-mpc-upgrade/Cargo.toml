@@ -75,3 +75,8 @@ path = "src/bin/reshare-server.rs"
 [[bin]]
 name = "reshare-client"
 path = "src/bin/reshare-client.rs"
+
+[[bin]]
+name = "ping-pong"
+path = "src/bin/ping-pong-client.rs"
+

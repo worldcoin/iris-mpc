@@ -123,6 +123,21 @@ impl fmt::Debug for UpgradeClientConfig {
 }
 
 #[derive(Parser)]
+pub struct PingClientConfig {
+    /// The URL of the server to send reshare messages to
+    #[clap(long, default_value = "http://localhost:8000", env("SERVER_URL"))]
+    pub server_url: String,
+
+    // The path to the client's TLS certificate
+    #[clap(long)]
+    pub client_tls_cert_path: String,
+
+    // Message to send to the server
+    #[clap(long)]
+    pub message: String,
+}
+
+#[derive(Parser)]
 pub struct ReShareClientConfig {
     /// The URL of the server to send reshare messages to
     #[clap(long, default_value = "http://localhost:8000", env("SERVER_URL"))]
