@@ -180,6 +180,9 @@ pub struct ReShareClientConfig {
     /// the common secret derived between the two parties
     #[clap(long)]
     pub reshare_run_session_id: String,
+
+    #[clap(long)]
+    pub client_tls_cert_path: String,
 }
 
 #[derive(Parser)]

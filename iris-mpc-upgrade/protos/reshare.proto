@@ -33,3 +33,17 @@ enum IrisCodeReShareStatus {
 service IrisCodeReShareService {
     rpc ReShare(IrisCodeReShareRequest) returns (IrisCodeReShareResponse);
 }
+
+// implement ping pong service
+message Ping {
+    string message = 1;
+    float delaySeconds = 2;
+}
+
+message Pong {
+    string message = 1;
+}
+
+service PingPong {
+    rpc SendPing(Ping) returns (Pong) {}
+}

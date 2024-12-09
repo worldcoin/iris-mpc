@@ -4,7 +4,8 @@ use iris_mpc_store::Store;
 use iris_mpc_upgrade::{
     config::ReShareServerConfig,
     proto::{
-        self, iris_mpc_reshare::iris_code_re_share_service_server::IrisCodeReShareServiceServer,
+        get_size_of_reshare_iris_code_share_batch,
+        iris_mpc_reshare::iris_code_re_share_service_server::IrisCodeReShareServiceServer,
     },
     reshare::{GrpcReshareServer, IrisCodeReshareReceiverHelper},
     utils::{install_tracing, spawn_healthcheck_server},
@@ -45,7 +46,7 @@ async fn main() -> eyre::Result<()> {
     );
 
     let encoded_message_size =
-        proto::get_size_of_reshare_iris_code_share_batch(config.batch_size as usize);
+        get_size_of_reshare_iris_code_share_batch(config.batch_size as usize);
     if encoded_message_size > 100 * 1024 * 1024 {
         tracing::warn!(
             "encoded batch message size is large: {}MB",
