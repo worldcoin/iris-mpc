@@ -1,4 +1,4 @@
-use super::binary::single_extract_msb_u32;
+use super::binary::{mul_lift_2k, single_extract_msb_u32};
 use crate::{
     database_generators::GaloisRingSharedIris,
     execution::session::{BootSession, Session, SessionHandles},
@@ -50,12 +50,14 @@ pub async fn setup_replicated_prf(session: &BootSession, my_seed: PrfSeed) -> ey
     Ok(Prf::new(my_seed, other_seed))
 }
 
-/// Takes as input two code and mask dot products between two Irises: i, j.
-/// i.e. code_dot = <i.code, j.code> and mask_dot = <i.mask, j.mask>
-/// Then lifts the two dot products to the larger ring (Z_{2^32}), multiplies
-/// with some predefined constants B = 2^16
-/// A = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64)
-/// and then compares mask_dot * A < code_dot * B.
+/// Compares the distance between two iris pairs to a threshold.
+///
+/// - Takes as input two code and mask dot products between two Irises: i, j.
+///   i.e. code_dot = <i.code, j.code> and mask_dot = <i.mask, j.mask>.
+/// - Lifts the two dot products to the ring Z_{2^32}.
+/// - Multiplies with predefined threshold constants B = 2^16 and A = ((1. - 2.
+///   * MATCH_THRESHOLD_RATIO) * B as f64).
+/// - Compares mask_dot * A < code_dot * B.
 pub async fn compare_threshold(
     session: &mut Session,
     code_dot: Share<u32>,
@@ -68,6 +70,26 @@ pub async fn compare_threshold(
     single_extract_msb_u32::<32>(session, x).await
 }
 
+/// The same as compare_threshold, but the input shares are 16-bit and lifted to
+/// 32-bit before threshold comparison.
+///
+/// See compare_threshold for more details.
+pub async fn lift_and_compare_threshold(
+    session: &mut Session,
+    code_dot: Share<u16>,
+    mask_dot: Share<u16>,
+) -> eyre::Result<Share<Bit>> {
+    let y = mul_lift_2k::<B_BITS>(&code_dot);
+    let mut x = lift::<{ B_BITS as usize }>(session, VecShare::new_vec(vec![mask_dot])).await?;
+    let mut x = x.pop().expect("Expected a single element in the VecShare");
+    x *= A as u32;
+    x -= y;
+
+    single_extract_msb_u32::<32>(session, x).await
+}
+
+/// Lifts a share of a vector (VecShare) of 16-bit values to a share of a vector
+/// (VecShare) of 32-bit values.
 pub async fn batch_signed_lift(
     session: &mut Session,
     mut pre_lift: VecShare<u16>,
@@ -86,6 +108,8 @@ pub async fn batch_signed_lift(
     Ok(lifted_values)
 }
 
+/// Wrapper over batch_signed_lift that lifts a vector (Vec) of 16-bit shares to
+/// a vector (Vec) of 32-bit shares.
 pub async fn batch_signed_lift_vec(
     session: &mut Session,
     pre_lift: Vec<Share<u16>>,
@@ -96,7 +120,7 @@ pub async fn batch_signed_lift_vec(
 
 /// Computes [D1 * T2; D2 * T1]
 /// Assumes that the input shares are originally 16-bit and lifted to u32.
-pub(crate) async fn cross_mul_via_lift(
+pub(crate) async fn cross_mul(
     session: &mut Session,
     d1: Share<u32>,
     t1: Share<u32>,
@@ -163,7 +187,7 @@ pub async fn cross_compare(
     d2: Share<u32>,
     t2: Share<u32>,
 ) -> eyre::Result<bool> {
-    let (d1t2, d2t1) = cross_mul_via_lift(session, d1, t1, d2, t2).await?;
+    let (d1t2, d2t1) = cross_mul(session, d1, t1, d2, t2).await?;
     let diff = d2t1 - d1t2;
     // Compute bit <- MSB(D2 * T1 - D1 * T2)
     let bit = single_extract_msb_u32::<32>(session, diff).await?;
@@ -239,10 +263,10 @@ pub async fn galois_ring_to_rep3(
 
 /// Checks whether first Iris entry in the pair matches the Iris in the second
 /// entry. This is done in the following manner:
-/// Compute the dot product between the two Irises.
-/// Convert the partial shamir share result to a replicated sharing and then
-/// Compare the distance using the MATCH_THRESHOLD_RATIO from the
-/// `compare_threshold` function.
+/// - Compute the dot product between the two Irises.
+/// - Convert the partial Shamir share result to a replicated sharing and then
+/// - Compare the distance using the MATCH_THRESHOLD_RATIO from the
+///   `lift_and_compare_threshold` function.
 pub async fn galois_ring_is_match(
     session: &mut Session,
     pairs: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
@@ -250,10 +274,8 @@ pub async fn galois_ring_is_match(
     assert_eq!(pairs.len(), 1);
     let additive_dots = galois_ring_pairwise_distance(session, pairs).await?;
     let rep_dots = galois_ring_to_rep3(session, additive_dots).await?;
-    let rep_dots = VecShare::new_vec(rep_dots);
-    let rep_dots = batch_signed_lift(session, rep_dots).await?.inner();
     // compute dots[0] - dots[1]
-    let bit = compare_threshold(session, rep_dots[0].clone(), rep_dots[1].clone()).await?;
+    let bit = lift_and_compare_threshold(session, rep_dots[0].clone(), rep_dots[1].clone()).await?;
     let opened = open_bin(session, bit).await?;
     Ok(opened.convert())
 }
@@ -475,13 +497,11 @@ mod tests {
         for player in identities.iter() {
             let mut player_session = runtime.sessions.get(player).unwrap().clone();
             let four_shares = four_share_map.get(player).unwrap().clone();
-            let four_shares = VecShare::new_vec(four_shares);
             jobs.spawn(async move {
-                let four_shares = batch_signed_lift(&mut player_session, four_shares)
+                let four_shares = batch_signed_lift_vec(&mut player_session, four_shares)
                     .await
-                    .unwrap()
-                    .inner();
-                let out_shared = cross_mul_via_lift(
+                    .unwrap();
+                let out_shared = cross_mul(
                     &mut player_session,
                     four_shares[0].clone(),
                     four_shares[1].clone(),
