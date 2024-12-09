@@ -13,6 +13,7 @@ use iris_mpc_common::{
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store};
+use serde::{Deserialize, Deserializer};
 use sqlx::{
     migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Row, Transaction,
 };
@@ -40,14 +41,42 @@ pub enum IrisSource {
     DB(StoredIris),
 }
 
-#[derive(sqlx::FromRow, Debug, Default, PartialEq, Eq)]
+#[derive(sqlx::FromRow, Deserialize, Debug, Default, PartialEq, Eq)]
 pub struct StoredIris {
     #[allow(dead_code)]
+    #[serde(deserialize_with = "parse_id")]
     id:         i64, // BIGSERIAL
+    #[serde(deserialize_with = "hex_to_bytes_deserializer")]
     left_code:  Vec<u8>, // BYTEA
+    #[serde(deserialize_with = "hex_to_bytes_deserializer")]
     left_mask:  Vec<u8>, // BYTEA
+    #[serde(deserialize_with = "hex_to_bytes_deserializer")]
     right_code: Vec<u8>, // BYTEA
+    #[serde(deserialize_with = "hex_to_bytes_deserializer")]
     right_mask: Vec<u8>, // BYTEA
+}
+
+fn parse_id<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s: &str = Deserialize::deserialize(deserializer)?;
+    s.parse::<i64>().map_err(serde::de::Error::custom)
+}
+
+fn hex_to_bytes_deserializer<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s: &str = Deserialize::deserialize(deserializer)?;
+    hex_to_bytes(s).map_err(serde::de::Error::custom)
+}
+
+fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, hex::FromHexError> {
+    if hex.is_empty() {
+        return Ok(vec![]);
+    }
+    hex::decode(hex)
 }
 
 impl StoredIris {

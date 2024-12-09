@@ -5,7 +5,6 @@ use bytes::Bytes;
 use futures::{stream, Stream, StreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use rayon::{iter::ParallelIterator, prelude::ParallelBridge};
-use serde::Deserialize;
 use std::{io::Cursor, mem, pin::Pin, sync::Arc};
 use tokio::task;
 
@@ -76,24 +75,6 @@ impl ObjectStore for S3Store {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct CsvIrisRecord {
-    id:         String,
-    left_code:  String,
-    left_mask:  String,
-    right_code: String,
-    right_mask: String,
-}
-
-fn hex_to_bytes(hex: &str, byte_len: usize) -> eyre::Result<Vec<u8>> {
-    if hex.is_empty() {
-        return Ok(vec![]);
-    }
-    let mut bytes = vec![0; byte_len];
-    hex::decode_to_slice(hex, &mut bytes)?;
-    Ok(bytes)
-}
-
 pub async fn last_snapshot_timestamp(store: &impl ObjectStore) -> eyre::Result<i64> {
     store
         .list_objects()
@@ -136,28 +117,9 @@ pub async fn fetch_and_parse_chunks(
                 let records: Vec<eyre::Result<StoredIris>> = reader
                     .into_deserialize()
                     .par_bridge()
-                    .map(|r: Result<CsvIrisRecord, _>| {
+                    .map(|r: Result<StoredIris, _>| {
                         let raw = r.map_err(|e| eyre::eyre!("CSV parse error: {}", e))?;
-
-                        Ok(StoredIris {
-                            id:         raw.id.parse()?,
-                            left_code:  hex_to_bytes(
-                                &raw.left_code,
-                                IRIS_CODE_LENGTH * mem::size_of::<u16>(),
-                            )?,
-                            left_mask:  hex_to_bytes(
-                                &raw.left_mask,
-                                MASK_CODE_LENGTH * mem::size_of::<u16>(),
-                            )?,
-                            right_code: hex_to_bytes(
-                                &raw.right_code,
-                                IRIS_CODE_LENGTH * mem::size_of::<u16>(),
-                            )?,
-                            right_mask: hex_to_bytes(
-                                &raw.right_mask,
-                                MASK_CODE_LENGTH * mem::size_of::<u16>(),
-                            )?,
-                        })
+                        Ok(raw)
                     })
                     .collect();
 
