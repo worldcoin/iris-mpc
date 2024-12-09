@@ -82,4 +82,4 @@ preStop:
   sleepPeriod: 10
 
 # terminationGracePeriodSeconds specifies the grace time between SIGTERM and SIGKILL
-terminationGracePeriodSeconds: 180 # 3x SMPC__PROCESSING_TIMEOUT_SECS
+terminationGracePeriodSeconds: 20 # 3x SMPC__PROCESSING_TIMEOUT_SECS
