@@ -124,11 +124,14 @@ pub async fn fetch_and_parse_chunks(
         })
         .map(move |chunk| async move {
             let mut now = Instant::now();
+
             let result = store.get_object(&chunk).await?;
+            tracing::info!("Got stream object: {} in {:?}", chunk, now.elapsed(),);
+            now = Instant::now();
+
             let async_read = result.into_async_read();
 
-            let get_object_time = now.elapsed();
-            tracing::info!("Got chunk object: {} in {:?}", chunk, get_object_time,);
+            tracing::info!("Got async_read object: {} in {:?}", chunk, now.elapsed());
 
             now = Instant::now();
 
