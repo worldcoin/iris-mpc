@@ -72,15 +72,20 @@ impl ObjectStore for S3Store {
     }
 }
 
-pub async fn last_snapshot_timestamp(store: &impl ObjectStore) -> eyre::Result<i64> {
+pub async fn last_snapshot_timestamp(
+    store: &impl ObjectStore,
+    folder_name: String,
+) -> eyre::Result<i64> {
+    tracing::info!("Looking for last snapshot time in folder: {}", folder_name);
+    let start_path = format!("{}/", folder_name);
     store
         .list_objects()
         .await?
         .into_iter()
-        .filter(|f| f.starts_with("output/") && f.ends_with(".timestamp"))
+        .filter(|f| f.starts_with(start_path.as_str()) && f.ends_with(".timestamp"))
         .filter_map(|f| {
             f.replace(".timestamp", "")
-                .replace("output/", "")
+                .replace(start_path.as_str(), "")
                 .parse::<i64>()
                 .ok()
         })

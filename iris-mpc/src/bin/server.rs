@@ -903,6 +903,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let load_chunks_parallelism = config.load_chunks_parallelism;
     let db_chunks_bucket_name = config.db_chunks_bucket_name.clone();
+    let db_chunks_folder_name = config.db_chunks_folder_name.clone();
 
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
@@ -984,9 +985,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     let s3_store = S3Store::new(s3_client_clone, db_chunks_bucket_name);
                     tokio::runtime::Handle::current().block_on(async {
                         // First fetch last snapshot from S3
-                        let last_snapshot_timestamp = last_snapshot_timestamp(&s3_store).await?;
+                        let last_snapshot_timestamp =
+                            last_snapshot_timestamp(&s3_store, db_chunks_folder_name).await?;
                         let min_last_modified_at =
                             last_snapshot_timestamp - config.db_load_safety_overlap_seconds;
+                        tracing::info!(
+                            "Last snapshot timestamp: {}, min_last_modified_at: {}",
+                            last_snapshot_timestamp,
+                            min_last_modified_at
+                        );
                         let stream_s3 = fetch_and_parse_chunks(&s3_store, load_chunks_parallelism)
                             .await
                             .map(|result| result.map(IrisSource::S3))
