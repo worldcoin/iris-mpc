@@ -4,14 +4,11 @@
 //! new party, producing a valid share for the new party, without leaking
 //! information about the individual shares of the sending parties.
 
-use crate::{
-    proto,
-    proto::{
-        iris_mpc_reshare,
-        iris_mpc_reshare::{
-            iris_code_re_share_service_server, ping_pong_server, IrisCodeReShare,
-            IrisCodeReShareRequest, IrisCodeReShareResponse, IrisCodeReShareStatus, Ping, Pong,
-        },
+use crate::proto::{
+    iris_mpc_reshare,
+    iris_mpc_reshare::{
+        iris_code_re_share_service_server, ping_pong_server, IrisCodeReShare,
+        IrisCodeReShareRequest, IrisCodeReShareResponse, IrisCodeReShareStatus, Ping, Pong,
     },
 };
 use iris_mpc_common::{
