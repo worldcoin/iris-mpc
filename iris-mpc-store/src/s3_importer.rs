@@ -1,17 +1,11 @@
-use std::mem;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::time::Instant;
-
+use crate::StoredIris;
 use async_trait::async_trait;
-use aws_sdk_s3::primitives::ByteStream;
-use aws_sdk_s3::Client;
+use aws_sdk_s3::{primitives::ByteStream, Client};
 use csv_async::AsyncReaderBuilder;
 use futures::{stream, Stream, StreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use serde::Deserialize;
-
-use crate::StoredIris;
+use std::{mem, pin::Pin, sync::Arc, time::Instant};
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -38,6 +32,7 @@ impl S3Store {
 #[async_trait]
 impl ObjectStore for S3Store {
     async fn get_object(&self, key: &str) -> eyre::Result<ByteStream> {
+        let now = Instant::now();
         let result = self
             .client
             .get_object()
@@ -45,6 +40,7 @@ impl ObjectStore for S3Store {
             .key(key)
             .send()
             .await?;
+        tracing::info!("Got object: {} in {:?}", key, now.elapsed());
 
         if let Some(bytes) = result.body.bytes() {
             tracing::info!(n = bytes.len(), "S3 Object Downloaded");
@@ -192,12 +188,9 @@ pub async fn fetch_and_parse_chunks(
 
 #[cfg(test)]
 mod tests {
-    use std::cmp::min;
-    use std::collections::HashSet;
-
-    use rand::Rng;
-
     use super::*;
+    use rand::Rng;
+    use std::{cmp::min, collections::HashSet};
 
     #[derive(Default, Clone)]
     pub struct MockStore {
