@@ -18,7 +18,7 @@ pub use s3_importer::{fetch_and_parse_chunks, last_snapshot_timestamp, ObjectSto
 use sqlx::{
     migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Row, Transaction,
 };
-use std::{ops::DerefMut, pin::Pin};
+use std::{ops::DerefMut, pin::Pin, u32};
 
 const APP_NAME: &str = "SMPC";
 const MAX_CONNECTIONS: u32 = 100;
@@ -93,11 +93,11 @@ impl StoredIris {
 
         // Parse `id` (i64)
         let id_bytes = extract_slice(bytes, &mut cursor, 4)?;
-        let id = i64::from_be_bytes(
+        let id = u32::from_be_bytes(
             id_bytes
                 .try_into()
                 .map_err(|_| eyre!("Failed to convert id bytes to i64"))?,
-        );
+        ) as i64;
 
         // parse codes and masks
         let left_code = extract_slice(bytes, &mut cursor, 25_600)?;
