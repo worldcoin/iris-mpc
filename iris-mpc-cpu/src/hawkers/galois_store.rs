@@ -19,9 +19,9 @@ use crate::{
 };
 use aes_prng::AesRng;
 use hawk_pack::{
-    graph_store::{graph_mem::Layer, EntryPoint, GraphMem},
-    hnsw_db::{FurthestQueue, HawkSearcher},
-    GraphStore, VectorStore,
+    data_structures::queue::FurthestQueue,
+    graph_store::{graph_mem::Layer, GraphMem},
+    GraphStore, HawkSearcher, VectorStore,
 };
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use rand::{CryptoRng, RngCore, SeedableRng};
@@ -323,10 +323,7 @@ impl LocalNetAby3NgStoreProtocol {
         recompute_distances: bool,
     ) -> GraphMem<LocalNetAby3NgStoreProtocol> {
         let ep = graph_store.get_entry_point().await;
-        let new_ep = ep.map(|ep| EntryPoint {
-            vector_ref:  VectorId { id: ep.vector_ref },
-            layer_count: ep.layer_count,
-        });
+        let new_ep = ep.map(|(vector_ref, layer_count)| (VectorId { id: vector_ref }, layer_count));
 
         let layers = graph_store.get_layers();
 
@@ -476,18 +473,8 @@ impl LocalNetAby3NgStoreProtocol {
                 let searcher = HawkSearcher::default();
                 // insert queries
                 for query in queries.iter() {
-                    let neighbors = searcher
-                        .search_to_insert(&mut store, &mut graph_store, query)
-                        .await;
-                    let inserted_query = store.insert(query).await;
                     searcher
-                        .insert_from_search_results(
-                            &mut store,
-                            &mut graph_store,
-                            &mut rng_searcher,
-                            inserted_query,
-                            neighbors,
-                        )
+                        .insert(&mut store, &mut graph_store, query, &mut rng_searcher)
                         .await;
                 }
                 (store, graph_store)
@@ -525,7 +512,7 @@ mod tests {
     use super::*;
     use crate::database_generators::generate_galois_iris_shares;
     use aes_prng::AesRng;
-    use hawk_pack::{graph_store::GraphMem, hnsw_db::HawkSearcher};
+    use hawk_pack::{graph_store::GraphMem, HawkSearcher};
     use itertools::Itertools;
     use rand::SeedableRng;
     use tracing_test::traced_test;
@@ -559,30 +546,19 @@ mod tests {
                 let mut inserted = vec![];
                 // insert queries
                 for query in queries.iter() {
-                    let neighbors = db
-                        .search_to_insert(&mut store, &mut aby3_graph, query)
+                    let inserted_vector = db
+                        .insert(&mut store, &mut aby3_graph, query, &mut rng)
                         .await;
-                    let inserted_query = store.insert(query).await;
-                    inserted.push(inserted_query);
-                    db.insert_from_search_results(
-                        &mut store,
-                        &mut aby3_graph,
-                        &mut rng,
-                        inserted_query,
-                        neighbors,
-                    )
-                    .await;
+                    inserted.push(inserted_vector)
                 }
                 tracing::debug!("FINISHED INSERTING");
                 // Search for the same codes and find matches.
                 let mut matching_results = vec![];
                 for v in inserted.into_iter() {
                     let query = store.prepare_query(store.storage.get_vector(&v).clone());
-                    let neighbors = db
-                        .search_to_insert(&mut store, &mut aby3_graph, &query)
-                        .await;
+                    let neighbors = db.search(&mut store, &mut aby3_graph, &query, 1).await;
                     tracing::debug!("Finished checking query");
-                    matching_results.push(db.is_match(&mut store, &neighbors).await)
+                    matching_results.push(db.is_match(&mut store, &[neighbors]).await)
                 }
                 matching_results
             });
@@ -629,11 +605,11 @@ mod tests {
 
         for i in 0..database_size {
             let cleartext_neighbors = hawk_searcher
-                .search_to_insert(&mut cleartext_data.0, &mut cleartext_data.1, &i.into())
+                .search(&mut cleartext_data.0, &mut cleartext_data.1, &i.into(), 1)
                 .await;
             assert!(
                 hawk_searcher
-                    .is_match(&mut cleartext_data.0, &cleartext_neighbors)
+                    .is_match(&mut cleartext_data.0, &[cleartext_neighbors])
                     .await,
             );
 
@@ -644,9 +620,9 @@ mod tests {
                 let mut g = g.clone();
                 let q = v.prepare_query(v.storage.get_vector(&i.into()).clone());
                 jobs.spawn(async move {
-                    let secret_neighbors = hawk_searcher.search_to_insert(&mut v, &mut g, &q).await;
+                    let secret_neighbors = hawk_searcher.search(&mut v, &mut g, &q, 1).await;
 
-                    hawk_searcher.is_match(&mut v, &secret_neighbors).await
+                    hawk_searcher.is_match(&mut v, &[secret_neighbors]).await
                 });
             }
             let scratch_results = jobs.join_all().await;
@@ -658,10 +634,9 @@ mod tests {
                 let mut g = g.clone();
                 jobs.spawn(async move {
                     let query = v.prepare_query(v.storage.get_vector(&i.into()).clone());
-                    let secret_neighbors =
-                        hawk_searcher.search_to_insert(&mut v, &mut g, &query).await;
+                    let secret_neighbors = hawk_searcher.search(&mut v, &mut g, &query, 1).await;
 
-                    hawk_searcher.is_match(&mut v, &secret_neighbors).await
+                    hawk_searcher.is_match(&mut v, &[secret_neighbors]).await
                 });
             }
             let premade_results = jobs.join_all().await;
@@ -790,9 +765,8 @@ mod tests {
                 let searcher = searcher.clone();
                 let q = store.prepare_query(store.storage.get_vector(&i.into()).clone());
                 jobs.spawn(async move {
-                    let secret_neighbors =
-                        searcher.search_to_insert(&mut store, &mut graph, &q).await;
-                    searcher.is_match(&mut store, &secret_neighbors).await
+                    let secret_neighbors = searcher.search(&mut store, &mut graph, &q, 1).await;
+                    searcher.is_match(&mut store, &[secret_neighbors]).await
                 });
             }
             let res = jobs.join_all().await;

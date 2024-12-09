@@ -343,7 +343,7 @@ mod tests {
         hawkers::galois_store::LocalNetAby3NgStoreProtocol,
     };
     use aes_prng::AesRng;
-    use hawk_pack::hnsw_db::HawkSearcher;
+    use hawk_pack::HawkSearcher;
     use rand::SeedableRng;
     use tokio::task::JoinSet;
     use tracing_test::traced_test;
@@ -587,9 +587,8 @@ mod tests {
                 let searcher = searcher.clone();
                 let q = store.prepare_query(store.storage.get_vector(&i.into()).clone());
                 jobs.spawn(async move {
-                    let secret_neighbors =
-                        searcher.search_to_insert(&mut store, &mut graph, &q).await;
-                    searcher.is_match(&mut store, &secret_neighbors).await
+                    let secret_neighbors = searcher.search(&mut store, &mut graph, &q, 1).await;
+                    searcher.is_match(&mut store, &[secret_neighbors]).await
                 });
             }
             let res = jobs.join_all().await;

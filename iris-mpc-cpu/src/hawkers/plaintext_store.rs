@@ -1,5 +1,5 @@
 use aes_prng::AesRng;
-use hawk_pack::{graph_store::GraphMem, hnsw_db::HawkSearcher, VectorStore};
+use hawk_pack::{graph_store::GraphMem, HawkSearcher, VectorStore};
 use iris_mpc_common::iris_db::{
     db::IrisDB,
     iris::{IrisCode, MATCH_THRESHOLD_RATIO},
@@ -152,21 +152,12 @@ impl PlaintextStore {
 
         for raw_query in cleartext_database.iter() {
             let query = plaintext_vector_store.prepare_query(raw_query.clone());
-            let neighbors = searcher
-                .search_to_insert(
+            searcher
+                .insert(
                     &mut plaintext_vector_store,
                     &mut plaintext_graph_store,
                     &query,
-                )
-                .await;
-            let inserted = plaintext_vector_store.insert(&query).await;
-            searcher
-                .insert_from_search_results(
-                    &mut plaintext_vector_store,
-                    &mut plaintext_graph_store,
                     &mut rng_searcher1,
-                    inserted,
-                    neighbors,
                 )
                 .await;
         }
@@ -183,7 +174,7 @@ impl PlaintextStore {
 mod tests {
     use super::*;
     use aes_prng::AesRng;
-    use hawk_pack::hnsw_db::HawkSearcher;
+    use hawk_pack::HawkSearcher;
     use iris_mpc_common::iris_db::db::IrisDB;
     use rand::SeedableRng;
     use tracing_test::traced_test;
@@ -272,11 +263,11 @@ mod tests {
                 .unwrap();
         for i in 0..database_size {
             let cleartext_neighbors = searcher
-                .search_to_insert(&mut ptxt_vector, &mut ptxt_graph, &i.into())
+                .search(&mut ptxt_vector, &mut ptxt_graph, &i.into(), 1)
                 .await;
             assert!(
                 searcher
-                    .is_match(&mut ptxt_vector, &cleartext_neighbors)
+                    .is_match(&mut ptxt_vector, &[cleartext_neighbors])
                     .await,
             );
         }
