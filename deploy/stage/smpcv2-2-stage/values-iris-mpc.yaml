@@ -77,6 +77,9 @@ env:
   - name: SMPC__DB_CHUNKS_FOLDER_NAME
     value: "binary_output_8k"
 
+  - name: SMPC__LOAD_CHUNKS_PARALLELISM
+    value: "8"
+    
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
 
