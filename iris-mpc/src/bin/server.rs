@@ -1000,6 +1000,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
                         let mut stream = select_all(vec![stream_s3, stream_db]);
 
+                        // fetch again in case we rolled back storage
+                        let store_len = store.count_irises().await?;
+                        let max_serial_id = store.get_max_serial_id().await?;
+
                         let now = Instant::now();
                         let mut now_load_summary = Instant::now();
                         let mut time_waiting_for_stream = time::Duration::from_secs(0);
@@ -1021,6 +1025,18 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                     iris
                                 }
                                 IrisSource::S3(iris) => {
+                                    // Do not load possibly rolled back items from S3
+                                    if iris.id() > max_serial_id as i64 {
+                                        tracing::warn!(
+                                            "Skip loading record from S3 with serial_id: {} > \
+                                             max_serial_id: {}",
+                                            iris.id(),
+                                            max_serial_id,
+                                        );
+                                        continue;
+                                    }
+
+                                    // Do not override record already loaded from DB with S3 record
                                     if serial_ids_from_db.contains(&iris.id()) {
                                         tracing::warn!(
                                             "Skip overriding record already loaded via DB with S3 \
