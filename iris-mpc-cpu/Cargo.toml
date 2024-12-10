@@ -54,3 +54,7 @@ name = "hnsw-ex"
 [[bin]]
 name = "local_hnsw"
 path = "bin/local_hnsw.rs"
+
+[[bin]]
+name = "generate_benchmark_data"
+path = "bin/generate_benchmark_data.rs"
