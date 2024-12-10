@@ -1,6 +1,7 @@
 use crate::StoredIris;
 use async_trait::async_trait;
 use aws_sdk_s3::Client;
+use bytes::Bytes;
 use futures::{stream, Stream, StreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use std::{mem, pin::Pin, sync::Arc, time::Instant};
@@ -12,7 +13,7 @@ const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
 
 #[async_trait]
 pub trait ObjectStore: Send + Sync + 'static {
-    async fn get_object(&self, key: &str) -> eyre::Result<Vec<u8>>;
+    async fn get_object(&self, key: &str) -> eyre::Result<Bytes>;
     async fn list_objects(&self, prefix: &str) -> eyre::Result<Vec<String>>;
 }
 
@@ -29,7 +30,7 @@ impl S3Store {
 
 #[async_trait]
 impl ObjectStore for S3Store {
-    async fn get_object(&self, key: &str) -> eyre::Result<Vec<u8>> {
+    async fn get_object(&self, key: &str) -> eyre::Result<Bytes> {
         let result = self
             .client
             .get_object()
@@ -39,7 +40,7 @@ impl ObjectStore for S3Store {
             .await?;
 
         let data = result.body.collect().await?;
-        Ok(data.to_vec())
+        Ok(data.into_bytes())
     }
 
     async fn list_objects(&self, prefix: &str) -> eyre::Result<Vec<String>> {
@@ -191,11 +192,12 @@ mod tests {
 
     #[async_trait]
     impl ObjectStore for MockStore {
-        async fn get_object(&self, key: &str) -> eyre::Result<Vec<u8>> {
+        async fn get_object(&self, key: &str) -> eyre::Result<Bytes> {
             self.objects
                 .get(key)
-                .ok_or_else(|| eyre::eyre!("Object not found: {}", key))
                 .cloned()
+                .map(Bytes::from)
+                .ok_or_else(|| eyre::eyre!("Object not found: {}", key))
         }
 
         async fn list_objects(&self, _: &str) -> eyre::Result<Vec<String>> {
