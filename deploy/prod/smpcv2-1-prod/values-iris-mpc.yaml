@@ -77,8 +77,8 @@ env:
   - name: SMPC__PUBLIC_KEY_BASE_URL
     value: "https://pki-smpc.worldcoin.org"
 
-#  - name: SMPC__ENABLE_S3_IMPORTER
-#    value: "false"
+  - name: SMPC__ENABLE_S3_IMPORTER
+    value: "false"
 
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
     value: "iris-mpc-db-exporter-store-node-1-prod-eu-north-1"
