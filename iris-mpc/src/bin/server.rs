@@ -983,22 +983,36 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     );
                     let s3_store = S3Store::new(s3_client_clone, db_chunks_bucket_name);
                     tokio::runtime::Handle::current().block_on(async {
-                        // First fetch last snapshot from S3
-                        let last_snapshot_timestamp = last_snapshot_timestamp(&s3_store).await?;
-                        let min_last_modified_at =
-                            last_snapshot_timestamp - config.db_load_safety_overlap_seconds;
-                        let stream_s3 = fetch_and_parse_chunks(&s3_store, load_chunks_parallelism)
-                            .await
-                            .map(|result| result.map(IrisSource::S3))
-                            .boxed();
+                        let mut stream = match config.enable_s3_importer {
+                            true => {
+                                tracing::info!("S3 importer enabled. Fetching from s3 + db");
+                                // First fetch last snapshot from S3
+                                let last_snapshot_timestamp = last_snapshot_timestamp(&s3_store).await?;
+                                let min_last_modified_at =
+                                    last_snapshot_timestamp - config.db_load_safety_overlap_seconds;
+                                let stream_s3 = fetch_and_parse_chunks(&s3_store, load_chunks_parallelism)
+                                    .await
+                                    .map(|result| result.map(IrisSource::S3))
+                                    .boxed();
 
-                        let stream_db = store
-                            .stream_irises_par(min_last_modified_at, parallelism)
-                            .await
-                            .map(|result| result.map(IrisSource::DB))
-                            .boxed();
+                                let stream_db = store
+                                    .stream_irises_par(Some(min_last_modified_at), parallelism)
+                                    .await
+                                    .map(|result| result.map(IrisSource::DB))
+                                    .boxed();
 
-                        let mut stream = select_all(vec![stream_s3, stream_db]);
+                                select_all(vec![stream_s3, stream_db])
+                            }
+                            false => {
+                                tracing::info!("S3 importer disabled. Fetching only from db");
+                                let stream_db = store
+                                    .stream_irises_par(None, parallelism)
+                                    .await
+                                    .map(|result| result.map(IrisSource::DB))
+                                    .boxed();
+                                select_all(vec![stream_db])
+                            }
+                        };
 
                         let now = Instant::now();
                         let mut now_load_summary = Instant::now();
