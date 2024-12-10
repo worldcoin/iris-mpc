@@ -37,6 +37,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-test = "0.2.5"
 uuid.workspace = true
+rand_distr = "0.4.3"
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio"] }

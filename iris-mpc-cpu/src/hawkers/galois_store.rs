@@ -1,4 +1,4 @@
-use super::plaintext_store::PlaintextStore;
+use super::{iris_searcher::IrisSearcher, plaintext_store::PlaintextStore};
 use crate::{
     database_generators::{generate_galois_iris_shares, GaloisRingSharedIris},
     execution::{
@@ -21,7 +21,7 @@ use aes_prng::AesRng;
 use hawk_pack::{
     data_structures::queue::FurthestQueue,
     graph_store::{graph_mem::Layer, GraphMem},
-    GraphStore, HawkSearcher, VectorStore,
+    GraphStore, VectorStore,
 };
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use rand::{CryptoRng, RngCore, SeedableRng};
@@ -470,7 +470,7 @@ impl LocalNetAby3NgStoreProtocol {
                 .collect::<Vec<_>>();
             jobs.spawn(async move {
                 let mut graph_store = GraphMem::new();
-                let searcher = HawkSearcher::default();
+                let searcher = IrisSearcher::default();
                 // insert queries
                 for query in queries.iter() {
                     searcher
@@ -510,9 +510,11 @@ impl LocalNetAby3NgStoreProtocol {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database_generators::generate_galois_iris_shares;
+    use crate::{
+        database_generators::generate_galois_iris_shares, hawkers::iris_searcher::IrisSearcher,
+    };
     use aes_prng::AesRng;
-    use hawk_pack::{graph_store::GraphMem, HawkSearcher};
+    use hawk_pack::graph_store::GraphMem;
     use itertools::Itertools;
     use rand::SeedableRng;
     use tracing_test::traced_test;
@@ -541,7 +543,7 @@ mod tests {
             let mut rng = rng.clone();
             jobs.spawn(async move {
                 let mut aby3_graph = GraphMem::new();
-                let db = HawkSearcher::default();
+                let db = IrisSearcher::default();
 
                 let mut inserted = vec![];
                 // insert queries
@@ -601,7 +603,7 @@ mod tests {
         {
             assert_eq!(v_from_scratch.storage.points, premade_v.storage.points);
         }
-        let hawk_searcher = HawkSearcher::default();
+        let hawk_searcher = IrisSearcher::default();
 
         for i in 0..database_size {
             let cleartext_neighbors = hawk_searcher
@@ -748,7 +750,7 @@ mod tests {
     async fn test_gr_scratch_hnsw() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 2;
-        let searcher = HawkSearcher::default();
+        let searcher = IrisSearcher::default();
         let mut vectors_and_graphs = LocalNetAby3NgStoreProtocol::shared_random_setup(
             &mut rng,
             database_size,

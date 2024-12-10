@@ -340,10 +340,9 @@ mod tests {
     use super::*;
     use crate::{
         execution::{local::generate_local_identities, player::Role},
-        hawkers::galois_store::LocalNetAby3NgStoreProtocol,
+        hawkers::{galois_store::LocalNetAby3NgStoreProtocol, iris_searcher::IrisSearcher},
     };
     use aes_prng::AesRng;
-    use hawk_pack::HawkSearcher;
     use rand::SeedableRng;
     use tokio::task::JoinSet;
     use tracing_test::traced_test;
@@ -570,7 +569,7 @@ mod tests {
     async fn test_hnsw_local() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 2;
-        let searcher = HawkSearcher::default();
+        let searcher = IrisSearcher::default();
         let mut vectors_and_graphs = LocalNetAby3NgStoreProtocol::shared_random_setup(
             &mut rng,
             database_size,
