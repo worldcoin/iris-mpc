@@ -68,6 +68,9 @@ env:
   - name: SMPC__SHARES_BUCKET_NAME
     value: "wf-smpcv2-stage-sns-requests"
 
+  - name: SMPC__ENABLE_S3_IMPORTER
+    value: "false"
+
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
     value: "iris-mpc-db-exporter-store-node-0-stage-eu-north-1"
 
