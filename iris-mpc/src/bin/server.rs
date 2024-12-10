@@ -988,23 +988,26 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             true => {
                                 tracing::info!("S3 importer enabled. Fetching from s3 + db");
                                 // First fetch last snapshot from S3
-                                let last_snapshot_timestamp =
-                                    last_snapshot_timestamp(&s3_store).await?;
+                                let last_snapshot_timestamp = last_snapshot_timestamp(
+                                    &s3_store,
+                                    db_chunks_folder_name.clone(),
+                                )
+                                .await?;
                                 let min_last_modified_at =
                                     last_snapshot_timestamp - config.db_load_safety_overlap_seconds;
                                 tracing::info!(
-                            "Last snapshot timestamp: {}, min_last_modified_at: {}",
-                            last_snapshot_timestamp,
-                            min_last_modified_at
-                        );
+                                    "Last snapshot timestamp: {}, min_last_modified_at: {}",
+                                    last_snapshot_timestamp,
+                                    min_last_modified_at
+                                );
                                 let stream_s3 = fetch_and_parse_chunks(
                                     &s3_store,
                                     load_chunks_parallelism,
                                     db_chunks_folder_name,
                                 )
-                                        .await
-                                        .map(|result| result.map(IrisSource::S3))
-                                        .boxed();
+                                .await
+                                .map(|result| result.map(IrisSource::S3))
+                                .boxed();
 
                                 let stream_db = store
                                     .stream_irises_par(Some(min_last_modified_at), parallelism)
