@@ -23,7 +23,7 @@ Once successfully installed, the native rust module `iris_mpc_py` can be importe
 ```python
 from iris_mpc_py import PyHawkSearcher, PyPlaintextStore, PyGraphStore, PyIrisCode
 
-hnsw = PyHawkSearcher.new_uniform(32, 32) # M, ef
+hnsw = PyHawkSearcher(32, 64, 32) # M, ef_constr, ef_search
 vector = PyPlaintextStore()
 graph = PyGraphStore()
 
@@ -61,7 +61,7 @@ graph = PyGraphStore.read_from_bin("graph.dat")
 Second, to construct an HNSW index dynamically from streamed database entries:
 
 ```python
-hnsw = PyHawkSearcher.new_uniform(32, 32)
+hnsw = PyHawkSearcher(32, 64, 32)
 vector = PyPlaintextStore()
 graph = PyGraphStore()
 hnsw.fill_from_ndjson_file("large_vector_database.ndjson", vector, graph, 10000)
