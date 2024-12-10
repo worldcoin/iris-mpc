@@ -9,8 +9,8 @@ use crate::{
     hawkers::plaintext_store::PointId,
     network::NetworkType,
     protocol::ops::{
-        compare_threshold_and_open, cross_compare, galois_ring_pairwise_distance,
-        galois_ring_to_rep3,
+        batch_signed_lift_vec, compare_threshold_and_open, cross_compare,
+        galois_ring_pairwise_distance, galois_ring_to_rep3,
     },
     py_bindings::{io::read_bin, plaintext_store::from_ndjson_file},
     shares::{
@@ -195,25 +195,40 @@ impl LocalNetAby3NgStoreProtocol {
     pub fn prepare_query(&mut self, code: GaloisRingSharedIris) -> QueryRef {
         self.storage.prepare_query(code)
     }
-}
 
-/// Assumes that the first iris of each pair is preprocessed.
-async fn eval_pairwise_distances(
-    pairs: Vec<(GaloisRingSharedIris, GaloisRingSharedIris)>,
-    player_session: &mut Session,
-) -> Vec<Share<u16>> {
-    let ds_and_ts = galois_ring_pairwise_distance(player_session, &pairs)
-        .await
-        .unwrap();
-    galois_ring_to_rep3(player_session, ds_and_ts)
-        .await
-        .unwrap()
+    pub async fn lift_distances(
+        &mut self,
+        distances: Vec<Share<u16>>,
+    ) -> eyre::Result<Vec<DistanceShare<u32>>> {
+        let mut player_session = self.get_owner_session();
+        let distances = batch_signed_lift_vec(&mut player_session, distances).await?;
+        Ok(distances
+            .chunks(2)
+            .map(|dot_products| {
+                DistanceShare::new(dot_products[0].clone(), dot_products[1].clone())
+            })
+            .collect::<Vec<_>>())
+    }
+
+    /// Assumes that the first iris of each pair is preprocessed.
+    async fn eval_pairwise_distances(
+        &mut self,
+        pairs: Vec<(GaloisRingSharedIris, GaloisRingSharedIris)>,
+    ) -> Vec<Share<u16>> {
+        let mut player_session = self.get_owner_session();
+        let ds_and_ts = galois_ring_pairwise_distance(&mut player_session, &pairs)
+            .await
+            .unwrap();
+        galois_ring_to_rep3(&mut player_session, ds_and_ts)
+            .await
+            .unwrap()
+    }
 }
 
 impl VectorStore for LocalNetAby3NgStoreProtocol {
     type QueryRef = QueryRef; // Point ID, pending insertion.
     type VectorRef = VectorId; // Point ID, inserted.
-    type DistanceRef = DistanceShare<u16>; // Distance represented as shares.
+    type DistanceRef = DistanceShare<u32>; // Distance represented as shares.
 
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         self.storage.insert(query)
@@ -224,11 +239,10 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
         query: &Self::QueryRef,
         vector: &Self::VectorRef,
     ) -> Self::DistanceRef {
-        let mut player_session = self.get_owner_session();
         let vector_point = self.storage.get_vector(vector);
         let pairs = vec![(query.processed_query.clone(), vector_point.clone())];
-        let ds_and_ts = eval_pairwise_distances(pairs, &mut player_session).await;
-        DistanceShare::new(ds_and_ts[0].clone(), ds_and_ts[1].clone())
+        let dist = self.eval_pairwise_distances(pairs).await;
+        self.lift_distances(dist).await.unwrap()[0].clone()
     }
 
     async fn eval_distance_batch(
@@ -236,7 +250,6 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
         query: &Self::QueryRef,
         vectors: &[Self::VectorRef],
     ) -> Vec<Self::DistanceRef> {
-        let mut player_session = self.get_owner_session();
         let pairs = vectors
             .iter()
             .map(|vector_id| {
@@ -244,13 +257,8 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
                 (query.processed_query.clone(), vector_point.clone())
             })
             .collect::<Vec<_>>();
-        let ds_and_ts = eval_pairwise_distances(pairs, &mut player_session).await;
-        ds_and_ts
-            .chunks(2)
-            .map(|dot_products| {
-                DistanceShare::new(dot_products[0].clone(), dot_products[1].clone())
-            })
-            .collect::<Vec<_>>()
+        let dist = self.eval_pairwise_distances(pairs).await;
+        self.lift_distances(dist).await.unwrap()
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> bool {
@@ -283,10 +291,10 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
 }
 
 impl LocalNetAby3NgStoreProtocol {
-    pub fn get_trivial_share(&self, distance: u16) -> Share<u16> {
+    pub fn get_trivial_share(&self, distance: u16) -> Share<u32> {
         let player = self.get_owner_index();
-        let distance_elem = RingElement(distance);
-        let zero_elem = RingElement(0_u16);
+        let distance_elem = RingElement(distance as u32);
+        let zero_elem = RingElement(0_u32);
 
         match player {
             0 => Share::new(distance_elem, zero_elem),
@@ -301,14 +309,13 @@ impl LocalNetAby3NgStoreProtocol {
         vector1: &<LocalNetAby3NgStoreProtocol as VectorStore>::VectorRef,
         vector2: &<LocalNetAby3NgStoreProtocol as VectorStore>::VectorRef,
     ) -> <LocalNetAby3NgStoreProtocol as VectorStore>::DistanceRef {
-        let mut player_session = self.get_owner_session();
         let point1 = self.storage.get_vector(vector1);
         let mut point2 = self.storage.get_vector(vector2).clone();
         point2.code.preprocess_iris_code_query_share();
         point2.mask.preprocess_mask_code_query_share();
         let pairs = vec![(point1.clone(), point2.clone())];
-        let ds_and_ts = eval_pairwise_distances(pairs, &mut player_session).await;
-        DistanceShare::new(ds_and_ts[0].clone(), ds_and_ts[1].clone())
+        let dist = self.eval_pairwise_distances(pairs).await;
+        self.lift_distances(dist).await.unwrap()[0].clone()
     }
 
     async fn graph_from_plain(
