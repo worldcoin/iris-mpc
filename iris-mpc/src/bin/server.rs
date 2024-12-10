@@ -1,11 +1,12 @@
 #![allow(clippy::needless_range_loop)]
 
+use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
 use eyre::{eyre, Context};
-use futures::TryStreamExt;
+use futures::{stream::select_all, StreamExt, TryStreamExt};
 use iris_mpc_common::{
     config::{json_wrapper::JsonStrWrapper, Config, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -37,18 +38,21 @@ use iris_mpc_gpu::{
         BatchQueryEntriesPreprocessed, ServerActor, ServerJobResult,
     },
 };
-use iris_mpc_store::{Store, StoredIrisRef};
+use iris_mpc_store::{
+    fetch_and_parse_chunks, last_snapshot_timestamp, IrisSource, S3Store, Store, StoredIrisRef,
+};
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::{
     backtrace::Backtrace,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     mem, panic,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, LazyLock, Mutex,
     },
+    time,
     time::{Duration, Instant},
 };
 use telemetry_batteries::tracing::{datadog::DatadogBattery, TracingShutdownHandle};
@@ -122,6 +126,7 @@ async fn receive_batch(
     party_id: usize,
     client: &Client,
     sns_client: &SNSClient,
+    s3_client: &Arc<S3Client>,
     config: &Config,
     store: &Store,
     skip_request_ids: &[String],
@@ -275,17 +280,21 @@ async fn receive_batch(
                         batch_query.metadata.push(batch_metadata);
 
                         let semaphore = Arc::clone(&semaphore);
+                        let s3_client_arc = Arc::clone(s3_client);
+                        let bucket_name = config.shares_bucket_name.clone();
                         let handle = tokio::spawn(async move {
                             let _ = semaphore.acquire().await?;
 
-                            let base_64_encoded_message_payload =
-                                match smpc_request.get_iris_data_by_party_id(party_id).await {
-                                    Ok(iris_message_share) => iris_message_share,
-                                    Err(e) => {
-                                        tracing::error!("Failed to get iris shares: {:?}", e);
-                                        eyre::bail!("Failed to get iris shares: {:?}", e);
-                                    }
-                                };
+                            let base_64_encoded_message_payload = match smpc_request
+                                .get_iris_data_by_party_id(party_id, &bucket_name, &s3_client_arc)
+                                .await
+                            {
+                                Ok(iris_message_share) => iris_message_share,
+                                Err(e) => {
+                                    tracing::error!("Failed to get iris shares: {:?}", e);
+                                    eyre::bail!("Failed to get iris shares: {:?}", e);
+                                }
+                            };
 
                             let iris_message_share = match smpc_request.decrypt_iris_share(
                                 base_64_encoded_message_payload,
@@ -664,6 +673,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);
+    let s3_client = Arc::new(S3Client::new(&shared_config));
+    let s3_client_clone = Arc::clone(&s3_client);
     let shares_encryption_key_pair =
         match SharesEncryptionKeyPairs::from_storage(config.clone()).await {
             Ok(key_pair) => key_pair,
@@ -890,6 +901,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         .ok_or(eyre!("Missing database config"))?
         .load_parallelism;
 
+    let load_chunks_parallelism = config.load_chunks_parallelism;
+    let db_chunks_bucket_name = config.db_chunks_bucket_name.clone();
+
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
         let device_manager = Arc::new(DeviceManager::init());
@@ -967,20 +981,90 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         "Initialize iris db: Loading from DB (parallelism: {})",
                         parallelism
                     );
+                    let s3_store = S3Store::new(s3_client_clone, db_chunks_bucket_name);
                     tokio::runtime::Handle::current().block_on(async {
-                        let mut stream = store.stream_irises_par(parallelism).await;
+                        let mut stream = match config.enable_s3_importer {
+                            true => {
+                                tracing::info!("S3 importer enabled. Fetching from s3 + db");
+                                // First fetch last snapshot from S3
+                                let last_snapshot_timestamp =
+                                    last_snapshot_timestamp(&s3_store).await?;
+                                let min_last_modified_at =
+                                    last_snapshot_timestamp - config.db_load_safety_overlap_seconds;
+                                let stream_s3 =
+                                    fetch_and_parse_chunks(&s3_store, load_chunks_parallelism)
+                                        .await
+                                        .map(|result| result.map(IrisSource::S3))
+                                        .boxed();
+
+                                let stream_db = store
+                                    .stream_irises_par(Some(min_last_modified_at), parallelism)
+                                    .await
+                                    .map(|result| result.map(IrisSource::DB))
+                                    .boxed();
+
+                                select_all(vec![stream_s3, stream_db])
+                            }
+                            false => {
+                                tracing::info!("S3 importer disabled. Fetching only from db");
+                                let stream_db = store
+                                    .stream_irises_par(None, parallelism)
+                                    .await
+                                    .map(|result| result.map(IrisSource::DB))
+                                    .boxed();
+                                select_all(vec![stream_db])
+                            }
+                        };
+
+                        let now = Instant::now();
+                        let mut now_load_summary = Instant::now();
+                        let mut time_waiting_for_stream = time::Duration::from_secs(0);
+                        let mut time_loading_into_memory = time::Duration::from_secs(0);
                         let mut record_counter = 0;
-                        while let Some(iris) = stream.try_next().await? {
+                        let mut all_serial_ids: HashSet<i64> =
+                            HashSet::from_iter(1..=(store_len as i64));
+                        let mut serial_ids_from_db: HashSet<i64> = HashSet::new();
+                        let mut n_loaded_from_db = 0;
+                        let mut n_loaded_from_s3 = 0;
+                        while let Some(result) = stream.try_next().await? {
+                            time_waiting_for_stream += now_load_summary.elapsed();
+                            now_load_summary = Instant::now();
+
+                            let iris = match result {
+                                IrisSource::DB(iris) => {
+                                    n_loaded_from_db += 1;
+                                    serial_ids_from_db.insert(iris.id());
+                                    iris
+                                }
+                                IrisSource::S3(iris) => {
+                                    if serial_ids_from_db.contains(&iris.id()) {
+                                        tracing::warn!(
+                                            "Skip overriding record already loaded via DB with S3 \
+                                             record: {}",
+                                            iris.id()
+                                        );
+                                        continue;
+                                    }
+                                    n_loaded_from_s3 += 1;
+                                    iris
+                                }
+                            };
+
                             if record_counter % 100_000 == 0 {
+                                let elapsed = now.elapsed();
                                 tracing::info!(
-                                    "Loaded {} records from db into memory",
-                                    record_counter
+                                    "Loaded {} records into memory in {:?} ({:.2} entries/s)",
+                                    record_counter,
+                                    elapsed,
+                                    record_counter as f64 / elapsed.as_secs_f64()
                                 );
                             }
-                            if iris.index() > store_len {
-                                tracing::error!("Inconsistent iris index {}", iris.index());
-                                return Err(eyre!("Inconsistent iris index {}", iris.index()));
+
+                            if iris.index() == 0 || iris.index() > store_len {
+                                tracing::error!("Invalid iris index {}", iris.index());
+                                return Err(eyre!("Invalid iris index {}", iris.index()));
                             }
+
                             actor.load_single_record(
                                 iris.index() - 1,
                                 iris.left_code(),
@@ -988,13 +1072,34 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                 iris.right_code(),
                                 iris.right_mask(),
                             );
+                            time_loading_into_memory += now_load_summary.elapsed();
+                            now_load_summary = Instant::now();
+
+                            all_serial_ids.remove(&(iris.index() as i64));
                             record_counter += 1;
                         }
 
-                        assert_eq!(
-                            record_counter, store_len,
-                            "Loaded record count does not match db size"
+                        tracing::info!(
+                            "Loading summary => Loaded {:?} items. {} from DB, {} from S3. Waited \
+                             for stream: {:?}, Loaded into memory: {:?}",
+                            record_counter,
+                            n_loaded_from_db,
+                            n_loaded_from_s3,
+                            time_waiting_for_stream,
+                            time_loading_into_memory,
                         );
+
+                        // Clear the memory allocated by temp HashSet
+                        serial_ids_from_db.clear();
+                        serial_ids_from_db.shrink_to_fit();
+
+                        if !all_serial_ids.is_empty() {
+                            tracing::error!("Not all serial_ids were loaded: {:?}", all_serial_ids);
+                            return Err(eyre!(
+                                "Not all serial_ids were loaded: {:?}",
+                                all_serial_ids
+                            ));
+                        }
 
                         tracing::info!("Preprocessing db");
                         actor.preprocess_db();
@@ -1265,6 +1370,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             party_id,
             &sqs_client,
             &sns_client,
+            &s3_client,
             &config,
             &store,
             &skip_request_ids,
@@ -1318,6 +1424,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 party_id,
                 &sqs_client,
                 &sns_client,
+                &s3_client,
                 &config,
                 &store,
                 &skip_request_ids,

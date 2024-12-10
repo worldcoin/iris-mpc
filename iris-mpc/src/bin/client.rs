@@ -372,7 +372,7 @@ async fn main() -> eyre::Result<()> {
                 let request_message = UniquenessRequest {
                     batch_size: None,
                     signup_id: request_id.to_string(),
-                    s3_presigned_url: presigned_url,
+                    s3_key: presigned_url,
                     iris_shares_file_hashes,
                 };
 
