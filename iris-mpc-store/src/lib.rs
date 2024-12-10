@@ -180,21 +180,21 @@ impl Store {
             let end_id = start_id + partition_size - 1;
 
             let partition_stream = match min_last_modified_at {
-                Some(min_last_modified_at) => {
-                    sqlx::query_as::<_, StoredIris>("SELECT * FROM irises WHERE id BETWEEN $1 AND $2 AND last_modified_at >= $3")
-                        .bind(start_id as i64)
-                        .bind(end_id as i64)
-                        .bind(min_last_modified_at)
-                        .fetch(&self.pool)
-                        .map_err(Into::into)
-                }
-                None => {
-                    sqlx::query_as::<_, StoredIris>("SELECT * FROM irises WHERE id BETWEEN $1 AND $2")
-                        .bind(start_id as i64)
-                        .bind(end_id as i64)
-                        .fetch(&self.pool)
-                        .map_err(Into::into)
-                }
+                Some(min_last_modified_at) => sqlx::query_as::<_, StoredIris>(
+                    "SELECT * FROM irises WHERE id BETWEEN $1 AND $2 AND last_modified_at >= $3",
+                )
+                .bind(start_id as i64)
+                .bind(end_id as i64)
+                .bind(min_last_modified_at)
+                .fetch(&self.pool)
+                .map_err(Into::into),
+                None => sqlx::query_as::<_, StoredIris>(
+                    "SELECT * FROM irises WHERE id BETWEEN $1 AND $2",
+                )
+                .bind(start_id as i64)
+                .bind(end_id as i64)
+                .fetch(&self.pool)
+                .map_err(Into::into),
             };
 
             partition_streams.push(Box::pin(partition_stream)
@@ -518,7 +518,11 @@ mod tests {
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), 0);
 
-        let got: Vec<StoredIris> = store.stream_irises_par(Some(0), 2).await.try_collect().await?;
+        let got: Vec<StoredIris> = store
+            .stream_irises_par(Some(0), 2)
+            .await
+            .try_collect()
+            .await?;
         assert_eq!(got.len(), 0);
 
         let codes_and_masks = &[
@@ -553,8 +557,11 @@ mod tests {
         let got_len = store.count_irises().await?;
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
 
-        let mut got_par: Vec<StoredIris> =
-            store.stream_irises_par(Some(0), 2).await.try_collect().await?;
+        let mut got_par: Vec<StoredIris> = store
+            .stream_irises_par(Some(0), 2)
+            .await
+            .try_collect()
+            .await?;
         got_par.sort_by_key(|iris| iris.id);
         assert_eq!(got, got_par);
 

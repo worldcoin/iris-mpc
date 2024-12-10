@@ -90,7 +90,7 @@ pub struct Config {
 
     #[serde(default)]
     pub enable_s3_importer: bool,
-    
+
     #[serde(default)]
     pub db_chunks_bucket_name: String,
 
