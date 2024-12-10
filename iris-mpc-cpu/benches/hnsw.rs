@@ -165,8 +165,7 @@ fn bench_gr_primitives(c: &mut Criterion) {
 /// To run this benchmark, you need to generate the data first by running the
 /// following commands:
 ///
-/// cargo build --release
-/// ./target/release/generate_benchmark_data
+/// cargo run --release --bin generate_benchmark_data
 fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
     let mut group = c.benchmark_group("gr_ready_made_hnsw");
     group.sample_size(10);
@@ -177,19 +176,24 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
             .build()
             .unwrap();
 
-        let (_, secret_searcher) = rt.block_on(async move {
+        let secret_searcher = rt.block_on(async move {
             let mut rng = AesRng::seed_from_u64(0_u64);
             LocalNetAby3NgStoreProtocol::lazy_setup_from_files_with_grpc(
-                "./data/irises.ndjson",
                 "./data/store.ndjson",
-                &format!("./data/graph_{}.ndjson", database_size),
+                &format!("./data/graph_{}.dat", database_size),
                 &mut rng,
                 database_size,
                 false,
             )
             .await
-            .unwrap()
         });
+
+        if let Err(e) = secret_searcher {
+            eprintln!("bench_gr_ready_made_hnsw failed. {e:?}");
+            rt.shutdown_timeout(std::time::Duration::from_secs(5));
+            return;
+        }
+        let (_, secret_searcher) = secret_searcher.unwrap();
 
         group.bench_function(
             BenchmarkId::new("gr-big-hnsw-insertions", database_size),

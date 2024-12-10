@@ -141,7 +141,7 @@ impl PlaintextStore {
     pub async fn create_random<R: RngCore + Clone + CryptoRng>(
         rng: &mut R,
         database_size: usize,
-    ) -> eyre::Result<(Vec<IrisCode>, Self, GraphMem<Self>)> {
+    ) -> eyre::Result<(Self, GraphMem<Self>)> {
         // makes sure the searcher produces same graph structure by having the same rng
         let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
         let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
@@ -171,17 +171,13 @@ impl PlaintextStore {
                 .await;
         }
 
-        Ok((
-            cleartext_database,
-            plaintext_vector_store,
-            plaintext_graph_store,
-        ))
+        Ok((plaintext_vector_store, plaintext_graph_store))
     }
 
     pub async fn create_random_store<R: RngCore + Clone + CryptoRng>(
         rng: &mut R,
         database_size: usize,
-    ) -> eyre::Result<(Vec<IrisCode>, Self)> {
+    ) -> eyre::Result<Self> {
         let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
 
         let mut plaintext_vector_store = PlaintextStore::default();
@@ -191,7 +187,7 @@ impl PlaintextStore {
             let _ = plaintext_vector_store.insert(&query).await;
         }
 
-        Ok((cleartext_database, plaintext_vector_store))
+        Ok(plaintext_vector_store)
     }
 
     pub async fn create_graph<R: RngCore + Clone + CryptoRng>(
@@ -310,7 +306,7 @@ mod tests {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 1;
         let searcher = HawkSearcher::default();
-        let (_, mut ptxt_vector, mut ptxt_graph) =
+        let (mut ptxt_vector, mut ptxt_graph) =
             PlaintextStore::create_random(&mut rng, database_size)
                 .await
                 .unwrap();
