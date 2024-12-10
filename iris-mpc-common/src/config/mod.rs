@@ -89,6 +89,9 @@ pub struct Config {
     pub image_name: String,
 
     #[serde(default)]
+    pub enable_s3_importer: bool,
+
+    #[serde(default)]
     pub db_chunks_bucket_name: String,
 
     #[serde(default = "default_load_chunks_parallelism")]
