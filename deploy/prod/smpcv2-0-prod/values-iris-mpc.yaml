@@ -83,6 +83,12 @@ env:
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
     value: "iris-mpc-db-exporter-store-node-0-prod-eu-north-1"
 
+  - name: SMPC__DB_CHUNKS_FOLDER_NAME
+    value: "binary_output_2k"
+
+  - name: SMPC__LOAD_CHUNKS_PARALLELISM
+    value: "32"
+
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
 
