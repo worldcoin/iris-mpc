@@ -5,7 +5,7 @@ use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use iris_mpc_cpu::{
     database_generators::{create_random_sharing, generate_galois_iris_shares},
     execution::local::LocalRuntime,
-    hawkers::{galois_store::LocalNetAby3NgStoreProtocol, plaintext_store::PlaintextStore},
+    hawkers::{galois_store::Aby3Runner, plaintext_store::PlaintextStore},
     protocol::ops::{
         batch_signed_lift_vec, cross_compare, galois_ring_pairwise_distance, galois_ring_to_rep3,
     },
@@ -178,7 +178,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
 
         let secret_searcher = rt.block_on(async move {
             let mut rng = AesRng::seed_from_u64(0_u64);
-            LocalNetAby3NgStoreProtocol::lazy_setup_from_files_with_grpc(
+            Aby3Runner::lazy_setup_from_files_with_grpc(
                 "./data/store.ndjson",
                 &format!("./data/graph_{}.dat", database_size),
                 &mut rng,
