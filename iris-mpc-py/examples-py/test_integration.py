@@ -12,7 +12,7 @@ print("Writing vector store to file...")
 vector_init.write_to_ndjson("vector.ndjson")
 
 print("Generating HNSW graphs for 10k imported iris codes...")
-hnsw = PyHawkSearcher.new_uniform(32, 32)
+hnsw = PyHawkSearcher(32, 64, 32)
 vector1 = PyPlaintextStore()
 graph1 = PyGraphStore()
 hnsw.fill_from_ndjson_file("vector.ndjson", vector1, graph1, 10000)

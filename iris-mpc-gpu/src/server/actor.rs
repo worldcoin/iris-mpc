@@ -68,6 +68,7 @@ impl ServerActorHandle {
 
 const DB_CHUNK_SIZE: usize = 1 << 14;
 const KDF_SALT: &str = "111a1a93518f670e9bb0c2c68888e2beb9406d4c4ed571dc77b801e676ae3091"; // Random 32 byte salt
+const SUPERMATCH_THRESHOLD: usize = 4_000;
 
 pub struct ServerActor {
     job_queue:              mpsc::Receiver<ServerJob>,
@@ -695,30 +696,6 @@ impl ServerActor {
         // Truncate the results to the batch size
         host_results.iter_mut().for_each(|x| x.truncate(batch_size));
 
-        // Evaluate the results across devices
-        // Format: merged_results[query_index]
-        let mut merged_results =
-            get_merged_results(&host_results, self.device_manager.device_count());
-
-        // List the indices of the queries that did not match.
-        let insertion_list = merged_results
-            .iter()
-            .enumerate()
-            .filter(|&(_idx, &num)| num == NON_MATCH_ID)
-            .map(|(idx, _num)| idx)
-            .collect::<Vec<_>>();
-
-        // Spread the insertions across devices.
-        let insertion_list = distribute_insertions(&insertion_list, &self.current_db_sizes);
-
-        // Calculate the new indices for the inserted queries
-        let mut matches = calculate_insertion_indices(
-            &mut merged_results,
-            &insertion_list,
-            &self.current_db_sizes,
-            batch_size,
-        );
-
         // Fetch and truncate the match counters
         let match_counters_devices = self
             .distance_comparator
@@ -757,13 +734,31 @@ impl ServerActor {
             }
         }
 
-        // Check for supermatchers for v1 compatibility and mark them as non-unique
-        const SUPERMATCH_THRESHOLD: usize = 4_000;
-        for i in 0..batch_size {
-            if match_counters[i] > SUPERMATCH_THRESHOLD {
-                matches[i] = true;
-            }
-        }
+        // Evaluate the results across devices
+        // Format: merged_results[query_index]
+        let mut merged_results =
+            get_merged_results(&host_results, self.device_manager.device_count());
+
+        // List the indices of the queries that did not match.
+        let insertion_list = merged_results
+            .iter()
+            .enumerate()
+            .filter(|&(idx, &num)| {
+                num == NON_MATCH_ID && match_counters[idx] <= SUPERMATCH_THRESHOLD
+            })
+            .map(|(idx, _num)| idx)
+            .collect::<Vec<_>>();
+
+        // Spread the insertions across devices.
+        let insertion_list = distribute_insertions(&insertion_list, &self.current_db_sizes);
+
+        // Calculate the new indices for the inserted queries
+        let matches = calculate_insertion_indices(
+            &mut merged_results,
+            &insertion_list,
+            &self.current_db_sizes,
+            batch_size,
+        );
 
         // Fetch the partial matches
         let (partial_match_ids_left, partial_match_ids_right) = if self.return_partial_results {
