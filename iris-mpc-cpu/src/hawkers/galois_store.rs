@@ -27,7 +27,7 @@ use hawk_pack::{
 use iris_mpc_common::iris_db::db::IrisDB;
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
+use std::{collections::HashMap, fmt::Debug, sync::{Arc, RwLock}, vec};
 use tokio::task::JoinSet;
 
 #[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -62,22 +62,39 @@ pub struct Query {
 type QueryRef = Arc<Query>;
 
 #[derive(Default, Clone)]
-pub struct SharedIrises {
+struct SharedIrisesBody {
     points: Vec<GaloisRingSharedIris>,
+}
+
+#[derive(Clone)]
+pub struct SharedIrises {
+    body: Arc<RwLock<SharedIrisesBody>>
 }
 
 impl std::fmt::Debug for SharedIrises {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.points.fmt(f)
+        self.body.read().unwrap().points.fmt(f)
+    }
+}
+
+impl Default for SharedIrises {
+    fn default() -> Self {
+        let body = SharedIrisesBody { points: vec![] };
+        SharedIrises { body: Arc::new(RwLock::new(body)) }
     }
 }
 
 impl SharedIrises {
     pub fn new_with_shared_db(data: Vec<GaloisRingSharedIris>) -> Self {
-        SharedIrises { points: data }
+        let body = SharedIrisesBody {
+            points: data
+        };
+        SharedIrises { body: Arc::new(RwLock::new(body)) }
     }
+}
 
-    pub fn prepare_query(&mut self, raw_query: GaloisRingSharedIris) -> QueryRef {
+impl SharedIrises {
+    fn prepare_query(&mut self, raw_query: GaloisRingSharedIris) -> QueryRef {
         let mut preprocessed_query = raw_query.clone();
         preprocessed_query.code.preprocess_iris_code_query_share();
         preprocessed_query.mask.preprocess_mask_code_query_share();
@@ -88,17 +105,17 @@ impl SharedIrises {
         })
     }
 
-    pub fn get_vector(&self, vector: &VectorId) -> &GaloisRingSharedIris {
-        &self.points[vector.id]
+    pub fn get_vector(&self, vector: &VectorId) -> GaloisRingSharedIris {
+        let body = self.body.read().unwrap();
+        body.points[vector.id].clone()
     }
-}
 
-impl SharedIrises {
     fn insert(&mut self, query: &QueryRef) -> VectorId {
+        let mut body = self.body.write().unwrap();
         // The query is now accepted in the store.
-        self.points.push(query.query.clone());
+        body.points.push(query.query.clone());
 
-        let new_id = self.points.len() - 1;
+        let new_id = body.points.len() - 1;
         VectorId { id: new_id.into() }
     }
 }
@@ -676,7 +693,7 @@ mod tests {
         for ((v_from_scratch, _), (premade_v, _)) in
             vector_graph_stores.iter().zip(secret_data.iter())
         {
-            assert_eq!(v_from_scratch.storage.points, premade_v.storage.points);
+            assert_eq!(v_from_scratch.storage.body.read().unwrap().points, premade_v.storage.body.read().unwrap().points);
         }
         let hawk_searcher = HawkSearcher::default();
 
