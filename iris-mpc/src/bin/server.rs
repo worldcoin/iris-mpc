@@ -449,6 +449,8 @@ async fn receive_batch(
         batch_query.query_right.mask.extend(mask_shares_right);
     }
 
+    tracing::info!("batch signups ids in order: {:?}", batch_query.request_ids);
+
     // Preprocess query shares here already to avoid blocking the actor
     batch_query.query_left_preprocessed =
         BatchQueryEntriesPreprocessed::from(batch_query.query_left.clone());
