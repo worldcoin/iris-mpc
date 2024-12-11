@@ -5,6 +5,5 @@
 .env
 .envrc
 *.iml
-/iris-mpc-cpu/data
 
 .DS_Store
