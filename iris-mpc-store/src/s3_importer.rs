@@ -27,9 +27,10 @@ pub struct S3Store {
 
 impl S3Store {
     pub fn new(config: SdkConfig, bucket: String, concurrency: usize) -> Self {
-        let clients = (0..concurrency)
+        let clients = (0..concurrency / 4)
             .map(|_| S3Client::new(&config.clone()))
             .collect();
+        tracing::info!("Created {} S3 clients", concurrency / 4);
         Self {
             clients,
             bucket,
