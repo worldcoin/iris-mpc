@@ -1087,6 +1087,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                 iris.right_code(),
                                 iris.right_mask(),
                             );
+
+                            // if the serial id hasn't been loaded before, count is as unique record
+                            if all_serial_ids.contains(&(iris.index() as i64)) {
+                                actor.increment_db_size(iris.index() - 1);
+                            }
+
                             time_loading_into_memory += now_load_summary.elapsed();
                             now_load_summary = Instant::now();
 
