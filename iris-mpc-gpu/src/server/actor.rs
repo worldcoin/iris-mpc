@@ -461,6 +461,9 @@ impl ServerActor {
             self.device_manager.device_count(),
             MASK_CODE_LENGTH,
         );
+    }
+
+    pub fn increment_db_size(&mut self, index: usize) {
         self.current_db_sizes[index % self.device_manager.device_count()] += 1;
     }
 

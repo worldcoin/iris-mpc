@@ -281,7 +281,7 @@ impl ShareDB {
         n_shards: usize,
         code_length: usize,
     ) {
-        assert!(record.len() == code_length);
+        assert_eq!(record.len(), code_length);
 
         let a0_host = record
             .iter()
