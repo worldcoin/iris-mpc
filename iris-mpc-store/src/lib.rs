@@ -12,6 +12,7 @@ use iris_mpc_common::{
     config::Config,
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     iris_db::iris::IrisCode,
+    IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store};
@@ -100,10 +101,10 @@ impl StoredIris {
         ) as i64;
 
         // parse codes and masks
-        let left_code = extract_slice(bytes, &mut cursor, 25_600)?;
-        let left_mask = extract_slice(bytes, &mut cursor, 12_800)?;
-        let right_code = extract_slice(bytes, &mut cursor, 25_600)?;
-        let right_mask = extract_slice(bytes, &mut cursor, 12_800)?;
+        let left_code = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH * size_of::<u16>())?;
+        let left_mask = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH * size_of::<u16>())?;
+        let right_code = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH * size_of::<u16>())?;
+        let right_mask = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH * size_of::<u16>())?;
 
         Ok(StoredIris {
             id,
