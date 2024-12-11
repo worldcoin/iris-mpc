@@ -1,10 +1,12 @@
 use crate::StoredIris;
 use async_trait::async_trait;
-use aws_sdk_s3::Client;
+use aws_config::SdkConfig;
+use aws_sdk_s3::Client as S3Client;
 use bytes::Bytes;
 use futures::{stream, Stream, StreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
-use std::{mem, pin::Pin, sync::Arc, time::Instant};
+use rand::Rng;
+use std::{mem, pin::Pin, time::Instant};
 use tokio::task;
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -18,21 +20,29 @@ pub trait ObjectStore: Send + Sync + 'static {
 }
 
 pub struct S3Store {
-    client: Arc<Client>,
-    bucket: String,
+    clients:     Vec<S3Client>,
+    bucket:      String,
+    concurrency: usize,
 }
 
 impl S3Store {
-    pub fn new(client: Arc<Client>, bucket: String) -> Self {
-        Self { client, bucket }
+    pub fn new(config: SdkConfig, bucket: String, concurrency: usize) -> Self {
+        let clients = (0..concurrency)
+            .map(|_| S3Client::new(&config.clone()))
+            .collect();
+        Self {
+            clients,
+            bucket,
+            concurrency,
+        }
     }
 }
 
 #[async_trait]
 impl ObjectStore for S3Store {
     async fn get_object(&self, key: &str) -> eyre::Result<Bytes> {
-        let result = self
-            .client
+        let selected_client = rand::thread_rng().gen_range(0..self.concurrency);
+        let result = self.clients[selected_client]
             .get_object()
             .bucket(&self.bucket)
             .key(key)
@@ -48,8 +58,7 @@ impl ObjectStore for S3Store {
         let mut continuation_token = None;
 
         loop {
-            let mut request = self
-                .client
+            let mut request = self.clients[0]
                 .list_objects_v2()
                 .bucket(&self.bucket)
                 .prefix(prefix);
@@ -135,14 +144,6 @@ pub async fn fetch_and_parse_chunks(
     tracing::info!("Generated {} chunk names", chunks.len());
 
     let result_stream = stream::iter(chunks)
-        .filter_map(|chunk| async move {
-            if chunk.ends_with(".bin") {
-                tracing::info!("Processing chunk: {}", chunk);
-                Some(chunk)
-            } else {
-                None
-            }
-        })
         .map(move |chunk| async move {
             let mut now = Instant::now();
             let result = store.get_object(&chunk).await?;
@@ -198,7 +199,7 @@ mod tests {
         pub fn add_timestamp_file(&mut self, key: &str) {
             self.objects.insert(key.to_string(), Vec::new());
         }
-        
+
         pub fn add_test_data(&mut self, key: &str, records: Vec<StoredIris>) {
             let mut csv = Vec::new();
             {
@@ -262,7 +263,9 @@ mod tests {
         store.add_timestamp_file("out/timestamps/124_100_958");
         store.add_timestamp_file("out/timestamps/125_100_958");
 
-        let last_snapshot = last_snapshot_timestamp(&store, "out".to_string()).await.unwrap();
+        let last_snapshot = last_snapshot_timestamp(&store, "out".to_string())
+            .await
+            .unwrap();
         assert_eq!(last_snapshot.timestamp, 125);
         assert_eq!(last_snapshot.last_serial_id, 958);
         assert_eq!(last_snapshot.chunk_size, 100);
@@ -283,10 +286,7 @@ mod tests {
             );
         }
 
-        assert_eq!(
-            store.list_objects("").await.unwrap().len(),
-            n_chunks
-        );
+        assert_eq!(store.list_objects("").await.unwrap().len(), n_chunks);
         let last_snapshot_details = LastSnapshotDetails {
             timestamp:      0,
             last_serial_id: MOCK_ENTRIES as i64,
