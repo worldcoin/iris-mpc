@@ -97,6 +97,9 @@ pub struct Config {
     #[serde(default = "default_load_chunks_parallelism")]
     pub load_chunks_parallelism: usize,
 
+    #[serde(default = "default_load_chunks_s3_clients")]
+    pub load_chunks_s3_clients: usize,
+
     /// Defines the safety overlap to load the DB records >last_modified_at in
     /// seconds This is to ensure we don't miss any records that were
     /// updated during the DB export to S3
@@ -133,6 +136,10 @@ fn default_shutdown_last_results_sync_timeout_secs() -> u64 {
 
 fn default_shares_bucket_name() -> String {
     "wf-mpc-prod-smpcv2-sns-requests".to_string()
+}
+
+fn default_load_chunks_s3_clients() -> usize {
+    1
 }
 
 fn default_db_load_safety_overlap_seconds() -> i64 {

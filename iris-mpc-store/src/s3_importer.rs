@@ -20,21 +20,20 @@ pub trait ObjectStore: Send + Sync + 'static {
 }
 
 pub struct S3Store {
-    clients:     Vec<S3Client>,
-    bucket:      String,
-    concurrency: usize,
+    clients:   Vec<S3Client>,
+    bucket:    String,
+    n_clients: usize,
 }
 
 impl S3Store {
-    pub fn new(config: SdkConfig, bucket: String, concurrency: usize) -> Self {
-        let clients = (0..concurrency / 4)
+    pub fn new(config: SdkConfig, bucket: String, n_clients: usize) -> Self {
+        let clients = (0..n_clients)
             .map(|_| S3Client::new(&config.clone()))
             .collect();
-        tracing::info!("Created {} S3 clients", concurrency / 4);
         Self {
             clients,
             bucket,
-            concurrency,
+            n_clients,
         }
     }
 }
@@ -42,7 +41,7 @@ impl S3Store {
 #[async_trait]
 impl ObjectStore for S3Store {
     async fn get_object(&self, key: &str) -> eyre::Result<Bytes> {
-        let selected_client = rand::thread_rng().gen_range(0..self.concurrency);
+        let selected_client = rand::thread_rng().gen_range(0..self.n_clients);
         let result = self.clients[selected_client]
             .get_object()
             .bucket(&self.bucket)
