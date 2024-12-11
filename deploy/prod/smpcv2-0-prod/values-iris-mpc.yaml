@@ -60,7 +60,7 @@ env:
     value: "2"
 
   - name: SMPC__HEARTBEAT_INITIAL_RETRIES
-    value: "30"
+    value: "65"
 
   - name: SMPC__PATH
     value: "/data/"
@@ -78,10 +78,16 @@ env:
     value: "https://pki-smpc.worldcoin.org"
 
   - name: SMPC__ENABLE_S3_IMPORTER
-    value: "false"
+    value: "true"
 
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
     value: "iris-mpc-db-exporter-store-node-0-prod-eu-north-1"
+
+  - name: SMPC__DB_CHUNKS_FOLDER_NAME
+    value: "binary_output_2k"
+
+  - name: SMPC__LOAD_CHUNKS_PARALLELISM
+    value: "64"
 
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
@@ -90,7 +96,7 @@ env:
     value: "0"
 
   - name: SMPC__MAX_DB_SIZE
-    value: "10000000"
+    value: "20000000"
 
   - name: SMPC__FAKE_DB_SIZE
     value: "0"

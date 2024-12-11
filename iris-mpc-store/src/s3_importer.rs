@@ -4,20 +4,17 @@ use aws_sdk_s3::Client;
 use bytes::Bytes;
 use futures::{stream, Stream, StreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
-use rayon::{iter::ParallelIterator, prelude::ParallelBridge};
-use serde::Deserialize;
-use std::{io::Cursor, mem, pin::Pin, sync::Arc};
+use std::{mem, pin::Pin, sync::Arc, time::Instant};
 use tokio::task;
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
     + mem::size_of::<u32>(); // 75 KB
-const CSV_BUFFER_CAPACITY: usize = SINGLE_ELEMENT_SIZE * 10;
 
 #[async_trait]
 pub trait ObjectStore: Send + Sync + 'static {
     async fn get_object(&self, key: &str) -> eyre::Result<Bytes>;
-    async fn list_objects(&self) -> eyre::Result<Vec<String>>;
+    async fn list_objects(&self, prefix: &str) -> eyre::Result<Vec<String>>;
 }
 
 pub struct S3Store {
@@ -46,12 +43,16 @@ impl ObjectStore for S3Store {
         Ok(data.into_bytes())
     }
 
-    async fn list_objects(&self) -> eyre::Result<Vec<String>> {
+    async fn list_objects(&self, prefix: &str) -> eyre::Result<Vec<String>> {
         let mut objects = Vec::new();
         let mut continuation_token = None;
 
         loop {
-            let mut request = self.client.list_objects_v2().bucket(&self.bucket);
+            let mut request = self
+                .client
+                .list_objects_v2()
+                .bucket(&self.bucket)
+                .prefix(prefix);
 
             if let Some(token) = continuation_token {
                 request = request.continuation_token(token);
@@ -76,101 +77,98 @@ impl ObjectStore for S3Store {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct CsvIrisRecord {
-    id:         String,
-    left_code:  String,
-    left_mask:  String,
-    right_code: String,
-    right_mask: String,
+#[derive(Debug)]
+pub struct LastSnapshotDetails {
+    pub timestamp:      i64,
+    pub last_serial_id: i64,
+    pub chunk_size:     i64,
 }
 
-fn hex_to_bytes(hex: &str, byte_len: usize) -> eyre::Result<Vec<u8>> {
-    if hex.is_empty() {
-        return Ok(vec![]);
+impl LastSnapshotDetails {
+    // Parse last snapshot from s3 file name.
+    // It is in {unixTime}_{batchSize}_{lastSerialId} format.
+    pub fn new_from_str(last_snapshot_str: &str) -> Option<Self> {
+        let parts: Vec<&str> = last_snapshot_str.split('_').collect();
+        match parts.len() {
+            3 => Some(Self {
+                timestamp:      parts[0].parse().unwrap(),
+                chunk_size:     parts[1].parse().unwrap(),
+                last_serial_id: parts[2].parse().unwrap(),
+            }),
+            _ => {
+                tracing::warn!("Invalid export timestamp file name: {}", last_snapshot_str);
+                None
+            }
+        }
     }
-    let mut bytes = vec![0; byte_len];
-    hex::decode_to_slice(hex, &mut bytes)?;
-    Ok(bytes)
 }
 
-pub async fn last_snapshot_timestamp(store: &impl ObjectStore) -> eyre::Result<i64> {
+pub async fn last_snapshot_timestamp(
+    store: &impl ObjectStore,
+    prefix_name: String,
+) -> eyre::Result<LastSnapshotDetails> {
+    tracing::info!("Looking for last snapshot time in prefix: {}", prefix_name);
+    let timestamps_path = format!("{}/timestamps/", prefix_name);
     store
-        .list_objects()
+        .list_objects(timestamps_path.as_str())
         .await?
         .into_iter()
-        .filter(|f| f.starts_with("output/") && f.ends_with(".timestamp"))
-        .filter_map(|f| {
-            f.replace(".timestamp", "")
-                .replace("output/", "")
-                .parse::<i64>()
-                .ok()
+        .filter_map(|f| match f.split('/').last() {
+            Some(file_name) => LastSnapshotDetails::new_from_str(file_name),
+            _ => None,
         })
-        .max()
+        .max_by_key(|s| s.timestamp)
         .ok_or_else(|| eyre::eyre!("No snapshot found"))
 }
 
 pub async fn fetch_and_parse_chunks(
     store: &impl ObjectStore,
     concurrency: usize,
+    prefix_name: String,
+    last_snapshot_details: LastSnapshotDetails,
 ) -> Pin<Box<dyn Stream<Item = eyre::Result<StoredIris>> + Send + '_>> {
-    let chunks = store.list_objects().await.unwrap();
-    stream::iter(chunks)
-        .filter_map(|chunk| async move {
-            if chunk.ends_with(".csv") {
-                tracing::info!("Processing chunk: {}", chunk);
-                Some(chunk)
-            } else {
-                None
-            }
-        })
+    tracing::info!("Generating chunk files using: {:?}", last_snapshot_details);
+    let chunks: Vec<String> = (1..=last_snapshot_details.last_serial_id)
+        .step_by(last_snapshot_details.chunk_size as usize)
+        .map(|num| format!("{}/{}.bin", prefix_name, num))
+        .collect();
+    tracing::info!("Generated {} chunk names", chunks.len());
+
+    let result_stream = stream::iter(chunks)
         .map(move |chunk| async move {
+            let mut now = Instant::now();
             let result = store.get_object(&chunk).await?;
-            task::spawn_blocking(move || {
-                let cursor = Cursor::new(result);
-                let reader = csv::ReaderBuilder::new()
-                    .has_headers(true)
-                    .buffer_capacity(CSV_BUFFER_CAPACITY)
-                    .from_reader(cursor);
+            let get_object_time = now.elapsed();
+            tracing::info!("Got chunk object: {} in {:?}", chunk, get_object_time,);
 
-                let records: Vec<eyre::Result<StoredIris>> = reader
-                    .into_deserialize()
-                    .par_bridge()
-                    .map(|r: Result<CsvIrisRecord, _>| {
-                        let raw = r.map_err(|e| eyre::eyre!("CSV parse error: {}", e))?;
+            now = Instant::now();
+            let task = task::spawn_blocking(move || {
+                let n_records = result.len().div_floor(SINGLE_ELEMENT_SIZE);
 
-                        Ok(StoredIris {
-                            id:         raw.id.parse()?,
-                            left_code:  hex_to_bytes(
-                                &raw.left_code,
-                                IRIS_CODE_LENGTH * mem::size_of::<u16>(),
-                            )?,
-                            left_mask:  hex_to_bytes(
-                                &raw.left_mask,
-                                MASK_CODE_LENGTH * mem::size_of::<u16>(),
-                            )?,
-                            right_code: hex_to_bytes(
-                                &raw.right_code,
-                                IRIS_CODE_LENGTH * mem::size_of::<u16>(),
-                            )?,
-                            right_mask: hex_to_bytes(
-                                &raw.right_mask,
-                                MASK_CODE_LENGTH * mem::size_of::<u16>(),
-                            )?,
-                        })
-                    })
-                    .collect();
+                let mut records = Vec::with_capacity(n_records);
+                for i in 0..n_records {
+                    let start = i * SINGLE_ELEMENT_SIZE;
+                    let end = (i + 1) * SINGLE_ELEMENT_SIZE;
+                    let chunk = &result[start..end];
+                    let iris = StoredIris::from_bytes(chunk);
+                    records.push(iris);
+                }
 
                 Ok::<_, eyre::Error>(stream::iter(records))
             })
-            .await?
+            .await?;
+            let parse_time = now.elapsed();
+            tracing::info!("Parsed chunk: {} in {:?}", chunk, parse_time,);
+            task
         })
         .buffer_unordered(concurrency)
         .flat_map(|result| match result {
             Ok(stream) => stream.boxed(),
             Err(e) => stream::once(async move { Err(e) }).boxed(),
         })
-        .boxed()
+        .boxed();
+
+    result_stream
 }
 
 #[cfg(test)]
@@ -189,27 +187,20 @@ mod tests {
             Self::default()
         }
 
-        pub fn add_test_data(&mut self, key: &str, records: Vec<StoredIris>) {
-            let mut csv = Vec::new();
-            {
-                let mut writer = csv::Writer::from_writer(&mut csv);
-                writer
-                    .write_record(["id", "left_code", "left_mask", "right_code", "right_mask"])
-                    .unwrap();
+        pub fn add_timestamp_file(&mut self, key: &str) {
+            self.objects.insert(key.to_string(), Vec::new());
+        }
 
-                for record in records {
-                    writer
-                        .write_record(&[
-                            record.id.to_string(),
-                            hex::encode(record.left_code),
-                            hex::encode(record.left_mask),
-                            hex::encode(record.right_code),
-                            hex::encode(record.right_mask),
-                        ])
-                        .unwrap();
-                }
+        pub fn add_test_data(&mut self, key: &str, records: Vec<StoredIris>) {
+            let mut result = Vec::new();
+            for record in records {
+                result.extend_from_slice(&(record.id as u32).to_be_bytes());
+                result.extend_from_slice(&record.left_code);
+                result.extend_from_slice(&record.left_mask);
+                result.extend_from_slice(&record.right_code);
+                result.extend_from_slice(&record.right_mask);
             }
-            self.objects.insert(key.to_string(), csv);
+            self.objects.insert(key.to_string(), result);
         }
     }
 
@@ -223,7 +214,7 @@ mod tests {
                 .ok_or_else(|| eyre::eyre!("Object not found: {}", key))
         }
 
-        async fn list_objects(&self) -> eyre::Result<Vec<String>> {
+        async fn list_objects(&self, _: &str) -> eyre::Result<Vec<String>> {
             Ok(self.objects.keys().cloned().collect())
         }
     }
@@ -246,6 +237,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_last_snapshot_timestamp() {
+        let mut store = MockStore::new();
+        store.add_timestamp_file("out/timestamps/123_100_954");
+        store.add_timestamp_file("out/timestamps/124_100_958");
+        store.add_timestamp_file("out/timestamps/125_100_958");
+
+        let last_snapshot = last_snapshot_timestamp(&store, "out".to_string())
+            .await
+            .unwrap();
+        assert_eq!(last_snapshot.timestamp, 125);
+        assert_eq!(last_snapshot.last_serial_id, 958);
+        assert_eq!(last_snapshot.chunk_size, 100);
+    }
+
+    #[tokio::test]
     async fn test_fetch_and_parse_chunks() {
         const MOCK_ENTRIES: usize = 107;
         const MOCK_CHUNK_SIZE: usize = 10;
@@ -255,17 +261,19 @@ mod tests {
             let start_serial_id = i * MOCK_CHUNK_SIZE + 1;
             let end_serial_id = min((i + 1) * MOCK_CHUNK_SIZE, MOCK_ENTRIES);
             store.add_test_data(
-                &format!("{start_serial_id}.csv"),
+                &format!("out/{start_serial_id}.bin"),
                 (start_serial_id..=end_serial_id).map(dummy_entry).collect(),
             );
         }
 
-        assert_eq!(
-            store.list_objects().await.unwrap().len(),
-            MOCK_ENTRIES.div_ceil(MOCK_CHUNK_SIZE)
-        );
-
-        let mut chunks = fetch_and_parse_chunks(&store, 1).await;
+        assert_eq!(store.list_objects("").await.unwrap().len(), n_chunks);
+        let last_snapshot_details = LastSnapshotDetails {
+            timestamp:      0,
+            last_serial_id: MOCK_ENTRIES as i64,
+            chunk_size:     MOCK_CHUNK_SIZE as i64,
+        };
+        let mut chunks =
+            fetch_and_parse_chunks(&store, 1, "out".to_string(), last_snapshot_details).await;
         let mut count = 0;
         let mut ids: HashSet<usize> = HashSet::from_iter(1..MOCK_ENTRIES);
         while let Some(chunk) = chunks.next().await {

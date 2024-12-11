@@ -102,6 +102,9 @@ pub struct Config {
     /// updated during the DB export to S3
     #[serde(default = "default_db_load_safety_overlap_seconds")]
     pub db_load_safety_overlap_seconds: i64,
+
+    #[serde(default)]
+    pub db_chunks_folder_name: String,
 }
 
 fn default_load_chunks_parallelism() -> usize {
