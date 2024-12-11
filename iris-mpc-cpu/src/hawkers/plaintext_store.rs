@@ -192,16 +192,12 @@ impl PlaintextStore {
         let searcher = HawkSearcher::default();
 
         for i in 0..graph_size {
-            let neighbors = searcher
-                .search_to_insert(self, &mut plaintext_graph_store, &i.into())
-                .await;
             searcher
-                .insert_from_search_results(
+                .insert(
                     self,
                     &mut plaintext_graph_store,
+                    &i.into(),
                     &mut rng_searcher1,
-                    i.into(),
-                    neighbors,
                 )
                 .await;
         }
