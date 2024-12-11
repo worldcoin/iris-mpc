@@ -190,7 +190,7 @@ mod tests {
         pub fn add_timestamp_file(&mut self, key: &str) {
             self.objects.insert(key.to_string(), Vec::new());
         }
-        
+
         pub fn add_test_data(&mut self, key: &str, records: Vec<StoredIris>) {
             let mut result = Vec::new();
             for record in records {
@@ -243,7 +243,9 @@ mod tests {
         store.add_timestamp_file("out/timestamps/124_100_958");
         store.add_timestamp_file("out/timestamps/125_100_958");
 
-        let last_snapshot = last_snapshot_timestamp(&store, "out".to_string()).await.unwrap();
+        let last_snapshot = last_snapshot_timestamp(&store, "out".to_string())
+            .await
+            .unwrap();
         assert_eq!(last_snapshot.timestamp, 125);
         assert_eq!(last_snapshot.last_serial_id, 958);
         assert_eq!(last_snapshot.chunk_size, 100);
@@ -264,10 +266,7 @@ mod tests {
             );
         }
 
-        assert_eq!(
-            store.list_objects("").await.unwrap().len(),
-            n_chunks
-        );
+        assert_eq!(store.list_objects("").await.unwrap().len(), n_chunks);
         let last_snapshot_details = LastSnapshotDetails {
             timestamp:      0,
             last_serial_id: MOCK_ENTRIES as i64,
