@@ -200,26 +200,15 @@ mod tests {
         }
         
         pub fn add_test_data(&mut self, key: &str, records: Vec<StoredIris>) {
-            let mut csv = Vec::new();
-            {
-                let mut writer = csv::Writer::from_writer(&mut csv);
-                writer
-                    .write_record(["id", "left_code", "left_mask", "right_code", "right_mask"])
-                    .unwrap();
-
-                for record in records {
-                    writer
-                        .write_record(&[
-                            record.id.to_string(),
-                            hex::encode(record.left_code),
-                            hex::encode(record.left_mask),
-                            hex::encode(record.right_code),
-                            hex::encode(record.right_mask),
-                        ])
-                        .unwrap();
-                }
+            let mut result = Vec::new();
+            for record in records {
+                result.extend_from_slice(&(record.id as u32).to_be_bytes());
+                result.extend_from_slice(&record.left_code);
+                result.extend_from_slice(&record.left_mask);
+                result.extend_from_slice(&record.right_code);
+                result.extend_from_slice(&record.right_mask);
             }
-            self.objects.insert(key.to_string(), csv);
+            self.objects.insert(key.to_string(), result);
         }
     }
 
