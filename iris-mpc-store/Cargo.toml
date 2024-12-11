@@ -14,7 +14,6 @@ bytes.workspace = true
 async-trait.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
 bytemuck.workspace = true
-csv.workspace = true
 futures.workspace = true
 sqlx.workspace = true
 eyre.workspace = true
