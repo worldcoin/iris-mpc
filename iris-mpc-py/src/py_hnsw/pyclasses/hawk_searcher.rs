@@ -1,13 +1,13 @@
 use super::{graph_store::PyGraphStore, iris_code::PyIrisCode, plaintext_store::PyPlaintextStore};
 use iris_mpc_cpu::{
-    hawkers::iris_searcher::{HnswParams, IrisSearcher, N_PARAM_LAYERS},
+    hawkers::iris_searcher::{HnswParams, HnswSearcher, N_PARAM_LAYERS},
     py_bindings,
 };
 use pyo3::{exceptions::PyIOError, prelude::*};
 
 #[pyclass]
 #[derive(Clone, Default)]
-pub struct PyHawkSearcher(pub IrisSearcher);
+pub struct PyHawkSearcher(pub HnswSearcher);
 
 #[pymethods]
 #[allow(non_snake_case)]
@@ -20,13 +20,13 @@ impl PyHawkSearcher {
     #[staticmethod]
     pub fn new_standard(M: usize, ef_constr: usize, ef_search: usize) -> Self {
         let params = HnswParams::new(ef_constr, ef_search, M);
-        Self(IrisSearcher { params })
+        Self(HnswSearcher { params })
     }
 
     #[staticmethod]
     pub fn new_uniform(M: usize, ef: usize) -> Self {
         let params = HnswParams::new_uniform(ef, M);
-        Self(IrisSearcher { params })
+        Self(HnswSearcher { params })
     }
 
     /// Construct `IrisSearcher` with fully general parameters, specifying the
@@ -49,7 +49,7 @@ impl PyHawkSearcher {
             ef_search,
             layer_probability,
         };
-        Self(IrisSearcher { params })
+        Self(HnswSearcher { params })
     }
 
     pub fn insert(

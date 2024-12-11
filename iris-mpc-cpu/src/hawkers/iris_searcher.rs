@@ -139,22 +139,22 @@ impl HnswParams {
 /// Operations on vectors are delegated to a VectorStore.
 /// Operations on the graph are delegate to a GraphStore.
 #[derive(Clone, Serialize, Deserialize)]
-pub struct IrisSearcher {
+pub struct HnswSearcher {
     pub params: HnswParams,
 }
 
 // TODO remove default value; this varies too much between applications
 // to make sense to specify something "obvious"
-impl Default for IrisSearcher {
+impl Default for HnswSearcher {
     fn default() -> Self {
-        IrisSearcher {
+        HnswSearcher {
             params: HnswParams::new(64, 32, 32),
         }
     }
 }
 
 #[allow(non_snake_case)]
-impl IrisSearcher {
+impl HnswSearcher {
     async fn connect_bidir<V: VectorStore, G: GraphStore<V>>(
         &self,
         vector_store: &mut V,
@@ -450,7 +450,7 @@ mod tests {
         let vector_store = &mut LazyMemoryStore::new();
         let graph_store = &mut GraphMem::new();
         let rng = &mut AesRng::seed_from_u64(0_u64);
-        let db = IrisSearcher::default();
+        let db = HnswSearcher::default();
 
         let queries1 = (0..100)
             .map(|raw_query| vector_store.prepare_query(raw_query))

@@ -1,6 +1,6 @@
 use super::plaintext_store::Base64IrisCode;
 use crate::hawkers::{
-    iris_searcher::IrisSearcher,
+    iris_searcher::HnswSearcher,
     plaintext_store::{PlaintextStore, PointId},
 };
 use hawk_pack::graph_store::GraphMem;
@@ -11,7 +11,7 @@ use std::{fs::File, io::BufReader};
 
 pub fn search(
     query: IrisCode,
-    searcher: &IrisSearcher,
+    searcher: &HnswSearcher,
     vector: &mut PlaintextStore,
     graph: &mut GraphMem<PlaintextStore>,
 ) -> (PointId, f64) {
@@ -31,7 +31,7 @@ pub fn search(
 // TODO could instead take iterator of IrisCodes to make more flexible
 pub fn insert(
     iris: IrisCode,
-    searcher: &IrisSearcher,
+    searcher: &HnswSearcher,
     vector: &mut PlaintextStore,
     graph: &mut GraphMem<PlaintextStore>,
 ) -> PointId {
@@ -49,7 +49,7 @@ pub fn insert(
 }
 
 pub fn insert_uniform_random(
-    searcher: &IrisSearcher,
+    searcher: &HnswSearcher,
     vector: &mut PlaintextStore,
     graph: &mut GraphMem<PlaintextStore>,
 ) -> PointId {
@@ -61,7 +61,7 @@ pub fn insert_uniform_random(
 
 pub fn fill_uniform_random(
     num: usize,
-    searcher: &IrisSearcher,
+    searcher: &HnswSearcher,
     vector: &mut PlaintextStore,
     graph: &mut GraphMem<PlaintextStore>,
 ) {
@@ -87,7 +87,7 @@ pub fn fill_uniform_random(
 pub fn fill_from_ndjson_file(
     filename: &str,
     limit: Option<usize>,
-    searcher: &IrisSearcher,
+    searcher: &HnswSearcher,
     vector: &mut PlaintextStore,
     graph: &mut GraphMem<PlaintextStore>,
 ) {

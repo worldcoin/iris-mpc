@@ -6,7 +6,7 @@ use iris_mpc_cpu::{
     database_generators::{create_random_sharing, generate_galois_iris_shares},
     execution::local::LocalRuntime,
     hawkers::{
-        galois_store::LocalNetAby3NgStoreProtocol, iris_searcher::IrisSearcher,
+        galois_store::LocalNetAby3NgStoreProtocol, iris_searcher::HnswSearcher,
         plaintext_store::PlaintextStore,
     },
     protocol::ops::{
@@ -31,7 +31,7 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
             let mut rng = AesRng::seed_from_u64(0_u64);
             let mut vector = PlaintextStore::default();
             let mut graph = GraphMem::new();
-            let searcher = IrisSearcher::default();
+            let searcher = HnswSearcher::default();
 
             for _ in 0..database_size {
                 let raw_query = IrisCode::random_rng(&mut rng);
@@ -47,7 +47,7 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
             b.to_async(&rt).iter_batched(
                 || (vector.clone(), graph.clone()),
                 |(mut db_vectors, mut graph)| async move {
-                    let searcher = IrisSearcher::default();
+                    let searcher = HnswSearcher::default();
                     let mut rng = AesRng::seed_from_u64(0_u64);
                     let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
                     let query = db_vectors.prepare_query(on_the_fly_query);
@@ -204,7 +204,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                 b.to_async(&rt).iter_batched(
                     || secret_searcher.clone(),
                     |vectors_graphs| async move {
-                        let searcher = IrisSearcher::default();
+                        let searcher = HnswSearcher::default();
                         let mut rng = AesRng::seed_from_u64(0_u64);
                         let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
                         let raw_query = generate_galois_iris_shares(&mut rng, on_the_fly_query);
@@ -238,7 +238,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                 b.to_async(&rt).iter_batched(
                     || secret_searcher.clone(),
                     |vectors_graphs| async move {
-                        let searcher = IrisSearcher::default();
+                        let searcher = HnswSearcher::default();
                         let mut rng = AesRng::seed_from_u64(0_u64);
                         let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
                         let raw_query = generate_galois_iris_shares(&mut rng, on_the_fly_query);

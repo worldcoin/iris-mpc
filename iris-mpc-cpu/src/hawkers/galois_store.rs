@@ -1,4 +1,4 @@
-use super::{iris_searcher::IrisSearcher, plaintext_store::PlaintextStore};
+use super::{iris_searcher::HnswSearcher, plaintext_store::PlaintextStore};
 use crate::{
     database_generators::{generate_galois_iris_shares, GaloisRingSharedIris},
     execution::{
@@ -546,7 +546,7 @@ impl LocalNetAby3NgStoreProtocol {
                 .collect::<Vec<_>>();
             jobs.spawn(async move {
                 let mut graph_store = GraphMem::new();
-                let searcher = IrisSearcher::default();
+                let searcher = HnswSearcher::default();
                 // insert queries
                 for query in queries.iter() {
                     searcher
@@ -587,7 +587,7 @@ impl LocalNetAby3NgStoreProtocol {
 mod tests {
     use super::*;
     use crate::{
-        database_generators::generate_galois_iris_shares, hawkers::iris_searcher::IrisSearcher,
+        database_generators::generate_galois_iris_shares, hawkers::iris_searcher::HnswSearcher,
     };
     use aes_prng::AesRng;
     use hawk_pack::graph_store::GraphMem;
@@ -619,7 +619,7 @@ mod tests {
             let mut rng = rng.clone();
             jobs.spawn(async move {
                 let mut aby3_graph = GraphMem::new();
-                let db = IrisSearcher::default();
+                let db = HnswSearcher::default();
 
                 let mut inserted = vec![];
                 // insert queries
@@ -679,7 +679,7 @@ mod tests {
         {
             assert_eq!(v_from_scratch.storage.points, premade_v.storage.points);
         }
-        let hawk_searcher = IrisSearcher::default();
+        let hawk_searcher = HnswSearcher::default();
 
         for i in 0..database_size {
             let cleartext_neighbors = hawk_searcher
@@ -826,7 +826,7 @@ mod tests {
     async fn test_gr_scratch_hnsw() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 2;
-        let searcher = IrisSearcher::default();
+        let searcher = HnswSearcher::default();
         let mut vectors_and_graphs = LocalNetAby3NgStoreProtocol::shared_random_setup(
             &mut rng,
             database_size,

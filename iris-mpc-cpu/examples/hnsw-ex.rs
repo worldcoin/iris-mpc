@@ -1,7 +1,7 @@
 use aes_prng::AesRng;
 use hawk_pack::graph_store::GraphMem;
 use iris_mpc_common::iris_db::iris::IrisCode;
-use iris_mpc_cpu::hawkers::{iris_searcher::IrisSearcher, plaintext_store::PlaintextStore};
+use iris_mpc_cpu::hawkers::{iris_searcher::HnswSearcher, plaintext_store::PlaintextStore};
 use rand::SeedableRng;
 
 const DATABASE_SIZE: usize = 1_000;
@@ -16,7 +16,7 @@ fn main() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let mut vector = PlaintextStore::default();
         let mut graph = GraphMem::new();
-        let searcher = IrisSearcher::default();
+        let searcher = HnswSearcher::default();
 
         for idx in 0..DATABASE_SIZE {
             let raw_query = IrisCode::random_rng(&mut rng);
