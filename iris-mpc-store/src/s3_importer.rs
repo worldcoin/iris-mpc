@@ -1,6 +1,6 @@
 use crate::StoredIris;
 use async_trait::async_trait;
-use aws_config::SdkConfig;
+use aws_config::Region;
 use aws_sdk_s3::Client as S3Client;
 use bytes::Bytes;
 use futures::{stream, Stream, StreamExt};
@@ -26,10 +26,16 @@ pub struct S3Store {
 }
 
 impl S3Store {
-    pub fn new(config: SdkConfig, bucket: String, n_clients: usize) -> Self {
-        let clients = (0..n_clients)
-            .map(|_| S3Client::new(&config.clone()))
+    pub async fn new(bucket: String, n_clients: usize) -> Self {
+        let client_futures: Vec<_> = (0..n_clients)
+            .map(|_| async move {
+                let region_provider = Region::new("eu-north-1");
+                let config = aws_config::from_env().region(region_provider).load().await;
+
+                S3Client::new(&config)
+            })
             .collect();
+        let clients = futures::future::join_all(client_futures).await;
         Self {
             clients,
             bucket,

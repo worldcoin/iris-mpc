@@ -904,6 +904,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let load_chunks_s3_clients = config.load_chunks_s3_clients;
     let db_chunks_bucket_name = config.db_chunks_bucket_name.clone();
     let db_chunks_folder_name = config.db_chunks_folder_name.clone();
+    let s3_store = S3Store::new(db_chunks_bucket_name, load_chunks_s3_clients).await;
 
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
@@ -982,8 +983,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         "Initialize iris db: Loading from DB (parallelism: {})",
                         parallelism
                     );
-                    let s3_store =
-                        S3Store::new(shared_config, db_chunks_bucket_name, load_chunks_s3_clients);
                     tokio::runtime::Handle::current().block_on(async {
                         let mut stream = match config.enable_s3_importer {
                             true => {
