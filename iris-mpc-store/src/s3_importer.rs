@@ -135,14 +135,6 @@ pub async fn fetch_and_parse_chunks(
     tracing::info!("Generated {} chunk names", chunks.len());
 
     let result_stream = stream::iter(chunks)
-        .filter_map(|chunk| async move {
-            if chunk.ends_with(".bin") {
-                tracing::info!("Processing chunk: {}", chunk);
-                Some(chunk)
-            } else {
-                None
-            }
-        })
         .map(move |chunk| async move {
             let mut now = Instant::now();
             let result = store.get_object(&chunk).await?;
