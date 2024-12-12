@@ -250,6 +250,9 @@ impl VectorStore for LocalNetAby3NgStoreProtocol {
         query: &Self::QueryRef,
         vectors: &[Self::VectorRef],
     ) -> Vec<Self::DistanceRef> {
+        if vectors.is_empty() {
+            return vec![];
+        }
         let pairs = vectors
             .iter()
             .map(|vector_id| {
