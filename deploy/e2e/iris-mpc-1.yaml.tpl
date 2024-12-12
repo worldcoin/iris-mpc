@@ -190,7 +190,7 @@ iris-mpc-1:
       value: '["iris-mpc-node.1.e2e.smpcv2.worldcoin.dev","iris-mpc-node.2.e2e.smpcv2.worldcoin.dev","iris-mpc-node.3.e2e.smpcv2.worldcoin.dev"]'
 
     - name: SMPC__IMAGE_NAME
-      value: $(IMAGE_NAME)
+      value: "ghcr.io/worldcoin/iris-mpc:v0.12.2"
 
   initContainer:
     enabled: true
