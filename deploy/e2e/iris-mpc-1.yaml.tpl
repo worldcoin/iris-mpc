@@ -136,11 +136,7 @@ iris-mpc-1:
       value: "/data/"
 
     - name: SMPC__KMS_KEY_ARNS
-      value: [
-        "arn:aws:kms:eu-north-1:000000000000:key/00000000-0000-0000-0000-000000000000",
-        "arn:aws:kms:eu-north-1:000000000000:key/00000000-0000-0000-0000-000000000001",
-        "arn:aws:kms:eu-north-1:000000000000:key/00000000-0000-0000-0000-000000000002"
-      ]
+      value: '["arn:aws:kms:eu-north-1:000000000000:key/00000000-0000-0000-0000-000000000000","arn:aws:kms:eu-north-1:000000000000:key/00000000-0000-0000-0000-000000000001","arn:aws:kms:eu-north-1:000000000000:key/00000000-0000-0000-0000-000000000002"]'
 
     - name: SMPC__PARTY_ID
       value: "1"
