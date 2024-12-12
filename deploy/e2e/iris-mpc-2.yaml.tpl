@@ -85,112 +85,112 @@ iris-mpc-2:
 
   # terminationGracePeriodSeconds specifies the grace time between SIGTERM and SIGKILL
   terminationGracePeriodSeconds: 180 # 3x SMPC__PROCESSING_TIMEOUT_SECS
-  
+
   env:
     - name: RUST_LOG
       value: "info"
-  
+
     - name: RUST_BACKTRACE
       value: "full"
-  
+
     - name: NCCL_SOCKET_IFNAME
       value: "eth0"
-  
+
     - name: NCCL_COMM_ID
       value: "iris-mpc-node.1.e2e.smpcv2.worldcoin.dev:4000"
-  
+
     - name: SMPC__ENVIRONMENT
       value: "e2e"
-  
+
     - name: SMPC__SERVICE__SERVICE_NAME
       value: "smpcv2-server-e2e"
-  
+
     - name: SMPC__DATABASE__URL
       valueFrom:
         secretKeyRef:
           key: DATABASE_AURORA_URL
           name: application
-  
+
     - name: SMPC__DATABASE__MIGRATE
       value: "true"
-  
+
     - name: SMPC__DATABASE__CREATE
       value: "true"
-  
+
     - name: SMPC__DATABASE__LOAD_PARALLELISM
       value: "8"
-  
+
     - name: SMPC__AWS__REGION
       value: "eu-north-1"
-  
+
     - name: SMPC__REQUESTS_QUEUE_URL
       value: "arn:aws:sns:eu-central-1:000000000000:iris-mpc-input"
-  
+
     - name: SMPC__RESULTS_TOPIC_ARN
       value: "arn:aws:sns:eu-central-1:000000000000:iris-mpc-results"
-      
+
     - name: SMPC__PROCESSING_TIMEOUT_SECS
       value: "60"
-  
+
     - name: SMPC__PATH
       value: "/data/"
-  
+
     - name: SMPC__KMS_KEY_ARNS
       valueFrom:
         secretKeyRef:
           key: KMS_KEYS
           name: application
-  
+
     - name: SMPC__PARTY_ID
       value: "2"
-  
+
     - name: SMPC__PUBLIC_KEY_BASE_URL
       value: "https://pki-smpcv2-stage.worldcoin.org"
-  
+
     - name: SMPC__ENABLE_S3_IMPORTER
       value: "false"
-  
+
     - name: SMPC__SHARES_BUCKET_NAME
       value: "wf-smpcv2-stage-sns-requests"
-  
+
     - name: SMPC__CLEAR_DB_BEFORE_INIT
       value: "true"
-  
+
     - name: SMPC__INIT_DB_SIZE
       value: "80000"
-  
+
     - name: SMPC__MAX_DB_SIZE
       value: "110000"
-  
+
     - name: SMPC__MAX_BATCH_SIZE
       value: "64"
-  
+
     - name: SMPC__SERVICE__METRICS__HOST
       valueFrom:
         fieldRef:
           fieldPath: status.hostIP
-  
+
     - name: SMPC__SERVICE__METRICS__PORT
       value: "8125"
-  
+
     - name: SMPC__SERVICE__METRICS__QUEUE_SIZE
       value: "5000"
-  
+
     - name: SMPC__SERVICE__METRICS__BUFFER_SIZE
       value: "256"
-  
+
     - name: SMPC__SERVICE__METRICS__PREFIX
       value: "smpcv2-e2e-2"
-  
+
     - name: SMPC__RETURN_PARTIAL_RESULTS
       value: "true"
-  
+
     - name: SMPC__NODE_HOSTNAMES
       value: '["iris-mpc-node.1.e2e.smpcv2.worldcoin.dev","iris-mpc-node.2.e2e.smpcv2.worldcoin.dev","iris-mpc-node.3.e2e.smpcv2.worldcoin.dev"]'
-  
+
     - name: SMPC__IMAGE_NAME
-      value: $(IMAGE_NAME)
-  
+      value: "ghcr.io/worldcoin/iris-mpc:v0.12.2"
+
   initContainer:
     enabled: true
     image: "amazon/aws-cli:2.17.62"
@@ -205,10 +205,10 @@ iris-mpc-2:
     configMap:
       init.sh: |
         #!/usr/bin/env bash
-  
+
         # Set up environment variables
         HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$PARTY_ID".e2e.smpcv2.worldcoin.dev --query "HostedZones[].Id" --output text)
-  
+
         # Generate the JSON content in memory
         BATCH_JSON=$(cat <<EOF
         {
@@ -229,10 +229,10 @@ iris-mpc-2:
         }
         EOF
         )
-  
+
         # Execute AWS CLI command with the generated JSON
         aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch "$BATCH_JSON"
-  
+
         cd /libs
         aws s3 cp s3://wf-smpcv2-stage-libs/libcublas.so.12.2.5.6 .
         aws s3 cp s3://wf-smpcv2-stage-libs/libcublasLt.so.12.2.5.6 .
