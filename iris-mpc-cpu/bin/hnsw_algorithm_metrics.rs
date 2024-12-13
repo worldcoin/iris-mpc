@@ -4,13 +4,13 @@ use hawk_pack::graph_store::GraphMem;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
-    hnsw::searcher::{
-        tracing::{
+    hnsw::{
+        searcher::{HnswParams, HnswSearcher},
+        metrics::{
             EventCounter, HnswEventCounterLayer, COMPARE_DIST_EVENT, EVAL_DIST_EVENT,
             LAYER_SEARCH_EVENT, OPEN_NODE_EVENT,
         },
-        HnswParams, HnswSearcher,
-    },
+    }
 };
 use rand::SeedableRng;
 use std::{error::Error, sync::Arc};
