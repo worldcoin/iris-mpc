@@ -720,7 +720,7 @@ impl ServerActor {
 
         // Transfer all match ids
         let match_ids = self.distance_comparator.fetch_all_match_ids(
-            match_counters_devices,
+            &match_counters_devices,
             &self.distance_comparator.all_matches,
         );
 
@@ -737,6 +737,59 @@ impl ServerActor {
             }
         }
 
+        // Fetch the partial matches
+        let (
+            partial_match_ids_left,
+            partial_match_counters_left,
+            partial_match_ids_right,
+            partial_match_counters_right,
+        ) = if self.return_partial_results {
+            // Transfer the partial results to the host
+            let partial_match_counters_left = self
+                .distance_comparator
+                .fetch_match_counters(&self.distance_comparator.match_counters_left);
+            let partial_match_counters_right = self
+                .distance_comparator
+                .fetch_match_counters(&self.distance_comparator.match_counters_right);
+
+            let partial_results_left = self.distance_comparator.fetch_all_match_ids(
+                &partial_match_counters_left,
+                &self.distance_comparator.partial_results_left,
+            );
+            let partial_results_right = self.distance_comparator.fetch_all_match_ids(
+                &partial_match_counters_right,
+                &self.distance_comparator.partial_results_right,
+            );
+            (
+                partial_results_left,
+                partial_match_counters_left,
+                partial_results_right,
+                partial_match_counters_right,
+            )
+        } else {
+            (vec![], vec![], vec![], vec![])
+        };
+
+        let partial_match_counters_left = partial_match_counters_left.iter().fold(
+            vec![0usize; batch_size],
+            |mut acc, counters| {
+                for (i, &value) in counters.iter().enumerate() {
+                    acc[i] += value as usize;
+                }
+                acc
+            },
+        );
+
+        let partial_match_counters_right = partial_match_counters_right.iter().fold(
+            vec![0usize; batch_size],
+            |mut acc, counters| {
+                for (i, &value) in counters.iter().enumerate() {
+                    acc[i] += value as usize;
+                }
+                acc
+            },
+        );
+
         // Evaluate the results across devices
         // Format: merged_results[query_index]
         let mut merged_results =
@@ -747,7 +800,10 @@ impl ServerActor {
             .iter()
             .enumerate()
             .filter(|&(idx, &num)| {
-                num == NON_MATCH_ID && match_counters[idx] <= SUPERMATCH_THRESHOLD
+                num == NON_MATCH_ID
+                    // Filter-out supermatchers on both sides (TODO: remove this in the future)
+                    && partial_match_counters_left[idx] <= SUPERMATCH_THRESHOLD
+                    && partial_match_counters_right[idx] <= SUPERMATCH_THRESHOLD
             })
             .map(|(idx, _num)| idx)
             .collect::<Vec<_>>();
@@ -762,29 +818,6 @@ impl ServerActor {
             &self.current_db_sizes,
             batch_size,
         );
-
-        // Fetch the partial matches
-        let (partial_match_ids_left, partial_match_ids_right) = if self.return_partial_results {
-            // Transfer the partial results to the host
-            let partial_match_counters_left = self
-                .distance_comparator
-                .fetch_match_counters(&self.distance_comparator.match_counters_left);
-            let partial_match_counters_right = self
-                .distance_comparator
-                .fetch_match_counters(&self.distance_comparator.match_counters_right);
-
-            let partial_results_left = self.distance_comparator.fetch_all_match_ids(
-                partial_match_counters_left,
-                &self.distance_comparator.partial_results_left,
-            );
-            let partial_results_right = self.distance_comparator.fetch_all_match_ids(
-                partial_match_counters_right,
-                &self.distance_comparator.partial_results_right,
-            );
-            (partial_results_left, partial_results_right)
-        } else {
-            (vec![], vec![])
-        };
 
         // Check for batch matches
         let matched_batch_request_ids = match_ids
