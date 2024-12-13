@@ -1,10 +1,10 @@
 use crate::StoredIris;
 use async_trait::async_trait;
-use aws_sdk_s3::Client;
+use aws_sdk_s3::{config::Region, Client as S3Client};
 use bytes::Bytes;
 use futures::{stream, Stream, StreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
-use std::{cmp::min, mem, pin::Pin, sync::Arc, time::Instant};
+use std::{cmp::min, mem, pin::Pin, time::Instant};
 use tokio::task;
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -13,26 +13,40 @@ const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
 
 #[async_trait]
 pub trait ObjectStore: Send + Sync + 'static {
-    async fn get_object(&self, key: &str) -> eyre::Result<Bytes>;
+    async fn get_object(&self, key: &str, client_idx: usize) -> eyre::Result<Bytes>;
     async fn list_objects(&self, prefix: &str) -> eyre::Result<Vec<String>>;
 }
 
 pub struct S3Store {
-    client: Arc<Client>,
-    bucket: String,
+    clients:   Vec<S3Client>,
+    bucket:    String,
+    n_clients: usize,
 }
 
 impl S3Store {
-    pub fn new(client: Arc<Client>, bucket: String) -> Self {
-        Self { client, bucket }
+    pub async fn new(n_clients: usize, bucket: String) -> Self {
+        let client_futures: Vec<_> = (0..n_clients)
+            .map(|_| async move {
+                let region_provider = Region::new("eu-north-1");
+                let config = aws_config::from_env().region(region_provider).load().await;
+
+                S3Client::new(&config)
+            })
+            .collect();
+        let clients = futures::future::join_all(client_futures).await;
+        Self {
+            clients,
+            bucket,
+            n_clients,
+        }
     }
 }
 
 #[async_trait]
 impl ObjectStore for S3Store {
-    async fn get_object(&self, key: &str) -> eyre::Result<Bytes> {
-        let result = self
-            .client
+    async fn get_object(&self, key: &str, client_idx: usize) -> eyre::Result<Bytes> {
+        let client_idx_modulo = client_idx % self.n_clients;
+        let result = self.clients[client_idx_modulo]
             .get_object()
             .bucket(&self.bucket)
             .key(key)
@@ -48,8 +62,7 @@ impl ObjectStore for S3Store {
         let mut continuation_token = None;
 
         loop {
-            let mut request = self
-                .client
+            let mut request = self.clients[0]
                 .list_objects_v2()
                 .bucket(&self.bucket)
                 .prefix(prefix);
@@ -179,7 +192,7 @@ async fn fetch_chunks_for_partition(
     let result_stream = stream::iter(chunks)
         .map(move |chunk| async move {
             let mut now = Instant::now();
-            let result = store.get_object(&chunk).await?;
+            let result = store.get_object(&chunk, partition as usize).await?;
             let get_object_time = now.elapsed();
             tracing::info!("Got chunk object: {} in {:?}", chunk, get_object_time,);
 
@@ -248,7 +261,7 @@ mod tests {
 
     #[async_trait]
     impl ObjectStore for MockStore {
-        async fn get_object(&self, key: &str) -> eyre::Result<Bytes> {
+        async fn get_object(&self, key: &str, _: usize) -> eyre::Result<Bytes> {
             self.objects
                 .get(key)
                 .cloned()
