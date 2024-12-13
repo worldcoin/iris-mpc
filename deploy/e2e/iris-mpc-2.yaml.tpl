@@ -55,10 +55,6 @@ iris-mpc-2:
 
   hostNetwork: false
 
-  podSecurityContext:
-    runAsUser: 65534
-    runAsGroup: 65534
-
   tolerations:
     - key: "dedicated"
       operator: "Equal"
@@ -191,7 +187,7 @@ iris-mpc-2:
   initContainer:
     enabled: true
     image: "amazon/aws-cli:2.17.62"
-    name: "iris-mpc-copy-cuda-libs"
+    name: "iris-mpc-2-copy-cuda-libs"
     env:
       - name: PARTY_ID
         value: "3"
