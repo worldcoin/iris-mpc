@@ -143,16 +143,23 @@ pub(crate) async fn transposed_pack_and(
     session: &mut Session,
     x1: Vec<VecShare<u64>>,
     x2: Vec<VecShare<u64>>,
-) -> Result<Vec<VecShare<u64>>, Error>
-where
-    Standard: Distribution<u64>,
-{
-    // TODO(Dragos) this could probably be parallelized even more.
-    let mut res = Vec::with_capacity(x1.len());
-    for (x1, x2) in x1.iter().zip(x2.iter()) {
-        let shares_a = and_many_send(session, x1.as_slice(), x2.as_slice()).await?;
-        let shares_b = and_many_receive(session).await?;
-        res.push(VecShare::from_ab(shares_a, shares_b))
+) -> Result<Vec<VecShare<u64>>, Error> {
+    let res_len = x1.len();
+    let x1 = x1.into_iter().flatten().collect::<Vec<_>>();
+    let x2 = x2.into_iter().flatten().collect::<Vec<_>>();
+    let x1 = VecShare::new_vec(x1);
+    let x2 = VecShare::new_vec(x2);
+    let shares_a = and_many_send(session, x1.as_slice(), x2.as_slice()).await?;
+    let shares_b = and_many_receive(session).await?;
+
+    let mut res = Vec::with_capacity(res_len);
+    let chunk_size = x1.len() / res_len;
+    let shares_a = shares_a.into_iter().chunks(chunk_size);
+    let shares_b = shares_b.into_iter().chunks(chunk_size);
+    for (a, b) in shares_a.into_iter().zip(shares_b.into_iter()) {
+        let a = a.collect::<Vec<_>>();
+        let b = b.collect::<Vec<_>>();
+        res.push(VecShare::from_ab(a, b));
     }
     Ok(res)
 }
