@@ -38,7 +38,7 @@ iris-mpc-2:
   resources:
     limits:
       cpu: 31
-      memory: 600Gi
+      memory: 60Gi
       nvidia.com/gpu: 1
       vpc.amazonaws.com/efa: 1
     requests:

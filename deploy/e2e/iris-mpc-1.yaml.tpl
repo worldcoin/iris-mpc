@@ -43,7 +43,7 @@ iris-mpc-1:
       vpc.amazonaws.com/efa: 1
     requests:
       cpu: 30
-      memory: 60Gi
+      memory: 55Gi
       nvidia.com/gpu: 1
       vpc.amazonaws.com/efa: 1
 
