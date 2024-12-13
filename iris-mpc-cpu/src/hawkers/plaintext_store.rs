@@ -1,4 +1,4 @@
-use crate::hawkers::iris_searcher::HnswSearcher;
+use crate::hawkers::iris_searcher::{tracing::{COMPARE_DIST_EVENT, EVAL_DIST_EVENT}, HnswSearcher};
 use aes_prng::AesRng;
 use hawk_pack::{graph_store::GraphMem, VectorStore};
 use iris_mpc_common::iris_db::{
@@ -117,6 +117,7 @@ impl VectorStore for PlaintextStore {
         query: &Self::QueryRef,
         vector: &Self::VectorRef,
     ) -> Self::DistanceRef {
+        tracing::info!(event_type = EVAL_DIST_EVENT);
         let query_code = &self.points[*query];
         let vector_code = &self.points[*vector];
         query_code.data.distance_fraction(&vector_code.data)
@@ -132,6 +133,7 @@ impl VectorStore for PlaintextStore {
         distance1: &Self::DistanceRef,
         distance2: &Self::DistanceRef,
     ) -> bool {
+        tracing::info!(event_type = COMPARE_DIST_EVENT);
         let (a, b) = *distance1; // a/b
         let (c, d) = *distance2; // c/d
         (a as i32) * (d as i32) - (b as i32) * (c as i32) < 0
