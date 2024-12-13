@@ -53,7 +53,7 @@ iris-mpc-2:
   nodeSelector:
     kubernetes.io/arch: amd64
 
-  hostNetwork: true
+  hostNetwork: false
 
   podSecurityContext:
     runAsUser: 65534
