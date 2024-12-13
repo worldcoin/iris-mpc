@@ -1,7 +1,7 @@
 use aes_prng::AesRng;
 use hawk_pack::graph_store::GraphMem;
 use iris_mpc_common::iris_db::iris::IrisCode;
-use iris_mpc_cpu::hawkers::{iris_searcher::HnswSearcher, plaintext_store::PlaintextStore};
+use iris_mpc_cpu::{hawkers::plaintext_store::PlaintextStore, hnsw::searcher::HnswSearcher};
 use rand::SeedableRng;
 
 const DATABASE_SIZE: usize = 1_000;

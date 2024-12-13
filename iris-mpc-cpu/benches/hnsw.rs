@@ -5,10 +5,8 @@ use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use iris_mpc_cpu::{
     database_generators::{create_random_sharing, generate_galois_iris_shares},
     execution::local::LocalRuntime,
-    hawkers::{
-        galois_store::LocalNetAby3NgStoreProtocol, iris_searcher::HnswSearcher,
-        plaintext_store::PlaintextStore,
-    },
+    hawkers::{galois_store::LocalNetAby3NgStoreProtocol, plaintext_store::PlaintextStore},
+    hnsw::searcher::HnswSearcher,
     protocol::ops::{
         batch_signed_lift_vec, cross_compare, galois_ring_pairwise_distance, galois_ring_to_rep3,
     },

@@ -4,6 +4,7 @@
 //*
 //* https://github.com/Inversed-Tech/hawk-pack/
 
+use ::tracing::info;
 pub use hawk_pack::data_structures::queue::{
     FurthestQueue, FurthestQueueV, NearestQueue, NearestQueueV,
 };
@@ -11,7 +12,6 @@ use hawk_pack::{GraphStore, VectorStore};
 use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
-use ::tracing::info;
 use std::collections::HashSet;
 
 // specify construction and search parameters by layer up to this value minus 1
@@ -442,8 +442,10 @@ impl HnswSearcher {
 }
 
 pub mod tracing {
-    use std::sync::{atomic::{AtomicUsize, Ordering}, Arc};
-
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
     use tracing::{Event, Subscriber};
     use tracing_subscriber::{layer::Context, Layer};
 
@@ -479,7 +481,6 @@ pub mod tracing {
         }
     }
 
-
     #[derive(Default)]
     struct EventVisitor {
         // which event was encountered
@@ -494,10 +495,10 @@ pub mod tracing {
             match field.name() {
                 "event_type" => {
                     self.event = Some(value as usize);
-                },
+                }
                 "increment_amount" => {
                     self.amount = Some(value as usize);
-                },
+                }
                 _ => {}
             }
         }

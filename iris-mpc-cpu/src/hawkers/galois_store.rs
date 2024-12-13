@@ -1,4 +1,3 @@
-use super::{iris_searcher::HnswSearcher, plaintext_store::PlaintextStore};
 use crate::{
     database_generators::{generate_galois_iris_shares, GaloisRingSharedIris},
     execution::{
@@ -6,7 +5,8 @@ use crate::{
         player::Identity,
         session::Session,
     },
-    hawkers::plaintext_store::PointId,
+    hawkers::plaintext_store::{PlaintextStore, PointId},
+    hnsw::HnswSearcher,
     network::NetworkType,
     protocol::ops::{
         batch_signed_lift_vec, compare_threshold_and_open, cross_compare,

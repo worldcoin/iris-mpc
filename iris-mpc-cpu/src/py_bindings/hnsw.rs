@@ -1,7 +1,7 @@
 use super::plaintext_store::Base64IrisCode;
-use crate::hawkers::{
-    iris_searcher::HnswSearcher,
-    plaintext_store::{PlaintextStore, PointId},
+use crate::{
+    hawkers::plaintext_store::{PlaintextStore, PointId},
+    hnsw::HnswSearcher,
 };
 use hawk_pack::graph_store::GraphMem;
 use iris_mpc_common::iris_db::iris::IrisCode;

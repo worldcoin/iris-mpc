@@ -2,23 +2,29 @@ use aes_prng::AesRng;
 use clap::Parser;
 use hawk_pack::graph_store::GraphMem;
 use iris_mpc_common::iris_db::iris::IrisCode;
-use iris_mpc_cpu::hawkers::{
-    iris_searcher::{tracing::{EventCounter, HnswEventCounterLayer, COMPARE_DIST_EVENT, EVAL_DIST_EVENT, LAYER_SEARCH_EVENT, OPEN_NODE_EVENT}, HnswParams, HnswSearcher},
-    plaintext_store::PlaintextStore};
+use iris_mpc_cpu::{
+    hawkers::plaintext_store::PlaintextStore,
+    hnsw::searcher::{
+        tracing::{
+            EventCounter, HnswEventCounterLayer, COMPARE_DIST_EVENT, EVAL_DIST_EVENT,
+            LAYER_SEARCH_EVENT, OPEN_NODE_EVENT,
+        },
+        HnswParams, HnswSearcher,
+    },
+};
 use rand::SeedableRng;
 use std::{error::Error, sync::Arc};
-
 use tracing_subscriber::prelude::*;
 
 #[derive(Parser)]
 #[allow(non_snake_case)]
 struct Args {
     #[clap(default_value = "64")]
-    M: usize,
+    M:             usize,
     #[clap(default_value = "128")]
-    ef_constr: usize,
+    ef_constr:     usize,
     #[clap(default_value = "64")]
-    ef_search: usize,
+    ef_search:     usize,
     #[clap(default_value = "10000")]
     database_size: usize,
 }
@@ -38,7 +44,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut vector = PlaintextStore::default();
     let mut graph = GraphMem::new();
     let searcher = HnswSearcher {
-        params: HnswParams::new(M, ef_constr, ef_search)
+        params: HnswParams::new(M, ef_constr, ef_search),
     };
 
     for idx in 0..database_size {
@@ -72,7 +78,10 @@ fn print_stats(counters: &Arc<EventCounter>, verbose: bool) {
         println!("  Evaluate distance events: {:?}", distance_evals);
         println!("  Compare distance events: {:?}", distance_comps);
     } else {
-        println!("{:?}, {:?}, {:?}", opened_nodes, distance_evals, distance_comps);
+        println!(
+            "{:?}, {:?}, {:?}",
+            opened_nodes, distance_evals, distance_comps
+        );
     }
 }
 
@@ -87,62 +96,3 @@ fn configure_tracing() -> Arc<EventCounter> {
 
     counters
 }
-
-// mod custom_layer {
-//     use tracing_subscriber::Layer;
-
-//     pub struct CustomLayer;
-
-//     impl<S> Layer<S> for CustomLayer where S: tracing::Subscriber {
-//         fn on_event(
-//             &self,
-//             event: &tracing::Event<'_>,
-//             _ctx: tracing_subscriber::layer::Context<'_, S>,
-//         ) {
-//             println!("Got event!");
-//             println!("  level={:?}", event.metadata().level());
-//             println!("  target={:?}", event.metadata().target());
-//             println!("  name={:?}", event.metadata().name());
-//             let mut visitor = PrintlnVisitor;
-//             event.record(&mut visitor);
-//         }
-//     }
-
-//     struct PrintlnVisitor;
-
-//     impl tracing::field::Visit for PrintlnVisitor {
-//         fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
-//             println!("  field={} value={}", field.name(), value)
-//         }
-
-//         fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
-//             println!("  field={} value={}", field.name(), value)
-//         }
-
-//         fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
-//             println!("  field={} value={}", field.name(), value)
-//         }
-
-//         fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
-//             println!("  field={} value={}", field.name(), value)
-//         }
-
-//         fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-//             println!("  field={} value={}", field.name(), value)
-//         }
-
-//         fn record_error(
-//             &mut self,
-//             field: &tracing::field::Field,
-//             value: &(dyn std::error::Error + 'static),
-//         ) {
-//             println!("  field={} value={}", field.name(), value)
-//         }
-
-//         fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-//             println!("  field={} value={:?}", field.name(), value)
-//         }
-//     }
-
-// }
-// use custom_layer::CustomLayer;

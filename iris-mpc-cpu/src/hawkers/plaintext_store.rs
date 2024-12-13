@@ -1,4 +1,7 @@
-use crate::hawkers::iris_searcher::{tracing::{COMPARE_DIST_EVENT, EVAL_DIST_EVENT}, HnswSearcher};
+use crate::hnsw::searcher::{
+    tracing::{COMPARE_DIST_EVENT, EVAL_DIST_EVENT},
+    HnswSearcher,
+};
 use aes_prng::AesRng;
 use hawk_pack::{graph_store::GraphMem, VectorStore};
 use iris_mpc_common::iris_db::{
@@ -212,7 +215,7 @@ impl PlaintextStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hawkers::iris_searcher::HnswSearcher;
+    use crate::hnsw::HnswSearcher;
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
     use rand::SeedableRng;
