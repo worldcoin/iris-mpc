@@ -4,7 +4,7 @@ use aws_sdk_s3::Client;
 use bytes::Bytes;
 use futures::{stream, Stream, StreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
-use std::{mem, pin::Pin, sync::Arc, time::Instant};
+use std::{cmp::min, mem, pin::Pin, sync::Arc, time::Instant};
 use tokio::task;
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -77,7 +77,7 @@ impl ObjectStore for S3Store {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct LastSnapshotDetails {
     pub timestamp:      i64,
     pub last_serial_id: i64,
@@ -127,17 +127,55 @@ pub async fn fetch_and_parse_chunks(
     prefix_name: String,
     last_snapshot_details: LastSnapshotDetails,
     partition_size: i64,
-) -> Pin<Box<dyn Stream<Item = eyre::Result<StoredIris>> + Send + '_>> {
+) -> impl Stream<Item = eyre::Result<StoredIris>> + '_ {
     tracing::info!("Generating chunk files using: {:?}", last_snapshot_details);
-    let chunks: Vec<String> = (1..=last_snapshot_details.last_serial_id)
-        .step_by(last_snapshot_details.chunk_size as usize)
-        .map(|num| {
-            let partition = num.div_floor(partition_size);
-            format!("{}/{}/{}.bin", prefix_name, partition, num)
-        })
-        .collect();
-    tracing::info!("Generated {} chunk names", chunks.len());
+    let n_partitions = last_snapshot_details
+        .last_serial_id
+        .div_ceil(partition_size);
+    let partition_concurrency = concurrency.div_ceil(n_partitions as usize);
+    let mut results = Vec::with_capacity(n_partitions as usize);
+    for partition in 0..n_partitions {
+        tracing::info!("Initiating stream for partition: {}", partition);
+        let stream = fetch_chunks_for_partition(
+            store,
+            prefix_name.clone(),
+            partition,
+            partition_size,
+            last_snapshot_details,
+            partition_concurrency,
+        )
+        .await;
+        results.push(stream);
+        tracing::info!("Initiated stream for partition: {}", partition);
+    }
 
+    stream::select_all(results)
+}
+
+async fn fetch_chunks_for_partition(
+    store: &impl ObjectStore,
+    prefix_name: String,
+    partition: i64,
+    partition_size: i64,
+    last_snapshot_details: LastSnapshotDetails,
+    concurrency: usize,
+) -> Pin<Box<dyn Stream<Item = eyre::Result<StoredIris>> + Send + '_>> {
+    let first_serial_id = partition * partition_size + 1;
+    let last_serial_id = min(
+        (partition + 1) * partition_size,
+        last_snapshot_details.last_serial_id,
+    );
+    tracing::info!(
+        "Partition {} will work on range [{},{}] with {} concurrency",
+        partition,
+        first_serial_id,
+        last_serial_id,
+        concurrency,
+    );
+    let chunks: Vec<String> = (first_serial_id..=last_serial_id)
+        .step_by(last_snapshot_details.chunk_size as usize)
+        .map(|num| format!("{}/{}/{}.bin", prefix_name, partition, num))
+        .collect();
     let result_stream = stream::iter(chunks)
         .map(move |chunk| async move {
             let mut now = Instant::now();

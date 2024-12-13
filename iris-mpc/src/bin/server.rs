@@ -1003,6 +1003,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                     last_snapshot_details.timestamp,
                                     min_last_modified_at
                                 );
+
+                                tracing::info!("Initiating s3 streams.");
                                 let stream_s3 = fetch_and_parse_chunks(
                                     &s3_store,
                                     load_chunks_parallelism,
@@ -1013,12 +1015,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                 .await
                                 .map(|result| result.map(IrisSource::S3))
                                 .boxed();
+                                tracing::info!("Initiated s3 streams.");
 
+                                tracing::info!("Initiating db streams.");
                                 let stream_db = store
                                     .stream_irises_par(Some(min_last_modified_at), parallelism)
                                     .await
                                     .map(|result| result.map(IrisSource::DB))
                                     .boxed();
+                                tracing::info!("Initiated db streams.");
 
                                 select_all(vec![stream_s3, stream_db])
                             }
