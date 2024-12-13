@@ -747,10 +747,16 @@ impl ServerActor {
             // Transfer the partial results to the host
             let partial_match_counters_left = self
                 .distance_comparator
-                .fetch_match_counters(&self.distance_comparator.match_counters_left);
+                .fetch_match_counters(&self.distance_comparator.match_counters_left)
+                .into_iter()
+                .map(|x| x[..batch_size].to_vec())
+                .collect::<Vec<_>>();
             let partial_match_counters_right = self
                 .distance_comparator
-                .fetch_match_counters(&self.distance_comparator.match_counters_right);
+                .fetch_match_counters(&self.distance_comparator.match_counters_right)
+                .into_iter()
+                .map(|x| x[..batch_size].to_vec())
+                .collect::<Vec<_>>();
 
             let partial_results_left = self.distance_comparator.fetch_all_match_ids(
                 &partial_match_counters_left,
