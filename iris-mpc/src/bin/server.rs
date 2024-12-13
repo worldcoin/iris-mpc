@@ -906,6 +906,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let load_chunks_parallelism = config.load_chunks_parallelism;
     let db_chunks_bucket_name = config.db_chunks_bucket_name.clone();
     let db_chunks_folder_name = config.db_chunks_folder_name.clone();
+    let db_chunks_partition_size = config.db_chunks_partition_size;
 
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
@@ -1007,6 +1008,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                     load_chunks_parallelism,
                                     db_chunks_folder_name,
                                     last_snapshot_details,
+                                    db_chunks_partition_size,
                                 )
                                 .await
                                 .map(|result| result.map(IrisSource::S3))

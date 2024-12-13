@@ -80,6 +80,9 @@ env:
   - name: SMPC__LOAD_CHUNKS_PARALLELISM
     value: "32"
 
+  - name: SMPC__DB_CHUNKS_PARTITION_SIZE
+    value: "100000"
+    
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
 

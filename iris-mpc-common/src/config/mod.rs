@@ -97,6 +97,9 @@ pub struct Config {
     #[serde(default = "default_load_chunks_parallelism")]
     pub load_chunks_parallelism: usize,
 
+    #[serde(default)]
+    pub db_chunks_partition_size: i64,
+
     /// Defines the safety overlap to load the DB records >last_modified_at in
     /// seconds This is to ensure we don't miss any records that were
     /// updated during the DB export to S3

@@ -126,11 +126,15 @@ pub async fn fetch_and_parse_chunks(
     concurrency: usize,
     prefix_name: String,
     last_snapshot_details: LastSnapshotDetails,
+    partition_size: i64,
 ) -> Pin<Box<dyn Stream<Item = eyre::Result<StoredIris>> + Send + '_>> {
     tracing::info!("Generating chunk files using: {:?}", last_snapshot_details);
     let chunks: Vec<String> = (1..=last_snapshot_details.last_serial_id)
         .step_by(last_snapshot_details.chunk_size as usize)
-        .map(|num| format!("{}/{}.bin", prefix_name, num))
+        .map(|num| {
+            let partition = num.div_floor(partition_size);
+            format!("{}/{}/{}.bin", prefix_name, partition, num)
+        })
         .collect();
     tracing::info!("Generated {} chunk names", chunks.len());
 
@@ -255,6 +259,7 @@ mod tests {
     async fn test_fetch_and_parse_chunks() {
         const MOCK_ENTRIES: usize = 107;
         const MOCK_CHUNK_SIZE: usize = 10;
+        const MOCK_PARTITION_SIZE: i64 = 20;
         let mut store = MockStore::new();
         let n_chunks = MOCK_ENTRIES.div_ceil(MOCK_CHUNK_SIZE);
         for i in 0..n_chunks {
@@ -272,8 +277,14 @@ mod tests {
             last_serial_id: MOCK_ENTRIES as i64,
             chunk_size:     MOCK_CHUNK_SIZE as i64,
         };
-        let mut chunks =
-            fetch_and_parse_chunks(&store, 1, "out".to_string(), last_snapshot_details).await;
+        let mut chunks = fetch_and_parse_chunks(
+            &store,
+            1,
+            "out".to_string(),
+            last_snapshot_details,
+            MOCK_PARTITION_SIZE,
+        )
+        .await;
         let mut count = 0;
         let mut ids: HashSet<usize> = HashSet::from_iter(1..MOCK_ENTRIES);
         while let Some(chunk) = chunks.next().await {
