@@ -75,7 +75,7 @@ env:
     value: "iris-mpc-db-exporter-store-node-0-stage-eu-north-1"
 
   - name: SMPC__DB_CHUNKS_FOLDER_NAME
-    value: "binary_output_2k_partitioned"
+    value: "binary_output_1k_partitioned"
 
   - name: SMPC__LOAD_CHUNKS_PARALLELISM
     value: "64"
