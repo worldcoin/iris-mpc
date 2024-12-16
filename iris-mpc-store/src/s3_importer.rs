@@ -319,8 +319,9 @@ mod tests {
         for i in 0..n_chunks {
             let start_serial_id = i * MOCK_CHUNK_SIZE + 1;
             let end_serial_id = min((i + 1) * MOCK_CHUNK_SIZE, MOCK_ENTRIES);
+            let partition_id = i / (MOCK_PARTITION_SIZE / MOCK_CHUNK_SIZE as i64) as usize;
             store.add_test_data(
-                &format!("out/{start_serial_id}.bin"),
+                &format!("out/{partition_id}/{start_serial_id}.bin"),
                 (start_serial_id..=end_serial_id).map(dummy_entry).collect(),
             );
         }
