@@ -4,8 +4,12 @@ use aws_sdk_s3::{config::Region, Client as S3Client};
 use bytes::Bytes;
 use futures::{stream, Stream, StreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
-use std::{cmp::min, mem, pin::Pin, time::Instant};
-use std::cmp::max;
+use std::{
+    cmp::{max, min},
+    mem,
+    pin::Pin,
+    time::Instant,
+};
 use tokio::task;
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
