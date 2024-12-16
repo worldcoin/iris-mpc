@@ -36,7 +36,7 @@ env:
     value: "true"
 
   - name: SMPC__DATABASE__LOAD_PARALLELISM
-    value: "80"
+    value: "4"
 
   - name: SMPC__AWS__REGION
     value: "eu-north-1"
@@ -84,11 +84,17 @@ env:
     value: "iris-mpc-db-exporter-store-node-0-prod-eu-north-1"
 
   - name: SMPC__DB_CHUNKS_FOLDER_NAME
-    value: "binary_output_2k"
+    value: "binary_output_200_partitioned"
 
   - name: SMPC__LOAD_CHUNKS_PARALLELISM
-    value: "32"
+    value: "64"
 
+  - name: SMPC__DB_CHUNKS_PARTITION_SIZE
+    value: "1000000"
+
+  - name: SMPC__LOAD_CHUNKS_S3_CLIENTS
+    value: "8"
+    
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
 
