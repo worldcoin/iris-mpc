@@ -127,8 +127,7 @@ pub(crate) async fn cross_mul(
     d2: Share<u32>,
     t2: Share<u32>,
 ) -> eyre::Result<Share<u32>> {
-    // Compute d1 * t2 - t2 * d1
-    let res_a = session.prf_as_mut().gen_zero_share() + &d1 * &t2 - &t1 * &d2;
+    let res_a = session.prf_as_mut().gen_zero_share() + &d2 * &t1 - &t2 * &d1;
 
     let network = session.network();
     let next_role = session.identity(&session.own_role()?.next(3))?;
@@ -496,7 +495,7 @@ mod tests {
         }
         // check first party output is equal to the expected result.
         let t = jobs.join_next().await.unwrap().unwrap();
-        assert_eq!(t, RingElement(u32::MAX - 1));
+        assert_eq!(t, RingElement(2));
     }
 
     async fn open_additive(session: &Session, x: Vec<RingElement<u16>>) -> eyre::Result<Vec<u16>> {
