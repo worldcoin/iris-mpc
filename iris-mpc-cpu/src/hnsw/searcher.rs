@@ -64,6 +64,32 @@ impl HnswParams {
         }
     }
 
+    /// Same as standard constructor but with an extra input for a non-standard
+    /// `layer_probability` parameter.
+    pub fn new_with_layer_probability(
+        ef_construction: usize,
+        ef_search: usize,
+        M: usize,
+        layer_probability: f64) -> Self
+    {
+        let M_arr = [M; N_PARAM_LAYERS];
+        let mut M_max_arr = [M; N_PARAM_LAYERS];
+        M_max_arr[0] = 2 * M;
+        let ef_constr_search_arr = [1usize; N_PARAM_LAYERS];
+        let ef_constr_insert_arr = [ef_construction; N_PARAM_LAYERS];
+        let mut ef_search_arr = [1usize; N_PARAM_LAYERS];
+        ef_search_arr[0] = ef_search;
+
+        Self {
+            M: M_arr,
+            M_max: M_max_arr,
+            ef_constr_search: ef_constr_search_arr,
+            ef_constr_insert: ef_constr_insert_arr,
+            ef_search: ef_search_arr,
+            layer_probability,
+        }
+    }
+
     /// Parameter configuration using fixed exploration factor for all layer
     /// search operations, both for insertion and for search.
     pub fn new_uniform(ef: usize, M: usize) -> Self {
@@ -219,7 +245,7 @@ impl HnswSearcher {
     /// given layer using depth-first graph traversal,  Terminates when `W`
     /// contains vectors which are the nearest to `q` among all traversed
     /// vertices and their neighbors.
-    #[instrument(skip(self, vector_store, graph_store))]
+    #[instrument(skip(self, vector_store, graph_store, W))]
     #[allow(non_snake_case)]
     async fn search_layer<V: VectorStore, G: GraphStore<V>>(
         &self,

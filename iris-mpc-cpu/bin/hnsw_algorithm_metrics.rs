@@ -5,15 +5,13 @@ use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{
-        searcher::{HnswParams, HnswSearcher},
         metrics::{
-            EventCounter, HnswEventCounterLayer, COMPARE_DIST_EVENT, EVAL_DIST_EVENT,
-            LAYER_SEARCH_EVENT, OPEN_NODE_EVENT,
-        },
+            EventCounter, HnswEventCounterLayer, VertexOpeningsLayer, COMPARE_DIST_EVENT, EVAL_DIST_EVENT, LAYER_SEARCH_EVENT, OPEN_NODE_EVENT
+        }, searcher::{HnswParams, HnswSearcher}
     }
 };
 use rand::SeedableRng;
-use std::{error::Error, sync::Arc};
+use std::{collections::HashMap, error::Error, sync::{Arc, Mutex}};
 use tracing_subscriber::prelude::*;
 
 #[derive(Parser)]
@@ -27,6 +25,7 @@ struct Args {
     ef_search:     usize,
     #[clap(default_value = "10000")]
     database_size: usize,
+    layer_probability: Option<f64>,
 }
 
 #[tokio::main]
@@ -37,15 +36,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let ef_constr = args.ef_constr;
     let ef_search = args.ef_search;
     let database_size = args.database_size;
+    let layer_probability = args.layer_probability;
 
-    let counters = configure_tracing();
+    let (counters, counter_map) = configure_tracing();
 
-    let mut rng = AesRng::seed_from_u64(0_u64);
+    let mut rng = AesRng::seed_from_u64(42_u64);
+    // let mut rng = rand::thread_rng();
     let mut vector = PlaintextStore::default();
     let mut graph = GraphMem::new();
-    let searcher = HnswSearcher {
-        params: HnswParams::new(M, ef_constr, ef_search),
+    let params = if let Some(p) = layer_probability {
+        HnswParams::new_with_layer_probability(ef_constr, ef_search, M, p)
+    } else {
+        HnswParams::new(ef_constr, ef_search, M)
     };
+    let searcher = HnswSearcher { params };
 
     for idx in 0..database_size {
         let raw_query = IrisCode::random_rng(&mut rng);
@@ -62,6 +66,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("Final counts:");
     print_stats(&counters, true);
+
+    println!("Layer search counts:");
+    for ((lc, ef), value) in counter_map.lock().unwrap().iter() {
+        println!("  lc={lc},ef={ef}: {value}");
+    }
 
     Ok(())
 }
@@ -85,14 +94,27 @@ fn print_stats(counters: &Arc<EventCounter>, verbose: bool) {
     }
 }
 
-fn configure_tracing() -> Arc<EventCounter> {
+fn configure_tracing() -> (Arc<EventCounter>, Arc<Mutex<HashMap<(usize, usize), usize>>>) {
     let counters = Arc::new(EventCounter::default());
 
-    let layer = HnswEventCounterLayer {
+    let counting_layer = HnswEventCounterLayer {
         counters: counters.clone(),
     };
-    // Set up how `tracing-subscriber` will deal with tracing data.
-    tracing_subscriber::registry().with(layer).init();
 
-    counters
+    let counter_map: Arc<Mutex<HashMap<(usize, usize), usize>>>
+        = Arc::new(Mutex::new(HashMap::new()));
+
+    let vertex_openings_layer = VertexOpeningsLayer {
+        counter_map: counter_map.clone()
+    };
+
+    tracing_subscriber::registry()
+        .with(counting_layer)
+        .with(vertex_openings_layer)
+        .init();
+
+    // tracing_subscriber::fmt()
+    //    .init();
+
+    (counters, counter_map)
 }

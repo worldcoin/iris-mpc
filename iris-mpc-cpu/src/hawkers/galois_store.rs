@@ -587,7 +587,7 @@ impl LocalNetAby3NgStoreProtocol {
 mod tests {
     use super::*;
     use crate::{
-        database_generators::generate_galois_iris_shares, hawkers::iris_searcher::HnswSearcher,
+        database_generators::generate_galois_iris_shares, hnsw::HnswSearcher,
     };
     use aes_prng::AesRng;
     use hawk_pack::graph_store::GraphMem;
