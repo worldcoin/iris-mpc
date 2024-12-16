@@ -54,7 +54,7 @@ env:
         name: application
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "120"
+    value: "300"
 
   - name: SMPC__HEARTBEAT_INTERVAL_SECS
     value: "2"
@@ -85,7 +85,7 @@ env:
 
   - name: SMPC__DB_CHUNKS_FOLDER_NAME
     value: "binary_output_2k"
-    
+
   - name: SMPC__LOAD_CHUNKS_PARALLELISM
     value: "32"
 
