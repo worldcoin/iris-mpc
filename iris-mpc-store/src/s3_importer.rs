@@ -1,10 +1,15 @@
 use crate::StoredIris;
 use async_trait::async_trait;
-use aws_sdk_s3::Client;
+use aws_sdk_s3::{config::Region, Client as S3Client};
 use bytes::Bytes;
 use futures::{stream, Stream, StreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
-use std::{mem, pin::Pin, sync::Arc, time::Instant};
+use std::{
+    cmp::{max, min},
+    mem,
+    pin::Pin,
+    time::Instant,
+};
 use tokio::task;
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -13,26 +18,40 @@ const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
 
 #[async_trait]
 pub trait ObjectStore: Send + Sync + 'static {
-    async fn get_object(&self, key: &str) -> eyre::Result<Bytes>;
+    async fn get_object(&self, key: &str, client_idx: usize) -> eyre::Result<Bytes>;
     async fn list_objects(&self, prefix: &str) -> eyre::Result<Vec<String>>;
 }
 
 pub struct S3Store {
-    client: Arc<Client>,
-    bucket: String,
+    clients:   Vec<S3Client>,
+    bucket:    String,
+    n_clients: usize,
 }
 
 impl S3Store {
-    pub fn new(client: Arc<Client>, bucket: String) -> Self {
-        Self { client, bucket }
+    pub async fn new(n_clients: usize, bucket: String) -> Self {
+        let client_futures: Vec<_> = (0..n_clients)
+            .map(|_| async move {
+                let region_provider = Region::new("eu-north-1");
+                let config = aws_config::from_env().region(region_provider).load().await;
+
+                S3Client::new(&config)
+            })
+            .collect();
+        let clients = futures::future::join_all(client_futures).await;
+        Self {
+            clients,
+            bucket,
+            n_clients,
+        }
     }
 }
 
 #[async_trait]
 impl ObjectStore for S3Store {
-    async fn get_object(&self, key: &str) -> eyre::Result<Bytes> {
-        let result = self
-            .client
+    async fn get_object(&self, key: &str, client_idx: usize) -> eyre::Result<Bytes> {
+        let client_idx_modulo = client_idx % self.n_clients;
+        let result = self.clients[client_idx_modulo]
             .get_object()
             .bucket(&self.bucket)
             .key(key)
@@ -48,8 +67,7 @@ impl ObjectStore for S3Store {
         let mut continuation_token = None;
 
         loop {
-            let mut request = self
-                .client
+            let mut request = self.clients[0]
                 .list_objects_v2()
                 .bucket(&self.bucket)
                 .prefix(prefix);
@@ -77,7 +95,7 @@ impl ObjectStore for S3Store {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct LastSnapshotDetails {
     pub timestamp:      i64,
     pub last_serial_id: i64,
@@ -126,18 +144,58 @@ pub async fn fetch_and_parse_chunks(
     concurrency: usize,
     prefix_name: String,
     last_snapshot_details: LastSnapshotDetails,
-) -> Pin<Box<dyn Stream<Item = eyre::Result<StoredIris>> + Send + '_>> {
+    partition_size: i64,
+) -> impl Stream<Item = eyre::Result<StoredIris>> + '_ {
     tracing::info!("Generating chunk files using: {:?}", last_snapshot_details);
-    let chunks: Vec<String> = (1..=last_snapshot_details.last_serial_id)
-        .step_by(last_snapshot_details.chunk_size as usize)
-        .map(|num| format!("{}/{}.bin", prefix_name, num))
-        .collect();
-    tracing::info!("Generated {} chunk names", chunks.len());
+    let n_partitions = last_snapshot_details
+        .last_serial_id
+        .div_ceil(partition_size);
+    let partition_concurrency = max(1, concurrency.div_ceil(n_partitions as usize));
+    let mut results = Vec::with_capacity(n_partitions as usize);
+    for partition in 0..n_partitions {
+        let stream = fetch_chunks_for_partition(
+            store,
+            prefix_name.clone(),
+            partition,
+            partition_size,
+            last_snapshot_details,
+            partition_concurrency,
+        )
+        .await;
+        results.push(stream);
+    }
 
+    stream::select_all(results)
+}
+
+async fn fetch_chunks_for_partition(
+    store: &impl ObjectStore,
+    prefix_name: String,
+    partition: i64,
+    partition_size: i64,
+    last_snapshot_details: LastSnapshotDetails,
+    concurrency: usize,
+) -> Pin<Box<dyn Stream<Item = eyre::Result<StoredIris>> + Send + '_>> {
+    let first_serial_id = partition * partition_size + 1;
+    let last_serial_id = min(
+        (partition + 1) * partition_size,
+        last_snapshot_details.last_serial_id,
+    );
+    tracing::info!(
+        "Partition {} will work on range [{},{}] with {} concurrency",
+        partition,
+        first_serial_id,
+        last_serial_id,
+        concurrency,
+    );
+    let chunks: Vec<String> = (first_serial_id..=last_serial_id)
+        .step_by(last_snapshot_details.chunk_size as usize)
+        .map(|num| format!("{}/{}/{}.bin", prefix_name, partition, num))
+        .collect();
     let result_stream = stream::iter(chunks)
         .map(move |chunk| async move {
             let mut now = Instant::now();
-            let result = store.get_object(&chunk).await?;
+            let result = store.get_object(&chunk, partition as usize).await?;
             let get_object_time = now.elapsed();
             tracing::info!("Got chunk object: {} in {:?}", chunk, get_object_time,);
 
@@ -206,7 +264,7 @@ mod tests {
 
     #[async_trait]
     impl ObjectStore for MockStore {
-        async fn get_object(&self, key: &str) -> eyre::Result<Bytes> {
+        async fn get_object(&self, key: &str, _: usize) -> eyre::Result<Bytes> {
             self.objects
                 .get(key)
                 .cloned()
@@ -255,13 +313,15 @@ mod tests {
     async fn test_fetch_and_parse_chunks() {
         const MOCK_ENTRIES: usize = 107;
         const MOCK_CHUNK_SIZE: usize = 10;
+        const MOCK_PARTITION_SIZE: i64 = 20;
         let mut store = MockStore::new();
         let n_chunks = MOCK_ENTRIES.div_ceil(MOCK_CHUNK_SIZE);
         for i in 0..n_chunks {
             let start_serial_id = i * MOCK_CHUNK_SIZE + 1;
             let end_serial_id = min((i + 1) * MOCK_CHUNK_SIZE, MOCK_ENTRIES);
+            let partition_id = i / (MOCK_PARTITION_SIZE / MOCK_CHUNK_SIZE as i64) as usize;
             store.add_test_data(
-                &format!("out/{start_serial_id}.bin"),
+                &format!("out/{partition_id}/{start_serial_id}.bin"),
                 (start_serial_id..=end_serial_id).map(dummy_entry).collect(),
             );
         }
@@ -272,8 +332,14 @@ mod tests {
             last_serial_id: MOCK_ENTRIES as i64,
             chunk_size:     MOCK_CHUNK_SIZE as i64,
         };
-        let mut chunks =
-            fetch_and_parse_chunks(&store, 1, "out".to_string(), last_snapshot_details).await;
+        let mut chunks = fetch_and_parse_chunks(
+            &store,
+            1,
+            "out".to_string(),
+            last_snapshot_details,
+            MOCK_PARTITION_SIZE,
+        )
+        .await;
         let mut count = 0;
         let mut ids: HashSet<usize> = HashSet::from_iter(1..MOCK_ENTRIES);
         while let Some(chunk) = chunks.next().await {

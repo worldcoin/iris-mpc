@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+aws-config.workspace = true
 aws-sdk-s3.workspace = true
 bytes.workspace = true
 async-trait.workspace = true
