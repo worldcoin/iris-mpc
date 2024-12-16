@@ -66,7 +66,7 @@ impl ServerActorHandle {
     }
 }
 
-const DB_CHUNK_SIZE: usize = 1 << 14;
+const DB_CHUNK_SIZE: usize = 1 << 15;
 const KDF_SALT: &str = "111a1a93518f670e9bb0c2c68888e2beb9406d4c4ed571dc77b801e676ae3091"; // Random 32 byte salt
 const SUPERMATCH_THRESHOLD: usize = 4_000;
 
