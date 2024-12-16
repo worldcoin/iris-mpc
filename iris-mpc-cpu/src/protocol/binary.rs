@@ -144,21 +144,24 @@ pub(crate) async fn transposed_pack_and(
     x1: Vec<VecShare<u64>>,
     x2: Vec<VecShare<u64>>,
 ) -> Result<Vec<VecShare<u64>>, Error> {
-    let res_len = x1.len();
-    let x1 = x1.into_iter().flatten().collect::<Vec<_>>();
-    let x2 = x2.into_iter().flatten().collect::<Vec<_>>();
-    let x1 = VecShare::new_vec(x1);
-    let x2 = VecShare::new_vec(x2);
-    let shares_a = and_many_send(session, x1.as_slice(), x2.as_slice()).await?;
-    let shares_b = and_many_receive(session).await?;
+    if x1.len() != x2.len() {
+        return Err(eyre!("Inputs have different length"));
+    }
+    let chunk_sizes = x1.iter().map(VecShare::len).collect::<Vec<_>>();
+    let chunk_sizes2 = x2.iter().map(VecShare::len).collect::<Vec<_>>();
+    if chunk_sizes != chunk_sizes2 {
+        return Err(eyre!("VecShare lengths are not equal"));
+    }
 
-    let mut res = Vec::with_capacity(res_len);
-    let chunk_size = x1.len() / res_len;
-    let shares_a = shares_a.into_iter().chunks(chunk_size);
-    let shares_b = shares_b.into_iter().chunks(chunk_size);
-    for (a, b) in shares_a.into_iter().zip(shares_b.into_iter()) {
-        let a = a.collect::<Vec<_>>();
-        let b = b.collect::<Vec<_>>();
+    let x1 = VecShare::flatten(x1);
+    let x2 = VecShare::flatten(x2);
+    let mut shares_a = and_many_send(session, x1.as_slice(), x2.as_slice()).await?;
+    let mut shares_b = and_many_receive(session).await?;
+
+    let mut res = Vec::with_capacity(chunk_sizes.len());
+    for l in chunk_sizes {
+        let a = shares_a.drain(..l).collect();
+        let b = shares_b.drain(..l).collect();
         res.push(VecShare::from_ab(a, b));
     }
     Ok(res)
