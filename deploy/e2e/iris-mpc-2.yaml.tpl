@@ -196,6 +196,7 @@ iris-mpc-2:
           fieldRef:
             fieldPath: status.hostIP
     configMap:
+      name: "iris-mpc-2-init"
       init.sh: |
         #!/usr/bin/env bash
 
