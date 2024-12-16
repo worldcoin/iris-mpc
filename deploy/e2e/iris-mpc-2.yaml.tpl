@@ -1,8 +1,8 @@
 iris-mpc-2:
   fullnameOverride: "iris-mpc-2"
-  image: "ghcr.io/worldcoin/iris-mpc:v0.12.2"
+  image: "ghcr.io/worldcoin/iris-mpc:$IRIS_MPC_IMAGE_TAG"
 
-  environment: e2e
+  environment: $ENV
   replicaCount: 1
 
   strategy:
@@ -93,13 +93,13 @@ iris-mpc-2:
       value: "eth0"
 
     - name: NCCL_COMM_ID
-      value: "iris-mpc-node.1.e2e.smpcv2.worldcoin.dev:4000"
+      value: "iris-mpc-node.1.$ENV.smpcv2.worldcoin.dev:4000"
 
     - name: SMPC__ENVIRONMENT
-      value: "e2e"
+      value: "$ENV"
 
     - name: SMPC__SERVICE__SERVICE_NAME
-      value: "smpcv2-server-e2e"
+      value: "smpcv2-server-$ENV"
 
     - name: SMPC__DATABASE__URL
       valueFrom:
@@ -173,16 +173,16 @@ iris-mpc-2:
       value: "256"
 
     - name: SMPC__SERVICE__METRICS__PREFIX
-      value: "smpcv2-e2e-2"
+      value: "smpcv2-$ENV-2"
 
     - name: SMPC__RETURN_PARTIAL_RESULTS
       value: "true"
 
     - name: SMPC__NODE_HOSTNAMES
-      value: '["iris-mpc-node.1.e2e.smpcv2.worldcoin.dev","iris-mpc-node.2.e2e.smpcv2.worldcoin.dev","iris-mpc-node.3.e2e.smpcv2.worldcoin.dev"]'
+      value: '["iris-mpc-node.1.$ENV.smpcv2.worldcoin.dev","iris-mpc-node.2.$ENV.smpcv2.worldcoin.dev","iris-mpc-node.3.$ENV.smpcv2.worldcoin.dev"]'
 
     - name: SMPC__IMAGE_NAME
-      value: "ghcr.io/worldcoin/iris-mpc:v0.12.2"
+      value: "ghcr.io/worldcoin/iris-mpc:$IRIS_MPC_IMAGE_TAG"
 
   initContainer:
     enabled: true
@@ -201,7 +201,7 @@ iris-mpc-2:
         #!/usr/bin/env bash
 
         # Set up environment variables
-        HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$PARTY_ID".e2e.smpcv2.worldcoin.dev --query "HostedZones[].Id" --output text)
+        HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$PARTY_ID".$ENV.smpcv2.worldcoin.dev --query "HostedZones[].Id" --output text)
 
         # Generate the JSON content in memory
         BATCH_JSON=$(cat <<EOF
@@ -211,7 +211,7 @@ iris-mpc-2:
             {
               "Action": "UPSERT",
               "ResourceRecordSet": {
-                "Name": "iris-mpc-node.$PARTY_ID.e2e.smpcv2.worldcoin.dev",
+                "Name": "iris-mpc-node.$PARTY_ID.$ENV.smpcv2.worldcoin.dev",
                 "TTL": 5,
                 "Type": "A",
                 "ResourceRecords": [{
