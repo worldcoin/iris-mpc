@@ -276,7 +276,7 @@ impl DistanceComparator {
 
     pub fn fetch_all_match_ids(
         &self,
-        match_counters: Vec<Vec<u32>>,
+        match_counters: &[Vec<u32>],
         matches: &[CudaSlice<u32>],
     ) -> Vec<Vec<u32>> {
         let mut results = vec![];
