@@ -5,6 +5,7 @@ use bytes::Bytes;
 use futures::{stream, Stream, StreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use std::{cmp::min, mem, pin::Pin, time::Instant};
+use std::cmp::max;
 use tokio::task;
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -145,10 +146,9 @@ pub async fn fetch_and_parse_chunks(
     let n_partitions = last_snapshot_details
         .last_serial_id
         .div_ceil(partition_size);
-    let partition_concurrency = concurrency.div_ceil(n_partitions as usize);
+    let partition_concurrency = max(1, concurrency.div_ceil(n_partitions as usize));
     let mut results = Vec::with_capacity(n_partitions as usize);
     for partition in 0..n_partitions {
-        tracing::info!("Initiating stream for partition: {}", partition);
         let stream = fetch_chunks_for_partition(
             store,
             prefix_name.clone(),
@@ -159,7 +159,6 @@ pub async fn fetch_and_parse_chunks(
         )
         .await;
         results.push(stream);
-        tracing::info!("Initiated stream for partition: {}", partition);
     }
 
     stream::select_all(results)
