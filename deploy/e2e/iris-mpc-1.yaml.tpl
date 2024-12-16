@@ -56,9 +56,9 @@ iris-mpc-1:
   hostNetwork: false
 
   tolerations:
-    - key: "dedicated"
+    - key: "gpuGroup"
       operator: "Equal"
-      value: "gpuGroup"
+      value: "dedicated"
       effect: "NoSchedule"
 
   keelPolling:
