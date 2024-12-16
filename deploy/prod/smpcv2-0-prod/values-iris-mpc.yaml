@@ -87,7 +87,7 @@ env:
     value: "binary_output_200_partitioned"
 
   - name: SMPC__LOAD_CHUNKS_PARALLELISM
-    value: "128"
+    value: "192"
 
   - name: SMPC__DB_CHUNKS_PARTITION_SIZE
     value: "1000000"
