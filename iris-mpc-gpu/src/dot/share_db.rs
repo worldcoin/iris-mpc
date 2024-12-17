@@ -469,6 +469,7 @@ impl ShareDB {
         buffers: &DBChunkBuffers,
         chunk_sizes: &[usize],
         offset: &[usize],
+        db_sizes: &[usize],
         streams: &[CudaStream],
     ) {
         for idx in 0..self.device_manager.device_count() {
@@ -476,12 +477,18 @@ impl ShareDB {
             device.bind_to_thread().unwrap();
 
             tracing::info!(
-                "Copying db chunk to device {} with offset {} and size {} and code length {}",
+                "Copying db chunk to device {} with offset {} and size {} and code length {} and \
+                 db size {}",
                 idx,
                 offset[idx],
                 chunk_sizes[idx],
-                self.code_length
+                self.code_length,
+                db_sizes[idx]
             );
+
+            if offset[idx] >= db_sizes[idx] || offset[idx] + chunk_sizes[idx] > db_sizes[idx] {
+                continue;
+            }
 
             unsafe {
                 cudarc::driver::sys::lib()

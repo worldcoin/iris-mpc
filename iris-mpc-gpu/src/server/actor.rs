@@ -1131,6 +1131,7 @@ impl ServerActor {
             &self.code_chunk_buffers[0],
             &chunk_sizes(0),
             &vec![0; self.device_manager.device_count()],
+            &self.current_db_sizes,
             &self.streams[0],
         );
         self.masks_engine.prefetch_db_chunk(
@@ -1138,6 +1139,7 @@ impl ServerActor {
             &self.mask_chunk_buffers[0],
             &chunk_sizes(0),
             &vec![0; self.device_manager.device_count()],
+            &self.current_db_sizes,
             &self.streams[0],
         );
 
@@ -1183,6 +1185,7 @@ impl ServerActor {
                 &self.code_chunk_buffers[(db_chunk_idx + 1) % 2],
                 &next_chunk_size,
                 &chunk_size.iter().map(|s| offset + s).collect::<Vec<_>>(),
+                &self.current_db_sizes,
                 next_request_streams,
             );
             self.masks_engine.prefetch_db_chunk(
@@ -1190,6 +1193,7 @@ impl ServerActor {
                 &self.mask_chunk_buffers[(db_chunk_idx + 1) % 2],
                 &next_chunk_size,
                 &chunk_size.iter().map(|s| offset + s).collect::<Vec<_>>(),
+                &self.current_db_sizes,
                 next_request_streams,
             );
 
