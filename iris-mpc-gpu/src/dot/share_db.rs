@@ -20,8 +20,8 @@ use cudarc::{
         CudaBlas,
     },
     driver::{
-        result::{self, malloc_async, malloc_managed},
-        sys::{CUdeviceptr, CUmemAttach_flags},
+        result::{self, malloc_async, malloc_sync},
+        sys::CUdeviceptr,
         CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr, DeviceSlice, LaunchAsync,
     },
     nccl,
@@ -248,16 +248,8 @@ impl ShareDB {
                     (
                         StreamAwareCudaSlice::from(device.alloc(max_size).unwrap()),
                         (
-                            malloc_managed(
-                                max_size * self.code_length,
-                                CUmemAttach_flags::CU_MEM_ATTACH_HOST,
-                            )
-                            .unwrap(),
-                            malloc_managed(
-                                max_size * self.code_length,
-                                CUmemAttach_flags::CU_MEM_ATTACH_HOST,
-                            )
-                            .unwrap(),
+                            malloc_sync(max_size * self.code_length).unwrap(),
+                            malloc_sync(max_size * self.code_length).unwrap(),
                         ),
                     ),
                 )
@@ -490,9 +482,10 @@ impl ShareDB {
 
             unsafe {
                 cudarc::driver::sys::lib()
-                    .cuMemcpyDtoDAsync_v2(
+                    .cuMemcpyHtoDAsync_v2(
                         *buffers.limb_0[idx].device_ptr(),
-                        (db.code_gr.limb_0[idx] as usize + offset[idx] * self.code_length) as u64,
+                        (db.code_gr.limb_0[idx] as usize + offset[idx] * self.code_length)
+                            as *mut _,
                         chunk_sizes[idx] * self.code_length,
                         streams[idx].stream,
                     )
@@ -500,9 +493,10 @@ impl ShareDB {
                     .unwrap();
 
                 cudarc::driver::sys::lib()
-                    .cuMemcpyDtoDAsync_v2(
+                    .cuMemcpyHtoDAsync_v2(
                         *buffers.limb_1[idx].device_ptr(),
-                        (db.code_gr.limb_1[idx] as usize + offset[idx] * self.code_length) as u64,
+                        (db.code_gr.limb_1[idx] as usize + offset[idx] * self.code_length)
+                            as *mut _,
                         chunk_sizes[idx] * self.code_length,
                         streams[idx].stream,
                     )

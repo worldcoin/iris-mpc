@@ -323,10 +323,8 @@ impl ServerActor {
         let query_db_size = vec![n_queries; device_manager.device_count()];
         let current_db_sizes = vec![0; device_manager.device_count()];
 
-        let code_chunk_buffers =
-            vec![codes_engine.alloc_db_chunk_buffer(DB_CHUNK_SIZE); device_manager.device_count()];
-        let mask_chunk_buffers =
-            vec![masks_engine.alloc_db_chunk_buffer(DB_CHUNK_SIZE); device_manager.device_count()];
+        let code_chunk_buffers = vec![codes_engine.alloc_db_chunk_buffer(DB_CHUNK_SIZE); 2];
+        let mask_chunk_buffers = vec![masks_engine.alloc_db_chunk_buffer(DB_CHUNK_SIZE); 2];
 
         for dev in device_manager.devices() {
             dev.synchronize().unwrap();
