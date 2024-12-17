@@ -114,6 +114,12 @@ pub struct SlicedProcessedDatabase {
     pub code_sums_gr: CudaVec2DSlicerU32,
 }
 
+#[derive(Clone)]
+pub struct DBChunkBuffers {
+    pub limb_0: Vec<CudaSlice<u8>>,
+    pub limb_1: Vec<CudaSlice<u8>>,
+}
+
 pub struct ShareDB {
     peer_id:               usize,
     is_remote:             bool,
@@ -244,12 +250,12 @@ impl ShareDB {
                         (
                             malloc_managed(
                                 max_size * self.code_length,
-                                CUmemAttach_flags::CU_MEM_ATTACH_GLOBAL,
+                                CUmemAttach_flags::CU_MEM_ATTACH_HOST,
                             )
                             .unwrap(),
                             malloc_managed(
                                 max_size * self.code_length,
-                                CUmemAttach_flags::CU_MEM_ATTACH_GLOBAL,
+                                CUmemAttach_flags::CU_MEM_ATTACH_HOST,
                             )
                             .unwrap(),
                         ),
@@ -447,6 +453,56 @@ impl ShareDB {
         CudaVec2DSlicer {
             limb_0: query0_sums,
             limb_1: query1_sums,
+        }
+    }
+
+    pub fn alloc_db_chunk_buffer(&self, max_chunk_size: usize) -> DBChunkBuffers {
+        let mut limb_0 = vec![];
+        let mut limb_1 = vec![];
+        for device in self.device_manager.devices() {
+            unsafe {
+                limb_0.push(device.alloc(max_chunk_size * self.code_length).unwrap());
+                limb_1.push(device.alloc(max_chunk_size * self.code_length).unwrap());
+            }
+        }
+        DBChunkBuffers { limb_0, limb_1 }
+    }
+
+    pub fn prefetch_db_chunk(
+        &self,
+        db: &SlicedProcessedDatabase,
+        buffers: &DBChunkBuffers,
+        chunk_sizes: &[usize],
+        offset: &[usize],
+        streams: &[CudaStream],
+    ) {
+        for idx in 0..self.device_manager.device_count() {
+            let device = self.device_manager.device(idx);
+            device.bind_to_thread().unwrap();
+
+            unsafe {
+                cudarc::driver::sys::lib()
+                    .cuMemcpyHtoDAsync_v2(
+                        *buffers.limb_0[idx].device_ptr(),
+                        (db.code_gr.limb_0[idx] as usize + offset[idx] * self.code_length)
+                            as *mut _,
+                        chunk_sizes[idx] * self.code_length,
+                        streams[idx].stream,
+                    )
+                    .result()
+                    .unwrap();
+
+                cudarc::driver::sys::lib()
+                    .cuMemcpyHtoDAsync_v2(
+                        *buffers.limb_1[idx].device_ptr(),
+                        (db.code_gr.limb_1[idx] as usize + offset[idx] * self.code_length)
+                            as *mut _,
+                        chunk_sizes[idx] * self.code_length,
+                        streams[idx].stream,
+                    )
+                    .result()
+                    .unwrap();
+            }
         }
     }
 

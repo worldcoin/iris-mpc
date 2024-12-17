@@ -2,14 +2,16 @@ use super::{BatchQuery, Eye, ServerJob, ServerJobResult};
 use crate::{
     dot::{
         distance_comparator::DistanceComparator,
-        share_db::{preprocess_query, ShareDB, SlicedProcessedDatabase},
+        share_db::{preprocess_query, DBChunkBuffers, ShareDB, SlicedProcessedDatabase},
         IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS,
     },
     helpers::{
         self,
         comm::NcclComm,
         device_manager::DeviceManager,
-        query_processor::{CompactQuery, DeviceCompactQuery, DeviceCompactSums},
+        query_processor::{
+            CompactQuery, CudaVec2DSlicerRawPointer, DeviceCompactQuery, DeviceCompactSums,
+        },
     },
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
@@ -103,6 +105,8 @@ pub struct ServerActor {
     max_db_size:            usize,
     return_partial_results: bool,
     disable_persistence:    bool,
+    code_chunk_buffers:     Vec<DBChunkBuffers>,
+    mask_chunk_buffers:     Vec<DBChunkBuffers>,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -317,8 +321,12 @@ impl ServerActor {
         let batch_match_list_right = distance_comparator.prepare_db_match_list(n_queries);
 
         let query_db_size = vec![n_queries; device_manager.device_count()];
-
         let current_db_sizes = vec![0; device_manager.device_count()];
+
+        let code_chunk_buffers =
+            vec![codes_engine.alloc_db_chunk_buffer(DB_CHUNK_SIZE); device_manager.device_count()];
+        let mask_chunk_buffers =
+            vec![masks_engine.alloc_db_chunk_buffer(DB_CHUNK_SIZE); device_manager.device_count()];
 
         for dev in device_manager.devices() {
             dev.synchronize().unwrap();
@@ -355,6 +363,8 @@ impl ServerActor {
             max_db_size,
             return_partial_results,
             disable_persistence,
+            code_chunk_buffers,
+            mask_chunk_buffers,
         })
     }
 
@@ -1111,6 +1121,28 @@ impl ServerActor {
         let mut current_phase2_event = self.device_manager.create_events();
         let mut next_phase2_event = self.device_manager.create_events();
 
+        let chunk_sizes = |chunk_idx: usize| {
+            self.current_db_sizes
+                .iter()
+                .map(|s| (s - DB_CHUNK_SIZE * chunk_idx).clamp(1, DB_CHUNK_SIZE))
+                .collect::<Vec<_>>()
+        };
+
+        self.codes_engine.prefetch_db_chunk(
+            code_db_slices,
+            &self.code_chunk_buffers[0],
+            &chunk_sizes(0),
+            &vec![0; self.device_manager.device_count()],
+            &self.streams[0],
+        );
+        self.masks_engine.prefetch_db_chunk(
+            mask_db_slices,
+            &self.mask_chunk_buffers[0],
+            &chunk_sizes(0),
+            &vec![0; self.device_manager.device_count()],
+            &self.streams[0],
+        );
+
         // ---- START DATABASE DEDUP ----
         tracing::info!(party_id = self.party_id, "Start DB deduplication");
         let ignore_device_results: Vec<bool> =
@@ -1118,14 +1150,12 @@ impl ServerActor {
         let mut db_chunk_idx = 0;
         loop {
             let request_streams = &self.streams[db_chunk_idx % 2];
+            let next_request_streams = &self.streams[(db_chunk_idx + 1) % 2];
             let request_cublas_handles = &self.cublas_handles[db_chunk_idx % 2];
 
             let offset = db_chunk_idx * DB_CHUNK_SIZE;
-            let chunk_size = self
-                .current_db_sizes
-                .iter()
-                .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(1, DB_CHUNK_SIZE))
-                .collect::<Vec<_>>();
+            let chunk_size = chunk_sizes(db_chunk_idx);
+            let next_chunk_size = chunk_sizes(db_chunk_idx + 1);
 
             // We need to pad the chunk size for two reasons:
             // 1. Chunk size needs to be a multiple of 4, because the underlying
@@ -1149,6 +1179,22 @@ impl ServerActor {
                     .record_event(request_streams, &current_phase2_event);
             }
 
+            // Prefetch next chunk
+            self.codes_engine.prefetch_db_chunk(
+                code_db_slices,
+                &self.code_chunk_buffers[(db_chunk_idx + 1) % 2],
+                &next_chunk_size,
+                &chunk_size.iter().map(|s| offset + s).collect::<Vec<_>>(),
+                next_request_streams,
+            );
+            self.masks_engine.prefetch_db_chunk(
+                mask_db_slices,
+                &self.mask_chunk_buffers[(db_chunk_idx + 1) % 2],
+                &next_chunk_size,
+                &chunk_size.iter().map(|s| offset + s).collect::<Vec<_>>(),
+                next_request_streams,
+            );
+
             self.device_manager
                 .await_event(request_streams, &current_dot_event);
 
@@ -1157,10 +1203,10 @@ impl ServerActor {
                 compact_device_queries.dot_products_against_db(
                     &mut self.codes_engine,
                     &mut self.masks_engine,
-                    code_db_slices,
-                    mask_db_slices,
+                    &CudaVec2DSlicerRawPointer::from(&self.code_chunk_buffers[db_chunk_idx % 2]),
+                    &CudaVec2DSlicerRawPointer::from(&self.mask_chunk_buffers[db_chunk_idx % 2]),
                     &dot_chunk_size,
-                    offset,
+                    0,
                     request_streams,
                     request_cublas_handles,
                 );
@@ -1190,9 +1236,6 @@ impl ServerActor {
 
             self.device_manager
                 .record_event(request_streams, &next_dot_event);
-
-            self.device_manager
-                .await_event(request_streams, &next_dot_event);
 
             record_stream_time!(
                 &self.device_manager,
