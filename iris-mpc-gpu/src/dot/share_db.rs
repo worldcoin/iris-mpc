@@ -20,8 +20,8 @@ use cudarc::{
         CudaBlas,
     },
     driver::{
-        result::{self, malloc_async, malloc_managed},
-        sys::{CUdeviceptr, CUmemAttach_flags},
+        result::{self, malloc_async},
+        sys::CUdeviceptr,
         CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr, DeviceSlice, LaunchAsync,
     },
     nccl,
@@ -243,22 +243,17 @@ impl ShareDB {
             .devices()
             .iter()
             .map(|device| unsafe {
+                let mut host_mem0: *mut c_void = std::ptr::null_mut();
+                let mut host_mem1: *mut c_void = std::ptr::null_mut();
+                let _ = cudarc::driver::sys::lib()
+                    .cuMemAllocHost_v2(&mut host_mem0, max_size * self.code_length);
+                let _ = cudarc::driver::sys::lib()
+                    .cuMemAllocHost_v2(&mut host_mem1, max_size * self.code_length);
                 (
                     StreamAwareCudaSlice::from(device.alloc(max_size).unwrap()),
                     (
                         StreamAwareCudaSlice::from(device.alloc(max_size).unwrap()),
-                        (
-                            malloc_managed(
-                                max_size * self.code_length,
-                                CUmemAttach_flags::CU_MEM_ATTACH_HOST,
-                            )
-                            .unwrap(),
-                            malloc_managed(
-                                max_size * self.code_length,
-                                CUmemAttach_flags::CU_MEM_ATTACH_HOST,
-                            )
-                            .unwrap(),
-                        ),
+                        (host_mem0 as u64, host_mem1 as u64),
                     ),
                 )
             })
@@ -490,9 +485,10 @@ impl ShareDB {
 
             unsafe {
                 cudarc::driver::sys::lib()
-                    .cuMemcpyDtoDAsync_v2(
+                    .cuMemcpyHtoDAsync_v2(
                         *buffers.limb_0[idx].device_ptr(),
-                        (db.code_gr.limb_0[idx] as usize + offset[idx] * self.code_length) as u64,
+                        (db.code_gr.limb_0[idx] as usize + offset[idx] * self.code_length)
+                            as *mut _,
                         chunk_sizes[idx] * self.code_length,
                         streams[idx].stream,
                     )
@@ -500,9 +496,10 @@ impl ShareDB {
                     .unwrap();
 
                 cudarc::driver::sys::lib()
-                    .cuMemcpyDtoDAsync_v2(
+                    .cuMemcpyHtoDAsync_v2(
                         *buffers.limb_1[idx].device_ptr(),
-                        (db.code_gr.limb_1[idx] as usize + offset[idx] * self.code_length) as u64,
+                        (db.code_gr.limb_1[idx] as usize + offset[idx] * self.code_length)
+                            as *mut _,
                         chunk_sizes[idx] * self.code_length,
                         streams[idx].stream,
                     )
