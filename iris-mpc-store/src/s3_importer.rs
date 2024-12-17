@@ -10,11 +10,6 @@ const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
     + mem::size_of::<u32>(); // 75 KB
 
-// Size of each exported chunk. This is only used to allocate the vec for
-// storing all records in a chunk. If the chunk is larger than this specified
-// size, it will only lead to more allocations.
-const CHUNK_SIZE: usize = 1 << 30; // 1 GB
-
 #[async_trait]
 pub trait ObjectStore: Send + Sync + 'static {
     async fn get_object(&self, key: &str) -> eyre::Result<ByteStream>;
@@ -140,7 +135,7 @@ pub async fn fetch_and_parse_chunks(
     let result_stream = stream::iter(chunks)
         .map(move |chunk| async move {
             let mut object_stream = store.get_object(&chunk).await?.into_async_read();
-            let mut records = Vec::with_capacity(CHUNK_SIZE / SINGLE_ELEMENT_SIZE);
+            let mut records = Vec::with_capacity(last_snapshot_details.chunk_size as usize);
             let mut buf = vec![0u8; SINGLE_ELEMENT_SIZE];
             loop {
                 match object_stream.read_exact(&mut buf).await {
