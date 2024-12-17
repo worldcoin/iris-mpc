@@ -3,7 +3,15 @@ use async_trait::async_trait;
 use aws_sdk_s3::{primitives::ByteStream, Client};
 use futures::{stream, Stream, StreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
-use std::{mem, pin::Pin, sync::Arc};
+use std::{
+    mem,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
 use tokio::io::AsyncReadExt;
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -131,24 +139,32 @@ pub async fn fetch_and_parse_chunks(
         .map(|num| format!("{}/{}.bin", prefix_name, num))
         .collect();
     tracing::info!("Generated {} chunk names", chunks.len());
+    let total_bytes = Arc::new(AtomicUsize::new(0));
+    let now = Instant::now();
 
     let result_stream = stream::iter(chunks)
-        .map(move |chunk| async move {
-            let mut object_stream = store.get_object(&chunk).await?.into_async_read();
-            let mut records = Vec::with_capacity(last_snapshot_details.chunk_size as usize);
-            let mut buf = vec![0u8; SINGLE_ELEMENT_SIZE];
-            loop {
-                match object_stream.read_exact(&mut buf).await {
-                    Ok(_) => {
-                        let iris = StoredIris::from_bytes(&buf);
-                        records.push(iris);
+        .map({
+            let total_bytes_clone = total_bytes.clone();
+            move |chunk| {
+                let counter = total_bytes_clone.clone();
+                async move {
+                    let mut object_stream = store.get_object(&chunk).await?.into_async_read();
+                    let mut records = Vec::with_capacity(last_snapshot_details.chunk_size as usize);
+                    let mut buf = vec![0u8; SINGLE_ELEMENT_SIZE];
+                    loop {
+                        match object_stream.read_exact(&mut buf).await {
+                            Ok(_) => {
+                                let iris = StoredIris::from_bytes(&buf);
+                                records.push(iris);
+                                counter.fetch_add(SINGLE_ELEMENT_SIZE, Ordering::Relaxed);
+                            }
+                            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                            Err(e) => return Err(e.into()),
+                        }
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-                    Err(e) => return Err(e.into()),
+                    Ok::<_, eyre::Error>(stream::iter(records))
                 }
             }
-
-            Ok::<_, eyre::Error>(stream::iter(records))
         })
         .buffer_unordered(concurrency)
         .flat_map(|result| match result {
@@ -156,6 +172,11 @@ pub async fn fetch_and_parse_chunks(
             Err(e) => stream::once(async move { Err(e) }).boxed(),
         })
         .boxed();
+
+    tracing::info!(
+        "Overall download throughput: {:.2} Gbps",
+        total_bytes.load(Ordering::Relaxed) as f32 * 8.0 / 1e9 / now.elapsed().as_secs_f32()
+    );
 
     result_stream
 }
