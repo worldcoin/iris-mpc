@@ -1166,11 +1166,6 @@ impl ServerActor {
                 );
             });
 
-            // DEBUG
-            for device in self.device_manager.devices() {
-                device.synchronize().unwrap();
-            }
-
             // wait for the exchange result buffers to be ready
             self.device_manager
                 .await_event(request_streams, &current_exchange_event);
@@ -1195,6 +1190,9 @@ impl ServerActor {
 
             self.device_manager
                 .record_event(request_streams, &next_dot_event);
+
+            self.device_manager
+                .await_event(request_streams, &next_dot_event);
 
             record_stream_time!(
                 &self.device_manager,
