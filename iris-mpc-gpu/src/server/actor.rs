@@ -1166,6 +1166,11 @@ impl ServerActor {
                 );
             });
 
+            // DEBUG
+            for device in self.device_manager.devices() {
+                device.synchronize().unwrap();
+            }
+
             // wait for the exchange result buffers to be ready
             self.device_manager
                 .await_event(request_streams, &current_exchange_event);
