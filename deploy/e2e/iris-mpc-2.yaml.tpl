@@ -35,6 +35,11 @@ iris-mpc-2:
       path: /ready
       port: health
 
+  podSecurityContext:
+    runAsNonRoot: false
+    seccompProfile:
+      type: RuntimeDefault
+
   resources:
     limits:
       cpu: 31
