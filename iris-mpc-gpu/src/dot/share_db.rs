@@ -490,10 +490,9 @@ impl ShareDB {
 
             unsafe {
                 cudarc::driver::sys::lib()
-                    .cuMemcpyHtoDAsync_v2(
+                    .cuMemcpyDtoDAsync_v2(
                         *buffers.limb_0[idx].device_ptr(),
-                        (db.code_gr.limb_0[idx] as usize + offset[idx] * self.code_length)
-                            as *mut _,
+                        (db.code_gr.limb_0[idx] as usize + offset[idx] * self.code_length) as u64,
                         chunk_sizes[idx] * self.code_length,
                         streams[idx].stream,
                     )
@@ -501,10 +500,9 @@ impl ShareDB {
                     .unwrap();
 
                 cudarc::driver::sys::lib()
-                    .cuMemcpyHtoDAsync_v2(
+                    .cuMemcpyDtoDAsync_v2(
                         *buffers.limb_1[idx].device_ptr(),
-                        (db.code_gr.limb_1[idx] as usize + offset[idx] * self.code_length)
-                            as *mut _,
+                        (db.code_gr.limb_1[idx] as usize + offset[idx] * self.code_length) as u64,
                         chunk_sizes[idx] * self.code_length,
                         streams[idx].stream,
                     )
