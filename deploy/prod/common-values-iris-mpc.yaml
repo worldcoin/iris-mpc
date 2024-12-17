@@ -29,7 +29,7 @@ readinessProbe:
 
 startupProbe:
   initialDelaySeconds: 900
-  failureThreshold: 40
+  failureThreshold: 50
   periodSeconds: 30
   httpGet:
     path: /ready
