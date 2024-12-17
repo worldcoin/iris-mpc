@@ -480,6 +480,14 @@ impl ShareDB {
             let device = self.device_manager.device(idx);
             device.bind_to_thread().unwrap();
 
+            tracing::info!(
+                "Copying db chunk to device {} with offset {} and size {} and code length {}",
+                idx,
+                offset[idx],
+                chunk_sizes[idx],
+                self.code_length
+            );
+
             unsafe {
                 cudarc::driver::sys::lib()
                     .cuMemcpyHtoDAsync_v2(
