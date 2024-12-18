@@ -118,7 +118,7 @@ pub async fn batch_signed_lift_vec(
     Ok(batch_signed_lift(session, pre_lift).await?.inner())
 }
 
-/// Computes [D1 * T2; D2 * T1]
+/// Computes D2 * T1 - T2 * D1
 /// Assumes that the input shares are originally 16-bit and lifted to u32.
 pub(crate) async fn cross_mul(
     session: &mut Session,
@@ -144,7 +144,7 @@ pub(crate) async fn cross_mul(
     let serialized_reply = network.receive(prev_role, &session.session_id()).await;
     let res_b = match NetworkValue::from_network(serialized_reply) {
         Ok(NetworkValue::RingElement32(element)) => element,
-        _ => return Err(eyre!("Could not deserialize VecRing16")),
+        _ => return Err(eyre!("Could not deserialize RingElement32")),
     };
 
     Ok(Share::new(res_a, res_b))
