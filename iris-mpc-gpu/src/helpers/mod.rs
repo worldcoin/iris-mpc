@@ -104,6 +104,11 @@ pub unsafe fn dtod_at_offset(
     }
 }
 
+/// Copy a slice from device to host with respective offsets.
+/// # Safety
+///
+/// The caller must ensure that the `dst` and `src` pointers are valid
+/// with the respective offsets
 pub unsafe fn dtoh_at_offset(
     dst: u64,
     dst_offset: usize,
