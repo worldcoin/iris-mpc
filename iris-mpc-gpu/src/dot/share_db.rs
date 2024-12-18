@@ -476,16 +476,6 @@ impl ShareDB {
             let device = self.device_manager.device(idx);
             device.bind_to_thread().unwrap();
 
-            tracing::info!(
-                "Copying db chunk to device {} with offset {} and size {} and code length {} and \
-                 db size {}",
-                idx,
-                offset[idx],
-                chunk_sizes[idx],
-                self.code_length,
-                db_sizes[idx]
-            );
-
             if offset[idx] >= db_sizes[idx] || offset[idx] + chunk_sizes[idx] > db_sizes[idx] {
                 continue;
             }
