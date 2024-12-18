@@ -171,12 +171,22 @@ pub async fn fetch_and_parse_chunks(
             Ok(stream) => stream.boxed(),
             Err(e) => stream::once(async move { Err(e) }).boxed(),
         })
+        .inspect({
+            let counter = Arc::new(AtomicUsize::new(0));
+            move |_| {
+                if counter.fetch_add(1, Ordering::Relaxed) % 1000 == 0 {
+                    let elapsed = now.elapsed().as_secs_f32();
+                    if elapsed > 0.0 {
+                        let bytes = total_bytes.load(Ordering::Relaxed);
+                        tracing::info!(
+                            "Current download throughput: {:.2} Gbps",
+                            bytes as f32 * 8.0 / 1e9 / elapsed
+                        );
+                    }
+                }
+            }
+        })
         .boxed();
-
-    tracing::info!(
-        "Overall download throughput: {:.2} Gbps",
-        total_bytes.load(Ordering::Relaxed) as f32 * 8.0 / 1e9 / now.elapsed().as_secs_f32()
-    );
 
     result_stream
 }
