@@ -99,10 +99,10 @@ env:
     value: "10000000"
 
   - name: SMPC__FAKE_DB_SIZE
-    value: "0"
+    value: "8455770"
 
   - name: SMPC__MAX_BATCH_SIZE
-    value: "64"
+    value: "256"
 
   - name: SMPC__SERVICE__METRICS__HOST
     valueFrom:
