@@ -98,7 +98,7 @@ iris-mpc-0:
       value: "eth0"
 
     - name: NCCL_COMM_ID
-      value: "iris-mpc-node.1.$ENV.smpcv2.worldcoin.dev:4000"
+      value: "iris-mpc-0.svc.cluster.local:4000"
 
     - name: SMPC__ENVIRONMENT
       value: "$ENV"
@@ -183,7 +183,7 @@ iris-mpc-0:
       value: "true"
 
     - name: SMPC__NODE_HOSTNAMES
-      value: '["iris-mpc-node.1.$ENV.smpcv2.worldcoin.dev","iris-mpc-node.2.$ENV.smpcv2.worldcoin.dev","iris-mpc-node.3.$ENV.smpcv2.worldcoin.dev"]'
+      value: '["iris-mpc-0.svc.cluster.local","iris-mpc-1.svc.cluster.local","iris-mpc-2.svc.cluster.local"]'
 
     - name: SMPC__IMAGE_NAME
       value: "ghcr.io/worldcoin/iris-mpc:$IRIS_MPC_IMAGE_TAG"
@@ -203,34 +203,6 @@ iris-mpc-0:
       name: "iris-mpc-0-init"
       init.sh: |
         #!/usr/bin/env bash
-  
-        # Set up environment variables
-        HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$PARTY_ID".$ENV.smpcv2.worldcoin.dev --query "HostedZones[].Id" --output text)
-  
-        # Generate the JSON content in memory
-        BATCH_JSON=$(cat <<EOF
-        {
-          "Comment": "Upsert the A record for iris-mpc NCCL_COMM_ID",
-          "Changes": [
-            {
-              "Action": "UPSERT",
-              "ResourceRecordSet": {
-                "Name": "iris-mpc-node.$PARTY_ID.$ENV.smpcv2.worldcoin.dev",
-                "TTL": 5,
-                "Type": "A",
-                "ResourceRecords": [{
-                  "Value": "$MY_NODE_IP"
-                }]
-              }
-            }
-          ]
-        }
-        EOF
-        )
-  
-        # Execute AWS CLI command with the generated JSON
-        aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch "$BATCH_JSON"
-  
         cd /libs
         aws s3 cp s3://wf-smpcv2-stage-libs/libcublas.so.12.2.5.6 .
         aws s3 cp s3://wf-smpcv2-stage-libs/libcublasLt.so.12.2.5.6 .
