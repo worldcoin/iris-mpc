@@ -1,7 +1,7 @@
 use crate::threshold_ring::protocol::ChunkShare;
 use cudarc::driver::{
     result::{self, memcpy_dtoh_async, memcpy_htod_async, stream},
-    sys::{CUdeviceptr, CUstream, CUstream_st},
+    sys::{lib, CUdeviceptr, CUstream, CUstream_st},
     CudaDevice, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceRepr, DriverError,
     LaunchConfig,
 };
@@ -101,6 +101,27 @@ pub unsafe fn dtod_at_offset(
             stream_ptr,
         )
         .unwrap();
+    }
+}
+
+pub unsafe fn dtoh_at_offset(
+    dst: u64,
+    dst_offset: usize,
+    src: CUdeviceptr,
+    src_offset: usize,
+    len: usize,
+    stream_ptr: CUstream,
+) {
+    unsafe {
+        lib()
+            .cuMemcpyDtoHAsync_v2(
+                (dst + dst_offset as u64) as *mut _,
+                (src + src_offset as u64) as CUdeviceptr,
+                len,
+                stream_ptr,
+            )
+            .result()
+            .unwrap();
     }
 }
 

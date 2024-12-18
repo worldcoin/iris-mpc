@@ -1666,7 +1666,7 @@ fn write_db_at_index(
         ),
     ] {
         unsafe {
-            helpers::dtod_at_offset(
+            helpers::dtoh_at_offset(
                 db.code_gr.limb_0[device_index],
                 dst_index * code_length,
                 *query.limb_0[device_index].device_ptr(),
@@ -1675,7 +1675,7 @@ fn write_db_at_index(
                 streams[device_index].stream,
             );
 
-            helpers::dtod_at_offset(
+            helpers::dtoh_at_offset(
                 db.code_gr.limb_1[device_index],
                 dst_index * code_length,
                 *query.limb_1[device_index].device_ptr(),
