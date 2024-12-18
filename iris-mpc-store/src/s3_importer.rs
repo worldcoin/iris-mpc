@@ -174,7 +174,7 @@ pub async fn fetch_and_parse_chunks(
         .inspect({
             let counter = Arc::new(AtomicUsize::new(0));
             move |_| {
-                if counter.fetch_add(1, Ordering::Relaxed) % 1000 == 0 {
+                if counter.fetch_add(1, Ordering::Relaxed) % 1_000_000 == 0 {
                     let elapsed = now.elapsed().as_secs_f32();
                     if elapsed > 0.0 {
                         let bytes = total_bytes.load(Ordering::Relaxed);
