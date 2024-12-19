@@ -221,7 +221,8 @@ impl Store {
 
             let partition_stream = match min_last_modified_at {
                 Some(min_last_modified_at) => sqlx::query_as::<_, StoredIris>(
-                    "SELECT * FROM irises WHERE id BETWEEN $1 AND $2 AND last_modified_at >= $3",
+                    "SELECT id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
+                     BETWEEN $1 AND $2 AND last_modified_at >= $3",
                 )
                 .bind(start_id as i64)
                 .bind(end_id as i64)
@@ -229,7 +230,8 @@ impl Store {
                 .fetch(&self.pool)
                 .map_err(Into::into),
                 None => sqlx::query_as::<_, StoredIris>(
-                    "SELECT * FROM irises WHERE id BETWEEN $1 AND $2",
+                    "SELECT id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
+                     BETWEEN $1 AND $2",
                 )
                 .bind(start_id as i64)
                 .bind(end_id as i64)
