@@ -6,8 +6,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
 pub enum NetworkValue {
     PrfKey([u8; 16]),
-    Ring16(std::num::Wrapping<u16>),
-    Ring32(std::num::Wrapping<u32>),
     RingElementBit(RingElement<Bit>),
     RingElement16(RingElement<u16>),
     RingElement32(RingElement<u32>),
