@@ -118,7 +118,7 @@ pub async fn batch_signed_lift_vec(
     Ok(batch_signed_lift(session, pre_lift).await?.inner())
 }
 
-/// Computes [D1 * T2; D2 * T1]
+/// Computes D2 * T1 - T2 * D1
 /// Assumes that the input shares are originally 16-bit and lifted to u32.
 pub(crate) async fn cross_mul(
     session: &mut Session,
@@ -126,15 +126,8 @@ pub(crate) async fn cross_mul(
     t1: Share<u32>,
     d2: Share<u32>,
     t2: Share<u32>,
-) -> eyre::Result<(Share<u32>, Share<u32>)> {
-    // Compute d1 * t2; t2 * d1
-    let mut exchanged_shares_a = Vec::with_capacity(2);
-    let pairs = [(d1, t2), (d2, t1)];
-    for pair in pairs.iter() {
-        let (x, y) = pair;
-        let res = session.prf_as_mut().gen_zero_share() + x * y;
-        exchanged_shares_a.push(res);
-    }
+) -> eyre::Result<Share<u32>> {
+    let res_a = session.prf_as_mut().gen_zero_share() + &d2 * &t1 - &t2 * &d1;
 
     let network = session.network();
     let next_role = session.identity(&session.own_role()?.next(3))?;
@@ -142,7 +135,7 @@ pub(crate) async fn cross_mul(
 
     network
         .send(
-            NetworkValue::VecRing32(exchanged_shares_a.clone()).to_network(),
+            NetworkValue::RingElement32(res_a).to_network(),
             next_role,
             &session.session_id(),
         )
@@ -150,24 +143,11 @@ pub(crate) async fn cross_mul(
 
     let serialized_reply = network.receive(prev_role, &session.session_id()).await;
     let res_b = match NetworkValue::from_network(serialized_reply) {
-        Ok(NetworkValue::VecRing32(element)) => element,
-        _ => return Err(eyre!("Could not deserialize VecRing16")),
+        Ok(NetworkValue::RingElement32(element)) => element,
+        _ => return Err(eyre!("Could not deserialize RingElement32")),
     };
-    if exchanged_shares_a.len() != res_b.len() {
-        return Err(eyre!(
-            "Expected a VecRing32 with length {:?} but received with length: {:?}",
-            exchanged_shares_a.len(),
-            res_b.len()
-        ));
-    }
 
-    // vec![D1 * T2; T2 * D1]
-    let mut res = Vec::with_capacity(2);
-    for (a_share, b_share) in exchanged_shares_a.into_iter().zip(res_b) {
-        res.push(Share::new(a_share, b_share));
-    }
-
-    Ok((res[0].clone(), res[1].clone()))
+    Ok(Share::new(res_a, res_b))
 }
 
 /// Computes (d2*t1 - d1*t2) > 0.
@@ -187,8 +167,7 @@ pub async fn cross_compare(
     d2: Share<u32>,
     t2: Share<u32>,
 ) -> eyre::Result<bool> {
-    let (d1t2, d2t1) = cross_mul(session, d1, t1, d2, t2).await?;
-    let diff = d2t1 - d1t2;
+    let diff = cross_mul(session, d1, t1, d2, t2).await?;
     // Compute bit <- MSB(D2 * T1 - D1 * T2)
     let bit = single_extract_msb_u32::<32>(session, diff).await?;
     // Open bit
@@ -510,16 +489,13 @@ mod tests {
                 )
                 .await
                 .unwrap();
-                (
-                    open_single(&player_session, out_shared.0).await.unwrap(),
-                    open_single(&player_session, out_shared.1).await.unwrap(),
-                )
+
+                open_single(&player_session, out_shared).await.unwrap()
             });
         }
         // check first party output is equal to the expected result.
         let t = jobs.join_next().await.unwrap().unwrap();
-        assert_eq!(t.0, RingElement(4));
-        assert_eq!(t.1, RingElement(6));
+        assert_eq!(t, RingElement(2));
     }
 
     async fn open_additive(session: &Session, x: Vec<RingElement<u16>>) -> eyre::Result<Vec<u16>> {
