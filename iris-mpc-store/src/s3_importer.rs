@@ -1,11 +1,18 @@
 use crate::StoredIris;
 use async_trait::async_trait;
-use aws_sdk_s3::Client;
-use bytes::Bytes;
+use aws_sdk_s3::{primitives::ByteStream, Client};
 use futures::{stream, Stream, StreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
-use std::{mem, pin::Pin, sync::Arc, time::Instant};
-use tokio::task;
+use std::{
+    mem,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
+use tokio::io::AsyncReadExt;
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -13,7 +20,7 @@ const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
 
 #[async_trait]
 pub trait ObjectStore: Send + Sync + 'static {
-    async fn get_object(&self, key: &str) -> eyre::Result<Bytes>;
+    async fn get_object(&self, key: &str) -> eyre::Result<ByteStream>;
     async fn list_objects(&self, prefix: &str) -> eyre::Result<Vec<String>>;
 }
 
@@ -30,8 +37,8 @@ impl S3Store {
 
 #[async_trait]
 impl ObjectStore for S3Store {
-    async fn get_object(&self, key: &str) -> eyre::Result<Bytes> {
-        let result = self
+    async fn get_object(&self, key: &str) -> eyre::Result<ByteStream> {
+        let res = self
             .client
             .get_object()
             .bucket(&self.bucket)
@@ -39,8 +46,7 @@ impl ObjectStore for S3Store {
             .send()
             .await?;
 
-        let data = result.body.collect().await?;
-        Ok(data.into_bytes())
+        Ok(res.body)
     }
 
     async fn list_objects(&self, prefix: &str) -> eyre::Result<Vec<String>> {
@@ -133,38 +139,52 @@ pub async fn fetch_and_parse_chunks(
         .map(|num| format!("{}/{}.bin", prefix_name, num))
         .collect();
     tracing::info!("Generated {} chunk names", chunks.len());
+    let total_bytes = Arc::new(AtomicUsize::new(0));
+    let now = Instant::now();
 
     let result_stream = stream::iter(chunks)
-        .map(move |chunk| async move {
-            let mut now = Instant::now();
-            let result = store.get_object(&chunk).await?;
-            let get_object_time = now.elapsed();
-            tracing::info!("Got chunk object: {} in {:?}", chunk, get_object_time,);
-
-            now = Instant::now();
-            let task = task::spawn_blocking(move || {
-                let n_records = result.len().div_floor(SINGLE_ELEMENT_SIZE);
-
-                let mut records = Vec::with_capacity(n_records);
-                for i in 0..n_records {
-                    let start = i * SINGLE_ELEMENT_SIZE;
-                    let end = (i + 1) * SINGLE_ELEMENT_SIZE;
-                    let chunk = &result[start..end];
-                    let iris = StoredIris::from_bytes(chunk);
-                    records.push(iris);
+        .map({
+            let total_bytes_clone = total_bytes.clone();
+            move |chunk| {
+                let counter = total_bytes_clone.clone();
+                async move {
+                    let mut object_stream = store.get_object(&chunk).await?.into_async_read();
+                    let mut records = Vec::with_capacity(last_snapshot_details.chunk_size as usize);
+                    let mut buf = vec![0u8; SINGLE_ELEMENT_SIZE];
+                    loop {
+                        match object_stream.read_exact(&mut buf).await {
+                            Ok(_) => {
+                                let iris = StoredIris::from_bytes(&buf);
+                                records.push(iris);
+                                counter.fetch_add(SINGLE_ELEMENT_SIZE, Ordering::Relaxed);
+                            }
+                            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                            Err(e) => return Err(e.into()),
+                        }
+                    }
+                    Ok::<_, eyre::Error>(stream::iter(records))
                 }
-
-                Ok::<_, eyre::Error>(stream::iter(records))
-            })
-            .await?;
-            let parse_time = now.elapsed();
-            tracing::info!("Parsed chunk: {} in {:?}", chunk, parse_time,);
-            task
+            }
         })
         .buffer_unordered(concurrency)
         .flat_map(|result| match result {
             Ok(stream) => stream.boxed(),
             Err(e) => stream::once(async move { Err(e) }).boxed(),
+        })
+        .inspect({
+            let counter = Arc::new(AtomicUsize::new(0));
+            move |_| {
+                if counter.fetch_add(1, Ordering::Relaxed) % 1_000_000 == 0 {
+                    let elapsed = now.elapsed().as_secs_f32();
+                    if elapsed > 0.0 {
+                        let bytes = total_bytes.load(Ordering::Relaxed);
+                        tracing::info!(
+                            "Current download throughput: {:.2} Gbps",
+                            bytes as f32 * 8.0 / 1e9 / elapsed
+                        );
+                    }
+                }
+            }
         })
         .boxed();
 
@@ -174,6 +194,7 @@ pub async fn fetch_and_parse_chunks(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aws_sdk_s3::primitives::SdkBody;
     use rand::Rng;
     use std::{cmp::min, collections::HashSet};
 
@@ -206,12 +227,13 @@ mod tests {
 
     #[async_trait]
     impl ObjectStore for MockStore {
-        async fn get_object(&self, key: &str) -> eyre::Result<Bytes> {
-            self.objects
+        async fn get_object(&self, key: &str) -> eyre::Result<ByteStream> {
+            let bytes = self
+                .objects
                 .get(key)
                 .cloned()
-                .map(Bytes::from)
-                .ok_or_else(|| eyre::eyre!("Object not found: {}", key))
+                .ok_or_else(|| eyre::eyre!("Object not found: {}", key))?;
+            Ok(ByteStream::from(SdkBody::from(bytes)))
         }
 
         async fn list_objects(&self, _: &str) -> eyre::Result<Vec<String>> {
