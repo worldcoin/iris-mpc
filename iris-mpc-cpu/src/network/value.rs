@@ -19,19 +19,19 @@ pub enum NetworkValue {
 
 impl NetworkValue {
     pub fn to_network(&self) -> Vec<u8> {
-        bincode::serialize(self).unwrap()
+        bitcode::serialize(self).unwrap()
     }
 
     pub fn from_network(serialized: eyre::Result<Vec<u8>>) -> eyre::Result<Self> {
-        bincode::deserialize::<Self>(&serialized?).map_err(|_e| eyre!("Failed to parse value"))
+        bitcode::deserialize::<Self>(&serialized?).map_err(|_e| eyre!("Failed to parse value"))
     }
 
     pub fn vec_to_network(values: &Vec<Self>) -> Vec<u8> {
-        bincode::serialize(&values).unwrap()
+        bitcode::serialize(&values).unwrap()
     }
 
     pub fn vec_from_network(serialized: eyre::Result<Vec<u8>>) -> eyre::Result<Vec<Self>> {
-        bincode::deserialize::<Vec<Self>>(&serialized?).map_err(|_e| eyre!("Failed to parse value"))
+        bitcode::deserialize::<Vec<Self>>(&serialized?).map_err(|_e| eyre!("Failed to parse value"))
     }
 }
 

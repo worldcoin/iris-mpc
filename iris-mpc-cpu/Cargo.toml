@@ -14,6 +14,7 @@ async-stream = "0.3.6"
 async-trait = "~0.1"
 backoff = {version="0.4.0", features = ["tokio"]}
 bincode.workspace = true
+bitcode = { version="0.6.3", features = ["serde"] }
 bytes = "1.7"
 bytemuck.workspace = true
 clap.workspace = true
