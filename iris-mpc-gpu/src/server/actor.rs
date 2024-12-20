@@ -1126,21 +1126,29 @@ impl ServerActor {
                 .collect::<Vec<_>>()
         };
 
-        self.codes_engine.prefetch_db_chunk(
-            code_db_slices,
-            &self.code_chunk_buffers[0],
-            &chunk_sizes(0),
-            &vec![0; self.device_manager.device_count()],
-            &self.current_db_sizes,
+        record_stream_time!(
+            &self.device_manager,
             &self.streams[0],
-        );
-        self.masks_engine.prefetch_db_chunk(
-            mask_db_slices,
-            &self.mask_chunk_buffers[0],
-            &chunk_sizes(0),
-            &vec![0; self.device_manager.device_count()],
-            &self.current_db_sizes,
-            &self.streams[0],
+            events,
+            "prefetch_db_chunk",
+            {
+                self.codes_engine.prefetch_db_chunk(
+                    code_db_slices,
+                    &self.code_chunk_buffers[0],
+                    &chunk_sizes(0),
+                    &vec![0; self.device_manager.device_count()],
+                    &self.current_db_sizes,
+                    &self.streams[0],
+                );
+                self.masks_engine.prefetch_db_chunk(
+                    mask_db_slices,
+                    &self.mask_chunk_buffers[0],
+                    &chunk_sizes(0),
+                    &vec![0; self.device_manager.device_count()],
+                    &self.current_db_sizes,
+                    &self.streams[0],
+                );
+            }
         );
 
         // ---- START DATABASE DEDUP ----
@@ -1180,21 +1188,29 @@ impl ServerActor {
             }
 
             // Prefetch next chunk
-            self.codes_engine.prefetch_db_chunk(
-                code_db_slices,
-                &self.code_chunk_buffers[(db_chunk_idx + 1) % 2],
-                &next_chunk_size,
-                &chunk_size.iter().map(|s| offset + s).collect::<Vec<_>>(),
-                &self.current_db_sizes,
+            record_stream_time!(
+                &self.device_manager,
                 next_request_streams,
-            );
-            self.masks_engine.prefetch_db_chunk(
-                mask_db_slices,
-                &self.mask_chunk_buffers[(db_chunk_idx + 1) % 2],
-                &next_chunk_size,
-                &chunk_size.iter().map(|s| offset + s).collect::<Vec<_>>(),
-                &self.current_db_sizes,
-                next_request_streams,
+                events,
+                "prefetch_db_chunk",
+                {
+                    self.codes_engine.prefetch_db_chunk(
+                        code_db_slices,
+                        &self.code_chunk_buffers[(db_chunk_idx + 1) % 2],
+                        &next_chunk_size,
+                        &chunk_size.iter().map(|s| offset + s).collect::<Vec<_>>(),
+                        &self.current_db_sizes,
+                        next_request_streams,
+                    );
+                    self.masks_engine.prefetch_db_chunk(
+                        mask_db_slices,
+                        &self.mask_chunk_buffers[(db_chunk_idx + 1) % 2],
+                        &next_chunk_size,
+                        &chunk_size.iter().map(|s| offset + s).collect::<Vec<_>>(),
+                        &self.current_db_sizes,
+                        next_request_streams,
+                    );
+                }
             );
 
             self.device_manager
