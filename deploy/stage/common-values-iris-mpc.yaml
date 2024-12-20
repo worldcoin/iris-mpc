@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:v0.13.3"
+image: "ghcr.io/worldcoin/iris-mpc:load-in-ranges-test"
 
 environment: stage
 replicaCount: 1
