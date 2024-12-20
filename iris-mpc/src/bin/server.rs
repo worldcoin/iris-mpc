@@ -1012,13 +1012,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                 .map(|result| result.map(IrisSource::S3))
                                 .boxed();
 
-                                let stream_db = store
+                                let stream_db_modified = store
                                     .stream_irises_par(Some(min_last_modified_at), parallelism)
                                     .await
                                     .map(|result| result.map(IrisSource::DB))
                                     .boxed();
-
-                                select_all(vec![stream_s3, stream_db])
+                                
+                                select_all(vec![stream_s3, stream_db, stream_db_modified])
                             }
                             false => {
                                 tracing::info!("S3 importer disabled. Fetching only from db");
