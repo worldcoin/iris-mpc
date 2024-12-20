@@ -69,7 +69,7 @@ env:
     value: "wf-smpcv2-stage-sns-requests"
 
   - name: SMPC__ENABLE_S3_IMPORTER
-    value: "load-in-ranges-test"
+    value: "true"
 
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
     value: "iris-mpc-db-exporter-store-node-2-stage-eu-north-1"
