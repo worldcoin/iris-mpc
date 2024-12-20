@@ -18,9 +18,11 @@ const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
     + mem::size_of::<u32>(); // 75 KB
 
+const MAX_RANGE_SIZE: usize = 200; // Download chunks in sub-chunks of 200 elements = 15 MB
+
 #[async_trait]
 pub trait ObjectStore: Send + Sync + 'static {
-    async fn get_object(&self, key: &str) -> eyre::Result<ByteStream>;
+    async fn get_object(&self, key: &str, range: (usize, usize)) -> eyre::Result<ByteStream>;
     async fn list_objects(&self, prefix: &str) -> eyre::Result<Vec<String>>;
 }
 
@@ -37,12 +39,13 @@ impl S3Store {
 
 #[async_trait]
 impl ObjectStore for S3Store {
-    async fn get_object(&self, key: &str) -> eyre::Result<ByteStream> {
+    async fn get_object(&self, key: &str, range: (usize, usize)) -> eyre::Result<ByteStream> {
         let res = self
             .client
             .get_object()
             .bucket(&self.bucket)
             .key(key)
+            .range(format!("bytes={}-{}", range.0, range.1 - 1))
             .send()
             .await?;
 
@@ -134,59 +137,74 @@ pub async fn fetch_and_parse_chunks(
     last_snapshot_details: LastSnapshotDetails,
 ) -> Pin<Box<dyn Stream<Item = eyre::Result<StoredIris>> + Send + '_>> {
     tracing::info!("Generating chunk files using: {:?}", last_snapshot_details);
-    let chunks: Vec<String> = (1..=last_snapshot_details.last_serial_id)
-        .step_by(last_snapshot_details.chunk_size as usize)
-        .map(|num| format!("{}/{}.bin", prefix_name, num))
-        .collect();
-    tracing::info!("Generated {} chunk names", chunks.len());
+    let range_size = if last_snapshot_details.chunk_size as usize > MAX_RANGE_SIZE {
+        MAX_RANGE_SIZE
+    } else {
+        last_snapshot_details.chunk_size as usize
+    };
     let total_bytes = Arc::new(AtomicUsize::new(0));
     let now = Instant::now();
 
-    let result_stream = stream::iter(chunks)
-        .map({
-            let total_bytes_clone = total_bytes.clone();
-            move |chunk| {
-                let counter = total_bytes_clone.clone();
-                async move {
-                    let mut object_stream = store.get_object(&chunk).await?.into_async_read();
-                    let mut records = Vec::with_capacity(last_snapshot_details.chunk_size as usize);
-                    let mut buf = vec![0u8; SINGLE_ELEMENT_SIZE];
-                    loop {
-                        match object_stream.read_exact(&mut buf).await {
-                            Ok(_) => {
-                                let iris = StoredIris::from_bytes(&buf);
-                                records.push(iris);
-                                counter.fetch_add(SINGLE_ELEMENT_SIZE, Ordering::Relaxed);
+    let result_stream =
+        stream::iter((1..=last_snapshot_details.last_serial_id).step_by(range_size))
+            .map({
+                let total_bytes_clone = total_bytes.clone();
+                move |chunk| {
+                    let counter = total_bytes_clone.clone();
+                    let prefix_name = prefix_name.clone();
+                    async move {
+                        let chunk_id = (chunk / last_snapshot_details.chunk_size)
+                            * last_snapshot_details.chunk_size
+                            + 1;
+                        let offset_within_chunk = (chunk - chunk_id) as usize;
+                        let mut object_stream = store
+                            .get_object(
+                                &format!("{}/{}.bin", prefix_name, chunk_id),
+                                (
+                                    offset_within_chunk * SINGLE_ELEMENT_SIZE,
+                                    (offset_within_chunk + range_size) * SINGLE_ELEMENT_SIZE,
+                                ),
+                            )
+                            .await?
+                            .into_async_read();
+                        let mut records = Vec::with_capacity(range_size);
+                        let mut buf = vec![0u8; SINGLE_ELEMENT_SIZE];
+                        loop {
+                            match object_stream.read_exact(&mut buf).await {
+                                Ok(_) => {
+                                    let iris = StoredIris::from_bytes(&buf);
+                                    records.push(iris);
+                                    counter.fetch_add(SINGLE_ELEMENT_SIZE, Ordering::Relaxed);
+                                }
+                                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                                Err(e) => return Err(e.into()),
                             }
-                            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-                            Err(e) => return Err(e.into()),
+                        }
+                        Ok::<_, eyre::Error>(stream::iter(records))
+                    }
+                }
+            })
+            .buffer_unordered(concurrency)
+            .flat_map(|result| match result {
+                Ok(stream) => stream.boxed(),
+                Err(e) => stream::once(async move { Err(e) }).boxed(),
+            })
+            .inspect({
+                let counter = Arc::new(AtomicUsize::new(0));
+                move |_| {
+                    if counter.fetch_add(1, Ordering::Relaxed) % 1_000_000 == 0 {
+                        let elapsed = now.elapsed().as_secs_f32();
+                        if elapsed > 0.0 {
+                            let bytes = total_bytes.load(Ordering::Relaxed);
+                            tracing::info!(
+                                "Current download throughput: {:.2} Gbps",
+                                bytes as f32 * 8.0 / 1e9 / elapsed
+                            );
                         }
                     }
-                    Ok::<_, eyre::Error>(stream::iter(records))
                 }
-            }
-        })
-        .buffer_unordered(concurrency)
-        .flat_map(|result| match result {
-            Ok(stream) => stream.boxed(),
-            Err(e) => stream::once(async move { Err(e) }).boxed(),
-        })
-        .inspect({
-            let counter = Arc::new(AtomicUsize::new(0));
-            move |_| {
-                if counter.fetch_add(1, Ordering::Relaxed) % 1000 == 0 {
-                    let elapsed = now.elapsed().as_secs_f32();
-                    if elapsed > 0.0 {
-                        let bytes = total_bytes.load(Ordering::Relaxed);
-                        tracing::info!(
-                            "Current download throughput: {:.2} Gbps",
-                            bytes as f32 * 8.0 / 1e9 / elapsed
-                        );
-                    }
-                }
-            }
-        })
-        .boxed();
+            })
+            .boxed();
 
     result_stream
 }
@@ -227,13 +245,19 @@ mod tests {
 
     #[async_trait]
     impl ObjectStore for MockStore {
-        async fn get_object(&self, key: &str) -> eyre::Result<ByteStream> {
+        async fn get_object(&self, key: &str, range: (usize, usize)) -> eyre::Result<ByteStream> {
             let bytes = self
                 .objects
                 .get(key)
                 .cloned()
                 .ok_or_else(|| eyre::eyre!("Object not found: {}", key))?;
-            Ok(ByteStream::from(SdkBody::from(bytes)))
+
+            // Handle the range parameter by slicing the bytes
+            let start = range.0;
+            let end = range.1.min(bytes.len());
+            let sliced_bytes = bytes[start..end].to_vec();
+
+            Ok(ByteStream::from(SdkBody::from(sliced_bytes)))
         }
 
         async fn list_objects(&self, _: &str) -> eyre::Result<Vec<String>> {
