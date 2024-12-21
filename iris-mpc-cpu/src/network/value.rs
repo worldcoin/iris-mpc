@@ -6,8 +6,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
 pub enum NetworkValue {
     PrfKey([u8; 16]),
-    Ring16(std::num::Wrapping<u16>),
-    Ring32(std::num::Wrapping<u32>),
     RingElementBit(RingElement<Bit>),
     RingElement16(RingElement<u16>),
     RingElement32(RingElement<u32>),
@@ -19,19 +17,19 @@ pub enum NetworkValue {
 
 impl NetworkValue {
     pub fn to_network(&self) -> Vec<u8> {
-        bincode::serialize(self).unwrap()
+        bitcode::serialize(self).unwrap()
     }
 
     pub fn from_network(serialized: eyre::Result<Vec<u8>>) -> eyre::Result<Self> {
-        bincode::deserialize::<Self>(&serialized?).map_err(|_e| eyre!("Failed to parse value"))
+        bitcode::deserialize::<Self>(&serialized?).map_err(|_e| eyre!("Failed to parse value"))
     }
 
     pub fn vec_to_network(values: &Vec<Self>) -> Vec<u8> {
-        bincode::serialize(&values).unwrap()
+        bitcode::serialize(&values).unwrap()
     }
 
     pub fn vec_from_network(serialized: eyre::Result<Vec<u8>>) -> eyre::Result<Vec<Self>> {
-        bincode::deserialize::<Vec<Self>>(&serialized?).map_err(|_e| eyre!("Failed to parse value"))
+        bitcode::deserialize::<Vec<Self>>(&serialized?).map_err(|_e| eyre!("Failed to parse value"))
     }
 }
 

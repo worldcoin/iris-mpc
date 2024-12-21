@@ -103,8 +103,7 @@ impl Networking for LocalNetworking {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::network::value::NetworkValue;
-    use std::num::Wrapping;
+    use crate::{network::value::NetworkValue, shares::ring_impl::RingElement};
 
     #[tokio::test]
     async fn test_network_send_receive() {
@@ -118,11 +117,11 @@ mod tests {
             let recv = bob.receive(&"alice".into(), &1_u64.into()).await;
             assert_eq!(
                 NetworkValue::from_network(recv).unwrap(),
-                NetworkValue::Ring16(Wrapping::<u16>(777))
+                NetworkValue::RingElement16(RingElement(777))
             );
         });
         let task2 = tokio::spawn(async move {
-            let value = NetworkValue::Ring16(Wrapping::<u16>(777));
+            let value = NetworkValue::RingElement16(RingElement(777));
             alice
                 .send(value.to_network(), &"bob".into(), &1_u64.into())
                 .await
