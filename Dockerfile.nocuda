@@ -34,7 +34,7 @@ RUN cargo build --release --target x86_64-unknown-linux-gnu --bin seed-v1-dbs --
 FROM --platform=linux/amd64 ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y ca-certificates
+RUN apt-get update && apt-get install -y ca-certificates awscli
 COPY certs /usr/local/share/ca-certificates/
 RUN update-ca-certificates
 
