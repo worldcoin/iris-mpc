@@ -200,7 +200,7 @@ iris-mpc-2:
           fieldRef:
             fieldPath: status.hostIP
     configMap:
-      name: "iris-mpc-0-init"
+      name: "iris-mpc-2-init"
       init.sh: |
         #!/usr/bin/env bash
         apt-update && apt install -y awscli

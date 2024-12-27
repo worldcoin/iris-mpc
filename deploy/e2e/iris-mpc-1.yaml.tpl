@@ -202,9 +202,6 @@ iris-mpc-1:
     configMap:
       name: "iris-mpc-1-init"
       init.sh: |
-    configMap:
-      name: "iris-mpc-0-init"
-      init.sh: |
         #!/usr/bin/env bash
         apt-update && apt install -y awscli
         cd /libs
