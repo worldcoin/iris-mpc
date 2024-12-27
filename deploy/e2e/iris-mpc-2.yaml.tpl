@@ -121,7 +121,10 @@ iris-mpc-2:
       value: "8"
 
     - name: SMPC__AWS__REGION
-      value: "eu-north-1"
+      value: "$AWS_REGION"
+
+    - name: SMPC__AWS__ENDPOINT
+      value: "http://localstack:4566"
 
     - name: SMPC__REQUESTS_QUEUE_URL
       value: "arn:aws:sns:eu-central-1:000000000000:iris-mpc-input"
@@ -193,6 +196,8 @@ iris-mpc-2:
     image: "ghcr.io/worldcoin/iris-mpc:146c2cae43dbeb586144d9d37d152a6b2bfacdd4" # no-cuda image
     name: "iris-mpc-2-copy-cuda-libs"
     env:
+      - name: AWS_REGION
+        value: "$AWS_REGION"
       - name: PARTY_ID
         value: "3"
       - name: MY_NODE_IP
@@ -210,5 +215,5 @@ iris-mpc-2:
         aws s3 cp s3://wf-smpcv2-stage-libs/libcublas.so.12.2.5.6 .
         aws s3 cp s3://wf-smpcv2-stage-libs/libcublasLt.so.12.2.5.6 .
 
-        key-manager --node-id 2 --env $ENV rotate --public-key-bucket-name wf-$ENV-public-keys
+        AWS_ENDPOINT_URL="http://localstack:4566" key-manager --node-id 2 --env $ENV --region $AWS_REGION rotate --public-key-bucket-name wf-$ENV-public-keys
 
