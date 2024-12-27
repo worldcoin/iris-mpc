@@ -21,7 +21,7 @@ use cudarc::{
     },
     driver::{
         result::{self, malloc_async},
-        sys::CUdeviceptr,
+        sys::{CUdeviceptr, CU_MEMHOSTALLOC_PORTABLE},
         CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr, DeviceSlice, LaunchAsync,
     },
     nccl,
@@ -279,7 +279,13 @@ impl ShareDB {
                 let _ = cudarc::driver::sys::lib().cuMemHostRegister_v2(
                     db.code_gr.limb_0[device_index] as *mut _,
                     max_size * self.code_length,
-                    0,
+                    CU_MEMHOSTALLOC_PORTABLE,
+                );
+
+                let _ = cudarc::driver::sys::lib().cuMemHostRegister_v2(
+                    db.code_gr.limb_1[device_index] as *mut _,
+                    max_size * self.code_length,
+                    CU_MEMHOSTALLOC_PORTABLE,
                 );
             }
         }
