@@ -33,6 +33,9 @@ struct KeyManagerCli {
 
     #[arg(short, long, env, default_value = "eu-north-1")]
     region: String,
+
+    #[arg(short, long, env, default_value = None)]
+    endpoint_url: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -88,6 +91,7 @@ async fn main() -> eyre::Result<()> {
                 &private_key_secret_id,
                 dry_run,
                 public_key_bucket_name,
+                args.endpoint_url,
             )
             .await?;
         }
@@ -104,6 +108,7 @@ async fn main() -> eyre::Result<()> {
                 &bucket_key_name,
                 public_key_bucket_name,
                 region.clone(),
+                args.endpoint_url,
             )
             .await?;
         }
@@ -111,6 +116,7 @@ async fn main() -> eyre::Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn validate_keys(
     sdk_config: &SdkConfig,
     secret_id: &str,
@@ -119,8 +125,15 @@ async fn validate_keys(
     bucket_key_name: &str,
     public_key_bucket_name: Option<String>,
     region: String,
+    endpoint_url: Option<String>,
 ) -> eyre::Result<()> {
-    let sm_client = SecretsManagerClient::new(sdk_config);
+    let mut sm_config_builder = aws_sdk_secretsmanager::config::Builder::from(sdk_config);
+
+    if let Some(endpoint_url) = endpoint_url.as_ref() {
+        sm_config_builder = sm_config_builder.endpoint_url(endpoint_url);
+    }
+
+    let sm_client = SecretsManagerClient::from_conf(sm_config_builder.build());
 
     let bucket_name = if let Some(bucket_name) = public_key_bucket_name {
         bucket_name
@@ -160,6 +173,7 @@ async fn rotate_keys(
     private_key_secret_id: &str,
     dry_run: Option<bool>,
     public_key_bucket_name: Option<String>,
+    endpoint_url: Option<String>,
 ) -> eyre::Result<()> {
     let mut rng = thread_rng();
 
@@ -173,8 +187,17 @@ async fn rotate_keys(
     rng.fill(&mut seedbuf);
     let pk_seed = Seed(seedbuf);
 
-    let s3_client = S3Client::new(sdk_config);
-    let sm_client = SecretsManagerClient::new(sdk_config);
+    let mut s3_config_builder = aws_sdk_s3::config::Builder::from(sdk_config);
+    let mut sm_config_builder = aws_sdk_secretsmanager::config::Builder::from(sdk_config);
+
+    if let Some(endpoint_url) = endpoint_url.as_ref() {
+        s3_config_builder = s3_config_builder.endpoint_url(endpoint_url);
+        s3_config_builder = s3_config_builder.force_path_style(true);
+        sm_config_builder = sm_config_builder.endpoint_url(endpoint_url);
+    }
+
+    let s3_client = S3Client::from_conf(s3_config_builder.build());
+    let sm_client = SecretsManagerClient::from_conf(sm_config_builder.build());
 
     let (public_key, private_key) = generate_key_pairs(pk_seed);
     let pub_key_str = STANDARD.encode(public_key);
