@@ -28,10 +28,11 @@ use cudarc::{
     nvrtc::compile_ptx,
 };
 use itertools::{izip, Itertools};
+use memmap2::MmapMut;
 use rayon::prelude::*;
 use std::{
     ffi::{c_void, CStr},
-    mem,
+    mem::{self, forget},
     sync::Arc,
 };
 
@@ -243,13 +244,23 @@ impl ShareDB {
             .devices()
             .iter()
             .map(|device| unsafe {
-                let host_mem0 = memmap2::MmapMut::map_anon(max_size * self.code_length).unwrap();
-                let host_mem1 = memmap2::MmapMut::map_anon(max_size * self.code_length).unwrap();
+                let host_mem0 = MmapMut::map_anon(max_size * self.code_length).unwrap();
+                let host_mem1 = MmapMut::map_anon(max_size * self.code_length).unwrap();
+
+                let host_mem0_ptr = host_mem0.as_ptr() as u64;
+                let host_mem1_ptr = host_mem1.as_ptr() as u64;
+
+                // Make sure to not drop the memory, even though we only use the pointers
+                // afterwards. This also has the effect that this memory is never freed, which
+                // is fine for the db.
+                forget(host_mem0);
+                forget(host_mem1);
+
                 (
                     StreamAwareCudaSlice::from(device.alloc(max_size).unwrap()),
                     (
                         StreamAwareCudaSlice::from(device.alloc(max_size).unwrap()),
-                        (host_mem0.as_ptr() as u64, host_mem1.as_ptr() as u64),
+                        (host_mem0_ptr, host_mem1_ptr),
                     ),
                 )
             })

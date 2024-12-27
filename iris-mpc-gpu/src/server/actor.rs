@@ -238,10 +238,14 @@ impl ServerActor {
             comms.clone(),
         );
 
+        let now = Instant::now();
+
         let left_code_db_slices = codes_engine.alloc_db(max_db_size);
         let left_mask_db_slices = masks_engine.alloc_db(max_db_size);
         let right_code_db_slices = codes_engine.alloc_db(max_db_size);
         let right_mask_db_slices = masks_engine.alloc_db(max_db_size);
+
+        tracing::info!("Allocated db in {:?}", now.elapsed());
 
         // Engines for inflight queries
         let batch_codes_engine = ShareDB::init(
