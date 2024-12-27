@@ -243,17 +243,13 @@ impl ShareDB {
             .devices()
             .iter()
             .map(|device| unsafe {
-                let mut host_mem0: *mut c_void = std::ptr::null_mut();
-                let mut host_mem1: *mut c_void = std::ptr::null_mut();
-                let _ = cudarc::driver::sys::lib()
-                    .cuMemAllocHost_v2(&mut host_mem0, max_size * self.code_length);
-                let _ = cudarc::driver::sys::lib()
-                    .cuMemAllocHost_v2(&mut host_mem1, max_size * self.code_length);
+                let host_mem0 = memmap2::MmapMut::map_anon(max_size * self.code_length).unwrap();
+                let host_mem1 = memmap2::MmapMut::map_anon(max_size * self.code_length).unwrap();
                 (
                     StreamAwareCudaSlice::from(device.alloc(max_size).unwrap()),
                     (
                         StreamAwareCudaSlice::from(device.alloc(max_size).unwrap()),
-                        (host_mem0 as u64, host_mem1 as u64),
+                        (host_mem0.as_ptr() as u64, host_mem1.as_ptr() as u64),
                     ),
                 )
             })
@@ -272,6 +268,20 @@ impl ShareDB {
                 limb_0: db0_sums,
                 limb_1: db1_sums,
             },
+        }
+    }
+
+    pub fn register_host_memory(&self, db: &SlicedProcessedDatabase, max_db_length: usize) {
+        let max_size = max_db_length / self.device_manager.device_count();
+        for (device_index, device) in self.device_manager.devices().iter().enumerate() {
+            device.bind_to_thread().unwrap();
+            unsafe {
+                let _ = cudarc::driver::sys::lib().cuMemHostRegister_v2(
+                    db.code_gr.limb_0[device_index] as *mut _,
+                    max_size * self.code_length,
+                    0,
+                );
+            }
         }
     }
 

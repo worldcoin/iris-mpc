@@ -1132,6 +1132,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         tracing::info!("Preprocessing db");
                         actor.preprocess_db();
 
+                        tracing::info!("Page-lock host memory");
+                        actor.register_host_memory();
+
                         tracing::info!(
                             "Loaded {} records from db into memory [DB sizes: {:?}]",
                             record_counter,

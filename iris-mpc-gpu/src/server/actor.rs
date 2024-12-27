@@ -486,6 +486,17 @@ impl ServerActor {
             .preprocess_db(&mut self.right_mask_db_slices, &self.current_db_sizes);
     }
 
+    pub fn register_host_memory(&self) {
+        self.codes_engine
+            .register_host_memory(&self.left_code_db_slices, self.max_db_size);
+        self.masks_engine
+            .register_host_memory(&self.left_mask_db_slices, self.max_db_size);
+        self.codes_engine
+            .register_host_memory(&self.right_code_db_slices, self.max_db_size);
+        self.masks_engine
+            .register_host_memory(&self.right_mask_db_slices, self.max_db_size);
+    }
+
     fn process_batch_query(
         &mut self,
         batch: BatchQuery,
