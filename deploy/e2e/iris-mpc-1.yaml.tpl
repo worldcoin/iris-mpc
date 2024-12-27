@@ -142,7 +142,7 @@ iris-mpc-1:
       value: "1"
 
     - name: SMPC__PUBLIC_KEY_BASE_URL
-      value: "https://pki-smpcv2-stage.worldcoin.org"
+      value: "http://wf-$ENV-stage-public-keys.s3.localhost.localstack.cloud:4566"
 
     - name: SMPC__ENABLE_S3_IMPORTER
       value: "false"

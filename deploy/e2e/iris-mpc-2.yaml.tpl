@@ -142,7 +142,7 @@ iris-mpc-2:
       value: "2"
 
     - name: SMPC__PUBLIC_KEY_BASE_URL
-      value: "https://pki-smpcv2-stage.worldcoin.org"
+      value: "http://wf-$ENV-stage-public-keys.s3.localhost.localstack.cloud:4566"
 
     - name: SMPC__ENABLE_S3_IMPORTER
       value: "false"
@@ -203,7 +203,7 @@ iris-mpc-2:
       name: "iris-mpc-2-init"
       init.sh: |
         #!/usr/bin/env bash
-        apt-update && apt install -y awscli
+        apt update && apt install -y awscli
         cd /libs
         aws s3 cp s3://wf-smpcv2-stage-libs/libcublas.so.12.2.5.6 .
         aws s3 cp s3://wf-smpcv2-stage-libs/libcublasLt.so.12.2.5.6 .
