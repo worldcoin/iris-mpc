@@ -1361,18 +1361,18 @@ impl ServerActor {
         tracing::info!(party_id = self.party_id, "db search finished");
 
         // Destroy all events
-        for events in [
-            current_dot_events,
-            next_dot_events,
-            current_exchange_events,
-            next_exchange_events,
-            current_phase2_events,
-            next_phase2_events,
-        ] {
-            for event in events {
-                self.device_manager.destroy_events(event);
-            }
-        }
+        // for events in [
+        //     current_dot_events,
+        //     next_dot_events,
+        //     current_exchange_events,
+        //     next_exchange_events,
+        //     current_phase2_events,
+        //     next_phase2_events,
+        // ] {
+        //     for event in events {
+        //         self.device_manager.destroy_events(event);
+        //     }
+        // }
 
         // Reset the results buffers for reuse
         for dst in &[&self.results, &self.batch_results, &self.final_results] {
