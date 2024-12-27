@@ -888,6 +888,7 @@ mod tests {
             .unwrap();
         let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
         let mut db_slices = engine.alloc_db(DB_SIZE);
+        engine.register_db_slices(&db_slices);
         let db_sizes = engine.load_full_db(&mut db_slices, &db);
 
         engine.dot(
@@ -989,6 +990,7 @@ mod tests {
                 .unwrap();
             let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
             let mut db_slices = engine.alloc_db(DB_SIZE);
+            engine.register_db_slices(&db_slices);
             let db_sizes = engine.load_full_db(&mut db_slices, &codes_db);
 
             engine.dot(
@@ -1122,6 +1124,8 @@ mod tests {
             let db_sizes = codes_engine.load_full_db(&mut code_db_slices, &codes_db);
             let mut mask_db_slices = masks_engine.alloc_db(DB_SIZE);
             let mask_db_sizes = masks_engine.load_full_db(&mut mask_db_slices, &masks_db);
+            codes_engine.register_db_slices(&code_db_slices);
+            masks_engine.register_db_slices(&mask_db_slices);
 
             assert_eq!(db_sizes, mask_db_sizes);
 
