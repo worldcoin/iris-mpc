@@ -215,5 +215,5 @@ iris-mpc-2:
         aws s3 cp s3://wf-smpcv2-stage-libs/libcublas.so.12.2.5.6 .
         aws s3 cp s3://wf-smpcv2-stage-libs/libcublasLt.so.12.2.5.6 .
 
-        AWS_ENDPOINT_URL="http://localstack:4566" key-manager --node-id 1 --env $ENV --region $AWS_REGION rotate --public-key-bucket-name wf-$ENV-public-keys
+        AWS_ENDPOINT_URL="http://localstack:4566" key-manager --node-id 2 --env $ENV --region $AWS_REGION rotate --public-key-bucket-name wf-$ENV-public-keys
 
