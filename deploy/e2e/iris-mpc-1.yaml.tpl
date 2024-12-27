@@ -190,7 +190,7 @@ iris-mpc-1:
 
   initContainer:
     enabled: true
-    image: "amazon/aws-cli:2.17.62"
+    image: "ghcr.io/worldcoin/iris-mpc:146c2cae43dbeb586144d9d37d152a6b2bfacdd4" # no-cuda image
     name: "iris-mpc-1-copy-cuda-libs"
     env:
       - name: PARTY_ID
@@ -202,7 +202,14 @@ iris-mpc-1:
     configMap:
       name: "iris-mpc-1-init"
       init.sh: |
+    configMap:
+      name: "iris-mpc-0-init"
+      init.sh: |
         #!/usr/bin/env bash
+        apt-update && apt install -y awscli
         cd /libs
         aws s3 cp s3://wf-smpcv2-stage-libs/libcublas.so.12.2.5.6 .
         aws s3 cp s3://wf-smpcv2-stage-libs/libcublasLt.so.12.2.5.6 .
+
+        key-manager --node-id 1 --env $ENV rotate --public-key-bucket-name wf-$ENV-stage-public-keys
+
