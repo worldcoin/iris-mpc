@@ -16,7 +16,6 @@ use sodiumoxide::crypto::box_::{curve25519xsalsa20poly1305, PublicKey, SecretKey
 const PUBLIC_KEY_S3_BUCKET_NAME: &str = "wf-smpcv2-stage-public-keys";
 const PUBLIC_KEY_S3_KEY_NAME_PREFIX: &str = "public-key";
 
-/// A fictional versioning CLI
 #[derive(Debug, Parser)] // requires `derive` feature
 #[command(name = "key-manager")]
 #[command(about = "Key manager CLI", long_about = None)]
