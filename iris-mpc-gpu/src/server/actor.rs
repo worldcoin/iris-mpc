@@ -238,10 +238,14 @@ impl ServerActor {
             comms.clone(),
         );
 
+        let now = Instant::now();
+
         let left_code_db_slices = codes_engine.alloc_db(max_db_size);
         let left_mask_db_slices = masks_engine.alloc_db(max_db_size);
         let right_code_db_slices = codes_engine.alloc_db(max_db_size);
         let right_mask_db_slices = masks_engine.alloc_db(max_db_size);
+
+        tracing::info!("Allocated db in {:?}", now.elapsed());
 
         // Engines for inflight queries
         let batch_codes_engine = ShareDB::init(
@@ -484,6 +488,17 @@ impl ServerActor {
             .preprocess_db(&mut self.right_code_db_slices, &self.current_db_sizes);
         self.masks_engine
             .preprocess_db(&mut self.right_mask_db_slices, &self.current_db_sizes);
+    }
+
+    pub fn register_host_memory(&self) {
+        self.codes_engine
+            .register_host_memory(&self.left_code_db_slices, self.max_db_size);
+        self.masks_engine
+            .register_host_memory(&self.left_mask_db_slices, self.max_db_size);
+        self.codes_engine
+            .register_host_memory(&self.right_code_db_slices, self.max_db_size);
+        self.masks_engine
+            .register_host_memory(&self.right_mask_db_slices, self.max_db_size);
     }
 
     fn process_batch_query(
