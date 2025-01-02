@@ -88,7 +88,6 @@ impl SharesEncryptionKeyPairs {
             .aws
             .and_then(|aws| aws.region)
             .unwrap_or_else(|| REGION.to_owned());
-        
         let region_provider = Region::new(region);
         let shared_config = aws_config::from_env().region(region_provider).load().await;
         let client = SecretsManagerClient::new(&shared_config);
