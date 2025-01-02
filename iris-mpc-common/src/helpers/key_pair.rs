@@ -201,7 +201,7 @@ async fn download_private_key_from_asm(
 ) -> Result<String, SharesDecodingError> {
     let private_key_secret_id: String = format!("{}/iris-mpc/ecdh-private-key-{}", env, node_id);
     tracing::info!(
-        "Downloading private key from Secrets Manager: {}", 
+        "Downloading private key from Secrets Manager: {}",
         private_key_secret_id
     );
     match client
