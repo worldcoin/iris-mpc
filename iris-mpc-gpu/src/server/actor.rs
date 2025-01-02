@@ -1167,7 +1167,7 @@ impl ServerActor {
         let chunk_sizes = |chunk_idx: usize| {
             self.current_db_sizes
                 .iter()
-                .map(|s| (s - DB_CHUNK_SIZE * chunk_idx).clamp(1, DB_CHUNK_SIZE))
+                .map(|s| (s - DB_CHUNK_SIZE * chunk_idx).clamp(0, DB_CHUNK_SIZE))
                 .collect::<Vec<_>>()
         };
 
@@ -1220,7 +1220,7 @@ impl ServerActor {
             // later.
             let dot_chunk_size = chunk_size
                 .iter()
-                .map(|s| s.div_ceil(64) * 64)
+                .map(|&s| (s.max(1).div_ceil(64) * 64))
                 .collect::<Vec<_>>();
 
             // First stream doesn't need to wait
