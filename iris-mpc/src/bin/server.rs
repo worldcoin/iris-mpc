@@ -973,6 +973,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             config.max_batch_size,
             config.return_partial_results,
             config.disable_persistence,
+            config.enable_debug_timing,
         ) {
             Ok((mut actor, handle)) => {
                 let res = if config.fake_db_size > 0 {
