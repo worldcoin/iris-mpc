@@ -108,6 +108,9 @@ iris-mpc-1:
     - name: SMPC__ENVIRONMENT
       value: "$ENV"
 
+    - name: SMPC__AWS__REGION
+      value: "$AWS_REGION"
+
     - name: SMPC__SERVICE__SERVICE_NAME
       value: "smpcv2-server-$ENV"
 
