@@ -90,6 +90,12 @@ iris-mpc-0:
     - name: RUST_LOG
       value: "info"
 
+    - name: AWS_REGION
+      value: "$AWS_REGION"
+
+    - name: AWS_ENDPOINT_URL
+      value: "http://localstack:4566"
+
     - name: RUST_BACKTRACE
       value: "full"
 
@@ -101,6 +107,9 @@ iris-mpc-0:
 
     - name: SMPC__ENVIRONMENT
       value: "$ENV"
+
+    - name: SMPC__AWS__REGION
+      value: "$AWS_REGION"
 
     - name: SMPC__SERVICE__SERVICE_NAME
       value: "smpcv2-server-$ENV"
@@ -119,12 +128,6 @@ iris-mpc-0:
 
     - name: SMPC__DATABASE__LOAD_PARALLELISM
       value: "8"
-
-    - name: SMPC__AWS__REGION
-      value: "$AWS_REGION"
-
-    - name: SMPC__AWS__ENDPOINT
-      value: "http://localstack:4566"
 
     - name: SMPC__REQUESTS_QUEUE_URL
       value: "arn:aws:sns:eu-central-1:000000000000:iris-mpc-input"
@@ -216,5 +219,3 @@ iris-mpc-0:
         aws s3 cp s3://wf-smpcv2-stage-libs/libcublasLt.so.12.2.5.6 .
 
         key-manager --node-id 0 --env $ENV --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-stage-public-keys --region $AWS_REGION
-
-
