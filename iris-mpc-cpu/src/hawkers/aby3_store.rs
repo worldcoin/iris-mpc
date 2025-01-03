@@ -4,7 +4,7 @@ use crate::{
     execution::{
         local::{generate_local_identities, LocalRuntime},
         player::Identity,
-        session::Session,
+        session::{Session, SessionHandles},
     },
     hawkers::plaintext_store::PointId,
     network::NetworkType,
@@ -27,7 +27,12 @@ use hawk_pack::{
 use iris_mpc_common::iris_db::db::IrisDB;
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt::Debug, sync::{Arc, RwLock}, vec};
+use std::{
+    collections::HashMap,
+    fmt::Debug,
+    sync::{Arc, RwLock},
+    vec,
+};
 use tokio::task::JoinSet;
 
 #[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -61,14 +66,14 @@ pub struct Query {
 
 type QueryRef = Arc<Query>;
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 struct SharedIrisesBody {
     points: Vec<GaloisRingSharedIris>,
 }
 
 #[derive(Clone)]
 pub struct SharedIrises {
-    body: Arc<RwLock<SharedIrisesBody>>
+    body: Arc<RwLock<SharedIrisesBody>>,
 }
 
 impl std::fmt::Debug for SharedIrises {
@@ -80,16 +85,18 @@ impl std::fmt::Debug for SharedIrises {
 impl Default for SharedIrises {
     fn default() -> Self {
         let body = SharedIrisesBody { points: vec![] };
-        SharedIrises { body: Arc::new(RwLock::new(body)) }
+        SharedIrises {
+            body: Arc::new(RwLock::new(body)),
+        }
     }
 }
 
 impl SharedIrises {
     pub fn new_with_shared_db(data: Vec<GaloisRingSharedIris>) -> Self {
-        let body = SharedIrisesBody {
-            points: data
-        };
-        SharedIrises { body: Arc::new(RwLock::new(body)) }
+        let body = SharedIrisesBody { points: data };
+        SharedIrises {
+            body: Arc::new(RwLock::new(body)),
+        }
     }
 }
 
@@ -112,7 +119,6 @@ impl SharedIrises {
 
     fn insert(&mut self, query: &QueryRef) -> VectorId {
         let mut body = self.body.write().unwrap();
-        // The query is now accepted in the store.
         body.points.push(query.query.clone());
 
         let new_id = body.points.len() - 1;
@@ -131,7 +137,7 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
     rng: &mut R,
     plain_store: &PlaintextStore,
     network_t: NetworkType,
-) -> eyre::Result<Vec<Aby3Runner>> {
+) -> eyre::Result<Vec<Aby3Store>> {
     let identities = generate_local_identities();
 
     let mut shared_irises = vec![vec![]; identities.len()];
@@ -149,67 +155,54 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
         .collect();
     let runtime = LocalRuntime::mock_setup(network_t).await?;
 
-    let local_stores = identities
+    identities
         .into_iter()
         .zip(storages.into_iter())
-        .map(|(identity, storage)| Aby3Runner {
-            runtime: runtime.clone(),
-            storage,
-            owner: identity,
+        .map(|(identity, storage)| {
+            let session = runtime.get_session(&identity)?;
+            Ok(Aby3Store {
+                session,
+                storage,
+                owner: identity,
+            })
         })
-        .collect();
-
-    Ok(local_stores)
+        .collect()
 }
 
 /// Implementation of VectorStore based on the ABY3 framework (https://eprint.iacr.org/2018/403.pdf).
-/// 
+///
 /// Note that all SMPC operations are performed in a single session.
 #[derive(Debug, Clone)]
-pub struct Aby3Runner {
+pub struct Aby3Store {
     pub owner:   Identity,
     pub storage: SharedIrises,
-    pub runtime: LocalRuntime,
+    pub session: Session,
 }
 
-impl Aby3Runner {
-    pub fn get_owner_session(&self) -> Session {
-        self.runtime.sessions.get(&self.owner).unwrap().clone()
-    }
-
+impl Aby3Store {
     pub fn get_owner_index(&self) -> usize {
-        self.runtime
-            .role_assignments
-            .iter()
-            .find_map(|(role, id)| {
-                if id.clone() == self.owner {
-                    Some(role.clone())
-                } else {
-                    None
-                }
-            })
-            .unwrap()
-            .index()
+        self.session.boot_session.own_role().unwrap().index()
     }
 }
 
 pub async fn setup_local_store_aby3_players(
     network_t: NetworkType,
-) -> eyre::Result<Vec<Aby3Runner>> {
+) -> eyre::Result<Vec<Aby3Store>> {
     let runtime = LocalRuntime::mock_setup(network_t).await?;
-    let players = generate_local_identities();
-    let local_stores = players
+    generate_local_identities()
         .into_iter()
-        .map(|identity| Aby3Runner {
-            runtime: runtime.clone(),
-            storage: SharedIrises::default(),
-            owner:   identity,
+        .map(|identity| {
+            let session = runtime.get_session(&identity)?;
+            Ok(Aby3Store {
+                session,
+                storage: SharedIrises::default(),
+                owner: identity,
+            })
         })
-        .collect();
-    Ok(local_stores)
+        .collect()
 }
 
-impl Aby3Runner {
+impl Aby3Store {
     pub fn prepare_query(&mut self, code: GaloisRingSharedIris) -> QueryRef {
         self.storage.prepare_query(code)
     }
@@ -221,8 +214,7 @@ impl Aby3Runner {
         if distances.is_empty() {
             return Ok(vec![]);
         }
-        let mut player_session = self.get_owner_session();
-        let distances = batch_signed_lift_vec(&mut player_session, distances).await?;
+        let distances = batch_signed_lift_vec(&mut self.session, distances).await?;
         Ok(distances
             .chunks(2)
             .map(|dot_products| {
@@ -239,19 +231,18 @@ impl Aby3Runner {
         if pairs.is_empty() {
             return vec![];
         }
-        let mut player_session = self.get_owner_session();
-        let ds_and_ts = galois_ring_pairwise_distance(&mut player_session, &pairs)
+        let ds_and_ts = galois_ring_pairwise_distance(&mut self.session, &pairs)
             .await
             .unwrap();
-        galois_ring_to_rep3(&mut player_session, ds_and_ts)
+        galois_ring_to_rep3(&mut self.session, ds_and_ts)
             .await
             .unwrap()
     }
 }
 
-impl VectorStore for Aby3Runner {
-    type QueryRef = QueryRef; // Point ID, pending insertion.
-    type VectorRef = VectorId; // Point ID, inserted.
+impl VectorStore for Aby3Store {
+    type QueryRef = QueryRef; // Arc ref to a query.
+    type VectorRef = VectorId; // Point ID of an inserted iris.
     type DistanceRef = DistanceShare<u32>; // Distance represented as shares.
 
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
@@ -289,8 +280,7 @@ impl VectorStore for Aby3Runner {
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> bool {
-        let mut player_session = self.get_owner_session();
-        compare_threshold_and_open(&mut player_session, distance.clone())
+        compare_threshold_and_open(&mut self.session, distance.clone())
             .await
             .unwrap()
     }
@@ -300,13 +290,12 @@ impl VectorStore for Aby3Runner {
         distance1: &Self::DistanceRef,
         distance2: &Self::DistanceRef,
     ) -> bool {
-        let mut player_session = self.get_owner_session();
         let code_dot1 = distance1.code_dot.clone();
         let mask_dot1 = distance1.mask_dot.clone();
         let code_dot2 = distance2.code_dot.clone();
         let mask_dot2 = distance2.mask_dot.clone();
         cross_compare(
-            &mut player_session,
+            &mut self.session,
             code_dot1,
             mask_dot1,
             code_dot2,
@@ -317,7 +306,7 @@ impl VectorStore for Aby3Runner {
     }
 }
 
-impl Aby3Runner {
+impl Aby3Store {
     pub fn get_trivial_share(&self, distance: u16) -> Share<u32> {
         let player = self.get_owner_index();
         let distance_elem = RingElement(distance as u32);
@@ -333,9 +322,9 @@ impl Aby3Runner {
 
     async fn eval_distance_vectors(
         &mut self,
-        vector1: &<Aby3Runner as VectorStore>::VectorRef,
-        vector2: &<Aby3Runner as VectorStore>::VectorRef,
-    ) -> <Aby3Runner as VectorStore>::DistanceRef {
+        vector1: &<Aby3Store as VectorStore>::VectorRef,
+        vector2: &<Aby3Store as VectorStore>::VectorRef,
+    ) -> <Aby3Store as VectorStore>::DistanceRef {
         let point1 = self.storage.get_vector(vector1);
         let mut point2 = self.storage.get_vector(vector2).clone();
         point2.code.preprocess_iris_code_query_share();
@@ -344,12 +333,20 @@ impl Aby3Runner {
         let dist = self.eval_pairwise_distances(pairs).await;
         self.lift_distances(dist).await.unwrap()[0].clone()
     }
+}
 
+impl Aby3Store {
+    /// Converts a plaintext graph store to a secret-shared graph store.
+    ///
+    /// If recompute_distance is true, distances are recomputed from scratch via
+    /// SMPC. Otherwise, distances are naively converted from plaintext ones
+    /// via trivial shares,
+    /// i.e., the sharing of a value x is a triple (x, 0, 0).
     async fn graph_from_plain(
         &mut self,
         graph_store: &GraphMem<PlaintextStore>,
         recompute_distances: bool,
-    ) -> GraphMem<Aby3Runner> {
+    ) -> GraphMem<Aby3Store> {
         let ep = graph_store.get_entry_point().await;
         let new_ep = ep.map(|(vector_ref, layer_count)| (VectorId { id: vector_ref }, layer_count));
 
@@ -368,6 +365,7 @@ impl Aby3Runner {
                         // recompute distances of graph edges from scratch
                         self.eval_distance_vectors(&source_v, &target_v).await
                     } else {
+                        // convert plaintext distances to trivial shares, i.e., d -> (d, 0, 0)
                         DistanceShare::new(
                             self.get_trivial_share(dist.0),
                             self.get_trivial_share(dist.1),
@@ -384,9 +382,7 @@ impl Aby3Runner {
         }
         GraphMem::from_precomputed(new_ep, shared_layers)
     }
-}
 
-impl Aby3Runner {
     /// Generates 3 pairs of vector stores and graphs from a plaintext
     /// vector store and graph read from disk, which are returned as well.
     /// The network type is specified by the user.
@@ -511,10 +507,7 @@ impl Aby3Runner {
         recompute_distances: bool,
     ) -> eyre::Result<(
         (PlaintextStore, GraphMem<PlaintextStore>),
-        Vec<(
-            Aby3Runner,
-            GraphMem<Aby3Runner>,
-        )>,
+        Vec<(Aby3Store, GraphMem<Aby3Store>)>,
     )> {
         Self::lazy_random_setup(
             rng,
@@ -534,10 +527,7 @@ impl Aby3Runner {
         recompute_distances: bool,
     ) -> eyre::Result<(
         (PlaintextStore, GraphMem<PlaintextStore>),
-        Vec<(
-            Aby3Runner,
-            GraphMem<Aby3Runner>,
-        )>,
+        Vec<(Aby3Store, GraphMem<Aby3Store>)>,
     )> {
         Self::lazy_random_setup(
             rng,
@@ -684,25 +674,24 @@ mod tests {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 10;
         let network_t = NetworkType::LocalChannel;
-        let (mut cleartext_data, secret_data) = Aby3Runner::lazy_random_setup(
-            &mut rng,
-            database_size,
-            network_t.clone(),
-            true,
-        )
-        .await
-        .unwrap();
+        let (mut cleartext_data, secret_data) =
+            Aby3Store::lazy_random_setup(&mut rng, database_size, network_t.clone(), true)
+                .await
+                .unwrap();
 
         let mut rng = AesRng::seed_from_u64(0_u64);
         let vector_graph_stores =
-            Aby3Runner::shared_random_setup(&mut rng, database_size, network_t)
+            Aby3Store::shared_random_setup(&mut rng, database_size, network_t)
                 .await
                 .unwrap();
 
         for ((v_from_scratch, _), (premade_v, _)) in
             vector_graph_stores.iter().zip(secret_data.iter())
         {
-            assert_eq!(v_from_scratch.storage.body.read().unwrap().points, premade_v.storage.body.read().unwrap().points);
+            assert_eq!(
+                v_from_scratch.storage.body.read().unwrap().points,
+                premade_v.storage.body.read().unwrap().points
+            );
         }
         let hawk_searcher = HawkSearcher::default();
 
@@ -852,13 +841,10 @@ mod tests {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 2;
         let searcher = HawkSearcher::default();
-        let mut vectors_and_graphs = Aby3Runner::shared_random_setup(
-            &mut rng,
-            database_size,
-            NetworkType::LocalChannel,
-        )
-        .await
-        .unwrap();
+        let mut vectors_and_graphs =
+            Aby3Store::shared_random_setup(&mut rng, database_size, NetworkType::LocalChannel)
+                .await
+                .unwrap();
 
         for i in 0..database_size {
             let mut jobs = JoinSet::new();
