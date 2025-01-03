@@ -218,6 +218,9 @@ impl Aby3Runner {
         &mut self,
         distances: Vec<Share<u16>>,
     ) -> eyre::Result<Vec<DistanceShare<u32>>> {
+        if distances.is_empty() {
+            return Ok(vec![]);
+        }
         let mut player_session = self.get_owner_session();
         let distances = batch_signed_lift_vec(&mut player_session, distances).await?;
         Ok(distances
@@ -233,6 +236,9 @@ impl Aby3Runner {
         &mut self,
         pairs: Vec<(GaloisRingSharedIris, GaloisRingSharedIris)>,
     ) -> Vec<Share<u16>> {
+        if pairs.is_empty() {
+            return vec![];
+        }
         let mut player_session = self.get_owner_session();
         let ds_and_ts = galois_ring_pairwise_distance(&mut player_session, &pairs)
             .await
@@ -268,6 +274,9 @@ impl VectorStore for Aby3Runner {
         query: &Self::QueryRef,
         vectors: &[Self::VectorRef],
     ) -> Vec<Self::DistanceRef> {
+        if vectors.is_empty() {
+            return vec![];
+        }
         let pairs = vectors
             .iter()
             .map(|vector_id| {

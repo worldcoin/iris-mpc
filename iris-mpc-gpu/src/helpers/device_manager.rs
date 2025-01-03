@@ -103,8 +103,9 @@ impl DeviceManager {
     }
 
     pub fn destroy_events(&self, events: Vec<CUevent>) {
-        for event in events {
-            unsafe { event::destroy(event).unwrap() };
+        for (device_idx, event) in events.iter().enumerate() {
+            self.device(device_idx).bind_to_thread().unwrap();
+            unsafe { event::destroy(*event).unwrap() };
         }
     }
 
