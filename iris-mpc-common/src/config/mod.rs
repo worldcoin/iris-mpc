@@ -79,6 +79,9 @@ pub struct Config {
     #[serde(default)]
     pub disable_persistence: bool,
 
+    #[serde(default)]
+    pub enable_debug_timing: bool,
+
     #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
     pub node_hostnames: Vec<String>,
 
