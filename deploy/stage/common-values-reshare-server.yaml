@@ -1,0 +1,141 @@
+image: "ghcr.io/worldcoin/iris-mpc:v0.10.4"
+
+environment: stage
+replicaCount: 0
+
+strategy:
+  type: Recreate
+
+datadog:
+  enabled: true
+
+# Nginx exposes the only port required here
+ports:
+  - containerPort: 3001
+    name: health
+    protocol: TCP
+
+startupProbe:
+  httpGet:
+    path: /health
+    port: health
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: health
+
+readinessProbe:
+  periodSeconds: 30
+  failureThreshold: 10
+  httpGet:
+    path: /health
+    port: health
+
+resources:
+  limits:
+    cpu: 4
+    memory: 16Gi
+  requests:
+    cpu: 4
+    memory: 16Gi
+
+imagePullSecrets:
+  - name: github-secret
+
+nodeSelector:
+  kubernetes.io/arch: amd64
+  beta.kubernetes.io/instance-type: t3.2xlarge
+
+podSecurityContext:
+  runAsUser: 405
+  runAsGroup: 405
+
+serviceAccount:
+  create: true
+
+command: [ "/bin/reshare-server" ]
+
+env:
+  - name: SMPC__DATABASE__URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_URL
+        name: application
+  - name: RUST_LOG
+    value: info
+  - name: ENVIRONMENT
+    value: stage
+
+service:
+  enabled: false
+
+nginxSidecar:
+  enabled: true
+  port: 6443
+  secrets:
+    enabled: true
+    volumeMount:
+      - name: mounted-secret-name
+        mountPath: /etc/nginx/cert
+    volume:
+      - name: mounted-secret-name
+        secret:
+          secretName: application
+          items:
+            - key: certificate.crt
+              path: certificate.crt
+            - key: key.pem
+              path: key.pem
+          optional: false
+  config:
+    nginx.conf: |
+      worker_processes  auto;
+  
+      error_log  /dev/stderr notice;
+      pid        /tmp/nginx.pid;
+  
+      events {
+        worker_connections  1024;
+      }
+  
+      http {
+        proxy_temp_path       /tmp/proxy_temp;
+        client_body_temp_path /tmp/client_temp;
+        fastcgi_temp_path     /tmp/fastcgi_temp;
+        uwsgi_temp_path       /tmp/uwsgi_temp;
+        scgi_temp_path        /tmp/scgi_temp;
+  
+        log_format basic '$remote_addr [$time_local] '
+          '$status $bytes_sent';
+      
+        server {
+          listen 6443 ssl;
+          http2 on;
+      
+          ssl_certificate /etc/nginx/cert/certificate.crt;
+          ssl_certificate_key /etc/nginx/cert/key.pem;
+      
+          ssl_protocols TLSv1.3;
+          ssl_ciphers HIGH:!aNULL:!MD5;
+      
+          # Enable session resumption to improve performance
+          ssl_session_cache shared:SSL:10m;
+          ssl_session_timeout 1h;
+      
+          location / {
+            # Forward gRPC traffic to the gRPC server on port 7000
+            grpc_pass grpc://127.0.0.1:7000;
+            error_page 502 = /error502grpc;    # Custom error page for GRPC backend issues
+          }
+      
+          # Custom error page
+          location = /error502grpc {
+            internal;
+            default_type text/plain;
+            return 502 "Bad Gateway: gRPC server unreachable.";
+          }
+  
+          access_log /dev/stdout basic;
+        }
+      }

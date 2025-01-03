@@ -51,6 +51,7 @@ impl LocalNetworkingStore {
     }
 }
 
+#[derive(Debug)]
 pub struct LocalNetworking {
     p2p_channels: P2PChannels,
     pub owner:    Identity,
@@ -114,7 +115,7 @@ mod tests {
         let bob = networking_store.get_local_network("bob".into());
 
         let task1 = tokio::spawn(async move {
-            let recv = bob.receive(&"alice".into(), &1_u128.into()).await;
+            let recv = bob.receive(&"alice".into(), &1_u64.into()).await;
             assert_eq!(
                 NetworkValue::from_network(recv).unwrap(),
                 NetworkValue::Ring16(Wrapping::<u16>(777))
@@ -123,7 +124,7 @@ mod tests {
         let task2 = tokio::spawn(async move {
             let value = NetworkValue::Ring16(Wrapping::<u16>(777));
             alice
-                .send(value.to_network(), &"bob".into(), &1_u128.into())
+                .send(value.to_network(), &"bob".into(), &1_u64.into())
                 .await
         });
 

@@ -102,6 +102,13 @@ impl DeviceManager {
         events
     }
 
+    pub fn destroy_events(&self, events: Vec<CUevent>) {
+        for (device_idx, event) in events.iter().enumerate() {
+            self.device(device_idx).bind_to_thread().unwrap();
+            unsafe { event::destroy(*event).unwrap() };
+        }
+    }
+
     pub fn record_event(&self, streams: &[CudaStream], events: &[CUevent]) {
         for idx in 0..self.devices.len() {
             unsafe {

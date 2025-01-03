@@ -6,6 +6,7 @@ members = [
     "iris-mpc-common",
     "iris-mpc-upgrade",
     "iris-mpc-store",
+    "iris-mpc-py",
 ]
 resolver = "2"
 
@@ -15,24 +16,31 @@ license = "MIT OR (Apache-2.0 WITH LLVM-exception)"
 repository = "https://github.com/worldcoin/iris-mpc"
 
 [workspace.dependencies]
-aws-config = { version = "1.5.4", features = ["behavior-version-latest"] }
+aws-config = { version = "1.5.10", features = ["behavior-version-latest"] }
 aws-sdk-kms = { version = "1.44.0" }
 aws-sdk-sns = { version = "1.44.0" }
 aws-sdk-sqs = { version = "1.36.0" }
-aws-sdk-s3 = { version = "1.50.0" }
+aws-sdk-s3 = { version = "1.65.0" }
 aws-sdk-secretsmanager = { version = "1.47.0" }
+async-trait = "0.1.83"
 axum = "0.7"
 clap = { version = "4", features = ["derive", "env"] }
+csv = "1.3.1"
 base64 = "0.22.1"
+bytes = "1.5"
 bytemuck = { version = "1.17", features = ["derive"] }
 dotenvy = "0.15"
 eyre = "0.6"
 futures = "0.3.30"
+hawk-pack = { git = "https://github.com/Inversed-Tech/hawk-pack.git", rev = "ba995e09" }
 hex = "0.4.3"
 itertools = "0.13"
 num-traits = "0.2"
+memmap2 = "0.9.5"
 serde = { version = "1.0", features = ["derive"] }
+serde-big-array = "0.5.1"
 serde_json = "1"
+bincode = "1.3.3"
 sqlx = { version = "0.8", features = ["runtime-tokio-native-tls", "postgres"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.15", features = ["env-filter"] }

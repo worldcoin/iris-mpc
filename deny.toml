@@ -5,10 +5,12 @@ all-features = true
 [advisories]
 version = 2
 ignore = [
-	{ id = "RUSTSEC-2021-0137", reason = "we will switch to alkali eventually" },
-	# https://github.com/mehcode/config-rs/issues/563
-	{ id = "RUSTSEC-2024-0384", reason = "waiting for `web-time` crate to remove the dependency" },
-	{ id = "RUSTSEC-2024-0388", reason = "waiting for `mongodb` crate to remove the deprecated dependency" },
+    { id = "RUSTSEC-2021-0137", reason = "we will switch to alkali eventually" },
+    # https://github.com/mehcode/config-rs/issues/563
+    { id = "RUSTSEC-2024-0384", reason = "waiting for `web-time` crate to remove the dependency" },
+    { id = "RUSTSEC-2024-0388", reason = "waiting for `mongodb` crate to remove the deprecated dependency" },
+    { id = "RUSTSEC-2024-0402", reason = "wating for `index-map` crate to remove the dependency" },
+    { id = "RUSTSEC-2024-0421", reason = "waiting for `mongodb` crate to remove the deprecated dependency" },
 ]
 
 [sources]
@@ -35,6 +37,7 @@ allow = [
     "MIT",
     "MPL-2.0", # Although this is copyleft, it is scoped to modifying the original files
     "OpenSSL",
+    "Unicode-3.0",
     "Unicode-DFS-2016",
     "Unlicense",
     "Zlib",

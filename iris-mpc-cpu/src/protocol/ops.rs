@@ -1,13 +1,18 @@
-use super::binary::single_extract_msb_u32;
+use super::binary::{mul_lift_2k, single_extract_msb_u32};
 use crate::{
     database_generators::GaloisRingSharedIris,
     execution::session::{BootSession, Session, SessionHandles},
     network::value::NetworkValue::{self},
     protocol::{
-        binary::{lift, mul_lift_2k, open_bin},
+        binary::{lift, open_bin},
         prf::{Prf, PrfSeed},
     },
-    shares::{bit::Bit, ring_impl::RingElement, share::Share, vecshare::VecShare},
+    shares::{
+        bit::Bit,
+        ring_impl::RingElement,
+        share::{DistanceShare, Share},
+        vecshare::VecShare,
+    },
 };
 use eyre::eyre;
 
@@ -15,7 +20,6 @@ pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MA
 pub(crate) const B_BITS: u64 = 16;
 pub(crate) const B: u64 = 1 << B_BITS;
 pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
-pub(crate) const A_BITS: u32 = u64::BITS - A.leading_zeros();
 
 /// Setup the PRF seeds in the replicated protocol.
 /// Each party sends to the next party a random seed.
@@ -46,30 +50,47 @@ pub async fn setup_replicated_prf(session: &BootSession, my_seed: PrfSeed) -> ey
     Ok(Prf::new(my_seed, other_seed))
 }
 
-/// Takes as input two code and mask dot products between two Irises: i, j.
-/// i.e. code_dot = <i.code, j.code> and mask_dot = <i.mask, j.mask>
-/// Then lifts the two dot products to the larger ring (Z_{2^32}), multiplies
-/// with some predefined constants B = 2^16
-/// A = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64)
-/// and then compares mask_dot * A < code_dot * B.
+/// Compares the distance between two iris pairs to a threshold.
+///
+/// - Takes as input two code and mask dot products between two Irises: i, j.
+///   i.e. code_dot = <i.code, j.code> and mask_dot = <i.mask, j.mask>.
+/// - Lifts the two dot products to the ring Z_{2^32}.
+/// - Multiplies with predefined threshold constants B = 2^16 and A = ((1. - 2.
+///   * MATCH_THRESHOLD_RATIO) * B as f64).
+/// - Compares mask_dot * A < code_dot * B.
 pub async fn compare_threshold(
+    session: &mut Session,
+    code_dot: Share<u32>,
+    mask_dot: Share<u32>,
+) -> eyre::Result<Share<Bit>> {
+    let mut x = mask_dot * A as u32;
+    let y = code_dot * B as u32;
+    x -= y;
+
+    single_extract_msb_u32::<32>(session, x).await
+}
+
+/// The same as compare_threshold, but the input shares are 16-bit and lifted to
+/// 32-bit before threshold comparison.
+///
+/// See compare_threshold for more details.
+pub async fn lift_and_compare_threshold(
     session: &mut Session,
     code_dot: Share<u16>,
     mask_dot: Share<u16>,
 ) -> eyre::Result<Share<Bit>> {
-    debug_assert!(A_BITS as u64 <= B_BITS);
-
     let y = mul_lift_2k::<B_BITS>(&code_dot);
     let mut x = lift::<{ B_BITS as usize }>(session, VecShare::new_vec(vec![mask_dot])).await?;
-    debug_assert_eq!(x.len(), 1);
-    let mut x = x.pop().expect("Enough elements present");
+    let mut x = x.pop().expect("Expected a single element in the VecShare");
     x *= A as u32;
     x -= y;
 
     single_extract_msb_u32::<32>(session, x).await
 }
 
-pub(crate) async fn batch_signed_lift(
+/// Lifts a share of a vector (VecShare) of 16-bit values to a share of a vector
+/// (VecShare) of 32-bit values.
+pub async fn batch_signed_lift(
     session: &mut Session,
     mut pre_lift: VecShare<u16>,
 ) -> eyre::Result<VecShare<u32>> {
@@ -87,40 +108,26 @@ pub(crate) async fn batch_signed_lift(
     Ok(lifted_values)
 }
 
-/// Computes [D1 * T2; D2 * T1] via lifting
-pub(crate) async fn cross_mul_via_lift(
+/// Wrapper over batch_signed_lift that lifts a vector (Vec) of 16-bit shares to
+/// a vector (Vec) of 32-bit shares.
+pub async fn batch_signed_lift_vec(
     session: &mut Session,
-    d1: Share<u16>,
-    t1: Share<u16>,
-    d2: Share<u16>,
-    t2: Share<u16>,
-) -> eyre::Result<(Share<u32>, Share<u32>)> {
-    let mut pre_lift = VecShare::<u16>::with_capacity(4);
-    // Do preprocessing to lift all values
-    pre_lift.push(d1);
-    pre_lift.push(t2);
-    pre_lift.push(d2);
-    pre_lift.push(t1);
+    pre_lift: Vec<Share<u16>>,
+) -> eyre::Result<Vec<Share<u32>>> {
+    let pre_lift = VecShare::new_vec(pre_lift);
+    Ok(batch_signed_lift(session, pre_lift).await?.inner())
+}
 
-    let lifted_values = batch_signed_lift(session, pre_lift).await?;
-
-    // Compute d1 * t2; t2 * d1
-    let mut exchanged_shares_a = Vec::with_capacity(2);
-    let pairs = [
-        (
-            lifted_values.shares[0].clone(),
-            lifted_values.shares[1].clone(),
-        ),
-        (
-            lifted_values.shares[2].clone(),
-            lifted_values.shares[3].clone(),
-        ),
-    ];
-    for pair in pairs.iter() {
-        let (x, y) = pair;
-        let res = session.prf_as_mut().gen_zero_share() + x * y;
-        exchanged_shares_a.push(res);
-    }
+/// Computes D2 * T1 - T2 * D1
+/// Assumes that the input shares are originally 16-bit and lifted to u32.
+pub(crate) async fn cross_mul(
+    session: &mut Session,
+    d1: Share<u32>,
+    t1: Share<u32>,
+    d2: Share<u32>,
+    t2: Share<u32>,
+) -> eyre::Result<Share<u32>> {
+    let res_a = session.prf_as_mut().gen_zero_share() + &d2 * &t1 - &t2 * &d1;
 
     let network = session.network();
     let next_role = session.identity(&session.own_role()?.next(3))?;
@@ -128,7 +135,7 @@ pub(crate) async fn cross_mul_via_lift(
 
     network
         .send(
-            NetworkValue::VecRing32(exchanged_shares_a.clone()).to_network(),
+            NetworkValue::RingElement32(res_a).to_network(),
             next_role,
             &session.session_id(),
         )
@@ -136,43 +143,31 @@ pub(crate) async fn cross_mul_via_lift(
 
     let serialized_reply = network.receive(prev_role, &session.session_id()).await;
     let res_b = match NetworkValue::from_network(serialized_reply) {
-        Ok(NetworkValue::VecRing32(element)) => element,
-        _ => return Err(eyre!("Could not deserialize VecRing16")),
+        Ok(NetworkValue::RingElement32(element)) => element,
+        _ => return Err(eyre!("Could not deserialize RingElement32")),
     };
-    if exchanged_shares_a.len() != res_b.len() {
-        return Err(eyre!(
-            "Expected a VecRing32 with length {:?} but received with length: {:?}",
-            exchanged_shares_a.len(),
-            res_b.len()
-        ));
-    }
 
-    // vec![D1 * T2; T2 * D1]
-    let mut res = Vec::with_capacity(2);
-    for (a_share, b_share) in exchanged_shares_a.into_iter().zip(res_b) {
-        res.push(Share::new(a_share, b_share));
-    }
-
-    Ok((res[0].clone(), res[1].clone()))
+    Ok(Share::new(res_a, res_b))
 }
 
-/// Computes (d2*t1 - d1*t2) > 0 by first lifting the values in a batch
-/// from Z_{2^16} to a bigger ring Z_{2^32}
+/// Computes (d2*t1 - d1*t2) > 0.
 /// Does the multiplication in Z_{2^32} and computes the MSB, to check the
 /// comparison result.
 /// d1, t1 are replicated shares that come from an iris code/mask dot product,
 /// ie: d1 = dot(c_x, c_y); t1 = dot(m_x, m_y). d2, t2 are replicated shares
 /// that come from an iris code and mask dot product, ie:
 /// d2 = dot(c_u, c_w), t2 = dot(m_u, m_w)
+///
+/// Input values are assumed to be 16-bit shares that have been lifted to
+/// 32-bit.
 pub async fn cross_compare(
     session: &mut Session,
-    d1: Share<u16>,
-    t1: Share<u16>,
-    d2: Share<u16>,
-    t2: Share<u16>,
+    d1: Share<u32>,
+    t1: Share<u32>,
+    d2: Share<u32>,
+    t2: Share<u32>,
 ) -> eyre::Result<bool> {
-    let (d1t2, d2t1) = cross_mul_via_lift(session, d1, t1, d2, t2).await?;
-    let diff = d2t1 - d1t2;
+    let diff = cross_mul(session, d1, t1, d2, t2).await?;
     // Compute bit <- MSB(D2 * T1 - D1 * T2)
     let bit = single_extract_msb_u32::<32>(session, diff).await?;
     // Open bit
@@ -247,10 +242,10 @@ pub async fn galois_ring_to_rep3(
 
 /// Checks whether first Iris entry in the pair matches the Iris in the second
 /// entry. This is done in the following manner:
-/// Compute the dot product between the two Irises.
-/// Convert the partial shamir share result to a replicated sharing and then
-/// Compare the distance using the MATCH_THRESHOLD_RATIO from the
-/// `compare_threshold` function.
+/// - Compute the dot product between the two Irises.
+/// - Convert the partial Shamir share result to a replicated sharing and then
+/// - Compare the distance using the MATCH_THRESHOLD_RATIO from the
+///   `lift_and_compare_threshold` function.
 pub async fn galois_ring_is_match(
     session: &mut Session,
     pairs: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
@@ -259,18 +254,17 @@ pub async fn galois_ring_is_match(
     let additive_dots = galois_ring_pairwise_distance(session, pairs).await?;
     let rep_dots = galois_ring_to_rep3(session, additive_dots).await?;
     // compute dots[0] - dots[1]
-    let bit = compare_threshold(session, rep_dots[0].clone(), rep_dots[1].clone()).await?;
+    let bit = lift_and_compare_threshold(session, rep_dots[0].clone(), rep_dots[1].clone()).await?;
     let opened = open_bin(session, bit).await?;
     Ok(opened.convert())
 }
 
-/// Checks that the given dot product is zero.
-pub async fn is_dot_zero(
+/// Compares the given distance to a threshold and reveal the result.
+pub async fn compare_threshold_and_open(
     session: &mut Session,
-    code_dot: Share<u16>,
-    mask_dot: Share<u16>,
+    distance: DistanceShare<u32>,
 ) -> eyre::Result<bool> {
-    let bit = compare_threshold(session, code_dot, mask_dot).await?;
+    let bit = compare_threshold(session, distance.code_dot, distance.mask_dot).await?;
     let opened = open_bin(session, bit).await?;
     Ok(opened.convert())
 }
@@ -280,7 +274,10 @@ mod tests {
     use super::*;
     use crate::{
         database_generators::generate_galois_iris_shares,
-        execution::{local::LocalRuntime, player::Identity},
+        execution::{
+            local::{generate_local_identities, LocalRuntime},
+            player::Identity,
+        },
         hawkers::plaintext_store::PlaintextIris,
         protocol::ops::NetworkValue::RingElement32,
         shares::{int_ring::IntRing2k, ring_impl::RingElement},
@@ -352,15 +349,16 @@ mod tests {
     #[tokio::test]
     async fn test_async_prf_setup() {
         let num_parties = 3;
-        let identities: Vec<Identity> = vec!["alice".into(), "bob".into(), "charlie".into()];
+        let identities = generate_local_identities();
         let mut seeds = Vec::new();
         for i in 0..num_parties {
             let mut seed = [0_u8; 16];
             seed[0] = i;
             seeds.push(seed);
         }
-        let local = LocalRuntime::new(identities.clone(), seeds.clone());
-        let mut ready_sessions = local.create_player_sessions().await.unwrap();
+        let mut runtime = LocalRuntime::new(identities.clone(), seeds.clone())
+            .await
+            .unwrap();
 
         // check whether parties have sent/received the correct seeds.
         // P0: [seed_0, seed_2]
@@ -368,7 +366,8 @@ mod tests {
         // P2: [seed_2, seed_1]
         // This is done by calling next() on the PRFs and see whether they match with
         // the ones created from scratch.
-        let prf0 = ready_sessions
+        let prf0 = runtime
+            .sessions
             .get_mut(&"alice".into())
             .unwrap()
             .prf_as_mut();
@@ -381,7 +380,11 @@ mod tests {
             Prf::new(seeds[0], seeds[2]).get_prev_prf().next_u64()
         );
 
-        let prf1 = ready_sessions.get_mut(&"bob".into()).unwrap().prf_as_mut();
+        let prf1 = runtime
+            .sessions
+            .get_mut(&"bob".into())
+            .unwrap()
+            .prf_as_mut();
         assert_eq!(
             prf1.get_my_prf().next_u64(),
             Prf::new(seeds[1], seeds[0]).get_my_prf().next_u64()
@@ -391,7 +394,8 @@ mod tests {
             Prf::new(seeds[1], seeds[0]).get_prev_prf().next_u64()
         );
 
-        let prf2 = ready_sessions
+        let prf2 = runtime
+            .sessions
             .get_mut(&"charlie".into())
             .unwrap()
             .prf_as_mut();
@@ -464,15 +468,19 @@ mod tests {
             seed[0] = i;
             seeds.push(seed);
         }
-        let local = LocalRuntime::new(identities.clone(), seeds.clone());
-        let ready_sessions = local.create_player_sessions().await.unwrap();
+        let runtime = LocalRuntime::new(identities.clone(), seeds.clone())
+            .await
+            .unwrap();
 
         let mut jobs = JoinSet::new();
         for player in identities.iter() {
-            let mut player_session = ready_sessions.get(player).unwrap().clone();
+            let mut player_session = runtime.sessions.get(player).unwrap().clone();
             let four_shares = four_share_map.get(player).unwrap().clone();
             jobs.spawn(async move {
-                let out_shared = cross_mul_via_lift(
+                let four_shares = batch_signed_lift_vec(&mut player_session, four_shares)
+                    .await
+                    .unwrap();
+                let out_shared = cross_mul(
                     &mut player_session,
                     four_shares[0].clone(),
                     four_shares[1].clone(),
@@ -481,16 +489,13 @@ mod tests {
                 )
                 .await
                 .unwrap();
-                (
-                    open_single(&player_session, out_shared.0).await.unwrap(),
-                    open_single(&player_session, out_shared.1).await.unwrap(),
-                )
+
+                open_single(&player_session, out_shared).await.unwrap()
             });
         }
         // check first party output is equal to the expected result.
         let t = jobs.join_next().await.unwrap().unwrap();
-        assert_eq!(t.0, RingElement(4));
-        assert_eq!(t.1, RingElement(6));
+        assert_eq!(t, RingElement(2));
     }
 
     async fn open_additive(session: &Session, x: Vec<RingElement<u16>>) -> eyre::Result<Vec<u16>> {
@@ -537,8 +542,7 @@ mod tests {
     #[case(1)]
     #[case(2)]
     async fn test_galois_ring_to_rep3(#[case] seed: u64) {
-        let runtime = LocalRuntime::replicated_test_config();
-        let ready_sessions = runtime.create_player_sessions().await.unwrap();
+        let runtime = LocalRuntime::mock_setup_with_channel().await.unwrap();
         let mut rng = AesRng::seed_from_u64(seed);
 
         let iris_db = IrisDB::new_random_rng(2, &mut rng).db;
@@ -548,7 +552,7 @@ mod tests {
 
         let mut jobs = JoinSet::new();
         for (index, player) in runtime.identities.iter().cloned().enumerate() {
-            let mut player_session = ready_sessions.get(&player).unwrap().clone();
+            let mut player_session = runtime.sessions.get(&player).unwrap().clone();
             let mut own_shares = vec![(first_entry[index].clone(), second_entry[index].clone())];
             own_shares.iter_mut().for_each(|(_x, y)| {
                 y.code.preprocess_iris_code_query_share();

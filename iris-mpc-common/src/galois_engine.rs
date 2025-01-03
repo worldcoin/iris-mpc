@@ -3,7 +3,7 @@ pub type CompactGaloisRingShares = Vec<Vec<u8>>;
 pub mod degree4 {
     use crate::{
         galois::degree4::{basis, GaloisRingElement, ShamirGaloisRingShare},
-        iris_db::iris::IrisCodeArray,
+        iris_db::iris::{IrisCode, IrisCodeArray},
         IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
     };
     use base64::{prelude::BASE64_STANDARD, Engine};
@@ -44,9 +44,10 @@ pub mod degree4 {
             .for_each(|chunk| chunk.rotate_left(by * 4));
     }
 
-    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub struct GaloisRingTrimmedMaskCodeShare {
         pub id:    usize,
+        #[serde(with = "BigArray")]
         pub coefs: [u16; MASK_CODE_LENGTH],
     }
 
@@ -313,6 +314,36 @@ pub mod degree4 {
         pub fn from_base64(s: &str) -> eyre::Result<Self> {
             let decoded_bytes = BASE64_STANDARD.decode(s)?;
             Ok(bincode::deserialize(&decoded_bytes)?)
+        }
+    }
+
+    pub struct FullGaloisRingIrisCodeShare {
+        pub code: GaloisRingIrisCodeShare,
+        pub mask: GaloisRingTrimmedMaskCodeShare,
+    }
+
+    impl FullGaloisRingIrisCodeShare {
+        pub fn encode_iris_code(
+            iris: &IrisCode,
+            rng: &mut (impl Rng + CryptoRng),
+        ) -> [FullGaloisRingIrisCodeShare; 3] {
+            let [code0, code1, code2] =
+                GaloisRingIrisCodeShare::encode_iris_code(&iris.code, &iris.mask, rng);
+            let [mask0, mask1, mask2] = GaloisRingIrisCodeShare::encode_mask_code(&iris.mask, rng);
+            [
+                FullGaloisRingIrisCodeShare {
+                    code: code0,
+                    mask: mask0.into(),
+                },
+                FullGaloisRingIrisCodeShare {
+                    code: code1,
+                    mask: mask1.into(),
+                },
+                FullGaloisRingIrisCodeShare {
+                    code: code2,
+                    mask: mask2.into(),
+                },
+            ]
         }
     }
 

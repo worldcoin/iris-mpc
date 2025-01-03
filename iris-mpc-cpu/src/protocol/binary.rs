@@ -10,6 +10,7 @@ use crate::{
     },
 };
 use eyre::{eyre, Error};
+use itertools::Itertools;
 use num_traits::{One, Zero};
 use rand::{distributions::Standard, prelude::Distribution, Rng};
 use std::ops::SubAssign;
@@ -29,7 +30,7 @@ pub(crate) fn a2b_pre<T: IntRing2k>(
     let mut x2 = Share::zero();
     let mut x3 = Share::zero();
 
-    match session.own_role()?.zero_based() {
+    match session.own_role()?.index() {
         0 => {
             x1.a = a;
             x3.b = b;
@@ -142,16 +143,26 @@ pub(crate) async fn transposed_pack_and(
     session: &mut Session,
     x1: Vec<VecShare<u64>>,
     x2: Vec<VecShare<u64>>,
-) -> Result<Vec<VecShare<u64>>, Error>
-where
-    Standard: Distribution<u64>,
-{
-    // TODO(Dragos) this could probably be parallelized even more.
-    let mut res = Vec::with_capacity(x1.len());
-    for (x1, x2) in x1.iter().zip(x2.iter()) {
-        let shares_a = and_many_send(session, x1.as_slice(), x2.as_slice()).await?;
-        let shares_b = and_many_receive(session).await?;
-        res.push(VecShare::from_ab(shares_a, shares_b))
+) -> Result<Vec<VecShare<u64>>, Error> {
+    if x1.len() != x2.len() {
+        return Err(eyre!("Inputs have different length"));
+    }
+    let chunk_sizes = x1.iter().map(VecShare::len).collect::<Vec<_>>();
+    let chunk_sizes2 = x2.iter().map(VecShare::len).collect::<Vec<_>>();
+    if chunk_sizes != chunk_sizes2 {
+        return Err(eyre!("VecShare lengths are not equal"));
+    }
+
+    let x1 = VecShare::flatten(x1);
+    let x2 = VecShare::flatten(x2);
+    let mut shares_a = and_many_send(session, x1.as_slice(), x2.as_slice()).await?;
+    let mut shares_b = and_many_receive(session).await?;
+
+    let mut res = Vec::with_capacity(chunk_sizes.len());
+    for l in chunk_sizes {
+        let a = shares_a.drain(..l).collect();
+        let b = shares_b.drain(..l).collect();
+        res.push(VecShare::from_ab(a, b));
     }
     Ok(res)
 }
@@ -282,15 +293,21 @@ async fn bit_inject_ot_2round_receiver(
     let sid = session.session_id();
 
     let (m0, m1, wc) = tokio::spawn(async move {
-        let reply_m0 = network.receive(&next_id, &sid).await;
-        let m0 = match NetworkValue::from_network(reply_m0) {
-            Ok(NetworkValue::VecRing16(val)) => Ok(val),
+        let reply_m0_and_m1 = network.receive(&next_id, &sid).await;
+        let m0_and_m1 = NetworkValue::vec_from_network(reply_m0_and_m1).unwrap();
+        assert!(
+            m0_and_m1.len() == 2,
+            "Deserialized vec in bit inject is wrong length"
+        );
+        let (m0, m1) = m0_and_m1.into_iter().collect_tuple().unwrap();
+
+        let m0 = match m0 {
+            NetworkValue::VecRing16(val) => Ok(val),
             _ => Err(eyre!("Could not deserialize properly in bit inject")),
         };
 
-        let reply_m1 = network.receive(&next_id, &sid).await;
-        let m1 = match NetworkValue::from_network(reply_m1) {
-            Ok(NetworkValue::VecRing16(val)) => Ok(val),
+        let m1 = match m1 {
+            NetworkValue::VecRing16(val) => Ok(val),
             _ => Err(eyre!("Could not deserialize properly in bit inject")),
         };
 
@@ -365,26 +382,27 @@ async fn bit_inject_ot_2round_sender(
     let prev_id = session.prev_identity()?;
     let sid = session.session_id();
     // TODO(Dragos) Note this can be compressed in a single round.
+    let m0_and_m1: Vec<NetworkValue> = [m0, m1]
+        .into_iter()
+        .map(NetworkValue::VecRing16)
+        .collect::<Vec<_>>();
     // Reshare to Helper
     tokio::spawn(async move {
         let _ = network
-            .send(NetworkValue::VecRing16(m0).to_network(), &prev_id, &sid)
-            .await;
-        let _ = network
-            .send(NetworkValue::VecRing16(m1).to_network(), &prev_id, &sid)
+            .send(NetworkValue::vec_to_network(&m0_and_m1), &prev_id, &sid)
             .await;
     })
     .await?;
     Ok(shares)
 }
 
-// TODO this is inbalanced, so a real implementation should actually rotate
+// TODO this is unbalanced, so a real implementation should actually rotate
 // parties around
 pub(crate) async fn bit_inject_ot_2round(
     session: &mut Session,
     input: VecShare<Bit>,
 ) -> Result<VecShare<u16>, Error> {
-    let res = match session.own_role()?.zero_based() {
+    let res = match session.own_role()?.index() {
         0 => {
             // OT Helper
             bit_inject_ot_2round_helper(session, input).await?

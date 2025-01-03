@@ -1,6 +1,6 @@
 use crate::{
     dot::{
-        share_db::{ShareDB, SlicedProcessedDatabase},
+        share_db::{DBChunkBuffers, ShareDB, SlicedProcessedDatabase},
         IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
     },
     helpers::device_manager::DeviceManager,
@@ -78,6 +78,15 @@ impl<T> From<&CudaVec2DSlicer<T>> for CudaVec2DSlicerRawPointer {
         CudaVec2DSlicerRawPointer {
             limb_0: slicer.limb_0.iter().map(|s| *s.device_ptr()).collect(),
             limb_1: slicer.limb_1.iter().map(|s| *s.device_ptr()).collect(),
+        }
+    }
+}
+
+impl From<&DBChunkBuffers> for CudaVec2DSlicerRawPointer {
+    fn from(buffers: &DBChunkBuffers) -> Self {
+        CudaVec2DSlicerRawPointer {
+            limb_0: buffers.limb_0.iter().map(|s| *s.device_ptr()).collect(),
+            limb_1: buffers.limb_1.iter().map(|s| *s.device_ptr()).collect(),
         }
     }
 }
@@ -193,8 +202,8 @@ impl DeviceCompactQuery {
         &self,
         code_engine: &mut ShareDB,
         mask_engine: &mut ShareDB,
-        sliced_code_db: &SlicedProcessedDatabase,
-        sliced_mask_db: &SlicedProcessedDatabase,
+        sliced_code_db: &CudaVec2DSlicerRawPointer,
+        sliced_mask_db: &CudaVec2DSlicerRawPointer,
         database_sizes: &[usize],
         offset: usize,
         streams: &[CudaStream],
@@ -202,7 +211,7 @@ impl DeviceCompactQuery {
     ) {
         code_engine.dot(
             &self.code_query,
-            &sliced_code_db.code_gr,
+            sliced_code_db,
             database_sizes,
             offset,
             streams,
@@ -210,7 +219,7 @@ impl DeviceCompactQuery {
         );
         mask_engine.dot(
             &self.mask_query,
-            &sliced_mask_db.code_gr,
+            sliced_mask_db,
             database_sizes,
             offset,
             streams,

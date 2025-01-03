@@ -1,32 +1,18 @@
-use axum::{routing::get, Router};
 use clap::Parser;
-use eyre::{bail, Context};
+use eyre::bail;
 use futures_concurrency::future::Join;
 use iris_mpc_common::helpers::task_monitor::TaskMonitor;
 use iris_mpc_store::Store;
 use iris_mpc_upgrade::{
     config::{Eye, UpgradeServerConfig, BATCH_SUCCESSFUL_ACK, FINAL_BATCH_SUCCESSFUL_ACK},
     packets::{MaskShareMessage, TwoToThreeIrisCodeMessage},
+    utils::{install_tracing, spawn_healthcheck_server},
     IrisCodeUpgrader, NewIrisShareSink,
 };
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 const APP_NAME: &str = "SMPC";
-
-fn install_tracing() {
-    use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-
-    let fmt_layer = fmt::layer().with_target(true).with_line_number(true);
-    let filter_layer = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new("info"))
-        .unwrap();
-
-    tracing_subscriber::registry()
-        .with(filter_layer)
-        .with(fmt_layer)
-        .init();
-}
 
 struct UpgradeTask {
     msg1:  TwoToThreeIrisCodeMessage,
@@ -47,19 +33,13 @@ async fn main() -> eyre::Result<()> {
     tracing::info!("Starting healthcheck server.");
 
     let mut background_tasks = TaskMonitor::new();
-    let _health_check_abort = background_tasks.spawn(async move {
-        let app = Router::new().route("/health", get(|| async {})); // implicit 200 return
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
-            .await
-            .wrap_err("healthcheck listener bind error")?;
-        axum::serve(listener, app)
-            .await
-            .wrap_err("healthcheck listener server launch error")?;
-        Ok(())
-    });
-
+    let _health_check_abort = background_tasks
+        .spawn(async move { spawn_healthcheck_server(args.healthcheck_port).await });
     background_tasks.check_tasks();
-    tracing::info!("Healthcheck server running on port 3000.");
+    tracing::info!(
+        "Healthcheck server running on port {}.",
+        args.healthcheck_port.clone()
+    );
 
     let upgrader = IrisCodeUpgrader::new(args.party_id, sink.clone());
 
@@ -212,10 +192,6 @@ async fn main() -> eyre::Result<()> {
     client_stream1.write_u8(FINAL_BATCH_SUCCESSFUL_ACK).await?;
     tracing::info!("Sent final ACK to client1");
 
-    tracing::info!("Updating iris id sequence");
-    sink.update_iris_id_sequence().await?;
-    tracing::info!("Iris id sequence updated");
-
     Ok(())
 }
 
@@ -251,9 +227,5 @@ impl NewIrisShareSink for IrisShareDbSink {
                     .await
             }
         }
-    }
-
-    async fn update_iris_id_sequence(&self) -> eyre::Result<()> {
-        self.store.update_iris_id_sequence().await
     }
 }

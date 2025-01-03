@@ -65,11 +65,26 @@ env:
   - name: SMPC__PUBLIC_KEY_BASE_URL
     value: "https://pki-smpcv2-stage.worldcoin.org"
 
+  - name: SMPC__SHARES_BUCKET_NAME
+    value: "wf-smpcv2-stage-sns-requests"
+
+  - name: SMPC__ENABLE_S3_IMPORTER
+    value: "true"
+
+  - name: SMPC__DB_CHUNKS_BUCKET_NAME
+    value: "iris-mpc-db-exporter-store-node-1-stage-eu-north-1"
+
+  - name: SMPC__DB_CHUNKS_FOLDER_NAME
+    value: "binary_output_16k"
+
+  - name: SMPC__LOAD_CHUNKS_PARALLELISM
+    value: "32"
+
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
-    value: "0"
+    value: "800000"
 
   - name: SMPC__MAX_DB_SIZE
     value: "1000000"
@@ -90,7 +105,7 @@ env:
 
   - name: SMPC__SERVICE__METRICS__BUFFER_SIZE
     value: "256"
-  
+
   - name: SMPC__SERVICE__METRICS__PREFIX
     value: "smpcv2-1"
 
@@ -99,6 +114,9 @@ env:
 
   - name: SMPC__NODE_HOSTNAMES
     value: '["iris-mpc-node.1.stage.smpcv2.worldcoin.dev","iris-mpc-node.2.stage.smpcv2.worldcoin.dev","iris-mpc-node.3.stage.smpcv2.worldcoin.dev"]'
+
+  - name: SMPC__IMAGE_NAME
+    value: $(IMAGE_NAME)
 
 initContainer:
   enabled: true

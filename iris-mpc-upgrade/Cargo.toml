@@ -11,7 +11,7 @@ repository.workspace = true
 axum.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
-clap.workspace = true
+clap = { workspace = true, features = ["env"] }
 eyre.workspace = true
 bytemuck.workspace = true
 sqlx.workspace = true
@@ -30,9 +30,22 @@ mpc-uniqueness-check = { package = "mpc", git = "https://github.com/worldcoin/mp
 indicatif = "0.17.8"
 rcgen = "0.13.1"
 tokio-native-tls = "0.3.1"
+tonic = { version = "0.12.3", features = [
+    "tls",
+    "tls-native-roots",
+    "transport",
+] }
+prost = "0.13.3"
+sha2 = "0.10.8"
+thiserror.workspace = true
+hkdf = "0.12.4"
 
 [dev-dependencies]
 float_eq = "1"
+
+
+[build-dependencies]
+tonic-build = "0.12.3"
 
 [[bin]]
 name = "upgrade-checker"
@@ -49,3 +62,15 @@ path = "src/bin/tcp_ssl_upgrade_client.rs"
 [[bin]]
 name = "seed-v1-dbs"
 path = "src/bin/seed_v1_dbs.rs"
+
+[[bin]]
+name = "seed-v2-dbs"
+path = "src/bin/seed_v2_dbs.rs"
+
+[[bin]]
+name = "reshare-server"
+path = "src/bin/reshare-server.rs"
+
+[[bin]]
+name = "reshare-client"
+path = "src/bin/reshare-client.rs"

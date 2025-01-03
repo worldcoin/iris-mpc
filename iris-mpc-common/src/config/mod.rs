@@ -49,6 +49,9 @@ pub struct Config {
     #[serde(default)]
     pub public_key_base_url: String,
 
+    #[serde(default = "default_shares_bucket_name")]
+    pub shares_bucket_name: String,
+
     #[serde(default)]
     pub clear_db_before_init: bool,
 
@@ -76,11 +79,39 @@ pub struct Config {
     #[serde(default)]
     pub disable_persistence: bool,
 
+    #[serde(default)]
+    pub enable_debug_timing: bool,
+
     #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
     pub node_hostnames: Vec<String>,
 
     #[serde(default = "default_shutdown_last_results_sync_timeout_secs")]
     pub shutdown_last_results_sync_timeout_secs: u64,
+
+    #[serde(default)]
+    pub image_name: String,
+
+    #[serde(default)]
+    pub enable_s3_importer: bool,
+
+    #[serde(default)]
+    pub db_chunks_bucket_name: String,
+
+    #[serde(default = "default_load_chunks_parallelism")]
+    pub load_chunks_parallelism: usize,
+
+    /// Defines the safety overlap to load the DB records >last_modified_at in
+    /// seconds This is to ensure we don't miss any records that were
+    /// updated during the DB export to S3
+    #[serde(default = "default_db_load_safety_overlap_seconds")]
+    pub db_load_safety_overlap_seconds: i64,
+
+    #[serde(default)]
+    pub db_chunks_folder_name: String,
+}
+
+fn default_load_chunks_parallelism() -> usize {
+    32
 }
 
 fn default_processing_timeout_secs() -> u64 {
@@ -92,7 +123,7 @@ fn default_max_batch_size() -> usize {
 }
 
 fn default_heartbeat_interval_secs() -> u64 {
-    30
+    2
 }
 
 fn default_heartbeat_initial_retries() -> u64 {
@@ -101,6 +132,14 @@ fn default_heartbeat_initial_retries() -> u64 {
 
 fn default_shutdown_last_results_sync_timeout_secs() -> u64 {
     10
+}
+
+fn default_shares_bucket_name() -> String {
+    "wf-mpc-prod-smpcv2-sns-requests".to_string()
+}
+
+fn default_db_load_safety_overlap_seconds() -> i64 {
+    60
 }
 
 impl Config {

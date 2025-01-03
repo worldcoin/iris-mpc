@@ -29,7 +29,7 @@ impl<T: IntRing2k> Share<T> {
     }
 
     pub fn add_assign_const_role(&mut self, other: T, role: Role) {
-        match role.zero_based() {
+        match role.index() {
             0 => self.a += RingElement(other),
             1 => self.b += RingElement(other),
             2 => {}
@@ -317,5 +317,22 @@ impl<T: IntRing2k> Shl<u32> for Share<T> {
             a: self.a << rhs,
             b: self.b << rhs,
         }
+    }
+}
+
+// Additive share of a Hamming distance value
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(bound = "")]
+pub struct DistanceShare<T: IntRing2k> {
+    pub code_dot: Share<T>,
+    pub mask_dot: Share<T>,
+}
+
+impl<T> DistanceShare<T>
+where
+    T: IntRing2k,
+{
+    pub fn new(code_dot: Share<T>, mask_dot: Share<T>) -> Self {
+        DistanceShare { code_dot, mask_dot }
     }
 }
