@@ -109,7 +109,7 @@ iris-mpc-2:
       value: "eth0"
 
     - name: NCCL_COMM_ID
-      value: "iris-mpc-2.svc.cluster.local:4000"
+      value: "iris-mpc-0.iris-mpc-0.$ENV.svc.cluster.local:4000"
 
     - name: SMPC__ENVIRONMENT
       value: "$ENV"
@@ -198,7 +198,7 @@ iris-mpc-2:
       value: "true"
 
     - name: SMPC__NODE_HOSTNAMES
-      value: '["iris-mpc-0.svc.cluster.local","iris-mpc-1.svc.cluster.local","iris-mpc-2.svc.cluster.local"]'
+      value: '["iris-mpc-0.iris-mpc-0.$ENV.svc.cluster.local","iris-mpc-1.iris-mpc-1.$ENV.svc.cluster.local","iris-mpc-2.iris-mpc-2.$ENV.svc.cluster.local"]'
 
     - name: SMPC__IMAGE_NAME
       value: "ghcr.io/worldcoin/iris-mpc:$IRIS_MPC_IMAGE_TAG"
@@ -227,4 +227,5 @@ iris-mpc-2:
         aws s3 cp s3://wf-smpcv2-stage-libs/libcublas.so.12.2.5.6 .
         aws s3 cp s3://wf-smpcv2-stage-libs/libcublasLt.so.12.2.5.6 .
 
+        key-manager --node-id 2 --env $ENV --region $AWS_REGION --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-public-keys
         key-manager --node-id 2 --env $ENV --region $AWS_REGION --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-public-keys
