@@ -551,7 +551,7 @@ mod tests {
         let second_entry = generate_galois_iris_shares(&mut rng, iris_db[1].clone());
 
         let mut jobs = JoinSet::new();
-        for (index, player) in runtime.identities.iter().cloned().enumerate() {
+        for (index, player) in runtime.get_identities().iter().cloned().enumerate() {
             let mut player_session = runtime.sessions.get(&player).unwrap().clone();
             let mut own_shares = vec![(first_entry[index].clone(), second_entry[index].clone())];
             own_shares.iter_mut().for_each(|(_x, y)| {

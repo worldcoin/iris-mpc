@@ -41,14 +41,22 @@ pub async fn get_free_local_addresses(num_ports: usize) -> eyre::Result<Vec<Stri
 
 #[derive(Debug, Clone)]
 pub struct LocalRuntime {
-    pub identities:       Vec<Identity>,
-    pub role_assignments: RoleAssignment,
-    pub seeds:            Vec<PrfSeed>,
     // only one session per player is created
-    pub sessions:         HashMap<Identity, Session>,
+    pub sessions: HashMap<Identity, Session>,
 }
 
 impl LocalRuntime {
+    pub fn get_session(&self, identity: &Identity) -> eyre::Result<Session> {
+        self.sessions
+            .get(identity)
+            .ok_or_else(|| eyre::eyre!(format!("Session not found for identity: {:?}", identity)))
+            .cloned()
+    }
+
+    pub fn get_identities(&self) -> Vec<Identity> {
+        self.sessions.keys().cloned().collect()
+    }
+
     pub async fn mock_setup(network_t: NetworkType) -> eyre::Result<Self> {
         let num_parties = 3;
         let identities = generate_local_identities();
@@ -138,12 +146,7 @@ impl LocalRuntime {
                 setup: prf,
             });
         }
-        Ok(LocalRuntime {
-            identities,
-            role_assignments,
-            seeds,
-            sessions,
-        })
+        Ok(LocalRuntime { sessions })
     }
 
     pub async fn new(identities: Vec<Identity>, seeds: Vec<PrfSeed>) -> eyre::Result<Self> {
