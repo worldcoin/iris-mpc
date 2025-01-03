@@ -237,7 +237,7 @@ async fn rotate_keys(
             return Err(eyre::eyre!("Error uploading public key to S3"));
         }
     }
-    println!("{}", private_key_secret_id);
+
     match upload_private_key_to_asm(&sm_client, private_key_secret_id, priv_key_str.as_str()).await
     {
         Ok(output) => {
