@@ -93,6 +93,12 @@ iris-mpc-0:
     - name: AWS_REGION
       value: "$AWS_REGION"
 
+    - name: AWS_ACCESS_KEY_ID
+      value: "access_key"
+
+    - name: AWS_SECRET_ACCESS_KEY
+      value: "secret_key"
+
     - name: AWS_ENDPOINT_URL
       value: "http://localstack:4566"
 
@@ -199,7 +205,7 @@ iris-mpc-0:
 
   initContainer:
     enabled: true
-    image: "ghcr.io/worldcoin/iris-mpc:2694d8cbb37c278ed84951ef9aac3af47b21f146" # no-cuda image
+    image: "ghcr.io/worldcoin/iris-mpc:4913ef30024615c5dca0132a22c2971158e1cc0e" # no-cuda image
     name: "iris-mpc-0-copy-cuda-libs"
     env:
       - name: AWS_REGION
