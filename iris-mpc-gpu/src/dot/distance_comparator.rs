@@ -347,4 +347,21 @@ impl DistanceComparator {
             })
             .collect::<Vec<_>>()
     }
+
+    pub fn prepare_match_distances_buffer(&self, max_size: usize) -> Vec<CudaSlice<u16>> {
+        (0..self.device_manager.device_count())
+            .map(|i| {
+                self.device_manager
+                    .device(i)
+                    .alloc_zeros(max_size / self.device_manager.device_count())
+                    .unwrap()
+            })
+            .collect::<Vec<_>>()
+    }
+
+    pub fn prepare_match_distances_counter(&self) -> Vec<CudaSlice<u32>> {
+        (0..self.device_manager.device_count())
+            .map(|i| self.device_manager.device(i).alloc_zeros(1).unwrap())
+            .collect::<Vec<_>>()
+    }
 }

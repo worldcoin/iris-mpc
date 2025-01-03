@@ -77,44 +77,48 @@ const KDF_SALT: &str = "111a1a93518f670e9bb0c2c68888e2beb9406d4c4ed571dc77b801e6
 const SUPERMATCH_THRESHOLD: usize = 4_000;
 
 pub struct ServerActor {
-    job_queue:              mpsc::Receiver<ServerJob>,
-    device_manager:         Arc<DeviceManager>,
-    party_id:               usize,
+    job_queue: mpsc::Receiver<ServerJob>,
+    device_manager: Arc<DeviceManager>,
+    party_id: usize,
     // engines
-    codes_engine:           ShareDB,
-    masks_engine:           ShareDB,
-    batch_codes_engine:     ShareDB,
-    batch_masks_engine:     ShareDB,
-    phase2:                 Circuits,
-    phase2_batch:           Circuits,
-    distance_comparator:    DistanceComparator,
-    comms:                  Vec<Arc<NcclComm>>,
+    codes_engine: ShareDB,
+    masks_engine: ShareDB,
+    batch_codes_engine: ShareDB,
+    batch_masks_engine: ShareDB,
+    phase2: Circuits,
+    phase2_batch: Circuits,
+    distance_comparator: DistanceComparator,
+    comms: Vec<Arc<NcclComm>>,
     // DB slices
-    left_code_db_slices:    SlicedProcessedDatabase,
-    left_mask_db_slices:    SlicedProcessedDatabase,
-    right_code_db_slices:   SlicedProcessedDatabase,
-    right_mask_db_slices:   SlicedProcessedDatabase,
-    streams:                Vec<Vec<CudaStream>>,
-    cublas_handles:         Vec<Vec<CudaBlas>>,
-    results:                Vec<CudaSlice<u32>>,
-    batch_results:          Vec<CudaSlice<u32>>,
-    final_results:          Vec<CudaSlice<u32>>,
-    db_match_list_left:     Vec<CudaSlice<u64>>,
-    db_match_list_right:    Vec<CudaSlice<u64>>,
-    batch_match_list_left:  Vec<CudaSlice<u64>>,
+    left_code_db_slices: SlicedProcessedDatabase,
+    left_mask_db_slices: SlicedProcessedDatabase,
+    right_code_db_slices: SlicedProcessedDatabase,
+    right_mask_db_slices: SlicedProcessedDatabase,
+    streams: Vec<Vec<CudaStream>>,
+    cublas_handles: Vec<Vec<CudaBlas>>,
+    results: Vec<CudaSlice<u32>>,
+    batch_results: Vec<CudaSlice<u32>>,
+    final_results: Vec<CudaSlice<u32>>,
+    db_match_list_left: Vec<CudaSlice<u64>>,
+    db_match_list_right: Vec<CudaSlice<u64>>,
+    batch_match_list_left: Vec<CudaSlice<u64>>,
     batch_match_list_right: Vec<CudaSlice<u64>>,
-    current_db_sizes:       Vec<usize>,
-    query_db_size:          Vec<usize>,
-    max_batch_size:         usize,
-    max_db_size:            usize,
+    current_db_sizes: Vec<usize>,
+    query_db_size: Vec<usize>,
+    max_batch_size: usize,
+    max_db_size: usize,
     return_partial_results: bool,
-    disable_persistence:    bool,
-    enable_debug_timing:    bool,
-    code_chunk_buffers:     Vec<DBChunkBuffers>,
-    mask_chunk_buffers:     Vec<DBChunkBuffers>,
-    dot_events:             Vec<Vec<CUevent>>,
-    exchange_events:        Vec<Vec<CUevent>>,
-    phase2_events:          Vec<Vec<CUevent>>,
+    disable_persistence: bool,
+    enable_debug_timing: bool,
+    code_chunk_buffers: Vec<DBChunkBuffers>,
+    mask_chunk_buffers: Vec<DBChunkBuffers>,
+    dot_events: Vec<Vec<CUevent>>,
+    exchange_events: Vec<Vec<CUevent>>,
+    phase2_events: Vec<Vec<CUevent>>,
+    match_distances_buffer_left: Vec<CudaSlice<u16>>,
+    match_distances_buffer_right: Vec<CudaSlice<u16>>,
+    match_distances_counter_left: Vec<CudaSlice<u32>>,
+    match_distances_counter_right: Vec<CudaSlice<u32>>,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -350,6 +354,14 @@ impl ServerActor {
         let exchange_events = vec![device_manager.create_events(); 2];
         let phase2_events = vec![device_manager.create_events(); 2];
 
+        // Buffers and counters for match distribution
+        let match_distances_buffer_left =
+            distance_comparator.prepare_match_distances_buffer(1_000_000); // TODO
+        let match_distances_buffer_right =
+            distance_comparator.prepare_match_distances_buffer(1_000_000); // TODO
+        let match_distances_counter_left = distance_comparator.prepare_match_distances_counter();
+        let match_distances_counter_right = distance_comparator.prepare_match_distances_counter();
+
         for dev in device_manager.devices() {
             dev.synchronize().unwrap();
         }
@@ -391,6 +403,10 @@ impl ServerActor {
             dot_events,
             exchange_events,
             phase2_events,
+            match_distances_buffer_left,
+            match_distances_buffer_right,
+            match_distances_counter_left,
+            match_distances_counter_right,
         })
     }
 
@@ -1102,18 +1118,22 @@ impl ServerActor {
             {
                 tracing::info!(party_id = self.party_id, "batch_reshare start");
                 self.batch_codes_engine
-                    .reshare_results(&self.query_db_size, batch_streams);
+                    .reshare_results(&self.query_db_size, batch_streams, 0);
                 tracing::info!(party_id = self.party_id, "batch_reshare masks start");
                 self.batch_masks_engine
-                    .reshare_results(&self.query_db_size, batch_streams);
+                    .reshare_results(&self.query_db_size, batch_streams, 0);
                 tracing::info!(party_id = self.party_id, "batch_reshare end");
             }
         );
 
         let db_sizes_batch =
             vec![self.max_batch_size * ROTATIONS; self.device_manager.device_count()];
-        let code_dots_batch = self.batch_codes_engine.result_chunk_shares(&db_sizes_batch);
-        let mask_dots_batch = self.batch_masks_engine.result_chunk_shares(&db_sizes_batch);
+        let code_dots_batch = self
+            .batch_codes_engine
+            .result_chunk_shares(&db_sizes_batch, 0);
+        let mask_dots_batch = self
+            .batch_masks_engine
+            .result_chunk_shares(&db_sizes_batch, 0);
 
         record_stream_time!(
             &self.device_manager,
@@ -1297,6 +1317,7 @@ impl ServerActor {
                         &dot_chunk_size,
                         offset,
                         request_streams,
+                        db_chunk_idx % 2,
                     );
                 }
             );
@@ -1311,10 +1332,16 @@ impl ServerActor {
                 "db_reshare",
                 self.enable_debug_timing,
                 {
-                    self.codes_engine
-                        .reshare_results(&dot_chunk_size, request_streams);
-                    self.masks_engine
-                        .reshare_results(&dot_chunk_size, request_streams);
+                    self.codes_engine.reshare_results(
+                        &dot_chunk_size,
+                        request_streams,
+                        db_chunk_idx % 2,
+                    );
+                    self.masks_engine.reshare_results(
+                        &dot_chunk_size,
+                        request_streams,
+                        db_chunk_idx % 2,
+                    );
                 }
             );
 
@@ -1326,8 +1353,12 @@ impl ServerActor {
             // ---- START PHASE 2 ----
             let max_chunk_size = dot_chunk_size.iter().max().copied().unwrap();
             let phase_2_chunk_sizes = vec![max_chunk_size; self.device_manager.device_count()];
-            let code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
-            let mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
+            let code_dots = self
+                .codes_engine
+                .result_chunk_shares(&phase_2_chunk_sizes, db_chunk_idx % 2);
+            let mask_dots = self
+                .masks_engine
+                .result_chunk_shares(&phase_2_chunk_sizes, db_chunk_idx % 2);
             {
                 assert_eq!(
                     (max_chunk_size * self.max_batch_size * ROTATIONS) % 64,
