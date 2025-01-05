@@ -680,6 +680,7 @@ impl ServerActor {
             &compact_device_sums_left,
             &mut events,
             Eye::Left,
+            batch_size,
         );
 
         ///////////////////////////////////////////////////////////////////
@@ -727,6 +728,7 @@ impl ServerActor {
             &compact_device_sums_right,
             &mut events,
             Eye::Right,
+            batch_size,
         );
 
         ///////////////////////////////////////////////////////////////////
@@ -1069,6 +1071,7 @@ impl ServerActor {
         compact_device_sums: &DeviceCompactSums,
         events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
         eye_db: Eye,
+        batch_size: usize,
     ) {
         let batch_streams = &self.streams[0];
         let batch_cublas = &self.cublas_handles[0];
@@ -1100,6 +1103,15 @@ impl ServerActor {
                 &self.match_distances_counter_right,
             ),
         };
+
+        // copy counters to host
+        let counter = self
+            .device_manager
+            .device(0)
+            .dtoh_sync_copy(&match_distances_counters[0])
+            .unwrap();
+
+        tracing::info!("counter: {:?}", counter);
 
         // ---- START BATCH DEDUP ----
         tracing::info!(party_id = self.party_id, "Starting batch deduplication");
@@ -1439,6 +1451,7 @@ impl ServerActor {
                             match_distances_counters,
                             &code_dots,
                             &mask_dots,
+                            batch_size,
                             request_streams,
                         );
                         self.phase2.return_result_buffer(res);
@@ -1620,6 +1633,7 @@ fn open(
     match_distances_counters: &[CudaSlice<u32>],
     code_dots: &[ChunkShareView<u16>],
     mask_dots: &[ChunkShareView<u16>],
+    batch_size: usize,
     streams: &[CudaStream],
 ) {
     let n_devices = x.len();
@@ -1661,6 +1675,7 @@ fn open(
         match_distances_counters,
         code_dots,
         mask_dots,
+        batch_size,
         streams,
     );
 }

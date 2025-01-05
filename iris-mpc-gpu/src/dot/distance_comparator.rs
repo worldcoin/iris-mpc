@@ -144,6 +144,7 @@ impl DistanceComparator {
         match_distances_counters: &[CudaSlice<u32>],
         code_dots: &[ChunkShareView<u16>],
         mask_dots: &[ChunkShareView<u16>],
+        batch_size: usize,
         streams: &[CudaStream],
     ) {
         for i in 0..self.device_manager.device_count() {
@@ -171,7 +172,7 @@ impl DistanceComparator {
                 ptr_param(results3[i].device_ptr()),
                 ptr_param(matches_bitmap[i].device_ptr()),
                 usize_param(&db_sizes[i]),
-                usize_param(&self.query_length),
+                usize_param(&(batch_size * ROTATIONS)),
                 usize_param(&offset),
                 usize_param(&num_elements),
                 usize_param(&real_db_sizes[i]),

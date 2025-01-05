@@ -70,12 +70,16 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
             }
 
             // Save the corresponding code and mask dots for later (match distributions)
-            // unsigned int match_distances_counter_idx = atomicAdd(&match_distances_counter[0], 1);
-            // match_distances_buffer_codes_a[match_distances_counter_idx] = code_dots_a[idx];
-            // match_distances_buffer_codes_b[match_distances_counter_idx] = code_dots_b[idx];
-            // match_distances_buffer_masks_a[match_distances_counter_idx] = mask_dots_a[idx];
-            // match_distances_buffer_masks_b[match_distances_counter_idx] = mask_dots_b[idx];
+            if (match_distances_counter[0] < UINT_MAX)
+            {
+                unsigned int match_distances_counter_idx = atomicAdd(&match_distances_counter[0], 1);
+                match_distances_buffer_codes_a[match_distances_counter_idx] = code_dots_a[idx];
+                match_distances_buffer_codes_b[match_distances_counter_idx] = code_dots_b[idx];
+                match_distances_buffer_masks_a[match_distances_counter_idx] = mask_dots_a[idx];
+                match_distances_buffer_masks_b[match_distances_counter_idx] = mask_dots_b[idx];
+            }
 
+            // Mark which results are matches with a bit in the output
             unsigned int outputIdx = totalDbLen * (queryIdx / ALL_ROTATIONS) + dbIdx + offset;
             atomicOr(&output[outputIdx / 64], (1ULL << (outputIdx % 64)));
         }
