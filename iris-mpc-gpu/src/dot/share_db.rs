@@ -1213,6 +1213,7 @@ mod tests {
                 &db_sizes,
                 0,
                 &streams,
+                0,
             );
             masks_engine.dot_reduce_and_multiply(
                 &mask_query_sums,
@@ -1221,6 +1222,7 @@ mod tests {
                 0,
                 &streams,
                 2,
+                0,
             );
 
             device_manager.await_streams(&streams);

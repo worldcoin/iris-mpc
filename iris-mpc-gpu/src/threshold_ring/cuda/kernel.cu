@@ -24,8 +24,16 @@ template <typename T> __device__ void xor_assign_inner(T *lhs, T *rhs) {
 template <typename T>
 __device__ void arithmetic_xor_inner(T *res_a, T *lhs_a, T *lhs_b, T *rhs_a,
                                      T *rhs_b, T *r1, T *r2) {
-  T mul = (*lhs_a * *rhs_a) + (*lhs_b * *rhs_a) + (*lhs_a * *rhs_b) + *r1 - *r2;
-  *res_a = lhs_a + rhs_a - 2 * mul;
+  T lhs_a_val = *lhs_a;
+  T lhs_b_val = *lhs_b;
+  T rhs_a_val = *rhs_a;
+  T rhs_b_val = *rhs_b;
+  T r1_val = *r1;
+  T r2_val = *r2;
+  
+  T mul = (lhs_a_val * rhs_a_val) + (lhs_b_val * rhs_a_val) + 
+          (lhs_a_val * rhs_b_val) + r1_val - r2_val;
+  *res_a = lhs_a_val + rhs_a_val - 2 * mul;
 }
 
 // Computes the local part of the multiplication (including randomness)
@@ -172,20 +180,20 @@ __device__ void u32_transpose_pack_u64(U64 *out_a, U64 *out_b, U32 *in_a,
   }
 }
 
-__device__ void lift_mul_sub(U32 *mask, U16 *mask_corr1, U16 *mask_corr2,
-                             U16 *code) {
-  U32 lifted;
-  finalize_lift(mask, &lifted, mask_corr1, mask_corr2, code);
-  *mask *= A;
-  *mask -= lifted;
-}
-
 __device__ void finalize_lift(U32 *mask, U32 *code_lift, U16 *mask_corr1,
                               U16 *mask_corr2, U16 *code) {
   *mask -= (U32)(*mask_corr1) << 16;
   *mask -= (U32)(*mask_corr2) << 17;
 
   mul_lift_b(code_lift, code);
+}
+
+__device__ void lift_mul_sub(U32 *mask, U16 *mask_corr1, U16 *mask_corr2,
+                             U16 *code) {
+  U32 lifted;
+  finalize_lift(mask, &lifted, mask_corr1, mask_corr2, code);
+  *mask *= A;
+  *mask -= lifted;
 }
 
 __device__ void lifted_sub(U32 *mask, U32 *code, U32 *output, U32 a) {
@@ -445,8 +453,8 @@ extern "C" __global__ void shared_lifted_sub(U32 *mask_a, U32 *mask_b,
                                              U32 a, int id, size_t n) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
-    lifted_sub(&mask_a[i], &code_a[i], output_a[i], a);
-    lifted_sub(&mask_b[i], &code_b[i], output_n[i], a);
+    lifted_sub(&mask_a[i], &code_a[i], &output_a[i], a);
+    lifted_sub(&mask_b[i], &code_b[i], &output_b[i], a);
     switch (id) {
     case 0:
       mask_a[i] -= 1; // Transforms the <= into <
@@ -545,9 +553,8 @@ extern "C" __global__ void collapse_u64_helper(U64 *inout_a, U64 *in_b,
   }
 }
 
-extern "C" __global__ void collapse_sum_assign(u32 *inout_a, U32 *inout_b,
+extern "C" __global__ void collapse_sum_assign(U32 *inout_a, U32 *inout_b,
                                                size_t n) {
-
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i == 1) {
     for (size_t j = 1; j < n; j++) {
@@ -560,9 +567,9 @@ extern "C" __global__ void collapse_sum_assign(u32 *inout_a, U32 *inout_b,
   }
 }
 
-extern "C" __global__ void collapse_sum(u32 *inout_a, U32 *inout_b, input_a,
-                                        input_b, size_t inout_index, size_t n) {
-
+extern "C" __global__ void collapse_sum(U32 *inout_a, U32 *inout_b,
+                                        U32 *input_a, U32 *input_b,
+                                        size_t inout_index, size_t n) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i == 1) {
     for (size_t j = 0; j < n; j++) {

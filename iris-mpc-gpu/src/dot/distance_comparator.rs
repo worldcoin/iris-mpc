@@ -8,12 +8,12 @@ use crate::{
 };
 use cudarc::{
     driver::{
-        result::launch_kernel, CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr,
+        result::launch_kernel, sys, CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr,
         LaunchAsync,
     },
     nvrtc::compile_ptx,
 };
-use std::{cmp::min, sync::Arc};
+use std::{cmp::min, ffi::c_void, sync::Arc};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const OPEN_RESULTS_FUNCTION: &str = "openResults";
@@ -161,26 +161,30 @@ impl DistanceComparator {
             );
             self.device_manager.device(i).bind_to_thread().unwrap();
 
+            let ptr_param = |ptr: *const sys::CUdeviceptr| ptr as *mut c_void;
+            let usize_param = |val: &usize| val as *const usize as *mut _;
+
             let params = &mut [
-                *results1[i].device_ptr() as *mut _,
-                *results2[i].device_ptr() as *mut _,
-                *results3[i].device_ptr() as *mut _,
-                *matches_bitmap[i].device_ptr() as *mut _,
-                db_sizes[i] as *mut _,
-                self.query_length as *mut _,
-                offset as *mut _,
-                num_elements as *mut _,
-                real_db_sizes[i] as *mut _,
-                total_db_sizes[i] as *mut _,
-                *match_distances_buffers_codes[i].a.device_ptr() as *mut _,
-                *match_distances_buffers_codes[i].b.device_ptr() as *mut _,
-                *match_distances_buffers_masks[i].a.device_ptr() as *mut _,
-                *match_distances_buffers_masks[i].b.device_ptr() as *mut _,
-                *match_distances_counters[i].device_ptr() as *mut _,
-                *code_dots[i].a.device_ptr() as *mut _,
-                *code_dots[i].b.device_ptr() as *mut _,
-                *mask_dots[i].a.device_ptr() as *mut _,
-                *mask_dots[i].b.device_ptr() as *mut _,
+                // Results arrays
+                ptr_param(results1[i].device_ptr()),
+                ptr_param(results2[i].device_ptr()),
+                ptr_param(results3[i].device_ptr()),
+                ptr_param(matches_bitmap[i].device_ptr()),
+                usize_param(&db_sizes[i]),
+                usize_param(&self.query_length),
+                usize_param(&offset),
+                usize_param(&num_elements),
+                usize_param(&real_db_sizes[i]),
+                usize_param(&total_db_sizes[i]),
+                ptr_param(match_distances_buffers_codes[i].a.device_ptr()),
+                ptr_param(match_distances_buffers_codes[i].b.device_ptr()),
+                ptr_param(match_distances_buffers_masks[i].a.device_ptr()),
+                ptr_param(match_distances_buffers_masks[i].b.device_ptr()),
+                ptr_param(match_distances_counters[i].device_ptr()),
+                ptr_param(code_dots[i].a.device_ptr()),
+                ptr_param(code_dots[i].b.device_ptr()),
+                ptr_param(mask_dots[i].a.device_ptr()),
+                ptr_param(mask_dots[i].b.device_ptr()),
             ];
 
             unsafe {
