@@ -27,7 +27,7 @@ extern "C" __global__ void matmul_correct_and_reduce(int *c, unsigned short *out
     }
 }
 
-extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t chunkLength, size_t queryLength, size_t offset, size_t numElements, size_t realChunkLen, size_t totalDbLen)
+extern "C" __global__ void openResultsBatch(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t chunkLength, size_t queryLength, size_t offset, size_t numElements, size_t realChunkLen, size_t totalDbLen)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
@@ -44,6 +44,37 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
             {
                 continue;
             }
+
+            unsigned int outputIdx = totalDbLen * (queryIdx / ALL_ROTATIONS) + dbIdx + offset;
+            atomicOr(&output[outputIdx / 64], (1ULL << (outputIdx % 64)));
+        }
+    }
+}
+
+extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t chunkLength, size_t queryLength, size_t offset, size_t numElements, size_t realChunkLen, size_t totalDbLen, unsigned short *match_distances_buffer_codes_a, unsigned short *match_distances_buffer_codes_b, unsigned short *match_distances_buffer_masks_a, unsigned short *match_distances_buffer_masks_b, unsigned int *match_distances_counter, unsigned short *code_dots_a, unsigned short *code_dots_b, unsigned short *mask_dots_a, unsigned short *mask_dots_b)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < numElements)
+    {
+        unsigned long long result = result1[idx] ^ result2[idx] ^ result3[idx];
+        for (int i = 0; i < 64; i++)
+        {
+            unsigned int queryIdx = (idx * 64 + i) / chunkLength;
+            unsigned int dbIdx = (idx * 64 + i) % chunkLength;
+            bool match = (result & (1ULL << i));
+
+            // Check if we are out of bounds for the query or db
+            if (queryIdx >= queryLength || dbIdx >= realChunkLen || !match)
+            {
+                continue;
+            }
+
+            // Save the corresponding code and mask dots for later (match distributions)
+            unsigned int match_distances_counter_idx = atomicAdd(&match_distances_counter[0], 1);
+            match_distances_buffer_codes_a[match_distances_counter_idx] = code_dots_a[idx];
+            match_distances_buffer_codes_b[match_distances_counter_idx] = code_dots_b[idx];
+            match_distances_buffer_masks_a[match_distances_counter_idx] = mask_dots_a[idx];
+            match_distances_buffer_masks_b[match_distances_counter_idx] = mask_dots_b[idx];
 
             unsigned int outputIdx = totalDbLen * (queryIdx / ALL_ROTATIONS) + dbIdx + offset;
             atomicOr(&output[outputIdx / 64], (1ULL << (outputIdx % 64)));

@@ -13,7 +13,7 @@ use crate::{
             CompactQuery, CudaVec2DSlicerRawPointer, DeviceCompactQuery, DeviceCompactSums,
         },
     },
-    threshold_ring::protocol::{ChunkShare, Circuits},
+    threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
 };
 use cudarc::{
     cublas::CudaBlas,
@@ -115,8 +115,10 @@ pub struct ServerActor {
     dot_events: Vec<Vec<CUevent>>,
     exchange_events: Vec<Vec<CUevent>>,
     phase2_events: Vec<Vec<CUevent>>,
-    match_distances_buffer_left: Vec<CudaSlice<u16>>,
-    match_distances_buffer_right: Vec<CudaSlice<u16>>,
+    match_distances_buffer_codes_left: Vec<ChunkShare<u16>>,
+    match_distances_buffer_codes_right: Vec<ChunkShare<u16>>,
+    match_distances_buffer_masks_left: Vec<ChunkShare<u16>>,
+    match_distances_buffer_masks_right: Vec<ChunkShare<u16>>,
     match_distances_counter_left: Vec<CudaSlice<u32>>,
     match_distances_counter_right: Vec<CudaSlice<u32>>,
 }
@@ -355,9 +357,13 @@ impl ServerActor {
         let phase2_events = vec![device_manager.create_events(); 2];
 
         // Buffers and counters for match distribution
-        let match_distances_buffer_left =
+        let match_distances_buffer_codes_left =
             distance_comparator.prepare_match_distances_buffer(1_000_000); // TODO
-        let match_distances_buffer_right =
+        let match_distances_buffer_codes_right =
+            distance_comparator.prepare_match_distances_buffer(1_000_000); // TODO
+        let match_distances_buffer_masks_left =
+            distance_comparator.prepare_match_distances_buffer(1_000_000); // TODO
+        let match_distances_buffer_masks_right =
             distance_comparator.prepare_match_distances_buffer(1_000_000); // TODO
         let match_distances_counter_left = distance_comparator.prepare_match_distances_counter();
         let match_distances_counter_right = distance_comparator.prepare_match_distances_counter();
@@ -403,8 +409,10 @@ impl ServerActor {
             dot_events,
             exchange_events,
             phase2_events,
-            match_distances_buffer_left,
-            match_distances_buffer_right,
+            match_distances_buffer_codes_left,
+            match_distances_buffer_codes_right,
+            match_distances_buffer_masks_left,
+            match_distances_buffer_masks_right,
             match_distances_counter_left,
             match_distances_counter_right,
         })
@@ -1076,6 +1084,23 @@ impl ServerActor {
             Eye::Right => (&self.db_match_list_right, &self.batch_match_list_right),
         };
 
+        let (
+            match_distances_buffers_codes,
+            match_distances_buffers_masks,
+            match_distances_counters,
+        ) = match eye_db {
+            Eye::Left => (
+                &self.match_distances_buffer_codes_left,
+                &self.match_distances_buffer_masks_left,
+                &self.match_distances_counter_left,
+            ),
+            Eye::Right => (
+                &self.match_distances_buffer_codes_right,
+                &self.match_distances_buffer_masks_right,
+                &self.match_distances_counter_right,
+            ),
+        };
+
         // ---- START BATCH DEDUP ----
         tracing::info!(party_id = self.party_id, "Starting batch deduplication");
 
@@ -1156,7 +1181,7 @@ impl ServerActor {
 
         let res = self.phase2_batch.take_result_buffer();
         let chunk_size = self.phase2_batch.chunk_size();
-        open(
+        open_batch(
             &mut self.phase2_batch,
             &res,
             &self.distance_comparator,
@@ -1409,8 +1434,14 @@ impl ServerActor {
                             offset,
                             &self.current_db_sizes,
                             &ignore_device_results,
+                            &match_distances_buffers_codes,
+                            &match_distances_buffers_masks,
+                            &match_distances_counters,
+                            &code_dots,
+                            &mask_dots,
                             request_streams,
                         );
+                        // TODO: pass the
                         self.phase2.return_result_buffer(res);
                     }
                 );
@@ -1585,6 +1616,11 @@ fn open(
     offset: usize,
     total_db_sizes: &[usize],
     ignore_db_results: &[bool],
+    match_distances_buffers_codes: &[ChunkShare<u16>],
+    match_distances_buffers_masks: &[ChunkShare<u16>],
+    match_distances_counters: &[CudaSlice<u32>],
+    code_dots: &[ChunkShareView<u16>],
+    mask_dots: &[ChunkShareView<u16>],
     streams: &[CudaStream],
 ) {
     let n_devices = x.len();
@@ -1612,6 +1648,63 @@ fn open(
     cudarc::nccl::result::group_end().unwrap();
 
     distance_comparator.open_results(
+        &a,
+        &b,
+        &c,
+        matches_bitmap,
+        db_sizes,
+        real_db_sizes,
+        offset,
+        total_db_sizes,
+        ignore_db_results,
+        match_distances_buffers_codes,
+        match_distances_buffers_masks,
+        match_distances_counters,
+        code_dots,
+        mask_dots,
+        streams,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn open_batch(
+    party: &mut Circuits,
+    x: &[ChunkShare<u64>],
+    distance_comparator: &DistanceComparator,
+    matches_bitmap: &[CudaSlice<u64>],
+    chunk_size: usize,
+    db_sizes: &[usize],
+    real_db_sizes: &[usize],
+    offset: usize,
+    total_db_sizes: &[usize],
+    ignore_db_results: &[bool],
+    streams: &[CudaStream],
+) {
+    let n_devices = x.len();
+    let mut a = Vec::with_capacity(n_devices);
+    let mut b = Vec::with_capacity(n_devices);
+    let mut c = Vec::with_capacity(n_devices);
+
+    cudarc::nccl::result::group_start().unwrap();
+    for (idx, res) in x.iter().enumerate() {
+        // Result is in bit 0
+        let res = res.get_offset(0, chunk_size);
+        party.comms()[idx]
+            .send_view(&res.b, party.next_id(), &streams[idx])
+            .unwrap();
+        a.push(res.a);
+        b.push(res.b);
+    }
+    for (idx, res) in x.iter().enumerate() {
+        let mut res = res.get_offset(1, chunk_size);
+        party.comms()[idx]
+            .receive_view(&mut res.a, party.prev_id(), &streams[idx])
+            .unwrap();
+        c.push(res.a);
+    }
+    cudarc::nccl::result::group_end().unwrap();
+
+    distance_comparator.open_batch_results(
         &a,
         &b,
         &c,
