@@ -588,6 +588,7 @@ impl ShareDB {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn dot_reduce_and_multiply(
         &mut self,
         query_sums: &CudaVec2DSlicerU32,

@@ -1434,14 +1434,13 @@ impl ServerActor {
                             offset,
                             &self.current_db_sizes,
                             &ignore_device_results,
-                            &match_distances_buffers_codes,
-                            &match_distances_buffers_masks,
-                            &match_distances_counters,
+                            match_distances_buffers_codes,
+                            match_distances_buffers_masks,
+                            match_distances_counters,
                             &code_dots,
                             &mask_dots,
                             request_streams,
                         );
-                        // TODO: pass the
                         self.phase2.return_result_buffer(res);
                     }
                 );
