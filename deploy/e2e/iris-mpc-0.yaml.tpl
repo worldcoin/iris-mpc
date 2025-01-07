@@ -203,6 +203,9 @@ iris-mpc-0:
     - name: SMPC__IMAGE_NAME
       value: "ghcr.io/worldcoin/iris-mpc:$IRIS_MPC_IMAGE_TAG"
 
+    - name: SMPC__HEARTBEAT_INITIAL_RETRIES
+      value: "1000"
+
   initContainer:
     enabled: true
     image: "ghcr.io/worldcoin/iris-mpc:4913ef30024615c5dca0132a22c2971158e1cc0e" # no-cuda image
