@@ -39,13 +39,13 @@ startupProbe:
 resources:
   limits:
     cpu: 192
-    memory: 1000Gi
+    memory: 2000Gi
     nvidia.com/gpu: 8
     hugepages-2Mi: 5Gi
     vpc.amazonaws.com/efa: 32
   requests:
     cpu: 190
-    memory: 1000Gi
+    memory: 2000Gi
     nvidia.com/gpu: 8
     hugepages-2Mi: 5Gi
     vpc.amazonaws.com/efa: 32
