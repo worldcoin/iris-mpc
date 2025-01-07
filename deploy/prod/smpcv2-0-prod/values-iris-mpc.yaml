@@ -96,7 +96,7 @@ env:
     value: "0"
 
   - name: SMPC__MAX_DB_SIZE
-    value: "20000000"
+    value: "11000000"
 
   - name: SMPC__FAKE_DB_SIZE
     value: "0"
