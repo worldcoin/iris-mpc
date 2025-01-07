@@ -108,6 +108,9 @@ pub struct Config {
 
     #[serde(default)]
     pub db_chunks_folder_name: String,
+
+    #[serde(default)]
+    pub fixed_shared_secrets: bool,
 }
 
 fn default_load_chunks_parallelism() -> usize {
