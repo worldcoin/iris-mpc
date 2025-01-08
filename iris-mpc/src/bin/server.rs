@@ -1,6 +1,7 @@
 #![allow(clippy::needless_range_loop)]
 
-use aws_sdk_s3::Client as S3Client;
+use aws_config::retry::RetryConfig;
+use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{response::IntoResponse, routing::get, Router};
@@ -675,7 +676,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);
-    let s3_client = Arc::new(S3Client::new(&shared_config));
+
+    // Increase S3 retries to 5
+    let retry_config = RetryConfig::standard().with_max_attempts(5);
+    let s3_config = S3ConfigBuilder::from(&shared_config)
+        .retry_config(retry_config)
+        .build();
+    let s3_client = Arc::new(S3Client::from_conf(s3_config));
     let s3_client_clone = Arc::clone(&s3_client);
     let shares_encryption_key_pair =
         match SharesEncryptionKeyPairs::from_storage(config.clone()).await {
@@ -966,6 +973,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             config.max_batch_size,
             config.return_partial_results,
             config.disable_persistence,
+            config.enable_debug_timing,
         ) {
             Ok((mut actor, handle)) => {
                 let res = if config.fake_db_size > 0 {
@@ -1124,6 +1132,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
                         tracing::info!("Preprocessing db");
                         actor.preprocess_db();
+
+                        tracing::info!("Page-lock host memory");
+                        actor.register_host_memory();
 
                         tracing::info!(
                             "Loaded {} records from db into memory [DB sizes: {:?}]",

@@ -83,7 +83,13 @@ impl Drop for SharesEncryptionKeyPairs {
 
 impl SharesEncryptionKeyPairs {
     pub async fn from_storage(config: Config) -> Result<Self, SharesDecodingError> {
-        let region_provider = Region::new(REGION);
+        // use the configured region, fallback to the hardcoded value
+        let region = config
+            .aws
+            .and_then(|aws| aws.region)
+            .unwrap_or_else(|| REGION.to_owned());
+        tracing::info!("Using region: {} for key pair download", region);
+        let region_provider = Region::new(region);
         let shared_config = aws_config::from_env().region(region_provider).load().await;
         let client = SecretsManagerClient::new(&shared_config);
 
@@ -194,6 +200,10 @@ async fn download_private_key_from_asm(
     version_stage: &str,
 ) -> Result<String, SharesDecodingError> {
     let private_key_secret_id: String = format!("{}/iris-mpc/ecdh-private-key-{}", env, node_id);
+    tracing::info!(
+        "Downloading private key from Secrets Manager: {}",
+        private_key_secret_id
+    );
     match client
         .get_secret_value()
         .secret_id(private_key_secret_id)

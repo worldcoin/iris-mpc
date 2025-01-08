@@ -40,7 +40,6 @@ iris-mpc-0:
     seccompProfile:
       type: RuntimeDefault
 
-
   resources:
     limits:
       cpu: 31
@@ -91,6 +90,12 @@ iris-mpc-0:
     - name: RUST_LOG
       value: "info"
 
+    - name: AWS_REGION
+      value: "$AWS_REGION"
+
+    - name: AWS_ENDPOINT_URL
+      value: "http://localstack:4566"
+
     - name: RUST_BACKTRACE
       value: "full"
 
@@ -102,6 +107,9 @@ iris-mpc-0:
 
     - name: SMPC__ENVIRONMENT
       value: "$ENV"
+
+    - name: SMPC__AWS__REGION
+      value: "$AWS_REGION"
 
     - name: SMPC__SERVICE__SERVICE_NAME
       value: "smpcv2-server-$ENV"
@@ -121,9 +129,6 @@ iris-mpc-0:
     - name: SMPC__DATABASE__LOAD_PARALLELISM
       value: "8"
 
-    - name: SMPC__AWS__REGION
-      value: "eu-north-1"
-
     - name: SMPC__REQUESTS_QUEUE_URL
       value: "arn:aws:sns:eu-central-1:000000000000:iris-mpc-input"
 
@@ -137,12 +142,13 @@ iris-mpc-0:
       value: "/data/"
 
     - name: SMPC__KMS_KEY_ARNS
-      value: '["arn:aws:kms:eu-north-1:000000000000:key/00000000-0000-0000-0000-000000000000","arn:aws:kms:eu-north-1:000000000000:key/00000000-0000-0000-0000-000000000001","arn:aws:kms:eu-north-1:000000000000:key/00000000-0000-0000-0000-000000000002"]'
+      value: '["arn:aws:kms:$AWS_REGION:000000000000:key/00000000-0000-0000-0000-000000000000","arn:aws:kms:$AWS_REGION:000000000000:key/00000000-0000-0000-0000-000000000001","arn:aws:kms:$AWS_REGION:000000000000:key/00000000-0000-0000-0000-000000000002"]'
+
     - name: SMPC__PARTY_ID
       value: "0"
 
     - name: SMPC__PUBLIC_KEY_BASE_URL
-      value: "https://pki-smpcv2-stage.worldcoin.org"
+      value: "http://wf-$ENV-public-keys.s3.localhost.localstack.cloud:4566"
 
     - name: SMPC__ENABLE_S3_IMPORTER
       value: "false"
@@ -190,9 +196,11 @@ iris-mpc-0:
 
   initContainer:
     enabled: true
-    image: "amazon/aws-cli:2.17.62"
+    image: "ghcr.io/worldcoin/iris-mpc:2694d8cbb37c278ed84951ef9aac3af47b21f146" # no-cuda image
     name: "iris-mpc-0-copy-cuda-libs"
     env:
+      - name: AWS_REGION
+        value: "$AWS_REGION"
       - name: PARTY_ID
         value: "1"
       - name: MY_NODE_IP
@@ -203,6 +211,11 @@ iris-mpc-0:
       name: "iris-mpc-0-init"
       init.sh: |
         #!/usr/bin/env bash
+        set -e
+
         cd /libs
+
         aws s3 cp s3://wf-smpcv2-stage-libs/libcublas.so.12.2.5.6 .
         aws s3 cp s3://wf-smpcv2-stage-libs/libcublasLt.so.12.2.5.6 .
+
+        key-manager --node-id 0 --env $ENV --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-stage-public-keys --region $AWS_REGION

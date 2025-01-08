@@ -21,17 +21,18 @@ use cudarc::{
     },
     driver::{
         result::{self, malloc_async},
-        sys::CUdeviceptr,
+        sys::{CUdeviceptr, CU_MEMHOSTALLOC_PORTABLE},
         CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr, DeviceSlice, LaunchAsync,
     },
     nccl,
     nvrtc::compile_ptx,
 };
 use itertools::{izip, Itertools};
+use memmap2::MmapMut;
 use rayon::prelude::*;
 use std::{
     ffi::{c_void, CStr},
-    mem,
+    mem::{self, forget},
     sync::Arc,
 };
 
@@ -243,17 +244,23 @@ impl ShareDB {
             .devices()
             .iter()
             .map(|device| unsafe {
-                let mut host_mem0: *mut c_void = std::ptr::null_mut();
-                let mut host_mem1: *mut c_void = std::ptr::null_mut();
-                let _ = cudarc::driver::sys::lib()
-                    .cuMemAllocHost_v2(&mut host_mem0, max_size * self.code_length);
-                let _ = cudarc::driver::sys::lib()
-                    .cuMemAllocHost_v2(&mut host_mem1, max_size * self.code_length);
+                let host_mem0 = MmapMut::map_anon(max_size * self.code_length).unwrap();
+                let host_mem1 = MmapMut::map_anon(max_size * self.code_length).unwrap();
+
+                let host_mem0_ptr = host_mem0.as_ptr() as u64;
+                let host_mem1_ptr = host_mem1.as_ptr() as u64;
+
+                // Make sure to not drop the memory, even though we only use the pointers
+                // afterwards. This also has the effect that this memory is never freed, which
+                // is fine for the db.
+                forget(host_mem0);
+                forget(host_mem1);
+
                 (
                     StreamAwareCudaSlice::from(device.alloc(max_size).unwrap()),
                     (
                         StreamAwareCudaSlice::from(device.alloc(max_size).unwrap()),
-                        (host_mem0 as u64, host_mem1 as u64),
+                        (host_mem0_ptr, host_mem1_ptr),
                     ),
                 )
             })
@@ -272,6 +279,26 @@ impl ShareDB {
                 limb_0: db0_sums,
                 limb_1: db1_sums,
             },
+        }
+    }
+
+    pub fn register_host_memory(&self, db: &SlicedProcessedDatabase, max_db_length: usize) {
+        let max_size = max_db_length / self.device_manager.device_count();
+        for (device_index, device) in self.device_manager.devices().iter().enumerate() {
+            device.bind_to_thread().unwrap();
+            unsafe {
+                let _ = cudarc::driver::sys::lib().cuMemHostRegister_v2(
+                    db.code_gr.limb_0[device_index] as *mut _,
+                    max_size * self.code_length,
+                    CU_MEMHOSTALLOC_PORTABLE,
+                );
+
+                let _ = cudarc::driver::sys::lib().cuMemHostRegister_v2(
+                    db.code_gr.limb_1[device_index] as *mut _,
+                    max_size * self.code_length,
+                    CU_MEMHOSTALLOC_PORTABLE,
+                );
+            }
         }
     }
 
@@ -476,7 +503,10 @@ impl ShareDB {
             let device = self.device_manager.device(idx);
             device.bind_to_thread().unwrap();
 
-            if offset[idx] >= db_sizes[idx] || offset[idx] + chunk_sizes[idx] > db_sizes[idx] {
+            if offset[idx] >= db_sizes[idx]
+                || offset[idx] + chunk_sizes[idx] > db_sizes[idx]
+                || chunk_sizes[idx] == 0
+            {
                 continue;
             }
 
@@ -861,6 +891,7 @@ mod tests {
             .unwrap();
         let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
         let mut db_slices = engine.alloc_db(DB_SIZE);
+        engine.register_host_memory(&db_slices, DB_SIZE);
         let db_sizes = engine.load_full_db(&mut db_slices, &db);
 
         engine.dot(
@@ -962,6 +993,7 @@ mod tests {
                 .unwrap();
             let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
             let mut db_slices = engine.alloc_db(DB_SIZE);
+            engine.register_host_memory(&db_slices, DB_SIZE);
             let db_sizes = engine.load_full_db(&mut db_slices, &codes_db);
 
             engine.dot(
@@ -1095,6 +1127,8 @@ mod tests {
             let db_sizes = codes_engine.load_full_db(&mut code_db_slices, &codes_db);
             let mut mask_db_slices = masks_engine.alloc_db(DB_SIZE);
             let mask_db_sizes = masks_engine.load_full_db(&mut mask_db_slices, &masks_db);
+            codes_engine.register_host_memory(&code_db_slices, DB_SIZE);
+            masks_engine.register_host_memory(&mask_db_slices, DB_SIZE);
 
             assert_eq!(db_sizes, mask_db_sizes);
 
