@@ -143,16 +143,26 @@ pub(crate) async fn transposed_pack_and(
     session: &mut Session,
     x1: Vec<VecShare<u64>>,
     x2: Vec<VecShare<u64>>,
-) -> Result<Vec<VecShare<u64>>, Error>
-where
-    Standard: Distribution<u64>,
-{
-    // TODO(Dragos) this could probably be parallelized even more.
-    let mut res = Vec::with_capacity(x1.len());
-    for (x1, x2) in x1.iter().zip(x2.iter()) {
-        let shares_a = and_many_send(session, x1.as_slice(), x2.as_slice()).await?;
-        let shares_b = and_many_receive(session).await?;
-        res.push(VecShare::from_ab(shares_a, shares_b))
+) -> Result<Vec<VecShare<u64>>, Error> {
+    if x1.len() != x2.len() {
+        return Err(eyre!("Inputs have different length"));
+    }
+    let chunk_sizes = x1.iter().map(VecShare::len).collect::<Vec<_>>();
+    let chunk_sizes2 = x2.iter().map(VecShare::len).collect::<Vec<_>>();
+    if chunk_sizes != chunk_sizes2 {
+        return Err(eyre!("VecShare lengths are not equal"));
+    }
+
+    let x1 = VecShare::flatten(x1);
+    let x2 = VecShare::flatten(x2);
+    let mut shares_a = and_many_send(session, x1.as_slice(), x2.as_slice()).await?;
+    let mut shares_b = and_many_receive(session).await?;
+
+    let mut res = Vec::with_capacity(chunk_sizes.len());
+    for l in chunk_sizes {
+        let a = shares_a.drain(..l).collect();
+        let b = shares_b.drain(..l).collect();
+        res.push(VecShare::from_ab(a, b));
     }
     Ok(res)
 }

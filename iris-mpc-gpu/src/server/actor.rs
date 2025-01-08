@@ -2,14 +2,16 @@ use super::{BatchQuery, Eye, ServerJob, ServerJobResult};
 use crate::{
     dot::{
         distance_comparator::DistanceComparator,
-        share_db::{preprocess_query, ShareDB, SlicedProcessedDatabase},
+        share_db::{preprocess_query, DBChunkBuffers, ShareDB, SlicedProcessedDatabase},
         IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS,
     },
     helpers::{
         self,
         comm::NcclComm,
         device_manager::DeviceManager,
-        query_processor::{CompactQuery, DeviceCompactQuery, DeviceCompactSums},
+        query_processor::{
+            CompactQuery, CudaVec2DSlicerRawPointer, DeviceCompactQuery, DeviceCompactSums,
+        },
     },
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
@@ -35,14 +37,18 @@ use std::{collections::HashMap, mem, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
 
 macro_rules! record_stream_time {
-    ($manager:expr, $streams:expr, $map:expr, $label:expr, $block:block) => {{
-        let evt0 = $manager.create_events();
-        let evt1 = $manager.create_events();
-        $manager.record_event($streams, &evt0);
-        let res = $block;
-        $manager.record_event($streams, &evt1);
-        $map.entry($label).or_default().extend(vec![evt0, evt1]);
-        res
+    ($manager:expr, $streams:expr, $map:expr, $label:expr, $enable_timing:expr, $block:block) => {{
+        if $enable_timing {
+            let evt0 = $manager.create_events();
+            let evt1 = $manager.create_events();
+            $manager.record_event($streams, &evt0);
+            let res = $block;
+            $manager.record_event($streams, &evt1);
+            $map.entry($label).or_default().extend(vec![evt0, evt1]);
+            res
+        } else {
+            $block
+        }
     }};
 }
 
@@ -66,8 +72,9 @@ impl ServerActorHandle {
     }
 }
 
-const DB_CHUNK_SIZE: usize = 1 << 14;
+const DB_CHUNK_SIZE: usize = 1 << 15;
 const KDF_SALT: &str = "111a1a93518f670e9bb0c2c68888e2beb9406d4c4ed571dc77b801e676ae3091"; // Random 32 byte salt
+const SUPERMATCH_THRESHOLD: usize = 4_000;
 
 pub struct ServerActor {
     job_queue:              mpsc::Receiver<ServerJob>,
@@ -102,6 +109,12 @@ pub struct ServerActor {
     max_db_size:            usize,
     return_partial_results: bool,
     disable_persistence:    bool,
+    enable_debug_timing:    bool,
+    code_chunk_buffers:     Vec<DBChunkBuffers>,
+    mask_chunk_buffers:     Vec<DBChunkBuffers>,
+    dot_events:             Vec<Vec<CUevent>>,
+    exchange_events:        Vec<Vec<CUevent>>,
+    phase2_events:          Vec<Vec<CUevent>>,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -116,6 +129,7 @@ impl ServerActor {
         max_batch_size: usize,
         return_partial_results: bool,
         disable_persistence: bool,
+        enable_debug_timing: bool,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let device_manager = Arc::new(DeviceManager::init());
         Self::new_with_device_manager(
@@ -127,6 +141,7 @@ impl ServerActor {
             max_batch_size,
             return_partial_results,
             disable_persistence,
+            enable_debug_timing,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -139,6 +154,7 @@ impl ServerActor {
         max_batch_size: usize,
         return_partial_results: bool,
         disable_persistence: bool,
+        enable_debug_timing: bool,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let ids = device_manager.get_ids_from_magic(0);
         let comms = device_manager.instantiate_network_from_ids(party_id, &ids)?;
@@ -152,6 +168,7 @@ impl ServerActor {
             max_batch_size,
             return_partial_results,
             disable_persistence,
+            enable_debug_timing,
         )
     }
 
@@ -166,6 +183,7 @@ impl ServerActor {
         max_batch_size: usize,
         return_partial_results: bool,
         disable_persistence: bool,
+        enable_debug_timing: bool,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let (tx, rx) = mpsc::channel(job_queue_size);
         let actor = Self::init(
@@ -178,6 +196,7 @@ impl ServerActor {
             max_batch_size,
             return_partial_results,
             disable_persistence,
+            enable_debug_timing,
         )?;
         Ok((actor, ServerActorHandle { job_queue: tx }))
     }
@@ -193,6 +212,7 @@ impl ServerActor {
         max_batch_size: usize,
         return_partial_results: bool,
         disable_persistence: bool,
+        enable_debug_timing: bool,
     ) -> eyre::Result<Self> {
         assert!(max_batch_size != 0);
         let mut kdf_nonce = 0;
@@ -233,10 +253,14 @@ impl ServerActor {
             comms.clone(),
         );
 
+        let now = Instant::now();
+
         let left_code_db_slices = codes_engine.alloc_db(max_db_size);
         let left_mask_db_slices = masks_engine.alloc_db(max_db_size);
         let right_code_db_slices = codes_engine.alloc_db(max_db_size);
         let right_mask_db_slices = masks_engine.alloc_db(max_db_size);
+
+        tracing::info!("Allocated db in {:?}", now.elapsed());
 
         // Engines for inflight queries
         let batch_codes_engine = ShareDB::init(
@@ -316,8 +340,15 @@ impl ServerActor {
         let batch_match_list_right = distance_comparator.prepare_db_match_list(n_queries);
 
         let query_db_size = vec![n_queries; device_manager.device_count()];
-
         let current_db_sizes = vec![0; device_manager.device_count()];
+
+        let code_chunk_buffers = vec![codes_engine.alloc_db_chunk_buffer(DB_CHUNK_SIZE); 2];
+        let mask_chunk_buffers = vec![masks_engine.alloc_db_chunk_buffer(DB_CHUNK_SIZE); 2];
+
+        // Create all needed events
+        let dot_events = vec![device_manager.create_events(); 2];
+        let exchange_events = vec![device_manager.create_events(); 2];
+        let phase2_events = vec![device_manager.create_events(); 2];
 
         for dev in device_manager.devices() {
             dev.synchronize().unwrap();
@@ -354,6 +385,12 @@ impl ServerActor {
             max_db_size,
             return_partial_results,
             disable_persistence,
+            enable_debug_timing,
+            code_chunk_buffers,
+            mask_chunk_buffers,
+            dot_events,
+            exchange_events,
+            phase2_events,
         })
     }
 
@@ -460,6 +497,9 @@ impl ServerActor {
             self.device_manager.device_count(),
             MASK_CODE_LENGTH,
         );
+    }
+
+    pub fn increment_db_size(&mut self, index: usize) {
         self.current_db_sizes[index % self.device_manager.device_count()] += 1;
     }
 
@@ -472,6 +512,17 @@ impl ServerActor {
             .preprocess_db(&mut self.right_code_db_slices, &self.current_db_sizes);
         self.masks_engine
             .preprocess_db(&mut self.right_mask_db_slices, &self.current_db_sizes);
+    }
+
+    pub fn register_host_memory(&self) {
+        self.codes_engine
+            .register_host_memory(&self.left_code_db_slices, self.max_db_size);
+        self.masks_engine
+            .register_host_memory(&self.left_mask_db_slices, self.max_db_size);
+        self.codes_engine
+            .register_host_memory(&self.right_code_db_slices, self.max_db_size);
+        self.masks_engine
+            .register_host_memory(&self.right_mask_db_slices, self.max_db_size);
     }
 
     fn process_batch_query(
@@ -578,6 +629,7 @@ impl ServerActor {
             &self.streams[0],
             events,
             "query_preprocess",
+            self.enable_debug_timing,
             {
                 // This needs to be max_batch_size, even though the query can be shorter to have
                 // enough padding for GEMM
@@ -624,6 +676,7 @@ impl ServerActor {
             &self.streams[0],
             events,
             "query_preprocess",
+            self.enable_debug_timing,
             {
                 // This needs to be MAX_BATCH_SIZE, even though the query can be shorter to have
                 // enough padding for GEMM
@@ -674,6 +727,7 @@ impl ServerActor {
         );
 
         self.device_manager.await_streams(&self.streams[0]);
+        self.device_manager.await_streams(&self.streams[1]);
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id
@@ -694,30 +748,6 @@ impl ServerActor {
 
         // Truncate the results to the batch size
         host_results.iter_mut().for_each(|x| x.truncate(batch_size));
-
-        // Evaluate the results across devices
-        // Format: merged_results[query_index]
-        let mut merged_results =
-            get_merged_results(&host_results, self.device_manager.device_count());
-
-        // List the indices of the queries that did not match.
-        let insertion_list = merged_results
-            .iter()
-            .enumerate()
-            .filter(|&(_idx, &num)| num == NON_MATCH_ID)
-            .map(|(idx, _num)| idx)
-            .collect::<Vec<_>>();
-
-        // Spread the insertions across devices.
-        let insertion_list = distribute_insertions(&insertion_list, &self.current_db_sizes);
-
-        // Calculate the new indices for the inserted queries
-        let mut matches = calculate_insertion_indices(
-            &mut merged_results,
-            &insertion_list,
-            &self.current_db_sizes,
-            batch_size,
-        );
 
         // Fetch and truncate the match counters
         let match_counters_devices = self
@@ -740,7 +770,7 @@ impl ServerActor {
 
         // Transfer all match ids
         let match_ids = self.distance_comparator.fetch_all_match_ids(
-            match_counters_devices,
+            &match_counters_devices,
             &self.distance_comparator.all_matches,
         );
 
@@ -757,36 +787,93 @@ impl ServerActor {
             }
         }
 
-        // Check for supermatchers for v1 compatibility and mark them as non-unique
-        const SUPERMATCH_THRESHOLD: usize = 4_000;
-        for i in 0..batch_size {
-            if match_counters[i] > SUPERMATCH_THRESHOLD {
-                matches[i] = true;
-            }
-        }
-
         // Fetch the partial matches
-        let (partial_match_ids_left, partial_match_ids_right) = if self.return_partial_results {
+        let (
+            partial_match_ids_left,
+            partial_match_counters_left,
+            partial_match_ids_right,
+            partial_match_counters_right,
+        ) = if self.return_partial_results {
             // Transfer the partial results to the host
             let partial_match_counters_left = self
                 .distance_comparator
-                .fetch_match_counters(&self.distance_comparator.match_counters_left);
+                .fetch_match_counters(&self.distance_comparator.match_counters_left)
+                .into_iter()
+                .map(|x| x[..batch_size].to_vec())
+                .collect::<Vec<_>>();
             let partial_match_counters_right = self
                 .distance_comparator
-                .fetch_match_counters(&self.distance_comparator.match_counters_right);
+                .fetch_match_counters(&self.distance_comparator.match_counters_right)
+                .into_iter()
+                .map(|x| x[..batch_size].to_vec())
+                .collect::<Vec<_>>();
 
             let partial_results_left = self.distance_comparator.fetch_all_match_ids(
-                partial_match_counters_left,
+                &partial_match_counters_left,
                 &self.distance_comparator.partial_results_left,
             );
             let partial_results_right = self.distance_comparator.fetch_all_match_ids(
-                partial_match_counters_right,
+                &partial_match_counters_right,
                 &self.distance_comparator.partial_results_right,
             );
-            (partial_results_left, partial_results_right)
+            (
+                partial_results_left,
+                partial_match_counters_left,
+                partial_results_right,
+                partial_match_counters_right,
+            )
         } else {
-            (vec![], vec![])
+            (vec![], vec![], vec![], vec![])
         };
+
+        let partial_match_counters_left = partial_match_counters_left.iter().fold(
+            vec![0usize; batch_size],
+            |mut acc, counters| {
+                for (i, &value) in counters.iter().enumerate() {
+                    acc[i] += value as usize;
+                }
+                acc
+            },
+        );
+
+        let partial_match_counters_right = partial_match_counters_right.iter().fold(
+            vec![0usize; batch_size],
+            |mut acc, counters| {
+                for (i, &value) in counters.iter().enumerate() {
+                    acc[i] += value as usize;
+                }
+                acc
+            },
+        );
+
+        // Evaluate the results across devices
+        // Format: merged_results[query_index]
+        let mut merged_results =
+            get_merged_results(&host_results, self.device_manager.device_count());
+
+        // List the indices of the queries that did not match.
+        let insertion_list = merged_results
+            .iter()
+            .enumerate()
+            .filter(|&(idx, &num)| {
+                num == NON_MATCH_ID
+                    // Filter-out supermatchers on both sides (TODO: remove this in the future)
+                    && partial_match_counters_left[idx] <= SUPERMATCH_THRESHOLD
+                    && partial_match_counters_right[idx] <= SUPERMATCH_THRESHOLD
+            })
+            .map(|(idx, _num)| idx)
+            .collect::<Vec<_>>();
+
+        // Spread the insertions across devices.
+        let insertion_list = distribute_insertions(&insertion_list, &self.current_db_sizes);
+
+        // Calculate the new indices for the inserted queries
+        let matches = calculate_insertion_indices(
+            &mut merged_results,
+            &insertion_list,
+            &self.current_db_sizes,
+            batch_size,
+        );
 
         // Check for batch matches
         let matched_batch_request_ids = match_ids
@@ -832,6 +919,7 @@ impl ServerActor {
                 &self.streams[0],
                 events,
                 "db_write",
+                self.enable_debug_timing,
                 {
                     for i in 0..self.device_manager.device_count() {
                         self.device_manager.device(i).bind_to_thread().unwrap();
@@ -880,12 +968,8 @@ impl ServerActor {
             })
             .unwrap();
 
-        // Wait for all streams before get timings
-        self.device_manager.await_streams(&self.streams[0]);
-        self.device_manager.await_streams(&self.streams[1]);
-
         // Reset the results buffers for reuse
-        for dst in &[
+        for dst in [
             &self.db_match_list_left,
             &self.db_match_list_right,
             &self.batch_match_list_left,
@@ -894,29 +978,24 @@ impl ServerActor {
             reset_slice(self.device_manager.devices(), dst, 0, &self.streams[0]);
         }
 
-        reset_slice(
-            self.device_manager.devices(),
+        for dst in [
+            &self.distance_comparator.all_matches,
             &self.distance_comparator.match_counters,
-            0,
-            &self.streams[0],
-        );
-
-        reset_slice(
-            self.device_manager.devices(),
             &self.distance_comparator.match_counters_left,
-            0,
-            &self.streams[0],
-        );
-
-        reset_slice(
-            self.device_manager.devices(),
             &self.distance_comparator.match_counters_right,
-            0,
-            &self.streams[0],
-        );
+            &self.distance_comparator.partial_results_left,
+            &self.distance_comparator.partial_results_right,
+        ] {
+            reset_slice(self.device_manager.devices(), dst, 0, &self.streams[0]);
+        }
+
+        self.device_manager.await_streams(&self.streams[0]);
+        self.device_manager.await_streams(&self.streams[1]);
 
         // ---- END RESULT PROCESSING ----
-        log_timers(events);
+        if self.enable_debug_timing {
+            log_timers(events);
+        }
         let processed_mil_elements_per_second = (self.max_batch_size * previous_total_db_size)
             as f64
             / now.elapsed().as_secs_f64()
@@ -984,34 +1063,42 @@ impl ServerActor {
         // ---- START BATCH DEDUP ----
         tracing::info!(party_id = self.party_id, "Starting batch deduplication");
 
-        record_stream_time!(&self.device_manager, batch_streams, events, "batch_dot", {
-            tracing::info!(party_id = self.party_id, "batch_dot start");
+        record_stream_time!(
+            &self.device_manager,
+            batch_streams,
+            events,
+            "batch_dot",
+            self.enable_debug_timing,
+            {
+                tracing::info!(party_id = self.party_id, "batch_dot start");
 
-            compact_device_queries.compute_dot_products(
-                &mut self.batch_codes_engine,
-                &mut self.batch_masks_engine,
-                &self.query_db_size,
-                0,
-                batch_streams,
-                batch_cublas,
-            );
-            tracing::info!(party_id = self.party_id, "compute_dot_reducers start");
+                compact_device_queries.compute_dot_products(
+                    &mut self.batch_codes_engine,
+                    &mut self.batch_masks_engine,
+                    &self.query_db_size,
+                    0,
+                    batch_streams,
+                    batch_cublas,
+                );
+                tracing::info!(party_id = self.party_id, "compute_dot_reducers start");
 
-            compact_device_sums.compute_dot_reducers(
-                &mut self.batch_codes_engine,
-                &mut self.batch_masks_engine,
-                &self.query_db_size,
-                0,
-                batch_streams,
-            );
-            tracing::info!(party_id = self.party_id, "batch_dot end");
-        });
+                compact_device_sums.compute_dot_reducers(
+                    &mut self.batch_codes_engine,
+                    &mut self.batch_masks_engine,
+                    &self.query_db_size,
+                    0,
+                    batch_streams,
+                );
+                tracing::info!(party_id = self.party_id, "batch_dot end");
+            }
+        );
 
         record_stream_time!(
             &self.device_manager,
             batch_streams,
             events,
             "batch_reshare",
+            self.enable_debug_timing,
             {
                 tracing::info!(party_id = self.party_id, "batch_reshare start");
                 self.batch_codes_engine
@@ -1033,6 +1120,7 @@ impl ServerActor {
             batch_streams,
             events,
             "batch_threshold",
+            self.enable_debug_timing,
             {
                 tracing::info!(party_id = self.party_id, "batch_threshold start");
                 self.phase2_batch.compare_threshold_masked_many(
@@ -1066,13 +1154,38 @@ impl ServerActor {
         tracing::info!(party_id = self.party_id, "Finished batch deduplication");
         // ---- END BATCH DEDUP ----
 
-        // Create new initial events
-        let mut current_dot_event = self.device_manager.create_events();
-        let mut next_dot_event = self.device_manager.create_events();
-        let mut current_exchange_event = self.device_manager.create_events();
-        let mut next_exchange_event = self.device_manager.create_events();
-        let mut current_phase2_event = self.device_manager.create_events();
-        let mut next_phase2_event = self.device_manager.create_events();
+        let chunk_sizes = |chunk_idx: usize| {
+            self.current_db_sizes
+                .iter()
+                .map(|s| (s - DB_CHUNK_SIZE * chunk_idx).clamp(0, DB_CHUNK_SIZE))
+                .collect::<Vec<_>>()
+        };
+
+        record_stream_time!(
+            &self.device_manager,
+            &self.streams[0],
+            events,
+            "prefetch_db_chunk",
+            self.enable_debug_timing,
+            {
+                self.codes_engine.prefetch_db_chunk(
+                    code_db_slices,
+                    &self.code_chunk_buffers[0],
+                    &chunk_sizes(0),
+                    &vec![0; self.device_manager.device_count()],
+                    &self.current_db_sizes,
+                    &self.streams[0],
+                );
+                self.masks_engine.prefetch_db_chunk(
+                    mask_db_slices,
+                    &self.mask_chunk_buffers[0],
+                    &chunk_sizes(0),
+                    &vec![0; self.device_manager.device_count()],
+                    &self.current_db_sizes,
+                    &self.streams[0],
+                );
+            }
+        );
 
         // ---- START DATABASE DEDUP ----
         tracing::info!(party_id = self.party_id, "Start DB deduplication");
@@ -1081,14 +1194,12 @@ impl ServerActor {
         let mut db_chunk_idx = 0;
         loop {
             let request_streams = &self.streams[db_chunk_idx % 2];
+            let next_request_streams = &self.streams[(db_chunk_idx + 1) % 2];
             let request_cublas_handles = &self.cublas_handles[db_chunk_idx % 2];
 
             let offset = db_chunk_idx * DB_CHUNK_SIZE;
-            let chunk_size = self
-                .current_db_sizes
-                .iter()
-                .map(|s| (s - DB_CHUNK_SIZE * db_chunk_idx).clamp(1, DB_CHUNK_SIZE))
-                .collect::<Vec<_>>();
+            let chunk_size = chunk_sizes(db_chunk_idx);
+            let next_chunk_size = chunk_sizes(db_chunk_idx + 1);
 
             // We need to pad the chunk size for two reasons:
             // 1. Chunk size needs to be a multiple of 4, because the underlying
@@ -1099,45 +1210,84 @@ impl ServerActor {
             // later.
             let dot_chunk_size = chunk_size
                 .iter()
-                .map(|s| s.div_ceil(64) * 64)
+                .map(|&s| (s.max(1).div_ceil(64) * 64))
                 .collect::<Vec<_>>();
 
             // First stream doesn't need to wait
             if db_chunk_idx == 0 {
                 self.device_manager
-                    .record_event(request_streams, &current_dot_event);
+                    .record_event(request_streams, &self.dot_events[db_chunk_idx % 2]);
                 self.device_manager
-                    .record_event(request_streams, &current_exchange_event);
+                    .record_event(request_streams, &self.exchange_events[db_chunk_idx % 2]);
                 self.device_manager
-                    .record_event(request_streams, &current_phase2_event);
+                    .record_event(request_streams, &self.phase2_events[db_chunk_idx % 2]);
             }
 
+            // Prefetch next chunk
+            record_stream_time!(
+                &self.device_manager,
+                next_request_streams,
+                events,
+                "prefetch_db_chunk",
+                self.enable_debug_timing,
+                {
+                    self.codes_engine.prefetch_db_chunk(
+                        code_db_slices,
+                        &self.code_chunk_buffers[(db_chunk_idx + 1) % 2],
+                        &next_chunk_size,
+                        &chunk_size.iter().map(|s| offset + s).collect::<Vec<_>>(),
+                        &self.current_db_sizes,
+                        next_request_streams,
+                    );
+                    self.masks_engine.prefetch_db_chunk(
+                        mask_db_slices,
+                        &self.mask_chunk_buffers[(db_chunk_idx + 1) % 2],
+                        &next_chunk_size,
+                        &chunk_size.iter().map(|s| offset + s).collect::<Vec<_>>(),
+                        &self.current_db_sizes,
+                        next_request_streams,
+                    );
+                }
+            );
+
             self.device_manager
-                .await_event(request_streams, &current_dot_event);
+                .await_event(request_streams, &self.dot_events[db_chunk_idx % 2]);
 
             // ---- START PHASE 1 ----
-            record_stream_time!(&self.device_manager, batch_streams, events, "db_dot", {
-                compact_device_queries.dot_products_against_db(
-                    &mut self.codes_engine,
-                    &mut self.masks_engine,
-                    code_db_slices,
-                    mask_db_slices,
-                    &dot_chunk_size,
-                    offset,
-                    request_streams,
-                    request_cublas_handles,
-                );
-            });
+            record_stream_time!(
+                &self.device_manager,
+                batch_streams,
+                events,
+                "db_dot",
+                self.enable_debug_timing,
+                {
+                    compact_device_queries.dot_products_against_db(
+                        &mut self.codes_engine,
+                        &mut self.masks_engine,
+                        &CudaVec2DSlicerRawPointer::from(
+                            &self.code_chunk_buffers[db_chunk_idx % 2],
+                        ),
+                        &CudaVec2DSlicerRawPointer::from(
+                            &self.mask_chunk_buffers[db_chunk_idx % 2],
+                        ),
+                        &dot_chunk_size,
+                        0,
+                        request_streams,
+                        request_cublas_handles,
+                    );
+                }
+            );
 
             // wait for the exchange result buffers to be ready
             self.device_manager
-                .await_event(request_streams, &current_exchange_event);
+                .await_event(request_streams, &self.exchange_events[db_chunk_idx % 2]);
 
             record_stream_time!(
                 &self.device_manager,
                 request_streams,
                 events,
                 "db_reduce",
+                self.enable_debug_timing,
                 {
                     compact_device_sums.compute_dot_reducer_against_db(
                         &mut self.codes_engine,
@@ -1152,13 +1302,14 @@ impl ServerActor {
             );
 
             self.device_manager
-                .record_event(request_streams, &next_dot_event);
+                .record_event(request_streams, &self.dot_events[(db_chunk_idx + 1) % 2]);
 
             record_stream_time!(
                 &self.device_manager,
                 request_streams,
                 events,
                 "db_reshare",
+                self.enable_debug_timing,
                 {
                     self.codes_engine
                         .reshare_results(&dot_chunk_size, request_streams);
@@ -1170,7 +1321,7 @@ impl ServerActor {
             // ---- END PHASE 1 ----
 
             self.device_manager
-                .await_event(request_streams, &current_phase2_event);
+                .await_event(request_streams, &self.phase2_events[db_chunk_idx % 2]);
 
             // ---- START PHASE 2 ----
             let max_chunk_size = dot_chunk_size.iter().max().copied().unwrap();
@@ -1191,6 +1342,7 @@ impl ServerActor {
                     request_streams,
                     events,
                     "db_threshold",
+                    self.enable_debug_timing,
                     {
                         self.phase2.compare_threshold_masked_many(
                             &code_dots,
@@ -1202,44 +1354,40 @@ impl ServerActor {
                 // we can now record the exchange event since the phase 2 is no longer using the
                 // code_dots/mask_dots which are just reinterpretations of the exchange result
                 // buffers
-                self.device_manager
-                    .record_event(request_streams, &next_exchange_event);
+                self.device_manager.record_event(
+                    request_streams,
+                    &self.exchange_events[(db_chunk_idx + 1) % 2],
+                );
 
                 let res = self.phase2.take_result_buffer();
-                record_stream_time!(&self.device_manager, request_streams, events, "db_open", {
-                    open(
-                        &mut self.phase2,
-                        &res,
-                        &self.distance_comparator,
-                        db_match_bitmap,
-                        max_chunk_size * self.max_batch_size * ROTATIONS / 64,
-                        &dot_chunk_size,
-                        &chunk_size,
-                        offset,
-                        &self.current_db_sizes,
-                        &ignore_device_results,
-                        request_streams,
-                    );
-                    self.phase2.return_result_buffer(res);
-                });
+                record_stream_time!(
+                    &self.device_manager,
+                    request_streams,
+                    events,
+                    "db_open",
+                    self.enable_debug_timing,
+                    {
+                        open(
+                            &mut self.phase2,
+                            &res,
+                            &self.distance_comparator,
+                            db_match_bitmap,
+                            max_chunk_size * self.max_batch_size * ROTATIONS / 64,
+                            &dot_chunk_size,
+                            &chunk_size,
+                            offset,
+                            &self.current_db_sizes,
+                            &ignore_device_results,
+                            request_streams,
+                        );
+                        self.phase2.return_result_buffer(res);
+                    }
+                );
             }
             self.device_manager
-                .record_event(request_streams, &next_phase2_event);
+                .record_event(request_streams, &self.phase2_events[(db_chunk_idx + 1) % 2]);
 
             // ---- END PHASE 2 ----
-
-            // Destroy events
-            self.device_manager.destroy_events(current_dot_event);
-            self.device_manager.destroy_events(current_exchange_event);
-            self.device_manager.destroy_events(current_phase2_event);
-
-            // Update events for synchronization
-            current_dot_event = next_dot_event;
-            current_exchange_event = next_exchange_event;
-            current_phase2_event = next_phase2_event;
-            next_dot_event = self.device_manager.create_events();
-            next_exchange_event = self.device_manager.create_events();
-            next_phase2_event = self.device_manager.create_events();
 
             // Increment chunk index
             db_chunk_idx += 1;
@@ -1581,7 +1729,7 @@ fn write_db_at_index(
         ),
     ] {
         unsafe {
-            helpers::dtod_at_offset(
+            helpers::dtoh_at_offset(
                 db.code_gr.limb_0[device_index],
                 dst_index * code_length,
                 *query.limb_0[device_index].device_ptr(),
@@ -1590,7 +1738,7 @@ fn write_db_at_index(
                 streams[device_index].stream,
             );
 
-            helpers::dtod_at_offset(
+            helpers::dtoh_at_offset(
                 db.code_gr.limb_1[device_index],
                 dst_index * code_length,
                 *query.limb_1[device_index].device_ptr(),

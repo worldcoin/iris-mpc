@@ -1,5 +1,5 @@
 use aes_prng::AesRng;
-use hawk_pack::{graph_store::GraphMem, hnsw_db::HawkSearcher, VectorStore};
+use hawk_pack::{graph_store::GraphMem, HawkSearcher, VectorStore};
 use iris_mpc_common::iris_db::{
     db::IrisDB,
     iris::{IrisCode, MATCH_THRESHOLD_RATIO},
@@ -141,7 +141,7 @@ impl PlaintextStore {
     pub async fn create_random<R: RngCore + Clone + CryptoRng>(
         rng: &mut R,
         database_size: usize,
-    ) -> eyre::Result<(Vec<IrisCode>, Self, GraphMem<Self>)> {
+    ) -> eyre::Result<(Self, GraphMem<Self>)> {
         // makes sure the searcher produces same graph structure by having the same rng
         let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
         let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
@@ -152,30 +152,57 @@ impl PlaintextStore {
 
         for raw_query in cleartext_database.iter() {
             let query = plaintext_vector_store.prepare_query(raw_query.clone());
-            let neighbors = searcher
-                .search_to_insert(
+            searcher
+                .insert(
                     &mut plaintext_vector_store,
                     &mut plaintext_graph_store,
                     &query,
-                )
-                .await;
-            let inserted = plaintext_vector_store.insert(&query).await;
-            searcher
-                .insert_from_search_results(
-                    &mut plaintext_vector_store,
-                    &mut plaintext_graph_store,
                     &mut rng_searcher1,
-                    inserted,
-                    neighbors,
                 )
                 .await;
         }
 
-        Ok((
-            cleartext_database,
-            plaintext_vector_store,
-            plaintext_graph_store,
-        ))
+        Ok((plaintext_vector_store, plaintext_graph_store))
+    }
+
+    pub async fn create_random_store<R: RngCore + Clone + CryptoRng>(
+        rng: &mut R,
+        database_size: usize,
+    ) -> eyre::Result<Self> {
+        let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
+
+        let mut plaintext_vector_store = PlaintextStore::default();
+
+        for raw_query in cleartext_database.iter() {
+            let query = plaintext_vector_store.prepare_query(raw_query.clone());
+            let _ = plaintext_vector_store.insert(&query).await;
+        }
+
+        Ok(plaintext_vector_store)
+    }
+
+    pub async fn create_graph<R: RngCore + Clone + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+        graph_size: usize,
+    ) -> eyre::Result<GraphMem<Self>> {
+        let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
+
+        let mut plaintext_graph_store = GraphMem::new();
+        let searcher = HawkSearcher::default();
+
+        for i in 0..graph_size {
+            searcher
+                .insert(
+                    self,
+                    &mut plaintext_graph_store,
+                    &i.into(),
+                    &mut rng_searcher1,
+                )
+                .await;
+        }
+
+        Ok(plaintext_graph_store)
     }
 }
 
@@ -183,7 +210,7 @@ impl PlaintextStore {
 mod tests {
     use super::*;
     use aes_prng::AesRng;
-    use hawk_pack::hnsw_db::HawkSearcher;
+    use hawk_pack::HawkSearcher;
     use iris_mpc_common::iris_db::db::IrisDB;
     use rand::SeedableRng;
     use tracing_test::traced_test;
@@ -266,17 +293,17 @@ mod tests {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 1;
         let searcher = HawkSearcher::default();
-        let (_, mut ptxt_vector, mut ptxt_graph) =
+        let (mut ptxt_vector, mut ptxt_graph) =
             PlaintextStore::create_random(&mut rng, database_size)
                 .await
                 .unwrap();
         for i in 0..database_size {
             let cleartext_neighbors = searcher
-                .search_to_insert(&mut ptxt_vector, &mut ptxt_graph, &i.into())
+                .search(&mut ptxt_vector, &mut ptxt_graph, &i.into(), 1)
                 .await;
             assert!(
                 searcher
-                    .is_match(&mut ptxt_vector, &cleartext_neighbors)
+                    .is_match(&mut ptxt_vector, &[cleartext_neighbors])
                     .await,
             );
         }

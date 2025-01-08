@@ -1,6 +1,7 @@
 #![allow(clippy::needless_range_loop)]
 
-use aws_sdk_s3::Client as S3Client;
+use aws_config::retry::RetryConfig;
+use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{response::IntoResponse, routing::get, Router};
@@ -449,6 +450,8 @@ async fn receive_batch(
         batch_query.query_right.mask.extend(mask_shares_right);
     }
 
+    tracing::info!("batch signups ids in order: {:?}", batch_query.request_ids);
+
     // Preprocess query shares here already to avoid blocking the actor
     batch_query.query_left_preprocessed =
         BatchQueryEntriesPreprocessed::from(batch_query.query_left.clone());
@@ -673,7 +676,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);
-    let s3_client = Arc::new(S3Client::new(&shared_config));
+
+    // Increase S3 retries to 5
+    let retry_config = RetryConfig::standard().with_max_attempts(5);
+    let s3_config = S3ConfigBuilder::from(&shared_config)
+        .retry_config(retry_config)
+        .build();
+    let s3_client = Arc::new(S3Client::from_conf(s3_config));
     let s3_client_clone = Arc::clone(&s3_client);
     let shares_encryption_key_pair =
         match SharesEncryptionKeyPairs::from_storage(config.clone()).await {
@@ -903,6 +912,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let load_chunks_parallelism = config.load_chunks_parallelism;
     let db_chunks_bucket_name = config.db_chunks_bucket_name.clone();
+    let db_chunks_folder_name = config.db_chunks_folder_name.clone();
 
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
@@ -963,6 +973,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             config.max_batch_size,
             config.return_partial_results,
             config.disable_persistence,
+            config.enable_debug_timing,
         ) {
             Ok((mut actor, handle)) => {
                 let res = if config.fake_db_size > 0 {
@@ -983,22 +994,50 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     );
                     let s3_store = S3Store::new(s3_client_clone, db_chunks_bucket_name);
                     tokio::runtime::Handle::current().block_on(async {
-                        // First fetch last snapshot from S3
-                        let last_snapshot_timestamp = last_snapshot_timestamp(&s3_store).await?;
-                        let min_last_modified_at =
-                            last_snapshot_timestamp - config.db_load_safety_overlap_seconds;
-                        let stream_s3 = fetch_and_parse_chunks(&s3_store, load_chunks_parallelism)
-                            .await
-                            .map(|result| result.map(IrisSource::S3))
-                            .boxed();
+                        let mut stream = match config.enable_s3_importer {
+                            true => {
+                                tracing::info!("S3 importer enabled. Fetching from s3 + db");
+                                // First fetch last snapshot from S3
+                                let last_snapshot_details = last_snapshot_timestamp(
+                                    &s3_store,
+                                    db_chunks_folder_name.clone(),
+                                )
+                                .await?;
+                                let min_last_modified_at = last_snapshot_details.timestamp
+                                    - config.db_load_safety_overlap_seconds;
+                                tracing::info!(
+                                    "Last snapshot timestamp: {}, min_last_modified_at: {}",
+                                    last_snapshot_details.timestamp,
+                                    min_last_modified_at
+                                );
+                                let stream_s3 = fetch_and_parse_chunks(
+                                    &s3_store,
+                                    load_chunks_parallelism,
+                                    db_chunks_folder_name,
+                                    last_snapshot_details,
+                                )
+                                .await
+                                .map(|result| result.map(IrisSource::S3))
+                                .boxed();
 
-                        let stream_db = store
-                            .stream_irises_par(min_last_modified_at, parallelism)
-                            .await
-                            .map(|result| result.map(IrisSource::DB))
-                            .boxed();
+                                let stream_db = store
+                                    .stream_irises_par(Some(min_last_modified_at), parallelism)
+                                    .await
+                                    .map(|result| result.map(IrisSource::DB))
+                                    .boxed();
 
-                        let mut stream = select_all(vec![stream_s3, stream_db]);
+                                select_all(vec![stream_s3, stream_db])
+                            }
+                            false => {
+                                tracing::info!("S3 importer disabled. Fetching only from db");
+                                let stream_db = store
+                                    .stream_irises_par(None, parallelism)
+                                    .await
+                                    .map(|result| result.map(IrisSource::DB))
+                                    .boxed();
+                                select_all(vec![stream_db])
+                            }
+                        };
 
                         let now = Instant::now();
                         let mut now_load_summary = Instant::now();
@@ -1056,6 +1095,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                 iris.right_code(),
                                 iris.right_mask(),
                             );
+
+                            // if the serial id hasn't been loaded before, count is as unique record
+                            if all_serial_ids.contains(&(iris.index() as i64)) {
+                                actor.increment_db_size(iris.index() - 1);
+                            }
+
                             time_loading_into_memory += now_load_summary.elapsed();
                             now_load_summary = Instant::now();
 
@@ -1087,6 +1132,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
                         tracing::info!("Preprocessing db");
                         actor.preprocess_db();
+
+                        tracing::info!("Page-lock host memory");
+                        actor.register_host_memory();
 
                         tracing::info!(
                             "Loaded {} records from db into memory [DB sizes: {:?}]",

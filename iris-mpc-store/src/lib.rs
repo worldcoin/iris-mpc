@@ -1,3 +1,5 @@
+#![feature(int_roundings)]
+
 mod s3_importer;
 
 use bytemuck::cast_slice;
@@ -10,6 +12,7 @@ use iris_mpc_common::{
     config::Config,
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     iris_db::iris::IrisCode,
+    IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store};
@@ -73,6 +76,43 @@ impl StoredIris {
     }
     pub fn id(&self) -> i64 {
         self.id
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, eyre::Error> {
+        let mut cursor = 0;
+
+        // Helper closure to extract a slice of a given size
+        let extract_slice =
+            |bytes: &[u8], cursor: &mut usize, size: usize| -> Result<Vec<u8>, eyre::Error> {
+                if *cursor + size > bytes.len() {
+                    return Err(eyre!("Exceeded total bytes while extracting slice",));
+                }
+                let slice = &bytes[*cursor..*cursor + size];
+                *cursor += size;
+                Ok(slice.to_vec())
+            };
+
+        // Parse `id` (i64)
+        let id_bytes = extract_slice(bytes, &mut cursor, 4)?;
+        let id = u32::from_be_bytes(
+            id_bytes
+                .try_into()
+                .map_err(|_| eyre!("Failed to convert id bytes to i64"))?,
+        ) as i64;
+
+        // parse codes and masks
+        let left_code = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH * size_of::<u16>())?;
+        let left_mask = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH * size_of::<u16>())?;
+        let right_code = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH * size_of::<u16>())?;
+        let right_mask = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH * size_of::<u16>())?;
+
+        Ok(StoredIris {
+            id,
+            left_code,
+            left_mask,
+            right_code,
+            right_mask,
+        })
     }
 }
 
@@ -167,7 +207,7 @@ impl Store {
     /// Stream irises in parallel, without a particular order.
     pub async fn stream_irises_par(
         &self,
-        min_last_modified_at: i64,
+        min_last_modified_at: Option<i64>,
         partitions: usize,
     ) -> impl Stream<Item = eyre::Result<StoredIris>> + '_ {
         let count = self.count_irises().await.expect("Failed count_irises");
@@ -179,14 +219,25 @@ impl Store {
             let start_id = 1 + partition_size * i;
             let end_id = start_id + partition_size - 1;
 
-            let partition_stream = sqlx::query_as::<_, StoredIris>(
-                "SELECT * FROM irises WHERE id BETWEEN $1 AND $2 AND last_modified_at >= $3",
-            )
-            .bind(start_id as i64)
-            .bind(end_id as i64)
-            .bind(min_last_modified_at)
-            .fetch(&self.pool)
-            .map_err(Into::into);
+            let partition_stream = match min_last_modified_at {
+                Some(min_last_modified_at) => sqlx::query_as::<_, StoredIris>(
+                    "SELECT id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
+                     BETWEEN $1 AND $2 AND last_modified_at >= $3",
+                )
+                .bind(start_id as i64)
+                .bind(end_id as i64)
+                .bind(min_last_modified_at)
+                .fetch(&self.pool)
+                .map_err(Into::into),
+                None => sqlx::query_as::<_, StoredIris>(
+                    "SELECT id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
+                     BETWEEN $1 AND $2",
+                )
+                .bind(start_id as i64)
+                .bind(end_id as i64)
+                .fetch(&self.pool)
+                .map_err(Into::into),
+            };
 
             partition_streams.push(Box::pin(partition_stream)
                 as Pin<Box<dyn Stream<Item = eyre::Result<StoredIris>> + Send>>);
@@ -509,7 +560,11 @@ mod tests {
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), 0);
 
-        let got: Vec<StoredIris> = store.stream_irises_par(0, 2).await.try_collect().await?;
+        let got: Vec<StoredIris> = store
+            .stream_irises_par(Some(0), 2)
+            .await
+            .try_collect()
+            .await?;
         assert_eq!(got.len(), 0);
 
         let codes_and_masks = &[
@@ -544,8 +599,11 @@ mod tests {
         let got_len = store.count_irises().await?;
         let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
 
-        let mut got_par: Vec<StoredIris> =
-            store.stream_irises_par(0, 2).await.try_collect().await?;
+        let mut got_par: Vec<StoredIris> = store
+            .stream_irises_par(Some(0), 2)
+            .await
+            .try_collect()
+            .await?;
         got_par.sort_by_key(|iris| iris.id);
         assert_eq!(got, got_par);
 
@@ -623,7 +681,7 @@ mod tests {
         // Compare with the parallel version with several edge-cases.
         for parallelism in [1, 5, MAX_CONNECTIONS as usize + 1] {
             let mut got_par: Vec<StoredIris> = store
-                .stream_irises_par(0, parallelism)
+                .stream_irises_par(Some(0), parallelism)
                 .await
                 .try_collect()
                 .await?;

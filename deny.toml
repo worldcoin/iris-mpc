@@ -11,6 +11,7 @@ ignore = [
     { id = "RUSTSEC-2024-0388", reason = "waiting for `mongodb` crate to remove the deprecated dependency" },
     { id = "RUSTSEC-2024-0402", reason = "wating for `index-map` crate to remove the dependency" },
     { id = "RUSTSEC-2024-0421", reason = "wating for `mongodb` crate to remove the dependency" },
+    { id = "RUSTSEC-2024-0421", reason = "waiting for `mongodb` crate to remove the deprecated dependency" },
 ]
 
 [sources]

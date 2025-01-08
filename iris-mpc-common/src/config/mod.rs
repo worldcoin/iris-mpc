@@ -79,6 +79,9 @@ pub struct Config {
     #[serde(default)]
     pub disable_persistence: bool,
 
+    #[serde(default)]
+    pub enable_debug_timing: bool,
+
     #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
     pub node_hostnames: Vec<String>,
 
@@ -87,6 +90,9 @@ pub struct Config {
 
     #[serde(default)]
     pub image_name: String,
+
+    #[serde(default)]
+    pub enable_s3_importer: bool,
 
     #[serde(default)]
     pub db_chunks_bucket_name: String,
@@ -99,6 +105,9 @@ pub struct Config {
     /// updated during the DB export to S3
     #[serde(default = "default_db_load_safety_overlap_seconds")]
     pub db_load_safety_overlap_seconds: i64,
+
+    #[serde(default)]
+    pub db_chunks_folder_name: String,
 }
 
 fn default_load_chunks_parallelism() -> usize {

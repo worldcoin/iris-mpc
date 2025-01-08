@@ -340,10 +340,10 @@ mod tests {
     use super::*;
     use crate::{
         execution::{local::generate_local_identities, player::Role},
-        hawkers::galois_store::LocalNetAby3NgStoreProtocol,
+        hawkers::aby3_store::Aby3Store,
     };
     use aes_prng::AesRng;
-    use hawk_pack::hnsw_db::HawkSearcher;
+    use hawk_pack::HawkSearcher;
     use rand::SeedableRng;
     use tokio::task::JoinSet;
     use tracing_test::traced_test;
@@ -571,7 +571,7 @@ mod tests {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 2;
         let searcher = HawkSearcher::default();
-        let mut vectors_and_graphs = LocalNetAby3NgStoreProtocol::shared_random_setup(
+        let mut vectors_and_graphs = Aby3Store::shared_random_setup(
             &mut rng,
             database_size,
             crate::network::NetworkType::GrpcChannel,
@@ -585,11 +585,10 @@ mod tests {
                 let mut store = store.clone();
                 let mut graph = graph.clone();
                 let searcher = searcher.clone();
-                let q = store.prepare_query(store.storage.get_vector(&i.into()).clone());
+                let q = store.prepare_query(store.storage.get_vector(&i.into()));
                 jobs.spawn(async move {
-                    let secret_neighbors =
-                        searcher.search_to_insert(&mut store, &mut graph, &q).await;
-                    searcher.is_match(&mut store, &secret_neighbors).await
+                    let secret_neighbors = searcher.search(&mut store, &mut graph, &q, 1).await;
+                    searcher.is_match(&mut store, &[secret_neighbors]).await
                 });
             }
             let res = jobs.join_all().await;

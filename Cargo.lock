@@ -2205,7 +2205,7 @@ dependencies = [
 [[package]]
 name = "hawk-pack"
 version = "0.1.0"
-source = "git+https://github.com/Inversed-Tech/hawk-pack.git?rev=29e888ed#29e888edfe19cd69e5925fa676ca07d1f64214da"
+source = "git+https://github.com/Inversed-Tech/hawk-pack.git?rev=ba995e09#ba995e096116a564a0cc8fc43a6b75b2515c34ff"
 dependencies = [
  "aes-prng 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "criterion",
@@ -2214,6 +2214,7 @@ dependencies = [
  "futures",
  "rand",
  "rand_core",
+ "rand_distr",
  "serde",
  "serde_json",
  "sqlx",
@@ -2784,6 +2785,7 @@ dependencies = [
  "hex",
  "iris-mpc-common",
  "itertools 0.13.0",
+ "memmap2",
  "metrics 0.22.3",
  "metrics-exporter-statsd 0.7.0",
  "ndarray",
@@ -3141,6 +3143,15 @@ name = "memchr"
 version = "2.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78ca9ab1a0babb1e7d5695e3530886289c18cf2f87ec19a575a0abdce112e3a3"
+
+[[package]]
+name = "memmap2"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd3f7eed9d3848f8b98834af67102b720745c4ec028fcd0aa0239277e7de374f"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "memoffset"
@@ -4156,6 +4167,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 dependencies = [
  "getrandom",
+]
+
+[[package]]
+name = "rand_distr"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32cb0b9bc82b0a0876c2dd994a7e7a2683d3e7390ca40e6886785ef0c7e3ee31"
+dependencies = [
+ "num-traits",
+ "rand",
 ]
 
 [[package]]
