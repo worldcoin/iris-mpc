@@ -36,8 +36,20 @@ impl NetworkValue {
         }
     }
 
-    pub fn to_network(&self) -> Vec<u8> {
-        let mut res = vec![];
+    fn byte_len(&self) -> usize {
+        match self {
+            NetworkValue::PrfKey(_) => 1 + PRF_KEY_SIZE,
+            NetworkValue::RingElementBit(_) => 1,
+            NetworkValue::RingElement16(_) => 3,
+            NetworkValue::RingElement32(_) => 5,
+            NetworkValue::RingElement64(_) => 9,
+            NetworkValue::VecRing16(v) => 5 + 2 * v.len(),
+            NetworkValue::VecRing32(v) => 5 + 4 * v.len(),
+            NetworkValue::VecRing64(v) => 5 + 8 * v.len(),
+        }
+    }
+
+    fn to_network_inner(&self, res: &mut Vec<u8>) {
         res.push(self.get_descriptor_byte());
 
         match self {
@@ -68,6 +80,11 @@ impl NetworkValue {
                 }
             }
         }
+    }
+
+    pub fn to_network(&self) -> Vec<u8> {
+        let mut res = Vec::with_capacity(self.byte_len());
+        self.to_network_inner(&mut res);
         res
     }
 
@@ -177,10 +194,12 @@ impl NetworkValue {
     }
 
     pub fn vec_to_network(values: &Vec<Self>) -> Vec<u8> {
-        let mut res = vec![];
+        // 4 extra bytes for the length of the vector
+        let len = values.iter().map(|v| v.byte_len()).sum::<usize>() + 4;
+        let mut res = Vec::with_capacity(len);
         res.extend_from_slice(&(values.len() as u32).to_le_bytes());
         for value in values {
-            res.extend_from_slice(&value.to_network());
+            value.to_network_inner(&mut res);
         }
         res
     }
