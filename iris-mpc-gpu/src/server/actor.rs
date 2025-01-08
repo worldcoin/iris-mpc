@@ -727,6 +727,7 @@ impl ServerActor {
         );
 
         self.device_manager.await_streams(&self.streams[0]);
+        self.device_manager.await_streams(&self.streams[1]);
 
         // Iterate over a list of tracing payloads, and create logs with mappings to
         // payloads Log at least a "start" event using a log with trace.id
@@ -967,12 +968,8 @@ impl ServerActor {
             })
             .unwrap();
 
-        // Wait for all streams before get timings
-        self.device_manager.await_streams(&self.streams[0]);
-        self.device_manager.await_streams(&self.streams[1]);
-
         // Reset the results buffers for reuse
-        for dst in &[
+        for dst in [
             &self.db_match_list_left,
             &self.db_match_list_right,
             &self.batch_match_list_left,
@@ -981,26 +978,19 @@ impl ServerActor {
             reset_slice(self.device_manager.devices(), dst, 0, &self.streams[0]);
         }
 
-        reset_slice(
-            self.device_manager.devices(),
+        for dst in [
+            &self.distance_comparator.all_matches,
             &self.distance_comparator.match_counters,
-            0,
-            &self.streams[0],
-        );
-
-        reset_slice(
-            self.device_manager.devices(),
             &self.distance_comparator.match_counters_left,
-            0,
-            &self.streams[0],
-        );
-
-        reset_slice(
-            self.device_manager.devices(),
             &self.distance_comparator.match_counters_right,
-            0,
-            &self.streams[0],
-        );
+            &self.distance_comparator.partial_results_left,
+            &self.distance_comparator.partial_results_right,
+        ] {
+            reset_slice(self.device_manager.devices(), dst, 0, &self.streams[0]);
+        }
+
+        self.device_manager.await_streams(&self.streams[0]);
+        self.device_manager.await_streams(&self.streams[1]);
 
         // ---- END RESULT PROCESSING ----
         if self.enable_debug_timing {
@@ -1167,7 +1157,7 @@ impl ServerActor {
         let chunk_sizes = |chunk_idx: usize| {
             self.current_db_sizes
                 .iter()
-                .map(|s| (s - DB_CHUNK_SIZE * chunk_idx).clamp(1, DB_CHUNK_SIZE))
+                .map(|s| (s - DB_CHUNK_SIZE * chunk_idx).clamp(0, DB_CHUNK_SIZE))
                 .collect::<Vec<_>>()
         };
 
@@ -1220,7 +1210,7 @@ impl ServerActor {
             // later.
             let dot_chunk_size = chunk_size
                 .iter()
-                .map(|s| s.div_ceil(64) * 64)
+                .map(|&s| (s.max(1).div_ceil(64) * 64))
                 .collect::<Vec<_>>();
 
             // First stream doesn't need to wait

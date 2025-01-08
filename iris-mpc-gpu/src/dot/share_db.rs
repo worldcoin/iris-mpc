@@ -503,7 +503,10 @@ impl ShareDB {
             let device = self.device_manager.device(idx);
             device.bind_to_thread().unwrap();
 
-            if offset[idx] >= db_sizes[idx] || offset[idx] + chunk_sizes[idx] > db_sizes[idx] {
+            if offset[idx] >= db_sizes[idx]
+                || offset[idx] + chunk_sizes[idx] > db_sizes[idx]
+                || chunk_sizes[idx] == 0
+            {
                 continue;
             }
 
