@@ -1,6 +1,6 @@
 env:
   - name: RUST_LOG
-    value: "info"
+    value: "debug"
 
   - name: RUST_BACKTRACE
     value: "full"
