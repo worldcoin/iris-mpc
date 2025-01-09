@@ -249,6 +249,7 @@ impl DeviceCompactSums {
             db_sizes,
             offset,
             streams,
+            0,
         );
         mask_engine.dot_reduce_and_multiply(
             &self.mask_query,
@@ -257,6 +258,7 @@ impl DeviceCompactSums {
             offset,
             streams,
             2,
+            0,
         );
     }
 
@@ -270,6 +272,7 @@ impl DeviceCompactSums {
         database_sizes: &[usize],
         offset: usize,
         streams: &[CudaStream],
+        results_idx: usize,
     ) {
         code_engine.dot_reduce(
             &self.code_query,
@@ -277,6 +280,7 @@ impl DeviceCompactSums {
             database_sizes,
             offset,
             streams,
+            results_idx,
         );
         mask_engine.dot_reduce_and_multiply(
             &self.mask_query,
@@ -285,6 +289,7 @@ impl DeviceCompactSums {
             offset,
             streams,
             2,
+            results_idx,
         );
     }
 }
