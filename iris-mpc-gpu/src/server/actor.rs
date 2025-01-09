@@ -75,6 +75,7 @@ impl ServerActorHandle {
 const DB_CHUNK_SIZE: usize = 1 << 15;
 const KDF_SALT: &str = "111a1a93518f670e9bb0c2c68888e2beb9406d4c4ed571dc77b801e676ae3091"; // Random 32 byte salt
 const SUPERMATCH_THRESHOLD: usize = 4_000;
+const MIN_MATCH_DISTANCES: usize = 100_000;
 
 pub struct ServerActor {
     job_queue: mpsc::Receiver<ServerJob>,
@@ -319,6 +320,15 @@ impl ServerActor {
             party_id,
             phase2_chunk_size,
             phase2_chunk_size / 64,
+            next_chacha_seeds(chacha_seeds)?,
+            device_manager.clone(),
+            comms.clone(),
+        );
+
+        let phase2_buckets = Circuits::new(
+            party_id,
+            n_queries,
+            n_queries / 64,
             next_chacha_seeds(chacha_seeds)?,
             device_manager.clone(),
             comms.clone(),
@@ -1105,13 +1115,17 @@ impl ServerActor {
         };
 
         // copy counters to host
-        let counter = self
-            .device_manager
-            .device(0)
-            .dtoh_sync_copy(&match_distances_counters[0])
-            .unwrap();
+        let mut total_distance_counter = 0;
+        for (i, device) in self.device_manager.devices().iter().enumerate() {
+            let counter = device.dtoh_sync_copy(&match_distances_counters[i]).unwrap();
+            total_distance_counter += counter[0];
+        }
 
-        tracing::info!("counter: {:?}", counter);
+        tracing::info!("Matching distances collected: {}", total_distance_counter);
+
+        if total_distance_counter < MIN_MATCH_DISTANCES {
+            tracing::info!("Collected enough match distances, starting bucket calculation");
+        }
 
         // ---- START BATCH DEDUP ----
         tracing::info!(party_id = self.party_id, "Starting batch deduplication");
