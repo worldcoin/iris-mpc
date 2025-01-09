@@ -347,8 +347,8 @@ impl ShareDB {
         n_shards: usize,
         code_length: usize,
     ) {
-        assert_eq!(a0_host.len(), code_length / 2);
-        assert_eq!(a1_host.len(), code_length / 2);
+        assert_eq!(a0_host.len(), code_length);
+        assert_eq!(a1_host.len(), code_length);
 
         let device_index = index % n_shards;
         let device_db_index = index / n_shards;
