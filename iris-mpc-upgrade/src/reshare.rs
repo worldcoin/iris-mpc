@@ -4,12 +4,9 @@
 //! new party, producing a valid share for the new party, without leaking
 //! information about the individual shares of the sending parties.
 
-use crate::proto::{
-    self,
-    iris_mpc_reshare::{
-        iris_code_re_share_service_server, IrisCodeReShare, IrisCodeReShareRequest,
-        IrisCodeReShareStatus,
-    },
+use crate::proto::iris_mpc_reshare::{
+    iris_code_re_share_service_server, IrisCodeReShare, IrisCodeReShareRequest,
+    IrisCodeReShareResponse, IrisCodeReShareStatus,
 };
 use iris_mpc_common::{
     galois::degree4::{basis::Monomial, GaloisRingElement, ShamirGaloisRingShare},
@@ -615,24 +612,24 @@ impl iris_code_re_share_service_server::IrisCodeReShareService for GrpcReshareSe
     async fn re_share(
         &self,
         request: tonic::Request<IrisCodeReShareRequest>,
-    ) -> Result<Response<proto::iris_mpc_reshare::IrisCodeReShareResponse>, tonic::Status> {
+    ) -> Result<Response<IrisCodeReShareResponse>, tonic::Status> {
         match self.receiver_helper.add_request_batch(request.into_inner()) {
             Ok(()) => (),
             Err(err) => {
                 tracing::warn!(error = err.to_string(), "Error handling reshare request");
                 return match err {
-                    IrisCodeReShareError::InvalidRequest { reason } => Ok(Response::new(
-                        proto::iris_mpc_reshare::IrisCodeReShareResponse {
+                    IrisCodeReShareError::InvalidRequest { reason } => {
+                        Ok(Response::new(IrisCodeReShareResponse {
                             status:  IrisCodeReShareStatus::Error as i32,
                             message: reason,
-                        },
-                    )),
-                    IrisCodeReShareError::TooManyRequests { .. } => Ok(Response::new(
-                        proto::iris_mpc_reshare::IrisCodeReShareResponse {
+                        }))
+                    }
+                    IrisCodeReShareError::TooManyRequests { .. } => {
+                        Ok(Response::new(IrisCodeReShareResponse {
                             status:  IrisCodeReShareStatus::FullQueue as i32,
                             message: err.to_string(),
-                        },
-                    )),
+                        }))
+                    }
                 };
             }
         }
@@ -653,21 +650,17 @@ impl iris_code_re_share_service_server::IrisCodeReShareService for GrpcReshareSe
             Ok(None) => (),
             Err(err) => {
                 tracing::warn!(error = err.to_string(), "Error handling reshare request");
-                return Ok(Response::new(
-                    proto::iris_mpc_reshare::IrisCodeReShareResponse {
-                        status:  IrisCodeReShareStatus::Error as i32,
-                        message: err.to_string(),
-                    },
-                ));
+                return Ok(Response::new(IrisCodeReShareResponse {
+                    status:  IrisCodeReShareStatus::Error as i32,
+                    message: err.to_string(),
+                }));
             }
         }
 
-        Ok(Response::new(
-            proto::iris_mpc_reshare::IrisCodeReShareResponse {
-                status:  IrisCodeReShareStatus::Ok as i32,
-                message: Default::default(),
-            },
-        ))
+        Ok(Response::new(IrisCodeReShareResponse {
+            status:  IrisCodeReShareStatus::Ok as i32,
+            message: Default::default(),
+        }))
     }
 }
 

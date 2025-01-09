@@ -9,17 +9,15 @@ use iris_mpc_upgrade::{
     },
     db::V1Db,
     packets::{MaskShareMessage, TwoToThreeIrisCodeMessage},
-    utils::{get_shares_from_masks, get_shares_from_shares, install_tracing, V1Database},
+    utils::{
+        extract_domain, get_shares_from_masks, get_shares_from_shares, install_tracing, V1Database,
+    },
     OldIrisShareSource,
 };
 use mpc_uniqueness_check::{bits::Bits, distance::EncodedBits};
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
-use std::{
-    io::{Error as IoError, ErrorKind},
-    pin::Pin,
-    time::Duration,
-};
+use std::{pin::Pin, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -27,18 +25,6 @@ use tokio::{
 };
 use tokio_native_tls::{TlsConnector, TlsStream};
 use tracing::error;
-
-fn extract_domain(address: &str) -> Result<String, IoError> {
-    // Try to split the address into domain and port parts.
-    if let Some((domain, _port)) = address.rsplit_once(':') {
-        Ok(domain.to_string())
-    } else {
-        Err(IoError::new(
-            ErrorKind::InvalidInput,
-            "Invalid address format",
-        ))
-    }
-}
 
 async fn prepare_tls_stream_for_writing(address: &str) -> eyre::Result<TlsStream<TcpStream>> {
     // Create a TCP connection
@@ -48,7 +34,7 @@ async fn prepare_tls_stream_for_writing(address: &str) -> eyre::Result<TlsStream
     let native_tls_connector = tokio_native_tls::native_tls::TlsConnector::new()?;
     let tls_connector = TlsConnector::from(native_tls_connector);
 
-    let domain = extract_domain(address)?;
+    let domain = extract_domain(address, true)?;
     println!(
         "TLS connecting to address {} using domain {},",
         address, domain

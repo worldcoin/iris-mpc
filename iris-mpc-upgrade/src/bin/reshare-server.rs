@@ -4,7 +4,8 @@ use iris_mpc_store::Store;
 use iris_mpc_upgrade::{
     config::ReShareServerConfig,
     proto::{
-        self, iris_mpc_reshare::iris_code_re_share_service_server::IrisCodeReShareServiceServer,
+        get_size_of_reshare_iris_code_share_batch,
+        iris_mpc_reshare::iris_code_re_share_service_server::IrisCodeReShareServiceServer,
     },
     reshare::{GrpcReshareServer, IrisCodeReshareReceiverHelper},
     utils::{install_tracing, spawn_healthcheck_server},
@@ -45,7 +46,7 @@ async fn main() -> eyre::Result<()> {
     );
 
     let encoded_message_size =
-        proto::get_size_of_reshare_iris_code_share_batch(config.batch_size as usize);
+        get_size_of_reshare_iris_code_share_batch(config.batch_size as usize);
     if encoded_message_size > 100 * 1024 * 1024 {
         tracing::warn!(
             "encoded batch message size is large: {}MB",
@@ -53,13 +54,13 @@ async fn main() -> eyre::Result<()> {
         );
     }
     let encoded_message_size_with_buf = (encoded_message_size as f64 * 1.1) as usize;
-    let grpc_server =
+    let iris_reshare_service =
         IrisCodeReShareServiceServer::new(GrpcReshareServer::new(store, receiver_helper))
             .max_decoding_message_size(encoded_message_size_with_buf)
             .max_encoding_message_size(encoded_message_size_with_buf);
 
     Server::builder()
-        .add_service(grpc_server)
+        .add_service(iris_reshare_service)
         .serve_with_shutdown(config.bind_addr, shutdown_signal())
         .await?;
 
