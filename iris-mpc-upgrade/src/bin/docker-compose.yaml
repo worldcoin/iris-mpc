@@ -57,7 +57,7 @@ services:
       - SERVICES=kms
       - DEFAULT_REGION=us-east-1
   reshare-server-2:
-    image: ghcr.io/worldcoin/iris-mpc:146c2cae43dbeb586144d9d37d152a6b2bfacdd4
+    image: ghcr.io/worldcoin/iris-mpc:0e20fb5bd297cbb9e5d5bacdcd33cbd90025e4f9
     platform: linux/x86_64
     entrypoint: reshare-server
     command: "--party-id 2 --sender1-party-id 0 --sender2-party-id 1 --bind-addr 0.0.0.0:7000 --environment testing --db-url postgres://postgres:postgres@new-db-4:5432 --batch-size 100 --healthcheck-port 3000"

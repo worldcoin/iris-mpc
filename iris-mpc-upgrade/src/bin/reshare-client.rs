@@ -15,7 +15,7 @@ use iris_mpc_upgrade::{
         },
     },
     reshare::IrisCodeReshareSenderHelper,
-    utils::install_tracing,
+    utils::{extract_domain, install_tracing},
 };
 use sha2::Sha256;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig};
@@ -82,7 +82,16 @@ async fn main() -> eyre::Result<()> {
         .expect("oh no, the cert file wasn't loaded");
     let cert = Certificate::from_pem(pem.clone());
 
-    let tls = ClientTlsConfig::new().ca_certificate(cert);
+    let domain = extract_domain(&config.server_url.clone(), true)?;
+    println!(
+        "TLS connecting to address {} using domain {},",
+        config.server_url.clone(),
+        domain
+    );
+
+    let tls = ClientTlsConfig::new()
+        .domain_name(domain)
+        .ca_certificate(cert);
 
     // build a tonic transport channel ourselves, since we want to add a tls config
     let channel = Channel::from_shared(config.server_url.clone())?
