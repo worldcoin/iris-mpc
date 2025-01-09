@@ -1,6 +1,6 @@
 env:
   - name: RUST_LOG
-    value: "debug"
+    value: "info"
 
   - name: NCCL_SOCKET_IFNAME
     value: "eth"
