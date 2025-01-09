@@ -31,9 +31,10 @@ use iris_mpc_common::{
         sync::SyncState,
         task_monitor::TaskMonitor,
     },
+    IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use iris_mpc_gpu::{
-    helpers::device_manager::DeviceManager,
+    helpers::{device_manager::DeviceManager, register_host_memory},
     server::{
         get_dummy_shares_for_deletion, sync_nccl, BatchMetadata, BatchQuery,
         BatchQueryEntriesPreprocessed, ServerActor, ServerJobResult,
@@ -1039,6 +1040,33 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             }
                         };
 
+                        tracing::info!("Page-lock host memory");
+                        let left_codes = actor.left_code_db_slices.code_gr.clone();
+                        let right_codes = actor.right_code_db_slices.code_gr.clone();
+                        let left_masks = actor.left_mask_db_slices.code_gr.clone();
+                        let right_masks = actor.right_mask_db_slices.code_gr.clone();
+                        let device_manager_clone = actor.device_manager.clone();
+
+                        let page_lock_handle = spawn_blocking(move || {
+                            for db in [&left_codes, &right_codes] {
+                                register_host_memory(
+                                    device_manager_clone.clone(),
+                                    db,
+                                    config.max_db_size,
+                                    IRIS_CODE_LENGTH,
+                                );
+                            }
+
+                            for db in [&left_masks, &right_masks] {
+                                register_host_memory(
+                                    device_manager_clone.clone(),
+                                    db,
+                                    config.max_db_size,
+                                    MASK_CODE_LENGTH,
+                                );
+                            }
+                        });
+
                         let now = Instant::now();
                         let mut now_load_summary = Instant::now();
                         let mut time_waiting_for_stream = time::Duration::from_secs(0);
@@ -1133,8 +1161,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         tracing::info!("Preprocessing db");
                         actor.preprocess_db();
 
-                        tracing::info!("Page-lock host memory");
-                        actor.register_host_memory();
+                        tracing::info!("Waiting for page-lock to finish");
+                        page_lock_handle.await?;
 
                         tracing::info!(
                             "Loaded {} records from db into memory [DB sizes: {:?}]",
