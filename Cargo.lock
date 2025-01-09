@@ -2755,6 +2755,7 @@ dependencies = [
  "num-traits",
  "prost",
  "rand",
+ "rand_distr",
  "rstest",
  "serde",
  "serde_json",
