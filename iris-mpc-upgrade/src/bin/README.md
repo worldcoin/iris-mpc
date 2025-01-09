@@ -117,7 +117,7 @@ This will generate server private keys, self-signed CA roots, and public keys fo
 You will also need to edit the `/etc/hosts` file to include the following line:
 
 ```shell
-127.0.0.1 localhost upgrade-left.1.stage.smpcv2.worldcoin.dev  upgrade-left.2.stage.smpcv2.worldcoin.dev
+127.0.0.1 localhost reshare-server.1.stage.smpcv2.worldcoin.dev reshare-server.2.stage.smpcv2.worldcoin.dev reshare-server.3.stage.smpcv2.worldcoin.dev
 ```
 
 These will be used by NGNIX, as well as the clients
@@ -136,7 +136,7 @@ We also need generate some KMS keys to be used by the clients to derive the comm
 ./aws_local.sh
 ```
 
-This will output 2 keys ARNs. You will use them in a leter step.
+This will output 2 keys ARNs. You will use them in a later step.
 
 ### Seed the databases
 
@@ -161,12 +161,12 @@ Short rundown of the parameters:
 
 ```bash
 cd iris-mpc-upgrade/src/bin
-cargo run --release --bin reshare-client -- --party-id 0 --other-party-id 1 --target-party-id 2 --server-url https://upgrade-left.1.smpcv2.stage.worldcoin.dev:6443 --environment testing --db-url postgres://postgres:postgres@localhost:6200 --db-start 1 --db-end 10001 --batch-size 100 --my-kms-key-arn <kms_key_arn-1> --other-kms-key-arn <kms_key_arn-2> --reshare-run-session-id test --client-tls-cert-path nginx/cert/ca.txt
+cargo run --release --bin reshare-client -- --party-id 0 --other-party-id 1 --target-party-id 2 --server-url https://upgrade-left.1.smpcv2.stage.worldcoin.dev:6443 --environment testing --db-url postgres://postgres:postgres@localhost:6200 --db-start 1 --db-end 10001 --batch-size 100 --my-kms-key-arn <kms_key_arn-1> --other-kms-key-arn <kms_key_arn-2> --reshare-run-session-id test --ca-root-file-path nginx/cert/ca.txt
 ```
 
 ```bash
 cd iris-mpc-upgrade/src/bin
-cargo run --release --bin reshare-client -- --party-id 1 --other-party-id 0 --target-party-id 2 --server-url https://upgrade-left.2.smpcv2.stage.worldcoin.dev:6443 --environment testing --db-url postgres://postgres:postgres@localhost:6200 --db-start 1 --db-end 10001 --batch-size 100 --my-kms-key-arn <kms_key_arn-1> --other-kms-key-arn <kms_key_arn-2> --reshare-run-session-id test --client-tls-cert-path nginx/cert/ca.txt
+cargo run --release --bin reshare-client -- --party-id 1 --other-party-id 0 --target-party-id 2 --server-url https://upgrade-left.2.smpcv2.stage.worldcoin.dev:6443 --environment testing --db-url postgres://postgres:postgres@localhost:6200 --db-start 1 --db-end 10001 --batch-size 100 --my-kms-key-arn <kms_key_arn-1> --other-kms-key-arn <kms_key_arn-2> --reshare-run-session-id test --ca-root-file-path nginx/cert/ca.txt
 ```
 
 Short rundown of the parameters:
@@ -182,7 +182,7 @@ Short rundown of the parameters:
 * `batch-size`: maximum size of sent reshare batches
 * `my-kms-key-arn`: ARN of the KMS key to use for the common seed derivation
 * `other-kms-key-arn`: ARN of the KMS key to use for the common seed derivation
-* `client-tls-cert-path`: Path to the TLS certificate
+* `ca-root-file-path`: Path to the CA Root TLS certificate
 * `reshare-run-sessin-id`: a random string to identify the current reshare run
 
 ### Checking results

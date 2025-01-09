@@ -130,7 +130,7 @@ pub struct PingClientConfig {
 
     // The path to the client's TLS certificate
     #[clap(long)]
-    pub client_tls_cert_path: String,
+    pub ca_root_file_path: String,
 
     // Message to send to the server
     #[clap(long)]

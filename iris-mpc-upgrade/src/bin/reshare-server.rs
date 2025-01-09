@@ -5,12 +5,9 @@ use iris_mpc_upgrade::{
     config::ReShareServerConfig,
     proto::{
         get_size_of_reshare_iris_code_share_batch,
-        iris_mpc_reshare::{
-            iris_code_re_share_service_server::IrisCodeReShareServiceServer,
-            ping_pong_server::PingPongServer,
-        },
+        iris_mpc_reshare::iris_code_re_share_service_server::IrisCodeReShareServiceServer,
     },
-    reshare::{GrpcPingPongServer, GrpcReshareServer, IrisCodeReshareReceiverHelper},
+    reshare::{GrpcReshareServer, IrisCodeReshareReceiverHelper},
     utils::{install_tracing, spawn_healthcheck_server},
 };
 use tonic::transport::Server;
@@ -62,11 +59,8 @@ async fn main() -> eyre::Result<()> {
             .max_decoding_message_size(encoded_message_size_with_buf)
             .max_encoding_message_size(encoded_message_size_with_buf);
 
-    let ping_pong_service = PingPongServer::new(GrpcPingPongServer::new());
-
     Server::builder()
         .add_service(iris_reshare_service)
-        .add_service(ping_pong_service)
         .serve_with_shutdown(config.bind_addr, shutdown_signal())
         .await?;
 

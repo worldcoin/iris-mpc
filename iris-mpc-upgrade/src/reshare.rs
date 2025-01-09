@@ -4,12 +4,9 @@
 //! new party, producing a valid share for the new party, without leaking
 //! information about the individual shares of the sending parties.
 
-use crate::proto::{
-    iris_mpc_reshare,
-    iris_mpc_reshare::{
-        iris_code_re_share_service_server, ping_pong_server, IrisCodeReShare,
-        IrisCodeReShareRequest, IrisCodeReShareResponse, IrisCodeReShareStatus, Ping, Pong,
-    },
+use crate::proto::iris_mpc_reshare::{
+    iris_code_re_share_service_server, IrisCodeReShare, IrisCodeReShareRequest,
+    IrisCodeReShareResponse, IrisCodeReShareStatus,
 };
 use iris_mpc_common::{
     galois::degree4::{basis::Monomial, GaloisRingElement, ShamirGaloisRingShare},
@@ -607,37 +604,6 @@ impl GrpcReshareServer {
             store,
             receiver_helper,
         }
-    }
-}
-
-pub struct GrpcPingPongServer {}
-
-impl Default for crate::reshare::GrpcPingPongServer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl crate::reshare::GrpcPingPongServer {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-#[tonic::async_trait]
-impl ping_pong_server::PingPong for GrpcPingPongServer {
-    async fn send_ping(
-        &self,
-        request: tonic::Request<iris_mpc_reshare::Ping>,
-    ) -> Result<Response<Pong>, tonic::Status> {
-        tracing::info!("Received ping");
-        let Ping { message, .. } = request.into_inner();
-        {
-            tracing::info!("Received message: {}", message);
-        }
-        Ok(Response::new(Pong {
-            message: message.to_string(),
-        }))
     }
 }
 
