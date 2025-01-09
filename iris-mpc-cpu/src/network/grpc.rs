@@ -340,8 +340,8 @@ mod tests {
     use super::*;
     use crate::{
         execution::{local::generate_local_identities, player::Role},
-        hnsw::HnswSearcher,
         hawkers::aby3_store::Aby3Store,
+        hnsw::HnswSearcher,
     };
     use aes_prng::AesRng;
     use rand::SeedableRng;

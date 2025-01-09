@@ -1,6 +1,6 @@
 use crate::hnsw::{
-    HnswSearcher,
     metrics::{COMPARE_DIST_EVENT, EVAL_DIST_EVENT},
+    HnswSearcher,
 };
 use aes_prng::AesRng;
 use hawk_pack::{graph_store::GraphMem, VectorStore};

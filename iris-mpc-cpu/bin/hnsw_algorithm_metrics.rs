@@ -6,25 +6,31 @@ use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{
         metrics::{
-            EventCounter, HnswEventCounterLayer, VertexOpeningsLayer, COMPARE_DIST_EVENT, EVAL_DIST_EVENT, LAYER_SEARCH_EVENT, OPEN_NODE_EVENT
-        }, searcher::{HnswParams, HnswSearcher}
-    }
+            EventCounter, HnswEventCounterLayer, VertexOpeningsLayer, COMPARE_DIST_EVENT,
+            EVAL_DIST_EVENT, LAYER_SEARCH_EVENT, OPEN_NODE_EVENT,
+        },
+        searcher::{HnswParams, HnswSearcher},
+    },
 };
 use rand::SeedableRng;
-use std::{collections::HashMap, error::Error, sync::{Arc, Mutex}};
+use std::{
+    collections::HashMap,
+    error::Error,
+    sync::{Arc, Mutex},
+};
 use tracing_subscriber::prelude::*;
 
 #[derive(Parser)]
 #[allow(non_snake_case)]
 struct Args {
     #[clap(default_value = "64")]
-    M:             usize,
+    M:                 usize,
     #[clap(default_value = "128")]
-    ef_constr:     usize,
+    ef_constr:         usize,
     #[clap(default_value = "64")]
-    ef_search:     usize,
+    ef_search:         usize,
     #[clap(default_value = "10000")]
-    database_size: usize,
+    database_size:     usize,
     layer_probability: Option<f64>,
 }
 
@@ -94,18 +100,21 @@ fn print_stats(counters: &Arc<EventCounter>, verbose: bool) {
     }
 }
 
-fn configure_tracing() -> (Arc<EventCounter>, Arc<Mutex<HashMap<(usize, usize), usize>>>) {
+fn configure_tracing() -> (
+    Arc<EventCounter>,
+    Arc<Mutex<HashMap<(usize, usize), usize>>>,
+) {
     let counters = Arc::new(EventCounter::default());
 
     let counting_layer = HnswEventCounterLayer {
         counters: counters.clone(),
     };
 
-    let counter_map: Arc<Mutex<HashMap<(usize, usize), usize>>>
-        = Arc::new(Mutex::new(HashMap::new()));
+    let counter_map: Arc<Mutex<HashMap<(usize, usize), usize>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     let vertex_openings_layer = VertexOpeningsLayer {
-        counter_map: counter_map.clone()
+        counter_map: counter_map.clone(),
     };
 
     tracing_subscriber::registry()

@@ -1,15 +1,20 @@
-use std::{collections::HashMap, sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc, Mutex,
-}};
-use tracing::{field::{Field, Visit}, Event, Id, Subscriber};
+use std::{
+    collections::HashMap,
+    fmt::Debug,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+};
+use tracing::{
+    field::{Field, Visit},
+    span::Attributes,
+    Event, Id, Subscriber,
+};
 use tracing_subscriber::{
     layer::{Context, Layer},
+    registry::LookupSpan,
 };
-use std::fmt::Debug;
-use tracing_subscriber::registry::LookupSpan;
-
-use tracing::span::Attributes;
 
 pub const LAYER_SEARCH_EVENT: u64 = 0;
 pub const OPEN_NODE_EVENT: u64 = 1;
@@ -28,7 +33,8 @@ pub struct HnswEventCounterLayer {
 }
 
 impl<S> Layer<S> for HnswEventCounterLayer
-    where S: Subscriber + for <'a> LookupSpan<'a>
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
 {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
         let mut visitor = EventVisitor::default();
@@ -70,7 +76,6 @@ impl Visit for EventVisitor {
     fn record_debug(&mut self, _field: &Field, _value: &dyn Debug) {}
 }
 
-
 /// Tracing library Layer for counting detailed HNSW layer search operations
 pub struct VertexOpeningsLayer {
     // Measure number of vertex openings for different lc and ef values
@@ -78,15 +83,16 @@ pub struct VertexOpeningsLayer {
 }
 
 impl<S> Layer<S> for VertexOpeningsLayer
-    where S: Subscriber + for <'a> LookupSpan<'a>
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
 {
-    // fn register_callsite(&self, _metadata: &'static Metadata<'static>) -> Interest {
-    //     Interest::sometimes()
+    // fn register_callsite(&self, _metadata: &'static Metadata<'static>) ->
+    // Interest {     Interest::sometimes()
     // }
 
     // fn enabled(&self, metadata: &Metadata<'_>, _ctx: Context<'_, S>) -> bool {
-    //     let is_search_layer_span = metadata.is_span() && metadata.name() == "search_layer";
-    //     is_search_layer_span || metadata.is_event()
+    //     let is_search_layer_span = metadata.is_span() && metadata.name() ==
+    // "search_layer";     is_search_layer_span || metadata.is_event()
     // }
 
     fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
@@ -104,13 +110,20 @@ impl<S> Layer<S> for VertexOpeningsLayer
             // open node event must have parent span representing open node function
             let current_span = ctx.current_span();
             let span_id = current_span.id().unwrap();
-            if let Some(LayerSearchFields { lc: Some(lc), ef: Some(ef) })
-                = ctx.span(span_id).unwrap().extensions().get::<LayerSearchFields>()
+            if let Some(LayerSearchFields {
+                lc: Some(lc),
+                ef: Some(ef),
+            }) = ctx
+                .span(span_id)
+                .unwrap()
+                .extensions()
+                .get::<LayerSearchFields>()
             {
                 let mut counter_map = self.counter_map.lock().unwrap();
                 let increment_amount = visitor.amount.unwrap_or(1);
-                *counter_map.entry((*lc as usize, *ef as usize)).or_insert(0usize)
-                    += increment_amount as usize;
+                *counter_map
+                    .entry((*lc as usize, *ef as usize))
+                    .or_insert(0usize) += increment_amount as usize;
             } else {
                 panic!("Open node event is missing associated span fields");
             }

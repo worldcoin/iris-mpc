@@ -4,7 +4,7 @@
 //*
 //* https://github.com/Inversed-Tech/hawk-pack/
 
-use tracing::{info, instrument};
+use super::metrics;
 pub use hawk_pack::data_structures::queue::{
     FurthestQueue, FurthestQueueV, NearestQueue, NearestQueueV,
 };
@@ -13,8 +13,7 @@ use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-
-use super::metrics;
+use tracing::{info, instrument};
 
 // specify construction and search parameters by layer up to this value minus 1
 // any higher layers will use the last set of parameters
@@ -70,8 +69,8 @@ impl HnswParams {
         ef_construction: usize,
         ef_search: usize,
         M: usize,
-        layer_probability: f64) -> Self
-    {
+        layer_probability: f64,
+    ) -> Self {
         let M_arr = [M; N_PARAM_LAYERS];
         let mut M_max_arr = [M; N_PARAM_LAYERS];
         M_max_arr[0] = 2 * M;
@@ -469,7 +468,6 @@ impl HnswSearcher {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

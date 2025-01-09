@@ -1,4 +1,4 @@
-pub mod searcher;
 pub mod metrics;
+pub mod searcher;
 
 pub use searcher::HnswSearcher;
