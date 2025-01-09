@@ -1,12 +1,13 @@
 use crate::shares::{bit::Bit, ring_impl::RingElement};
 use eyre::eyre;
 
+/// Size of a PRF key in bytes
 const PRF_KEY_SIZE: usize = 16;
 
 /// Value sent over the network
 #[derive(PartialEq, Clone, Debug)]
 pub enum NetworkValue {
-    PrfKey([u8; 16]),
+    PrfKey([u8; PRF_KEY_SIZE]),
     RingElementBit(RingElement<Bit>),
     RingElement16(RingElement<u16>),
     RingElement32(RingElement<u32>),
