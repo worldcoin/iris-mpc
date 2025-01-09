@@ -2,11 +2,12 @@
 
 mod s3_importer;
 
+use crate::s3_importer::S3StoredIris;
 use bytemuck::cast_slice;
 use eyre::{eyre, Result};
 use futures::{
     stream::{self},
-    Stream, TryStreamExt,
+    Stream, StreamExt, TryStreamExt,
 };
 use iris_mpc_common::{
     config::Config,
@@ -19,7 +20,7 @@ pub use s3_importer::{fetch_and_parse_chunks, last_snapshot_timestamp, ObjectSto
 use sqlx::{
     migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Row, Transaction,
 };
-use std::{ops::DerefMut, pin::Pin};
+use std::ops::DerefMut;
 
 const APP_NAME: &str = "SMPC";
 const MAX_CONNECTIONS: u32 = 100;
@@ -37,14 +38,26 @@ fn sql_switch_schema(schema_name: &str) -> Result<String> {
     ))
 }
 
-// Enum to define the source of the irises
-pub enum IrisSource {
-    S3(StoredIris),
-    DB(StoredIris),
+/// The unified type that can hold either DB or S3 variants.
+pub enum StoredIris {
+    // DB stores the shares in their original form
+    DB(DbStoredIris),
+    // S3 stores the shares in even-odd ordered form (needed by limbs) to make the loading faster
+    S3(S3StoredIris),
+}
+
+impl StoredIris {
+    /// Returns the `id` from either variant.
+    pub fn index(&self) -> usize {
+        match self {
+            StoredIris::DB(db) => db.index(),
+            StoredIris::S3(s3) => s3.index(),
+        }
+    }
 }
 
 #[derive(sqlx::FromRow, Debug, Default, PartialEq, Eq)]
-pub struct StoredIris {
+pub struct DbStoredIris {
     #[allow(dead_code)]
     id:         i64, // BIGSERIAL
     left_code:  Vec<u8>, // BYTEA
@@ -53,7 +66,7 @@ pub struct StoredIris {
     right_mask: Vec<u8>, // BYTEA
 }
 
-impl StoredIris {
+impl DbStoredIris {
     /// The index which is contiguous and starts from 0.
     pub fn index(&self) -> usize {
         self.id as usize
@@ -106,7 +119,7 @@ impl StoredIris {
         let right_code = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH * size_of::<u16>())?;
         let right_mask = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH * size_of::<u16>())?;
 
-        Ok(StoredIris {
+        Ok(DbStoredIris {
             id,
             left_code,
             left_mask,
@@ -183,15 +196,17 @@ impl Store {
     }
 
     /// Stream irises in order.
-    pub async fn stream_irises(&self) -> impl Stream<Item = Result<StoredIris, sqlx::Error>> + '_ {
-        sqlx::query_as::<_, StoredIris>("SELECT * FROM irises WHERE id >= 1 ORDER BY id")
+    pub async fn stream_irises(
+        &self,
+    ) -> impl Stream<Item = Result<DbStoredIris, sqlx::Error>> + '_ {
+        sqlx::query_as::<_, DbStoredIris>("SELECT * FROM irises WHERE id >= 1 ORDER BY id")
             .fetch(&self.pool)
     }
 
     pub fn stream_irises_in_range(
         &self,
         id_range: std::ops::Range<u64>,
-    ) -> impl Stream<Item = sqlx::Result<StoredIris>> + '_ {
+    ) -> impl Stream<Item = sqlx::Result<DbStoredIris>> + '_ {
         sqlx::query_as(
             r#"
             SELECT *
@@ -215,34 +230,45 @@ impl Store {
 
         let mut partition_streams = Vec::new();
         for i in 0..partitions {
-            // we start from ID 1
+            // We start from ID 1
             let start_id = 1 + partition_size * i;
             let end_id = start_id + partition_size - 1;
 
-            let partition_stream = match min_last_modified_at {
-                Some(min_last_modified_at) => sqlx::query_as::<_, StoredIris>(
-                    "SELECT id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
-                     BETWEEN $1 AND $2 AND last_modified_at >= $3",
+            // This base query yields `DbStoredIris`
+            let base_stream = match min_last_modified_at {
+                Some(min_last_modified_at) => sqlx::query_as::<_, DbStoredIris>(
+                    "SELECT id, left_code, left_mask, right_code, right_mask
+                 FROM irises
+                 WHERE id BETWEEN $1 AND $2
+                   AND last_modified_at >= $3",
                 )
                 .bind(start_id as i64)
                 .bind(end_id as i64)
                 .bind(min_last_modified_at)
-                .fetch(&self.pool)
-                .map_err(Into::into),
-                None => sqlx::query_as::<_, StoredIris>(
-                    "SELECT id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
-                     BETWEEN $1 AND $2",
+                .fetch(&self.pool),
+                None => sqlx::query_as::<_, DbStoredIris>(
+                    "SELECT id, left_code, left_mask, right_code, right_mask
+                 FROM irises
+                 WHERE id BETWEEN $1 AND $2",
                 )
                 .bind(start_id as i64)
                 .bind(end_id as i64)
-                .fetch(&self.pool)
-                .map_err(Into::into),
+                .fetch(&self.pool),
             };
 
-            partition_streams.push(Box::pin(partition_stream)
-                as Pin<Box<dyn Stream<Item = eyre::Result<StoredIris>> + Send>>);
+            // Convert `Stream<Item = Result<DbStoredIris, sqlx::Error>>`
+            //  -> `Stream<Item = eyre::Result<DbStoredIris>>` using map_err,
+            //  -> then map_ok(StoredIris::Db) to unify the output type:
+            let partition_stream = base_stream
+                .map_err(Into::into) // `sqlx::Error` -> `eyre::Error`
+                .map_ok(StoredIris::DB) // `DbStoredIris` -> `StoredIris::Db(...)`
+                .boxed();
+
+            partition_streams.push(partition_stream);
         }
 
+        // `select_all` requires that all streams have the same Item type:
+        // which is `Result<StoredIris, eyre::Error>` now.
         stream::select_all(partition_streams)
     }
 
@@ -557,12 +583,16 @@ mod tests {
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
 
-        let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
+        let got: Vec<DbStoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), 0);
 
-        let got: Vec<StoredIris> = store
+        let got: Vec<DbStoredIris> = store
             .stream_irises_par(Some(0), 2)
             .await
+            .map_ok(|stored_iris| match stored_iris {
+                StoredIris::DB(db_iris) => db_iris,
+                StoredIris::S3(_) => panic!("Unexpected S3 variant in this test!"),
+            })
             .try_collect()
             .await?;
         assert_eq!(got.len(), 0);
@@ -597,11 +627,15 @@ mod tests {
         tx.commit().await?;
 
         let got_len = store.count_irises().await?;
-        let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
+        let got: Vec<DbStoredIris> = store.stream_irises().await.try_collect().await?;
 
-        let mut got_par: Vec<StoredIris> = store
+        let mut got_par: Vec<DbStoredIris> = store
             .stream_irises_par(Some(0), 2)
             .await
+            .map_ok(|stored_iris| match stored_iris {
+                StoredIris::DB(db_iris) => db_iris,
+                StoredIris::S3(_) => panic!("Unexpected S3 variant in this test!"),
+            })
             .try_collect()
             .await?;
         got_par.sort_by_key(|iris| iris.id);
@@ -674,15 +708,19 @@ mod tests {
         store.insert_irises(&mut tx, &codes_and_masks).await?;
         tx.commit().await?;
 
-        let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
+        let got: Vec<DbStoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), count);
         assert_contiguous_id(&got);
 
         // Compare with the parallel version with several edge-cases.
         for parallelism in [1, 5, MAX_CONNECTIONS as usize + 1] {
-            let mut got_par: Vec<StoredIris> = store
+            let mut got_par: Vec<DbStoredIris> = store
                 .stream_irises_par(Some(0), parallelism)
                 .await
+                .map_ok(|stored_iris| match stored_iris {
+                    StoredIris::DB(db_iris) => db_iris,
+                    StoredIris::S3(_) => panic!("Unexpected S3 variant in this test!"),
+                })
                 .try_collect()
                 .await?;
             got_par.sort_by_key(|iris| iris.id);
@@ -734,7 +772,7 @@ mod tests {
         tx.commit().await?;
         store.rollback(5).await?;
 
-        let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
+        let got: Vec<DbStoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), 5);
         assert_contiguous_id(&got);
 
@@ -820,7 +858,7 @@ mod tests {
             }
         }
 
-        let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
+        let got: Vec<DbStoredIris> = store.stream_irises().await.try_collect().await?;
 
         for i in 0..10u16 {
             assert_eq!(got[i as usize].id, (i + 1) as i64);
@@ -904,7 +942,7 @@ mod tests {
             .await?;
 
         // assert iris updated in db with new values
-        let got: Vec<StoredIris> = store.stream_irises().await.try_collect().await?;
+        let got: Vec<DbStoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), 2);
         assert_eq!(cast_u8_to_u16(&got[0].left_code), updated_left_code.coefs);
         assert_eq!(cast_u8_to_u16(&got[0].left_mask), updated_left_mask.coefs);
@@ -933,7 +971,7 @@ mod tests {
         format!("smpc_test{}_0", rand::random::<u32>())
     }
 
-    fn assert_contiguous_id(vec: &[StoredIris]) {
+    fn assert_contiguous_id(vec: &[DbStoredIris]) {
         assert!(
             vec.iter()
                 .enumerate()

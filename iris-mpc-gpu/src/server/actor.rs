@@ -461,7 +461,7 @@ impl ServerActor {
         self.current_db_sizes = db_lens1;
     }
 
-    pub fn load_single_record(
+    pub fn load_single_record_from_db(
         &mut self,
         index: usize,
         left_code: &[u16],
@@ -469,31 +469,78 @@ impl ServerActor {
         right_code: &[u16],
         right_mask: &[u16],
     ) {
-        ShareDB::load_single_record(
+        ShareDB::load_single_record_from_db(
             index,
             &self.left_code_db_slices.code_gr,
             left_code,
             self.device_manager.device_count(),
             IRIS_CODE_LENGTH,
         );
-        ShareDB::load_single_record(
+        ShareDB::load_single_record_from_db(
             index,
             &self.left_mask_db_slices.code_gr,
             left_mask,
             self.device_manager.device_count(),
             MASK_CODE_LENGTH,
         );
-        ShareDB::load_single_record(
+        ShareDB::load_single_record_from_db(
             index,
             &self.right_code_db_slices.code_gr,
             right_code,
             self.device_manager.device_count(),
             IRIS_CODE_LENGTH,
         );
-        ShareDB::load_single_record(
+        ShareDB::load_single_record_from_db(
             index,
             &self.right_mask_db_slices.code_gr,
             right_mask,
+            self.device_manager.device_count(),
+            MASK_CODE_LENGTH,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn load_single_record_from_s3(
+        &mut self,
+        index: usize,
+        left_code_odd: &[u8],
+        left_code_even: &[u8],
+        right_code_odd: &[u8],
+        right_code_even: &[u8],
+        left_mask_odd: &[u8],
+        left_mask_even: &[u8],
+        right_mask_odd: &[u8],
+        right_mask_even: &[u8],
+    ) {
+        ShareDB::load_single_record_from_s3(
+            index,
+            &self.left_code_db_slices.code_gr,
+            left_code_odd,
+            left_code_even,
+            self.device_manager.device_count(),
+            IRIS_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_s3(
+            index,
+            &self.left_mask_db_slices.code_gr,
+            left_mask_odd,
+            left_mask_even,
+            self.device_manager.device_count(),
+            MASK_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_s3(
+            index,
+            &self.right_code_db_slices.code_gr,
+            right_code_odd,
+            right_code_even,
+            self.device_manager.device_count(),
+            IRIS_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_s3(
+            index,
+            &self.right_mask_db_slices.code_gr,
+            right_mask_odd,
+            right_mask_even,
             self.device_manager.device_count(),
             MASK_CODE_LENGTH,
         );
