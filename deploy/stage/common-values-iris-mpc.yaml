@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:v0.12.5"
+image: "ghcr.io/worldcoin/iris-mpc:v0.13.9"
 
 environment: stage
 replicaCount: 1
@@ -27,7 +27,7 @@ readinessProbe:
 
 startupProbe:
   initialDelaySeconds: 60
-  failureThreshold: 40
+  failureThreshold: 60
   periodSeconds: 30
   httpGet:
     path: /ready
