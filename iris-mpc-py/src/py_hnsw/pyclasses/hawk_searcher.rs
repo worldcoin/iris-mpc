@@ -1,6 +1,6 @@
 use super::{graph_store::PyGraphStore, iris_code::PyIrisCode, plaintext_store::PyPlaintextStore};
 use iris_mpc_cpu::{
-    hawkers::iris_searcher::{HnswParams, HnswSearcher, N_PARAM_LAYERS},
+    hnsw::searcher::{HnswParams, HnswSearcher, N_PARAM_LAYERS},
     py_bindings,
 };
 use pyo3::{exceptions::PyIOError, prelude::*};
