@@ -313,7 +313,7 @@ impl ShareDB {
 
         let a0_host = record
             .iter()
-            .map(|&x: &u16| ((x >> 8) as i32 - 128) as i8)
+            .map(|&x| ((x as i8) as i32 - 128) as i8)
             .collect::<Vec<_>>();
 
         let a1_host = record
