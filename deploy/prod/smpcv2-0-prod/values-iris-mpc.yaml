@@ -132,6 +132,9 @@ env:
 
   - name: SMPC__IMAGE_NAME
     value: $(IMAGE_NAME)
+  
+  - name: SMPC__HELLO
+    value: $(IMAGE_NAME)
 
 initContainer:
   enabled: true
