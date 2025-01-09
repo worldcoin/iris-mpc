@@ -77,7 +77,7 @@ async fn main() -> eyre::Result<()> {
     }
     let encoded_message_size_with_buf = (encoded_message_size as f64 * 1.1) as usize;
 
-    let pem = tokio::fs::read(config.client_tls_cert_path)
+    let pem = tokio::fs::read(config.ca_root_file_path)
         .await
         .expect("oh no, the cert file wasn't loaded");
     let cert = Certificate::from_pem(pem.clone());
