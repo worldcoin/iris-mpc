@@ -90,43 +90,6 @@ impl DbStoredIris {
     pub fn id(&self) -> i64 {
         self.id
     }
-
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, eyre::Error> {
-        let mut cursor = 0;
-
-        // Helper closure to extract a slice of a given size
-        let extract_slice =
-            |bytes: &[u8], cursor: &mut usize, size: usize| -> Result<Vec<u8>, eyre::Error> {
-                if *cursor + size > bytes.len() {
-                    return Err(eyre!("Exceeded total bytes while extracting slice",));
-                }
-                let slice = &bytes[*cursor..*cursor + size];
-                *cursor += size;
-                Ok(slice.to_vec())
-            };
-
-        // Parse `id` (i64)
-        let id_bytes = extract_slice(bytes, &mut cursor, 4)?;
-        let id = u32::from_be_bytes(
-            id_bytes
-                .try_into()
-                .map_err(|_| eyre!("Failed to convert id bytes to i64"))?,
-        ) as i64;
-
-        // parse codes and masks
-        let left_code = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH * size_of::<u16>())?;
-        let left_mask = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH * size_of::<u16>())?;
-        let right_code = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH * size_of::<u16>())?;
-        let right_mask = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH * size_of::<u16>())?;
-
-        Ok(DbStoredIris {
-            id,
-            left_code,
-            left_mask,
-            right_code,
-            right_mask,
-        })
-    }
 }
 
 #[derive(Clone)]
@@ -230,26 +193,23 @@ impl Store {
 
         let mut partition_streams = Vec::new();
         for i in 0..partitions {
-            // We start from ID 1
+            // we start from ID 1
             let start_id = 1 + partition_size * i;
             let end_id = start_id + partition_size - 1;
 
             // This base query yields `DbStoredIris`
             let base_stream = match min_last_modified_at {
                 Some(min_last_modified_at) => sqlx::query_as::<_, DbStoredIris>(
-                    "SELECT id, left_code, left_mask, right_code, right_mask
-                 FROM irises
-                 WHERE id BETWEEN $1 AND $2
-                   AND last_modified_at >= $3",
+                    "SELECT id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
+                     BETWEEN $1 AND $2 AND last_modified_at >= $3",
                 )
                 .bind(start_id as i64)
                 .bind(end_id as i64)
                 .bind(min_last_modified_at)
                 .fetch(&self.pool),
                 None => sqlx::query_as::<_, DbStoredIris>(
-                    "SELECT id, left_code, left_mask, right_code, right_mask
-                 FROM irises
-                 WHERE id BETWEEN $1 AND $2",
+                    "SELECT id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
+                     BETWEEN $1 AND $2",
                 )
                 .bind(start_id as i64)
                 .bind(end_id as i64)
