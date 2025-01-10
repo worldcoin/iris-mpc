@@ -68,6 +68,7 @@ impl<T> Drop for StreamAwareCudaSlice<T> {
 
 /// Holds the raw memory pointers for the 2D slices.
 /// Memory is not freed when the struct is dropped, but must be freed manually.
+#[derive(Clone)]
 pub struct CudaVec2DSlicerRawPointer {
     pub limb_0: Vec<u64>,
     pub limb_1: Vec<u64>,
