@@ -44,5 +44,10 @@ COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/
 COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/reshare-server /bin/reshare-server
 COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/reshare-client /bin/reshare-client
 
+
+# Copy your wrapper entrypoint script into the final container
+COPY test_entrypoint.sh /test_entrypoint.sh
+RUN chmod +x /test_entrypoint.sh
+
 USER 65534
-ENTRYPOINT ["/bin/server"]
+ENTRYPOINT ["/test_entrypoint.sh", "/bin/server"]
