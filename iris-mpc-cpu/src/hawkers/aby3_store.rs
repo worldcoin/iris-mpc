@@ -1,4 +1,3 @@
-use super::plaintext_store::PlaintextStore;
 use crate::{
     database_generators::{generate_galois_iris_shares, GaloisRingSharedIris},
     execution::{
@@ -6,7 +5,8 @@ use crate::{
         player::Identity,
         session::{Session, SessionHandles},
     },
-    hawkers::plaintext_store::PointId,
+    hawkers::plaintext_store::{PlaintextStore, PointId},
+    hnsw::HnswSearcher,
     network::NetworkType,
     protocol::ops::{
         batch_signed_lift_vec, compare_threshold_and_open, cross_compare,
@@ -22,7 +22,7 @@ use aes_prng::AesRng;
 use hawk_pack::{
     data_structures::queue::FurthestQueue,
     graph_store::{graph_mem::Layer, GraphMem},
-    GraphStore, HawkSearcher, VectorStore,
+    GraphStore, VectorStore,
 };
 use iris_mpc_common::iris_db::db::IrisDB;
 use rand::{CryptoRng, RngCore, SeedableRng};
@@ -563,7 +563,7 @@ impl Aby3Store {
                 .collect::<Vec<_>>();
             jobs.spawn(async move {
                 let mut graph_store = GraphMem::new();
-                let searcher = HawkSearcher::default();
+                let searcher = HnswSearcher::default();
                 // insert queries
                 for query in queries.iter() {
                     searcher
@@ -603,9 +603,9 @@ impl Aby3Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database_generators::generate_galois_iris_shares;
+    use crate::{database_generators::generate_galois_iris_shares, hnsw::HnswSearcher};
     use aes_prng::AesRng;
-    use hawk_pack::{graph_store::GraphMem, HawkSearcher};
+    use hawk_pack::graph_store::GraphMem;
     use itertools::Itertools;
     use rand::SeedableRng;
     use tracing_test::traced_test;
@@ -634,7 +634,7 @@ mod tests {
             let mut rng = rng.clone();
             jobs.spawn(async move {
                 let mut aby3_graph = GraphMem::new();
-                let db = HawkSearcher::default();
+                let db = HnswSearcher::default();
 
                 let mut inserted = vec![];
                 // insert queries
@@ -693,7 +693,7 @@ mod tests {
                 premade_v.storage.body.read().unwrap().points
             );
         }
-        let hawk_searcher = HawkSearcher::default();
+        let hawk_searcher = HnswSearcher::default();
 
         for i in 0..database_size {
             let cleartext_neighbors = hawk_searcher
@@ -840,7 +840,7 @@ mod tests {
     async fn test_gr_scratch_hnsw() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 2;
-        let searcher = HawkSearcher::default();
+        let searcher = HnswSearcher::default();
         let mut vectors_and_graphs =
             Aby3Store::shared_random_setup(&mut rng, database_size, NetworkType::LocalChannel)
                 .await
