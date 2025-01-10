@@ -87,7 +87,7 @@ env:
     value: "binary_output_128k"
 
   - name: SMPC__LOAD_CHUNKS_PARALLELISM
-    value: "128"
+    value: "256"
 
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
