@@ -41,7 +41,7 @@ use iris_mpc_gpu::{
     },
 };
 use iris_mpc_store::{
-    fetch_and_parse_chunks, last_snapshot_timestamp, IrisSource, S3Store, Store, StoredIrisRef,
+    fetch_and_parse_chunks, last_snapshot_timestamp, S3Store, Store, StoredIris, StoredIrisRef,
 };
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
@@ -1024,24 +1024,19 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                     last_snapshot_details,
                                 )
                                 .await
-                                .map(|result| result.map(IrisSource::S3))
                                 .boxed();
 
                                 let stream_db = store
                                     .stream_irises_par(Some(min_last_modified_at), parallelism)
                                     .await
-                                    .map(|result| result.map(IrisSource::DB))
                                     .boxed();
 
                                 select_all(vec![stream_s3, stream_db])
                             }
                             false => {
                                 tracing::info!("S3 importer disabled. Fetching only from db");
-                                let stream_db = store
-                                    .stream_irises_par(None, parallelism)
-                                    .await
-                                    .map(|result| result.map(IrisSource::DB))
-                                    .boxed();
+                                let stream_db =
+                                    store.stream_irises_par(None, parallelism).await.boxed();
                                 select_all(vec![stream_db])
                             }
                         };
@@ -1086,24 +1081,44 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         while let Some(result) = stream.try_next().await? {
                             time_waiting_for_stream += now_load_summary.elapsed();
                             now_load_summary = Instant::now();
-
-                            let iris = match result {
-                                IrisSource::DB(iris) => {
+                            let index = result.index();
+                            if index == 0 || index > store_len {
+                                tracing::error!("Invalid iris index {}", index);
+                                return Err(eyre!("Invalid iris index {}", index));
+                            }
+                            match result {
+                                StoredIris::DB(iris) => {
                                     n_loaded_from_db += 1;
                                     serial_ids_from_db.insert(iris.id());
-                                    iris
+                                    actor.load_single_record_from_db(
+                                        iris.index() - 1,
+                                        iris.left_code(),
+                                        iris.left_mask(),
+                                        iris.right_code(),
+                                        iris.right_mask(),
+                                    );
                                 }
-                                IrisSource::S3(iris) => {
+                                StoredIris::S3(iris) => {
                                     if serial_ids_from_db.contains(&iris.id()) {
                                         tracing::warn!(
                                             "Skip overriding record already loaded via DB with S3 \
                                              record: {}",
-                                            iris.id()
+                                            iris.index()
                                         );
                                         continue;
                                     }
                                     n_loaded_from_s3 += 1;
-                                    iris
+                                    actor.load_single_record_from_s3(
+                                        iris.index() - 1,
+                                        iris.left_code_odd(),
+                                        iris.left_code_even(),
+                                        iris.right_code_odd(),
+                                        iris.right_code_even(),
+                                        iris.left_mask_odd(),
+                                        iris.left_mask_even(),
+                                        iris.right_mask_odd(),
+                                        iris.right_mask_even(),
+                                    );
                                 }
                             };
 
@@ -1117,28 +1132,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                 );
                             }
 
-                            if iris.index() == 0 || iris.index() > store_len {
-                                tracing::error!("Invalid iris index {}", iris.index());
-                                return Err(eyre!("Invalid iris index {}", iris.index()));
-                            }
-
-                            actor.load_single_record(
-                                iris.index() - 1,
-                                iris.left_code(),
-                                iris.left_mask(),
-                                iris.right_code(),
-                                iris.right_mask(),
-                            );
-
                             // if the serial id hasn't been loaded before, count is as unique record
-                            if all_serial_ids.contains(&(iris.index() as i64)) {
-                                actor.increment_db_size(iris.index() - 1);
+                            if all_serial_ids.contains(&(index as i64)) {
+                                actor.increment_db_size(index - 1);
                             }
 
                             time_loading_into_memory += now_load_summary.elapsed();
                             now_load_summary = Instant::now();
 
-                            all_serial_ids.remove(&(iris.index() as i64));
+                            all_serial_ids.remove(&(index as i64));
                             record_counter += 1;
                         }
 
