@@ -188,6 +188,9 @@ iris-mpc-0:
     - name: SMPC__RETURN_PARTIAL_RESULTS
       value: "true"
 
+    - name: SMPC__FIXED_SHARED_SECRETS
+      value: "true"
+
     - name: SMPC__NODE_HOSTNAMES
       value: '["iris-mpc-0.svc.cluster.local","iris-mpc-1.svc.cluster.local","iris-mpc-2.svc.cluster.local"]'
 

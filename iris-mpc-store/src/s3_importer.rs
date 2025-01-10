@@ -1,6 +1,7 @@
 use crate::StoredIris;
 use async_trait::async_trait;
 use aws_sdk_s3::{primitives::ByteStream, Client};
+use eyre::eyre;
 use futures::{stream, Stream, StreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use std::{
@@ -19,6 +20,106 @@ const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + mem::size_of::<u32>(); // 75 KB
 
 const MAX_RANGE_SIZE: usize = 200; // Download chunks in sub-chunks of 200 elements = 15 MB
+
+pub struct S3StoredIris {
+    #[allow(dead_code)]
+    id:              i64,
+    left_code_even:  Vec<u8>,
+    left_code_odd:   Vec<u8>,
+    left_mask_even:  Vec<u8>,
+    left_mask_odd:   Vec<u8>,
+    right_code_even: Vec<u8>,
+    right_code_odd:  Vec<u8>,
+    right_mask_even: Vec<u8>,
+    right_mask_odd:  Vec<u8>,
+}
+
+impl S3StoredIris {
+    pub fn from_bytes(bytes: &[u8]) -> eyre::Result<Self, eyre::Error> {
+        let mut cursor = 0;
+
+        // Helper closure to extract a slice of a given size
+        let extract_slice =
+            |bytes: &[u8], cursor: &mut usize, size: usize| -> eyre::Result<Vec<u8>, eyre::Error> {
+                if *cursor + size > bytes.len() {
+                    return Err(eyre!("Exceeded total bytes while extracting slice",));
+                }
+                let slice = &bytes[*cursor..*cursor + size];
+                *cursor += size;
+                Ok(slice.to_vec())
+            };
+
+        // Parse `id` (i64)
+        let id_bytes = extract_slice(bytes, &mut cursor, 4)?;
+        let id = u32::from_be_bytes(
+            id_bytes
+                .try_into()
+                .map_err(|_| eyre!("Failed to convert id bytes to i64"))?,
+        ) as i64;
+
+        // parse codes and masks for each limb separately
+        let left_code_odd = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH)?;
+        let left_code_even = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH)?;
+        let left_mask_odd = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH)?;
+        let left_mask_even = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH)?;
+        let right_code_odd = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH)?;
+        let right_code_even = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH)?;
+        let right_mask_odd = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH)?;
+        let right_mask_even = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH)?;
+
+        Ok(S3StoredIris {
+            id,
+            left_code_even,
+            left_code_odd,
+            left_mask_even,
+            left_mask_odd,
+            right_code_even,
+            right_code_odd,
+            right_mask_even,
+            right_mask_odd,
+        })
+    }
+
+    pub fn index(&self) -> usize {
+        self.id as usize
+    }
+
+    pub fn left_code_odd(&self) -> &Vec<u8> {
+        &self.left_code_odd
+    }
+
+    pub fn left_code_even(&self) -> &Vec<u8> {
+        &self.left_code_even
+    }
+
+    pub fn left_mask_odd(&self) -> &Vec<u8> {
+        &self.left_mask_odd
+    }
+
+    pub fn left_mask_even(&self) -> &Vec<u8> {
+        &self.left_mask_even
+    }
+
+    pub fn right_code_odd(&self) -> &Vec<u8> {
+        &self.right_code_odd
+    }
+
+    pub fn right_code_even(&self) -> &Vec<u8> {
+        &self.right_code_even
+    }
+
+    pub fn right_mask_odd(&self) -> &Vec<u8> {
+        &self.right_mask_odd
+    }
+
+    pub fn right_mask_even(&self) -> &Vec<u8> {
+        &self.right_mask_even
+    }
+
+    pub fn id(&self) -> i64 {
+        self.id
+    }
+}
 
 #[async_trait]
 pub trait ObjectStore: Send + Sync + 'static {
@@ -172,7 +273,7 @@ pub async fn fetch_and_parse_chunks(
                         loop {
                             match object_stream.read_exact(&mut buf).await {
                                 Ok(_) => {
-                                    let iris = StoredIris::from_bytes(&buf);
+                                    let iris = S3StoredIris::from_bytes(&buf);
                                     records.push(iris);
                                     counter.fetch_add(SINGLE_ELEMENT_SIZE, Ordering::Relaxed);
                                 }
@@ -180,7 +281,10 @@ pub async fn fetch_and_parse_chunks(
                                 Err(e) => return Err(e.into()),
                             }
                         }
-                        Ok::<_, eyre::Error>(stream::iter(records))
+                        let stream_of_stored_iris =
+                            stream::iter(records).map(|res_s3| res_s3.map(StoredIris::S3));
+
+                        Ok::<_, eyre::Error>(stream_of_stored_iris)
                     }
                 }
             })
@@ -212,6 +316,7 @@ pub async fn fetch_and_parse_chunks(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DbStoredIris;
     use aws_sdk_s3::primitives::SdkBody;
     use rand::Rng;
     use std::{cmp::min, collections::HashSet};
@@ -230,7 +335,7 @@ mod tests {
             self.objects.insert(key.to_string(), Vec::new());
         }
 
-        pub fn add_test_data(&mut self, key: &str, records: Vec<StoredIris>) {
+        pub fn add_test_data(&mut self, key: &str, records: Vec<DbStoredIris>) {
             let mut result = Vec::new();
             for record in records {
                 result.extend_from_slice(&(record.id as u32).to_be_bytes());
@@ -272,8 +377,8 @@ mod tests {
         v
     }
 
-    fn dummy_entry(id: usize) -> StoredIris {
-        StoredIris {
+    fn dummy_entry(id: usize) -> DbStoredIris {
+        DbStoredIris {
             id:         id as i64,
             left_code:  random_bytes(IRIS_CODE_LENGTH * mem::size_of::<u16>()),
             left_mask:  random_bytes(MASK_CODE_LENGTH * mem::size_of::<u16>()),
@@ -324,7 +429,7 @@ mod tests {
         let mut ids: HashSet<usize> = HashSet::from_iter(1..MOCK_ENTRIES);
         while let Some(chunk) = chunks.next().await {
             let chunk = chunk.unwrap();
-            ids.remove(&(chunk.id as usize));
+            ids.remove(&(chunk.index()));
             count += 1;
         }
         assert_eq!(count, MOCK_ENTRIES);

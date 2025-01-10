@@ -11,7 +11,11 @@ use iris_mpc_common::galois_engine::degree4::{
 };
 use mpc_uniqueness_check::{bits::Bits, distance::EncodedBits};
 use rand_chacha::ChaCha20Rng;
-use std::{array, convert::TryFrom};
+use std::{
+    array,
+    convert::TryFrom,
+    io::{Error as IoError, ErrorKind},
+};
 
 pub fn install_tracing() {
     use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -144,4 +148,25 @@ pub async fn spawn_healthcheck_server(healthcheck_port: usize) -> eyre::Result<(
         .await
         .wrap_err("healthcheck listener server launch error")?;
     Ok(())
+}
+
+pub fn extract_domain(address: &str, remove_protocol: bool) -> Result<String, IoError> {
+    // Try to split the address into domain and port parts.
+    let mut address = address.trim().to_string();
+    if remove_protocol {
+        address = address
+            .strip_prefix("http://")
+            .or_else(|| address.strip_prefix("https://"))
+            .unwrap_or(&address)
+            .to_string();
+    }
+
+    if let Some((domain, _port)) = address.rsplit_once(':') {
+        Ok(domain.to_string())
+    } else {
+        Err(IoError::new(
+            ErrorKind::InvalidInput,
+            "Invalid address format",
+        ))
+    }
 }

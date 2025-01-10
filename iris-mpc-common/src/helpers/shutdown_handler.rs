@@ -29,6 +29,10 @@ impl ShutdownHandler {
         self.shutdown_received.load(Ordering::Relaxed)
     }
 
+    pub fn trigger_manual_shutdown(&self) {
+        self.shutdown_received.store(true, Ordering::Relaxed);
+    }
+
     pub async fn wait_for_shutdown_signal(&self) {
         let shutdown_flag = self.shutdown_received.clone();
         tokio::spawn(async move {

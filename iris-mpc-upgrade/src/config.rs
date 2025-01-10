@@ -180,6 +180,10 @@ pub struct ReShareClientConfig {
     /// the common secret derived between the two parties
     #[clap(long)]
     pub reshare_run_session_id: String,
+
+    /// The path to the CA root file for the TLS connection
+    #[clap(long)]
+    pub ca_root_file_path: String,
 }
 
 #[derive(Parser)]
