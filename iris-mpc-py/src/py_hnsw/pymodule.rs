@@ -1,5 +1,5 @@
 use super::pyclasses::{
-    graph_store::PyGraphStore, hawk_searcher::PyHnswSearcher, iris_code::PyIrisCode,
+    graph_store::PyGraphStore, hnsw_searcher::PyHnswSearcher, iris_code::PyIrisCode,
     iris_code_array::PyIrisCodeArray, plaintext_store::PyPlaintextStore,
 };
 use pyo3::prelude::*;
