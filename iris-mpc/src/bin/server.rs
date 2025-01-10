@@ -1082,6 +1082,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             time_waiting_for_stream += now_load_summary.elapsed();
                             now_load_summary = Instant::now();
                             let index = result.index();
+                            if index == 0 || index > store_len {
+                                tracing::error!("Invalid iris index {}", index);
+                                return Err(eyre!("Invalid iris index {}", index));
+                            }
                             match result {
                                 StoredIris::DB(iris) => {
                                     n_loaded_from_db += 1;
@@ -1126,11 +1130,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                     elapsed,
                                     record_counter as f64 / elapsed.as_secs_f64()
                                 );
-                            }
-
-                            if index == 0 || index > store_len {
-                                tracing::error!("Invalid iris index {}", index);
-                                return Err(eyre!("Invalid iris index {}", index));
                             }
 
                             // if the serial id hasn't been loaded before, count is as unique record
