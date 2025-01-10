@@ -1,4 +1,4 @@
-from iris_mpc_py import PyIrisCode, PyPlaintextStore, PyGraphStore, PyHawkSearcher
+from iris_mpc_py import PyIrisCode, PyPlaintextStore, PyGraphStore, PyHnswSearcher
 
 print("Generating 100k uniform random iris codes...")
 vector_init = PyPlaintextStore()
@@ -12,7 +12,7 @@ print("Writing vector store to file...")
 vector_init.write_to_ndjson("vector.ndjson")
 
 print("Generating HNSW graphs for 10k imported iris codes...")
-hnsw = PyHawkSearcher(32, 64, 32)
+hnsw = PyHnswSearcher(32, 64, 32)
 vector1 = PyPlaintextStore()
 graph1 = PyGraphStore()
 hnsw.fill_from_ndjson_file("vector.ndjson", vector1, graph1, 10000)

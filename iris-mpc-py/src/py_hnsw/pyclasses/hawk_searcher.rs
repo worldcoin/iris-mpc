@@ -7,11 +7,11 @@ use pyo3::{exceptions::PyIOError, prelude::*};
 
 #[pyclass]
 #[derive(Clone, Default)]
-pub struct PyHawkSearcher(pub HnswSearcher);
+pub struct PyHnswSearcher(pub HnswSearcher);
 
 #[pymethods]
 #[allow(non_snake_case)]
-impl PyHawkSearcher {
+impl PyHnswSearcher {
     #[new]
     pub fn new(M: usize, ef_constr: usize, ef_search: usize) -> Self {
         Self::new_standard(ef_constr, ef_search, M)
@@ -29,7 +29,7 @@ impl PyHawkSearcher {
         Self(HnswSearcher { params })
     }
 
-    /// Construct `IrisSearcher` with fully general parameters, specifying the
+    /// Construct `HnswSearcher` with fully general parameters, specifying the
     /// values of various parameters used during construction and search at
     /// different levels of the graph hierarchy.
     #[staticmethod]

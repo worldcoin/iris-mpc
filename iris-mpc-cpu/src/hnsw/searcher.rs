@@ -13,7 +13,7 @@ use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-// specify construction and search parameters by layer up to this value minus 1
+// Specify construction and search parameters by layer up to this value minus 1
 // any higher layers will use the last set of parameters
 pub const N_PARAM_LAYERS: usize = 5;
 
@@ -163,7 +163,7 @@ impl HnswParams {
 /// An implementation of the HNSW algorithm.
 ///
 /// Operations on vectors are delegated to a VectorStore.
-/// Operations on the graph are delegate to a GraphStore.
+/// Operations on the graph are delegated to a GraphStore.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct HnswSearcher {
     pub params: HnswParams,
