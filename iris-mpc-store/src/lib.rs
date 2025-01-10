@@ -13,7 +13,6 @@ use iris_mpc_common::{
     config::Config,
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     iris_db::iris::IrisCode,
-    IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store};

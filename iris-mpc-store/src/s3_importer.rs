@@ -58,22 +58,14 @@ impl S3StoredIris {
         ) as i64;
 
         // parse codes and masks for each limb separately
-        let left_code_odd =
-            extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH * size_of::<u16>() / 2)?;
-        let left_code_even =
-            extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH * size_of::<u16>() / 2)?;
-        let left_mask_odd =
-            extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH * size_of::<u16>() / 2)?;
-        let left_mask_even =
-            extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH * size_of::<u16>() / 2)?;
-        let right_code_odd =
-            extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH * size_of::<u16>() / 2)?;
-        let right_code_even =
-            extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH * size_of::<u16>() / 2)?;
-        let right_mask_odd =
-            extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH * size_of::<u16>() / 2)?;
-        let right_mask_even =
-            extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH * size_of::<u16>() / 2)?;
+        let left_code_odd = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH)?;
+        let left_code_even = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH)?;
+        let left_mask_odd = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH)?;
+        let left_mask_even = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH)?;
+        let right_code_odd = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH)?;
+        let right_code_even = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH)?;
+        let right_mask_odd = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH)?;
+        let right_mask_even = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH)?;
 
         Ok(S3StoredIris {
             id,
