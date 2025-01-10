@@ -1,9 +1,9 @@
 use crate::StoredIris;
 use async_trait::async_trait;
-use aws_sdk_s3::{primitives::ByteStream, Client};
 use eyre::eyre;
-use futures::{stream, Stream, StreamExt};
+use futures::{stream, Stream, StreamExt, TryStreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
+use mountpoint_s3_client::{ObjectClient, S3CrtClient};
 use std::{
     mem,
     pin::Pin,
@@ -13,7 +13,6 @@ use std::{
     },
     time::Instant,
 };
-use tokio::io::AsyncReadExt;
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -123,63 +122,54 @@ impl S3StoredIris {
 
 #[async_trait]
 pub trait ObjectStore: Send + Sync + 'static {
-    async fn get_object(&self, key: &str, range: (usize, usize)) -> eyre::Result<ByteStream>;
+    async fn get_object(&self, key: &str, range: (u64, u64)) -> eyre::Result<Vec<u8>>;
     async fn list_objects(&self, prefix: &str) -> eyre::Result<Vec<String>>;
 }
 
 pub struct S3Store {
-    client: Arc<Client>,
+    client: Arc<S3CrtClient>,
     bucket: String,
 }
 
 impl S3Store {
-    pub fn new(client: Arc<Client>, bucket: String) -> Self {
+    pub fn new(client: Arc<S3CrtClient>, bucket: String) -> Self {
         Self { client, bucket }
     }
 }
 
 #[async_trait]
 impl ObjectStore for S3Store {
-    async fn get_object(&self, key: &str, range: (usize, usize)) -> eyre::Result<ByteStream> {
+    async fn get_object(&self, key: &str, range: (u64, u64)) -> eyre::Result<Vec<u8>> {
         let res = self
             .client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .range(format!("bytes={}-{}", range.0, range.1 - 1))
-            .send()
+            .get_object(&self.bucket, key, Some(range.0..range.1 - 1), None)
             .await?;
 
-        Ok(res.body)
+        let r = res.map_ok(|(_, body)| body.to_vec()).try_concat().await?;
+        Ok(r)
     }
 
     async fn list_objects(&self, prefix: &str) -> eyre::Result<Vec<String>> {
         let mut objects = Vec::new();
-        let mut continuation_token = None;
+        let mut continuation_token: Option<String> = None;
 
         loop {
-            let mut request = self
+            let response = self
                 .client
-                .list_objects_v2()
-                .bucket(&self.bucket)
-                .prefix(prefix);
+                .list_objects(
+                    &self.bucket,
+                    continuation_token.as_deref(),
+                    "/",
+                    100,
+                    prefix,
+                )
+                .await?;
 
-            if let Some(token) = continuation_token {
-                request = request.continuation_token(token);
-            }
+            objects.extend(response.objects.iter().map(|obj| obj.key.to_string()));
 
-            let response = request.send().await?;
-
-            objects.extend(
-                response
-                    .contents()
-                    .iter()
-                    .filter_map(|obj| obj.key().map(String::from)),
-            );
-
-            match response.next_continuation_token() {
-                Some(token) => continuation_token = Some(token.to_string()),
-                None => break,
+            continuation_token = response.next_continuation_token;
+            if continuation_token.is_none() {
+                break;
             }
         }
 
@@ -258,29 +248,23 @@ pub async fn fetch_and_parse_chunks(
                             * last_snapshot_details.chunk_size
                             + 1;
                         let offset_within_chunk = (chunk - chunk_id) as usize;
-                        let mut object_stream = store
+                        let object_stream = store
                             .get_object(
                                 &format!("{}/{}.bin", prefix_name, chunk_id),
                                 (
-                                    offset_within_chunk * SINGLE_ELEMENT_SIZE,
-                                    (offset_within_chunk + range_size) * SINGLE_ELEMENT_SIZE,
+                                    (offset_within_chunk * SINGLE_ELEMENT_SIZE) as u64,
+                                    ((offset_within_chunk + range_size) * SINGLE_ELEMENT_SIZE)
+                                        as u64,
                                 ),
                             )
-                            .await?
-                            .into_async_read();
+                            .await?;
                         let mut records = Vec::with_capacity(range_size);
-                        let mut buf = vec![0u8; SINGLE_ELEMENT_SIZE];
-                        loop {
-                            match object_stream.read_exact(&mut buf).await {
-                                Ok(_) => {
-                                    let iris = S3StoredIris::from_bytes(&buf);
-                                    records.push(iris);
-                                    counter.fetch_add(SINGLE_ELEMENT_SIZE, Ordering::Relaxed);
-                                }
-                                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-                                Err(e) => return Err(e.into()),
-                            }
+                        for chunk in object_stream.chunks_exact(SINGLE_ELEMENT_SIZE) {
+                            let iris = S3StoredIris::from_bytes(chunk);
+                            records.push(iris);
+                            counter.fetch_add(SINGLE_ELEMENT_SIZE, Ordering::Relaxed);
                         }
+
                         let stream_of_stored_iris =
                             stream::iter(records).map(|res_s3| res_s3.map(StoredIris::S3));
 
@@ -317,7 +301,6 @@ pub async fn fetch_and_parse_chunks(
 mod tests {
     use super::*;
     use crate::DbStoredIris;
-    use aws_sdk_s3::primitives::SdkBody;
     use rand::Rng;
     use std::{cmp::min, collections::HashSet};
 
@@ -350,7 +333,7 @@ mod tests {
 
     #[async_trait]
     impl ObjectStore for MockStore {
-        async fn get_object(&self, key: &str, range: (usize, usize)) -> eyre::Result<ByteStream> {
+        async fn get_object(&self, key: &str, range: (u64, u64)) -> eyre::Result<Vec<u8>> {
             let bytes = self
                 .objects
                 .get(key)
@@ -359,10 +342,10 @@ mod tests {
 
             // Handle the range parameter by slicing the bytes
             let start = range.0;
-            let end = range.1.min(bytes.len());
-            let sliced_bytes = bytes[start..end].to_vec();
+            let end = range.1.min(bytes.len() as u64);
+            let sliced_bytes = bytes[start as usize..end as usize].to_vec();
 
-            Ok(ByteStream::from(SdkBody::from(sliced_bytes)))
+            Ok(sliced_bytes)
         }
 
         async fn list_objects(&self, _: &str) -> eyre::Result<Vec<String>> {

@@ -44,6 +44,7 @@ use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, S3Store, Store, StoredIris, StoredIrisRef,
 };
 use metrics_exporter_statsd::StatsdBuilder;
+use mountpoint_s3_client::{config::S3ClientConfig, S3CrtClient};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -692,7 +693,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         .retry_config(retry_config)
         .build();
     let s3_client = Arc::new(S3Client::from_conf(s3_config));
-    let s3_client_clone = Arc::clone(&s3_client);
+    let s3_crt_client_config = S3ClientConfig::new();
+    let s3_crt_client = Arc::new(S3CrtClient::new(s3_crt_client_config)?);
     let shares_encryption_key_pair =
         match SharesEncryptionKeyPairs::from_storage(config.clone()).await {
             Ok(key_pair) => key_pair,
@@ -1030,7 +1032,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         "Initialize iris db: Loading from DB (parallelism: {})",
                         parallelism
                     );
-                    let s3_store = S3Store::new(s3_client_clone, db_chunks_bucket_name);
+                    let s3_store = S3Store::new(s3_crt_client, db_chunks_bucket_name);
                     tokio::runtime::Handle::current().block_on(async {
                         let mut stream = match config.enable_s3_importer {
                             true => {
