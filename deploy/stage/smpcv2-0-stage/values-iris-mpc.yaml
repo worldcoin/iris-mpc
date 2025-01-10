@@ -118,6 +118,7 @@ env:
   - name: SMPC__IMAGE_NAME
     value: $(IMAGE_NAME)
 
+
 initContainer:
   enabled: true
   image: "amazon/aws-cli:2.17.62"
