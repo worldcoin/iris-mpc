@@ -1,6 +1,6 @@
 use crate::StoredIris;
 use async_trait::async_trait;
-use aws_sdk_s3::{primitives::ByteStream, Client};
+use aws_sdk_s3::{operation::RequestId, primitives::ByteStream, Client};
 use eyre::eyre;
 use futures::{stream, Stream, StreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
@@ -149,7 +149,9 @@ impl ObjectStore for S3Store {
             .range(format!("bytes={}-{}", range.0, range.1 - 1))
             .send()
             .await?;
-
+        if let Some(request_id) = res.request_id() {
+            tracing::debug!("get_object request ID for key {}: {}", key, request_id);
+        }
         Ok(res.body)
     }
 
