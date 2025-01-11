@@ -25,6 +25,7 @@ tracing.workspace = true
 tokio.workspace = true
 rand.workspace = true
 rayon.workspace = true
+openssl.workspace = true
 mountpoint-s3-client.workspace = true
 
 [dev-dependencies]

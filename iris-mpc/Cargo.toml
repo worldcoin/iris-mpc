@@ -28,6 +28,7 @@ rand.workspace = true
 base64.workspace = true
 uuid.workspace = true
 reqwest.workspace = true
+openssl.workspace = true
 mountpoint-s3-client.workspace = true
 sodiumoxide = "0.2.7"
 iris-mpc-gpu = { path = "../iris-mpc-gpu" }

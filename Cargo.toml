@@ -52,6 +52,7 @@ telemetry-batteries = { git = "https://github.com/worldcoin/telemetry-batteries.
 thiserror = "1"
 tokio = { version = "1.40", features = ["full", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4"] }
+openssl = { version = "0.10", features = ["vendored"] }
 mountpoint-s3-client = "0.11.0"
 
 # Abort on panics rather than unwinding.
