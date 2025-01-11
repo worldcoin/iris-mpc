@@ -117,6 +117,9 @@ pub struct Config {
 
     #[serde(default = "default_n_buckets")]
     pub n_buckets: usize,
+
+    #[serde(default)]
+    pub load_chunks_buffer_size: usize,
 }
 
 fn default_load_chunks_parallelism() -> usize {
