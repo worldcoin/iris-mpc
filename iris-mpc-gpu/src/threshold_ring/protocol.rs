@@ -2465,10 +2465,11 @@ impl Circuits {
             // Sum all elements in x to get the result in the first 32 bit word on each GPU
             self.collapse_sum(&mut x, streams);
             // Get data onto the first GPU
-            self.collect_graphic_result_u32(&mut x, streams);
+            if self.n_devices > 1 {
+                self.collect_graphic_result_u32(&mut x, streams);
+            }
             // Accumulate first result onto bucket
             self.collapse_sum_on_gpu(buckets, &x, self.n_devices, bucket_idx, 0, streams);
-
             self.return_result_buffer(result);
         }
 
@@ -2477,5 +2478,31 @@ impl Circuits {
         Buffers::return_buffer(&mut self.buffers.lifted_shares_buckets2, x2_);
         Buffers::return_buffer(&mut self.buffers.lifting_corrections, corrections_);
         self.buffers.check_buffers();
+    }
+
+    pub fn open_buckets(
+        &mut self,
+        buckets: &mut ChunkShare<u32>,
+        streams: &[CudaStream],
+    ) -> Vec<u32> {
+        let a = dtoh_on_stream_sync(&buckets.a, &self.devs[0], &streams[0]).unwrap();
+        let b = dtoh_on_stream_sync(&buckets.b, &self.devs[0], &streams[0]).unwrap();
+        let mut res = buckets.as_view();
+
+        result::group_start().unwrap();
+        self.comms[0]
+            .send_view(&res.b, self.next_id, &streams[0])
+            .unwrap();
+        self.comms[0]
+            .receive_view(&mut res.a, self.prev_id, &streams[0])
+            .unwrap();
+        result::group_end().unwrap();
+
+        let c = dtoh_on_stream_sync(&res.a, &self.devs[0], &streams[0]).unwrap();
+        a.iter()
+            .zip(b.iter())
+            .zip(c.iter())
+            .map(|((&a, &b), &c)| a.wrapping_add(b).wrapping_add(c))
+            .collect()
     }
 }

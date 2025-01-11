@@ -75,7 +75,7 @@ impl ServerActorHandle {
 const DB_CHUNK_SIZE: usize = 1 << 15;
 const KDF_SALT: &str = "111a1a93518f670e9bb0c2c68888e2beb9406d4c4ed571dc77b801e676ae3091"; // Random 32 byte salt
 const SUPERMATCH_THRESHOLD: usize = 4_000;
-const MIN_MATCH_DISTANCES: usize = 100_000;
+const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 15;
 
 pub struct ServerActor {
     job_queue: mpsc::Receiver<ServerJob>,
@@ -88,6 +88,7 @@ pub struct ServerActor {
     batch_masks_engine: ShareDB,
     phase2: Circuits,
     phase2_batch: Circuits,
+    phase2_buckets: Circuits,
     distance_comparator: DistanceComparator,
     comms: Vec<Arc<NcclComm>>,
     // DB slices
@@ -122,6 +123,7 @@ pub struct ServerActor {
     match_distances_buffer_masks_right: Vec<ChunkShare<u16>>,
     match_distances_counter_left: Vec<CudaSlice<u32>>,
     match_distances_counter_right: Vec<CudaSlice<u32>>,
+    buckets: ChunkShare<u32>,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -327,8 +329,8 @@ impl ServerActor {
 
         let phase2_buckets = Circuits::new(
             party_id,
-            n_queries,
-            n_queries / 64,
+            MATCH_DISTANCES_BUFFER_SIZE,
+            MATCH_DISTANCES_BUFFER_SIZE / 64,
             next_chacha_seeds(chacha_seeds)?,
             device_manager.clone(),
             comms.clone(),
@@ -368,15 +370,16 @@ impl ServerActor {
 
         // Buffers and counters for match distribution
         let match_distances_buffer_codes_left =
-            distance_comparator.prepare_match_distances_buffer(1_000_000); // TODO
+            distance_comparator.prepare_match_distances_buffer(MATCH_DISTANCES_BUFFER_SIZE);
         let match_distances_buffer_codes_right =
-            distance_comparator.prepare_match_distances_buffer(1_000_000); // TODO
+            distance_comparator.prepare_match_distances_buffer(MATCH_DISTANCES_BUFFER_SIZE);
         let match_distances_buffer_masks_left =
-            distance_comparator.prepare_match_distances_buffer(1_000_000); // TODO
+            distance_comparator.prepare_match_distances_buffer(MATCH_DISTANCES_BUFFER_SIZE);
         let match_distances_buffer_masks_right =
-            distance_comparator.prepare_match_distances_buffer(1_000_000); // TODO
+            distance_comparator.prepare_match_distances_buffer(MATCH_DISTANCES_BUFFER_SIZE);
         let match_distances_counter_left = distance_comparator.prepare_match_distances_counter();
         let match_distances_counter_right = distance_comparator.prepare_match_distances_counter();
+        let buckets = distance_comparator.prepare_match_distances_buckets(1); // TODO
 
         for dev in device_manager.devices() {
             dev.synchronize().unwrap();
@@ -390,6 +393,8 @@ impl ServerActor {
             masks_engine,
             phase2,
             phase2_batch,
+            phase2_buckets,
+            buckets,
             distance_comparator,
             batch_codes_engine,
             batch_masks_engine,
@@ -1123,8 +1128,35 @@ impl ServerActor {
 
         tracing::info!("Matching distances collected: {}", total_distance_counter);
 
-        if total_distance_counter < MIN_MATCH_DISTANCES {
+        if total_distance_counter >= 10 {
+            // TODO
             tracing::info!("Collected enough match distances, starting bucket calculation");
+
+            let match_distances_buffers_codes_view = match_distances_buffers_codes
+                .iter()
+                .map(|x| x.as_view())
+                .collect::<Vec<_>>();
+
+            let match_distances_buffers_masks_view = match_distances_buffers_masks
+                .iter()
+                .map(|x| x.as_view())
+                .collect::<Vec<_>>();
+
+            self.phase2_buckets.compare_multiple_thresholds(
+                &match_distances_buffers_codes_view,
+                &match_distances_buffers_masks_view,
+                batch_streams,
+                &[24577],
+                &mut self.buckets,
+            );
+
+            let buckets = self
+                .phase2_buckets
+                .open_buckets(&mut self.buckets, batch_streams);
+
+            tracing::info!("BUCKETRESULT: {:?}", buckets);
+
+            // TODO: reset counter
         }
 
         // ---- START BATCH DEDUP ----

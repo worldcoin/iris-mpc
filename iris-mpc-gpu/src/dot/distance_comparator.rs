@@ -460,4 +460,18 @@ impl DistanceComparator {
             .map(|i| self.device_manager.device(i).alloc_zeros(1).unwrap())
             .collect::<Vec<_>>()
     }
+
+    pub fn prepare_match_distances_buckets(&self, n_buckets: usize) -> ChunkShare<u32> {
+        let a = self
+            .device_manager
+            .device(0)
+            .alloc_zeros(n_buckets)
+            .unwrap();
+        let b = self
+            .device_manager
+            .device(0)
+            .alloc_zeros(n_buckets)
+            .unwrap();
+        ChunkShare::new(a, b)
+    }
 }
