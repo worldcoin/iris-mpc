@@ -7,10 +7,16 @@ use aws_sdk_s3::{
 };
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::{config::Region, Client};
+use aws_smithy_experimental::hyper_1_0::{CryptoMode, HyperClientBuilder};
+use aws_smithy_runtime_api::client::dns::{DnsFuture, ResolveDns};
 use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
 use eyre::{eyre, Context};
 use futures::{stream::select_all, StreamExt, TryStreamExt};
+use hickory_resolver::{
+    config::{ResolverConfig, ResolverOpts},
+    Resolver,
+};
 use iris_mpc_common::{
     config::{Config, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -53,6 +59,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     backtrace::Backtrace,
     collections::{HashMap, HashSet},
+    fmt::{Debug, Formatter},
     mem, panic,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -682,6 +689,44 @@ async fn main() -> eyre::Result<()> {
     Ok(())
 }
 
+struct StaticResolver {
+    resolver: Arc<Resolver>,
+}
+
+impl StaticResolver {
+    fn new() -> Self {
+        let resolver = Resolver::new(ResolverConfig::default(), ResolverOpts::default())
+            .expect("Failed to create resolver");
+        StaticResolver {
+            resolver: Arc::new(resolver),
+        }
+    }
+}
+
+impl Debug for StaticResolver {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StaticResolver")
+            .field("resolver", &"Arc<Resolver>")
+            .finish()
+    }
+}
+
+impl Clone for StaticResolver {
+    fn clone(&self) -> Self {
+        StaticResolver {
+            resolver: Arc::clone(&self.resolver),
+        }
+    }
+}
+
+impl ResolveDns for StaticResolver {
+    fn resolve_dns<'a>(&'a self, _name: &'a str) -> DnsFuture<'a> {
+        let lookup_result = self.resolver.lookup_ip(_name).unwrap();
+        let ip_addresses = lookup_result.iter().collect();
+        DnsFuture::ready(Ok(ip_addresses))
+    }
+}
+
 async fn server_main(config: Config) -> eyre::Result<()> {
     let shutdown_handler = Arc::new(ShutdownHandler::new(
         config.shutdown_last_results_sync_timeout_secs,
@@ -707,12 +752,20 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let sns_client = SNSClient::new(&shared_config);
 
     // Increase S3 retries to 5
+    // let resolver = Resolver::new(ResolverConfig::default(),
+    // ResolverOpts::default()).unwrap();
+    let static_resolver = StaticResolver::new();
+    let client = HyperClientBuilder::new()
+        .crypto_mode(CryptoMode::Ring)
+        .build_with_resolver(static_resolver);
+
     let retry_config = RetryConfig::standard().with_max_attempts(5);
 
     let s3_config = S3ConfigBuilder::from(&shared_config)
         // disable stalled stream protection to avoid panics during s3 import
         .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
         .retry_config(retry_config)
+        .http_client(client)
         .build();
     let s3_client = Arc::new(S3Client::from_conf(s3_config));
     let s3_client_clone = Arc::clone(&s3_client);
