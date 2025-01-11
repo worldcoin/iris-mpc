@@ -887,12 +887,16 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     .await
                     .expect("Deserialization of probe response failed");
                 if probe_response.shutting_down {
-                    tracing::error!(
-                        "Node {} has starting graceful shutdown. Therefore starting graceful \
-                         shutdown",
-                        host
-                    );
-                    heartbeat_shutdown_handler.trigger_manual_shutdown();
+                    tracing::info!("Node {} has starting graceful shutdown", host);
+
+                    if !heartbeat_shutdown_handler.is_shutting_down() {
+                        heartbeat_shutdown_handler.trigger_manual_shutdown();
+                        tracing::error!(
+                            "Node {} has starting graceful shutdown, therefore triggering \
+                             graceful shutdown",
+                            host
+                        );
+                    }
                 }
                 if probe_response.image_name != image_name {
                     // Do not create a panic as we still can continue to process before its
