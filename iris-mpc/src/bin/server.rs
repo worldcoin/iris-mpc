@@ -731,6 +731,7 @@ impl ResolveDns for StaticResolver {
             match resolver.lookup_ip(&hostname).await {
                 Ok(lookup_result) => {
                     let ips: Vec<IpAddr> = lookup_result.iter().collect();
+                    tracing::info!("Resolved host {} to {:?}", hostname, ips);
                     Ok(ips)
                 }
                 Err(e) => Err(ResolveDnsError::new(format!(
