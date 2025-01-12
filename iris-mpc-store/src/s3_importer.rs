@@ -19,7 +19,7 @@ const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
     + mem::size_of::<u32>(); // 75 KB
 
-const MAX_RANGE_SIZE: usize = 200; // Download chunks in sub-chunks of 100 elements = 7.5 MB
+const MAX_RANGE_SIZE: usize = 200; // Download chunks in sub-chunks of 200 elements = 15 MB
 
 pub struct S3StoredIris {
     #[allow(dead_code)]
