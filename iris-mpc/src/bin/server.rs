@@ -775,8 +775,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     ));
     shutdown_handler.wait_for_shutdown_signal().await;
 
-    let shares_bucket_host = format!("{}.s3.{}.amazonaws.com", config.shares_bucket_name, "eu-central-1");
-    let shares_bucket_ips = resolve_export_bucket_ips(shares_bucket_host);
+    let db_chunks_bucket_host = format!(
+        "{}.s3.{}.amazonaws.com",
+        config.db_chunks_bucket_name, REGION
+    );
+    let db_chunks_bucket_ips = resolve_export_bucket_ips(db_chunks_bucket_host);
     // Load batch_size config
     *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
     let max_sync_lookback: usize = config.max_batch_size * 2;
@@ -796,21 +799,25 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let sns_client = SNSClient::new(&shared_config);
 
     // Increase S3 retries to 5
-    let static_resolver = StaticResolver::new(shares_bucket_ips.await?);
-    let client = HyperClientBuilder::new()
+    let static_resolver = StaticResolver::new(db_chunks_bucket_ips.await?);
+    let http_client = HyperClientBuilder::new()
         .crypto_mode(CryptoMode::Ring)
         .build_with_resolver(static_resolver);
 
     let retry_config = RetryConfig::standard().with_max_attempts(5);
 
     let s3_config = S3ConfigBuilder::from(&shared_config)
+        .retry_config(retry_config.clone())
+        .build();
+    let db_chunks_s3_config = S3ConfigBuilder::from(&shared_config)
         // disable stalled stream protection to avoid panics during s3 import
         .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
         .retry_config(retry_config)
-        .http_client(client)
+        .http_client(http_client)
         .build();
+
     let s3_client = Arc::new(S3Client::from_conf(s3_config));
-    let s3_client_clone = Arc::clone(&s3_client);
+    let db_chunks_s3_client = Arc::new(S3Client::from_conf(db_chunks_s3_config));
     let shares_encryption_key_pair =
         match SharesEncryptionKeyPairs::from_storage(config.clone()).await {
             Ok(key_pair) => key_pair,
@@ -1164,7 +1171,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         parallelism
                     );
                     let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
-                    let s3_store = S3Store::new(s3_client_clone, db_chunks_bucket_name);
+                    let s3_store = S3Store::new(db_chunks_s3_client, db_chunks_bucket_name);
                     tokio::runtime::Handle::current().block_on(async {
                         let mut stream = match config.enable_s3_importer {
                             true => {
