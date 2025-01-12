@@ -698,10 +698,6 @@ struct StaticResolver {
 
 impl StaticResolver {
     fn new(ips: Vec<IpAddr>) -> Self {
-        assert!(
-            !ips.is_empty(),
-            "StaticResolver requires at least one IP address."
-        );
         Self {
             ips:     Arc::new(ips),
             current: Arc::new(AtomicUsize::new(0)),
@@ -749,7 +745,7 @@ async fn resolve_export_bucket_ips(host: String) -> eyre::Result<Vec<IpAddr>> {
     let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), resolver_opts);
     loop {
         // Check if we've collected enough unique IPs
-        if all_ips.len() >= 10 {
+        if all_ips.len() >= 30 {
             break;
         }
         match resolver.lookup_ip(&host).await {
@@ -779,7 +775,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     ));
     shutdown_handler.wait_for_shutdown_signal().await;
 
-    let shares_bucket_host = format!("{}.s3.{}.amazonaws.com", config.shares_bucket_name, REGION);
+    let shares_bucket_host = format!("{}.s3.{}.amazonaws.com", config.shares_bucket_name, "eu-central-1");
     let shares_bucket_ips = resolve_export_bucket_ips(shares_bucket_host);
     // Load batch_size config
     *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
@@ -800,9 +796,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let sns_client = SNSClient::new(&shared_config);
 
     // Increase S3 retries to 5
-    // let resolver = Resolver::new(ResolverConfig::default(),
-    // ResolverOpts::default()).unwrap();
-
     let static_resolver = StaticResolver::new(shares_bucket_ips.await?);
     let client = HyperClientBuilder::new()
         .crypto_mode(CryptoMode::Ring)
