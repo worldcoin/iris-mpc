@@ -8,14 +8,14 @@ use aws_sdk_s3::{
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::{config::Region, Client};
 use aws_smithy_experimental::hyper_1_0::{CryptoMode, HyperClientBuilder};
-use aws_smithy_runtime_api::client::dns::{DnsFuture, ResolveDns};
+use aws_smithy_runtime_api::client::dns::{DnsFuture, ResolveDns, ResolveDnsError};
 use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
 use eyre::{eyre, Context};
 use futures::{stream::select_all, StreamExt, TryStreamExt};
 use hickory_resolver::{
     config::{ResolverConfig, ResolverOpts},
-    Resolver,
+    TokioAsyncResolver,
 };
 use iris_mpc_common::{
     config::{Config, Opt},
@@ -60,7 +60,9 @@ use std::{
     backtrace::Backtrace,
     collections::{HashMap, HashSet},
     fmt::{Debug, Formatter},
-    mem, panic,
+    mem,
+    net::IpAddr,
+    panic,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, LazyLock, Mutex,
@@ -690,13 +692,13 @@ async fn main() -> eyre::Result<()> {
 }
 
 struct StaticResolver {
-    resolver: Arc<Resolver>,
+    resolver: Arc<TokioAsyncResolver>,
 }
 
 impl StaticResolver {
     fn new() -> Self {
-        let resolver = Resolver::new(ResolverConfig::default(), ResolverOpts::default())
-            .expect("Failed to create resolver");
+        let resolver =
+            TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
         StaticResolver {
             resolver: Arc::new(resolver),
         }
@@ -721,9 +723,25 @@ impl Clone for StaticResolver {
 
 impl ResolveDns for StaticResolver {
     fn resolve_dns<'a>(&'a self, _name: &'a str) -> DnsFuture<'a> {
-        let lookup_result = self.resolver.lookup_ip(_name).unwrap();
-        let ip_addresses = lookup_result.iter().collect();
-        DnsFuture::ready(Ok(ip_addresses))
+        let resolver = Arc::clone(&self.resolver);
+        let hostname = _name.to_string();
+
+        // Create the async block that performs DNS resolution
+        let future = async move {
+            match resolver.lookup_ip(&hostname).await {
+                Ok(lookup_result) => {
+                    let ips: Vec<IpAddr> = lookup_result.iter().collect();
+                    Ok(ips)
+                }
+                Err(e) => Err(ResolveDnsError::new(format!(
+                    "Failed to resolve {}: {}",
+                    hostname, e
+                ))),
+            }
+        };
+
+        // Wrap the future into DnsFuture
+        DnsFuture::new(Box::pin(future))
     }
 }
 
