@@ -1,4 +1,4 @@
-#[cfg(feature = "gpu_dependent")]
+// #[cfg(feature = "gpu_dependent")]
 mod extract_msb_mod_test {
 
     use cudarc::{
@@ -109,7 +109,7 @@ mod extract_msb_mod_test {
         let mod_ = 1u64 << (16 + B_BITS);
         let mut res = Vec::with_capacity(input.len());
         for inp in input {
-            let r = (u64::MAX - ((inp as u64) << B_BITS) + 1) % mod_;
+            let r = (u64::MAX - ((inp as u64) << B_BITS)) % mod_;
             let msb = r >> (B_BITS + 16 - 1) & 1 == 1;
             res.push(msb)
         }
