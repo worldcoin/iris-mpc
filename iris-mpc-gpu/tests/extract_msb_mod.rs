@@ -1,4 +1,4 @@
-// #[cfg(feature = "gpu_dependent")]
+#[cfg(feature = "gpu_dependent")]
 mod extract_msb_mod_test {
 
     use cudarc::{
