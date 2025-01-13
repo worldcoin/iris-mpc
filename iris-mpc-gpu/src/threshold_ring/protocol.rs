@@ -472,6 +472,10 @@ impl Circuits {
         Buffers::return_buffer(&mut self.buffers.lifted_shares_split1_result, src);
     }
 
+    pub fn peer_id(&self) -> usize {
+        self.peer_id
+    }
+
     pub fn next_id(&self) -> usize {
         self.next_id
     }
@@ -1252,21 +1256,21 @@ impl Circuits {
         debug_assert_eq!(self.n_devices, inp.len());
         debug_assert_eq!(self.n_devices, outp.len());
 
-        let mut x1_ = Buffers::take_buffer(&mut self.buffers.lifted_shares_split2);
-        let mut x2_ = Buffers::take_buffer(&mut self.buffers.lifted_shares_split3);
+        let x1_ = Buffers::take_buffer(&mut self.buffers.lifted_shares_split2);
+        let x2_ = Buffers::take_buffer(&mut self.buffers.lifted_shares_split3);
 
         // Reuse the existing buffers to have less memory
         // the transmute_mut is safe because we know that one u64 is 2 u32s, and the
         // buffer is aligned properly for the transmute
         let mut x1 = Vec::with_capacity(x1_.len());
-        for x in x1_.iter_mut() {
+        for x in x1_.iter() {
             let a: CudaView<u32> = unsafe { x.a.transmute(64 * self.chunk_size).unwrap() };
             let b: CudaView<u32> = unsafe { x.b.transmute(64 * self.chunk_size).unwrap() };
             let view = ChunkShareView { a, b };
             x1.push(view);
         }
         let mut x2 = Vec::with_capacity(x2_.len());
-        for x in x2_.iter_mut() {
+        for x in x2_.iter() {
             let a: CudaView<u32> = unsafe { x.a.transmute(64 * self.chunk_size).unwrap() };
             let b: CudaView<u32> = unsafe { x.b.transmute(64 * self.chunk_size).unwrap() };
             let view = ChunkShareView { a, b };
