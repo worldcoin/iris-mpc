@@ -889,6 +889,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     } else {
                         tracing::info!("Node {} has already started graceful shutdown.", host);
                     }
+                    continue;
                 }
 
                 let probe_response = res
