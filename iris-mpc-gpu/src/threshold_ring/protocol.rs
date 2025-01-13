@@ -2432,10 +2432,8 @@ impl Circuits {
         let mut corrections = Buffers::get_buffer_chunk(&corrections_, 128 * self.chunk_size);
 
         self.lift_mpc(mask_dots, &mut masks, &mut corrections, streams);
-        self.finalize_lifts(&mut x, &mut codes, &corrections, code_dots, streams);
+        self.finalize_lifts(&mut masks, &mut codes, &corrections, code_dots, streams);
         self.lifted_sub(&mut x, &masks, &codes, A as u32, streams);
-
-        self.lift_mul_sub(&mut x, &corrections, code_dots, streams);
         self.extract_msb(&mut x, streams);
 
         Buffers::return_buffer(&mut self.buffers.lifted_shares, x_);
