@@ -175,8 +175,8 @@ mod buckets_test {
 
         let mut error = false;
         for _ in 0..10 {
-            let a = devices[0].alloc_zeros::<u32>(1).unwrap();
-            let b = devices[0].alloc_zeros::<u32>(1).unwrap();
+            let a = devices[0].alloc_zeros::<u32>(THRESHOLDS.len()).unwrap();
+            let b = devices[0].alloc_zeros::<u32>(THRESHOLDS.len()).unwrap();
             let mut bucket = ChunkShare::new(a, b);
             let code_gpu = code_gpu.iter().map(|x| x.as_view()).collect_vec();
             let mask_gpu = mask_gpu.iter().map(|x| x.as_view()).collect_vec();
