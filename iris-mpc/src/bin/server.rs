@@ -239,7 +239,7 @@ async fn receive_batch(
                         msg_counter += 1;
 
                         let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
-                        
+
                         let smpc_request: UniquenessRequest =
                             serde_json::from_str(&message.message).map_err(|e| {
                                 ReceiveRequestError::json_parse_error("Uniqueness request", e)
