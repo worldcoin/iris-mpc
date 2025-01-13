@@ -212,7 +212,7 @@ impl Kernels {
             .get_func(Self::MOD_NAME, "shared_arithmetic_xor_pre_assign_u32")
             .unwrap();
         let assign_u64 = dev.get_func(Self::MOD_NAME, "shared_assign").unwrap();
-        let assign_u32 = dev.get_func(Self::MOD_NAME, "shared_assign").unwrap();
+        let assign_u32 = dev.get_func(Self::MOD_NAME, "shared_assign_u32").unwrap();
         let collapse_u64_helper = dev.get_func(Self::MOD_NAME, "collapse_u64_helper").unwrap();
         let collapse_sum_assign = dev.get_func(Self::MOD_NAME, "collapse_sum_assign").unwrap();
         let collapse_sum = dev.get_func(Self::MOD_NAME, "collapse_sum").unwrap();
