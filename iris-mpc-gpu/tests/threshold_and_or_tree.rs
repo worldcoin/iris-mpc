@@ -126,8 +126,7 @@ mod test_threshold_and_or_tree_test {
         result == 1
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[ignore]
+    #[tokio::test]
     async fn test_threshold_and_or_tree() -> eyre::Result<()> {
         use itertools::Itertools;
 

@@ -1,6 +1,9 @@
 #[cfg(feature = "gpu_dependent")]
 mod or_tree_test {
-    use cudarc::driver::{CudaDevice, CudaStream};
+    use cudarc::{
+        driver::{CudaDevice, CudaStream},
+        nccl::Id,
+    };
     use iris_mpc_gpu::{
         helpers::{device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync},
         threshold_ring::protocol::{ChunkShare, Circuits},
@@ -10,34 +13,33 @@ mod or_tree_test {
     use static_assertions::const_assert;
     use std::{env, sync::Arc};
     use tokio::time::Instant;
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+    const DB_RNG_SEED: u64 = 0xdeadbeef;
     // ceil(930 * 125_000 / 2048) * 2048
     // const INPUTS_PER_GPU_SIZE: usize = 116_250_624;
     const INPUTS_PER_GPU_SIZE: usize = 12_507_136;
     const CHUNK_SIZE: usize = INPUTS_PER_GPU_SIZE / 64;
 
-    fn rep_share_bin<R: Rng>(value: u64, id: usize, rng: &mut R) -> (u64, u64) {
+    fn rep_share_bin<R: Rng>(value: u64, rng: &mut R) -> (u64, u64, u64) {
         let a = rng.gen();
         let b = rng.gen();
         let c = a ^ b ^ value;
 
-        match id {
-            0 => (a, c),
-            1 => (b, a),
-            2 => (c, b),
-            _ => unreachable!(),
-        }
+        (a, b, c)
     }
 
-    fn rep_share_vec_bin<R: Rng>(value: &[u64], id: usize, rng: &mut R) -> (Vec<u64>, Vec<u64>) {
+    fn rep_share_vec_bin<R: Rng>(value: &[u64], rng: &mut R) -> (Vec<u64>, Vec<u64>, Vec<u64>) {
         let mut a = Vec::with_capacity(value.len());
         let mut b = Vec::with_capacity(value.len());
+        let mut c = Vec::with_capacity(value.len());
         for v in value.iter() {
-            let (a_, b_) = rep_share_bin(*v, id, rng);
+            let (a_, b_, c_) = rep_share_bin(*v, rng);
             a.push(a_);
             b.push(b_);
+            c.push(c_);
         }
-        (a, b)
+        (a, b, c)
     }
 
     fn to_gpu(
@@ -89,43 +91,99 @@ mod or_tree_test {
         result == 1
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[ignore]
-    async fn main() -> eyre::Result<()> {
-        const_assert!(
-            INPUTS_PER_GPU_SIZE % (2048) == 0,
-            // Mod 16 for randomness, mod 64 for chunk size
-        );
-        // TODO
-        let mut rng = StdRng::seed_from_u64(42);
+    fn install_tracing() {
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "info".into()),
+            )
+            .with(tracing_subscriber::fmt::layer())
+            .init();
+    }
 
-        let party_id: usize = env::var("SMPC__PARTY_ID")
-            .expect("SMPC__PARTY_ID environment variable not set")
-            .parse()
-            .expect("SMPC__PARTY_ID must be a valid usize");
-        let n_devices = CudaDevice::count()? as usize;
+    fn testcase(mut party: Circuits, share_a: Vec<u64>, share_b: Vec<u64>, i: usize) {
+        let id = party.peer_id();
 
-        // Get Circuit Party
-        let device_manager = Arc::new(DeviceManager::init());
-        let ids = device_manager.get_ids_from_magic(0);
-        let comms = device_manager.instantiate_network_from_ids(party_id, &ids)?;
-        let mut party = Circuits::new(
-            party_id,
-            INPUTS_PER_GPU_SIZE,
-            INPUTS_PER_GPU_SIZE / 64,
-            ([party_id as u32; 8], [((party_id + 2) % 3) as u32; 8]),
-            device_manager.clone(),
-            comms,
-        );
         let devices = party.get_devices();
         let streams = devices
             .iter()
             .map(|dev| dev.fork_default_stream().unwrap())
             .collect::<Vec<_>>();
 
-        println!("Starting tests...");
+        // Import to GPU
+        let mut share_gpu = to_gpu(&share_a, &share_b, &devices, &streams);
+        tracing::info!("id = {}, Data is on GPUs!", id);
+
+        let now = Instant::now();
+        party.or_reduce_result(&mut share_gpu, &streams);
+        tracing::info!("id = {}, compute time: {:?}", id, now.elapsed());
+
+        let now = Instant::now();
+        // Result is in the first bit of the first GPU
+        let result = open(&mut party, &mut share_gpu[0], &streams);
+        party.synchronize_streams(&streams);
+        tracing::info!(
+            "id = {}, Open and transfer to CPU time: {:?}",
+            id,
+            now.elapsed()
+        );
+
+        if i == devices.len() {
+            if result {
+                tracing::error!("id = {}, Test failed!", id);
+                panic!();
+            } else {
+                tracing::info!("id = {}, Test passed!", id);
+            }
+        } else if result {
+            tracing::info!("id = {}, Test passed!", id);
+        } else {
+            tracing::error!("id = {}, Test failed!", id);
+            panic!();
+        }
+    }
+
+    #[tokio::test]
+    async fn main() -> eyre::Result<()> {
+        install_tracing();
+        env::set_var("NCCL_P2P_LEVEL", "LOC");
+        env::set_var("NCCL_NET", "Socket");
+        env::set_var("NCCL_P2P_DIRECT_DISABLE", "1");
+        env::set_var("NCCL_SHM_DISABLE", "1");
+
+        let chacha_seeds0 = ([0u32; 8], [2u32; 8]);
+        let chacha_seeds1 = ([1u32; 8], [0u32; 8]);
+        let chacha_seeds2 = ([2u32; 8], [1u32; 8]);
+
+        const_assert!(
+            INPUTS_PER_GPU_SIZE % (2048) == 0,
+            // Mod 16 for randomness, mod 64 for chunk size
+        );
+
+        let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
+
+        let device_manager = DeviceManager::init();
+        let mut device_managers = device_manager
+            .split_into_n_chunks(3)
+            .expect("have at least 3 devices");
+        let device_manager2_ = Arc::new(device_managers.pop().unwrap());
+        let device_manager1_ = Arc::new(device_managers.pop().unwrap());
+        let device_manager0_ = Arc::new(device_managers.pop().unwrap());
+        let n_devices = device_manager0_.devices().len();
+        let ids0_ = (0..n_devices)
+            .map(|_| Id::new().unwrap())
+            .collect::<Vec<_>>();
+
+        tracing::info!("Starting tests...");
         for i in 0..=n_devices {
-            println!("Test: {}", i);
+            let ids0 = ids0_.clone();
+            let ids1 = ids0.clone();
+            let ids2 = ids0.clone();
+            let device_manager0 = device_manager0_.clone();
+            let device_manager1 = device_manager1_.clone();
+            let device_manager2 = device_manager2_.clone();
+
+            tracing::info!("Test: {}", i);
             let mut inputs = vec![0; CHUNK_SIZE * n_devices];
             if i < n_devices {
                 let index = rng.gen_range(i * CHUNK_SIZE..(i + 1) * CHUNK_SIZE);
@@ -133,33 +191,66 @@ mod or_tree_test {
                 inputs[index] = 1 << word_index;
             }
 
-            let (share_a, share_b) = rep_share_vec_bin(&inputs, party_id, &mut rng);
+            let (share_a, share_b, share_c) = rep_share_vec_bin(&inputs, &mut rng);
 
-            // Import to GPU
-            let mut share_gpu = to_gpu(&share_a, &share_b, &devices, &streams);
-            println!("Data is on GPUs!");
+            let share_a_ = share_a.to_owned();
+            let share_b_ = share_b.to_owned();
+            let share_c_ = share_c.to_owned();
 
-            let now = Instant::now();
-            party.or_reduce_result(&mut share_gpu, &streams);
-            println!("compute time: {:?}", now.elapsed());
+            let task0 = tokio::task::spawn_blocking(move || {
+                let comms0 = device_manager0
+                    .instantiate_network_from_ids(0, &ids0)
+                    .unwrap();
 
-            let now = Instant::now();
-            // Result is in the first bit of the first GPU
-            let result = open(&mut party, &mut share_gpu[0], &streams);
-            party.synchronize_streams(&streams);
-            println!("Open and transfer to CPU time: {:?}", now.elapsed());
+                let party = Circuits::new(
+                    0,
+                    INPUTS_PER_GPU_SIZE,
+                    INPUTS_PER_GPU_SIZE / 64,
+                    chacha_seeds0,
+                    device_manager0,
+                    comms0,
+                );
 
-            if i == n_devices {
-                if result {
-                    println!("Test failed!");
-                } else {
-                    println!("Test passed!");
-                }
-            } else if result {
-                println!("Test passed!");
-            } else {
-                println!("Test failed!");
-            }
+                testcase(party, share_a, share_c, i);
+            });
+
+            let task1 = tokio::task::spawn_blocking(move || {
+                let comms1 = device_manager1
+                    .instantiate_network_from_ids(1, &ids1)
+                    .unwrap();
+
+                let party = Circuits::new(
+                    1,
+                    INPUTS_PER_GPU_SIZE,
+                    INPUTS_PER_GPU_SIZE / 64,
+                    chacha_seeds1,
+                    device_manager1,
+                    comms1,
+                );
+
+                testcase(party, share_b, share_a_, i);
+            });
+
+            let task2 = tokio::task::spawn_blocking(move || {
+                let comms2 = device_manager2
+                    .instantiate_network_from_ids(2, &ids2)
+                    .unwrap();
+
+                let party = Circuits::new(
+                    2,
+                    INPUTS_PER_GPU_SIZE,
+                    INPUTS_PER_GPU_SIZE / 64,
+                    chacha_seeds2,
+                    device_manager2,
+                    comms2,
+                );
+
+                testcase(party, share_c_, share_b_, i);
+            });
+
+            task0.await.unwrap();
+            task1.await.unwrap();
+            task2.await.unwrap();
         }
 
         Ok(())
