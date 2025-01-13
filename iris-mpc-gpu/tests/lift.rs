@@ -211,7 +211,7 @@ mod lift_test {
             let now = Instant::now();
             let result = open(&mut party, &mut x, &mut correction, &streams);
             party.synchronize_streams(&streams);
-            tracing::error!(
+            tracing::info!(
                 "id = {}, Open and transfer to CPU time: {:?}",
                 id,
                 now.elapsed()
@@ -221,7 +221,7 @@ mod lift_test {
             for (i, (r, r_)) in izip!(&result, &real_result).enumerate() {
                 if r != r_ {
                     correct = false;
-                    tracing::info!("id = {}, Test failed on index: {}: {} != {}", id, i, r, r_);
+                    tracing::error!("id = {}, Test failed on index: {}: {} != {}", id, i, r, r_);
                     error = true;
                     break;
                 }
