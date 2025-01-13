@@ -277,6 +277,29 @@ async fn receive_batch(
                             "0011ace3eaab0926fd8f47d400000000",
                             "0012f21b417e50c799517c7d00000000",
                             "0011d065d2795f3a55f741da00000000",
+                            // IGNORING BELLOW
+                            // processed by Node 0 but not the rest of them
+                            "00127b078f48790ae5a4ca1500000000",
+                            "00112815499006562b930fd000000000",
+                            "0011f441184fab7e3ee96e1000000000",
+                            "0011cd757b3765a9cf4ceb4400000000",
+                            "0011f1544db72e33d776b6a100000000",
+                            "00116b4f410bd7b20c6e9ca500000000",
+                            "0012a8dbadba089437b790fe00000000",
+                            "001176f067854d051f51f8fa00000000",
+                            "00119468b154a04e47354a1200000000",
+                            "0012682f7d28e4617e0dc8e400000000",
+                            "00123133394aee7330a8555c00000000",
+                            "0012ffcdcecfe7644be6ea1e00000000",
+                            "0012a3a381a7d1b459622ec800000000",
+                            "00112112bf59d2e7d453636200000000",
+                            "0011f0cfbacc9b5cbf0d093d00000000",
+                            "001167649ce6b0835cea9eab00000000",
+                            "0011347968adb8c6c2774bf300000000",
+                            "0011cf286e50597c72cb656200000000",
+                            "0011eab0bcbfe7409c8f5d6e00000000",
+                            "00125eb6d87fc3915753c47900000000",
+                            "0011f1d1bc4ae991c442d67400000000",
                         ];
                         if force_ignore.contains(&smpc_request.signup_id.as_str()) {
                             // This needs to be ignored due to incident-196. Ignore this message
