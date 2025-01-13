@@ -1,5 +1,5 @@
 #[cfg(feature = "gpu_dependent")]
-mod bucket_threshold_test {
+mod one_bucket_test {
     use cudarc::{
         driver::{CudaDevice, CudaStream},
         nccl::Id,
@@ -200,7 +200,7 @@ mod bucket_threshold_test {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
-    async fn test_bucket_threshold() -> eyre::Result<()> {
+    async fn test_one_bucket() -> eyre::Result<()> {
         install_tracing();
         env::set_var("NCCL_P2P_LEVEL", "LOC");
         env::set_var("NCCL_NET", "Socket");
