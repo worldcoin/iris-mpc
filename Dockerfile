@@ -14,8 +14,8 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     protobuf-compiler \
     wget \
+    cmake \
     clang \
-    cmake3 \
     fuse \
     gcc
 
