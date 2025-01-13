@@ -30,8 +30,8 @@ __device__ void arithmetic_xor_inner(T *res_a, T *lhs_a, T *lhs_b, T *rhs_a,
   T rhs_b_val = *rhs_b;
   T r1_val = *r1;
   T r2_val = *r2;
-  
-  T mul = (lhs_a_val * rhs_a_val) + (lhs_b_val * rhs_a_val) + 
+
+  T mul = (lhs_a_val * rhs_a_val) + (lhs_b_val * rhs_a_val) +
           (lhs_a_val * rhs_b_val) + r1_val - r2_val;
   *res_a = lhs_a_val + rhs_a_val - 2 * mul;
 }
@@ -457,10 +457,10 @@ extern "C" __global__ void shared_lifted_sub(U32 *mask_a, U32 *mask_b,
     lifted_sub(&mask_b[i], &code_b[i], &output_b[i], a);
     switch (id) {
     case 0:
-      mask_a[i] -= 1; // Transforms the <= into <
+      output_a[i] -= 1; // Transforms the <= into <
       break;
     case 1:
-      mask_b[i] -= 1; // Transforms the <= into <
+      output_b[i] -= 1; // Transforms the <= into <
       break;
     default:
       break;

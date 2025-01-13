@@ -1146,7 +1146,7 @@ impl ServerActor {
                 &match_distances_buffers_codes_view,
                 &match_distances_buffers_masks_view,
                 batch_streams,
-                &[24577],
+                &[16384],
                 &mut self.buckets,
             );
 

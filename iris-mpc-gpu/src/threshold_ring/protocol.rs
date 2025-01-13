@@ -2414,7 +2414,7 @@ impl Circuits {
         streams: &[CudaStream],
     ) {
         const A: u64 = ((1. - 2. * iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO)
-            * ((1 << 16) as f64)) as u64;
+            * ((1u64 << 16) as f64)) as u64;
 
         assert_eq!(self.n_devices, code_dots.len());
         assert_eq!(self.n_devices, mask_dots.len());
