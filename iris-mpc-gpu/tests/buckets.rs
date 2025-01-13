@@ -1,5 +1,5 @@
-// #[cfg(feature = "gpu_dependent")]
-mod one_bucket_test {
+#[cfg(feature = "gpu_dependent")]
+mod buckets_test {
     use cudarc::{
         driver::{CudaDevice, CudaStream},
         nccl::Id,
@@ -215,7 +215,7 @@ mod one_bucket_test {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
-    async fn test_one_bucket() -> eyre::Result<()> {
+    async fn test_buckets() -> eyre::Result<()> {
         install_tracing();
         env::set_var("NCCL_P2P_LEVEL", "LOC");
         env::set_var("NCCL_NET", "Socket");
