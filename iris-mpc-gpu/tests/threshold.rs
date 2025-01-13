@@ -189,6 +189,7 @@ mod threshold_test {
         tracing::info!("id: {}, Data is on GPUs!", id);
         tracing::info!("id: {}, Starting tests...", id);
 
+        let mut error = false;
         for _ in 0..10 {
             let code_gpu = code_gpu.iter().map(|x| x.as_view()).collect_vec();
             let mask_gpu = mask_gpu.iter().map(|x| x.as_view()).collect_vec();
@@ -216,6 +217,7 @@ mod threshold_test {
                 if r != r_ {
                     correct = false;
                     tracing::error!("id: {}, Test failed on index: {}: {} != {}", id, i, r, r_);
+                    error = true;
                     break;
                 }
             }
@@ -223,6 +225,7 @@ mod threshold_test {
                 tracing::info!("id: {}, Test passed!", id);
             }
         }
+        assert!(!error);
     }
 
     #[tokio::test]

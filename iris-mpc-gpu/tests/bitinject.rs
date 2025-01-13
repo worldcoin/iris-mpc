@@ -169,6 +169,7 @@ mod bitinject_test {
         tracing::info!("id = {}, Data is on GPUs!", id);
         tracing::info!("id = {}, Starting tests...", id);
 
+        let mut error = false;
         for _ in 0..10 {
             let code_gpu_ = code_gpu.clone();
             let code_gpu = to_view(&code_gpu_);
@@ -189,7 +190,8 @@ mod bitinject_test {
             for (i, (r, r_)) in izip!(&result, &real_result).enumerate() {
                 if r != r_ {
                     correct = false;
-                    tracing::warn!("id = {}, Test failed on index: {}: {} != {}", id, i, r, r_);
+                    tracing::error!("id = {}, Test failed on index: {}: {} != {}", id, i, r, r_);
+                    error = true;
                     break;
                 }
             }
@@ -197,6 +199,7 @@ mod bitinject_test {
                 tracing::info!("id = {}, Test passed!", id);
             }
         }
+        assert!(!error);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
