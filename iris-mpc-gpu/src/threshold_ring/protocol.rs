@@ -2439,7 +2439,7 @@ impl Circuits {
         let x2_ = Buffers::take_buffer(&mut self.buffers.lifted_shares_buckets2);
         let corrections_ = Buffers::take_buffer(&mut self.buffers.lifting_corrections);
         let mut masks = Buffers::get_buffer_chunk(&x1_, 64 * self.chunk_size);
-        let mut codes = Buffers::get_buffer_chunk(&x1_, 64 * self.chunk_size);
+        let mut codes = Buffers::get_buffer_chunk(&x2_, 64 * self.chunk_size);
         let mut x = Buffers::get_buffer_chunk(&x_, 64 * self.chunk_size);
         let mut corrections = Buffers::get_buffer_chunk(&corrections_, 128 * self.chunk_size);
 
