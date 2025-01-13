@@ -46,7 +46,7 @@ tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.15", features = ["env-filter"] }
 rand = "0.8"
 rayon = "1.5.1"
-reqwest = { version = "0.12", features = ["blocking", "json"] }
+reqwest = { version = "0.12", default-features=false, features = ["blocking", "json", "rustls-tls"] }
 static_assertions = "1.1"
 telemetry-batteries = { git = "https://github.com/worldcoin/telemetry-batteries.git", rev = "901ea26e478c81e10d5d4355ac628ab7b15afca7" }
 thiserror = "1"
