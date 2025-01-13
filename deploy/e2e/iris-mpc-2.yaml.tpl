@@ -93,6 +93,12 @@ iris-mpc-2:
     - name: AWS_REGION
       value: "$AWS_REGION"
 
+    - name: AWS_ACCESS_KEY_ID
+      value: "access_key"
+
+    - name: AWS_SECRET_ACCESS_KEY
+      value: "secret_key"
+
     - name: AWS_ENDPOINT_URL
       value: "http://localstack:4566"
 
@@ -103,7 +109,7 @@ iris-mpc-2:
       value: "eth0"
 
     - name: NCCL_COMM_ID
-      value: "iris-mpc-2.svc.cluster.local:4000"
+      value: "iris-mpc-0.iris-mpc-0.$ENV.svc.cluster.local:4000"
 
     - name: SMPC__ENVIRONMENT
       value: "$ENV"
@@ -192,14 +198,17 @@ iris-mpc-2:
       value: "true"
 
     - name: SMPC__NODE_HOSTNAMES
-      value: '["iris-mpc-0.svc.cluster.local","iris-mpc-1.svc.cluster.local","iris-mpc-2.svc.cluster.local"]'
+      value: '["iris-mpc-0.iris-mpc-0.$ENV.svc.cluster.local","iris-mpc-1.iris-mpc-1.$ENV.svc.cluster.local","iris-mpc-2.iris-mpc-2.$ENV.svc.cluster.local"]'
 
     - name: SMPC__IMAGE_NAME
       value: "ghcr.io/worldcoin/iris-mpc:$IRIS_MPC_IMAGE_TAG"
 
+    - name: SMPC__HEARTBEAT_INITIAL_RETRIES
+      value: "1000"
+
   initContainer:
     enabled: true
-    image: "ghcr.io/worldcoin/iris-mpc:2694d8cbb37c278ed84951ef9aac3af47b21f146" # no-cuda image
+    image: "ghcr.io/worldcoin/iris-mpc:4913ef30024615c5dca0132a22c2971158e1cc0e" # no-cuda image
     name: "iris-mpc-2-copy-cuda-libs"
     env:
       - name: AWS_REGION
@@ -221,4 +230,5 @@ iris-mpc-2:
         aws s3 cp s3://wf-smpcv2-stage-libs/libcublas.so.12.2.5.6 .
         aws s3 cp s3://wf-smpcv2-stage-libs/libcublasLt.so.12.2.5.6 .
 
+        key-manager --node-id 2 --env $ENV --region $AWS_REGION --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-public-keys
         key-manager --node-id 2 --env $ENV --region $AWS_REGION --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-public-keys
