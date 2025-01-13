@@ -874,11 +874,21 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         tracing::warn!("Node {} did not respond with success, retrying...", host);
                         continue;
                     }
-                    // The other node seems to be down or returned an error.
-                    panic!(
-                        "Node {} did not respond with success, killing server...",
+                    tracing::info!(
+                        "Node {} did not respond with success, starting graceful shutdown",
                         host
                     );
+
+                    if !heartbeat_shutdown_handler.is_shutting_down() {
+                        heartbeat_shutdown_handler.trigger_manual_shutdown();
+                        tracing::error!(
+                            "Node {} has not completed health check, therefore graceful shutdown \
+                             has been triggered",
+                            host
+                        );
+                    } else {
+                        tracing::info!("Node {} has already started graceful shutdown.", host);
+                    }
                 }
 
                 let probe_response = res
