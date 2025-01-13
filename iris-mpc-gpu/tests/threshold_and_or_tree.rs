@@ -190,7 +190,7 @@ mod test_threshold_and_or_tree_test {
         assert!(!error);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
     async fn test_threshold_and_or_tree() -> eyre::Result<()> {
         install_tracing();
         env::set_var("NCCL_P2P_LEVEL", "LOC");

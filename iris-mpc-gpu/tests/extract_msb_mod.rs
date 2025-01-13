@@ -227,7 +227,7 @@ mod extract_msb_mod_test {
         assert!(!error);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
     async fn test_extract_msb_mod() -> eyre::Result<()> {
         install_tracing();
         env::set_var("NCCL_P2P_LEVEL", "LOC");

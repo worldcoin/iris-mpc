@@ -143,7 +143,7 @@ mod or_tree_test {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
     async fn main() -> eyre::Result<()> {
         install_tracing();
         env::set_var("NCCL_P2P_LEVEL", "LOC");
