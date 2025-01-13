@@ -1,4 +1,4 @@
-#[cfg(feature = "gpu_dependent")]
+// #[cfg(feature = "gpu_dependent")]
 mod threshold_test {
     use cudarc::{
         driver::{CudaDevice, CudaStream},
@@ -110,7 +110,7 @@ mod threshold_test {
         let mod_ = 1u64 << (16 + B_BITS);
         let mut res = Vec::with_capacity(code_input.len());
         for (c, m) in code_input.into_iter().zip(mask_input) {
-            let r = ((m as u64) * A - ((c as u64) << B_BITS)) % mod_;
+            let r = ((m as u64) * A - ((c as u64) << B_BITS) - 1) % mod_;
             let msb = r >> (B_BITS + 16 - 1) & 1 == 1;
             res.push(msb)
         }
@@ -226,7 +226,6 @@ mod threshold_test {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_threshold() -> eyre::Result<()> {
         install_tracing();
         env::set_var("NCCL_P2P_LEVEL", "LOC");
