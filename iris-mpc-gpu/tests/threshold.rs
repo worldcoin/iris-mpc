@@ -215,7 +215,7 @@ mod threshold_test {
             for (i, (r, r_)) in izip!(&result, &real_result).enumerate() {
                 if r != r_ {
                     correct = false;
-                    tracing::info!("id: {}, Test failed on index: {}: {} != {}", id, i, r, r_);
+                    tracing::error!("id: {}, Test failed on index: {}: {} != {}", id, i, r, r_);
                     break;
                 }
             }
