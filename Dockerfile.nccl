@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y \
     git \
     build-essential \
     libssl-dev \
+    openssl \
     ca-certificates \
     protobuf-compiler \
     wget \

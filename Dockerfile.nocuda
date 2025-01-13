@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     build-essential \
     libssl-dev \
+    openssl \
     texinfo \
     libcap2-bin \
     pkg-config \
