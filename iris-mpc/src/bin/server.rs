@@ -279,8 +279,7 @@ async fn receive_batch(
                             "0011d065d2795f3a55f741da00000000",
                         ];
                         if force_ignore.contains(&smpc_request.signup_id.as_str()) {
-                            // Some party (maybe us) already meant to delete this request, so we
-                            // skip it. Ignore this message when calculating the batch size.
+                            // This needs to be ignored due to incident-196. Ignore this message when calculating the batch size.
                             msg_counter -= 1;
                             continue;
                         }
