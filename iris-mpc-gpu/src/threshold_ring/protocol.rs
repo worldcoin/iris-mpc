@@ -2406,6 +2406,7 @@ impl Circuits {
 
     // same as compare_threshold_masked_many, just via the functions used in the
     // bucketing
+    // Just here for testing
     pub fn compare_threshold_masked_many_bucket_functions(
         &mut self,
         code_dots: &[ChunkShareView<u16>],
