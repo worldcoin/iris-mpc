@@ -266,6 +266,25 @@ async fn receive_batch(
                             continue;
                         }
 
+                        let force_ignore = vec![
+                            "00123b99c044484346788cea00000000",
+                            "001148c4cff8e0fe6f15953a00000000",
+                            "00123b99c044484346788cea00000000",
+                            "0011885f03fb4c4ac4a0c0d000000000",
+                            "0011adcf9e8051ed55eb0dee00000000",
+                            "0012aa221ad51123f638ad6a00000000",
+                            "0011d5cbfa08bedd1ef7e7e900000000",
+                            "0011ace3eaab0926fd8f47d400000000",
+                            "0012f21b417e50c799517c7d00000000",
+                            "0011d065d2795f3a55f741da00000000",
+                        ];
+                        if force_ignore.contains(&smpc_request.signup_id.as_str()) {
+                            // This needs to be ignored due to incident-196. Ignore this message
+                            // when calculating the batch size.
+                            msg_counter -= 1;
+                            continue;
+                        }
+
                         if let Some(batch_size) = smpc_request.batch_size {
                             // Updating the batch size instantly makes it a bit unpredictable, since
                             // if we're already above the new limit, we'll still process the current
