@@ -6,7 +6,7 @@ mod buckets_test {
     };
     use iris_mpc_common::iris_db::iris::IrisCodeArray;
     use iris_mpc_gpu::{
-        helpers::{device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync},
+        helpers::{device_manager::DeviceManager, htod_on_stream_sync},
         threshold_ring::protocol::{ChunkShare, Circuits},
     };
     use itertools::{izip, Itertools};
@@ -110,31 +110,6 @@ mod buckets_test {
         result
     }
 
-    fn open(party: &mut Circuits, x: &ChunkShare<u32>, streams: &[CudaStream]) -> Vec<u32> {
-        let mut view = x.as_view();
-        let dev = party.get_devices()[0].clone();
-
-        let mut a = dtoh_on_stream_sync(&x.a, &dev, &streams[0]).unwrap();
-        cudarc::nccl::result::group_start().unwrap();
-        // Result is in bit 0
-        party.comms()[0]
-            .send_view(&view.b, party.next_id(), &streams[0])
-            .unwrap();
-
-        party.comms()[0]
-            .receive_view(&mut view.a, party.prev_id(), &streams[0])
-            .unwrap();
-        cudarc::nccl::result::group_end().unwrap();
-        let b = dtoh_on_stream_sync(&x.b, &dev, &streams[0]).unwrap();
-        let c = dtoh_on_stream_sync(&x.a, &dev, &streams[0]).unwrap();
-
-        for (a, b, c) in izip!(a.iter_mut(), b, c) {
-            *a += b + c;
-        }
-
-        a
-    }
-
     fn install_tracing() {
         tracing_subscriber::registry()
             .with(
@@ -195,7 +170,7 @@ mod buckets_test {
             tracing::info!("id: {}, compute time: {:?}", id, now.elapsed());
 
             let now = Instant::now();
-            let result = open(&mut party, &bucket, &streams);
+            let result = party.open_buckets(&bucket, &streams);
             party.synchronize_streams(&streams);
             tracing::info!("id: {}, Starting tests...", id);
             tracing::info!(

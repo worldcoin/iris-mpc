@@ -1152,7 +1152,7 @@ impl ServerActor {
 
             let buckets = self
                 .phase2_buckets
-                .open_buckets(&mut self.buckets, batch_streams);
+                .open_buckets(&self.buckets, batch_streams);
 
             tracing::info!("BUCKETRESULT: {:?}", buckets);
 

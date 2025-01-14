@@ -2525,11 +2525,7 @@ impl Circuits {
         self.buffers.check_buffers();
     }
 
-    pub fn open_buckets(
-        &mut self,
-        buckets: &mut ChunkShare<u32>,
-        streams: &[CudaStream],
-    ) -> Vec<u32> {
+    pub fn open_buckets(&mut self, buckets: &ChunkShare<u32>, streams: &[CudaStream]) -> Vec<u32> {
         let a = dtoh_on_stream_sync(&buckets.a, &self.devs[0], &streams[0]).unwrap();
         let b = dtoh_on_stream_sync(&buckets.b, &self.devs[0], &streams[0]).unwrap();
         let mut res = buckets.as_view();
