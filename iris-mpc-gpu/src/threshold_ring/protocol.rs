@@ -1286,13 +1286,20 @@ impl Circuits {
 
         // Split to x1, x2, x3
         self.split_for_arithmetic_xor(inp, &mut x1, &mut x2, outp, streams);
+        let test = dtoh_on_stream_sync(&x1[0].a.slice(0..16), &self.devs[0], &streams[0]).unwrap();
+        tracing::warn!("id: {}, x1.a: {:?}", self.peer_id, test);
         let test = dtoh_on_stream_sync(&x1[0].b.slice(0..16), &self.devs[0], &streams[0]).unwrap();
-        tracing::warn!("x1: {:?}", test);
+        tracing::warn!("id: {}, x1.b: {:?}", self.peer_id, test);
+        let test = dtoh_on_stream_sync(&x2[0].a.slice(0..16), &self.devs[0], &streams[0]).unwrap();
+        tracing::warn!("id: {}, x2.a: {:?}", self.peer_id, test);
         let test = dtoh_on_stream_sync(&x2[0].b.slice(0..16), &self.devs[0], &streams[0]).unwrap();
-        tracing::warn!("x2: {:?}", test);
+        tracing::warn!("id: {}, x2.b: {:?}", self.peer_id, test);
+        let test =
+            dtoh_on_stream_sync(&outp[0].a.slice(0..16), &self.devs[0], &streams[0]).unwrap();
+        tracing::warn!("id: {}, x3.a: {:?}", self.peer_id, test);
         let test =
             dtoh_on_stream_sync(&outp[0].b.slice(0..16), &self.devs[0], &streams[0]).unwrap();
-        tracing::warn!("x3: {:?}", test);
+        tracing::warn!("id: {}, x3.b: {:?}", self.peer_id, test);
 
         // First arithmetic xor: x3 ^= x1
         for (idx, (x3, x1)) in izip!(outp.iter_mut(), x1.iter()).enumerate() {
