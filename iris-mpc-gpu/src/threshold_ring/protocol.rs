@@ -2514,7 +2514,7 @@ impl Circuits {
             self.collapse_sum(&mut x, streams);
             let test =
                 dtoh_on_stream_sync(&x[0].a.slice(0..1), &self.devs[0], &streams[0]).unwrap()[0];
-            println!("A: {}", test);
+            tracing::warn!("A: {}", test);
             // Get data onto the first GPU
             if self.n_devices > 1 {
                 self.collect_graphic_result_u32(&mut x, streams);
