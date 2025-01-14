@@ -656,7 +656,7 @@ impl ServerActor {
 
         // Compute hash of the request ids concatenated
         let batch_hash = sha256_bytes(&batch.request_ids.join(""));
-        tracing::info!("Current batch hash: 0x{}", hex::encode(batch_hash));
+        tracing::info!("Current batch hash: {}", hex::encode(&batch_hash[0..4]));
 
         let valid_entries =
             self.sync_batch_entries(&batch.valid_entries, self.max_batch_size, &batch_hash)?;
