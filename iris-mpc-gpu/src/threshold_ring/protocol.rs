@@ -2512,6 +2512,9 @@ impl Circuits {
             self.bit_inject_arithmetic_xor(&bits, &mut x, streams);
             // Sum all elements in x to get the result in the first 32 bit word on each GPU
             self.collapse_sum(&mut x, streams);
+            let test =
+                dtoh_on_stream_sync(&x[0].a.slice(0..1), &self.devs[0], &streams[0]).unwrap()[0];
+            println!("A: {}", test);
             // Get data onto the first GPU
             if self.n_devices > 1 {
                 self.collect_graphic_result_u32(&mut x, streams);
