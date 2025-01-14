@@ -1,4 +1,4 @@
-#[cfg(feature = "gpu_dependent")]
+// #[cfg(feature = "gpu_dependent")]
 mod buckets_test {
     use cudarc::{
         driver::{CudaDevice, CudaStream},
@@ -97,7 +97,7 @@ mod buckets_test {
         let mut result = Vec::with_capacity(THRESHOLDS.len());
 
         for t in THRESHOLDS {
-            let a = ((1. - 2. * t) * (B as f64)) as u64;
+            let a = Circuits::translate_threshold_a(t);
 
             let mut count = 0;
             for (c, m) in code_input.iter().cloned().zip(mask_input.iter().cloned()) {

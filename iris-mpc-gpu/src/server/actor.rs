@@ -1146,7 +1146,9 @@ impl ServerActor {
                 &match_distances_buffers_codes_view,
                 &match_distances_buffers_masks_view,
                 batch_streams,
-                &[16384],
+                &[Circuits::translate_threshold_a(
+                    iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO,
+                ) as u16],
                 &mut self.buckets,
             );
 

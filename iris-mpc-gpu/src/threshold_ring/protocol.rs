@@ -2404,6 +2404,10 @@ impl Circuits {
         // Result is in the first bit of the result buffer
     }
 
+    pub fn translate_threshold_a(a: f64) -> u64 {
+        ((1. - 2. * a) * ((1u64 << B_BITS) as f64)) as u64
+    }
+
     // same as compare_threshold_masked_many, just via the functions used in the
     // bucketing
     // Just here for testing
@@ -2413,8 +2417,7 @@ impl Circuits {
         mask_dots: &[ChunkShareView<u16>],
         streams: &[CudaStream],
     ) {
-        const A: u64 = ((1. - 2. * iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO)
-            * ((1u64 << 16) as f64)) as u64;
+        let a = Self::translate_threshold_a(iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO);
 
         assert_eq!(self.n_devices, code_dots.len());
         assert_eq!(self.n_devices, mask_dots.len());
@@ -2433,7 +2436,7 @@ impl Circuits {
 
         self.lift_mpc(mask_dots, &mut masks, &mut corrections, streams);
         self.finalize_lifts(&mut masks, &mut codes, &corrections, code_dots, streams);
-        self.lifted_sub(&mut x, &masks, &codes, A as u32, streams);
+        self.lifted_sub(&mut x, &masks, &codes, a as u32, streams);
         self.extract_msb(&mut x, streams);
 
         Buffers::return_buffer(&mut self.buffers.lifted_shares, x_);
