@@ -1281,20 +1281,6 @@ impl Circuits {
 
         // Split to x1, x2, x3
         self.split_for_arithmetic_xor(inp, &mut x1, &mut x2, outp, streams);
-        let test = dtoh_on_stream_sync(&x1[0].a.slice(0..16), &self.devs[0], &streams[0]).unwrap();
-        tracing::warn!("id: {}, x1.a: {:?}", self.peer_id, test);
-        let test = dtoh_on_stream_sync(&x1[0].b.slice(0..16), &self.devs[0], &streams[0]).unwrap();
-        tracing::warn!("id: {}, x1.b: {:?}", self.peer_id, test);
-        let test = dtoh_on_stream_sync(&x2[0].a.slice(0..16), &self.devs[0], &streams[0]).unwrap();
-        tracing::warn!("id: {}, x2.a: {:?}", self.peer_id, test);
-        let test = dtoh_on_stream_sync(&x2[0].b.slice(0..16), &self.devs[0], &streams[0]).unwrap();
-        tracing::warn!("id: {}, x2.b: {:?}", self.peer_id, test);
-        let test =
-            dtoh_on_stream_sync(&outp[0].a.slice(0..16), &self.devs[0], &streams[0]).unwrap();
-        tracing::warn!("id: {}, x3.a: {:?}", self.peer_id, test);
-        let test =
-            dtoh_on_stream_sync(&outp[0].b.slice(0..16), &self.devs[0], &streams[0]).unwrap();
-        tracing::warn!("id: {}, x3.b: {:?}", self.peer_id, test);
 
         // First arithmetic xor: x3 ^= x1
         for (idx, (x3, x1)) in izip!(outp.iter_mut(), x1.iter()).enumerate() {
@@ -2491,19 +2477,6 @@ impl Circuits {
         thresholds_a: &[u16], // Thresholds are given as a/b, where b=2^16
         buckets: &mut ChunkShare<u32>, // Each element in the chunkshares is one bucket
     ) {
-        let test =
-            dtoh_on_stream_sync(&code_dots[0].a.slice(0..16), &self.devs[0], &streams[0]).unwrap();
-        tracing::warn!("code_dots.a: id: {} {:?}", self.prev_id, test);
-        let test =
-            dtoh_on_stream_sync(&code_dots[0].b.slice(0..16), &self.devs[0], &streams[0]).unwrap();
-        tracing::warn!("code_dots.b: id: {} {:?}", self.prev_id, test);
-        let test =
-            dtoh_on_stream_sync(&mask_dots[0].a.slice(0..16), &self.devs[0], &streams[0]).unwrap();
-        tracing::warn!("mask_dots.a: id: {} {:?}", self.prev_id, test);
-        let test =
-            dtoh_on_stream_sync(&mask_dots[0].b.slice(0..16), &self.devs[0], &streams[0]).unwrap();
-        tracing::warn!("mask_dots.b: id: {} {:?}", self.prev_id, test);
-
         assert_eq!(self.n_devices, code_dots.len());
         assert_eq!(self.n_devices, mask_dots.len());
         assert_eq!(thresholds_a.len(), buckets.len());
@@ -2539,16 +2512,10 @@ impl Circuits {
 
             // Expand the result buffer to the x buffer and perform arithmetic xor
             self.bit_inject_arithmetic_xor(&bits, &mut x, streams);
-            let test =
-                dtoh_on_stream_sync(&x[0].a.slice(0..16), &self.devs[0], &streams[0]).unwrap();
-            tracing::warn!("{:?}", test);
 
             // Sum all elements in x to get the result in the first 32 bit word on each GPU
             self.collapse_sum(&mut x, streams);
-            // let test =
-            //     dtoh_on_stream_sync(&x[0].a.slice(0..1), &self.devs[0],
-            // &streams[0]).unwrap()[0]; tracing::warn!("A: {}", test);
-            // Get data onto the first GPU
+
             if self.n_devices > 1 {
                 self.collect_graphic_result_u32(&mut x, streams);
             }
