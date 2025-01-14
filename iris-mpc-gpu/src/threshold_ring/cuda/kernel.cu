@@ -389,8 +389,8 @@ split_for_arithmetic_xor(U32 *x1_a, U32 *x1_b, U32 *x2_a, U32 *x2_b, U32 *x3_a,
   if (i < 64 * n) {
     size_t wordindex = i / 64;
     size_t bitindex = i % 64;
-    U32 my_bit_a = (in_a[wordindex] >> bitindex) & 1;
-    U32 my_bit_b = (in_b[wordindex] >> bitindex) & 1;
+    U32 my_bit_a = (U32)((in_a[wordindex] >> bitindex) & 1);
+    U32 my_bit_b = (U32)((in_b[wordindex] >> bitindex) & 1);
     split_for_arithmetic_xor_inner(&x1_a[i], &x1_b[i], &x2_a[i], &x2_b[i],
                                    &x3_a[i], &x3_b[i], my_bit_a, my_bit_b, id);
   }
