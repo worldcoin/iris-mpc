@@ -1286,6 +1286,12 @@ impl Circuits {
 
         // Split to x1, x2, x3
         self.split_for_arithmetic_xor(inp, &mut x1, &mut x2, outp, streams);
+        let test = dtoh_on_stream_sync(&x1[0].a.slice(0..16), &self.devs[0], &streams[0]).unwrap();
+        tracing::warn!("x1: {:?}", test);
+        let test = dtoh_on_stream_sync(&x2[0].a.slice(0..16), &self.devs[0], &streams[0]).unwrap();
+        tracing::warn!("x2: {:?}", test);
+        let test = dtoh_on_stream_sync(&x3[0].a.slice(0..16), &self.devs[0], &streams[0]).unwrap();
+        tracing::warn!("x3: {:?}", test);
 
         // First arithmetic xor: x3 ^= x1
         for (idx, (x3, x1)) in izip!(outp.iter_mut(), x1.iter()).enumerate() {
