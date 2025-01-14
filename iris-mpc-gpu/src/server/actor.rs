@@ -1499,7 +1499,7 @@ impl ServerActor {
             .collect();
 
         // Only keep entries that are valid on all nodes
-        let mut valid_merged = vec![false; max_batch_size];
+        let mut valid_merged = vec![true; max_batch_size];
         for i in 0..self.comms[0].world_size() {
             for j in 0..max_batch_size {
                 valid_merged[j] &= results[i][j] == 1;
