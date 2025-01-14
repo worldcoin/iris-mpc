@@ -27,6 +27,7 @@ use eyre::eyre;
 use futures::{Future, FutureExt};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    helpers::sha256::sha256_bytes,
     iris_db::iris::IrisCode,
     IrisCodeDbSlice,
 };
@@ -652,7 +653,13 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         let tmp_now = Instant::now();
         tracing::info!("Syncing batch entries");
-        let valid_entries = self.sync_batch_entries(&batch.valid_entries)?;
+
+        // Compute hash of the request ids concatenated
+        let batch_hash = sha256_bytes(&batch.request_ids.join(""));
+        tracing::info!("Current batch hash: 0x{}", hex::encode(batch_hash));
+
+        let valid_entries =
+            self.sync_batch_entries(&batch.valid_entries, self.max_batch_size, &batch_hash)?;
         let valid_entry_idxs = valid_entries.iter().positions(|&x| x).collect::<Vec<_>>();
         batch_size = valid_entry_idxs.len();
         batch.retain(&valid_entry_idxs);
@@ -1458,53 +1465,60 @@ impl ServerActor {
         }
     }
 
-    fn sync_batch_entries(&mut self, valid_entries: &[bool]) -> eyre::Result<Vec<bool>> {
-        tracing::info!(
-            party_id = self.party_id,
-            "valid_entries {:?} ({})",
-            valid_entries,
-            valid_entries.len()
-        );
-        tracing::info!(party_id = self.party_id, "sync_batch_entries start");
+    fn sync_batch_entries(
+        &mut self,
+        valid_entries: &[bool],
+        max_batch_size: usize,
+        batch_hash: &[u8],
+    ) -> eyre::Result<Vec<bool>> {
+        assert!(valid_entries.len() <= max_batch_size);
+        let hash_len = batch_hash.len();
         let mut buffer = self
             .device_manager
             .device(0)
-            .alloc_zeros(valid_entries.len() * self.comms[0].world_size())
+            .alloc_zeros((max_batch_size + hash_len) * self.comms[0].world_size())
             .unwrap();
 
-        tracing::info!(party_id = self.party_id, "htod_copy start");
+        let mut host_buffer = vec![0u8; max_batch_size + hash_len];
+        host_buffer[..valid_entries.len()]
+            .copy_from_slice(&valid_entries.iter().map(|&x| x as u8).collect::<Vec<u8>>());
+        host_buffer[max_batch_size..].copy_from_slice(&batch_hash);
 
-        let buffer_self = self
-            .device_manager
-            .device(0)
-            .htod_copy(valid_entries.iter().map(|&x| x as u8).collect::<Vec<_>>())?;
+        let buffer_self = self.device_manager.device(0).htod_copy(host_buffer)?;
 
+        // Use all_gather to sync the buffer across all nodes (only using device 0)
         self.device_manager.device(0).synchronize()?;
-
-        tracing::info!(party_id = self.party_id, "all_gather start");
-
         self.comms[0]
             .all_gather(&buffer_self, &mut buffer)
             .map_err(|e| eyre!(format!("{:?}", e)))?;
-
         self.device_manager.device(0).synchronize()?;
-
-        tracing::info!(party_id = self.party_id, "dtoh_sync_copy start");
 
         let results = self.device_manager.device(0).dtoh_sync_copy(&buffer)?;
         let results: Vec<_> = results
             .chunks_exact(results.len() / self.comms[0].world_size())
             .collect();
 
-        tracing::info!(party_id = self.party_id, "sync_batch_entries end");
+        // Only keep entries that are valid on all nodes
+        let mut valid_merged = vec![false; max_batch_size];
+        for i in 0..self.comms[0].world_size() {
+            for j in 0..max_batch_size {
+                valid_merged[j] &= results[i][j] == 1;
+            }
+        }
 
-        let mut valid_merged = vec![];
-        for i in 0..results[0].len() {
-            valid_merged.push(
-                [results[0][i], results[1][i], results[2][i]]
-                    .iter()
-                    .all(|&x| x == 1),
-            );
+        // Check that the hash is the same on nodes
+        for i in 0..self.comms[0].world_size() {
+            if &results[i][max_batch_size..] != batch_hash {
+                tracing::error!(
+                    party_id = self.party_id,
+                    "Batch mismatch with node {}. Queues seem to be out of sync.",
+                    i
+                );
+                return Err(eyre!(
+                    "Batch mismatch with node {}. Queues seem to be out of sync.",
+                    i
+                ));
+            }
         }
 
         Ok(valid_merged)
