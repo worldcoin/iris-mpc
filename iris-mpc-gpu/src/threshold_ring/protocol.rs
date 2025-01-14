@@ -2502,6 +2502,12 @@ impl Circuits {
         let test =
             dtoh_on_stream_sync(&code_dots[0].b.slice(0..16), &self.devs[0], &streams[0]).unwrap();
         tracing::warn!("code_dots.b: id: {} {:?}", self.prev_id, test);
+        let test =
+            dtoh_on_stream_sync(&mask_dots[0].a.slice(0..16), &self.devs[0], &streams[0]).unwrap();
+        tracing::warn!("mask_dots.a: id: {} {:?}", self.prev_id, test);
+        let test =
+            dtoh_on_stream_sync(&mask_dots[0].b.slice(0..16), &self.devs[0], &streams[0]).unwrap();
+        tracing::warn!("mask_dots.b: id: {} {:?}", self.prev_id, test);
 
         assert_eq!(self.n_devices, code_dots.len());
         assert_eq!(self.n_devices, mask_dots.len());
