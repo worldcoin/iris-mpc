@@ -556,11 +556,11 @@ extern "C" __global__ void collapse_u64_helper(U64 *inout_a, U64 *in_b,
 extern "C" __global__ void collapse_sum_assign(U32 *inout_a, U32 *inout_b,
                                                size_t n) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i == 1) {
+  if (i == 0) {
     for (size_t j = 1; j < n; j++) {
       inout_a[0] += inout_a[j];
     }
-  } else if (i == 2) {
+  } else if (i == 1) {
     for (size_t j = 1; j < n; j++) {
       inout_b[0] += inout_b[j];
     }
@@ -571,11 +571,11 @@ extern "C" __global__ void collapse_sum(U32 *inout_a, U32 *inout_b,
                                         U32 *input_a, U32 *input_b,
                                         size_t inout_index, size_t n) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i == 1) {
+  if (i == 0) {
     for (size_t j = 0; j < n; j++) {
       inout_a[inout_index] += input_a[j];
     }
-  } else if (i == 2) {
+  } else if (i == 1) {
     for (size_t j = 0; j < n; j++) {
       inout_b[inout_index] += input_b[j];
     }
