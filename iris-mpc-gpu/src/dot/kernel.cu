@@ -71,7 +71,7 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
 
             // Save the corresponding code and mask dots for later (match distributions)
             unsigned int match_distances_counter_idx = atomicAdd(&match_distances_counter[0], 1);
-            if (match_distances_counter[0] < 1000)
+            if (match_distances_counter_idx < 1000)
             {
                 match_distances_buffer_codes_a[match_distances_counter_idx] = code_dots_a[idx * 64 + i];
                 match_distances_buffer_codes_b[match_distances_counter_idx] = code_dots_b[idx * 64 + i];
