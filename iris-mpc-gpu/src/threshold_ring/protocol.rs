@@ -2496,6 +2496,13 @@ impl Circuits {
         thresholds_a: &[u16], // Thresholds are given as a/b, where b=2^16
         buckets: &mut ChunkShare<u32>, // Each element in the chunkshares is one bucket
     ) {
+        let test =
+            dtoh_on_stream_sync(&code_dots[0].a.slice(0..16), &self.devs[0], &streams[0]).unwrap();
+        tracing::warn!("code_dots.a: id: {} {:?}", self.prev_id, test);
+        let test =
+            dtoh_on_stream_sync(&code_dots[0].b.slice(0..16), &self.devs[0], &streams[0]).unwrap();
+        tracing::warn!("code_dots.b: id: {} {:?}", self.prev_id, test);
+
         assert_eq!(self.n_devices, code_dots.len());
         assert_eq!(self.n_devices, mask_dots.len());
         assert_eq!(thresholds_a.len(), buckets.len());
