@@ -1482,7 +1482,7 @@ impl ServerActor {
         let mut host_buffer = vec![0u8; max_batch_size + hash_len];
         host_buffer[..valid_entries.len()]
             .copy_from_slice(&valid_entries.iter().map(|&x| x as u8).collect::<Vec<u8>>());
-        host_buffer[max_batch_size..].copy_from_slice(&batch_hash);
+        host_buffer[max_batch_size..].copy_from_slice(batch_hash);
 
         let buffer_self = self.device_manager.device(0).htod_copy(host_buffer)?;
 
