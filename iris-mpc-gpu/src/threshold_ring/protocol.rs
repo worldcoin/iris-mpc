@@ -616,7 +616,7 @@ impl Circuits {
                 .launch_on_stream(
                     &streams[idx],
                     cfg,
-                    (&des.a, &des.b, &src.a, &src.b, src.len() as i32),
+                    (&des.a, &des.b, &src.a, &src.b, src.len()),
                 )
                 .unwrap();
         }
@@ -643,7 +643,7 @@ impl Circuits {
                 .launch_on_stream(
                     &streams[idx],
                     cfg,
-                    (&des.a, &des.b, &src.a, &src.b, src.len() as i32),
+                    (&des.a, &des.b, &src.a, &src.b, src.len()),
                 )
                 .unwrap();
         }
