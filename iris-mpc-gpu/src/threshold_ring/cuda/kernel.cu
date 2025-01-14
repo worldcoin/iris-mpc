@@ -28,11 +28,11 @@ __device__ void arithmetic_xor_inner(T *res_a, T *lhs_a, T *lhs_b, T *rhs_a,
   T lhs_b_val = *lhs_b;
   T rhs_a_val = *rhs_a;
   T rhs_b_val = *rhs_b;
-  //   T r1_val = *r1;
-  //   T r2_val = *r2;
+  T r1_val = *r1;
+  T r2_val = *r2;
 
   T mul = (lhs_a_val * rhs_a_val) + (lhs_b_val * rhs_a_val) +
-          (lhs_a_val * rhs_b_val); // + r1_val - r2_val;
+          (lhs_a_val * rhs_b_val) + r1_val - r2_val;
   *res_a = lhs_a_val + rhs_a_val - 2 * mul;
 }
 

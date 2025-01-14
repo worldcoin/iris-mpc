@@ -717,7 +717,7 @@ impl Circuits {
     fn arithmetic_xor_many_pre_assign(
         &mut self,
         x1: &mut ChunkShareView<u32>,
-        x2: &ChunkShare<u32>,
+        x2: &ChunkShareView<u32>,
         idx: usize,
         streams: &[CudaStream],
     ) {
@@ -1205,8 +1205,8 @@ impl Circuits {
     fn split_for_arithmetic_xor(
         &mut self,
         inp: &[ChunkShareView<u64>],
-        x1: &mut [ChunkShare<u32>],
-        x2: &mut [ChunkShare<u32>],
+        x1: &mut [ChunkShareView<u32>],
+        x2: &mut [ChunkShareView<u32>],
         x3: &mut [ChunkShareView<u32>],
         streams: &[CudaStream],
     ) {
@@ -1264,23 +1264,18 @@ impl Circuits {
         // buffer is aligned properly for the transmute
         let mut x1 = Vec::with_capacity(x1_.len());
         for (idx, x) in x1_.iter().enumerate() {
-            let a = self.devs[idx].alloc_zeros(64 * self.chunk_size).unwrap();
-            let b = self.devs[idx].alloc_zeros(64 * self.chunk_size).unwrap();
-            // let a: CudaView<u32> = unsafe { x.a.transmute(64 * self.chunk_size).unwrap()
-            // }; let b: CudaView<u32> = unsafe { x.b.transmute(64 *
-            // self.chunk_size).unwrap() };
-            // let view = ChunkShareView { a, b };
-            let view = ChunkShare { a, b };
+            let a: CudaView<u32> = unsafe { x.a.transmute(64 * self.chunk_size).unwrap() };
+            let b: CudaView<u32> = unsafe { x.b.transmute(64 * self.chunk_size).unwrap() };
+            let view = ChunkShareView { a, b };
+            // let view = ChunkShare { a, b };
             x1.push(view);
         }
         let mut x2 = Vec::with_capacity(x2_.len());
         for (idx, x) in x2_.iter().enumerate() {
-            let a = self.devs[idx].alloc_zeros(64 * self.chunk_size).unwrap();
-            let b = self.devs[idx].alloc_zeros(64 * self.chunk_size).unwrap();
-            // let a: CudaView<u32> = unsafe { x.a.transmute(64 * self.chunk_size).unwrap()
-            // }; let b: CudaView<u32> = unsafe { x.b.transmute(64 *
-            // self.chunk_size).unwrap() }; let view = ChunkShareView { a, b };
-            let view = ChunkShare { a, b };
+            let a: CudaView<u32> = unsafe { x.a.transmute(64 * self.chunk_size).unwrap() };
+            let b: CudaView<u32> = unsafe { x.b.transmute(64 * self.chunk_size).unwrap() };
+            let view = ChunkShareView { a, b };
+            // let view = ChunkShare { a, b };
             x2.push(view);
         }
 
@@ -2536,13 +2531,6 @@ impl Circuits {
 
             // Result is in the first bit of the result buffer
             let result = self.take_result_buffer();
-            let test =
-                dtoh_on_stream_sync(&result[0].a.slice(0..16), &self.devs[0], &streams[0]).unwrap();
-            tracing::warn!("result.a: id: {} {:?}", self.prev_id, test);
-            let test =
-                dtoh_on_stream_sync(&result[0].b.slice(0..16), &self.devs[0], &streams[0]).unwrap();
-            tracing::warn!("result.b: id: {} {:?}", self.prev_id, test);
-
             let mut bits = Vec::with_capacity(self.n_devices);
             for r in result.iter() {
                 // Result is in the first bit of the input
