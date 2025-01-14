@@ -2523,6 +2523,13 @@ impl Circuits {
 
             // Result is in the first bit of the result buffer
             let result = self.take_result_buffer();
+            let test =
+                dtoh_on_stream_sync(&result[0].a.slice(0..16), &self.devs[0], &streams[0]).unwrap();
+            tracing::warn!("result.a: id: {} {:?}", self.prev_id, test);
+            let test =
+                dtoh_on_stream_sync(&result[0].b.slice(0..16), &self.devs[0], &streams[0]).unwrap();
+            tracing::warn!("result.b: id: {} {:?}", self.prev_id, test);
+
             let mut bits = Vec::with_capacity(self.n_devices);
             for r in result.iter() {
                 // Result is in the first bit of the input
