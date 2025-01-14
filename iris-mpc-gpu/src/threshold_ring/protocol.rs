@@ -1290,7 +1290,8 @@ impl Circuits {
         tracing::warn!("x1: {:?}", test);
         let test = dtoh_on_stream_sync(&x2[0].a.slice(0..16), &self.devs[0], &streams[0]).unwrap();
         tracing::warn!("x2: {:?}", test);
-        let test = dtoh_on_stream_sync(&x3[0].a.slice(0..16), &self.devs[0], &streams[0]).unwrap();
+        let test =
+            dtoh_on_stream_sync(&outp[0].a.slice(0..16), &self.devs[0], &streams[0]).unwrap();
         tracing::warn!("x3: {:?}", test);
 
         // First arithmetic xor: x3 ^= x1
