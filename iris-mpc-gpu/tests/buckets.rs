@@ -1,4 +1,4 @@
-// #[cfg(feature = "gpu_dependent")]
+#[cfg(feature = "gpu_dependent")]
 mod buckets_test {
     use cudarc::{
         driver::{CudaDevice, CudaStream},
