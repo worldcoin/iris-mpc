@@ -8,8 +8,8 @@ use crate::{
 };
 use cudarc::{
     driver::{
-        result::launch_kernel, sys, CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr,
-        LaunchAsync,
+        result::{launch_kernel, memset_d8_sync},
+        sys, CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr, DeviceSlice, LaunchAsync,
     },
     nvrtc::compile_ptx,
 };
@@ -440,16 +440,15 @@ impl DistanceComparator {
     pub fn prepare_match_distances_buffer(&self, max_size: usize) -> Vec<ChunkShare<u16>> {
         (0..self.device_manager.device_count())
             .map(|i| {
-                let a = self
-                    .device_manager
-                    .device(i)
-                    .alloc_zeros(max_size / self.device_manager.device_count())
-                    .unwrap();
-                let b = self
-                    .device_manager
-                    .device(i)
-                    .alloc_zeros(max_size / self.device_manager.device_count())
-                    .unwrap();
+                let a = self.device_manager.device(i).alloc_zeros(max_size).unwrap();
+                let b = self.device_manager.device(i).alloc_zeros(max_size).unwrap();
+
+                self.device_manager.device(i).bind_to_thread().unwrap();
+                unsafe {
+                    memset_d8_sync(*a.device_ptr(), 0xff, a.num_bytes()).unwrap();
+                    memset_d8_sync(*b.device_ptr(), 0xff, b.num_bytes()).unwrap();
+                }
+
                 ChunkShare::new(a, b)
             })
             .collect::<Vec<_>>()
