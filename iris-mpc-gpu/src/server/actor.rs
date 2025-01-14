@@ -655,7 +655,7 @@ impl ServerActor {
         tracing::info!("Syncing batch entries");
 
         // Compute hash of the request ids concatenated
-        let batch_hash = sha256_bytes(&batch.request_ids.join(""));
+        let batch_hash = sha256_bytes(batch.request_ids.join(""));
         tracing::info!("Current batch hash: {}", hex::encode(&batch_hash[0..4]));
 
         let valid_entries =
