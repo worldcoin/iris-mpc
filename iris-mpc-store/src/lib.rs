@@ -445,6 +445,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         rng_seed: u64,
         party_id: usize,
         db_size: usize,
+        store_len: usize,
         clear_db_before_init: bool,
     ) -> Result<()> {
         let mut rng = StdRng::seed_from_u64(rng_seed);
@@ -461,7 +462,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
             "DB size before initialization: {}",
             self.count_irises().await?
         );
-        for i in 0..db_size {
+        for i in store_len..db_size {
             if (i % 1000) == 0 {
                 tracing::info!("Initializing iris db: Generated {} entries", i);
             }
@@ -700,7 +701,7 @@ mod tests {
 
         let expected_generated_irises_num = 10;
         store
-            .init_db_with_random_shares(0, 0, expected_generated_irises_num, true)
+            .init_db_with_random_shares(0, 0, expected_generated_irises_num, 0, true)
             .await?;
 
         let generated_irises_count = store.count_irises().await?;

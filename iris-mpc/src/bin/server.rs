@@ -726,7 +726,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     // Seed the persistent storage with random shares if configured and db is still
     // empty.
-    if store_len == 0 && config.init_db_size > 0 {
+    if config.init_db_size > 0 && store_len < config.init_db_size {
         tracing::info!(
             "Initialize persistent iris DB with {} randomly generated shares",
             config.init_db_size
@@ -737,6 +737,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 RNG_SEED_INIT_DB,
                 party_id,
                 config.init_db_size,
+                store_len,
                 config.clear_db_before_init,
             )
             .await?;
