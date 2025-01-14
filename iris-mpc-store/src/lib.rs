@@ -700,7 +700,7 @@ mod tests {
 
         let expected_generated_irises_num = 10;
         store
-            .init_db_with_random_shares(0, 0, expected_generated_irises_num, true)
+            .init_db_with_random_shares(0, 0, expected_generated_irises_num, 0, true)
             .await?;
 
         let generated_irises_count = store.count_irises().await?;
