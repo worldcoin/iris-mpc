@@ -2528,18 +2528,25 @@ impl Circuits {
     pub fn open_buckets(&mut self, buckets: &ChunkShare<u32>, streams: &[CudaStream]) -> Vec<u32> {
         let a = dtoh_on_stream_sync(&buckets.a, &self.devs[0], &streams[0]).unwrap();
         let b = dtoh_on_stream_sync(&buckets.b, &self.devs[0], &streams[0]).unwrap();
-        let mut res = buckets.as_view();
+        let res = buckets.as_view();
+
+        let rcv_buffer_ = Buffers::take_buffer(&mut self.buffers.lifted_shares);
+        let mut rcv_buffer = rcv_buffer_[0].get_range(0, buckets.len());
 
         result::group_start().unwrap();
         self.comms[0]
             .send_view(&res.b, self.next_id, &streams[0])
             .unwrap();
         self.comms[0]
-            .receive_view(&mut res.a, self.prev_id, &streams[0])
+            .receive_view(&mut rcv_buffer.a, self.prev_id, &streams[0])
             .unwrap();
         result::group_end().unwrap();
 
-        let c = dtoh_on_stream_sync(&res.a, &self.devs[0], &streams[0]).unwrap();
+        let c = dtoh_on_stream_sync(&rcv_buffer.a, &self.devs[0], &streams[0]).unwrap();
+
+        Buffers::return_buffer(&mut self.buffers.lifted_shares, rcv_buffer_);
+        self.buffers.check_buffers();
+
         a.iter()
             .zip(b.iter())
             .zip(c.iter())
