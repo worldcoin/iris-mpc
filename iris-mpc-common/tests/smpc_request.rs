@@ -4,7 +4,7 @@ mod tests {
     use base64::{engine::general_purpose::STANDARD, Engine};
     use iris_mpc_common::helpers::{
         key_pair::{SharesDecodingError, SharesEncryptionKeyPairs},
-        sha256::calculate_sha256,
+        sha256::sha256_as_hex_string,
         smpc_request::{IrisCodesJSON, UniquenessRequest},
     };
     use serde_json::json;
@@ -271,7 +271,7 @@ mod tests {
     async fn test_validate_iris_share() {
         let mock_iris_codes_json = mock_iris_codes_json();
         let mock_serialized_iris = serde_json::to_string(&mock_iris_codes_json).unwrap();
-        let mock_hash = calculate_sha256(mock_serialized_iris.into_bytes());
+        let mock_hash = sha256_as_hex_string(mock_serialized_iris.into_bytes());
 
         let smpc_request = get_mock_smpc_request_with_hashes([
             mock_hash.clone(),
