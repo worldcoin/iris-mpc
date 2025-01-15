@@ -142,6 +142,7 @@ impl DistanceComparator {
         match_distances_buffers_codes: &[ChunkShare<u16>],
         match_distances_buffers_masks: &[ChunkShare<u16>],
         match_distances_counters: &[CudaSlice<u32>],
+        match_distances_indices: &[CudaSlice<u32>],
         code_dots: &[ChunkShareView<u16>],
         mask_dots: &[ChunkShareView<u16>],
         batch_size: usize,
@@ -182,6 +183,7 @@ impl DistanceComparator {
                 ptr_param(match_distances_buffers_masks[i].a.device_ptr()),
                 ptr_param(match_distances_buffers_masks[i].b.device_ptr()),
                 ptr_param(match_distances_counters[i].device_ptr()),
+                ptr_param(match_distances_indices[i].device_ptr()),
                 ptr_param(code_dots[i].a.device_ptr()),
                 ptr_param(code_dots[i].b.device_ptr()),
                 ptr_param(mask_dots[i].a.device_ptr()),
@@ -457,6 +459,18 @@ impl DistanceComparator {
     pub fn prepare_match_distances_counter(&self) -> Vec<CudaSlice<u32>> {
         (0..self.device_manager.device_count())
             .map(|i| self.device_manager.device(i).alloc_zeros(1).unwrap())
+            .collect::<Vec<_>>()
+    }
+
+    pub fn prepare_match_distances_index(&self, max_size: usize) -> Vec<CudaSlice<u32>> {
+        (0..self.device_manager.device_count())
+            .map(|i| {
+                let a = self.device_manager.device(i).alloc_zeros(max_size).unwrap();
+                unsafe {
+                    memset_d8_sync(*a.device_ptr(), 0xff, a.num_bytes()).unwrap();
+                }
+                a
+            })
             .collect::<Vec<_>>()
     }
 

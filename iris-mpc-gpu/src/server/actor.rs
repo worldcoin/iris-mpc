@@ -9,6 +9,7 @@ use crate::{
         self,
         comm::NcclComm,
         device_manager::DeviceManager,
+        dtoh_on_stream_sync, htod_on_stream_sync,
         query_processor::{
             CompactQuery, CudaVec2DSlicerRawPointer, DeviceCompactQuery, DeviceCompactSums,
         },
@@ -75,7 +76,7 @@ impl ServerActorHandle {
 const DB_CHUNK_SIZE: usize = 1 << 15;
 const KDF_SALT: &str = "111a1a93518f670e9bb0c2c68888e2beb9406d4c4ed571dc77b801e676ae3091"; // Random 32 byte salt
 const SUPERMATCH_THRESHOLD: usize = 4_000;
-const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 15;
+const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 20;
 
 pub struct ServerActor {
     job_queue: mpsc::Receiver<ServerJob>,
@@ -123,6 +124,8 @@ pub struct ServerActor {
     match_distances_buffer_masks_right: Vec<ChunkShare<u16>>,
     match_distances_counter_left: Vec<CudaSlice<u32>>,
     match_distances_counter_right: Vec<CudaSlice<u32>>,
+    match_distances_indices_left: Vec<CudaSlice<u32>>,
+    match_distances_indices_right: Vec<CudaSlice<u32>>,
     buckets: ChunkShare<u32>,
 }
 
@@ -379,6 +382,10 @@ impl ServerActor {
             distance_comparator.prepare_match_distances_buffer(MATCH_DISTANCES_BUFFER_SIZE);
         let match_distances_counter_left = distance_comparator.prepare_match_distances_counter();
         let match_distances_counter_right = distance_comparator.prepare_match_distances_counter();
+        let match_distances_indices_left =
+            distance_comparator.prepare_match_distances_index(MATCH_DISTANCES_BUFFER_SIZE);
+        let match_distances_indices_right =
+            distance_comparator.prepare_match_distances_index(MATCH_DISTANCES_BUFFER_SIZE);
         let buckets = distance_comparator.prepare_match_distances_buckets(1); // TODO
 
         for dev in device_manager.devices() {
@@ -430,6 +437,8 @@ impl ServerActor {
             match_distances_buffer_masks_right,
             match_distances_counter_left,
             match_distances_counter_right,
+            match_distances_indices_left,
+            match_distances_indices_right,
         })
     }
 
@@ -1106,16 +1115,19 @@ impl ServerActor {
             match_distances_buffers_codes,
             match_distances_buffers_masks,
             match_distances_counters,
+            match_distances_indices,
         ) = match eye_db {
             Eye::Left => (
                 &self.match_distances_buffer_codes_left,
                 &self.match_distances_buffer_masks_left,
                 &self.match_distances_counter_left,
+                &self.match_distances_indices_left,
             ),
             Eye::Right => (
                 &self.match_distances_buffer_codes_right,
                 &self.match_distances_buffer_masks_right,
                 &self.match_distances_counter_right,
+                &self.match_distances_indices_right,
             ),
         };
 
@@ -1130,16 +1142,49 @@ impl ServerActor {
 
         if total_distance_counter >= 10 {
             // TODO
+            let now = std::time::Instant::now();
             tracing::info!("Collected enough match distances, starting bucket calculation");
 
-            let match_distances_buffers_codes_view = match_distances_buffers_codes
+            // Fetch the indices from the device
+            let indices = match_distances_indices
                 .iter()
-                .map(|x| x.as_view())
+                .enumerate()
+                .map(|(i, x)| {
+                    dtoh_on_stream_sync(x, &self.device_manager.device(i), &batch_streams[i])
+                        .unwrap()
+                })
                 .collect::<Vec<_>>();
 
-            let match_distances_buffers_masks_view = match_distances_buffers_masks
+            let resort_indices = (0..indices.len())
+                .map(|i| {
+                    let mut resort_indices = (0..indices[i].len()).collect::<Vec<_>>();
+                    resort_indices.sort_by_key(|&j| indices[i][j]);
+                    resort_indices
+                })
+                .collect::<Vec<_>>();
+
+            let shares = resort_shares_by_indices(
+                &self.device_manager,
+                &resort_indices,
+                &match_distances_buffers_codes,
+                batch_streams,
+            );
+
+            let match_distances_buffers_codes_view = shares
                 .iter()
-                .map(|x| x.as_view())
+                .map(|x: &ChunkShare<u16>| x.as_view())
+                .collect::<Vec<_>>();
+
+            let shares = resort_shares_by_indices(
+                &self.device_manager,
+                &resort_indices,
+                &match_distances_buffers_masks,
+                batch_streams,
+            );
+
+            let match_distances_buffers_masks_view = shares
+                .iter()
+                .map(|x: &ChunkShare<u16>| x.as_view())
                 .collect::<Vec<_>>();
 
             self.phase2_buckets.compare_multiple_thresholds(
@@ -1158,6 +1203,7 @@ impl ServerActor {
 
             tracing::info!("BUCKETRESULT: {:?}", buckets);
 
+            tracing::info!("Bucket calculation took {:?}", now.elapsed());
             // TODO: reset counter
         }
 
@@ -1497,6 +1543,7 @@ impl ServerActor {
                             match_distances_buffers_codes,
                             match_distances_buffers_masks,
                             match_distances_counters,
+                            match_distances_indices,
                             &code_dots,
                             &mask_dots,
                             batch_size,
@@ -1679,6 +1726,7 @@ fn open(
     match_distances_buffers_codes: &[ChunkShare<u16>],
     match_distances_buffers_masks: &[ChunkShare<u16>],
     match_distances_counters: &[CudaSlice<u32>],
+    match_distances_indices: &[CudaSlice<u32>],
     code_dots: &[ChunkShareView<u16>],
     mask_dots: &[ChunkShareView<u16>],
     batch_size: usize,
@@ -1721,6 +1769,7 @@ fn open(
         match_distances_buffers_codes,
         match_distances_buffers_masks,
         match_distances_counters,
+        match_distances_indices,
         code_dots,
         mask_dots,
         batch_size,
@@ -1967,4 +2016,41 @@ pub fn get_dummy_shares_for_deletion(
             .clone()
             .into();
     (iris_share, mask_share)
+}
+
+fn resort_shares_by_indices(
+    device_manager: &DeviceManager,
+    resort_indices: &[Vec<usize>],
+    shares: &[ChunkShare<u16>],
+    streams: &[CudaStream],
+) -> Vec<ChunkShare<u16>> {
+    let a = shares
+        .iter()
+        .enumerate()
+        .map(|(i, x)| dtoh_on_stream_sync(&x.a, &device_manager.device(i), &streams[i]).unwrap())
+        .collect::<Vec<_>>();
+
+    let b = shares
+        .iter()
+        .enumerate()
+        .map(|(i, x)| dtoh_on_stream_sync(&x.b, &device_manager.device(i), &streams[i]).unwrap())
+        .collect::<Vec<_>>();
+
+    (0..a.len())
+        .map(|i| {
+            let new_a = resort_indices[i]
+                .iter()
+                .map(|&j| a[i][j])
+                .collect::<Vec<_>>();
+            let a = htod_on_stream_sync(&new_a, &device_manager.device(i), &streams[i]).unwrap();
+
+            let new_b = resort_indices[i]
+                .iter()
+                .map(|&j| b[i][j])
+                .collect::<Vec<_>>();
+            let b = htod_on_stream_sync(&new_b, &device_manager.device(i), &streams[i]).unwrap();
+
+            ChunkShare::new(a, b)
+        })
+        .collect::<Vec<_>>()
 }
