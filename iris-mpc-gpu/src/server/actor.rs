@@ -1497,7 +1497,7 @@ impl ServerActor {
         let results: Vec<_> = results
             .chunks_exact(results.len() / self.comms[0].world_size())
             .collect();
-
+        tracing::info!("valid entries: {:?}", valid_entries);
         // Only keep entries that are valid on all nodes
         let mut valid_merged = vec![true; max_batch_size];
         for i in 0..self.comms[0].world_size() {
