@@ -16,7 +16,7 @@ jobs:
       - name: Install Dependencies
         run: sudo apt install protobuf-compiler
       - name: Cache build products
-        uses: Swatinem/rust-cache@v2.7.3
+        uses: Swatinem/rust-cache@v2.7.7
         with:
           # Split the test and bench caches, the have different debug settings
           key: "test"
@@ -36,7 +36,7 @@ jobs:
       - name: Install Dependencies
         run: sudo apt install protobuf-compiler
       - name: Cache build products
-        uses: Swatinem/rust-cache@v2.7.3
+        uses: Swatinem/rust-cache@v2.7.7
         with:
           # Split the test and bench caches, they have different debug settings
           key: "bench"
