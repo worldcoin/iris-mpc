@@ -692,12 +692,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     // Increase S3 retries to 5
     let retry_config = RetryConfig::standard().with_max_attempts(5);
 
-    // Bump stalled stream protection grace period to 30 seconds
-    let mut stream_protection = StalledStreamProtectionConfig::enabled();
-    stream_protection.set_grace_period(Some(Duration::from_secs(40)));
-
     let s3_config = S3ConfigBuilder::from(&shared_config)
-        .stalled_stream_protection(stream_protection.build())
+        // disable stalled stream protection to avoid panics during s3 import
+        .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
         .retry_config(retry_config)
         .build();
     let s3_client = Arc::new(S3Client::from_conf(s3_config));
