@@ -249,6 +249,7 @@ async fn receive_batch(
                             })?;
                         metrics::counter!("request.received", "type" => "uniqueness_verification")
                             .increment(1);
+                        tracing::info!("signup id: {}", smpc_request.signup_id);
                         store
                             .mark_requests_deleted(&[smpc_request.signup_id.clone()])
                             .await
