@@ -1514,6 +1514,7 @@ impl ServerActor {
                     "Batch mismatch with node {}. Queues seem to be out of sync.",
                     i
                 );
+                metrics::counter!("batch.mismatch").increment(1);
                 return Err(eyre!(
                     "Batch mismatch with node {}. Queues seem to be out of sync.",
                     i
