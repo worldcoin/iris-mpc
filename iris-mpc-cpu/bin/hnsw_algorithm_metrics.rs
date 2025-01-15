@@ -6,8 +6,8 @@ use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{
         metrics::{
-            EventCounter, HnswEventCounterLayer, VertexOpeningsLayer, COMPARE_DIST_EVENT,
-            EVAL_DIST_EVENT, LAYER_SEARCH_EVENT, OPEN_NODE_EVENT,
+            CounterLayer, OpCounters,
+            VertexOpeningsLayer, Operation
         },
         searcher::{HnswParams, HnswSearcher},
     },
@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let database_size = args.database_size;
     let layer_probability = args.layer_probability;
 
-    let (counters, counter_map) = configure_tracing();
+    let (op_counters, counter_map) = configure_tracing();
 
     let mut rng = AesRng::seed_from_u64(42_u64);
     // let mut rng = rand::thread_rng();
@@ -66,12 +66,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         if idx % 1000 == 999 {
             print!("{}, ", idx + 1);
-            print_stats(&counters, false);
+            print_stats(&op_counters, false);
         }
     }
 
     println!("Final counts:");
-    print_stats(&counters, true);
+    print_stats(&op_counters, true);
 
     println!("Layer search counts:");
     for ((lc, ef), value) in counter_map.lock().unwrap().iter() {
@@ -81,11 +81,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn print_stats(counters: &Arc<EventCounter>, verbose: bool) {
-    let layer_searches = counters.counters.get(LAYER_SEARCH_EVENT as usize).unwrap();
-    let opened_nodes = counters.counters.get(OPEN_NODE_EVENT as usize).unwrap();
-    let distance_evals = counters.counters.get(EVAL_DIST_EVENT as usize).unwrap();
-    let distance_comps = counters.counters.get(COMPARE_DIST_EVENT as usize).unwrap();
+fn print_stats(counters: &Arc<OpCounters>, verbose: bool) {
+    let layer_searches = counters.get(Operation::LayerSearch.id() as usize).unwrap();
+    let opened_nodes = counters.get(Operation::OpenNode.id() as usize).unwrap();
+    let distance_evals = counters.get(Operation::EvaluateDistance.id() as usize).unwrap();
+    let distance_comps = counters.get(Operation::CompareDistance.id() as usize).unwrap();
 
     if verbose {
         println!("  Layer search events: {:?}", layer_searches);
@@ -101,14 +101,21 @@ fn print_stats(counters: &Arc<EventCounter>, verbose: bool) {
 }
 
 fn configure_tracing() -> (
-    Arc<EventCounter>,
+    Arc<OpCounters>,
     Arc<Mutex<HashMap<(usize, usize), usize>>>,
 ) {
-    let counters = Arc::new(EventCounter::default());
+    let count_ops_layer = CounterLayer::new();
+    let ops_counters = count_ops_layer.get_counters();
 
-    let counting_layer = HnswEventCounterLayer {
-        counters: counters.clone(),
-    };
+    // let compare_dist_layer = SingletonCounterLayer::new("compare_distance");
+    // let compare_dist_counter = compare_dist_layer.get_counter();
+
+
+    // let counters = Arc::new(EventCounter::default());
+
+    // let counting_layer = SingletonCounterLayer {
+    //     counter: counters.clone(),
+    // };
 
     let counter_map: Arc<Mutex<HashMap<(usize, usize), usize>>> =
         Arc::new(Mutex::new(HashMap::new()));
@@ -118,12 +125,12 @@ fn configure_tracing() -> (
     };
 
     tracing_subscriber::registry()
-        .with(counting_layer)
         .with(vertex_openings_layer)
+        .with(count_ops_layer)
         .init();
 
     // tracing_subscriber::fmt()
     //    .init();
 
-    (counters, counter_map)
+    (ops_counters, counter_map)
 }

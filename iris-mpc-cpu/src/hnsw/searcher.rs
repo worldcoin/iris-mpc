@@ -4,7 +4,7 @@
 //*
 //* https://github.com/Inversed-Tech/hawk-pack/
 
-use super::metrics;
+use super::metrics::Operation;
 pub use hawk_pack::data_structures::queue::{
     FurthestQueue, FurthestQueueV, NearestQueue, NearestQueueV,
 };
@@ -255,7 +255,7 @@ impl HnswSearcher {
         ef: usize,
         lc: usize,
     ) {
-        info!(event_type = metrics::LAYER_SEARCH_EVENT);
+        info!(event_type = Operation::LayerSearch.id());
 
         // v: The set of already visited vectors.
         let mut v = HashSet::<V::VectorRef>::from_iter(W.iter().map(|(e, _eq)| e.clone()));
@@ -276,7 +276,7 @@ impl HnswSearcher {
             }
 
             // Open the node c and explore its neighbors.
-            info!(event_type = metrics::OPEN_NODE_EVENT);
+            info!(event_type = Operation::OpenNode.id());
 
             // Visit all neighbors of c.
             let c_links = graph_store.get_links(&c, lc).await;

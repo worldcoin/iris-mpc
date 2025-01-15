@@ -7,67 +7,131 @@ use std::{
     },
 };
 use tracing::{
-    field::{Field, Visit},
-    span::Attributes,
-    Event, Id, Subscriber,
+    field::{Field, Visit}, span::Attributes, Event, Id, Subscriber
 };
 use tracing_subscriber::{
     layer::{Context, Layer},
     registry::LookupSpan,
 };
 
-pub const LAYER_SEARCH_EVENT: u64 = 0;
-pub const OPEN_NODE_EVENT: u64 = 1;
-pub const EVAL_DIST_EVENT: u64 = 2;
-pub const COMPARE_DIST_EVENT: u64 = 3;
-
-const NUM_EVENT_TYPES: usize = 4;
-
-#[derive(Default)]
-pub struct EventCounter {
-    pub counters: [AtomicUsize; NUM_EVENT_TYPES],
+/// Provides a basic scheme for deriving a list of control strings from the
+/// `name` field of a `tracing` callsite's metadata, by splitting into a list
+/// of whitespace separated substrings.  These substrings may be used to
+/// determine callsite activation status in `tracing::Subscriber` or
+/// `tracing_subscriber::Layer` implementations.
+pub fn parse_callsite_name(name: &str) -> Vec<String> {
+    name.split_whitespace().map(|s| s.to_string()).collect()
 }
 
-pub struct HnswEventCounterLayer {
-    pub counters: Arc<EventCounter>,
+pub struct SingletonCounterLayer {
+    pub counter: Arc<AtomicUsize>,
+    target: String,
 }
 
-impl<S> Layer<S> for HnswEventCounterLayer
-where
-    S: Subscriber + for<'a> LookupSpan<'a>,
-{
+impl SingletonCounterLayer {
+    pub fn new(target: &str) -> Self {
+        Self {
+            counter: Arc::new(AtomicUsize::default()),
+            target: target.to_string(),
+        }
+    }
+
+    pub fn get_counter(&self) -> Arc<AtomicUsize> {
+        self.counter.clone()
+    }
+
+    pub fn get_target(&self) -> String {
+        self.target.clone()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Operation {
+    EvaluateDistance,
+    CompareDistance,
+    OpenNode,
+    LayerSearch,
+}
+
+/// The number of enum variants of `Operation`
+const NUM_OPS: usize = 4;
+
+impl Operation {
+    pub const fn tag(&self) -> &'static str {
+        match self {
+            Operation::EvaluateDistance => "evaluate_distance",
+            Operation::CompareDistance => "compare_distance",
+            Operation::OpenNode => "open_node",
+            Operation::LayerSearch => "layer_search",
+        }
+    }
+
+    pub const fn id(&self) -> usize {
+        *self as usize
+    }
+}
+
+pub type OpCounters = [AtomicUsize; NUM_OPS];
+
+pub struct CounterLayer {
+    counters: Arc<OpCounters>,
+    // callsite_target: Option<String>,
+}
+
+impl CounterLayer {
+    pub fn new() -> Self {
+        let counters_inner = OpCounters::default();
+        Self {
+            counters: Arc::new(counters_inner),
+            // callsite_target: target.map(|s| s.to_string())
+        }
+    }
+
+    pub fn get_counters(&self) -> Arc<OpCounters> {
+        self.counters.clone()
+    }
+}
+
+impl<S: Subscriber> Layer<S> for CounterLayer {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
         let mut visitor = EventVisitor::default();
         event.record(&mut visitor);
 
-        if let Some(event_type) = visitor.event {
-            if let Some(counter) = self.counters.counters.get(event_type as usize) {
-                let increment_amount = visitor.amount.unwrap_or(1);
-                counter.fetch_add(increment_amount as usize, Ordering::Relaxed);
-            } else {
-                panic!("Invalid event type specified: {:?}", event_type);
-            }
-        }
+        let event_id = visitor.event.unwrap() as usize;
+        let increment_amount = visitor.amount.unwrap_or(1);
+        self.counters
+            .get(event_id)
+            .expect("attempted to count using invalid counter id")
+            .fetch_add(increment_amount as usize, Ordering::Relaxed);
     }
 }
 
 #[derive(Default)]
 struct EventVisitor {
     // which event was encountered
-    event: Option<u64>,
+    event: Option<usize>,
 
     // how much to increment the associated counter
-    amount: Option<u64>,
+    amount: Option<i128>,
 }
 
 impl Visit for EventVisitor {
     fn record_u64(&mut self, field: &Field, value: u64) {
         match field.name() {
             "event_type" => {
-                self.event = Some(value);
+                self.event = Some(value as usize);
             }
             "increment_amount" => {
-                self.amount = Some(value);
+                self.amount = Some(value as i128);
+            }
+            _ => {}
+        }
+    }
+
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        match field.name() {
+            "increment_amount" => {
+                self.amount = Some(value as i128);
             }
             _ => {}
         }
@@ -86,15 +150,6 @@ impl<S> Layer<S> for VertexOpeningsLayer
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
-    // fn register_callsite(&self, _metadata: &'static Metadata<'static>) ->
-    // Interest {     Interest::sometimes()
-    // }
-
-    // fn enabled(&self, metadata: &Metadata<'_>, _ctx: Context<'_, S>) -> bool {
-    //     let is_search_layer_span = metadata.is_span() && metadata.name() ==
-    // "search_layer";     is_search_layer_span || metadata.is_event()
-    // }
-
     fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
         let span = ctx.span(id).unwrap();
         let mut visitor = LayerSearchFields::default();
@@ -106,6 +161,7 @@ where
         let mut visitor = EventVisitor::default();
         event.record(&mut visitor);
 
+        const OPEN_NODE_EVENT: usize = Operation::OpenNode.id();
         if let Some(OPEN_NODE_EVENT) = visitor.event {
             // open node event must have parent span representing open node function
             let current_span = ctx.current_span();
