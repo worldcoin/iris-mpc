@@ -266,6 +266,11 @@ async fn receive_batch(
                             // Some party (maybe us) already meant to delete this request, so we
                             // skip it. Ignore this message when calculating the batch size.
                             msg_counter -= 1;
+                            metrics::counter!("skip.request.deleted.sqs.request").increment(1);
+                            tracing::warn!(
+                                "Skipping request due to it being from synced deleted ids: {}",
+                                smpc_request.signup_id
+                            );
                             continue;
                         }
 
