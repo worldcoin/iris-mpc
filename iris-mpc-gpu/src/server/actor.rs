@@ -1163,29 +1163,25 @@ impl ServerActor {
                 })
                 .collect::<Vec<_>>();
 
-            let shares = resort_shares_by_indices(
+            let shares = sort_shares_by_indices(
                 &self.device_manager,
                 &resort_indices,
-                &match_distances_buffers_codes,
+                match_distances_buffers_codes,
                 batch_streams,
             );
 
-            let match_distances_buffers_codes_view = shares
-                .iter()
-                .map(|x: &ChunkShare<u16>| x.as_view())
-                .collect::<Vec<_>>();
+            let match_distances_buffers_codes_view =
+                shares.iter().map(|x| x.as_view()).collect::<Vec<_>>();
 
-            let shares = resort_shares_by_indices(
+            let shares = sort_shares_by_indices(
                 &self.device_manager,
                 &resort_indices,
-                &match_distances_buffers_masks,
+                match_distances_buffers_masks,
                 batch_streams,
             );
 
-            let match_distances_buffers_masks_view = shares
-                .iter()
-                .map(|x: &ChunkShare<u16>| x.as_view())
-                .collect::<Vec<_>>();
+            let match_distances_buffers_masks_view =
+                shares.iter().map(|x| x.as_view()).collect::<Vec<_>>();
 
             self.phase2_buckets.compare_multiple_thresholds(
                 &match_distances_buffers_codes_view,
@@ -2018,7 +2014,7 @@ pub fn get_dummy_shares_for_deletion(
     (iris_share, mask_share)
 }
 
-fn resort_shares_by_indices(
+fn sort_shares_by_indices(
     device_manager: &DeviceManager,
     resort_indices: &[Vec<usize>],
     shares: &[ChunkShare<u16>],
