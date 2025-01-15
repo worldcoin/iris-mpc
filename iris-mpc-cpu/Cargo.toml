@@ -8,11 +8,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display"}
+aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
 async-channel = "2.3.1"
 async-stream = "0.3.6"
 async-trait = "~0.1"
-backoff = {version="0.4.0", features = ["tokio"]}
+backoff = { version = "0.4.0", features = ["tokio"] }
 bincode.workspace = true
 bytes = "1.7"
 bytemuck.workspace = true
@@ -59,3 +59,7 @@ path = "bin/local_hnsw.rs"
 [[bin]]
 name = "generate_benchmark_data"
 path = "bin/generate_benchmark_data.rs"
+
+[[bin]]
+name = "hawk_main"
+path = "bin/hawk_main.rs"
