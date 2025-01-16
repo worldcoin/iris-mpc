@@ -1219,17 +1219,11 @@ impl ServerActor {
                  codes: &[ChunkShare<u16>],
                  masks: &[ChunkShare<u16>],
                  buckets: &ChunkShare<u32>| {
-                    reset_slice(self.device_manager.devices(), counter, 0, &batch_streams);
-                    reset_slice(self.device_manager.devices(), indices, 0xff, &batch_streams);
-                    reset_share(self.device_manager.devices(), masks, 0xff, &batch_streams);
-                    reset_share(self.device_manager.devices(), codes, 0xff, &batch_streams);
-                    reset_single_share(
-                        self.device_manager.devices(),
-                        &buckets,
-                        0,
-                        &batch_streams,
-                        0,
-                    );
+                    reset_slice(self.device_manager.devices(), counter, 0, batch_streams);
+                    reset_slice(self.device_manager.devices(), indices, 0xff, batch_streams);
+                    reset_share(self.device_manager.devices(), masks, 0xff, batch_streams);
+                    reset_share(self.device_manager.devices(), codes, 0xff, batch_streams);
+                    reset_single_share(self.device_manager.devices(), buckets, 0, batch_streams, 0);
                 };
 
             match eye_db {
