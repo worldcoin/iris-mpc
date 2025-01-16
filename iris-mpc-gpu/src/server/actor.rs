@@ -104,6 +104,7 @@ pub struct ServerActor {
     db_match_list_right:      Vec<CudaSlice<u64>>,
     batch_match_list_left:    Vec<CudaSlice<u64>>,
     batch_match_list_right:   Vec<CudaSlice<u64>>,
+    or_policy_bitmap:         Vec<CudaSlice<u64>>,
     current_db_sizes:         Vec<usize>,
     query_db_size:            Vec<usize>,
     max_batch_size:           usize,
@@ -340,6 +341,9 @@ impl ServerActor {
         let batch_match_list_left = distance_comparator.prepare_db_match_list(n_queries);
         let batch_match_list_right = distance_comparator.prepare_db_match_list(n_queries);
 
+        let or_policy_bitmap =
+            distance_comparator.prepare_luc_bitmap(max_db_size / device_manager.device_count());
+
         let query_db_size = vec![n_queries; device_manager.device_count()];
         let current_db_sizes = vec![0; device_manager.device_count()];
 
@@ -382,6 +386,7 @@ impl ServerActor {
             db_match_list_right,
             batch_match_list_left,
             batch_match_list_right,
+            or_policy_bitmap,
             max_batch_size,
             max_db_size,
             return_partial_results,

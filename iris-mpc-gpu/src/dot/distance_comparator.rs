@@ -13,24 +13,26 @@ const PTX_SRC: &str = include_str!("kernel.cu");
 const OPEN_RESULTS_FUNCTION: &str = "openResults";
 const MERGE_DB_RESULTS_FUNCTION: &str = "mergeDbResults";
 const MERGE_BATCH_RESULTS_FUNCTION: &str = "mergeBatchResults";
+const MERGE_BATCH_RESULTS_WITH_BITMAP_FUNCTION: &str = "mergeBatchResultsWithBitmap";
 const ALL_MATCHES_LEN: usize = 256;
 
 pub struct DistanceComparator {
-    pub device_manager:          Arc<DeviceManager>,
-    pub open_kernels:            Vec<CudaFunction>,
-    pub merge_db_kernels:        Vec<CudaFunction>,
-    pub merge_batch_kernels:     Vec<CudaFunction>,
-    pub query_length:            usize,
-    pub opened_results:          Vec<CudaSlice<u32>>,
-    pub final_results:           Vec<CudaSlice<u32>>,
-    pub results_init_host:       Vec<u32>,
-    pub final_results_init_host: Vec<u32>,
-    pub match_counters:          Vec<CudaSlice<u32>>,
-    pub all_matches:             Vec<CudaSlice<u32>>,
-    pub match_counters_left:     Vec<CudaSlice<u32>>,
-    pub match_counters_right:    Vec<CudaSlice<u32>>,
-    pub partial_results_left:    Vec<CudaSlice<u32>>,
-    pub partial_results_right:   Vec<CudaSlice<u32>>,
+    pub device_manager:                  Arc<DeviceManager>,
+    pub open_kernels:                    Vec<CudaFunction>,
+    pub merge_db_kernels:                Vec<CudaFunction>,
+    pub merge_batch_kernels:             Vec<CudaFunction>,
+    pub merge_batch_with_bitmap_kernels: Vec<CudaFunction>,
+    pub query_length:                    usize,
+    pub opened_results:                  Vec<CudaSlice<u32>>,
+    pub final_results:                   Vec<CudaSlice<u32>>,
+    pub results_init_host:               Vec<u32>,
+    pub final_results_init_host:         Vec<u32>,
+    pub match_counters:                  Vec<CudaSlice<u32>>,
+    pub all_matches:                     Vec<CudaSlice<u32>>,
+    pub match_counters_left:             Vec<CudaSlice<u32>>,
+    pub match_counters_right:            Vec<CudaSlice<u32>>,
+    pub partial_results_left:            Vec<CudaSlice<u32>>,
+    pub partial_results_right:           Vec<CudaSlice<u32>>,
 }
 
 impl DistanceComparator {
@@ -39,6 +41,7 @@ impl DistanceComparator {
         let mut open_kernels: Vec<CudaFunction> = Vec::new();
         let mut merge_db_kernels = Vec::new();
         let mut merge_batch_kernels = Vec::new();
+        let mut merge_batch_with_bitmap_kernels = Vec::new();
         let mut opened_results = vec![];
         let mut final_results = vec![];
         let mut match_counters = vec![];
@@ -60,6 +63,7 @@ impl DistanceComparator {
                     OPEN_RESULTS_FUNCTION,
                     MERGE_DB_RESULTS_FUNCTION,
                     MERGE_BATCH_RESULTS_FUNCTION,
+                    MERGE_BATCH_RESULTS_WITH_BITMAP_FUNCTION,
                 ])
                 .unwrap();
 
@@ -67,6 +71,9 @@ impl DistanceComparator {
             let merge_db_results_function = device.get_func("", MERGE_DB_RESULTS_FUNCTION).unwrap();
             let merge_batch_results_function =
                 device.get_func("", MERGE_BATCH_RESULTS_FUNCTION).unwrap();
+            let merge_batch_results_with_bitmap_function = device
+                .get_func("", MERGE_BATCH_RESULTS_WITH_BITMAP_FUNCTION)
+                .unwrap();
 
             opened_results.push(device.htod_copy(results_init_host.clone()).unwrap());
             final_results.push(device.htod_copy(final_results_init_host.clone()).unwrap());
@@ -88,10 +95,10 @@ impl DistanceComparator {
                     .alloc_zeros(ALL_MATCHES_LEN * query_length / ROTATIONS)
                     .unwrap(),
             );
-
             open_kernels.push(open_results_function);
             merge_db_kernels.push(merge_db_results_function);
             merge_batch_kernels.push(merge_batch_results_function);
+            merge_batch_with_bitmap_kernels.push(merge_batch_results_with_bitmap_function);
         }
 
         Self {
@@ -99,6 +106,7 @@ impl DistanceComparator {
             open_kernels,
             merge_db_kernels,
             merge_batch_kernels,
+            merge_batch_with_bitmap_kernels,
             query_length,
             opened_results,
             final_results,
@@ -159,6 +167,59 @@ impl DistanceComparator {
                             num_elements,
                             real_db_sizes[i],
                             total_db_sizes[i],
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn join_db_matches_with_bitmaps(
+        &self,
+        matches_bitmap_left: &[CudaSlice<u64>],
+        matches_bitmap_right: &[CudaSlice<u64>],
+        final_results: &[CudaSlice<u32>],
+        db_sizes: &[usize],
+        streams: &[CudaStream],
+        kernels: &[CudaFunction],
+        or_policies_bitmap: &[CudaSlice<u64>],
+        row_stride64: usize,
+    ) {
+        for i in 0..self.device_manager.device_count() {
+            if db_sizes[i] == 0 {
+                continue;
+            }
+            let num_elements = (db_sizes[i] * self.query_length / ROTATIONS).div_ceil(64);
+            let threads_per_block = DEFAULT_LAUNCH_CONFIG_THREADS; // ON CHANGE: sync with kernel
+            let cfg = launch_config_from_elements_and_threads(
+                num_elements as u32,
+                threads_per_block,
+                &self.device_manager.devices()[i],
+            );
+
+            unsafe {
+                kernels[i]
+                    .clone()
+                    .launch_on_stream(
+                        &streams[i],
+                        cfg,
+                        (
+                            &matches_bitmap_left[i],
+                            &matches_bitmap_right[i],
+                            &final_results[i],
+                            (self.query_length / ROTATIONS) as u64,
+                            db_sizes[i] as u64,
+                            num_elements as u64,
+                            &self.match_counters[i],
+                            &self.all_matches[i],
+                            &self.match_counters_left[i],
+                            &self.match_counters_right[i],
+                            &self.partial_results_left[i],
+                            &self.partial_results_right[i],
+                            // Additional args
+                            &or_policies_bitmap[i],
+                            row_stride64 as u64,
                         ),
                     )
                     .unwrap();
@@ -343,6 +404,18 @@ impl DistanceComparator {
                 self.device_manager
                     .device(i)
                     .alloc_zeros(db_size * self.query_length / ROTATIONS / 64)
+                    .unwrap()
+            })
+            .collect::<Vec<_>>()
+    }
+
+    pub fn prepare_luc_bitmap(&self, db_size: usize) -> Vec<CudaSlice<u64>> {
+        let row_stride64 = (db_size + 63) / 64;
+        (0..self.device_manager.device_count())
+            .map(|i| {
+                self.device_manager
+                    .device(i)
+                    .alloc_zeros(row_stride64 * self.query_length)
                     .unwrap()
             })
             .collect::<Vec<_>>()

@@ -93,6 +93,56 @@ extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, 
     }
 }
 
+extern "C" __global__ void mergeDbResultsWithBitmap(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *matchCounterLeft, unsigned int *matchCounterRight, unsigned int *partialResultsLeft, unsigned int *partialResultsRight, const unsigned long long *orPolicyBitmap, size_t rowStride64) // 2D bitmap stored as 1D
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < numElements)
+    {
+        for (int i = 0; i < 64; i++)
+        {
+            unsigned int queryIdx = (idx * 64 + i) / dbLength;
+            unsigned int dbIdx = (idx * 64 + i) % dbLength;
+            bool matchLeft = (matchResultsLeft[idx] & (1ULL << i));
+            bool matchRight = (matchResultsRight[idx] & (1ULL << i));
+
+            // Check bounds
+            if (queryIdx >= queryLength || dbIdx >= dbLength)
+                continue;
+
+            // Check for partial results (only used for debugging)
+            if (matchLeft)
+            {
+                unsigned int queryMatchCounter = atomicAdd(&matchCounterLeft[queryIdx], 1);
+                if (queryMatchCounter < MAX_MATCHES_LEN)
+                    partialResultsLeft[MAX_MATCHES_LEN * queryIdx + queryMatchCounter] = dbIdx;
+            }
+            if (matchRight)
+            {
+                unsigned int queryMatchCounter = atomicAdd(&matchCounterRight[queryIdx], 1);
+                if (queryMatchCounter < MAX_MATCHES_LEN)
+                    partialResultsRight[MAX_MATCHES_LEN * queryIdx + queryMatchCounter] = dbIdx;
+            }
+            size_t rowIndex = queryIdx * rowStride64;
+            bool useOr = (orPolicyBitmap[rowIndex + (dbIdx / 64)]
+                          & (1ULL << (dbIdx % 64))) != 0ULL;
+                        
+            // If useOr is true => (matchLeft || matchRight),
+            // else => (matchLeft && matchRight).
+            bool finalMatch = useOr ? (matchLeft || matchRight)
+                                    : (matchLeft && matchRight);
+    
+            if (finalMatch)
+            {
+                atomicMin(&finalResults[queryIdx], dbIdx);
+                unsigned int queryMatchCounter = atomicAdd(&matchCounter[queryIdx], 1);
+                if (queryMatchCounter < MAX_MATCHES_LEN)
+                    allMatches[MAX_MATCHES_LEN * queryIdx + queryMatchCounter] = dbIdx;
+            }
+        }
+    }
+}
+
+
 extern "C" __global__ void mergeBatchResults(unsigned long long *matchResultsSelfLeft, unsigned long long *matchResultsSelfRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *__matchCounterLeft, unsigned int *__matchCounterRight, unsigned int *__partialResultsLeft, unsigned int *__partialResultsRight)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
