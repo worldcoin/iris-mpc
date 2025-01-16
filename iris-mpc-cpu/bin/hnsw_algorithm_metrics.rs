@@ -5,19 +5,12 @@ use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{
-        metrics::{
-            CounterLayer, OpCounters,
-            VertexOpeningsLayer, Operation
-        },
+        metrics::{CounterLayer, Counters, OpCounters, Operation, VertexOpeningsLayer},
         searcher::{HnswParams, HnswSearcher},
     },
 };
 use rand::SeedableRng;
-use std::{
-    collections::HashMap,
-    error::Error,
-    sync::{Arc, Mutex},
-};
+use std::{error::Error, sync::Arc};
 use tracing_subscriber::prelude::*;
 
 #[derive(Parser)]
@@ -44,7 +37,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let database_size = args.database_size;
     let layer_probability = args.layer_probability;
 
-    let (op_counters, counter_map) = configure_tracing();
+    let (op_counters, counters) = configure_tracing();
 
     let mut rng = AesRng::seed_from_u64(42_u64);
     // let mut rng = rand::thread_rng();
@@ -74,8 +67,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     print_stats(&op_counters, true);
 
     println!("Layer search counts:");
-    for ((lc, ef), value) in counter_map.lock().unwrap().iter() {
-        println!("  lc={lc},ef={ef}: {value}");
+    let counter_map = counters.0.read().unwrap();
+    for ((lc, ef), value) in counter_map.iter() {
+        println!("  lc={lc},ef={ef}: {:?}", value);
     }
 
     Ok(())
@@ -84,8 +78,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 fn print_stats(counters: &Arc<OpCounters>, verbose: bool) {
     let layer_searches = counters.get(Operation::LayerSearch.id() as usize).unwrap();
     let opened_nodes = counters.get(Operation::OpenNode.id() as usize).unwrap();
-    let distance_evals = counters.get(Operation::EvaluateDistance.id() as usize).unwrap();
-    let distance_comps = counters.get(Operation::CompareDistance.id() as usize).unwrap();
+    let distance_evals = counters
+        .get(Operation::EvaluateDistance.id() as usize)
+        .unwrap();
+    let distance_comps = counters
+        .get(Operation::CompareDistance.id() as usize)
+        .unwrap();
 
     if verbose {
         println!("  Layer search events: {:?}", layer_searches);
@@ -100,29 +98,12 @@ fn print_stats(counters: &Arc<OpCounters>, verbose: bool) {
     }
 }
 
-fn configure_tracing() -> (
-    Arc<OpCounters>,
-    Arc<Mutex<HashMap<(usize, usize), usize>>>,
-) {
+fn configure_tracing() -> (Arc<OpCounters>, Counters) {
     let count_ops_layer = CounterLayer::new();
     let ops_counters = count_ops_layer.get_counters();
 
-    // let compare_dist_layer = SingletonCounterLayer::new("compare_distance");
-    // let compare_dist_counter = compare_dist_layer.get_counter();
-
-
-    // let counters = Arc::new(EventCounter::default());
-
-    // let counting_layer = SingletonCounterLayer {
-    //     counter: counters.clone(),
-    // };
-
-    let counter_map: Arc<Mutex<HashMap<(usize, usize), usize>>> =
-        Arc::new(Mutex::new(HashMap::new()));
-
-    let vertex_openings_layer = VertexOpeningsLayer {
-        counter_map: counter_map.clone(),
-    };
+    let vertex_openings_layer = VertexOpeningsLayer::new();
+    let counters = vertex_openings_layer.get_counters();
 
     tracing_subscriber::registry()
         .with(vertex_openings_layer)
@@ -132,5 +113,5 @@ fn configure_tracing() -> (
     // tracing_subscriber::fmt()
     //    .init();
 
-    (ops_counters, counter_map)
+    (ops_counters, counters)
 }

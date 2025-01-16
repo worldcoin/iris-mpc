@@ -3,11 +3,13 @@ use std::{
     fmt::Debug,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
+        Arc, RwLock,
     },
 };
 use tracing::{
-    field::{Field, Visit}, span::Attributes, Event, Id, Subscriber
+    field::{Field, Visit},
+    span::Attributes,
+    Event, Id, Subscriber,
 };
 use tracing_subscriber::{
     layer::{Context, Layer},
@@ -25,14 +27,14 @@ pub fn parse_callsite_name(name: &str) -> Vec<String> {
 
 pub struct SingletonCounterLayer {
     pub counter: Arc<AtomicUsize>,
-    target: String,
+    target:      String,
 }
 
 impl SingletonCounterLayer {
     pub fn new(target: &str) -> Self {
         Self {
             counter: Arc::new(AtomicUsize::default()),
-            target: target.to_string(),
+            target:  target.to_string(),
         }
     }
 
@@ -80,10 +82,8 @@ pub struct CounterLayer {
 
 impl CounterLayer {
     pub fn new() -> Self {
-        let counters_inner = OpCounters::default();
         Self {
-            counters: Arc::new(counters_inner),
-            // callsite_target: target.map(|s| s.to_string())
+            counters: Arc::new(OpCounters::default()),
         }
     }
 
@@ -112,7 +112,7 @@ struct EventVisitor {
     event: Option<usize>,
 
     // how much to increment the associated counter
-    amount: Option<i128>,
+    amount: Option<usize>,
 }
 
 impl Visit for EventVisitor {
@@ -122,16 +122,7 @@ impl Visit for EventVisitor {
                 self.event = Some(value as usize);
             }
             "increment_amount" => {
-                self.amount = Some(value as i128);
-            }
-            _ => {}
-        }
-    }
-
-    fn record_i64(&mut self, field: &Field, value: i64) {
-        match field.name() {
-            "increment_amount" => {
-                self.amount = Some(value as i128);
+                self.amount = Some(value as usize);
             }
             _ => {}
         }
@@ -140,10 +131,25 @@ impl Visit for EventVisitor {
     fn record_debug(&mut self, _field: &Field, _value: &dyn Debug) {}
 }
 
+#[derive(Default)]
+pub struct Counters(pub Arc<RwLock<HashMap<(u64, u64), AtomicUsize>>>);
+
 /// Tracing library Layer for counting detailed HNSW layer search operations
 pub struct VertexOpeningsLayer {
     // Measure number of vertex openings for different lc and ef values
-    pub counter_map: Arc<Mutex<HashMap<(usize, usize), usize>>>,
+    counters: Counters,
+}
+
+impl VertexOpeningsLayer {
+    pub fn new() -> Self {
+        Self {
+            counters: Counters::default(),
+        }
+    }
+
+    pub fn get_counters(&self) -> Counters {
+        Counters(self.counters.0.clone())
+    }
 }
 
 impl<S> Layer<S> for VertexOpeningsLayer
@@ -175,11 +181,16 @@ where
                 .extensions()
                 .get::<LayerSearchFields>()
             {
-                let mut counter_map = self.counter_map.lock().unwrap();
+                let key = (*lc, *ef);
                 let increment_amount = visitor.amount.unwrap_or(1);
-                *counter_map
-                    .entry((*lc as usize, *ef as usize))
-                    .or_insert(0usize) += increment_amount as usize;
+                let counters_read = self.counters.0.read().unwrap();
+                if let Some(counter) = counters_read.get(&key) {
+                    counter.fetch_add(increment_amount, Ordering::Release);
+                } else {
+                    drop(counters_read);
+                    let new_counter = AtomicUsize::new(increment_amount);
+                    self.counters.0.write().unwrap().insert(key, new_counter);
+                }
             } else {
                 panic!("Open node event is missing associated span fields");
             }
