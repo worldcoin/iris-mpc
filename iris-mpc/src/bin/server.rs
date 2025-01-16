@@ -63,6 +63,7 @@ use std::{
     mem,
     net::IpAddr,
     panic,
+    process::exit,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, LazyLock, Mutex,
@@ -1091,6 +1092,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let db_chunks_bucket_name = config.db_chunks_bucket_name.clone();
     let db_chunks_folder_name = config.db_chunks_folder_name.clone();
     let download_shutdown_handler = Arc::clone(&shutdown_handler);
+    let env = config.environment.clone();
 
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
@@ -1219,7 +1221,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         let left_masks = actor.left_mask_db_slices.code_gr.clone();
                         let right_masks = actor.right_mask_db_slices.code_gr.clone();
                         let device_manager_clone = actor.device_manager.clone();
-
                         let page_lock_handle = spawn_blocking(move || {
                             for db in [&left_codes, &right_codes] {
                                 register_host_memory(
@@ -1262,13 +1263,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                 StoredIris::DB(iris) => {
                                     n_loaded_from_db += 1;
                                     serial_ids_from_db.insert(iris.id());
-                                    actor.load_single_record_from_db(
-                                        iris.index() - 1,
-                                        iris.left_code(),
-                                        iris.left_mask(),
-                                        iris.right_code(),
-                                        iris.right_mask(),
-                                    );
+                                    // actor.load_single_record_from_db(
+                                    //     iris.index() - 1,
+                                    //     iris.left_code(),
+                                    //     iris.left_mask(),
+                                    //     iris.right_code(),
+                                    //     iris.right_mask(),
+                                    // );
                                 }
                                 StoredIris::S3(iris) => {
                                     if serial_ids_from_db.contains(&iris.id()) {
@@ -1280,17 +1281,17 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                         continue;
                                     }
                                     n_loaded_from_s3 += 1;
-                                    actor.load_single_record_from_s3(
-                                        iris.index() - 1,
-                                        iris.left_code_odd(),
-                                        iris.left_code_even(),
-                                        iris.right_code_odd(),
-                                        iris.right_code_even(),
-                                        iris.left_mask_odd(),
-                                        iris.left_mask_even(),
-                                        iris.right_mask_odd(),
-                                        iris.right_mask_even(),
-                                    );
+                                    // actor.load_single_record_from_s3(
+                                    //     iris.index() - 1,
+                                    //     iris.left_code_odd(),
+                                    //     iris.left_code_even(),
+                                    //     iris.right_code_odd(),
+                                    //     iris.right_code_even(),
+                                    //     iris.left_mask_odd(),
+                                    //     iris.left_mask_even(),
+                                    //     iris.right_mask_odd(),
+                                    //     iris.right_mask_even(),
+                                    // );
                                 }
                             };
 
@@ -1330,6 +1331,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             time_loading_into_memory,
                         );
 
+                        if env.eq("stage") {
+                            tracing::info!("Test environment detected, exiting");
+                            exit(0);
+                        }
                         // Clear the memory allocated by temp HashSet
                         serial_ids_from_db.clear();
                         serial_ids_from_db.shrink_to_fit();
