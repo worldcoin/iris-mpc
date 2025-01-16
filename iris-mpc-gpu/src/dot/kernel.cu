@@ -51,7 +51,7 @@ extern "C" __global__ void openResultsBatch(unsigned long long *result1, unsigne
     }
 }
 
-extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t chunkLength, size_t queryLength, size_t offset, size_t numElements, size_t realChunkLen, size_t totalDbLen, unsigned short *match_distances_buffer_codes_a, unsigned short *match_distances_buffer_codes_b, unsigned short *match_distances_buffer_masks_a, unsigned short *match_distances_buffer_masks_b, unsigned int *match_distances_counter, unsigned int *match_distances_indices, unsigned short *code_dots_a, unsigned short *code_dots_b, unsigned short *mask_dots_a, unsigned short *mask_dots_b)
+extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t chunkLength, size_t queryLength, size_t offset, size_t numElements, size_t realChunkLen, size_t totalDbLen, unsigned short *match_distances_buffer_codes_a, unsigned short *match_distances_buffer_codes_b, unsigned short *match_distances_buffer_masks_a, unsigned short *match_distances_buffer_masks_b, unsigned int *match_distances_counter, unsigned int *match_distances_indices, unsigned short *code_dots_a, unsigned short *code_dots_b, unsigned short *mask_dots_a, unsigned short *mask_dots_b, size_t max_bucket_distances)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
@@ -71,7 +71,7 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
 
             // Save the corresponding code and mask dots for later (match distributions)
             unsigned int match_distances_counter_idx = atomicAdd(&match_distances_counter[0], 1);
-            if (match_distances_counter_idx < 1000)
+            if (match_distances_counter_idx < max_bucket_distances)
             {
                 match_distances_indices[match_distances_counter_idx] = idx * 64 + i;
                 match_distances_buffer_codes_a[match_distances_counter_idx] = code_dots_a[idx * 64 + i];

@@ -146,6 +146,7 @@ impl DistanceComparator {
         code_dots: &[ChunkShareView<u16>],
         mask_dots: &[ChunkShareView<u16>],
         batch_size: usize,
+        max_bucket_distances: usize,
         streams: &[CudaStream],
     ) {
         for i in 0..self.device_manager.device_count() {
@@ -188,6 +189,7 @@ impl DistanceComparator {
                 ptr_param(code_dots[i].b.device_ptr()),
                 ptr_param(mask_dots[i].a.device_ptr()),
                 ptr_param(mask_dots[i].b.device_ptr()),
+                usize_param(&max_bucket_distances),
             ];
 
             unsafe {

@@ -28,7 +28,7 @@ use eyre::eyre;
 use futures::{Future, FutureExt};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
-    iris_db::iris::IrisCode,
+    iris_db::iris::{IrisCode, MATCH_THRESHOLD_RATIO},
     IrisCodeDbSlice,
 };
 use itertools::Itertools;
@@ -77,6 +77,7 @@ const DB_CHUNK_SIZE: usize = 1 << 15;
 const KDF_SALT: &str = "111a1a93518f670e9bb0c2c68888e2beb9406d4c4ed571dc77b801e676ae3091"; // Random 32 byte salt
 const SUPERMATCH_THRESHOLD: usize = 4_000;
 const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 20;
+const N_BUCKETS: usize = 10;
 
 pub struct ServerActor {
     job_queue: mpsc::Receiver<ServerJob>,
@@ -386,7 +387,7 @@ impl ServerActor {
             distance_comparator.prepare_match_distances_index(MATCH_DISTANCES_BUFFER_SIZE);
         let match_distances_indices_right =
             distance_comparator.prepare_match_distances_index(MATCH_DISTANCES_BUFFER_SIZE);
-        let buckets = distance_comparator.prepare_match_distances_buckets(1); // TODO
+        let buckets = distance_comparator.prepare_match_distances_buckets(N_BUCKETS);
 
         for dev in device_manager.devices() {
             dev.synchronize().unwrap();
@@ -1131,7 +1132,6 @@ impl ServerActor {
             ),
         };
 
-        // copy counters to host
         let mut total_distance_counter = 0;
         for (i, device) in self.device_manager.devices().iter().enumerate() {
             let counter = device.dtoh_sync_copy(&match_distances_counters[i]).unwrap();
@@ -1140,12 +1140,10 @@ impl ServerActor {
 
         tracing::info!("Matching distances collected: {}", total_distance_counter);
 
-        if total_distance_counter >= 10 {
-            // TODO
+        if total_distance_counter >= MATCH_DISTANCES_BUFFER_SIZE as u32 {
             let now = std::time::Instant::now();
             tracing::info!("Collected enough match distances, starting bucket calculation");
 
-            // Fetch the indices from the device
             let indices = match_distances_indices
                 .iter()
                 .enumerate()
@@ -1187,9 +1185,13 @@ impl ServerActor {
                 &match_distances_buffers_codes_view,
                 &match_distances_buffers_masks_view,
                 batch_streams,
-                &[Circuits::translate_threshold_a(
-                    iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO,
-                ) as u16],
+                &(1..=N_BUCKETS)
+                    .map(|x: usize| {
+                        Circuits::translate_threshold_a(
+                            MATCH_THRESHOLD_RATIO / (N_BUCKETS as f64) * (x as f64),
+                        ) as u16
+                    })
+                    .collect::<Vec<_>>(),
                 &mut self.buckets,
             );
 
@@ -1197,10 +1199,61 @@ impl ServerActor {
                 .phase2_buckets
                 .open_buckets(&self.buckets, batch_streams);
 
-            tracing::info!("BUCKETRESULT: {:?}", buckets);
+            let mut results = String::new();
+            for i in 0..buckets.len() {
+                let step = MATCH_THRESHOLD_RATIO / (N_BUCKETS as f64);
+                let previous_threshold = step * (i as f64);
+                let threshold = step * (i as f64 + 1.0);
+                let previous_count = if i == 0 { 0 } else { buckets[i - 1] };
+                let count = buckets[i] - previous_count;
+                results.push_str(&format!(
+                    "    {:.3}-{:.3}: {:?}\n",
+                    previous_threshold, threshold, count
+                ));
+            }
+            tracing::info!("Bucket results:\n{}", results);
+
+            let reset_all_buffers =
+                |counter: &[CudaSlice<u32>],
+                 indices: &[CudaSlice<u32>],
+                 codes: &[ChunkShare<u16>],
+                 masks: &[ChunkShare<u16>],
+                 buckets: &ChunkShare<u32>| {
+                    reset_slice(self.device_manager.devices(), counter, 0, &batch_streams);
+                    reset_slice(self.device_manager.devices(), indices, 0xff, &batch_streams);
+                    reset_share(self.device_manager.devices(), masks, 0xff, &batch_streams);
+                    reset_share(self.device_manager.devices(), codes, 0xff, &batch_streams);
+                    reset_single_share(
+                        self.device_manager.devices(),
+                        &buckets,
+                        0,
+                        &batch_streams,
+                        0,
+                    );
+                };
+
+            match eye_db {
+                Eye::Left => {
+                    reset_all_buffers(
+                        &self.match_distances_counter_left,
+                        &self.match_distances_indices_left,
+                        &self.match_distances_buffer_codes_left,
+                        &self.match_distances_buffer_masks_left,
+                        &self.buckets,
+                    );
+                }
+                Eye::Right => {
+                    reset_all_buffers(
+                        &self.match_distances_counter_right,
+                        &self.match_distances_indices_right,
+                        &self.match_distances_buffer_codes_right,
+                        &self.match_distances_buffer_masks_right,
+                        &self.buckets,
+                    );
+                }
+            }
 
             tracing::info!("Bucket calculation took {:?}", now.elapsed());
-            // TODO: reset counter
         }
 
         // ---- START BATCH DEDUP ----
@@ -1543,6 +1596,7 @@ impl ServerActor {
                             &code_dots,
                             &mask_dots,
                             batch_size,
+                            MATCH_DISTANCES_BUFFER_SIZE,
                             request_streams,
                         );
                         self.phase2.return_result_buffer(res);
@@ -1726,6 +1780,7 @@ fn open(
     code_dots: &[ChunkShareView<u16>],
     mask_dots: &[ChunkShareView<u16>],
     batch_size: usize,
+    max_bucket_distances: usize,
     streams: &[CudaStream],
 ) {
     let n_devices = x.len();
@@ -1769,6 +1824,7 @@ fn open(
         code_dots,
         mask_dots,
         batch_size,
+        max_bucket_distances,
         streams,
     );
 }
@@ -1861,6 +1917,44 @@ fn distribute_insertions(results: &[usize], db_sizes: &[usize]) -> Vec<Vec<usize
         c = (c + 1) % db_sizes.len();
     }
     ret
+}
+
+fn reset_single_share<T>(
+    devs: &[Arc<CudaDevice>],
+    dst: &ChunkShare<T>,
+    value: u8,
+    streams: &[CudaStream],
+    i: usize,
+) {
+    devs[i].bind_to_thread().unwrap();
+    unsafe {
+        result::memset_d8_async(
+            *dst.a.device_ptr(),
+            value,
+            dst.a.num_bytes(),
+            streams[i].stream,
+        )
+        .unwrap();
+
+        result::memset_d8_async(
+            *dst.b.device_ptr(),
+            value,
+            dst.b.num_bytes(),
+            streams[i].stream,
+        )
+        .unwrap();
+    };
+}
+
+fn reset_share<T>(
+    devs: &[Arc<CudaDevice>],
+    dst: &[ChunkShare<T>],
+    value: u8,
+    streams: &[CudaStream],
+) {
+    for i in 0..devs.len() {
+        reset_single_share(devs, &dst[i], value, streams, i);
+    }
 }
 
 fn reset_slice<T>(
