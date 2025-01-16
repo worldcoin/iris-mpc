@@ -218,13 +218,13 @@ mod e2e_test {
         let mut rng = StdRng::seed_from_u64(INTERNAL_RNG_SEED);
 
         let mut expected_results: HashMap<String, (Option<u32>, bool)> = HashMap::new();
-        let mut requests: HashMap<String, IrisCode> = HashMap::new();
         let mut responses: HashMap<u32, IrisCode> = HashMap::new();
         let mut deleted_indices_buffer = vec![];
         let mut deleted_indices: HashSet<u32> = HashSet::new();
         let mut disallowed_queries = Vec::new();
 
         for _ in 0..NUM_BATCHES {
+            let mut requests: HashMap<String, IrisCode> = HashMap::new();
             let mut batch0 = BatchQuery::default();
             let mut batch1 = BatchQuery::default();
             let mut batch2 = BatchQuery::default();
@@ -470,8 +470,13 @@ mod e2e_test {
             let res1 = res1_fut.await;
             let res2 = res2_fut.await;
 
-            // go over results and check if correct
-            for res in [res0, res1, res2].iter() {
+            let mut resp_counters = HashMap::new();
+            for req in requests.keys() {
+                resp_counters.insert(req, 0);
+            }
+
+            let results = [&res0, &res1, &res2];
+            for res in results.iter() {
                 let ServerJobResult {
                     request_ids: thread_request_ids,
                     matches,
@@ -496,12 +501,10 @@ mod e2e_test {
                 {
                     assert!(requests.contains_key(req_id));
 
+                    resp_counters.insert(req_id, resp_counters.get(req_id).unwrap() + 1);
+
                     assert_eq!(partial_left, partial_right);
                     assert_eq!(partial_left, match_id);
-
-                    // This was an invalid query, we should not get a response, but they should be
-                    // silently ignored
-                    assert!(requests.contains_key(req_id));
 
                     let (expected_idx, is_batch_match) = expected_results.get(req_id).unwrap();
 
@@ -520,6 +523,11 @@ mod e2e_test {
                         responses.insert(*idx, request);
                     }
                 }
+            }
+
+            // Check that we received a response from all actors
+            for (&id, &count) in resp_counters.iter() {
+                assert_eq!(count, 3, "Received {} responses for {}", count, id);
             }
         }
 

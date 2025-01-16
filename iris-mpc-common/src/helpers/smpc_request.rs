@@ -1,4 +1,4 @@
-use super::{key_pair::SharesDecodingError, sha256::calculate_sha256};
+use super::{key_pair::SharesDecodingError, sha256::sha256_as_hex_string};
 use crate::helpers::key_pair::SharesEncryptionKeyPairs;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::types::MessageAttributeValue;
@@ -286,6 +286,6 @@ impl UniquenessRequest {
             .map_err(SharesDecodingError::SerdeError)?
             .into_bytes();
 
-        Ok(self.iris_shares_file_hashes[party_id] == calculate_sha256(stringified_share))
+        Ok(self.iris_shares_file_hashes[party_id] == sha256_as_hex_string(stringified_share))
     }
 }
