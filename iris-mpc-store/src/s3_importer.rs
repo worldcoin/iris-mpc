@@ -3,7 +3,9 @@ use async_trait::async_trait;
 use aws_sdk_s3::{primitives::ByteStream, Client};
 use eyre::eyre;
 use futures::{stream, Stream, StreamExt};
-use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
+use iris_mpc_common::{
+    helpers::shutdown_handler::ShutdownHandler, IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
+};
 use std::{
     mem,
     pin::Pin,
@@ -236,6 +238,7 @@ pub async fn fetch_and_parse_chunks(
     concurrency: usize,
     prefix_name: String,
     last_snapshot_details: LastSnapshotDetails,
+    shutdown_handler: Arc<ShutdownHandler>,
 ) -> Pin<Box<dyn Stream<Item = eyre::Result<StoredIris>> + Send + '_>> {
     tracing::info!("Generating chunk files using: {:?}", last_snapshot_details);
     let range_size = if last_snapshot_details.chunk_size as usize > MAX_RANGE_SIZE {
@@ -253,7 +256,12 @@ pub async fn fetch_and_parse_chunks(
                 move |chunk| {
                     let counter = total_bytes_clone.clone();
                     let prefix_name = prefix_name.clone();
+                    let shutdown_handler_clone = shutdown_handler.clone();
                     async move {
+                        if shutdown_handler_clone.is_shutting_down() {
+                            tracing::info!("Shutdown triggered before processing chunk {}", chunk);
+                            return Err(eyre::eyre!("Shutdown triggered"));
+                        }
                         let chunk_id = (chunk / last_snapshot_details.chunk_size)
                             * last_snapshot_details.chunk_size
                             + 1;
@@ -407,6 +415,8 @@ mod tests {
         const MOCK_ENTRIES: usize = 107;
         const MOCK_CHUNK_SIZE: usize = 10;
         let mut store = MockStore::new();
+        let shutdown_handler = Arc::new(ShutdownHandler::new(60));
+        shutdown_handler.wait_for_shutdown_signal().await;
         let n_chunks = MOCK_ENTRIES.div_ceil(MOCK_CHUNK_SIZE);
         for i in 0..n_chunks {
             let start_serial_id = i * MOCK_CHUNK_SIZE + 1;
@@ -423,8 +433,14 @@ mod tests {
             last_serial_id: MOCK_ENTRIES as i64,
             chunk_size:     MOCK_CHUNK_SIZE as i64,
         };
-        let mut chunks =
-            fetch_and_parse_chunks(&store, 1, "out".to_string(), last_snapshot_details).await;
+        let mut chunks = fetch_and_parse_chunks(
+            &store,
+            1,
+            "out".to_string(),
+            last_snapshot_details,
+            shutdown_handler,
+        )
+        .await;
         let mut count = 0;
         let mut ids: HashSet<usize> = HashSet::from_iter(1..MOCK_ENTRIES);
         while let Some(chunk) = chunks.next().await {
@@ -434,5 +450,64 @@ mod tests {
         }
         assert_eq!(count, MOCK_ENTRIES);
         assert!(ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_and_parse_chunks_shutdown_handler() {
+        const MOCK_ENTRIES: usize = 107;
+        const MOCK_CHUNK_SIZE: usize = 10;
+        let mut store = MockStore::new();
+        let shutdown_handler = Arc::new(ShutdownHandler::new(60));
+        shutdown_handler.wait_for_shutdown_signal().await;
+
+        let shutdown_handler_2 = Arc::clone(&shutdown_handler);
+        let n_chunks = MOCK_ENTRIES.div_ceil(MOCK_CHUNK_SIZE);
+        for i in 0..n_chunks {
+            let start_serial_id = i * MOCK_CHUNK_SIZE + 1;
+            let end_serial_id = min((i + 1) * MOCK_CHUNK_SIZE, MOCK_ENTRIES);
+            store.add_test_data(
+                &format!("out/{start_serial_id}.bin"),
+                (start_serial_id..=end_serial_id).map(dummy_entry).collect(),
+            );
+        }
+
+        assert_eq!(store.list_objects("").await.unwrap().len(), n_chunks);
+        let last_snapshot_details = LastSnapshotDetails {
+            timestamp:      0,
+            last_serial_id: MOCK_ENTRIES as i64,
+            chunk_size:     MOCK_CHUNK_SIZE as i64,
+        };
+        let chunks_process = fetch_and_parse_chunks(
+            &store,
+            1,
+            "out".to_string(),
+            last_snapshot_details,
+            shutdown_handler,
+        );
+        shutdown_handler_2.trigger_manual_shutdown();
+        let mut found_error = false;
+        let mut chunks = chunks_process.await;
+        let mut count = 0;
+
+        while let Some(item_result) = chunks.next().await {
+            match item_result {
+                Ok(_) => {
+                    // The chunk was fine, continue reading...
+                    count += 1;
+                }
+                Err(e) => {
+                    // We got an error - test passes
+                    found_error = true;
+                    println!("Received error as expected: {e:?}");
+                    break;
+                }
+            }
+        }
+
+        assert!(
+            found_error,
+            "Expected an error from the stream, but it ended or returned only Ok items."
+        );
+        assert!(count < MOCK_ENTRIES);
     }
 }

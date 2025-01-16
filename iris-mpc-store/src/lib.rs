@@ -12,6 +12,7 @@ use futures::{
 use iris_mpc_common::{
     config::Config,
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    helpers::shutdown_handler::ShutdownHandler,
     iris_db::iris::IrisCode,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -19,7 +20,7 @@ pub use s3_importer::{fetch_and_parse_chunks, last_snapshot_timestamp, ObjectSto
 use sqlx::{
     migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Row, Transaction,
 };
-use std::ops::DerefMut;
+use std::{ops::DerefMut, sync::Arc};
 
 const APP_NAME: &str = "SMPC";
 const MAX_CONNECTIONS: u32 = 100;
@@ -186,12 +187,17 @@ impl Store {
         &self,
         min_last_modified_at: Option<i64>,
         partitions: usize,
+        shutdown_handler: Arc<ShutdownHandler>,
     ) -> impl Stream<Item = eyre::Result<StoredIris>> + '_ {
         let count = self.count_irises().await.expect("Failed count_irises");
         let partition_size = count.div_ceil(partitions).max(1);
 
         let mut partition_streams = Vec::new();
         for i in 0..partitions {
+            if shutdown_handler.is_shutting_down() {
+                tracing::info!("Shutdown triggered before processing chunk {}", i);
+                break;
+            }
             // we start from ID 1
             let start_id = 1 + partition_size * i;
             let end_id = start_id + partition_size - 1;
@@ -539,6 +545,9 @@ mod tests {
     #[tokio::test]
     async fn test_store() -> Result<()> {
         // Create a unique schema for this test.
+        let shutdown_handler = Arc::new(ShutdownHandler::new(60));
+        shutdown_handler.wait_for_shutdown_signal().await;
+        let shutdown_handler_2 = Arc::clone(&shutdown_handler);
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
 
@@ -546,7 +555,7 @@ mod tests {
         assert_eq!(got.len(), 0);
 
         let got: Vec<DbStoredIris> = store
-            .stream_irises_par(Some(0), 2)
+            .stream_irises_par(Some(0), 2, shutdown_handler)
             .await
             .map_ok(|stored_iris| match stored_iris {
                 StoredIris::DB(db_iris) => db_iris,
@@ -589,7 +598,7 @@ mod tests {
         let got: Vec<DbStoredIris> = store.stream_irises().await.try_collect().await?;
 
         let mut got_par: Vec<DbStoredIris> = store
-            .stream_irises_par(Some(0), 2)
+            .stream_irises_par(Some(0), 2, shutdown_handler_2)
             .await
             .map_ok(|stored_iris| match stored_iris {
                 StoredIris::DB(db_iris) => db_iris,
@@ -609,6 +618,52 @@ mod tests {
             assert_eq!(got[i].right_code(), codes_and_masks[i].right_code);
             assert_eq!(got[i].right_mask(), codes_and_masks[i].right_mask);
         }
+
+        // Clean up on success.
+        cleanup(&store, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_store_shutdown_handler() -> Result<()> {
+        let count = 500;
+        // Create a unique schema for this test.
+        let shutdown_handler = Arc::new(ShutdownHandler::new(60));
+        shutdown_handler.wait_for_shutdown_signal().await;
+        let shutdown_handler_2 = Arc::clone(&shutdown_handler);
+        let schema_name = temporary_name();
+        let store = Store::new(&test_db_url()?, &schema_name).await?;
+
+        let mut codes_and_masks = vec![];
+
+        for i in 0..count {
+            let iris = StoredIrisRef {
+                id:         (i + 1) as i64,
+                left_code:  &[123_u16; 12800],
+                left_mask:  &[456_u16; 12800],
+                right_code: &[789_u16; 12800],
+                right_mask: &[101_u16; 12800],
+            };
+            codes_and_masks.push(iris);
+        }
+        let mut tx = store.tx().await?;
+        store.insert_irises(&mut tx, &codes_and_masks).await?;
+        tx.commit().await?;
+
+        let got_len = store.count_irises().await?;
+        let got_par_process = store
+            .stream_irises_par(Some(0), 250, shutdown_handler)
+            .await
+            .map_ok(|stored_iris| match stored_iris {
+                StoredIris::DB(db_iris) => db_iris,
+                StoredIris::S3(_) => panic!("Unexpected S3 variant in this test!"),
+            })
+            .try_collect();
+        shutdown_handler_2.trigger_manual_shutdown();
+        let got_par: Vec<DbStoredIris> = got_par_process.await?;
+
+        assert_eq!(got_len, count);
+        assert!(got_par.len() < count);
 
         // Clean up on success.
         cleanup(&store, &schema_name).await?;
@@ -636,6 +691,8 @@ mod tests {
 
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let shutdown_handler = Arc::new(ShutdownHandler::new(60));
+        shutdown_handler.wait_for_shutdown_signal().await;
 
         let mut codes_and_masks = vec![];
 
@@ -674,7 +731,7 @@ mod tests {
         // Compare with the parallel version with several edge-cases.
         for parallelism in [1, 5, MAX_CONNECTIONS as usize + 1] {
             let mut got_par: Vec<DbStoredIris> = store
-                .stream_irises_par(Some(0), parallelism)
+                .stream_irises_par(Some(0), parallelism, shutdown_handler.clone())
                 .await
                 .map_ok(|stored_iris| match stored_iris {
                     StoredIris::DB(db_iris) => db_iris,
