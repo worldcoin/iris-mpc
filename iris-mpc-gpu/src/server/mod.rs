@@ -79,6 +79,7 @@ pub struct BatchQuery {
     pub db_right_preprocessed:      BatchQueryEntriesPreprocessed,
     pub deletion_requests_indices:  Vec<u32>, // 0-indexed indicies in of entries to be deleted
     pub deletion_requests_metadata: Vec<BatchMetadata>,
+    pub or_rule_serial_ids:         Vec<Vec<u32>>,
     pub valid_entries:              Vec<bool>,
 }
 

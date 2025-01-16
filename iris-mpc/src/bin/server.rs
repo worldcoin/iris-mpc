@@ -135,6 +135,7 @@ async fn receive_batch(
     shares_encryption_key_pairs: SharesEncryptionKeyPairs,
     shutdown_handler: &ShutdownHandler,
     error_result_attributes: &HashMap<String, MessageAttributeValue>,
+    store_len: usize,
 ) -> eyre::Result<Option<BatchQuery>, ReceiveRequestError> {
     let max_batch_size = config.clone().max_batch_size;
     let queue_url = &config.clone().requests_queue_url;
@@ -276,6 +277,24 @@ async fn receive_batch(
                             *CURRENT_BATCH_SIZE.lock().unwrap() =
                                 batch_size.clamp(1, max_batch_size);
                             tracing::info!("Updating batch size to {}", batch_size);
+                        }
+                        if config.luc_enabled {
+                            if config.luc_lookback_records > 0 {
+                                batch_query.or_rule_serial_ids.push(
+                                    ((store_len as u32 - config.luc_lookback_records as u32)
+                                        ..store_len as u32)
+                                        .collect::<Vec<u32>>(),
+                                );
+                            }
+                            if config.luc_serial_ids_from_smpc_request {
+                                if let Some(serial_ids) = smpc_request.or_rule_serial_ids.clone() {
+                                    batch_query.or_rule_serial_ids.push(serial_ids);
+                                } else {
+                                    tracing::error!(
+                                        "Received a uniqueness request without serial_ids"
+                                    );
+                                }
+                            }
                         }
 
                         batch_query.request_ids.push(smpc_request.signup_id.clone());
@@ -1491,6 +1510,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             shares_encryption_key_pair.clone(),
             &shutdown_handler,
             &error_result_attribute,
+            store_len,
         );
 
         let dummy_shares_for_deletions = get_dummy_shares_for_deletion(party_id);
@@ -1545,6 +1565,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 shares_encryption_key_pair.clone(),
                 &shutdown_handler,
                 &error_result_attribute,
+                store_len,
             );
 
             // await the result
