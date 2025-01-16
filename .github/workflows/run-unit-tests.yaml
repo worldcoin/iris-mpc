@@ -2,9 +2,17 @@ name: Run unit tests
 
 on:
   push:
+    paths-ignore:
+      - 'adr/**'
+      - 'deploy/**'
+      - '.github/**'
     branches:
       - main
   pull_request:
+    paths-ignore:
+      - 'adr/**'
+      - 'deploy/**'
+      - '.github/**'
     types: [opened, synchronize]
 
 concurrency:
