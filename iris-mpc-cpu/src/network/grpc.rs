@@ -139,13 +139,6 @@ impl GrpcNetworking {
     }
 
     pub async fn create_session(&self, session_id: SessionId) -> eyre::Result<()> {
-        if self.message_queues.contains_key(&session_id) {
-            return Err(eyre!(
-                "Player {:?} has already created session {session_id:?}",
-                self.party_id
-            ));
-        }
-
         for mut client in self.clients.iter_mut() {
             let (tx, rx) = mpsc::unbounded_channel();
             self.outgoing_streams

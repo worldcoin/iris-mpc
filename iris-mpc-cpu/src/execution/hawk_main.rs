@@ -19,7 +19,7 @@ use iris_mpc_common::iris_db::db::IrisDB;
 use itertools::{izip, Itertools};
 use rand::SeedableRng;
 use std::{sync::Arc, time::Duration};
-use tokio::task::JoinSet;
+use tokio::{task::JoinSet, time::sleep};
 use tonic::transport::Server;
 
 #[derive(Parser)]
@@ -51,18 +51,19 @@ pub async fn hawk_main(args: HawkArgs) -> Result<()> {
 
     let my_index = args.party_index;
     let my_identity = identities[my_index].clone();
-    let my_address = addresses[my_index].clone();
+    let my_address = &addresses[my_index];
 
     println!("🦅 Starting Hawk node {my_index}");
 
     let grpc_config = GrpcConfig {
-        timeout_duration: Duration::from_secs(1),
+        timeout_duration: Duration::from_secs(10),
     };
 
     let player = GrpcNetworking::new(my_identity.clone(), grpc_config);
 
     // Start server.
     {
+        println!("Listening on {my_address}");
         let player = player.clone();
         let socket = my_address.parse().unwrap();
         tokio::spawn(async move {
@@ -75,22 +76,30 @@ pub async fn hawk_main(args: HawkArgs) -> Result<()> {
     }
 
     // TODO: Retry until all servers are up.
-    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    sleep(Duration::from_secs(3)).await;
 
     // Connect to other players.
     izip!(&identities, &addresses)
-        .filter(|(_, address)| address != &&my_address)
+        .filter(|(_, address)| address != &my_address)
         .map(|(identity, address)| {
             let player = player.clone();
             let identity = identity.clone();
             let url = format!("http://{}", address);
-            async move { player.connect_to_party(identity, &url).await }
+            println!("Connecting to {url}");
+            async move {
+                player.connect_to_party(identity, &url).await?;
+                println!("Connected to {url}");
+                Ok(())
+            }
         })
         .collect::<JoinSet<_>>()
         .join_all()
         .await
         .into_iter()
         .collect::<Result<()>>()?;
+
+    // TODO: Wait until others connected to me.
+    sleep(Duration::from_secs(3)).await;
 
     // ---- My state ----
     // TODO: Persistence.
@@ -106,6 +115,10 @@ pub async fn hawk_main(args: HawkArgs) -> Result<()> {
     let my_session_seed = [0_u8; 16];
 
     player.create_session(session_id).await?;
+    println!("Created {session_id:?}");
+
+    // TODO: Wait until others ceated their side of the session.
+    sleep(Duration::from_secs(3)).await;
 
     let boot_session = BootSession {
         session_id,
@@ -162,6 +175,9 @@ mod tests {
             .into_iter()
             .map(|index| async move {
                 let args = HawkArgs::parse_from(&["hawk_main", "--party-index", index]);
+
+                // Make the test async.
+                sleep(Duration::from_secs(args.party_index as u64)).await;
 
                 hawk_main(args).await
             })
