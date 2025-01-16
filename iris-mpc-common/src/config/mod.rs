@@ -113,15 +113,17 @@ pub struct Config {
     pub fixed_shared_secrets: bool,
 
     /// LUC is the defense mechanism by which iris computations are performed
-    /// using the OR rule for right and left matches. LUC look back is the
-    /// time frame in days for which to use OR rule for a new signup against
-    /// existing signups in that time period.
-    #[serde(default = "default_luc_lookback_records")]
-    pub luc_lookback_records: usize,
-
+    /// using the OR rule for right and left matches.
     #[serde(default)]
     pub luc_enabled: bool,
 
+    /// LUC look back is the time frame in days for which to use OR rule for a
+    /// new signup against existing signups in that time period.
+    #[serde(default = "default_luc_lookback_records")]
+    pub luc_lookback_records: usize,
+
+    /// Alternatively, we can use the serial IDs from the SMPc request to mark
+    /// which records are to be processed using the OR rule.
     #[serde(default)]
     pub luc_serial_ids_from_smpc_request: bool,
 }
