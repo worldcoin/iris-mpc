@@ -989,6 +989,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let load_chunks_parallelism = config.load_chunks_parallelism;
     let db_chunks_bucket_name = config.db_chunks_bucket_name.clone();
     let db_chunks_folder_name = config.db_chunks_folder_name.clone();
+    let download_shutdown_handler = Arc::clone(&shutdown_handler);
 
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
@@ -1068,6 +1069,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         "Initialize iris db: Loading from DB (parallelism: {})",
                         parallelism
                     );
+                    let s3_shutdown_handler = Arc::clone(&download_shutdown_handler);
+                    let post_download_shutdown_handler = Arc::clone(&download_shutdown_handler);
                     let s3_store = S3Store::new(s3_client_clone, db_chunks_bucket_name);
                     tokio::runtime::Handle::current().block_on(async {
                         let mut stream = match config.enable_s3_importer {
@@ -1091,12 +1094,17 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                     load_chunks_parallelism,
                                     db_chunks_folder_name,
                                     last_snapshot_details,
+                                    s3_shutdown_handler,
                                 )
                                 .await
                                 .boxed();
 
                                 let stream_db = store
-                                    .stream_irises_par(Some(min_last_modified_at), parallelism)
+                                    .stream_irises_par(
+                                        Some(min_last_modified_at),
+                                        parallelism,
+                                        download_shutdown_handler,
+                                    )
                                     .await
                                     .boxed();
 
@@ -1104,11 +1112,18 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             }
                             false => {
                                 tracing::info!("S3 importer disabled. Fetching only from db");
-                                let stream_db =
-                                    store.stream_irises_par(None, parallelism).await.boxed();
+                                let stream_db = store
+                                    .stream_irises_par(None, parallelism, download_shutdown_handler)
+                                    .await
+                                    .boxed();
                                 select_all(vec![stream_db])
                             }
                         };
+
+                        if post_download_shutdown_handler.is_shutting_down() {
+                            tracing::warn!("Shutdown requested by shutdown_handler.");
+                            return Err(eyre::eyre!("Shutdown requested"));
+                        }
 
                         tracing::info!("Page-lock host memory");
                         let left_codes = actor.left_code_db_slices.code_gr.clone();
@@ -1148,6 +1163,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         let mut n_loaded_from_db = 0;
                         let mut n_loaded_from_s3 = 0;
                         while let Some(result) = stream.try_next().await? {
+                            if post_download_shutdown_handler.is_shutting_down() {
+                                tracing::warn!("Shutdown requested by shutdown_handler.");
+                                return Err(eyre::eyre!("Shutdown requested"));
+                            }
                             time_waiting_for_stream += now_load_summary.elapsed();
                             now_load_summary = Instant::now();
                             let index = result.index();
@@ -1282,7 +1301,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let sns_client_bg = sns_client.clone();
     let config_bg = config.clone();
     let store_bg = store.clone();
-    let shutdown_handler_bg = shutdown_handler.clone();
+    let shutdown_handler_bg = Arc::clone(&shutdown_handler);
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
             merged_results,
