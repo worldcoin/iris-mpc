@@ -95,16 +95,24 @@ extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, 
 
 extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *matchCounterLeft, unsigned int *matchCounterRight, unsigned int *partialResultsLeft, unsigned int *partialResultsRight, const unsigned long long *orPolicyBitmap) // 2D bitmap stored as 1D
 {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    size_t row_stride64 = (db_length + 63) / 64;
-    size_t numElements = query_length * db_length;
 
+    size_t rowStride64 = (dbLength + 63) / 64;
+
+    size_t totalBits   = dbLength * queryLength;
+    size_t numElements = (totalBits + 63) / 64; //  div_ceil
+
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
     {
         for (int i = 0; i < 64; i++)
         {
-            unsigned int queryIdx = (idx * 64 + i) / dbLength;
-            unsigned int dbIdx = (idx * 64 + i) % dbLength;
+        
+            size_t globalBit = idx * 64 + i;
+            // Protect against any leftover bits if totalBits not multiple of 64
+            if (globalBit >= totalBits) break;
+            
+            unsigned int queryIdx = globalBit / dbLength;
+            unsigned int dbIdx = globalBit % dbLength;
             bool matchLeft = (matchResultsLeft[idx] & (1ULL << i));
             bool matchRight = (matchResultsRight[idx] & (1ULL << i));
 
@@ -115,15 +123,15 @@ extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *
             // Check for partial results (only used for debugging)
             if (matchLeft)
             {
-                unsigned int queryMatchCounter = atomicAdd(&matchCounterLeft[queryIdx], 1);
-                if (queryMatchCounter < MAX_MATCHES_LEN)
-                    partialResultsLeft[MAX_MATCHES_LEN * queryIdx + queryMatchCounter] = dbIdx;
+                unsigned int qmcL = atomicAdd(&matchCounterLeft[queryIdx], 1);
+                if (qmcL < MAX_MATCHES_LEN)
+                    partialResultsLeft[MAX_MATCHES_LEN * queryIdx + qmcL] = dbIdx;
             }
             if (matchRight)
             {
-                unsigned int queryMatchCounter = atomicAdd(&matchCounterRight[queryIdx], 1);
-                if (queryMatchCounter < MAX_MATCHES_LEN)
-                    partialResultsRight[MAX_MATCHES_LEN * queryIdx + queryMatchCounter] = dbIdx;
+                unsigned int qmcR = atomicAdd(&matchCounterRight[queryIdx], 1);
+                if (qmcR < MAX_MATCHES_LEN)
+                    partialResultsRight[MAX_MATCHES_LEN * queryIdx + qmcR] = dbIdx;
             }
             size_t rowIndex = queryIdx * rowStride64;
             bool useOr = (orPolicyBitmap[rowIndex + (dbIdx / 64)]
@@ -137,9 +145,9 @@ extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *
             if (finalMatch)
             {
                 atomicMin(&finalResults[queryIdx], dbIdx);
-                unsigned int queryMatchCounter = atomicAdd(&matchCounter[queryIdx], 1);
-                if (queryMatchCounter < MAX_MATCHES_LEN)
-                    allMatches[MAX_MATCHES_LEN * queryIdx + queryMatchCounter] = dbIdx;
+                unsigned int qmc = atomicAdd(&matchCounter[queryIdx], 1);
+                if (qmc < MAX_MATCHES_LEN)
+                    allMatches[MAX_MATCHES_LEN * queryIdx + qmc] = dbIdx;
             }
         }
     }

@@ -767,6 +767,22 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // MERGE LEFT & RIGHT results
         ///////////////////////////////////////////////////////////////////
+
+        // Initialize bitmap with OR rule, if exists
+        if let Some(or_rule_bitmap) = batch.or_rule_serial_ids {
+            // Populate the pre-allocated OR policy bitmap with the serial ids
+            self.populate_or_policy_bitmap(or_rule_bitmap, batch_size);
+            self.distance_comparator.join_db_matches_with_bitmaps(
+                &self.db_match_list_left,
+                &self.db_match_list_right,
+                &self.final_results,
+                &self.current_db_sizes,
+                &self.streams[0],
+                &self.distance_comparator.merge_batch_with_bitmap_kernels,
+                &self.or_policy_bitmap,
+            );
+        }
+
         tracing::info!("Joining both sides");
         // Merge results and fetch matching indices
         // Format: host_results[device_index][query_index]
@@ -1569,6 +1585,37 @@ impl ServerActor {
         )?;
 
         Ok((compact_device_queries, compact_device_sums))
+    }
+
+    fn populate_or_policy_bitmap(&mut self, or_rule_serial_ids: Vec<Vec<u32>>, batch_size: usize) {
+        for (device_idx, &db_length) in self.current_db_sizes.iter().enumerate() {
+            if db_length == 0 {
+                continue; // Skip empty DBs
+            }
+
+            let row_stride64 = (db_length + 63) / 64;
+            let total_size = row_stride64 * batch_size / ROTATIONS;
+
+            // Create the bitmap on the host
+            let mut bitmap = vec![0u64; total_size];
+
+            for (query_idx, db_indices) in or_rule_serial_ids.iter().enumerate() {
+                for &db_idx in db_indices {
+                    if db_idx < db_length as u32 {
+                        let row_start = query_idx * row_stride64;
+                        let word_idx = row_start + (db_idx as usize / 64);
+                        let bit_offset = db_idx as usize % 64;
+                        bitmap[word_idx] |= 1 << bit_offset;
+                    }
+                }
+            }
+
+            // Copy the host-side bitmap into the pre-allocated GPU memory
+            self.device_manager
+                .device(device_idx)
+                .htod_copy_into(bitmap, &mut self.or_policy_bitmap[device_idx])
+                .expect("Failed to populate OR policy bitmap");
+        }
     }
 }
 

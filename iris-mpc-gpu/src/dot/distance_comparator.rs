@@ -175,7 +175,7 @@ impl DistanceComparator {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn join_db_matches_with_bitmaps(
+    pub fn join_db_matches_with_bitmaps(
         &self,
         matches_bitmap_left: &[CudaSlice<u64>],
         matches_bitmap_right: &[CudaSlice<u64>],
@@ -184,7 +184,6 @@ impl DistanceComparator {
         streams: &[CudaStream],
         kernels: &[CudaFunction],
         or_policies_bitmap: &[CudaSlice<u64>],
-        row_stride64: usize,
     ) {
         for i in 0..self.device_manager.device_count() {
             if db_sizes[i] == 0 {
