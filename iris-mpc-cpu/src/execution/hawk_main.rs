@@ -34,6 +34,8 @@ pub struct HawkArgs {
     addresses: Vec<String>,
 }
 
+/// HawkActor manages the state of the HNSW database and connections to other
+/// MPC nodes.
 pub struct HawkActor {
     // ---- Shared setup ----
     search_params:    HnswSearcher,
@@ -50,8 +52,13 @@ pub struct HawkActor {
     own_identity: Identity,
 }
 
+/// HawkSession is a unit of parallelism whe operating on the HawkActor.
+pub struct HawkSession {
+    aby3_store: Aby3Store,
+}
+
+/// HawkRequest contains a batch of items to search.
 pub struct HawkRequest {
-    pub session_id:     SessionId,
     pub my_iris_shares: Vec<GaloisRingSharedIris>,
 }
 
@@ -128,18 +135,18 @@ impl HawkActor {
         })
     }
 
-    // TODO: Remove &mut requirement and support parallel sessions.
-    pub async fn request(&mut self, req: HawkRequest) -> Result<()> {
-        self.networking.create_session(req.session_id).await?;
+    pub async fn new_session(&mut self, session_id: SessionId) -> Result<HawkSession> {
+        // TODO: cleanup of dropped sessions.
+        self.networking.create_session(session_id).await?;
 
         // TODO: Wait until others ceated their side of the session.
         sleep(TEST_WAIT).await;
 
         let boot_session = BootSession {
-            session_id:       req.session_id,
+            session_id,
             role_assignments: self.role_assignments.clone(),
-            networking:       Arc::new(self.networking.clone()),
-            own_identity:     self.own_identity.clone(),
+            networking: Arc::new(self.networking.clone()),
+            own_identity: self.own_identity.clone(),
         };
 
         let my_session_seed = thread_rng().gen();
@@ -150,18 +157,23 @@ impl HawkActor {
             setup: prf,
         };
 
-        let mut aby3_store = Aby3Store {
+        let aby3_store = Aby3Store {
             session,
             storage: self.iris_store.clone(),
             owner: self.own_identity.clone(),
         };
 
+        Ok(HawkSession { aby3_store })
+    }
+
+    // TODO: Remove `&mut self` requirement to support parallel sessions.
+    pub async fn request(&mut self, session: &mut HawkSession, req: HawkRequest) -> Result<()> {
         for iris in req.my_iris_shares {
-            let query = aby3_store.prepare_query(iris);
+            let query = session.aby3_store.prepare_query(iris);
 
             self.search_params
                 .insert(
-                    &mut aby3_store,
+                    &mut session.aby3_store,
                     &mut self.graph_store,
                     &query,
                     &mut self.graph_rng,
@@ -189,13 +201,11 @@ pub async fn hawk_main(args: HawkArgs) -> Result<()> {
             .into_iter()
             .map(|iris| generate_galois_iris_shares(iris_rng, iris)[args.party_index].clone())
             .collect_vec();
+        let session_id = SessionId::from(iris_rng.next_u64());
+        let req = HawkRequest { my_iris_shares };
 
-        let req = HawkRequest {
-            session_id: SessionId::from(iris_rng.next_u64()),
-            my_iris_shares,
-        };
-
-        hawk_actor.request(req).await?;
+        let mut session = hawk_actor.new_session(session_id).await?;
+        hawk_actor.request(&mut session, req).await?;
 
         println!("🎉 Inserted {n_inserts} items into the database");
     }
