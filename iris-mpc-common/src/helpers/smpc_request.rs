@@ -111,6 +111,7 @@ pub struct UniquenessRequest {
     pub signup_id:               String,
     pub s3_key:                  String,
     pub iris_shares_file_hashes: [String; 3],
+    pub or_rule_serial_ids:      Option<Vec<u32>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

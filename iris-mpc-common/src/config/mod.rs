@@ -111,6 +111,21 @@ pub struct Config {
 
     #[serde(default)]
     pub fixed_shared_secrets: bool,
+
+    /// LUC is the defense mechanism by which iris computations are performed
+    /// using the OR rule for right and left matches.
+    #[serde(default)]
+    pub luc_enabled: bool,
+
+    /// LUC look back is the time frame in days for which to use OR rule for a
+    /// new signup against existing signups in that time period.
+    #[serde(default = "default_luc_lookback_records")]
+    pub luc_lookback_records: usize,
+
+    /// Alternatively, we can use the serial IDs from the SMPc request to mark
+    /// which records are to be processed using the OR rule.
+    #[serde(default)]
+    pub luc_serial_ids_from_smpc_request: bool,
 }
 
 fn default_load_chunks_parallelism() -> usize {
@@ -143,6 +158,10 @@ fn default_shares_bucket_name() -> String {
 
 fn default_db_load_safety_overlap_seconds() -> i64 {
     60
+}
+
+fn default_luc_lookback_records() -> usize {
+    0
 }
 
 impl Config {
