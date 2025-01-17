@@ -5,6 +5,7 @@ use std::collections::HashMap;
 pub const SMPC_MESSAGE_TYPE_ATTRIBUTE: &str = "message_type";
 // Error Reasons
 pub const ERROR_FAILED_TO_PROCESS_IRIS_SHARES: &str = "failed_to_process_iris_shares";
+pub const ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH: &str = "skipped_request_previous_node_batch";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UniquenessResult {
