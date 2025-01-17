@@ -290,6 +290,7 @@ async fn receive_batch(
                         batch_query.metadata.push(batch_metadata);
 
                         let semaphore = Arc::clone(&semaphore);
+
                         let s3_client_arc = Arc::clone(s3_client);
                         let bucket_name = config.shares_bucket_name.clone();
                         let handle = tokio::spawn(async move {
