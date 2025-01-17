@@ -341,8 +341,7 @@ impl ServerActor {
         let batch_match_list_left = distance_comparator.prepare_db_match_list(n_queries);
         let batch_match_list_right = distance_comparator.prepare_db_match_list(n_queries);
 
-        let or_policy_bitmap =
-            distance_comparator.prepare_luc_bitmap(max_db_size / device_manager.device_count());
+        let or_policy_bitmap = distance_comparator.prepare_luc_bitmap(max_db_size);
 
         let query_db_size = vec![n_queries; device_manager.device_count()];
         let current_db_sizes = vec![0; device_manager.device_count()];
@@ -1588,12 +1587,8 @@ impl ServerActor {
     }
 
     fn populate_or_policy_bitmap(&mut self, or_rule_serial_ids: Vec<Vec<u32>>, batch_size: usize) {
-        for (device_idx, &db_length) in self.current_db_sizes.iter().enumerate() {
-            if db_length == 0 {
-                continue; // Skip empty DBs
-            }
-
-            let row_stride64 = (db_length + 63) / 64;
+        for (device_idx, _) in self.current_db_sizes.iter().enumerate() {
+            let row_stride64 = (self.max_db_size + 63) / 64;
             let total_size = row_stride64 * batch_size / ROTATIONS;
 
             // Create the bitmap on the host
@@ -1601,19 +1596,17 @@ impl ServerActor {
 
             for (query_idx, db_indices) in or_rule_serial_ids.iter().enumerate() {
                 for &db_idx in db_indices {
-                    if db_idx < db_length as u32 {
-                        let row_start = query_idx * row_stride64;
-                        let word_idx = row_start + (db_idx as usize / 64);
-                        let bit_offset = db_idx as usize % 64;
-                        bitmap[word_idx] |= 1 << bit_offset;
-                    }
+                    let row_start = query_idx * row_stride64;
+                    let word_idx = row_start + (db_idx as usize / 64);
+                    let bit_offset = db_idx as usize % 64;
+                    bitmap[word_idx] |= 1 << bit_offset;
                 }
             }
 
             // Copy the host-side bitmap into the pre-allocated GPU memory
             self.device_manager
                 .device(device_idx)
-                .htod_copy_into(bitmap, &mut self.or_policy_bitmap[device_idx])
+                .htod_sync_copy_into(&bitmap, &mut self.or_policy_bitmap[device_idx])
                 .expect("Failed to populate OR policy bitmap");
         }
     }

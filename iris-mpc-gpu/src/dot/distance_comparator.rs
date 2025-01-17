@@ -412,7 +412,7 @@ impl DistanceComparator {
             .map(|i| {
                 self.device_manager
                     .device(i)
-                    .alloc_zeros(row_stride64 * self.query_length)
+                    .alloc_zeros(row_stride64 * self.query_length / ROTATIONS)
                     .unwrap()
             })
             .collect::<Vec<_>>()
