@@ -1,7 +1,10 @@
 #![allow(clippy::needless_range_loop)]
 
 use aws_config::retry::RetryConfig;
-use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
+use aws_sdk_s3::{
+    config::{Builder as S3ConfigBuilder, StalledStreamProtectionConfig},
+    Client as S3Client,
+};
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{response::IntoResponse, routing::get, Router};
@@ -26,7 +29,8 @@ use iris_mpc_common::{
         },
         smpc_response::{
             create_message_type_attribute_map, IdentityDeletionResult, UniquenessResult,
-            ERROR_FAILED_TO_PROCESS_IRIS_SHARES, SMPC_MESSAGE_TYPE_ATTRIBUTE,
+            ERROR_FAILED_TO_PROCESS_IRIS_SHARES, ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
+            SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
         sync::SyncState,
         task_monitor::TaskMonitor,
@@ -263,6 +267,22 @@ async fn receive_batch(
                             // Some party (maybe us) already meant to delete this request, so we
                             // skip it. Ignore this message when calculating the batch size.
                             msg_counter -= 1;
+                            metrics::counter!("skip.request.deleted.sqs.request").increment(1);
+                            tracing::warn!(
+                                "Skipping request due to it being from synced deleted ids: {}",
+                                smpc_request.signup_id
+                            );
+                            // shares
+                            send_error_results_to_sns(
+                                smpc_request.signup_id,
+                                &batch_metadata,
+                                sns_client,
+                                config,
+                                error_result_attributes,
+                                UNIQUENESS_MESSAGE_TYPE,
+                                ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
+                            )
+                            .await?;
                             continue;
                         }
 
@@ -688,7 +708,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     // Increase S3 retries to 5
     let retry_config = RetryConfig::standard().with_max_attempts(5);
+
     let s3_config = S3ConfigBuilder::from(&shared_config)
+        // disable stalled stream protection to avoid panics during s3 import
+        .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
         .retry_config(retry_config)
         .build();
     let s3_client = Arc::new(S3Client::from_conf(s3_config));
@@ -889,6 +912,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     } else {
                         tracing::info!("Node {} has already started graceful shutdown.", host);
                     }
+                    continue;
                 }
 
                 let probe_response = res

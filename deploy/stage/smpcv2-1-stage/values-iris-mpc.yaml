@@ -48,7 +48,7 @@ env:
         name: application
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "60"
+    value: "120"
 
   - name: SMPC__PATH
     value: "/data/"
@@ -84,10 +84,10 @@ env:
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
-    value: "900000"
+    value: "1200000"
 
   - name: SMPC__MAX_DB_SIZE
-    value: "1000000"
+    value: "1300000"
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"

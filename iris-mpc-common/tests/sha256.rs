@@ -1,5 +1,5 @@
 mod tests {
-    use iris_mpc_common::helpers::sha256::calculate_sha256;
+    use iris_mpc_common::helpers::sha256::sha256_as_hex_string;
 
     #[test]
     fn test_calculate_sha256() {
@@ -8,7 +8,7 @@ mod tests {
         let expected_hash = "315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3";
 
         // Act
-        let calculated_hash = calculate_sha256(data);
+        let calculated_hash = sha256_as_hex_string(data);
 
         // Assert
         assert_eq!(
@@ -24,7 +24,7 @@ mod tests {
         let expected_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
         // Act
-        let calculated_hash = calculate_sha256(data);
+        let calculated_hash = sha256_as_hex_string(data);
 
         // Assert
         assert_eq!(
@@ -38,8 +38,8 @@ mod tests {
         // Arrange
         let data_1 = "Data 1";
         let data_2 = "Data 2";
-        let hash_1 = calculate_sha256(data_1);
-        let hash_2 = calculate_sha256(data_2);
+        let hash_1 = sha256_as_hex_string(data_1);
+        let hash_2 = sha256_as_hex_string(data_2);
 
         // Act & Assert
         assert_ne!(
