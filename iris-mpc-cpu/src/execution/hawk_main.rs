@@ -52,7 +52,7 @@ pub struct HawkActor {
     own_identity: Identity,
 }
 
-/// HawkSession is a unit of parallelism whe operating on the HawkActor.
+/// HawkSession is a unit of parallelism when operating on the HawkActor.
 pub struct HawkSession {
     aby3_store: Aby3Store,
 }
@@ -135,7 +135,7 @@ impl HawkActor {
         })
     }
 
-    pub async fn new_session(&mut self, session_id: SessionId) -> Result<HawkSession> {
+    pub async fn new_session(&self, session_id: SessionId) -> Result<HawkSession> {
         // TODO: cleanup of dropped sessions.
         self.networking.create_session(session_id).await?;
 
@@ -192,22 +192,30 @@ pub async fn hawk_main(args: HawkArgs) -> Result<()> {
     // ---- Requests ----
     // TODO: Listen for external requests.
 
-    let n_inserts = 5;
+    let parallelism = 2;
+    let n_batches = 3;
+    let batch_size = 5;
     let iris_rng = &mut AesRng::seed_from_u64(1337);
 
-    for _ in 0..2 {
-        let my_iris_shares = IrisDB::new_random_rng(n_inserts, iris_rng)
+    let mut sessions = vec![];
+    for _ in 0..parallelism {
+        let session_id = SessionId::from(iris_rng.next_u64());
+        sessions.push(hawk_actor.new_session(session_id).await?);
+    }
+
+    for i in 0..n_batches {
+        let my_iris_shares = IrisDB::new_random_rng(batch_size, iris_rng)
             .db
             .into_iter()
             .map(|iris| generate_galois_iris_shares(iris_rng, iris)[args.party_index].clone())
             .collect_vec();
-        let session_id = SessionId::from(iris_rng.next_u64());
         let req = HawkRequest { my_iris_shares };
 
-        let mut session = hawk_actor.new_session(session_id).await?;
-        hawk_actor.request(&mut session, req).await?;
+        hawk_actor
+            .request(&mut sessions[i % parallelism], req)
+            .await?;
 
-        println!("🎉 Inserted {n_inserts} items into the database");
+        println!("🎉 Inserted {batch_size} items into the database");
     }
     Ok(())
 }
