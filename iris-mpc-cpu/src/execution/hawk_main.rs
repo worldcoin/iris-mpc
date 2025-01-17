@@ -173,7 +173,7 @@ mod tests {
     async fn test_hawk_main() -> Result<()> {
         let go = |addresses: Vec<String>, index: usize| {
             async move {
-                let args = HawkArgs::parse_from(&[
+                let args = HawkArgs::parse_from([
                     "hawk_main",
                     "--addresses",
                     &addresses.join(","),
