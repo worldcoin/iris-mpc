@@ -22,24 +22,23 @@ use std::{sync::Arc, time::Duration};
 use tokio::{task::JoinSet, time::sleep};
 use tonic::transport::Server;
 
+const TEST_WAIT: Duration = Duration::from_secs(3);
+
 #[derive(Parser)]
 pub struct HawkArgs {
     #[clap(short, long)]
     party_index: usize,
+
+    #[clap(short, long, value_delimiter = ',')]
+    addresses: Vec<String>,
 }
 
 pub async fn hawk_main(args: HawkArgs) -> Result<()> {
     // ---- Shared setup ----
 
-    let n_parties = 3;
-    let port_start = 40000;
     let search_params = HnswSearcher::default();
 
     let identities = generate_local_identities();
-
-    let addresses = (0..n_parties)
-        .map(|i| format!("127.0.0.1:{}", port_start + i))
-        .collect_vec();
 
     let role_assignments: RoleAssignment = identities
         .iter()
@@ -51,7 +50,7 @@ pub async fn hawk_main(args: HawkArgs) -> Result<()> {
 
     let my_index = args.party_index;
     let my_identity = identities[my_index].clone();
-    let my_address = &addresses[my_index];
+    let my_address = &args.addresses[my_index];
 
     println!("🦅 Starting Hawk node {my_index}");
 
@@ -76,10 +75,10 @@ pub async fn hawk_main(args: HawkArgs) -> Result<()> {
     }
 
     // TODO: Retry until all servers are up.
-    sleep(Duration::from_secs(3)).await;
+    sleep(TEST_WAIT).await;
 
     // Connect to other players.
-    izip!(&identities, &addresses)
+    izip!(&identities, &args.addresses)
         .filter(|(_, address)| address != &my_address)
         .map(|(identity, address)| {
             let player = player.clone();
@@ -99,7 +98,7 @@ pub async fn hawk_main(args: HawkArgs) -> Result<()> {
         .collect::<Result<()>>()?;
 
     // TODO: Wait until others connected to me.
-    sleep(Duration::from_secs(3)).await;
+    sleep(TEST_WAIT).await;
 
     // ---- My state ----
     // TODO: Persistence.
@@ -118,7 +117,7 @@ pub async fn hawk_main(args: HawkArgs) -> Result<()> {
     println!("Created {session_id:?}");
 
     // TODO: Wait until others ceated their side of the session.
-    sleep(Duration::from_secs(3)).await;
+    sleep(TEST_WAIT).await;
 
     let boot_session = BootSession {
         session_id,
@@ -168,19 +167,32 @@ pub async fn hawk_main(args: HawkArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::execution::local::get_free_local_addresses;
 
     #[tokio::test]
     async fn test_hawk_main() -> Result<()> {
-        ["0", "1", "2"]
-            .into_iter()
-            .map(|index| async move {
-                let args = HawkArgs::parse_from(&["hawk_main", "--party-index", index]);
+        let go = |addresses: Vec<String>, index: usize| {
+            async move {
+                let args = HawkArgs::parse_from(&[
+                    "hawk_main",
+                    "--addresses",
+                    &addresses.join(","),
+                    "--party-index",
+                    &index.to_string(),
+                ]);
 
                 // Make the test async.
-                sleep(Duration::from_secs(args.party_index as u64)).await;
+                sleep(Duration::from_millis(100 * index as u64)).await;
 
                 hawk_main(args).await
-            })
+            }
+        };
+
+        let n_parties = 3;
+        let addresses = get_free_local_addresses(n_parties).await?;
+
+        (0..n_parties)
+            .map(|i| go(addresses.clone(), i))
             .collect::<JoinSet<_>>()
             .join_all()
             .await
