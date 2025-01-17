@@ -13,7 +13,7 @@ const PTX_SRC: &str = include_str!("kernel.cu");
 const OPEN_RESULTS_FUNCTION: &str = "openResults";
 const MERGE_DB_RESULTS_FUNCTION: &str = "mergeDbResults";
 const MERGE_BATCH_RESULTS_FUNCTION: &str = "mergeBatchResults";
-const MERGE_BATCH_RESULTS_WITH_BITMAP_FUNCTION: &str = "mergeBatchResultsWithBitmap";
+const MERGE_BATCH_RESULTS_WITH_OR_POLICY_BITMAP_FUNCTION: &str = "mergeDbResultsWithOrPolicyBitmap";
 const ALL_MATCHES_LEN: usize = 256;
 
 pub struct DistanceComparator {
@@ -63,7 +63,7 @@ impl DistanceComparator {
                     OPEN_RESULTS_FUNCTION,
                     MERGE_DB_RESULTS_FUNCTION,
                     MERGE_BATCH_RESULTS_FUNCTION,
-                    MERGE_BATCH_RESULTS_WITH_BITMAP_FUNCTION,
+                    MERGE_BATCH_RESULTS_WITH_OR_POLICY_BITMAP_FUNCTION,
                 ])
                 .unwrap();
 
@@ -72,7 +72,7 @@ impl DistanceComparator {
             let merge_batch_results_function =
                 device.get_func("", MERGE_BATCH_RESULTS_FUNCTION).unwrap();
             let merge_batch_results_with_bitmap_function = device
-                .get_func("", MERGE_BATCH_RESULTS_WITH_BITMAP_FUNCTION)
+                .get_func("", MERGE_BATCH_RESULTS_WITH_OR_POLICY_BITMAP_FUNCTION)
                 .unwrap();
 
             opened_results.push(device.htod_copy(results_init_host.clone()).unwrap());
@@ -210,7 +210,6 @@ impl DistanceComparator {
                             &final_results[i],
                             (self.query_length / ROTATIONS) as u64,
                             db_sizes[i] as u64,
-                            num_elements as u64,
                             &self.match_counters[i],
                             &self.all_matches[i],
                             &self.match_counters_left[i],
@@ -219,7 +218,6 @@ impl DistanceComparator {
                             &self.partial_results_right[i],
                             // Additional args
                             &or_policies_bitmap[i],
-                            row_stride64 as u64,
                         ),
                     )
                     .unwrap();

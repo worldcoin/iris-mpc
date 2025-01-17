@@ -93,9 +93,12 @@ extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, 
     }
 }
 
-extern "C" __global__ void mergeDbResultsWithBitmap(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *matchCounterLeft, unsigned int *matchCounterRight, unsigned int *partialResultsLeft, unsigned int *partialResultsRight, const unsigned long long *orPolicyBitmap, size_t rowStride64) // 2D bitmap stored as 1D
+extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *matchCounterLeft, unsigned int *matchCounterRight, unsigned int *partialResultsLeft, unsigned int *partialResultsRight, const unsigned long long *orPolicyBitmap) // 2D bitmap stored as 1D
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t row_stride64 = (db_length + 63) / 64;
+    size_t numElements = query_length * db_length;
+
     if (idx < numElements)
     {
         for (int i = 0; i < 64; i++)
