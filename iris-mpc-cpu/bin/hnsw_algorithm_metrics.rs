@@ -67,7 +67,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     print_stats(&op_counters, true);
 
     println!("Layer search counts:");
-    let counter_map = counters.0.read().unwrap();
+    let counter_map = counters.read().unwrap();
     for ((lc, ef), value) in counter_map.iter() {
         println!("  lc={lc},ef={ef}: {:?}", value);
     }

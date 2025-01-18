@@ -276,7 +276,7 @@ impl HnswSearcher {
             }
 
             // Open the node c and explore its neighbors.
-            info!(event_type = Operation::OpenNode.id());
+            info!(event_type = Operation::OpenNode.id(), ef, lc);
 
             // Visit all neighbors of c.
             let c_links = graph_store.get_links(&c, lc).await;

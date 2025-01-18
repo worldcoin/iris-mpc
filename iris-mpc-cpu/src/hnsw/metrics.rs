@@ -8,44 +8,9 @@ use std::{
 };
 use tracing::{
     field::{Field, Visit},
-    span::Attributes,
-    Event, Id, Subscriber,
+    Event, Subscriber,
 };
-use tracing_subscriber::{
-    layer::{Context, Layer},
-    registry::LookupSpan,
-};
-
-/// Provides a basic scheme for deriving a list of control strings from the
-/// `name` field of a `tracing` callsite's metadata, by splitting into a list
-/// of whitespace separated substrings.  These substrings may be used to
-/// determine callsite activation status in `tracing::Subscriber` or
-/// `tracing_subscriber::Layer` implementations.
-pub fn parse_callsite_name(name: &str) -> Vec<String> {
-    name.split_whitespace().map(|s| s.to_string()).collect()
-}
-
-pub struct SingletonCounterLayer {
-    pub counter: Arc<AtomicUsize>,
-    target:      String,
-}
-
-impl SingletonCounterLayer {
-    pub fn new(target: &str) -> Self {
-        Self {
-            counter: Arc::new(AtomicUsize::default()),
-            target:  target.to_string(),
-        }
-    }
-
-    pub fn get_counter(&self) -> Arc<AtomicUsize> {
-        self.counter.clone()
-    }
-
-    pub fn get_target(&self) -> String {
-        self.target.clone()
-    }
-}
+use tracing_subscriber::layer::{Context, Layer};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Operation {
@@ -131,80 +96,77 @@ impl Visit for EventVisitor {
     fn record_debug(&mut self, _field: &Field, _value: &dyn Debug) {}
 }
 
-#[derive(Default)]
-pub struct Counters(pub Arc<RwLock<HashMap<(u64, u64), AtomicUsize>>>);
+// #[derive(Default)]
+pub type Counters = Arc<RwLock<HashMap<(u64, u64), AtomicUsize>>>;
 
 /// Tracing library Layer for counting detailed HNSW layer search operations
 pub struct VertexOpeningsLayer {
     // Measure number of vertex openings for different lc and ef values
-    counters: Counters,
+    counters:     Counters,
+    missing_keys: Arc<AtomicUsize>,
 }
 
 impl VertexOpeningsLayer {
     pub fn new() -> Self {
         Self {
-            counters: Counters::default(),
+            counters:     Counters::default(),
+            missing_keys: Arc::default(),
         }
     }
 
     pub fn get_counters(&self) -> Counters {
-        Counters(self.counters.0.clone())
+        self.counters.clone()
     }
 }
 
-impl<S> Layer<S> for VertexOpeningsLayer
-where
-    S: Subscriber + for<'a> LookupSpan<'a>,
-{
-    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
-        let span = ctx.span(id).unwrap();
-        let mut visitor = LayerSearchFields::default();
-        attrs.record(&mut visitor);
-        span.extensions_mut().insert(visitor);
-    }
-
-    fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
-        let mut visitor = EventVisitor::default();
-        event.record(&mut visitor);
+impl<S: Subscriber> Layer<S> for VertexOpeningsLayer {
+    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        let mut op = EventVisitor::default();
+        event.record(&mut op);
 
         const OPEN_NODE_EVENT: usize = Operation::OpenNode.id();
-        if let Some(OPEN_NODE_EVENT) = visitor.event {
-            // open node event must have parent span representing open node function
-            let current_span = ctx.current_span();
-            let span_id = current_span.id().unwrap();
-            if let Some(LayerSearchFields {
-                lc: Some(lc),
-                ef: Some(ef),
-            }) = ctx
-                .span(span_id)
-                .unwrap()
-                .extensions()
-                .get::<LayerSearchFields>()
-            {
-                let key = (*lc, *ef);
-                let increment_amount = visitor.amount.unwrap_or(1);
-                let counters_read = self.counters.0.read().unwrap();
+        if let Some(OPEN_NODE_EVENT) = op.event {
+            let increment_amount = op.amount.unwrap_or(1);
+
+            let mut key_fields = KeyFields::default();
+            event.record(&mut key_fields);
+
+            if let Some(key) = key_fields.get_key() {
+                let counters_read = self.counters.read().unwrap();
                 if let Some(counter) = counters_read.get(&key) {
                     counter.fetch_add(increment_amount, Ordering::Release);
                 } else {
                     drop(counters_read);
                     let new_counter = AtomicUsize::new(increment_amount);
-                    self.counters.0.write().unwrap().insert(key, new_counter);
+                    self.counters.write().unwrap().insert(key, new_counter);
                 }
             } else {
-                panic!("Open node event is missing associated span fields");
+                self.missing_keys
+                    .fetch_add(increment_amount, Ordering::Release);
             }
         }
     }
 }
 
 #[derive(Default)]
-pub struct LayerSearchFields {
+pub struct KeyFields {
     lc: Option<u64>,
     ef: Option<u64>,
 }
 
-impl Visit for LayerSearchFields {
+impl KeyFields {
+    pub fn get_key(&self) -> Option<(u64, u64)> {
+        match self {
+            Self {
+                lc: Some(lc),
+                ef: Some(ef),
+            } => Some((*lc, *ef)),
+            _ => None,
+        }
+    }
+}
+
+impl Visit for KeyFields {
     fn record_u64(&mut self, field: &Field, value: u64) {
         match field.name() {
             "lc" => {
