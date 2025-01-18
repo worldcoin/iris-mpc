@@ -9,6 +9,7 @@ use crate::{
         self,
         comm::NcclComm,
         device_manager::DeviceManager,
+        htod_on_stream_sync,
         query_processor::{
             CompactQuery, CudaVec2DSlicerRawPointer, DeviceCompactQuery, DeviceCompactSums,
         },
@@ -31,7 +32,7 @@ use iris_mpc_common::{
     iris_db::iris::IrisCode,
     IrisCodeDbSlice,
 };
-use itertools::Itertools;
+use itertools::{izip, Itertools};
 use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{collections::HashMap, mem, sync::Arc, time::Instant};
@@ -104,7 +105,6 @@ pub struct ServerActor {
     db_match_list_right:      Vec<CudaSlice<u64>>,
     batch_match_list_left:    Vec<CudaSlice<u64>>,
     batch_match_list_right:   Vec<CudaSlice<u64>>,
-    or_policy_bitmap:         Vec<CudaSlice<u64>>,
     current_db_sizes:         Vec<usize>,
     query_db_size:            Vec<usize>,
     max_batch_size:           usize,
@@ -341,8 +341,6 @@ impl ServerActor {
         let batch_match_list_left = distance_comparator.prepare_db_match_list(n_queries);
         let batch_match_list_right = distance_comparator.prepare_db_match_list(n_queries);
 
-        let or_policy_bitmap = distance_comparator.prepare_luc_bitmap(max_db_size);
-
         let query_db_size = vec![n_queries; device_manager.device_count()];
         let current_db_sizes = vec![0; device_manager.device_count()];
 
@@ -385,7 +383,6 @@ impl ServerActor {
             db_match_list_right,
             batch_match_list_left,
             batch_match_list_right,
-            or_policy_bitmap,
             max_batch_size,
             max_db_size,
             return_partial_results,
@@ -770,7 +767,7 @@ impl ServerActor {
         // Initialize bitmap with OR rule, if exists
         if let Some(or_rule_bitmap) = batch.or_rule_serial_ids {
             // Populate the pre-allocated OR policy bitmap with the serial ids
-            self.populate_or_policy_bitmap(or_rule_bitmap, batch_size);
+            let or_policy_bitmap = self.prepare_or_policy_bitmap(or_rule_bitmap, batch_size);
             self.distance_comparator.join_db_matches_with_bitmaps(
                 &self.db_match_list_left,
                 &self.db_match_list_right,
@@ -778,7 +775,7 @@ impl ServerActor {
                 &self.current_db_sizes,
                 &self.streams[0],
                 &self.distance_comparator.merge_batch_with_bitmap_kernels,
-                &self.or_policy_bitmap,
+                &or_policy_bitmap,
             );
         }
 
@@ -1586,8 +1583,23 @@ impl ServerActor {
         Ok((compact_device_queries, compact_device_sums))
     }
 
-    fn populate_or_policy_bitmap(&mut self, or_rule_serial_ids: Vec<Vec<u32>>, batch_size: usize) {
-        for (device_idx, _) in self.current_db_sizes.iter().enumerate() {
+    fn prepare_or_policy_bitmap(
+        &mut self,
+        or_rule_serial_ids: Vec<Vec<u32>>,
+        batch_size: usize,
+    ) -> Vec<CudaSlice<u64>> {
+        let streams = self
+            .device_manager
+            .devices()
+            .iter()
+            .map(|dev| dev.fork_default_stream().unwrap())
+            .collect::<Vec<_>>();
+
+        let devices = self.device_manager.devices();
+
+        let mut or_policy_bitmap = Vec::with_capacity(devices.len());
+
+        for (dev, stream) in izip!(devices, streams) {
             let row_stride64 = (self.max_db_size + 63) / 64;
             let total_size = row_stride64 * batch_size / ROTATIONS;
 
@@ -1602,13 +1614,11 @@ impl ServerActor {
                     bitmap[word_idx] |= 1 << bit_offset;
                 }
             }
-
-            // Copy the host-side bitmap into the pre-allocated GPU memory
-            self.device_manager
-                .device(device_idx)
-                .htod_sync_copy_into(&bitmap, &mut self.or_policy_bitmap[device_idx])
-                .expect("Failed to populate OR policy bitmap");
+            // Transfer the bitmap to the device
+            let _bitmap = htod_on_stream_sync(&bitmap, dev, &stream).unwrap();
+            or_policy_bitmap.push(_bitmap);
         }
+        or_policy_bitmap
     }
 }
 
