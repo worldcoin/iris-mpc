@@ -78,7 +78,7 @@ env:
     value: "even_odd_binary_output_16k"
 
   - name: SMPC__LOAD_CHUNKS_PARALLELISM
-    value: "64"
+    value: "128"
 
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
