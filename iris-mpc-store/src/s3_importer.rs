@@ -13,7 +13,7 @@ use std::{
     },
     time::Instant,
 };
-use tokio::io::AsyncReadExt;
+use tokio::{io::AsyncReadExt, task};
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -187,7 +187,7 @@ impl ObjectStore for S3Store {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LastSnapshotDetails {
     pub timestamp:      i64,
     pub last_serial_id: i64,
@@ -311,6 +311,69 @@ pub async fn fetch_and_parse_chunks(
             .boxed();
 
     result_stream
+}
+
+pub async fn fetch_to_memory(
+    store: Arc<impl ObjectStore>,
+    concurrency: usize,
+    prefix_name: String,
+    last_snapshot_details: LastSnapshotDetails,
+) -> eyre::Result<()> {
+    let mut handles: Vec<task::JoinHandle<Result<(), eyre::Error>>> = Vec::new();
+    let mut active_handles = 0;
+    let range_size = MAX_RANGE_SIZE;
+    let single_range_bytes = range_size * SINGLE_ELEMENT_SIZE;
+    for chunk in (1..=last_snapshot_details.last_serial_id).step_by(range_size) {
+        let chunk_id =
+            (chunk / last_snapshot_details.chunk_size) * last_snapshot_details.chunk_size + 1;
+        let prefix_name = prefix_name.clone();
+        let offset_within_chunk = (chunk - chunk_id) as usize;
+
+        // Wait if we've hit the concurrency limit
+        if active_handles >= concurrency {
+            let handle = handles.remove(0);
+            handle.await??;
+            active_handles -= 1;
+        }
+
+        handles.push(task::spawn({
+            let store = Arc::clone(&store); // Clone the Arc to share ownership
+            let mut slice = vec![0u8; single_range_bytes];
+            async move {
+                let mut result = store
+                    .get_object(
+                        &format!("{}/{}.bin", prefix_name, chunk_id),
+                        (
+                            offset_within_chunk * SINGLE_ELEMENT_SIZE,
+                            (offset_within_chunk + range_size) * SINGLE_ELEMENT_SIZE,
+                        ),
+                    )
+                    .await?
+                    .into_async_read();
+
+                let mut bytes_read = 0;
+                while bytes_read < single_range_bytes {
+                    match result.read(&mut slice[bytes_read..]).await {
+                        Ok(0) => break,
+                        Ok(n) => bytes_read += n,
+                        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                        Err(e) => return Err(e.into()),
+                    }
+                }
+
+                Ok(())
+            }
+        }));
+
+        active_handles += 1;
+    }
+
+    // Wait for remaining handles
+    for handle in handles {
+        handle.await??;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

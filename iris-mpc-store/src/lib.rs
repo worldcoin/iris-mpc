@@ -15,7 +15,9 @@ use iris_mpc_common::{
     iris_db::iris::IrisCode,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
-pub use s3_importer::{fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store};
+pub use s3_importer::{
+    fetch_and_parse_chunks, fetch_to_memory, last_snapshot_timestamp, ObjectStore, S3Store,
+};
 use sqlx::{
     migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Row, Transaction,
 };
