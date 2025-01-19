@@ -747,7 +747,7 @@ async fn resolve_export_bucket_ips(host: String) -> eyre::Result<Vec<IpAddr>> {
     let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), resolver_opts);
     loop {
         // Check if we've collected enough unique IPs
-        if all_ips.len() >= 30 {
+        if all_ips.len() >= 4 {
             break;
         }
         match resolver.lookup_ip(&host).await {
@@ -802,7 +802,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     // Increase S3 retries to 5
     let static_resolver = StaticResolver::new(db_chunks_bucket_ips.await?);
-    let _http_client = HyperClientBuilder::new()
+    let http_client = HyperClientBuilder::new()
         .crypto_mode(CryptoMode::Ring)
         .build_with_resolver(static_resolver);
 
@@ -815,7 +815,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         // disable stalled stream protection to avoid panics during s3 import
         .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
         .retry_config(retry_config)
-        // .http_client(http_client)
+        .http_client(http_client)
         .build();
 
     let s3_client = Arc::new(S3Client::from_conf(s3_config));
