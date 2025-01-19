@@ -802,7 +802,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     // Increase S3 retries to 5
     let static_resolver = StaticResolver::new(db_chunks_bucket_ips.await?);
-    let http_client = HyperClientBuilder::new()
+    let _http_client = HyperClientBuilder::new()
         .crypto_mode(CryptoMode::Ring)
         .build_with_resolver(static_resolver);
 
@@ -815,7 +815,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         // disable stalled stream protection to avoid panics during s3 import
         .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
         .retry_config(retry_config)
-        .http_client(http_client)
+        // .http_client(http_client)
         .build();
 
     let s3_client = Arc::new(S3Client::from_conf(s3_config));
@@ -1193,7 +1193,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         )
                         .await?;
                         let elapsed = fetch_test_ts.elapsed();
-                        tracing::info!("Fetch to memory took {:?}", elapsed);
+                        tracing::info!(
+                            "Fetch to memory took {:?} with {} par",
+                            elapsed,
+                            load_chunks_parallelism
+                        );
 
                         let s3_store = S3Store::new(db_chunks_s3_client, db_chunks_bucket_name);
 
