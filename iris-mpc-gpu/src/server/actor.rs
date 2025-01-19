@@ -9,6 +9,7 @@ use crate::{
         self,
         comm::NcclComm,
         device_manager::DeviceManager,
+        htod_on_stream_sync,
         query_processor::{
             CompactQuery, CudaVec2DSlicerRawPointer, DeviceCompactQuery, DeviceCompactSums,
         },
@@ -762,6 +763,22 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // MERGE LEFT & RIGHT results
         ///////////////////////////////////////////////////////////////////
+
+        // Initialize bitmap with OR rule, if exists
+        if let Some(or_rule_bitmap) = batch.or_rule_serial_ids {
+            // Populate the pre-allocated OR policy bitmap with the serial ids
+            let or_policy_bitmap = self.prepare_or_policy_bitmap(or_rule_bitmap, batch_size);
+            self.distance_comparator.join_db_matches_with_bitmaps(
+                &self.db_match_list_left,
+                &self.db_match_list_right,
+                &self.final_results,
+                &self.current_db_sizes,
+                &self.streams[0],
+                &self.distance_comparator.merge_batch_with_bitmap_kernels,
+                &or_policy_bitmap,
+            );
+        }
+
         tracing::info!("Joining both sides");
         // Merge results and fetch matching indices
         // Format: host_results[device_index][query_index]
@@ -1564,6 +1581,36 @@ impl ServerActor {
         )?;
 
         Ok((compact_device_queries, compact_device_sums))
+    }
+
+    fn prepare_or_policy_bitmap(
+        &mut self,
+        or_rule_serial_ids: Vec<Vec<u32>>,
+        batch_size: usize,
+    ) -> Vec<CudaSlice<u64>> {
+        let devices = self.device_manager.devices();
+        let mut or_policy_bitmap = Vec::with_capacity(devices.len());
+
+        for (device_idx, dev) in devices.iter().enumerate() {
+            let row_stride64 = (self.max_db_size + 63) / 64;
+            let total_size = row_stride64 * batch_size / ROTATIONS;
+
+            // Create the bitmap on the host
+            let mut bitmap = vec![0u64; total_size];
+
+            for (query_idx, db_indices) in or_rule_serial_ids.iter().enumerate() {
+                for &db_idx in db_indices {
+                    let row_start = query_idx * row_stride64;
+                    let word_idx = row_start + (db_idx as usize / 64);
+                    let bit_offset = db_idx as usize % 64;
+                    bitmap[word_idx] |= 1 << bit_offset;
+                }
+            }
+            // Transfer the bitmap to the device
+            let _bitmap = htod_on_stream_sync(&bitmap, dev, &self.streams[0][device_idx]).unwrap();
+            or_policy_bitmap.push(_bitmap);
+        }
+        or_policy_bitmap
     }
 }
 
