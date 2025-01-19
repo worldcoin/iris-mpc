@@ -51,7 +51,8 @@ use iris_mpc_gpu::{
     },
 };
 use iris_mpc_store::{
-    fetch_and_parse_chunks, last_snapshot_timestamp, S3Store, Store, StoredIris, StoredIrisRef,
+    fetch_and_parse_chunks, fetch_to_memory, last_snapshot_timestamp, S3Store, Store, StoredIris,
+    StoredIrisRef,
 };
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
@@ -1173,17 +1174,32 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         parallelism
                     );
                     let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
-                    let s3_store = S3Store::new(db_chunks_s3_client, db_chunks_bucket_name);
+                    let db_chunks_s3_store =
+                        S3Store::new(db_chunks_s3_client.clone(), db_chunks_bucket_name.clone());
+
                     tokio::runtime::Handle::current().block_on(async {
+                        // First fetch last snapshot from S3
+                        let last_snapshot_details = last_snapshot_timestamp(
+                            &db_chunks_s3_store,
+                            db_chunks_folder_name.clone(),
+                        )
+                        .await?;
+                        let fetch_test_ts = Instant::now();
+                        fetch_to_memory(
+                            Arc::new(db_chunks_s3_store),
+                            load_chunks_parallelism,
+                            db_chunks_folder_name.clone(),
+                            last_snapshot_details.clone(),
+                        )
+                        .await?;
+                        let elapsed = fetch_test_ts.elapsed();
+                        tracing::info!("Fetch to memory took {:?}", elapsed);
+
+                        let s3_store = S3Store::new(db_chunks_s3_client, db_chunks_bucket_name);
+
                         let mut stream = match config.enable_s3_importer {
                             true => {
                                 tracing::info!("S3 importer enabled. Fetching from s3 + db");
-                                // First fetch last snapshot from S3
-                                let last_snapshot_details = last_snapshot_timestamp(
-                                    &s3_store,
-                                    db_chunks_folder_name.clone(),
-                                )
-                                .await?;
                                 let min_last_modified_at = last_snapshot_details.timestamp
                                     - config.db_load_safety_overlap_seconds;
                                 tracing::info!(
