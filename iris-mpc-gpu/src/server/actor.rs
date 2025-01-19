@@ -1588,18 +1588,10 @@ impl ServerActor {
         or_rule_serial_ids: Vec<Vec<u32>>,
         batch_size: usize,
     ) -> Vec<CudaSlice<u64>> {
-        let streams = self
-            .device_manager
-            .devices()
-            .iter()
-            .map(|dev| dev.fork_default_stream().unwrap())
-            .collect::<Vec<_>>();
-
         let devices = self.device_manager.devices();
-
         let mut or_policy_bitmap = Vec::with_capacity(devices.len());
 
-        for (dev, stream) in izip!(devices, streams) {
+        for (device_idx, dev) in devices.iter().enumerate() {
             let row_stride64 = (self.max_db_size + 63) / 64;
             let total_size = row_stride64 * batch_size / ROTATIONS;
 
@@ -1615,7 +1607,7 @@ impl ServerActor {
                 }
             }
             // Transfer the bitmap to the device
-            let _bitmap = htod_on_stream_sync(&bitmap, dev, &stream).unwrap();
+            let _bitmap = htod_on_stream_sync(&bitmap, dev, &self.streams[0][device_idx]).unwrap();
             or_policy_bitmap.push(_bitmap);
         }
         or_policy_bitmap
