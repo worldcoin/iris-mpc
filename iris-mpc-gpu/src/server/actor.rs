@@ -32,7 +32,7 @@ use iris_mpc_common::{
     iris_db::iris::IrisCode,
     IrisCodeDbSlice,
 };
-use itertools::{izip, Itertools};
+use itertools::Itertools;
 use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{collections::HashMap, mem, sync::Arc, time::Instant};
