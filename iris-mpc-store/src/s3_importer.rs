@@ -353,7 +353,9 @@ pub async fn fetch_to_memory(
 
                 loop {
                     match result.read_exact(&mut slice).await {
-                        Ok(_) => break,
+                        Ok(_) => {
+                            // left blank
+                        }
                         Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
                         Err(e) => return Err(e.into()),
                     }
