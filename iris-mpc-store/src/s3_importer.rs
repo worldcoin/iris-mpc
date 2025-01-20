@@ -351,11 +351,9 @@ pub async fn fetch_to_memory(
                     .await?
                     .into_async_read();
 
-                let mut bytes_read = 0;
-                while bytes_read < single_range_bytes {
-                    match result.read(&mut slice[bytes_read..]).await {
-                        Ok(0) => break,
-                        Ok(n) => bytes_read += n,
+                loop {
+                    match result.read_exact(&mut slice).await {
+                        Ok(_) => break,
                         Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
                         Err(e) => return Err(e.into()),
                     }
