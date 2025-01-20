@@ -37,9 +37,9 @@ mod e2e_test {
     #[derive(Clone)]
     pub struct E2ESharedTemplate {
         pub left_shared_code:  [GaloisRingIrisCodeShare; 3],
-        pub left_shared_mask:  Vec<GaloisRingTrimmedMaskCodeShare>,
+        pub left_shared_mask:  [GaloisRingTrimmedMaskCodeShare; 3],
         pub right_shared_code: [GaloisRingIrisCodeShare; 3],
-        pub right_shared_mask: Vec<GaloisRingTrimmedMaskCodeShare>,
+        pub right_shared_mask: [GaloisRingTrimmedMaskCodeShare; 3],
     }
 
     fn generate_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
@@ -648,14 +648,17 @@ mod e2e_test {
         rng: &mut StdRng,
     ) -> (
         [GaloisRingIrisCodeShare; 3],
-        Vec<GaloisRingTrimmedMaskCodeShare>,
+        [GaloisRingTrimmedMaskCodeShare; 3],
     ) {
         let mut shared_code =
             GaloisRingIrisCodeShare::encode_iris_code(&template.code, &template.mask, rng);
 
         let shared_mask = GaloisRingIrisCodeShare::encode_mask_code(&template.mask, rng);
-        let mut shared_mask: Vec<GaloisRingTrimmedMaskCodeShare> =
+        let shared_mask_vector: Vec<GaloisRingTrimmedMaskCodeShare> =
             shared_mask.iter().map(|x| x.clone().into()).collect();
+
+        let mut shared_mask: [GaloisRingTrimmedMaskCodeShare; 3] =
+            shared_mask_vector.try_into().unwrap();
 
         if !is_valid {
             shared_code[0] = GaloisRingIrisCodeShare::default_for_party(1);
