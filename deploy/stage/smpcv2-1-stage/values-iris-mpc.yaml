@@ -30,7 +30,7 @@ env:
     value: "true"
 
   - name: SMPC__DATABASE__LOAD_PARALLELISM
-    value: "8"
+    value: "1"
 
   - name: SMPC__AWS__REGION
     value: "eu-north-1"
@@ -78,7 +78,7 @@ env:
     value: "even_odd_binary_output_16k"
 
   - name: SMPC__LOAD_CHUNKS_PARALLELISM
-    value: "64"
+    value: "256"
 
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"

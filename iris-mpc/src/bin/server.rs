@@ -747,7 +747,7 @@ async fn resolve_export_bucket_ips(host: String) -> eyre::Result<Vec<IpAddr>> {
     let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), resolver_opts);
     loop {
         // Check if we've collected enough unique IPs
-        if all_ips.len() >= 4 {
+        if all_ips.len() >= 8 {
             break;
         }
         match resolver.lookup_ip(&host).await {
