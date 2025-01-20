@@ -29,7 +29,8 @@ use iris_mpc_common::{
         },
         smpc_response::{
             create_message_type_attribute_map, IdentityDeletionResult, UniquenessResult,
-            ERROR_FAILED_TO_PROCESS_IRIS_SHARES, SMPC_MESSAGE_TYPE_ATTRIBUTE,
+            ERROR_FAILED_TO_PROCESS_IRIS_SHARES, ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
+            SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
         sync::SyncState,
         task_monitor::TaskMonitor,
@@ -271,6 +272,17 @@ async fn receive_batch(
                                 "Skipping request due to it being from synced deleted ids: {}",
                                 smpc_request.signup_id
                             );
+                            // shares
+                            send_error_results_to_sns(
+                                smpc_request.signup_id,
+                                &batch_metadata,
+                                sns_client,
+                                config,
+                                error_result_attributes,
+                                UNIQUENESS_MESSAGE_TYPE,
+                                ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
+                            )
+                            .await?;
                             continue;
                         }
 
