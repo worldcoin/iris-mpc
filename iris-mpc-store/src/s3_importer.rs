@@ -322,7 +322,6 @@ pub async fn fetch_to_memory(
     let mut handles: Vec<task::JoinHandle<Result<(), eyre::Error>>> = Vec::new();
     let mut active_handles = 0;
     let range_size = MAX_RANGE_SIZE;
-    let single_range_bytes = range_size * SINGLE_ELEMENT_SIZE;
     for chunk in (1..=last_snapshot_details.last_serial_id).step_by(range_size) {
         let chunk_id =
             (chunk / last_snapshot_details.chunk_size) * last_snapshot_details.chunk_size + 1;
@@ -338,7 +337,7 @@ pub async fn fetch_to_memory(
 
         handles.push(task::spawn({
             let store = Arc::clone(&store); // Clone the Arc to share ownership
-            let mut slice = vec![0u8; single_range_bytes];
+            let mut slice = vec![0u8; SINGLE_ELEMENT_SIZE];
             async move {
                 let mut result = store
                     .get_object(
@@ -354,7 +353,10 @@ pub async fn fetch_to_memory(
                 loop {
                     match result.read_exact(&mut slice).await {
                         Ok(_) => {
-                            // left blank
+                            let iris = S3StoredIris::from_bytes(&slice)?;
+                            if iris.id % 10000 == 0 {
+                                tracing::info!("Fetched iris with id: {}", iris.id);
+                            }
                         }
                         Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
                         Err(e) => return Err(e.into()),
