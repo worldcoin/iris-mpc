@@ -765,9 +765,10 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
 
         // Initialize bitmap with OR rule, if exists
-        if let Some(or_rule_bitmap) = batch.or_rule_serial_ids {
+        if !batch.or_rule_serial_ids.is_empty() {
             // Populate the pre-allocated OR policy bitmap with the serial ids
-            let or_policy_bitmap = self.prepare_or_policy_bitmap(or_rule_bitmap, batch_size);
+            let or_policy_bitmap =
+                self.prepare_or_policy_bitmap(batch.or_rule_serial_ids, batch_size);
             self.distance_comparator.join_db_matches_with_bitmaps(
                 &self.db_match_list_left,
                 &self.db_match_list_right,

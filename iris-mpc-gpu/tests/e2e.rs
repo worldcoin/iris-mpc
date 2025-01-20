@@ -249,6 +249,7 @@ mod e2e_test {
 
             for idx in 0..batch_size {
                 let request_id = Uuid::new_v4();
+                let mut use_or_rule_for_serial_ids: Vec<u32> = vec![];
                 // Automatic random tests
                 let options = if responses.is_empty() {
                     3
@@ -366,9 +367,54 @@ mod e2e_test {
                         // above the threshold against the other codes. It will
                         // also be required to set the param BatchQuery.threshold_bitmap_or to true
                         // for the specific iris codes to be matched against
-                        // 5 => {
-                        // println!("Sending iris codes that match on right but not left with the OR
-                        // rule set");
+                        5 => {
+                            println!(
+                                "Sending iris codes that match on right but not left with the OR
+                        rule set"
+                            );
+                            let db_index = loop {
+                                let db_index = rng.gen_range(0..DB_SIZE / 10);
+                                if !disallowed_queries.contains(&db_index) {
+                                    break db_index;
+                                }
+                            };
+                            if deleted_indices.contains(&(db_index as u32)) {
+                                continue;
+                            }
+
+                            // comparison against this item will use the OR rule
+                            use_or_rule_for_serial_ids.push(db_index as u32);
+
+                            // apply variation to either right of left code
+                            let flip_right: bool = rng.gen();
+                            let variation = 1;
+
+                            // Will always match under the OR rule
+                            expected_results
+                                .insert(request_id.to_string(), (Some(db_index as u32), false));
+
+                            let mut code_left = db.db[db_index].clone();
+                            let mut code_right = db.db[db_index].clone();
+
+                            assert_eq!(code_left.mask, IrisCodeArray::ONES);
+                            assert_eq!(code_right.mask, IrisCodeArray::ONES);
+
+                            if flip_right {
+                                // Flip bits to below threshold
+                                for i in 0..(THRESHOLD_ABSOLUTE as i32 - variation) as usize {
+                                    code_right.code.flip_bit(i);
+                                }
+                            } else {
+                                for i in 0..(THRESHOLD_ABSOLUTE as i32 - variation) as usize {
+                                    code_left.code.flip_bit(i);
+                                }
+                            }
+
+                            E2ETemplate {
+                                left:  code_left,
+                                right: code_right,
+                            }
+                        }
                         _ => unreachable!(),
                     }
                 };
@@ -388,6 +434,7 @@ mod e2e_test {
                     request_id.to_string(),
                     0,
                     shared_template.clone(),
+                    use_or_rule_for_serial_ids.clone(),
                 );
 
                 prepare_batch(
@@ -396,6 +443,7 @@ mod e2e_test {
                     request_id.to_string(),
                     1,
                     shared_template.clone(),
+                    use_or_rule_for_serial_ids.clone(),
                 );
                 prepare_batch(
                     batch2.clone(),
@@ -403,6 +451,7 @@ mod e2e_test {
                     request_id.to_string(),
                     2,
                     shared_template.clone(),
+                    use_or_rule_for_serial_ids.clone(),
                 );
             }
 
@@ -518,10 +567,13 @@ mod e2e_test {
         request_id: String,
         batch_idx: usize,
         e2e_shared_template: E2ESharedTemplate,
+        or_rule_serial_ids: Vec<u32>,
     ) -> BatchQuery {
         batch.metadata.push(Default::default());
         batch.valid_entries.push(is_valid);
         batch.request_ids.push(request_id);
+
+        batch.or_rule_serial_ids.push(or_rule_serial_ids);
 
         batch
             .store_left
