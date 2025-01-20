@@ -64,7 +64,6 @@ use std::{
     mem,
     net::IpAddr,
     panic,
-    process::exit,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, LazyLock, Mutex,
@@ -802,7 +801,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     // Increase S3 retries to 5
     let static_resolver = StaticResolver::new(db_chunks_bucket_ips.await?);
-    let http_client = HyperClientBuilder::new()
+    let _http_client = HyperClientBuilder::new()
         .crypto_mode(CryptoMode::Ring)
         .build_with_resolver(static_resolver);
 
@@ -815,7 +814,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         // disable stalled stream protection to avoid panics during s3 import
         .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
         .retry_config(retry_config)
-        .http_client(http_client)
+        // .http_client(http_client)
         .build();
 
     let s3_client = Arc::new(S3Client::from_conf(s3_config));
@@ -1351,10 +1350,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             time_loading_into_memory,
                         );
 
-                        if env.eq("stage") {
-                            tracing::info!("Test environment detected, exiting");
-                            exit(0);
-                        }
                         // Clear the memory allocated by temp HashSet
                         serial_ids_from_db.clear();
                         serial_ids_from_db.shrink_to_fit();
