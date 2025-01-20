@@ -360,6 +360,15 @@ mod e2e_test {
                                 right: db.db[deleted_idx as usize].clone(),
                             }
                         }
+                        // TODO: implement test that enables testing the bitmap OR rule setting.
+                        // This will require setting the left and right iris code to be different,
+                        // one of them below the threshold and the other
+                        // above the threshold against the other codes. It will
+                        // also be required to set the param BatchQuery.threshold_bitmap_or to true
+                        // for the specific iris codes to be matched against
+                        // 5 => {
+                        // println!("Sending iris codes that match on right but not left with the OR
+                        // rule set");
                         _ => unreachable!(),
                     }
                 };
