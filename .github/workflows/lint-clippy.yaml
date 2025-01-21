@@ -28,6 +28,10 @@ jobs:
         with:
           files_yaml: |
             src:
+              - Dockerfile*
+              - Cargo.lock
+              - Cargo.toml
+              - deny.toml
               - iris-*/**
 
       # The following steps will only run if any of the src files have changed

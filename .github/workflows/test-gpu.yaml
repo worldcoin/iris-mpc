@@ -20,7 +20,13 @@ jobs:
         with:
           files_yaml: |
             src:
-              - iris-*/**
+            - Dockerfile*
+            - Cargo.lock
+            - Cargo.toml
+            - deny.toml
+            - iris-*/**
+      
+
       # The following steps will only run if any of the src files have changed
       - name: Validate presence of GPU devices
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
