@@ -2,10 +2,6 @@ name: Lint Clippy
 
 on:
   push:
-    paths-ignore:
-      - 'adr/**'
-      - 'deploy/**'
-      - '.github/**'
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
@@ -25,13 +21,40 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Get all test, doc and src files that have changed
+        id: changed-files-yaml
+        uses: tj-actions/changed-files@v45
+        with:
+          files_yaml: |
+            docs:
+              - **.md
+            adr:
+              - adr/**
+            config:
+              - certs/**
+              - deploy/**
+              - scripts/**
+            src:
+              - iris-*/**
+
+      # The following steps will only run if any of the src files have changed
       - name: Install Dependencies
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: sudo apt install protobuf-compiler
+
       - name: Install Rust nightly
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: rustup toolchain install nightly-2024-07-10
+
       - name: Set Rust nightly as default
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: rustup default nightly-2024-07-10
+
       - name: Install Rust clippy for checking clippy errors
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: rustup component add clippy
+
       - name: Clippy
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: cargo clippy --all-targets --all-features -- -D warnings --no-deps
