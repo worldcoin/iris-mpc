@@ -302,7 +302,7 @@ mod e2e_test {
                             }
                         }
                         2 => {
-                            println!("Sending iris code on the threshold");
+                            println!("Sending iris code on the threshold!!!!!!");
                             let db_index = loop {
                                 let db_index = rng.gen_range(0..DB_SIZE / 10);
                                 if !disallowed_queries.contains(&db_index) {
@@ -518,7 +518,7 @@ mod e2e_test {
         is_valid: bool,
         request_id: String,
         batch_idx: usize,
-        e2e_shared_template: E2ESharedTemplate,
+        mut e2e_shared_template: E2ESharedTemplate,
     ) -> Result<()> {
         batch.metadata.push(Default::default());
         batch.valid_entries.push(is_valid);
@@ -560,16 +560,16 @@ mod e2e_test {
             .extend(e2e_shared_template.left_shared_mask[batch_idx].all_rotations());
 
         GaloisRingIrisCodeShare::preprocess_iris_code_query_share(
-            &mut e2e_shared_template.left_shared_code[batch_idx].clone(),
+            &mut e2e_shared_template.left_shared_code[batch_idx],
         );
         GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(
-            &mut e2e_shared_template.left_shared_mask[batch_idx].clone(),
+            &mut e2e_shared_template.left_shared_mask[batch_idx],
         );
         GaloisRingIrisCodeShare::preprocess_iris_code_query_share(
-            &mut e2e_shared_template.right_shared_code[batch_idx].clone(),
+            &mut e2e_shared_template.right_shared_code[batch_idx],
         );
         GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(
-            &mut e2e_shared_template.right_shared_mask[batch_idx].clone(),
+            &mut e2e_shared_template.right_shared_mask[batch_idx],
         );
         batch
             .query_left
