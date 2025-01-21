@@ -98,12 +98,13 @@ where
     let network = session.network().clone();
     let sid = session.session_id();
     let message = shares_a.clone();
+    let message = if message.len() == 1 {
+        NetworkValue::RingElement64(message[0])
+    } else {
+        NetworkValue::VecRing64(message)
+    };
     network
-        .send(
-            NetworkValue::VecRing64(message).to_network(),
-            &next_party,
-            &sid,
-        )
+        .send(message.to_network(), &next_party, &sid)
         .await?;
     Ok(shares_a)
 }
@@ -118,6 +119,7 @@ pub(crate) async fn and_many_receive(
     let shares_b = {
         let serialized_other_share = network.receive(&prev_party, &sid).await;
         match NetworkValue::from_network(serialized_other_share) {
+            Ok(NetworkValue::RingElement64(message)) => Ok(vec![message]),
             Ok(NetworkValue::VecRing64(message)) => Ok(message),
             _ => Err(eyre!("Error in receiving in and_many operation")),
         }

@@ -98,6 +98,10 @@ impl OutgoingStreams {
             ))
             .map(|s| s.value().clone())
     }
+
+    fn contains_session(&self, session_id: SessionId) -> bool {
+        self.streams.iter().any(|v| v.key().0 == session_id)
+    }
 }
 
 #[derive(Default, Clone)]
@@ -139,7 +143,7 @@ impl GrpcNetworking {
     }
 
     pub async fn create_session(&self, session_id: SessionId) -> eyre::Result<()> {
-        if self.message_queues.contains_key(&session_id) {
+        if self.outgoing_streams.contains_session(session_id) {
             return Err(eyre!(
                 "Player {:?} has already created session {session_id:?}",
                 self.party_id
@@ -340,10 +344,10 @@ mod tests {
     use super::*;
     use crate::{
         execution::{local::generate_local_identities, player::Role},
-        hawkers::galois_store::LocalNetAby3NgStoreProtocol,
+        hawkers::aby3_store::Aby3Store,
+        hnsw::HnswSearcher,
     };
     use aes_prng::AesRng;
-    use hawk_pack::HawkSearcher;
     use rand::SeedableRng;
     use tokio::task::JoinSet;
     use tracing_test::traced_test;
@@ -403,6 +407,7 @@ mod tests {
 
         // Each party sending and receiving messages to each other
         {
+            let players = players.clone();
             jobs.spawn(async move {
                 let session_id = SessionId::from(1);
 
@@ -452,6 +457,18 @@ mod tests {
                     });
                 }
                 tasks.join_all().await;
+            });
+        }
+
+        // Parties create a session consecutively
+        {
+            let players = players.clone();
+            jobs.spawn(async move {
+                let session_id = SessionId::from(2);
+
+                for player in players.iter() {
+                    player.create_session(session_id).await.unwrap();
+                }
             });
         }
 
@@ -570,8 +587,8 @@ mod tests {
     async fn test_hnsw_local() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 2;
-        let searcher = HawkSearcher::default();
-        let mut vectors_and_graphs = LocalNetAby3NgStoreProtocol::shared_random_setup(
+        let searcher = HnswSearcher::default();
+        let mut vectors_and_graphs = Aby3Store::shared_random_setup(
             &mut rng,
             database_size,
             crate::network::NetworkType::GrpcChannel,
@@ -585,7 +602,7 @@ mod tests {
                 let mut store = store.clone();
                 let mut graph = graph.clone();
                 let searcher = searcher.clone();
-                let q = store.prepare_query(store.storage.get_vector(&i.into()).clone());
+                let q = store.prepare_query(store.storage.get_vector(&i.into()));
                 jobs.spawn(async move {
                     let secret_neighbors = searcher.search(&mut store, &mut graph, &q, 1).await;
                     searcher.is_match(&mut store, &[secret_neighbors]).await

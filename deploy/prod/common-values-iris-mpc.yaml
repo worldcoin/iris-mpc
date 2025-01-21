@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:v0.13.9"
+image: "ghcr.io/worldcoin/iris-mpc:v0.13.20"
 
 environment: prod
 replicaCount: 1
@@ -38,13 +38,13 @@ startupProbe:
 resources:
   limits:
     cpu: 192
-    memory: 1000Gi
+    memory: 1900Gi
     nvidia.com/gpu: 8
     hugepages-2Mi: 5Gi
     vpc.amazonaws.com/efa: 32
   requests:
     cpu: 190
-    memory: 1000Gi
+    memory: 1900Gi
     nvidia.com/gpu: 8
     hugepages-2Mi: 5Gi
     vpc.amazonaws.com/efa: 32
@@ -91,4 +91,4 @@ preStop:
   sleepPeriod: 10
 
 # terminationGracePeriodSeconds specifies the grace time between SIGTERM and SIGKILL
-terminationGracePeriodSeconds: 360 # 3x SMPC__PROCESSING_TIMEOUT_SECS
+terminationGracePeriodSeconds: 120 # TODO: make it 3x SMPC__PROCESSING_TIMEOUT_SECS

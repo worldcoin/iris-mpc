@@ -21,9 +21,9 @@ See the [Maturin User Guide Tutorial](https://www.maturin.rs/tutorial#build-and-
 Once successfully installed, the native rust module `iris_mpc_py` can be imported in your Python environment as usual with `import iris_mpc_py`.  Example usage:
 
 ```python
-from iris_mpc_py import PyHawkSearcher, PyPlaintextStore, PyGraphStore, PyIrisCode
+from iris_mpc_py import PyHnswSearcher, PyPlaintextStore, PyGraphStore, PyIrisCode
 
-hnsw = PyHawkSearcher(32, 64, 32) # M, ef_constr, ef_search
+hnsw = PyHnswSearcher(32, 64, 32) # M, ef_constr, ef_search
 vector = PyPlaintextStore()
 graph = PyGraphStore()
 
@@ -45,7 +45,7 @@ hnsw.write_to_json("searcher.json")
 vector.write_to_ndjson("vector.ndjson")
 graph.write_to_bin("graph.dat")
 
-hnsw2 = PyHawkSearcher.read_from_json("searcher.json")
+hnsw2 = PyHnswSearcher.read_from_json("searcher.json")
 vector2 = PyPlaintextStore.read_from_ndjson("vector.ndjson")
 graph2 = PyGraphStore.read_from_bin("graph.dat")
 ```
@@ -61,7 +61,7 @@ graph = PyGraphStore.read_from_bin("graph.dat")
 Second, to construct an HNSW index dynamically from streamed database entries:
 
 ```python
-hnsw = PyHawkSearcher(32, 64, 32)
+hnsw = PyHnswSearcher(32, 64, 32)
 vector = PyPlaintextStore()
 graph = PyGraphStore()
 hnsw.fill_from_ndjson_file("large_vector_database.ndjson", vector, graph, 10000)

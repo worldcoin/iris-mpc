@@ -48,7 +48,7 @@ env:
         name: application
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "60"
+    value: "120"
 
   - name: SMPC__PATH
     value: "/data/"
@@ -75,7 +75,7 @@ env:
     value: "iris-mpc-db-exporter-store-node-1-stage-eu-north-1"
 
   - name: SMPC__DB_CHUNKS_FOLDER_NAME
-    value: "binary_output_16k"
+    value: "even_odd_binary_output_16k"
 
   - name: SMPC__LOAD_CHUNKS_PARALLELISM
     value: "32"
@@ -84,10 +84,10 @@ env:
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
-    value: "800000"
+    value: "1200000"
 
   - name: SMPC__MAX_DB_SIZE
-    value: "1000000"
+    value: "1300000"
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"

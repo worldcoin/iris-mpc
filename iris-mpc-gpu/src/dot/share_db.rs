@@ -307,7 +307,7 @@ impl ShareDB {
         }
     }
 
-    pub fn load_single_record(
+    pub fn load_single_record_from_db(
         index: usize,
         db: &CudaVec2DSlicerRawPointer,
         record: &[u16],
@@ -325,6 +325,35 @@ impl ShareDB {
             .iter()
             .map(|&x: &u16| ((x >> 8) as i32 - 128) as i8)
             .collect::<Vec<_>>();
+
+        let device_index = index % n_shards;
+        let device_db_index = index / n_shards;
+
+        unsafe {
+            std::ptr::copy(
+                a0_host.as_ptr() as *const _,
+                (db.limb_0[device_index] + (device_db_index * code_length) as u64) as *mut _,
+                code_length,
+            );
+
+            std::ptr::copy(
+                a1_host.as_ptr() as *const _,
+                (db.limb_1[device_index] + (device_db_index * code_length) as u64) as *mut _,
+                code_length,
+            );
+        };
+    }
+
+    pub fn load_single_record_from_s3(
+        index: usize,
+        db: &CudaVec2DSlicerRawPointer,
+        a0_host: &[u8],
+        a1_host: &[u8],
+        n_shards: usize,
+        code_length: usize,
+    ) {
+        assert_eq!(a0_host.len(), code_length);
+        assert_eq!(a1_host.len(), code_length);
 
         let device_index = index % n_shards;
         let device_db_index = index / n_shards;
@@ -386,7 +415,7 @@ impl ShareDB {
             .par_chunks(self.code_length)
             .enumerate()
             .for_each(|(idx, chunk)| {
-                Self::load_single_record(idx, &db.code_gr, chunk, n_shards, code_length);
+                Self::load_single_record_from_db(idx, &db.code_gr, chunk, n_shards, code_length);
             });
 
         // Calculate the number of entries per shard

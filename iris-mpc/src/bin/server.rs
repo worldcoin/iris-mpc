@@ -1,7 +1,10 @@
 #![allow(clippy::needless_range_loop)]
 
 use aws_config::retry::RetryConfig;
-use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
+use aws_sdk_s3::{
+    config::{Builder as S3ConfigBuilder, StalledStreamProtectionConfig},
+    Client as S3Client,
+};
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{response::IntoResponse, routing::get, Router};
@@ -9,7 +12,7 @@ use clap::Parser;
 use eyre::{eyre, Context};
 use futures::{stream::select_all, StreamExt, TryStreamExt};
 use iris_mpc_common::{
-    config::{json_wrapper::JsonStrWrapper, Config, Opt},
+    config::{Config, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
         aws::{
@@ -26,21 +29,23 @@ use iris_mpc_common::{
         },
         smpc_response::{
             create_message_type_attribute_map, IdentityDeletionResult, UniquenessResult,
-            ERROR_FAILED_TO_PROCESS_IRIS_SHARES, SMPC_MESSAGE_TYPE_ATTRIBUTE,
+            ERROR_FAILED_TO_PROCESS_IRIS_SHARES, ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
+            SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
         sync::SyncState,
         task_monitor::TaskMonitor,
     },
+    IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use iris_mpc_gpu::{
-    helpers::device_manager::DeviceManager,
+    helpers::{device_manager::DeviceManager, register_host_memory},
     server::{
         get_dummy_shares_for_deletion, sync_nccl, BatchMetadata, BatchQuery,
         BatchQueryEntriesPreprocessed, ServerActor, ServerJobResult,
     },
 };
 use iris_mpc_store::{
-    fetch_and_parse_chunks, last_snapshot_timestamp, IrisSource, S3Store, Store, StoredIrisRef,
+    fetch_and_parse_chunks, last_snapshot_timestamp, S3Store, Store, StoredIris, StoredIrisRef,
 };
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
@@ -262,6 +267,22 @@ async fn receive_batch(
                             // Some party (maybe us) already meant to delete this request, so we
                             // skip it. Ignore this message when calculating the batch size.
                             msg_counter -= 1;
+                            metrics::counter!("skip.request.deleted.sqs.request").increment(1);
+                            tracing::warn!(
+                                "Skipping request due to it being from synced deleted ids: {}",
+                                smpc_request.signup_id
+                            );
+                            // shares
+                            send_error_results_to_sns(
+                                smpc_request.signup_id,
+                                &batch_metadata,
+                                sns_client,
+                                config,
+                                error_result_attributes,
+                                UNIQUENESS_MESSAGE_TYPE,
+                                ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
+                            )
+                            .await?;
                             continue;
                         }
 
@@ -528,35 +549,41 @@ fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
     }
 }
 
-async fn initialize_chacha_seeds(
-    kms_key_arns: &JsonStrWrapper<Vec<String>>,
-    party_id: usize,
-) -> eyre::Result<([u32; 8], [u32; 8])> {
+async fn initialize_chacha_seeds(config: Config) -> eyre::Result<([u32; 8], [u32; 8])> {
     // Init RNGs
-    let own_key_arn = kms_key_arns
+    let own_key_arn = config
+        .kms_key_arns
         .0
-        .get(party_id)
+        .get(config.party_id)
         .expect("Expected value not found in kms_key_arns");
-    let dh_pairs = match party_id {
+    let dh_pairs = match config.party_id {
         0 => (1usize, 2usize),
         1 => (2usize, 0usize),
         2 => (0usize, 1usize),
         _ => unimplemented!(),
     };
 
-    let dh_pair_0: &str = kms_key_arns
+    let dh_pair_0: &str = config
+        .kms_key_arns
         .0
         .get(dh_pairs.0)
         .expect("Expected value not found in kms_key_arns");
-    let dh_pair_1: &str = kms_key_arns
+    let dh_pair_1: &str = config
+        .kms_key_arns
         .0
         .get(dh_pairs.1)
         .expect("Expected value not found in kms_key_arns");
 
-    let chacha_seeds = (
-        bytemuck::cast(derive_shared_secret(own_key_arn, dh_pair_0).await?),
-        bytemuck::cast(derive_shared_secret(own_key_arn, dh_pair_1).await?),
-    );
+    // To be used only for e2e testing where we use localstack. There's a bug in
+    // localstack's implementation of `derive_shared_secret`. See: https://github.com/localstack/localstack/pull/12071
+    let chacha_seeds: ([u32; 8], [u32; 8]) = if config.fixed_shared_secrets {
+        ([0u32; 8], [0u32; 8])
+    } else {
+        (
+            bytemuck::cast(derive_shared_secret(own_key_arn, dh_pair_0).await?),
+            bytemuck::cast(derive_shared_secret(own_key_arn, dh_pair_1).await?),
+        )
+    };
 
     Ok(chacha_seeds)
 }
@@ -656,7 +683,9 @@ async fn main() -> eyre::Result<()> {
 }
 
 async fn server_main(config: Config) -> eyre::Result<()> {
-    let shutdown_handler = ShutdownHandler::new(config.shutdown_last_results_sync_timeout_secs);
+    let shutdown_handler = Arc::new(ShutdownHandler::new(
+        config.shutdown_last_results_sync_timeout_secs,
+    ));
     shutdown_handler.wait_for_shutdown_signal().await;
 
     // Load batch_size config
@@ -679,7 +708,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     // Increase S3 retries to 5
     let retry_config = RetryConfig::standard().with_max_attempts(5);
+
     let s3_config = S3ConfigBuilder::from(&shared_config)
+        // disable stalled stream protection to avoid panics during s3 import
+        .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
         .retry_config(retry_config)
         .build();
     let s3_client = Arc::new(S3Client::from_conf(s3_config));
@@ -695,7 +727,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let party_id = config.party_id;
     tracing::info!("Deriving shared secrets");
-    let chacha_seeds = initialize_chacha_seeds(&config.kms_key_arns, party_id).await?;
+    let chacha_seeds = initialize_chacha_seeds(config.clone()).await?;
 
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
@@ -770,19 +802,30 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let is_ready_flag = Arc::new(AtomicBool::new(false));
     let is_ready_flag_cloned = Arc::clone(&is_ready_flag);
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize, Clone)]
     struct ReadyProbeResponse {
-        image_name: String,
-        uuid:       String,
+        image_name:    String,
+        uuid:          String,
+        shutting_down: bool,
     }
+
+    let health_shutdown_handler = Arc::clone(&shutdown_handler);
 
     let _health_check_abort = background_tasks.spawn({
         let uuid = uuid::Uuid::new_v4().to_string();
         let ready_probe_response = ReadyProbeResponse {
-            image_name: config.image_name.clone(),
-            uuid,
+            image_name:    config.image_name.clone(),
+            shutting_down: false,
+            uuid:          uuid.clone(),
+        };
+        let ready_probe_response_shutdown = ReadyProbeResponse {
+            image_name:    config.image_name.clone(),
+            shutting_down: true,
+            uuid:          uuid.clone(),
         };
         let serialized_response = serde_json::to_string(&ready_probe_response)
+            .expect("Serialization to JSON to probe response failed");
+        let serialized_response_shutdown = serde_json::to_string(&ready_probe_response_shutdown)
             .expect("Serialization to JSON to probe response failed");
         tracing::info!("Healthcheck probe response: {}", serialized_response);
         async move {
@@ -790,7 +833,16 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             let app = Router::new()
                 .route(
                     "/health",
-                    get(move || async move { serialized_response.clone() }),
+                    get(move || {
+                        let shutdown_handler_clone = Arc::clone(&health_shutdown_handler);
+                        async move {
+                            if shutdown_handler_clone.is_shutting_down() {
+                                serialized_response_shutdown.clone()
+                            } else {
+                                serialized_response.clone()
+                            }
+                        }
+                    }),
                 )
                 .route(
                     "/ready",
@@ -824,6 +876,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let mut heartbeat_tx = Some(heartbeat_tx);
     let all_nodes = config.node_hostnames.clone();
     let image_name = config.image_name.clone();
+    let heartbeat_shutdown_handler = Arc::clone(&shutdown_handler);
     let _heartbeat = background_tasks.spawn(async move {
         let next_node = &all_nodes[(config.party_id + 1) % 3];
         let prev_node = &all_nodes[(config.party_id + 2) % 3];
@@ -844,11 +897,22 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         tracing::warn!("Node {} did not respond with success, retrying...", host);
                         continue;
                     }
-                    // The other node seems to be down or returned an error.
-                    panic!(
-                        "Node {} did not respond with success, killing server...",
+                    tracing::info!(
+                        "Node {} did not respond with success, starting graceful shutdown",
                         host
                     );
+
+                    if !heartbeat_shutdown_handler.is_shutting_down() {
+                        heartbeat_shutdown_handler.trigger_manual_shutdown();
+                        tracing::error!(
+                            "Node {} has not completed health check, therefore graceful shutdown \
+                             has been triggered",
+                            host
+                        );
+                    } else {
+                        tracing::info!("Node {} has already started graceful shutdown.", host);
+                    }
+                    continue;
                 }
 
                 let probe_response = res
@@ -856,6 +920,18 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     .json::<ReadyProbeResponse>()
                     .await
                     .expect("Deserialization of probe response failed");
+                if probe_response.shutting_down {
+                    tracing::info!("Node {} has starting graceful shutdown", host);
+
+                    if !heartbeat_shutdown_handler.is_shutting_down() {
+                        heartbeat_shutdown_handler.trigger_manual_shutdown();
+                        tracing::error!(
+                            "Node {} has starting graceful shutdown, therefore triggering \
+                             graceful shutdown",
+                            host
+                        );
+                    }
+                }
                 if probe_response.image_name != image_name {
                     // Do not create a panic as we still can continue to process before its
                     // updated
@@ -1017,27 +1093,49 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                     last_snapshot_details,
                                 )
                                 .await
-                                .map(|result| result.map(IrisSource::S3))
                                 .boxed();
 
                                 let stream_db = store
                                     .stream_irises_par(Some(min_last_modified_at), parallelism)
                                     .await
-                                    .map(|result| result.map(IrisSource::DB))
                                     .boxed();
 
                                 select_all(vec![stream_s3, stream_db])
                             }
                             false => {
                                 tracing::info!("S3 importer disabled. Fetching only from db");
-                                let stream_db = store
-                                    .stream_irises_par(None, parallelism)
-                                    .await
-                                    .map(|result| result.map(IrisSource::DB))
-                                    .boxed();
+                                let stream_db =
+                                    store.stream_irises_par(None, parallelism).await.boxed();
                                 select_all(vec![stream_db])
                             }
                         };
+
+                        tracing::info!("Page-lock host memory");
+                        let left_codes = actor.left_code_db_slices.code_gr.clone();
+                        let right_codes = actor.right_code_db_slices.code_gr.clone();
+                        let left_masks = actor.left_mask_db_slices.code_gr.clone();
+                        let right_masks = actor.right_mask_db_slices.code_gr.clone();
+                        let device_manager_clone = actor.device_manager.clone();
+
+                        let page_lock_handle = spawn_blocking(move || {
+                            for db in [&left_codes, &right_codes] {
+                                register_host_memory(
+                                    device_manager_clone.clone(),
+                                    db,
+                                    config.max_db_size,
+                                    IRIS_CODE_LENGTH,
+                                );
+                            }
+
+                            for db in [&left_masks, &right_masks] {
+                                register_host_memory(
+                                    device_manager_clone.clone(),
+                                    db,
+                                    config.max_db_size,
+                                    MASK_CODE_LENGTH,
+                                );
+                            }
+                        });
 
                         let now = Instant::now();
                         let mut now_load_summary = Instant::now();
@@ -1052,24 +1150,44 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         while let Some(result) = stream.try_next().await? {
                             time_waiting_for_stream += now_load_summary.elapsed();
                             now_load_summary = Instant::now();
-
-                            let iris = match result {
-                                IrisSource::DB(iris) => {
+                            let index = result.index();
+                            if index == 0 || index > store_len {
+                                tracing::error!("Invalid iris index {}", index);
+                                return Err(eyre!("Invalid iris index {}", index));
+                            }
+                            match result {
+                                StoredIris::DB(iris) => {
                                     n_loaded_from_db += 1;
                                     serial_ids_from_db.insert(iris.id());
-                                    iris
+                                    actor.load_single_record_from_db(
+                                        iris.index() - 1,
+                                        iris.left_code(),
+                                        iris.left_mask(),
+                                        iris.right_code(),
+                                        iris.right_mask(),
+                                    );
                                 }
-                                IrisSource::S3(iris) => {
+                                StoredIris::S3(iris) => {
                                     if serial_ids_from_db.contains(&iris.id()) {
                                         tracing::warn!(
                                             "Skip overriding record already loaded via DB with S3 \
                                              record: {}",
-                                            iris.id()
+                                            iris.index()
                                         );
                                         continue;
                                     }
                                     n_loaded_from_s3 += 1;
-                                    iris
+                                    actor.load_single_record_from_s3(
+                                        iris.index() - 1,
+                                        iris.left_code_odd(),
+                                        iris.left_code_even(),
+                                        iris.right_code_odd(),
+                                        iris.right_code_even(),
+                                        iris.left_mask_odd(),
+                                        iris.left_mask_even(),
+                                        iris.right_mask_odd(),
+                                        iris.right_mask_even(),
+                                    );
                                 }
                             };
 
@@ -1083,28 +1201,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                 );
                             }
 
-                            if iris.index() == 0 || iris.index() > store_len {
-                                tracing::error!("Invalid iris index {}", iris.index());
-                                return Err(eyre!("Invalid iris index {}", iris.index()));
-                            }
-
-                            actor.load_single_record(
-                                iris.index() - 1,
-                                iris.left_code(),
-                                iris.left_mask(),
-                                iris.right_code(),
-                                iris.right_mask(),
-                            );
-
                             // if the serial id hasn't been loaded before, count is as unique record
-                            if all_serial_ids.contains(&(iris.index() as i64)) {
-                                actor.increment_db_size(iris.index() - 1);
+                            if all_serial_ids.contains(&(index as i64)) {
+                                actor.increment_db_size(index - 1);
                             }
 
                             time_loading_into_memory += now_load_summary.elapsed();
                             now_load_summary = Instant::now();
 
-                            all_serial_ids.remove(&(iris.index() as i64));
+                            all_serial_ids.remove(&(index as i64));
                             record_counter += 1;
                         }
 
@@ -1133,8 +1238,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         tracing::info!("Preprocessing db");
                         actor.preprocess_db();
 
-                        tracing::info!("Page-lock host memory");
-                        actor.register_host_memory();
+                        tracing::info!("Waiting for page-lock to finish");
+                        page_lock_handle.await?;
 
                         tracing::info!(
                             "Loaded {} records from db into memory [DB sizes: {:?}]",

@@ -1,5 +1,6 @@
+use crate::hnsw::HnswSearcher;
 use aes_prng::AesRng;
-use hawk_pack::{graph_store::GraphMem, HawkSearcher, VectorStore};
+use hawk_pack::{graph_store::GraphMem, VectorStore};
 use iris_mpc_common::iris_db::{
     db::IrisDB,
     iris::{IrisCode, MATCH_THRESHOLD_RATIO},
@@ -148,7 +149,7 @@ impl PlaintextStore {
 
         let mut plaintext_vector_store = PlaintextStore::default();
         let mut plaintext_graph_store = GraphMem::new();
-        let searcher = HawkSearcher::default();
+        let searcher = HnswSearcher::default();
 
         for raw_query in cleartext_database.iter() {
             let query = plaintext_vector_store.prepare_query(raw_query.clone());
@@ -189,7 +190,7 @@ impl PlaintextStore {
         let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
 
         let mut plaintext_graph_store = GraphMem::new();
-        let searcher = HawkSearcher::default();
+        let searcher = HnswSearcher::default();
 
         for i in 0..graph_size {
             searcher
@@ -209,8 +210,8 @@ impl PlaintextStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hnsw::HnswSearcher;
     use aes_prng::AesRng;
-    use hawk_pack::HawkSearcher;
     use iris_mpc_common::iris_db::db::IrisDB;
     use rand::SeedableRng;
     use tracing_test::traced_test;
@@ -292,7 +293,7 @@ mod tests {
     async fn test_plaintext_hnsw_matcher() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 1;
-        let searcher = HawkSearcher::default();
+        let searcher = HnswSearcher::default();
         let (mut ptxt_vector, mut ptxt_graph) =
             PlaintextStore::create_random(&mut rng, database_size)
                 .await

@@ -28,6 +28,7 @@ use eyre::eyre;
 use futures::{Future, FutureExt};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    helpers::sha256::sha256_bytes,
     iris_db::iris::{IrisCode, MATCH_THRESHOLD_RATIO},
     IrisCodeDbSlice,
 };
@@ -81,7 +82,7 @@ const N_BUCKETS: usize = 10;
 
 pub struct ServerActor {
     job_queue: mpsc::Receiver<ServerJob>,
-    device_manager: Arc<DeviceManager>,
+    pub device_manager: Arc<DeviceManager>,
     party_id: usize,
     // engines
     codes_engine: ShareDB,
@@ -94,10 +95,10 @@ pub struct ServerActor {
     distance_comparator: DistanceComparator,
     comms: Vec<Arc<NcclComm>>,
     // DB slices
-    left_code_db_slices: SlicedProcessedDatabase,
-    left_mask_db_slices: SlicedProcessedDatabase,
-    right_code_db_slices: SlicedProcessedDatabase,
-    right_mask_db_slices: SlicedProcessedDatabase,
+    pub left_code_db_slices: SlicedProcessedDatabase,
+    pub left_mask_db_slices: SlicedProcessedDatabase,
+    pub right_code_db_slices: SlicedProcessedDatabase,
+    pub right_mask_db_slices: SlicedProcessedDatabase,
     streams: Vec<Vec<CudaStream>>,
     cublas_handles: Vec<Vec<CudaBlas>>,
     results: Vec<CudaSlice<u32>>,
@@ -507,7 +508,7 @@ impl ServerActor {
         self.current_db_sizes = db_lens1;
     }
 
-    pub fn load_single_record(
+    pub fn load_single_record_from_db(
         &mut self,
         index: usize,
         left_code: &[u16],
@@ -515,31 +516,78 @@ impl ServerActor {
         right_code: &[u16],
         right_mask: &[u16],
     ) {
-        ShareDB::load_single_record(
+        ShareDB::load_single_record_from_db(
             index,
             &self.left_code_db_slices.code_gr,
             left_code,
             self.device_manager.device_count(),
             IRIS_CODE_LENGTH,
         );
-        ShareDB::load_single_record(
+        ShareDB::load_single_record_from_db(
             index,
             &self.left_mask_db_slices.code_gr,
             left_mask,
             self.device_manager.device_count(),
             MASK_CODE_LENGTH,
         );
-        ShareDB::load_single_record(
+        ShareDB::load_single_record_from_db(
             index,
             &self.right_code_db_slices.code_gr,
             right_code,
             self.device_manager.device_count(),
             IRIS_CODE_LENGTH,
         );
-        ShareDB::load_single_record(
+        ShareDB::load_single_record_from_db(
             index,
             &self.right_mask_db_slices.code_gr,
             right_mask,
+            self.device_manager.device_count(),
+            MASK_CODE_LENGTH,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn load_single_record_from_s3(
+        &mut self,
+        index: usize,
+        left_code_odd: &[u8],
+        left_code_even: &[u8],
+        right_code_odd: &[u8],
+        right_code_even: &[u8],
+        left_mask_odd: &[u8],
+        left_mask_even: &[u8],
+        right_mask_odd: &[u8],
+        right_mask_even: &[u8],
+    ) {
+        ShareDB::load_single_record_from_s3(
+            index,
+            &self.left_code_db_slices.code_gr,
+            left_code_odd,
+            left_code_even,
+            self.device_manager.device_count(),
+            IRIS_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_s3(
+            index,
+            &self.left_mask_db_slices.code_gr,
+            left_mask_odd,
+            left_mask_even,
+            self.device_manager.device_count(),
+            MASK_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_s3(
+            index,
+            &self.right_code_db_slices.code_gr,
+            right_code_odd,
+            right_code_even,
+            self.device_manager.device_count(),
+            IRIS_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_s3(
+            index,
+            &self.right_mask_db_slices.code_gr,
+            right_mask_odd,
+            right_mask_even,
             self.device_manager.device_count(),
             MASK_CODE_LENGTH,
         );
@@ -651,7 +699,13 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         let tmp_now = Instant::now();
         tracing::info!("Syncing batch entries");
-        let valid_entries = self.sync_batch_entries(&batch.valid_entries)?;
+
+        // Compute hash of the request ids concatenated
+        let batch_hash = sha256_bytes(batch.request_ids.join(""));
+        tracing::info!("Current batch hash: {}", hex::encode(&batch_hash[0..4]));
+
+        let valid_entries =
+            self.sync_batch_entries(&batch.valid_entries, self.max_batch_size, &batch_hash)?;
         let valid_entry_idxs = valid_entries.iter().positions(|&x| x).collect::<Vec<_>>();
         batch_size = valid_entry_idxs.len();
         batch.retain(&valid_entry_idxs);
@@ -1299,12 +1353,8 @@ impl ServerActor {
 
         let db_sizes_batch =
             vec![self.max_batch_size * ROTATIONS; self.device_manager.device_count()];
-        let code_dots_batch = self
-            .batch_codes_engine
-            .result_chunk_shares(&db_sizes_batch, 0);
-        let mask_dots_batch = self
-            .batch_masks_engine
-            .result_chunk_shares(&db_sizes_batch, 0);
+        let code_dots_batch = self.batch_codes_engine.result_chunk_shares(&db_sizes_batch);
+        let mask_dots_batch = self.batch_masks_engine.result_chunk_shares(&db_sizes_batch);
 
         record_stream_time!(
             &self.device_manager,
@@ -1511,12 +1561,8 @@ impl ServerActor {
             // ---- START PHASE 2 ----
             let max_chunk_size = dot_chunk_size.iter().max().copied().unwrap();
             let phase_2_chunk_sizes = vec![max_chunk_size; self.device_manager.device_count()];
-            let code_dots = self
-                .codes_engine
-                .result_chunk_shares(&phase_2_chunk_sizes, db_chunk_idx % 2);
-            let mask_dots = self
-                .masks_engine
-                .result_chunk_shares(&phase_2_chunk_sizes, db_chunk_idx % 2);
+            let code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
+            let mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
             {
                 assert_eq!(
                     (max_chunk_size * self.max_batch_size * ROTATIONS) % 64,
@@ -1601,53 +1647,61 @@ impl ServerActor {
         }
     }
 
-    fn sync_batch_entries(&mut self, valid_entries: &[bool]) -> eyre::Result<Vec<bool>> {
-        tracing::info!(
-            party_id = self.party_id,
-            "valid_entries {:?} ({})",
-            valid_entries,
-            valid_entries.len()
-        );
-        tracing::info!(party_id = self.party_id, "sync_batch_entries start");
+    fn sync_batch_entries(
+        &mut self,
+        valid_entries: &[bool],
+        max_batch_size: usize,
+        batch_hash: &[u8],
+    ) -> eyre::Result<Vec<bool>> {
+        assert!(valid_entries.len() <= max_batch_size);
+        let hash_len = batch_hash.len();
         let mut buffer = self
             .device_manager
             .device(0)
-            .alloc_zeros(valid_entries.len() * self.comms[0].world_size())
+            .alloc_zeros((max_batch_size + hash_len) * self.comms[0].world_size())
             .unwrap();
 
-        tracing::info!(party_id = self.party_id, "htod_copy start");
+        let mut host_buffer = vec![0u8; max_batch_size + hash_len];
+        host_buffer[..valid_entries.len()]
+            .copy_from_slice(&valid_entries.iter().map(|&x| x as u8).collect::<Vec<u8>>());
+        host_buffer[max_batch_size..].copy_from_slice(batch_hash);
 
-        let buffer_self = self
-            .device_manager
-            .device(0)
-            .htod_copy(valid_entries.iter().map(|&x| x as u8).collect::<Vec<_>>())?;
+        let buffer_self = self.device_manager.device(0).htod_copy(host_buffer)?;
 
+        // Use all_gather to sync the buffer across all nodes (only using device 0)
         self.device_manager.device(0).synchronize()?;
-
-        tracing::info!(party_id = self.party_id, "all_gather start");
-
         self.comms[0]
             .all_gather(&buffer_self, &mut buffer)
             .map_err(|e| eyre!(format!("{:?}", e)))?;
-
         self.device_manager.device(0).synchronize()?;
-
-        tracing::info!(party_id = self.party_id, "dtoh_sync_copy start");
 
         let results = self.device_manager.device(0).dtoh_sync_copy(&buffer)?;
         let results: Vec<_> = results
             .chunks_exact(results.len() / self.comms[0].world_size())
             .collect();
 
-        tracing::info!(party_id = self.party_id, "sync_batch_entries end");
+        // Only keep entries that are valid on all nodes
+        let mut valid_merged = vec![true; max_batch_size];
+        for i in 0..self.comms[0].world_size() {
+            for j in 0..max_batch_size {
+                valid_merged[j] &= results[i][j] == 1;
+            }
+        }
 
-        let mut valid_merged = vec![];
-        for i in 0..results[0].len() {
-            valid_merged.push(
-                [results[0][i], results[1][i], results[2][i]]
-                    .iter()
-                    .all(|&x| x == 1),
-            );
+        // Check that the hash is the same on nodes
+        for i in 0..self.comms[0].world_size() {
+            if &results[i][max_batch_size..] != batch_hash {
+                tracing::error!(
+                    party_id = self.party_id,
+                    "Batch mismatch with node {}. Queues seem to be out of sync.",
+                    i
+                );
+                metrics::counter!("batch.mismatch").increment(1);
+                return Err(eyre!(
+                    "Batch mismatch with node {}. Queues seem to be out of sync.",
+                    i
+                ));
+            }
         }
 
         Ok(valid_merged)

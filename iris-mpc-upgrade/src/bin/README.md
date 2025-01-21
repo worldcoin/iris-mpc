@@ -101,42 +101,72 @@ Currently, the matching is not very robust and requires that both clients send b
 ## Example Protocol run
 
 In this example we start a reshare process where parties 0 and 1 are the senders (i.e., clients) and party 2 is the receiver (i.e., server).
+The server is TLS aware and uses NGINX with hardcoded certificates for the server and clients.
 
-### Bring up some DBs and seed them
+Clients load certificates and connect directly through NGINX, which then pass-throughs the request to the server
+
+### Create SSH keys and self-signed certificates
+
+To generate the SSH keys and self-signed certificates for the clients, use:
+
+```shell
+./ssh_chain.sh
+```
+
+This will generate server private keys, self-signed CA roots, and public keys for SSL.
+You will also need to edit the `/etc/hosts` file to include the following line:
+
+```shell
+127.0.0.1 localhost reshare-server.1.stage.smpcv2.worldcoin.dev reshare-server.2.stage.smpcv2.worldcoin.dev reshare-server.3.stage.smpcv2.worldcoin.dev
+```
+
+These will be used by NGNIX, as well as the clients
+
+### Bring up the DBs, localstack, and reshare sever
+
+```bash
+docker-compose up
+```
+
+### Generate KMS keys
+
+We also need generate some KMS keys to be used by the clients to derive the common seed. Use:
+
+```shell
+./aws_local.sh
+```
+
+This will output 2 keys ARNs. You will use them in a later step.
+
+### Seed the databases
 
 Here, the seed-v2-dbs binary just creates fully replicated DB for 3 parties, in DBs with ports 6200,6201,6202. Additionally, there is also another DB at 6203, which we will use as a target for the reshare protocol to fill into.
 
-```bash
-docker-compose up -d
+```shell
 cargo run --release --bin seed-v2-dbs -- --db-url-party1 postgres://postgres:postgres@localhost:6200 --db-url-party2 postgres://postgres:postgres@localhost:6201 --db-url-party3 postgres://postgres:postgres@localhost:6202 --schema-name-party1 SMPC_testing_0 --schema-name-party2 SMPC_testing_1 --schema-name-party3 SMPC_testing_2 --fill-to 10000 --batch-size 100
-```
-
-### Start a server for the receiving party
-
-```bash
-cargo run --release --bin reshare-server -- --party-id 2 --sender1-party-id 0 --sender2-party-id 1 --bind-addr 0.0.0.0:7000 --environment testing --db-url postgres://postgres:postgres@localhost:6203 --db-start 1 --db-end 10001 --batch-size 100
 ```
 
 Short rundown of the parameters:
 
-* `party-id`: the 0-indexed party id of the receiving party. This corresponds to the (i+1)-th point on the exceptional sequence for Shamir poly evaluation
-* `sender1-party-id`: The party id of the first sender, just for sanity checks against received packets. (Order between sender1 and sender2 does not matter here)
-* `sender2-party-id`: The party id of the second sender, just for sanity checks against received packets.
-* `bind-addr`: Socket addr to bind to for gGRPC server.
-* `environment`: Which environment are we running in, used for DB schema name
-* `db-url`: Postgres connection string. We save the results in this DB
-* `db-start`: Expected range of DB entries to receive, just used for sanity checks. Start is inclusive.
-* `db-end`: Expected range of DB entries to receive, just used for sanity checks. End is exclusive.
-* `batch-size`: maximum size of received reshare batches
+* `db-url-party1`: Postgres connection string for the first party
+* `db-url-party2`: Postgres connection string for the second party
+* `db-url-party3`: Postgres connection string for the third party
+* `schema-name-party1`: Schema name for the first party
+* `schema-name-party2`: Schema name for the second party
+* `schema-name-party3`: Schema name for the third party
+* `fill-to`: Number of entries to fill in the DB
+* `batch-size`: Batch size for the inserts
 
 ### Start clients for the sending parties
 
 ```bash
-cargo run --release --bin reshare-client -- --party-id 0 --other-party-id 1 --target-party-id 2 --server-url http://localhost:7000 --environment testing --db-url postgres://postgres:postgres@localhost:6200 --db-start 1 --db-end 10001 --batch-size 100
+cd iris-mpc-upgrade/src/bin
+cargo run --release --bin reshare-client -- --party-id 0 --other-party-id 1 --target-party-id 2 --server-url https://upgrade-left.1.smpcv2.stage.worldcoin.dev:6443 --environment testing --db-url postgres://postgres:postgres@localhost:6200 --db-start 1 --db-end 10001 --batch-size 100 --my-kms-key-arn <kms_key_arn-1> --other-kms-key-arn <kms_key_arn-2> --reshare-run-session-id test --ca-root-file-path nginx/cert/ca.txt
 ```
 
 ```bash
-cargo run --release --bin reshare-client -- --party-id 1 --other-party-id 0 --target-party-id 2 --server-url http://localhost:7000 --environment testing --db-url postgres://postgres:postgres@localhost:6201 --db-start 1 --db-end 10001 --batch-size 100
+cd iris-mpc-upgrade/src/bin
+cargo run --release --bin reshare-client -- --party-id 1 --other-party-id 0 --target-party-id 2 --server-url https://upgrade-left.2.smpcv2.stage.worldcoin.dev:6443 --environment testing --db-url postgres://postgres:postgres@localhost:6200 --db-start 1 --db-end 10001 --batch-size 100 --my-kms-key-arn <kms_key_arn-1> --other-kms-key-arn <kms_key_arn-2> --reshare-run-session-id test --ca-root-file-path nginx/cert/ca.txt
 ```
 
 Short rundown of the parameters:
@@ -150,6 +180,10 @@ Short rundown of the parameters:
 * `db-start`: Range of DB entries to send. Start is inclusive.
 * `db-end`: Range of DB entries to send. End is exclusive.
 * `batch-size`: maximum size of sent reshare batches
+* `my-kms-key-arn`: ARN of the KMS key to use for the common seed derivation
+* `other-kms-key-arn`: ARN of the KMS key to use for the common seed derivation
+* `ca-root-file-path`: Path to the CA Root TLS certificate
+* `reshare-run-sessin-id`: a random string to identify the current reshare run
 
 ### Checking results
 

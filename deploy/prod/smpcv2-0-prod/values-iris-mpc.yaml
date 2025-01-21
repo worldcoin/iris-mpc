@@ -84,9 +84,9 @@ env:
     value: "iris-mpc-db-exporter-store-node-0-prod-eu-north-1"
 
   - name: SMPC__DB_CHUNKS_FOLDER_NAME
-    value: "binary_output_16k"
+    value: "even_odd_binary_output_16k"
 
-  - name: SMPC__DATABASE__LOAD_PARALLELISM
+  - name: SMPC__LOAD_CHUNKS_PARALLELISM
     value: "64"
 
   - name: SMPC__CLEAR_DB_BEFORE_INIT
@@ -96,7 +96,7 @@ env:
     value: "0"
 
   - name: SMPC__MAX_DB_SIZE
-    value: "10000000"
+    value: "11000000"
 
   - name: SMPC__FAKE_DB_SIZE
     value: "0"
@@ -131,6 +131,9 @@ env:
     value: '["iris-mpc-node.1.smpcv2.worldcoin.org","iris-mpc-node.2.smpcv2.worldcoin.org","iris-mpc-node.3.smpcv2.worldcoin.org"]'
 
   - name: SMPC__IMAGE_NAME
+    value: $(IMAGE_NAME)
+  
+  - name: SMPC__HELLO
     value: $(IMAGE_NAME)
 
 initContainer:
