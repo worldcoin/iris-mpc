@@ -383,27 +383,28 @@ mod e2e_test {
                 let shared_template = to_shared_template(is_valid, &e2e_template, &mut rng);
 
                 prepare_batch(
-                    batch0.clone(),
+                    &mut batch0,
                     is_valid,
                     request_id.to_string(),
                     0,
                     shared_template.clone(),
-                );
+                )?;
 
                 prepare_batch(
-                    batch1.clone(),
+                    &mut batch1,
                     true,
                     request_id.to_string(),
                     1,
                     shared_template.clone(),
-                );
+                )?;
+
                 prepare_batch(
-                    batch2.clone(),
+                    &mut batch2,
                     true,
                     request_id.to_string(),
                     2,
                     shared_template.clone(),
-                );
+                )?;
             }
 
             // Skip empty batch
@@ -513,12 +514,12 @@ mod e2e_test {
 
     #[allow(clippy::too_many_arguments)]
     fn prepare_batch(
-        mut batch: BatchQuery,
+        batch: &mut BatchQuery,
         is_valid: bool,
         request_id: String,
         batch_idx: usize,
         e2e_shared_template: E2ESharedTemplate,
-    ) -> BatchQuery {
+    ) -> Result<()> {
         batch.metadata.push(Default::default());
         batch.valid_entries.push(is_valid);
         batch.request_ids.push(request_id);
@@ -539,6 +540,24 @@ mod e2e_test {
             .store_right
             .mask
             .push(e2e_shared_template.right_shared_mask[batch_idx].clone());
+
+        batch
+            .db_left
+            .code
+            .extend(e2e_shared_template.left_shared_code[batch_idx].all_rotations());
+        batch
+            .db_left
+            .mask
+            .extend(e2e_shared_template.left_shared_mask[batch_idx].all_rotations());
+
+        batch
+            .db_right
+            .code
+            .extend(e2e_shared_template.left_shared_code[batch_idx].all_rotations());
+        batch
+            .db_right
+            .mask
+            .extend(e2e_shared_template.left_shared_mask[batch_idx].all_rotations());
 
         GaloisRingIrisCodeShare::preprocess_iris_code_query_share(
             &mut e2e_shared_template.left_shared_code[batch_idx].clone(),
@@ -570,7 +589,7 @@ mod e2e_test {
             .mask
             .extend(e2e_shared_template.right_shared_mask[batch_idx].all_rotations());
 
-        batch
+        Ok(())
     }
 
     fn to_shared_template(
