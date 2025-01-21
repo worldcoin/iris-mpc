@@ -12,7 +12,6 @@ use aws_smithy_runtime_api::client::dns::{DnsFuture, ResolveDns};
 use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
 use eyre::{eyre, Context};
-use futures::{stream::select_all, StreamExt, TryStreamExt};
 use hickory_resolver::{
     config::{ResolverConfig, ResolverOpts},
     TokioAsyncResolver,
@@ -64,6 +63,7 @@ use std::{
     mem,
     net::IpAddr,
     panic,
+    process::exit,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, LazyLock, Mutex,
@@ -1199,40 +1199,21 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         );
 
                         let s3_store = S3Store::new(db_chunks_s3_client, db_chunks_bucket_name);
+                        let s3_arc = Arc::new(s3_store);
 
-                        let mut stream = match config.enable_s3_importer {
-                            true => {
-                                tracing::info!("S3 importer enabled. Fetching from s3 + db");
-                                let min_last_modified_at = last_snapshot_details.timestamp
-                                    - config.db_load_safety_overlap_seconds;
-                                tracing::info!(
-                                    "Last snapshot timestamp: {}, min_last_modified_at: {}",
-                                    last_snapshot_details.timestamp,
-                                    min_last_modified_at
-                                );
-                                let stream_s3 = fetch_and_parse_chunks(
-                                    &s3_store,
-                                    load_chunks_parallelism,
-                                    db_chunks_folder_name,
-                                    last_snapshot_details,
-                                )
-                                .await
-                                .boxed();
+                        let (tx, mut rx) = mpsc::channel::<StoredIris>(1024);
 
-                                let stream_db = store
-                                    .stream_irises_par(Some(min_last_modified_at), parallelism)
-                                    .await
-                                    .boxed();
-
-                                select_all(vec![stream_s3, stream_db])
-                            }
-                            false => {
-                                tracing::info!("S3 importer disabled. Fetching only from db");
-                                let stream_db =
-                                    store.stream_irises_par(None, parallelism).await.boxed();
-                                select_all(vec![stream_db])
-                            }
-                        };
+                        tokio::spawn(async move {
+                            fetch_and_parse_chunks(
+                                s3_arc,
+                                load_chunks_parallelism,
+                                db_chunks_folder_name,
+                                last_snapshot_details,
+                                tx.clone(),
+                            )
+                            .await
+                            .expect("Couldn't fetch and parse chunks");
+                        });
 
                         tracing::info!("Page-lock host memory");
                         let left_codes = actor.left_code_db_slices.code_gr.clone();
@@ -1270,7 +1251,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         let mut serial_ids_from_db: HashSet<i64> = HashSet::new();
                         let mut n_loaded_from_db = 0;
                         let mut n_loaded_from_s3 = 0;
-                        while let Some(result) = stream.try_next().await? {
+                        while let Some(result) = rx.recv().await {
                             time_waiting_for_stream += now_load_summary.elapsed();
                             now_load_summary = Instant::now();
                             let index = result.index();
@@ -1349,6 +1330,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             time_waiting_for_stream,
                             time_loading_into_memory,
                         );
+
+                        if env.eq("stage") {
+                            tracing::info!("Test environment detected, exiting");
+                            exit(0);
+                        }
 
                         // Clear the memory allocated by temp HashSet
                         serial_ids_from_db.clear();
