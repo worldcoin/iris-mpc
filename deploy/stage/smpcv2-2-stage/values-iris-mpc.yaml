@@ -78,13 +78,13 @@ env:
     value: "even_odd_binary_output_16k"
 
   - name: SMPC__LOAD_CHUNKS_PARALLELISM
-    value: "256"
+    value: "32"
 
   - name: SMPC__LOAD_CHUNKS_DEFAULT_CLIENT
     value: "true"
 
   - name: SMPC__LOAD_CHUNKS_BUFFER_SIZE
-    value: "256"
+    value: "1024"
 
   - name: SMPC__LOAD_CHUNKS_STATIC_IPS
     value: "16"
