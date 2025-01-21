@@ -381,10 +381,6 @@ mod e2e_test {
                             // comparison against this item will use the OR rule
                             use_or_rule_for_serial_ids.push(db_index as u32);
 
-                            // apply variation to either right of left code
-                            let flip_right: bool = rng.gen();
-                            let variation = 1;
-
                             // Will always match under the OR rule
                             expected_results
                                 .insert(request_id.to_string(), (Some(db_index as u32), false));
@@ -394,6 +390,10 @@ mod e2e_test {
 
                             assert_eq!(code_left.mask, IrisCodeArray::ONES);
                             assert_eq!(code_right.mask, IrisCodeArray::ONES);
+
+                            // apply variation to either right of left code
+                            let flip_right: bool = rng.gen();
+                            let variation = 1;
 
                             if flip_right {
                                 // Flip bits to below threshold

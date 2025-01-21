@@ -1589,9 +1589,6 @@ impl ServerActor {
         or_rule_serial_ids: Vec<Vec<u32>>,
         batch_size: usize,
     ) -> Vec<CudaSlice<u64>> {
-        println!("Preparing OR policy bitmap");
-        println!("or_rule_serial_ids: {:?}", or_rule_serial_ids);
-
         let devices = self.device_manager.devices();
         let mut or_policy_bitmap = Vec::with_capacity(devices.len());
 
