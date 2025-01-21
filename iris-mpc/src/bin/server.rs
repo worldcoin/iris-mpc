@@ -1275,13 +1275,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                 StoredIris::DB(iris) => {
                                     n_loaded_from_db += 1;
                                     serial_ids_from_db.insert(iris.id());
-                                    // actor.load_single_record_from_db(
-                                    //     iris.index() - 1,
-                                    //     iris.left_code(),
-                                    //     iris.left_mask(),
-                                    //     iris.right_code(),
-                                    //     iris.right_mask(),
-                                    // );
+                                    actor.load_single_record_from_db(
+                                        iris.index() - 1,
+                                        iris.left_code(),
+                                        iris.left_mask(),
+                                        iris.right_code(),
+                                        iris.right_mask(),
+                                    );
                                 }
                                 StoredIris::S3(iris) => {
                                     if serial_ids_from_db.contains(&iris.id()) {
@@ -1293,17 +1293,17 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                         continue;
                                     }
                                     n_loaded_from_s3 += 1;
-                                    // actor.load_single_record_from_s3(
-                                    //     iris.index() - 1,
-                                    //     iris.left_code_odd(),
-                                    //     iris.left_code_even(),
-                                    //     iris.right_code_odd(),
-                                    //     iris.right_code_even(),
-                                    //     iris.left_mask_odd(),
-                                    //     iris.left_mask_even(),
-                                    //     iris.right_mask_odd(),
-                                    //     iris.right_mask_even(),
-                                    // );
+                                    actor.load_single_record_from_s3(
+                                        iris.index() - 1,
+                                        iris.left_code_odd(),
+                                        iris.left_code_even(),
+                                        iris.right_code_odd(),
+                                        iris.right_code_even(),
+                                        iris.left_mask_odd(),
+                                        iris.left_mask_even(),
+                                        iris.right_mask_odd(),
+                                        iris.right_mask_even(),
+                                    );
                                 }
                             };
 
