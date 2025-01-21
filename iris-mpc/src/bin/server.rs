@@ -739,14 +739,14 @@ impl ResolveDns for StaticResolver {
     }
 }
 
-async fn resolve_export_bucket_ips(host: String) -> eyre::Result<Vec<IpAddr>> {
+async fn resolve_export_bucket_ips(host: String, n_ips: usize) -> eyre::Result<Vec<IpAddr>> {
     let mut all_ips = vec![];
     let mut resolver_opts = ResolverOpts::default();
     resolver_opts.positive_max_ttl = Some(time::Duration::from_millis(10));
     let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), resolver_opts);
     loop {
         // Check if we've collected enough unique IPs
-        if all_ips.len() >= 8 {
+        if all_ips.len() >= n_ips {
             break;
         }
         match resolver.lookup_ip(&host).await {
@@ -780,7 +780,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         "{}.s3.{}.amazonaws.com",
         config.db_chunks_bucket_name, REGION
     );
-    let db_chunks_bucket_ips = resolve_export_bucket_ips(db_chunks_bucket_host);
     // Load batch_size config
     *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
     let max_sync_lookback: usize = config.max_batch_size * 2;
@@ -800,22 +799,34 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let sns_client = SNSClient::new(&shared_config);
 
     // Increase S3 retries to 5
-    let static_resolver = StaticResolver::new(db_chunks_bucket_ips.await?);
-    let http_client = HyperClientBuilder::new()
-        .crypto_mode(CryptoMode::Ring)
-        .build_with_resolver(static_resolver);
-
     let retry_config = RetryConfig::standard().with_max_attempts(5);
 
     let s3_config = S3ConfigBuilder::from(&shared_config)
         .retry_config(retry_config.clone())
         .build();
-    let db_chunks_s3_config = S3ConfigBuilder::from(&shared_config)
-        // disable stalled stream protection to avoid panics during s3 import
-        .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
-        .retry_config(retry_config)
-        .http_client(http_client)
-        .build();
+    let db_chunks_s3_config = match config.load_chunks_default_client {
+        true => {
+            S3ConfigBuilder::from(&shared_config)
+                // disable stalled stream protection to avoid panics during s3 import
+                .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
+                .retry_config(retry_config)
+                .build()
+        }
+        false => {
+            let db_chunks_bucket_ips =
+                resolve_export_bucket_ips(db_chunks_bucket_host, config.load_chunks_static_ips);
+            let static_resolver = StaticResolver::new(db_chunks_bucket_ips.await?);
+            let http_client = HyperClientBuilder::new()
+                .crypto_mode(CryptoMode::Ring)
+                .build_with_resolver(static_resolver);
+            S3ConfigBuilder::from(&shared_config)
+                // disable stalled stream protection to avoid panics during s3 import
+                .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
+                .retry_config(retry_config)
+                .http_client(http_client)
+                .build()
+        }
+    };
 
     let s3_client = Arc::new(S3Client::from_conf(s3_config));
     let db_chunks_s3_client = Arc::new(S3Client::from_conf(db_chunks_s3_config));
@@ -1201,7 +1212,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         let s3_store = S3Store::new(db_chunks_s3_client, db_chunks_bucket_name);
                         let s3_arc = Arc::new(s3_store);
 
-                        let (tx, mut rx) = mpsc::channel::<StoredIris>(1024);
+                        let (tx, mut rx) =
+                            mpsc::channel::<StoredIris>(config.load_chunks_buffer_size);
 
                         tokio::spawn(async move {
                             fetch_and_parse_chunks(

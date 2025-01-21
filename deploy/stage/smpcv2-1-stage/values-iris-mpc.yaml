@@ -80,6 +80,15 @@ env:
   - name: SMPC__LOAD_CHUNKS_PARALLELISM
     value: "64"
 
+  - name: SMPC__LOAD_CHUNKS_DEFAULT_CLIENT
+    value: "true"
+
+  - name: SMPC__LOAD_CHUNKS_BUFFER_SIZE
+    value: "4096"
+
+  - name: SMPC__LOAD_CHUNKS_STATIC_IPS
+    value: "4"
+
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
 

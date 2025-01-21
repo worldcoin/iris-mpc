@@ -111,6 +111,15 @@ pub struct Config {
 
     #[serde(default)]
     pub fixed_shared_secrets: bool,
+
+    #[serde(default)]
+    pub load_chunks_default_client: bool,
+
+    #[serde(default)]
+    pub load_chunks_buffer_size: usize,
+
+    #[serde(default)]
+    pub load_chunks_static_ips: usize,
 }
 
 fn default_load_chunks_parallelism() -> usize {
