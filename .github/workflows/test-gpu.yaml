@@ -20,7 +20,7 @@ jobs:
         with:
           files_yaml: |
             docs:
-              - **.md
+              - '**.md'
             adr:
               - adr/**
             config:
