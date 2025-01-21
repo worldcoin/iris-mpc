@@ -334,7 +334,7 @@ pub async fn fetch_to_memory(
                     match result.read_exact(&mut slice).await {
                         Ok(_) => {
                             let iris = S3StoredIris::from_bytes(&slice)?;
-                            if iris.id % 10000 == 0 {
+                            if iris.id % 100000 == 0 {
                                 tracing::info!("Fetched iris with id: {}", iris.id);
                             }
                         }

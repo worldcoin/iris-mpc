@@ -1194,20 +1194,23 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             db_chunks_folder_name.clone(),
                         )
                         .await?;
-                        let fetch_test_ts = Instant::now();
-                        fetch_to_memory(
-                            Arc::new(db_chunks_s3_store),
-                            load_chunks_parallelism,
-                            db_chunks_folder_name.clone(),
-                            last_snapshot_details.clone(),
-                        )
-                        .await?;
-                        let elapsed = fetch_test_ts.elapsed();
-                        tracing::info!(
-                            "Fetch to memory took {:?} with {} par",
-                            elapsed,
-                            load_chunks_parallelism
-                        );
+
+                        if config.test_load_into_memory {
+                            let fetch_test_ts = Instant::now();
+                            fetch_to_memory(
+                                Arc::new(db_chunks_s3_store),
+                                load_chunks_parallelism,
+                                db_chunks_folder_name.clone(),
+                                last_snapshot_details.clone(),
+                            )
+                            .await?;
+                            let elapsed = fetch_test_ts.elapsed();
+                            tracing::info!(
+                                "Fetch to memory took {:?} with {} par",
+                                elapsed,
+                                load_chunks_parallelism
+                            );
+                        }
 
                         let s3_store = S3Store::new(db_chunks_s3_client, db_chunks_bucket_name);
                         let s3_arc = Arc::new(s3_store);

@@ -120,6 +120,9 @@ pub struct Config {
 
     #[serde(default)]
     pub load_chunks_static_ips: usize,
+
+    #[serde(default)]
+    pub test_load_into_memory: bool,
 }
 
 fn default_load_chunks_parallelism() -> usize {
