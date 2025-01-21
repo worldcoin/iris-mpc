@@ -65,6 +65,11 @@ pub struct HawkRequest {
     pub my_iris_shares: Vec<GaloisRingSharedIris>,
 }
 
+pub type SearchResult = (
+    <Aby3Store as VectorStore>::VectorRef,
+    <Aby3Store as VectorStore>::DistanceRef,
+);
+
 pub type InsertPlan = InsertPlanV<Aby3Store>;
 
 #[derive(Debug)]
@@ -184,6 +189,25 @@ impl HawkActor {
             aby3_store,
             shared_rng,
         })
+    }
+
+    pub async fn search(
+        &self,
+        sessions: &[HawkSessionRef],
+        req: HawkRequest,
+    ) -> Result<Vec<SearchResult>> {
+        Ok(self
+            .search_to_insert(sessions, req)
+            .await?
+            .iter()
+            .map(|plan| {
+                plan.links
+                    .first()
+                    .and_then(|layer| layer.get_nearest())
+                    .cloned()
+            })
+            .collect::<Option<Vec<SearchResult>>>()
+            .unwrap_or_default())
     }
 
     pub async fn search_to_insert(
@@ -330,10 +354,20 @@ pub async fn hawk_main(args: HawkArgs) -> Result<()> {
         .into_iter()
         .map(|iris| generate_galois_iris_shares(iris_rng, iris)[args.party_index].clone())
         .collect_vec();
-    let req = HawkRequest { my_iris_shares };
 
-    let plans = hawk_actor.search_to_insert(&sessions, req).await?;
+    // TODO: obtain rotated and mirrored versions.
+    let rotated = my_iris_shares.clone();
 
+    let _search_results = hawk_actor
+        .search(&sessions, HawkRequest {
+            my_iris_shares: rotated,
+        })
+        .await?;
+    // TODO: Compare with threshold.
+
+    let plans = hawk_actor
+        .search_to_insert(&sessions, HawkRequest { my_iris_shares })
+        .await?;
     hawk_actor.insert(&sessions, plans).await?;
 
     println!("🎉 Inserted {batch_size} items into the database");
