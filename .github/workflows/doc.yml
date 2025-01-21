@@ -18,35 +18,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Get all test, doc and src files that have changed
-        id: changed-files-yaml
-        uses: tj-actions/changed-files@v45
-        with:
-          files_yaml: |
-            src:
-              - Dockerfile*
-              - Cargo.lock
-              - Cargo.toml
-              - deny.toml
-              - iris-*/**
-
-      # The following steps will only run if any of the src files have changed
       - name: Install Dependencies
-        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: sudo apt install protobuf-compiler
 
       - name: Show errors inline
-        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         uses: r7kamura/rust-problem-matchers@v1
 
       - name: Install Rust nightly
-        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: rustup toolchain install nightly-2024-07-10
 
       - name: Set Rust nightly as default
-        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: rustup default nightly-2024-07-10
 
       - name: Build Docs
-        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: cargo doc --all-features --no-deps --document-private-items
