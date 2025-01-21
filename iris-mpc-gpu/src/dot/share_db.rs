@@ -806,13 +806,7 @@ impl ShareDB {
         }
     }
 
-    pub fn fetch_results(
-        &self,
-        results: &mut [u16],
-        db_sizes: &[usize],
-        device_id: usize,
-        results_idx: usize,
-    ) {
+    pub fn fetch_results(&self, results: &mut [u16], db_sizes: &[usize], device_id: usize) {
         unsafe {
             let res_trans =
                 self.results[device_id].transmute(db_sizes[device_id] * self.query_length);
@@ -824,11 +818,7 @@ impl ShareDB {
         }
     }
 
-    pub fn result_chunk_shares<'a>(
-        &'a self,
-        db_sizes: &[usize],
-        results_idx: usize,
-    ) -> Vec<ChunkShareView<'a, u16>> {
+    pub fn result_chunk_shares<'a>(&'a self, db_sizes: &[usize]) -> Vec<ChunkShareView<'a, u16>> {
         izip!(db_sizes, self.results.iter(), self.results_peer.iter())
             .map(|(&len, xa, xb)| {
                 // SAFETY: All bit patterns are valid u16 values
@@ -962,7 +952,7 @@ mod tests {
         }
 
         for device_idx in 0..n_devices {
-            engine.fetch_results(&mut gpu_result, &db_sizes, device_idx, 0);
+            engine.fetch_results(&mut gpu_result, &db_sizes, device_idx);
             let selected_elements: Vec<u16> = vec_column_major
                 .chunks(DB_SIZE)
                 .flat_map(|chunk| {
@@ -1051,7 +1041,7 @@ mod tests {
             );
             engine.dot_reduce(&query_sums, &db_slices.code_sums_gr, &db_sizes, 0, &streams);
             device_manager.await_streams(&streams);
-            engine.fetch_results(&mut gpu_result[i], &db_sizes, 0, 0);
+            engine.fetch_results(&mut gpu_result[i], &db_sizes, 0);
         }
 
         for i in 0..DB_SIZE * QUERY_SIZE / n_devices {
@@ -1213,8 +1203,8 @@ mod tests {
             device_manager.await_streams(&streams);
 
             // TODO: fetch results also for other devices
-            codes_engine.fetch_results(&mut results_codes[party_id], &db_sizes, 0, 0);
-            masks_engine.fetch_results(&mut results_masks[party_id], &db_sizes, 0, 0);
+            codes_engine.fetch_results(&mut results_codes[party_id], &db_sizes, 0);
+            masks_engine.fetch_results(&mut results_masks[party_id], &db_sizes, 0);
         }
 
         // Reconstruct the results
