@@ -1597,7 +1597,7 @@ impl ServerActor {
 
         for (device_idx, dev) in devices.iter().enumerate() {
             let row_stride64 = (self.max_db_size + 63) / 64;
-            let total_size = row_stride64 * batch_size / ROTATIONS;
+            let total_size = row_stride64 * batch_size;
 
             // Create the bitmap on the host
             let mut bitmap = vec![0u64; total_size];
