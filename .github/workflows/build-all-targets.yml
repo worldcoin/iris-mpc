@@ -35,7 +35,6 @@ jobs:
 
       # Building tests in release mode checks warnings and compiler errors that depend on optimisations
       - name: Build Tests
-        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: cargo build --release --all-features --tests
 
   build-bins:
