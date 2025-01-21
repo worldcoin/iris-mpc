@@ -18,7 +18,7 @@ use eyre::Result;
 use hawk_pack::{graph_store::GraphMem, hawk_searcher::FurthestQueue, VectorStore};
 use itertools::{izip, Itertools};
 use rand::{thread_rng, Rng, SeedableRng};
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, ops::DerefMut, sync::Arc, time::Duration};
 use tokio::{
     sync::{mpsc::Sender, RwLock},
     task::JoinSet,
@@ -44,19 +44,21 @@ pub struct HawkArgs {
 /// MPC nodes.
 pub struct HawkActor {
     // ---- Shared setup ----
-    search_params:    HnswSearcher,
+    search_params:    Arc<HnswSearcher>,
     role_assignments: Arc<HashMap<Role, Identity>>,
     consensus:        Consensus,
 
     // ---- My state ----
     // TODO: Persistence.
     iris_store:  SharedIrisesRef,
-    graph_store: GraphMem<Aby3Store>,
+    graph_store: GraphRef,
 
     // ---- My network setup ----
     networking:   GrpcNetworking,
     own_identity: Identity,
 }
+
+type GraphRef = Arc<RwLock<GraphMem<Aby3Store>>>;
 
 /// HawkSession is a unit of parallelism when operating on the HawkActor.
 pub struct HawkSession {
@@ -88,7 +90,7 @@ pub struct InsertPlanV<V: VectorStore> {
 
 impl HawkActor {
     pub async fn from_cli(args: &HawkArgs) -> Result<Self> {
-        let search_params = HnswSearcher::default();
+        let search_params = Arc::new(HnswSearcher::default());
 
         let identities = generate_local_identities();
 
@@ -148,7 +150,7 @@ impl HawkActor {
         Ok(HawkActor {
             search_params,
             iris_store: SharedIrisesRef::default(),
-            graph_store: GraphMem::<Aby3Store>::new(),
+            graph_store: Arc::new(RwLock::new(GraphMem::<Aby3Store>::new())),
             role_assignments: Arc::new(role_assignments),
             consensus: Consensus::default(),
             networking,
@@ -224,26 +226,25 @@ impl HawkActor {
     ) -> Result<Vec<InsertPlan>> {
         let mut plans = vec![];
 
+        // Distribute the requests over the given sessions in parallel.
         for chunk in req.my_iris_shares.chunks(sessions.len()) {
             let tasks = izip!(chunk, sessions).map(|(iris, session)| {
-                let search_params = self.search_params.clone();
-                let graph_store = self.graph_store.clone();
-                let session = session.clone();
+                let search_params = Arc::clone(&self.search_params);
+                let graph_store = Arc::clone(&self.graph_store);
+                let session = Arc::clone(session);
                 let iris = iris.clone();
 
-                let task = {
-                    async move {
-                        let mut session = session.write().await;
-                        Self::search_to_insert_one(&search_params, &graph_store, &mut session, iris)
-                            .await
-                    }
-                };
-                tokio::spawn(task)
+                tokio::spawn(async move {
+                    let graph_store = graph_store.read().await;
+                    let mut session = session.write().await;
+                    Self::search_to_insert_one(&search_params, &graph_store, &mut session, iris)
+                        .await
+                })
             });
 
+            // Wait between chunks for determinism (not relying on mutex).
             for t in tasks {
-                let plan = t.await?;
-                plans.push(plan);
+                plans.push(t.await?);
             }
         }
 
@@ -292,11 +293,11 @@ impl HawkActor {
     // TODO: Remove `&mut self` requirement to support parallel sessions.
     async fn insert_one(&mut self, session: &mut HawkSession, plan: InsertPlan) -> Result<()> {
         let inserted = session.aby3_store.insert(&plan.query).await;
-
+        let mut graph_store = self.graph_store.write().await;
         self.search_params
             .insert_from_search_results(
                 &mut session.aby3_store,
-                &mut self.graph_store,
+                graph_store.deref_mut(),
                 inserted,
                 plan.links,
                 plan.set_ep,
