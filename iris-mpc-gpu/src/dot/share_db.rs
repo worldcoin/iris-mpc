@@ -132,8 +132,8 @@ pub struct ShareDB {
     comms:                 Vec<Arc<NcclComm>>,
     ones:                  Vec<CudaSlice<u8>>,
     intermediate_results:  Vec<CudaSlice<i32>>,
-    pub results:           Vec<Vec<CudaSlice<u8>>>,
-    pub results_peer:      Vec<Vec<CudaSlice<u8>>>,
+    pub results:           Vec<CudaSlice<u8>>,
+    pub results_peer:      Vec<CudaSlice<u8>>,
     code_length:           usize,
 }
 
@@ -183,8 +183,8 @@ impl ShareDB {
         // TODO: depending on the batch size, intermediate_results can get quite big, we
         // can perform the gemm in chunks to limit this
         let mut intermediate_results = vec![];
-        let mut results = vec![vec![]; 2];
-        let mut results_peer = vec![vec![]; 2];
+        let mut results = vec![];
+        let mut results_peer = vec![];
         let results_len = (max_db_length * query_length).div_ceil(64) * 64;
 
         for idx in 0..n_devices {
@@ -193,22 +193,20 @@ impl ShareDB {
             }
         }
 
-        for i in 0..2 {
-            for idx in 0..n_devices {
-                unsafe {
-                    results_peer[i].push(
-                        device_manager
-                            .device(idx)
-                            .alloc(results_len * std::mem::size_of::<u16>())
-                            .unwrap(),
-                    );
-                    results[i].push(
-                        device_manager
-                            .device(idx)
-                            .alloc(results_len * std::mem::size_of::<u16>())
-                            .unwrap(),
-                    );
-                }
+        for idx in 0..n_devices {
+            unsafe {
+                results_peer.push(
+                    device_manager
+                        .device(idx)
+                        .alloc(results_len * std::mem::size_of::<u16>())
+                        .unwrap(),
+                );
+                results.push(
+                    device_manager
+                        .device(idx)
+                        .alloc(results_len * std::mem::size_of::<u16>())
+                        .unwrap(),
+                );
             }
         }
 
@@ -597,7 +595,6 @@ impl ShareDB {
         offset: usize,
         streams: &[CudaStream],
         multiplier: u16,
-        results_idx: usize,
     ) {
         for idx in 0..self.device_manager.device_count() {
             assert!(
@@ -620,7 +617,7 @@ impl ShareDB {
                         cfg,
                         (
                             &self.intermediate_results[idx],
-                            &mut self.results[results_idx][idx],
+                            &mut self.results[idx],
                             *db_sums.limb_0[idx].device_ptr(),
                             *db_sums.limb_1[idx].device_ptr(),
                             *query_sums.limb_0[idx].device_ptr(),
@@ -645,17 +642,8 @@ impl ShareDB {
         chunk_sizes: &[usize],
         offset: usize,
         streams: &[CudaStream],
-        results_idx: usize,
     ) {
-        self.dot_reduce_and_multiply(
-            query_sums,
-            db_sums,
-            chunk_sizes,
-            offset,
-            streams,
-            1,
-            results_idx,
-        );
+        self.dot_reduce_and_multiply(query_sums, db_sums, chunk_sizes, offset, streams, 1);
     }
 
     fn single_xor_assign_u8(
@@ -718,7 +706,6 @@ impl ShareDB {
         len: usize,
         idx: usize,
         streams: &[CudaStream],
-        results_idx: usize,
     ) -> CudaSlice<u32> {
         assert_eq!(len & 3, 0);
         let mut rand = unsafe {
@@ -730,7 +717,7 @@ impl ShareDB {
         let mut rand_u8 = self.fill_my_rng_into_u8(&mut rand, idx, streams);
         self.single_xor_assign_u8(
             &mut rand_u8,
-            &self.results[results_idx][idx].slice(..),
+            &self.results[idx].slice(..),
             idx,
             len,
             streams,
@@ -738,13 +725,7 @@ impl ShareDB {
         rand
     }
 
-    fn otp_decrypt_rng_result(
-        &mut self,
-        len: usize,
-        idx: usize,
-        streams: &[CudaStream],
-        results_idx: usize,
-    ) {
+    fn otp_decrypt_rng_result(&mut self, len: usize, idx: usize, streams: &[CudaStream]) {
         assert_eq!(len & 3, 0);
         let mut rand = unsafe {
             self.device_manager
@@ -754,7 +735,7 @@ impl ShareDB {
         };
         let rand_u8 = self.fill_their_rng_into_u8(&mut rand, idx, streams);
         self.single_xor_assign_u8(
-            &mut self.results_peer[results_idx][idx].slice(..),
+            &mut self.results_peer[idx].slice(..),
             &rand_u8,
             idx,
             len,
@@ -762,19 +743,14 @@ impl ShareDB {
         );
     }
 
-    pub fn reshare_results(
-        &mut self,
-        db_sizes: &[usize],
-        streams: &[CudaStream],
-        results_idx: usize,
-    ) {
+    pub fn reshare_results(&mut self, db_sizes: &[usize], streams: &[CudaStream]) {
         let next_peer = (self.peer_id + 1) % 3;
         let prev_peer = (self.peer_id + 2) % 3;
 
         let send_bufs = (0..self.device_manager.device_count())
             .map(|idx| {
                 let len = db_sizes[idx] * self.query_length * 2;
-                self.otp_encrypt_rng_result(len, idx, streams, results_idx)
+                self.otp_encrypt_rng_result(len, idx, streams)
             })
             .collect_vec();
 
@@ -789,7 +765,7 @@ impl ShareDB {
                 .send_view(&send_view, next_peer, &streams[idx])
                 .unwrap();
 
-            let mut recv_view = self.results_peer[results_idx][idx].slice(..len);
+            let mut recv_view = self.results_peer[idx].slice(..len);
             self.comms[idx]
                 .receive_view(&mut recv_view, prev_peer, &streams[idx])
                 .unwrap();
@@ -797,7 +773,7 @@ impl ShareDB {
         nccl::group_end().unwrap();
         for idx in 0..self.device_manager.device_count() {
             let len = db_sizes[idx] * self.query_length * 2;
-            self.otp_decrypt_rng_result(len, idx, streams, results_idx);
+            self.otp_decrypt_rng_result(len, idx, streams);
         }
     }
 
@@ -809,8 +785,8 @@ impl ShareDB {
         results_idx: usize,
     ) {
         unsafe {
-            let res_trans = self.results[results_idx][device_id]
-                .transmute(db_sizes[device_id] * self.query_length);
+            let res_trans =
+                self.results[device_id].transmute(db_sizes[device_id] * self.query_length);
 
             self.device_manager
                 .device(device_id)
@@ -824,28 +800,24 @@ impl ShareDB {
         db_sizes: &[usize],
         results_idx: usize,
     ) -> Vec<ChunkShareView<'a, u16>> {
-        izip!(
-            db_sizes,
-            self.results[results_idx].iter(),
-            self.results_peer[results_idx].iter()
-        )
-        .map(|(&len, xa, xb)| {
-            // SAFETY: All bit patterns are valid u16 values
-            let xa_view = unsafe {
-                xa.transmute(len * self.query_length)
-                    .expect("len is correct")
-            };
-            // SAFETY: All bit patterns are valid u16 values
-            let xb_view = unsafe {
-                xb.transmute(len * self.query_length)
-                    .expect("len is correct")
-            };
-            ChunkShareView {
-                a: xa_view,
-                b: xb_view,
-            }
-        })
-        .collect()
+        izip!(db_sizes, self.results.iter(), self.results_peer.iter())
+            .map(|(&len, xa, xb)| {
+                // SAFETY: All bit patterns are valid u16 values
+                let xa_view = unsafe {
+                    xa.transmute(len * self.query_length)
+                        .expect("len is correct")
+                };
+                // SAFETY: All bit patterns are valid u16 values
+                let xb_view = unsafe {
+                    xb.transmute(len * self.query_length)
+                        .expect("len is correct")
+                };
+                ChunkShareView {
+                    a: xa_view,
+                    b: xb_view,
+                }
+            })
+            .collect()
     }
 }
 
@@ -946,14 +918,7 @@ mod tests {
             &streams,
             &blass,
         );
-        engine.dot_reduce(
-            &query_sums,
-            &db_slices.code_sums_gr,
-            &db_sizes,
-            0,
-            &streams,
-            0,
-        );
+        engine.dot_reduce(&query_sums, &db_slices.code_sums_gr, &db_sizes, 0, &streams);
         device_manager.await_streams(&streams);
 
         let a_nda = random_ndarray::<u16>(shard_db(&db, n_devices), DB_SIZE, WIDTH);
@@ -1055,14 +1020,7 @@ mod tests {
                 &streams,
                 &blass,
             );
-            engine.dot_reduce(
-                &query_sums,
-                &db_slices.code_sums_gr,
-                &db_sizes,
-                0,
-                &streams,
-                0,
-            );
+            engine.dot_reduce(&query_sums, &db_slices.code_sums_gr, &db_sizes, 0, &streams);
             device_manager.await_streams(&streams);
             engine.fetch_results(&mut gpu_result[i], &db_sizes, 0, 0);
         }
@@ -1213,7 +1171,6 @@ mod tests {
                 &db_sizes,
                 0,
                 &streams,
-                0,
             );
             masks_engine.dot_reduce_and_multiply(
                 &mask_query_sums,
@@ -1222,7 +1179,6 @@ mod tests {
                 0,
                 &streams,
                 2,
-                0,
             );
 
             device_manager.await_streams(&streams);

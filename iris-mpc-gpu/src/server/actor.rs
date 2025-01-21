@@ -116,8 +116,7 @@ pub struct ServerActor {
     enable_debug_timing: bool,
     code_chunk_buffers: Vec<DBChunkBuffers>,
     mask_chunk_buffers: Vec<DBChunkBuffers>,
-    dot_events: Vec<Vec<CUevent>>,
-    exchange_events: Vec<Vec<CUevent>>,
+    phase1_events: Vec<Vec<CUevent>>,
     phase2_events: Vec<Vec<CUevent>>,
     match_distances_buffer_codes_left: Vec<ChunkShare<u16>>,
     match_distances_buffer_codes_right: Vec<ChunkShare<u16>>,
@@ -368,8 +367,7 @@ impl ServerActor {
         let mask_chunk_buffers = vec![masks_engine.alloc_db_chunk_buffer(DB_CHUNK_SIZE); 2];
 
         // Create all needed events
-        let dot_events = vec![device_manager.create_events(); 2];
-        let exchange_events = vec![device_manager.create_events(); 2];
+        let phase1_events = vec![device_manager.create_events(); 2];
         let phase2_events = vec![device_manager.create_events(); 2];
 
         // Buffers and counters for match distribution
@@ -429,8 +427,7 @@ impl ServerActor {
             enable_debug_timing,
             code_chunk_buffers,
             mask_chunk_buffers,
-            dot_events,
-            exchange_events,
+            phase1_events,
             phase2_events,
             match_distances_buffer_codes_left,
             match_distances_buffer_codes_right,
@@ -1292,10 +1289,10 @@ impl ServerActor {
             {
                 tracing::info!(party_id = self.party_id, "batch_reshare start");
                 self.batch_codes_engine
-                    .reshare_results(&self.query_db_size, batch_streams, 0);
+                    .reshare_results(&self.query_db_size, batch_streams);
                 tracing::info!(party_id = self.party_id, "batch_reshare masks start");
                 self.batch_masks_engine
-                    .reshare_results(&self.query_db_size, batch_streams, 0);
+                    .reshare_results(&self.query_db_size, batch_streams);
                 tracing::info!(party_id = self.party_id, "batch_reshare end");
             }
         );
@@ -1410,9 +1407,7 @@ impl ServerActor {
             // First stream doesn't need to wait
             if db_chunk_idx == 0 {
                 self.device_manager
-                    .record_event(request_streams, &self.dot_events[db_chunk_idx % 2]);
-                self.device_manager
-                    .record_event(request_streams, &self.exchange_events[db_chunk_idx % 2]);
+                    .record_event(request_streams, &self.phase1_events[db_chunk_idx % 2]);
                 self.device_manager
                     .record_event(request_streams, &self.phase2_events[db_chunk_idx % 2]);
             }
@@ -1445,7 +1440,7 @@ impl ServerActor {
             );
 
             self.device_manager
-                .await_event(request_streams, &self.dot_events[db_chunk_idx % 2]);
+                .await_event(request_streams, &self.phase1_events[db_chunk_idx % 2]);
 
             // ---- START PHASE 1 ----
             record_stream_time!(
@@ -1472,9 +1467,8 @@ impl ServerActor {
                 }
             );
 
-            // wait for the exchange result buffers to be ready
             self.device_manager
-                .await_event(request_streams, &self.exchange_events[db_chunk_idx % 2]);
+                .await_event(request_streams, &self.phase2_events[db_chunk_idx % 2]);
 
             record_stream_time!(
                 &self.device_manager,
@@ -1491,13 +1485,12 @@ impl ServerActor {
                         &dot_chunk_size,
                         offset,
                         request_streams,
-                        db_chunk_idx % 2,
                     );
                 }
             );
 
             self.device_manager
-                .record_event(request_streams, &self.dot_events[(db_chunk_idx + 1) % 2]);
+                .record_event(request_streams, &self.phase1_events[(db_chunk_idx + 1) % 2]);
 
             record_stream_time!(
                 &self.device_manager,
@@ -1506,23 +1499,14 @@ impl ServerActor {
                 "db_reshare",
                 self.enable_debug_timing,
                 {
-                    self.codes_engine.reshare_results(
-                        &dot_chunk_size,
-                        request_streams,
-                        db_chunk_idx % 2,
-                    );
-                    self.masks_engine.reshare_results(
-                        &dot_chunk_size,
-                        request_streams,
-                        db_chunk_idx % 2,
-                    );
+                    self.codes_engine
+                        .reshare_results(&dot_chunk_size, request_streams);
+                    self.masks_engine
+                        .reshare_results(&dot_chunk_size, request_streams);
                 }
             );
 
             // ---- END PHASE 1 ----
-
-            self.device_manager
-                .await_event(request_streams, &self.phase2_events[db_chunk_idx % 2]);
 
             // ---- START PHASE 2 ----
             let max_chunk_size = dot_chunk_size.iter().max().copied().unwrap();
@@ -1555,13 +1539,6 @@ impl ServerActor {
                             request_streams,
                         );
                     }
-                );
-                // we can now record the exchange event since the phase 2 is no longer using the
-                // code_dots/mask_dots which are just reinterpretations of the exchange result
-                // buffers
-                self.device_manager.record_event(
-                    request_streams,
-                    &self.exchange_events[(db_chunk_idx + 1) % 2],
                 );
 
                 let res = self.phase2.take_result_buffer();
