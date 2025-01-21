@@ -63,10 +63,10 @@ pub struct HawkRequest {
     pub my_iris_shares: Vec<GaloisRingSharedIris>,
 }
 
-pub type InsertPlan = InsertPlanX<Aby3Store>;
+pub type InsertPlan = InsertPlanV<Aby3Store>;
 
 #[derive(Debug)]
-pub struct InsertPlanX<V: VectorStore> {
+pub struct InsertPlanV<V: VectorStore> {
     query:  V::QueryRef,
     links:  Vec<FurthestQueue<V::VectorRef, V::DistanceRef>>,
     set_ep: bool,
@@ -185,7 +185,7 @@ impl HawkActor {
     }
 
     // TODO: Implement actual parallelism.
-    pub async fn search_to_insert_par(
+    pub async fn search_to_insert(
         &mut self,
         sessions: &mut [HawkSession],
         req: HawkRequest,
@@ -193,13 +193,13 @@ impl HawkActor {
         let mut plans = vec![];
         for (i, iris) in req.my_iris_shares.into_iter().enumerate() {
             let session = &mut sessions[i % sessions.len()];
-            plans.push(self.search_to_insert(session, iris).await?);
+            plans.push(self.search_to_insert_one(session, iris).await?);
         }
         Ok(plans)
     }
 
     // TODO: Remove `&mut self` requirement to support parallel sessions.
-    pub async fn search_to_insert(
+    async fn search_to_insert_one(
         &mut self,
         session: &mut HawkSession,
         iris: GaloisRingSharedIris,
@@ -223,6 +223,36 @@ impl HawkActor {
             set_ep,
         })
     }
+
+    // TODO: Implement actual parallelism.
+    pub async fn insert(
+        &mut self,
+        sessions: &mut [HawkSession],
+        plans: Vec<InsertPlan>,
+    ) -> Result<()> {
+        let plans = join_plans(plans);
+        for (i, plan) in izip!(0.., plans) {
+            let session = &mut sessions[i % sessions.len()];
+            self.insert_one(session, plan).await?;
+        }
+        Ok(())
+    }
+
+    // TODO: Remove `&mut self` requirement to support parallel sessions.
+    async fn insert_one(&mut self, session: &mut HawkSession, plan: InsertPlan) -> Result<()> {
+        let inserted = session.aby3_store.insert(&plan.query).await;
+
+        self.search_params
+            .insert_from_search_results(
+                &mut session.aby3_store,
+                &mut self.graph_store,
+                inserted,
+                plan.links,
+                plan.set_ep,
+            )
+            .await;
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -236,6 +266,26 @@ impl Consensus {
         self.next_session_id += 1;
         id
     }
+}
+
+/// Combine insert plans from parallel searches, repairing any conflict.
+fn join_plans(mut plans: Vec<InsertPlan>) -> Vec<InsertPlan> {
+    let set_ep = plans.iter().any(|plan| plan.set_ep);
+    if set_ep {
+        // There can be at most one new entry point.
+        let highest = plans
+            .iter()
+            .map(|plan| plan.links.len())
+            .position_max()
+            .unwrap();
+
+        for plan in &mut plans {
+            plan.set_ep = false;
+        }
+        plans[highest].set_ep = true;
+        plans.swap(0, highest);
+    }
+    plans
 }
 
 pub async fn hawk_main(args: HawkArgs) -> Result<()> {
@@ -261,7 +311,8 @@ pub async fn hawk_main(args: HawkArgs) -> Result<()> {
         .collect_vec();
     let req = HawkRequest { my_iris_shares };
 
-    hawk_actor.search_to_insert_par(&mut sessions, req).await?;
+    let plans = hawk_actor.search_to_insert(&mut sessions, req).await?;
+    hawk_actor.insert(&mut sessions, plans).await?;
 
     println!("🎉 Inserted {batch_size} items into the database");
     Ok(())
