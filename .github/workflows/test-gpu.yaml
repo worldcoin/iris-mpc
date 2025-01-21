@@ -19,14 +19,6 @@ jobs:
         uses: tj-actions/changed-files@v45
         with:
           files_yaml: |
-            docs:
-              - '**.md'
-            adr:
-              - adr/**
-            config:
-              - certs/**
-              - deploy/**
-              - scripts/**
             src:
               - iris-*/**
       # The following steps will only run if any of the src files have changed
