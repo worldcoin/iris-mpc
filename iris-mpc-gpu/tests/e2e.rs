@@ -365,8 +365,8 @@ mod e2e_test {
                         }
                         5 => {
                             println!(
-                                "Sending iris codes that match on right but not left with the OR
-                        rule set"
+                                "Sending iris codes that match on right but not left with the OR \
+                                 rule set"
                             );
                             let db_index = loop {
                                 let db_index = rng.gen_range(0..DB_SIZE / 10);
