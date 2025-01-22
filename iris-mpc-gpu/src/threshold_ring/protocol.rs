@@ -916,7 +916,7 @@ impl Circuits {
         result::group_start().unwrap();
         self.comms[idx]
             .send_view(
-                &send_bufs.slice(range.to_owned()),
+                &send_bufs.slice(0..range.len()),
                 self.next_id,
                 &streams[idx],
             )
@@ -948,7 +948,7 @@ impl Circuits {
         result::group_start().unwrap();
         for (idx, res) in send_bufs.iter().enumerate() {
             self.comms[idx]
-                .send_view(&res.slice(range.to_owned()), self.next_id, &streams[idx])
+                .send_view(&res.slice(0..range.len()), self.next_id, &streams[idx])
                 .unwrap();
         }
         for (idx, res) in res.iter_mut().enumerate() {
