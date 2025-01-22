@@ -1590,24 +1590,26 @@ impl ServerActor {
         batch_size: usize,
     ) -> Vec<CudaSlice<u64>> {
         let devices = self.device_manager.devices();
+
         let mut or_policy_bitmap = Vec::with_capacity(devices.len());
+        let row_stride64 = (self.max_db_size + 63) / 64;
+        let total_size = row_stride64 * batch_size;
+
+        // Create the bitmap on the host
+        let mut bitmap = vec![0u64; total_size];
+
+        for (query_idx, db_indices) in or_rule_serial_ids.iter().enumerate() {
+            for &db_idx in db_indices {
+                let row_start = query_idx * row_stride64;
+                let word_idx = row_start + (db_idx as usize / 64);
+                let bit_offset = db_idx as usize % 64;
+                bitmap[word_idx] |= 1 << bit_offset;
+            }
+        }
 
         for (device_idx, dev) in devices.iter().enumerate() {
-            let row_stride64 = (self.max_db_size + 63) / 64;
-            let total_size = row_stride64 * batch_size;
-
-            // Create the bitmap on the host
-            let mut bitmap = vec![0u64; total_size];
-
-            for (query_idx, db_indices) in or_rule_serial_ids.iter().enumerate() {
-                for &db_idx in db_indices {
-                    let row_start = query_idx * row_stride64;
-                    let word_idx = row_start + (db_idx as usize / 64);
-                    let bit_offset = db_idx as usize % 64;
-                    bitmap[word_idx] |= 1 << bit_offset;
-                }
-            }
-            // Transfer the bitmap to the device
+            // Transfer the bitmap to the device. It will be the same for each of the
+            // devices
             let _bitmap = htod_on_stream_sync(&bitmap, dev, &self.streams[0][device_idx]).unwrap();
             or_policy_bitmap.push(_bitmap);
         }

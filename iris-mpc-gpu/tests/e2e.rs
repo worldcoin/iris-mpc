@@ -396,12 +396,12 @@ mod e2e_test {
                             let variation = 1;
 
                             if flip_right {
-                                // Flip bits to below threshold
-                                for i in 0..(THRESHOLD_ABSOLUTE as i32 - variation) as usize {
+                                // Flip right bits to above threshold - (right) does not match
+                                for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
                                     code_right.code.flip_bit(i);
                                 }
                             } else {
-                                // Flip bits to above threshold
+                                // Flip right bits to above threshold - (left) does not match
                                 for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
                                     code_left.code.flip_bit(i);
                                 }

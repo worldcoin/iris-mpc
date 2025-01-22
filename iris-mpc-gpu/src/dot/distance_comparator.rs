@@ -405,16 +405,4 @@ impl DistanceComparator {
             })
             .collect::<Vec<_>>()
     }
-
-    pub fn prepare_luc_bitmap(&self, db_size: usize) -> Vec<CudaSlice<u64>> {
-        let row_stride64 = (db_size + 63) / 64;
-        (0..self.device_manager.device_count())
-            .map(|i| {
-                self.device_manager
-                    .device(i)
-                    .alloc_zeros(row_stride64 * self.query_length / ROTATIONS)
-                    .unwrap()
-            })
-            .collect::<Vec<_>>()
-    }
 }
