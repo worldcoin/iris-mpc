@@ -173,6 +173,7 @@ mod bitinject_test {
         for _ in 0..10 {
             let code_gpu_ = code_gpu.clone();
             let code_gpu = to_view(&code_gpu_);
+            party.synchronize_streams(&streams);
 
             let now = Instant::now();
             party.bit_inject_ot(&code_gpu, &mut res, &streams);

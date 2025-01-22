@@ -112,6 +112,7 @@ mod or_tree_test {
 
         // Import to GPU
         let mut share_gpu = to_gpu(&share_a, &share_b, &devices, &streams);
+        party.synchronize_streams(&streams);
         tracing::info!("id = {}, Data is on GPUs!", id);
 
         let now = Instant::now();

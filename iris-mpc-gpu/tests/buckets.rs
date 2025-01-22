@@ -155,6 +155,7 @@ mod buckets_test {
             let mut bucket = ChunkShare::new(a, b);
             let code_gpu = code_gpu.iter().map(|x| x.as_view()).collect_vec();
             let mask_gpu = mask_gpu.iter().map(|x| x.as_view()).collect_vec();
+            party.synchronize_streams(&streams);
 
             let now = Instant::now();
             party.compare_multiple_thresholds(

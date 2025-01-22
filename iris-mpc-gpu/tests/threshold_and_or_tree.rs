@@ -164,6 +164,7 @@ mod test_threshold_and_or_tree_test {
         for _ in 0..10 {
             let code_gpu = code_gpu.iter().map(|x| x.as_view()).collect_vec();
             let mask_gpu = mask_gpu.iter().map(|x| x.as_view()).collect_vec();
+            party.synchronize_streams(&streams);
 
             let now = Instant::now();
             party.compare_threshold_masked_many_with_or_tree(&code_gpu, &mask_gpu, &streams);

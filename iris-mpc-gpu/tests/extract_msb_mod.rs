@@ -193,6 +193,7 @@ mod extract_msb_mod_test {
             let correction_ = party.allocate_buffer::<u16>(INPUTS_PER_GPU_SIZE * 2);
             let correction = to_view(&correction_);
             let code_gpu = code_gpu.iter().map(|x| x.as_view()).collect_vec();
+            party.synchronize_streams(&streams);
 
             let now = Instant::now();
             party.lift_mul_sub(&mut x, &correction, &code_gpu, &streams);

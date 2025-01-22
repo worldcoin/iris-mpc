@@ -193,6 +193,7 @@ mod bucket_threshold_test {
         for _ in 0..10 {
             let code_gpu = code_gpu.iter().map(|x| x.as_view()).collect_vec();
             let mask_gpu = mask_gpu.iter().map(|x| x.as_view()).collect_vec();
+            party.synchronize_streams(&streams);
 
             let now = Instant::now();
             party.compare_threshold_masked_many_bucket_functions(&code_gpu, &mask_gpu, &streams);
