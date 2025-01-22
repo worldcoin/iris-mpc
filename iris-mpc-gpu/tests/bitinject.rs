@@ -256,8 +256,8 @@ mod bitinject_test {
 
             let party = Circuits::new(
                 0,
-                INPUTS_PER_GPU_SIZE,
-                INPUTS_PER_GPU_SIZE / 64,
+                INPUTS_PER_GPU_SIZE / 2,
+                INPUTS_PER_GPU_SIZE / 128,
                 chacha_seeds0,
                 device_manager0,
                 comms0,
@@ -273,8 +273,8 @@ mod bitinject_test {
 
             let party = Circuits::new(
                 1,
-                INPUTS_PER_GPU_SIZE,
-                INPUTS_PER_GPU_SIZE / 64,
+                INPUTS_PER_GPU_SIZE / 2,
+                INPUTS_PER_GPU_SIZE / 128,
                 chacha_seeds1,
                 device_manager1,
                 comms1,
@@ -290,8 +290,8 @@ mod bitinject_test {
 
             let party = Circuits::new(
                 2,
-                INPUTS_PER_GPU_SIZE,
-                INPUTS_PER_GPU_SIZE / 64,
+                INPUTS_PER_GPU_SIZE / 2,
+                INPUTS_PER_GPU_SIZE / 128,
                 chacha_seeds2,
                 device_manager2,
                 comms2,
