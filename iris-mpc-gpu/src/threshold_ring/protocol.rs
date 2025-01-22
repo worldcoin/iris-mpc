@@ -915,7 +915,11 @@ impl Circuits {
 
         result::group_start().unwrap();
         self.comms[idx]
-            .send(&send_bufs, self.next_id, &streams[idx])
+            .send_view(
+                &send_bufs.slice(range.to_owned()),
+                self.next_id,
+                &streams[idx],
+            )
             .unwrap();
         let mut rcv = res.b.slice(range.to_owned());
         self.comms[idx]
@@ -944,7 +948,7 @@ impl Circuits {
         result::group_start().unwrap();
         for (idx, res) in send_bufs.iter().enumerate() {
             self.comms[idx]
-                .send(res, self.next_id, &streams[idx])
+                .send_view(&res.slice(range.to_owned()), self.next_id, &streams[idx])
                 .unwrap();
         }
         for (idx, res) in res.iter_mut().enumerate() {
@@ -969,9 +973,9 @@ impl Circuits {
             .collect_vec();
 
         result::group_start().unwrap();
-        for (idx, res) in send_bufs.iter().enumerate() {
+        for (idx, r) in send_bufs.iter().enumerate() {
             self.comms[idx]
-                .send(res, self.next_id, &streams[idx])
+                .send_view(&r.slice(0..res[idx].len()), self.next_id, &streams[idx])
                 .unwrap();
         }
         for (idx, res) in res.iter_mut().enumerate() {
@@ -995,9 +999,9 @@ impl Circuits {
             .collect_vec();
 
         result::group_start().unwrap();
-        for (idx, res) in send_bufs.iter().enumerate() {
+        for (idx, r) in send_bufs.iter().enumerate() {
             self.comms[idx]
-                .send(res, self.next_id, &streams[idx])
+                .send_view(&r.slice(0..res[idx].len()), self.next_id, &streams[idx])
                 .unwrap();
         }
         for (idx, res) in res.iter_mut().enumerate() {
@@ -1021,7 +1025,7 @@ impl Circuits {
 
         result::group_start().unwrap();
         self.comms[idx]
-            .send(&send_bufs, self.next_id, &streams[idx])
+            .send_view(&send_bufs.slice(0..res.len()), self.next_id, &streams[idx])
             .unwrap();
         self.comms[idx]
             .receive_view(&mut res.b, self.prev_id, &streams[idx])
