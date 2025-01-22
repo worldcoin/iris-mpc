@@ -989,6 +989,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let load_chunks_parallelism = config.load_chunks_parallelism;
     let db_chunks_bucket_name = config.db_chunks_bucket_name.clone();
     let db_chunks_folder_name = config.db_chunks_folder_name.clone();
+    let download_shutdown_handler = Arc::clone(&shutdown_handler);
 
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
@@ -1068,6 +1069,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         "Initialize iris db: Loading from DB (parallelism: {})",
                         parallelism
                     );
+                    let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
                     let s3_store = S3Store::new(s3_client_clone, db_chunks_bucket_name);
                     tokio::runtime::Handle::current().block_on(async {
                         let mut stream = match config.enable_s3_importer {
@@ -1199,6 +1201,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                     elapsed,
                                     record_counter as f64 / elapsed.as_secs_f64()
                                 );
+                                if download_shutdown_handler.is_shutting_down() {
+                                    tracing::warn!("Shutdown requested by shutdown_handler.");
+                                    return Err(eyre::eyre!("Shutdown requested"));
+                                }
                             }
 
                             // if the serial id hasn't been loaded before, count is as unique record
@@ -1282,7 +1288,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let sns_client_bg = sns_client.clone();
     let config_bg = config.clone();
     let store_bg = store.clone();
-    let shutdown_handler_bg = shutdown_handler.clone();
+    let shutdown_handler_bg = Arc::clone(&shutdown_handler);
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
             merged_results,
