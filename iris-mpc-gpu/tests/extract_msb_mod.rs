@@ -38,7 +38,7 @@ mod extract_msb_mod_test {
                 let mut x = rng.gen_range::<u16, _>(0..=IrisCodeArray::IRIS_CODE_SIZE as u16);
                 let neg = rng.gen::<bool>();
                 if neg {
-                    x = u16::MAX - x + 1;
+                    x = (u16::MAX - x).wrapping_add(1);
                 }
                 x
             })
@@ -48,7 +48,7 @@ mod extract_msb_mod_test {
     fn rep_share<R: Rng>(value: u16, rng: &mut R) -> (u16, u16, u16) {
         let a = rng.gen();
         let b = rng.gen();
-        let c = value - a - b;
+        let c = value.wrapping_sub(a).wrapping_sub(b);
 
         (a, b, c)
     }

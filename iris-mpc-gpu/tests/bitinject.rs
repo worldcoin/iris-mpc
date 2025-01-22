@@ -130,7 +130,7 @@ mod bitinject_test {
         let mut result = Vec::with_capacity(n_devices * INPUTS_PER_GPU_SIZE);
         for (mut a, b, c) in izip!(a, b, c) {
             for (a, b, c) in izip!(a.iter_mut(), b, c) {
-                *a += b + c;
+                *a = a.wrapping_add(b).wrapping_add(c);
             }
             result.extend(a);
         }

@@ -38,7 +38,7 @@ mod lift_test {
     fn rep_share<R: Rng>(value: u16, rng: &mut R) -> (u16, u16, u16) {
         let a = rng.gen();
         let b = rng.gen();
-        let c = value - a - b;
+        let c= value.wrapping_sub(a).wrapping_sub(b);
 
         (a, b, c)
     }

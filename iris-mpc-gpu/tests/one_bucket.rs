@@ -31,7 +31,7 @@ mod one_bucket_test {
                 let mut x = rng.gen_range::<u16, _>(0..=IrisCodeArray::IRIS_CODE_SIZE as u16);
                 let neg = rng.gen::<bool>();
                 if neg {
-                    x = u16::MAX - x + 1;
+                    x = (u16::MAX - x).wrapping_add(1);
                 }
                 x
             })
@@ -47,7 +47,7 @@ mod one_bucket_test {
     fn rep_share<R: Rng>(value: u16, rng: &mut R) -> (u16, u16, u16) {
         let a = rng.gen();
         let b = rng.gen();
-        let c = value - a - b;
+        let c = value.wrapping_sub(a).wrapping_sub(b);
 
         (a, b, c)
     }
@@ -94,7 +94,10 @@ mod one_bucket_test {
         let mod_ = 1u64 << (16 + B_BITS);
         let mut count = 0;
         for (c, m) in code_input.into_iter().zip(mask_input) {
-            let r = ((m as u64) * A - ((c as u64) << B_BITS) - 1) % mod_;
+            let r = (((m as u64) * A)
+                .wrapping_sub((c as u64) << B_BITS)
+                .wrapping_sub(1))
+                % mod_;
             let msb = r >> (B_BITS + 16 - 1) & 1 == 1;
             count += msb as u32;
         }
