@@ -6,7 +6,7 @@ use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{
         metrics::ops_counter::{
-            OpCountersLayer, Operation, ParamVertexOpeningsCounter, StaticCounter,
+            KeyedVertexOpeningsCounter, OpCountersLayer, Operation, StaticCounter,
         },
         searcher::{HnswParams, HnswSearcher},
     },
@@ -47,21 +47,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let dist_comparisons = StaticCounter::new();
     let dist_comparisons_counter = dist_comparisons.get_counter();
 
-    let param_openings = ParamVertexOpeningsCounter::new();
+    let node_openings = StaticCounter::new();
+    let node_openings_counter = node_openings.get_counter();
+
+    let param_openings = KeyedVertexOpeningsCounter::new();
     let (param_openings_map, _) = param_openings.get_counters();
 
-    let counting_layer = OpCountersLayer::new_builder()
+    let counting_layer = OpCountersLayer::new()
         .register_static(dist_evaluations, Operation::EvaluateDistance)
         .register_static(dist_comparisons, Operation::CompareDistance)
+        .register_static(node_openings, Operation::OpenNode)
         .register_dynamic(param_openings, Operation::OpenNode)
         .init();
 
     tracing_subscriber::registry().with(counting_layer).init();
 
-    // tracing_subscriber::fmt()
-    //    .init();
-
-    // Run simulation
+    // Run HNSW construction
 
     let mut rng = AesRng::seed_from_u64(42_u64);
     // let mut rng = rand::thread_rng();
@@ -82,12 +83,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .await;
 
         if idx % 1000 == 999 {
-            print!("{}, ", idx + 1);
             println!(
-                "evaluations: {:?}, comparisons: {:?}",
-                dist_evaluations_counter, dist_comparisons_counter
+                "insertions: {:?}, evaluations: {:?}, comparisons: {:?}, openings: {:?}",
+                idx + 1,
+                dist_evaluations_counter,
+                dist_comparisons_counter,
+                node_openings_counter,
             );
-            // print_stats(&op_counters, false);
         }
     }
 

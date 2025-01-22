@@ -21,7 +21,8 @@ pub enum Operation {
 }
 
 /// The number of enum variants of `Operation`
-const NUM_OPS: usize = 4;
+pub const NUM_OPS: usize = 4;
+pub type OpCounters = [Vec<OpCounter>; NUM_OPS];
 
 impl Operation {
     pub const fn tag(&self) -> &'static str {
@@ -39,19 +40,19 @@ impl Operation {
 }
 
 #[derive(Default)]
-struct EventVisitor {
-    // which event was encountered
-    event: Option<usize>,
+struct OpVisitor {
+    // which operation was encountered
+    id: Option<usize>,
 
     // how much to increment the associated counter
     amount: Option<usize>,
 }
 
-impl Visit for EventVisitor {
+impl Visit for OpVisitor {
     fn record_u64(&mut self, field: &Field, value: u64) {
         match field.name() {
             "event_type" => {
-                self.event = Some(value as usize);
+                self.id = Some(value as usize);
             }
             "increment_amount" => {
                 self.amount = Some(value as usize);
@@ -63,54 +64,41 @@ impl Visit for EventVisitor {
     fn record_debug(&mut self, _field: &Field, _value: &dyn Debug) {}
 }
 
-pub enum OpCounter {
-    Static {
-        counter: StaticCounter,
-    },
-    Dynamic {
-        counter: Box<dyn DynamicCounter + Send + Sync>,
-    },
-}
-
-pub type OpCounters = [Vec<OpCounter>; NUM_OPS];
-
-pub type ParamCounterRef<K> = Arc<RwLock<HashMap<K, AtomicUsize>>>;
-pub type CounterRef = Arc<AtomicUsize>;
-
-#[derive(Default)]
-pub struct StaticCounter {
-    counter: CounterRef,
-}
-
-impl StaticCounter {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn get_counter(&self) -> CounterRef {
-        self.counter.clone()
-    }
-
-    #[inline(always)]
-    pub fn increment(&self, increment_amount: usize) {
-        self.counter.fetch_add(increment_amount, Ordering::Relaxed);
-    }
-}
-
-pub trait DynamicCounter {
-    /// Access relevant data from current Event dynamically, and increment
-    /// counter based on this data.
-    fn increment(&self, increment_amount: usize, event: &Event<'_>);
-}
-
+/// `OpCountersLayer` maintains a list of counters for each variant of the
+/// `Operations` enum, which are each incremented when a callsite specifying
+/// the associated operation ID is encountered.
 #[derive(Default)]
 pub struct OpCountersLayer {
     counters: Arc<OpCounters>,
 }
 
 impl OpCountersLayer {
-    pub fn new_builder() -> OpCountersLayerBuilder {
+    pub fn new() -> OpCountersLayerBuilder {
         OpCountersLayerBuilder::default()
+    }
+}
+
+impl<S: Subscriber> Layer<S> for OpCountersLayer {
+    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        let mut visitor = OpVisitor::default();
+        event.record(&mut visitor);
+
+        let operation_id = visitor.id.unwrap() as usize;
+        let increment_amount = visitor.amount.unwrap_or(1);
+        let counters = self
+            .counters
+            .get(operation_id)
+            .expect("attempted to count using invalid operation id");
+        for counter in counters {
+            match counter {
+                OpCounter::Static { counter: c } => {
+                    c.increment(increment_amount);
+                }
+                OpCounter::Dynamic { counter: c } => {
+                    c.increment(increment_amount, event);
+                }
+            }
+        }
     }
 }
 
@@ -149,53 +137,80 @@ impl OpCountersLayerBuilder {
     }
 }
 
-impl<S: Subscriber> Layer<S> for OpCountersLayer {
-    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-        let mut visitor = EventVisitor::default();
-        event.record(&mut visitor);
+/// Enum representing two types of counters, static counters which count
+/// operations unconditionally, and dynamic counters which respond to fields
+/// associated with an event in order to increment one or more counters.
+pub enum OpCounter {
+    Static {
+        counter: StaticCounter,
+    },
+    Dynamic {
+        counter: Box<dyn DynamicCounter + Send + Sync>,
+    },
+}
 
-        let operation_id = visitor.event.unwrap() as usize;
-        let increment_amount = visitor.amount.unwrap_or(1);
-        let counters = self
-            .counters
-            .get(operation_id)
-            .expect("attempted to count using invalid operation id");
-        for counter in counters {
-            match counter {
-                OpCounter::Static { counter: c } => {
-                    c.increment(increment_amount);
-                }
-                OpCounter::Dynamic { counter: c } => {
-                    c.increment(increment_amount, event);
-                }
-            }
-        }
+pub type StaticCounterRef = Arc<AtomicUsize>;
+
+#[derive(Default)]
+pub struct StaticCounter {
+    counter: StaticCounterRef,
+}
+
+impl StaticCounter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn get_counter(&self) -> StaticCounterRef {
+        self.counter.clone()
+    }
+
+    #[inline(always)]
+    pub fn increment(&self, increment_amount: usize) {
+        self.counter.fetch_add(increment_amount, Ordering::Relaxed);
     }
 }
+
+pub trait DynamicCounter {
+    /// Access relevant data from current Event dynamically, and increment
+    /// counter based on this data.
+    fn increment(&self, increment_amount: usize, event: &Event<'_>);
+}
+
+pub type KeyedCounterRef<K> = Arc<RwLock<HashMap<K, AtomicUsize>>>;
 
 pub trait KeyVisitor: Visit + Default {
     type Key: Eq + std::hash::Hash + Default;
     fn get_key(&self) -> Option<Self::Key>;
 }
 
+/// Dynamic counter type which keeps separate counters for different key values
+/// derived from Event field data.  The generic type `K` implementing the
+/// `KeyVisitor` trait provides the logic for recording the fields of an Event
+/// and producing a `KeyVisitor::Key` value used as the key for a `HashMap` of
+/// `AtomicUsize` counters.
+///
+/// Events which don't properly correspond with a key(indicated by a return
+/// value of `None` from the `get_key` function) are recorded separately in a
+/// `missing_keys` counter.
 #[derive(Default)]
-pub struct ParameterizedCounter<K: KeyVisitor> {
-    counter_map:  ParamCounterRef<K::Key>,
+pub struct KeyedCounter<K: KeyVisitor> {
+    counter_map:  KeyedCounterRef<K::Key>,
     missing_keys: StaticCounter,
 }
 
-impl<K: KeyVisitor> ParameterizedCounter<K> {
+impl<K: KeyVisitor> KeyedCounter<K> {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Return references to parameterized counter map and missing keys counter
-    pub fn get_counters(&self) -> (ParamCounterRef<K::Key>, CounterRef) {
+    /// Return references to counter map and missing keys counter
+    pub fn get_counters(&self) -> (KeyedCounterRef<K::Key>, StaticCounterRef) {
         (self.counter_map.clone(), self.missing_keys.counter.clone())
     }
 }
 
-impl<K: KeyVisitor> DynamicCounter for ParameterizedCounter<K> {
+impl<K: KeyVisitor> DynamicCounter for KeyedCounter<K> {
     fn increment(&self, increment_amount: usize, event: &Event<'_>) {
         let mut visitor = K::default();
         event.record(&mut visitor);
@@ -214,64 +229,17 @@ impl<K: KeyVisitor> DynamicCounter for ParameterizedCounter<K> {
     }
 }
 
-// /// Tracing library Layer for counting detailed HNSW layer search operations
-// pub struct VertexOpeningsLayer {
-//     // Measure number of vertex openings for different lc and ef values
-//     counters:     Counters,
-//     missing_keys: Arc<AtomicUsize>,
-// }
-
-// impl VertexOpeningsLayer {
-//     pub fn new() -> Self {
-//         Self {
-//             counters:     Counters::default(),
-//             missing_keys: Arc::default(),
-//         }
-//     }
-
-//     pub fn get_counters(&self) -> Counters {
-//         self.counters.clone()
-//     }
-// }
-
-// impl<S: Subscriber> Layer<S> for VertexOpeningsLayer {
-//     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-//         let mut op = EventVisitor::default();
-//         event.record(&mut op);
-
-//         const OPEN_NODE_EVENT: usize = Operation::OpenNode.id();
-//         if let Some(OPEN_NODE_EVENT) = op.event {
-//             let increment_amount = op.amount.unwrap_or(1);
-
-//             let mut key_fields = VertexOpeningsParams::default();
-//             event.record(&mut key_fields);
-
-//             if let Some(key) = key_fields.get_key() {
-//                 let counters_read = self.counters.read().unwrap();
-//                 if let Some(counter) = counters_read.get(&key) {
-//                     counter.fetch_add(increment_amount, Ordering::Release);
-//                 } else {
-//                     drop(counters_read);
-//                     let new_counter = AtomicUsize::new(increment_amount);
-//                     self.counters.write().unwrap().insert(key, new_counter);
-//                 }
-//             } else {
-//                 self.missing_keys
-//                     .fetch_add(increment_amount, Ordering::Release);
-//             }
-//         }
-//     }
-// }
-
-pub type ParamVertexOpeningsCounter = ParameterizedCounter<VertexOpeningsParams>;
+/// An instance of `KeyedCounter` which can be used to count
+/// `OpenVertex` events according to their `lc` and `ef` parameters.
+pub type KeyedVertexOpeningsCounter = KeyedCounter<VertexOpeningsKeys>;
 
 #[derive(Default)]
-pub struct VertexOpeningsParams {
+pub struct VertexOpeningsKeys {
     lc: Option<u64>,
     ef: Option<u64>,
 }
 
-impl KeyVisitor for VertexOpeningsParams {
+impl KeyVisitor for VertexOpeningsKeys {
     type Key = (u64, u64);
 
     fn get_key(&self) -> Option<(u64, u64)> {
@@ -285,7 +253,7 @@ impl KeyVisitor for VertexOpeningsParams {
     }
 }
 
-impl Visit for VertexOpeningsParams {
+impl Visit for VertexOpeningsKeys {
     fn record_u64(&mut self, field: &Field, value: u64) {
         match field.name() {
             "lc" => {
