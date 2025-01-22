@@ -236,6 +236,7 @@ mod e2e_test {
         let mut deleted_indices_buffer = vec![];
         let mut deleted_indices: HashSet<u32> = HashSet::new();
         let mut disallowed_queries = Vec::new();
+        let mut or_rule_matches = vec![];
 
         for _ in 0..NUM_BATCHES {
             let mut requests: HashMap<String, E2ETemplate> = HashMap::new();
@@ -378,6 +379,7 @@ mod e2e_test {
 
                             // comparison against this item will use the OR rule
                             use_or_rule_for_serial_ids.push(db_index as u32);
+                            or_rule_matches.push(request_id.to_string());
 
                             // Will always match under the OR rule
                             expected_results
@@ -518,7 +520,9 @@ mod e2e_test {
                     resp_counters.insert(req_id, resp_counters.get(req_id).unwrap() + 1);
 
                     assert_eq!(partial_left, partial_right);
-                    assert_eq!(partial_left, match_id);
+                    if !or_rule_matches.contains(req_id) {
+                        assert_eq!(partial_left, match_id);
+                    }
 
                     let (expected_idx, is_batch_match) = expected_results.get(req_id).unwrap();
 
