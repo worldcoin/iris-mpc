@@ -64,23 +64,23 @@ mod or_tree_test {
     }
 
     fn open(party: &mut Circuits, result: &mut ChunkShare<u64>, streams: &[CudaStream]) -> bool {
-        let res = result.get_offset(0, 1);
-        let mut res_helper = result.get_offset(1, 1);
-        cudarc::nccl::result::group_start().expect("group start should work");
-        party.comms()[0]
-            .send_view(&res.b, party.next_id(), &streams[0])
-            .unwrap();
-        party.comms()[0]
-            .receive_view(&mut res_helper.a, party.prev_id(), &streams[0])
-            .unwrap();
-        cudarc::nccl::result::group_end().expect("group end should work");
-
         let dev = party.get_devices()[0].clone();
         let stream = &streams[0];
 
+        let mut res = result.get_offset(0, 1);
         let a = dtoh_on_stream_sync(&res.a, &dev, stream).unwrap();
         let b = dtoh_on_stream_sync(&res.b, &dev, stream).unwrap();
-        let c = dtoh_on_stream_sync(&res_helper.a, &dev, stream).unwrap();
+
+        cudarc::nccl::result::group_start().expect("group start should work");
+        party.comms()[0]
+            .send_view(&res.b, party.next_id(), stream)
+            .unwrap();
+        party.comms()[0]
+            .receive_view(&mut res.a, party.prev_id(), stream)
+            .unwrap();
+        cudarc::nccl::result::group_end().expect("group end should work");
+
+        let c = dtoh_on_stream_sync(&res.a, &dev, stream).unwrap();
         assert_eq!(a.len(), 1);
         assert_eq!(b.len(), 1);
         assert_eq!(c.len(), 1);
