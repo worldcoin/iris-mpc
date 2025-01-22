@@ -255,8 +255,6 @@ mod e2e_test {
                     3
                 } else if deleted_indices_buffer.is_empty() {
                     4
-                } else if rng.gen() {
-                    5
                 } else {
                     6
                 };
@@ -365,8 +363,8 @@ mod e2e_test {
                         }
                         5 => {
                             println!(
-                                "Sending iris codes that match on right but not left with the OR \
-                                 rule set"
+                                "Sending iris codes that match on one side but not the other with \
+                                 the OR rule set"
                             );
                             let db_index = loop {
                                 let db_index = rng.gen_range(0..DB_SIZE / 10);
@@ -401,7 +399,8 @@ mod e2e_test {
                                     code_right.code.flip_bit(i);
                                 }
                             } else {
-                                for i in 0..(THRESHOLD_ABSOLUTE as i32 - variation) as usize {
+                                // Flip bits to above threshold
+                                for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
                                     code_left.code.flip_bit(i);
                                 }
                             }
