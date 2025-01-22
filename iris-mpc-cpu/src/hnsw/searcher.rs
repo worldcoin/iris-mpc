@@ -4,7 +4,7 @@
 //*
 //* https://github.com/Inversed-Tech/hawk-pack/
 
-use super::metrics::Operation;
+use super::metrics::ops_counter::Operation;
 pub use hawk_pack::data_structures::queue::{
     FurthestQueue, FurthestQueueV, NearestQueue, NearestQueueV,
 };

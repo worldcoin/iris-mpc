@@ -1,5 +1,5 @@
 use crate::hnsw::{
-    metrics::Operation::{CompareDistance, EvaluateDistance},
+    metrics::ops_counter::Operation::{CompareDistance, EvaluateDistance},
     HnswSearcher,
 };
 use aes_prng::AesRng;

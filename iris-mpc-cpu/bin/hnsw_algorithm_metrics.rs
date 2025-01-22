@@ -5,7 +5,9 @@ use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{
-        metrics::{CounterLayer, Counters, OpCounters, Operation, VertexOpeningsLayer},
+        metrics::ops_counter::{
+            CounterLayer, Counters, OpCounters, Operation, VertexOpeningsLayer,
+        },
         searcher::{HnswParams, HnswSearcher},
     },
 };
