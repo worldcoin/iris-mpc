@@ -228,19 +228,21 @@ impl HawkActor {
 
         // Distribute the requests over the given sessions in parallel.
         for chunk in req.my_iris_shares.chunks(sessions.len()) {
-            let tasks = izip!(chunk, sessions).map(|(iris, session)| {
-                let search_params = Arc::clone(&self.search_params);
-                let graph_store = Arc::clone(&self.graph_store);
-                let session = Arc::clone(session);
-                let iris = iris.clone();
+            let tasks = izip!(chunk, sessions)
+                .map(|(iris, session)| {
+                    let search_params = Arc::clone(&self.search_params);
+                    let graph_store = Arc::clone(&self.graph_store);
+                    let session = Arc::clone(session);
+                    let iris = iris.clone();
 
-                tokio::spawn(async move {
-                    let graph_store = graph_store.read().await;
-                    let mut session = session.write().await;
-                    Self::search_to_insert_one(&search_params, &graph_store, &mut session, iris)
-                        .await
+                    tokio::spawn(async move {
+                        let graph_store = graph_store.read().await;
+                        let mut session = session.write().await;
+                        Self::search_to_insert_one(&search_params, &graph_store, &mut session, iris)
+                            .await
+                    })
                 })
-            });
+                .collect_vec();
 
             // Wait between chunks for determinism (not relying on mutex).
             for t in tasks {
