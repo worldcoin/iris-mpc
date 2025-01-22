@@ -38,7 +38,7 @@ mod lift_test {
     fn rep_share<R: Rng>(value: u16, rng: &mut R) -> (u16, u16, u16) {
         let a = rng.gen();
         let b = rng.gen();
-        let c= value.wrapping_sub(a).wrapping_sub(b);
+        let c = value.wrapping_sub(a).wrapping_sub(b);
 
         (a, b, c)
     }
@@ -150,11 +150,11 @@ mod lift_test {
                 corr_b.iter().skip(INPUTS_PER_GPU_SIZE),
                 corr_c.iter().skip(INPUTS_PER_GPU_SIZE),
             ) {
-                let corr1 = *corr_a1 + corr_b1 + corr_c1;
-                let corr2 = *corr_a2 + corr_b2 + corr_c2;
+                let corr1 = corr_a1.wrapping_add(*corr_b1).wrapping_add(*corr_c1);
+                let corr2 = corr_a2.wrapping_add(*corr_b2).wrapping_add(*corr_c2);
                 assert!(corr1 == 0 || corr1 == 1);
                 assert!(corr2 == 0 || corr2 == 1);
-                let mut res = *res_a + res_b + res_c;
+                let mut res = res_a.wrapping_add(res_b).wrapping_add(res_c);
                 res -= (corr1 as u32) << 16;
                 res -= (corr2 as u32) << 17;
                 *res_a = res;
