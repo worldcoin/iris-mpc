@@ -1,7 +1,10 @@
 #![allow(clippy::needless_range_loop)]
 
 use aws_config::retry::RetryConfig;
-use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
+use aws_sdk_s3::{
+    config::{Builder as S3ConfigBuilder, StalledStreamProtectionConfig},
+    Client as S3Client,
+};
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{response::IntoResponse, routing::get, Router};
@@ -26,7 +29,8 @@ use iris_mpc_common::{
         },
         smpc_response::{
             create_message_type_attribute_map, IdentityDeletionResult, UniquenessResult,
-            ERROR_FAILED_TO_PROCESS_IRIS_SHARES, SMPC_MESSAGE_TYPE_ATTRIBUTE,
+            ERROR_FAILED_TO_PROCESS_IRIS_SHARES, ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
+            SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
         sync::SyncState,
         task_monitor::TaskMonitor,
@@ -263,6 +267,22 @@ async fn receive_batch(
                             // Some party (maybe us) already meant to delete this request, so we
                             // skip it. Ignore this message when calculating the batch size.
                             msg_counter -= 1;
+                            metrics::counter!("skip.request.deleted.sqs.request").increment(1);
+                            tracing::warn!(
+                                "Skipping request due to it being from synced deleted ids: {}",
+                                smpc_request.signup_id
+                            );
+                            // shares
+                            send_error_results_to_sns(
+                                smpc_request.signup_id,
+                                &batch_metadata,
+                                sns_client,
+                                config,
+                                error_result_attributes,
+                                UNIQUENESS_MESSAGE_TYPE,
+                                ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
+                            )
+                            .await?;
                             continue;
                         }
 
@@ -688,7 +708,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     // Increase S3 retries to 5
     let retry_config = RetryConfig::standard().with_max_attempts(5);
+
     let s3_config = S3ConfigBuilder::from(&shared_config)
+        // disable stalled stream protection to avoid panics during s3 import
+        .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
         .retry_config(retry_config)
         .build();
     let s3_client = Arc::new(S3Client::from_conf(s3_config));
@@ -874,11 +897,22 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         tracing::warn!("Node {} did not respond with success, retrying...", host);
                         continue;
                     }
-                    // The other node seems to be down or returned an error.
-                    panic!(
-                        "Node {} did not respond with success, killing server...",
+                    tracing::info!(
+                        "Node {} did not respond with success, starting graceful shutdown",
                         host
                     );
+
+                    if !heartbeat_shutdown_handler.is_shutting_down() {
+                        heartbeat_shutdown_handler.trigger_manual_shutdown();
+                        tracing::error!(
+                            "Node {} has not completed health check, therefore graceful shutdown \
+                             has been triggered",
+                            host
+                        );
+                    } else {
+                        tracing::info!("Node {} has already started graceful shutdown.", host);
+                    }
+                    continue;
                 }
 
                 let probe_response = res
@@ -887,12 +921,16 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     .await
                     .expect("Deserialization of probe response failed");
                 if probe_response.shutting_down {
-                    tracing::error!(
-                        "Node {} has starting graceful shutdown. Therefore starting graceful \
-                         shutdown",
-                        host
-                    );
-                    heartbeat_shutdown_handler.trigger_manual_shutdown();
+                    tracing::info!("Node {} has starting graceful shutdown", host);
+
+                    if !heartbeat_shutdown_handler.is_shutting_down() {
+                        heartbeat_shutdown_handler.trigger_manual_shutdown();
+                        tracing::error!(
+                            "Node {} has starting graceful shutdown, therefore triggering \
+                             graceful shutdown",
+                            host
+                        );
+                    }
                 }
                 if probe_response.image_name != image_name {
                     // Do not create a panic as we still can continue to process before its
@@ -951,6 +989,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let load_chunks_parallelism = config.load_chunks_parallelism;
     let db_chunks_bucket_name = config.db_chunks_bucket_name.clone();
     let db_chunks_folder_name = config.db_chunks_folder_name.clone();
+    let download_shutdown_handler = Arc::clone(&shutdown_handler);
 
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
@@ -1030,6 +1069,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         "Initialize iris db: Loading from DB (parallelism: {})",
                         parallelism
                     );
+                    let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
                     let s3_store = S3Store::new(s3_client_clone, db_chunks_bucket_name);
                     tokio::runtime::Handle::current().block_on(async {
                         let mut stream = match config.enable_s3_importer {
@@ -1161,6 +1201,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                     elapsed,
                                     record_counter as f64 / elapsed.as_secs_f64()
                                 );
+                                if download_shutdown_handler.is_shutting_down() {
+                                    tracing::warn!("Shutdown requested by shutdown_handler.");
+                                    return Err(eyre::eyre!("Shutdown requested"));
+                                }
                             }
 
                             // if the serial id hasn't been loaded before, count is as unique record
@@ -1244,7 +1288,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let sns_client_bg = sns_client.clone();
     let config_bg = config.clone();
     let store_bg = store.clone();
-    let shutdown_handler_bg = shutdown_handler.clone();
+    let shutdown_handler_bg = Arc::clone(&shutdown_handler);
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
             merged_results,

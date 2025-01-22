@@ -1,8 +1,7 @@
-image: "ghcr.io/worldcoin/iris-mpc:v0.13.11"
+image: "ghcr.io/worldcoin/iris-mpc:v0.13.20"
 
 environment: prod
 replicaCount: 1
-
 
 strategy:
   type: Recreate
