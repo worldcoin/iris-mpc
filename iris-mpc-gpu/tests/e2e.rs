@@ -519,7 +519,10 @@ mod e2e_test {
 
                     resp_counters.insert(req_id, resp_counters.get(req_id).unwrap() + 1);
 
-                    assert_eq!(partial_left, partial_right);
+                    if !or_rule_matches.contains(req_id) {
+                        assert_eq!(partial_left, partial_right);
+                    }
+
                     if !or_rule_matches.contains(req_id) {
                         assert_eq!(partial_left, match_id);
                     }

@@ -607,6 +607,9 @@ impl ServerActor {
                 && batch_size * ROTATIONS == batch.db_right_preprocessed.len(),
             "Query batch sizes mismatch"
         );
+        if !batch.or_rule_serial_ids.is_empty() {
+            assert_eq!(batch.or_rule_serial_ids.len(), batch_size);
+        };
 
         ///////////////////////////////////////////////////////////////////
         // PERFORM DELETIONS (IF ANY)
@@ -764,32 +767,47 @@ impl ServerActor {
         // MERGE LEFT & RIGHT results
         ///////////////////////////////////////////////////////////////////
 
+        tracing::info!("Joining both sides");
+        // Merge results and fetch matching indices
+        // Format: host_results[device_index][query_index]
+
         // Initialize bitmap with OR rule, if exists
-        if !batch.or_rule_serial_ids.is_empty() {
+        if !batch.or_rule_serial_ids.is_empty()
+            && !batch
+                .or_rule_serial_ids
+                .iter()
+                .all(|inner| inner.is_empty())
+        {
+            assert_eq!(batch.or_rule_serial_ids.len(), batch_size);
+
             // Populate the pre-allocated OR policy bitmap with the serial ids
-            let or_policy_bitmap =
-                self.prepare_or_policy_bitmap(batch.or_rule_serial_ids, batch_size);
+            let host_or_policy_bitmap = prepare_or_policy_bitmap(
+                self.max_db_size,
+                batch.or_rule_serial_ids.clone(),
+                batch_size,
+            );
+
+            let device_or_policy_bitmap =
+                self.allocate_or_policy_bitmap(host_or_policy_bitmap.clone());
+
             self.distance_comparator.join_db_matches_with_bitmaps(
+                self.max_db_size,
                 &self.db_match_list_left,
                 &self.db_match_list_right,
                 &self.final_results,
                 &self.current_db_sizes,
                 &self.streams[0],
-                &self.distance_comparator.merge_batch_with_bitmap_kernels,
-                &or_policy_bitmap,
+                &device_or_policy_bitmap,
+            );
+        } else {
+            self.distance_comparator.join_db_matches(
+                &self.db_match_list_left,
+                &self.db_match_list_right,
+                &self.final_results,
+                &self.current_db_sizes,
+                &self.streams[0],
             );
         }
-
-        tracing::info!("Joining both sides");
-        // Merge results and fetch matching indices
-        // Format: host_results[device_index][query_index]
-        self.distance_comparator.join_db_matches(
-            &self.db_match_list_left,
-            &self.db_match_list_right,
-            &self.final_results,
-            &self.current_db_sizes,
-            &self.streams[0],
-        );
 
         self.distance_comparator.join_batch_matches(
             &self.batch_match_list_left,
@@ -1584,28 +1602,10 @@ impl ServerActor {
         Ok((compact_device_queries, compact_device_sums))
     }
 
-    fn prepare_or_policy_bitmap(
-        &mut self,
-        or_rule_serial_ids: Vec<Vec<u32>>,
-        batch_size: usize,
-    ) -> Vec<CudaSlice<u64>> {
+    fn allocate_or_policy_bitmap(&mut self, bitmap: Vec<u64>) -> Vec<CudaSlice<u64>> {
         let devices = self.device_manager.devices();
 
         let mut or_policy_bitmap = Vec::with_capacity(devices.len());
-        let row_stride64 = (self.max_db_size + 63) / 64;
-        let total_size = row_stride64 * batch_size;
-
-        // Create the bitmap on the host
-        let mut bitmap = vec![0u64; total_size];
-
-        for (query_idx, db_indices) in or_rule_serial_ids.iter().enumerate() {
-            for &db_idx in db_indices {
-                let row_start = query_idx * row_stride64;
-                let word_idx = row_start + (db_idx as usize / 64);
-                let bit_offset = db_idx as usize % 64;
-                bitmap[word_idx] |= 1 << bit_offset;
-            }
-        }
 
         for (device_idx, dev) in devices.iter().enumerate() {
             // Transfer the bitmap to the device. It will be the same for each of the
@@ -1893,4 +1893,26 @@ pub fn get_dummy_shares_for_deletion(
             .clone()
             .into();
     (iris_share, mask_share)
+}
+
+pub fn prepare_or_policy_bitmap(
+    max_db_size: usize,
+    or_rule_serial_ids: Vec<Vec<u32>>,
+    batch_size: usize,
+) -> Vec<u64> {
+    let row_stride64 = (max_db_size + 63) / 64;
+    let total_size = row_stride64 * batch_size;
+
+    // Create the bitmap on the host
+    let mut bitmap = vec![0u64; total_size];
+
+    for (query_idx, db_indices) in or_rule_serial_ids.iter().enumerate() {
+        for &db_idx in db_indices {
+            let row_start = query_idx * row_stride64;
+            let word_idx = row_start + (db_idx as usize / 64);
+            let bit_offset = db_idx as usize % 64;
+            bitmap[word_idx] |= 1 << bit_offset;
+        }
+    }
+    bitmap
 }
