@@ -300,6 +300,54 @@ impl HawkActor {
     }
 }
 
+/// HawkHandle is a handle to the HawkActor managing concurrency.
+#[derive(Clone, Debug)]
+pub struct HawkHandle {
+    pub request_queue: Sender<HawkRequest>,
+}
+
+impl HawkHandle {
+    pub async fn new(mut hawk_actor: HawkActor, request_parallelism: usize) -> Result<Self> {
+        let mut sessions = vec![];
+        for _ in 0..request_parallelism {
+            let session = hawk_actor.new_session().await?;
+            sessions.push(Arc::new(RwLock::new(session)));
+        }
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<HawkRequest>(1);
+
+        // ---- Request Handler ----
+        tokio::spawn(async move {
+            while let Some(req) = rx.recv().await {
+                // TODO: obtain rotated and mirrored versions.
+                let rotated = req.clone();
+
+                // Search for nearest neighbors.
+                let _search_results = hawk_actor.search(&sessions, rotated).await.unwrap();
+
+                // TODO: Compare with threshold.
+                let to_insert = req;
+
+                // Insert into the database.
+                let plans = hawk_actor
+                    .search_to_insert(&sessions, to_insert)
+                    .await
+                    .unwrap();
+                hawk_actor.insert(&sessions, plans).await.unwrap();
+
+                println!("🎉 Inserted items into the database");
+            }
+        });
+
+        Ok(Self { request_queue: tx })
+    }
+
+    pub async fn submit(&self, req: HawkRequest) -> Result<()> {
+        self.request_queue.send(req).await?;
+        Ok(())
+    }
+}
+
 #[derive(Default)]
 struct Consensus {
     next_session_id: u64,
@@ -333,42 +381,10 @@ fn join_plans(mut plans: Vec<InsertPlan>) -> Vec<InsertPlan> {
     plans
 }
 
-pub async fn hawk_main(args: HawkArgs) -> Result<Sender<HawkRequest>> {
+pub async fn hawk_main(args: HawkArgs) -> Result<HawkHandle> {
     println!("🦅 Starting Hawk node {}", args.party_index);
-    let mut hawk_actor = HawkActor::from_cli(&args).await?;
-
-    let mut sessions = vec![];
-    for _ in 0..args.request_parallelism {
-        let session = hawk_actor.new_session().await?;
-        sessions.push(Arc::new(RwLock::new(session)));
-    }
-
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<HawkRequest>(1);
-
-    // ---- Request Handler ----
-    tokio::spawn(async move {
-        while let Some(req) = rx.recv().await {
-            // TODO: obtain rotated and mirrored versions.
-            let rotated = req.clone();
-
-            // Search for nearest neighbors.
-            let _search_results = hawk_actor.search(&sessions, rotated).await.unwrap();
-
-            // TODO: Compare with threshold.
-            let to_insert = req;
-
-            // Insert into the database.
-            let plans = hawk_actor
-                .search_to_insert(&sessions, to_insert)
-                .await
-                .unwrap();
-            hawk_actor.insert(&sessions, plans).await.unwrap();
-
-            println!("🎉 Inserted items into the database");
-        }
-    });
-
-    Ok(tx)
+    let hawk_actor = HawkActor::from_cli(&args).await?;
+    HawkHandle::new(hawk_actor, args.request_parallelism).await
 }
 
 #[cfg(test)]
@@ -403,13 +419,13 @@ mod tests {
         let n_parties = 3;
         let addresses = get_free_local_addresses(n_parties).await?;
 
-        let request_queues = (0..n_parties)
+        let handles = (0..n_parties)
             .map(|i| go(addresses.clone(), i))
             .collect::<JoinSet<_>>()
             .join_all()
             .await
             .into_iter()
-            .collect::<Result<Vec<Sender<HawkRequest>>>>()?;
+            .collect::<Result<Vec<HawkHandle>>>()?;
 
         // ---- Send requests ----
 
@@ -432,10 +448,10 @@ mod tests {
             })
             .collect_vec();
 
-        izip!(irises, request_queues.clone())
-            .map(|(share, queue)| async move {
-                queue
-                    .send(HawkRequest {
+        izip!(irises, handles.clone())
+            .map(|(share, handle)| async move {
+                handle
+                    .submit(HawkRequest {
                         my_iris_shares: share,
                     })
                     .await?;
