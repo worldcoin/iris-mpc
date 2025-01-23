@@ -20,7 +20,7 @@ use itertools::{izip, Itertools};
 use rand::{thread_rng, Rng, SeedableRng};
 use std::{collections::HashMap, ops::DerefMut, sync::Arc, time::Duration};
 use tokio::{
-    sync::{mpsc::Sender, RwLock},
+    sync::{mpsc, oneshot, RwLock},
     task::JoinSet,
 };
 use tonic::transport::Server;
@@ -300,10 +300,17 @@ impl HawkActor {
     }
 }
 
+struct HawkJob {
+    request:        HawkRequest,
+    return_channel: oneshot::Sender<Result<HawkResult>>,
+}
+
+type HawkResult = ();
+
 /// HawkHandle is a handle to the HawkActor managing concurrency.
 #[derive(Clone, Debug)]
 pub struct HawkHandle {
-    pub request_queue: Sender<HawkRequest>,
+    job_queue: mpsc::Sender<HawkJob>,
 }
 
 impl HawkHandle {
@@ -314,19 +321,19 @@ impl HawkHandle {
             sessions.push(Arc::new(RwLock::new(session)));
         }
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<HawkRequest>(1);
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<HawkJob>(1);
 
         // ---- Request Handler ----
         tokio::spawn(async move {
-            while let Some(req) = rx.recv().await {
+            while let Some(job) = rx.recv().await {
                 // TODO: obtain rotated and mirrored versions.
-                let rotated = req.clone();
+                let rotated = job.request.clone();
 
                 // Search for nearest neighbors.
                 let _search_results = hawk_actor.search(&sessions, rotated).await.unwrap();
 
                 // TODO: Compare with threshold.
-                let to_insert = req;
+                let to_insert = job.request;
 
                 // Insert into the database.
                 let plans = hawk_actor
@@ -336,15 +343,22 @@ impl HawkHandle {
                 hawk_actor.insert(&sessions, plans).await.unwrap();
 
                 println!("🎉 Inserted items into the database");
+
+                let _ = job.return_channel.send(Ok(()));
             }
         });
 
-        Ok(Self { request_queue: tx })
+        Ok(Self { job_queue: tx })
     }
 
-    pub async fn submit(&self, req: HawkRequest) -> Result<()> {
-        self.request_queue.send(req).await?;
-        Ok(())
+    pub async fn submit(&self, request: HawkRequest) -> Result<HawkResult> {
+        let (tx, rx) = oneshot::channel();
+        let job = HawkJob {
+            request,
+            return_channel: tx,
+        };
+        self.job_queue.send(job).await?;
+        rx.await?
     }
 }
 
