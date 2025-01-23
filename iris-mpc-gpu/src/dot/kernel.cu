@@ -53,7 +53,7 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
 
 extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *matchCounterLeft, unsigned int *matchCounterRight, unsigned int *partialResultsLeft, unsigned int *partialResultsRight)
 {
-    
+
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
     {
@@ -105,11 +105,11 @@ extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *
     {
         for (int i = 0; i < 64; i++)
         {
-        
+
             size_t globalBit = idx * 64 + i;
             // Protect against any leftover bits if totalBits not multiple of 64
             if (globalBit >= totalBits) break;
-            
+
             unsigned int queryIdx = globalBit / dbLength;
             unsigned int dbIdx = globalBit % dbLength;
             bool matchLeft = (matchResultsLeft[idx] & (1ULL << i));
@@ -137,15 +137,6 @@ extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *
 
             bool useOr = (orPolicyBitmap[orPolicyBitmapIdx]
                           & (1ULL << (dbIdx % 64))) != 0ULL;
-
-            // if (useOr)
-            // {
-            //     printf("rowStride64: %lu, numElements: %lu, totalBits %lu, queryLength: %lu, dbLength: %lu, maxDbLength: %lu\n", rowStride64, numElements, totalBits, queryLength, dbLength, maxDbLength);
-            //     printf("dbIdx: %d, dbIdx / 64: %d, dbIdx %% 64: %d\n", dbIdx, dbIdx / 64, dbIdx % 64);
-            //     printf("queryIdx: %d, dbIdx: %d, rowIndex %d, orPolicyIdx %d, useOr: %d\n", queryIdx, dbIdx, rowIndex, orPolicyBitmapIdx,  useOr);
-            //     printf("matchLeft: %d, matchRight: %d\n", matchLeft, matchRight);
-            // }
-
 
             // If useOr is true => (matchLeft || matchRight),
             // else => (matchLeft && matchRight).

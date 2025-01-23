@@ -288,10 +288,6 @@ impl DistanceComparator {
                 continue;
             }
             let num_elements = (db_sizes[i] * self.query_length / ROTATIONS).div_ceil(64);
-            // print this at random every 100 occurrences
-            if rand::random::<u32>() % 100 == 0 {
-                println!("num_elements W/O OR POLICY: {}", num_elements);
-            }
             let threads_per_block = DEFAULT_LAUNCH_CONFIG_THREADS; // ON CHANGE: sync with kernel
             let cfg = launch_config_from_elements_and_threads(
                 num_elements as u32,

@@ -787,19 +787,6 @@ impl ServerActor {
                 batch_size,
             );
 
-            // count ones and find their positions
-            let mut count = 0;
-            host_or_policy_bitmap
-                .iter()
-                .enumerate()
-                .for_each(|(idx, bitmap)| {
-                    if *bitmap != (0u64) {
-                        println!("bitmap: [{:?}] {:064b} at idx: {}", bitmap, bitmap, idx);
-                        count += 1;
-                    }
-                });
-            println!("OR POLICY COUNT: {}", count);
-
             let device_or_policy_bitmap =
                 self.allocate_or_policy_bitmap(host_or_policy_bitmap.clone());
 
@@ -1915,7 +1902,6 @@ pub fn prepare_or_policy_bitmap(
 ) -> Vec<u64> {
     let row_stride64 = (max_db_size + 63) / 64;
     let total_size = row_stride64 * batch_size;
-    println!("TOTAL SIZE: {}, ROW STRIDE: {}", total_size, row_stride64);
 
     // Create the bitmap on the host
     let mut bitmap = vec![0u64; total_size];
