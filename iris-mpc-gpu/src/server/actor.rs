@@ -607,6 +607,9 @@ impl ServerActor {
                 && batch_size * ROTATIONS == batch.db_right_preprocessed.len(),
             "Query batch sizes mismatch"
         );
+        if !batch.or_rule_serial_ids.is_empty() {
+            assert_eq!(batch.or_rule_serial_ids.len(), batch_size);
+        };
 
         ///////////////////////////////////////////////////////////////////
         // PERFORM DELETIONS (IF ANY)
@@ -775,6 +778,8 @@ impl ServerActor {
                 .iter()
                 .all(|inner| inner.is_empty())
         {
+            assert_eq!(batch.or_rule_serial_ids.len(), batch_size);
+
             // Populate the pre-allocated OR policy bitmap with the serial ids
             let host_or_policy_bitmap = prepare_or_policy_bitmap(
                 self.max_db_size,
@@ -843,15 +848,6 @@ impl ServerActor {
         let mut host_results = self
             .distance_comparator
             .fetch_final_results(&self.final_results);
-
-        if !batch.or_rule_serial_ids.is_empty()
-            && !batch
-                .or_rule_serial_ids
-                .iter()
-                .all(|inner| inner.is_empty())
-        {
-            println!("HOST RESULTS: {:?}", host_results);
-        }
 
         // Truncate the results to the batch size
         host_results.iter_mut().for_each(|x| x.truncate(batch_size));
@@ -923,18 +919,6 @@ impl ServerActor {
                 &partial_match_counters_right,
                 &self.distance_comparator.partial_results_right,
             );
-
-            if !batch.or_rule_serial_ids.is_empty()
-                && !batch
-                    .or_rule_serial_ids
-                    .iter()
-                    .all(|inner| inner.is_empty())
-            {
-                println!("MATCH IDS: {:?}", match_ids);
-                println!("PARTIAL MATCH IDS LEFT: {:?}", partial_results_left);
-                println!("PARTIAL MATCH IDS RIGHT: {:?}", partial_results_right);
-            }
-
             (
                 partial_results_left,
                 partial_match_counters_left,
@@ -970,15 +954,6 @@ impl ServerActor {
         let mut merged_results =
             get_merged_results(&host_results, self.device_manager.device_count());
 
-        if !batch.or_rule_serial_ids.is_empty()
-            && !batch
-                .or_rule_serial_ids
-                .iter()
-                .all(|inner| inner.is_empty())
-        {
-            println!("MERGED RESULTS: {:?}", merged_results);
-        }
-
         // List the indices of the queries that did not match.
         let insertion_list = merged_results
             .iter()
@@ -1002,14 +977,6 @@ impl ServerActor {
             &self.current_db_sizes,
             batch_size,
         );
-        if !batch.or_rule_serial_ids.is_empty()
-            && !batch
-                .or_rule_serial_ids
-                .iter()
-                .all(|inner| inner.is_empty())
-        {
-            println!("MATCHES: {:?}", matches);
-        }
 
         // Check for batch matches
         let matched_batch_request_ids = match_ids
