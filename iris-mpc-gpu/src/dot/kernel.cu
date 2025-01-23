@@ -136,7 +136,14 @@ extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *
             size_t rowIndex = queryIdx * rowStride64;
             bool useOr = (orPolicyBitmap[rowIndex + (dbIdx / 64)]
                           & (1ULL << (dbIdx % 64))) != 0ULL;
-                        
+
+            if (useOr)
+            {
+                printf("queryIdx: %d, dbIdx: %d, useOr: %d\n", queryIdx, dbIdx, useOr);
+                printf("matchLeft: %d, matchRight: %d\n", matchLeft, matchRight);
+            }
+
+
             // If useOr is true => (matchLeft || matchRight),
             // else => (matchLeft && matchRight).
             bool finalMatch = useOr ? (matchLeft || matchRight)

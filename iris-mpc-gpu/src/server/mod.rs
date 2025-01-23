@@ -2,7 +2,9 @@ mod actor;
 pub mod sync_nccl;
 
 use crate::dot::{share_db::preprocess_query, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS};
-pub use actor::{get_dummy_shares_for_deletion, ServerActor, ServerActorHandle};
+pub use actor::{
+    get_dummy_shares_for_deletion, prepare_or_policy_bitmap, ServerActor, ServerActorHandle,
+};
 use iris_mpc_common::galois_engine::degree4::{
     GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
 };

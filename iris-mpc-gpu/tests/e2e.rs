@@ -518,8 +518,16 @@ mod e2e_test {
                     assert!(requests.contains_key(req_id));
 
                     resp_counters.insert(req_id, resp_counters.get(req_id).unwrap() + 1);
+                    println!(
+                        "Request {} was {} at index {} with partial match left {:?}, right {:?}",
+                        req_id, was_match, idx, partial_left, partial_right
+                    );
+                    println!("or_rule_matches ids {:?}", or_rule_matches);
 
-                    assert_eq!(partial_left, partial_right);
+                    if !or_rule_matches.contains(req_id) {
+                        assert_eq!(partial_left, partial_right);
+                    }
+
                     if !or_rule_matches.contains(req_id) {
                         assert_eq!(partial_left, match_id);
                     }
@@ -527,6 +535,10 @@ mod e2e_test {
                     let (expected_idx, is_batch_match) = expected_results.get(req_id).unwrap();
 
                     if let Some(expected_idx) = expected_idx {
+                        println!(
+                            "Req Id, idx, expected_idx: {}, {}, {}",
+                            req_id, idx, expected_idx
+                        );
                         assert!(was_match);
                         if !is_batch_match {
                             assert_eq!(expected_idx, idx);
