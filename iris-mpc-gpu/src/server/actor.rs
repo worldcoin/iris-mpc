@@ -788,7 +788,7 @@ impl ServerActor {
                 .iter()
                 .enumerate()
                 .for_each(|(idx, bitmap)| {
-                    if *bitmap != (0 as u64) {
+                    if *bitmap != (0u64) {
                         println!("bitmap: [{:?}] {:064b} at idx: {}", bitmap, bitmap, idx);
                         count += 1;
                     }
