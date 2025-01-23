@@ -188,7 +188,7 @@ impl Store {
         &self,
         min_last_modified_at: Option<i64>,
         partitions: usize,
-    ) -> impl Stream<Item = eyre::Result<StoredIris>> + '_ {
+    ) -> impl Stream<Item = eyre::Result<DbStoredIris>> + '_ {
         let count = self.count_irises().await.expect("Failed count_irises");
         let partition_size = count.div_ceil(partitions).max(1);
 
@@ -199,7 +199,7 @@ impl Store {
             let end_id = start_id + partition_size - 1;
 
             // This base query yields `DbStoredIris`
-            let base_stream = match min_last_modified_at {
+            let stream = match min_last_modified_at {
                 Some(min_last_modified_at) => sqlx::query_as::<_, DbStoredIris>(
                     "SELECT id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
                      BETWEEN $1 AND $2 AND last_modified_at >= $3",
@@ -207,25 +207,20 @@ impl Store {
                 .bind(start_id as i64)
                 .bind(end_id as i64)
                 .bind(min_last_modified_at)
-                .fetch(&self.pool),
+                .fetch(&self.pool)
+                .map_err(Into::into),
                 None => sqlx::query_as::<_, DbStoredIris>(
                     "SELECT id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
                      BETWEEN $1 AND $2",
                 )
                 .bind(start_id as i64)
                 .bind(end_id as i64)
-                .fetch(&self.pool),
-            };
+                .fetch(&self.pool)
+                .map_err(Into::into),
+            }
+            .boxed();
 
-            // Convert `Stream<Item = Result<DbStoredIris, sqlx::Error>>`
-            //  -> `Stream<Item = eyre::Result<DbStoredIris>>` using map_err,
-            //  -> then map_ok(StoredIris::Db) to unify the output type:
-            let partition_stream = base_stream
-                .map_err(Into::into) // `sqlx::Error` -> `eyre::Error`
-                .map_ok(StoredIris::DB) // `DbStoredIris` -> `StoredIris::Db(...)`
-                .boxed();
-
-            partition_streams.push(partition_stream);
+            partition_streams.push(stream);
         }
 
         // `select_all` requires that all streams have the same Item type:
@@ -550,10 +545,6 @@ mod tests {
         let got: Vec<DbStoredIris> = store
             .stream_irises_par(Some(0), 2)
             .await
-            .map_ok(|stored_iris| match stored_iris {
-                StoredIris::DB(db_iris) => db_iris,
-                StoredIris::S3(_) => panic!("Unexpected S3 variant in this test!"),
-            })
             .try_collect()
             .await?;
         assert_eq!(got.len(), 0);
@@ -593,10 +584,6 @@ mod tests {
         let mut got_par: Vec<DbStoredIris> = store
             .stream_irises_par(Some(0), 2)
             .await
-            .map_ok(|stored_iris| match stored_iris {
-                StoredIris::DB(db_iris) => db_iris,
-                StoredIris::S3(_) => panic!("Unexpected S3 variant in this test!"),
-            })
             .try_collect()
             .await?;
         got_par.sort_by_key(|iris| iris.id);
@@ -678,10 +665,6 @@ mod tests {
             let mut got_par: Vec<DbStoredIris> = store
                 .stream_irises_par(Some(0), parallelism)
                 .await
-                .map_ok(|stored_iris| match stored_iris {
-                    StoredIris::DB(db_iris) => db_iris,
-                    StoredIris::S3(_) => panic!("Unexpected S3 variant in this test!"),
-                })
                 .try_collect()
                 .await?;
             got_par.sort_by_key(|iris| iris.id);
