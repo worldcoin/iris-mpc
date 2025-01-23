@@ -22,11 +22,8 @@ use std::{collections::HashMap, ops::DerefMut, sync::Arc, time::Duration};
 use tokio::{
     sync::{mpsc::Sender, RwLock},
     task::JoinSet,
-    time::sleep,
 };
 use tonic::transport::Server;
-
-const TEST_WAIT: Duration = Duration::from_secs(3);
 
 #[derive(Parser)]
 pub struct HawkArgs {
@@ -123,9 +120,6 @@ impl HawkActor {
             });
         }
 
-        // TODO: Retry until all servers are up.
-        sleep(TEST_WAIT).await;
-
         // Connect to other players.
         izip!(&identities, &args.addresses)
             .filter(|(_, address)| address != &my_address)
@@ -143,9 +137,6 @@ impl HawkActor {
             .await
             .into_iter()
             .collect::<Result<()>>()?;
-
-        // TODO: Wait until others connected to me.
-        sleep(TEST_WAIT).await;
 
         Ok(HawkActor {
             search_params,
@@ -167,8 +158,8 @@ impl HawkActor {
         // TODO: cleanup of dropped sessions.
         self.networking.create_session(session_id).await?;
 
-        // TODO: Wait until others ceated their side of the session.
-        sleep(TEST_WAIT).await;
+        // Wait until others ceated their side of the session.
+        self.networking.wait_for_session(session_id).await;
 
         let boot_session = BootSession {
             session_id,
@@ -388,6 +379,7 @@ mod tests {
         execution::local::get_free_local_addresses,
     };
     use iris_mpc_common::iris_db::db::IrisDB;
+    use tokio::time::sleep;
 
     #[tokio::test]
     async fn test_hawk_main() -> Result<()> {
