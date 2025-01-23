@@ -63,7 +63,6 @@ use std::{
     mem,
     net::IpAddr,
     panic,
-    process::exit,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, LazyLock, Mutex,
@@ -1326,11 +1325,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             time_waiting_for_stream,
                             time_loading_into_memory,
                         );
-
-                        if env.eq("stage") {
-                            tracing::info!("Test environment detected, exiting");
-                            exit(0);
-                        }
 
                         if !all_serial_ids.is_empty() {
                             tracing::error!("Not all serial_ids were loaded: {:?}", all_serial_ids);
