@@ -1,9 +1,8 @@
-use crate::StoredIris;
 use async_trait::async_trait;
 use aws_sdk_s3::{primitives::ByteStream, Client};
 use eyre::eyre;
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
-use std::{mem, sync::Arc};
+use std::{collections::VecDeque, mem, sync::Arc};
 use tokio::{io::AsyncReadExt, sync::mpsc::Sender, task};
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -227,7 +226,7 @@ pub async fn fetch_and_parse_chunks(
     concurrency: usize,
     prefix_name: String,
     last_snapshot_details: LastSnapshotDetails,
-    tx: Sender<StoredIris>,
+    tx: Sender<S3StoredIris>,
 ) -> eyre::Result<()> {
     tracing::info!("Generating chunk files using: {:?}", last_snapshot_details);
     let range_size = if last_snapshot_details.chunk_size as usize > MAX_RANGE_SIZE {
@@ -235,8 +234,8 @@ pub async fn fetch_and_parse_chunks(
     } else {
         last_snapshot_details.chunk_size as usize
     };
-    let mut handles: Vec<task::JoinHandle<Result<(), eyre::Error>>> = Vec::new();
-    let mut active_handles = 0;
+    let mut handles: VecDeque<task::JoinHandle<Result<(), eyre::Error>>> =
+        VecDeque::with_capacity(concurrency);
 
     for chunk in (1..=last_snapshot_details.last_serial_id).step_by(range_size) {
         let chunk_id =
@@ -245,13 +244,12 @@ pub async fn fetch_and_parse_chunks(
         let offset_within_chunk = (chunk - chunk_id) as usize;
 
         // Wait if we've hit the concurrency limit
-        if active_handles >= concurrency {
-            let handle = handles.remove(0);
+        if handles.len() >= concurrency {
+            let handle = handles.pop_front().expect("No s3 import handles to pop");
             handle.await??;
-            active_handles -= 1;
         }
 
-        handles.push(task::spawn({
+        handles.push_back(task::spawn({
             let store = Arc::clone(&store);
             let mut slice = vec![0u8; SINGLE_ELEMENT_SIZE];
             let tx = tx.clone();
@@ -271,7 +269,7 @@ pub async fn fetch_and_parse_chunks(
                     match result.read_exact(&mut slice).await {
                         Ok(_) => {
                             let iris = S3StoredIris::from_bytes(&slice)?;
-                            tx.send(StoredIris::S3(iris)).await?;
+                            tx.send(iris).await?;
                         }
                         Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
                         Err(e) => return Err(e.into()),
@@ -469,7 +467,7 @@ mod tests {
             last_serial_id: MOCK_ENTRIES as i64,
             chunk_size:     MOCK_CHUNK_SIZE as i64,
         };
-        let (tx, mut rx) = mpsc::channel::<StoredIris>(1024);
+        let (tx, mut rx) = mpsc::channel::<S3StoredIris>(1024);
         let store_arc = Arc::new(store);
         let _res =
             fetch_and_parse_chunks(store_arc, 1, "out".to_string(), last_snapshot_details, tx)

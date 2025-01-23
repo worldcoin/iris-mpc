@@ -2,7 +2,6 @@
 
 mod s3_importer;
 
-use crate::s3_importer::S3StoredIris;
 use bytemuck::cast_slice;
 use eyre::{eyre, Result};
 use futures::{
@@ -17,6 +16,7 @@ use iris_mpc_common::{
 use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
     fetch_and_parse_chunks, fetch_to_memory, last_snapshot_timestamp, ObjectStore, S3Store,
+    S3StoredIris,
 };
 use sqlx::{
     migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Row, Transaction,

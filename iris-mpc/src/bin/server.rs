@@ -1,6 +1,6 @@
 #![allow(clippy::needless_range_loop)]
 
-use aws_config::retry::RetryConfig;
+use aws_config::{retry::RetryConfig, timeout::TimeoutConfig};
 use aws_sdk_s3::{
     config::{Builder as S3ConfigBuilder, StalledStreamProtectionConfig},
     Client as S3Client,
@@ -50,7 +50,7 @@ use iris_mpc_gpu::{
     },
 };
 use iris_mpc_store::{
-    fetch_and_parse_chunks, fetch_to_memory, last_snapshot_timestamp, S3Store, Store, StoredIris,
+    fetch_and_parse_chunks, fetch_to_memory, last_snapshot_timestamp, S3Store, S3StoredIris, Store,
     StoredIrisRef,
 };
 use metrics_exporter_statsd::StatsdBuilder;
@@ -800,6 +800,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     // Increase S3 retries to 5
     let retry_config = RetryConfig::standard().with_max_attempts(5);
+    let timeout_config = TimeoutConfig::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .build();
 
     let s3_config = S3ConfigBuilder::from(&shared_config)
         .retry_config(retry_config.clone())
@@ -810,6 +813,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 // disable stalled stream protection to avoid panics during s3 import
                 .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
                 .retry_config(retry_config)
+                .timeout_config(timeout_config)
                 .build()
         }
         false => {
@@ -823,6 +827,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 // disable stalled stream protection to avoid panics during s3 import
                 .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
                 .retry_config(retry_config)
+                .timeout_config(timeout_config)
                 .http_client(http_client)
                 .build()
         }
@@ -1216,7 +1221,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         let s3_arc = Arc::new(s3_store);
 
                         let (tx, mut rx) =
-                            mpsc::channel::<StoredIris>(config.load_chunks_buffer_size);
+                            mpsc::channel::<S3StoredIris>(config.load_chunks_buffer_size);
 
                         tokio::spawn(async move {
                             fetch_and_parse_chunks(
@@ -1263,52 +1268,28 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         let mut record_counter = 0;
                         let mut all_serial_ids: HashSet<i64> =
                             HashSet::from_iter(1..=(store_len as i64));
-                        let mut serial_ids_from_db: HashSet<i64> = HashSet::new();
-                        let mut n_loaded_from_db = 0;
+                        let n_loaded_from_db = 0;
                         let mut n_loaded_from_s3 = 0;
-                        while let Some(result) = rx.recv().await {
+                        while let Some(iris) = rx.recv().await {
                             time_waiting_for_stream += now_load_summary.elapsed();
                             now_load_summary = Instant::now();
-                            let index = result.index();
+                            let index = iris.index();
                             if index == 0 || index > store_len {
                                 tracing::error!("Invalid iris index {}", index);
                                 return Err(eyre!("Invalid iris index {}", index));
                             }
-                            match result {
-                                StoredIris::DB(iris) => {
-                                    n_loaded_from_db += 1;
-                                    serial_ids_from_db.insert(iris.id());
-                                    actor.load_single_record_from_db(
-                                        iris.index() - 1,
-                                        iris.left_code(),
-                                        iris.left_mask(),
-                                        iris.right_code(),
-                                        iris.right_mask(),
-                                    );
-                                }
-                                StoredIris::S3(iris) => {
-                                    if serial_ids_from_db.contains(&iris.id()) {
-                                        tracing::warn!(
-                                            "Skip overriding record already loaded via DB with S3 \
-                                             record: {}",
-                                            iris.index()
-                                        );
-                                        continue;
-                                    }
-                                    n_loaded_from_s3 += 1;
-                                    actor.load_single_record_from_s3(
-                                        iris.index() - 1,
-                                        iris.left_code_odd(),
-                                        iris.left_code_even(),
-                                        iris.right_code_odd(),
-                                        iris.right_code_even(),
-                                        iris.left_mask_odd(),
-                                        iris.left_mask_even(),
-                                        iris.right_mask_odd(),
-                                        iris.right_mask_even(),
-                                    );
-                                }
-                            };
+                            n_loaded_from_s3 += 1;
+                            actor.load_single_record_from_s3(
+                                iris.index() - 1,
+                                iris.left_code_odd(),
+                                iris.left_code_even(),
+                                iris.right_code_odd(),
+                                iris.right_code_even(),
+                                iris.left_mask_odd(),
+                                iris.left_mask_even(),
+                                iris.right_mask_odd(),
+                                iris.right_mask_even(),
+                            );
 
                             if record_counter % 100_000 == 0 {
                                 let elapsed = now.elapsed();
@@ -1350,10 +1331,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             tracing::info!("Test environment detected, exiting");
                             exit(0);
                         }
-
-                        // Clear the memory allocated by temp HashSet
-                        serial_ids_from_db.clear();
-                        serial_ids_from_db.shrink_to_fit();
 
                         if !all_serial_ids.is_empty() {
                             tracing::error!("Not all serial_ids were loaded: {:?}", all_serial_ids);
