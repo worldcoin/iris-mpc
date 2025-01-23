@@ -4,10 +4,13 @@ use crate::helpers::{
     DEFAULT_LAUNCH_CONFIG_THREADS,
 };
 use cudarc::{
-    driver::{CudaFunction, CudaSlice, CudaStream, CudaView, LaunchAsync},
+    driver::{
+        result::launch_kernel, sys, CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr,
+        LaunchAsync,
+    },
     nvrtc::compile_ptx,
 };
-use std::{cmp::min, sync::Arc};
+use std::{cmp::min, ffi::c_void, sync::Arc};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const OPEN_RESULTS_FUNCTION: &str = "openResults";
@@ -41,7 +44,7 @@ impl DistanceComparator {
         let mut open_kernels: Vec<CudaFunction> = Vec::new();
         let mut merge_db_kernels = Vec::new();
         let mut merge_batch_kernels = Vec::new();
-        let mut merge_batch_with_bitmap_kernels = Vec::new();
+        let mut merge_batch_with_bitmap_kernels: Vec<CudaFunction> = Vec::new();
         let mut opened_results = vec![];
         let mut final_results = vec![];
         let mut match_counters = vec![];
@@ -177,19 +180,21 @@ impl DistanceComparator {
     #[allow(clippy::too_many_arguments)]
     pub fn join_db_matches_with_bitmaps(
         &self,
+        max_db_size: usize,
         matches_bitmap_left: &[CudaSlice<u64>],
         matches_bitmap_right: &[CudaSlice<u64>],
         final_results: &[CudaSlice<u32>],
         db_sizes: &[usize],
         streams: &[CudaStream],
-        kernels: &[CudaFunction],
         or_policies_bitmap: &[CudaSlice<u64>],
     ) {
         for i in 0..self.device_manager.device_count() {
             if db_sizes[i] == 0 {
                 continue;
             }
+
             let num_elements = (db_sizes[i] * self.query_length / ROTATIONS).div_ceil(64);
+
             let threads_per_block = DEFAULT_LAUNCH_CONFIG_THREADS; // ON CHANGE: sync with kernel
             let cfg = launch_config_from_elements_and_threads(
                 num_elements as u32,
@@ -197,29 +202,39 @@ impl DistanceComparator {
                 &self.device_manager.devices()[i],
             );
 
+            self.device_manager.device(i).bind_to_thread().unwrap();
+
+            let ptr_param = |ptr: *const sys::CUdeviceptr| ptr as *mut c_void;
+            let usize_param = |val: &usize| val as *const usize as *mut _;
+
+            let params = &mut [
+                // Results arrays
+                ptr_param(matches_bitmap_left[i].device_ptr()),
+                ptr_param(matches_bitmap_right[i].device_ptr()),
+                ptr_param(final_results[i].device_ptr()),
+                usize_param(&self.query_length),
+                usize_param(&db_sizes[i]),
+                usize_param(&num_elements),
+                usize_param(&max_db_size),
+                ptr_param(self.match_counters[i].device_ptr()),
+                ptr_param(self.all_matches[i].device_ptr()),
+                ptr_param(self.match_counters_left[i].device_ptr()),
+                ptr_param(self.match_counters_right[i].device_ptr()),
+                ptr_param(self.partial_results_left[i].device_ptr()),
+                ptr_param(self.partial_results_right[i].device_ptr()),
+                ptr_param(or_policies_bitmap[i].device_ptr()),
+            ];
+
             unsafe {
-                kernels[i]
-                    .clone()
-                    .launch_on_stream(
-                        &streams[i],
-                        cfg,
-                        (
-                            &matches_bitmap_left[i],
-                            &matches_bitmap_right[i],
-                            &final_results[i],
-                            (self.query_length / ROTATIONS) as u64,
-                            db_sizes[i] as u64,
-                            &self.match_counters[i],
-                            &self.all_matches[i],
-                            &self.match_counters_left[i],
-                            &self.match_counters_right[i],
-                            &self.partial_results_left[i],
-                            &self.partial_results_right[i],
-                            // Additional args
-                            &or_policies_bitmap[i],
-                        ),
-                    )
-                    .unwrap();
+                launch_kernel(
+                    self.merge_batch_with_bitmap_kernels[i].cu_function(),
+                    cfg.grid_dim,
+                    cfg.block_dim,
+                    0,
+                    streams[i].stream,
+                    params,
+                )
+                .unwrap();
             }
         }
     }
@@ -273,6 +288,10 @@ impl DistanceComparator {
                 continue;
             }
             let num_elements = (db_sizes[i] * self.query_length / ROTATIONS).div_ceil(64);
+            // print this at random every 100 occurrences
+            if rand::random::<u32>() % 100 == 0 {
+                println!("num_elements W/O OR POLICY: {}", num_elements);
+            }
             let threads_per_block = DEFAULT_LAUNCH_CONFIG_THREADS; // ON CHANGE: sync with kernel
             let cfg = launch_config_from_elements_and_threads(
                 num_elements as u32,

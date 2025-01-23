@@ -53,6 +53,7 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
 
 extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *matchCounterLeft, unsigned int *matchCounterRight, unsigned int *partialResultsLeft, unsigned int *partialResultsRight)
 {
+    
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
     {
@@ -93,13 +94,11 @@ extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, 
     }
 }
 
-extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *matchCounterLeft, unsigned int *matchCounterRight, unsigned int *partialResultsLeft, unsigned int *partialResultsRight, const unsigned long long *orPolicyBitmap) // 2D bitmap stored as 1D
+extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, size_t maxDbLength, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *matchCounterLeft, unsigned int *matchCounterRight, unsigned int *partialResultsLeft, unsigned int *partialResultsRight, const unsigned long long *orPolicyBitmap) // 2D bitmap stored as 1D
 {
 
-    size_t rowStride64 = (dbLength + 63) / 64;
-
-    size_t totalBits   = dbLength * queryLength;
-    size_t numElements = (totalBits + 63) / 64; //  div_ceil
+    size_t rowStride64 = (maxDbLength + 63) / 64;
+    size_t totalBits   = maxDbLength * queryLength;
 
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
@@ -134,14 +133,18 @@ extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *
                     partialResultsRight[MAX_MATCHES_LEN * queryIdx + qmcR] = dbIdx;
             }
             size_t rowIndex = queryIdx * rowStride64;
-            bool useOr = (orPolicyBitmap[rowIndex + (dbIdx / 64)]
+            size_t orPolicyBitmapIdx = rowIndex + (dbIdx / 64);
+
+            bool useOr = (orPolicyBitmap[orPolicyBitmapIdx]
                           & (1ULL << (dbIdx % 64))) != 0ULL;
 
-            if (useOr)
-            {
-                printf("queryIdx: %d, dbIdx: %d, useOr: %d\n", queryIdx, dbIdx, useOr);
-                printf("matchLeft: %d, matchRight: %d\n", matchLeft, matchRight);
-            }
+            // if (useOr)
+            // {
+            //     printf("rowStride64: %lu, numElements: %lu, totalBits %lu, queryLength: %lu, dbLength: %lu, maxDbLength: %lu\n", rowStride64, numElements, totalBits, queryLength, dbLength, maxDbLength);
+            //     printf("dbIdx: %d, dbIdx / 64: %d, dbIdx %% 64: %d\n", dbIdx, dbIdx / 64, dbIdx % 64);
+            //     printf("queryIdx: %d, dbIdx: %d, rowIndex %d, orPolicyIdx %d, useOr: %d\n", queryIdx, dbIdx, rowIndex, orPolicyBitmapIdx,  useOr);
+            //     printf("matchLeft: %d, matchRight: %d\n", matchLeft, matchRight);
+            // }
 
 
             // If useOr is true => (matchLeft || matchRight),

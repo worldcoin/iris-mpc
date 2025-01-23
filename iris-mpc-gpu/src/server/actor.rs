@@ -776,7 +776,6 @@ impl ServerActor {
                 .all(|inner| inner.is_empty())
         {
             // Populate the pre-allocated OR policy bitmap with the serial ids
-            assert_eq!(batch.or_rule_serial_ids.len(), batch_size);
             let host_or_policy_bitmap = prepare_or_policy_bitmap(
                 self.max_db_size,
                 batch.or_rule_serial_ids.clone(),
@@ -790,7 +789,7 @@ impl ServerActor {
                 .enumerate()
                 .for_each(|(idx, bitmap)| {
                     if *bitmap != (0 as u64) {
-                        println!("bitmap: {:?} at idx: {}", bitmap, idx);
+                        println!("bitmap: [{:?}] {:064b} at idx: {}", bitmap, bitmap, idx);
                         count += 1;
                     }
                 });
@@ -800,12 +799,12 @@ impl ServerActor {
                 self.allocate_or_policy_bitmap(host_or_policy_bitmap.clone());
 
             self.distance_comparator.join_db_matches_with_bitmaps(
+                self.max_db_size,
                 &self.db_match_list_left,
                 &self.db_match_list_right,
                 &self.final_results,
                 &self.current_db_sizes,
                 &self.streams[0],
-                &self.distance_comparator.merge_batch_with_bitmap_kernels,
                 &device_or_policy_bitmap,
             );
         } else {
