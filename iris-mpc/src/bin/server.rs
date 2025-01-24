@@ -1217,9 +1217,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             );
                         }
                     });
+                    let mut page_lock_handle = Some(page_lock_handle);
 
                     tokio::runtime::Handle::current().block_on(async {
-                        let now = Instant::now();
+                        let mut now = Instant::now();
+                        if config.page_lock_at_beginning {
+                            page_lock_handle.take().unwrap().await?;
+                            tracing::info!("Page-locking took {:?}", now.elapsed());
+                        }
+                        now = Instant::now();
                         let mut load_summary_ts = Instant::now();
                         let mut time_waiting_for_stream = time::Duration::from_secs(0);
                         let mut time_loading_into_memory = time::Duration::from_secs(0);
@@ -1383,12 +1389,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         tracing::info!("Preprocessing db");
                         actor.preprocess_db();
 
-                        tracing::info!("Waiting for page-lock to finish");
-                        page_lock_handle.await?;
+                        if !config.page_lock_at_beginning {
+                            tracing::info!("Waiting for page-lock to finish");
+                            page_lock_handle.take().unwrap().await?;
+                        }
 
                         tracing::info!(
-                            "Loaded {} records from db into memory [DB sizes: {:?}]",
+                            "Loaded {} records from db into memory in {:?} [DB sizes: {:?}]",
                             record_counter,
+                            now.elapsed(),
                             actor.current_db_sizes()
                         );
 

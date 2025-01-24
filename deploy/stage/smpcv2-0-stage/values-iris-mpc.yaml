@@ -92,6 +92,9 @@ env:
   - name: SMPC__TEST_LOAD_INTO_MEMORY
     value: "false"
 
+  - name: SMPC__PAGE_LOCK_AT_BEGINNING
+    value: "true"
+
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
 

@@ -123,6 +123,9 @@ pub struct Config {
 
     #[serde(default)]
     pub test_load_into_memory: bool,
+
+    #[serde(default)]
+    pub page_lock_at_beginning: bool,
 }
 
 fn default_load_chunks_parallelism() -> usize {
