@@ -30,7 +30,7 @@ env:
     value: "true"
 
   - name: SMPC__DATABASE__LOAD_PARALLELISM
-    value: "1"
+    value: "8"
 
   - name: SMPC__AWS__REGION
     value: "eu-north-1"
@@ -90,7 +90,7 @@ env:
     value: "16"
 
   - name: SMPC__TEST_LOAD_INTO_MEMORY
-    value: "true"
+    value: "false"
 
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"

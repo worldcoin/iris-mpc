@@ -1252,6 +1252,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                     elapsed,
                                     load_chunks_parallelism
                                 );
+                                load_summary_ts = Instant::now();
                                 if download_shutdown_handler.is_shutting_down() {
                                     tracing::warn!("Shutdown requested by shutdown_handler.");
                                     return Err(eyre::eyre!("Shutdown requested"));
@@ -1303,6 +1304,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
                             time_waiting_for_stream = Duration::from_secs(0);
                             time_loading_into_memory = Duration::from_secs(0);
+                            load_summary_ts = Instant::now();
                             while let Some(iris) = rx.recv().await {
                                 time_waiting_for_stream += load_summary_ts.elapsed();
                                 load_summary_ts = Instant::now();
