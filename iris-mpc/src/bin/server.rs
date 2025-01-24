@@ -1108,7 +1108,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let db_chunks_bucket_name = config.db_chunks_bucket_name.clone();
     let db_chunks_folder_name = config.db_chunks_folder_name.clone();
     let download_shutdown_handler = Arc::clone(&shutdown_handler);
-    let env = config.environment.clone();
 
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
@@ -1255,10 +1254,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                     load_chunks_parallelism
                                 );
                                 load_summary_ts = Instant::now();
-                                if download_shutdown_handler.is_shutting_down() {
-                                    tracing::warn!("Shutdown requested by shutdown_handler.");
-                                    return Err(eyre::eyre!("Shutdown requested"));
-                                }
                             }
 
                             let min_last_modified_at = last_snapshot_details.timestamp
@@ -1342,6 +1337,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                         elapsed,
                                         record_counter as f64 / elapsed.as_secs_f64()
                                     );
+                                    if download_shutdown_handler.is_shutting_down() {
+                                        tracing::warn!("Shutdown requested by shutdown_handler.");
+                                        return Err(eyre::eyre!("Shutdown requested"));
+                                    }
                                 }
 
                                 time_loading_into_memory += load_summary_ts.elapsed();
