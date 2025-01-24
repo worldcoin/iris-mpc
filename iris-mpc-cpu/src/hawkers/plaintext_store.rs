@@ -149,6 +149,7 @@ impl PlaintextStore {
     pub async fn create_random<R: RngCore + Clone + CryptoRng>(
         rng: &mut R,
         database_size: usize,
+        searcher: &HnswSearcher,
     ) -> eyre::Result<(Self, GraphMem<Self>)> {
         // makes sure the searcher produces same graph structure by having the same rng
         let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
@@ -156,7 +157,6 @@ impl PlaintextStore {
 
         let mut plaintext_vector_store = PlaintextStore::default();
         let mut plaintext_graph_store = GraphMem::new();
-        let searcher = HnswSearcher::default();
 
         for raw_query in cleartext_database.iter() {
             let query = plaintext_vector_store.prepare_query(raw_query.clone());
@@ -302,7 +302,7 @@ mod tests {
         let database_size = 1;
         let searcher = HnswSearcher::default();
         let (mut ptxt_vector, mut ptxt_graph) =
-            PlaintextStore::create_random(&mut rng, database_size)
+            PlaintextStore::create_random(&mut rng, database_size, &searcher)
                 .await
                 .unwrap();
         for i in 0..database_size {

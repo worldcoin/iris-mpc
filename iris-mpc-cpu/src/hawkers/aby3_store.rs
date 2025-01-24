@@ -101,6 +101,7 @@ impl SharedIrisesRef {
 }
 
 impl SharedIrisesRef {
+    // TODO migrate this to a function of the `Query` type
     fn prepare_query(&mut self, raw_query: GaloisRingSharedIris) -> QueryRef {
         let mut preprocessed_query = raw_query.clone();
         preprocessed_query.code.preprocess_iris_code_query_share();
@@ -472,8 +473,9 @@ impl Aby3Store {
         (PlaintextStore, GraphMem<PlaintextStore>),
         Vec<(Self, GraphMem<Self>)>,
     )> {
+        let searcher = HnswSearcher::default();
         let (plaintext_vector_store, plaintext_graph_store) =
-            PlaintextStore::create_random(rng, database_size).await?;
+            PlaintextStore::create_random(rng, database_size, &searcher).await?;
 
         let protocol_stores =
             setup_local_aby3_players_with_preloaded_db(rng, &plaintext_vector_store, network_t)
