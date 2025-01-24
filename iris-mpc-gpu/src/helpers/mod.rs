@@ -173,22 +173,23 @@ pub fn htod_on_stream_sync<T: DeviceRepr>(
 pub fn register_host_memory(
     device_manager: Arc<DeviceManager>,
     db: &CudaVec2DSlicerRawPointer,
-    max_db_length: usize,
+    chunk_length: usize,
+    chunk_offset: usize,
     code_length: usize,
 ) {
-    let max_size = max_db_length / device_manager.device_count();
+    let size = chunk_length / device_manager.device_count();
     for (device_index, device) in device_manager.devices().iter().enumerate() {
         device.bind_to_thread().unwrap();
         unsafe {
             let _ = cudarc::driver::sys::lib().cuMemHostRegister_v2(
-                db.limb_0[device_index] as *mut _,
-                max_size * code_length,
+                (db.limb_0[device_index] + (chunk_offset * code_length) as u64) as *mut _,
+                size * code_length,
                 CU_MEMHOSTALLOC_PORTABLE,
             );
 
             let _ = cudarc::driver::sys::lib().cuMemHostRegister_v2(
-                db.limb_1[device_index] as *mut _,
-                max_size * code_length,
+                (db.limb_1[device_index] + (chunk_offset * code_length) as u64) as *mut _,
+                size * code_length,
                 CU_MEMHOSTALLOC_PORTABLE,
             );
         }

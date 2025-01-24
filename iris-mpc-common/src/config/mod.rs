@@ -126,6 +126,13 @@ pub struct Config {
 
     #[serde(default)]
     pub page_lock_at_beginning: bool,
+
+    /// Percentage of the chunk size to page lock at each iteration
+    /// Must be a positive integer between [1-100]
+    /// The first memory chunk will be page-locked before starting db & s3
+    /// importers
+    #[serde(default)]
+    pub page_lock_chunk_percentage: usize,
 }
 
 fn default_load_chunks_parallelism() -> usize {
