@@ -12,7 +12,7 @@ use aws_smithy_runtime_api::client::dns::{DnsFuture, ResolveDns};
 use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
 use eyre::{eyre, Context};
-use futures::{stream::BoxStream, StreamExt};
+use futures::{future, stream::BoxStream, StreamExt};
 use hickory_resolver::{
     config::{ResolverConfig, ResolverOpts},
     TokioAsyncResolver,
@@ -1193,36 +1193,32 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         S3Store::new(db_chunks_s3_client.clone(), db_chunks_bucket_name.clone());
 
                     tracing::info!("Page-lock host memory");
-                    let left_codes = actor.left_code_db_slices.code_gr.clone();
-                    let right_codes = actor.right_code_db_slices.code_gr.clone();
-                    let left_masks = actor.left_mask_db_slices.code_gr.clone();
-                    let right_masks = actor.right_mask_db_slices.code_gr.clone();
-                    let device_manager_clone = actor.device_manager.clone();
-                    let page_lock_handle = spawn_blocking(move || {
-                        for db in [&left_codes, &right_codes] {
+                    let dbs = [
+                        (actor.left_code_db_slices.code_gr.clone(), IRIS_CODE_LENGTH),
+                        (actor.right_code_db_slices.code_gr.clone(), IRIS_CODE_LENGTH),
+                        (actor.left_mask_db_slices.code_gr.clone(), MASK_CODE_LENGTH),
+                        (actor.right_mask_db_slices.code_gr.clone(), MASK_CODE_LENGTH),
+                    ];
+                    let mut page_lock_handles = Vec::new();
+                    for (db, code_length) in dbs {
+                        let max_db_size = config.max_db_size;
+                        // spawn_blocking moves its closure to a worker thread
+                        let device_manager_clone = actor.device_manager.clone();
+                        let handle = spawn_blocking(move || {
                             register_host_memory(
-                                device_manager_clone.clone(),
-                                db,
-                                config.max_db_size,
-                                IRIS_CODE_LENGTH,
+                                device_manager_clone,
+                                &db,
+                                max_db_size,
+                                code_length,
                             );
-                        }
-
-                        for db in [&left_masks, &right_masks] {
-                            register_host_memory(
-                                device_manager_clone.clone(),
-                                db,
-                                config.max_db_size,
-                                MASK_CODE_LENGTH,
-                            );
-                        }
-                    });
-                    let mut page_lock_handle = Some(page_lock_handle);
-
+                        });
+                        page_lock_handles.push(handle);
+                    }
+                    let mut page_lock_handles = Some(page_lock_handles);
                     tokio::runtime::Handle::current().block_on(async {
                         let mut now = Instant::now();
                         if config.page_lock_at_beginning {
-                            page_lock_handle.take().unwrap().await?;
+                            future::join_all(page_lock_handles.take().unwrap()).await;
                             tracing::info!("Page-locking took {:?}", now.elapsed());
                         }
                         now = Instant::now();
@@ -1391,7 +1387,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
                         if !config.page_lock_at_beginning {
                             tracing::info!("Waiting for page-lock to finish");
-                            page_lock_handle.take().unwrap().await?;
+                            future::join_all(page_lock_handles.take().unwrap()).await;
                         }
 
                         tracing::info!(
