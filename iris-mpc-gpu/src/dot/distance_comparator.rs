@@ -4,13 +4,10 @@ use crate::helpers::{
     DEFAULT_LAUNCH_CONFIG_THREADS,
 };
 use cudarc::{
-    driver::{
-        result::launch_kernel, sys, CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr,
-        LaunchAsync,
-    },
+    driver::{CudaFunction, CudaSlice, CudaStream, CudaView, LaunchAsync},
     nvrtc::compile_ptx,
 };
-use std::{cmp::min, ffi::c_void, sync::Arc};
+use std::{cmp::min, sync::Arc};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const OPEN_RESULTS_FUNCTION: &str = "openResults";
@@ -204,37 +201,31 @@ impl DistanceComparator {
 
             self.device_manager.device(i).bind_to_thread().unwrap();
 
-            let ptr_param = |ptr: *const sys::CUdeviceptr| ptr as *mut c_void;
-            let usize_param = |val: &usize| val as *const usize as *mut _;
-
-            let params = &mut [
-                // Results arrays
-                ptr_param(matches_bitmap_left[i].device_ptr()),
-                ptr_param(matches_bitmap_right[i].device_ptr()),
-                ptr_param(final_results[i].device_ptr()),
-                usize_param(&self.query_length),
-                usize_param(&db_sizes[i]),
-                usize_param(&num_elements),
-                usize_param(&max_db_size),
-                ptr_param(self.match_counters[i].device_ptr()),
-                ptr_param(self.all_matches[i].device_ptr()),
-                ptr_param(self.match_counters_left[i].device_ptr()),
-                ptr_param(self.match_counters_right[i].device_ptr()),
-                ptr_param(self.partial_results_left[i].device_ptr()),
-                ptr_param(self.partial_results_right[i].device_ptr()),
-                ptr_param(or_policies_bitmap[i].device_ptr()),
-            ];
-
             unsafe {
-                launch_kernel(
-                    self.merge_batch_with_bitmap_kernels[i].cu_function(),
-                    cfg.grid_dim,
-                    cfg.block_dim,
-                    0,
-                    streams[i].stream,
-                    params,
-                )
-                .unwrap();
+                self.merge_batch_with_bitmap_kernels[i]
+                    .clone()
+                    .launch_on_stream(
+                        &streams[i],
+                        cfg,
+                        (
+                            &matches_bitmap_left[i],
+                            &matches_bitmap_right[i],
+                            &final_results[i],
+                            self.query_length,
+                            db_sizes[i] as u64,
+                            num_elements,
+                            max_db_size,
+                            &self.match_counters[i],
+                            &self.all_matches[i],
+                            &self.match_counters_left[i],
+                            &self.match_counters_right[i],
+                            &self.partial_results_left[i],
+                            &self.partial_results_right[i],
+                            // Additional args
+                            &or_policies_bitmap[i],
+                        ),
+                    )
+                    .unwrap();
             }
         }
     }

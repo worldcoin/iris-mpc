@@ -1473,8 +1473,9 @@ dependencies = [
 
 [[package]]
 name = "cudarc"
-version = "0.12.2"
-source = "git+https://github.com/worldcoin/cudarc-fork.git#b6ba8da720217736d262c43d39260c7380530567"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "712390a76a83255b3d02760b8b3b3b7cb518f1f7cd83aafbbd65c382a7d6e8ef"
 dependencies = [
  "libloading",
 ]
