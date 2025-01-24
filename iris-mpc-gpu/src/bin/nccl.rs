@@ -86,13 +86,13 @@ async fn main() -> eyre::Result<()> {
             devs[i].bind_to_thread().unwrap();
 
             comms[i]
-                .broadcast(&slices[i].as_ref(), &mut slices1[i], 0)
+                .broadcast(slices[i].as_ref(), &mut slices1[i], 0)
                 .unwrap();
             comms[i]
-                .broadcast(&slices[i].as_ref(), &mut slices2[i], 1)
+                .broadcast(slices[i].as_ref(), &mut slices2[i], 1)
                 .unwrap();
             comms[i]
-                .broadcast(&slices[i].as_ref(), &mut slices3[i], 2)
+                .broadcast(slices[i].as_ref(), &mut slices3[i], 2)
                 .unwrap();
         }
 
