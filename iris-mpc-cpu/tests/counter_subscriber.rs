@@ -12,24 +12,23 @@
 //! parallel operation with other tests, and allows a clean execution
 //! environment for testing tracing subscriber functionality.
 
-use std::{collections::HashMap, sync::atomic::Ordering};
-
+use aes_prng::AesRng;
+use eyre::Result;
+use hawk_pack::graph_store::graph_mem::GraphMem;
+use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
     hawkers::plaintext_store::{PlaintextStore, PointId},
     hnsw::{
         metrics::ops_counter::{
-            KeyedCounterRef, KeyedVertexOpeningsCounter, OpCountersLayer, Operation, StaticCounter
-        }, searcher::{HnswParams, HnswSearcher}
-    }
+            OpCountersLayer, Operation, ParamCounterRef, ParamVertexOpeningsCounter, StaticCounter,
+        },
+        searcher::{HnswParams, HnswSearcher},
+    },
 };
-use aes_prng::AesRng;
-use hawk_pack::graph_store::graph_mem::GraphMem;
-use iris_mpc_common::{iris_db::iris::IrisCode};
 use rand::SeedableRng;
+use std::{collections::HashMap, sync::atomic::Ordering};
 use tokio::{self, task::JoinSet};
 use tracing_subscriber::prelude::*;
-
-use eyre::Result;
 
 #[tokio::test]
 async fn test_counter_subscriber() -> Result<()> {
@@ -41,7 +40,7 @@ async fn test_counter_subscriber() -> Result<()> {
     let dist_evaluations = StaticCounter::new();
     let dist_evaluations_counter = dist_evaluations.get_counter();
 
-    let param_openings = KeyedVertexOpeningsCounter::new();
+    let param_openings = ParamVertexOpeningsCounter::new();
     let (param_openings_map, _) = param_openings.get_counters();
 
     let counting_layer = OpCountersLayer::new()
@@ -49,9 +48,7 @@ async fn test_counter_subscriber() -> Result<()> {
         .register_dynamic(param_openings, Operation::OpenNode)
         .init();
 
-    tracing_subscriber::registry()
-        .with(counting_layer)
-        .init();
+    tracing_subscriber::registry().with(counting_layer).init();
 
     // Test consistency of static counters between serial and parallel operation
 
@@ -60,7 +57,14 @@ async fn test_counter_subscriber() -> Result<()> {
 
         let mut vector_store = vector_store.clone();
         let mut graph_store = graph_store.clone();
-        hnsw_search_queries_seq(&searcher, &mut vector_store, &mut graph_store, query1, query2).await;
+        hnsw_search_queries_seq(
+            &searcher,
+            &mut vector_store,
+            &mut graph_store,
+            query1,
+            query2,
+        )
+        .await;
 
         let end = dist_evaluations_counter.load(Ordering::Relaxed);
         end - start
@@ -71,7 +75,14 @@ async fn test_counter_subscriber() -> Result<()> {
 
         let mut vector_store = vector_store.clone();
         let mut graph_store = graph_store.clone();
-        hnsw_search_queries_par(&searcher, &mut vector_store, &mut graph_store, query1, query2).await;
+        hnsw_search_queries_par(
+            &searcher,
+            &mut vector_store,
+            &mut graph_store,
+            query1,
+            query2,
+        )
+        .await;
 
         let end = dist_evaluations_counter.load(Ordering::Relaxed);
         end - start
@@ -87,7 +98,14 @@ async fn test_counter_subscriber() -> Result<()> {
         let mut graph_store = graph_store.clone();
 
         let start = clone_counter_map(&param_openings_map).await;
-        hnsw_search_queries_seq(&searcher, &mut vector_store, &mut graph_store, query1, query2).await;
+        hnsw_search_queries_seq(
+            &searcher,
+            &mut vector_store,
+            &mut graph_store,
+            query1,
+            query2,
+        )
+        .await;
         let end = clone_counter_map(&param_openings_map).await;
 
         map_diffs(&end, &start)
@@ -98,7 +116,14 @@ async fn test_counter_subscriber() -> Result<()> {
         let mut graph_store = graph_store.clone();
 
         let start = clone_counter_map(&param_openings_map).await;
-        hnsw_search_queries_par(&searcher, &mut vector_store, &mut graph_store, query1, query2).await;
+        hnsw_search_queries_par(
+            &searcher,
+            &mut vector_store,
+            &mut graph_store,
+            query1,
+            query2,
+        )
+        .await;
         let end = clone_counter_map(&param_openings_map).await;
 
         map_diffs(&end, &start)
@@ -115,10 +140,20 @@ async fn test_counter_subscriber() -> Result<()> {
 
 async fn init_hnsw(
     db_size: usize,
-    rng: &mut AesRng) -> (HnswSearcher, PlaintextStore, GraphMem<PlaintextStore>, PointId, PointId)
-{
-    let searcher = HnswSearcher { params: HnswParams::new(64, 64, 32) };
-    let (mut vector_store, graph_store) = PlaintextStore::create_random(rng, db_size, &searcher).await.unwrap();
+    rng: &mut AesRng,
+) -> (
+    HnswSearcher,
+    PlaintextStore,
+    GraphMem<PlaintextStore>,
+    PointId,
+    PointId,
+) {
+    let searcher = HnswSearcher {
+        params: HnswParams::new(64, 64, 32),
+    };
+    let (mut vector_store, graph_store) = PlaintextStore::create_random(rng, db_size, &searcher)
+        .await
+        .unwrap();
     let queries: Vec<_> = (0..=1)
         .map(|_| vector_store.prepare_query(IrisCode::random_rng(rng)))
         .collect();
@@ -130,8 +165,8 @@ async fn hnsw_search_queries_seq(
     vector_store: &mut PlaintextStore,
     graph_store: &mut GraphMem<PlaintextStore>,
     query1: PointId,
-    query2: PointId)
-{
+    query2: PointId,
+) {
     for q in [query1, query2].into_iter() {
         searcher.search(vector_store, graph_store, &q, 1).await;
     }
@@ -142,21 +177,25 @@ async fn hnsw_search_queries_par(
     vector_store: &mut PlaintextStore,
     graph_store: &mut GraphMem<PlaintextStore>,
     query1: PointId,
-    query2: PointId)
-{
+    query2: PointId,
+) {
     let mut jobs = JoinSet::new();
     for q in [query1, query2].into_iter() {
         let searcher = searcher.clone();
         let mut vector_store = vector_store.clone();
         let mut graph_store = graph_store.clone();
         jobs.spawn(async move {
-            searcher.search(&mut vector_store, &mut graph_store, &q, 1).await;
+            searcher
+                .search(&mut vector_store, &mut graph_store, &q, 1)
+                .await;
         });
     }
     jobs.join_all().await;
 }
 
-async fn clone_counter_map<K: Eq + std::hash::Hash + Copy>(async_map: &KeyedCounterRef<K>) -> HashMap<K, usize> {
+async fn clone_counter_map<K: Eq + std::hash::Hash + Copy>(
+    async_map: &ParamCounterRef<K>,
+) -> HashMap<K, usize> {
     let async_map_read = async_map.read().unwrap();
     let mut copied_map: HashMap<K, usize> = HashMap::new();
     for (key, value) in async_map_read.iter() {
@@ -166,7 +205,10 @@ async fn clone_counter_map<K: Eq + std::hash::Hash + Copy>(async_map: &KeyedCoun
     copied_map
 }
 
-fn map_diffs<K: Eq + std::hash::Hash + Copy>(end: &HashMap<K, usize>, start: &HashMap<K, usize>) -> HashMap<K, usize> {
+fn map_diffs<K: Eq + std::hash::Hash + Copy>(
+    end: &HashMap<K, usize>,
+    start: &HashMap<K, usize>,
+) -> HashMap<K, usize> {
     let mut diffs: HashMap<K, usize> = HashMap::new();
     for (key, end_val) in end.iter() {
         let start_val = start.get(key).unwrap_or(&0);

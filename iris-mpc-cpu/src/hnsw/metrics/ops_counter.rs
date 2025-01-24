@@ -177,7 +177,7 @@ pub trait DynamicCounter {
     fn increment(&self, increment_amount: usize, event: &Event<'_>);
 }
 
-pub type KeyedCounterRef<K> = Arc<RwLock<HashMap<K, AtomicUsize>>>;
+pub type ParamCounterRef<K> = Arc<RwLock<HashMap<K, AtomicUsize>>>;
 
 pub trait KeyVisitor: Visit + Default {
     type Key: Eq + std::hash::Hash + Default;
@@ -190,27 +190,27 @@ pub trait KeyVisitor: Visit + Default {
 /// and producing a `KeyVisitor::Key` value used as the key for a `HashMap` of
 /// `AtomicUsize` counters.
 ///
-/// Events which don't properly correspond with a key(indicated by a return
+/// Events which don't properly correspond with a key (indicated by a return
 /// value of `None` from the `get_key` function) are recorded separately in a
 /// `missing_keys` counter.
 #[derive(Default)]
-pub struct KeyedCounter<K: KeyVisitor> {
-    counter_map:  KeyedCounterRef<K::Key>,
+pub struct ParameterizedCounter<K: KeyVisitor> {
+    counter_map:  ParamCounterRef<K::Key>,
     missing_keys: StaticCounter,
 }
 
-impl<K: KeyVisitor> KeyedCounter<K> {
+impl<K: KeyVisitor> ParameterizedCounter<K> {
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Return references to counter map and missing keys counter
-    pub fn get_counters(&self) -> (KeyedCounterRef<K::Key>, StaticCounterRef) {
+    pub fn get_counters(&self) -> (ParamCounterRef<K::Key>, StaticCounterRef) {
         (self.counter_map.clone(), self.missing_keys.counter.clone())
     }
 }
 
-impl<K: KeyVisitor> DynamicCounter for KeyedCounter<K> {
+impl<K: KeyVisitor> DynamicCounter for ParameterizedCounter<K> {
     fn increment(&self, increment_amount: usize, event: &Event<'_>) {
         let mut visitor = K::default();
         event.record(&mut visitor);
@@ -229,9 +229,9 @@ impl<K: KeyVisitor> DynamicCounter for KeyedCounter<K> {
     }
 }
 
-/// An instance of `KeyedCounter` which can be used to count
+/// An instance of `ParameterizedCounter` which can be used to count
 /// `OpenVertex` events according to their `lc` and `ef` parameters.
-pub type KeyedVertexOpeningsCounter = KeyedCounter<VertexOpeningsKeys>;
+pub type ParamVertexOpeningsCounter = ParameterizedCounter<VertexOpeningsKeys>;
 
 #[derive(Default)]
 pub struct VertexOpeningsKeys {

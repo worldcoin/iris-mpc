@@ -6,7 +6,7 @@ use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{
         metrics::ops_counter::{
-            KeyedVertexOpeningsCounter, OpCountersLayer, Operation, StaticCounter,
+            OpCountersLayer, Operation, ParamVertexOpeningsCounter, StaticCounter,
         },
         searcher::{HnswParams, HnswSearcher},
     },
@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let node_openings = StaticCounter::new();
     let node_openings_counter = node_openings.get_counter();
 
-    let param_openings = KeyedVertexOpeningsCounter::new();
+    let param_openings = ParamVertexOpeningsCounter::new();
     let (param_openings_map, _) = param_openings.get_counters();
 
     let counting_layer = OpCountersLayer::new()
