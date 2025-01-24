@@ -43,7 +43,7 @@ async fn test_counter_subscriber() -> Result<()> {
     let param_openings = ParamVertexOpeningsCounter::new();
     let (param_openings_map, _) = param_openings.get_counters();
 
-    let counting_layer = OpCountersLayer::new()
+    let counting_layer = OpCountersLayer::builder()
         .register_static(dist_evaluations, Operation::EvaluateDistance)
         .register_dynamic(param_openings, Operation::OpenNode)
         .init();

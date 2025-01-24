@@ -53,7 +53,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let param_openings = ParamVertexOpeningsCounter::new();
     let (param_openings_map, _) = param_openings.get_counters();
 
-    let counting_layer = OpCountersLayer::new()
+    let counting_layer = OpCountersLayer::builder()
         .register_static(dist_evaluations, Operation::EvaluateDistance)
         .register_static(dist_comparisons, Operation::CompareDistance)
         .register_static(node_openings, Operation::OpenNode)

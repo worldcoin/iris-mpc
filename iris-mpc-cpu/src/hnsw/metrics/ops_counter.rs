@@ -73,7 +73,7 @@ pub struct OpCountersLayer {
 }
 
 impl OpCountersLayer {
-    pub fn new() -> OpCountersLayerBuilder {
+    pub fn builder() -> OpCountersLayerBuilder {
         OpCountersLayerBuilder::default()
     }
 }
@@ -83,7 +83,7 @@ impl<S: Subscriber> Layer<S> for OpCountersLayer {
         let mut visitor = OpVisitor::default();
         event.record(&mut visitor);
 
-        let operation_id = visitor.id.unwrap() as usize;
+        let operation_id = visitor.id.unwrap();
         let increment_amount = visitor.amount.unwrap_or(1);
         let counters = self
             .counters
