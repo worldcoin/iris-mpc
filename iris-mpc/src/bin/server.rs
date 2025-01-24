@@ -1192,6 +1192,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         S3Store::new(db_chunks_s3_client.clone(), db_chunks_bucket_name.clone());
 
                     tokio::runtime::Handle::current().block_on(async {
+                        let total_load_time = Instant::now();
                         tracing::info!("Page-lock host memory");
                         let dbs = [
                             (actor.left_code_db_slices.code_gr.clone(), IRIS_CODE_LENGTH),
@@ -1201,8 +1202,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         ];
                         let n_page_lock_iters = 100 / config.page_lock_chunk_percentage;
                         let page_lock_chunk_size = config.max_db_size / n_page_lock_iters;
+                        tracing::info!(
+                            "Will page lock chunks in {} iters each {} items",
+                            n_page_lock_iters,
+                            page_lock_chunk_size
+                        );
                         let dbs_clone = dbs.clone();
-                        let now = Instant::now();
+                        let mut now = Instant::now();
                         for (db, code_length) in dbs_clone {
                             let device_manager_clone = actor.device_manager.clone();
                             register_host_memory(
@@ -1220,6 +1226,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         // prepare the handle for the rest of the page locks
                         let page_lock_handle = spawn_blocking(move || {
                             for i in 1..n_page_lock_iters {
+                                tracing::info!("Page-locking chunk {}", i);
                                 let dbs_clone = dbs.clone();
                                 let device_manager_clone = device_manager_clone.clone();
                                 for (db, code_length) in dbs_clone {
@@ -1232,9 +1239,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                         code_length,
                                     );
                                 }
+                                tracing::info!("Page-locking chunk {} completed", i);
                             }
                         });
 
+                        now = Instant::now();
                         let mut load_summary_ts = Instant::now();
                         let mut time_waiting_for_stream = Duration::from_secs(0);
                         let mut time_loading_into_memory = Duration::from_secs(0);
@@ -1404,7 +1413,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         tracing::info!(
                             "Loaded {} records from db into memory in {:?} [DB sizes: {:?}]",
                             record_counter,
-                            now.elapsed(),
+                            total_load_time.elapsed(),
                             actor.current_db_sizes()
                         );
 
