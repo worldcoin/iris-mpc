@@ -6,7 +6,10 @@ use crate::{
         session::{Session, SessionHandles},
     },
     hawkers::plaintext_store::{PlaintextStore, PointId},
-    hnsw::{graph::layered_graph::{GraphMem, Layer}, HnswSearcher},
+    hnsw::{
+        graph::layered_graph::{GraphMem, Layer},
+        HnswSearcher,
+    },
     network::NetworkType,
     protocol::ops::{
         batch_signed_lift_vec, compare_threshold_and_open, cross_compare,
@@ -19,10 +22,7 @@ use crate::{
     },
 };
 use aes_prng::AesRng;
-use hawk_pack::{
-    data_structures::queue::FurthestQueue,
-    VectorStore,
-};
+use hawk_pack::{data_structures::queue::FurthestQueue, VectorStore};
 use iris_mpc_common::iris_db::db::IrisDB;
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -604,7 +604,10 @@ impl Aby3Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{database_generators::generate_galois_iris_shares, hnsw::{graph::layered_graph::GraphMem,HnswSearcher}};
+    use crate::{
+        database_generators::generate_galois_iris_shares,
+        hnsw::{graph::layered_graph::GraphMem, HnswSearcher},
+    };
     use aes_prng::AesRng;
     use itertools::Itertools;
     use rand::SeedableRng;

@@ -1,6 +1,5 @@
 use serde::Serialize;
-use std::fmt::Debug;
-use std::hash::Hash;
+use std::{fmt::Debug, hash::Hash};
 
 pub trait Ref:
     Clone + Debug + PartialEq + Eq + Hash + Sync + Serialize + for<'de> serde::Deserialize<'de>
@@ -17,7 +16,8 @@ impl<T> Ref for T where
 pub trait VectorStore: Clone + Debug {
     /// Opaque reference to a query.
     ///
-    /// Example: a preprocessed representation optimized for distance evaluations.
+    /// Example: a preprocessed representation optimized for distance
+    /// evaluations.
     type QueryRef: Ref;
 
     /// Opaque reference to a stored vector.
@@ -30,7 +30,8 @@ pub trait VectorStore: Clone + Debug {
     /// Example: an encrypted distance.
     type DistanceRef: Ref;
 
-    /// Persist a query as a new vector in the store, and return a reference to it.
+    /// Persist a query as a new vector in the store, and return a reference to
+    /// it.
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef;
 
     /// Evaluate the distance between a query and a vector.
@@ -40,7 +41,8 @@ pub trait VectorStore: Clone + Debug {
         vector: &Self::VectorRef,
     ) -> Self::DistanceRef;
 
-    /// Check whether a distance is a match, meaning the query is considered equivalent to a previously inserted vector.
+    /// Check whether a distance is a match, meaning the query is considered
+    /// equivalent to a previously inserted vector.
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> bool;
 
     /// Compare two distances.
@@ -52,9 +54,9 @@ pub trait VectorStore: Clone + Debug {
 
     // Batch variants.
 
-    /// Persist a batch of queries as new vectors in the store, and return references to them.
-    /// The default implementation is a loop over `insert`.
-    /// Override for more efficient batch insertions.
+    /// Persist a batch of queries as new vectors in the store, and return
+    /// references to them. The default implementation is a loop over
+    /// `insert`. Override for more efficient batch insertions.
     async fn insert_batch(&mut self, queries: &[Self::QueryRef]) -> Vec<Self::VectorRef> {
         let mut results = Vec::with_capacity(queries.len());
         for query in queries {

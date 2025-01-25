@@ -5,6 +5,7 @@
 //* https://github.com/Inversed-Tech/hawk-pack/
 
 use super::metrics::ops_counter::Operation;
+use crate::hnsw::graph::layered_graph::GraphMem;
 pub use hawk_pack::data_structures::queue::{
     FurthestQueue, FurthestQueueV, NearestQueue, NearestQueueV,
 };
@@ -14,7 +15,6 @@ use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use tracing::{info, instrument};
-use crate::hnsw::graph::layered_graph::GraphMem;
 
 // Specify construction and search parameters by layer up to this value minus 1
 // any higher layers will use the last set of parameters
@@ -166,7 +166,6 @@ impl HnswParams {
 /// An implementation of the HNSW algorithm.
 ///
 /// Operations on vectors are delegated to a VectorStore.
-/// Operations on the graph are delegated to a GraphStore.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct HnswSearcher {
     pub params: HnswParams,
@@ -475,9 +474,7 @@ mod tests {
     use super::*;
     use crate::hnsw::graph::layered_graph::GraphMem;
     use aes_prng::AesRng;
-    use hawk_pack::{
-        vector_store::lazy_memory_store::LazyMemoryStore,
-    };
+    use hawk_pack::vector_store::lazy_memory_store::LazyMemoryStore;
     use rand::SeedableRng;
     use tokio;
 

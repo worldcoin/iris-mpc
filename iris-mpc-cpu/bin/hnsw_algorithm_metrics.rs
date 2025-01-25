@@ -4,11 +4,11 @@ use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{
+        graph::layered_graph::GraphMem,
         metrics::ops_counter::{
             OpCountersLayer, Operation, ParamVertexOpeningsCounter, StaticCounter,
         },
         searcher::{HnswParams, HnswSearcher},
-        graph::layered_graph::GraphMem,
     },
 };
 use rand::SeedableRng;

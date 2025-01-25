@@ -16,14 +16,14 @@ struct EntryPoint<VectorRef> {
 #[derive(Default, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct GraphMem<V: VectorStore> {
     entry_point: Option<EntryPoint<V::VectorRef>>,
-    layers: Vec<Layer<V>>,
+    layers:      Vec<Layer<V>>,
 }
 
 impl<V: VectorStore> GraphMem<V> {
     pub fn new() -> Self {
         GraphMem {
             entry_point: None,
-            layers: vec![],
+            layers:      vec![],
         }
     }
 
@@ -45,9 +45,10 @@ impl<V: VectorStore> GraphMem<V> {
     }
 }
 
-// Plain converter for a Graph structure that has different distance ref and vector ref types.
-// WARNING: distance metric is assumed to stay the same; thus, conversion doesn't change the graph structure.
-// Needed when switching from a PlaintextStore to a secret shared VectorStore.
+// Plain converter for a Graph structure that has different distance ref and
+// vector ref types. WARNING: distance metric is assumed to stay the same; thus,
+// conversion doesn't change the graph structure. Needed when switching from a
+// PlaintextStore to a secret shared VectorStore.
 impl<V: VectorStore> GraphMem<V> {
     pub fn from_another<U, F1, F2>(graph: GraphMem<U>, vector_map: F1, distance_map: F2) -> Self
     where
@@ -75,7 +76,7 @@ impl<V: VectorStore> GraphMem<V> {
 
         GraphMem::<V> {
             entry_point: new_entry_point,
-            layers: new_layers,
+            layers:      new_layers,
         }
     }
 
@@ -130,7 +131,8 @@ impl<V: VectorStore> GraphMem<V> {
 
 #[derive(PartialEq, Eq, Default, Clone, Debug, Serialize, Deserialize)]
 pub struct Layer<V: VectorStore> {
-    /// Map a base vector to its neighbors, including the distance base-neighbor.
+    /// Map a base vector to its neighbors, including the distance
+    /// base-neighbor.
     links: HashMap<V::VectorRef, FurthestQueueV<V>>,
 }
 
@@ -160,17 +162,12 @@ impl<V: VectorStore> Layer<V> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::hnsw::HnswSearcher;
     use aes_prng::AesRng;
+    use hawk_pack::vector_store::lazy_memory_store::{LazyMemoryStore, PointId};
     use rand::{RngCore, SeedableRng};
     use serde::{Deserialize, Serialize};
-
-    use crate::hnsw::HnswSearcher;
-
-    use hawk_pack::{
-        vector_store::lazy_memory_store::{LazyMemoryStore, PointId},
-    };
-
-    use super::*;
 
     #[derive(Default, Clone, Debug, PartialEq, Eq)]
     pub struct TestStore {
@@ -180,8 +177,9 @@ mod tests {
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct Point {
         /// Whatever encoding of a vector.
-        data: u64,
-        /// Distinguish between queries that are pending, and those that were ultimately accepted into the vector store.
+        data:          u64,
+        /// Distinguish between queries that are pending, and those that were
+        /// ultimately accepted into the vector store.
         is_persistent: bool,
     }
 

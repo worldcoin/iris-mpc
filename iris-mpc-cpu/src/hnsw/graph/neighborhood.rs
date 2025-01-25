@@ -1,25 +1,29 @@
-use std::ops::Deref;
-
 use hawk_pack::VectorStore;
 use serde::{Deserialize, Serialize};
+use std::ops::Deref;
 
 // pub type FurthestQueueV<V> =
-//     SortedNeighborhood<<V as VectorStore>::VectorRef, <V as VectorStore>::DistanceRef>;
-// pub type NearestQueueV<V> =
-//     NearestQueue<<V as VectorStore>::VectorRef, <V as VectorStore>::DistanceRef>;
+//     SortedNeighborhood<<V as VectorStore>::VectorRef, <V as
+// VectorStore>::DistanceRef>; pub type NearestQueueV<V> =
+//     NearestQueue<<V as VectorStore>::VectorRef, <V as
+// VectorStore>::DistanceRef>;
 
-// list only stores "graph neighborhood" data, which includes vectors and cached distance refs;
-// visited status for layer search is stored in a separate hashset
+// list only stores "graph neighborhood" data, which includes vectors and cached
+// distance refs; visited status for layer search is stored in a separate
+// hashset
 
-type Edge<V> = (<V as VectorStore>::VectorRef, <V as VectorStore>::DistanceRef);
+type Edge<V> = (
+    <V as VectorStore>::VectorRef,
+    <V as VectorStore>::DistanceRef,
+);
 
 /// SortedNeighborhood maintains a collection of distance-weighted oriented
 /// graph edges for an HNSW graph which are stored in increasing order of edge
 /// weights.  Each edge is stored as a vector id representing the target of the
 /// directed edge, along with a cached representation of the distance between
-/// the source vector and the target vector.  Note that the source vector id is not stored, as this would increase
-/// the memory required to store an edge, and is implicit from the context in
-/// which the neighborhood is being accessed.
+/// the source vector and the target vector.  Note that the source vector id is
+/// not stored, as this would increase the memory required to store an edge, and
+/// is implicit from the context in which the neighborhood is being accessed.
 ///
 /// The aim of ordering operations for this implementation is to prioritize a
 /// combination of low total overall comparison operations and low sequential
@@ -28,26 +32,26 @@ type Edge<V> = (<V as VectorStore>::VectorRef, <V as VectorStore>::DistanceRef);
 /// determine overall network bandwidth usage, and sequential complexity
 /// determines serial latency of operations.
 #[derive(Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SortedNeighborhood<V: VectorStore>
-{
+pub struct SortedNeighborhood<V: VectorStore> {
     queue: Vec<Edge<V>>,
 }
 
-
 impl<V: VectorStore> SortedNeighborhood<V> {
     pub fn new() -> Self {
-        Self { queue: Default::default() }
+        Self {
+            queue: Default::default(),
+        }
     }
 
     pub fn from_ascending_vec(queue: Vec<Edge<V>>) -> Self {
         SortedNeighborhood { queue }
     }
 
-    /// Insert the element `to` with distance `dist` into the queue, maintaining the ascending order.
+    /// Insert the element `to` with distance `dist` into the queue, maintaining
+    /// the ascending order.
     ///
     /// Call the VectorStore to come up with the insertion index.
-    pub async fn insert(&mut self, store: &mut V, to: V::VectorRef, dist: V::DistanceRef)
-    {
+    pub async fn insert(&mut self, store: &mut V, to: V::VectorRef, dist: V::DistanceRef) {
         let index_asc = Self::binary_search(
             store,
             &self
@@ -82,11 +86,7 @@ impl<V: VectorStore> SortedNeighborhood<V> {
     }
 
     // Assumes that distance map doesn't change the distance metric
-    pub fn map<W, F1, F2>(
-        self,
-        vector_map: F1,
-        distance_map: F2,
-    ) -> SortedNeighborhood<W>
+    pub fn map<W, F1, F2>(self, vector_map: F1, distance_map: F2) -> SortedNeighborhood<W>
     where
         W: VectorStore,
         F1: Fn(V::VectorRef) -> W::VectorRef,
@@ -154,10 +154,9 @@ impl<V: VectorStore> From<SortedNeighborhood<V>> for Vec<Edge<V>> {
 
 #[cfg(test)]
 mod tests {
-    use iris_mpc_common::iris_db::iris::IrisCode;
-
     use super::*;
     use crate::hawkers::plaintext_store::PlaintextStore;
+    use iris_mpc_common::iris_db::iris::IrisCode;
 
     #[tokio::test]
     async fn test_neighborhood() {
