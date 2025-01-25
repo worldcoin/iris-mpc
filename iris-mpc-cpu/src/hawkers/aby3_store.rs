@@ -7,7 +7,10 @@ use crate::{
     },
     hawkers::plaintext_store::{PlaintextStore, PointId},
     hnsw::{
-        graph::layered_graph::{GraphMem, Layer},
+        graph::{
+            layered_graph::{GraphMem, Layer},
+            neighborhood::SortedNeighborhood,
+        },
         HnswSearcher,
     },
     network::NetworkType,
@@ -22,7 +25,7 @@ use crate::{
     },
 };
 use aes_prng::AesRng;
-use hawk_pack::{data_structures::queue::FurthestQueue, VectorStore};
+use hawk_pack::VectorStore;
 use iris_mpc_common::iris_db::db::IrisDB;
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -375,7 +378,7 @@ impl Aby3Store {
                 }
                 shared_links.insert(
                     source_v,
-                    FurthestQueue::from_ascending_vec(shared_queue.clone()),
+                    SortedNeighborhood::from_ascending_vec(shared_queue.clone()),
                 );
             }
             shared_layers.push(Layer::from_links(shared_links));

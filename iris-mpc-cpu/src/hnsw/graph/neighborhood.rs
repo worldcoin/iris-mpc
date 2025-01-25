@@ -12,7 +12,7 @@ use std::ops::Deref;
 // distance refs; visited status for layer search is stored in a separate
 // hashset
 
-type Edge<V> = (
+pub type Edge<V> = (
     <V as VectorStore>::VectorRef,
     <V as VectorStore>::DistanceRef,
 );
@@ -33,7 +33,7 @@ type Edge<V> = (
 /// determines serial latency of operations.
 #[derive(Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SortedNeighborhood<V: VectorStore> {
-    queue: Vec<Edge<V>>,
+    pub queue: Vec<Edge<V>>,
 }
 
 impl<V: VectorStore> SortedNeighborhood<V> {

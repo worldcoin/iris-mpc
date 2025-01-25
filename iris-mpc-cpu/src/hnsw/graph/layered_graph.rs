@@ -1,7 +1,5 @@
-use hawk_pack::{
-    data_structures::queue::{FurthestQueue, FurthestQueueV},
-    VectorStore,
-};
+use super::neighborhood::SortedNeighborhood;
+use hawk_pack::VectorStore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -105,12 +103,12 @@ impl<V: VectorStore> GraphMem<V> {
         &self,
         base: &<V as VectorStore>::VectorRef,
         lc: usize,
-    ) -> FurthestQueueV<V> {
+    ) -> SortedNeighborhood<V> {
         let layer = &self.layers[lc];
         if let Some(links) = layer.get_links(base) {
             links.clone()
         } else {
-            FurthestQueue::new()
+            SortedNeighborhood::new()
         }
     }
 
@@ -119,7 +117,7 @@ impl<V: VectorStore> GraphMem<V> {
     /// `set_entry_point` function for an entry point at at least this layer.
     ///
     /// Panics if `lc` is higher than the maximum initialized layer.
-    pub async fn set_links(&mut self, base: V::VectorRef, links: FurthestQueueV<V>, lc: usize) {
+    pub async fn set_links(&mut self, base: V::VectorRef, links: SortedNeighborhood<V>, lc: usize) {
         let layer = self.layers.get_mut(lc).unwrap();
         layer.set_links(base, links);
     }
@@ -127,13 +125,38 @@ impl<V: VectorStore> GraphMem<V> {
     pub async fn num_layers(&self) -> usize {
         self.layers.len()
     }
+
+    pub async fn connect_bidir(
+        &mut self,
+        vector_store: &mut V,
+        q: &V::VectorRef,
+        neighbors: SortedNeighborhood<V>,
+        max_links: usize,
+        lc: usize,
+    ) {
+        // let M = self.params.get_M(lc);
+        // let max_links = self.params.get_M_max(lc);
+
+        // neighbors.trim_to_k_nearest(M);
+
+        // Connect all n -> q.
+        for (n, nq) in neighbors.iter() {
+            let mut links = self.get_links(n, lc).await;
+            links.insert(vector_store, q.clone(), nq.clone()).await;
+            links.trim_to_k_nearest(max_links);
+            self.set_links(n.clone(), links, lc).await;
+        }
+
+        // Connect q -> all n.
+        self.set_links(q.clone(), neighbors, lc).await;
+    }
 }
 
 #[derive(PartialEq, Eq, Default, Clone, Debug, Serialize, Deserialize)]
 pub struct Layer<V: VectorStore> {
     /// Map a base vector to its neighbors, including the distance
     /// base-neighbor.
-    links: HashMap<V::VectorRef, FurthestQueueV<V>>,
+    links: HashMap<V::VectorRef, SortedNeighborhood<V>>,
 }
 
 impl<V: VectorStore> Layer<V> {
@@ -143,19 +166,19 @@ impl<V: VectorStore> Layer<V> {
         }
     }
 
-    pub fn from_links(links: HashMap<V::VectorRef, FurthestQueueV<V>>) -> Self {
+    pub fn from_links(links: HashMap<V::VectorRef, SortedNeighborhood<V>>) -> Self {
         Layer { links }
     }
 
-    fn get_links(&self, from: &V::VectorRef) -> Option<&FurthestQueueV<V>> {
+    fn get_links(&self, from: &V::VectorRef) -> Option<&SortedNeighborhood<V>> {
         self.links.get(from)
     }
 
-    fn set_links(&mut self, from: V::VectorRef, links: FurthestQueueV<V>) {
+    fn set_links(&mut self, from: V::VectorRef, links: SortedNeighborhood<V>) {
         self.links.insert(from, links);
     }
 
-    pub fn get_links_map(&self) -> &HashMap<V::VectorRef, FurthestQueueV<V>> {
+    pub fn get_links_map(&self) -> &HashMap<V::VectorRef, SortedNeighborhood<V>> {
         &self.links
     }
 }
