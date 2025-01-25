@@ -18,11 +18,11 @@ use tracing_subscriber::prelude::*;
 #[derive(Parser)]
 #[allow(non_snake_case)]
 struct Args {
-    #[clap(default_value = "64")]
+    #[clap(default_value = "384")]
     M:                 usize,
-    #[clap(default_value = "128")]
+    #[clap(default_value = "512")]
     ef_constr:         usize,
-    #[clap(default_value = "64")]
+    #[clap(default_value = "512")]
     ef_search:         usize,
     #[clap(default_value = "10000")]
     database_size:     usize,
@@ -49,6 +49,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let node_openings = StaticCounter::new();
     let node_openings_counter = node_openings.get_counter();
+
+    // TODO support several counters and output formats using CLI options
 
     let param_openings = ParamVertexOpeningsCounter::new();
     let (param_openings_map, _) = param_openings.get_counters();
