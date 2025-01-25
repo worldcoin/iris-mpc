@@ -1,6 +1,5 @@
 use aes_prng::AesRng;
 use clap::Parser;
-use hawk_pack::graph_store::GraphMem;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
@@ -9,6 +8,7 @@ use iris_mpc_cpu::{
             OpCountersLayer, Operation, ParamVertexOpeningsCounter, StaticCounter,
         },
         searcher::{HnswParams, HnswSearcher},
+        graph::layered_graph::GraphMem,
     },
 };
 use rand::SeedableRng;

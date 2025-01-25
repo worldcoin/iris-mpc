@@ -1,6 +1,5 @@
 use hawk_pack::{
     data_structures::queue::{FurthestQueue, FurthestQueueV},
-    traits::GraphStore,
     VectorStore,
 };
 use serde::{Deserialize, Serialize};
@@ -79,16 +78,14 @@ impl<V: VectorStore> GraphMem<V> {
             layers: new_layers,
         }
     }
-}
 
-impl<V: VectorStore> GraphStore<V> for GraphMem<V> {
-    async fn get_entry_point(&self) -> Option<(V::VectorRef, usize)> {
+    pub async fn get_entry_point(&self) -> Option<(V::VectorRef, usize)> {
         self.entry_point
             .as_ref()
             .map(|ep| (ep.point.clone(), ep.layer))
     }
 
-    async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) {
+    pub async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) {
         if let Some(previous) = self.entry_point.as_ref() {
             assert!(
                 previous.layer < layer,
@@ -103,7 +100,7 @@ impl<V: VectorStore> GraphStore<V> for GraphMem<V> {
         self.entry_point = Some(EntryPoint { point, layer });
     }
 
-    async fn get_links(
+    pub async fn get_links(
         &self,
         base: &<V as VectorStore>::VectorRef,
         lc: usize,
@@ -121,12 +118,12 @@ impl<V: VectorStore> GraphStore<V> for GraphMem<V> {
     /// `set_entry_point` function for an entry point at at least this layer.
     ///
     /// Panics if `lc` is higher than the maximum initialized layer.
-    async fn set_links(&mut self, base: V::VectorRef, links: FurthestQueueV<V>, lc: usize) {
+    pub async fn set_links(&mut self, base: V::VectorRef, links: FurthestQueueV<V>, lc: usize) {
         let layer = self.layers.get_mut(lc).unwrap();
         layer.set_links(base, links);
     }
 
-    async fn num_layers(&self) -> usize {
+    pub async fn num_layers(&self) -> usize {
         self.layers.len()
     }
 }
@@ -167,8 +164,9 @@ mod tests {
     use rand::{RngCore, SeedableRng};
     use serde::{Deserialize, Serialize};
 
+    use crate::hnsw::HnswSearcher;
+
     use hawk_pack::{
-        hawk_searcher::HawkSearcher,
         vector_store::lazy_memory_store::{LazyMemoryStore, PointId},
     };
 
@@ -239,7 +237,7 @@ mod tests {
     async fn test_from_another_naive() {
         let mut vector_store = LazyMemoryStore::new();
         let mut graph_store = GraphMem::new();
-        let searcher = HawkSearcher::default();
+        let searcher = HnswSearcher::default();
         let mut rng = AesRng::seed_from_u64(0_u64);
 
         for raw_query in 0..10 {
@@ -273,7 +271,7 @@ mod tests {
     async fn test_from_another() {
         let mut vector_store = LazyMemoryStore::new();
         let mut graph_store = GraphMem::new();
-        let searcher = HawkSearcher::default();
+        let searcher = HnswSearcher::default();
         let mut rng = AesRng::seed_from_u64(0_u64);
 
         let mut point_ids: HashMap<PointId, TestPointId> = HashMap::new();

@@ -8,12 +8,13 @@ use super::metrics::ops_counter::Operation;
 pub use hawk_pack::data_structures::queue::{
     FurthestQueue, FurthestQueueV, NearestQueue, NearestQueueV,
 };
-use hawk_pack::{GraphStore, VectorStore};
+use hawk_pack::VectorStore;
 use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use tracing::{info, instrument};
+use crate::hnsw::graph::layered_graph::GraphMem;
 
 // Specify construction and search parameters by layer up to this value minus 1
 // any higher layers will use the last set of parameters
@@ -183,10 +184,10 @@ impl Default for HnswSearcher {
 
 #[allow(non_snake_case)]
 impl HnswSearcher {
-    async fn connect_bidir<V: VectorStore, G: GraphStore<V>>(
+    async fn connect_bidir<V: VectorStore>(
         &self,
         vector_store: &mut V,
-        graph_store: &mut G,
+        graph_store: &mut GraphMem<V>,
         q: &V::VectorRef,
         mut neighbors: FurthestQueueV<V>,
         lc: usize,
@@ -222,10 +223,10 @@ impl HnswSearcher {
     ///
     /// If no entry point is initialized, returns an empty list and layer 0.
     #[allow(non_snake_case)]
-    async fn search_init<V: VectorStore, G: GraphStore<V>>(
+    async fn search_init<V: VectorStore>(
         &self,
         vector_store: &mut V,
-        graph_store: &mut G,
+        graph_store: &mut GraphMem<V>,
         query: &V::QueryRef,
     ) -> (FurthestQueueV<V>, usize) {
         if let Some((entry_point, layer)) = graph_store.get_entry_point().await {
@@ -246,10 +247,10 @@ impl HnswSearcher {
     /// vertices and their neighbors.
     #[instrument(skip(self, vector_store, graph_store, W))]
     #[allow(non_snake_case)]
-    async fn search_layer<V: VectorStore, G: GraphStore<V>>(
+    async fn search_layer<V: VectorStore>(
         &self,
         vector_store: &mut V,
-        graph_store: &mut G,
+        graph_store: &mut GraphMem<V>,
         q: &V::QueryRef,
         W: &mut FurthestQueueV<V>,
         ef: usize,
@@ -325,10 +326,10 @@ impl HnswSearcher {
     }
 
     #[allow(non_snake_case)]
-    pub async fn search<V: VectorStore, G: GraphStore<V>>(
+    pub async fn search<V: VectorStore>(
         &self,
         vector_store: &mut V,
-        graph_store: &mut G,
+        graph_store: &mut GraphMem<V>,
         query: &V::QueryRef,
         k: usize,
     ) -> FurthestQueueV<V> {
@@ -348,10 +349,10 @@ impl HnswSearcher {
     /// Insert `query` into HNSW index represented by `vector_store` and
     /// `graph_store`.  Return a `V::VectorRef` representing the inserted
     /// vector.
-    pub async fn insert<V: VectorStore, G: GraphStore<V>>(
+    pub async fn insert<V: VectorStore>(
         &self,
         vector_store: &mut V,
-        graph_store: &mut G,
+        graph_store: &mut GraphMem<V>,
         query: &V::QueryRef,
         rng: &mut impl RngCore,
     ) -> V::VectorRef {
@@ -387,10 +388,10 @@ impl HnswSearcher {
     /// If no entry point is initialized for the index, then the insertion will
     /// set `query` as the index entry point.
     #[allow(non_snake_case)]
-    pub async fn search_to_insert<V: VectorStore, G: GraphStore<V>>(
+    pub async fn search_to_insert<V: VectorStore>(
         &self,
         vector_store: &mut V,
-        graph_store: &mut G,
+        graph_store: &mut GraphMem<V>,
         query: &V::QueryRef,
         insertion_layer: usize,
     ) -> (Vec<FurthestQueueV<V>>, bool) {
@@ -431,10 +432,10 @@ impl HnswSearcher {
     /// Insert a vector using the search results from `search_to_insert`,
     /// that is the nearest neighbor links at each insertion layer, and a flag
     /// indicating whether the vector is to be inserted as the new entry point.
-    pub async fn insert_from_search_results<V: VectorStore, G: GraphStore<V>>(
+    pub async fn insert_from_search_results<V: VectorStore>(
         &self,
         vector_store: &mut V,
-        graph_store: &mut G,
+        graph_store: &mut GraphMem<V>,
         inserted_vector: V::VectorRef,
         links: Vec<FurthestQueueV<V>>,
         set_ep: bool,
@@ -472,9 +473,10 @@ impl HnswSearcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hnsw::graph::layered_graph::GraphMem;
     use aes_prng::AesRng;
     use hawk_pack::{
-        graph_store::graph_mem::GraphMem, vector_store::lazy_memory_store::LazyMemoryStore,
+        vector_store::lazy_memory_store::LazyMemoryStore,
     };
     use rand::SeedableRng;
     use tokio;

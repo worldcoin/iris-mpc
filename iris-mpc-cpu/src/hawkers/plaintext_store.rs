@@ -1,9 +1,10 @@
 use crate::hnsw::{
+    graph::layered_graph::GraphMem,
     metrics::ops_counter::Operation::{CompareDistance, EvaluateDistance},
     HnswSearcher,
 };
 use aes_prng::AesRng;
-use hawk_pack::{graph_store::GraphMem, VectorStore};
+use hawk_pack::VectorStore;
 use iris_mpc_common::iris_db::{
     db::IrisDB,
     iris::{IrisCode, MATCH_THRESHOLD_RATIO},
@@ -12,7 +13,6 @@ use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::ops::{Index, IndexMut};
 use tracing::info;
-// use const_str;
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct PlaintextIris(pub IrisCode);

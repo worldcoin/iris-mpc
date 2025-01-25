@@ -6,7 +6,7 @@ use crate::{
         session::{BootSession, Session, SessionId},
     },
     hawkers::aby3_store::{Aby3Store, SharedIrisesRef},
-    hnsw::HnswSearcher,
+    hnsw::{graph::layered_graph::GraphMem, HnswSearcher},
     network::grpc::{GrpcConfig, GrpcNetworking},
     proto_generated::party_node::party_node_server::PartyNodeServer,
     protocol::ops::setup_replicated_prf,
@@ -14,7 +14,6 @@ use crate::{
 use aes_prng::AesRng;
 use clap::Parser;
 use eyre::Result;
-use hawk_pack::graph_store::GraphMem;
 use iris_mpc_common::iris_db::db::IrisDB;
 use itertools::{izip, Itertools};
 use rand::SeedableRng;

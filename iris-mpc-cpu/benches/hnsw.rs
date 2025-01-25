@@ -1,12 +1,11 @@
 use aes_prng::AesRng;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode};
-use hawk_pack::graph_store::GraphMem;
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use iris_mpc_cpu::{
     database_generators::{create_random_sharing, generate_galois_iris_shares},
     execution::local::LocalRuntime,
     hawkers::{aby3_store::Aby3Store, plaintext_store::PlaintextStore},
-    hnsw::searcher::HnswSearcher,
+    hnsw::{graph::layered_graph::GraphMem, searcher::HnswSearcher},
     protocol::ops::{
         batch_signed_lift_vec, cross_compare, galois_ring_pairwise_distance, galois_ring_to_rep3,
     },

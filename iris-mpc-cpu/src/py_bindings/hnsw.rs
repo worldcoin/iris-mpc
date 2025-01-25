@@ -1,9 +1,8 @@
 use super::plaintext_store::Base64IrisCode;
 use crate::{
     hawkers::plaintext_store::{PlaintextStore, PointId},
-    hnsw::HnswSearcher,
+    hnsw::{graph::layered_graph::GraphMem, HnswSearcher},
 };
-use hawk_pack::graph_store::GraphMem;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use rand::rngs::ThreadRng;
 use serde_json::{self, Deserializer};
