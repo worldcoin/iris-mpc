@@ -52,14 +52,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // TODO support several counters and output formats using CLI options
 
-    // let param_openings = ParamVertexOpeningsCounter::new();
-    // let (param_openings_map, _) = param_openings.get_counters();
+    let param_openings = ParamVertexOpeningsCounter::new();
+    let (param_openings_map, _) = param_openings.get_counters();
 
     let counting_layer = OpCountersLayer::builder()
         .register_static(dist_evaluations, Operation::EvaluateDistance)
         .register_static(dist_comparisons, Operation::CompareDistance)
         .register_static(node_openings, Operation::OpenNode)
-        // .register_dynamic(param_openings, Operation::OpenNode)
+        .register_dynamic(param_openings, Operation::OpenNode)
         .init();
 
     tracing_subscriber::registry().with(counting_layer).init();
@@ -95,11 +95,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // println!("Layer search counts:");
-    // let counter_map = param_openings_map.read().unwrap();
-    // for ((lc, ef), value) in counter_map.iter() {
-    //     println!("  lc={lc},ef={ef}: {:?}", value);
-    // }
+    println!("Layer search counts:");
+    let counter_map = param_openings_map.read().unwrap();
+    for ((lc, ef), value) in counter_map.iter() {
+        println!("  lc={lc},ef={ef}: {:?}", value);
+    }
 
     Ok(())
 }
