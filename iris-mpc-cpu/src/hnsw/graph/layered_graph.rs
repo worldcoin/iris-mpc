@@ -3,9 +3,7 @@
 //!
 //! https://github.com/Inversed-Tech/hawk-pack/
 
-use crate::hawkers::vector_store::VectorStore;
-
-use super::neighborhood::SortedNeighborhood;
+use crate::hnsw::{SortedNeighborhood, VectorStore};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -190,11 +188,14 @@ impl<V: VectorStore> Layer<V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{hawkers::plaintext_store::{PlaintextStore, PointId}, hnsw::HnswSearcher};
+    use crate::{
+        hawkers::plaintext_store::{PlaintextStore, PointId},
+        hnsw::HnswSearcher,
+    };
     use aes_prng::AesRng;
+    use iris_mpc_common::iris_db::db::IrisDB;
     use rand::{RngCore, SeedableRng};
     use serde::{Deserialize, Serialize};
-    use iris_mpc_common::iris_db::db::IrisDB;
 
     #[derive(Default, Clone, Debug, PartialEq, Eq)]
     pub struct TestStore {
@@ -301,7 +302,8 @@ mod tests {
         let searcher = HnswSearcher::default();
         let mut rng = AesRng::seed_from_u64(0_u64);
 
-        let mut point_ids_map: HashMap<<PlaintextStore as VectorStore>::VectorRef, TestPointId> = HashMap::new();
+        let mut point_ids_map: HashMap<<PlaintextStore as VectorStore>::VectorRef, TestPointId> =
+            HashMap::new();
         fn distance_map(d: <PlaintextStore as VectorStore>::DistanceRef) -> u32 {
             let (num, denom) = d;
             (num as u32) * (1 << 16) / (denom as u32)

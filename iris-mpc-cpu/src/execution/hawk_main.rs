@@ -6,7 +6,7 @@ use crate::{
         session::{BootSession, Session, SessionId},
     },
     hawkers::aby3_store::{Aby3Store, SharedIrisesRef},
-    hnsw::{graph::layered_graph::GraphMem, HnswSearcher},
+    hnsw::{GraphMem, HnswSearcher},
     network::grpc::{GrpcConfig, GrpcNetworking},
     proto_generated::party_node::party_node_server::PartyNodeServer,
     protocol::ops::setup_replicated_prf,

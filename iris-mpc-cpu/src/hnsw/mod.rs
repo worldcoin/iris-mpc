@@ -11,5 +11,8 @@
 pub mod graph;
 pub mod metrics;
 pub mod searcher;
+pub mod vector_store;
 
-pub use searcher::HnswSearcher;
+pub use graph::{layered_graph::GraphMem, neighborhood::SortedNeighborhood};
+pub use searcher::{HnswParams, HnswSearcher};
+pub use vector_store::VectorStore;

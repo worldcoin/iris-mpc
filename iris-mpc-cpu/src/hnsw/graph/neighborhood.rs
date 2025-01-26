@@ -3,10 +3,9 @@
 //!
 //! https://github.com/Inversed-Tech/hawk-pack/
 
+use crate::hnsw::VectorStore;
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
-
-use crate::hawkers::vector_store::VectorStore;
 
 pub type Edge<V> = (
     <V as VectorStore>::VectorRef,

@@ -5,7 +5,7 @@ use iris_mpc_cpu::{
     database_generators::{create_random_sharing, generate_galois_iris_shares},
     execution::local::LocalRuntime,
     hawkers::{aby3_store::Aby3Store, plaintext_store::PlaintextStore},
-    hnsw::{graph::layered_graph::GraphMem, searcher::HnswSearcher},
+    hnsw::{GraphMem, HnswSearcher},
     protocol::ops::{
         batch_signed_lift_vec, cross_compare, galois_ring_pairwise_distance, galois_ring_to_rep3,
     },

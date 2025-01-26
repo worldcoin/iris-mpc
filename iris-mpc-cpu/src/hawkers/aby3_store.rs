@@ -7,11 +7,8 @@ use crate::{
     },
     hawkers::plaintext_store::{PlaintextStore, PointId},
     hnsw::{
-        graph::{
-            layered_graph::{GraphMem, Layer},
-            neighborhood::SortedNeighborhood,
-        },
-        HnswSearcher,
+        graph::layered_graph::{GraphMem, Layer},
+        HnswSearcher, SortedNeighborhood, VectorStore,
     },
     network::NetworkType,
     protocol::ops::{
@@ -35,8 +32,6 @@ use std::{
     vec,
 };
 use tokio::task::JoinSet;
-
-use super::vector_store::VectorStore;
 
 #[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct VectorId {
@@ -610,7 +605,7 @@ mod tests {
     use super::*;
     use crate::{
         database_generators::generate_galois_iris_shares,
-        hnsw::{graph::layered_graph::GraphMem, HnswSearcher},
+        hnsw::{GraphMem, HnswSearcher},
     };
     use aes_prng::AesRng;
     use itertools::Itertools;

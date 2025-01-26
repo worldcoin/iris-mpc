@@ -2,7 +2,7 @@ use aes_prng::AesRng;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
-    hnsw::{graph::layered_graph::GraphMem, searcher::HnswSearcher},
+    hnsw::{GraphMem, HnswSearcher},
 };
 use rand::SeedableRng;
 
