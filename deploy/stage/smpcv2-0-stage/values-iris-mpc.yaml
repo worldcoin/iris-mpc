@@ -81,7 +81,7 @@ env:
     value: "64"
 
   - name: SMPC__LOAD_CHUNKS_DEFAULT_CLIENT
-    value: "true"
+    value: "false"
 
   - name: SMPC__LOAD_CHUNKS_BUFFER_SIZE
     value: "1024"
@@ -89,12 +89,6 @@ env:
   - name: SMPC__LOAD_CHUNKS_STATIC_IPS
     value: "16"
 
-  - name: SMPC__TEST_LOAD_INTO_MEMORY
-    value: "false"
-
-  - name: SMPC__PAGE_LOCK_AT_BEGINNING
-    value: "true"
-  
   - name: SMPC__PAGE_LOCK_CHUNK_PERCENTAGE
     value: "10"
 
