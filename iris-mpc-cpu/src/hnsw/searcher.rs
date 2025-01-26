@@ -244,7 +244,6 @@ impl HnswSearcher {
             current_neighbors: &'a SortedNeighborhood<V>,
             opened: &HashSet<V::VectorRef>,
         ) -> Option<&'a Edge<V>> {
-            // println!("Candidate selection");
             for edge in current_neighbors.queue.iter() {
                 if !opened.contains(&edge.0) {
                     return Some(edge);
@@ -254,15 +253,10 @@ impl HnswSearcher {
         }
 
         while let Some(candidate) = next_candidate(W, &opened) {
-            // println!("Candidate chosen {candidate:?}");
-
             // Open the candidate node and visit its neighbors
             let (c, cq) = candidate;
             opened.insert(c.clone());
             info!(event_type = Operation::OpenNode.id(), ef, lc);
-
-            // println!("candidate: {candidate:?}");
-            // C.pop_nearest().expect("C cannot be empty").clone();
 
             // If the nearest distance to C is greater than the furthest
             // distance in W, then we can stop
@@ -272,8 +266,6 @@ impl HnswSearcher {
 
             // Visit all neighbors of c
             let c_links = graph_store.get_links(&c, lc).await;
-            // println!("c_links: {c_links:?}");
-
             // Evaluate the distances of the neighbors to the query, as a batch.
             let c_links = {
                 let e_batch = c_links
@@ -305,16 +297,11 @@ impl HnswSearcher {
                     }
                 }
 
-                // // Track the new candidate in C so we will continue this path later.
-                // C.insert(vector_store, e.clone(), eq.clone()).await;
-
                 // Track the new candidate as a potential k-nearest.
                 W.insert(vector_store, e, eq).await;
 
                 // fq stays the furthest distance in W.
                 (_, fq) = W.get_furthest().expect("W cannot be empty").clone();
-
-                // println!("Length: {:?}", W.len())
             }
         }
     }
