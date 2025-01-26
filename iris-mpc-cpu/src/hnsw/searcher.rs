@@ -182,31 +182,6 @@ impl Default for HnswSearcher {
 
 #[allow(non_snake_case)]
 impl HnswSearcher {
-    // async fn connect_bidir<V: VectorStore>(
-    //     &self,
-    //     vector_store: &mut V,
-    //     graph_store: &mut GraphMem<V>,
-    //     q: &V::VectorRef,
-    //     mut neighbors: FurthestQueueV<V>,
-    //     lc: usize,
-    // ) {
-    //     let M = self.params.get_M(lc);
-    //     let max_links = self.params.get_M_max(lc);
-
-    //     neighbors.trim_to_k_nearest(M);
-
-    //     // Connect all n -> q.
-    //     for (n, nq) in neighbors.iter() {
-    //         let mut links = graph_store.get_links(n, lc).await;
-    //         links.insert(vector_store, q.clone(), nq.clone()).await;
-    //         links.trim_to_k_nearest(max_links);
-    //         graph_store.set_links(n.clone(), links, lc).await;
-    //     }
-
-    //     // Connect q -> all n.
-    //     graph_store.set_links(q.clone(), neighbors, lc).await;
-    // }
-
     pub fn select_layer(&self, rng: &mut impl RngCore) -> usize {
         let p_geom = 1f64 - self.params.get_layer_probability();
         let geom_distr = Geometric::new(p_geom).unwrap();
