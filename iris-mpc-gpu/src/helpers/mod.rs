@@ -177,6 +177,11 @@ pub fn register_host_memory(
     chunk_offset: usize,
     code_length: usize,
 ) {
+    tracing::info!(
+        "Page-locking chunk: [{}-{}]",
+        chunk_offset,
+        chunk_offset + chunk_length
+    );
     let size = chunk_length / device_manager.device_count();
     for (device_index, device) in device_manager.devices().iter().enumerate() {
         device.bind_to_thread().unwrap();
@@ -194,4 +199,9 @@ pub fn register_host_memory(
             );
         }
     }
+    tracing::info!(
+        "Page-lock completed for chunk: [{}-{}]",
+        chunk_offset,
+        chunk_offset + chunk_length
+    );
 }
