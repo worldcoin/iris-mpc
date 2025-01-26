@@ -28,21 +28,21 @@ pub type Edge<V> = (
 /// determines serial latency of operations.
 #[derive(Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SortedNeighborhood<V: VectorStore> {
-    pub queue: Vec<Edge<V>>,
+    pub edges: Vec<Edge<V>>,
 }
 
 impl<V: VectorStore> SortedNeighborhood<V> {
     pub fn new() -> Self {
         Self {
-            queue: Default::default(),
+            edges: Default::default(),
         }
     }
 
-    pub fn from_ascending_vec(queue: Vec<Edge<V>>) -> Self {
-        SortedNeighborhood { queue }
+    pub fn from_ascending_vec(edges: Vec<Edge<V>>) -> Self {
+        SortedNeighborhood { edges }
     }
 
-    /// Insert the element `to` with distance `dist` into the queue, maintaining
+    /// Insert the element `to` with distance `dist` into the list, maintaining
     /// the ascending order.
     ///
     /// Call the VectorStore to come up with the insertion index.
@@ -50,34 +50,34 @@ impl<V: VectorStore> SortedNeighborhood<V> {
         let index_asc = Self::binary_search(
             store,
             &self
-                .queue
+                .edges
                 .iter()
                 .map(|(_, dist)| dist.clone())
                 .collect::<Vec<V::DistanceRef>>(),
             &dist,
         )
         .await;
-        self.queue.insert(index_asc, (to, dist));
+        self.edges.insert(index_asc, (to, dist));
     }
 
     pub fn get_nearest(&self) -> Option<&Edge<V>> {
-        self.queue.first()
+        self.edges.first()
     }
 
     pub fn get_furthest(&self) -> Option<&Edge<V>> {
-        self.queue.last()
+        self.edges.last()
     }
 
     pub fn pop_furthest(&mut self) -> Option<Edge<V>> {
-        self.queue.pop()
+        self.edges.pop()
     }
 
     pub fn get_k_nearest(&self, k: usize) -> &[Edge<V>] {
-        &self.queue[..k]
+        &self.edges[..k]
     }
 
     pub fn trim_to_k_nearest(&mut self, k: usize) {
-        self.queue.truncate(k);
+        self.edges.truncate(k);
     }
 
     // Assumes that distance map doesn't change the distance metric
@@ -87,17 +87,17 @@ impl<V: VectorStore> SortedNeighborhood<V> {
         F1: Fn(V::VectorRef) -> W::VectorRef,
         F2: Fn(V::DistanceRef) -> W::DistanceRef,
     {
-        let queue: Vec<(W::VectorRef, W::DistanceRef)> = self
-            .queue
+        let edges: Vec<(W::VectorRef, W::DistanceRef)> = self
+            .edges
             .iter()
             .cloned()
             .map(|(v, d)| (vector_map(v), distance_map(d)))
             .collect();
-        SortedNeighborhood::from_ascending_vec(queue)
+        SortedNeighborhood::from_ascending_vec(edges)
     }
 
     pub fn as_vec_ref(&self) -> &[Edge<V>] {
-        &self.queue
+        &self.edges
     }
 
     /// Find the insertion index for a target distance in the current
@@ -129,21 +129,21 @@ impl<V: VectorStore> Deref for SortedNeighborhood<V> {
     type Target = [Edge<V>];
 
     fn deref(&self) -> &Self::Target {
-        &self.queue
+        &self.edges
     }
 }
 
 impl<V: VectorStore> Clone for SortedNeighborhood<V> {
     fn clone(&self) -> Self {
         SortedNeighborhood {
-            queue: self.queue.clone(),
+            edges: self.edges.clone(),
         }
     }
 }
 
 impl<V: VectorStore> From<SortedNeighborhood<V>> for Vec<Edge<V>> {
-    fn from(queue: SortedNeighborhood<V>) -> Self {
-        queue.queue
+    fn from(nbhd: SortedNeighborhood<V>) -> Self {
+        nbhd.edges
     }
 }
 
@@ -160,11 +160,11 @@ mod tests {
         let vector = store.insert(&query).await;
         let distance = store.eval_distance(&query, &vector).await;
 
-        // Example usage for FurthestQueue
-        let mut furthest_queue = SortedNeighborhood::new();
-        furthest_queue.insert(&mut store, vector, distance).await;
-        println!("{:?}", furthest_queue.get_furthest());
-        println!("{:?}", furthest_queue.get_k_nearest(1));
-        println!("{:?}", furthest_queue.pop_furthest());
+        // Example usage for SortedNeighborhood
+        let mut nbhd = SortedNeighborhood::new();
+        nbhd.insert(&mut store, vector, distance).await;
+        println!("{:?}", nbhd.get_furthest());
+        println!("{:?}", nbhd.get_k_nearest(1));
+        println!("{:?}", nbhd.pop_furthest());
     }
 }

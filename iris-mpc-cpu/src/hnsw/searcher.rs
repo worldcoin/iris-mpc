@@ -240,7 +240,7 @@ impl HnswSearcher {
             current_neighbors: &'a SortedNeighborhood<V>,
             opened: &HashSet<V::VectorRef>,
         ) -> Option<&'a V::VectorRef> {
-            for (c, _) in current_neighbors.queue.iter() {
+            for (c, _) in current_neighbors.edges.iter() {
                 if !opened.contains(c) {
                     return Some(c);
                 }
