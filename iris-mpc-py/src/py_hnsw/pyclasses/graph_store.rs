@@ -1,4 +1,6 @@
-use iris_mpc_cpu::{hawkers::plaintext_store::PlaintextStore, hnsw::graph::layered_graph::GraphMem, py_bindings};
+use iris_mpc_cpu::{
+    hawkers::plaintext_store::PlaintextStore, hnsw::graph::layered_graph::GraphMem, py_bindings,
+};
 use pyo3::{exceptions::PyIOError, prelude::*};
 
 #[pyclass]
