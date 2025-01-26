@@ -4,11 +4,7 @@
 //!
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
-use super::{
-    graph::neighborhood::{Edge, SortedNeighborhood},
-    metrics::ops_counter::Operation,
-};
-use crate::hnsw::{GraphMem, VectorStore};
+use crate::hnsw::{metrics::ops_counter::Operation, GraphMem, SortedNeighborhood, VectorStore};
 use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
@@ -243,26 +239,19 @@ impl HnswSearcher {
         fn next_candidate<'a, V: VectorStore>(
             current_neighbors: &'a SortedNeighborhood<V>,
             opened: &HashSet<V::VectorRef>,
-        ) -> Option<&'a Edge<V>> {
-            for edge in current_neighbors.queue.iter() {
-                if !opened.contains(&edge.0) {
-                    return Some(edge);
+        ) -> Option<&'a V::VectorRef> {
+            for (c, _) in current_neighbors.queue.iter() {
+                if !opened.contains(c) {
+                    return Some(c);
                 }
             }
             None
         }
 
-        while let Some(candidate) = next_candidate(W, &opened) {
+        while let Some(c) = next_candidate(W, &opened) {
             // Open the candidate node and visit its neighbors
-            let (c, cq) = candidate;
             opened.insert(c.clone());
             info!(event_type = Operation::OpenNode.id(), ef, lc);
-
-            // If the nearest distance to C is greater than the furthest
-            // distance in W, then we can stop
-            if vector_store.less_than(&fq, &cq).await {
-                break;
-            }
 
             // Visit all neighbors of c
             let c_links = graph_store.get_links(&c, lc).await;
