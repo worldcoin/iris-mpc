@@ -1,8 +1,8 @@
-//* Implementation of HNSW algorithm for k-nearest-neighbor search over iris
-//* biometric templates with high-latency MPC comparison operations.  Based on
-//* the `HawkSearcher` class of the hawk-pack crate:
-//*
-//* https://github.com/Inversed-Tech/hawk-pack/
+//! Implementation of HNSW algorithm for k-nearest-neighbor search over iris
+//! biometric templates with high-latency MPC comparison operations.  Based on
+//! the `HawkSearcher` class of the `hawk-pack` crate:
+//!
+//! https://github.com/Inversed-Tech/hawk-pack/
 
 use super::{
     graph::neighborhood::{Edge, SortedNeighborhood},

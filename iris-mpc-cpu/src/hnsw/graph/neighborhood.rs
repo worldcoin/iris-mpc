@@ -1,17 +1,12 @@
+//! Implementation of sorted graph neighborhoods for an HNSW hierarchical graph;
+//! based on the `FurthestQueue` class of the `hawk-pack` crate:
+//!
+//! https://github.com/Inversed-Tech/hawk-pack/
+
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 
 use crate::hawkers::vector_store::VectorStore;
-
-// pub type FurthestQueueV<V> =
-//     SortedNeighborhood<<V as VectorStore>::VectorRef, <V as
-// VectorStore>::DistanceRef>; pub type NearestQueueV<V> =
-//     NearestQueue<<V as VectorStore>::VectorRef, <V as
-// VectorStore>::DistanceRef>;
-
-// list only stores "graph neighborhood" data, which includes vectors and cached
-// distance refs; visited status for layer search is stored in a separate
-// hashset
 
 pub type Edge<V> = (
     <V as VectorStore>::VectorRef,

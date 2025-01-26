@@ -1,3 +1,8 @@
+//! Implementation of a hierarchical graph for use by the HNSW algorithm; based
+//! on the `GraphMem` class of the `hawk-pack` crate:
+//!
+//! https://github.com/Inversed-Tech/hawk-pack/
+
 use crate::hawkers::vector_store::VectorStore;
 
 use super::neighborhood::SortedNeighborhood;
