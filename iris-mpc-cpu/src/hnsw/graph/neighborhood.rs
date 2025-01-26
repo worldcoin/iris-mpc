@@ -1,6 +1,7 @@
-use hawk_pack::VectorStore;
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
+
+use crate::hawkers::vector_store::VectorStore;
 
 // pub type FurthestQueueV<V> =
 //     SortedNeighborhood<<V as VectorStore>::VectorRef, <V as

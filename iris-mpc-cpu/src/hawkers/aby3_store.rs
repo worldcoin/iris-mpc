@@ -25,7 +25,6 @@ use crate::{
     },
 };
 use aes_prng::AesRng;
-use hawk_pack::VectorStore;
 use iris_mpc_common::iris_db::db::IrisDB;
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -36,6 +35,8 @@ use std::{
     vec,
 };
 use tokio::task::JoinSet;
+
+use super::vector_store::VectorStore;
 
 #[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct VectorId {

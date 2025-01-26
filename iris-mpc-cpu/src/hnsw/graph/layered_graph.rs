@@ -1,10 +1,9 @@
+use crate::hawkers::vector_store::VectorStore;
+
 use super::neighborhood::SortedNeighborhood;
-use hawk_pack::VectorStore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Utility struct, not exposed externally because it doesn't have enough use
-/// semantically to add an extra abstraction to the public interface.
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct EntryPoint<VectorRef> {
     pub point: VectorRef,
@@ -186,11 +185,11 @@ impl<V: VectorStore> Layer<V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hnsw::HnswSearcher;
+    use crate::{hawkers::plaintext_store::{PlaintextStore, PointId}, hnsw::HnswSearcher};
     use aes_prng::AesRng;
-    use hawk_pack::vector_store::lazy_memory_store::{LazyMemoryStore, PointId};
     use rand::{RngCore, SeedableRng};
     use serde::{Deserialize, Serialize};
+    use iris_mpc_common::iris_db::db::IrisDB;
 
     #[derive(Default, Clone, Debug, PartialEq, Eq)]
     pub struct TestStore {
@@ -222,7 +221,7 @@ mod tests {
     impl VectorStore for TestStore {
         type QueryRef = TestPointId; // Vector ID, pending insertion.
         type VectorRef = TestPointId; // Vector ID, inserted.
-        type DistanceRef = u32; // Eager distance representation.
+        type DistanceRef = u32; // Eager distance representation as fraction.
 
         async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
             // The query is now accepted in the store. It keeps the same ID.
@@ -256,12 +255,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_from_another_naive() {
-        let mut vector_store = LazyMemoryStore::new();
+        let mut vector_store = PlaintextStore::new();
         let mut graph_store = GraphMem::new();
         let searcher = HnswSearcher::default();
         let mut rng = AesRng::seed_from_u64(0_u64);
 
-        for raw_query in 0..10 {
+        let raw_queries = IrisDB::new_random_rng(10, &mut rng);
+
+        for raw_query in raw_queries.db {
             let query = vector_store.prepare_query(raw_query);
             let insertion_layer = searcher.select_layer(&mut rng);
             let (neighbors, set_ep) = searcher
@@ -279,26 +280,29 @@ mod tests {
                 .await;
         }
 
-        let equal_graph_store: GraphMem<LazyMemoryStore> =
+        let equal_graph_store: GraphMem<PlaintextStore> =
             GraphMem::from_another(graph_store.clone(), |v| v, |d| d);
         assert_eq!(graph_store, equal_graph_store);
 
-        let different_graph_store: GraphMem<LazyMemoryStore> =
-            GraphMem::from_another(graph_store.clone(), |v| PointId(v.val() * 2), |d| d);
+        let different_graph_store: GraphMem<PlaintextStore> =
+            GraphMem::from_another(graph_store.clone(), |v| PointId(v.0 * 2), |d| d);
         assert_ne!(graph_store, different_graph_store);
     }
 
     #[tokio::test]
     async fn test_from_another() {
-        let mut vector_store = LazyMemoryStore::new();
+        let mut vector_store = PlaintextStore::new();
         let mut graph_store = GraphMem::new();
         let searcher = HnswSearcher::default();
         let mut rng = AesRng::seed_from_u64(0_u64);
 
-        let mut point_ids: HashMap<PointId, TestPointId> = HashMap::new();
-        let mut distances: HashMap<(PointId, PointId), u32> = HashMap::new();
+        let mut point_ids_map: HashMap<<PlaintextStore as VectorStore>::VectorRef, TestPointId> = HashMap::new();
+        fn distance_map(d: <PlaintextStore as VectorStore>::DistanceRef) -> u32 {
+            let (num, denom) = d;
+            (num as u32) * (1 << 16) / (denom as u32)
+        }
 
-        for raw_query in 0..10 {
+        for raw_query in IrisDB::new_random_rng(20, &mut rng).db {
             let query = vector_store.prepare_query(raw_query);
             let insertion_layer = searcher.select_layer(&mut rng);
             let (neighbors, set_ep) = searcher
@@ -315,24 +319,18 @@ mod tests {
                 )
                 .await;
 
-            point_ids.insert(query, TestPointId(rng.next_u64() as usize));
-            for future_query in 0..10_u64 {
-                distances.insert(
-                    (query, PointId(future_query as usize)),
-                    hamming_distance(raw_query, future_query),
-                );
-            }
+            point_ids_map.insert(query, TestPointId(rng.next_u64() as usize));
         }
 
         let new_graph_store: GraphMem<TestStore> =
-            GraphMem::from_another(graph_store.clone(), |v| point_ids[&v], |d| distances[&d]);
+            GraphMem::from_another(graph_store.clone(), |v| point_ids_map[&v], distance_map);
 
         let (entry_point, layer) = graph_store.get_entry_point().await.unwrap();
         let (new_entry_point, new_layer) = new_graph_store.get_entry_point().await.unwrap();
 
         // Check that entry points are correct
         assert_eq!(layer, new_layer);
-        assert_eq!(point_ids[&entry_point], new_entry_point);
+        assert_eq!(point_ids_map[&entry_point], new_entry_point);
 
         let layers = graph_store.get_layers();
         let new_layers = new_graph_store.get_layers();
@@ -342,14 +340,14 @@ mod tests {
             let new_links = new_layer.get_links_map();
 
             for (point_id, queue) in links.iter() {
-                let new_point_id = point_ids[point_id];
+                let new_point_id = point_ids_map[point_id];
                 let new_queue_vec = new_links[&new_point_id].to_vec();
                 let queue_vec = queue.to_vec();
                 for ((neighbor_id, distance), (new_neighbor_id, new_distance)) in
                     queue_vec.iter().zip(new_queue_vec)
                 {
-                    assert_eq!(point_ids[neighbor_id], new_neighbor_id);
-                    assert_eq!(distances[distance], new_distance);
+                    assert_eq!(point_ids_map[neighbor_id], new_neighbor_id);
+                    assert_eq!(distance_map(*distance), new_distance);
                 }
             }
         }

@@ -8,8 +8,7 @@ use super::{
     graph::neighborhood::{Edge, SortedNeighborhood},
     metrics::ops_counter::Operation,
 };
-use crate::hnsw::graph::layered_graph::GraphMem;
-use hawk_pack::VectorStore;
+use crate::{hawkers::vector_store::VectorStore, hnsw::graph::layered_graph::GraphMem};
 use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
@@ -498,20 +497,23 @@ impl HnswSearcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hnsw::graph::layered_graph::GraphMem;
+    use crate::{hawkers::plaintext_store::PlaintextStore, hnsw::graph::layered_graph::GraphMem};
     use aes_prng::AesRng;
-    use hawk_pack::vector_store::lazy_memory_store::LazyMemoryStore;
+    use iris_mpc_common::iris_db::db::IrisDB;
     use rand::SeedableRng;
     use tokio;
 
     #[tokio::test]
     async fn test_hnsw_db() {
-        let vector_store = &mut LazyMemoryStore::new();
+        let vector_store = &mut PlaintextStore::default();
         let graph_store = &mut GraphMem::new();
         let rng = &mut AesRng::seed_from_u64(0_u64);
         let db = HnswSearcher::default();
 
-        let queries1 = (0..100)
+        // let raw_queries1 = IrisDB::new_random_rng(100, &mut rng);
+
+        let queries1 = IrisDB::new_random_rng(100, rng).db
+            .into_iter()
             .map(|raw_query| vector_store.prepare_query(raw_query))
             .collect::<Vec<_>>();
 
@@ -528,7 +530,8 @@ mod tests {
                 .await;
         }
 
-        let queries2 = (101..200)
+        let queries2 = IrisDB::new_random_rng(100, rng).db
+            .into_iter()
             .map(|raw_query| vector_store.prepare_query(raw_query))
             .collect::<Vec<_>>();
 

@@ -1,6 +1,16 @@
 use serde::Serialize;
 use std::{fmt::Debug, hash::Hash};
 
+pub trait TransientRef:
+    Clone + Debug + PartialEq + Eq + Hash + Sync
+{
+}
+
+impl<T> TransientRef for T where
+    T: Clone + Debug + PartialEq + Eq + Hash + Sync
+{
+}
+
 pub trait Ref:
     Clone + Debug + PartialEq + Eq + Hash + Sync + Serialize + for<'de> serde::Deserialize<'de>
 {
@@ -18,7 +28,7 @@ pub trait VectorStore: Clone + Debug {
     ///
     /// Example: a preprocessed representation optimized for distance
     /// evaluations.
-    type QueryRef: Ref;
+    type QueryRef: TransientRef;
 
     /// Opaque reference to a stored vector.
     ///

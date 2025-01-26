@@ -4,7 +4,6 @@ use crate::hnsw::{
     HnswSearcher,
 };
 use aes_prng::AesRng;
-use hawk_pack::VectorStore;
 use iris_mpc_common::iris_db::{
     db::IrisDB,
     iris::{IrisCode, MATCH_THRESHOLD_RATIO},
@@ -14,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use std::ops::{Index, IndexMut};
 use tracing::info;
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+use super::vector_store::VectorStore;
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextIris(pub IrisCode);
 
 impl PlaintextIris {
@@ -51,7 +52,7 @@ impl PlaintextIris {
 
 // TODO refactor away is_persistent flag; should probably be stored in a
 // separate buffer instead whenever working with non-persistent iris codes
-#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextPoint {
     /// Whatever encoding of a vector.
     pub data:          PlaintextIris,
@@ -89,12 +90,16 @@ impl From<u32> for PointId {
     }
 }
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextStore {
     pub points: Vec<PlaintextPoint>,
 }
 
 impl PlaintextStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     pub fn prepare_query(&mut self, raw_query: IrisCode) -> <Self as VectorStore>::QueryRef {
         self.points.push(PlaintextPoint {
             data:          PlaintextIris(raw_query),
