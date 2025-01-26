@@ -1,7 +1,7 @@
 //! Implementation of a hierarchical graph for use by the HNSW algorithm; based
 //! on the `GraphMem` class of the `hawk-pack` crate:
 //!
-//! https://github.com/Inversed-Tech/hawk-pack/
+//! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
 use crate::hnsw::{SortedNeighborhood, VectorStore};
 use serde::{Deserialize, Serialize};

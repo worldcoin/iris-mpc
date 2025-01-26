@@ -2,7 +2,7 @@
 //! biometric templates with high-latency MPC comparison operations.  Based on
 //! the `HawkSearcher` class of the `hawk-pack` crate:
 //!
-//! https://github.com/Inversed-Tech/hawk-pack/
+//! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
 use super::{
     graph::neighborhood::{Edge, SortedNeighborhood},

@@ -1,7 +1,7 @@
 //! Implementation of sorted graph neighborhoods for an HNSW hierarchical graph;
 //! based on the `FurthestQueue` class of the `hawk-pack` crate:
 //!
-//! https://github.com/Inversed-Tech/hawk-pack/
+//! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
 use crate::hnsw::VectorStore;
 use serde::{Deserialize, Serialize};
