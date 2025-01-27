@@ -18,7 +18,12 @@ use eyre::Result;
 use hawk_pack::{graph_store::GraphMem, hawk_searcher::FurthestQueue, VectorStore};
 use itertools::{izip, Itertools};
 use rand::{thread_rng, Rng, SeedableRng};
-use std::{collections::HashMap, ops::DerefMut, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    ops::{Deref, DerefMut},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{
     sync::{mpsc, oneshot, RwLock},
     task::JoinSet,
@@ -284,17 +289,27 @@ impl HawkActor {
     }
 
     // TODO: Remove `&mut self` requirement to support parallel sessions.
-    async fn insert_one(&mut self, session: &mut HawkSession, plan: InsertPlan) -> Result<()> {
-        let inserted = session.aby3_store.insert(&plan.query).await;
+    async fn insert_one(
+        &mut self,
+        session: &mut HawkSession,
+        insert_plan: InsertPlan,
+    ) -> Result<()> {
+        let inserted = session.aby3_store.insert(&insert_plan.query).await;
         let mut graph_store = self.graph_store.write().await;
-        self.search_params
-            .insert_from_search_results(
+
+        let connect_plan = self
+            .search_params
+            .insert_prepare(
                 &mut session.aby3_store,
-                graph_store.deref_mut(),
+                graph_store.deref(),
                 inserted,
-                plan.links,
-                plan.set_ep,
+                insert_plan.links,
+                insert_plan.set_ep,
             )
+            .await;
+
+        self.search_params
+            .insert_execute(graph_store.deref_mut(), connect_plan)
             .await;
         Ok(())
     }

@@ -8,6 +8,7 @@ pub use hawk_pack::data_structures::queue::{
     FurthestQueue, FurthestQueueV, NearestQueue, NearestQueueV,
 };
 use hawk_pack::{GraphStore, VectorStore};
+use itertools::izip;
 use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
@@ -169,6 +170,17 @@ pub struct HnswSearcher {
     pub params: HnswParams,
 }
 
+pub struct ConnectPlan<V: VectorStore> {
+    inserted_vector: V::VectorRef,
+    layers:          Vec<ConnectPlanLayer<V>>,
+    set_ep:          bool,
+}
+
+struct ConnectPlanLayer<V: VectorStore> {
+    neighbors: FurthestQueueV<V>,
+    n_links:   Vec<FurthestQueueV<V>>,
+}
+
 // TODO remove default value; this varies too much between applications
 // to make sense to specify something "obvious"
 impl Default for HnswSearcher {
@@ -181,6 +193,49 @@ impl Default for HnswSearcher {
 
 #[allow(non_snake_case)]
 impl HnswSearcher {
+    /// Two-step variant of `connect_bidir`: prepare.
+    async fn connect_prepare<V: VectorStore, G: GraphStore<V>>(
+        &self,
+        vector_store: &mut V,
+        graph_store: &G,
+        q: &V::VectorRef,
+        mut neighbors: FurthestQueueV<V>,
+        lc: usize,
+    ) -> ConnectPlanLayer<V> {
+        let M = self.params.get_M(lc);
+        let max_links = self.params.get_M_max(lc);
+
+        neighbors.trim_to_k_nearest(M);
+
+        // Connect all n -> q.
+        let mut n_links = vec![];
+        for (n, nq) in neighbors.iter() {
+            let mut links = graph_store.get_links(n, lc).await;
+            links.insert(vector_store, q.clone(), nq.clone()).await;
+            links.trim_to_k_nearest(max_links);
+            n_links.push(links);
+        }
+
+        ConnectPlanLayer { neighbors, n_links }
+    }
+
+    /// Two-step variant of `connect_bidir`: execute.
+    async fn connect_execute<V: VectorStore, G: GraphStore<V>>(
+        &self,
+        graph_store: &mut G,
+        q: V::VectorRef,
+        lc: usize,
+        plan: ConnectPlanLayer<V>,
+    ) {
+        // Connect all n -> q.
+        for ((n, _nq), links) in izip!(plan.neighbors.iter(), plan.n_links) {
+            graph_store.set_links(n.clone(), links, lc).await;
+        }
+
+        // Connect q -> all n.
+        graph_store.set_links(q, plan.neighbors, lc).await;
+    }
+
     async fn connect_bidir<V: VectorStore, G: GraphStore<V>>(
         &self,
         vector_store: &mut V,
@@ -420,6 +475,53 @@ impl HnswSearcher {
         debug_assert!(links.len() == insertion_layer + 1);
 
         (links, set_ep)
+    }
+
+    /// Two-step variant of `insert_from_search_results`: prepare.
+    pub async fn insert_prepare<V: VectorStore, G: GraphStore<V>>(
+        &self,
+        vector_store: &mut V,
+        graph_store: &G,
+        inserted_vector: V::VectorRef,
+        links: Vec<FurthestQueueV<V>>,
+        set_ep: bool,
+    ) -> ConnectPlan<V> {
+        let mut plan = ConnectPlan {
+            inserted_vector: inserted_vector.clone(),
+            layers: vec![],
+            set_ep,
+        };
+
+        // Connect the new vector to its neighbors in each layer.
+        for (lc, layer_links) in links.into_iter().enumerate() {
+            let lp = self
+                .connect_prepare(vector_store, graph_store, &inserted_vector, layer_links, lc)
+                .await;
+            plan.layers.push(lp);
+        }
+
+        plan
+    }
+
+    /// Two-step variant of `insert_from_search_results`: execute.
+    pub async fn insert_execute<V: VectorStore, G: GraphStore<V>>(
+        &self,
+        graph_store: &mut G,
+        plan: ConnectPlan<V>,
+    ) {
+        // If required, set vector as new entry point
+        if plan.set_ep {
+            let insertion_layer = plan.layers.len() - 1;
+            graph_store
+                .set_entry_point(plan.inserted_vector.clone(), insertion_layer)
+                .await;
+        }
+
+        // Connect the new vector to its neighbors in each layer.
+        for (lc, layer_plan) in plan.layers.into_iter().enumerate() {
+            self.connect_execute(graph_store, plan.inserted_vector.clone(), lc, layer_plan)
+                .await;
+        }
     }
 
     /// Insert a vector using the search results from `search_to_insert`,
