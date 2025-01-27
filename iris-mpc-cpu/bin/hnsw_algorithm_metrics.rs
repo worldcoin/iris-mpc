@@ -94,7 +94,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    println!("Layer search counts:");
+    println!("Node opening counts, by associated layer search params:");
     let counter_map = param_openings_map.read().unwrap();
     for ((lc, ef), value) in counter_map.iter() {
         println!("  lc={lc},ef={ef}: {:?}", value);
