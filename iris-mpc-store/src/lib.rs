@@ -222,8 +222,6 @@ impl Store {
             partition_streams.push(stream);
         }
 
-        // `select_all` requires that all streams have the same Item type:
-        // which is `Result<StoredIris, eyre::Error>` now.
         stream::select_all(partition_streams)
     }
 

@@ -72,7 +72,7 @@ env:
     value: "true"
 
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
-    value: "temp-iris-mpc-db-exporter-stage-1--eun1-az3--x-s3"
+    value: "iris-mpc-db-exporter-store-node-1-stage--eun1-az3--x-s3"
 
   - name: SMPC__DB_CHUNKS_FOLDER_NAME
     value: "even_odd_binary_output_16k"
