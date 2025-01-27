@@ -240,12 +240,11 @@ impl HnswSearcher {
             current_neighbors: &'a SortedNeighborhood<V>,
             opened: &HashSet<V::VectorRef>,
         ) -> Option<&'a V::VectorRef> {
-            for (c, _) in current_neighbors.edges.iter() {
-                if !opened.contains(c) {
-                    return Some(c);
-                }
-            }
-            None
+            current_neighbors
+                .edges
+                .iter()
+                .map(|(c, _)| c)
+                .find(|&c| !opened.contains(c))
         }
 
         while let Some(c) = next_candidate(W, &opened) {
@@ -254,7 +253,7 @@ impl HnswSearcher {
             info!(event_type = Operation::OpenNode.id(), ef, lc);
 
             // Visit all neighbors of c
-            let c_links = graph_store.get_links(&c, lc).await;
+            let c_links = graph_store.get_links(c, lc).await;
             // Evaluate the distances of the neighbors to the query, as a batch.
             let c_links = {
                 let e_batch = c_links
