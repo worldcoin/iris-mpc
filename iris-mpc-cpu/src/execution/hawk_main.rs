@@ -362,28 +362,34 @@ impl HawkRequest {
         &self.shares
     }
 
+    /// *AND* policy: only match, if both eyes match (like `mergeDbResults`).
+    // TODO: Account for rotated and mirrored versions.
+    fn is_insertion(both_insert_plans: &BothEyes<Vec<InsertPlan>>) -> Vec<bool> {
+        izip!(&both_insert_plans[0], &both_insert_plans[1])
+            .map(|(left, right)| !(left.is_match && right.is_match))
+            .collect_vec()
+    }
+
     fn filter_for_insertion(
         &self,
         both_insert_plans: BothEyes<Vec<InsertPlan>>,
+        is_insertion: &[bool],
     ) -> BothEyes<Vec<InsertPlan>> {
-        // *AND* policy: only match, if both eyes match (like `mergeDbResults`).
-        let is_insert = izip!(&both_insert_plans[0], &both_insert_plans[1])
-            .map(|(left, right)| !(left.is_match && right.is_match))
-            .collect_vec();
-
-        // TODO: Account for rotated and mirrored versions.
-
         // TODO: Report the insertions versus rejections.
 
         both_insert_plans.map(|plans| {
-            izip!(plans, &is_insert)
-                .filter_map(|(plan, &is_insert)| is_insert.then_some(plan))
+            izip!(plans, is_insertion)
+                .filter_map(|(plan, &is_insertion)| is_insertion.then_some(plan))
                 .collect_vec()
         })
     }
 }
 
-type HawkResult = BothEyes<Vec<ConnectPlan>>;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HawkResult {
+    connect_plans: BothEyes<Vec<ConnectPlan>>,
+    is_insertion:  Vec<bool>,
+}
 
 /// HawkHandle is a handle to the HawkActor managing concurrency.
 #[derive(Clone, Debug)]
@@ -405,6 +411,7 @@ impl HawkHandle {
             while let Some(job) = rx.recv().await {
                 let mut both_insert_plans = [vec![], vec![]];
 
+                // For both eyes.
                 for (sessions, iris_shares, insert_plans) in izip!(
                     &sessions,
                     job.request.shares_to_search(),
@@ -419,20 +426,28 @@ impl HawkHandle {
                     // TODO: Optimize for pure searches (rotations).
                 }
 
-                let both_insert_plans = job.request.filter_for_insertion(both_insert_plans);
+                let is_insertion = HawkRequest::is_insertion(&both_insert_plans);
+                let both_insert_plans = job
+                    .request
+                    .filter_for_insertion(both_insert_plans, &is_insertion);
 
                 // Insert into the database.
-                let mut both_connect_plans = HawkResult::default();
+                let mut results = HawkResult {
+                    connect_plans: [vec![], vec![]],
+                    is_insertion,
+                };
 
-                for (sessions, insert_plans, connect_plan) in
-                    izip!(&sessions, both_insert_plans, &mut both_connect_plans)
+                // For both eyes.
+                for (sessions, insert_plans, connect_plans) in
+                    izip!(&sessions, both_insert_plans, &mut results.connect_plans)
                 {
-                    *connect_plan = hawk_actor.insert(sessions, insert_plans).await.unwrap();
+                    // Insert in memory, and return the plans to update the persistent database.
+                    *connect_plans = hawk_actor.insert(sessions, insert_plans).await.unwrap();
                 }
 
                 println!("🎉 Inserted items into the database");
 
-                let _ = job.return_channel.send(Ok(both_connect_plans));
+                let _ = job.return_channel.send(Ok(results));
             }
         });
 
