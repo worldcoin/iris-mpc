@@ -81,7 +81,8 @@ type HawkSessionRef = Arc<RwLock<HawkSession>>;
 /// HawkRequest contains a batch of items to search.
 #[derive(Clone, Debug)]
 pub struct HawkRequest {
-    pub my_iris_shares: Vec<GaloisRingSharedIris>,
+    pub left_shares:  Vec<GaloisRingSharedIris>,
+    pub right_shares: Vec<GaloisRingSharedIris>,
 }
 
 pub type SearchResult = (
@@ -224,10 +225,10 @@ impl HawkActor {
     pub async fn search(
         &self,
         sessions: &[HawkSessionRef],
-        req: HawkRequest,
+        iris_shares: Vec<GaloisRingSharedIris>,
     ) -> Result<Vec<SearchResult>> {
         Ok(self
-            .search_to_insert(sessions, req)
+            .search_to_insert(sessions, iris_shares)
             .await?
             .iter()
             .map(|plan| {
@@ -243,12 +244,12 @@ impl HawkActor {
     pub async fn search_to_insert(
         &self,
         sessions: &[HawkSessionRef],
-        req: HawkRequest,
+        iris_shares: Vec<GaloisRingSharedIris>,
     ) -> Result<Vec<InsertPlan>> {
         let mut plans = vec![];
 
         // Distribute the requests over the given sessions in parallel.
-        for chunk in req.my_iris_shares.chunks(sessions.len()) {
+        for chunk in iris_shares.chunks(sessions.len()) {
             let tasks = izip!(chunk, sessions)
                 .map(|(iris, session)| {
                     let search_params = Arc::clone(&self.search_params);
@@ -348,7 +349,7 @@ struct HawkJob {
     return_channel: oneshot::Sender<Result<HawkResult>>,
 }
 
-type HawkResult = Vec<ConnectPlan>;
+type HawkResult = Vec<Vec<ConnectPlan>>;
 
 /// HawkHandle is a handle to the HawkActor managing concurrency.
 #[derive(Clone, Debug)]
@@ -368,24 +369,29 @@ impl HawkHandle {
         // ---- Request Handler ----
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
-                // TODO: both eyes.
-                let sessions = &sessions[0];
+                let mut connect_plans = vec![];
 
-                // TODO: obtain rotated and mirrored versions.
-                let rotated = job.request.clone();
+                for (sessions, iris_shares) in izip!(&sessions, [
+                    &job.request.left_shares,
+                    &job.request.right_shares
+                ]) {
+                    // TODO: obtain rotated and mirrored versions.
+                    let rotated = iris_shares.clone();
 
-                // Search for nearest neighbors.
-                let _search_results = hawk_actor.search(sessions, rotated).await.unwrap();
+                    // Search for nearest neighbors.
+                    let _search_results = hawk_actor.search(sessions, rotated).await.unwrap();
 
-                // TODO: Compare with threshold.
-                let to_insert = job.request;
+                    // TODO: Compare with threshold.
+                    let to_insert = iris_shares.clone();
 
-                // Insert into the database.
-                let plans = hawk_actor
-                    .search_to_insert(sessions, to_insert)
-                    .await
-                    .unwrap();
-                let connect_plans = hawk_actor.insert(sessions, plans).await.unwrap();
+                    // Insert into the database.
+                    let plans = hawk_actor
+                        .search_to_insert(sessions, to_insert)
+                        .await
+                        .unwrap();
+
+                    connect_plans.push(hawk_actor.insert(sessions, plans).await.unwrap());
+                }
 
                 println!("🎉 Inserted items into the database");
 
@@ -524,7 +530,8 @@ mod tests {
             .map(|(share, handle)| async move {
                 let plans = handle
                     .submit(HawkRequest {
-                        my_iris_shares: share,
+                        left_shares:  share.clone(),
+                        right_shares: share, // TODO: different eyes.
                     })
                     .await?;
                 Ok(plans)
