@@ -90,9 +90,10 @@ pub type ConnectPlan = ConnectPlanV<Aby3Store>;
 
 #[derive(Debug)]
 pub struct InsertPlanV<V: VectorStore> {
-    query:  V::QueryRef,
-    links:  Vec<FurthestQueue<V::VectorRef, V::DistanceRef>>,
-    set_ep: bool,
+    query:    V::QueryRef,
+    links:    Vec<FurthestQueue<V::VectorRef, V::DistanceRef>>,
+    set_ep:   bool,
+    is_match: bool,
 }
 
 impl HawkActor {
@@ -288,10 +289,15 @@ impl HawkActor {
             )
             .await;
 
+        let is_match = search_params
+            .is_match(&mut session.aby3_store, &links)
+            .await;
+
         InsertPlan {
             query,
             links,
             set_ep,
+            is_match,
         }
     }
 
@@ -356,12 +362,24 @@ impl HawkRequest {
         &self.shares
     }
 
-    fn shares_to_insert(
+    fn filter_for_insertion(
         &self,
         both_insert_plans: BothEyes<Vec<InsertPlan>>,
     ) -> BothEyes<Vec<InsertPlan>> {
-        // TODO: Compare all results with threshold and filter what to insert.
-        both_insert_plans
+        // *AND* policy: only match, if both eyes match (like `mergeDbResults`).
+        let is_insert = izip!(&both_insert_plans[0], &both_insert_plans[1])
+            .map(|(left, right)| !(left.is_match && right.is_match))
+            .collect_vec();
+
+        // TODO: Account for rotated and mirrored versions.
+
+        // TODO: Report the insertions versus rejections.
+
+        both_insert_plans.map(|plans| {
+            izip!(plans, &is_insert)
+                .filter_map(|(plan, &is_insert)| is_insert.then_some(plan))
+                .collect_vec()
+        })
     }
 }
 
@@ -401,7 +419,7 @@ impl HawkHandle {
                     // TODO: Optimize for pure searches (rotations).
                 }
 
-                let both_insert_plans = job.request.shares_to_insert(both_insert_plans);
+                let both_insert_plans = job.request.filter_for_insertion(both_insert_plans);
 
                 // Insert into the database.
                 let mut both_connect_plans = HawkResult::default();
