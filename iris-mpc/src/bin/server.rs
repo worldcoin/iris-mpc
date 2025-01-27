@@ -7,16 +7,10 @@ use aws_sdk_s3::{
 };
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::{config::Region, Client};
-use aws_smithy_experimental::hyper_1_0::{CryptoMode, HyperClientBuilder};
-use aws_smithy_runtime_api::client::dns::{DnsFuture, ResolveDns};
 use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
 use eyre::{eyre, Context};
 use futures::{stream::BoxStream, StreamExt};
-use hickory_resolver::{
-    config::{ResolverConfig, ResolverOpts},
-    TokioAsyncResolver,
-};
 use iris_mpc_common::{
     config::{Config, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -60,15 +54,12 @@ use serde::{Deserialize, Serialize};
 use std::{
     backtrace::Backtrace,
     collections::{HashMap, HashSet},
-    fmt::{Debug, Formatter},
-    mem,
-    net::IpAddr,
-    panic,
+    fmt::Debug,
+    mem, panic,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, Ordering},
         Arc, LazyLock, Mutex,
     },
-    time,
     time::{Duration, Instant},
 };
 use telemetry_batteries::tracing::{datadog::DatadogBattery, TracingShutdownHandle};
@@ -692,94 +683,12 @@ async fn main() -> eyre::Result<()> {
     Ok(())
 }
 
-struct StaticResolver {
-    ips:     Arc<Vec<IpAddr>>,
-    current: Arc<AtomicUsize>,
-}
-
-impl StaticResolver {
-    fn new(ips: Vec<IpAddr>) -> Self {
-        Self {
-            ips:     Arc::new(ips),
-            current: Arc::new(AtomicUsize::new(0)),
-        }
-    }
-}
-
-impl Debug for StaticResolver {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        // Load the current index atomically
-        let current_index = self.current.load(Ordering::SeqCst);
-        f.debug_struct("StaticResolver")
-            .field("ips", &self.ips)
-            .field("current_index", &current_index)
-            .finish()
-    }
-}
-
-impl Clone for StaticResolver {
-    fn clone(&self) -> Self {
-        Self {
-            ips:     Arc::clone(&self.ips),
-            current: Arc::clone(&self.current),
-        }
-    }
-}
-
-impl ResolveDns for StaticResolver {
-    fn resolve_dns<'a>(&'a self, _name: &'a str) -> DnsFuture<'a> {
-        let current_index = self.current.fetch_add(1, Ordering::SeqCst);
-        let index = current_index % self.ips.len();
-        let selected_ip = self.ips[index];
-        let future = async move {
-            tracing::info!("Returning IP {:?} for host {}", selected_ip, _name);
-            Ok(vec![selected_ip])
-        };
-        DnsFuture::new(Box::pin(future))
-    }
-}
-
-async fn resolve_export_bucket_ips(host: String, n_ips: usize) -> eyre::Result<Vec<IpAddr>> {
-    let mut all_ips = vec![];
-    let mut resolver_opts = ResolverOpts::default();
-    resolver_opts.positive_max_ttl = Some(time::Duration::from_millis(10));
-    let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), resolver_opts);
-    loop {
-        // Check if we've collected enough unique IPs
-        if all_ips.len() >= n_ips {
-            break;
-        }
-        match resolver.lookup_ip(&host).await {
-            Ok(lookup_result) => {
-                let ips: Vec<IpAddr> = lookup_result.iter().collect();
-                tracing::info!("Resolved {:?} for host {}", ips, host);
-                for ip in lookup_result.iter() {
-                    // Attempt to insert the IP into the HashSet
-                    if !all_ips.contains(&ip) {
-                        all_ips.push(ip);
-                        tracing::info!("Added IP {:?} for host {}", ip, host);
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::error!("Failed to resolve host {}: {}", host, e);
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    Ok(all_ips)
-}
-
 async fn server_main(config: Config) -> eyre::Result<()> {
     let shutdown_handler = Arc::new(ShutdownHandler::new(
         config.shutdown_last_results_sync_timeout_secs,
     ));
     shutdown_handler.wait_for_shutdown_signal().await;
 
-    let db_chunks_bucket_host = format!(
-        "{}.s3.{}.amazonaws.com",
-        config.db_chunks_bucket_name, REGION
-    );
     // Load batch_size config
     *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
     let max_sync_lookback: usize = config.max_batch_size * 2;
@@ -800,6 +709,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     // Increase S3 retries to 5
     let retry_config = RetryConfig::standard().with_max_attempts(5);
+
+    // Increase S3 connect timeouts to 10s
     let timeout_config = TimeoutConfig::builder()
         .connect_timeout(Duration::from_secs(10))
         .build();
@@ -807,31 +718,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let s3_config = S3ConfigBuilder::from(&shared_config)
         .retry_config(retry_config.clone())
         .build();
-    let db_chunks_s3_config = match config.load_chunks_default_client {
-        true => {
-            S3ConfigBuilder::from(&shared_config)
-                // disable stalled stream protection to avoid panics during s3 import
-                .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
-                .retry_config(retry_config)
-                .timeout_config(timeout_config)
-                .build()
-        }
-        false => {
-            let db_chunks_bucket_ips =
-                resolve_export_bucket_ips(db_chunks_bucket_host, config.load_chunks_static_ips);
-            let static_resolver = StaticResolver::new(db_chunks_bucket_ips.await?);
-            let http_client = HyperClientBuilder::new()
-                .crypto_mode(CryptoMode::Ring)
-                .build_with_resolver(static_resolver);
-            S3ConfigBuilder::from(&shared_config)
-                // disable stalled stream protection to avoid panics during s3 import
-                .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
-                .retry_config(retry_config)
-                .timeout_config(timeout_config)
-                .http_client(http_client)
-                .build()
-        }
-    };
+
+    let db_chunks_s3_config = S3ConfigBuilder::from(&shared_config)
+        // disable stalled stream protection to avoid panics during s3 import
+        .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
+        .retry_config(retry_config)
+        .timeout_config(timeout_config)
+        .build();
 
     let s3_client = Arc::new(S3Client::from_conf(s3_config));
     let db_chunks_s3_client = Arc::new(S3Client::from_conf(db_chunks_s3_config));
@@ -1193,7 +1086,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
                     tokio::runtime::Handle::current().block_on(async {
                         let total_load_time = Instant::now();
-                        tracing::info!("Page-lock host memory");
                         let dbs = [
                             (actor.left_code_db_slices.code_gr.clone(), IRIS_CODE_LENGTH),
                             (actor.right_code_db_slices.code_gr.clone(), IRIS_CODE_LENGTH),
@@ -1203,7 +1095,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         let n_page_lock_iters = 100 / config.page_lock_chunk_percentage;
                         let page_lock_chunk_size = config.max_db_size / n_page_lock_iters;
                         tracing::info!(
-                            "Will page lock chunks in {} iters each {} items",
+                            "Will page lock chunks in {} iters, each {} items",
                             n_page_lock_iters,
                             page_lock_chunk_size
                         );
@@ -1750,6 +1642,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     Ok(())
 }
 
+// Helper function to load Aurora db records from the stream into memory
 async fn load_db_records<'a>(
     actor: &mut ServerActor,
     mut record_counter: i32,

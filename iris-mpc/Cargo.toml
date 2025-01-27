@@ -37,11 +37,6 @@ metrics = "0.22.1"
 metrics-exporter-statsd = "0.7"
 serde = { version = "1.0.214", features = ["derive"] }
 bincode = "1.3.3"
-#hyper = { version = "0.14", features = ["full"] }
-aws-smithy-experimental = { version = "0.1.5", features = ["crypto-ring"] }
-aws-smithy-runtime-api = "1.7.3"
-
-hickory-resolver = { version = "0.24.2", default-features = false, features = ["tokio-runtime"] }
 
 [dev-dependencies]
 criterion = "0.5"

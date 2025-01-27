@@ -113,13 +113,7 @@ pub struct Config {
     pub fixed_shared_secrets: bool,
 
     #[serde(default)]
-    pub load_chunks_default_client: bool,
-
-    #[serde(default)]
     pub load_chunks_buffer_size: usize,
-
-    #[serde(default)]
-    pub load_chunks_static_ips: usize,
 
     /// Percentage of the chunk size to page lock at each iteration
     /// Must be a positive integer between [1-100]
