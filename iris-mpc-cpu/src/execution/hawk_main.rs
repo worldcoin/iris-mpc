@@ -7,7 +7,7 @@ use crate::{
         session::{BootSession, Session, SessionId},
     },
     hawkers::aby3_store::{Aby3Store, SharedIrisesRef},
-    hnsw::HnswSearcher,
+    hnsw::{searcher::ConnectPlanV, HnswSearcher},
     network::grpc::{GrpcConfig, GrpcNetworking},
     proto_generated::party_node::party_node_server::PartyNodeServer,
     protocol::ops::setup_replicated_prf,
@@ -18,7 +18,13 @@ use eyre::Result;
 use hawk_pack::{graph_store::GraphMem, hawk_searcher::FurthestQueue, VectorStore};
 use itertools::{izip, Itertools};
 use rand::{thread_rng, Rng, SeedableRng};
-use std::{collections::HashMap, ops::DerefMut, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    ops::{Deref, DerefMut},
+    sync::Arc,
+    time::Duration,
+    vec,
+};
 use tokio::{
     sync::{mpsc, oneshot, RwLock},
     task::JoinSet,
@@ -77,6 +83,7 @@ pub type SearchResult = (
 );
 
 pub type InsertPlan = InsertPlanV<Aby3Store>;
+pub type ConnectPlan = ConnectPlanV<Aby3Store>;
 
 #[derive(Debug)]
 pub struct InsertPlanV<V: VectorStore> {
@@ -274,29 +281,42 @@ impl HawkActor {
         &mut self,
         sessions: &[HawkSessionRef],
         plans: Vec<InsertPlan>,
-    ) -> Result<()> {
-        let plans = join_plans(plans);
-        for plan in plans {
+    ) -> Result<Vec<ConnectPlan>> {
+        let insert_plans = join_plans(plans);
+        let mut connect_plans = vec![];
+        for plan in insert_plans {
             let mut session = sessions[0].write().await;
-            self.insert_one(&mut session, plan).await?;
+            let cp = self.insert_one(&mut session, plan).await?;
+            connect_plans.push(cp);
         }
-        Ok(())
+        Ok(connect_plans)
     }
 
     // TODO: Remove `&mut self` requirement to support parallel sessions.
-    async fn insert_one(&mut self, session: &mut HawkSession, plan: InsertPlan) -> Result<()> {
-        let inserted = session.aby3_store.insert(&plan.query).await;
+    async fn insert_one(
+        &mut self,
+        session: &mut HawkSession,
+        insert_plan: InsertPlan,
+    ) -> Result<ConnectPlan> {
+        let inserted = session.aby3_store.insert(&insert_plan.query).await;
         let mut graph_store = self.graph_store.write().await;
-        self.search_params
-            .insert_from_search_results(
+
+        let connect_plan = self
+            .search_params
+            .insert_prepare(
                 &mut session.aby3_store,
-                graph_store.deref_mut(),
+                graph_store.deref(),
                 inserted,
-                plan.links,
-                plan.set_ep,
+                insert_plan.links,
+                insert_plan.set_ep,
             )
             .await;
-        Ok(())
+
+        self.search_params
+            .insert_apply(graph_store.deref_mut(), connect_plan.clone())
+            .await;
+
+        Ok(connect_plan)
     }
 }
 
@@ -305,7 +325,7 @@ struct HawkJob {
     return_channel: oneshot::Sender<Result<HawkResult>>,
 }
 
-type HawkResult = ();
+type HawkResult = Vec<ConnectPlan>;
 
 /// HawkHandle is a handle to the HawkActor managing concurrency.
 #[derive(Clone, Debug)]
@@ -340,11 +360,11 @@ impl HawkHandle {
                     .search_to_insert(&sessions, to_insert)
                     .await
                     .unwrap();
-                hawk_actor.insert(&sessions, plans).await.unwrap();
+                let connect_plans = hawk_actor.insert(&sessions, plans).await.unwrap();
 
                 println!("🎉 Inserted items into the database");
 
-                let _ = job.return_channel.send(Ok(()));
+                let _ = job.return_channel.send(Ok(connect_plans));
             }
         });
 
@@ -462,20 +482,25 @@ mod tests {
             })
             .collect_vec();
 
-        izip!(irises, handles.clone())
+        let all_plans = izip!(irises, handles.clone())
             .map(|(share, handle)| async move {
-                handle
+                let plans = handle
                     .submit(HawkRequest {
                         my_iris_shares: share,
                     })
                     .await?;
-                Ok(())
+                Ok(plans)
             })
             .collect::<JoinSet<_>>()
             .join_all()
             .await
             .into_iter()
-            .collect::<Result<()>>()?;
+            .collect::<Result<Vec<HawkResult>>>()?;
+
+        assert!(
+            all_plans.iter().all_equal(),
+            "All parties must agree on the graph changes"
+        );
 
         Ok(())
     }
