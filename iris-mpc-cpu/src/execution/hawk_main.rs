@@ -53,8 +53,8 @@ pub struct HawkActor {
 
     // ---- My state ----
     // TODO: Persistence.
-    iris_store:  [SharedIrisesRef; 2],
-    graph_store: [GraphRef; 2],
+    iris_store:  BothEyes<SharedIrisesRef>,
+    graph_store: BothEyes<GraphRef>,
 
     // ---- My network setup ----
     networking:   GrpcNetworking,
@@ -66,6 +66,8 @@ pub enum StoreId {
     Left,
     Right,
 }
+
+type BothEyes<T> = [T; 2];
 
 type GraphRef = Arc<RwLock<GraphMem<Aby3Store>>>;
 
@@ -81,8 +83,7 @@ type HawkSessionRef = Arc<RwLock<HawkSession>>;
 /// HawkRequest contains a batch of items to search.
 #[derive(Clone, Debug)]
 pub struct HawkRequest {
-    pub left_shares:  Vec<GaloisRingSharedIris>,
-    pub right_shares: Vec<GaloisRingSharedIris>,
+    pub shares: BothEyes<Vec<GaloisRingSharedIris>>,
 }
 
 pub type SearchResult = (
@@ -349,7 +350,7 @@ struct HawkJob {
     return_channel: oneshot::Sender<Result<HawkResult>>,
 }
 
-type HawkResult = Vec<Vec<ConnectPlan>>;
+type HawkResult = BothEyes<Vec<ConnectPlan>>;
 
 /// HawkHandle is a handle to the HawkActor managing concurrency.
 #[derive(Clone, Debug)]
@@ -369,12 +370,11 @@ impl HawkHandle {
         // ---- Request Handler ----
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
-                let mut connect_plans = vec![];
+                let mut connect_plans = HawkResult::default();
 
-                for (sessions, iris_shares) in izip!(&sessions, [
-                    &job.request.left_shares,
-                    &job.request.right_shares
-                ]) {
+                for (sessions, iris_shares, connect_plan) in
+                    izip!(&sessions, &job.request.shares, &mut connect_plans)
+                {
                     // TODO: obtain rotated and mirrored versions.
                     let rotated = iris_shares.clone();
 
@@ -390,7 +390,7 @@ impl HawkHandle {
                         .await
                         .unwrap();
 
-                    connect_plans.push(hawk_actor.insert(sessions, plans).await.unwrap());
+                    *connect_plan = hawk_actor.insert(sessions, plans).await.unwrap();
                 }
 
                 println!("🎉 Inserted items into the database");
@@ -530,8 +530,7 @@ mod tests {
             .map(|(share, handle)| async move {
                 let plans = handle
                     .submit(HawkRequest {
-                        left_shares:  share.clone(),
-                        right_shares: share, // TODO: different eyes.
+                        shares: [share.clone(), share], // TODO: different eyes.
                     })
                     .await?;
                 Ok(plans)
