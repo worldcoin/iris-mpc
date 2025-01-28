@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 ubuntu:22.04 as build-image
+FROM --platform=linux/amd64 ubuntu:22.04 as base-image
 
 RUN apt-get update && apt-get install -y pkg-config wget libssl-dev ca-certificates protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
@@ -46,3 +46,29 @@ RUN cd /tmp \
     --with-nccl=/tmp/nccl/build \
     --with-mpi=/opt/amazon/openmpi/ \
     && make && make install
+
+
+# Runtime Image
+FROM --platform=linux/amd64 ubuntu:22.04 as build-image
+
+RUN apt-get update && apt-get install -y pkg-config wget
+
+RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
+    && dpkg -i cuda-keyring_1.1-1_all.deb \
+    && apt-get update \
+    && apt-get install -y cuda-libraries-12-2 libnccl2=2.22.3-1+cuda12.2 libnccl-dev=2.22.3-1+cuda12.2 \
+    && rm -f cuda-keyring_1.1-1_all.deb
+
+# Set environment variables for runtime
+ENV LD_LIBRARY_PATH=/usr/local/cuda/extras/CUPTI/lib64:/opt/aws-ofi-nccl/install/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+ENV PATH=/opt/aws-ofi-nccl/install/bin:/usr/local/cuda/bin:$PATH
+
+# Copy necessary files from build stage
+COPY --from=base-image /opt/gdrcopy /opt/gdrcopy
+COPY --from=base-image /opt/aws-ofi-nccl/install /opt/aws-ofi-nccl/install
+COPY --from=base-image /opt/amazon/efa /opt/amazon/efa
+
+ENV LD_LIBRARY_PATH=/opt/gdrcopy/lib:/usr/local/cuda/compat:$LD_LIBRARY_PATH
+ENV LIBRARY_PATH=/opt/gdrcopy/lib:/usr/local/cuda/compat/:$LIBRARY_PATH
+ENV CPATH=/opt/gdrcopy/include:$CPATH
+ENV PATH=/opt/gdrcopy/bin:$PATH

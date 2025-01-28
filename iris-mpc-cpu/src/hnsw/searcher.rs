@@ -243,31 +243,6 @@ impl HnswSearcher {
         graph_store.set_links(q, plan.neighbors, lc).await;
     }
 
-    async fn connect_bidir<V: VectorStore, G: GraphStore<V>>(
-        &self,
-        vector_store: &mut V,
-        graph_store: &mut G,
-        q: &V::VectorRef,
-        mut neighbors: FurthestQueueV<V>,
-        lc: usize,
-    ) {
-        let M = self.params.get_M(lc);
-        let max_links = self.params.get_M_max(lc);
-
-        neighbors.trim_to_k_nearest(M);
-
-        // Connect all n -> q.
-        for (n, nq) in neighbors.iter() {
-            let mut links = graph_store.get_links(n, lc).await;
-            links.insert(vector_store, q.clone(), nq.clone()).await;
-            links.trim_to_k_nearest(max_links);
-            graph_store.set_links(n.clone(), links, lc).await;
-        }
-
-        // Connect q -> all n.
-        graph_store.set_links(q.clone(), neighbors, lc).await;
-    }
-
     pub fn select_layer(&self, rng: &mut impl RngCore) -> usize {
         let p_geom = 1f64 - self.params.get_layer_probability();
         let geom_distr = Geometric::new(p_geom).unwrap();
@@ -542,19 +517,10 @@ impl HnswSearcher {
         links: Vec<FurthestQueueV<V>>,
         set_ep: bool,
     ) {
-        // If required, set vector as new entry point
-        if set_ep {
-            let insertion_layer = links.len() - 1;
-            graph_store
-                .set_entry_point(inserted_vector.clone(), insertion_layer)
-                .await;
-        }
-
-        // Connect the new vector to its neighbors in each layer.
-        for (lc, layer_links) in links.into_iter().enumerate().rev() {
-            self.connect_bidir(vector_store, graph_store, &inserted_vector, layer_links, lc)
-                .await;
-        }
+        let plan = self
+            .insert_prepare(vector_store, graph_store, inserted_vector, links, set_ep)
+            .await;
+        self.insert_apply(graph_store, plan).await;
     }
 
     pub async fn is_match<V: VectorStore>(

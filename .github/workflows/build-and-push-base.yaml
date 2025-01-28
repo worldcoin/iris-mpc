@@ -41,7 +41,7 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda${{ env.CUDA_VERSION }}-nccl${{ env.NCCL_VERSION }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda-libraries${{ env.CUDA_VERSION }}-nccl${{ env.NCCL_VERSION }}
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
