@@ -152,11 +152,11 @@ fn default_db_load_safety_overlap_seconds() -> i64 {
 }
 
 fn default_match_distances_buffer_size() -> usize {
-    1 << 20
+    1 << 19
 }
 
 fn default_n_buckets() -> usize {
-    10
+    375
 }
 
 impl Config {
