@@ -1212,7 +1212,7 @@ impl ServerActor {
             let now = std::time::Instant::now();
             tracing::info!("Collected enough match distances, starting bucket calculation");
 
-            self.device_manager.await_streams(&batch_streams);
+            self.device_manager.await_streams(batch_streams);
 
             let indices = match_distances_indices
                 .iter()
@@ -1317,7 +1317,7 @@ impl ServerActor {
                 }
             }
 
-            self.device_manager.await_streams(&batch_streams);
+            self.device_manager.await_streams(batch_streams);
 
             tracing::info!("Bucket calculation took {:?}", now.elapsed());
         }
