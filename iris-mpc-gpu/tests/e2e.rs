@@ -413,7 +413,7 @@ mod e2e_test {
                             // apply variation to either right of left code
                             let will_match: bool = rng.gen();
                             let flip_right: bool = rng.gen();
-                            let variation = 1;
+                            let variation = rng.gen_range(1..100);
 
                             if will_match {
                                 if flip_right {
@@ -432,6 +432,11 @@ mod e2e_test {
                                     (Some(matching_db_index as u32), false),
                                 );
                             } else {
+                                // Flip both to above threshold - neither match
+                                for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
+                                    code_left.code.flip_bit(i);
+                                    code_right.code.flip_bit(i);
+                                }
                                 expected_results.insert(request_id.to_string(), (None, false));
                             }
 
