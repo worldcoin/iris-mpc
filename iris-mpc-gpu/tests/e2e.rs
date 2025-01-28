@@ -28,6 +28,20 @@ mod e2e_test {
     const MAX_DELETIONS_PER_BATCH: usize = 10;
     const THRESHOLD_ABSOLUTE: usize = 4800; // 0.375 * 12800
 
+    #[derive(Clone)]
+    pub struct E2ETemplate {
+        left:  IrisCode,
+        right: IrisCode,
+    }
+
+    #[derive(Clone)]
+    pub struct E2ESharedTemplate {
+        pub left_shared_code:  [GaloisRingIrisCodeShare; 3],
+        pub left_shared_mask:  [GaloisRingTrimmedMaskCodeShare; 3],
+        pub right_shared_code: [GaloisRingIrisCodeShare; 3],
+        pub right_shared_mask: [GaloisRingTrimmedMaskCodeShare; 3],
+    }
+
     fn generate_db(party_id: usize) -> Result<(Vec<u16>, Vec<u16>)> {
         let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
         let mut db = IrisDB::new_random_par(DB_SIZE, &mut rng);
@@ -218,13 +232,13 @@ mod e2e_test {
         let mut rng = StdRng::seed_from_u64(INTERNAL_RNG_SEED);
 
         let mut expected_results: HashMap<String, (Option<u32>, bool)> = HashMap::new();
-        let mut responses: HashMap<u32, IrisCode> = HashMap::new();
+        let mut responses: HashMap<u32, E2ETemplate> = HashMap::new();
         let mut deleted_indices_buffer = vec![];
         let mut deleted_indices: HashSet<u32> = HashSet::new();
         let mut disallowed_queries = Vec::new();
 
         for _ in 0..NUM_BATCHES {
-            let mut requests: HashMap<String, IrisCode> = HashMap::new();
+            let mut requests: HashMap<String, E2ETemplate> = HashMap::new();
             let mut batch0 = BatchQuery::default();
             let mut batch1 = BatchQuery::default();
             let mut batch2 = BatchQuery::default();
@@ -245,14 +259,17 @@ mod e2e_test {
                 };
 
                 let pick_from_batch = rng.gen_range(0..10);
-                let template = if pick_from_batch == 0 && !new_templates_in_batch.is_empty() {
+                let e2e_template = if pick_from_batch == 0 && !new_templates_in_batch.is_empty() {
                     let random_idx = rng.gen_range(0..new_templates_in_batch.len());
                     let (batch_idx, duplicate_request_id, template) =
                         new_templates_in_batch[random_idx].clone();
                     expected_results.insert(request_id.to_string(), (Some(batch_idx as u32), true));
                     batch_duplicates.insert(request_id.to_string(), duplicate_request_id);
                     skip_invalidate = true;
-                    template
+                    E2ETemplate {
+                        left:  template.clone(),
+                        right: template.clone(),
+                    }
                 } else {
                     let option = rng.gen_range(0..options);
                     match option {
@@ -266,7 +283,10 @@ mod e2e_test {
                                 template.clone(),
                             ));
                             skip_invalidate = true;
-                            template
+                            E2ETemplate {
+                                left:  template.clone(),
+                                right: template.clone(),
+                            }
                         }
                         1 => {
                             println!("Sending iris code from db");
@@ -276,10 +296,13 @@ mod e2e_test {
                             }
                             expected_results
                                 .insert(request_id.to_string(), (Some(db_index as u32), false));
-                            db.db[db_index].clone()
+                            E2ETemplate {
+                                left:  db.db[db_index].clone(),
+                                right: db.db[db_index].clone(),
+                            }
                         }
                         2 => {
-                            println!("Sending iris code on the threshold");
+                            println!("Sending iris code on the threshold!!!!!!");
                             let db_index = loop {
                                 let db_index = rng.gen_range(0..DB_SIZE / 10);
                                 if !disallowed_queries.contains(&db_index) {
@@ -304,20 +327,27 @@ mod e2e_test {
                                 },
                             );
                             let mut code = db.db[db_index].clone();
-                            assert!(code.mask == IrisCodeArray::ONES);
+                            assert_eq!(code.mask, IrisCodeArray::ONES);
                             for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
                                 code.code.flip_bit(i);
                             }
-                            code
+                            E2ETemplate {
+                                left:  code.clone(),
+                                right: code.clone(),
+                            }
                         }
                         3 => {
                             println!("Sending freshly inserted iris code");
                             let keys = responses.keys().collect::<Vec<_>>();
                             let idx = rng.gen_range(0..keys.len());
-                            let iris_code = responses.get(keys[idx]).unwrap().clone();
+                            let e2e_template = responses.get(keys[idx]).unwrap().clone();
                             expected_results
                                 .insert(request_id.to_string(), (Some(*keys[idx]), false));
-                            iris_code
+
+                            E2ETemplate {
+                                left:  e2e_template.left.clone(),
+                                right: e2e_template.right.clone(),
+                            }
                         }
                         4 => {
                             println!("Sending deleted iris code");
@@ -325,8 +355,20 @@ mod e2e_test {
                             let deleted_idx = deleted_indices_buffer[idx];
                             deleted_indices_buffer.remove(idx);
                             expected_results.insert(request_id.to_string(), (None, false));
-                            db.db[deleted_idx as usize].clone()
+                            E2ETemplate {
+                                left:  db.db[deleted_idx as usize].clone(),
+                                right: db.db[deleted_idx as usize].clone(),
+                            }
                         }
+                        // TODO: implement test that enables testing the bitmap OR rule setting.
+                        // This will require setting the left and right iris code to be different,
+                        // one of them below the threshold and the other
+                        // above the threshold against the other codes. It will
+                        // also be required to set the param BatchQuery.threshold_bitmap_or to true
+                        // for the specific iris codes to be matched against
+                        // 5 => {
+                        // println!("Sending iris codes that match on right but not left with the OR
+                        // rule set");
                         _ => unreachable!(),
                     }
                 };
@@ -335,95 +377,34 @@ mod e2e_test {
                 let is_valid = rng.gen_range(0..10) != 0 || skip_invalidate;
 
                 if is_valid {
-                    requests.insert(request_id.to_string(), template.clone());
+                    requests.insert(request_id.to_string(), e2e_template.clone());
                 }
 
-                let mut shared_code = GaloisRingIrisCodeShare::encode_iris_code(
-                    &template.code,
-                    &template.mask,
-                    &mut rng,
-                );
-                let shared_mask =
-                    GaloisRingIrisCodeShare::encode_mask_code(&template.mask, &mut rng);
+                let shared_template = to_shared_template(is_valid, &e2e_template, &mut rng);
 
-                let mut shared_mask: Vec<GaloisRingTrimmedMaskCodeShare> =
-                    shared_mask.iter().map(|x| x.clone().into()).collect();
+                prepare_batch(
+                    &mut batch0,
+                    is_valid,
+                    request_id.to_string(),
+                    0,
+                    shared_template.clone(),
+                )?;
 
-                // batch0
-                if !is_valid {
-                    shared_code[0] = GaloisRingIrisCodeShare::default_for_party(1);
-                    shared_mask[0] = GaloisRingTrimmedMaskCodeShare::default_for_party(1)
-                }
-                batch0.metadata.push(Default::default());
-                batch0.valid_entries.push(is_valid);
-                batch0.request_ids.push(request_id.to_string());
-                // for storage
-                batch0.store_left.code.push(shared_code[0].clone());
-                batch0.store_left.mask.push(shared_mask[0].clone());
-                // with rotations
-                batch0.db_left.code.extend(shared_code[0].all_rotations());
-                batch0.db_left.mask.extend(shared_mask[0].all_rotations());
-                // with rotations
-                GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_code[0]);
-                GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(
-                    &mut shared_mask[0],
-                );
-                batch0
-                    .query_left
-                    .code
-                    .extend(shared_code[0].all_rotations());
-                batch0
-                    .query_left
-                    .mask
-                    .extend(shared_mask[0].all_rotations());
+                prepare_batch(
+                    &mut batch1,
+                    true,
+                    request_id.to_string(),
+                    1,
+                    shared_template.clone(),
+                )?;
 
-                // batch 1
-                batch1.valid_entries.push(true);
-                batch1.metadata.push(Default::default());
-                batch1.request_ids.push(request_id.to_string());
-                // for storage
-                batch1.store_left.code.push(shared_code[1].clone());
-                batch1.store_left.mask.push(shared_mask[1].clone());
-                // with rotations
-                batch1.db_left.code.extend(shared_code[1].all_rotations());
-                batch1.db_left.mask.extend(shared_mask[1].all_rotations());
-                // with rotations
-                GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_code[1]);
-                GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(
-                    &mut shared_mask[1],
-                );
-                batch1
-                    .query_left
-                    .code
-                    .extend(shared_code[1].all_rotations());
-                batch1
-                    .query_left
-                    .mask
-                    .extend(shared_mask[1].all_rotations());
-
-                // batch 2
-                batch2.valid_entries.push(true);
-                batch2.metadata.push(Default::default());
-                batch2.request_ids.push(request_id.to_string());
-                // for storage
-                batch2.store_left.code.push(shared_code[2].clone());
-                batch2.store_left.mask.push(shared_mask[2].clone());
-                // with rotations
-                batch2.db_left.code.extend(shared_code[2].all_rotations());
-                batch2.db_left.mask.extend(shared_mask[2].all_rotations());
-                // with rotations
-                GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut shared_code[2]);
-                GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(
-                    &mut shared_mask[2],
-                );
-                batch2
-                    .query_left
-                    .code
-                    .extend(shared_code[2].all_rotations());
-                batch2
-                    .query_left
-                    .mask
-                    .extend(shared_mask[2].all_rotations());
+                prepare_batch(
+                    &mut batch2,
+                    true,
+                    request_id.to_string(),
+                    2,
+                    shared_template.clone(),
+                )?;
             }
 
             // Skip empty batch
@@ -444,17 +425,6 @@ mod e2e_test {
                 batch1.deletion_requests_indices.push(idx as u32);
                 batch2.deletion_requests_indices.push(idx as u32);
             }
-
-            // TODO: better tests involving two eyes, atm just copy left to right
-            batch0.db_right = batch0.db_left.clone();
-            batch1.db_right = batch1.db_left.clone();
-            batch2.db_right = batch2.db_left.clone();
-            batch0.query_right = batch0.query_left.clone();
-            batch1.query_right = batch1.query_left.clone();
-            batch2.query_right = batch2.query_left.clone();
-            batch0.store_right = batch0.store_left.clone();
-            batch1.store_right = batch1.store_left.clone();
-            batch2.store_right = batch2.store_left.clone();
 
             // Preprocess the batches
             preprocess_batch(&mut batch0)?;
@@ -540,6 +510,128 @@ mod e2e_test {
         actor2_task.await.unwrap();
 
         Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_batch(
+        batch: &mut BatchQuery,
+        is_valid: bool,
+        request_id: String,
+        batch_idx: usize,
+        mut e2e_shared_template: E2ESharedTemplate,
+    ) -> Result<()> {
+        batch.metadata.push(Default::default());
+        batch.valid_entries.push(is_valid);
+        batch.request_ids.push(request_id);
+
+        batch
+            .store_left
+            .code
+            .push(e2e_shared_template.left_shared_code[batch_idx].clone());
+        batch
+            .store_left
+            .mask
+            .push(e2e_shared_template.left_shared_mask[batch_idx].clone());
+        batch
+            .store_right
+            .code
+            .push(e2e_shared_template.right_shared_code[batch_idx].clone());
+        batch
+            .store_right
+            .mask
+            .push(e2e_shared_template.right_shared_mask[batch_idx].clone());
+
+        batch
+            .db_left
+            .code
+            .extend(e2e_shared_template.left_shared_code[batch_idx].all_rotations());
+        batch
+            .db_left
+            .mask
+            .extend(e2e_shared_template.left_shared_mask[batch_idx].all_rotations());
+
+        batch
+            .db_right
+            .code
+            .extend(e2e_shared_template.left_shared_code[batch_idx].all_rotations());
+        batch
+            .db_right
+            .mask
+            .extend(e2e_shared_template.left_shared_mask[batch_idx].all_rotations());
+
+        GaloisRingIrisCodeShare::preprocess_iris_code_query_share(
+            &mut e2e_shared_template.left_shared_code[batch_idx],
+        );
+        GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(
+            &mut e2e_shared_template.left_shared_mask[batch_idx],
+        );
+        GaloisRingIrisCodeShare::preprocess_iris_code_query_share(
+            &mut e2e_shared_template.right_shared_code[batch_idx],
+        );
+        GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(
+            &mut e2e_shared_template.right_shared_mask[batch_idx],
+        );
+        batch
+            .query_left
+            .code
+            .extend(e2e_shared_template.left_shared_code[batch_idx].all_rotations());
+        batch
+            .query_left
+            .mask
+            .extend(e2e_shared_template.left_shared_mask[batch_idx].all_rotations());
+
+        batch
+            .query_right
+            .code
+            .extend(e2e_shared_template.right_shared_code[batch_idx].all_rotations());
+        batch
+            .query_right
+            .mask
+            .extend(e2e_shared_template.right_shared_mask[batch_idx].all_rotations());
+
+        Ok(())
+    }
+
+    fn to_shared_template(
+        is_valid: bool,
+        template: &E2ETemplate,
+        rng: &mut StdRng,
+    ) -> E2ESharedTemplate {
+        let (left_shared_code, left_shared_mask) =
+            get_shared_template(is_valid, &template.left, rng);
+        let (right_shared_code, right_shared_mask) =
+            get_shared_template(is_valid, &template.right, rng);
+        E2ESharedTemplate {
+            left_shared_code,
+            left_shared_mask,
+            right_shared_code,
+            right_shared_mask,
+        }
+    }
+
+    fn get_shared_template(
+        is_valid: bool,
+        template: &IrisCode,
+        rng: &mut StdRng,
+    ) -> (
+        [GaloisRingIrisCodeShare; 3],
+        [GaloisRingTrimmedMaskCodeShare; 3],
+    ) {
+        let mut shared_code =
+            GaloisRingIrisCodeShare::encode_iris_code(&template.code, &template.mask, rng);
+
+        let shared_mask = GaloisRingIrisCodeShare::encode_mask_code(&template.mask, rng);
+        let shared_mask_vector: Vec<GaloisRingTrimmedMaskCodeShare> =
+            shared_mask.iter().map(|x| x.clone().into()).collect();
+
+        let mut shared_mask: [GaloisRingTrimmedMaskCodeShare; 3] =
+            shared_mask_vector.try_into().unwrap();
+
+        if !is_valid {
+            shared_code[0] = GaloisRingIrisCodeShare::default_for_party(1);
+            shared_mask[0] = GaloisRingTrimmedMaskCodeShare::default_for_party(1)
+        }
+        (shared_code, shared_mask)
     }
 
     fn preprocess_batch(batch: &mut BatchQuery) -> Result<()> {
