@@ -1094,12 +1094,20 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
                         let device_manager_clone = actor.device_manager.clone();
 
+                        let start_page_lock = Arc::new(AtomicBool::new(false));
+                        let start_page_lock_clone = start_page_lock.clone();
                         let page_lock_sleep = config.page_lock_sleep;
                         // prepare the handle for the rest of the page locks
                         let page_lock_handle = spawn_blocking(move || {
+                            tracing::info!("Sleeping before page lock");
                             if page_lock_sleep {
-                                tracing::info!("Sleeping before page lock");
-                                sleep(Duration::from_secs(60));
+                                loop {
+                                    if start_page_lock_clone.load(Ordering::SeqCst) {
+                                        break;
+                                    }
+                                    tracing::info!("Sleeping before page lock");
+                                    sleep(Duration::from_millis(100));
+                                }
                             }
                             tracing::info!("Page locking host memory for code slices");
                             let now = Instant::now();
@@ -1273,6 +1281,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         actor.preprocess_db();
 
                         tracing::info!("Waiting for all page-locks to finish");
+                        start_page_lock.store(true, Ordering::SeqCst);
                         if !config.page_lock_before {
                             page_lock_handle.take().unwrap().await?;
                         }
