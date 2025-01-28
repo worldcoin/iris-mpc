@@ -901,6 +901,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         "Node {} did not respond with success, starting graceful shutdown",
                         host
                     );
+                    // if the nodes are still starting up and they get a failure - we can panic and
+                    // not start graceful shutdown
+                    if last_response[i] == String::default() {
+                        panic!(
+                            "Node {} did not respond with success during heartbeat init phase, \
+                             killing server...",
+                            host
+                        );
+                    }
 
                     if !heartbeat_shutdown_handler.is_shutting_down() {
                         heartbeat_shutdown_handler.trigger_manual_shutdown();
@@ -968,6 +977,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Heartbeat starting...");
     heartbeat_rx.await?;
     tracing::info!("Heartbeat on all nodes started.");
+    let download_shutdown_handler = Arc::clone(&shutdown_handler);
+
     background_tasks.check_tasks();
 
     let my_state = SyncState {
@@ -988,7 +999,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let load_chunks_parallelism = config.load_chunks_parallelism;
     let db_chunks_bucket_name = config.db_chunks_bucket_name.clone();
     let db_chunks_folder_name = config.db_chunks_folder_name.clone();
-    let download_shutdown_handler = Arc::clone(&shutdown_handler);
 
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
@@ -1031,6 +1041,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             );
             tokio::runtime::Handle::current().block_on(async { store.rollback(db_len).await })?;
             metrics::counter!("db.sync.rollback").increment(1);
+        }
+
+        if download_shutdown_handler.is_shutting_down() {
+            tracing::warn!("Shutting down has been triggered");
+            return Ok(());
         }
 
         // --------------------------------------------------------------------------
