@@ -23,7 +23,7 @@ mod e2e_test {
     const DB_BUFFER: usize = 8 * 1000;
     const DB_RNG_SEED: u64 = 0xdeadbeef;
     const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
-    const NUM_BATCHES: usize = 10;
+    const NUM_BATCHES: usize = 30;
     const MAX_BATCH_SIZE: usize = 64;
     const N_BUCKETS: usize = 10;
     const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 7;
@@ -255,6 +255,7 @@ mod e2e_test {
             let mut skip_invalidate = false;
             let mut batch_duplicates: HashMap<String, String> = HashMap::new();
 
+            let mut db_indices_used = HashSet::new();
             for idx in 0..batch_size {
                 let request_id = Uuid::new_v4();
                 // Automatic random tests
@@ -302,6 +303,7 @@ mod e2e_test {
                             if deleted_indices.contains(&(db_index as u32)) {
                                 continue;
                             }
+                            db_indices_used.insert(db_index);
                             expected_results
                                 .insert(request_id.to_string(), (Some(db_index as u32), false));
                             E2ETemplate {
@@ -310,7 +312,7 @@ mod e2e_test {
                             }
                         }
                         2 => {
-                            println!("Sending iris code on the threshold!!!!!!");
+                            println!("Sending iris code on the threshold");
                             let db_index = loop {
                                 let db_index = rng.gen_range(0..DB_SIZE / 10);
                                 if !disallowed_queries.contains(&db_index) {
@@ -320,6 +322,7 @@ mod e2e_test {
                             if deleted_indices.contains(&(db_index as u32)) {
                                 continue;
                             }
+                            db_indices_used.insert(db_index);
                             let variation = rng.gen_range(-1..=1);
                             expected_results.insert(
                                 request_id.to_string(),
@@ -351,6 +354,7 @@ mod e2e_test {
                             let e2e_template = responses.get(keys[idx]).unwrap().clone();
                             expected_results
                                 .insert(request_id.to_string(), (Some(*keys[idx]), false));
+                            db_indices_used.insert(*keys[idx] as usize);
 
                             E2ETemplate {
                                 left:  e2e_template.left.clone(),
@@ -422,7 +426,7 @@ mod e2e_test {
 
             for _ in 0..rng.gen_range(0..MAX_DELETIONS_PER_BATCH) {
                 let idx = rng.gen_range(0..db.db.len());
-                if deleted_indices.contains(&(idx as u32)) {
+                if deleted_indices.contains(&(idx as u32)) || db_indices_used.contains(&idx) {
                     continue;
                 }
                 deleted_indices_buffer.push(idx as u32);
