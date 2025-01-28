@@ -183,17 +183,18 @@ pub fn register_host_memory(
         chunk_offset + chunk_length
     );
     let size = chunk_length / device_manager.device_count();
+    let offset = chunk_offset / device_manager.device_count();
     for (device_index, device) in device_manager.devices().iter().enumerate() {
         device.bind_to_thread().unwrap();
         unsafe {
             let _ = cudarc::driver::sys::lib().cuMemHostRegister_v2(
-                (db.limb_0[device_index] + (chunk_offset * code_length) as u64) as *mut _,
+                (db.limb_0[device_index] + (offset * code_length) as u64) as *mut _,
                 size * code_length,
                 CU_MEMHOSTALLOC_PORTABLE,
             );
 
             let _ = cudarc::driver::sys::lib().cuMemHostRegister_v2(
-                (db.limb_1[device_index] + (chunk_offset * code_length) as u64) as *mut _,
+                (db.limb_1[device_index] + (offset * code_length) as u64) as *mut _,
                 size * code_length,
                 CU_MEMHOSTALLOC_PORTABLE,
             );
