@@ -84,7 +84,7 @@ env:
     value: "1024"
 
   - name: SMPC__PAGE_LOCK_CHUNK_PERCENTAGE
-    value: "100"
+    value: "50"
 
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
