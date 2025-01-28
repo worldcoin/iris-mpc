@@ -60,6 +60,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, LazyLock, Mutex,
     },
+    thread::sleep,
     time::{Duration, Instant},
 };
 use telemetry_batteries::tracing::{datadog::DatadogBattery, TracingShutdownHandle};
@@ -1093,8 +1094,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
                         let device_manager_clone = actor.device_manager.clone();
 
+                        let page_lock_after = config.page_lock_after;
                         // prepare the handle for the rest of the page locks
                         let page_lock_handle = spawn_blocking(move || {
+                            if page_lock_after {
+                                tracing::info!("Sleeping before page lock");
+                                sleep(Duration::from_secs(120));
+                            }
                             tracing::info!("Page locking host memory for code slices");
                             let now = Instant::now();
                             for db in [&left_codes, &right_codes] {
