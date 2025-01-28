@@ -116,7 +116,10 @@ pub struct Config {
     pub load_chunks_buffer_size: usize,
 
     #[serde(default)]
-    pub page_lock_after: bool,
+    pub page_lock_sleep: bool,
+
+    #[serde(default)]
+    pub page_lock_before: bool,
 }
 
 fn default_load_chunks_parallelism() -> usize {

@@ -83,8 +83,11 @@ env:
   - name: SMPC__LOAD_CHUNKS_BUFFER_SIZE
     value: "1024"
 
-  - name: SMPC__PAGE_LOCK_AFTER
+  - name: SMPC__PAGE_LOCK_BEFORE
     value: "false"
+
+  - name: SMPC__PAGE_LOCK_SLEEP
+    value: "true"
 
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"

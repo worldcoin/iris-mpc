@@ -1094,12 +1094,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
                         let device_manager_clone = actor.device_manager.clone();
 
-                        let page_lock_after = config.page_lock_after;
+                        let page_lock_sleep = config.page_lock_sleep;
                         // prepare the handle for the rest of the page locks
                         let page_lock_handle = spawn_blocking(move || {
-                            if page_lock_after {
+                            if page_lock_sleep {
                                 tracing::info!("Sleeping before page lock");
-                                sleep(Duration::from_secs(120));
+                                sleep(Duration::from_secs(60));
                             }
                             tracing::info!("Page locking host memory for code slices");
                             let now = Instant::now();
@@ -1129,6 +1129,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                 now.elapsed()
                             );
                         });
+                        let mut page_lock_handle = Some(page_lock_handle);
+
+                        if config.page_lock_before {
+                            page_lock_handle.take().unwrap().await?;
+                        }
 
                         let now = Instant::now();
                         let mut record_counter = 0;
@@ -1268,7 +1273,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         actor.preprocess_db();
 
                         tracing::info!("Waiting for all page-locks to finish");
-                        page_lock_handle.await.expect("Error while page-locking");
+                        if !config.page_lock_before {
+                            page_lock_handle.take().unwrap().await?;
+                        }
 
                         tracing::info!(
                             "Loaded {} records from db into memory in {:?} [DB sizes: {:?}]",
