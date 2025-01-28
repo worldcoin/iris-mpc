@@ -920,18 +920,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     .json::<ReadyProbeResponse>()
                     .await
                     .expect("Deserialization of probe response failed");
-                if probe_response.shutting_down {
-                    tracing::info!("Node {} has starting graceful shutdown", host);
-
-                    if !heartbeat_shutdown_handler.is_shutting_down() {
-                        heartbeat_shutdown_handler.trigger_manual_shutdown();
-                        tracing::error!(
-                            "Node {} has starting graceful shutdown, therefore triggering \
-                             graceful shutdown",
-                            host
-                        );
-                    }
-                }
                 if probe_response.image_name != image_name {
                     // Do not create a panic as we still can continue to process before its
                     // updated
@@ -957,6 +945,17 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     // noticing. Our main NCCL connections cannot recover from
                     // this, so we panic.
                     panic!("Node {} seems to have restarted, killing server...", host);
+                } else if probe_response.shutting_down {
+                    tracing::info!("Node {} has starting graceful shutdown", host);
+
+                    if !heartbeat_shutdown_handler.is_shutting_down() {
+                        heartbeat_shutdown_handler.trigger_manual_shutdown();
+                        tracing::error!(
+                            "Node {} has starting graceful shutdown, therefore triggering \
+                             graceful shutdown",
+                            host
+                        );
+                    }
                 } else {
                     tracing::info!("Heartbeat: Node {} is healthy", host);
                 }

@@ -30,7 +30,7 @@ WORKDIR /src/gpu-iris-mpc
 COPY . .
 RUN cargo build --release --target x86_64-unknown-linux-gnu --bin nccl --bin server --bin client --bin key-manager --bin upgrade-server --bin upgrade-client --bin upgrade-checker --bin reshare-server --bin reshare-client
 
-FROM --platform=linux/amd64 ghcr.io/worldcoin/iris-mpc-base:cuda12_2-nccl2_22_3_1
+FROM --platform=linux/amd64 ghcr.io/worldcoin/iris-mpc-base:cuda-libraries12_2-nccl2_22_3_1
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Include client, server and key-manager, upgrade-client and upgrade-server binaries
