@@ -281,13 +281,12 @@ pub async fn fetch_and_parse_chunks(
         }));
     }
 
-    drop(tx);
-
+    tracing::info!("All s3 import tasks are spawned. Waiting for them to finish");
     // Wait for remaining handles
     for handle in handles {
         handle.await??;
     }
-
+    tracing::info!("All s3 import tasks are finished.");
     Ok(())
 }
 
