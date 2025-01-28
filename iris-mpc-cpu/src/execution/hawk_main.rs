@@ -286,6 +286,7 @@ impl HawkActor {
     ) -> Result<()> {
         let plans = join_plans(plans);
         for plan in plans {
+            // TODO: Parallel insertions are not supported, so only one session is needed.
             let mut session = sessions[0].write().await;
             self.insert_one(&mut session, plan).await?;
         }
