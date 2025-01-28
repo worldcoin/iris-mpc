@@ -1062,6 +1062,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             8,
             config.max_db_size,
             config.max_batch_size,
+            config.match_distances_buffer_size,
+            config.n_buckets,
             config.return_partial_results,
             config.disable_persistence,
             config.enable_debug_timing,
