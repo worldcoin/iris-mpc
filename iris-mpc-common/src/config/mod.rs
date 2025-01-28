@@ -114,13 +114,6 @@ pub struct Config {
 
     #[serde(default)]
     pub load_chunks_buffer_size: usize,
-
-    /// Percentage of the chunk size to page lock at each iteration
-    /// The first chunk will be waited to finish without loading anything
-    /// The rest of the chunks will be page locked in parallel to s3 import
-    /// Must be a positive integer between [1-100]
-    #[serde(default)]
-    pub page_lock_chunk_percentage: usize,
 }
 
 fn default_load_chunks_parallelism() -> usize {

@@ -1086,54 +1086,45 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
                     tokio::runtime::Handle::current().block_on(async {
                         let total_load_time = Instant::now();
-                        let dbs = [
-                            (actor.left_code_db_slices.code_gr.clone(), IRIS_CODE_LENGTH),
-                            (actor.right_code_db_slices.code_gr.clone(), IRIS_CODE_LENGTH),
-                            (actor.left_mask_db_slices.code_gr.clone(), MASK_CODE_LENGTH),
-                            (actor.right_mask_db_slices.code_gr.clone(), MASK_CODE_LENGTH),
-                        ];
-                        let n_page_lock_iters = 100 / config.page_lock_chunk_percentage;
-                        let page_lock_chunk_size = config.max_db_size / n_page_lock_iters;
-                        tracing::info!(
-                            "Will page lock chunks in {} iters, each {} items",
-                            n_page_lock_iters,
-                            page_lock_chunk_size
-                        );
-                        let dbs_clone = dbs.clone();
-                        let mut now = Instant::now();
-                        for (db, code_length) in dbs_clone {
-                            let device_manager_clone = actor.device_manager.clone();
-                            register_host_memory(
-                                device_manager_clone,
-                                &db,
-                                page_lock_chunk_size,
-                                0,
-                                code_length,
-                            );
-                        }
-                        tracing::info!("First chunk page-locking took {:?}", now.elapsed());
+                        let left_codes = actor.left_code_db_slices.code_gr.clone();
+                        let right_codes = actor.right_code_db_slices.code_gr.clone();
+                        let left_masks = actor.left_mask_db_slices.code_gr.clone();
+                        let right_masks = actor.right_mask_db_slices.code_gr.clone();
 
                         let device_manager_clone = actor.device_manager.clone();
 
                         // prepare the handle for the rest of the page locks
                         let page_lock_handle = spawn_blocking(move || {
-                            for i in 1..n_page_lock_iters {
-                                let dbs_clone = dbs.clone();
-                                let device_manager_clone = device_manager_clone.clone();
-                                for (db, code_length) in dbs_clone {
-                                    let device_manager_clone = device_manager_clone.clone();
-                                    register_host_memory(
-                                        device_manager_clone,
-                                        &db,
-                                        page_lock_chunk_size,
-                                        i * page_lock_chunk_size,
-                                        code_length,
-                                    );
-                                }
+                            tracing::info!("Page locking host memory for code slices");
+                            let now = Instant::now();
+                            for db in [&left_codes, &right_codes] {
+                                register_host_memory(
+                                    device_manager_clone.clone(),
+                                    db,
+                                    config.max_db_size,
+                                    IRIS_CODE_LENGTH,
+                                );
+                                tracing::info!("Page locking completed for code slice");
                             }
+
+                            tracing::info!("Page locking host memory for mask slices");
+                            for db in [&left_masks, &right_masks] {
+                                register_host_memory(
+                                    device_manager_clone.clone(),
+                                    db,
+                                    config.max_db_size,
+                                    MASK_CODE_LENGTH,
+                                );
+                                tracing::info!("Page locking completed for mask slice");
+                            }
+
+                            tracing::info!(
+                                "Page locking completed for all slices in {:?}",
+                                now.elapsed()
+                            );
                         });
 
-                        now = Instant::now();
+                        let now = Instant::now();
                         let mut record_counter = 0;
                         let mut all_serial_ids: HashSet<i64> =
                             HashSet::from_iter(1..=(store_len as i64));
