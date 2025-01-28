@@ -49,6 +49,9 @@ env:
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
     value: "120"
+  
+  - name: SMPC__HEARTBEAT_INITIAL_RETRIES
+    value: "65"
 
   - name: SMPC__PATH
     value: "/data/"
