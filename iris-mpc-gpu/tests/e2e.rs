@@ -19,11 +19,11 @@ mod e2e_test {
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
     use uuid::Uuid;
 
-    const DB_SIZE: usize = 8 * 1000;
+    const DB_SIZE: usize = 16 * 1000;
     const DB_BUFFER: usize = 8 * 1000;
     const DB_RNG_SEED: u64 = 0xdeadbeef;
     const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
-    const NUM_BATCHES: usize = 30;
+    const NUM_BATCHES: usize = 50;
     const MAX_BATCH_SIZE: usize = 64;
     const N_BUCKETS: usize = 10;
     const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 7;
