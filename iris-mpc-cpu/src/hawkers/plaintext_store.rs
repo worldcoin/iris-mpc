@@ -12,7 +12,6 @@ use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::ops::{Index, IndexMut};
 use tracing::info;
-// use const_str;
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct PlaintextIris(pub IrisCode);

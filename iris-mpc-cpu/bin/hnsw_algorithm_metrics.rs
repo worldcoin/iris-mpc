@@ -65,7 +65,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Run HNSW construction
 
     let mut rng = AesRng::seed_from_u64(42_u64);
-    // let mut rng = rand::thread_rng();
     let mut vector = PlaintextStore::default();
     let mut graph = GraphMem::new();
     let params = if let Some(p) = layer_probability {
