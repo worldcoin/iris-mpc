@@ -200,7 +200,7 @@ impl Default for HnswSearcher {
 
 #[allow(non_snake_case)]
 impl HnswSearcher {
-    /// Two-step variant of `connect_bidir`: prepare.
+    /// Prepare bidirectional connections between `q` and its `neighbors`.
     async fn connect_prepare<V: VectorStore, G: GraphStore<V>>(
         &self,
         vector_store: &mut V,
@@ -226,7 +226,7 @@ impl HnswSearcher {
         ConnectPlanLayer { neighbors, n_links }
     }
 
-    /// Two-step variant of `connect_bidir`: execute.
+    /// Apply the connections from `connect_prepare` to the graph store.
     async fn connect_apply<V: VectorStore, G: GraphStore<V>>(
         &self,
         graph_store: &mut G,
