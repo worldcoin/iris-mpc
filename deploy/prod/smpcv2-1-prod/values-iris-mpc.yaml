@@ -81,13 +81,16 @@ env:
     value: "true"
 
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
-    value: "iris-mpc-db-exporter-store-node-1-prod-eu-north-1"
+    value: "iris-mpc-db-exporter-store-node-1-prod--eun1-az3--x-s3"
 
   - name: SMPC__DB_CHUNKS_FOLDER_NAME
     value: "even_odd_binary_output_16k"
 
   - name: SMPC__LOAD_CHUNKS_PARALLELISM
     value: "64"
+
+  - name: SMPC__LOAD_CHUNKS_BUFFER_SIZE
+    value: "1024"
 
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
@@ -96,7 +99,7 @@ env:
     value: "0"
 
   - name: SMPC__MAX_DB_SIZE
-    value: "11000000"
+    value: "13000000"
 
   - name: SMPC__FAKE_DB_SIZE
     value: "0"
