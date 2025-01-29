@@ -8,12 +8,12 @@ use crate::{
 };
 use cudarc::{
     driver::{
-        result::{launch_kernel, memset_d8_sync},
-        sys, CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr, DeviceSlice, LaunchAsync,
+        result::memset_d8_sync, CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr,
+        DeviceSlice, LaunchAsync,
     },
     nvrtc::compile_ptx,
 };
-use std::{cmp::min, ffi::c_void, sync::Arc};
+use std::{cmp::min, sync::Arc};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const OPEN_RESULTS_FUNCTION: &str = "openResults";
@@ -164,44 +164,37 @@ impl DistanceComparator {
             );
             self.device_manager.device(i).bind_to_thread().unwrap();
 
-            let ptr_param = |ptr: *const sys::CUdeviceptr| ptr as *mut c_void;
-            let usize_param = |val: &usize| val as *const usize as *mut _;
-
-            let params = &mut [
-                // Results arrays
-                ptr_param(results1[i].device_ptr()),
-                ptr_param(results2[i].device_ptr()),
-                ptr_param(results3[i].device_ptr()),
-                ptr_param(matches_bitmap[i].device_ptr()),
-                usize_param(&db_sizes[i]),
-                usize_param(&(batch_size * ROTATIONS)),
-                usize_param(&offset),
-                usize_param(&num_elements),
-                usize_param(&real_db_sizes[i]),
-                usize_param(&total_db_sizes[i]),
-                ptr_param(match_distances_buffers_codes[i].a.device_ptr()),
-                ptr_param(match_distances_buffers_codes[i].b.device_ptr()),
-                ptr_param(match_distances_buffers_masks[i].a.device_ptr()),
-                ptr_param(match_distances_buffers_masks[i].b.device_ptr()),
-                ptr_param(match_distances_counters[i].device_ptr()),
-                ptr_param(match_distances_indices[i].device_ptr()),
-                ptr_param(code_dots[i].a.device_ptr()),
-                ptr_param(code_dots[i].b.device_ptr()),
-                ptr_param(mask_dots[i].a.device_ptr()),
-                ptr_param(mask_dots[i].b.device_ptr()),
-                usize_param(&max_bucket_distances),
-            ];
-
             unsafe {
-                launch_kernel(
-                    self.open_kernels[i].cu_function(),
-                    cfg.grid_dim,
-                    cfg.block_dim,
-                    0,
-                    streams[i].stream,
-                    params,
-                )
-                .unwrap();
+                self.open_kernels[i]
+                    .clone()
+                    .launch_on_stream(
+                        &streams[i],
+                        cfg,
+                        (
+                            &results1[i],
+                            &results2[i],
+                            &results3[i],
+                            &matches_bitmap[i],
+                            db_sizes[i],
+                            (batch_size * ROTATIONS) as u64,
+                            offset,
+                            num_elements,
+                            real_db_sizes[i],
+                            total_db_sizes[i],
+                            &match_distances_buffers_codes[i].a,
+                            &match_distances_buffers_codes[i].b,
+                            &match_distances_buffers_masks[i].a,
+                            &match_distances_buffers_masks[i].b,
+                            &match_distances_counters[i],
+                            &match_distances_indices[i],
+                            &code_dots[i].a,
+                            &code_dots[i].b,
+                            &mask_dots[i].a,
+                            &mask_dots[i].b,
+                            max_bucket_distances,
+                        ),
+                    )
+                    .unwrap();
             }
         }
     }

@@ -9,7 +9,7 @@ repository.workspace = true
 
 [dependencies]
 bincode = "1.3.3"
-cudarc = { git = "https://github.com/worldcoin/cudarc-fork.git", features = [
+cudarc = { version = "0.13.4", features = [
     "cuda-12020",
     "nccl",
 ] }
