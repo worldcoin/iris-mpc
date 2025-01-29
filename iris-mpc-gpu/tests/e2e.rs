@@ -403,8 +403,8 @@ mod e2e_test {
                                 db_indexes_copy[rng.gen_range(0..db_indexes_copy.len())];
 
                             // comparison against this item will use the OR rule
-                            use_or_rule_for_serial_ids.extend(db_indexes.iter().map(|x| *x as u32));
-                            or_rule_matches.push(request_id.to_string());
+                            use_or_rule_for_serial_ids
+                                .extend(db_indexes_copy.iter().map(|x| *x as u32));
 
                             // Will always match under the OR rule
                             expected_results.insert(
@@ -424,6 +424,7 @@ mod e2e_test {
                             let variation = rng.gen_range(1..100);
 
                             if will_match {
+                                or_rule_matches.push(request_id.to_string());
                                 if flip_right {
                                     // Flip right bits to above threshold - (right) does not match
                                     for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
@@ -445,6 +446,8 @@ mod e2e_test {
                                     code_left.code.flip_bit(i);
                                     code_right.code.flip_bit(i);
                                 }
+                                db_indices_used.insert(matching_db_index as usize);
+                                disallowed_queries.push(matching_db_index);
                                 expected_results.insert(request_id.to_string(), (None, false));
                             }
 

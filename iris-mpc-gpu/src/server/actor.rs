@@ -9,8 +9,7 @@ use crate::{
         self,
         comm::NcclComm,
         device_manager::DeviceManager,
-        htod_on_stream_sync,
-        dtoh_on_stream_sync,
+        dtoh_on_stream_sync, htod_on_stream_sync,
         query_processor::{
             CompactQuery, CudaVec2DSlicerRawPointer, DeviceCompactQuery, DeviceCompactSums,
         },
