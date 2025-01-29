@@ -7,7 +7,7 @@ use crate::{
         session::{BootSession, Session, SessionId},
     },
     hawkers::aby3_store::{Aby3Store, SharedIrisesRef},
-    hnsw::HnswSearcher,
+    hnsw::{searcher::ConnectPlanV, HnswSearcher},
     network::grpc::{GrpcConfig, GrpcNetworking},
     proto_generated::party_node::party_node_server::PartyNodeServer,
     protocol::ops::setup_replicated_prf,
@@ -18,15 +18,18 @@ use eyre::Result;
 use hawk_pack::{graph_store::GraphMem, hawk_searcher::FurthestQueue, VectorStore};
 use itertools::{izip, Itertools};
 use rand::{thread_rng, Rng, SeedableRng};
-use std::{collections::HashMap, ops::DerefMut, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    ops::{Deref, DerefMut},
+    sync::Arc,
+    time::Duration,
+    vec,
+};
 use tokio::{
-    sync::{mpsc::Sender, RwLock},
+    sync::{mpsc, oneshot, RwLock},
     task::JoinSet,
-    time::sleep,
 };
 use tonic::transport::Server;
-
-const TEST_WAIT: Duration = Duration::from_secs(3);
 
 #[derive(Parser)]
 pub struct HawkArgs {
@@ -80,6 +83,7 @@ pub type SearchResult = (
 );
 
 pub type InsertPlan = InsertPlanV<Aby3Store>;
+pub type ConnectPlan = ConnectPlanV<Aby3Store>;
 
 #[derive(Debug)]
 pub struct InsertPlanV<V: VectorStore> {
@@ -123,9 +127,6 @@ impl HawkActor {
             });
         }
 
-        // TODO: Retry until all servers are up.
-        sleep(TEST_WAIT).await;
-
         // Connect to other players.
         izip!(&identities, &args.addresses)
             .filter(|(_, address)| address != &my_address)
@@ -143,9 +144,6 @@ impl HawkActor {
             .await
             .into_iter()
             .collect::<Result<()>>()?;
-
-        // TODO: Wait until others connected to me.
-        sleep(TEST_WAIT).await;
 
         Ok(HawkActor {
             search_params,
@@ -167,8 +165,8 @@ impl HawkActor {
         // TODO: cleanup of dropped sessions.
         self.networking.create_session(session_id).await?;
 
-        // TODO: Wait until others ceated their side of the session.
-        sleep(TEST_WAIT).await;
+        // Wait until others ceated their side of the session.
+        self.networking.wait_for_session(session_id).await;
 
         let boot_session = BootSession {
             session_id,
@@ -283,30 +281,105 @@ impl HawkActor {
         &mut self,
         sessions: &[HawkSessionRef],
         plans: Vec<InsertPlan>,
-    ) -> Result<()> {
-        let plans = join_plans(plans);
-        for plan in plans {
+    ) -> Result<Vec<ConnectPlan>> {
+        let insert_plans = join_plans(plans);
+        let mut connect_plans = vec![];
+        for plan in insert_plans {
             // TODO: Parallel insertions are not supported, so only one session is needed.
             let mut session = sessions[0].write().await;
-            self.insert_one(&mut session, plan).await?;
+            let cp = self.insert_one(&mut session, plan).await?;
+            connect_plans.push(cp);
         }
-        Ok(())
+        Ok(connect_plans)
     }
 
     // TODO: Remove `&mut self` requirement to support parallel sessions.
-    async fn insert_one(&mut self, session: &mut HawkSession, plan: InsertPlan) -> Result<()> {
-        let inserted = session.aby3_store.insert(&plan.query).await;
+    async fn insert_one(
+        &mut self,
+        session: &mut HawkSession,
+        insert_plan: InsertPlan,
+    ) -> Result<ConnectPlan> {
+        let inserted = session.aby3_store.insert(&insert_plan.query).await;
         let mut graph_store = self.graph_store.write().await;
-        self.search_params
-            .insert_from_search_results(
+
+        let connect_plan = self
+            .search_params
+            .insert_prepare(
                 &mut session.aby3_store,
-                graph_store.deref_mut(),
+                graph_store.deref(),
                 inserted,
-                plan.links,
-                plan.set_ep,
+                insert_plan.links,
+                insert_plan.set_ep,
             )
             .await;
-        Ok(())
+
+        self.search_params
+            .insert_apply(graph_store.deref_mut(), connect_plan.clone())
+            .await;
+
+        Ok(connect_plan)
+    }
+}
+
+struct HawkJob {
+    request:        HawkRequest,
+    return_channel: oneshot::Sender<Result<HawkResult>>,
+}
+
+type HawkResult = Vec<ConnectPlan>;
+
+/// HawkHandle is a handle to the HawkActor managing concurrency.
+#[derive(Clone, Debug)]
+pub struct HawkHandle {
+    job_queue: mpsc::Sender<HawkJob>,
+}
+
+impl HawkHandle {
+    pub async fn new(mut hawk_actor: HawkActor, request_parallelism: usize) -> Result<Self> {
+        let mut sessions = vec![];
+        for _ in 0..request_parallelism {
+            let session = hawk_actor.new_session().await?;
+            sessions.push(Arc::new(RwLock::new(session)));
+        }
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<HawkJob>(1);
+
+        // ---- Request Handler ----
+        tokio::spawn(async move {
+            while let Some(job) = rx.recv().await {
+                // TODO: obtain rotated and mirrored versions.
+                let rotated = job.request.clone();
+
+                // Search for nearest neighbors.
+                let _search_results = hawk_actor.search(&sessions, rotated).await.unwrap();
+
+                // TODO: Compare with threshold.
+                let to_insert = job.request;
+
+                // Insert into the database.
+                let plans = hawk_actor
+                    .search_to_insert(&sessions, to_insert)
+                    .await
+                    .unwrap();
+                let connect_plans = hawk_actor.insert(&sessions, plans).await.unwrap();
+
+                println!("🎉 Inserted items into the database");
+
+                let _ = job.return_channel.send(Ok(connect_plans));
+            }
+        });
+
+        Ok(Self { job_queue: tx })
+    }
+
+    pub async fn submit(&self, request: HawkRequest) -> Result<HawkResult> {
+        let (tx, rx) = oneshot::channel();
+        let job = HawkJob {
+            request,
+            return_channel: tx,
+        };
+        self.job_queue.send(job).await?;
+        rx.await?
     }
 }
 
@@ -343,42 +416,10 @@ fn join_plans(mut plans: Vec<InsertPlan>) -> Vec<InsertPlan> {
     plans
 }
 
-pub async fn hawk_main(args: HawkArgs) -> Result<Sender<HawkRequest>> {
+pub async fn hawk_main(args: HawkArgs) -> Result<HawkHandle> {
     println!("🦅 Starting Hawk node {}", args.party_index);
-    let mut hawk_actor = HawkActor::from_cli(&args).await?;
-
-    let mut sessions = vec![];
-    for _ in 0..args.request_parallelism {
-        let session = hawk_actor.new_session().await?;
-        sessions.push(Arc::new(RwLock::new(session)));
-    }
-
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<HawkRequest>(1);
-
-    // ---- Request Handler ----
-    tokio::spawn(async move {
-        while let Some(req) = rx.recv().await {
-            // TODO: obtain rotated and mirrored versions.
-            let rotated = req.clone();
-
-            // Search for nearest neighbors.
-            let _search_results = hawk_actor.search(&sessions, rotated).await.unwrap();
-
-            // TODO: Compare with threshold.
-            let to_insert = req;
-
-            // Insert into the database.
-            let plans = hawk_actor
-                .search_to_insert(&sessions, to_insert)
-                .await
-                .unwrap();
-            hawk_actor.insert(&sessions, plans).await.unwrap();
-
-            println!("🎉 Inserted items into the database");
-        }
-    });
-
-    Ok(tx)
+    let hawk_actor = HawkActor::from_cli(&args).await?;
+    HawkHandle::new(hawk_actor, args.request_parallelism).await
 }
 
 #[cfg(test)]
@@ -389,6 +430,7 @@ mod tests {
         execution::local::get_free_local_addresses,
     };
     use iris_mpc_common::iris_db::db::IrisDB;
+    use tokio::time::sleep;
 
     #[tokio::test]
     async fn test_hawk_main() -> Result<()> {
@@ -412,13 +454,13 @@ mod tests {
         let n_parties = 3;
         let addresses = get_free_local_addresses(n_parties).await?;
 
-        let request_queues = (0..n_parties)
+        let handles = (0..n_parties)
             .map(|i| go(addresses.clone(), i))
             .collect::<JoinSet<_>>()
             .join_all()
             .await
             .into_iter()
-            .collect::<Result<Vec<Sender<HawkRequest>>>>()?;
+            .collect::<Result<Vec<HawkHandle>>>()?;
 
         // ---- Send requests ----
 
@@ -441,20 +483,25 @@ mod tests {
             })
             .collect_vec();
 
-        izip!(irises, request_queues.clone())
-            .map(|(share, queue)| async move {
-                queue
-                    .send(HawkRequest {
+        let all_plans = izip!(irises, handles.clone())
+            .map(|(share, handle)| async move {
+                let plans = handle
+                    .submit(HawkRequest {
                         my_iris_shares: share,
                     })
                     .await?;
-                Ok(())
+                Ok(plans)
             })
             .collect::<JoinSet<_>>()
             .join_all()
             .await
             .into_iter()
-            .collect::<Result<()>>()?;
+            .collect::<Result<Vec<HawkResult>>>()?;
+
+        assert!(
+            all_plans.iter().all_equal(),
+            "All parties must agree on the graph changes"
+        );
 
         Ok(())
     }
