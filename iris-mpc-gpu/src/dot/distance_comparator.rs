@@ -26,7 +26,7 @@ const ALL_MATCHES_LEN: usize = 256;
 pub struct DistanceComparator {
     pub device_manager:                  Arc<DeviceManager>,
     pub open_kernels:                    Vec<CudaFunction>,
-    pub open_batch_kernels:      Vec<CudaFunction>,
+    pub open_batch_kernels:              Vec<CudaFunction>,
     pub merge_db_kernels:                Vec<CudaFunction>,
     pub merge_batch_kernels:             Vec<CudaFunction>,
     pub merge_batch_with_bitmap_kernels: Vec<CudaFunction>,
