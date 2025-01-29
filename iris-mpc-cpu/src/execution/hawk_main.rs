@@ -1,6 +1,6 @@
 use super::player::Identity;
 use crate::{
-    database_generators::{generate_galois_iris_shares, GaloisRingSharedIris},
+    database_generators::GaloisRingSharedIris,
     execution::{
         local::generate_local_identities,
         player::{Role, RoleAssignment},
@@ -16,11 +16,14 @@ use aes_prng::AesRng;
 use clap::Parser;
 use eyre::Result;
 use hawk_pack::{graph_store::GraphMem, hawk_searcher::FurthestQueue, VectorStore};
-use iris_mpc_common::iris_db::db::IrisDB;
 use itertools::{izip, Itertools};
 use rand::{thread_rng, Rng, SeedableRng};
-use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::{task::JoinSet, time::sleep};
+use std::{collections::HashMap, ops::DerefMut, sync::Arc, time::Duration};
+use tokio::{
+    sync::{mpsc::Sender, RwLock},
+    task::JoinSet,
+    time::sleep,
+};
 use tonic::transport::Server;
 
 const TEST_WAIT: Duration = Duration::from_secs(3);
@@ -32,25 +35,30 @@ pub struct HawkArgs {
 
     #[clap(short, long, value_delimiter = ',')]
     addresses: Vec<String>,
+
+    #[clap(short, long, default_value_t = 2)]
+    request_parallelism: usize,
 }
 
 /// HawkActor manages the state of the HNSW database and connections to other
 /// MPC nodes.
 pub struct HawkActor {
     // ---- Shared setup ----
-    search_params:    HnswSearcher,
+    search_params:    Arc<HnswSearcher>,
     role_assignments: Arc<HashMap<Role, Identity>>,
     consensus:        Consensus,
 
     // ---- My state ----
     // TODO: Persistence.
     iris_store:  SharedIrisesRef,
-    graph_store: GraphMem<Aby3Store>,
+    graph_store: GraphRef,
 
     // ---- My network setup ----
     networking:   GrpcNetworking,
     own_identity: Identity,
 }
+
+type GraphRef = Arc<RwLock<GraphMem<Aby3Store>>>;
 
 /// HawkSession is a unit of parallelism when operating on the HawkActor.
 pub struct HawkSession {
@@ -58,10 +66,18 @@ pub struct HawkSession {
     shared_rng: AesRng,
 }
 
+type HawkSessionRef = Arc<RwLock<HawkSession>>;
+
 /// HawkRequest contains a batch of items to search.
+#[derive(Clone, Debug)]
 pub struct HawkRequest {
     pub my_iris_shares: Vec<GaloisRingSharedIris>,
 }
+
+pub type SearchResult = (
+    <Aby3Store as VectorStore>::VectorRef,
+    <Aby3Store as VectorStore>::DistanceRef,
+);
 
 pub type InsertPlan = InsertPlanV<Aby3Store>;
 
@@ -74,7 +90,7 @@ pub struct InsertPlanV<V: VectorStore> {
 
 impl HawkActor {
     pub async fn from_cli(args: &HawkArgs) -> Result<Self> {
-        let search_params = HnswSearcher::default();
+        let search_params = Arc::new(HnswSearcher::default());
 
         let identities = generate_local_identities();
 
@@ -134,7 +150,7 @@ impl HawkActor {
         Ok(HawkActor {
             search_params,
             iris_store: SharedIrisesRef::default(),
-            graph_store: GraphMem::<Aby3Store>::new(),
+            graph_store: Arc::new(RwLock::new(GraphMem::<Aby3Store>::new())),
             role_assignments: Arc::new(role_assignments),
             consensus: Consensus::default(),
             networking,
@@ -184,56 +200,95 @@ impl HawkActor {
         })
     }
 
-    // TODO: Implement actual parallelism.
+    pub async fn search(
+        &self,
+        sessions: &[HawkSessionRef],
+        req: HawkRequest,
+    ) -> Result<Vec<SearchResult>> {
+        Ok(self
+            .search_to_insert(sessions, req)
+            .await?
+            .iter()
+            .map(|plan| {
+                plan.links
+                    .first()
+                    .and_then(|layer| layer.get_nearest())
+                    .cloned()
+            })
+            .collect::<Option<Vec<SearchResult>>>()
+            .unwrap_or_default())
+    }
+
     pub async fn search_to_insert(
-        &mut self,
-        sessions: &mut [HawkSession],
+        &self,
+        sessions: &[HawkSessionRef],
         req: HawkRequest,
     ) -> Result<Vec<InsertPlan>> {
         let mut plans = vec![];
-        for (i, iris) in req.my_iris_shares.into_iter().enumerate() {
-            let session = &mut sessions[i % sessions.len()];
-            plans.push(self.search_to_insert_one(session, iris).await?);
+
+        // Distribute the requests over the given sessions in parallel.
+        for chunk in req.my_iris_shares.chunks(sessions.len()) {
+            let tasks = izip!(chunk, sessions)
+                .map(|(iris, session)| {
+                    let search_params = Arc::clone(&self.search_params);
+                    let graph_store = Arc::clone(&self.graph_store);
+                    let session = Arc::clone(session);
+                    let iris = iris.clone();
+
+                    tokio::spawn(async move {
+                        let graph_store = graph_store.read().await;
+                        let mut session = session.write().await;
+                        Self::search_to_insert_one(&search_params, &graph_store, &mut session, iris)
+                            .await
+                    })
+                })
+                .collect_vec();
+
+            // Wait between chunks for determinism (not relying on mutex).
+            for t in tasks {
+                plans.push(t.await?);
+            }
         }
+
         Ok(plans)
     }
 
-    // TODO: Remove `&mut self` requirement to support parallel sessions.
     async fn search_to_insert_one(
-        &mut self,
+        search_params: &HnswSearcher,
+        graph_store: &GraphMem<Aby3Store>,
         session: &mut HawkSession,
         iris: GaloisRingSharedIris,
-    ) -> Result<InsertPlan> {
-        let insertion_layer = self.search_params.select_layer(&mut session.shared_rng);
+    ) -> InsertPlan {
+        let insertion_layer = search_params.select_layer(&mut session.shared_rng);
         let query = session.aby3_store.prepare_query(iris);
 
-        let (links, set_ep) = self
-            .search_params
+        let (links, set_ep) = search_params
             .search_to_insert(
                 &mut session.aby3_store,
-                &mut self.graph_store,
+                graph_store,
                 &query,
                 insertion_layer,
             )
             .await;
 
-        Ok(InsertPlan {
+        InsertPlan {
             query,
             links,
             set_ep,
-        })
+        }
     }
 
     // TODO: Implement actual parallelism.
     pub async fn insert(
         &mut self,
-        sessions: &mut [HawkSession],
+        sessions: &[HawkSessionRef],
         plans: Vec<InsertPlan>,
     ) -> Result<()> {
         let plans = join_plans(plans);
-        for (i, plan) in izip!(0.., plans) {
-            let session = &mut sessions[i % sessions.len()];
-            self.insert_one(session, plan).await?;
+        for plan in plans {
+            // TODO: Parallel insertions are not supported, so only one session is needed.
+            let mut session = sessions[0].write().await;
+            self.insert_one(&mut session, plan).await?;
         }
         Ok(())
     }
@@ -241,11 +296,11 @@ impl HawkActor {
     // TODO: Remove `&mut self` requirement to support parallel sessions.
     async fn insert_one(&mut self, session: &mut HawkSession, plan: InsertPlan) -> Result<()> {
         let inserted = session.aby3_store.insert(&plan.query).await;
-
+        let mut graph_store = self.graph_store.write().await;
         self.search_params
             .insert_from_search_results(
                 &mut session.aby3_store,
-                &mut self.graph_store,
+                graph_store.deref_mut(),
                 inserted,
                 plan.links,
                 plan.set_ep,
@@ -288,40 +343,52 @@ fn join_plans(mut plans: Vec<InsertPlan>) -> Vec<InsertPlan> {
     plans
 }
 
-pub async fn hawk_main(args: HawkArgs) -> Result<()> {
+pub async fn hawk_main(args: HawkArgs) -> Result<Sender<HawkRequest>> {
     println!("🦅 Starting Hawk node {}", args.party_index);
     let mut hawk_actor = HawkActor::from_cli(&args).await?;
 
-    // ---- Requests ----
-    // TODO: Listen for external requests.
-
-    let parallelism = 2;
-    let batch_size = 5;
-    let iris_rng = &mut AesRng::seed_from_u64(1337);
-
     let mut sessions = vec![];
-    for _ in 0..parallelism {
-        sessions.push(hawk_actor.new_session().await?);
+    for _ in 0..args.request_parallelism {
+        let session = hawk_actor.new_session().await?;
+        sessions.push(Arc::new(RwLock::new(session)));
     }
 
-    let my_iris_shares = IrisDB::new_random_rng(batch_size, iris_rng)
-        .db
-        .into_iter()
-        .map(|iris| generate_galois_iris_shares(iris_rng, iris)[args.party_index].clone())
-        .collect_vec();
-    let req = HawkRequest { my_iris_shares };
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<HawkRequest>(1);
 
-    let plans = hawk_actor.search_to_insert(&mut sessions, req).await?;
-    hawk_actor.insert(&mut sessions, plans).await?;
+    // ---- Request Handler ----
+    tokio::spawn(async move {
+        while let Some(req) = rx.recv().await {
+            // TODO: obtain rotated and mirrored versions.
+            let rotated = req.clone();
 
-    println!("🎉 Inserted {batch_size} items into the database");
-    Ok(())
+            // Search for nearest neighbors.
+            let _search_results = hawk_actor.search(&sessions, rotated).await.unwrap();
+
+            // TODO: Compare with threshold.
+            let to_insert = req;
+
+            // Insert into the database.
+            let plans = hawk_actor
+                .search_to_insert(&sessions, to_insert)
+                .await
+                .unwrap();
+            hawk_actor.insert(&sessions, plans).await.unwrap();
+
+            println!("🎉 Inserted items into the database");
+        }
+    });
+
+    Ok(tx)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::execution::local::get_free_local_addresses;
+    use crate::{
+        database_generators::generate_galois_iris_shares,
+        execution::local::get_free_local_addresses,
+    };
+    use iris_mpc_common::iris_db::db::IrisDB;
 
     #[tokio::test]
     async fn test_hawk_main() -> Result<()> {
@@ -345,12 +412,50 @@ mod tests {
         let n_parties = 3;
         let addresses = get_free_local_addresses(n_parties).await?;
 
-        (0..n_parties)
+        let request_queues = (0..n_parties)
             .map(|i| go(addresses.clone(), i))
             .collect::<JoinSet<_>>()
             .join_all()
             .await
             .into_iter()
-            .collect::<Result<()>>()
+            .collect::<Result<Vec<Sender<HawkRequest>>>>()?;
+
+        // ---- Send requests ----
+
+        let batch_size = 5;
+        let iris_rng = &mut AesRng::seed_from_u64(1337);
+
+        // Generate: iris_id -> party -> share
+        let irises = IrisDB::new_random_rng(batch_size, iris_rng)
+            .db
+            .into_iter()
+            .map(|iris| generate_galois_iris_shares(iris_rng, iris))
+            .collect_vec();
+        // Unzip: party -> iris_id -> share
+        let irises = (0..n_parties)
+            .map(|party_index| {
+                irises
+                    .iter()
+                    .map(|iris| iris[party_index].clone())
+                    .collect_vec()
+            })
+            .collect_vec();
+
+        izip!(irises, request_queues.clone())
+            .map(|(share, queue)| async move {
+                queue
+                    .send(HawkRequest {
+                        my_iris_shares: share,
+                    })
+                    .await?;
+                Ok(())
+            })
+            .collect::<JoinSet<_>>()
+            .join_all()
+            .await
+            .into_iter()
+            .collect::<Result<()>>()?;
+
+        Ok(())
     }
 }

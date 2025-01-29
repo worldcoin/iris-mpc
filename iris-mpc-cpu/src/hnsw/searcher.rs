@@ -223,7 +223,7 @@ impl HnswSearcher {
     async fn search_init<V: VectorStore, G: GraphStore<V>>(
         &self,
         vector_store: &mut V,
-        graph_store: &mut G,
+        graph_store: &G,
         query: &V::QueryRef,
     ) -> (FurthestQueueV<V>, usize) {
         if let Some((entry_point, layer)) = graph_store.get_entry_point().await {
@@ -246,7 +246,7 @@ impl HnswSearcher {
     async fn search_layer<V: VectorStore, G: GraphStore<V>>(
         &self,
         vector_store: &mut V,
-        graph_store: &mut G,
+        graph_store: &G,
         q: &V::QueryRef,
         W: &mut FurthestQueueV<V>,
         ef: usize,
@@ -384,7 +384,7 @@ impl HnswSearcher {
     pub async fn search_to_insert<V: VectorStore, G: GraphStore<V>>(
         &self,
         vector_store: &mut V,
-        graph_store: &mut G,
+        graph_store: &G,
         query: &V::QueryRef,
         insertion_layer: usize,
     ) -> (Vec<FurthestQueueV<V>>, bool) {
