@@ -7,6 +7,8 @@ use crate::hnsw::{SortedNeighborhood, VectorStore};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use super::neighborhood::SortedNeighborhoodV;
+
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct EntryPoint<VectorRef> {
     pub point: VectorRef,
@@ -105,7 +107,7 @@ impl<V: VectorStore> GraphMem<V> {
         &self,
         base: &<V as VectorStore>::VectorRef,
         lc: usize,
-    ) -> SortedNeighborhood<V> {
+    ) -> SortedNeighborhoodV<V> {
         let layer = &self.layers[lc];
         if let Some(links) = layer.get_links(base) {
             links.clone()
@@ -119,7 +121,7 @@ impl<V: VectorStore> GraphMem<V> {
     /// `set_entry_point` function for an entry point at at least this layer.
     ///
     /// Panics if `lc` is higher than the maximum initialized layer.
-    pub async fn set_links(&mut self, base: V::VectorRef, links: SortedNeighborhood<V>, lc: usize) {
+    pub async fn set_links(&mut self, base: V::VectorRef, links: SortedNeighborhoodV<V>, lc: usize) {
         let layer = self.layers.get_mut(lc).unwrap();
         layer.set_links(base, links);
     }
@@ -132,7 +134,7 @@ impl<V: VectorStore> GraphMem<V> {
         &mut self,
         vector_store: &mut V,
         q: &V::VectorRef,
-        neighbors: SortedNeighborhood<V>,
+        neighbors: SortedNeighborhoodV<V>,
         max_links: usize,
         lc: usize,
     ) {
@@ -158,7 +160,7 @@ impl<V: VectorStore> GraphMem<V> {
 pub struct Layer<V: VectorStore> {
     /// Map a base vector to its neighbors, including the distance
     /// base-neighbor.
-    links: HashMap<V::VectorRef, SortedNeighborhood<V>>,
+    links: HashMap<V::VectorRef, SortedNeighborhoodV<V>>,
 }
 
 impl<V: VectorStore> Layer<V> {
@@ -168,19 +170,19 @@ impl<V: VectorStore> Layer<V> {
         }
     }
 
-    pub fn from_links(links: HashMap<V::VectorRef, SortedNeighborhood<V>>) -> Self {
+    pub fn from_links(links: HashMap<V::VectorRef, SortedNeighborhoodV<V>>) -> Self {
         Layer { links }
     }
 
-    fn get_links(&self, from: &V::VectorRef) -> Option<&SortedNeighborhood<V>> {
+    fn get_links(&self, from: &V::VectorRef) -> Option<&SortedNeighborhoodV<V>> {
         self.links.get(from)
     }
 
-    fn set_links(&mut self, from: V::VectorRef, links: SortedNeighborhood<V>) {
+    fn set_links(&mut self, from: V::VectorRef, links: SortedNeighborhoodV<V>) {
         self.links.insert(from, links);
     }
 
-    pub fn get_links_map(&self) -> &HashMap<V::VectorRef, SortedNeighborhood<V>> {
+    pub fn get_links_map(&self) -> &HashMap<V::VectorRef, SortedNeighborhoodV<V>> {
         &self.links
     }
 }

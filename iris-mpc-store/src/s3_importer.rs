@@ -1,19 +1,9 @@
-use crate::StoredIris;
 use async_trait::async_trait;
 use aws_sdk_s3::{primitives::ByteStream, Client};
 use eyre::eyre;
-use futures::{stream, Stream, StreamExt};
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
-use std::{
-    mem,
-    pin::Pin,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
-    time::Instant,
-};
-use tokio::io::AsyncReadExt;
+use std::{collections::VecDeque, mem, sync::Arc};
+use tokio::{io::AsyncReadExt, sync::mpsc::Sender, task};
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -187,7 +177,7 @@ impl ObjectStore for S3Store {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LastSnapshotDetails {
     pub timestamp:      i64,
     pub last_serial_id: i64,
@@ -232,85 +222,72 @@ pub async fn last_snapshot_timestamp(
 }
 
 pub async fn fetch_and_parse_chunks(
-    store: &impl ObjectStore,
+    store: Arc<impl ObjectStore>,
     concurrency: usize,
     prefix_name: String,
     last_snapshot_details: LastSnapshotDetails,
-) -> Pin<Box<dyn Stream<Item = eyre::Result<StoredIris>> + Send + '_>> {
+    tx: Sender<S3StoredIris>,
+) -> eyre::Result<()> {
     tracing::info!("Generating chunk files using: {:?}", last_snapshot_details);
     let range_size = if last_snapshot_details.chunk_size as usize > MAX_RANGE_SIZE {
         MAX_RANGE_SIZE
     } else {
         last_snapshot_details.chunk_size as usize
     };
-    let total_bytes = Arc::new(AtomicUsize::new(0));
-    let now = Instant::now();
+    let mut handles: VecDeque<task::JoinHandle<Result<(), eyre::Error>>> =
+        VecDeque::with_capacity(concurrency);
 
-    let result_stream =
-        stream::iter((1..=last_snapshot_details.last_serial_id).step_by(range_size))
-            .map({
-                let total_bytes_clone = total_bytes.clone();
-                move |chunk| {
-                    let counter = total_bytes_clone.clone();
-                    let prefix_name = prefix_name.clone();
-                    async move {
-                        let chunk_id = (chunk / last_snapshot_details.chunk_size)
-                            * last_snapshot_details.chunk_size
-                            + 1;
-                        let offset_within_chunk = (chunk - chunk_id) as usize;
-                        let mut object_stream = store
-                            .get_object(
-                                &format!("{}/{}.bin", prefix_name, chunk_id),
-                                (
-                                    offset_within_chunk * SINGLE_ELEMENT_SIZE,
-                                    (offset_within_chunk + range_size) * SINGLE_ELEMENT_SIZE,
-                                ),
-                            )
-                            .await?
-                            .into_async_read();
-                        let mut records = Vec::with_capacity(range_size);
-                        let mut buf = vec![0u8; SINGLE_ELEMENT_SIZE];
-                        loop {
-                            match object_stream.read_exact(&mut buf).await {
-                                Ok(_) => {
-                                    let iris = S3StoredIris::from_bytes(&buf);
-                                    records.push(iris);
-                                    counter.fetch_add(SINGLE_ELEMENT_SIZE, Ordering::Relaxed);
-                                }
-                                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-                                Err(e) => return Err(e.into()),
-                            }
+    for chunk in (1..=last_snapshot_details.last_serial_id).step_by(range_size) {
+        let chunk_id =
+            (chunk / last_snapshot_details.chunk_size) * last_snapshot_details.chunk_size + 1;
+        let prefix_name = prefix_name.clone();
+        let offset_within_chunk = (chunk - chunk_id) as usize;
+
+        // Wait if we've hit the concurrency limit
+        if handles.len() >= concurrency {
+            let handle = handles.pop_front().expect("No s3 import handles to pop");
+            handle.await??;
+        }
+
+        handles.push_back(task::spawn({
+            let store = Arc::clone(&store);
+            let mut slice = vec![0u8; SINGLE_ELEMENT_SIZE];
+            let tx = tx.clone();
+            async move {
+                let mut result = store
+                    .get_object(
+                        &format!("{}/{}.bin", prefix_name, chunk_id),
+                        (
+                            offset_within_chunk * SINGLE_ELEMENT_SIZE,
+                            (offset_within_chunk + range_size) * SINGLE_ELEMENT_SIZE,
+                        ),
+                    )
+                    .await?
+                    .into_async_read();
+
+                loop {
+                    match result.read_exact(&mut slice).await {
+                        Ok(_) => {
+                            let iris = S3StoredIris::from_bytes(&slice)?;
+                            tx.send(iris).await?;
                         }
-                        let stream_of_stored_iris =
-                            stream::iter(records).map(|res_s3| res_s3.map(StoredIris::S3));
-
-                        Ok::<_, eyre::Error>(stream_of_stored_iris)
+                        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                        Err(e) => return Err(e.into()),
                     }
                 }
-            })
-            .buffer_unordered(concurrency)
-            .flat_map(|result| match result {
-                Ok(stream) => stream.boxed(),
-                Err(e) => stream::once(async move { Err(e) }).boxed(),
-            })
-            .inspect({
-                let counter = Arc::new(AtomicUsize::new(0));
-                move |_| {
-                    if counter.fetch_add(1, Ordering::Relaxed) % 1_000_000 == 0 {
-                        let elapsed = now.elapsed().as_secs_f32();
-                        if elapsed > 0.0 {
-                            let bytes = total_bytes.load(Ordering::Relaxed);
-                            tracing::info!(
-                                "Current download throughput: {:.2} Gbps",
-                                bytes as f32 * 8.0 / 1e9 / elapsed
-                            );
-                        }
-                    }
-                }
-            })
-            .boxed();
 
-    result_stream
+                Ok(())
+            }
+        }));
+    }
+
+    tracing::info!("All s3 import tasks are spawned. Waiting for them to finish");
+    // Wait for remaining handles
+    for handle in handles {
+        handle.await??;
+    }
+    tracing::info!("All s3 import tasks are finished.");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -320,6 +297,7 @@ mod tests {
     use aws_sdk_s3::primitives::SdkBody;
     use rand::Rng;
     use std::{cmp::min, collections::HashSet};
+    use tokio::sync::mpsc;
 
     #[derive(Default, Clone)]
     pub struct MockStore {
@@ -423,12 +401,14 @@ mod tests {
             last_serial_id: MOCK_ENTRIES as i64,
             chunk_size:     MOCK_CHUNK_SIZE as i64,
         };
-        let mut chunks =
-            fetch_and_parse_chunks(&store, 1, "out".to_string(), last_snapshot_details).await;
+        let (tx, mut rx) = mpsc::channel::<S3StoredIris>(1024);
+        let store_arc = Arc::new(store);
+        let _res =
+            fetch_and_parse_chunks(store_arc, 1, "out".to_string(), last_snapshot_details, tx)
+                .await;
         let mut count = 0;
         let mut ids: HashSet<usize> = HashSet::from_iter(1..MOCK_ENTRIES);
-        while let Some(chunk) = chunks.next().await {
-            let chunk = chunk.unwrap();
+        while let Some(chunk) = rx.recv().await {
             ids.remove(&(chunk.index()));
             count += 1;
         }

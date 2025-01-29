@@ -1,13 +1,13 @@
 #[cfg(feature = "gpu_dependent")]
-mod lift_test {
+mod bucket_threshold_test {
     use cudarc::{
         driver::{CudaDevice, CudaStream},
         nccl::Id,
     };
-    use iris_mpc_common::iris_db::iris::IrisCodeArray;
+    use iris_mpc_common::iris_db::iris::{IrisCodeArray, MATCH_THRESHOLD_RATIO};
     use iris_mpc_gpu::{
         helpers::{device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync},
-        threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
+        threshold_ring::protocol::{ChunkShare, Circuits},
     };
     use itertools::{izip, Itertools};
     use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -20,13 +20,23 @@ mod lift_test {
     // ceil(930 * 125_000 / 2048) * 2048
     // const INPUTS_PER_GPU_SIZE: usize = 116_250_624;
     const INPUTS_PER_GPU_SIZE: usize = 12_507_136;
+    const CHUNK_SIZE: usize = INPUTS_PER_GPU_SIZE / 64;
 
-    fn to_view<T>(inp: &[ChunkShare<T>]) -> Vec<ChunkShareView<T>> {
-        let mut res = Vec::with_capacity(inp.len());
-        for inp in inp {
-            res.push(inp.as_view());
-        }
-        res
+    const B_BITS: u64 = 16;
+    pub(crate) const B: u64 = 1 << B_BITS;
+    pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
+
+    fn sample_code_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<u16> {
+        (0..size)
+            .map(|_| {
+                let mut x = rng.gen_range::<u16, _>(0..=IrisCodeArray::IRIS_CODE_SIZE as u16);
+                let neg = rng.gen::<bool>();
+                if neg {
+                    x = (u16::MAX - x).wrapping_add(1);
+                }
+                x
+            })
+            .collect::<Vec<_>>()
     }
 
     fn sample_mask_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<u16> {
@@ -80,89 +90,73 @@ mod lift_test {
         result
     }
 
-    fn real_result_msb(mask_input: Vec<u16>) -> Vec<u32> {
-        mask_input.into_iter().map(|x| (x as u32)).collect()
+    fn pack_with_device_padding(bits: Vec<bool>) -> Vec<u64> {
+        assert!(bits.len() % INPUTS_PER_GPU_SIZE == 0);
+        let mut res = vec![];
+        for devices in bits.chunks_exact(INPUTS_PER_GPU_SIZE) {
+            for bits in devices.chunks(64) {
+                let mut r = 0;
+                for (i, bit) in bits.iter().enumerate() {
+                    r |= u64::from(*bit) << i;
+                }
+                res.push(r);
+            }
+        }
+        res
     }
 
-    fn open(
-        party: &mut Circuits,
-        x: &mut [ChunkShareView<u32>],
-        corrections: &mut [ChunkShareView<u16>],
-        streams: &[CudaStream],
-    ) -> Vec<u32> {
-        let n_devices = x.len();
-        let mut res_a = Vec::with_capacity(n_devices);
-        let mut res_b = Vec::with_capacity(n_devices);
-        let mut res_c = Vec::with_capacity(n_devices);
-        let mut corr_a = Vec::with_capacity(n_devices);
-        let mut corr_b = Vec::with_capacity(n_devices);
-        let mut corr_c = Vec::with_capacity(n_devices);
-
-        let devices = party.get_devices();
-        for (idx, (res, corr)) in izip!(x.iter(), corrections.iter()).enumerate() {
-            res_a.push(dtoh_on_stream_sync(&res.a, &devices[idx], &streams[idx]).unwrap());
-            res_b.push(dtoh_on_stream_sync(&res.b, &devices[idx], &streams[idx]).unwrap());
-            corr_a.push(dtoh_on_stream_sync(&corr.a, &devices[idx], &streams[idx]).unwrap());
-            corr_b.push(dtoh_on_stream_sync(&corr.b, &devices[idx], &streams[idx]).unwrap());
+    fn real_result_msb(code_input: Vec<u16>, mask_input: Vec<u16>) -> Vec<u64> {
+        assert_eq!(code_input.len(), mask_input.len());
+        let mod_ = 1u64 << (16 + B_BITS);
+        let mut res = Vec::with_capacity(code_input.len());
+        for (c, m) in code_input.into_iter().zip(mask_input) {
+            let r = (((m as u64) * A)
+                .wrapping_sub((c as u64) << B_BITS)
+                .wrapping_sub(1))
+                % mod_;
+            let msb = r >> (B_BITS + 16 - 1) & 1 == 1;
+            res.push(msb)
         }
+        pack_with_device_padding(res)
+    }
+
+    fn open(party: &mut Circuits, x: &[ChunkShare<u64>], streams: &[CudaStream]) -> Vec<u64> {
+        let n_devices = x.len();
+        let mut a = Vec::with_capacity(n_devices);
+        let mut b = Vec::with_capacity(n_devices);
+        let mut c = Vec::with_capacity(n_devices);
+
         cudarc::nccl::result::group_start().unwrap();
-        for (idx, (res, corr)) in izip!(x.iter(), corrections.iter()).enumerate() {
+        for (idx, res) in x.iter().enumerate() {
+            // Result is in bit 0
+            let res = res.get_offset(0, CHUNK_SIZE);
             party.comms()[idx]
                 .send_view(&res.b, party.next_id(), &streams[idx])
                 .unwrap();
-            party.comms()[idx]
-                .send_view_u16(&corr.b, party.next_id(), &streams[idx])
-                .unwrap();
+            a.push(res.a);
+            b.push(res.b);
         }
-        for (idx, (res, corr)) in izip!(x.iter_mut(), corrections.iter_mut()).enumerate() {
+        for (idx, res) in x.iter().enumerate() {
+            let mut res = res.get_offset(1, CHUNK_SIZE);
             party.comms()[idx]
                 .receive_view(&mut res.a, party.prev_id(), &streams[idx])
                 .unwrap();
-            party.comms()[idx]
-                .receive_view_u16(&mut corr.a, party.prev_id(), &streams[idx])
-                .unwrap();
+            c.push(res.a);
         }
         cudarc::nccl::result::group_end().unwrap();
-        for (idx, (res, corr)) in izip!(x, corrections).enumerate() {
-            res_c.push(dtoh_on_stream_sync(&res.a, &devices[idx], &streams[idx]).unwrap());
-            corr_c.push(dtoh_on_stream_sync(&corr.a, &devices[idx], &streams[idx]).unwrap());
-        }
 
-        let mut result = Vec::with_capacity(n_devices * INPUTS_PER_GPU_SIZE);
-        for (mut res_a, res_b, res_c, corr_a, corr_b, corr_c) in
-            izip!(res_a, res_b, res_c, corr_a, corr_b, corr_c)
-        {
-            assert_eq!(res_a.len(), INPUTS_PER_GPU_SIZE);
-            assert_eq!(res_b.len(), INPUTS_PER_GPU_SIZE);
-            assert_eq!(res_c.len(), INPUTS_PER_GPU_SIZE);
-            assert_eq!(corr_a.len(), INPUTS_PER_GPU_SIZE * 2);
-            assert_eq!(corr_b.len(), INPUTS_PER_GPU_SIZE * 2);
-            assert_eq!(corr_c.len(), INPUTS_PER_GPU_SIZE * 2);
-
-            for (res_a, res_b, res_c, corr_a1, corr_b1, corr_c1, corr_a2, corr_b2, corr_c2) in izip!(
-                &mut res_a,
-                res_b,
-                res_c,
-                corr_a.iter().take(INPUTS_PER_GPU_SIZE),
-                corr_b.iter().take(INPUTS_PER_GPU_SIZE),
-                corr_c.iter().take(INPUTS_PER_GPU_SIZE),
-                corr_a.iter().skip(INPUTS_PER_GPU_SIZE),
-                corr_b.iter().skip(INPUTS_PER_GPU_SIZE),
-                corr_c.iter().skip(INPUTS_PER_GPU_SIZE),
-            ) {
-                let corr1 = corr_a1.wrapping_add(*corr_b1).wrapping_add(*corr_c1);
-                let corr2 = corr_a2.wrapping_add(*corr_b2).wrapping_add(*corr_c2);
-                assert!(corr1 == 0 || corr1 == 1);
-                assert!(corr2 == 0 || corr2 == 1);
-                let mut res = res_a.wrapping_add(res_b).wrapping_add(res_c);
-                res -= (corr1 as u32) << 16;
-                res -= (corr2 as u32) << 17;
-                *res_a = res;
+        let mut result = Vec::with_capacity(n_devices * CHUNK_SIZE);
+        let devices = party.get_devices();
+        for (dev, stream, a, b, c) in izip!(devices, streams, a, b, c) {
+            let mut a = dtoh_on_stream_sync(&a, &dev, stream).unwrap();
+            let b = dtoh_on_stream_sync(&b, &dev, stream).unwrap();
+            let c = dtoh_on_stream_sync(&c, &dev, stream).unwrap();
+            for (a, b, c) in izip!(a.iter_mut(), b, c) {
+                *a ^= b ^ c;
             }
-            result.extend(res_a);
+            result.extend(a);
         }
-
-        assert_eq!(result.len(), n_devices * INPUTS_PER_GPU_SIZE);
+        assert_eq!(result.len(), n_devices * CHUNK_SIZE);
         result
     }
 
@@ -178,9 +172,11 @@ mod lift_test {
 
     fn testcase(
         mut party: Circuits,
+        code_share_a: Vec<u16>,
+        code_share_b: Vec<u16>,
         mask_share_a: Vec<u16>,
         mask_share_b: Vec<u16>,
-        real_result: Vec<u32>,
+        real_result: Vec<u64>,
     ) {
         let id = party.peer_id();
 
@@ -191,29 +187,32 @@ mod lift_test {
             .collect::<Vec<_>>();
 
         // Import to GPU
+        let code_gpu = to_gpu(&code_share_a, &code_share_b, &devices, &streams);
         let mask_gpu = to_gpu(&mask_share_a, &mask_share_b, &devices, &streams);
-        tracing::info!("id = {}, Data is on GPUs!", id);
-        tracing::info!("id = {}, Starting tests...", id);
+        tracing::info!("id: {}, Data is on GPUs!", id);
+        tracing::info!("id: {}, Starting tests...", id);
 
         let mut error = false;
         for _ in 0..10 {
-            // Simulate Masks to be zero for this test
-            let x_ = party.allocate_buffer::<u32>(INPUTS_PER_GPU_SIZE);
-            let mut x = to_view(&x_);
-            let correction_ = party.allocate_buffer::<u16>(INPUTS_PER_GPU_SIZE * 2);
-            let mut correction = to_view(&correction_);
+            let code_gpu = code_gpu.iter().map(|x| x.as_view()).collect_vec();
             let mask_gpu = mask_gpu.iter().map(|x| x.as_view()).collect_vec();
             party.synchronize_streams(&streams);
 
             let now = Instant::now();
-            party.lift_mpc(&mask_gpu, &mut x, &mut correction, &streams);
-            tracing::info!("id = {}, compute time: {:?}", id, now.elapsed());
+            party.compare_threshold_masked_many_bucket_functions(&code_gpu, &mask_gpu, &streams);
 
-            let now = Instant::now();
-            let result = open(&mut party, &mut x, &mut correction, &streams);
             party.synchronize_streams(&streams);
+            tracing::info!("id: {}, Starting tests...", id);
+            tracing::info!("id: {}, compute time: {:?}", id, now.elapsed());
+
+            let res = party.take_result_buffer();
+            let now = Instant::now();
+            let result = open(&mut party, &res, &streams);
+            party.synchronize_streams(&streams);
+            party.return_result_buffer(res);
+            tracing::info!("id: {}, Starting tests...", id);
             tracing::info!(
-                "id = {}, Open and transfer to CPU time: {:?}",
+                "id: {}, Open and transfer to CPU time: {:?}",
                 id,
                 now.elapsed()
             );
@@ -222,20 +221,20 @@ mod lift_test {
             for (i, (r, r_)) in izip!(&result, &real_result).enumerate() {
                 if r != r_ {
                     correct = false;
-                    tracing::error!("id = {}, Test failed on index: {}: {} != {}", id, i, r, r_);
+                    tracing::error!("id: {}, Test failed on index: {}: {} != {}", id, i, r, r_);
                     error = true;
                     break;
                 }
             }
             if correct {
-                tracing::info!("id = {}, Test passed!", id);
+                tracing::info!("id: {}, Test passed!", id);
             }
         }
         assert!(!error);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
-    async fn test_lift() -> eyre::Result<()> {
+    async fn test_bucket_threshold() -> eyre::Result<()> {
         install_tracing();
         env::set_var("NCCL_P2P_LEVEL", "LOC");
         env::set_var("NCCL_NET", "Socket");
@@ -268,12 +267,17 @@ mod lift_test {
         let ids2 = ids0.clone();
 
         // Get inputs
+        let code_dots = sample_code_dots(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);
         let mask_dots = sample_mask_dots(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);
 
+        let (code_share_a, code_share_b, code_share_c) = rep_share_vec(&code_dots, &mut rng);
         let (mask_share_a, mask_share_b, mask_share_c) = rep_share_vec(&mask_dots, &mut rng);
-        let real_result = real_result_msb(mask_dots);
+        let real_result = real_result_msb(code_dots, mask_dots);
         tracing::info!("Random shared inputs generated!");
 
+        let code_share_a_ = code_share_a.to_owned();
+        let code_share_b_ = code_share_b.to_owned();
+        let code_share_c_ = code_share_c.to_owned();
         let mask_share_a_ = mask_share_a.to_owned();
         let mask_share_b_ = mask_share_b.to_owned();
         let mask_share_c_ = mask_share_c.to_owned();
@@ -294,7 +298,14 @@ mod lift_test {
                 comms0,
             );
 
-            testcase(party, mask_share_a, mask_share_c, real_result);
+            testcase(
+                party,
+                code_share_a,
+                code_share_c,
+                mask_share_a,
+                mask_share_c,
+                real_result,
+            );
         });
 
         let task1 = tokio::task::spawn_blocking(move || {
@@ -311,7 +322,14 @@ mod lift_test {
                 comms1,
             );
 
-            testcase(party, mask_share_b, mask_share_a_, real_result_);
+            testcase(
+                party,
+                code_share_b,
+                code_share_a_,
+                mask_share_b,
+                mask_share_a_,
+                real_result_,
+            );
         });
 
         let task2 = tokio::task::spawn_blocking(move || {
@@ -328,7 +346,14 @@ mod lift_test {
                 comms2,
             );
 
-            testcase(party, mask_share_c_, mask_share_b_, real_result__);
+            testcase(
+                party,
+                code_share_c_,
+                code_share_b_,
+                mask_share_c_,
+                mask_share_b_,
+                real_result__,
+            );
         });
 
         task0.await.unwrap();

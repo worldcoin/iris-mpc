@@ -7,10 +7,7 @@ use crate::hnsw::VectorStore;
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 
-pub type Edge<V> = (
-    <V as VectorStore>::VectorRef,
-    <V as VectorStore>::DistanceRef,
-);
+pub type SortedNeighborhoodV<V> = SortedNeighborhood<<V as VectorStore>::VectorRef, <V as VectorStore>::DistanceRef>;
 
 /// SortedNeighborhood maintains a collection of distance-weighted oriented
 /// graph edges for an HNSW graph which are stored in increasing order of edge
@@ -27,18 +24,18 @@ pub type Edge<V> = (
 /// determine overall network bandwidth usage, and sequential complexity
 /// determines serial latency of operations.
 #[derive(Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SortedNeighborhood<V: VectorStore> {
-    pub edges: Vec<Edge<V>>,
+pub struct SortedNeighborhood<Vector, Distance> {
+    pub edges: Vec<(Vector, Distance)>,
 }
 
-impl<V: VectorStore> SortedNeighborhood<V> {
+impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
     pub fn new() -> Self {
         Self {
             edges: Default::default(),
         }
     }
 
-    pub fn from_ascending_vec(edges: Vec<Edge<V>>) -> Self {
+    pub fn from_ascending_vec(edges: Vec<(Vector, Distance)>) -> Self {
         SortedNeighborhood { edges }
     }
 
@@ -46,33 +43,36 @@ impl<V: VectorStore> SortedNeighborhood<V> {
     /// the ascending order.
     ///
     /// Call the VectorStore to come up with the insertion index.
-    pub async fn insert(&mut self, store: &mut V, to: V::VectorRef, dist: V::DistanceRef) {
+    pub async fn insert<V>(&mut self, store: &mut V, to: Vector, dist: Distance)
+    where
+        V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
+    {
         let index_asc = Self::binary_search(
             store,
             &self
                 .edges
                 .iter()
                 .map(|(_, dist)| dist.clone())
-                .collect::<Vec<V::DistanceRef>>(),
+                .collect::<Vec<Distance>>(),
             &dist,
         )
         .await;
         self.edges.insert(index_asc, (to, dist));
     }
 
-    pub fn get_nearest(&self) -> Option<&Edge<V>> {
+    pub fn get_nearest(&self) -> Option<&(Vector, Distance)> {
         self.edges.first()
     }
 
-    pub fn get_furthest(&self) -> Option<&Edge<V>> {
+    pub fn get_furthest(&self) -> Option<&(Vector, Distance)> {
         self.edges.last()
     }
 
-    pub fn pop_furthest(&mut self) -> Option<Edge<V>> {
+    pub fn pop_furthest(&mut self) -> Option<(Vector, Distance)> {
         self.edges.pop()
     }
 
-    pub fn get_k_nearest(&self, k: usize) -> &[Edge<V>] {
+    pub fn get_k_nearest(&self, k: usize) -> &[(Vector, Distance)] {
         &self.edges[..k]
     }
 
@@ -81,11 +81,11 @@ impl<V: VectorStore> SortedNeighborhood<V> {
     }
 
     // Assumes that distance map doesn't change the distance metric
-    pub fn map<W, F1, F2>(self, vector_map: F1, distance_map: F2) -> SortedNeighborhood<W>
+    pub fn map<W, F1, F2>(self, vector_map: F1, distance_map: F2) -> SortedNeighborhoodV<W>
     where
         W: VectorStore,
-        F1: Fn(V::VectorRef) -> W::VectorRef,
-        F2: Fn(V::DistanceRef) -> W::DistanceRef,
+        F1: Fn(Vector) -> W::VectorRef,
+        F2: Fn(Distance) -> W::DistanceRef,
     {
         let edges: Vec<(W::VectorRef, W::DistanceRef)> = self
             .edges
@@ -96,19 +96,19 @@ impl<V: VectorStore> SortedNeighborhood<V> {
         SortedNeighborhood::from_ascending_vec(edges)
     }
 
-    pub fn as_vec_ref(&self) -> &[Edge<V>] {
+    pub fn as_vec_ref(&self) -> &[(Vector, Distance)] {
         &self.edges
     }
 
     /// Find the insertion index for a target distance in the current
     /// neighborhood list.
-    async fn binary_search(
+    async fn binary_search<V>(
         store: &mut V,
-        distances: &[V::DistanceRef],
-        target: &V::DistanceRef,
+        distances: &[Distance],
+        target: &Distance,
     ) -> usize
     where
-        V: VectorStore,
+        V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
     {
         let mut left = 0;
         let mut right = distances.len();
@@ -125,15 +125,15 @@ impl<V: VectorStore> SortedNeighborhood<V> {
     }
 }
 
-impl<V: VectorStore> Deref for SortedNeighborhood<V> {
-    type Target = [Edge<V>];
+impl<Vector, Distance> Deref for SortedNeighborhood<Vector, Distance> {
+    type Target = [(Vector, Distance)];
 
     fn deref(&self) -> &Self::Target {
         &self.edges
     }
 }
 
-impl<V: VectorStore> Clone for SortedNeighborhood<V> {
+impl<Vector: Clone, Distance: Clone> Clone for SortedNeighborhood<Vector, Distance> {
     fn clone(&self) -> Self {
         SortedNeighborhood {
             edges: self.edges.clone(),
@@ -141,8 +141,8 @@ impl<V: VectorStore> Clone for SortedNeighborhood<V> {
     }
 }
 
-impl<V: VectorStore> From<SortedNeighborhood<V>> for Vec<Edge<V>> {
-    fn from(nbhd: SortedNeighborhood<V>) -> Self {
+impl<Vector, Distance> From<SortedNeighborhood<Vector, Distance>> for Vec<(Vector, Distance)> {
+    fn from(nbhd: SortedNeighborhood<Vector, Distance>) -> Self {
         nbhd.edges
     }
 }

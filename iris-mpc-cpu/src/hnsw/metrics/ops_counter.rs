@@ -185,14 +185,18 @@ pub trait KeyVisitor: Visit + Default {
 }
 
 /// Dynamic counter type which keeps separate counters for different key values
-/// derived from Event field data.  The generic type `K` implementing the
-/// `KeyVisitor` trait provides the logic for recording the fields of an Event
-/// and producing a `KeyVisitor::Key` value used as the key for a `HashMap` of
-/// `AtomicUsize` counters.
+/// derived from an Event's field data.
+///
+/// The generic type `K` implementing the `KeyVisitor` trait provides the logic
+/// for recording the fields of an Event and producing a `KeyVisitor::Key`
+/// value used as the key for a `HashMap` of `AtomicUsize` counters.  When a
+/// matching event is encountered, a key is derived from its associated fields,
+/// and the counter for that key is incremented by the value of the
+/// `increment_amount` field if present, or by 1 otherwise.
 ///
 /// Events which don't properly correspond with a key (indicated by a return
-/// value of `None` from the `get_key` function) are recorded separately in a
-/// `missing_keys` counter.
+/// value of `None` from the `KeyVisitor::get_key` function) are recorded
+/// separately in a `missing_keys` counter.
 #[derive(Default)]
 pub struct ParameterizedCounter<K: KeyVisitor> {
     counter_map:  ParamCounterRef<K::Key>,
@@ -217,7 +221,7 @@ impl<K: KeyVisitor> DynamicCounter for ParameterizedCounter<K> {
         if let Some(key) = visitor.get_key() {
             let counters_read = self.counter_map.read().unwrap();
             if let Some(counter) = counters_read.get(&key) {
-                counter.fetch_add(increment_amount, Ordering::Release);
+                counter.fetch_add(increment_amount, Ordering::Relaxed);
             } else {
                 drop(counters_read);
                 let new_counter = AtomicUsize::new(increment_amount);

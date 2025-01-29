@@ -5,11 +5,14 @@
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
 use crate::hnsw::{metrics::ops_counter::Operation, GraphMem, SortedNeighborhood, VectorStore};
+use itertools::izip;
 use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use tracing::{info, instrument};
+
+use super::graph::neighborhood::SortedNeighborhoodV;
 
 // Specify construction and search parameters by layer up to this value minus 1
 // any higher layers will use the last set of parameters
@@ -166,6 +169,38 @@ pub struct HnswSearcher {
     pub params: HnswParams,
 }
 
+pub type ConnectPlanV<V> =
+    ConnectPlan<<V as VectorStore>::VectorRef, <V as VectorStore>::DistanceRef>;
+type ConnectPlanLayerV<V> =
+    ConnectPlanLayer<<V as VectorStore>::VectorRef, <V as VectorStore>::DistanceRef>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConnectPlan<Vector, Distance> {
+    inserted_vector: Vector,
+    layers:          Vec<ConnectPlanLayer<Vector, Distance>>,
+    set_ep:          bool,
+}
+
+// impl <V: VectorStore> PartialEq for ConnectPlan<V> {
+//     fn eq(&self, other: &Self) -> bool {
+//         self.inserted_vector == other.inserted_vector && self.layers == other.layers && self.set_ep == other.set_ep
+//     }
+// }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ConnectPlanLayer<Vector, Distance> {
+    neighbors: SortedNeighborhood<Vector, Distance>,
+    n_links:   Vec<SortedNeighborhood<Vector, Distance>>,
+}
+
+// impl <V: VectorStore> PartialEq for ConnectPlanLayer<V> {
+//     fn eq(&self, other: &Self) -> bool {
+//         self.neighbors == other.neighbors && self.n_links == other.n_links
+//     }
+// }
+
+
+
 // TODO remove default value; this varies too much between applications
 // to make sense to specify something "obvious"
 impl Default for HnswSearcher {
@@ -178,6 +213,49 @@ impl Default for HnswSearcher {
 
 #[allow(non_snake_case)]
 impl HnswSearcher {
+    /// Prepare bidirectional connections between `q` and its `neighbors`.
+    async fn connect_prepare<V: VectorStore>(
+        &self,
+        vector_store: &mut V,
+        graph_store: &GraphMem<V>,
+        q: &V::VectorRef,
+        mut neighbors: SortedNeighborhoodV<V>,
+        lc: usize,
+    ) -> ConnectPlanLayerV<V> {
+        let M = self.params.get_M(lc);
+        let max_links = self.params.get_M_max(lc);
+
+        neighbors.trim_to_k_nearest(M);
+
+        // Connect all n -> q.
+        let mut n_links = vec![];
+        for (n, nq) in neighbors.iter() {
+            let mut links = graph_store.get_links(n, lc).await;
+            links.insert(vector_store, q.clone(), nq.clone()).await;
+            links.trim_to_k_nearest(max_links);
+            n_links.push(links);
+        }
+
+        ConnectPlanLayer { neighbors, n_links }
+    }
+
+    /// Apply the connections from `connect_prepare` to the graph store.
+    async fn connect_apply<V: VectorStore>(
+        &self,
+        graph_store: &mut GraphMem<V>,
+        q: V::VectorRef,
+        lc: usize,
+        plan: ConnectPlanLayerV<V>,
+    ) {
+        // Connect all n -> q.
+        for ((n, _nq), links) in izip!(plan.neighbors.iter(), plan.n_links) {
+            graph_store.set_links(n.clone(), links, lc).await;
+        }
+
+        // Connect q -> all n.
+        graph_store.set_links(q, plan.neighbors, lc).await;
+    }
+
     pub fn select_layer(&self, rng: &mut impl RngCore) -> usize {
         let p_geom = 1f64 - self.params.get_layer_probability();
         let geom_distr = Geometric::new(p_geom).unwrap();
@@ -195,9 +273,9 @@ impl HnswSearcher {
     async fn search_init<V: VectorStore>(
         &self,
         vector_store: &mut V,
-        graph_store: &mut GraphMem<V>,
+        graph_store: &GraphMem<V>,
         query: &V::QueryRef,
-    ) -> (SortedNeighborhood<V>, usize) {
+    ) -> (SortedNeighborhoodV<V>, usize) {
         if let Some((entry_point, layer)) = graph_store.get_entry_point().await {
             let distance = vector_store.eval_distance(query, &entry_point).await;
 
@@ -219,9 +297,9 @@ impl HnswSearcher {
     async fn search_layer<V: VectorStore>(
         &self,
         vector_store: &mut V,
-        graph_store: &mut GraphMem<V>,
+        graph_store: &GraphMem<V>,
         q: &V::QueryRef,
-        W: &mut SortedNeighborhood<V>,
+        W: &mut SortedNeighborhoodV<V>,
         ef: usize,
         lc: usize,
     ) {
@@ -236,18 +314,11 @@ impl HnswSearcher {
         // fq: The current furthest distance in W.
         let (_, mut fq) = W.get_furthest().expect("W cannot be empty").clone();
 
-        fn next_candidate<'a, V: VectorStore>(
-            current_neighbors: &'a SortedNeighborhood<V>,
-            opened: &HashSet<V::VectorRef>,
-        ) -> Option<&'a V::VectorRef> {
-            current_neighbors
-                .edges
-                .iter()
+        // Continue until all current entries in candidate nearest neighbors list have been opened
+        while let Some(c) = W.edges.iter()
                 .map(|(c, _)| c)
                 .find(|&c| !opened.contains(c))
-        }
-
-        while let Some(c) = next_candidate(W, &opened) {
+        {
             // Open the candidate node and visit its neighbors
             opened.insert(c.clone());
             info!(event_type = Operation::OpenNode.id(), ef, lc);
@@ -301,7 +372,7 @@ impl HnswSearcher {
         graph_store: &mut GraphMem<V>,
         query: &V::QueryRef,
         k: usize,
-    ) -> SortedNeighborhood<V> {
+    ) -> SortedNeighborhoodV<V> {
         let (mut W, layer_count) = self.search_init(vector_store, graph_store, query).await;
 
         // Search from the top layer down to layer 0
@@ -360,10 +431,10 @@ impl HnswSearcher {
     pub async fn search_to_insert<V: VectorStore>(
         &self,
         vector_store: &mut V,
-        graph_store: &mut GraphMem<V>,
+        graph_store: &GraphMem<V>,
         query: &V::QueryRef,
         insertion_layer: usize,
-    ) -> (Vec<SortedNeighborhood<V>>, bool) {
+    ) -> (Vec<SortedNeighborhoodV<V>>, bool) {
         let mut links = vec![];
 
         let (mut W, n_layers) = self.search_init(vector_store, graph_store, query).await;
@@ -398,6 +469,53 @@ impl HnswSearcher {
         (links, set_ep)
     }
 
+    /// Two-step variant of `insert_from_search_results`: prepare.
+    pub async fn insert_prepare<V: VectorStore>(
+        &self,
+        vector_store: &mut V,
+        graph_store: &GraphMem<V>,
+        inserted_vector: V::VectorRef,
+        links: Vec<SortedNeighborhoodV<V>>,
+        set_ep: bool,
+    ) -> ConnectPlanV<V> {
+        let mut plan = ConnectPlan {
+            inserted_vector: inserted_vector.clone(),
+            layers: vec![],
+            set_ep,
+        };
+
+        // Connect the new vector to its neighbors in each layer.
+        for (lc, layer_links) in links.into_iter().enumerate() {
+            let lp = self
+                .connect_prepare(vector_store, graph_store, &inserted_vector, layer_links, lc)
+                .await;
+            plan.layers.push(lp);
+        }
+
+        plan
+    }
+
+    /// Two-step variant of `insert_from_search_results`: execute.
+    pub async fn insert_apply<V: VectorStore>(
+        &self,
+        graph_store: &mut GraphMem<V>,
+        plan: ConnectPlanV<V>,
+    ) {
+        // If required, set vector as new entry point
+        if plan.set_ep {
+            let insertion_layer = plan.layers.len() - 1;
+            graph_store
+                .set_entry_point(plan.inserted_vector.clone(), insertion_layer)
+                .await;
+        }
+
+        // Connect the new vector to its neighbors in each layer.
+        for (lc, layer_plan) in plan.layers.into_iter().enumerate() {
+            self.connect_apply(graph_store, plan.inserted_vector.clone(), lc, layer_plan)
+                .await;
+        }
+    }
+
     /// Insert a vector using the search results from `search_to_insert`,
     /// that is the nearest neighbor links at each insertion layer, and a flag
     /// indicating whether the vector is to be inserted as the new entry point.
@@ -406,33 +524,19 @@ impl HnswSearcher {
         vector_store: &mut V,
         graph_store: &mut GraphMem<V>,
         inserted_vector: V::VectorRef,
-        links: Vec<SortedNeighborhood<V>>,
+        links: Vec<SortedNeighborhoodV<V>>,
         set_ep: bool,
     ) {
-        // If required, set vector as new entry point
-        if set_ep {
-            let insertion_layer = links.len() - 1;
-            graph_store
-                .set_entry_point(inserted_vector.clone(), insertion_layer)
-                .await;
-        }
-
-        // Connect the new vector to its neighbors in each layer.
-
-        for (lc, mut layer_links) in links.into_iter().enumerate().rev() {
-            let M = self.params.get_M(lc);
-            let M_max = self.params.get_M_max(lc);
-            layer_links.trim_to_k_nearest(M);
-            graph_store
-                .connect_bidir(vector_store, &inserted_vector, layer_links, M_max, lc)
-                .await;
-        }
+        let plan = self
+            .insert_prepare(vector_store, graph_store, inserted_vector, links, set_ep)
+            .await;
+        self.insert_apply(graph_store, plan).await;
     }
 
     pub async fn is_match<V: VectorStore>(
         &self,
         vector_store: &mut V,
-        neighbors: &[SortedNeighborhood<V>],
+        neighbors: &[SortedNeighborhoodV<V>],
     ) -> bool {
         match neighbors
             .first()
