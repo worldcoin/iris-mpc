@@ -111,6 +111,15 @@ pub struct Config {
 
     #[serde(default)]
     pub fixed_shared_secrets: bool,
+
+    #[serde(default = "default_match_distances_buffer_size")]
+    pub match_distances_buffer_size: usize,
+
+    #[serde(default = "default_n_buckets")]
+    pub n_buckets: usize,
+
+    #[serde(default)]
+    pub load_chunks_buffer_size: usize,
 }
 
 fn default_load_chunks_parallelism() -> usize {
@@ -143,6 +152,14 @@ fn default_shares_bucket_name() -> String {
 
 fn default_db_load_safety_overlap_seconds() -> i64 {
     60
+}
+
+fn default_match_distances_buffer_size() -> usize {
+    1 << 19
+}
+
+fn default_n_buckets() -> usize {
+    375
 }
 
 impl Config {

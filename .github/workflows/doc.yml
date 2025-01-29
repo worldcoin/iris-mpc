@@ -2,6 +2,10 @@ name: Check Doc Syntax
 
 on:
   push:
+    paths-ignore:
+      - 'adr/**'
+      - 'deploy/**'
+      - '.github/**'
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
@@ -13,13 +17,18 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
       - name: Install Dependencies
         run: sudo apt install protobuf-compiler
+
       - name: Show errors inline
         uses: r7kamura/rust-problem-matchers@v1
+
       - name: Install Rust nightly
         run: rustup toolchain install nightly-2024-07-10
+
       - name: Set Rust nightly as default
         run: rustup default nightly-2024-07-10
+
       - name: Build Docs
         run: cargo doc --all-features --no-deps --document-private-items

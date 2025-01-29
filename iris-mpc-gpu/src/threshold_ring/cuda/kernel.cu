@@ -22,6 +22,22 @@ template <typename T> __device__ void xor_assign_inner(T *lhs, T *rhs) {
 
 // Computes the local part of the multiplication (including randomness)
 template <typename T>
+__device__ void arithmetic_xor_inner(T *res_a, T *lhs_a, T *lhs_b, T *rhs_a,
+                                     T *rhs_b, T *r1, T *r2) {
+  T lhs_a_val = *lhs_a;
+  T lhs_b_val = *lhs_b;
+  T rhs_a_val = *rhs_a;
+  T rhs_b_val = *rhs_b;
+  T r1_val = *r1;
+  T r2_val = *r2;
+
+  T mul = (lhs_a_val * rhs_a_val) + (lhs_b_val * rhs_a_val) +
+          (lhs_a_val * rhs_b_val) + r1_val - r2_val;
+  *res_a = lhs_a_val + rhs_a_val - 2 * mul;
+}
+
+// Computes the local part of the multiplication (including randomness)
+template <typename T>
 __device__ void and_pre_inner(T *res_a, T *lhs_a, T *lhs_b, T *rhs_a, T *rhs_b,
                               T *r) {
   *res_a = (*lhs_a & *rhs_a) ^ (*lhs_b & *rhs_a) ^ (*lhs_a & *rhs_b) ^ *r;
@@ -164,15 +180,24 @@ __device__ void u32_transpose_pack_u64(U64 *out_a, U64 *out_b, U32 *in_a,
   }
 }
 
-__device__ void lift_mul_sub(U32 *mask, U16 *mask_corr1, U16 *mask_corr2,
-                             U16 *code) {
+__device__ void finalize_lift(U32 *mask, U32 *code_lift, U16 *mask_corr1,
+                              U16 *mask_corr2, U16 *code) {
   *mask -= (U32)(*mask_corr1) << 16;
   *mask -= (U32)(*mask_corr2) << 17;
 
+  mul_lift_b(code_lift, code);
+}
+
+__device__ void lift_mul_sub(U32 *mask, U16 *mask_corr1, U16 *mask_corr2,
+                             U16 *code) {
   U32 lifted;
-  mul_lift_b(&lifted, code);
+  finalize_lift(mask, &lifted, mask_corr1, mask_corr2, code);
   *mask *= A;
   *mask -= lifted;
+}
+
+__device__ void lifted_sub(U32 *mask, U32 *code, U32 *output, U32 a) {
+  *output = *mask * a - *code;
 }
 
 __device__ void split_inner(U64 *x1_a, U64 *x1_b, U64 *x2_a, U64 *x2_b,
@@ -207,12 +232,52 @@ __device__ void split_inner(U64 *x1_a, U64 *x1_b, U64 *x2_a, U64 *x2_b,
   }
 }
 
+__device__ void split_for_arithmetic_xor_inner(U32 *x1_a, U32 *x1_b, U32 *x2_a,
+                                               U32 *x2_b, U32 *x3_a, U32 *x3_b,
+                                               U32 inp_a, U32 inp_b, int id) {
+  switch (id) {
+  case 0:
+    *x1_a = inp_a;
+    *x1_b = 0;
+    *x2_a = 0;
+    *x2_b = 0;
+    *x3_a = 0;
+    *x3_b = inp_b;
+    break;
+  case 1:
+    *x1_a = 0;
+    *x1_b = inp_b;
+    *x2_a = inp_a;
+    *x2_b = 0;
+    *x3_a = 0;
+    *x3_b = 0;
+    break;
+  case 2:
+    *x1_a = 0;
+    *x1_b = 0;
+    *x2_a = 0;
+    *x2_b = inp_b;
+    *x3_a = inp_a;
+    *x3_b = 0;
+    break;
+  }
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // Test kernels
 ////////////////////////////////////////////////////////////////////////////////
 
 extern "C" __global__ void shared_assign(TYPE *des_a, TYPE *des_b, TYPE *src_a,
                                          TYPE *src_b, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    des_a[i] = src_a[i];
+    des_b[i] = src_b[i];
+  }
+}
+
+extern "C" __global__ void shared_assign_u32(U32 *des_a, U32 *des_b, U32 *src_a,
+                                             U32 *src_b, size_t n) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     des_a[i] = src_a[i];
@@ -261,6 +326,18 @@ extern "C" __global__ void xor_assign_u64(U64 *lhs, U64 *rhs, size_t n) {
   }
 }
 
+extern "C" __global__ void
+shared_arithmetic_xor_pre_assign_u32(U32 *lhs_a, U32 *lhs_b, U32 *rhs_a,
+                                     U32 *rhs_b, U32 *r1, U32 *r2, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    U32 res_a;
+    arithmetic_xor_inner<U32>(&res_a, &lhs_a[i], &lhs_b[i], &rhs_a[i],
+                              &rhs_b[i], &r1[i], &r2[i]);
+    lhs_a[i] = res_a;
+  }
+}
+
 extern "C" __global__ void shared_and_pre(TYPE *res_a, TYPE *lhs_a, TYPE *lhs_b,
                                           TYPE *rhs_a, TYPE *rhs_b, TYPE *r,
                                           size_t n) {
@@ -276,7 +353,7 @@ extern "C" __global__ void shared_or_pre_assign(TYPE *lhs_a, TYPE *lhs_b,
                                                 TYPE *r, size_t n) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
-    U64 res_a;
+    TYPE res_a;
     or_pre_inner<TYPE>(&res_a, &lhs_a[i], &lhs_b[i], &rhs_a[i], &rhs_b[i],
                        &r[i]);
     lhs_a[i] = res_a;
@@ -302,6 +379,20 @@ extern "C" __global__ void split(U64 *x1_a, U64 *x1_b, U64 *x2_a, U64 *x2_b,
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     split_inner(&x1_a[i], &x1_b[i], &x2_a[i], &x2_b[i], &x3_a[i], &x3_b[i], id);
+  }
+}
+
+extern "C" __global__ void
+split_for_arithmetic_xor(U32 *x1_a, U32 *x1_b, U32 *x2_a, U32 *x2_b, U32 *x3_a,
+                         U32 *x3_b, U64 *in_a, U64 *in_b, size_t n, int id) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < 64 * n) {
+    size_t wordindex = i / 64;
+    size_t bitindex = i % 64;
+    U32 my_bit_a = (in_a[wordindex] >> bitindex) & 1;
+    U32 my_bit_b = (in_b[wordindex] >> bitindex) & 1;
+    split_for_arithmetic_xor_inner(&x1_a[i], &x1_b[i], &x2_a[i], &x2_b[i],
+                                   &x3_a[i], &x3_b[i], my_bit_a, my_bit_b, id);
   }
 }
 
@@ -334,6 +425,42 @@ extern "C" __global__ void shared_lift_mul_sub(U32 *mask_a, U32 *mask_b,
       break;
     case 1:
       mask_b[i] -= 1; // Transforms the <= into <
+      break;
+    default:
+      break;
+    }
+  }
+}
+
+// Puts the results into mask_a, mask_b and code_lift_a and code_lift_b
+extern "C" __global__ void
+shared_finalize_lift(U32 *mask_a, U32 *mask_b, U32 *code_lift_a,
+                     U32 *code_lift_b, U16 *mask_corr_a, U16 *mask_corr_b,
+                     U16 *code_a, U16 *code_b, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    finalize_lift(&mask_a[i], &code_lift_a[i], &mask_corr_a[i],
+                  &mask_corr_a[i + n], &code_a[i]);
+    finalize_lift(&mask_b[i], &code_lift_b[i], &mask_corr_b[i],
+                  &mask_corr_b[i + n], &code_b[i]);
+  }
+}
+
+// Puts the results into output_a and output_b
+extern "C" __global__ void shared_lifted_sub(U32 *mask_a, U32 *mask_b,
+                                             U32 *code_a, U32 *code_b,
+                                             U32 *output_a, U32 *output_b,
+                                             U32 a, int id, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    lifted_sub(&mask_a[i], &code_a[i], &output_a[i], a);
+    lifted_sub(&mask_b[i], &code_b[i], &output_b[i], a);
+    switch (id) {
+    case 0:
+      output_a[i] -= 1; // Transforms the <= into <
+      break;
+    case 1:
+      output_b[i] -= 1; // Transforms the <= into <
       break;
     default:
       break;
@@ -423,5 +550,34 @@ extern "C" __global__ void collapse_u64_helper(U64 *inout_a, U64 *in_b,
     U64 res_a;
     or_pre_inner<TYPE>(&res_a, inout_a, in_b, helper_a, helper_b, r);
     *inout_a = res_a & mask;
+  }
+}
+
+extern "C" __global__ void collapse_sum_assign(U32 *inout_a, U32 *inout_b,
+                                               size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i == 0) {
+    for (size_t j = 1; j < n; j++) {
+      inout_a[0] += inout_a[j];
+    }
+  } else if (i == 1) {
+    for (size_t j = 1; j < n; j++) {
+      inout_b[0] += inout_b[j];
+    }
+  }
+}
+
+extern "C" __global__ void collapse_sum(U32 *inout_a, U32 *inout_b,
+                                        U32 *input_a, U32 *input_b,
+                                        size_t inout_index, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i == 0) {
+    for (size_t j = 0; j < n; j++) {
+      inout_a[inout_index] += input_a[j];
+    }
+  } else if (i == 1) {
+    for (size_t j = 0; j < n; j++) {
+      inout_b[inout_index] += input_b[j];
+    }
   }
 }
