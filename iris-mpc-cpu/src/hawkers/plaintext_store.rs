@@ -1,4 +1,7 @@
-use crate::hnsw::HnswSearcher;
+use crate::hnsw::{
+    metrics::ops_counter::Operation::{CompareDistance, EvaluateDistance},
+    HnswSearcher,
+};
 use aes_prng::AesRng;
 use hawk_pack::{graph_store::GraphMem, VectorStore};
 use iris_mpc_common::iris_db::{
@@ -8,6 +11,7 @@ use iris_mpc_common::iris_db::{
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::ops::{Index, IndexMut};
+use tracing::info;
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct PlaintextIris(pub IrisCode);
@@ -117,6 +121,7 @@ impl VectorStore for PlaintextStore {
         query: &Self::QueryRef,
         vector: &Self::VectorRef,
     ) -> Self::DistanceRef {
+        info!(event_type = EvaluateDistance.id());
         let query_code = &self.points[*query];
         let vector_code = &self.points[*vector];
         query_code.data.distance_fraction(&vector_code.data)
@@ -132,6 +137,7 @@ impl VectorStore for PlaintextStore {
         distance1: &Self::DistanceRef,
         distance2: &Self::DistanceRef,
     ) -> bool {
+        info!(event_type = CompareDistance.id());
         let (a, b) = *distance1; // a/b
         let (c, d) = *distance2; // c/d
         (a as i32) * (d as i32) - (b as i32) * (c as i32) < 0
@@ -142,6 +148,7 @@ impl PlaintextStore {
     pub async fn create_random<R: RngCore + Clone + CryptoRng>(
         rng: &mut R,
         database_size: usize,
+        searcher: &HnswSearcher,
     ) -> eyre::Result<(Self, GraphMem<Self>)> {
         // makes sure the searcher produces same graph structure by having the same rng
         let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
@@ -149,7 +156,6 @@ impl PlaintextStore {
 
         let mut plaintext_vector_store = PlaintextStore::default();
         let mut plaintext_graph_store = GraphMem::new();
-        let searcher = HnswSearcher::default();
 
         for raw_query in cleartext_database.iter() {
             let query = plaintext_vector_store.prepare_query(raw_query.clone());
@@ -295,7 +301,7 @@ mod tests {
         let database_size = 1;
         let searcher = HnswSearcher::default();
         let (mut ptxt_vector, mut ptxt_graph) =
-            PlaintextStore::create_random(&mut rng, database_size)
+            PlaintextStore::create_random(&mut rng, database_size, &searcher)
                 .await
                 .unwrap();
         for i in 0..database_size {

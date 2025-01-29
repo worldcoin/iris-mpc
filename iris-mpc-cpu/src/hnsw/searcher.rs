@@ -4,6 +4,7 @@
 //*
 //* https://github.com/Inversed-Tech/hawk-pack/
 
+use super::metrics::ops_counter::Operation;
 pub use hawk_pack::data_structures::queue::{
     FurthestQueue, FurthestQueueV, NearestQueue, NearestQueueV,
 };
@@ -13,6 +14,7 @@ use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use tracing::{info, instrument};
 
 // Specify construction and search parameters by layer up to this value minus 1
 // any higher layers will use the last set of parameters
@@ -279,6 +281,7 @@ impl HnswSearcher {
     /// given layer using depth-first graph traversal,  Terminates when `W`
     /// contains vectors which are the nearest to `q` among all traversed
     /// vertices and their neighbors.
+    #[instrument(skip(self, vector_store, graph_store, W))]
     #[allow(non_snake_case)]
     async fn search_layer<V: VectorStore, G: GraphStore<V>>(
         &self,
@@ -289,6 +292,8 @@ impl HnswSearcher {
         ef: usize,
         lc: usize,
     ) {
+        info!(event_type = Operation::LayerSearch.id());
+
         // v: The set of already visited vectors.
         let mut v = HashSet::<V::VectorRef>::from_iter(W.iter().map(|(e, _eq)| e.clone()));
 
@@ -308,6 +313,7 @@ impl HnswSearcher {
             }
 
             // Open the node c and explore its neighbors.
+            info!(event_type = Operation::OpenNode.id(), ef, lc);
 
             // Visit all neighbors of c.
             let c_links = graph_store.get_links(&c, lc).await;
