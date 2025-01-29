@@ -14,13 +14,30 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Get all test, doc and src files that have changed
+        id: changed-files-yaml
+        uses: tj-actions/changed-files@v45
+        with:
+          files_yaml: |
+            src:
+            - Dockerfile*
+            - Cargo.lock
+            - Cargo.toml
+            - deny.toml
+            - iris-*/**
+      
+
+      # The following steps will only run if any of the src files have changed
       - name: Validate presence of GPU devices
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: nvidia-smi
 
       - name: Check shared memory size
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: df -h
 
       - name: Update gcc to version 11
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential manpages-dev software-properties-common
@@ -31,10 +48,11 @@ jobs:
           gcc --version
 
       - name: Install OpenSSL && pkg-config && protobuf-compiler
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev protobuf-compiler
 
       - name: Install CUDA and NCCL dependencies
-        if: steps.cache-cuda-nccl.outputs.cache-hit != 'true'
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true' && steps.cache-cuda-nccl.outputs.cache-hit != 'true'
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
@@ -44,9 +62,11 @@ jobs:
           sudo apt install -y cuda-toolkit-12-2 cuda-command-line-tools-12-2 libnccl2 libnccl-dev
 
       - name: Find libs
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: find /usr -name "libnvrtc*" && find /usr -name libcuda.so
 
       - name: Cache Rust build
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         uses: actions/cache@v4
         id: cache-rust
         with:
@@ -59,14 +79,17 @@ jobs:
             rust-build-${{ runner.os }}-
 
       - name: Find libs
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: find /usr -name "libnvrtc*" && find /usr -name libcuda.so
 
       - name: Install Rust nightly
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
 
       - name: GPU Dependent Tests
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         timeout-minutes: 10
         run: cargo test --release --features gpu_dependent -- --test-threads=1
         shell: bash

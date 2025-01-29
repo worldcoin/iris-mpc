@@ -49,6 +49,9 @@ env:
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
     value: "120"
+  
+  - name: SMPC__HEARTBEAT_INITIAL_RETRIES
+    value: "65"
 
   - name: SMPC__PATH
     value: "/data/"
@@ -72,13 +75,16 @@ env:
     value: "true"
 
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
-    value: "iris-mpc-db-exporter-store-node-1-stage-eu-north-1"
+    value: "iris-mpc-db-exporter-store-node-1-stage--eun1-az3--x-s3"
 
   - name: SMPC__DB_CHUNKS_FOLDER_NAME
     value: "even_odd_binary_output_16k"
 
   - name: SMPC__LOAD_CHUNKS_PARALLELISM
-    value: "32"
+    value: "64"
+
+  - name: SMPC__LOAD_CHUNKS_BUFFER_SIZE
+    value: "1024"
 
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
@@ -92,6 +98,12 @@ env:
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
 
+  - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
+    value: "128"
+
+  - name: SMPC__N_BUCKETS
+    value: "10"
+  
   - name: SMPC__SERVICE__METRICS__HOST
     valueFrom:
       fieldRef:
