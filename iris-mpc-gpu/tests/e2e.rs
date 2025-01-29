@@ -380,7 +380,10 @@ mod e2e_test {
                                  the OR rule set"
                             );
 
-                            let n_db_indexes = rng.gen_range(1..5);
+                            // use 1 to 10 OR-matching iris codes
+                            let n_db_indexes = rng.gen_range(1..10);
+
+                            // Remove disallowed queries from the pool
                             let db_indexes = (0..n_db_indexes)
                                 .map(|_| loop {
                                     let db_index = rng.gen_range(0..DB_SIZE / 10);
@@ -390,13 +393,7 @@ mod e2e_test {
                                 })
                                 .collect::<Vec<_>>();
 
-                            let mut db_indexes_copy = db_indexes.clone();
-
-                            let _ = db_indexes.iter().enumerate().map(|(idx, db_idx)| {
-                                if db_indexes_copy.contains(db_idx) {
-                                    db_indexes_copy.remove(idx);
-                                }
-                            });
+                            let db_indexes_copy = db_indexes.clone();
 
                             // select a random one to use as matching signup
                             let matching_db_index =
@@ -446,7 +443,7 @@ mod e2e_test {
                                     code_left.code.flip_bit(i);
                                     code_right.code.flip_bit(i);
                                 }
-                                db_indices_used.insert(matching_db_index as usize);
+                                db_indices_used.insert(matching_db_index);
                                 disallowed_queries.push(matching_db_index);
                                 expected_results.insert(request_id.to_string(), (None, false));
                             }
