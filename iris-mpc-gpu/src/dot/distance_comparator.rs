@@ -1,16 +1,23 @@
 use super::ROTATIONS;
-use crate::helpers::{
-    device_manager::DeviceManager, launch_config_from_elements_and_threads,
-    DEFAULT_LAUNCH_CONFIG_THREADS,
+use crate::{
+    helpers::{
+        device_manager::DeviceManager, launch_config_from_elements_and_threads,
+        DEFAULT_LAUNCH_CONFIG_THREADS,
+    },
+    threshold_ring::protocol::{ChunkShare, ChunkShareView},
 };
 use cudarc::{
-    driver::{CudaFunction, CudaSlice, CudaStream, CudaView, LaunchAsync},
+    driver::{
+        result::{launch_kernel, memset_d8_sync},
+        sys, CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr, DeviceSlice, LaunchAsync,
+    },
     nvrtc::compile_ptx,
 };
-use std::{cmp::min, sync::Arc};
+use std::{cmp::min, ffi::c_void, sync::Arc};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const OPEN_RESULTS_FUNCTION: &str = "openResults";
+const OPEN_RESULTS_BATCH_FUNCTION: &str = "openResultsBatch";
 const MERGE_DB_RESULTS_FUNCTION: &str = "mergeDbResults";
 const MERGE_BATCH_RESULTS_FUNCTION: &str = "mergeBatchResults";
 const MERGE_BATCH_RESULTS_WITH_OR_POLICY_BITMAP_FUNCTION: &str = "mergeDbResultsWithOrPolicyBitmap";
@@ -19,6 +26,7 @@ const ALL_MATCHES_LEN: usize = 256;
 pub struct DistanceComparator {
     pub device_manager:                  Arc<DeviceManager>,
     pub open_kernels:                    Vec<CudaFunction>,
+    pub open_batch_kernels:      Vec<CudaFunction>,
     pub merge_db_kernels:                Vec<CudaFunction>,
     pub merge_batch_kernels:             Vec<CudaFunction>,
     pub merge_batch_with_bitmap_kernels: Vec<CudaFunction>,
@@ -39,6 +47,7 @@ impl DistanceComparator {
     pub fn init(query_length: usize, device_manager: Arc<DeviceManager>) -> Self {
         let ptx = compile_ptx(PTX_SRC).unwrap();
         let mut open_kernels: Vec<CudaFunction> = Vec::new();
+        let mut open_batch_kernels: Vec<CudaFunction> = Vec::new();
         let mut merge_db_kernels = Vec::new();
         let mut merge_batch_kernels = Vec::new();
         let mut merge_batch_with_bitmap_kernels: Vec<CudaFunction> = Vec::new();
@@ -61,6 +70,7 @@ impl DistanceComparator {
             device
                 .load_ptx(ptx.clone(), "", &[
                     OPEN_RESULTS_FUNCTION,
+                    OPEN_RESULTS_BATCH_FUNCTION,
                     MERGE_DB_RESULTS_FUNCTION,
                     MERGE_BATCH_RESULTS_FUNCTION,
                     MERGE_BATCH_RESULTS_WITH_OR_POLICY_BITMAP_FUNCTION,
@@ -68,6 +78,8 @@ impl DistanceComparator {
                 .unwrap();
 
             let open_results_function = device.get_func("", OPEN_RESULTS_FUNCTION).unwrap();
+            let open_results_batch_function =
+                device.get_func("", OPEN_RESULTS_BATCH_FUNCTION).unwrap();
             let merge_db_results_function = device.get_func("", MERGE_DB_RESULTS_FUNCTION).unwrap();
             let merge_batch_results_function =
                 device.get_func("", MERGE_BATCH_RESULTS_FUNCTION).unwrap();
@@ -95,7 +107,9 @@ impl DistanceComparator {
                     .alloc_zeros(ALL_MATCHES_LEN * query_length / ROTATIONS)
                     .unwrap(),
             );
+
             open_kernels.push(open_results_function);
+            open_batch_kernels.push(open_results_batch_function);
             merge_db_kernels.push(merge_db_results_function);
             merge_batch_kernels.push(merge_batch_results_function);
             merge_batch_with_bitmap_kernels.push(merge_batch_results_with_bitmap_function);
@@ -104,6 +118,7 @@ impl DistanceComparator {
         Self {
             device_manager,
             open_kernels,
+            open_batch_kernels,
             merge_db_kernels,
             merge_batch_kernels,
             merge_batch_with_bitmap_kernels,
@@ -133,6 +148,85 @@ impl DistanceComparator {
         offset: usize,
         total_db_sizes: &[usize],
         ignore_db_results: &[bool],
+        match_distances_buffers_codes: &[ChunkShare<u16>],
+        match_distances_buffers_masks: &[ChunkShare<u16>],
+        match_distances_counters: &[CudaSlice<u32>],
+        match_distances_indices: &[CudaSlice<u32>],
+        code_dots: &[ChunkShareView<u16>],
+        mask_dots: &[ChunkShareView<u16>],
+        batch_size: usize,
+        max_bucket_distances: usize,
+        streams: &[CudaStream],
+    ) {
+        for i in 0..self.device_manager.device_count() {
+            // Those correspond to 0 length dbs, which were just artificially increased to
+            // length 1 to avoid division by zero in the kernel
+            if ignore_db_results[i] {
+                continue;
+            }
+            let num_elements = (db_sizes[i] * self.query_length).div_ceil(64);
+            let threads_per_block = DEFAULT_LAUNCH_CONFIG_THREADS; // ON CHANGE: sync with kernel
+            let cfg = launch_config_from_elements_and_threads(
+                num_elements as u32,
+                threads_per_block,
+                &self.device_manager.devices()[i],
+            );
+            self.device_manager.device(i).bind_to_thread().unwrap();
+
+            let ptr_param = |ptr: *const sys::CUdeviceptr| ptr as *mut c_void;
+            let usize_param = |val: &usize| val as *const usize as *mut _;
+
+            let params = &mut [
+                // Results arrays
+                ptr_param(results1[i].device_ptr()),
+                ptr_param(results2[i].device_ptr()),
+                ptr_param(results3[i].device_ptr()),
+                ptr_param(matches_bitmap[i].device_ptr()),
+                usize_param(&db_sizes[i]),
+                usize_param(&(batch_size * ROTATIONS)),
+                usize_param(&offset),
+                usize_param(&num_elements),
+                usize_param(&real_db_sizes[i]),
+                usize_param(&total_db_sizes[i]),
+                ptr_param(match_distances_buffers_codes[i].a.device_ptr()),
+                ptr_param(match_distances_buffers_codes[i].b.device_ptr()),
+                ptr_param(match_distances_buffers_masks[i].a.device_ptr()),
+                ptr_param(match_distances_buffers_masks[i].b.device_ptr()),
+                ptr_param(match_distances_counters[i].device_ptr()),
+                ptr_param(match_distances_indices[i].device_ptr()),
+                ptr_param(code_dots[i].a.device_ptr()),
+                ptr_param(code_dots[i].b.device_ptr()),
+                ptr_param(mask_dots[i].a.device_ptr()),
+                ptr_param(mask_dots[i].b.device_ptr()),
+                usize_param(&max_bucket_distances),
+            ];
+
+            unsafe {
+                launch_kernel(
+                    self.open_kernels[i].cu_function(),
+                    cfg.grid_dim,
+                    cfg.block_dim,
+                    0,
+                    streams[i].stream,
+                    params,
+                )
+                .unwrap();
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_batch_results(
+        &self,
+        results1: &[CudaView<u64>],
+        results2: &[CudaView<u64>],
+        results3: &[CudaView<u64>],
+        matches_bitmap: &[CudaSlice<u64>],
+        db_sizes: &[usize],
+        real_db_sizes: &[usize],
+        offset: usize,
+        total_db_sizes: &[usize],
+        ignore_db_results: &[bool],
         streams: &[CudaStream],
     ) {
         for i in 0..self.device_manager.device_count() {
@@ -151,7 +245,7 @@ impl DistanceComparator {
             self.device_manager.device(i).bind_to_thread().unwrap();
 
             unsafe {
-                self.open_kernels[i]
+                self.open_batch_kernels[i]
                     .clone()
                     .launch_on_stream(
                         &streams[i],
@@ -410,5 +504,54 @@ impl DistanceComparator {
                     .unwrap()
             })
             .collect::<Vec<_>>()
+    }
+
+    pub fn prepare_match_distances_buffer(&self, max_size: usize) -> Vec<ChunkShare<u16>> {
+        (0..self.device_manager.device_count())
+            .map(|i| {
+                let a = self.device_manager.device(i).alloc_zeros(max_size).unwrap();
+                let b = self.device_manager.device(i).alloc_zeros(max_size).unwrap();
+
+                self.device_manager.device(i).bind_to_thread().unwrap();
+                unsafe {
+                    memset_d8_sync(*a.device_ptr(), 0xff, a.num_bytes()).unwrap();
+                    memset_d8_sync(*b.device_ptr(), 0xff, b.num_bytes()).unwrap();
+                }
+
+                ChunkShare::new(a, b)
+            })
+            .collect::<Vec<_>>()
+    }
+
+    pub fn prepare_match_distances_counter(&self) -> Vec<CudaSlice<u32>> {
+        (0..self.device_manager.device_count())
+            .map(|i| self.device_manager.device(i).alloc_zeros(1).unwrap())
+            .collect::<Vec<_>>()
+    }
+
+    pub fn prepare_match_distances_index(&self, max_size: usize) -> Vec<CudaSlice<u32>> {
+        (0..self.device_manager.device_count())
+            .map(|i| {
+                let a = self.device_manager.device(i).alloc_zeros(max_size).unwrap();
+                unsafe {
+                    memset_d8_sync(*a.device_ptr(), 0xff, a.num_bytes()).unwrap();
+                }
+                a
+            })
+            .collect::<Vec<_>>()
+    }
+
+    pub fn prepare_match_distances_buckets(&self, n_buckets: usize) -> ChunkShare<u32> {
+        let a = self
+            .device_manager
+            .device(0)
+            .alloc_zeros(n_buckets)
+            .unwrap();
+        let b = self
+            .device_manager
+            .device(0)
+            .alloc_zeros(n_buckets)
+            .unwrap();
+        ChunkShare::new(a, b)
     }
 }
