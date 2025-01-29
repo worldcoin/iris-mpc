@@ -2,6 +2,10 @@ name: Build All Targets
 
 on:
   push:
+    paths-ignore:
+      - 'adr/**'
+      - 'deploy/**'
+      - '.github/**'
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
@@ -13,36 +17,47 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
       - name: Install Dependencies
         run: sudo apt install protobuf-compiler
+
       - name: Cache build products
         uses: Swatinem/rust-cache@v2.7.3
         with:
           # Split the test and bench caches, the have different debug settings
           key: "test"
+
       - name: Install Rust nightly
         run: rustup toolchain install nightly-2024-07-10
+
       - name: Set Rust nightly as default
         run: rustup default nightly-2024-07-10
+
       # Building tests in release mode checks warnings and compiler errors that depend on optimisations
       - name: Build Tests
         run: cargo build --release --all-features --tests
+
   build-bins:
     runs-on:
       labels: ubuntu-22.04-64core
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
       - name: Install Dependencies
         run: sudo apt install protobuf-compiler
+
       - name: Cache build products
         uses: Swatinem/rust-cache@v2.7.3
         with:
           # Split the test and bench caches, they have different debug settings
           key: "bench"
+
       - name: Install Rust nightly
         run: rustup toolchain install nightly-2024-07-10
+
       - name: Set Rust nightly as default
         run: rustup default nightly-2024-07-10
+
       - name: Build All Targets
         run: cargo build --release --all-features --lib --bins --benches --examples

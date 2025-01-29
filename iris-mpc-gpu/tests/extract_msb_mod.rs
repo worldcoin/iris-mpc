@@ -1,18 +1,23 @@
 #[cfg(feature = "gpu_dependent")]
 mod extract_msb_mod_test {
 
-    use cudarc::driver::{CudaDevice, CudaStream};
+    use cudarc::{
+        driver::{CudaDevice, CudaStream},
+        nccl::Id,
+    };
     use iris_mpc_common::iris_db::iris::IrisCodeArray;
     use iris_mpc_gpu::{
         helpers::{device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync},
         threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
     };
-    use itertools::izip;
+    use itertools::{izip, Itertools};
     use rand::{rngs::StdRng, Rng, SeedableRng};
     use static_assertions::const_assert;
     use std::{env, sync::Arc};
     use tokio::time::Instant;
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+    const DB_RNG_SEED: u64 = 0xdeadbeef;
     // ceil(930 * 125_000 / 2048) * 2048
     // const INPUTS_PER_GPU_SIZE: usize = 116_250_624;
     const INPUTS_PER_GPU_SIZE: usize = 12_507_136;
@@ -33,35 +38,32 @@ mod extract_msb_mod_test {
                 let mut x = rng.gen_range::<u16, _>(0..=IrisCodeArray::IRIS_CODE_SIZE as u16);
                 let neg = rng.gen::<bool>();
                 if neg {
-                    x = u16::MAX - x + 1;
+                    x = (u16::MAX - x).wrapping_add(1);
                 }
                 x
             })
             .collect::<Vec<_>>()
     }
 
-    fn rep_share<R: Rng>(value: u16, id: usize, rng: &mut R) -> (u16, u16) {
+    fn rep_share<R: Rng>(value: u16, rng: &mut R) -> (u16, u16, u16) {
         let a = rng.gen();
         let b = rng.gen();
-        let c = value - a - b;
+        let c = value.wrapping_sub(a).wrapping_sub(b);
 
-        match id {
-            0 => (a, c),
-            1 => (b, a),
-            2 => (c, b),
-            _ => unreachable!(),
-        }
+        (a, b, c)
     }
 
-    fn rep_share_vec<R: Rng>(value: &[u16], id: usize, rng: &mut R) -> (Vec<u16>, Vec<u16>) {
+    fn rep_share_vec<R: Rng>(value: &[u16], rng: &mut R) -> (Vec<u16>, Vec<u16>, Vec<u16>) {
         let mut a = Vec::with_capacity(value.len());
         let mut b = Vec::with_capacity(value.len());
+        let mut c = Vec::with_capacity(value.len());
         for v in value.iter() {
-            let (a_, b_) = rep_share(*v, id, rng);
+            let (a_, b_, c_) = rep_share(*v, rng);
             a.push(a_);
             b.push(b_);
+            c.push(c_);
         }
-        (a, b)
+        (a, b, c)
     }
 
     fn to_gpu(
@@ -107,7 +109,7 @@ mod extract_msb_mod_test {
         let mod_ = 1u64 << (16 + B_BITS);
         let mut res = Vec::with_capacity(input.len());
         for inp in input {
-            let r = (u64::MAX - ((inp as u64) << B_BITS) + 1) % mod_;
+            let r = (u64::MAX - ((inp as u64) << B_BITS)) % mod_;
             let msb = r >> (B_BITS + 16 - 1) & 1 == 1;
             res.push(msb)
         }
@@ -154,43 +156,24 @@ mod extract_msb_mod_test {
         result
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[ignore]
-    async fn test_extract_msb_mod() -> eyre::Result<()> {
-        use itertools::Itertools;
+    fn install_tracing() {
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "info".into()),
+            )
+            .with(tracing_subscriber::fmt::layer())
+            .init();
+    }
 
-        const_assert!(
-            INPUTS_PER_GPU_SIZE % (2048) == 0,
-            // Mod 16 for randomness, mod 64 for chunk size
-        );
+    fn testcase(
+        mut party: Circuits,
+        code_share_a: Vec<u16>,
+        code_share_b: Vec<u16>,
+        real_result: Vec<u64>,
+    ) {
+        let id = party.peer_id();
 
-        // TODO
-        let mut rng = StdRng::seed_from_u64(42);
-
-        let party_id: usize = env::var("SMPC__PARTY_ID")
-            .expect("SMPC__PARTY_ID environment variable not set")
-            .parse()
-            .expect("SMPC__PARTY_ID must be a valid usize");
-        let n_devices = CudaDevice::count()? as usize;
-
-        // Get inputs
-        let code_dots = sample_dots(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);
-        let (code_share_a, code_share_b) = rep_share_vec(&code_dots, party_id, &mut rng);
-        let real_result = real_result_msb(code_dots);
-        println!("Random shared inputs generated!");
-
-        // Get Circuit Party
-        let device_manager = Arc::new(DeviceManager::init());
-        let ids = device_manager.get_ids_from_magic(0);
-        let comms = device_manager.instantiate_network_from_ids(party_id, &ids)?;
-        let mut party = Circuits::new(
-            party_id,
-            INPUTS_PER_GPU_SIZE,
-            INPUTS_PER_GPU_SIZE / 64,
-            ([party_id as u32; 8], [((party_id + 2) % 3) as u32; 8]),
-            device_manager.clone(),
-            comms,
-        );
         let devices = party.get_devices();
         let streams = devices
             .iter()
@@ -199,9 +182,10 @@ mod extract_msb_mod_test {
 
         // Import to GPU
         let code_gpu = to_gpu(&code_share_a, &code_share_b, &devices, &streams);
-        println!("Data is on GPUs!");
-        println!("Starting tests...");
+        tracing::info!("id = {}, Data is on GPUs!", id);
+        tracing::info!("id = {}, Starting tests...", id);
 
+        let mut error = false;
         for _ in 0..10 {
             // Simulate Masks to be zero for this test
             let x_ = party.allocate_buffer::<u32>(INPUTS_PER_GPU_SIZE);
@@ -209,32 +193,140 @@ mod extract_msb_mod_test {
             let correction_ = party.allocate_buffer::<u16>(INPUTS_PER_GPU_SIZE * 2);
             let correction = to_view(&correction_);
             let code_gpu = code_gpu.iter().map(|x| x.as_view()).collect_vec();
+            party.synchronize_streams(&streams);
 
             let now = Instant::now();
             party.lift_mul_sub(&mut x, &correction, &code_gpu, &streams);
-            println!("lift time: {:?}", now.elapsed());
+            tracing::info!("id = {}, lift time: {:?}", id, now.elapsed());
             party.extract_msb(&mut x, &streams);
-            println!("extract time: {:?}", now.elapsed());
+            tracing::info!("id = {}, extract time: {:?}", id, now.elapsed());
 
             let res = party.take_result_buffer();
             let now = Instant::now();
             let result = open(&mut party, &res, &streams);
             party.synchronize_streams(&streams);
             party.return_result_buffer(res);
-            println!("Open and transfer to CPU time: {:?}", now.elapsed());
+            tracing::info!(
+                "id = {}, Open and transfer to CPU time: {:?}",
+                id,
+                now.elapsed()
+            );
 
             let mut correct = true;
             for (i, (r, r_)) in izip!(&result, &real_result).enumerate() {
                 if r != r_ {
                     correct = false;
-                    println!("Test failed on index: {}: {} != {}", i, r, r_);
+                    tracing::error!("id = {}, Test failed on index: {}: {} != {}", id, i, r, r_);
+                    error = true;
                     break;
                 }
             }
             if correct {
-                println!("Test passed!");
+                tracing::info!("id = {}, Test passed!", id);
             }
         }
+        assert!(!error);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+    async fn test_extract_msb_mod() -> eyre::Result<()> {
+        install_tracing();
+        env::set_var("NCCL_P2P_LEVEL", "LOC");
+        env::set_var("NCCL_NET", "Socket");
+        env::set_var("NCCL_P2P_DIRECT_DISABLE", "1");
+        env::set_var("NCCL_SHM_DISABLE", "1");
+
+        let chacha_seeds0 = ([0u32; 8], [2u32; 8]);
+        let chacha_seeds1 = ([1u32; 8], [0u32; 8]);
+        let chacha_seeds2 = ([2u32; 8], [1u32; 8]);
+
+        const_assert!(
+            INPUTS_PER_GPU_SIZE % (2048) == 0,
+            // Mod 16 for randomness, mod 64 for chunk size
+        );
+
+        let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
+
+        let device_manager = DeviceManager::init();
+        let mut device_managers = device_manager
+            .split_into_n_chunks(3)
+            .expect("have at least 3 devices");
+        let device_manager2 = Arc::new(device_managers.pop().unwrap());
+        let device_manager1 = Arc::new(device_managers.pop().unwrap());
+        let device_manager0 = Arc::new(device_managers.pop().unwrap());
+        let n_devices = device_manager0.devices().len();
+        let ids0 = (0..n_devices)
+            .map(|_| Id::new().unwrap())
+            .collect::<Vec<_>>();
+        let ids1 = ids0.clone();
+        let ids2 = ids0.clone();
+
+        // Get inputs
+        let code_dots = sample_dots(INPUTS_PER_GPU_SIZE * n_devices, &mut rng);
+        let (code_share_a, code_share_b, code_share_c) = rep_share_vec(&code_dots, &mut rng);
+        let real_result = real_result_msb(code_dots);
+        tracing::info!("Random shared inputs generated!");
+
+        let code_share_a_ = code_share_a.to_owned();
+        let code_share_b_ = code_share_b.to_owned();
+        let code_share_c_ = code_share_c.to_owned();
+        let real_result_ = real_result.to_owned();
+        let real_result__ = real_result.to_owned();
+
+        let task0 = tokio::task::spawn_blocking(move || {
+            let comms0 = device_manager0
+                .instantiate_network_from_ids(0, &ids0)
+                .unwrap();
+
+            let party = Circuits::new(
+                0,
+                INPUTS_PER_GPU_SIZE,
+                INPUTS_PER_GPU_SIZE / 64,
+                chacha_seeds0,
+                device_manager0,
+                comms0,
+            );
+
+            testcase(party, code_share_a, code_share_c, real_result);
+        });
+
+        let task1 = tokio::task::spawn_blocking(move || {
+            let comms1 = device_manager1
+                .instantiate_network_from_ids(1, &ids1)
+                .unwrap();
+
+            let party = Circuits::new(
+                1,
+                INPUTS_PER_GPU_SIZE,
+                INPUTS_PER_GPU_SIZE / 64,
+                chacha_seeds1,
+                device_manager1,
+                comms1,
+            );
+
+            testcase(party, code_share_b, code_share_a_, real_result_);
+        });
+
+        let task2 = tokio::task::spawn_blocking(move || {
+            let comms2 = device_manager2
+                .instantiate_network_from_ids(2, &ids2)
+                .unwrap();
+
+            let party = Circuits::new(
+                2,
+                INPUTS_PER_GPU_SIZE,
+                INPUTS_PER_GPU_SIZE / 64,
+                chacha_seeds2,
+                device_manager2,
+                comms2,
+            );
+
+            testcase(party, code_share_c_, code_share_b_, real_result__);
+        });
+
+        task0.await.unwrap();
+        task1.await.unwrap();
+        task2.await.unwrap();
 
         Ok(())
     }
