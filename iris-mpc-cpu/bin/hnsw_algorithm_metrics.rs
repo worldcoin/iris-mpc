@@ -1,6 +1,5 @@
 use aes_prng::AesRng;
 use clap::Parser;
-use hawk_pack::graph_store::GraphMem;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
@@ -8,7 +7,7 @@ use iris_mpc_cpu::{
         metrics::ops_counter::{
             OpCountersLayer, Operation, ParamVertexOpeningsCounter, StaticCounter,
         },
-        searcher::{HnswParams, HnswSearcher},
+        GraphMem, HnswParams, HnswSearcher,
     },
 };
 use rand::SeedableRng;
@@ -18,11 +17,11 @@ use tracing_subscriber::prelude::*;
 #[derive(Parser)]
 #[allow(non_snake_case)]
 struct Args {
-    #[clap(default_value = "64")]
+    #[clap(default_value = "384")]
     M:                 usize,
-    #[clap(default_value = "128")]
+    #[clap(default_value = "512")]
     ef_constr:         usize,
-    #[clap(default_value = "64")]
+    #[clap(default_value = "512")]
     ef_search:         usize,
     #[clap(default_value = "10000")]
     database_size:     usize,
@@ -49,6 +48,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let node_openings = StaticCounter::new();
     let node_openings_counter = node_openings.get_counter();
+
+    // TODO support several counters and output formats using CLI options
 
     let param_openings = ParamVertexOpeningsCounter::new();
     let (param_openings_map, _) = param_openings.get_counters();
@@ -92,7 +93,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    println!("Layer search counts:");
+    println!("Node opening counts, by associated layer search params:");
     let counter_map = param_openings_map.read().unwrap();
     for ((lc, ef), value) in counter_map.iter() {
         println!("  lc={lc},ef={ef}: {:?}", value);

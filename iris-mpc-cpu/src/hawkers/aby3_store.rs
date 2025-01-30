@@ -6,7 +6,10 @@ use crate::{
         session::{Session, SessionHandles},
     },
     hawkers::plaintext_store::{PlaintextStore, PointId},
-    hnsw::HnswSearcher,
+    hnsw::{
+        graph::layered_graph::{GraphMem, Layer},
+        HnswSearcher, SortedNeighborhood, VectorStore,
+    },
     network::NetworkType,
     protocol::ops::{
         batch_signed_lift_vec, compare_threshold_and_open, cross_compare,
@@ -19,11 +22,6 @@ use crate::{
     },
 };
 use aes_prng::AesRng;
-use hawk_pack::{
-    data_structures::queue::FurthestQueue,
-    graph_store::{graph_mem::Layer, GraphMem},
-    GraphStore, VectorStore,
-};
 use iris_mpc_common::iris_db::db::IrisDB;
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -376,7 +374,7 @@ impl Aby3Store {
                 }
                 shared_links.insert(
                     source_v,
-                    FurthestQueue::from_ascending_vec(shared_queue.clone()),
+                    SortedNeighborhood::from_ascending_vec(shared_queue.clone()),
                 );
             }
             shared_layers.push(Layer::from_links(shared_links));
@@ -605,9 +603,11 @@ impl Aby3Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{database_generators::generate_galois_iris_shares, hnsw::HnswSearcher};
+    use crate::{
+        database_generators::generate_galois_iris_shares,
+        hnsw::{GraphMem, HnswSearcher},
+    };
     use aes_prng::AesRng;
-    use hawk_pack::graph_store::GraphMem;
     use itertools::Itertools;
     use rand::SeedableRng;
     use tracing_test::traced_test;
