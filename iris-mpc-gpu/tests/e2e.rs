@@ -618,7 +618,12 @@ mod e2e_test {
         }
         assert_eq!(bucket_statistics.buckets.len(), N_BUCKETS);
         assert!(bucket_statistics.end_timestamp > Some(bucket_statistics.start_timestamp));
-        assert_eq!(bucket_statistics.buckets.len(), MATCH_DISTANCES_BUFFER_SIZE);
+        let total_count = bucket_statistics
+            .buckets
+            .iter()
+            .map(|b| b.count)
+            .sum::<usize>();
+        assert_eq!(total_count, MATCH_DISTANCES_BUFFER_SIZE);
         Ok(())
     }
 
