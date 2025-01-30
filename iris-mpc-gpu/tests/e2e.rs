@@ -305,7 +305,7 @@ mod e2e_test {
                         req_id,
                         idx,
                         was_match,
-                        &matched_batch_req_ids,
+                        matched_batch_req_ids,
                         &requests,
                     );
                 }
@@ -509,7 +509,7 @@ mod e2e_test {
         inserted_responses:     HashMap<u32, E2ETemplate>,
         /// A buffer of indices that have been deleted, to choose a index from
         /// to send for testing against deletions. Once picked, it is removed
-        /// from here.
+        /// from here
         deleted_indices_buffer: Vec<u32>,
         /// The full set of indices that have been deleted
         deleted_indices:        HashSet<u32>,
@@ -802,7 +802,7 @@ mod e2e_test {
                        * OR rule set"); */
                 }
             };
-            return (request_id, e2e_template);
+            (request_id, e2e_template)
         }
 
         // check a received result against the expected results
