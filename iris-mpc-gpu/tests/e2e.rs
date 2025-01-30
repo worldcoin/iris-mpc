@@ -379,44 +379,73 @@ mod e2e_test {
                                 "Sending iris codes that match on one side but not the other with \
                                  the OR rule set"
                             );
-                            let db_index = loop {
-                                let db_index = rng.gen_range(0..DB_SIZE / 10);
-                                if !disallowed_queries.contains(&db_index) {
-                                    break db_index;
-                                }
-                            };
-                            if deleted_indices.contains(&(db_index as u32)) {
-                                continue;
-                            }
+
+                            // use 1 to 10 OR-matching iris codes
+                            let n_db_indexes = rng.gen_range(1..10);
+
+                            // Remove disallowed queries from the pool
+                            let db_indexes = (0..n_db_indexes)
+                                .map(|_| loop {
+                                    let db_index = rng.gen_range(0..DB_SIZE / 10);
+                                    if !disallowed_queries.contains(&db_index) {
+                                        return db_index;
+                                    }
+                                })
+                                .collect::<Vec<_>>();
+
+                            let db_indexes_copy = db_indexes.clone();
+
+                            // select a random one to use as matching signup
+                            let matching_db_index =
+                                db_indexes_copy[rng.gen_range(0..db_indexes_copy.len())];
 
                             // comparison against this item will use the OR rule
-                            use_or_rule_for_serial_ids.push(db_index as u32);
-                            or_rule_matches.push(request_id.to_string());
+                            use_or_rule_for_serial_ids
+                                .extend(db_indexes_copy.iter().map(|x| *x as u32));
 
                             // Will always match under the OR rule
-                            expected_results
-                                .insert(request_id.to_string(), (Some(db_index as u32), false));
+                            expected_results.insert(
+                                request_id.to_string(),
+                                (Some(matching_db_index as u32), false),
+                            );
 
-                            let mut code_left = db.db[db_index].clone();
-                            let mut code_right = db.db[db_index].clone();
+                            let mut code_left = db.db[matching_db_index].clone();
+                            let mut code_right = db.db[matching_db_index].clone();
 
                             assert_eq!(code_left.mask, IrisCodeArray::ONES);
                             assert_eq!(code_right.mask, IrisCodeArray::ONES);
 
                             // apply variation to either right of left code
+                            let will_match: bool = rng.gen();
                             let flip_right: bool = rng.gen();
-                            let variation = 1;
+                            let variation = rng.gen_range(1..100);
 
-                            if flip_right {
-                                // Flip right bits to above threshold - (right) does not match
-                                for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
-                                    code_right.code.flip_bit(i);
+                            if will_match {
+                                or_rule_matches.push(request_id.to_string());
+                                if flip_right {
+                                    // Flip right bits to above threshold - (right) does not match
+                                    for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
+                                        code_right.code.flip_bit(i);
+                                    }
+                                } else {
+                                    // Flip left bits to above threshold - (left) does not match
+                                    for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
+                                        code_left.code.flip_bit(i);
+                                    }
                                 }
+                                expected_results.insert(
+                                    request_id.to_string(),
+                                    (Some(matching_db_index as u32), false),
+                                );
                             } else {
-                                // Flip right bits to above threshold - (left) does not match
+                                // Flip both to above threshold - neither match
                                 for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
                                     code_left.code.flip_bit(i);
+                                    code_right.code.flip_bit(i);
                                 }
+                                db_indices_used.insert(matching_db_index);
+                                disallowed_queries.push(matching_db_index);
+                                expected_results.insert(request_id.to_string(), (None, false));
                             }
 
                             E2ETemplate {
