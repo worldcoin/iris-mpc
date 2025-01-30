@@ -4,6 +4,7 @@ mod e2e_test {
     use eyre::Result;
     use iris_mpc_common::{
         galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+        helpers::statistics::BucketStatistics,
         iris_db::{
             db::IrisDB,
             iris::{IrisCode, IrisCodeArray},
@@ -467,8 +468,14 @@ mod e2e_test {
                     partial_match_ids_left,
                     partial_match_ids_right,
                     matched_batch_request_ids,
+                    anonymized_bucket_statistics_left,
+                    anonymized_bucket_statistics_right,
                     ..
                 } = res;
+
+                check_bucket_statistics(anonymized_bucket_statistics_left)?;
+                check_bucket_statistics(anonymized_bucket_statistics_right)?;
+
                 for (
                     (((((req_id, was_match), idx), partial_left), partial_right), match_id),
                     matched_batch_req_ids,
@@ -601,6 +608,17 @@ mod e2e_test {
             .mask
             .extend(e2e_shared_template.right_shared_mask[batch_idx].all_rotations());
 
+        Ok(())
+    }
+
+    fn check_bucket_statistics(bucket_statistics: &BucketStatistics) -> Result<()> {
+        if bucket_statistics.is_empty() {
+            assert_eq!(bucket_statistics.buckets.len(), 0);
+            return Ok(());
+        }
+        assert_eq!(bucket_statistics.buckets.len(), N_BUCKETS);
+        assert!(bucket_statistics.end_timestamp > Some(bucket_statistics.start_timestamp));
+        assert_eq!(bucket_statistics.buckets.len(), MATCH_DISTANCES_BUFFER_SIZE);
         Ok(())
     }
 
