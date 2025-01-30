@@ -123,6 +123,9 @@ pub struct Config {
 
     #[serde(default)]
     pub load_chunks_buffer_size: usize,
+
+    #[serde(default)]
+    pub enable_sending_anonymized_stats_message: bool,
 }
 
 fn default_load_chunks_parallelism() -> usize {

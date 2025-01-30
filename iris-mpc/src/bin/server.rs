@@ -24,8 +24,8 @@ use iris_mpc_common::{
         shutdown_handler::ShutdownHandler,
         smpc_request::{
             CircuitBreakerRequest, IdentityDeletionRequest, ReceiveRequestError, SQSMessage,
-            UniquenessRequest, CIRCUIT_BREAKER_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE,
-            UNIQUENESS_MESSAGE_TYPE,
+            UniquenessRequest, ANONYMIZED_STATISTICS_MESSAGE_TYPE, CIRCUIT_BREAKER_MESSAGE_TYPE,
+            IDENTITY_DELETION_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
         },
         smpc_response::{
             create_message_type_attribute_map, IdentityDeletionResult, UniquenessResult,
@@ -609,8 +609,6 @@ async fn send_error_results_to_sns(
         matched_batch_request_ids: None,
         error: Some(true),
         error_reason: Some(String::from(error_reason)),
-        anonymized_statistics_left: None,
-        anonymized_statistics_right: None,
     };
     let message_serialised = serde_json::to_string(&message)?;
     let mut message_attributes = base_message_attributes.clone();
@@ -1367,14 +1365,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             true => None,
                         },
                         Some(matched_batch_request_ids[i].clone()),
-                        match anonymized_bucket_statistics_left.is_empty() {
-                            false => Some(anonymized_bucket_statistics_left.clone()),
-                            true => None,
-                        },
-                        match anonymized_bucket_statistics_right.is_empty() {
-                            false => Some(anonymized_bucket_statistics_right.clone()),
-                            true => None,
-                        },
                     );
 
                     serde_json::to_string(&result_event).wrap_err("failed to serialize result")
@@ -1467,6 +1457,36 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 IDENTITY_DELETION_MESSAGE_TYPE,
             )
             .await?;
+
+            tracing::info!("Sending anonymized stats results");
+
+            if (config_bg.enable_sending_anonymized_stats_message)
+                && (!anonymized_bucket_statistics_left.buckets.is_empty()
+                    || !anonymized_bucket_statistics_right.buckets.is_empty())
+            {
+                let anonymized_statistics_results = [
+                    anonymized_bucket_statistics_left,
+                    anonymized_bucket_statistics_right,
+                ];
+                // transform to vector of string ands remove None values
+                let anonymized_statistics_results = anonymized_statistics_results
+                    .iter()
+                    .map(|anonymized_bucket_statistics| {
+                        serde_json::to_string(anonymized_bucket_statistics)
+                            .wrap_err("failed to serialize anonymized statistics result")
+                    })
+                    .collect::<eyre::Result<Vec<_>>>()?;
+
+                send_results_to_sns(
+                    anonymized_statistics_results,
+                    &metadata,
+                    &sns_client_bg,
+                    &config_bg,
+                    &identity_deletion_result_attributes,
+                    ANONYMIZED_STATISTICS_MESSAGE_TYPE,
+                )
+                .await?;
+            }
 
             shutdown_handler_bg.decrement_batches_pending_completion();
         }

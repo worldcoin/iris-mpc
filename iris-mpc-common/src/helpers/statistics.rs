@@ -28,6 +28,7 @@ pub struct BucketStatistics {
     pub start_timestamp: DateTime<Utc>,
     #[serde(with = "ts_seconds_option")]
     pub end_timestamp: Option<DateTime<Utc>>,
+    #[serde(skip_serializing)]
     #[serde(with = "ts_seconds_option")]
     pub next_start_timestamp: Option<DateTime<Utc>>,
 }
