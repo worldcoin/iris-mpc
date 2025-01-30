@@ -742,6 +742,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let chacha_seeds = initialize_chacha_seeds(config.clone()).await?;
 
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
+    let anonymized_statistics_attributes =
+        create_message_type_attribute_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
         create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
     tracing::info!("Replaying results");
@@ -1482,7 +1484,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     &metadata,
                     &sns_client_bg,
                     &config_bg,
-                    &identity_deletion_result_attributes,
+                    &anonymized_statistics_attributes,
                     ANONYMIZED_STATISTICS_MESSAGE_TYPE,
                 )
                 .await?;
