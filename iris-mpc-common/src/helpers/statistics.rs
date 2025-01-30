@@ -64,6 +64,7 @@ impl BucketStatistics {
     /// MATCH_THRESHOLD_RATIO], we subdivide that interval by `n_buckets`.
     pub fn fill_buckets(&mut self, buckets_array: &[u32], match_threshold_ratio: f64) {
         self.buckets.clear();
+        self.end_timestamp = None;
 
         let step = match_threshold_ratio / (self.n_buckets as f64);
         for i in 0..buckets_array.len() {
@@ -82,5 +83,6 @@ impl BucketStatistics {
 
         // Update the end_timestamp to "now" whenever we recalc buckets
         self.end_timestamp = Some(Utc::now());
+        self.start_timestamp = Utc::now();
     }
 }

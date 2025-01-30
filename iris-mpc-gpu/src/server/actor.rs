@@ -1215,7 +1215,7 @@ impl ServerActor {
         tracing::info!("Matching distances collected: {}", total_distance_counter);
 
         if total_distance_counter >= self.match_distances_buffer_size as u32 {
-            let now = std::time::Instant::now();
+            let now = Instant::now();
             tracing::info!("Collected enough match distances, starting bucket calculation");
 
             self.device_manager.await_streams(batch_streams);
