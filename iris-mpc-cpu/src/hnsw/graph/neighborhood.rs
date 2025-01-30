@@ -80,22 +80,6 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
         self.edges.truncate(k);
     }
 
-    // Assumes that distance map doesn't change the distance metric
-    pub fn map<W, F1, F2>(self, vector_map: F1, distance_map: F2) -> SortedNeighborhoodV<W>
-    where
-        W: VectorStore,
-        F1: Fn(Vector) -> W::VectorRef,
-        F2: Fn(Distance) -> W::DistanceRef,
-    {
-        let edges: Vec<(W::VectorRef, W::DistanceRef)> = self
-            .edges
-            .iter()
-            .cloned()
-            .map(|(v, d)| (vector_map(v), distance_map(d)))
-            .collect();
-        SortedNeighborhood::from_ascending_vec(edges)
-    }
-
     pub fn as_vec_ref(&self) -> &[(Vector, Distance)] {
         &self.edges
     }

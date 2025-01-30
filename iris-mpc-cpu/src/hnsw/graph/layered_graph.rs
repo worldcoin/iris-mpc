@@ -3,11 +3,10 @@
 //!
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
+use super::neighborhood::SortedNeighborhoodV;
 use crate::hnsw::{SortedNeighborhood, VectorStore};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-
-use super::neighborhood::SortedNeighborhoodV;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct EntryPoint<VectorRef> {
@@ -47,41 +46,7 @@ impl<V: VectorStore> GraphMem<V> {
     }
 }
 
-// Plain converter for a Graph structure that has different distance ref and
-// vector ref types. WARNING: distance metric is assumed to stay the same; thus,
-// conversion doesn't change the graph structure. Needed when switching from a
-// PlaintextStore to a secret shared VectorStore.
 impl<V: VectorStore> GraphMem<V> {
-    pub fn from_another<U, F1, F2>(graph: GraphMem<U>, vector_map: F1, distance_map: F2) -> Self
-    where
-        U: VectorStore,
-        F1: Fn(U::VectorRef) -> V::VectorRef + Copy,
-        F2: Fn(U::DistanceRef) -> V::DistanceRef + Copy,
-    {
-        let new_entry_point = graph.entry_point.map(|ep| EntryPoint {
-            point: vector_map(ep.point),
-            layer: ep.layer,
-        });
-
-        let new_layers: Vec<_> = graph
-            .layers
-            .into_iter()
-            .map(|v| {
-                let links: HashMap<_, _> = v
-                    .links
-                    .into_iter()
-                    .map(|(v, q)| (vector_map(v), q.map::<V, F1, F2>(vector_map, distance_map)))
-                    .collect();
-                Layer::<V> { links }
-            })
-            .collect();
-
-        GraphMem::<V> {
-            entry_point: new_entry_point,
-            layers:      new_layers,
-        }
-    }
-
     pub async fn get_entry_point(&self) -> Option<(V::VectorRef, usize)> {
         self.entry_point
             .as_ref()
@@ -187,6 +152,59 @@ impl<V: VectorStore> Layer<V> {
     }
 }
 
+/// Convert a `GraphMem` data structure via a direct mapping of vector and
+/// distance references, leaving the edge sets associated with the mapped
+/// vertices unchanged.
+///
+/// This could be useful for cases where the representation of the graph
+/// vertices or distances is changed, but not the underlying values. For
+/// example:
+/// - plaintext distances are converted to MPC secret shares
+/// - the preprocessing done on secret shared distances is changed
+/// - vector ids are re-mapped to remove blank entries left by deletions
+pub fn migrate<U, V, VecMap, DistMap>(
+    graph: GraphMem<U>,
+    vector_map: VecMap,
+    distance_map: DistMap,
+) -> GraphMem<V>
+where
+    U: VectorStore,
+    V: VectorStore,
+    VecMap: Fn(U::VectorRef) -> V::VectorRef + Copy,
+    DistMap: Fn(U::DistanceRef) -> V::DistanceRef + Copy,
+{
+    let new_entry_point = graph.entry_point.map(|ep| EntryPoint {
+        point: vector_map(ep.point),
+        layer: ep.layer,
+    });
+
+    let new_layers: Vec<_> = graph
+        .layers
+        .into_iter()
+        .map(|v| {
+            let links: HashMap<_, _> = v
+                .links
+                .into_iter()
+                .map(|(v, nbhd)| {
+                    (vector_map(v), SortedNeighborhoodV::<V> {
+                        edges: nbhd
+                            .edges
+                            .into_iter()
+                            .map(|(w, d)| (vector_map(w), distance_map(d)))
+                            .collect(),
+                    })
+                })
+                .collect();
+            Layer::<V> { links }
+        })
+        .collect();
+
+    GraphMem::<V> {
+        entry_point: new_entry_point,
+        layers:      new_layers,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,11 +307,11 @@ mod tests {
         }
 
         let equal_graph_store: GraphMem<PlaintextStore> =
-            GraphMem::from_another(graph_store.clone(), |v| v, |d| d);
+            migrate(graph_store.clone(), |v| v, |d| d);
         assert_eq!(graph_store, equal_graph_store);
 
         let different_graph_store: GraphMem<PlaintextStore> =
-            GraphMem::from_another(graph_store.clone(), |v| PointId(v.0 * 2), |d| d);
+            migrate(graph_store.clone(), |v| PointId(v.0 * 2), |d| d);
         assert_ne!(graph_store, different_graph_store);
     }
 
@@ -332,7 +350,7 @@ mod tests {
         }
 
         let new_graph_store: GraphMem<TestStore> =
-            GraphMem::from_another(graph_store.clone(), |v| point_ids_map[&v], distance_map);
+            migrate(graph_store.clone(), |v| point_ids_map[&v], distance_map);
 
         let (entry_point, layer) = graph_store.get_entry_point().await.unwrap();
         let (new_entry_point, new_layer) = new_graph_store.get_entry_point().await.unwrap();
