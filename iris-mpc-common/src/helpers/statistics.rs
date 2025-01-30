@@ -21,6 +21,10 @@ pub struct BucketStatistics {
     pub start_timestamp:             DateTime<Utc>,
     #[serde(with = "ts_seconds_option")]
     pub end_timestamp:               Option<DateTime<Utc>>,
+    #[serde(with = "ts_seconds_option")]
+    pub next_start_timestamp:        Option<DateTime<Utc>>,
+    #[serde(with = "ts_seconds_option")]
+    pub next_end_timestamp:          Option<DateTime<Utc>>,
 }
 
 impl BucketStatistics {
@@ -52,6 +56,8 @@ impl BucketStatistics {
             party_id,
             start_timestamp: Utc::now(),
             end_timestamp: None,
+            next_start_timestamp: None,
+            next_end_timestamp: None,
         }
     }
 
@@ -62,9 +68,15 @@ impl BucketStatistics {
     /// `match_threshold_ratio` is the upper bound you used for the last bucket.
     /// If e.g. you want hamming-distance thresholds in [0.0,
     /// MATCH_THRESHOLD_RATIO], we subdivide that interval by `n_buckets`.
-    pub fn fill_buckets(&mut self, buckets_array: &[u32], match_threshold_ratio: f64) {
+    pub fn fill_buckets(
+        &mut self,
+        buckets_array: &[u32],
+        match_threshold_ratio: f64,
+        start_timestamp: Option<DateTime<Utc>>,
+    ) {
+        let now_timestamp = Utc::now();
         self.buckets.clear();
-        self.end_timestamp = None;
+        self.end_timestamp = Some(now_timestamp);
 
         let step = match_threshold_ratio / (self.n_buckets as f64);
         for i in 0..buckets_array.len() {
@@ -81,8 +93,13 @@ impl BucketStatistics {
             });
         }
 
-        // Update the end_timestamp to "now" whenever we recalc buckets
-        self.end_timestamp = Some(Utc::now());
-        self.start_timestamp = Utc::now();
+        // If the start timestamp is provided, we use it as the start timestamp,
+        // otherwise, it means it was the first iteration (ServerActor
+        // instantiation)
+        if let Some(start_timestamp) = start_timestamp {
+            self.start_timestamp = start_timestamp;
+        }
+        // Set the next start timestamp to now
+        self.next_start_timestamp = Some(now_timestamp);
     }
 }

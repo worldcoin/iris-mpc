@@ -29,6 +29,7 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+chrono = { version = "0.4.38", features = ["serde"] }
 reqwest = { workspace = true, features = ["blocking", "json"] }
 sodiumoxide = "0.2.7"
 hmac = "0.12"
@@ -47,7 +48,6 @@ ring = "0.17.8"
 data-encoding = "2.6.0"
 bincode.workspace = true
 serde-big-array.workspace = true
-chrono = { version = "0.4.38", features = ["serde"] }
 
 [dev-dependencies]
 float_eq = "1"

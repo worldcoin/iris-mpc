@@ -1275,8 +1275,11 @@ impl ServerActor {
                 .phase2_buckets
                 .open_buckets(&self.buckets, batch_streams);
 
-            self.anonymized_bucket_statistics
-                .fill_buckets(&buckets, MATCH_THRESHOLD_RATIO);
+            self.anonymized_bucket_statistics.fill_buckets(
+                &buckets,
+                MATCH_THRESHOLD_RATIO,
+                self.anonymized_bucket_statistics.next_start_timestamp,
+            );
 
             tracing::info!("Bucket results:\n{}", self.anonymized_bucket_statistics);
 
