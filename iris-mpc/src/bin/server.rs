@@ -32,7 +32,7 @@ use iris_mpc_common::{
             ERROR_FAILED_TO_PROCESS_IRIS_SHARES, ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
             SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
-        sync::SyncState,
+        sync::{SyncResult, SyncState},
         task_monitor::TaskMonitor,
     },
     IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
@@ -40,8 +40,8 @@ use iris_mpc_common::{
 use iris_mpc_gpu::{
     helpers::{device_manager::DeviceManager, register_host_memory},
     server::{
-        get_dummy_shares_for_deletion, sync_nccl, BatchMetadata, BatchQuery,
-        BatchQueryEntriesPreprocessed, ServerActor, ServerJobResult,
+        get_dummy_shares_for_deletion, BatchMetadata, BatchQuery, BatchQueryEntriesPreprocessed,
+        ServerActor, ServerJobResult,
     },
 };
 use iris_mpc_store::{
@@ -693,7 +693,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
     let max_sync_lookback: usize = config.max_batch_size * 2;
     let max_rollback: usize = config.max_batch_size * 2;
-    assert!(max_sync_lookback <= sync_nccl::MAX_REQUESTS);
     tracing::info!("Set batch size to {}", config.max_batch_size);
 
     tracing::info!("Creating new storage from: {:?}", config);
@@ -807,12 +806,17 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let mut background_tasks = TaskMonitor::new();
 
     // --------------------------------------------------------------------------
-    // ANCHOR: Starting Healthcheck and Readiness server
+    // ANCHOR: Starting Healthcheck, Readiness and Sync server
     // --------------------------------------------------------------------------
-    tracing::info!("⚓️ ANCHOR: Starting Healthcheck and Readiness server");
+    tracing::info!("⚓️ ANCHOR: Starting Healthcheck, Readiness and Sync server");
 
     let is_ready_flag = Arc::new(AtomicBool::new(false));
     let is_ready_flag_cloned = Arc::clone(&is_ready_flag);
+
+    let my_state = SyncState {
+        db_len:              store_len as u64,
+        deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
+    };
 
     #[derive(Debug, Serialize, Deserialize, Clone)]
     struct ReadyProbeResponse {
@@ -840,6 +844,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         let serialized_response_shutdown = serde_json::to_string(&ready_probe_response_shutdown)
             .expect("Serialization to JSON to probe response failed");
         tracing::info!("Healthcheck probe response: {}", serialized_response);
+        let my_state = my_state.clone();
         async move {
             // Generate a random UUID for each run.
             let app = Router::new()
@@ -869,6 +874,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             }
                         }
                     }),
+                )
+                .route(
+                    "/sync",
+                    get(move || async move { serde_json::to_string(&my_state).unwrap() }),
                 );
             let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
                 .await
@@ -993,11 +1002,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     background_tasks.check_tasks();
 
-    let my_state = SyncState {
-        db_len:              store_len as u64,
-        deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
-    };
-
     // Start the actor in separate task.
     // A bit convoluted, but we need to create the actor on the thread already,
     // since it blocks a lot and is `!Send`, we get back the handle via the oneshot
@@ -1012,6 +1016,66 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let db_chunks_bucket_name = config.db_chunks_bucket_name.clone();
     let db_chunks_folder_name = config.db_chunks_folder_name.clone();
 
+    // --------------------------------------------------------------------------
+    // ANCHOR: Syncing latest node state
+    // --------------------------------------------------------------------------
+    tracing::info!("⚓️ ANCHOR: Syncing latest node state");
+    let all_nodes = config.node_hostnames.clone();
+    let next_node = &all_nodes[(config.party_id + 1) % 3];
+    let prev_node = &all_nodes[(config.party_id + 2) % 3];
+
+    tracing::info!("Database store length is: {}", store_len);
+    let mut states = vec![my_state.clone()];
+    for host in [next_node, prev_node].iter() {
+        let res = reqwest::get(format!("http://{}:3000/sync", host)).await;
+        match res {
+            Ok(res) => {
+                let state: SyncState = match res.json().await {
+                    Ok(state) => state,
+                    Err(e) => {
+                        tracing::error!("Failed to parse sync state from party {}: {:?}", host, e);
+                        panic!(
+                            "could not get sync state from party {}, trying to restart",
+                            host
+                        );
+                    }
+                };
+                states.push(state);
+            }
+            Err(e) => {
+                tracing::error!("Failed to fetch sync state from party {}: {:?}", host, e);
+                panic!(
+                    "could not get sync state from party {}, trying to restart",
+                    host
+                );
+            }
+        }
+    }
+    let sync_result = SyncResult::new(my_state, states);
+
+    if let Some(db_len) = sync_result.must_rollback_storage() {
+        tracing::error!("Databases are out-of-sync: {:?}", sync_result);
+        if db_len + max_rollback < store_len {
+            return Err(eyre!(
+                "Refusing to rollback so much (from {} to {})",
+                store_len,
+                db_len,
+            ));
+        }
+        tracing::warn!(
+            "Rolling back from database length {} to other nodes length {}",
+            store_len,
+            db_len
+        );
+        store.rollback(db_len).await?;
+        metrics::counter!("db.sync.rollback").increment(1);
+    }
+
+    if download_shutdown_handler.is_shutting_down() {
+        tracing::warn!("Shutting down has been triggered");
+        return Ok(());
+    }
+
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
         let device_manager = Arc::new(DeviceManager::init());
@@ -1023,42 +1087,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         tracing::info!("⚓️ ANCHOR: Starting NCCL");
         let comms = device_manager.instantiate_network_from_ids(config.party_id, &ids)?;
         // FYI: If any of the nodes die after this, all connections are broken.
-
-        // --------------------------------------------------------------------------
-        // ANCHOR: Syncing latest node state
-        // --------------------------------------------------------------------------
-        tracing::info!("⚓️ ANCHOR: Syncing latest node state");
-        let sync_result = match sync_nccl::sync(&comms[0], &my_state) {
-            Ok(res) => res,
-            Err(e) => {
-                tx.send(Err(e)).unwrap();
-                return Ok(());
-            }
-        };
-        tracing::info!("Database store length is: {}", store_len);
-
-        if let Some(db_len) = sync_result.must_rollback_storage() {
-            tracing::error!("Databases are out-of-sync: {:?}", sync_result);
-            if db_len + max_rollback < store_len {
-                return Err(eyre!(
-                    "Refusing to rollback so much (from {} to {})",
-                    store_len,
-                    db_len,
-                ));
-            }
-            tracing::warn!(
-                "Rolling back from database length {} to other nodes length {}",
-                store_len,
-                db_len
-            );
-            tokio::runtime::Handle::current().block_on(async { store.rollback(db_len).await })?;
-            metrics::counter!("db.sync.rollback").increment(1);
-        }
-
-        if download_shutdown_handler.is_shutting_down() {
-            tracing::warn!("Shutting down has been triggered");
-            return Ok(());
-        }
 
         // --------------------------------------------------------------------------
         // ANCHOR: Load the database
