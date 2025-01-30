@@ -7,7 +7,8 @@ use crate::hnsw::VectorStore;
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 
-pub type SortedNeighborhoodV<V> = SortedNeighborhood<<V as VectorStore>::VectorRef, <V as VectorStore>::DistanceRef>;
+pub type SortedNeighborhoodV<V> =
+    SortedNeighborhood<<V as VectorStore>::VectorRef, <V as VectorStore>::DistanceRef>;
 
 /// SortedNeighborhood maintains a collection of distance-weighted oriented
 /// graph edges for an HNSW graph which are stored in increasing order of edge
@@ -86,11 +87,7 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
 
     /// Find the insertion index for a target distance in the current
     /// neighborhood list.
-    async fn binary_search<V>(
-        store: &mut V,
-        distances: &[Distance],
-        target: &Distance,
-    ) -> usize
+    async fn binary_search<V>(store: &mut V, distances: &[Distance], target: &Distance) -> usize
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
     {

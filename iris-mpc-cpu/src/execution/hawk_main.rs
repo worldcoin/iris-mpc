@@ -7,7 +7,10 @@ use crate::{
         session::{BootSession, Session, SessionId},
     },
     hawkers::aby3_store::{Aby3Store, SharedIrisesRef},
-    hnsw::{graph::neighborhood::SortedNeighborhoodV, searcher::ConnectPlanV, GraphMem, HnswSearcher, VectorStore},
+    hnsw::{
+        graph::neighborhood::SortedNeighborhoodV, searcher::ConnectPlanV, GraphMem, HnswSearcher,
+        VectorStore,
+    },
     network::grpc::{GrpcConfig, GrpcNetworking},
     proto_generated::party_node::party_node_server::PartyNodeServer,
     protocol::ops::setup_replicated_prf,

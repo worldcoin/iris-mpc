@@ -86,7 +86,12 @@ impl<V: VectorStore> GraphMem<V> {
     /// `set_entry_point` function for an entry point at at least this layer.
     ///
     /// Panics if `lc` is higher than the maximum initialized layer.
-    pub async fn set_links(&mut self, base: V::VectorRef, links: SortedNeighborhoodV<V>, lc: usize) {
+    pub async fn set_links(
+        &mut self,
+        base: V::VectorRef,
+        links: SortedNeighborhoodV<V>,
+        lc: usize,
+    ) {
         let layer = self.layers.get_mut(lc).unwrap();
         layer.set_links(base, links);
     }
@@ -103,11 +108,6 @@ impl<V: VectorStore> GraphMem<V> {
         max_links: usize,
         lc: usize,
     ) {
-        // let M = self.params.get_M(lc);
-        // let max_links = self.params.get_M_max(lc);
-
-        // neighbors.trim_to_k_nearest(M);
-
         // Connect all n -> q.
         for (n, nq) in neighbors.iter() {
             let mut links = self.get_links(n, lc).await;
@@ -292,7 +292,7 @@ mod tests {
             let query = vector_store.prepare_query(raw_query);
             let insertion_layer = searcher.select_layer(&mut rng);
             let (neighbors, set_ep) = searcher
-                .search_to_insert(&mut vector_store, &mut graph_store, &query, insertion_layer)
+                .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
                 .await;
             let inserted = vector_store.insert(&query).await;
             searcher
@@ -333,7 +333,7 @@ mod tests {
             let query = vector_store.prepare_query(raw_query);
             let insertion_layer = searcher.select_layer(&mut rng);
             let (neighbors, set_ep) = searcher
-                .search_to_insert(&mut vector_store, &mut graph_store, &query, insertion_layer)
+                .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
                 .await;
             let inserted = vector_store.insert(&query).await;
             searcher

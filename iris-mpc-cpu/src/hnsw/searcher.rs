@@ -4,6 +4,7 @@
 //!
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
+use super::graph::neighborhood::SortedNeighborhoodV;
 use crate::hnsw::{metrics::ops_counter::Operation, GraphMem, SortedNeighborhood, VectorStore};
 use itertools::izip;
 use rand::RngCore;
@@ -11,8 +12,6 @@ use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use tracing::{info, instrument};
-
-use super::graph::neighborhood::SortedNeighborhoodV;
 
 // Specify construction and search parameters by layer up to this value minus 1
 // any higher layers will use the last set of parameters
@@ -183,8 +182,8 @@ pub struct ConnectPlan<Vector, Distance> {
 
 // impl <V: VectorStore> PartialEq for ConnectPlan<V> {
 //     fn eq(&self, other: &Self) -> bool {
-//         self.inserted_vector == other.inserted_vector && self.layers == other.layers && self.set_ep == other.set_ep
-//     }
+//         self.inserted_vector == other.inserted_vector && self.layers ==
+// other.layers && self.set_ep == other.set_ep     }
 // }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -198,8 +197,6 @@ struct ConnectPlanLayer<Vector, Distance> {
 //         self.neighbors == other.neighbors && self.n_links == other.n_links
 //     }
 // }
-
-
 
 // TODO remove default value; this varies too much between applications
 // to make sense to specify something "obvious"
@@ -314,10 +311,13 @@ impl HnswSearcher {
         // fq: The current furthest distance in W.
         let (_, mut fq) = W.get_furthest().expect("W cannot be empty").clone();
 
-        // Continue until all current entries in candidate nearest neighbors list have been opened
-        while let Some(c) = W.edges.iter()
-                .map(|(c, _)| c)
-                .find(|&c| !opened.contains(c))
+        // Continue until all current entries in candidate nearest neighbors list have
+        // been opened
+        while let Some(c) = W
+            .edges
+            .iter()
+            .map(|(c, _)| c)
+            .find(|&c| !opened.contains(c))
         {
             // Open the candidate node and visit its neighbors
             opened.insert(c.clone());
@@ -563,8 +563,6 @@ mod tests {
         let graph_store = &mut GraphMem::new();
         let rng = &mut AesRng::seed_from_u64(0_u64);
         let db = HnswSearcher::default();
-
-        // let raw_queries1 = IrisDB::new_random_rng(100, &mut rng);
 
         let queries1 = IrisDB::new_random_rng(100, rng)
             .db
