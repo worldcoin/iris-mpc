@@ -178,7 +178,8 @@ pub struct ServerJobResult {
     pub store_right: BatchQueryEntries,
     pub deleted_ids: Vec<u32>,
     pub matched_batch_request_ids: Vec<Vec<String>>,
-    pub anonymized_bucket_statistics: BucketStatistics,
+    pub anonymized_bucket_statistics_left: BucketStatistics,
+    pub anonymized_bucket_statistics_right: BucketStatistics,
 }
 
 enum Eye {

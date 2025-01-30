@@ -128,7 +128,8 @@ pub struct ServerActor {
     match_distances_indices_left: Vec<CudaSlice<u32>>,
     match_distances_indices_right: Vec<CudaSlice<u32>>,
     buckets: ChunkShare<u32>,
-    anonymized_bucket_statistics: BucketStatistics,
+    anonymized_bucket_statistics_left: BucketStatistics,
+    anonymized_bucket_statistics_right: BucketStatistics,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -407,8 +408,19 @@ impl ServerActor {
             dev.synchronize().unwrap();
         }
 
-        let anonymized_bucket_statistics =
-            BucketStatistics::new(match_distances_buffer_size, n_buckets, party_id);
+        let anonymized_bucket_statistics_left = BucketStatistics::new(
+            match_distances_buffer_size,
+            n_buckets,
+            party_id,
+            iris_mpc_common::helpers::statistics::Eye::Left,
+        );
+
+        let anonymized_bucket_statistics_right = BucketStatistics::new(
+            match_distances_buffer_size,
+            n_buckets,
+            party_id,
+            iris_mpc_common::helpers::statistics::Eye::Right,
+        );
 
         Ok(Self {
             party_id,
@@ -458,7 +470,8 @@ impl ServerActor {
             match_distances_counter_right,
             match_distances_indices_left,
             match_distances_indices_right,
-            anonymized_bucket_statistics,
+            anonymized_bucket_statistics_left,
+            anonymized_bucket_statistics_right,
         })
     }
 
@@ -1088,9 +1101,13 @@ impl ServerActor {
                 store_right: query_store_right,
                 deleted_ids: batch.deletion_requests_indices,
                 matched_batch_request_ids,
-                anonymized_bucket_statistics: self.anonymized_bucket_statistics.clone(),
+                anonymized_bucket_statistics_left: self.anonymized_bucket_statistics_left.clone(),
+                anonymized_bucket_statistics_right: self.anonymized_bucket_statistics_right.clone(),
             })
             .unwrap();
+
+        self.anonymized_bucket_statistics_left.buckets.clear();
+        self.anonymized_bucket_statistics_right.buckets.clear();
 
         // Reset the results buffers for reuse
         for dst in [
@@ -1275,13 +1292,30 @@ impl ServerActor {
                 .phase2_buckets
                 .open_buckets(&self.buckets, batch_streams);
 
-            self.anonymized_bucket_statistics.fill_buckets(
-                &buckets,
-                MATCH_THRESHOLD_RATIO,
-                self.anonymized_bucket_statistics.next_start_timestamp,
-            );
-
-            tracing::info!("Bucket results:\n{}", self.anonymized_bucket_statistics);
+            match eye_db {
+                Eye::Left => {
+                    self.anonymized_bucket_statistics_left.fill_buckets(
+                        &buckets,
+                        MATCH_THRESHOLD_RATIO,
+                        self.anonymized_bucket_statistics_left.next_start_timestamp,
+                    );
+                    tracing::info!(
+                        "Bucket results:\n{}",
+                        self.anonymized_bucket_statistics_left
+                    );
+                }
+                Eye::Right => {
+                    self.anonymized_bucket_statistics_right.fill_buckets(
+                        &buckets,
+                        MATCH_THRESHOLD_RATIO,
+                        self.anonymized_bucket_statistics_right.next_start_timestamp,
+                    );
+                    tracing::info!(
+                        "Bucket results:\n{}",
+                        self.anonymized_bucket_statistics_right
+                    );
+                }
+            }
 
             let reset_all_buffers =
                 |counter: &[CudaSlice<u32>],

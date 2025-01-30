@@ -10,17 +10,18 @@ pub const ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH: &str = "skipped_request_pre
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UniquenessResult {
-    pub node_id:                   usize,
-    pub serial_id:                 Option<u32>,
-    pub is_match:                  bool,
-    pub signup_id:                 String,
-    pub matched_serial_ids:        Option<Vec<u32>>,
-    pub matched_serial_ids_left:   Option<Vec<u32>>,
-    pub matched_serial_ids_right:  Option<Vec<u32>>,
+    pub node_id: usize,
+    pub serial_id: Option<u32>,
+    pub is_match: bool,
+    pub signup_id: String,
+    pub matched_serial_ids: Option<Vec<u32>>,
+    pub matched_serial_ids_left: Option<Vec<u32>>,
+    pub matched_serial_ids_right: Option<Vec<u32>>,
     pub matched_batch_request_ids: Option<Vec<String>>,
-    pub error:                     Option<bool>,
-    pub error_reason:              Option<String>,
-    pub anonymized_statistics:     Option<BucketStatistics>,
+    pub error: Option<bool>,
+    pub error_reason: Option<String>,
+    pub anonymized_statistics_left: Option<BucketStatistics>,
+    pub anonymized_statistics_right: Option<BucketStatistics>,
 }
 
 impl UniquenessResult {
@@ -34,7 +35,8 @@ impl UniquenessResult {
         matched_serial_ids_left: Option<Vec<u32>>,
         matched_serial_ids_right: Option<Vec<u32>>,
         matched_batch_request_ids: Option<Vec<String>>,
-        anonymized_statistics: Option<BucketStatistics>,
+        anonymized_statistics_left: Option<BucketStatistics>,
+        anonymized_statistics_right: Option<BucketStatistics>,
     ) -> Self {
         Self {
             node_id,
@@ -47,7 +49,8 @@ impl UniquenessResult {
             matched_batch_request_ids,
             error: None,
             error_reason: None,
-            anonymized_statistics,
+            anonymized_statistics_left,
+            anonymized_statistics_right,
         }
     }
 }

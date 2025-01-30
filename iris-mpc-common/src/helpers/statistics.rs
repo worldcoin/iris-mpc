@@ -6,6 +6,12 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Eye {
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BucketResult {
     pub count:                   usize,
     pub hamming_distance_bucket: [f64; 2],
@@ -13,16 +19,17 @@ pub struct BucketResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BucketStatistics {
-    pub buckets:                     Vec<BucketResult>,
-    pub n_buckets:                   usize,
+    pub buckets: Vec<BucketResult>,
+    pub n_buckets: usize,
     pub match_distances_buffer_size: usize,
-    pub party_id:                    usize,
+    pub party_id: usize,
+    pub eye: Eye,
     #[serde(with = "ts_seconds")]
-    pub start_timestamp:             DateTime<Utc>,
+    pub start_timestamp: DateTime<Utc>,
     #[serde(with = "ts_seconds_option")]
-    pub end_timestamp:               Option<DateTime<Utc>>,
+    pub end_timestamp: Option<DateTime<Utc>>,
     #[serde(with = "ts_seconds_option")]
-    pub next_start_timestamp:        Option<DateTime<Utc>>,
+    pub next_start_timestamp: Option<DateTime<Utc>>,
 }
 
 impl BucketStatistics {
@@ -46,10 +53,16 @@ impl fmt::Display for BucketStatistics {
 
 impl BucketStatistics {
     /// Create a new `BucketStatistics` with your desired metadata.
-    pub fn new(match_distances_buffer_size: usize, n_buckets: usize, party_id: usize) -> Self {
+    pub fn new(
+        match_distances_buffer_size: usize,
+        n_buckets: usize,
+        party_id: usize,
+        eye: Eye,
+    ) -> Self {
         Self {
             buckets: Vec::with_capacity(n_buckets),
             n_buckets,
+            eye,
             match_distances_buffer_size,
             party_id,
             start_timestamp: Utc::now(),
@@ -72,6 +85,8 @@ impl BucketStatistics {
         start_timestamp: Option<DateTime<Utc>>,
     ) {
         let now_timestamp = Utc::now();
+
+        // clear just in case, we already clear it on sending the message
         self.buckets.clear();
         self.end_timestamp = Some(now_timestamp);
 
