@@ -23,8 +23,6 @@ pub struct BucketStatistics {
     pub end_timestamp:               Option<DateTime<Utc>>,
     #[serde(with = "ts_seconds_option")]
     pub next_start_timestamp:        Option<DateTime<Utc>>,
-    #[serde(with = "ts_seconds_option")]
-    pub next_end_timestamp:          Option<DateTime<Utc>>,
 }
 
 impl BucketStatistics {
@@ -57,7 +55,6 @@ impl BucketStatistics {
             start_timestamp: Utc::now(),
             end_timestamp: None,
             next_start_timestamp: None,
-            next_end_timestamp: None,
         }
     }
 
