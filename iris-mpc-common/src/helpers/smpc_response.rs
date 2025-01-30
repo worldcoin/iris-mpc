@@ -1,3 +1,4 @@
+use crate::helpers::statistics::BucketStatistics;
 use aws_sdk_sns::types::MessageAttributeValue;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -19,6 +20,7 @@ pub struct UniquenessResult {
     pub matched_batch_request_ids: Option<Vec<String>>,
     pub error:                     Option<bool>,
     pub error_reason:              Option<String>,
+    pub anonymized_statistics:     Option<BucketStatistics>,
 }
 
 impl UniquenessResult {
@@ -32,6 +34,7 @@ impl UniquenessResult {
         matched_serial_ids_left: Option<Vec<u32>>,
         matched_serial_ids_right: Option<Vec<u32>>,
         matched_batch_request_ids: Option<Vec<String>>,
+        anonymized_statistics: Option<BucketStatistics>,
     ) -> Self {
         Self {
             node_id,
@@ -44,6 +47,7 @@ impl UniquenessResult {
             matched_batch_request_ids,
             error: None,
             error_reason: None,
+            anonymized_statistics,
         }
     }
 }

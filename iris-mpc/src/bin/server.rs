@@ -609,6 +609,7 @@ async fn send_error_results_to_sns(
         matched_batch_request_ids: None,
         error: Some(true),
         error_reason: Some(String::from(error_reason)),
+        anonymized_statistics: None,
     };
     let message_serialised = serde_json::to_string(&message)?;
     let mut message_attributes = base_message_attributes.clone();
@@ -1325,6 +1326,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             store_right,
             deleted_ids,
             matched_batch_request_ids,
+            anonymized_bucket_statistics,
         }) = rx.recv().await
         {
             // returned serial_ids are 0 indexed, but we want them to be 1 indexed
@@ -1363,6 +1365,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             true => None,
                         },
                         Some(matched_batch_request_ids[i].clone()),
+                        match anonymized_bucket_statistics.is_empty() {
+                            false => Some(anonymized_bucket_statistics.clone()),
+                            true => None,
+                        },
                     );
 
                     serde_json::to_string(&result_event).wrap_err("failed to serialize result")

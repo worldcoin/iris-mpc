@@ -28,7 +28,7 @@ use eyre::eyre;
 use futures::{Future, FutureExt};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
-    helpers::sha256::sha256_bytes,
+    helpers::{sha256::sha256_bytes, statistics::BucketStatistics},
     iris_db::iris::{IrisCode, MATCH_THRESHOLD_RATIO},
     IrisCodeDbSlice,
 };
@@ -128,6 +128,7 @@ pub struct ServerActor {
     match_distances_indices_left: Vec<CudaSlice<u32>>,
     match_distances_indices_right: Vec<CudaSlice<u32>>,
     buckets: ChunkShare<u32>,
+    anonymized_bucket_statistics: BucketStatistics,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -406,6 +407,9 @@ impl ServerActor {
             dev.synchronize().unwrap();
         }
 
+        let anonymized_bucket_statistics =
+            BucketStatistics::new(match_distances_buffer_size, n_buckets, party_id);
+
         Ok(Self {
             party_id,
             job_queue,
@@ -454,6 +458,7 @@ impl ServerActor {
             match_distances_counter_right,
             match_distances_indices_left,
             match_distances_indices_right,
+            anonymized_bucket_statistics,
         })
     }
 
@@ -1083,6 +1088,7 @@ impl ServerActor {
                 store_right: query_store_right,
                 deleted_ids: batch.deletion_requests_indices,
                 matched_batch_request_ids,
+                anonymized_bucket_statistics: self.anonymized_bucket_statistics.clone(),
             })
             .unwrap();
 
@@ -1269,19 +1275,10 @@ impl ServerActor {
                 .phase2_buckets
                 .open_buckets(&self.buckets, batch_streams);
 
-            let mut results = String::new();
-            for i in 0..buckets.len() {
-                let step = MATCH_THRESHOLD_RATIO / (self.n_buckets as f64);
-                let previous_threshold = step * (i as f64);
-                let threshold = step * (i as f64 + 1.0);
-                let previous_count = if i == 0 { 0 } else { buckets[i - 1] };
-                let count = buckets[i] - previous_count;
-                results.push_str(&format!(
-                    "    {:.3}-{:.3}: {:?}\n",
-                    previous_threshold, threshold, count
-                ));
-            }
-            tracing::info!("Bucket results:\n{}", results);
+            self.anonymized_bucket_statistics
+                .fill_buckets(&buckets, MATCH_THRESHOLD_RATIO);
+
+            tracing::info!("Bucket results:\n{}", self.anonymized_bucket_statistics);
 
             let reset_all_buffers =
                 |counter: &[CudaSlice<u32>],

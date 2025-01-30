@@ -1047,6 +1047,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "serde",
  "wasm-bindgen",
  "windows-targets 0.52.6",
 ]
@@ -2700,6 +2701,7 @@ dependencies = [
  "base64 0.22.1",
  "bincode",
  "bytemuck",
+ "chrono",
  "clap",
  "config",
  "data-encoding",

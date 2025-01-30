@@ -47,6 +47,7 @@ ring = "0.17.8"
 data-encoding = "2.6.0"
 bincode.workspace = true
 serde-big-array.workspace = true
+chrono = { version = "0.4.38", features = ["serde"] }
 
 [dev-dependencies]
 float_eq = "1"
