@@ -646,6 +646,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         ))?;
         let result_events = vec![result_event; count];
 
