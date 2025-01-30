@@ -100,7 +100,7 @@ impl BucketStatistics {
 
             // The difference between buckets[i] and buckets[i - 1], except when i=0
             let previous_count = if i == 0 { 0 } else { buckets_array[i - 1] };
-            let count = buckets_array[i].saturating_sub(previous_count);
+            let count = buckets_array[i] - previous_count;
 
             self.buckets.push(BucketResult {
                 hamming_distance_bucket: [previous_threshold, threshold],
