@@ -1208,9 +1208,17 @@ impl ServerActor {
 
         tracing::info!("Matching distances collected: {}", total_distance_counter);
 
-        if total_distance_counter >= self.match_distances_buffer_size as u32 {
+        if total_distance_counter
+            >= (self.match_distances_buffer_size * self.device_manager.devices().len()) as u32
+        {
             let now = std::time::Instant::now();
-            tracing::info!("Collected enough match distances, starting bucket calculation");
+            tracing::info!(
+                "Collected enough match distances, starting bucket calculation: {} eye",
+                match eye_db {
+                    Eye::Left => "left",
+                    Eye::Right => "right",
+                }
+            );
 
             self.device_manager.await_streams(batch_streams);
 
