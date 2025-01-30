@@ -8,6 +8,7 @@ use std::{
 };
 use tracing::{
     field::{Field, Visit},
+    span::{Attributes, Id},
     Event, Subscriber,
 };
 use tracing_subscriber::layer::{Context, Layer};
@@ -83,19 +84,43 @@ impl<S: Subscriber> Layer<S> for OpCountersLayer {
         let mut visitor = OpVisitor::default();
         event.record(&mut visitor);
 
-        let operation_id = visitor.id.unwrap();
-        let increment_amount = visitor.amount.unwrap_or(1);
-        let counters = self
-            .counters
-            .get(operation_id)
-            .expect("attempted to count using invalid operation id");
-        for counter in counters {
-            match counter {
-                OpCounter::Static { counter: c } => {
-                    c.increment(increment_amount);
+        if let Some(operation_id) = visitor.id {
+            let increment_amount = visitor.amount.unwrap_or(1);
+            let counters = self
+                .counters
+                .get(operation_id)
+                .expect("attempted to count using invalid operation id");
+            for counter in counters {
+                match counter {
+                    OpCounter::Static { counter: c } => {
+                        c.increment(increment_amount);
+                    }
+                    OpCounter::Dynamic { counter: c } => {
+                        c.increment_on_event(increment_amount, event);
+                    }
                 }
-                OpCounter::Dynamic { counter: c } => {
-                    c.increment(increment_amount, event);
+            }
+        }
+    }
+
+    fn on_new_span(&self, attrs: &Attributes<'_>, _id: &Id, _ctx: Context<'_, S>) {
+        let mut visitor = OpVisitor::default();
+        attrs.record(&mut visitor);
+
+        if let Some(operation_id) = visitor.id {
+            let increment_amount = visitor.amount.unwrap_or(1);
+            let counters = self
+                .counters
+                .get(operation_id)
+                .expect("attempted to count using invalid operation id");
+            for counter in counters {
+                match counter {
+                    OpCounter::Static { counter: c } => {
+                        c.increment(increment_amount);
+                    }
+                    OpCounter::Dynamic { counter: c } => {
+                        c.increment_on_new_span(increment_amount, attrs);
+                    }
                 }
             }
         }
@@ -174,7 +199,11 @@ impl StaticCounter {
 pub trait DynamicCounter {
     /// Access relevant data from current Event dynamically, and increment
     /// counter based on this data.
-    fn increment(&self, increment_amount: usize, event: &Event<'_>);
+    fn increment_on_event(&self, increment_amount: usize, event: &Event<'_>);
+
+    /// Access relevant data from new Span dynamically, and increment counter
+    /// based on this data.
+    fn increment_on_new_span(&self, increment_amount: usize, attrs: &Attributes<'_>);
 }
 
 pub type ParamCounterRef<K> = Arc<RwLock<HashMap<K, AtomicUsize>>>;
@@ -212,12 +241,8 @@ impl<K: KeyVisitor> ParameterizedCounter<K> {
     pub fn get_counters(&self) -> (ParamCounterRef<K::Key>, StaticCounterRef) {
         (self.counter_map.clone(), self.missing_keys.counter.clone())
     }
-}
 
-impl<K: KeyVisitor> DynamicCounter for ParameterizedCounter<K> {
-    fn increment(&self, increment_amount: usize, event: &Event<'_>) {
-        let mut visitor = K::default();
-        event.record(&mut visitor);
+    fn increment(&self, visitor: &K, increment_amount: usize) {
         if let Some(key) = visitor.get_key() {
             let counters_read = self.counter_map.read().unwrap();
             if let Some(counter) = counters_read.get(&key) {
@@ -230,6 +255,20 @@ impl<K: KeyVisitor> DynamicCounter for ParameterizedCounter<K> {
         } else {
             self.missing_keys.increment(increment_amount);
         }
+    }
+}
+
+impl<K: KeyVisitor> DynamicCounter for ParameterizedCounter<K> {
+    fn increment_on_event(&self, increment_amount: usize, event: &Event<'_>) {
+        let mut visitor = K::default();
+        event.record(&mut visitor);
+        self.increment(&visitor, increment_amount);
+    }
+
+    fn increment_on_new_span(&self, increment_amount: usize, attrs: &Attributes<'_>) {
+        let mut visitor = K::default();
+        attrs.record(&mut visitor);
+        self.increment(&visitor, increment_amount);
     }
 }
 
