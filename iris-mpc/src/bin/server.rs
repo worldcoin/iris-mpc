@@ -1460,12 +1460,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             )
             .await?;
 
-            tracing::info!("Sending anonymized stats results");
-
             if (config_bg.enable_sending_anonymized_stats_message)
                 && (!anonymized_bucket_statistics_left.buckets.is_empty()
                     || !anonymized_bucket_statistics_right.buckets.is_empty())
             {
+                tracing::info!("Sending anonymized stats results");
                 let anonymized_statistics_results = [
                     anonymized_bucket_statistics_left,
                     anonymized_bucket_statistics_right,
