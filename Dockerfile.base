@@ -89,7 +89,6 @@ RUN mkdir -p /lib/x86_64-linux-gnu && \
     ln -sf /usr/lib/x86_64-linux-gnu/librdmacm.so.1 . && \
     ln -sf /usr/lib/x86_64-linux-gnu/libibverbs.so.1 .
 
-# Test EFA and NCCL installation
+# Test EFA installation
 RUN ldconfig && \
     /opt/amazon/efa/bin/fi_info --version
-
