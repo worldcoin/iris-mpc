@@ -14,8 +14,16 @@ mod e2e_test {
         helpers::device_manager::DeviceManager,
         server::{BatchQuery, BatchQueryEntriesPreprocessed, ServerActor, ServerJobResult},
     };
-    use rand::{rngs::StdRng, Rng, SeedableRng};
-    use std::{collections::HashMap, env, sync::Arc};
+    use rand::{
+        rngs::StdRng,
+        seq::{IteratorRandom, SliceRandom},
+        Rng, SeedableRng,
+    };
+    use std::{
+        collections::{HashMap, HashSet},
+        env,
+        sync::Arc,
+    };
     use tokio::sync::oneshot;
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
     use uuid::Uuid;
@@ -97,8 +105,6 @@ mod e2e_test {
 
     #[tokio::test]
     async fn e2e_test() -> Result<()> {
-        use std::collections::HashSet;
-
         install_tracing();
         env::set_var("NCCL_P2P_LEVEL", "LOC");
         env::set_var("NCCL_NET", "Socket");
@@ -229,214 +235,22 @@ mod e2e_test {
         let mut handle1 = rx1.await??;
         let mut handle2 = rx2.await??;
 
-        // make a test query and send it to server
-
+        // create a copy of the plain database for the test case generator, this needs
+        // to be in sync with `generate_db`!!!
         let mut db = IrisDB::new_random_par(DB_SIZE, &mut StdRng::seed_from_u64(DB_RNG_SEED));
-
         // Set the masks to all 1s for the first 10%
         for i in 0..DB_SIZE / 10 {
             db.db[i].mask = IrisCodeArray::ONES;
         }
-
-        let mut rng = StdRng::seed_from_u64(INTERNAL_RNG_SEED);
-
-        let mut expected_results: HashMap<String, (Option<u32>, bool)> = HashMap::new();
-        let mut responses: HashMap<u32, E2ETemplate> = HashMap::new();
-        let mut deleted_indices_buffer = vec![];
-        let mut deleted_indices: HashSet<u32> = HashSet::new();
-        let mut disallowed_queries = Vec::new();
+        let rng = StdRng::seed_from_u64(INTERNAL_RNG_SEED);
+        let mut test_case_generator = TestCaseGenerator::new(db, rng);
 
         for _ in 0..NUM_BATCHES {
-            let mut requests: HashMap<String, E2ETemplate> = HashMap::new();
-            let mut batch0 = BatchQuery::default();
-            let mut batch1 = BatchQuery::default();
-            let mut batch2 = BatchQuery::default();
-            let batch_size = rng.gen_range(1..MAX_BATCH_SIZE);
-            let mut new_templates_in_batch: Vec<(usize, String, IrisCode)> = vec![];
-            let mut skip_invalidate = false;
-            let mut batch_duplicates: HashMap<String, String> = HashMap::new();
-
-            let mut db_indices_used = HashSet::new();
-            for idx in 0..batch_size {
-                let request_id = Uuid::new_v4();
-                // Automatic random tests
-                let options = if responses.is_empty() {
-                    3
-                } else if deleted_indices_buffer.is_empty() {
-                    4
-                } else {
-                    5
-                };
-
-                let pick_from_batch = rng.gen_range(0..10);
-                let e2e_template = if pick_from_batch == 0 && !new_templates_in_batch.is_empty() {
-                    let random_idx = rng.gen_range(0..new_templates_in_batch.len());
-                    let (batch_idx, duplicate_request_id, template) =
-                        new_templates_in_batch[random_idx].clone();
-                    expected_results.insert(request_id.to_string(), (Some(batch_idx as u32), true));
-                    batch_duplicates.insert(request_id.to_string(), duplicate_request_id);
-                    skip_invalidate = true;
-                    E2ETemplate {
-                        left:  template.clone(),
-                        right: template.clone(),
-                    }
-                } else {
-                    let option = rng.gen_range(0..options);
-                    match option {
-                        0 => {
-                            println!("Sending new iris code");
-                            expected_results.insert(request_id.to_string(), (None, false));
-                            let template = IrisCode::random_rng(&mut rng);
-                            new_templates_in_batch.push((
-                                idx,
-                                request_id.to_string(),
-                                template.clone(),
-                            ));
-                            skip_invalidate = true;
-                            E2ETemplate {
-                                left:  template.clone(),
-                                right: template.clone(),
-                            }
-                        }
-                        1 => {
-                            println!("Sending iris code from db");
-                            let db_index = rng.gen_range(0..db.db.len());
-                            if deleted_indices.contains(&(db_index as u32)) {
-                                continue;
-                            }
-                            db_indices_used.insert(db_index);
-                            expected_results
-                                .insert(request_id.to_string(), (Some(db_index as u32), false));
-                            E2ETemplate {
-                                left:  db.db[db_index].clone(),
-                                right: db.db[db_index].clone(),
-                            }
-                        }
-                        2 => {
-                            println!("Sending iris code on the threshold");
-                            let db_index = loop {
-                                let db_index = rng.gen_range(0..DB_SIZE / 10);
-                                if !disallowed_queries.contains(&db_index) {
-                                    break db_index;
-                                }
-                            };
-                            if deleted_indices.contains(&(db_index as u32)) {
-                                continue;
-                            }
-                            db_indices_used.insert(db_index);
-                            let variation = rng.gen_range(-1..=1);
-                            expected_results.insert(
-                                request_id.to_string(),
-                                if variation > 0 {
-                                    // we flip more than the threshold so this should not match
-                                    // however it would afterwards so we no longer pick it
-                                    disallowed_queries.push(db_index);
-                                    (None, false)
-                                } else {
-                                    // we flip less or equal to than the threshold so this should
-                                    // match
-                                    (Some(db_index as u32), false)
-                                },
-                            );
-                            let mut code = db.db[db_index].clone();
-                            assert_eq!(code.mask, IrisCodeArray::ONES);
-                            for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
-                                code.code.flip_bit(i);
-                            }
-                            E2ETemplate {
-                                left:  code.clone(),
-                                right: code.clone(),
-                            }
-                        }
-                        3 => {
-                            println!("Sending freshly inserted iris code");
-                            let keys = responses.keys().collect::<Vec<_>>();
-                            let idx = rng.gen_range(0..keys.len());
-                            let e2e_template = responses.get(keys[idx]).unwrap().clone();
-                            expected_results
-                                .insert(request_id.to_string(), (Some(*keys[idx]), false));
-                            db_indices_used.insert(*keys[idx] as usize);
-
-                            E2ETemplate {
-                                left:  e2e_template.left.clone(),
-                                right: e2e_template.right.clone(),
-                            }
-                        }
-                        4 => {
-                            println!("Sending deleted iris code");
-                            let idx = rng.gen_range(0..deleted_indices_buffer.len());
-                            let deleted_idx = deleted_indices_buffer[idx];
-                            deleted_indices_buffer.remove(idx);
-                            expected_results.insert(request_id.to_string(), (None, false));
-                            E2ETemplate {
-                                left:  db.db[deleted_idx as usize].clone(),
-                                right: db.db[deleted_idx as usize].clone(),
-                            }
-                        }
-                        // TODO: implement test that enables testing the bitmap OR rule setting.
-                        // This will require setting the left and right iris code to be different,
-                        // one of them below the threshold and the other
-                        // above the threshold against the other codes. It will
-                        // also be required to set the param BatchQuery.threshold_bitmap_or to true
-                        // for the specific iris codes to be matched against
-                        // 5 => {
-                        // println!("Sending iris codes that match on right but not left with the OR
-                        // rule set");
-                        _ => unreachable!(),
-                    }
-                };
-
-                // Invalidate 10% of the queries, but ignore the batch duplicates
-                let is_valid = rng.gen_range(0..10) != 0 || skip_invalidate;
-
-                if is_valid {
-                    requests.insert(request_id.to_string(), e2e_template.clone());
-                }
-
-                let shared_template = to_shared_template(is_valid, &e2e_template, &mut rng);
-
-                prepare_batch(
-                    &mut batch0,
-                    is_valid,
-                    request_id.to_string(),
-                    0,
-                    shared_template.clone(),
-                )?;
-
-                prepare_batch(
-                    &mut batch1,
-                    true,
-                    request_id.to_string(),
-                    1,
-                    shared_template.clone(),
-                )?;
-
-                prepare_batch(
-                    &mut batch2,
-                    true,
-                    request_id.to_string(),
-                    2,
-                    shared_template.clone(),
-                )?;
-            }
-
             // Skip empty batch
+            let ([mut batch0, mut batch1, mut batch2], requests) =
+                test_case_generator.generate_query_batch()?;
             if batch0.request_ids.is_empty() {
                 continue;
-            }
-
-            for _ in 0..rng.gen_range(0..MAX_DELETIONS_PER_BATCH) {
-                let idx = rng.gen_range(0..db.db.len());
-                if deleted_indices.contains(&(idx as u32)) || db_indices_used.contains(&idx) {
-                    continue;
-                }
-                deleted_indices_buffer.push(idx as u32);
-                deleted_indices.insert(idx as u32);
-                println!("Deleting index {}", idx);
-
-                batch0.deletion_requests_indices.push(idx as u32);
-                batch1.deletion_requests_indices.push(idx as u32);
-                batch2.deletion_requests_indices.push(idx as u32);
             }
 
             // Preprocess the batches
@@ -477,7 +291,7 @@ mod e2e_test {
                 check_bucket_statistics(anonymized_bucket_statistics_right)?;
 
                 for (
-                    (((((req_id, was_match), idx), partial_left), partial_right), match_id),
+                    (((((req_id, &was_match), &idx), partial_left), partial_right), match_id),
                     matched_batch_req_ids,
                 ) in thread_request_ids
                     .iter()
@@ -494,23 +308,13 @@ mod e2e_test {
 
                     assert_eq!(partial_left, partial_right);
                     assert_eq!(partial_left, match_id);
-
-                    let (expected_idx, is_batch_match) = expected_results.get(req_id).unwrap();
-
-                    if let Some(expected_idx) = expected_idx {
-                        assert!(was_match);
-                        if !is_batch_match {
-                            assert_eq!(expected_idx, idx);
-                        } else {
-                            assert!(batch_duplicates.contains_key(req_id));
-                            assert!(matched_batch_req_ids
-                                .contains(batch_duplicates.get(req_id).unwrap()));
-                        }
-                    } else {
-                        assert!(!was_match);
-                        let request = requests.get(req_id).unwrap().clone();
-                        responses.insert(*idx, request);
-                    }
+                    test_case_generator.check_result(
+                        req_id,
+                        idx,
+                        was_match,
+                        matched_batch_req_ids,
+                        &requests,
+                    );
                 }
             }
 
@@ -677,5 +481,385 @@ mod e2e_test {
         batch.db_left_preprocessed = BatchQueryEntriesPreprocessed::from(batch.db_left.clone());
         batch.db_right_preprocessed = BatchQueryEntriesPreprocessed::from(batch.db_right.clone());
         Ok(())
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum TestCases {
+        /// Send an iris code known to be in the database
+        Match,
+        /// Send an iris code that known not to match any in the database, it
+        /// will be inserted
+        NonMatch,
+        /// Send an iris code that is close to the threshold of matching another
+        /// iris code There will be a slight jitter added around the threshold
+        /// so it could produce both a match and non-match
+        CloseToThreshold,
+        /// Send an iris code that was not in the initial DB, but has been since
+        /// inserted
+        PreviouslyInserted,
+        /// Send an iris code known to have been in the database, but has been
+        /// deleted
+        PreviouslyDeleted,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum DatabaseRange {
+        /// Use the full database range
+        Full,
+        /// Use only the first 10% of the database range, which has masks set to
+        /// all 1. This is useful for testing values close to the threshold,
+        /// since we can rely on bitflips always affecting distance.
+        FullMaskOnly,
+    }
+
+    struct ExpectedResult {
+        /// The returned index of the iris code in the database.
+        /// It is None if the iris code is not in the database, and Some(idx) if
+        /// there is a match at index idx
+        db_index:       Option<u32>,
+        /// Whether the iris code is expected to be in the batch match
+        /// This flag indicates that the iris code is expected to match another
+        /// iris code in the current batch
+        is_batch_match: bool,
+    }
+
+    struct TestCaseGenerator {
+        /// initial state of the Iris Database
+        initial_db_state:       IrisDB,
+        /// expected results for all of the queries we send
+        expected_results:       HashMap<String, ExpectedResult>,
+        /// responses received from the servers, where a new iris code was
+        /// inserted. Maps position in the database to the E2ETemplate
+        inserted_responses:     HashMap<u32, E2ETemplate>,
+        /// A buffer of indices that have been deleted, to choose a index from
+        /// to send for testing against deletions. Once picked, it is removed
+        /// from here
+        deleted_indices_buffer: Vec<u32>,
+        /// The full set of indices that have been deleted
+        deleted_indices:        HashSet<u32>,
+        /// A list of indices that are not allowed to be queried, to avoid
+        /// potential false matches
+        disallowed_queries:     Vec<u32>,
+        /// The rng that is used internally
+        rng:                    StdRng,
+
+        // info for current batch, will be cleared at the start of a new batch
+        /// New templates that have been inserted in the current batch.
+        /// (position in batch, request_id, template)
+        new_templates_in_batch:           Vec<(usize, String, IrisCode)>,
+        /// skip invalidating requests in the current batch, since we expect
+        /// them to be processed
+        skip_invalidate:                  bool,
+        /// duplicates in the current batch, used to test the batch
+        /// deduplication mechanism
+        batch_duplicates:                 HashMap<String, String>,
+        /// indices used in the current batch, to avoid deleting those
+        db_indices_used_in_current_batch: HashSet<usize>,
+    }
+
+    impl TestCaseGenerator {
+        fn new(db: IrisDB, rng: StdRng) -> Self {
+            Self {
+                initial_db_state: db,
+                expected_results: HashMap::new(),
+                inserted_responses: HashMap::new(),
+                deleted_indices_buffer: Vec::new(),
+                deleted_indices: HashSet::new(),
+                disallowed_queries: Vec::new(),
+                rng,
+                new_templates_in_batch: Vec::new(),
+                skip_invalidate: false,
+                batch_duplicates: HashMap::new(),
+                db_indices_used_in_current_batch: HashSet::new(),
+            }
+        }
+
+        fn generate_query_batch(
+            &mut self,
+        ) -> Result<([BatchQuery; 3], HashMap<String, E2ETemplate>)> {
+            let mut requests: HashMap<String, E2ETemplate> = HashMap::new();
+            let mut batch0 = BatchQuery::default();
+            let mut batch1 = BatchQuery::default();
+            let mut batch2 = BatchQuery::default();
+            let batch_size = self.rng.gen_range(1..MAX_BATCH_SIZE);
+
+            self.batch_duplicates.clear();
+            self.skip_invalidate = false;
+            self.new_templates_in_batch.clear();
+            self.db_indices_used_in_current_batch.clear();
+
+            for idx in 0..batch_size {
+                let (request_id, e2e_template) = self.generate_query(idx);
+                // Invalidate 10% of the queries, but ignore the batch duplicates
+                let is_valid = self.rng.gen_bool(0.10) || self.skip_invalidate;
+
+                if is_valid {
+                    requests.insert(request_id.to_string(), e2e_template.clone());
+                }
+
+                let shared_template = to_shared_template(is_valid, &e2e_template, &mut self.rng);
+
+                prepare_batch(
+                    &mut batch0,
+                    is_valid,
+                    request_id.to_string(),
+                    0,
+                    shared_template.clone(),
+                )?;
+
+                prepare_batch(
+                    &mut batch1,
+                    true,
+                    request_id.to_string(),
+                    1,
+                    shared_template.clone(),
+                )?;
+
+                prepare_batch(
+                    &mut batch2,
+                    true,
+                    request_id.to_string(),
+                    2,
+                    shared_template,
+                )?;
+            }
+
+            // Skip empty batch
+            if batch0.request_ids.is_empty() {
+                return Ok(([batch0, batch1, batch2], requests));
+            }
+
+            // for non-empty batches also add some deletions
+            for _ in 0..self.rng.gen_range(0..MAX_DELETIONS_PER_BATCH) {
+                let idx = self.rng.gen_range(0..self.initial_db_state.db.len());
+                if self.deleted_indices.contains(&(idx as u32))
+                    || self.db_indices_used_in_current_batch.contains(&idx)
+                {
+                    continue;
+                }
+                self.deleted_indices_buffer.push(idx as u32);
+                self.deleted_indices.insert(idx as u32);
+                println!("Deleting index {}", idx);
+
+                batch0.deletion_requests_indices.push(idx as u32);
+                batch1.deletion_requests_indices.push(idx as u32);
+                batch2.deletion_requests_indices.push(idx as u32);
+            }
+            Ok(([batch0, batch1, batch2], requests))
+        }
+
+        /// Get an Iris code known to be in the database, and return it and its
+        /// index. The `DatabaseRange` parameter is used to chose which portion
+        /// of the DB the item is chosen from.
+        fn get_iris_code_in_db(&mut self, db_range: DatabaseRange) -> (usize, IrisCode) {
+            let mut db_index = None;
+            let range = match db_range {
+                DatabaseRange::FullMaskOnly => 0..DB_SIZE / 10,
+                DatabaseRange::Full => 0..self.initial_db_state.db.len(),
+            };
+            for _ in 0..100 {
+                let potential_db_index = self.rng.gen_range(range.clone());
+                if self.deleted_indices.contains(&(potential_db_index as u32)) {
+                    continue;
+                }
+                if self
+                    .disallowed_queries
+                    .contains(&(potential_db_index as u32))
+                {
+                    continue;
+                }
+                db_index = Some(potential_db_index);
+                break;
+            }
+            let db_index = db_index.expect("could not find a valid DB item in 100 random drawings");
+            (db_index, self.initial_db_state.db[db_index].clone())
+        }
+
+        fn generate_query(&mut self, internal_batch_idx: usize) -> (Uuid, E2ETemplate) {
+            let request_id = Uuid::new_v4();
+            // Automatic random tests
+            let mut options = vec![
+                TestCases::Match,
+                TestCases::NonMatch,
+                TestCases::CloseToThreshold,
+            ];
+            if !self.inserted_responses.is_empty() {
+                options.push(TestCases::PreviouslyInserted);
+            }
+            if !self.deleted_indices_buffer.is_empty() {
+                options.push(TestCases::PreviouslyDeleted);
+            };
+
+            // with a 10% chance we pick a template from the batch, to test the batch
+            // deduplication mechanism
+            let pick_from_batch = self.rng.gen_bool(0.10);
+            let e2e_template = if pick_from_batch && !self.new_templates_in_batch.is_empty() {
+                let random_idx = self.rng.gen_range(0..self.new_templates_in_batch.len());
+                let (batch_idx, duplicate_request_id, template) =
+                    self.new_templates_in_batch[random_idx].clone();
+                self.expected_results
+                    .insert(request_id.to_string(), ExpectedResult {
+                        db_index:       Some(batch_idx as u32),
+                        is_batch_match: true,
+                    });
+                self.batch_duplicates
+                    .insert(request_id.to_string(), duplicate_request_id);
+                self.skip_invalidate = true;
+                E2ETemplate {
+                    left:  template.clone(),
+                    right: template.clone(),
+                }
+            } else {
+                // otherwise we pick from the valid test case options
+                let option = options
+                    .choose(&mut self.rng)
+                    .expect("we have at least one testcase option");
+                match &option {
+                    TestCases::NonMatch => {
+                        println!("Sending new iris code");
+                        self.expected_results
+                            .insert(request_id.to_string(), ExpectedResult {
+                                db_index:       None,
+                                is_batch_match: false,
+                            });
+                        let template = IrisCode::random_rng(&mut self.rng);
+                        self.new_templates_in_batch.push((
+                            internal_batch_idx,
+                            request_id.to_string(),
+                            template.clone(),
+                        ));
+                        self.skip_invalidate = true;
+                        E2ETemplate {
+                            left:  template.clone(),
+                            right: template.clone(),
+                        }
+                    }
+                    TestCases::Match => {
+                        println!("Sending iris code from db");
+                        let (db_index, template) = self.get_iris_code_in_db(DatabaseRange::Full);
+                        self.db_indices_used_in_current_batch.insert(db_index);
+                        self.expected_results
+                            .insert(request_id.to_string(), ExpectedResult {
+                                db_index:       Some(db_index as u32),
+                                is_batch_match: false,
+                            });
+                        E2ETemplate {
+                            left:  template.clone(),
+                            right: template,
+                        }
+                    }
+                    TestCases::CloseToThreshold => {
+                        println!("Sending iris code on the threshold");
+                        let (db_index, mut template) =
+                            self.get_iris_code_in_db(DatabaseRange::FullMaskOnly);
+                        self.db_indices_used_in_current_batch.insert(db_index);
+                        let variation = self.rng.gen_range(-1..=1);
+                        self.expected_results.insert(
+                            request_id.to_string(),
+                            if variation > 0 {
+                                // we flip more than the threshold so this should not match
+                                // however it would afterwards so we no longer pick it
+                                self.disallowed_queries.push(db_index as u32);
+                                ExpectedResult {
+                                    db_index:       None,
+                                    is_batch_match: false,
+                                }
+                            } else {
+                                // we flip less or equal to than the threshold so this should
+                                // match
+                                ExpectedResult {
+                                    db_index:       Some(db_index as u32),
+                                    is_batch_match: false,
+                                }
+                            },
+                        );
+                        assert_eq!(template.mask, IrisCodeArray::ONES);
+                        for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
+                            template.code.flip_bit(i);
+                        }
+                        E2ETemplate {
+                            left:  template.clone(),
+                            right: template,
+                        }
+                    }
+                    TestCases::PreviouslyInserted => {
+                        println!("Sending freshly inserted iris code");
+                        let (idx, e2e_template) = self
+                            .inserted_responses
+                            .iter()
+                            .choose(&mut self.rng)
+                            .expect("we have at least one response");
+                        self.expected_results
+                            .insert(request_id.to_string(), ExpectedResult {
+                                db_index:       Some(*idx),
+                                is_batch_match: false,
+                            });
+                        self.db_indices_used_in_current_batch.insert(*idx as usize);
+
+                        E2ETemplate {
+                            left:  e2e_template.left.clone(),
+                            right: e2e_template.right.clone(),
+                        }
+                    }
+                    TestCases::PreviouslyDeleted => {
+                        println!("Sending deleted iris code");
+                        let idx = self.rng.gen_range(0..self.deleted_indices_buffer.len());
+                        let deleted_idx = self.deleted_indices_buffer[idx];
+                        self.deleted_indices_buffer.remove(idx);
+                        self.expected_results
+                            .insert(request_id.to_string(), ExpectedResult {
+                                db_index:       None,
+                                is_batch_match: false,
+                            });
+                        E2ETemplate {
+                            left:  self.initial_db_state.db[deleted_idx as usize].clone(),
+                            right: self.initial_db_state.db[deleted_idx as usize].clone(),
+                        }
+                    } /* TODO: implement test that enables testing the bitmap OR rule setting.
+                       * This will require setting the left and right iris code to be different,
+                       * one of them below the threshold and the other
+                       * above the threshold against the other codes. It will
+                       * also be required to set the param BatchQuery.threshold_bitmap_or to true
+                       * for the specific iris codes to be matched against
+                       * 5 => {
+                       * println!("Sending iris codes that match on right but not left with the
+                       * OR rule set"); */
+                }
+            };
+            (request_id, e2e_template)
+        }
+
+        // check a received result against the expected results
+        fn check_result(
+            &mut self,
+            req_id: &str,
+            idx: u32,
+            was_match: bool,
+            matched_batch_req_ids: &[String],
+            requests: &HashMap<String, E2ETemplate>,
+        ) {
+            let &ExpectedResult {
+                db_index: expected_idx,
+                is_batch_match,
+            } = self
+                .expected_results
+                .get(req_id)
+                .expect("request id not found");
+
+            if let Some(expected_idx) = expected_idx {
+                assert!(was_match);
+                if !is_batch_match {
+                    assert_eq!(expected_idx, idx);
+                } else {
+                    assert!(self.batch_duplicates.contains_key(req_id));
+                    assert!(
+                        matched_batch_req_ids.contains(self.batch_duplicates.get(req_id).unwrap())
+                    );
+                }
+            } else {
+                assert!(!was_match);
+                let request = requests.get(req_id).unwrap().clone();
+                self.inserted_responses.insert(idx, request);
+            }
+        }
     }
 }
