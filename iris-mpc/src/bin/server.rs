@@ -19,6 +19,7 @@ use iris_mpc_common::{
             construct_message_attributes, SPAN_ID_MESSAGE_ATTRIBUTE_NAME,
             TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
         },
+        inmemory_store::InMemoryStore,
         key_pair::SharesEncryptionKeyPairs,
         kms_dh::derive_shared_secret,
         shutdown_handler::ShutdownHandler,
@@ -1945,7 +1946,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
 // Helper function to load Aurora db records from the stream into memory
 async fn load_db_records<'a>(
-    actor: &mut ServerActor,
+    actor: &mut impl InMemoryStore,
     mut record_counter: i32,
     all_serial_ids: &mut HashSet<i64>,
     mut stream_db: BoxStream<'a, eyre::Result<DbStoredIris>>,

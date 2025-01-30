@@ -29,6 +29,7 @@ use futures::{Future, FutureExt};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
+        inmemory_store::InMemoryStore,
         sha256::sha256_bytes,
         smpc_request::{REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
         statistics::BucketStatistics,
@@ -558,95 +559,6 @@ impl ServerActor {
         assert_eq!(db_lens1, db_lens4);
 
         self.current_db_sizes = db_lens1;
-    }
-
-    pub fn load_single_record_from_db(
-        &mut self,
-        index: usize,
-        left_code: &[u16],
-        left_mask: &[u16],
-        right_code: &[u16],
-        right_mask: &[u16],
-    ) {
-        ShareDB::load_single_record_from_db(
-            index,
-            &self.left_code_db_slices.code_gr,
-            left_code,
-            self.device_manager.device_count(),
-            IRIS_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_db(
-            index,
-            &self.left_mask_db_slices.code_gr,
-            left_mask,
-            self.device_manager.device_count(),
-            MASK_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_db(
-            index,
-            &self.right_code_db_slices.code_gr,
-            right_code,
-            self.device_manager.device_count(),
-            IRIS_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_db(
-            index,
-            &self.right_mask_db_slices.code_gr,
-            right_mask,
-            self.device_manager.device_count(),
-            MASK_CODE_LENGTH,
-        );
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn load_single_record_from_s3(
-        &mut self,
-        index: usize,
-        left_code_odd: &[u8],
-        left_code_even: &[u8],
-        right_code_odd: &[u8],
-        right_code_even: &[u8],
-        left_mask_odd: &[u8],
-        left_mask_even: &[u8],
-        right_mask_odd: &[u8],
-        right_mask_even: &[u8],
-    ) {
-        ShareDB::load_single_record_from_s3(
-            index,
-            &self.left_code_db_slices.code_gr,
-            left_code_odd,
-            left_code_even,
-            self.device_manager.device_count(),
-            IRIS_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_s3(
-            index,
-            &self.left_mask_db_slices.code_gr,
-            left_mask_odd,
-            left_mask_even,
-            self.device_manager.device_count(),
-            MASK_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_s3(
-            index,
-            &self.right_code_db_slices.code_gr,
-            right_code_odd,
-            right_code_even,
-            self.device_manager.device_count(),
-            IRIS_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_s3(
-            index,
-            &self.right_mask_db_slices.code_gr,
-            right_mask_odd,
-            right_mask_even,
-            self.device_manager.device_count(),
-            MASK_CODE_LENGTH,
-        );
-    }
-
-    pub fn increment_db_size(&mut self, index: usize) {
-        self.current_db_sizes[index % self.device_manager.device_count()] += 1;
     }
 
     pub fn preprocess_db(&mut self) {
@@ -2459,4 +2371,93 @@ pub fn generate_luc_records(
         or_ids.dedup();
     }
     or_rule_serial_ids
+}
+
+impl InMemoryStore for ServerActor {
+    fn load_single_record_from_db(
+        &mut self,
+        index: usize,
+        left_code: &[u16],
+        left_mask: &[u16],
+        right_code: &[u16],
+        right_mask: &[u16],
+    ) {
+        ShareDB::load_single_record_from_db(
+            index,
+            &self.left_code_db_slices.code_gr,
+            left_code,
+            self.device_manager.device_count(),
+            IRIS_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_db(
+            index,
+            &self.left_mask_db_slices.code_gr,
+            left_mask,
+            self.device_manager.device_count(),
+            MASK_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_db(
+            index,
+            &self.right_code_db_slices.code_gr,
+            right_code,
+            self.device_manager.device_count(),
+            IRIS_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_db(
+            index,
+            &self.right_mask_db_slices.code_gr,
+            right_mask,
+            self.device_manager.device_count(),
+            MASK_CODE_LENGTH,
+        );
+    }
+    fn increment_db_size(&mut self, index: usize) {
+        self.current_db_sizes[index % self.device_manager.device_count()] += 1;
+    }
+
+    fn load_single_record_from_s3(
+        &mut self,
+        index: usize,
+        left_code_odd: &[u8],
+        left_code_even: &[u8],
+        right_code_odd: &[u8],
+        right_code_even: &[u8],
+        left_mask_odd: &[u8],
+        left_mask_even: &[u8],
+        right_mask_odd: &[u8],
+        right_mask_even: &[u8],
+    ) {
+        ShareDB::load_single_record_from_s3(
+            index,
+            &self.left_code_db_slices.code_gr,
+            left_code_odd,
+            left_code_even,
+            self.device_manager.device_count(),
+            IRIS_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_s3(
+            index,
+            &self.left_mask_db_slices.code_gr,
+            left_mask_odd,
+            left_mask_even,
+            self.device_manager.device_count(),
+            MASK_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_s3(
+            index,
+            &self.right_code_db_slices.code_gr,
+            right_code_odd,
+            right_code_even,
+            self.device_manager.device_count(),
+            IRIS_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_s3(
+            index,
+            &self.right_mask_db_slices.code_gr,
+            right_mask_odd,
+            right_mask_even,
+            self.device_manager.device_count(),
+            MASK_CODE_LENGTH,
+        );
+    }
 }
