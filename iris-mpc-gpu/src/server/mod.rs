@@ -82,7 +82,7 @@ pub struct BatchQuery {
     pub store_right:              BatchQueryEntries,
     pub query_right_preprocessed: BatchQueryEntriesPreprocessed,
     pub db_right_preprocessed:    BatchQueryEntriesPreprocessed,
-    pub or_rule_serial_ids:         Vec<Vec<u32>>,
+    pub or_rule_serial_ids:       Vec<Vec<u32>>,
     pub valid_entries:            Vec<bool>,
 
     // Only reauth specific fields
@@ -131,6 +131,7 @@ impl BatchQuery {
     pub fn retain(&mut self, indices: &[usize]) {
         let indices_set: HashSet<usize> = indices.iter().cloned().collect();
         filter_by_indices!(self.request_ids, indices_set);
+        filter_by_indices!(self.request_types, indices_set);
         filter_by_indices!(self.metadata, indices_set);
         filter_by_indices!(self.store_left.code, indices_set);
         filter_by_indices!(self.store_left.mask, indices_set);
