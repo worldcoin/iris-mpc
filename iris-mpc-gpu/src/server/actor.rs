@@ -28,7 +28,7 @@ use eyre::eyre;
 use futures::{Future, FutureExt};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
-    helpers::sha256::sha256_bytes,
+    helpers::{sha256::sha256_bytes, statistics::BucketStatistics},
     iris_db::iris::{IrisCode, MATCH_THRESHOLD_RATIO},
     IrisCodeDbSlice,
 };
@@ -128,6 +128,8 @@ pub struct ServerActor {
     match_distances_indices_left: Vec<CudaSlice<u32>>,
     match_distances_indices_right: Vec<CudaSlice<u32>>,
     buckets: ChunkShare<u32>,
+    anonymized_bucket_statistics_left: BucketStatistics,
+    anonymized_bucket_statistics_right: BucketStatistics,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -406,6 +408,20 @@ impl ServerActor {
             dev.synchronize().unwrap();
         }
 
+        let anonymized_bucket_statistics_left = BucketStatistics::new(
+            match_distances_buffer_size,
+            n_buckets,
+            party_id,
+            iris_mpc_common::helpers::statistics::Eye::Left,
+        );
+
+        let anonymized_bucket_statistics_right = BucketStatistics::new(
+            match_distances_buffer_size,
+            n_buckets,
+            party_id,
+            iris_mpc_common::helpers::statistics::Eye::Right,
+        );
+
         Ok(Self {
             party_id,
             job_queue,
@@ -454,6 +470,8 @@ impl ServerActor {
             match_distances_counter_right,
             match_distances_indices_left,
             match_distances_indices_right,
+            anonymized_bucket_statistics_left,
+            anonymized_bucket_statistics_right,
         })
     }
 
@@ -1083,8 +1101,13 @@ impl ServerActor {
                 store_right: query_store_right,
                 deleted_ids: batch.deletion_requests_indices,
                 matched_batch_request_ids,
+                anonymized_bucket_statistics_left: self.anonymized_bucket_statistics_left.clone(),
+                anonymized_bucket_statistics_right: self.anonymized_bucket_statistics_right.clone(),
             })
             .unwrap();
+
+        self.anonymized_bucket_statistics_left.buckets.clear();
+        self.anonymized_bucket_statistics_right.buckets.clear();
 
         // Reset the results buffers for reuse
         for dst in [
@@ -1211,7 +1234,7 @@ impl ServerActor {
         if total_distance_counter
             >= (self.match_distances_buffer_size * self.device_manager.devices().len()) as u32
         {
-            let now = std::time::Instant::now();
+            let now = Instant::now();
             tracing::info!(
                 "Collected enough match distances, starting bucket calculation: {} eye",
                 match eye_db {
@@ -1277,19 +1300,30 @@ impl ServerActor {
                 .phase2_buckets
                 .open_buckets(&self.buckets, batch_streams);
 
-            let mut results = String::new();
-            for i in 0..buckets.len() {
-                let step = MATCH_THRESHOLD_RATIO / (self.n_buckets as f64);
-                let previous_threshold = step * (i as f64);
-                let threshold = step * (i as f64 + 1.0);
-                let previous_count = if i == 0 { 0 } else { buckets[i - 1] };
-                let count = buckets[i] - previous_count;
-                results.push_str(&format!(
-                    "    {:.3}-{:.3}: {:?}\n",
-                    previous_threshold, threshold, count
-                ));
+            match eye_db {
+                Eye::Left => {
+                    self.anonymized_bucket_statistics_left.fill_buckets(
+                        &buckets,
+                        MATCH_THRESHOLD_RATIO,
+                        self.anonymized_bucket_statistics_left.next_start_timestamp,
+                    );
+                    tracing::info!(
+                        "Bucket results:\n{}",
+                        self.anonymized_bucket_statistics_left
+                    );
+                }
+                Eye::Right => {
+                    self.anonymized_bucket_statistics_right.fill_buckets(
+                        &buckets,
+                        MATCH_THRESHOLD_RATIO,
+                        self.anonymized_bucket_statistics_right.next_start_timestamp,
+                    );
+                    tracing::info!(
+                        "Bucket results:\n{}",
+                        self.anonymized_bucket_statistics_right
+                    );
+                }
             }
-            tracing::info!("Bucket results:\n{}", results);
 
             let reset_all_buffers =
                 |counter: &[CudaSlice<u32>],

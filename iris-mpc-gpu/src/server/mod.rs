@@ -3,8 +3,9 @@ pub mod sync_nccl;
 
 use crate::dot::{share_db::preprocess_query, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS};
 pub use actor::{get_dummy_shares_for_deletion, ServerActor, ServerActorHandle};
-use iris_mpc_common::galois_engine::degree4::{
-    GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
+use iris_mpc_common::{
+    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    helpers::statistics::BucketStatistics,
 };
 use std::collections::HashSet;
 use tokio::sync::oneshot;
@@ -166,17 +167,19 @@ pub struct ServerJob {
 
 #[derive(Debug, Clone)]
 pub struct ServerJobResult {
-    pub merged_results:            Vec<u32>,
-    pub request_ids:               Vec<String>,
-    pub metadata:                  Vec<BatchMetadata>,
-    pub matches:                   Vec<bool>,
-    pub match_ids:                 Vec<Vec<u32>>,
-    pub partial_match_ids_left:    Vec<Vec<u32>>,
-    pub partial_match_ids_right:   Vec<Vec<u32>>,
-    pub store_left:                BatchQueryEntries,
-    pub store_right:               BatchQueryEntries,
-    pub deleted_ids:               Vec<u32>,
+    pub merged_results: Vec<u32>,
+    pub request_ids: Vec<String>,
+    pub metadata: Vec<BatchMetadata>,
+    pub matches: Vec<bool>,
+    pub match_ids: Vec<Vec<u32>>,
+    pub partial_match_ids_left: Vec<Vec<u32>>,
+    pub partial_match_ids_right: Vec<Vec<u32>>,
+    pub store_left: BatchQueryEntries,
+    pub store_right: BatchQueryEntries,
+    pub deleted_ids: Vec<u32>,
     pub matched_batch_request_ids: Vec<Vec<String>>,
+    pub anonymized_bucket_statistics_left: BucketStatistics,
+    pub anonymized_bucket_statistics_right: BucketStatistics,
 }
 
 enum Eye {
