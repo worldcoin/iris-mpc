@@ -9,7 +9,7 @@ use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::statistics::BucketStatistics,
 };
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use tokio::sync::oneshot;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
@@ -66,7 +66,7 @@ pub struct BatchMetadata {
     pub span_id:  String,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct BatchQuery {
     // Enrollment and reauth specific fields
     pub request_ids:              Vec<String>,
@@ -87,7 +87,7 @@ pub struct BatchQuery {
 
     // Only reauth specific fields
     // Map from reauth request id to the index of the target entry to be matched
-    pub reauth_target_indices: BTreeMap<String, u32>,
+    pub reauth_target_indices: HashMap<String, u32>,
 
     // Only deletion specific fields
     pub deletion_requests_indices:  Vec<u32>, // 0-indexed indices of entries to be deleted
