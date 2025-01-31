@@ -686,6 +686,9 @@ impl ServerActor {
                 && batch_size * ROTATIONS == batch.db_right_preprocessed.len(),
             "Query batch sizes mismatch"
         );
+        if !batch.or_rule_serial_ids.is_empty() {
+            assert_eq!(batch.or_rule_serial_ids.len(), batch_size);
+        };
 
         ///////////////////////////////////////////////////////////////////
         // PERFORM DELETIONS (IF ANY)
@@ -844,16 +847,51 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // MERGE LEFT & RIGHT results
         ///////////////////////////////////////////////////////////////////
+
         tracing::info!("Joining both sides");
         // Merge results and fetch matching indices
         // Format: host_results[device_index][query_index]
-        self.distance_comparator.join_db_matches(
-            &self.db_match_list_left,
-            &self.db_match_list_right,
-            &self.final_results,
-            &self.current_db_sizes,
-            &self.streams[0],
-        );
+
+        // Initialize bitmap with OR rule, if exists
+        if !batch.or_rule_serial_ids.is_empty()
+            && !batch
+                .or_rule_serial_ids
+                .iter()
+                .all(|inner| inner.is_empty())
+        {
+            assert_eq!(batch.or_rule_serial_ids.len(), batch_size);
+
+            let now = Instant::now();
+            tracing::info!("Preparing and allocating OR policy bitmap");
+            // Populate the pre-allocated OR policy bitmap with the serial ids
+            let host_or_policy_bitmap = prepare_or_policy_bitmap(
+                self.max_db_size,
+                batch.or_rule_serial_ids.clone(),
+                batch_size,
+            );
+
+            let device_or_policy_bitmap =
+                self.allocate_or_policy_bitmap(host_or_policy_bitmap.clone());
+            tracing::info!("OR policy bitmap prepared in {:?}", now.elapsed());
+
+            self.distance_comparator.join_db_matches_with_bitmaps(
+                self.max_db_size,
+                &self.db_match_list_left,
+                &self.db_match_list_right,
+                &self.final_results,
+                &self.current_db_sizes,
+                &self.streams[0],
+                &device_or_policy_bitmap,
+            );
+        } else {
+            self.distance_comparator.join_db_matches(
+                &self.db_match_list_left,
+                &self.db_match_list_right,
+                &self.final_results,
+                &self.current_db_sizes,
+                &self.streams[0],
+            );
+        }
 
         self.distance_comparator.join_batch_matches(
             &self.batch_match_list_left,
@@ -1810,6 +1848,20 @@ impl ServerActor {
 
         Ok((compact_device_queries, compact_device_sums))
     }
+
+    fn allocate_or_policy_bitmap(&mut self, bitmap: Vec<u64>) -> Vec<CudaSlice<u64>> {
+        let devices = self.device_manager.devices();
+
+        let mut or_policy_bitmap = Vec::with_capacity(devices.len());
+
+        for (device_idx, dev) in devices.iter().enumerate() {
+            // Transfer the bitmap to the device. It will be the same for each of the
+            // devices
+            let _bitmap = htod_on_stream_sync(&bitmap, dev, &self.streams[0][device_idx]).unwrap();
+            or_policy_bitmap.push(_bitmap);
+        }
+        or_policy_bitmap
+    }
 }
 
 /// Internal helper function to log the timers of measured cuda streams.
@@ -2231,4 +2283,26 @@ fn sort_shares_by_indices(
             ChunkShare::new(a, b)
         })
         .collect::<Vec<_>>()
+}
+
+pub fn prepare_or_policy_bitmap(
+    max_db_size: usize,
+    or_rule_serial_ids: Vec<Vec<u32>>,
+    batch_size: usize,
+) -> Vec<u64> {
+    let row_stride64 = (max_db_size + 63) / 64;
+    let total_size = row_stride64 * batch_size;
+
+    // Create the bitmap on the host
+    let mut bitmap = vec![0u64; total_size];
+
+    for (query_idx, db_indices) in or_rule_serial_ids.iter().enumerate() {
+        for &db_idx in db_indices {
+            let row_start = query_idx * row_stride64;
+            let word_idx = row_start + (db_idx as usize / 64);
+            let bit_offset = db_idx as usize % 64;
+            bitmap[word_idx] |= 1 << bit_offset;
+        }
+    }
+    bitmap
 }

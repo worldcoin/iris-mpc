@@ -45,6 +45,8 @@ mod e2e_test {
         right: IrisCode,
     }
 
+    type OrRuleSerialIds = Vec<u32>;
+
     #[derive(Clone)]
     pub struct E2ESharedTemplate {
         pub left_shared_code:  [GaloisRingIrisCodeShare; 3],
@@ -236,7 +238,7 @@ mod e2e_test {
         let mut handle2 = rx2.await??;
 
         // create a copy of the plain database for the test case generator, this needs
-        // to be in sync with `generate_db`!!!
+        // to be in sync with `generate_db`
         let mut db = IrisDB::new_random_par(DB_SIZE, &mut StdRng::seed_from_u64(DB_RNG_SEED));
         // Set the masks to all 1s for the first 10%
         for i in 0..DB_SIZE / 10 {
@@ -306,8 +308,13 @@ mod e2e_test {
 
                     resp_counters.insert(req_id, resp_counters.get(req_id).unwrap() + 1);
 
-                    assert_eq!(partial_left, partial_right);
-                    assert_eq!(partial_left, match_id);
+                    if !test_case_generator.or_rule_matches.contains(req_id) {
+                        assert_eq!(partial_left, partial_right);
+                    }
+
+                    if !test_case_generator.or_rule_matches.contains(req_id) {
+                        assert_eq!(partial_left, match_id);
+                    }
                     test_case_generator.check_result(
                         req_id,
                         idx,
@@ -342,10 +349,13 @@ mod e2e_test {
         request_id: String,
         batch_idx: usize,
         mut e2e_shared_template: E2ESharedTemplate,
+        or_rule_serial_ids: Vec<u32>,
     ) -> Result<()> {
         batch.metadata.push(Default::default());
         batch.valid_entries.push(is_valid);
         batch.request_ids.push(request_id);
+
+        batch.or_rule_serial_ids.push(or_rule_serial_ids);
 
         batch
             .store_left
@@ -427,9 +437,8 @@ mod e2e_test {
             .iter()
             .map(|b| b.count)
             .sum::<usize>();
-        println!("Total count: {}", total_count);
-        // TODO: re-enable this check
-        // assert_eq!(total_count, MATCH_DISTANCES_BUFFER_SIZE);
+        println!("Total count for bucket: {}", total_count);
+        assert_eq!(total_count, MATCH_DISTANCES_BUFFER_SIZE);
         Ok(())
     }
 
@@ -501,6 +510,8 @@ mod e2e_test {
         /// Send an iris code known to have been in the database, but has been
         /// deleted
         PreviouslyDeleted,
+        /// Send an iris code that uses the OR rule
+        WithOrRuleSet,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -556,6 +567,8 @@ mod e2e_test {
         batch_duplicates:                 HashMap<String, String>,
         /// indices used in the current batch, to avoid deleting those
         db_indices_used_in_current_batch: HashSet<usize>,
+        /// items against which the OR rule is used
+        or_rule_matches:                  Vec<String>,
     }
 
     impl TestCaseGenerator {
@@ -572,6 +585,7 @@ mod e2e_test {
                 skip_invalidate: false,
                 batch_duplicates: HashMap::new(),
                 db_indices_used_in_current_batch: HashSet::new(),
+                or_rule_matches: Vec::new(),
             }
         }
 
@@ -588,9 +602,10 @@ mod e2e_test {
             self.skip_invalidate = false;
             self.new_templates_in_batch.clear();
             self.db_indices_used_in_current_batch.clear();
+            self.or_rule_matches.clear();
 
             for idx in 0..batch_size {
-                let (request_id, e2e_template) = self.generate_query(idx);
+                let (request_id, e2e_template, or_rule_serial_ids) = self.generate_query(idx);
                 // Invalidate 10% of the queries, but ignore the batch duplicates
                 let is_valid = self.rng.gen_bool(0.10) || self.skip_invalidate;
 
@@ -606,6 +621,7 @@ mod e2e_test {
                     request_id.to_string(),
                     0,
                     shared_template.clone(),
+                    or_rule_serial_ids.clone(),
                 )?;
 
                 prepare_batch(
@@ -614,6 +630,7 @@ mod e2e_test {
                     request_id.to_string(),
                     1,
                     shared_template.clone(),
+                    or_rule_serial_ids.clone(),
                 )?;
 
                 prepare_batch(
@@ -622,6 +639,7 @@ mod e2e_test {
                     request_id.to_string(),
                     2,
                     shared_template,
+                    or_rule_serial_ids.clone(),
                 )?;
             }
 
@@ -676,13 +694,17 @@ mod e2e_test {
             (db_index, self.initial_db_state.db[db_index].clone())
         }
 
-        fn generate_query(&mut self, internal_batch_idx: usize) -> (Uuid, E2ETemplate) {
+        fn generate_query(
+            &mut self,
+            internal_batch_idx: usize,
+        ) -> (Uuid, E2ETemplate, OrRuleSerialIds) {
             let request_id = Uuid::new_v4();
             // Automatic random tests
             let mut options = vec![
                 TestCases::Match,
                 TestCases::NonMatch,
                 TestCases::CloseToThreshold,
+                TestCases::WithOrRuleSet,
             ];
             if !self.inserted_responses.is_empty() {
                 options.push(TestCases::PreviouslyInserted);
@@ -690,6 +712,8 @@ mod e2e_test {
             if !self.deleted_indices_buffer.is_empty() {
                 options.push(TestCases::PreviouslyDeleted);
             };
+
+            let or_rule_serial_ids: Vec<u32>;
 
             // with a 10% chance we pick a template from the batch, to test the batch
             // deduplication mechanism
@@ -706,6 +730,8 @@ mod e2e_test {
                 self.batch_duplicates
                     .insert(request_id.to_string(), duplicate_request_id);
                 self.skip_invalidate = true;
+                or_rule_serial_ids = Vec::new();
+
                 E2ETemplate {
                     left:  template.clone(),
                     right: template.clone(),
@@ -730,6 +756,7 @@ mod e2e_test {
                             template.clone(),
                         ));
                         self.skip_invalidate = true;
+                        or_rule_serial_ids = Vec::new();
                         E2ETemplate {
                             left:  template.clone(),
                             right: template.clone(),
@@ -744,6 +771,7 @@ mod e2e_test {
                                 db_index:       Some(db_index as u32),
                                 is_batch_match: false,
                             });
+                        or_rule_serial_ids = Vec::new();
                         E2ETemplate {
                             left:  template.clone(),
                             right: template,
@@ -778,6 +806,7 @@ mod e2e_test {
                         for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
                             template.code.flip_bit(i);
                         }
+                        or_rule_serial_ids = Vec::new();
                         E2ETemplate {
                             left:  template.clone(),
                             right: template,
@@ -796,7 +825,7 @@ mod e2e_test {
                                 is_batch_match: false,
                             });
                         self.db_indices_used_in_current_batch.insert(*idx as usize);
-
+                        or_rule_serial_ids = Vec::new();
                         E2ETemplate {
                             left:  e2e_template.left.clone(),
                             right: e2e_template.right.clone(),
@@ -806,28 +835,107 @@ mod e2e_test {
                         println!("Sending deleted iris code");
                         let idx = self.rng.gen_range(0..self.deleted_indices_buffer.len());
                         let deleted_idx = self.deleted_indices_buffer[idx];
+
                         self.deleted_indices_buffer.remove(idx);
                         self.expected_results
                             .insert(request_id.to_string(), ExpectedResult {
                                 db_index:       None,
                                 is_batch_match: false,
                             });
+                        or_rule_serial_ids = Vec::new();
                         E2ETemplate {
-                            left:  self.initial_db_state.db[deleted_idx as usize].clone(),
                             right: self.initial_db_state.db[deleted_idx as usize].clone(),
+                            left:  self.initial_db_state.db[deleted_idx as usize].clone(),
                         }
-                    } /* TODO: implement test that enables testing the bitmap OR rule setting.
-                       * This will require setting the left and right iris code to be different,
-                       * one of them below the threshold and the other
-                       * above the threshold against the other codes. It will
-                       * also be required to set the param BatchQuery.threshold_bitmap_or to true
-                       * for the specific iris codes to be matched against
-                       * 5 => {
-                       * println!("Sending iris codes that match on right but not left with the
-                       * OR rule set"); */
+                    }
+                    TestCases::WithOrRuleSet => {
+                        println!(
+                            "Sending iris codes that match on one side but not the other with the \
+                             OR rule set"
+                        );
+
+                        // use 1 to 10 OR-matching iris codes
+                        let n_db_indexes = self.rng.gen_range(1..10);
+
+                        // Remove disallowed queries from the pool
+                        let db_indexes = (0..n_db_indexes)
+                            .map(|_| loop {
+                                let (db_index, _) =
+                                    self.get_iris_code_in_db(DatabaseRange::FullMaskOnly);
+                                if !self.disallowed_queries.contains(&(db_index as u32)) {
+                                    return db_index;
+                                }
+                            })
+                            .collect::<Vec<_>>();
+
+                        let db_indexes_copy = db_indexes.clone();
+
+                        // select a random one to use as matching signup
+                        let matching_db_index =
+                            db_indexes_copy[self.rng.gen_range(0..db_indexes_copy.len())];
+
+                        // comparison against this item will use the OR rule
+                        or_rule_serial_ids = db_indexes_copy.iter().map(|&x| x as u32).collect();
+
+                        // Will always match under the OR rule
+                        self.expected_results
+                            .insert(request_id.to_string(), ExpectedResult {
+                                db_index:       Some(matching_db_index as u32),
+                                is_batch_match: false,
+                            });
+
+                        let mut code_left = self.initial_db_state.db[matching_db_index].clone();
+                        let mut code_right = self.initial_db_state.db[matching_db_index].clone();
+
+                        assert_eq!(code_left.mask, IrisCodeArray::ONES);
+                        assert_eq!(code_right.mask, IrisCodeArray::ONES);
+
+                        // apply variation to either right of left code
+                        let will_match: bool = self.rng.gen();
+                        let flip_right: bool = self.rng.gen();
+                        let variation = self.rng.gen_range(1..100);
+
+                        if will_match {
+                            self.or_rule_matches.push(request_id.to_string());
+                            if flip_right {
+                                // Flip right bits to above threshold - (right) does not match
+                                for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
+                                    code_right.code.flip_bit(i);
+                                }
+                            } else {
+                                // Flip left bits to above threshold - (left) does not match
+                                for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
+                                    code_left.code.flip_bit(i);
+                                }
+                            }
+                            self.expected_results
+                                .insert(request_id.to_string(), ExpectedResult {
+                                    db_index:       Some(matching_db_index as u32),
+                                    is_batch_match: false,
+                                });
+                        } else {
+                            // Flip both to above threshold - neither match
+                            for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
+                                code_left.code.flip_bit(i);
+                                code_right.code.flip_bit(i);
+                            }
+                            self.db_indices_used_in_current_batch
+                                .insert(matching_db_index);
+                            self.disallowed_queries.push(matching_db_index as u32);
+                            self.expected_results
+                                .insert(request_id.to_string(), ExpectedResult {
+                                    db_index:       None,
+                                    is_batch_match: false,
+                                });
+                        }
+                        E2ETemplate {
+                            left:  code_left,
+                            right: code_right,
+                        }
+                    }
                 }
             };
-            (request_id, e2e_template)
+            (request_id, e2e_template, or_rule_serial_ids)
         }
 
         // check a received result against the expected results

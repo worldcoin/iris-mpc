@@ -2,7 +2,9 @@ mod actor;
 pub mod sync_nccl;
 
 use crate::dot::{share_db::preprocess_query, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS};
-pub use actor::{get_dummy_shares_for_deletion, ServerActor, ServerActorHandle};
+pub use actor::{
+    get_dummy_shares_for_deletion, prepare_or_policy_bitmap, ServerActor, ServerActorHandle,
+};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::statistics::BucketStatistics,
@@ -80,6 +82,7 @@ pub struct BatchQuery {
     pub db_right_preprocessed:      BatchQueryEntriesPreprocessed,
     pub deletion_requests_indices:  Vec<u32>, // 0-indexed indicies in of entries to be deleted
     pub deletion_requests_metadata: Vec<BatchMetadata>,
+    pub or_rule_serial_ids:         Vec<Vec<u32>>,
     pub valid_entries:              Vec<bool>,
 }
 
@@ -125,6 +128,7 @@ impl BatchQuery {
         filter_by_indices!(self.store_left.mask, indices_set);
         filter_by_indices!(self.store_right.code, indices_set);
         filter_by_indices!(self.store_right.mask, indices_set);
+        filter_by_indices!(self.or_rule_serial_ids, indices_set);
         filter_by_indices_with_rotations!(self.query_left.code, indices_set);
         filter_by_indices_with_rotations!(self.query_left.mask, indices_set);
         filter_by_indices_with_rotations!(self.db_left.code, indices_set);
