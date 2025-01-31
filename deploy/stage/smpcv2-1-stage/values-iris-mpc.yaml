@@ -106,7 +106,10 @@ env:
 
   - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
     value: "true"  
-  
+
+  - name: SMPC__ENABLE_REAUTH
+    value: "true"
+
   - name: SMPC__SERVICE__METRICS__HOST
     valueFrom:
       fieldRef:

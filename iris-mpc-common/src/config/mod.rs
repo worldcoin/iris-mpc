@@ -126,6 +126,9 @@ pub struct Config {
 
     #[serde(default)]
     pub enable_sending_anonymized_stats_message: bool,
+
+    #[serde(default)]
+    pub enable_reauth: bool,
 }
 
 fn default_load_chunks_parallelism() -> usize {
