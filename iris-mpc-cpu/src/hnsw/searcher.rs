@@ -289,7 +289,7 @@ impl HnswSearcher {
     /// given layer using depth-first graph traversal,  Terminates when `W`
     /// contains vectors which are the nearest to `q` among all traversed
     /// vertices and their neighbors.
-    #[instrument(skip(self, vector_store, graph_store, W))]
+    #[instrument(fields(event_type = Operation::LayerSearch.id()), skip(self, vector_store, graph_store, W))]
     #[allow(non_snake_case)]
     async fn search_layer<V: VectorStore>(
         &self,
@@ -300,8 +300,6 @@ impl HnswSearcher {
         ef: usize,
         lc: usize,
     ) {
-        info!(event_type = Operation::LayerSearch.id());
-
         // The set of vectors which have been considered as potential neighbors
         let mut visited = HashSet::<V::VectorRef>::from_iter(W.iter().map(|(e, _eq)| e.clone()));
 
