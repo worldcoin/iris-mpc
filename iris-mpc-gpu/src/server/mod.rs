@@ -9,7 +9,7 @@ use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::statistics::BucketStatistics,
 };
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use tokio::sync::oneshot;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
@@ -68,22 +68,30 @@ pub struct BatchMetadata {
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BatchQuery {
-    pub request_ids:                Vec<String>,
-    pub metadata:                   Vec<BatchMetadata>,
-    pub query_left:                 BatchQueryEntries,
-    pub db_left:                    BatchQueryEntries,
-    pub store_left:                 BatchQueryEntries,
-    pub query_left_preprocessed:    BatchQueryEntriesPreprocessed,
-    pub db_left_preprocessed:       BatchQueryEntriesPreprocessed,
-    pub query_right:                BatchQueryEntries,
-    pub db_right:                   BatchQueryEntries,
-    pub store_right:                BatchQueryEntries,
-    pub query_right_preprocessed:   BatchQueryEntriesPreprocessed,
-    pub db_right_preprocessed:      BatchQueryEntriesPreprocessed,
-    pub deletion_requests_indices:  Vec<u32>, // 0-indexed indicies in of entries to be deleted
-    pub deletion_requests_metadata: Vec<BatchMetadata>,
+    // Enrollment and reauth specific fields
+    pub request_ids:              Vec<String>,
+    pub request_types:            Vec<String>,
+    pub metadata:                 Vec<BatchMetadata>,
+    pub query_left:               BatchQueryEntries,
+    pub db_left:                  BatchQueryEntries,
+    pub store_left:               BatchQueryEntries,
+    pub query_left_preprocessed:  BatchQueryEntriesPreprocessed,
+    pub db_left_preprocessed:     BatchQueryEntriesPreprocessed,
+    pub query_right:              BatchQueryEntries,
+    pub db_right:                 BatchQueryEntries,
+    pub store_right:              BatchQueryEntries,
+    pub query_right_preprocessed: BatchQueryEntriesPreprocessed,
+    pub db_right_preprocessed:    BatchQueryEntriesPreprocessed,
     pub or_rule_serial_ids:         Vec<Vec<u32>>,
-    pub valid_entries:              Vec<bool>,
+    pub valid_entries:            Vec<bool>,
+
+    // Only reauth specific fields
+    // Map from reauth request id to the index of the target entry to be matched
+    pub reauth_target_indices: BTreeMap<String, u32>,
+
+    // Only deletion specific fields
+    pub deletion_requests_indices:  Vec<u32>, // 0-indexed indices of entries to be deleted
+    pub deletion_requests_metadata: Vec<BatchMetadata>,
 }
 
 macro_rules! filter_by_indices {
