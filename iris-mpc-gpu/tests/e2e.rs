@@ -45,6 +45,8 @@ mod e2e_test {
         right: IrisCode,
     }
 
+    type OrRuleSerialIds = Vec<u32>;
+
     #[derive(Clone)]
     pub struct E2ESharedTemplate {
         pub left_shared_code:  [GaloisRingIrisCodeShare; 3],
@@ -236,7 +238,7 @@ mod e2e_test {
         let mut handle2 = rx2.await??;
 
         // create a copy of the plain database for the test case generator, this needs
-        // to be in sync with `generate_db`!!!
+        // to be in sync with `generate_db`
         let mut db = IrisDB::new_random_par(DB_SIZE, &mut StdRng::seed_from_u64(DB_RNG_SEED));
         // Set the masks to all 1s for the first 10%
         for i in 0..DB_SIZE / 10 {
@@ -347,13 +349,13 @@ mod e2e_test {
         request_id: String,
         batch_idx: usize,
         mut e2e_shared_template: E2ESharedTemplate,
-        or_rule_serial_ids: Vec<Vec<u32>>,
+        or_rule_serial_ids: Vec<u32>,
     ) -> Result<()> {
         batch.metadata.push(Default::default());
         batch.valid_entries.push(is_valid);
         batch.request_ids.push(request_id);
 
-        batch.or_rule_serial_ids = or_rule_serial_ids;
+        batch.or_rule_serial_ids.push(or_rule_serial_ids);
 
         batch
             .store_left
@@ -607,7 +609,7 @@ mod e2e_test {
             self.or_rule_matches.clear();
 
             for idx in 0..batch_size {
-                let (request_id, e2e_template) = self.generate_query(idx);
+                let (request_id, e2e_template, or_rule_serial_ids) = self.generate_query(idx);
                 // Invalidate 10% of the queries, but ignore the batch duplicates
                 let is_valid = self.rng.gen_bool(0.10) || self.skip_invalidate;
 
@@ -623,7 +625,7 @@ mod e2e_test {
                     request_id.to_string(),
                     0,
                     shared_template.clone(),
-                    self.use_or_rule_for_serial_ids.clone(),
+                    or_rule_serial_ids.clone(),
                 )?;
 
                 prepare_batch(
@@ -632,7 +634,7 @@ mod e2e_test {
                     request_id.to_string(),
                     1,
                     shared_template.clone(),
-                    self.use_or_rule_for_serial_ids.clone(),
+                    or_rule_serial_ids.clone(),
                 )?;
 
                 prepare_batch(
@@ -641,7 +643,7 @@ mod e2e_test {
                     request_id.to_string(),
                     2,
                     shared_template,
-                    self.use_or_rule_for_serial_ids.clone(),
+                    or_rule_serial_ids.clone(),
                 )?;
             }
 
@@ -696,7 +698,10 @@ mod e2e_test {
             (db_index, self.initial_db_state.db[db_index].clone())
         }
 
-        fn generate_query(&mut self, internal_batch_idx: usize) -> (Uuid, E2ETemplate) {
+        fn generate_query(
+            &mut self,
+            internal_batch_idx: usize,
+        ) -> (Uuid, E2ETemplate, OrRuleSerialIds) {
             let request_id = Uuid::new_v4();
             // Automatic random tests
             let mut options = vec![
@@ -711,6 +716,8 @@ mod e2e_test {
             if !self.deleted_indices_buffer.is_empty() {
                 options.push(TestCases::PreviouslyDeleted);
             };
+
+            let or_rule_serial_ids: Vec<u32>;
 
             // with a 10% chance we pick a template from the batch, to test the batch
             // deduplication mechanism
@@ -727,7 +734,8 @@ mod e2e_test {
                 self.batch_duplicates
                     .insert(request_id.to_string(), duplicate_request_id);
                 self.skip_invalidate = true;
-                self.use_or_rule_for_serial_ids.push(vec![]);
+                or_rule_serial_ids = Vec::new();
+
                 E2ETemplate {
                     left:  template.clone(),
                     right: template.clone(),
@@ -752,7 +760,7 @@ mod e2e_test {
                             template.clone(),
                         ));
                         self.skip_invalidate = true;
-                        self.use_or_rule_for_serial_ids.push(vec![]);
+                        or_rule_serial_ids = Vec::new();
                         E2ETemplate {
                             left:  template.clone(),
                             right: template.clone(),
@@ -767,7 +775,7 @@ mod e2e_test {
                                 db_index:       Some(db_index as u32),
                                 is_batch_match: false,
                             });
-                        self.use_or_rule_for_serial_ids.push(vec![]);
+                        or_rule_serial_ids = Vec::new();
                         E2ETemplate {
                             left:  template.clone(),
                             right: template,
@@ -802,7 +810,7 @@ mod e2e_test {
                         for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
                             template.code.flip_bit(i);
                         }
-                        self.use_or_rule_for_serial_ids.push(vec![]);
+                        or_rule_serial_ids = Vec::new();
                         E2ETemplate {
                             left:  template.clone(),
                             right: template,
@@ -821,7 +829,7 @@ mod e2e_test {
                                 is_batch_match: false,
                             });
                         self.db_indices_used_in_current_batch.insert(*idx as usize);
-                        self.use_or_rule_for_serial_ids.push(vec![]);
+                        or_rule_serial_ids = Vec::new();
                         E2ETemplate {
                             left:  e2e_template.left.clone(),
                             right: e2e_template.right.clone(),
@@ -838,7 +846,7 @@ mod e2e_test {
                                 db_index:       None,
                                 is_batch_match: false,
                             });
-                        self.use_or_rule_for_serial_ids.push(vec![]);
+                        or_rule_serial_ids = Vec::new();
                         E2ETemplate {
                             right: self.initial_db_state.db[deleted_idx as usize].clone(),
                             left:  self.initial_db_state.db[deleted_idx as usize].clone(),
@@ -871,8 +879,7 @@ mod e2e_test {
                             db_indexes_copy[self.rng.gen_range(0..db_indexes_copy.len())];
 
                         // comparison against this item will use the OR rule
-                        self.use_or_rule_for_serial_ids
-                            .push(db_indexes_copy.iter().map(|&x| x as u32).collect());
+                        or_rule_serial_ids = db_indexes_copy.iter().map(|&x| x as u32).collect();
 
                         // Will always match under the OR rule
                         self.expected_results
@@ -932,7 +939,7 @@ mod e2e_test {
                     }
                 }
             };
-            (request_id, e2e_template)
+            (request_id, e2e_template, or_rule_serial_ids)
         }
 
         // check a received result against the expected results
