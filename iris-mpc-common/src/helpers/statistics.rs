@@ -41,6 +41,13 @@ impl BucketStatistics {
 
 impl fmt::Display for BucketStatistics {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "    party_id: {}", self.party_id)?;
+        writeln!(f, "    eye: {:?}", self.eye)?;
+        writeln!(f, "    start_timestamp: {}", self.start_timestamp)?;
+        match &self.end_timestamp {
+            Some(end) => writeln!(f, "    end_timestamp: {}", end)?,
+            None => writeln!(f, "    end_timestamp: <none>")?,
+        }
         for bucket in &self.buckets {
             writeln!(
                 f,
