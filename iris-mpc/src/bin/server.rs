@@ -503,9 +503,12 @@ async fn receive_batch(
     }
 
     tracing::info!(
-        "batch request ids: {:?}, types: {:?}",
-        batch_query.request_ids,
-        batch_query.request_types
+        "Batch requests: {:?}",
+        batch_query
+            .request_ids
+            .iter()
+            .zip(batch_query.request_types.iter())
+            .collect::<Vec<_>>()
     );
 
     // Preprocess query shares here already to avoid blocking the actor
