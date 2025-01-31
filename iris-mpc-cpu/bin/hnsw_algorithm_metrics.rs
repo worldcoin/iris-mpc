@@ -12,7 +12,8 @@ use iris_mpc_cpu::{
 };
 use rand::SeedableRng;
 use std::error::Error;
-use tracing_subscriber::prelude::*;
+use tracing::Level;
+use tracing_subscriber::{filter::Targets, prelude::*};
 
 #[derive(Parser)]
 #[allow(non_snake_case)]
@@ -61,7 +62,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .register_dynamic(param_openings, Operation::OpenNode)
         .init();
 
-    tracing_subscriber::registry().with(counting_layer).init();
+    let filter = Targets::new()
+        .with_target("iris_mpc_cpu::hnsw", Level::INFO)
+        .with_target("iris_mpc_cpu::hawkers", Level::INFO);
+
+    tracing_subscriber::registry()
+        .with(counting_layer)
+        .with(filter)
+        .init();
 
     // Run HNSW construction
 
