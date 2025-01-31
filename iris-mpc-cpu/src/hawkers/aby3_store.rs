@@ -6,7 +6,10 @@ use crate::{
         session::{Session, SessionHandles},
     },
     hawkers::plaintext_store::{PlaintextStore, PointId},
-    hnsw::HnswSearcher,
+    hnsw::{
+        graph::layered_graph::{GraphMem, Layer},
+        HnswSearcher, SortedNeighborhood, VectorStore,
+    },
     network::NetworkType,
     protocol::ops::{
         batch_signed_lift_vec, compare_threshold_and_open, cross_compare,
@@ -19,11 +22,6 @@ use crate::{
     },
 };
 use aes_prng::AesRng;
-use hawk_pack::{
-    data_structures::queue::FurthestQueue,
-    graph_store::{graph_mem::Layer, GraphMem},
-    GraphStore, VectorStore,
-};
 use iris_mpc_common::iris_db::db::IrisDB;
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -101,6 +99,7 @@ impl SharedIrisesRef {
 }
 
 impl SharedIrisesRef {
+    // TODO migrate this to a function of the `Query` type
     fn prepare_query(&mut self, raw_query: GaloisRingSharedIris) -> QueryRef {
         let mut preprocessed_query = raw_query.clone();
         preprocessed_query.code.preprocess_iris_code_query_share();
@@ -375,7 +374,7 @@ impl Aby3Store {
                 }
                 shared_links.insert(
                     source_v,
-                    FurthestQueue::from_ascending_vec(shared_queue.clone()),
+                    SortedNeighborhood::from_ascending_vec(shared_queue.clone()),
                 );
             }
             shared_layers.push(Layer::from_links(shared_links));
@@ -472,8 +471,9 @@ impl Aby3Store {
         (PlaintextStore, GraphMem<PlaintextStore>),
         Vec<(Self, GraphMem<Self>)>,
     )> {
+        let searcher = HnswSearcher::default();
         let (plaintext_vector_store, plaintext_graph_store) =
-            PlaintextStore::create_random(rng, database_size).await?;
+            PlaintextStore::create_random(rng, database_size, &searcher).await?;
 
         let protocol_stores =
             setup_local_aby3_players_with_preloaded_db(rng, &plaintext_vector_store, network_t)
@@ -603,9 +603,11 @@ impl Aby3Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{database_generators::generate_galois_iris_shares, hnsw::HnswSearcher};
+    use crate::{
+        database_generators::generate_galois_iris_shares,
+        hnsw::{GraphMem, HnswSearcher},
+    };
     use aes_prng::AesRng;
-    use hawk_pack::graph_store::GraphMem;
     use itertools::Itertools;
     use rand::SeedableRng;
     use tracing_test::traced_test;

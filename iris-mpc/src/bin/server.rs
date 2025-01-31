@@ -24,8 +24,8 @@ use iris_mpc_common::{
         shutdown_handler::ShutdownHandler,
         smpc_request::{
             CircuitBreakerRequest, IdentityDeletionRequest, ReceiveRequestError, SQSMessage,
-            UniquenessRequest, CIRCUIT_BREAKER_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE,
-            UNIQUENESS_MESSAGE_TYPE,
+            UniquenessRequest, ANONYMIZED_STATISTICS_MESSAGE_TYPE, CIRCUIT_BREAKER_MESSAGE_TYPE,
+            IDENTITY_DELETION_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
         },
         smpc_response::{
             create_message_type_attribute_map, IdentityDeletionResult, UniquenessResult,
@@ -742,6 +742,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let chacha_seeds = initialize_chacha_seeds(config.clone()).await?;
 
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
+    let anonymized_statistics_attributes =
+        create_message_type_attribute_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
         create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
     tracing::info!("Replaying results");
@@ -1325,6 +1327,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             store_right,
             deleted_ids,
             matched_batch_request_ids,
+            anonymized_bucket_statistics_left,
+            anonymized_bucket_statistics_right,
         }) = rx.recv().await
         {
             // returned serial_ids are 0 indexed, but we want them to be 1 indexed
@@ -1455,6 +1459,35 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 IDENTITY_DELETION_MESSAGE_TYPE,
             )
             .await?;
+
+            if (config_bg.enable_sending_anonymized_stats_message)
+                && (!anonymized_bucket_statistics_left.buckets.is_empty()
+                    || !anonymized_bucket_statistics_right.buckets.is_empty())
+            {
+                tracing::info!("Sending anonymized stats results");
+                let anonymized_statistics_results = [
+                    anonymized_bucket_statistics_left,
+                    anonymized_bucket_statistics_right,
+                ];
+                // transform to vector of string ands remove None values
+                let anonymized_statistics_results = anonymized_statistics_results
+                    .iter()
+                    .map(|anonymized_bucket_statistics| {
+                        serde_json::to_string(anonymized_bucket_statistics)
+                            .wrap_err("failed to serialize anonymized statistics result")
+                    })
+                    .collect::<eyre::Result<Vec<_>>>()?;
+
+                send_results_to_sns(
+                    anonymized_statistics_results,
+                    &metadata,
+                    &sns_client_bg,
+                    &config_bg,
+                    &anonymized_statistics_attributes,
+                    ANONYMIZED_STATISTICS_MESSAGE_TYPE,
+                )
+                .await?;
+            }
 
             shutdown_handler_bg.decrement_batches_pending_completion();
         }

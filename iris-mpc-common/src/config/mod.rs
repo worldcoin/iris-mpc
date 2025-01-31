@@ -112,6 +112,9 @@ pub struct Config {
     #[serde(default)]
     pub fixed_shared_secrets: bool,
 
+    /// The size of the match distance buffer collecting matches for anonymized
+    /// histogram creation. This gets multiplied by the number of GPU
+    /// devices.
     #[serde(default = "default_match_distances_buffer_size")]
     pub match_distances_buffer_size: usize,
 
@@ -120,6 +123,9 @@ pub struct Config {
 
     #[serde(default)]
     pub load_chunks_buffer_size: usize,
+
+    #[serde(default)]
+    pub enable_sending_anonymized_stats_message: bool,
 }
 
 fn default_load_chunks_parallelism() -> usize {
@@ -154,8 +160,9 @@ fn default_db_load_safety_overlap_seconds() -> i64 {
     60
 }
 
+// This gets multiplied by the number of GPU devices
 fn default_match_distances_buffer_size() -> usize {
-    1 << 19
+    1 << 16
 }
 
 fn default_n_buckets() -> usize {

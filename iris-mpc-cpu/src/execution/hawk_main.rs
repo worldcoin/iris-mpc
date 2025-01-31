@@ -7,7 +7,10 @@ use crate::{
         session::{BootSession, Session, SessionId},
     },
     hawkers::aby3_store::{Aby3Store, SharedIrisesRef},
-    hnsw::{searcher::ConnectPlanV, HnswSearcher},
+    hnsw::{
+        graph::neighborhood::SortedNeighborhoodV, searcher::ConnectPlanV, GraphMem, HnswSearcher,
+        VectorStore,
+    },
     network::grpc::{GrpcConfig, GrpcNetworking},
     proto_generated::party_node::party_node_server::PartyNodeServer,
     protocol::ops::setup_replicated_prf,
@@ -15,7 +18,6 @@ use crate::{
 use aes_prng::AesRng;
 use clap::Parser;
 use eyre::Result;
-use hawk_pack::{graph_store::GraphMem, hawk_searcher::FurthestQueue, VectorStore};
 use itertools::{izip, Itertools};
 use rand::{thread_rng, Rng, SeedableRng};
 use std::{
@@ -91,7 +93,7 @@ pub type ConnectPlan = ConnectPlanV<Aby3Store>;
 #[derive(Debug)]
 pub struct InsertPlanV<V: VectorStore> {
     query:    V::QueryRef,
-    links:    Vec<FurthestQueue<V::VectorRef, V::DistanceRef>>,
+    links:    Vec<SortedNeighborhoodV<V>>,
     set_ep:   bool,
     is_match: bool,
 }
