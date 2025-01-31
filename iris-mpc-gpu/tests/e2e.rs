@@ -856,7 +856,8 @@ mod e2e_test {
                         // Remove disallowed queries from the pool
                         let db_indexes = (0..n_db_indexes)
                             .map(|_| loop {
-                                let (db_index, _) = self.get_iris_code_in_db(DatabaseRange::Full);
+                                let (db_index, _) =
+                                    self.get_iris_code_in_db(DatabaseRange::FullMaskOnly);
                                 if !self.disallowed_queries.contains(&(db_index as u32)) {
                                     return db_index;
                                 }
