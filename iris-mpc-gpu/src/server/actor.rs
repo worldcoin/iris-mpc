@@ -861,6 +861,8 @@ impl ServerActor {
         {
             assert_eq!(batch.or_rule_serial_ids.len(), batch_size);
 
+            let now = Instant::now();
+            tracing::info!("Preparing and allocating OR policy bitmap");
             // Populate the pre-allocated OR policy bitmap with the serial ids
             let host_or_policy_bitmap = prepare_or_policy_bitmap(
                 self.max_db_size,
@@ -870,6 +872,7 @@ impl ServerActor {
 
             let device_or_policy_bitmap =
                 self.allocate_or_policy_bitmap(host_or_policy_bitmap.clone());
+            tracing::info!("OR policy bitmap prepared in {:?}", now.elapsed());
 
             self.distance_comparator.join_db_matches_with_bitmaps(
                 self.max_db_size,
