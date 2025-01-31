@@ -861,24 +861,33 @@ impl ServerActor {
         {
             assert_eq!(batch.or_rule_serial_ids.len(), batch_size);
 
-            // Populate the pre-allocated OR policy bitmap with the serial ids
-            let host_or_policy_bitmap = prepare_or_policy_bitmap(
-                self.max_db_size,
-                batch.or_rule_serial_ids.clone(),
-                batch_size,
-            );
-
-            let device_or_policy_bitmap =
-                self.allocate_or_policy_bitmap(host_or_policy_bitmap.clone());
-
-            self.distance_comparator.join_db_matches_with_bitmaps(
-                self.max_db_size,
-                &self.db_match_list_left,
-                &self.db_match_list_right,
-                &self.final_results,
-                &self.current_db_sizes,
+            record_stream_time!(
+                &self.device_manager,
                 &self.streams[0],
-                &device_or_policy_bitmap,
+                events,
+                "join_db_matches_with_bitmaps",
+                self.enable_debug_timing,
+                {
+                    // Populate the pre-allocated OR policy bitmap with the serial ids
+                    let host_or_policy_bitmap = prepare_or_policy_bitmap(
+                        self.max_db_size,
+                        batch.or_rule_serial_ids.clone(),
+                        batch_size,
+                    );
+
+                    let device_or_policy_bitmap =
+                        self.allocate_or_policy_bitmap(host_or_policy_bitmap.clone());
+
+                    self.distance_comparator.join_db_matches_with_bitmaps(
+                        self.max_db_size,
+                        &self.db_match_list_left,
+                        &self.db_match_list_right,
+                        &self.final_results,
+                        &self.current_db_sizes,
+                        &self.streams[0],
+                        &device_or_policy_bitmap,
+                    );
+                }
             );
         } else {
             self.distance_comparator.join_db_matches(
