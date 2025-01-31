@@ -867,7 +867,7 @@ impl ServerActor {
             let host_or_policy_bitmap = prepare_or_policy_bitmap(
                 self.max_db_size,
                 batch.or_rule_serial_ids.clone(),
-                batch_size,
+                self.max_batch_size,
             );
 
             let device_or_policy_bitmap =
