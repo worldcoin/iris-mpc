@@ -306,17 +306,11 @@ mod e2e_test {
 
                     resp_counters.insert(req_id, resp_counters.get(req_id).unwrap() + 1);
 
-                    if !test_case_generator
-                        .or_rule_matches
-                        .contains(req_id.as_ref())
-                    {
+                    if !test_case_generator.or_rule_matches.contains(req_id) {
                         assert_eq!(partial_left, partial_right);
                     }
 
-                    if !test_case_generator
-                        .or_rule_matches
-                        .contains(req_id.as_ref())
-                    {
+                    if !test_case_generator.or_rule_matches.contains(req_id) {
                         assert_eq!(partial_left, match_id);
                     }
                     test_case_generator.check_result(
