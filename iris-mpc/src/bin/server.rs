@@ -332,8 +332,6 @@ async fn receive_batch(
                     }
 
                     REAUTH_MESSAGE_TYPE => {
-                        msg_counter += 1;
-
                         let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
 
                         let reauth_request: ReAuthRequest = serde_json::from_str(&message.message)
@@ -354,46 +352,53 @@ async fn receive_batch(
                             .await
                             .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
 
-                        if let Some(batch_size) = reauth_request.batch_size {
-                            // Updating the batch size instantly makes it a bit unpredictable, since
-                            // if we're already above the new limit, we'll still process the current
-                            // batch at the higher limit. On the other
-                            // hand, updating it after the batch is
-                            // processed would not let us "unblock" the protocol if we're stuck with
-                            // low throughput.
-                            *CURRENT_BATCH_SIZE.lock().unwrap() =
-                                batch_size.clamp(1, max_batch_size);
-                            tracing::info!("Updating batch size to {}", batch_size);
+                        if config.enable_reauth {
+                            msg_counter += 1;
+
+                            if let Some(batch_size) = reauth_request.batch_size {
+                                // Updating the batch size instantly makes it a bit unpredictable,
+                                // since if we're already above the
+                                // new limit, we'll still process the current
+                                // batch at the higher limit. On the other
+                                // hand, updating it after the batch is
+                                // processed would not let us "unblock" the protocol if we're stuck
+                                // with low throughput.
+                                *CURRENT_BATCH_SIZE.lock().unwrap() =
+                                    batch_size.clamp(1, max_batch_size);
+                                tracing::info!("Updating batch size to {}", batch_size);
+                            }
+
+                            batch_query
+                                .request_ids
+                                .push(reauth_request.reauth_id.clone());
+                            batch_query
+                                .request_types
+                                .push(REAUTH_MESSAGE_TYPE.to_string());
+                            batch_query.metadata.push(batch_metadata);
+                            batch_query.reauth_target_indices.insert(
+                                reauth_request.reauth_id.clone(),
+                                reauth_request.serial_id - 1,
+                            );
+
+                            let semaphore = Arc::clone(&semaphore);
+                            let s3_client_arc = Arc::clone(s3_client);
+                            let bucket_name = config.shares_bucket_name.clone();
+                            let s3_key = reauth_request.s3_key.clone();
+                            let iris_shares_file_hashes = reauth_request.iris_shares_file_hashes;
+                            let handle = get_iris_shares_parse_task(
+                                party_id,
+                                shares_encryption_key_pairs,
+                                semaphore,
+                                s3_client_arc,
+                                bucket_name,
+                                s3_key,
+                                iris_shares_file_hashes,
+                            )?;
+
+                            handles.push(handle);
+                        } else {
+                            tracing::warn!("Reauth is disabled, skipping reauth request");
                         }
-
-                        batch_query
-                            .request_ids
-                            .push(reauth_request.reauth_id.clone());
-                        batch_query
-                            .request_types
-                            .push(REAUTH_MESSAGE_TYPE.to_string());
-                        batch_query.metadata.push(batch_metadata);
-                        batch_query.reauth_target_indices.insert(
-                            reauth_request.reauth_id.clone(),
-                            reauth_request.serial_id - 1,
-                        );
-
-                        let semaphore = Arc::clone(&semaphore);
-                        let s3_client_arc = Arc::clone(s3_client);
-                        let bucket_name = config.shares_bucket_name.clone();
-                        let s3_key = reauth_request.s3_key.clone();
-                        let iris_shares_file_hashes = reauth_request.iris_shares_file_hashes;
-                        let handle = get_iris_shares_parse_task(
-                            party_id,
-                            shares_encryption_key_pairs,
-                            semaphore,
-                            s3_client_arc,
-                            bucket_name,
-                            s3_key,
-                            iris_shares_file_hashes,
-                        )?;
-
-                        handles.push(handle);
                     }
 
                     _ => {
