@@ -570,8 +570,6 @@ mod e2e_test {
         db_indices_used_in_current_batch: HashSet<usize>,
         /// items against which the OR rule is used
         or_rule_matches:                  Vec<String>,
-        /// items for which the OR rule should be used for serial ids
-        use_or_rule_for_serial_ids:       Vec<Vec<u32>>,
     }
 
     impl TestCaseGenerator {
@@ -589,7 +587,6 @@ mod e2e_test {
                 batch_duplicates: HashMap::new(),
                 db_indices_used_in_current_batch: HashSet::new(),
                 or_rule_matches: Vec::new(),
-                use_or_rule_for_serial_ids: Vec::new(),
             }
         }
 
