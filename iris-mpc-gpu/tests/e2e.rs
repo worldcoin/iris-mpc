@@ -437,9 +437,8 @@ mod e2e_test {
             .iter()
             .map(|b| b.count)
             .sum::<usize>();
-        println!("Total count: {}", total_count);
-        // TODO: re-enable this check
-        // assert_eq!(total_count, MATCH_DISTANCES_BUFFER_SIZE);
+        println!("Total count for bucket: {}", total_count);
+        assert_eq!(total_count, MATCH_DISTANCES_BUFFER_SIZE);
         Ok(())
     }
 
