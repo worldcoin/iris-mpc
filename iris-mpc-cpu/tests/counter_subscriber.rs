@@ -90,7 +90,7 @@ async fn test_counter_subscriber() -> Result<()> {
 
         let mut vector_store = vector_store.clone();
         let mut graph_store = graph_store.clone();
-        hnsw_search_queries_seq(
+        hnsw_search_queries_par(
             &searcher,
             &mut vector_store,
             &mut graph_store,
