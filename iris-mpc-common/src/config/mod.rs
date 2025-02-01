@@ -101,13 +101,22 @@ pub struct Config {
     pub load_chunks_parallelism: usize,
 
     /// Defines the safety overlap to load the DB records >last_modified_at in
-    /// seconds This is to ensure we don't miss any records that were
+    /// seconds. This is to ensure we don't miss any records that were
     /// updated during the DB export to S3
     #[serde(default = "default_db_load_safety_overlap_seconds")]
     pub db_load_safety_overlap_seconds: i64,
 
     #[serde(default)]
     pub db_chunks_folder_name: String,
+
+    #[serde(default)]
+    pub load_chunks_buffer_size: usize,
+
+    #[serde(default = "default_load_chunks_max_retries")]
+    pub load_chunks_max_retries: usize,
+
+    #[serde(default = "default_load_chunks_initial_backoff_ms")]
+    pub load_chunks_initial_backoff_ms: u64,
 
     #[serde(default)]
     pub fixed_shared_secrets: bool,
@@ -120,9 +129,6 @@ pub struct Config {
 
     #[serde(default = "default_n_buckets")]
     pub n_buckets: usize,
-
-    #[serde(default)]
-    pub load_chunks_buffer_size: usize,
 
     #[serde(default)]
     pub enable_sending_anonymized_stats_message: bool,
@@ -161,6 +167,14 @@ fn default_shares_bucket_name() -> String {
 
 fn default_db_load_safety_overlap_seconds() -> i64 {
     60
+}
+
+fn default_load_chunks_max_retries() -> usize {
+    5
+}
+
+fn default_load_chunks_initial_backoff_ms() -> u64 {
+    100
 }
 
 // This gets multiplied by the number of GPU devices
