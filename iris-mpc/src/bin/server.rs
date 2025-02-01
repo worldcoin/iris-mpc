@@ -1364,34 +1364,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             ));
                         }
 
-                        tracing::info!("Starting page lock");
-
-                        let left_codes = actor.left_code_db_slices.code_gr.clone();
-                        let right_codes = actor.right_code_db_slices.code_gr.clone();
-                        let left_masks = actor.left_mask_db_slices.code_gr.clone();
-                        let right_masks = actor.right_mask_db_slices.code_gr.clone();
-                        let page_lock_ts = Instant::now();
-                        for db in [&left_codes, &right_codes] {
-                            register_host_memory(
-                                actor.device_manager.clone(),
-                                db,
-                                config.max_db_size,
-                                IRIS_CODE_LENGTH,
-                            );
-                            tracing::info!("Page locking completed for code slice");
-                        }
-
-                        for db in [&left_masks, &right_masks] {
-                            register_host_memory(
-                                actor.device_manager.clone(),
-                                db,
-                                config.max_db_size,
-                                MASK_CODE_LENGTH,
-                            );
-                            tracing::info!("Page locking completed for mask slice");
-                        }
-                        tracing::info!("Page locking completed in {:?}", page_lock_ts.elapsed());
-
                         tracing::info!("Preprocessing db");
                         actor.preprocess_db();
 

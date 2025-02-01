@@ -35,6 +35,7 @@ use std::{
     mem::{self, forget},
     sync::Arc,
 };
+use std::time::Instant;
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const REDUCE_FUNCTION_NAME: &str = "matmul_correct_and_reduce";
@@ -241,25 +242,19 @@ impl ShareDB {
             code_length,
         }
     }
-
+    
     pub fn alloc_db(&self, max_db_length: usize) -> SlicedProcessedDatabase {
+        let now = Instant::now();
+        tracing::info!("Allocating DB");
         let max_size = max_db_length / self.device_manager.device_count();
         let (db0_sums, (db1_sums, (db0, db1))) = self
             .device_manager
             .devices()
             .iter()
             .map(|device| unsafe {
-                let host_mem0 = MmapMut::map_anon(max_size * self.code_length).unwrap();
-                let host_mem1 = MmapMut::map_anon(max_size * self.code_length).unwrap();
-
-                let host_mem0_ptr = host_mem0.as_ptr() as u64;
-                let host_mem1_ptr = host_mem1.as_ptr() as u64;
-
-                // Make sure to not drop the memory, even though we only use the pointers
-                // afterwards. This also has the effect that this memory is never freed, which
-                // is fine for the db.
-                forget(host_mem0);
-                forget(host_mem1);
+                let bytes = max_size * self.code_length;
+                let host_mem0_ptr = pinned_alloc(bytes) as u64;
+                let host_mem1_ptr = pinned_alloc(bytes) as u64;
 
                 (
                     StreamAwareCudaSlice::from(device.alloc(max_size).unwrap()),
@@ -274,6 +269,7 @@ impl ShareDB {
         for dev in self.device_manager.devices() {
             dev.synchronize().unwrap();
         }
+        tracing::info!("Allocated DB in {:?}", now.elapsed());
 
         SlicedProcessedDatabase {
             code_gr:      CudaVec2DSlicerRawPointer {
@@ -838,6 +834,13 @@ impl ShareDB {
             })
             .collect()
     }
+}
+
+unsafe fn pinned_alloc(size_in_bytes: usize) -> *mut c_void {
+    let mut host_ptr: *mut c_void = std::ptr::null_mut();
+    let flags = CU_MEMHOSTALLOC_PORTABLE;
+    let _ = cudarc::driver::sys::lib().cuMemHostAlloc(&mut host_ptr, size_in_bytes, flags);
+    host_ptr
 }
 
 #[cfg(test)]
