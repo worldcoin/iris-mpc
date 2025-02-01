@@ -37,10 +37,9 @@ use iris_mpc_common::{
         sync::SyncState,
         task_monitor::TaskMonitor,
     },
-    IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use iris_mpc_gpu::{
-    helpers::{device_manager::DeviceManager, register_host_memory},
+    helpers::device_manager::DeviceManager,
     server::{
         get_dummy_shares_for_deletion, sync_nccl, BatchMetadata, BatchQuery,
         BatchQueryEntriesPreprocessed, ServerActor, ServerJobResult,

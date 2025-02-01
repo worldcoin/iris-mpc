@@ -21,21 +21,20 @@ use cudarc::{
     },
     driver::{
         result::{self, malloc_async},
-        sys::{CUdeviceptr, CU_MEMHOSTALLOC_PORTABLE},
+        sys::{CUdeviceptr, CU_MEMHOSTALLOC_PORTABLE, CU_MEMHOSTALLOC_WRITECOMBINED},
         CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr, DeviceSlice, LaunchAsync,
     },
     nccl,
     nvrtc::compile_ptx,
 };
 use itertools::{izip, Itertools};
-use memmap2::MmapMut;
 use rayon::prelude::*;
 use std::{
     ffi::{c_void, CStr},
-    mem::{self, forget},
+    mem::{self},
     sync::Arc,
+    time::Instant,
 };
-use std::time::Instant;
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const REDUCE_FUNCTION_NAME: &str = "matmul_correct_and_reduce";
@@ -242,7 +241,7 @@ impl ShareDB {
             code_length,
         }
     }
-    
+
     pub fn alloc_db(&self, max_db_length: usize) -> SlicedProcessedDatabase {
         let now = Instant::now();
         tracing::info!("Allocating DB");
@@ -838,7 +837,7 @@ impl ShareDB {
 
 unsafe fn pinned_alloc(size_in_bytes: usize) -> *mut c_void {
     let mut host_ptr: *mut c_void = std::ptr::null_mut();
-    let flags = CU_MEMHOSTALLOC_PORTABLE;
+    let flags = CU_MEMHOSTALLOC_PORTABLE | CU_MEMHOSTALLOC_WRITECOMBINED;
     let _ = cudarc::driver::sys::lib().cuMemHostAlloc(&mut host_ptr, size_in_bytes, flags);
     host_ptr
 }
