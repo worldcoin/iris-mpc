@@ -9,6 +9,7 @@ use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
+use dashmap::DashSet;
 use eyre::{eyre, Context, Report};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc_common::{
@@ -47,15 +48,15 @@ use iris_mpc_gpu::{
     },
 };
 use iris_mpc_store::{
-    fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, S3Store, S3StoredIris, Store,
-    StoredIrisRef,
+    fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, S3Store, Store, StoredIrisRef,
 };
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::{
     backtrace::Backtrace,
-    collections::{HashMap, HashSet},
+    cmp::min,
+    collections::HashMap,
     fmt::Debug,
     mem, panic,
     sync::{
@@ -1130,8 +1131,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let s3_load_parallelism = config.load_chunks_parallelism;
     let s3_chunks_bucket_name = config.db_chunks_bucket_name.clone();
     let s3_chunks_folder_name = config.db_chunks_folder_name.clone();
-    let s3_load_max_retries = config.load_chunks_max_retries;
-    let s3_load_initial_backoff_ms = config.load_chunks_initial_backoff_ms;
+    let _s3_load_max_retries = config.load_chunks_max_retries;
+    let _s3_load_initial_backoff_ms = config.load_chunks_initial_backoff_ms;
 
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
@@ -1218,17 +1219,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         "Initialize iris db: Loading from DB (parallelism: {})",
                         parallelism
                     );
-                    let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
                     let db_chunks_s3_store =
                         S3Store::new(db_chunks_s3_client.clone(), s3_chunks_bucket_name.clone());
 
                     tokio::runtime::Handle::current().block_on(async {
                         let total_load_time = Instant::now();
-                        let now = Instant::now();
 
-                        let mut record_counter = 0;
-                        let mut all_serial_ids: HashSet<i64> =
-                            HashSet::from_iter(1..=(store_len as i64));
+                        let record_counter = 0;
+                        let all_serial_ids = Arc::new(DashSet::from_iter(1..=(store_len as i64)));
 
                         if config.enable_s3_importer {
                             tracing::info!("S3 importer enabled. Fetching from s3 + db");
@@ -1251,86 +1249,39 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             let s3_store = S3Store::new(db_chunks_s3_client, s3_chunks_bucket_name);
                             let s3_arc = Arc::new(s3_store);
 
-                            let (tx, mut rx) =
-                                mpsc::channel::<S3StoredIris>(config.load_chunks_buffer_size);
+                            let left_codes = actor.left_code_db_slices.code_gr.clone();
+                            let right_codes = actor.right_code_db_slices.code_gr.clone();
+                            let left_masks = actor.left_mask_db_slices.code_gr.clone();
+                            let right_masks = actor.right_mask_db_slices.code_gr.clone();
 
-                            tokio::spawn(async move {
-                                fetch_and_parse_chunks(
-                                    s3_arc,
-                                    s3_load_parallelism,
-                                    s3_chunks_folder_name,
-                                    last_snapshot_details,
-                                    tx.clone(),
-                                    s3_load_max_retries,
-                                    s3_load_initial_backoff_ms,
-                                )
-                                .await
-                                .expect("Couldn't fetch and parse chunks from s3");
-                            });
-
-                            let mut time_waiting_for_stream = Duration::from_secs(0);
-                            let mut time_loading_into_memory = Duration::from_secs(0);
-                            let mut load_summary_ts = Instant::now();
-                            while let Some(iris) = rx.recv().await {
-                                time_waiting_for_stream += load_summary_ts.elapsed();
-                                load_summary_ts = Instant::now();
-                                let index = iris.index();
-
-                                if index == 0 {
-                                    tracing::error!("Invalid iris index {}", index);
-                                    return Err(eyre!("Invalid iris index {}", index));
-                                } else if index > store_len {
-                                    tracing::warn!(
-                                        "Skip loading rolled back item: index {} > store_len {}",
-                                        index,
-                                        store_len
-                                    );
-                                    continue;
-                                } else if !all_serial_ids.contains(&(index as i64)) {
-                                    tracing::warn!("Skip loading s3 retried item: index {}", index);
-                                    continue;
-                                }
-
-                                actor.load_single_record_from_s3(
-                                    iris.index() - 1,
-                                    iris.left_code_odd(),
-                                    iris.left_code_even(),
-                                    iris.right_code_odd(),
-                                    iris.right_code_even(),
-                                    iris.left_mask_odd(),
-                                    iris.left_mask_even(),
-                                    iris.right_mask_odd(),
-                                    iris.right_mask_even(),
-                                );
-                                actor.increment_db_size(index - 1);
-
-                                if record_counter % 100_000 == 0 {
-                                    let elapsed = now.elapsed();
-                                    tracing::info!(
-                                        "Loaded {} records into memory in {:?} ({:.2} entries/s)",
-                                        record_counter,
-                                        elapsed,
-                                        record_counter as f64 / elapsed.as_secs_f64()
-                                    );
-                                    if download_shutdown_handler.is_shutting_down() {
-                                        tracing::warn!("Shutdown requested by shutdown_handler.");
-                                        return Err(eyre::eyre!("Shutdown requested"));
-                                    }
-                                }
-
-                                time_loading_into_memory += load_summary_ts.elapsed();
-                                load_summary_ts = Instant::now();
-
-                                all_serial_ids.remove(&(index as i64));
-                                record_counter += 1;
-                            }
-                            tracing::info!(
-                                "S3 Loading summary => Loaded {:?} items. Waited for stream: \
-                                 {:?}, Loaded into memory: {:?}.",
-                                record_counter,
-                                time_waiting_for_stream,
-                                time_loading_into_memory,
+                            let last_serial_id_loaded_from_s3 =
+                                min(last_snapshot_details.last_serial_id, store_len as i64);
+                            let now = Instant::now();
+                            fetch_and_parse_chunks(
+                                s3_arc,
+                                s3_load_parallelism,
+                                s3_chunks_folder_name,
+                                last_snapshot_details,
+                                &left_codes.limb_0,
+                                &left_codes.limb_1,
+                                &right_codes.limb_0,
+                                &right_codes.limb_1,
+                                &left_masks.limb_0,
+                                &left_masks.limb_1,
+                                &right_masks.limb_0,
+                                &right_masks.limb_1,
+                                actor.device_manager.device_count(),
+                                Arc::clone(&all_serial_ids),
+                                store_len,
+                            )
+                            .await
+                            .expect("Couldn't fetch and parse chunks from s3");
+                            actor.bulk_increment_db_size(
+                                0,
+                                (last_serial_id_loaded_from_s3 - 1) as usize,
                             );
+
+                            tracing::info!("S3 load summary: {:?}", now.elapsed());
 
                             let stream_db = store
                                 .stream_irises_par(Some(min_last_modified_at), parallelism)
@@ -1339,7 +1290,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             load_db_records(
                                 &mut actor,
                                 record_counter,
-                                &mut all_serial_ids,
+                                Arc::clone(&all_serial_ids),
                                 stream_db,
                             )
                             .await;
@@ -1350,7 +1301,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             load_db_records(
                                 &mut actor,
                                 record_counter,
-                                &mut all_serial_ids,
+                                Arc::clone(&all_serial_ids),
                                 stream_db,
                             )
                             .await;
@@ -1803,7 +1754,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 async fn load_db_records<'a>(
     actor: &mut ServerActor,
     mut record_counter: i32,
-    all_serial_ids: &mut HashSet<i64>,
+    all_serial_ids: Arc<DashSet<i64>>,
     mut stream_db: BoxStream<'a, eyre::Result<DbStoredIris>>,
 ) {
     let mut load_summary_ts = Instant::now();

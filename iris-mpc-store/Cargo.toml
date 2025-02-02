@@ -25,6 +25,8 @@ tracing.workspace = true
 tokio.workspace = true
 rand.workspace = true
 rayon.workspace = true
+iris-mpc-gpu = { path = "../iris-mpc-gpu" }
+dashmap.workspace = true
 
 [dev-dependencies]
 rand.workspace = true

@@ -631,6 +631,31 @@ impl ServerActor {
         self.current_db_sizes[index % self.device_manager.device_count()] += 1;
     }
 
+    pub fn bulk_increment_db_size(&mut self, start_index: usize, end_index: usize) {
+        // Number of devices
+        let device_count = self.device_manager.device_count();
+        // Total number of increments
+        let length = end_index - start_index + 1;
+
+        // Each device will be incremented `full_cycles` times
+        let full_cycles = length / device_count;
+        // The remaining increments that must be distributed
+        let remainder = length % device_count;
+
+        // Increment each device by the full cycle count
+        for size in &mut self.current_db_sizes {
+            *size += full_cycles;
+        }
+
+        // Distribute the remainder among devices, starting at `start_index %
+        // device_count`
+        let start_mod = start_index % device_count;
+        for i in 0..remainder {
+            let device_index = (start_mod + i) % device_count;
+            self.current_db_sizes[device_index] += 1;
+        }
+    }
+
     pub fn preprocess_db(&mut self) {
         self.codes_engine
             .preprocess_db(&mut self.left_code_db_slices, &self.current_db_sizes);
