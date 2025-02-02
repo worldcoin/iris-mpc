@@ -431,7 +431,10 @@ mod e2e_test {
             return Ok(());
         }
         assert_eq!(bucket_statistics.buckets.len(), N_BUCKETS);
-        assert!(bucket_statistics.end_timestamp > Some(bucket_statistics.start_timestamp));
+        assert!(
+            bucket_statistics.end_time_utc_timestamp
+                > Some(bucket_statistics.start_time_utc_timestamp)
+        );
         let total_count = bucket_statistics
             .buckets
             .iter()

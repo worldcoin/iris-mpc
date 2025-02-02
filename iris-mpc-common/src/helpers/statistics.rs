@@ -25,12 +25,13 @@ pub struct BucketStatistics {
     pub party_id: usize,
     pub eye: Eye,
     #[serde(with = "ts_seconds")]
-    pub start_timestamp: DateTime<Utc>,
+    pub start_time_utc_timestamp: DateTime<Utc>,
     #[serde(with = "ts_seconds_option")]
-    pub end_timestamp: Option<DateTime<Utc>>,
+    pub end_time_utc_timestamp: Option<DateTime<Utc>>,
     #[serde(skip_serializing)]
+    #[serde(skip_deserializing)]
     #[serde(with = "ts_seconds_option")]
-    pub next_start_timestamp: Option<DateTime<Utc>>,
+    pub next_start_time_utc_timestamp: Option<DateTime<Utc>>,
 }
 
 impl BucketStatistics {
@@ -43,10 +44,10 @@ impl fmt::Display for BucketStatistics {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "    party_id: {}", self.party_id)?;
         writeln!(f, "    eye: {:?}", self.eye)?;
-        writeln!(f, "    start_timestamp: {}", self.start_timestamp)?;
-        match &self.end_timestamp {
-            Some(end) => writeln!(f, "    end_timestamp: {}", end)?,
-            None => writeln!(f, "    end_timestamp: <none>")?,
+        writeln!(f, "    start_time_utc: {}", self.start_time_utc_timestamp)?;
+        match &self.end_time_utc_timestamp {
+            Some(end) => writeln!(f, "    end_time_utc: {}", end)?,
+            None => writeln!(f, "    end_time_utc: <none>")?,
         }
         for bucket in &self.buckets {
             writeln!(
@@ -73,9 +74,9 @@ impl BucketStatistics {
             eye,
             match_distances_buffer_size,
             party_id,
-            start_timestamp: Utc::now(),
-            end_timestamp: None,
-            next_start_timestamp: None,
+            start_time_utc_timestamp: Utc::now(),
+            end_time_utc_timestamp: None,
+            next_start_time_utc_timestamp: None,
         }
     }
 
@@ -98,7 +99,7 @@ impl BucketStatistics {
 
         // clear just in case, we already clear it on sending the message
         self.buckets.clear();
-        self.end_timestamp = Some(now_timestamp);
+        self.end_time_utc_timestamp = Some(now_timestamp);
 
         let step = match_threshold_ratio / (self.n_buckets as f64);
         for i in 0..buckets_array.len() {
@@ -119,9 +120,9 @@ impl BucketStatistics {
         // otherwise, it means it was the first iteration (ServerActor
         // instantiation)
         if let Some(start_timestamp) = start_timestamp {
-            self.start_timestamp = start_timestamp;
+            self.start_time_utc_timestamp = start_timestamp;
         }
         // Set the next start timestamp to now
-        self.next_start_timestamp = Some(now_timestamp);
+        self.next_start_time_utc_timestamp = Some(now_timestamp);
     }
 }
