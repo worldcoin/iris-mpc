@@ -118,6 +118,9 @@ pub struct Config {
     #[serde(default = "default_match_distances_buffer_size")]
     pub match_distances_buffer_size: usize,
 
+    #[serde(default = "default_match_distances_buffer_size_extra_percent")]
+    pub match_distances_buffer_size_extra_percent: usize,
+
     #[serde(default = "default_n_buckets")]
     pub n_buckets: usize,
 
@@ -166,6 +169,10 @@ fn default_db_load_safety_overlap_seconds() -> i64 {
 // This gets multiplied by the number of GPU devices
 fn default_match_distances_buffer_size() -> usize {
     1 << 16
+}
+
+fn default_match_distances_buffer_size_extra_percent() -> usize {
+    10
 }
 
 fn default_n_buckets() -> usize {

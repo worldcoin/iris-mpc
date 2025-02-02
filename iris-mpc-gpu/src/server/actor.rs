@@ -111,6 +111,7 @@ pub struct ServerActor {
     max_batch_size: usize,
     max_db_size: usize,
     match_distances_buffer_size: usize,
+    match_distances_buffer_size_extra_percent: usize,
     n_buckets: usize,
     return_partial_results: bool,
     disable_persistence: bool,
@@ -143,6 +144,7 @@ impl ServerActor {
         max_db_size: usize,
         max_batch_size: usize,
         match_distances_buffer_size: usize,
+        match_distances_buffer_size_extra_percent: usize,
         n_buckets: usize,
         return_partial_results: bool,
         disable_persistence: bool,
@@ -157,6 +159,7 @@ impl ServerActor {
             max_db_size,
             max_batch_size,
             match_distances_buffer_size,
+            match_distances_buffer_size_extra_percent,
             n_buckets,
             return_partial_results,
             disable_persistence,
@@ -172,6 +175,7 @@ impl ServerActor {
         max_db_size: usize,
         max_batch_size: usize,
         match_distances_buffer_size: usize,
+        match_distances_buffer_size_extra_percent: usize,
         n_buckets: usize,
         return_partial_results: bool,
         disable_persistence: bool,
@@ -188,6 +192,7 @@ impl ServerActor {
             max_db_size,
             max_batch_size,
             match_distances_buffer_size,
+            match_distances_buffer_size_extra_percent,
             n_buckets,
             return_partial_results,
             disable_persistence,
@@ -205,6 +210,7 @@ impl ServerActor {
         max_db_size: usize,
         max_batch_size: usize,
         match_distances_buffer_size: usize,
+        match_distances_buffer_size_extra_percent: usize,
         n_buckets: usize,
         return_partial_results: bool,
         disable_persistence: bool,
@@ -220,6 +226,7 @@ impl ServerActor {
             max_db_size,
             max_batch_size,
             match_distances_buffer_size,
+            match_distances_buffer_size_extra_percent,
             n_buckets,
             return_partial_results,
             disable_persistence,
@@ -238,6 +245,7 @@ impl ServerActor {
         max_db_size: usize,
         max_batch_size: usize,
         match_distances_buffer_size: usize,
+        match_distances_buffer_size_extra_percent: usize,
         n_buckets: usize,
         return_partial_results: bool,
         disable_persistence: bool,
@@ -388,20 +396,22 @@ impl ServerActor {
         let phase2_events = vec![device_manager.create_events(); 2];
 
         // Buffers and counters for match distribution
+        let distance_buffer_len =
+            match_distances_buffer_size * (100 + match_distances_buffer_size_extra_percent) / 100;
         let match_distances_buffer_codes_left =
-            distance_comparator.prepare_match_distances_buffer(match_distances_buffer_size);
+            distance_comparator.prepare_match_distances_buffer(distance_buffer_len);
         let match_distances_buffer_codes_right =
-            distance_comparator.prepare_match_distances_buffer(match_distances_buffer_size);
+            distance_comparator.prepare_match_distances_buffer(distance_buffer_len);
         let match_distances_buffer_masks_left =
-            distance_comparator.prepare_match_distances_buffer(match_distances_buffer_size);
+            distance_comparator.prepare_match_distances_buffer(distance_buffer_len);
         let match_distances_buffer_masks_right =
-            distance_comparator.prepare_match_distances_buffer(match_distances_buffer_size);
+            distance_comparator.prepare_match_distances_buffer(distance_buffer_len);
         let match_distances_counter_left = distance_comparator.prepare_match_distances_counter();
         let match_distances_counter_right = distance_comparator.prepare_match_distances_counter();
         let match_distances_indices_left =
-            distance_comparator.prepare_match_distances_index(match_distances_buffer_size);
+            distance_comparator.prepare_match_distances_index(distance_buffer_len);
         let match_distances_indices_right =
-            distance_comparator.prepare_match_distances_index(match_distances_buffer_size);
+            distance_comparator.prepare_match_distances_index(distance_buffer_len);
         let buckets = distance_comparator.prepare_match_distances_buckets(n_buckets);
 
         for dev in device_manager.devices() {
@@ -454,6 +464,7 @@ impl ServerActor {
             max_batch_size,
             max_db_size,
             match_distances_buffer_size,
+            match_distances_buffer_size_extra_percent,
             n_buckets,
             return_partial_results,
             disable_persistence,
@@ -1261,16 +1272,24 @@ impl ServerActor {
             ),
         };
 
-        let mut total_distance_counter = 0;
-        for (i, device) in self.device_manager.devices().iter().enumerate() {
-            let counter = device.dtoh_sync_copy(&match_distances_counters[i]).unwrap();
-            total_distance_counter += counter[0];
-        }
+        let bucket_distance_counters = self
+            .device_manager
+            .devices()
+            .iter()
+            .enumerate()
+            .map(|(i, device)| {
+                device.dtoh_sync_copy(&match_distances_counters[i]).unwrap()[0] as usize
+            })
+            .collect::<Vec<_>>();
 
-        tracing::info!("Matching distances collected: {}", total_distance_counter);
+        tracing::info!(
+            "Matching distances collected: {:?}",
+            bucket_distance_counters
+        );
 
-        if total_distance_counter
-            >= (self.match_distances_buffer_size * self.device_manager.devices().len()) as u32
+        if bucket_distance_counters
+            .iter()
+            .all(|&x| x >= self.match_distances_buffer_size)
         {
             let now = Instant::now();
             tracing::info!(
@@ -1304,6 +1323,7 @@ impl ServerActor {
                 &self.device_manager,
                 &resort_indices,
                 match_distances_buffers_codes,
+                self.match_distances_buffer_size,
                 batch_streams,
             );
 
@@ -1314,6 +1334,7 @@ impl ServerActor {
                 &self.device_manager,
                 &resort_indices,
                 match_distances_buffers_masks,
+                self.match_distances_buffer_size,
                 batch_streams,
             );
 
@@ -1337,6 +1358,8 @@ impl ServerActor {
             let buckets = self
                 .phase2_buckets
                 .open_buckets(&self.buckets, batch_streams);
+
+            tracing::info!("Buckets: {:?}", buckets);
 
             match eye_db {
                 Eye::Left => {
@@ -1714,7 +1737,9 @@ impl ServerActor {
                             &code_dots,
                             &mask_dots,
                             batch_size,
-                            self.match_distances_buffer_size,
+                            self.match_distances_buffer_size
+                                * (100 + self.match_distances_buffer_size_extra_percent)
+                                / 100,
                             request_streams,
                         );
                         self.phase2.return_result_buffer(res);
@@ -2252,6 +2277,7 @@ fn sort_shares_by_indices(
     device_manager: &DeviceManager,
     resort_indices: &[Vec<usize>],
     shares: &[ChunkShare<u16>],
+    length: usize,
     streams: &[CudaStream],
 ) -> Vec<ChunkShare<u16>> {
     let a = shares
@@ -2272,13 +2298,15 @@ fn sort_shares_by_indices(
                 .iter()
                 .map(|&j| a[i][j])
                 .collect::<Vec<_>>();
-            let a = htod_on_stream_sync(&new_a, &device_manager.device(i), &streams[i]).unwrap();
+            let a = htod_on_stream_sync(&new_a[..length], &device_manager.device(i), &streams[i])
+                .unwrap();
 
             let new_b = resort_indices[i]
                 .iter()
                 .map(|&j| b[i][j])
                 .collect::<Vec<_>>();
-            let b = htod_on_stream_sync(&new_b, &device_manager.device(i), &streams[i]).unwrap();
+            let b = htod_on_stream_sync(&new_b[..length], &device_manager.device(i), &streams[i])
+                .unwrap();
 
             ChunkShare::new(a, b)
         })
