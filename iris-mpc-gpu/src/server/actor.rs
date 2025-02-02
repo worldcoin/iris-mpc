@@ -1343,7 +1343,8 @@ impl ServerActor {
                     self.anonymized_bucket_statistics_left.fill_buckets(
                         &buckets,
                         MATCH_THRESHOLD_RATIO,
-                        self.anonymized_bucket_statistics_left.next_start_timestamp,
+                        self.anonymized_bucket_statistics_left
+                            .next_start_time_utc_timestamp,
                     );
                     tracing::info!(
                         "Bucket results:\n{}",
@@ -1354,7 +1355,8 @@ impl ServerActor {
                     self.anonymized_bucket_statistics_right.fill_buckets(
                         &buckets,
                         MATCH_THRESHOLD_RATIO,
-                        self.anonymized_bucket_statistics_right.next_start_timestamp,
+                        self.anonymized_bucket_statistics_right
+                            .next_start_time_utc_timestamp,
                     );
                     tracing::info!(
                         "Bucket results:\n{}",
