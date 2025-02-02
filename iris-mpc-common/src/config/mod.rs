@@ -174,7 +174,7 @@ fn default_load_chunks_max_retries() -> usize {
 }
 
 fn default_load_chunks_initial_backoff_ms() -> u64 {
-    100
+    200
 }
 
 // This gets multiplied by the number of GPU devices
