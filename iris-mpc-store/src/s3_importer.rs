@@ -321,7 +321,6 @@ async fn read_range_in_chunk(
     range_size: usize,
     tx: Sender<S3StoredIris>,
 ) -> eyre::Result<()> {
-    // Open the range for the chunk
     let mut stream = store
         .get_object(
             key,
@@ -338,16 +337,10 @@ async fn read_range_in_chunk(
     loop {
         match stream.read_exact(&mut slice).await {
             Ok(_) => {
-                // Convert bytes -> your struct
                 let iris = S3StoredIris::from_bytes(&slice)?;
-                // Send to the channel
                 tx.send(iris).await?;
             }
-            // If we hit EOF, break out
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                break;
-            }
-            // Any other error => bubble up
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
             Err(e) => return Err(e.into()),
         }
     }
@@ -447,7 +440,7 @@ mod tests {
                 return Err(eyre::eyre!("Intentional failure for testing retries"));
             }
 
-            // Otherwise, delegate to the inner store
+            // All retries were consumed, delegate to the inner store
             self.inner.get_object(key, range).await
         }
 
