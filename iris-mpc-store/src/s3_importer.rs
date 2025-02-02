@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use aws_sdk_s3::{primitives::ByteStream, Client};
 use eyre::eyre;
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
-use std::{collections::VecDeque, mem, sync::Arc};
+use std::{collections::VecDeque, mem, sync::Arc, time::Duration};
 use tokio::{io::AsyncReadExt, sync::mpsc::Sender, task};
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -227,6 +227,8 @@ pub async fn fetch_and_parse_chunks(
     prefix_name: String,
     last_snapshot_details: LastSnapshotDetails,
     tx: Sender<S3StoredIris>,
+    max_retries: usize,
+    initial_backoff_ms: u64,
 ) -> eyre::Result<()> {
     tracing::info!("Generating chunk files using: {:?}", last_snapshot_details);
     let range_size = if last_snapshot_details.chunk_size as usize > MAX_RANGE_SIZE {
@@ -251,32 +253,52 @@ pub async fn fetch_and_parse_chunks(
 
         handles.push_back(task::spawn({
             let store = Arc::clone(&store);
-            let mut slice = vec![0u8; SINGLE_ELEMENT_SIZE];
             let tx = tx.clone();
             async move {
-                let mut result = store
-                    .get_object(
-                        &format!("{}/{}.bin", prefix_name, chunk_id),
-                        (
-                            offset_within_chunk * SINGLE_ELEMENT_SIZE,
-                            (offset_within_chunk + range_size) * SINGLE_ELEMENT_SIZE,
-                        ),
-                    )
-                    .await?
-                    .into_async_read();
+                let mut attempt = 0;
+                let mut backoff_ms = initial_backoff_ms;
+                let key = format!("{}/{}.bin", prefix_name, chunk_id);
 
+                // Retry reading the range with exponential backoff
                 loop {
-                    match result.read_exact(&mut slice).await {
+                    attempt += 1;
+                    match read_range_in_chunk(
+                        Arc::clone(&store),
+                        &key,
+                        offset_within_chunk,
+                        range_size,
+                        tx.clone(),
+                    )
+                    .await
+                    {
                         Ok(_) => {
-                            let iris = S3StoredIris::from_bytes(&slice)?;
-                            tx.send(iris).await?;
+                            return Ok(());
                         }
-                        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-                        Err(e) => return Err(e.into()),
+                        Err(e) => {
+                            // If we've tried all attempts, bail
+                            if attempt >= max_retries {
+                                return Err(eyre::eyre!(
+                                    "Failed to read {} after {} retries: {:?}",
+                                    key,
+                                    attempt,
+                                    e
+                                ));
+                            }
+
+                            tracing::warn!(
+                                "Error reading {} (attempt {} of {}): {:?}; retrying in {} ms",
+                                key,
+                                attempt,
+                                max_retries,
+                                e,
+                                backoff_ms
+                            );
+
+                            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                            backoff_ms *= 2; // exponential backoff
+                        }
                     }
                 }
-
-                Ok(())
             }
         }));
     }
@@ -290,18 +312,58 @@ pub async fn fetch_and_parse_chunks(
     Ok(())
 }
 
+// Read [offset_within_chunk, offset_within_chunk + range_size) range from the
+// chunk (s3 object) and send the parsed iris to the channel.
+async fn read_range_in_chunk(
+    store: Arc<impl ObjectStore>,
+    key: &str,
+    offset_within_chunk: usize,
+    range_size: usize,
+    tx: Sender<S3StoredIris>,
+) -> eyre::Result<()> {
+    let mut stream = store
+        .get_object(
+            key,
+            (
+                offset_within_chunk * SINGLE_ELEMENT_SIZE,
+                (offset_within_chunk + range_size) * SINGLE_ELEMENT_SIZE,
+            ),
+        )
+        .await?
+        .into_async_read();
+
+    let mut slice = vec![0_u8; SINGLE_ELEMENT_SIZE];
+
+    loop {
+        match stream.read_exact(&mut slice).await {
+            Ok(_) => {
+                let iris = S3StoredIris::from_bytes(&slice)?;
+                tx.send(iris).await?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(e.into()),
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::DbStoredIris;
     use aws_sdk_s3::primitives::SdkBody;
     use rand::Rng;
-    use std::{cmp::min, collections::HashSet};
-    use tokio::sync::mpsc;
+    use std::{
+        cmp::min,
+        collections::{HashMap, HashSet},
+        time::Instant,
+    };
+    use tokio::sync::{mpsc, Mutex};
 
     #[derive(Default, Clone)]
     pub struct MockStore {
-        objects: std::collections::HashMap<String, Vec<u8>>,
+        objects: HashMap<String, Vec<u8>>,
     }
 
     impl MockStore {
@@ -345,6 +407,45 @@ mod tests {
 
         async fn list_objects(&self, _: &str) -> eyre::Result<Vec<String>> {
             Ok(self.objects.keys().cloned().collect())
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct IntentionalFailureStore {
+        inner:              MockStore,
+        remaining_failures: Arc<Mutex<HashMap<String, i8>>>,
+        n_failures:         i8,
+    }
+
+    impl IntentionalFailureStore {
+        pub fn new(inner: MockStore, n_failures: i8) -> Self {
+            Self {
+                inner,
+                remaining_failures: Arc::new(Mutex::new(HashMap::new())),
+                n_failures,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore for IntentionalFailureStore {
+        async fn get_object(&self, key: &str, range: (usize, usize)) -> eyre::Result<ByteStream> {
+            let range_hash = format!("{}_{},{}", key, range.0, range.1);
+            let mut failures = self.remaining_failures.lock().await;
+            let n_remaining = failures
+                .entry(range_hash)
+                .or_insert_with(|| self.n_failures);
+            if *n_remaining > 0 {
+                *n_remaining -= 1;
+                return Err(eyre::eyre!("Intentional failure for testing retries"));
+            }
+
+            // All retries were consumed, delegate to the inner store
+            self.inner.get_object(key, range).await
+        }
+
+        async fn list_objects(&self, prefix: &str) -> eyre::Result<Vec<String>> {
+            self.inner.list_objects(prefix).await
         }
     }
 
@@ -403,9 +504,16 @@ mod tests {
         };
         let (tx, mut rx) = mpsc::channel::<S3StoredIris>(1024);
         let store_arc = Arc::new(store);
-        let _res =
-            fetch_and_parse_chunks(store_arc, 1, "out".to_string(), last_snapshot_details, tx)
-                .await;
+        let _res = fetch_and_parse_chunks(
+            store_arc,
+            1,
+            "out".to_string(),
+            last_snapshot_details,
+            tx,
+            1,
+            0,
+        )
+        .await;
         let mut count = 0;
         let mut ids: HashSet<usize> = HashSet::from_iter(1..MOCK_ENTRIES);
         while let Some(chunk) = rx.recv().await {
@@ -414,5 +522,66 @@ mod tests {
         }
         assert_eq!(count, MOCK_ENTRIES);
         assert!(ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_and_parse_chunks_with_retry() {
+        const MOCK_ENTRIES: usize = 36;
+        const MOCK_CHUNK_SIZE: usize = 10;
+        let mut mock_store = MockStore::new();
+        let n_chunks = MOCK_ENTRIES.div_ceil(MOCK_CHUNK_SIZE);
+        for i in 0..n_chunks {
+            let start_serial_id = i * MOCK_CHUNK_SIZE + 1;
+            let end_serial_id = min((i + 1) * MOCK_CHUNK_SIZE, MOCK_ENTRIES);
+            mock_store.add_test_data(
+                &format!("out/{start_serial_id}.bin"),
+                (start_serial_id..=end_serial_id).map(dummy_entry).collect(),
+            );
+        }
+
+        // Fail the first two attempts to read a chunk
+        // With 100ms backoff, we should get a successful read after 100 + 200 = 300ms
+        let n_failures = 2;
+        let expected_backoff = Duration::from_millis(300);
+        let store = IntentionalFailureStore::new(mock_store, n_failures);
+
+        let last_snapshot_details = LastSnapshotDetails {
+            timestamp:      0,
+            last_serial_id: MOCK_ENTRIES as i64,
+            chunk_size:     MOCK_CHUNK_SIZE as i64,
+        };
+
+        let (tx, mut rx) = mpsc::channel::<S3StoredIris>(1024);
+        let store_arc = Arc::new(store);
+        let now = Instant::now();
+        let result = fetch_and_parse_chunks(
+            store_arc,
+            5,
+            "out".to_string(),
+            last_snapshot_details,
+            tx,
+            5,
+            100,
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "Expected fetch_and_parse_chunks to succeed after retry"
+        );
+        assert!(
+            now.elapsed() >= expected_backoff,
+            "Expected to take more time to fetch"
+        );
+
+        // Make sure all the data is received
+        let mut count = 0;
+        let mut ids: HashSet<usize> = (1..=MOCK_ENTRIES).collect();
+        while let Some(chunk) = rx.recv().await {
+            ids.remove(&chunk.index());
+            count += 1;
+        }
+        assert_eq!(count, MOCK_ENTRIES);
+        assert!(ids.is_empty(), "All entries should have been received");
     }
 }

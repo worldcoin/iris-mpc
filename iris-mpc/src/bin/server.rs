@@ -1127,9 +1127,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         .ok_or(eyre!("Missing database config"))?
         .load_parallelism;
 
-    let load_chunks_parallelism = config.load_chunks_parallelism;
-    let db_chunks_bucket_name = config.db_chunks_bucket_name.clone();
-    let db_chunks_folder_name = config.db_chunks_folder_name.clone();
+    let s3_load_parallelism = config.load_chunks_parallelism;
+    let s3_chunks_bucket_name = config.db_chunks_bucket_name.clone();
+    let s3_chunks_folder_name = config.db_chunks_folder_name.clone();
+    let s3_load_max_retries = config.load_chunks_max_retries;
+    let s3_load_initial_backoff_ms = config.load_chunks_initial_backoff_ms;
 
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
@@ -1218,7 +1220,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     );
                     let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
                     let db_chunks_s3_store =
-                        S3Store::new(db_chunks_s3_client.clone(), db_chunks_bucket_name.clone());
+                        S3Store::new(db_chunks_s3_client.clone(), s3_chunks_bucket_name.clone());
 
                     tokio::runtime::Handle::current().block_on(async {
                         let total_load_time = Instant::now();
@@ -1234,7 +1236,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             // First fetch last snapshot from S3
                             let last_snapshot_details = last_snapshot_timestamp(
                                 &db_chunks_s3_store,
-                                db_chunks_folder_name.clone(),
+                                s3_chunks_folder_name.clone(),
                             )
                             .await?;
 
@@ -1246,7 +1248,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                 min_last_modified_at
                             );
 
-                            let s3_store = S3Store::new(db_chunks_s3_client, db_chunks_bucket_name);
+                            let s3_store = S3Store::new(db_chunks_s3_client, s3_chunks_bucket_name);
                             let s3_arc = Arc::new(s3_store);
 
                             let (tx, mut rx) =
@@ -1255,10 +1257,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             tokio::spawn(async move {
                                 fetch_and_parse_chunks(
                                     s3_arc,
-                                    load_chunks_parallelism,
-                                    db_chunks_folder_name,
+                                    s3_load_parallelism,
+                                    s3_chunks_folder_name,
                                     last_snapshot_details,
                                     tx.clone(),
+                                    s3_load_max_retries,
+                                    s3_load_initial_backoff_ms,
                                 )
                                 .await
                                 .expect("Couldn't fetch and parse chunks from s3");
@@ -1277,10 +1281,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                     return Err(eyre!("Invalid iris index {}", index));
                                 } else if index > store_len {
                                     tracing::warn!(
-                                        "Skipping loading from S3: index {} > store_len {}",
+                                        "Skip loading rolled back item: index {} > store_len {}",
                                         index,
                                         store_len
                                     );
+                                    continue;
+                                } else if !all_serial_ids.contains(&(index as i64)) {
+                                    tracing::warn!("Skip loading s3 retried item: index {}", index);
                                     continue;
                                 }
 
