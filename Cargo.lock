@@ -2718,6 +2718,7 @@ dependencies = [
  "clap",
  "criterion",
  "dashmap",
+ "dotenvy",
  "eyre",
  "futures",
  "iris-mpc-common",

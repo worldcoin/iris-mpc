@@ -20,13 +20,7 @@ use clap::Parser;
 use eyre::Result;
 use itertools::{izip, Itertools};
 use rand::{thread_rng, Rng, SeedableRng};
-use std::{
-    collections::HashMap,
-    ops::{Deref, DerefMut},
-    sync::Arc,
-    time::Duration,
-    vec,
-};
+use std::{collections::HashMap, ops::Deref, sync::Arc, time::Duration, vec};
 use tokio::{
     sync::{mpsc, oneshot, RwLock},
     task::JoinSet,
@@ -340,9 +334,7 @@ impl HawkActor {
             )
             .await;
 
-        self.search_params
-            .insert_apply(graph_store.deref_mut(), connect_plan.clone())
-            .await;
+        graph_store.insert_apply(connect_plan.clone()).await;
 
         Ok(connect_plan)
     }

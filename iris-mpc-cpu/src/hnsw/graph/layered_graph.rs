@@ -4,7 +4,11 @@
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
 use super::neighborhood::SortedNeighborhoodV;
-use crate::hnsw::{SortedNeighborhood, VectorStore};
+use crate::hnsw::{
+    searcher::{ConnectPlanLayerV, ConnectPlanV},
+    SortedNeighborhood, VectorStore,
+};
+use itertools::izip;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -43,6 +47,34 @@ impl<V: VectorStore> GraphMem<V> {
 
     pub fn get_layers(&self) -> Vec<Layer<V>> {
         self.layers.clone()
+    }
+
+    /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the
+    /// graph.
+    pub async fn insert_apply(&mut self, plan: ConnectPlanV<V>) {
+        // If required, set vector as new entry point
+        if plan.set_ep {
+            let insertion_layer = plan.layers.len() - 1;
+            self.set_entry_point(plan.inserted_vector.clone(), insertion_layer)
+                .await;
+        }
+
+        // Connect the new vector to its neighbors in each layer.
+        for (lc, layer_plan) in plan.layers.into_iter().enumerate() {
+            self.connect_apply(plan.inserted_vector.clone(), lc, layer_plan)
+                .await;
+        }
+    }
+
+    /// Apply the connections from `HnswSearcher::connect_prepare` to the graph.
+    async fn connect_apply(&mut self, q: V::VectorRef, lc: usize, plan: ConnectPlanLayerV<V>) {
+        // Connect all n -> q.
+        for ((n, _nq), links) in izip!(plan.neighbors.iter(), plan.n_links) {
+            self.set_links(n.clone(), links, lc).await;
+        }
+
+        // Connect q -> all n.
+        self.set_links(q, plan.neighbors, lc).await;
     }
 }
 

@@ -18,6 +18,7 @@ bytes = "1.7"
 bytemuck.workspace = true
 clap.workspace = true
 dashmap = "6.1.0"
+dotenvy.workspace = true
 eyre.workspace = true
 futures.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }

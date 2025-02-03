@@ -153,8 +153,8 @@ pub mod test_utils {
         ops::{Deref, DerefMut},
     };
     const DOTENV_TEST: &str = ".env.test";
-    const ENV_DB_URL: &str = "HAWK__DATABASE__URL";
-    const SCHEMA_PREFIX: &str = "hawk_test";
+    const ENV_DB_URL: &str = "SMPC__DATABASE__URL";
+    const SCHEMA_PREFIX: &str = "graph_store_test";
 
     /// A test database. It creates a unique schema for each test. Call
     /// `cleanup` at the end of the test.
@@ -218,20 +218,24 @@ pub mod test_utils {
 #[cfg(test)]
 mod tests {
     use super::{test_utils::TestGraphPg, *};
-    use crate::{hawkers::plaintext_store::PlaintextStore, hnsw::HnswSearcher};
+    use crate::{
+        hawkers::plaintext_store::PlaintextStore,
+        hnsw::{GraphMem, HnswSearcher},
+    };
     use aes_prng::AesRng;
+    use iris_mpc_common::iris_db::db::IrisDB;
     use rand::SeedableRng;
-    use std::ops::DerefMut;
     use tokio;
 
     #[tokio::test]
     async fn test_db() {
         let mut graph = TestGraphPg::<PlaintextStore>::new().await.unwrap();
         let mut vector_store = PlaintextStore::new();
+        let rng = &mut AesRng::seed_from_u64(0_u64);
 
         let vectors = {
             let mut v = vec![];
-            for raw_query in 0..10 {
+            for raw_query in IrisDB::new_random_rng(10, rng).db {
                 let q = vector_store.prepare_query(raw_query);
                 v.push(vector_store.insert(&q).await);
             }
@@ -283,40 +287,40 @@ mod tests {
 
     #[tokio::test]
     async fn test_hnsw_db() {
-        let mut graph = TestGraphPg::new().await.unwrap();
-        let vector_store = &mut PlaintextStore::new();
+        let graph_pg = TestGraphPg::<PlaintextStore>::new().await.unwrap();
+        let graph_mem = &mut GraphMem::new();
+        let vector_store = &mut PlaintextStore::default();
         let rng = &mut AesRng::seed_from_u64(0_u64);
         let db = HnswSearcher::default();
 
-        let queries = (0..10)
+        let queries1 = IrisDB::new_random_rng(10, rng)
+            .db
+            .into_iter()
             .map(|raw_query| vector_store.prepare_query(raw_query))
             .collect::<Vec<_>>();
 
         // Insert the codes.
-        for query in queries.iter() {
+        for query in queries1.iter() {
             let insertion_layer = db.select_layer(rng);
             let (neighbors, set_ep) = db
-                .search_to_insert(vector_store, graph.deref(), query, insertion_layer)
+                .search_to_insert(vector_store, graph_mem, query, insertion_layer)
                 .await;
             assert!(!db.is_match(vector_store, &neighbors).await);
             // Insert the new vector into the store.
             let inserted = vector_store.insert(query).await;
-            db.insert_from_search_results(
-                vector_store,
-                graph.deref_mut(),
-                inserted,
-                neighbors,
-                set_ep,
-            )
-            .await;
+            let plan = db
+                .insert_prepare(vector_store, graph_mem, inserted, neighbors, set_ep)
+                .await;
+
+            graph_mem.insert_apply(plan).await;
         }
 
         // Search for the same codes and find matches.
-        for query in queries.iter() {
-            let neighbors = db.search(vector_store, graph.deref_mut(), query, 1).await;
+        for query in queries1.iter() {
+            let neighbors = db.search(vector_store, graph_mem, query, 1).await;
             assert!(db.is_match(vector_store, &[neighbors]).await);
         }
 
-        graph.cleanup().await.unwrap();
+        graph_pg.cleanup().await.unwrap();
     }
 }
