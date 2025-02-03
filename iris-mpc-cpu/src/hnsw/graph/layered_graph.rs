@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct EntryPoint<VectorRef> {
+pub struct EntryPoint<VectorRef> {
     pub point: VectorRef,
     pub layer: usize,
 }
