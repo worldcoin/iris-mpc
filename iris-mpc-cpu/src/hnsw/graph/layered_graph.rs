@@ -85,7 +85,7 @@ impl<V: VectorStore> GraphMem<V> {
             .map(|ep| (ep.point.clone(), ep.layer))
     }
 
-    pub async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) {
+    async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) {
         if let Some(previous) = self.entry_point.as_ref() {
             assert!(
                 previous.layer < layer,
@@ -118,38 +118,13 @@ impl<V: VectorStore> GraphMem<V> {
     /// `set_entry_point` function for an entry point at at least this layer.
     ///
     /// Panics if `lc` is higher than the maximum initialized layer.
-    pub async fn set_links(
-        &mut self,
-        base: V::VectorRef,
-        links: SortedNeighborhoodV<V>,
-        lc: usize,
-    ) {
+    async fn set_links(&mut self, base: V::VectorRef, links: SortedNeighborhoodV<V>, lc: usize) {
         let layer = self.layers.get_mut(lc).unwrap();
         layer.set_links(base, links);
     }
 
     pub async fn num_layers(&self) -> usize {
         self.layers.len()
-    }
-
-    pub async fn connect_bidir(
-        &mut self,
-        vector_store: &mut V,
-        q: &V::VectorRef,
-        neighbors: SortedNeighborhoodV<V>,
-        max_links: usize,
-        lc: usize,
-    ) {
-        // Connect all n -> q.
-        for (n, nq) in neighbors.iter() {
-            let mut links = self.get_links(n, lc).await;
-            links.insert(vector_store, q.clone(), nq.clone()).await;
-            links.trim_to_k_nearest(max_links);
-            self.set_links(n.clone(), links, lc).await;
-        }
-
-        // Connect q -> all n.
-        self.set_links(q.clone(), neighbors, lc).await;
     }
 }
 

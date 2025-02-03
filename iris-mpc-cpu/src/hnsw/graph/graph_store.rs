@@ -1,6 +1,11 @@
 use super::layered_graph::EntryPoint;
-use crate::hnsw::{graph::neighborhood::SortedNeighborhoodV, SortedNeighborhood, VectorStore};
+use crate::hnsw::{
+    graph::neighborhood::SortedNeighborhoodV,
+    searcher::{ConnectPlanLayerV, ConnectPlanV},
+    SortedNeighborhood, VectorStore,
+};
 use eyre::{eyre, Result};
+use itertools::izip;
 use sqlx::{
     migrate::Migrator,
     postgres::{PgPoolOptions, PgRow},
@@ -45,6 +50,34 @@ impl<V: VectorStore> GraphPg<V> {
         })
     }
 
+    /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the
+    /// graph.
+    pub async fn insert_apply(&mut self, plan: ConnectPlanV<V>) {
+        // If required, set vector as new entry point
+        if plan.set_ep {
+            let insertion_layer = plan.layers.len() - 1;
+            self.set_entry_point(plan.inserted_vector.clone(), insertion_layer)
+                .await;
+        }
+
+        // Connect the new vector to its neighbors in each layer.
+        for (lc, layer_plan) in plan.layers.into_iter().enumerate() {
+            self.connect_apply(plan.inserted_vector.clone(), lc, layer_plan)
+                .await;
+        }
+    }
+
+    /// Apply the connections from `HnswSearcher::connect_prepare` to the graph.
+    async fn connect_apply(&mut self, q: V::VectorRef, lc: usize, plan: ConnectPlanLayerV<V>) {
+        // Connect all n -> q.
+        for ((n, _nq), links) in izip!(plan.neighbors.iter(), plan.n_links) {
+            self.set_links(n.clone(), links, lc).await;
+        }
+
+        // Connect q -> all n.
+        self.set_links(q, plan.neighbors, lc).await;
+    }
+
     pub async fn get_entry_point(&self) -> Option<(V::VectorRef, usize)> {
         sqlx::query(
             "
@@ -60,7 +93,7 @@ impl<V: VectorStore> GraphPg<V> {
         })
     }
 
-    pub async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) {
+    async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) {
         sqlx::query(
             "
             INSERT INTO hawk_graph_entry (entry_point, id)
@@ -98,12 +131,7 @@ impl<V: VectorStore> GraphPg<V> {
         .unwrap_or_else(SortedNeighborhood::new)
     }
 
-    pub async fn set_links(
-        &mut self,
-        base: V::VectorRef,
-        links: SortedNeighborhoodV<V>,
-        lc: usize,
-    ) {
+    async fn set_links(&mut self, base: V::VectorRef, links: SortedNeighborhoodV<V>, lc: usize) {
         let base_str = serde_json::to_string(&base).unwrap();
 
         sqlx::query(
@@ -120,10 +148,6 @@ impl<V: VectorStore> GraphPg<V> {
         .execute(&self.pool)
         .await
         .expect("Failed to set links");
-    }
-
-    pub async fn num_layers(&self) -> usize {
-        todo!();
     }
 }
 
@@ -287,7 +311,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_hnsw_db() {
-        let graph_pg = TestGraphPg::<PlaintextStore>::new().await.unwrap();
+        let mut graph_pg = TestGraphPg::<PlaintextStore>::new().await.unwrap();
         let graph_mem = &mut GraphMem::new();
         let vector_store = &mut PlaintextStore::default();
         let rng = &mut AesRng::seed_from_u64(0_u64);
@@ -312,7 +336,8 @@ mod tests {
                 .insert_prepare(vector_store, graph_mem, inserted, neighbors, set_ep)
                 .await;
 
-            graph_mem.insert_apply(plan).await;
+            graph_mem.insert_apply(plan.clone()).await;
+            graph_pg.insert_apply(plan).await;
         }
 
         // Search for the same codes and find matches.
