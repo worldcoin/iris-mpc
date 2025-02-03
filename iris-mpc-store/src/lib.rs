@@ -290,14 +290,13 @@ DO UPDATE SET left_code = EXCLUDED.left_code, left_mask = EXCLUDED.left_mask, ri
     /// Update existing iris with given shares.
     pub async fn update_iris(
         &self,
+        external_tx: Option<&mut Transaction<'_, Postgres>>,
         id: i64,
         left_iris_share: &GaloisRingIrisCodeShare,
         left_mask_share: &GaloisRingTrimmedMaskCodeShare,
         right_iris_share: &GaloisRingIrisCodeShare,
         right_mask_share: &GaloisRingTrimmedMaskCodeShare,
     ) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
-
         let query = sqlx::query(
             r#"
 UPDATE irises SET (left_code, left_mask, right_code, right_mask) = ($2, $3, $4, $5)
@@ -310,8 +309,17 @@ WHERE id = $1;
         .bind(cast_slice::<u16, u8>(&right_iris_share.coefs[..]))
         .bind(cast_slice::<u16, u8>(&right_mask_share.coefs[..]));
 
-        query.execute(&mut *tx).await?;
-        tx.commit().await?;
+        match external_tx {
+            Some(external_tx) => {
+                query.execute(external_tx.deref_mut()).await?;
+            }
+            None => {
+                let mut new_tx = self.pool.begin().await?;
+                query.execute(&mut *new_tx).await?;
+                new_tx.commit().await?;
+            }
+        }
+
         Ok(())
     }
 
@@ -522,7 +530,6 @@ fn cast_u8_to_u16(s: &[u8]) -> &[u16] {
 }
 
 #[cfg(test)]
-#[cfg(feature = "db_dependent")]
 mod tests {
     const DOTENV_TEST: &str = ".env.test";
 
@@ -874,6 +881,7 @@ mod tests {
         };
         store
             .update_iris(
+                None,
                 1,
                 &updated_left_code,
                 &updated_left_mask,
