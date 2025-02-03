@@ -27,7 +27,7 @@ extern "C" __global__ void matmul_correct_and_reduce(int *c, unsigned short *out
     }
 }
 
-extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t chunkLength, size_t queryLength, size_t offset, size_t numElements, size_t realChunkLen, size_t totalDbLen)
+extern "C" __global__ void openResultsBatch(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t chunkLength, size_t queryLength, size_t offset, size_t numElements, size_t realChunkLen, size_t totalDbLen)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
@@ -51,8 +51,45 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
     }
 }
 
+extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t chunkLength, size_t queryLength, size_t offset, size_t numElements, size_t realChunkLen, size_t totalDbLen, unsigned short *match_distances_buffer_codes_a, unsigned short *match_distances_buffer_codes_b, unsigned short *match_distances_buffer_masks_a, unsigned short *match_distances_buffer_masks_b, unsigned int *match_distances_counter, unsigned int *match_distances_indices, unsigned short *code_dots_a, unsigned short *code_dots_b, unsigned short *mask_dots_a, unsigned short *mask_dots_b, size_t max_bucket_distances)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < numElements)
+    {
+        unsigned long long result = result1[idx] ^ result2[idx] ^ result3[idx];
+        for (int i = 0; i < 64; i++)
+        {
+            unsigned int queryIdx = (idx * 64 + i) / chunkLength;
+            unsigned int dbIdx = (idx * 64 + i) % chunkLength;
+            bool match = (result & (1ULL << i));
+
+            // Check if we are out of bounds for the query or db
+            if (queryIdx >= queryLength || dbIdx >= realChunkLen || !match)
+            {
+                continue;
+            }
+
+            // Save the corresponding code and mask dots for later (match distributions)
+            unsigned int match_distances_counter_idx = atomicAdd(&match_distances_counter[0], 1);
+            if (match_distances_counter_idx < max_bucket_distances)
+            {
+                match_distances_indices[match_distances_counter_idx] = idx * 64 + i;
+                match_distances_buffer_codes_a[match_distances_counter_idx] = code_dots_a[idx * 64 + i];
+                match_distances_buffer_codes_b[match_distances_counter_idx] = code_dots_b[idx * 64 + i];
+                match_distances_buffer_masks_a[match_distances_counter_idx] = mask_dots_a[idx * 64 + i];
+                match_distances_buffer_masks_b[match_distances_counter_idx] = mask_dots_b[idx * 64 + i];
+            }
+
+            // Mark which results are matches with a bit in the output
+            unsigned int outputIdx = totalDbLen * (queryIdx / ALL_ROTATIONS) + dbIdx + offset;
+            atomicOr(&output[outputIdx / 64], (1ULL << (outputIdx % 64)));
+        }
+    }
+}
+
 extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *matchCounterLeft, unsigned int *matchCounterRight, unsigned int *partialResultsLeft, unsigned int *partialResultsRight)
 {
+
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
     {
@@ -92,6 +129,67 @@ extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, 
         }
     }
 }
+
+extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, size_t maxDbLength, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *matchCounterLeft, unsigned int *matchCounterRight, unsigned int *partialResultsLeft, unsigned int *partialResultsRight, const unsigned long long *orPolicyBitmap) // 2D bitmap stored as 1D
+{
+
+    size_t rowStride64 = (maxDbLength + 63) / 64;
+    size_t totalBits   = maxDbLength * queryLength;
+
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < numElements)
+    {
+        for (int i = 0; i < 64; i++)
+        {
+
+            size_t globalBit = idx * 64 + i;
+            // Protect against any leftover bits if totalBits not multiple of 64
+            if (globalBit >= totalBits) break;
+
+            unsigned int queryIdx = globalBit / dbLength;
+            unsigned int dbIdx = globalBit % dbLength;
+            bool matchLeft = (matchResultsLeft[idx] & (1ULL << i));
+            bool matchRight = (matchResultsRight[idx] & (1ULL << i));
+
+            // Check bounds
+            if (queryIdx >= queryLength || dbIdx >= dbLength)
+                continue;
+
+            // Check for partial results (only used for debugging)
+            if (matchLeft)
+            {
+                unsigned int qmcL = atomicAdd(&matchCounterLeft[queryIdx], 1);
+                if (qmcL < MAX_MATCHES_LEN)
+                    partialResultsLeft[MAX_MATCHES_LEN * queryIdx + qmcL] = dbIdx;
+            }
+            if (matchRight)
+            {
+                unsigned int qmcR = atomicAdd(&matchCounterRight[queryIdx], 1);
+                if (qmcR < MAX_MATCHES_LEN)
+                    partialResultsRight[MAX_MATCHES_LEN * queryIdx + qmcR] = dbIdx;
+            }
+            size_t rowIndex = queryIdx * rowStride64;
+            size_t orPolicyBitmapIdx = rowIndex + (dbIdx / 64);
+
+            bool useOr = (orPolicyBitmap[orPolicyBitmapIdx]
+                          & (1ULL << (dbIdx % 64))) != 0ULL;
+
+            // If useOr is true => (matchLeft || matchRight),
+            // else => (matchLeft && matchRight).
+            bool finalMatch = useOr ? (matchLeft || matchRight)
+                                    : (matchLeft && matchRight);
+    
+            if (finalMatch)
+            {
+                atomicMin(&finalResults[queryIdx], dbIdx);
+                unsigned int qmc = atomicAdd(&matchCounter[queryIdx], 1);
+                if (qmc < MAX_MATCHES_LEN)
+                    allMatches[MAX_MATCHES_LEN * queryIdx + qmc] = dbIdx;
+            }
+        }
+    }
+}
+
 
 extern "C" __global__ void mergeBatchResults(unsigned long long *matchResultsSelfLeft, unsigned long long *matchResultsSelfRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *__matchCounterLeft, unsigned int *__matchCounterRight, unsigned int *__partialResultsLeft, unsigned int *__partialResultsRight)
 {

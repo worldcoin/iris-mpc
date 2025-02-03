@@ -190,13 +190,18 @@ impl ShareDB {
         for idx in 0..n_devices {
             unsafe {
                 intermediate_results.push(device_manager.device(idx).alloc(results_len).unwrap());
-                results.push(
+            }
+        }
+
+        for idx in 0..n_devices {
+            unsafe {
+                results_peer.push(
                     device_manager
                         .device(idx)
                         .alloc(results_len * std::mem::size_of::<u16>())
                         .unwrap(),
                 );
-                results_peer.push(
+                results.push(
                     device_manager
                         .device(idx)
                         .alloc(results_len * std::mem::size_of::<u16>())
@@ -610,6 +615,7 @@ impl ShareDB {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn dot_reduce_and_multiply(
         &mut self,
         query_sums: &CudaVec2DSlicerU32,
@@ -735,7 +741,7 @@ impl ShareDB {
             self.device_manager
                 .device(idx)
                 .alloc::<u32>(len >> 2)
-                .unwrap()
+                .unwrap() // TODO: fix, make this async
         };
         let mut rand_u8 = self.fill_my_rng_into_u8(&mut rand, idx, streams);
         self.single_xor_assign_u8(

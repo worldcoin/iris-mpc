@@ -17,7 +17,7 @@ use tokio::{
         mpsc::{self, UnboundedSender},
         Mutex,
     },
-    time::timeout,
+    time::{sleep, timeout},
 };
 use tokio_stream::StreamExt;
 use tonic::{
@@ -50,6 +50,10 @@ impl MessageQueueStore {
         }
         self.queues.insert(sender_id, Mutex::new(stream));
         Ok(())
+    }
+
+    fn count_senders(&self) -> usize {
+        self.queues.len()
     }
 
     async fn pop(&self, sender_id: &Identity) -> eyre::Result<Vec<u8>> {
@@ -99,8 +103,11 @@ impl OutgoingStreams {
             .map(|s| s.value().clone())
     }
 
-    fn contains_session(&self, session_id: SessionId) -> bool {
-        self.streams.iter().any(|v| v.key().0 == session_id)
+    fn count_receivers(&self, session_id: SessionId) -> usize {
+        self.streams
+            .iter()
+            .filter(|v| v.key().0 == session_id)
+            .count()
     }
 }
 
@@ -136,14 +143,27 @@ impl GrpcNetworking {
         }
     }
 
+    // TODO: from config?
+    fn backoff(&self) -> ExponentialBackoff {
+        ExponentialBackoff {
+            max_elapsed_time: Some(std::time::Duration::from_secs(2)),
+            max_interval: std::time::Duration::from_secs(1),
+            multiplier: 1.1,
+            ..Default::default()
+        }
+    }
+
     pub async fn connect_to_party(&self, party_id: Identity, address: &str) -> eyre::Result<()> {
-        let client = PartyNodeClient::connect(address.to_string()).await?;
+        let client = retry(self.backoff(), || async {
+            Ok(PartyNodeClient::connect(address.to_string()).await?)
+        })
+        .await?;
         self.clients.insert(party_id.clone(), client);
         Ok(())
     }
 
     pub async fn create_session(&self, session_id: SessionId) -> eyre::Result<()> {
-        if self.outgoing_streams.contains_session(session_id) {
+        if self.outgoing_streams.count_receivers(session_id) > 0 {
             return Err(eyre!(
                 "Player {:?} has already created session {session_id:?}",
                 self.party_id
@@ -167,6 +187,25 @@ impl GrpcNetworking {
             let _response = client.value_mut().send_message(request).await?;
         }
         Ok(())
+    }
+
+    pub fn is_session_ready(&self, session_id: SessionId) -> bool {
+        let n_senders = self
+            .message_queues
+            .get(&session_id)
+            .map(|q| q.count_senders())
+            .unwrap_or(0);
+        if n_senders != self.clients.len() {
+            return false;
+        }
+
+        self.outgoing_streams.count_receivers(session_id) == self.clients.len()
+    }
+
+    pub async fn wait_for_session(&self, session_id: SessionId) {
+        while !self.is_session_ready(session_id) {
+            sleep(Duration::from_millis(100)).await;
+        }
     }
 }
 
@@ -231,19 +270,13 @@ impl Networking for GrpcNetworking {
         receiver: &Identity,
         session_id: &SessionId,
     ) -> eyre::Result<()> {
-        let backoff = ExponentialBackoff {
-            max_elapsed_time: Some(std::time::Duration::from_secs(2)),
-            max_interval: std::time::Duration::from_secs(1),
-            multiplier: 1.1,
-            ..Default::default()
-        };
         let outgoing_stream = self
             .outgoing_streams
             .get_stream(*session_id, receiver.clone())?;
 
         // Send message via the outgoing stream
         let request = SendRequest { data: value };
-        retry(backoff, || async {
+        retry(self.backoff(), || async {
             tracing::trace!(
                 "INIT: Sending message {:?} from {:?} to {:?} in session {:?}",
                 request.data,

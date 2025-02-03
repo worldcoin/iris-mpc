@@ -5,7 +5,10 @@ mod tests {
     use iris_mpc_common::helpers::{
         key_pair::{SharesDecodingError, SharesEncryptionKeyPairs},
         sha256::sha256_as_hex_string,
-        smpc_request::{IrisCodesJSON, UniquenessRequest},
+        smpc_request::{
+            decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share, IrisCodesJSON,
+            UniquenessRequest,
+        },
     };
     use serde_json::json;
     use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
@@ -115,9 +118,13 @@ mod tests {
             or_rule_serial_ids:      None,
         };
 
-        let result = smpc_request
-            .get_iris_data_by_party_id(0, &bucket_name.to_string(), &s3_client)
-            .await;
+        let result = get_iris_data_by_party_id(
+            smpc_request.s3_key.as_str(),
+            0,
+            &bucket_name.to_string(),
+            &s3_client,
+        )
+        .await;
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "share_0_data".to_string());
@@ -143,13 +150,12 @@ mod tests {
         let sealed_box = sealedbox::seal(json_string.as_bytes(), &shares_encryption_public_key);
         let encoded_share = STANDARD.encode(sealed_box);
 
-        let smpc_request = get_mock_request();
         let key_pair = get_key_pairs(
             PREVIOUS_PRIVATE_KEY.to_string(),
             CURRENT_PRIVATE_KEY.to_string(),
         );
 
-        let result = smpc_request.decrypt_iris_share(encoded_share, key_pair);
+        let result = decrypt_iris_share(encoded_share, key_pair);
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), iris_codes_json);
@@ -169,7 +175,6 @@ mod tests {
         let sealed_box = sealedbox::seal(json_string.as_bytes(), &shares_encryption_public_key);
         let encoded_share = STANDARD.encode(sealed_box);
 
-        let smpc_request = get_mock_request();
         let key_pair = get_key_pairs(
             PREVIOUS_PRIVATE_KEY.to_string(),
             CURRENT_PRIVATE_KEY.to_string(),
@@ -177,7 +182,7 @@ mod tests {
 
         // Decrypt the share. It will succeed, by first attempting to use the current
         // private key (failing), and then the previous private key (succeeding)
-        let result = smpc_request.decrypt_iris_share(encoded_share, key_pair);
+        let result = decrypt_iris_share(encoded_share, key_pair);
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), iris_codes_json);
@@ -198,12 +203,10 @@ mod tests {
         // Set the previous key to be empty
         let key_pair = get_key_pairs(CURRENT_PRIVATE_KEY.to_string(), "".to_string());
 
-        let smpc_request = get_mock_request();
-
         // Decrypt the share. It will fail: it will attempt to decrypt using the current
         // key, but the share was encrypted using the current key. The previous
         // key does not exist, so it will return a sealed box open error
-        let result = smpc_request.decrypt_iris_share(encoded_share, key_pair);
+        let result = decrypt_iris_share(encoded_share, key_pair);
         assert!(matches!(
             result,
             Err(SharesDecodingError::SealedBoxOpenError)
@@ -217,9 +220,8 @@ mod tests {
             CURRENT_PRIVATE_KEY.to_string(),
             CURRENT_PRIVATE_KEY.to_string(),
         );
-        let smpc_request = get_mock_request();
 
-        let result = smpc_request.decrypt_iris_share(invalid_base64.to_string(), key_pair);
+        let result = decrypt_iris_share(invalid_base64.to_string(), key_pair);
 
         assert!(matches!(
             result,
@@ -240,9 +242,8 @@ mod tests {
             PREVIOUS_PRIVATE_KEY.to_string(),
             CURRENT_PRIVATE_KEY.to_string(),
         );
-        let smpc_request = get_mock_request();
 
-        let result = smpc_request.decrypt_iris_share(encoded_share, key_pair);
+        let result = decrypt_iris_share(encoded_share, key_pair);
 
         assert!(matches!(
             result,
@@ -263,9 +264,8 @@ mod tests {
             PREVIOUS_PRIVATE_KEY.to_string(),
             CURRENT_PRIVATE_KEY.to_string(),
         );
-        let smpc_request = get_mock_request();
 
-        let result = smpc_request.decrypt_iris_share(encoded_share, key_pair);
+        let result = decrypt_iris_share(encoded_share, key_pair);
 
         assert!(matches!(result, Err(SharesDecodingError::SerdeError(_))));
     }
@@ -282,9 +282,12 @@ mod tests {
             "dummy_hash_2".to_string(),
         ]);
 
-        let is_valid = smpc_request
-            .validate_iris_share(0, mock_iris_codes_json)
-            .unwrap();
+        let is_valid = validate_iris_share(
+            smpc_request.iris_shares_file_hashes,
+            0,
+            mock_iris_codes_json,
+        )
+        .unwrap();
 
         assert!(is_valid, "The iris share should be valid");
     }
@@ -302,9 +305,12 @@ mod tests {
         ]);
 
         // Act
-        let is_valid = smpc_request
-            .validate_iris_share(0, mock_iris_codes_json)
-            .unwrap();
+        let is_valid = validate_iris_share(
+            smpc_request.iris_shares_file_hashes,
+            0,
+            mock_iris_codes_json,
+        )
+        .unwrap();
 
         // Assert
         assert!(!is_valid, "The iris share should be invalid");
