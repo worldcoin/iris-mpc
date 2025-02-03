@@ -314,7 +314,9 @@ async fn receive_batch(
                                 );
                             }
                             if config.luc_serial_ids_from_smpc_request {
-                                if let Some(serial_ids) = uniqueness_request.or_rule_serial_ids.clone() {
+                                if let Some(serial_ids) =
+                                    uniqueness_request.or_rule_serial_ids.clone()
+                                {
                                     batch_query.or_rule_serial_ids.push(serial_ids);
                                 } else {
                                     tracing::error!(

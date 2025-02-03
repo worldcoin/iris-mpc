@@ -53,20 +53,6 @@ mod tests {
         }
     }
 
-    fn get_mock_request() -> UniquenessRequest {
-        UniquenessRequest {
-            batch_size:              None,
-            signup_id:               "test_signup_id".to_string(),
-            s3_key:                  "package".to_string(),
-            iris_shares_file_hashes: [
-                "hash_0".to_string(),
-                "hash_1".to_string(),
-                "hash_2".to_string(),
-            ],
-            or_rule_serial_ids:      None,
-        }
-    }
-
     #[tokio::test]
     async fn test_retrieve_iris_shares_from_s3_success() {
         let mock_server = MockServer::start().await;
