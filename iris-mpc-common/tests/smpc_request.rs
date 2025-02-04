@@ -49,6 +49,7 @@ mod tests {
             signup_id:               "signup_mock".to_string(),
             s3_key:                  "mock".to_string(),
             iris_shares_file_hashes: hashes,
+            or_rule_serial_ids:      None,
         }
     }
 
@@ -100,6 +101,7 @@ mod tests {
                 "hash_1".to_string(),
                 "hash_2".to_string(),
             ],
+            or_rule_serial_ids:      None,
         };
 
         let result = get_iris_data_by_party_id(

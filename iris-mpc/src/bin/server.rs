@@ -304,6 +304,22 @@ async fn receive_batch(
                                 batch_size.clamp(1, max_batch_size);
                             tracing::info!("Updating batch size to {}", batch_size);
                         }
+                        if config.luc_enabled {
+                            if config.luc_lookback_records > 0 {
+                                batch_query.luc_lookback_records = config.luc_lookback_records;
+                            }
+                            if config.luc_serial_ids_from_smpc_request {
+                                if let Some(serial_ids) =
+                                    uniqueness_request.or_rule_serial_ids.clone()
+                                {
+                                    batch_query.or_rule_serial_ids.push(serial_ids);
+                                } else {
+                                    tracing::error!(
+                                        "Received a uniqueness request without serial_ids"
+                                    );
+                                }
+                            }
+                        }
 
                         batch_query
                             .request_ids

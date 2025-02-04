@@ -3,7 +3,8 @@ pub mod sync_nccl;
 
 use crate::dot::{share_db::preprocess_query, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS};
 pub use actor::{
-    get_dummy_shares_for_deletion, prepare_or_policy_bitmap, ServerActor, ServerActorHandle,
+    generate_luc_records, get_dummy_shares_for_deletion, prepare_or_policy_bitmap, ServerActor,
+    ServerActorHandle,
 };
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -83,6 +84,7 @@ pub struct BatchQuery {
     pub query_right_preprocessed: BatchQueryEntriesPreprocessed,
     pub db_right_preprocessed:    BatchQueryEntriesPreprocessed,
     pub or_rule_serial_ids:       Vec<Vec<u32>>,
+    pub luc_lookback_records:     usize,
     pub valid_entries:            Vec<bool>,
 
     // Only reauth specific fields
