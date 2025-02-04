@@ -16,6 +16,12 @@ iris-mpc-1:
       name: health
       protocol: TCP
 
+  service:
+    additionalPorts:
+      - name: health
+        port: 3000
+        targetPort: 3000
+
   livenessProbe:
     httpGet:
       path: /health
@@ -24,7 +30,7 @@ iris-mpc-1:
   readinessProbe:
     periodSeconds: 30
     httpGet:
-      path: /ready
+      path: /health
       port: health
 
   startupProbe:
@@ -32,11 +38,10 @@ iris-mpc-1:
     failureThreshold: 40
     periodSeconds: 30
     httpGet:
-      path: /ready
+      path: /health
       port: health
 
   podSecurityContext:
-    runAsNonRoot: false
     seccompProfile:
       type: RuntimeDefault
 
@@ -57,7 +62,18 @@ iris-mpc-1:
   nodeSelector:
     kubernetes.io/arch: amd64
 
-  hostNetwork: false
+  hostNetwork: true
+
+  dnsPolicy: None
+  dnsConfig:
+    nameservers:
+      - "172.20.0.10"
+    searches:
+      - "localstack"
+      - "mongodb.e2e.svc.cluster.local"
+      - "e2e.svc.cluster.local"
+      - "svc.cluster.local"
+      - "cluster.local"
 
   tolerations:
     - key: "gpuGroup"
@@ -87,6 +103,21 @@ iris-mpc-1:
   terminationGracePeriodSeconds: 180 # 3x SMPC__PROCESSING_TIMEOUT_SECS
 
   env:
+    - name: NCCL_DEBUG_FILE
+      value: "/dev/stdout"
+
+    - name: NCCL_DEBUG_SUBSYS
+      value: "ALL"
+
+    - name: NCCL_SOCKET_FAMILY
+      value: "AF_INET"
+
+    - name: NCCL_SOCKET_IFNAME
+      value: "eth0"
+
+    - name: NCCL_DEBUG
+      value: "TRACE"
+
     - name: RUST_LOG
       value: "info"
 
@@ -105,11 +136,8 @@ iris-mpc-1:
     - name: RUST_BACKTRACE
       value: "full"
 
-    - name: NCCL_SOCKET_IFNAME
-      value: "eth0"
-
     - name: NCCL_COMM_ID
-      value: "iris-mpc-0.iris-mpc-0.$ENV.svc.cluster.local:4000"
+      value: "iris-mpc-0.orb.e2e.test:4000"
 
     - name: SMPC__ENVIRONMENT
       value: "$ENV"
@@ -136,10 +164,10 @@ iris-mpc-1:
       value: "8"
 
     - name: SMPC__REQUESTS_QUEUE_URL
-      value: "arn:aws:sns:eu-central-1:000000000000:iris-mpc-input"
+      value: "http://sqs.eu-central-1.localhost.localstack.cloud:4566/000000000000/smpcv2-1-e2e.fifo"
 
     - name: SMPC__RESULTS_TOPIC_ARN
-      value: "arn:aws:sns:eu-central-1:000000000000:iris-mpc-results"
+      value: "arn:aws:sns:eu-central-1:000000000000:iris-mpc-results.fifo"
 
     - name: SMPC__PROCESSING_TIMEOUT_SECS
       value: "60"
@@ -166,7 +194,7 @@ iris-mpc-1:
       value: "true"
 
     - name: SMPC__INIT_DB_SIZE
-      value: "80000"
+      value: "5000"
 
     - name: SMPC__MAX_DB_SIZE
       value: "110000"
@@ -198,7 +226,7 @@ iris-mpc-1:
       value: "true"
       
     - name: SMPC__NODE_HOSTNAMES
-      value: '["iris-mpc-0.iris-mpc-0.$ENV.svc.cluster.local","iris-mpc-1.iris-mpc-1.$ENV.svc.cluster.local","iris-mpc-2.iris-mpc-2.$ENV.svc.cluster.local"]'
+      value: '["iris-mpc-0.$ENV.svc.cluster.local","iris-mpc-1.$ENV.svc.cluster.local","iris-mpc-2.$ENV.svc.cluster.local"]'
 
     - name: SMPC__IMAGE_NAME
       value: "ghcr.io/worldcoin/iris-mpc:$IRIS_MPC_IMAGE_TAG"
