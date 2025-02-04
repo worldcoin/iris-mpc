@@ -32,7 +32,7 @@ use iris_mpc_common::{
     iris_db::iris::{IrisCode, MATCH_THRESHOLD_RATIO},
     IrisCodeDbSlice,
 };
-use itertools::Itertools;
+use itertools::{izip, Itertools};
 use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{collections::HashMap, mem, sync::Arc, time::Instant};
@@ -697,17 +697,17 @@ impl ServerActor {
                 && batch_size * ROTATIONS == batch.db_right_preprocessed.len(),
             "Query batch sizes mismatch"
         );
-        if !batch.or_rule_serial_ids.is_empty() {
-            assert_eq!(batch.or_rule_serial_ids.len(), batch_size);
-            let latest_luc_index = (self.current_db_sizes.iter().sum::<usize>() - 1) as u32;
-            if batch.luc_lookback_records > 0 {
-                batch.or_rule_serial_ids = merge_luc_records(
-                    latest_luc_index,
-                    batch.or_rule_serial_ids.clone(),
-                    batch.luc_lookback_records,
-                );
-            }
-        };
+        if !batch.or_rule_serial_ids.is_empty() || batch.luc_lookback_records > 0 {
+            assert!(
+                (batch.or_rule_serial_ids.len() == batch_size) || (batch.luc_lookback_records > 0)
+            );
+            batch.or_rule_serial_ids = generate_luc_records(
+                (self.current_db_sizes.iter().sum::<usize>() - 1) as u32,
+                batch.or_rule_serial_ids.clone(),
+                batch.luc_lookback_records,
+                batch_size,
+            );
+        }
 
         ///////////////////////////////////////////////////////////////////
         // PERFORM DELETIONS (IF ANY)
@@ -2345,20 +2345,31 @@ pub fn prepare_or_policy_bitmap(
     bitmap
 }
 
-pub fn merge_luc_records(
+pub fn generate_luc_records(
     latest_luc_index: u32,
     mut or_rule_serial_ids: Vec<Vec<u32>>,
     lookback_records: usize,
+    batch_size: usize,
 ) -> Vec<Vec<u32>> {
+    // If lookback_records is 0, return the original or_rule_serial_ids
+    if lookback_records == 0 {
+        return or_rule_serial_ids;
+    }
     // Generate the lookback serial IDs: [current_db_size - luc_lookback_records,
     // current_db_size)
     let lookback_start = latest_luc_index.saturating_sub(lookback_records as u32); // ensure no underflow
     let lookback_ids: Vec<u32> = (lookback_start..=latest_luc_index).collect();
+    let lookback_records: Vec<Vec<u32>> = vec![lookback_ids; batch_size];
 
-    // Merge them into each inner vector of or_rule_serial_ids
-    for or_ids in &mut or_rule_serial_ids {
+    // If there are no OR rules, return only the lookback records
+    if or_rule_serial_ids.is_empty() {
+        return lookback_records;
+    }
+
+    // Otherwise, merge them into each inner vector of or_rule_serial_ids
+    for (or_ids, luc_ids) in izip!(or_rule_serial_ids.iter_mut(), lookback_records.iter()) {
         // Add the lookback IDs
-        or_ids.extend_from_slice(&lookback_ids);
+        or_ids.extend_from_slice(luc_ids);
         // Sort and remove duplicates
         or_ids.sort_unstable();
         or_ids.dedup();
