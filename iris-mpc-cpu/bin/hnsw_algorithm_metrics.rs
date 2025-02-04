@@ -17,14 +17,15 @@ use tracing_subscriber::prelude::*;
 #[derive(Parser)]
 #[allow(non_snake_case)]
 struct Args {
-    #[clap(default_value = "384")]
+    #[clap(short, default_value = "384")]
     M:                 usize,
-    #[clap(default_value = "512")]
+    #[clap(long("efc"), default_value = "512")]
     ef_constr:         usize,
-    #[clap(default_value = "512")]
+    #[clap(long("efs"), default_value = "512")]
     ef_search:         usize,
-    #[clap(default_value = "10000")]
+    #[clap(short, default_value = "10000")]
     database_size:     usize,
+    #[clap(short('p'))]
     layer_probability: Option<f64>,
 }
 
