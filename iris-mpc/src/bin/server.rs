@@ -149,7 +149,7 @@ async fn receive_batch(
     let max_batch_size = config.clone().max_batch_size;
     let queue_url = &config.clone().requests_queue_url;
     if shutdown_handler.is_shutting_down() {
-        tracing::info!("Stopping batch receive due to shutdown signal...");
+        tracing::info!("Stopping batch receive due to shutdown signal!!!!...");
         return Ok(None);
     }
 
