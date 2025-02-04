@@ -2353,7 +2353,7 @@ pub fn merge_luc_records(
     // Generate the lookback serial IDs: [current_db_size - luc_lookback_records,
     // current_db_size)
     let lookback_start = latest_luc_index.saturating_sub(lookback_records as u32); // ensure no underflow
-    let lookback_ids: Vec<u32> = (lookback_start..latest_luc_index + 1).collect();
+    let lookback_ids: Vec<u32> = (lookback_start..=latest_luc_index).collect();
 
     // Merge them into each inner vector of or_rule_serial_ids
     for or_ids in &mut or_rule_serial_ids {
