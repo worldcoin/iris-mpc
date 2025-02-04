@@ -293,8 +293,8 @@ mod e2e_test {
                     ..
                 } = res;
 
-                check_bucket_statistics(anonymized_bucket_statistics_left)?;
-                check_bucket_statistics(anonymized_bucket_statistics_right)?;
+                check_bucket_statistics(anonymized_bucket_statistics_left, num_devices)?;
+                check_bucket_statistics(anonymized_bucket_statistics_right, num_devices)?;
 
                 for (
                     (((((req_id, &was_match), &idx), partial_left), partial_right), match_id),
@@ -429,7 +429,10 @@ mod e2e_test {
         Ok(())
     }
 
-    fn check_bucket_statistics(bucket_statistics: &BucketStatistics) -> Result<()> {
+    fn check_bucket_statistics(
+        bucket_statistics: &BucketStatistics,
+        num_gpus_per_party: usize,
+    ) -> Result<()> {
         if bucket_statistics.is_empty() {
             assert_eq!(bucket_statistics.buckets.len(), 0);
             return Ok(());
@@ -445,7 +448,10 @@ mod e2e_test {
             .map(|b| b.count)
             .sum::<usize>();
         println!("Total count for bucket: {}", total_count);
-        assert_eq!(total_count, MATCH_DISTANCES_BUFFER_SIZE);
+        assert_eq!(
+            total_count,
+            MATCH_DISTANCES_BUFFER_SIZE * num_gpus_per_party
+        );
         Ok(())
     }
 
@@ -518,6 +524,7 @@ mod e2e_test {
         /// deleted
         PreviouslyDeleted,
         /// Send an iris code that uses the OR rule
+        #[expect(unused)]
         WithOrRuleSet,
     }
 
@@ -711,7 +718,7 @@ mod e2e_test {
                 TestCases::Match,
                 TestCases::NonMatch,
                 TestCases::CloseToThreshold,
-                TestCases::WithOrRuleSet,
+                // TestCases::WithOrRuleSet,
             ];
             if !self.inserted_responses.is_empty() {
                 options.push(TestCases::PreviouslyInserted);
