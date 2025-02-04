@@ -1,6 +1,6 @@
 mod or_policy_test {
 
-    use iris_mpc_gpu::server::prepare_or_policy_bitmap;
+    use iris_mpc_gpu::server::{merge_luc_records, prepare_or_policy_bitmap};
 
     const MAX_DB_SIZE: usize = 8 * 1000;
 
@@ -29,5 +29,74 @@ mod or_policy_test {
 
         assert_eq!(bitmap[250], 8);
         assert_eq!(format!("{:064b}", bitmap[250]), row_2_bitmap);
+    }
+
+    #[test]
+    fn test_empty_or_rule_serial_ids() {
+        let latest_serial_id = 10;
+        let or_rule_serial_ids = vec![];
+        let lookback_records = 5;
+
+        let result = merge_luc_records(latest_serial_id, or_rule_serial_ids, lookback_records);
+        assert!(
+            result.is_empty(),
+            "Expected an empty result when input is empty"
+        );
+    }
+
+    #[test]
+    fn test_no_lookback() {
+        // With lookback_records=0, nothing should be added
+        let latest_serial_id = 10;
+        let or_rule_serial_ids = vec![vec![1, 2], vec![3, 4]];
+        let lookback_records = 0;
+
+        let result = merge_luc_records(
+            latest_serial_id,
+            or_rule_serial_ids.clone(),
+            lookback_records,
+        );
+        assert_eq!(
+            result, or_rule_serial_ids,
+            "Expected no change with 0 lookback_records"
+        );
+    }
+
+    #[test]
+    fn test_basic_lookback() {
+        // If latest_serial_id=10 and lookback_records=3,
+        // then lookback range is [7, 8, 9].
+        let latest_serial_id = 10;
+        let lookback_records = 3;
+
+        // Suppose our existing IDs are:
+        let or_rule_serial_ids = vec![vec![1, 3], vec![4, 5, 9]];
+
+        let result = merge_luc_records(latest_serial_id, or_rule_serial_ids, lookback_records);
+        // We expect 7, 8, 9 to be appended (9 is already in second vector).
+        let expected = vec![
+            vec![1, 3, 7, 8, 9], // was [1, 3] + [7, 8, 9]
+            vec![4, 5, 7, 8, 9], // was [4, 5, 9] + [7, 8, 9] => duplicates removed
+        ];
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_duplicate_ids() {
+        // Check that duplicates (both pre-existing and from the lookback) are removed
+        // We use a small range so we can see the effect clearly.
+        let latest_serial_id = 5; // Suppose we want [3, 4] as lookback
+        let lookback_records = 2;
+
+        // Already has duplicates in the first vector
+        let or_rule_serial_ids = vec![vec![1, 1, 2, 3], vec![3, 3, 4]];
+
+        let result = merge_luc_records(latest_serial_id, or_rule_serial_ids, lookback_records);
+        // After merging, each vector should include [3, 4] (some of which are
+        // duplicates). Then we sort and deduplicate.
+        let expected = vec![vec![1, 2, 3, 4], vec![3, 4]];
+
+        assert_eq!(result, expected);
     }
 }

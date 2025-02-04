@@ -145,7 +145,6 @@ async fn receive_batch(
     shutdown_handler: &ShutdownHandler,
     uniqueness_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     reauth_error_result_attributes: &HashMap<String, MessageAttributeValue>,
-    store_len: usize,
 ) -> eyre::Result<Option<BatchQuery>, ReceiveRequestError> {
     let max_batch_size = config.clone().max_batch_size;
     let queue_url = &config.clone().requests_queue_url;
@@ -307,11 +306,7 @@ async fn receive_batch(
                         }
                         if config.luc_enabled {
                             if config.luc_lookback_records > 0 {
-                                batch_query.or_rule_serial_ids.push(
-                                    ((store_len as u32 - config.luc_lookback_records as u32)
-                                        ..store_len as u32)
-                                        .collect::<Vec<u32>>(),
-                                );
+                                batch_query.luc_lookback_records = config.luc_lookback_records;
                             }
                             if config.luc_serial_ids_from_smpc_request {
                                 if let Some(serial_ids) =
@@ -1725,7 +1720,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             &shutdown_handler,
             &uniqueness_error_result_attribute,
             &reauth_error_result_attribute,
-            store_len,
         );
 
         let dummy_shares_for_deletions = get_dummy_shares_for_deletion(party_id);
@@ -1781,7 +1775,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 &shutdown_handler,
                 &uniqueness_error_result_attribute,
                 &reauth_error_result_attribute,
-                store_len,
             );
 
             // await the result

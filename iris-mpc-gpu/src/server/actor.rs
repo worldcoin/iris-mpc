@@ -699,6 +699,14 @@ impl ServerActor {
         );
         if !batch.or_rule_serial_ids.is_empty() {
             assert_eq!(batch.or_rule_serial_ids.len(), batch_size);
+            let latest_serial_id = (self.current_db_sizes.iter().sum::<usize>() + 1) as u32;
+            if batch.luc_lookback_records > 0 {
+                batch.or_rule_serial_ids = merge_luc_records(
+                    latest_serial_id,
+                    batch.or_rule_serial_ids.clone(),
+                    batch.luc_lookback_records,
+                );
+            }
         };
 
         ///////////////////////////////////////////////////////////////////
@@ -2335,4 +2343,25 @@ pub fn prepare_or_policy_bitmap(
         }
     }
     bitmap
+}
+
+pub fn merge_luc_records(
+    latest_serial_id: u32,
+    mut or_rule_serial_ids: Vec<Vec<u32>>,
+    lookback_records: usize,
+) -> Vec<Vec<u32>> {
+    // Generate the lookback serial IDs: [current_db_size - luc_lookback_records,
+    // current_db_size)
+    let lookback_start = latest_serial_id.saturating_sub(lookback_records as u32); // ensure no underflow
+    let lookback_ids: Vec<u32> = (lookback_start..latest_serial_id).collect();
+
+    // Merge them into each inner vector of or_rule_serial_ids
+    for or_ids in &mut or_rule_serial_ids {
+        // Add the lookback IDs
+        or_ids.extend_from_slice(&lookback_ids);
+        // Sort and remove duplicates
+        or_ids.sort_unstable();
+        or_ids.dedup();
+    }
+    or_rule_serial_ids
 }
