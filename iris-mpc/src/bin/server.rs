@@ -38,7 +38,7 @@ use iris_mpc_common::{
     IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use iris_mpc_gpu::{
-    helpers::{device_manager::DeviceManager, register_host_memory},
+    helpers::register_host_memory,
     server::{
         get_dummy_shares_for_deletion, BatchMetadata, BatchQuery, BatchQueryEntriesPreprocessed,
         ServerActor, ServerJobResult,
@@ -1123,27 +1123,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
-        let device_manager = Arc::new(DeviceManager::init());
-        let ids = device_manager.get_ids_from_magic(0);
-
-        // --------------------------------------------------------------------------
-        // ANCHOR: Starting NCCL
-        // --------------------------------------------------------------------------
-        tracing::info!("⚓️ ANCHOR: Starting NCCL");
-        let comms = device_manager.instantiate_network_from_ids(config.party_id, &ids)?;
-        // FYI: If any of the nodes die after this, all connections are broken.
-
         // --------------------------------------------------------------------------
         // ANCHOR: Load the database
         // --------------------------------------------------------------------------
-        tracing::info!("⚓️ ANCHOR: Load the database");
-
-        tracing::info!("Starting server actor");
-        match ServerActor::new_with_device_manager_and_comms(
+        tracing::info!("⚓️ ANCHOR: Starting server actor");
+        match ServerActor::new(
             config.party_id,
             chacha_seeds,
-            device_manager,
-            comms,
             8,
             config.max_db_size,
             config.max_batch_size,
@@ -1154,6 +1140,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             config.enable_debug_timing,
         ) {
             Ok((mut actor, handle)) => {
+                tracing::info!("⚓️ ANCHOR: Load the database");
                 let res = if config.fake_db_size > 0 {
                     tracing::warn!(
                         "Faking db with {} entries, returned results will be random.",
