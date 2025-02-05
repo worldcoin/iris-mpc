@@ -2,9 +2,10 @@ use super::layered_graph::EntryPoint;
 use crate::hnsw::{
     graph::neighborhood::SortedNeighborhoodV,
     searcher::{ConnectPlanLayerV, ConnectPlanV},
-    GraphMem, SortedNeighborhood, VectorStore,
+    GraphMem, VectorStore,
 };
 use eyre::{eyre, Result};
+use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::izip;
 use sqlx::{
     error::BoxDynError,
@@ -109,6 +110,7 @@ impl<V: VectorStore> GraphPg<V> {
         .expect("Failed to set entry point");
     }
 
+    #[cfg(test)]
     async fn get_links(
         &self,
         base: &<V as VectorStore>::VectorRef,
@@ -128,7 +130,7 @@ impl<V: VectorStore> GraphPg<V> {
             let x: Json<SortedNeighborhoodV<V>> = row.get("links");
             x.as_ref().clone()
         })
-        .unwrap_or_else(SortedNeighborhood::new)
+        .unwrap_or_else(SortedNeighborhoodV::<V>::new)
     }
 
     async fn set_links(&mut self, base: V::VectorRef, links: SortedNeighborhoodV<V>, lc: usize) {
@@ -162,18 +164,17 @@ where
     BoxDynError: From<<V::VectorRef as FromStr>::Err>,
     V::DistanceRef: Send + Unpin + 'static,
 {
-    async fn iter_links(&self) -> Vec<RowLinks<V>> {
+    fn stream_links(&self) -> impl Stream<Item = Result<RowLinks<V>>> + '_ {
         sqlx::query_as::<_, RowLinks<V>>(
             "
         SELECT source_ref, links, layer FROM hawk_graph_links
         ",
         )
-        .fetch_all(&self.pool)
-        .await
-        .unwrap()
+        .fetch(&self.pool)
+        .map_err(Into::into)
     }
 
-    pub async fn load_to_mem(&self) -> GraphMem<V> {
+    pub async fn load_to_mem(&self) -> Result<GraphMem<V>> {
         let mut graph_mem = GraphMem::new();
 
         let ep = self.get_entry_point().await;
@@ -182,13 +183,15 @@ where
             graph_mem.set_entry_point(point, layer).await;
         }
 
-        for row in self.iter_links().await {
+        let mut irises = self.stream_links();
+        while let Some(row) = irises.next().await {
+            let row = row?;
             graph_mem
                 .set_links(row.source_ref.0, row.links.0, row.layer as usize)
                 .await;
         }
 
-        graph_mem
+        Ok(graph_mem)
     }
 }
 
@@ -285,7 +288,7 @@ mod tests {
     use super::{test_utils::TestGraphPg, *};
     use crate::{
         hawkers::plaintext_store::PlaintextStore,
-        hnsw::{GraphMem, HnswSearcher},
+        hnsw::{GraphMem, HnswSearcher, SortedNeighborhood},
     };
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
@@ -381,7 +384,7 @@ mod tests {
             graph_pg.insert_apply(plan).await;
         }
 
-        let graph_mem2 = graph_pg.load_to_mem().await;
+        let graph_mem2 = graph_pg.load_to_mem().await.unwrap();
         assert_eq!(graph_mem, &graph_mem2);
 
         // Search for the same codes and find matches.
