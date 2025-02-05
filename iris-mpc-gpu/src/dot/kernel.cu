@@ -130,7 +130,7 @@ extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, 
     }
 }
 
-extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, size_t maxDbLength, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *matchCounterLeft, unsigned int *matchCounterRight, unsigned int *partialResultsLeft, unsigned int *partialResultsRight, const unsigned long long *orPolicyBitmap, size_t numDevices, size_t deviceId) // 2D bitmap stored as 1D
+extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, size_t maxDbLength, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *matchCounterLeft, unsigned int *matchCounterRight, unsigned int *partialResultsLeft, unsigned int *partialResultsRight, const unsigned long long *orPolicyBitmap, size_t numDevices, size_t deviceId)
 {
 
     size_t rowStride64 = (maxDbLength + 63) / 64;
@@ -144,7 +144,7 @@ extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *
 
             size_t deviceBit = idx * 64 + i;
 
-            // // Protect against any leftover bits if totalBits not multiple of 64
+            // Protect against any leftover bits if totalBits not multiple of 64
             if (deviceBit >= totalBits) break;
 
             unsigned int queryIdx = deviceBit / dbLength;
@@ -176,6 +176,7 @@ extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *
             size_t originalDbIdx = dbIdx * numDevices + deviceId;
             size_t orPolicyBitmapIdx = rowIndex + (originalDbIdx / 64);
 
+            // orPolicyBitmap represents a 2D array of bits of size (max batch size x maxDbLength)
             bool useOr = (orPolicyBitmap[orPolicyBitmapIdx]
                           & (1ULL << (originalDbIdx % 64))) != 0ULL;
 

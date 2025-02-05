@@ -868,7 +868,7 @@ mod e2e_test {
                         );
 
                         // use 1 to 10 OR-matching iris codes
-                        let n_db_indexes = self.rng.gen_range(1..5);
+                        let n_db_indexes = self.rng.gen_range(1..10);
 
                         // Remove disallowed queries from the pool
                         let db_indexes = (0..n_db_indexes)
