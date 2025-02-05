@@ -308,8 +308,8 @@ impl DeviceManager {
 
 impl Drop for DeviceManager {
     fn drop(&mut self) {
-        // Get all tracked DBs
         let page_unlock_ts = Instant::now();
+        // Get all tracked DBs
         if let Ok(locked_dbs) = self.locked_dbs.lock() {
             tracing::info!(
                 "DeviceManager is dropping memory for {:?} number of dbs",

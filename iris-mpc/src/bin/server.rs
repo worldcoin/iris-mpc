@@ -1148,10 +1148,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let s3_chunks_folder_name = config.db_chunks_folder_name.clone();
     let s3_load_max_retries = config.load_chunks_max_retries;
     let s3_load_initial_backoff_ms = config.load_chunks_initial_backoff_ms;
+    let device_manager_init = Arc::new(DeviceManager::init());
+    let device_manager = Arc::clone(&device_manager_init);
 
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
-        let device_manager = Arc::new(DeviceManager::init());
         let ids = device_manager.get_ids_from_magic(0);
 
         // --------------------------------------------------------------------------
@@ -1812,7 +1813,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             background_tasks.check_tasks_finished();
         }
     }
-
+    drop(device_manager_init);
     Ok(())
 }
 
