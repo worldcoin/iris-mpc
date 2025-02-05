@@ -2,16 +2,18 @@ use super::layered_graph::EntryPoint;
 use crate::hnsw::{
     graph::neighborhood::SortedNeighborhoodV,
     searcher::{ConnectPlanLayerV, ConnectPlanV},
-    SortedNeighborhood, VectorStore,
+    GraphMem, SortedNeighborhood, VectorStore,
 };
 use eyre::{eyre, Result};
 use itertools::izip;
 use sqlx::{
+    error::BoxDynError,
     migrate::Migrator,
     postgres::{PgPoolOptions, PgRow},
+    types::{Json, Text},
     Executor, Row,
 };
-use std::marker::PhantomData;
+use std::{marker::PhantomData, str::FromStr};
 
 const MAX_CONNECTIONS: u32 = 5;
 
@@ -78,7 +80,7 @@ impl<V: VectorStore> GraphPg<V> {
         self.set_links(q, plan.neighbors, lc).await;
     }
 
-    pub async fn get_entry_point(&self) -> Option<(V::VectorRef, usize)> {
+    async fn get_entry_point(&self) -> Option<(V::VectorRef, usize)> {
         sqlx::query(
             "
                 SELECT entry_point FROM hawk_graph_entry WHERE id = 0
@@ -88,7 +90,7 @@ impl<V: VectorStore> GraphPg<V> {
         .await
         .expect("Failed to fetch entry point")
         .map(|row: PgRow| {
-            let x: sqlx::types::Json<EntryPoint<V::VectorRef>> = row.get("entry_point");
+            let x: Json<EntryPoint<V::VectorRef>> = row.get("entry_point");
             (x.point.clone(), x.layer)
         })
     }
@@ -101,39 +103,35 @@ impl<V: VectorStore> GraphPg<V> {
             DO UPDATE SET entry_point = EXCLUDED.entry_point
         ",
         )
-        .bind(sqlx::types::Json(&EntryPoint { point, layer }))
+        .bind(Json(&EntryPoint { point, layer }))
         .execute(&self.pool)
         .await
         .expect("Failed to set entry point");
     }
 
-    pub async fn get_links(
+    async fn get_links(
         &self,
         base: &<V as VectorStore>::VectorRef,
         lc: usize,
     ) -> SortedNeighborhoodV<V> {
-        let base_str = serde_json::to_string(base).unwrap();
-
         sqlx::query(
             "
             SELECT links FROM hawk_graph_links WHERE source_ref = $1 AND layer = $2
         ",
         )
-        .bind(base_str)
+        .bind(Text(base))
         .bind(lc as i32)
         .fetch_optional(&self.pool)
         .await
         .expect("Failed to fetch links")
         .map(|row: PgRow| {
-            let x: sqlx::types::Json<SortedNeighborhoodV<V>> = row.get("links");
+            let x: Json<SortedNeighborhoodV<V>> = row.get("links");
             x.as_ref().clone()
         })
         .unwrap_or_else(SortedNeighborhood::new)
     }
 
     async fn set_links(&mut self, base: V::VectorRef, links: SortedNeighborhoodV<V>, lc: usize) {
-        let base_str = serde_json::to_string(&base).unwrap();
-
         sqlx::query(
             "
             INSERT INTO hawk_graph_links (source_ref, layer, links)
@@ -142,12 +140,55 @@ impl<V: VectorStore> GraphPg<V> {
             links = EXCLUDED.links
         ",
         )
-        .bind(base_str)
+        .bind(Text(base))
         .bind(lc as i32)
-        .bind(sqlx::types::Json(&links))
+        .bind(Json(&links))
         .execute(&self.pool)
         .await
         .expect("Failed to set links");
+    }
+}
+
+#[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
+pub struct RowLinks<V: VectorStore> {
+    source_ref: Text<V::VectorRef>,
+    links:      Json<SortedNeighborhoodV<V>>,
+    layer:      i32,
+}
+
+impl<V: VectorStore> GraphPg<V>
+where
+    V::VectorRef: Send + Unpin + 'static,
+    BoxDynError: From<<V::VectorRef as FromStr>::Err>,
+    V::DistanceRef: Send + Unpin + 'static,
+{
+    async fn iter_links(&self) -> Vec<RowLinks<V>> {
+        sqlx::query_as::<_, RowLinks<V>>(
+            "
+        SELECT source_ref, links, layer FROM hawk_graph_links
+        ",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .unwrap()
+    }
+
+    pub async fn load_to_mem(&self) -> GraphMem<V> {
+        let mut graph_mem = GraphMem::new();
+
+        let ep = self.get_entry_point().await;
+
+        if let Some((point, layer)) = ep {
+            graph_mem.set_entry_point(point, layer).await;
+        }
+
+        for row in self.iter_links().await {
+            graph_mem
+                .set_links(row.source_ref.0, row.links.0, row.layer as usize)
+                .await;
+        }
+
+        graph_mem
     }
 }
 
@@ -339,6 +380,9 @@ mod tests {
             graph_mem.insert_apply(plan.clone()).await;
             graph_pg.insert_apply(plan).await;
         }
+
+        let graph_mem2 = graph_pg.load_to_mem().await;
+        assert_eq!(graph_mem, &graph_mem2);
 
         // Search for the same codes and find matches.
         for query in queries1.iter() {

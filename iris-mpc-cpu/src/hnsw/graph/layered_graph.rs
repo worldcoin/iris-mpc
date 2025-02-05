@@ -85,7 +85,7 @@ impl<V: VectorStore> GraphMem<V> {
             .map(|ep| (ep.point.clone(), ep.layer))
     }
 
-    async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) {
+    pub async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) {
         if let Some(previous) = self.entry_point.as_ref() {
             assert!(
                 previous.layer < layer,
@@ -118,7 +118,12 @@ impl<V: VectorStore> GraphMem<V> {
     /// `set_entry_point` function for an entry point at at least this layer.
     ///
     /// Panics if `lc` is higher than the maximum initialized layer.
-    async fn set_links(&mut self, base: V::VectorRef, links: SortedNeighborhoodV<V>, lc: usize) {
+    pub async fn set_links(
+        &mut self,
+        base: V::VectorRef,
+        links: SortedNeighborhoodV<V>,
+        lc: usize,
+    ) {
         let layer = self.layers.get_mut(lc).unwrap();
         layer.set_links(base, links);
     }
@@ -222,7 +227,6 @@ mod tests {
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
     use rand::{RngCore, SeedableRng};
-    use serde::{Deserialize, Serialize};
 
     #[derive(Default, Clone, Debug, PartialEq, Eq)]
     pub struct TestStore {
@@ -238,27 +242,21 @@ mod tests {
         is_persistent: bool,
     }
 
-    #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
-    pub struct TestPointId(pub usize);
-
-    impl TestPointId {
-        pub fn val(&self) -> usize {
-            self.0
-        }
-    }
-
     fn hamming_distance(a: u64, b: u64) -> u32 {
         (a ^ b).count_ones()
     }
 
     impl VectorStore for TestStore {
-        type QueryRef = TestPointId; // Vector ID, pending insertion.
-        type VectorRef = TestPointId; // Vector ID, inserted.
+        type QueryRef = PointId; // Vector ID, pending insertion.
+        type VectorRef = PointId; // Vector ID, inserted.
         type DistanceRef = u32; // Eager distance representation as fraction.
 
         async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
             // The query is now accepted in the store. It keeps the same ID.
-            self.points.get_mut(&query.val()).unwrap().is_persistent = true;
+            self.points
+                .get_mut(&(query.0 as usize))
+                .unwrap()
+                .is_persistent = true;
             *query
         }
 
@@ -268,8 +266,8 @@ mod tests {
             vector: &Self::VectorRef,
         ) -> Self::DistanceRef {
             // Hamming distance
-            let vector_0 = self.points[&query.val()].data;
-            let vector_1 = self.points[&vector.val()].data;
+            let vector_0 = self.points[&(query.0 as usize)].data;
+            let vector_1 = self.points[&(vector.0 as usize)].data;
             hamming_distance(vector_0, vector_1)
         }
 
@@ -329,7 +327,7 @@ mod tests {
         let searcher = HnswSearcher::default();
         let mut rng = AesRng::seed_from_u64(0_u64);
 
-        let mut point_ids_map: HashMap<<PlaintextStore as VectorStore>::VectorRef, TestPointId> =
+        let mut point_ids_map: HashMap<<PlaintextStore as VectorStore>::VectorRef, PointId> =
             HashMap::new();
         fn distance_map(d: <PlaintextStore as VectorStore>::DistanceRef) -> u32 {
             let (num, denom) = d;
@@ -353,7 +351,7 @@ mod tests {
                 )
                 .await;
 
-            point_ids_map.insert(query, TestPointId(rng.next_u64() as usize));
+            point_ids_map.insert(query, PointId(rng.next_u32()));
         }
 
         let new_graph_store: GraphMem<TestStore> =
