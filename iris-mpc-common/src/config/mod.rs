@@ -205,7 +205,7 @@ fn default_match_distances_buffer_size() -> usize {
 }
 
 fn default_match_distances_buffer_size_extra_percent() -> usize {
-    10
+    20
 }
 
 fn default_n_buckets() -> usize {
