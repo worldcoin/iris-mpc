@@ -1095,24 +1095,26 @@ impl ServerActor {
             })
             .collect::<Vec<_>>();
 
-        let successful_reauth_positions = match_ids_filtered
+        let successful_reauths = match_ids_filtered
             .iter()
             .enumerate()
-            .filter(|(idx, matches)| {
-                let reauth_id = batch.request_ids[*idx].clone();
+            .map(|(idx, matches)| {
+                let reauth_id = batch.request_ids[idx].clone();
                 // expect exactly one match to the target reauth index
-                batch.request_types[*idx] == REAUTH_MESSAGE_TYPE
+                batch.request_types[idx] == REAUTH_MESSAGE_TYPE
                     && matches.len() == 1
                     && matches[0] == *batch.reauth_target_indices.get(&reauth_id).unwrap()
             })
-            .map(|(idx, _)| idx)
-            .collect::<Vec<_>>();
-        let mut reauth_positions_per_device = vec![vec![]; self.device_manager.device_count()];
-        for reauth_pos in successful_reauth_positions.clone() {
+            .collect::<Vec<bool>>();
+        let mut reauth_updates_per_device = vec![vec![]; self.device_manager.device_count()];
+        for (reauth_pos, success) in successful_reauths.clone().iter().enumerate() {
+            if !*success {
+                continue;
+            }
             let reauth_id = batch.request_ids[reauth_pos].clone();
             let reauth_index = *batch.reauth_target_indices.get(&reauth_id).unwrap();
             let device_index = reauth_index % self.device_manager.device_count() as u32;
-            reauth_positions_per_device[device_index as usize].push(reauth_pos);
+            reauth_updates_per_device[device_index as usize].push(reauth_pos);
         }
 
         // Write back to in-memory db
@@ -1170,7 +1172,7 @@ impl ServerActor {
                             self.current_db_sizes[i]
                         );
 
-                        for reauth_pos in reauth_positions_per_device[i].clone() {
+                        for reauth_pos in reauth_updates_per_device[i].clone() {
                             let reauth_id = batch.request_ids[reauth_pos].clone();
                             let reauth_index =
                                 *batch.reauth_target_indices.get(&reauth_id).unwrap();
@@ -1227,7 +1229,7 @@ impl ServerActor {
                 matched_batch_request_ids,
                 anonymized_bucket_statistics_left: self.anonymized_bucket_statistics_left.clone(),
                 anonymized_bucket_statistics_right: self.anonymized_bucket_statistics_right.clone(),
-                successful_reauth_positions,
+                successful_reauths,
                 reauth_target_indices: batch.reauth_target_indices,
             })
             .unwrap();

@@ -196,7 +196,7 @@ pub struct ServerJobResult {
     pub matched_batch_request_ids: Vec<Vec<String>>,
     pub anonymized_bucket_statistics_left: BucketStatistics,
     pub anonymized_bucket_statistics_right: BucketStatistics,
-    pub successful_reauth_positions: Vec<usize>,
+    pub successful_reauths: Vec<bool>, // true if request type is reauth and it's successful
     pub reauth_target_indices: HashMap<String, u32>,
 }
 

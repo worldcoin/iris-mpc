@@ -1472,7 +1472,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             matched_batch_request_ids,
             anonymized_bucket_statistics_left,
             anonymized_bucket_statistics_right,
-            successful_reauth_positions,
+            successful_reauths,
             reauth_target_indices,
         }) = rx.recv().await
         {
@@ -1550,7 +1550,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         reauth_id.clone(),
                         party_id,
                         reauth_target_indices.get(&reauth_id).unwrap() + 1,
-                        successful_reauth_positions.contains(&i),
+                        successful_reauths[i],
                         match match_ids[i].is_empty() {
                             false => Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
                             true => None,
@@ -1586,21 +1586,21 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     ));
                 }
 
-                tracing::info!(
-                    "Persisting {} reauths into postgres",
-                    successful_reauth_positions.len()
-                );
-                for i in successful_reauth_positions.iter() {
-                    let reauth_id = request_ids[*i].clone();
+                for (i, success) in successful_reauths.iter().enumerate() {
+                    if !success {
+                        continue;
+                    }
+                    tracing::info!("Persisting reauth into postgres: {}", request_ids[i]);
+                    let reauth_id = request_ids[i].clone();
                     let serial_id = *reauth_target_indices.get(&reauth_id).unwrap();
                     store_bg
                         .update_iris(
                             Some(&mut tx),
                             serial_id as i64,
-                            &store_left.code[*i],
-                            &store_left.mask[*i],
-                            &store_right.code[*i],
-                            &store_right.mask[*i],
+                            &store_left.code[i],
+                            &store_left.mask[i],
+                            &store_right.code[i],
+                            &store_right.mask[i],
                         )
                         .await?;
                 }
