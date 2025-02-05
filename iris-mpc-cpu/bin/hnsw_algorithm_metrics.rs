@@ -68,7 +68,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     tracing_subscriber::registry()
         .with(counting_layer)
-        .with(ForestLayer::new(file_processor, NoTag {}).with_filter(EnvFilter::new("wall_time")))
+        .with(ForestLayer::new(file_processor, NoTag {}).with_filter(EnvFilter::new("cpu_time")))
         .init();
 
     // Run HNSW construction

@@ -11,7 +11,7 @@ use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use tracing::{info, instrument};
+use tracing::{info, instrument, trace_span, Instrument};
 
 // Specify construction and search parameters by layer up to this value minus 1
 // any higher layers will use the last set of parameters
@@ -267,7 +267,11 @@ impl HnswSearcher {
     ///
     /// If no entry point is initialized, returns an empty list and layer 0.
     #[allow(non_snake_case)]
-    #[instrument(target = "wall_time", skip(self, vector_store, graph_store, query))]
+    #[instrument(
+        level = "trace",
+        target = "cpu_time",
+        skip(self, vector_store, graph_store, query)
+    )]
     async fn search_init<V: VectorStore>(
         &self,
         vector_store: &mut V,
@@ -290,7 +294,11 @@ impl HnswSearcher {
     /// given layer using depth-first graph traversal,  Terminates when `W`
     /// contains vectors which are the nearest to `q` among all traversed
     /// vertices and their neighbors.
-    #[instrument(target = "wall_time", skip(self, vector_store, graph_store, W))]
+    #[instrument(
+        level = "trace",
+        target = "cpu_time",
+        skip(self, vector_store, graph_store, W)
+    )]
     #[allow(non_snake_case)]
     async fn search_layer<V: VectorStore>(
         &self,
@@ -311,6 +319,11 @@ impl HnswSearcher {
 
         // fq: The current furthest distance in W.
         let (_, mut fq) = W.get_furthest().expect("W cannot be empty").clone();
+
+        // These spans accumulate running time of multiple atomic operations
+        let eval_dist_span = trace_span!(target: "cpu_time", "eval_distance_batch");
+        let less_than_span = trace_span!(target: "cpu_time", "less_than");
+        let insert_span = trace_span!(target: "cpu_time", "insert_into_sorted_neighborhood");
 
         // Continue until all current entries in candidate nearest neighbors list have
         // been opened
@@ -337,7 +350,10 @@ impl HnswSearcher {
                     })
                     .collect::<Vec<_>>();
 
-                let distances = vector_store.eval_distance_batch(q, &e_batch).await;
+                let distances = vector_store
+                    .eval_distance_batch(q, &e_batch)
+                    .instrument(eval_dist_span.clone())
+                    .await;
 
                 e_batch
                     .into_iter()
@@ -348,7 +364,11 @@ impl HnswSearcher {
             for (e, eq) in c_links.into_iter() {
                 if W.len() == ef {
                     // When W is full, we decide whether to replace the furthest element.
-                    if vector_store.less_than(&eq, &fq).await {
+                    if vector_store
+                        .less_than(&eq, &fq)
+                        .instrument(less_than_span.clone())
+                        .await
+                    {
                         // Make room for the new better candidate…
                         W.pop_furthest();
                     } else {
@@ -358,7 +378,9 @@ impl HnswSearcher {
                 }
 
                 // Track the new candidate as a potential k-nearest.
-                W.insert(vector_store, e, eq).await;
+                W.insert(vector_store, e, eq)
+                    .instrument(insert_span.clone())
+                    .await;
 
                 // fq stays the furthest distance in W.
                 (_, fq) = W.get_furthest().expect("W cannot be empty").clone();
@@ -391,8 +413,9 @@ impl HnswSearcher {
     /// `graph_store`.  Return a `V::VectorRef` representing the inserted
     /// vector.
     #[instrument(
+        level = "trace",
         skip(self, vector_store, graph_store, query, rng),
-        target = "wall_time"
+        target = "cpu_time"
     )]
     pub async fn insert<V: VectorStore>(
         &self,
@@ -432,7 +455,11 @@ impl HnswSearcher {
     ///
     /// If no entry point is initialized for the index, then the insertion will
     /// set `query` as the index entry point.
-    #[instrument(target = "wall_time", skip(self, vector_store, graph_store, query))]
+    #[instrument(
+        level = "trace",
+        target = "cpu_time",
+        skip(self, vector_store, graph_store, query)
+    )]
     #[allow(non_snake_case)]
     pub async fn search_to_insert<V: VectorStore>(
         &self,
@@ -526,7 +553,8 @@ impl HnswSearcher {
     /// that is the nearest neighbor links at each insertion layer, and a flag
     /// indicating whether the vector is to be inserted as the new entry point.
     #[instrument(
-        target = "wall_time",
+        level = "trace",
+        target = "cpu_time",
         skip(self, vector_store, graph_store, inserted_vector, links)
     )]
     pub async fn insert_from_search_results<V: VectorStore>(

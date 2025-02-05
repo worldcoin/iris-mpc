@@ -34,7 +34,7 @@ tokio.workspace = true
 tokio-stream = "0.1"
 tonic = "0.12.3"
 tracing.workspace = true
-tracing-forest = { version = "0.1.6", features = ["full"] }
+tracing-forest = { version = "0.1.6", features = ["uuid", "chrono", "smallvec", "tokio", "serde", "env-filter"] }
 tracing-subscriber.workspace = true
 tracing-test = "0.2.5"
 uuid.workspace = true
