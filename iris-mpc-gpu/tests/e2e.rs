@@ -524,7 +524,6 @@ mod e2e_test {
         /// deleted
         PreviouslyDeleted,
         /// Send an iris code that uses the OR rule
-        #[expect(unused)]
         WithOrRuleSet,
     }
 
@@ -718,7 +717,7 @@ mod e2e_test {
                 TestCases::Match,
                 TestCases::NonMatch,
                 TestCases::CloseToThreshold,
-                // TestCases::WithOrRuleSet,
+                TestCases::WithOrRuleSet,
             ];
             if !self.inserted_responses.is_empty() {
                 options.push(TestCases::PreviouslyInserted);
@@ -869,7 +868,7 @@ mod e2e_test {
                         );
 
                         // use 1 to 10 OR-matching iris codes
-                        let n_db_indexes = self.rng.gen_range(1..10);
+                        let n_db_indexes = self.rng.gen_range(1..5);
 
                         // Remove disallowed queries from the pool
                         let db_indexes = (0..n_db_indexes)

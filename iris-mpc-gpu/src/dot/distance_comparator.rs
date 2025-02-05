@@ -287,6 +287,7 @@ impl DistanceComparator {
             );
 
             self.device_manager.device(i).bind_to_thread().unwrap();
+            let num_devices = self.device_manager.device_count();
 
             unsafe {
                 self.merge_batch_with_bitmap_kernels[i]
@@ -298,7 +299,7 @@ impl DistanceComparator {
                             &matches_bitmap_left[i],
                             &matches_bitmap_right[i],
                             &final_results[i],
-                            self.query_length,
+                            (self.query_length / ROTATIONS) as u64,
                             db_sizes[i] as u64,
                             num_elements,
                             max_db_size,
@@ -310,6 +311,8 @@ impl DistanceComparator {
                             &self.partial_results_right[i],
                             // Additional args
                             &or_policies_bitmap[i],
+                            num_devices as u64,
+                            i as u64,
                         ),
                     )
                     .unwrap();
