@@ -1044,7 +1044,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     connected_but_unready[i] = true;
                     // If all nodes are connected, notify the main thread.
                     if connected_but_unready.iter().all(|&c| c) {
-                        return ();
+                        return ;
                     }
                 }
             }
@@ -1717,7 +1717,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     connected[i] = true;
                     // If all nodes are connected, notify the main thread.
                     if connected.iter().all(|&c| c) {
-                        return ();
+                        return ;
                     }
                 }
             }
