@@ -1117,6 +1117,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         return Ok(());
     }
 
+    // refetch store_len in case we rolled back
+    let store_len = store.count_irises().await?;
+    tracing::info!("Database store length after sync: {}", store_len);
+
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
         let device_manager = Arc::new(DeviceManager::init());
