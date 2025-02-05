@@ -1054,7 +1054,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     });
 
     tracing::info!("Waiting for all nodes to be unready...");
-    match tokio::time::timeout(Duration::from_secs(300), unready_check).await {
+    match tokio::time::timeout(
+        Duration::from_secs(config.startup_sync_timeout_secs),
+        unready_check,
+    )
+    .await
+    {
         Ok(res) => {
             res?;
         }
@@ -1727,7 +1732,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     });
 
     tracing::info!("Waiting for all nodes to be ready...");
-    match tokio::time::timeout(Duration::from_secs(300), ready_check).await {
+    match tokio::time::timeout(
+        Duration::from_secs(config.startup_sync_timeout_secs),
+        ready_check,
+    )
+    .await
+    {
         Ok(res) => {
             res?;
         }

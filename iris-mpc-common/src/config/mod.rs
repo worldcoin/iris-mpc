@@ -46,6 +46,9 @@ pub struct Config {
     #[serde(default = "default_processing_timeout_secs")]
     pub processing_timeout_secs: u64,
 
+    #[serde(default = "default_startup_sync_timeout_secs")]
+    pub startup_sync_timeout_secs: u64,
+
     #[serde(default)]
     pub public_key_base_url: String,
 
@@ -161,6 +164,10 @@ fn default_load_chunks_parallelism() -> usize {
 
 fn default_processing_timeout_secs() -> u64 {
     60
+}
+
+fn default_startup_sync_timeout_secs() -> u64 {
+    300
 }
 
 fn default_max_batch_size() -> usize {
