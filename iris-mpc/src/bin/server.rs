@@ -1201,7 +1201,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Database store length is: {}", store_len);
     let mut states = vec![my_state.clone()];
     for host in [next_node, prev_node].iter() {
-        let res = reqwest::get(format!("http://{}:3000/sync", host)).await;
+        let res = reqwest::get(format!("http://{}:3000/startup-sync", host)).await;
         match res {
             Ok(res) => {
                 let state: SyncState = match res.json().await {
