@@ -267,6 +267,7 @@ impl HnswSearcher {
     ///
     /// If no entry point is initialized, returns an empty list and layer 0.
     #[allow(non_snake_case)]
+    #[instrument(target = "wall_time", skip(self, vector_store, graph_store, query))]
     async fn search_init<V: VectorStore>(
         &self,
         vector_store: &mut V,
@@ -289,7 +290,7 @@ impl HnswSearcher {
     /// given layer using depth-first graph traversal,  Terminates when `W`
     /// contains vectors which are the nearest to `q` among all traversed
     /// vertices and their neighbors.
-    #[instrument(skip(self, vector_store, graph_store, W))]
+    #[instrument(target = "wall_time", skip(self, vector_store, graph_store, W))]
     #[allow(non_snake_case)]
     async fn search_layer<V: VectorStore>(
         &self,
@@ -389,6 +390,10 @@ impl HnswSearcher {
     /// Insert `query` into HNSW index represented by `vector_store` and
     /// `graph_store`.  Return a `V::VectorRef` representing the inserted
     /// vector.
+    #[instrument(
+        skip(self, vector_store, graph_store, query, rng),
+        target = "wall_time"
+    )]
     pub async fn insert<V: VectorStore>(
         &self,
         vector_store: &mut V,
@@ -427,6 +432,7 @@ impl HnswSearcher {
     ///
     /// If no entry point is initialized for the index, then the insertion will
     /// set `query` as the index entry point.
+    #[instrument(target = "wall_time", skip(self, vector_store, graph_store, query))]
     #[allow(non_snake_case)]
     pub async fn search_to_insert<V: VectorStore>(
         &self,
@@ -519,6 +525,10 @@ impl HnswSearcher {
     /// Insert a vector using the search results from `search_to_insert`,
     /// that is the nearest neighbor links at each insertion layer, and a flag
     /// indicating whether the vector is to be inserted as the new entry point.
+    #[instrument(
+        target = "wall_time",
+        skip(self, vector_store, graph_store, inserted_vector, links)
+    )]
     pub async fn insert_from_search_results<V: VectorStore>(
         &self,
         vector_store: &mut V,

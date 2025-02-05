@@ -11,8 +11,9 @@ use iris_mpc_cpu::{
     },
 };
 use rand::SeedableRng;
-use std::error::Error;
-use tracing_subscriber::prelude::*;
+use std::{error::Error, fs::File};
+use tracing_forest::{tag::NoTag, ForestLayer, PrettyPrinter};
+use tracing_subscriber::{prelude::*, EnvFilter};
 
 #[derive(Parser)]
 #[allow(non_snake_case)]
@@ -62,7 +63,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .register_dynamic(param_openings, Operation::OpenNode)
         .init();
 
-    tracing_subscriber::registry().with(counting_layer).init();
+    let file = File::create("forest.txt")?;
+    let file_processor = PrettyPrinter::new().writer(std::sync::Mutex::new(file));
+
+    tracing_subscriber::registry()
+        .with(counting_layer)
+        .with(ForestLayer::new(file_processor, NoTag {}).with_filter(EnvFilter::new("wall_time")))
+        .init();
 
     // Run HNSW construction
 
