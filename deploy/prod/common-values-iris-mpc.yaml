@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:v0.13.25"
+image: "ghcr.io/worldcoin/iris-mpc:v0.14.2"
 
 environment: prod
 replicaCount: 1

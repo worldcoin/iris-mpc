@@ -102,8 +102,10 @@ where
 }
 
 pub const IDENTITY_DELETION_MESSAGE_TYPE: &str = "identity_deletion";
+pub const ANONYMIZED_STATISTICS_MESSAGE_TYPE: &str = "anonymized_statistics";
 pub const CIRCUIT_BREAKER_MESSAGE_TYPE: &str = "circuit_breaker";
 pub const UNIQUENESS_MESSAGE_TYPE: &str = "uniqueness";
+pub const REAUTH_MESSAGE_TYPE: &str = "reauth";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct UniquenessRequest {
@@ -111,6 +113,7 @@ pub struct UniquenessRequest {
     pub signup_id:               String,
     pub s3_key:                  String,
     pub iris_shares_file_hashes: [String; 3],
+    pub or_rule_serial_ids:      Option<Vec<u32>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -121,6 +124,16 @@ pub struct CircuitBreakerRequest {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct IdentityDeletionRequest {
     pub serial_id: u32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ReAuthRequest {
+    pub reauth_id:               String,
+    pub batch_size:              Option<usize>,
+    pub s3_key:                  String,
+    pub iris_shares_file_hashes: [String; 3],
+    pub serial_id:               u32,
+    pub use_or_rule:             bool,
 }
 
 #[derive(Error, Debug)]
@@ -192,99 +205,96 @@ impl SharesS3Object {
     }
 }
 
-impl UniquenessRequest {
-    pub async fn get_iris_data_by_party_id(
-        &self,
-        party_id: usize,
-        bucket_name: &String,
-        s3_client: &Arc<S3Client>,
-    ) -> Result<String, SharesDecodingError> {
-        let response = s3_client
-            .get_object()
-            .bucket(bucket_name)
-            .key(self.s3_key.as_str())
-            .send()
-            .await
-            .map_err(|err| {
-                tracing::error!("Failed to download file: {}", err);
-                SharesDecodingError::S3ResponseContent {
-                    key:     self.s3_key.clone(),
-                    message: err.to_string(),
-                }
-            })?;
-
-        let object_body = response.body.collect().await.map_err(|e| {
-            tracing::error!("Failed to get object body: {}", e);
+pub async fn get_iris_data_by_party_id(
+    s3_key: &str,
+    party_id: usize,
+    bucket_name: &String,
+    s3_client: &Arc<S3Client>,
+) -> Result<String, SharesDecodingError> {
+    let response = s3_client
+        .get_object()
+        .bucket(bucket_name)
+        .key(s3_key)
+        .send()
+        .await
+        .map_err(|err| {
+            tracing::error!("Failed to download file: {}", err);
             SharesDecodingError::S3ResponseContent {
-                key:     self.s3_key.clone(),
-                message: e.to_string(),
+                key:     s3_key.to_string(),
+                message: err.to_string(),
             }
         })?;
 
-        let bytes = object_body.into_bytes();
+    let object_body = response.body.collect().await.map_err(|e| {
+        tracing::error!("Failed to get object body: {}", e);
+        SharesDecodingError::S3ResponseContent {
+            key:     s3_key.to_string(),
+            message: e.to_string(),
+        }
+    })?;
 
-        let shares_file: SharesS3Object = serde_json::from_slice(&bytes)?;
+    let bytes = object_body.into_bytes();
 
-        let field_name = format!("iris_share_{}", party_id);
+    let shares_file: SharesS3Object = serde_json::from_slice(&bytes)?;
 
-        shares_file.get(party_id).cloned().ok_or_else(|| {
-            tracing::error!("Failed to find field: {}", field_name);
-            SharesDecodingError::SecretStringNotFound
-        })
-    }
+    let field_name = format!("iris_share_{}", party_id);
 
-    pub fn decrypt_iris_share(
-        &self,
-        share: String,
-        key_pairs: SharesEncryptionKeyPairs,
-    ) -> Result<IrisCodesJSON, SharesDecodingError> {
-        let share_bytes = STANDARD
-            .decode(share.as_bytes())
-            .map_err(|_| SharesDecodingError::Base64DecodeError)?;
+    shares_file.get(party_id).cloned().ok_or_else(|| {
+        tracing::error!("Failed to find field: {}", field_name);
+        SharesDecodingError::SecretStringNotFound
+    })
+}
 
-        // try decrypting with key_pairs.current_key_pair, if it fails, try decrypting
-        // with key_pairs.previous_key_pair (if it exists, otherwise, return an error)
-        let decrypted = match key_pairs
-            .current_key_pair
-            .open_sealed_box(share_bytes.clone())
-        {
-            Ok(bytes) => Ok(bytes),
-            Err(_) => {
-                match if let Some(key_pair) = key_pairs.previous_key_pair.clone() {
-                    key_pair.open_sealed_box(share_bytes)
-                } else {
-                    Err(SharesDecodingError::PreviousKeyNotFound)
-                } {
-                    Ok(bytes) => Ok(bytes),
-                    Err(_) => Err(SharesDecodingError::SealedBoxOpenError),
-                }
+pub fn decrypt_iris_share(
+    share: String,
+    key_pairs: SharesEncryptionKeyPairs,
+) -> Result<IrisCodesJSON, SharesDecodingError> {
+    let share_bytes = STANDARD
+        .decode(share.as_bytes())
+        .map_err(|_| SharesDecodingError::Base64DecodeError)?;
+
+    // try decrypting with key_pairs.current_key_pair, if it fails, try decrypting
+    // with key_pairs.previous_key_pair (if it exists, otherwise, return an error)
+    let decrypted = match key_pairs
+        .current_key_pair
+        .open_sealed_box(share_bytes.clone())
+    {
+        Ok(bytes) => Ok(bytes),
+        Err(_) => {
+            match if let Some(key_pair) = key_pairs.previous_key_pair.clone() {
+                key_pair.open_sealed_box(share_bytes)
+            } else {
+                Err(SharesDecodingError::PreviousKeyNotFound)
+            } {
+                Ok(bytes) => Ok(bytes),
+                Err(_) => Err(SharesDecodingError::SealedBoxOpenError),
             }
-        };
+        }
+    };
 
-        let iris_share = match decrypted {
-            Ok(bytes) => {
-                let json_string = String::from_utf8(bytes)
-                    .map_err(SharesDecodingError::DecodedShareParsingToUTF8Error)?;
+    let iris_share = match decrypted {
+        Ok(bytes) => {
+            let json_string = String::from_utf8(bytes)
+                .map_err(SharesDecodingError::DecodedShareParsingToUTF8Error)?;
 
-                let iris_share: IrisCodesJSON =
-                    serde_json::from_str(&json_string).map_err(SharesDecodingError::SerdeError)?;
-                iris_share
-            }
-            Err(e) => return Err(e),
-        };
+            let iris_share: IrisCodesJSON =
+                serde_json::from_str(&json_string).map_err(SharesDecodingError::SerdeError)?;
+            iris_share
+        }
+        Err(e) => return Err(e),
+    };
 
-        Ok(iris_share)
-    }
+    Ok(iris_share)
+}
 
-    pub fn validate_iris_share(
-        &self,
-        party_id: usize,
-        share: IrisCodesJSON,
-    ) -> Result<bool, SharesDecodingError> {
-        let stringified_share = serde_json::to_string(&share)
-            .map_err(SharesDecodingError::SerdeError)?
-            .into_bytes();
+pub fn validate_iris_share(
+    iris_shares_file_hashes: [String; 3],
+    party_id: usize,
+    share: IrisCodesJSON,
+) -> Result<bool, SharesDecodingError> {
+    let stringified_share = serde_json::to_string(&share)
+        .map_err(SharesDecodingError::SerdeError)?
+        .into_bytes();
 
-        Ok(self.iris_shares_file_hashes[party_id] == sha256_as_hex_string(stringified_share))
-    }
+    Ok(iris_shares_file_hashes[party_id] == sha256_as_hex_string(stringified_share))
 }

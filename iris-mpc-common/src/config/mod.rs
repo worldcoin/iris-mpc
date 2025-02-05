@@ -101,7 +101,7 @@ pub struct Config {
     pub load_chunks_parallelism: usize,
 
     /// Defines the safety overlap to load the DB records >last_modified_at in
-    /// seconds This is to ensure we don't miss any records that were
+    /// seconds. This is to ensure we don't miss any records that were
     /// updated during the DB export to S3
     #[serde(default = "default_db_load_safety_overlap_seconds")]
     pub db_load_safety_overlap_seconds: i64,
@@ -110,7 +110,31 @@ pub struct Config {
     pub db_chunks_folder_name: String,
 
     #[serde(default)]
+    pub load_chunks_buffer_size: usize,
+
+    #[serde(default = "default_load_chunks_max_retries")]
+    pub load_chunks_max_retries: usize,
+
+    #[serde(default = "default_load_chunks_initial_backoff_ms")]
+    pub load_chunks_initial_backoff_ms: u64,
+
+    #[serde(default)]
     pub fixed_shared_secrets: bool,
+
+    /// LUC is the defense mechanism by which iris computations are performed
+    /// using the OR rule for right and left matches.
+    #[serde(default)]
+    pub luc_enabled: bool,
+
+    /// LUC look back is the time frame in days for which to use OR rule for a
+    /// new signup against existing signups in that time period.
+    #[serde(default = "default_luc_lookback_records")]
+    pub luc_lookback_records: usize,
+
+    /// Alternatively, we can use the serial IDs from the SMPc request to mark
+    /// which records are to be processed using the OR rule.
+    #[serde(default)]
+    pub luc_serial_ids_from_smpc_request: bool,
 
     /// The size of the match distance buffer collecting matches for anonymized
     /// histogram creation. This gets multiplied by the number of GPU
@@ -118,11 +142,17 @@ pub struct Config {
     #[serde(default = "default_match_distances_buffer_size")]
     pub match_distances_buffer_size: usize,
 
+    #[serde(default = "default_match_distances_buffer_size_extra_percent")]
+    pub match_distances_buffer_size_extra_percent: usize,
+
     #[serde(default = "default_n_buckets")]
     pub n_buckets: usize,
 
     #[serde(default)]
-    pub load_chunks_buffer_size: usize,
+    pub enable_sending_anonymized_stats_message: bool,
+
+    #[serde(default)]
+    pub enable_reauth: bool,
 }
 
 fn default_load_chunks_parallelism() -> usize {
@@ -157,9 +187,25 @@ fn default_db_load_safety_overlap_seconds() -> i64 {
     60
 }
 
+fn default_luc_lookback_records() -> usize {
+    0
+}
+
+fn default_load_chunks_max_retries() -> usize {
+    5
+}
+
+fn default_load_chunks_initial_backoff_ms() -> u64 {
+    200
+}
+
 // This gets multiplied by the number of GPU devices
 fn default_match_distances_buffer_size() -> usize {
     1 << 16
+}
+
+fn default_match_distances_buffer_size_extra_percent() -> usize {
+    10
 }
 
 fn default_n_buckets() -> usize {
