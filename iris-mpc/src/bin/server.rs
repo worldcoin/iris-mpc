@@ -1030,10 +1030,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
     // Check other nodes and wait until all nodes are ready.
-    let (unreadiness_tx, unreadiness_rx) = oneshot::channel();
-    let mut unreadiness_tx = Some(unreadiness_tx);
     let all_nodes = config.node_hostnames.clone();
-    let _heartbeat = background_tasks.spawn(async move {
+    let unready_check = tokio::spawn(async move {
         let next_node = &all_nodes[(config.party_id + 1) % 3];
         let prev_node = &all_nodes[(config.party_id + 2) % 3];
         let mut connected_but_unready = [false, false];
@@ -1046,9 +1044,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     connected_but_unready[i] = true;
                     // If all nodes are connected, notify the main thread.
                     if connected_but_unready.iter().all(|&c| c) {
-                        if let Some(tx) = unreadiness_tx.take() {
-                            tx.send(()).unwrap();
-                        }
+                        return ();
                     }
                 }
             }
@@ -1058,7 +1054,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     });
 
     tracing::info!("Waiting for all nodes to be unready...");
-    match tokio::time::timeout(Duration::from_secs(300), unreadiness_rx).await {
+    match tokio::time::timeout(Duration::from_secs(300), unready_check).await {
         Ok(res) => {
             res?;
         }
@@ -1205,7 +1201,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Database store length is: {}", store_len);
     let mut states = vec![my_state.clone()];
     for host in [next_node, prev_node].iter() {
-        let res = reqwest::get(format!("http://{}:3000/startup-sync", host)).await;
+        let res = reqwest::get(format!("http://{}:3000/sync", host)).await;
         match res {
             Ok(res) => {
                 let state: SyncState = match res.json().await {
@@ -1707,10 +1703,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     is_ready_flag_cloned.store(true, std::sync::atomic::Ordering::SeqCst);
 
     // Check other nodes and wait until all nodes are ready.
-    let (readiness_tx, readiness_rx) = oneshot::channel();
-    let mut readiness_tx = Some(readiness_tx);
     let all_nodes = config.node_hostnames.clone();
-    let _heartbeat = background_tasks.spawn(async move {
+    let ready_check = tokio::spawn(async move {
         let next_node = &all_nodes[(config.party_id + 1) % 3];
         let prev_node = &all_nodes[(config.party_id + 2) % 3];
         let mut connected = [false, false];
@@ -1723,9 +1717,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     connected[i] = true;
                     // If all nodes are connected, notify the main thread.
                     if connected.iter().all(|&c| c) {
-                        if let Some(tx) = readiness_tx.take() {
-                            tx.send(()).unwrap();
-                        }
+                        return ();
                     }
                 }
             }
@@ -1735,7 +1727,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     });
 
     tracing::info!("Waiting for all nodes to be ready...");
-    readiness_rx.await?;
+    match tokio::time::timeout(Duration::from_secs(300), ready_check).await {
+        Ok(res) => {
+            res?;
+        }
+        Err(_) => {
+            tracing::error!("Timeout waiting for all nodes to be ready.");
+            return Err(eyre!("Timeout waiting for all nodes to be ready."));
+        }
+    }
     tracing::info!("All nodes are ready.");
     background_tasks.check_tasks();
 
