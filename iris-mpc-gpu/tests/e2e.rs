@@ -4,7 +4,7 @@ mod e2e_test {
     use eyre::Result;
     use iris_mpc_common::{
         galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
-        helpers::statistics::BucketStatistics,
+        helpers::{smpc_request::UNIQUENESS_MESSAGE_TYPE, statistics::BucketStatistics},
         iris_db::{
             db::IrisDB,
             iris::{IrisCode, IrisCodeArray},
@@ -358,6 +358,9 @@ mod e2e_test {
         batch.metadata.push(Default::default());
         batch.valid_entries.push(is_valid);
         batch.request_ids.push(request_id);
+        batch
+            .request_types
+            .push(UNIQUENESS_MESSAGE_TYPE.to_string());
 
         batch.or_rule_serial_ids.push(or_rule_serial_ids);
 

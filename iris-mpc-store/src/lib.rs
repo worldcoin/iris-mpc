@@ -530,6 +530,7 @@ fn cast_u8_to_u16(s: &[u8]) -> &[u16] {
 }
 
 #[cfg(test)]
+#[cfg(feature = "db_dependent")]
 mod tests {
     const DOTENV_TEST: &str = ".env.test";
 
