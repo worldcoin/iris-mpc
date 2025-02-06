@@ -53,22 +53,42 @@ FROM --platform=linux/amd64 ubuntu:22.04 as build-image
 
 RUN apt-get update && apt-get install -y pkg-config wget
 
-RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
+FROM --platform=linux/amd64 ubuntu:22.04 as runtime-image
+RUN apt-get update && apt-get install -y pkg-config wget \
+    && wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
     && dpkg -i cuda-keyring_1.1-1_all.deb \
     && apt-get update \
     && apt-get install -y cuda-libraries-12-2 libnccl2=2.22.3-1+cuda12.2 libnccl-dev=2.22.3-1+cuda12.2 \
-    && rm -f cuda-keyring_1.1-1_all.deb
-
-# Set environment variables for runtime
-ENV LD_LIBRARY_PATH=/usr/local/cuda/extras/CUPTI/lib64:/opt/aws-ofi-nccl/install/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
-ENV PATH=/opt/aws-ofi-nccl/install/bin:/usr/local/cuda/bin:$PATH
+    && rm -f cuda-keyring_1.1-1_all.deb \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy necessary files from build stage
 COPY --from=base-image /opt/gdrcopy /opt/gdrcopy
-COPY --from=base-image /opt/aws-ofi-nccl/install /opt/aws-ofi-nccl/install
-COPY --from=base-image /opt/amazon/efa /opt/amazon/efa
+COPY --from=base-image /opt/aws-ofi-nccl /opt/aws-ofi-nccl
+COPY --from=base-image /opt/amazon /opt/amazon
 
-ENV LD_LIBRARY_PATH=/opt/gdrcopy/lib:/usr/local/cuda/compat:$LD_LIBRARY_PATH
+# Copy all required shared libraries
+COPY --from=base-image /usr/lib/x86_64-linux-gnu/libfabric.so* /usr/lib/x86_64-linux-gnu/
+COPY --from=base-image /usr/lib/x86_64-linux-gnu/libefa.so* /usr/lib/x86_64-linux-gnu/
+COPY --from=base-image /usr/lib/x86_64-linux-gnu/librdmacm.so* /usr/lib/x86_64-linux-gnu/
+COPY --from=base-image /usr/lib/x86_64-linux-gnu/libibverbs.so* /usr/lib/x86_64-linux-gnu/
+COPY --from=base-image /usr/lib/x86_64-linux-gnu/libnl-3.so* /usr/lib/x86_64-linux-gnu/
+COPY --from=base-image /usr/lib/x86_64-linux-gnu/libnl-route-3.so* /usr/lib/x86_64-linux-gnu/
+
+ENV PATH=/opt/aws-ofi-nccl/install/bin:/usr/local/cuda/bin:/opt/amazon/efa/bin:$PATH
+ENV LD_LIBRARY_PATH=/usr/local/cuda/extras/CUPTI/lib64:/opt/aws-ofi-nccl/install/lib:/opt/amazon/efa/lib:/opt/amazon/openmpi/lib:/usr/local/cuda/lib64:/opt/nccl/build/lib:/opt/gdrcopy/lib:/usr/local/cuda/compat:/usr/local/lib:$LD_LIBRARY_PATH
 ENV LIBRARY_PATH=/opt/gdrcopy/lib:/usr/local/cuda/compat/:$LIBRARY_PATH
 ENV CPATH=/opt/gdrcopy/include:$CPATH
-ENV PATH=/opt/gdrcopy/bin:$PATH
+
+# Create symbolic links for libraries
+# Make sure libraries are properly linked
+RUN mkdir -p /lib/x86_64-linux-gnu && \
+    cd /lib/x86_64-linux-gnu && \
+    rm -f libefa.so.1 librdmacm.so.1 libibverbs.so.1 && \
+    ln -sf /usr/lib/x86_64-linux-gnu/libefa.so.1 . && \
+    ln -sf /usr/lib/x86_64-linux-gnu/librdmacm.so.1 . && \
+    ln -sf /usr/lib/x86_64-linux-gnu/libibverbs.so.1 .
+
+# Test EFA installation
+RUN ldconfig && \
+    /opt/amazon/efa/bin/fi_info --version

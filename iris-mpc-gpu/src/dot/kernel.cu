@@ -130,7 +130,7 @@ extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, 
     }
 }
 
-extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, size_t maxDbLength, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *matchCounterLeft, unsigned int *matchCounterRight, unsigned int *partialResultsLeft, unsigned int *partialResultsRight, const unsigned long long *orPolicyBitmap) // 2D bitmap stored as 1D
+extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, size_t maxDbLength, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *matchCounterLeft, unsigned int *matchCounterRight, unsigned int *partialResultsLeft, unsigned int *partialResultsRight, const unsigned long long *orPolicyBitmap, size_t numDevices, size_t deviceId)
 {
 
     size_t rowStride64 = (maxDbLength + 63) / 64;
@@ -142,12 +142,13 @@ extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *
         for (int i = 0; i < 64; i++)
         {
 
-            size_t globalBit = idx * 64 + i;
-            // Protect against any leftover bits if totalBits not multiple of 64
-            if (globalBit >= totalBits) break;
+            size_t deviceBit = idx * 64 + i;
 
-            unsigned int queryIdx = globalBit / dbLength;
-            unsigned int dbIdx = globalBit % dbLength;
+            // Protect against any leftover bits if totalBits not multiple of 64
+            if (deviceBit >= totalBits) break;
+
+            unsigned int queryIdx = deviceBit / dbLength;
+            unsigned int dbIdx = deviceBit % dbLength;
             bool matchLeft = (matchResultsLeft[idx] & (1ULL << i));
             bool matchRight = (matchResultsRight[idx] & (1ULL << i));
 
@@ -168,11 +169,17 @@ extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *
                 if (qmcR < MAX_MATCHES_LEN)
                     partialResultsRight[MAX_MATCHES_LEN * queryIdx + qmcR] = dbIdx;
             }
-            size_t rowIndex = queryIdx * rowStride64;
-            size_t orPolicyBitmapIdx = rowIndex + (dbIdx / 64);
 
+            size_t rowIndex = queryIdx * rowStride64;
+
+            // Recalculate the original dbIdx from the device-specific dbIdx
+            size_t originalDbIdx = dbIdx * numDevices + deviceId;
+            size_t orPolicyBitmapIdx = rowIndex + (originalDbIdx / 64);
+
+            // orPolicyBitmap represents a 2D array of bits of size (max batch size x maxDbLength)
             bool useOr = (orPolicyBitmap[orPolicyBitmapIdx]
-                          & (1ULL << (dbIdx % 64))) != 0ULL;
+                          & (1ULL << (originalDbIdx % 64))) != 0ULL;
+
 
             // If useOr is true => (matchLeft || matchRight),
             // else => (matchLeft && matchRight).

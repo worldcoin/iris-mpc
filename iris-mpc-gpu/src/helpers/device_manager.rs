@@ -1,6 +1,6 @@
 use super::{
     comm::NcclComm,
-    query_processor::{CudaVec2DSlicerU8, StreamAwareCudaSlice},
+    query_processor::{CudaVec2DSlicerRawPointer, CudaVec2DSlicerU8, StreamAwareCudaSlice},
 };
 use crate::dot::ROTATIONS;
 use cudarc::{
@@ -15,14 +15,19 @@ use cudarc::{
     },
     nccl::Id,
 };
-use std::{sync::Arc, thread::sleep, time::Duration};
+use std::{
+    sync::{Arc, Mutex},
+    thread::sleep,
+    time::{Duration, Instant},
+};
 
 pub const NCCL_START_WAIT_TIME: Duration = Duration::from_secs(5);
 pub const NCCL_START_RETRIES: usize = 5;
 
 #[derive(Debug, Clone)]
 pub struct DeviceManager {
-    devices: Vec<Arc<CudaDevice>>,
+    devices:    Vec<Arc<CudaDevice>>,
+    locked_dbs: Arc<Mutex<Vec<CudaVec2DSlicerRawPointer>>>,
 }
 
 impl DeviceManager {
@@ -34,7 +39,10 @@ impl DeviceManager {
 
         tracing::info!("Found {} devices", devices.len());
 
-        Self { devices }
+        Self {
+            devices,
+            locked_dbs: Arc::new(Mutex::new(Vec::new())),
+        }
     }
 
     pub fn init_with_streams() -> Self {
@@ -45,7 +53,10 @@ impl DeviceManager {
 
         tracing::info!("Found {} devices", devices.len());
 
-        Self { devices }
+        Self {
+            devices,
+            locked_dbs: Arc::new(Mutex::new(Vec::new())),
+        }
     }
 
     /// Splits the devices into n chunks, returning a device manager for each
@@ -60,7 +71,8 @@ impl DeviceManager {
         let mut ret = vec![];
         for i in 0..n {
             ret.push(DeviceManager {
-                devices: self.devices[i * chunk_size..(i + 1) * chunk_size].to_vec(),
+                devices:    self.devices[i * chunk_size..(i + 1) * chunk_size].to_vec(),
+                locked_dbs: self.locked_dbs.clone(),
             });
         }
         Ok(ret)
@@ -187,6 +199,13 @@ impl DeviceManager {
         })
     }
 
+    // Method to add a db to tracking
+    pub fn track_locked_db(&self, db: CudaVec2DSlicerRawPointer) {
+        if let Ok(mut locked) = self.locked_dbs.lock() {
+            locked.push(db);
+        }
+    }
+
     pub fn device(&self, index: usize) -> Arc<CudaDevice> {
         self.devices[index].clone()
     }
@@ -284,5 +303,34 @@ impl DeviceManager {
             }
         }
         Ok(comms)
+    }
+}
+
+impl Drop for DeviceManager {
+    fn drop(&mut self) {
+        let page_unlock_ts = Instant::now();
+        // Get all tracked DBs
+        if let Ok(locked_dbs) = self.locked_dbs.lock() {
+            tracing::info!(
+                "DeviceManager is dropping memory for {:?} number of dbs",
+                locked_dbs.len()
+            );
+            for db in locked_dbs.iter() {
+                // For each DB, unregister all its memory
+                for (device_index, device) in self.devices.iter().enumerate() {
+                    device.bind_to_thread().unwrap();
+                    unsafe {
+                        let _ = cudarc::driver::sys::lib()
+                            .cuMemHostUnregister(db.limb_0[device_index] as *mut _);
+                        let _ = cudarc::driver::sys::lib()
+                            .cuMemHostUnregister(db.limb_1[device_index] as *mut _);
+                    }
+                }
+            }
+        }
+        tracing::info!(
+            "DeviceManager dropped, all memory unregistered in {:?} ",
+            page_unlock_ts.elapsed()
+        );
     }
 }
