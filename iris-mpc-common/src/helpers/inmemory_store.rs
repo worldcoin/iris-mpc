@@ -57,4 +57,17 @@ pub trait InMemoryStore {
         right_mask_odd: &[u8],
         right_mask_even: &[u8],
     );
+
+    /// Executes any necessary preprocessing steps on the in-memory store.
+    ///
+    /// This method should be called ONCE, after all records have been loaded.
+    fn preprocess_db(&mut self) {}
+
+    /// Return the current size(s) of the in-memory store for printing in Debug
+    /// logs.
+    fn current_db_sizes(&self) -> impl std::fmt::Debug;
+
+    /// Initialize the DB with fake data of a given size, data may be random and
+    /// unpredictable.
+    fn fake_db(&mut self, size: usize);
 }

@@ -38,18 +38,14 @@ use iris_mpc_common::{
         sync::{SyncResult, SyncState},
         task_monitor::TaskMonitor,
     },
-    IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
-use iris_mpc_gpu::{
-    helpers::register_host_memory,
-    server::{
-        get_dummy_shares_for_deletion, BatchMetadata, BatchQuery, BatchQueryEntriesPreprocessed,
-        ServerActor, ServerJobResult,
-    },
+use iris_mpc_gpu::server::{
+    get_dummy_shares_for_deletion, BatchMetadata, BatchQuery, BatchQueryEntriesPreprocessed,
+    ServerActor, ServerJobResult,
 };
 use iris_mpc_store::{
-    fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, S3Store, S3StoredIris, Store,
-    StoredIrisRef,
+    fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
+    S3StoredIris, Store, StoredIrisRef,
 };
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
@@ -138,7 +134,7 @@ async fn receive_batch(
     party_id: usize,
     client: &Client,
     sns_client: &SNSClient,
-    s3_client: &Arc<S3Client>,
+    s3_client: &S3Client,
     config: &Config,
     store: &Store,
     skip_request_ids: &[String],
@@ -331,7 +327,7 @@ async fn receive_batch(
                         batch_query.metadata.push(batch_metadata);
 
                         let semaphore = Arc::clone(&semaphore);
-                        let s3_client_arc = Arc::clone(s3_client);
+                        let s3_client_arc = s3_client.clone();
                         let bucket_name = config.shares_bucket_name.clone();
                         let s3_key = uniqueness_request.s3_key.clone();
                         let iris_shares_file_hashes = uniqueness_request.iris_shares_file_hashes;
@@ -398,7 +394,7 @@ async fn receive_batch(
                             );
 
                             let semaphore = Arc::clone(&semaphore);
-                            let s3_client_arc = Arc::clone(s3_client);
+                            let s3_client_clone = s3_client.clone();
                             let bucket_name = config.shares_bucket_name.clone();
                             let s3_key = reauth_request.s3_key.clone();
                             let iris_shares_file_hashes = reauth_request.iris_shares_file_hashes;
@@ -406,7 +402,7 @@ async fn receive_batch(
                                 party_id,
                                 shares_encryption_key_pairs,
                                 semaphore,
-                                s3_client_arc,
+                                s3_client_clone,
                                 bucket_name,
                                 s3_key,
                                 iris_shares_file_hashes,
@@ -550,7 +546,7 @@ fn get_iris_shares_parse_task(
     party_id: usize,
     shares_encryption_key_pairs: SharesEncryptionKeyPairs,
     semaphore: Arc<Semaphore>,
-    s3_client_arc: Arc<S3Client>,
+    s3_client_arc: S3Client,
     bucket_name: String,
     s3_key: String,
     iris_shares_file_hashes: [String; 3],
@@ -859,8 +855,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         .timeout_config(timeout_config)
         .build();
 
-    let s3_client = Arc::new(S3Client::from_conf(s3_config));
-    let db_chunks_s3_client = Arc::new(S3Client::from_conf(db_chunks_s3_config));
+    let s3_client = S3Client::from_conf(s3_config);
+    let db_chunks_s3_client = S3Client::from_conf(db_chunks_s3_config);
     let shares_encryption_key_pair =
         match SharesEncryptionKeyPairs::from_storage(config.clone()).await {
             Ok(key_pair) => key_pair,
@@ -1262,7 +1258,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Database store length after sync: {}", store_len);
 
     let (tx, rx) = oneshot::channel();
+    let config_clone = config.clone();
     background_tasks.spawn_blocking(move || {
+        let config = config_clone;
         // --------------------------------------------------------------------------
         // ANCHOR: Load the database
         // --------------------------------------------------------------------------
@@ -1283,15 +1281,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             Ok((mut actor, handle)) => {
                 tracing::info!("⚓️ ANCHOR: Load the database");
                 let res = if config.fake_db_size > 0 {
-                    tracing::warn!(
-                        "Faking db with {} entries, returned results will be random.",
-                        config.fake_db_size
-                    );
-                    actor.set_current_db_sizes(vec![
-                        config.fake_db_size
-                            / actor.current_db_sizes().len();
-                        actor.current_db_sizes().len()
-                    ]);
+                    // TODO: does this even still work, since we do not page-lock the memory here?
+                    actor.fake_db(config.fake_db_size);
                     Ok(())
                 } else {
                     tracing::info!(
@@ -1303,192 +1294,28 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         S3Store::new(db_chunks_s3_client.clone(), s3_chunks_bucket_name.clone());
 
                     tokio::runtime::Handle::current().block_on(async {
-                        let total_load_time = Instant::now();
-                        let now = Instant::now();
-
-                        let mut record_counter = 0;
-                        let mut all_serial_ids: HashSet<i64> =
-                            HashSet::from_iter(1..=(store_len as i64));
-
-                        if config.enable_s3_importer {
-                            tracing::info!("S3 importer enabled. Fetching from s3 + db");
-
-                            // First fetch last snapshot from S3
-                            let last_snapshot_details = last_snapshot_timestamp(
-                                &db_chunks_s3_store,
-                                s3_chunks_folder_name.clone(),
-                            )
-                            .await?;
-
-                            let min_last_modified_at = last_snapshot_details.timestamp
-                                - config.db_load_safety_overlap_seconds;
-                            tracing::info!(
-                                "Last snapshot timestamp: {}, min_last_modified_at: {}",
-                                last_snapshot_details.timestamp,
-                                min_last_modified_at
-                            );
-
-                            let s3_store = S3Store::new(db_chunks_s3_client, s3_chunks_bucket_name);
-                            let s3_arc = Arc::new(s3_store);
-
-                            let (tx, mut rx) =
-                                mpsc::channel::<S3StoredIris>(config.load_chunks_buffer_size);
-
-                            tokio::spawn(async move {
-                                fetch_and_parse_chunks(
-                                    s3_arc,
-                                    s3_load_parallelism,
-                                    s3_chunks_folder_name,
-                                    last_snapshot_details,
-                                    tx.clone(),
-                                    s3_load_max_retries,
-                                    s3_load_initial_backoff_ms,
-                                )
-                                .await
-                                .expect("Couldn't fetch and parse chunks from s3");
-                            });
-
-                            let mut time_waiting_for_stream = Duration::from_secs(0);
-                            let mut time_loading_into_memory = Duration::from_secs(0);
-                            let mut load_summary_ts = Instant::now();
-                            while let Some(iris) = rx.recv().await {
-                                time_waiting_for_stream += load_summary_ts.elapsed();
-                                load_summary_ts = Instant::now();
-                                let index = iris.index();
-
-                                if index == 0 {
-                                    tracing::error!("Invalid iris index {}", index);
-                                    return Err(eyre!("Invalid iris index {}", index));
-                                } else if index > store_len {
-                                    tracing::warn!(
-                                        "Skip loading rolled back item: index {} > store_len {}",
-                                        index,
-                                        store_len
-                                    );
-                                    continue;
-                                } else if !all_serial_ids.contains(&(index as i64)) {
-                                    tracing::warn!("Skip loading s3 retried item: index {}", index);
-                                    continue;
-                                }
-
-                                actor.load_single_record_from_s3(
-                                    iris.index() - 1,
-                                    iris.left_code_odd(),
-                                    iris.left_code_even(),
-                                    iris.right_code_odd(),
-                                    iris.right_code_even(),
-                                    iris.left_mask_odd(),
-                                    iris.left_mask_even(),
-                                    iris.right_mask_odd(),
-                                    iris.right_mask_even(),
-                                );
-                                actor.increment_db_size(index - 1);
-
-                                if record_counter % 100_000 == 0 {
-                                    let elapsed = now.elapsed();
-                                    tracing::info!(
-                                        "Loaded {} records into memory in {:?} ({:.2} entries/s)",
-                                        record_counter,
-                                        elapsed,
-                                        record_counter as f64 / elapsed.as_secs_f64()
-                                    );
-                                    if download_shutdown_handler.is_shutting_down() {
-                                        tracing::warn!("Shutdown requested by shutdown_handler.");
-                                        return Err(eyre::eyre!("Shutdown requested"));
-                                    }
-                                }
-
-                                time_loading_into_memory += load_summary_ts.elapsed();
-                                load_summary_ts = Instant::now();
-
-                                all_serial_ids.remove(&(index as i64));
-                                record_counter += 1;
-                            }
-                            tracing::info!(
-                                "S3 Loading summary => Loaded {:?} items. Waited for stream: \
-                                 {:?}, Loaded into memory: {:?}.",
-                                record_counter,
-                                time_waiting_for_stream,
-                                time_loading_into_memory,
-                            );
-
-                            let stream_db = store
-                                .stream_irises_par(Some(min_last_modified_at), parallelism)
-                                .await
-                                .boxed();
-                            load_db_records(
-                                &mut actor,
-                                record_counter,
-                                &mut all_serial_ids,
-                                stream_db,
-                            )
-                            .await;
-                        } else {
-                            tracing::info!("S3 importer disabled. Fetching only from db");
-                            let stream_db =
-                                store.stream_irises_par(None, parallelism).await.boxed();
-                            load_db_records(
-                                &mut actor,
-                                record_counter,
-                                &mut all_serial_ids,
-                                stream_db,
-                            )
-                            .await;
-                        }
-
-                        if !all_serial_ids.is_empty() {
-                            tracing::error!("Not all serial_ids were loaded: {:?}", all_serial_ids);
-                            return Err(eyre!(
-                                "Not all serial_ids were loaded: {:?}",
-                                all_serial_ids
-                            ));
-                        }
-
-                        tracing::info!("Starting page lock");
-
-                        let left_codes = actor.left_code_db_slices.code_gr.clone();
-                        let right_codes = actor.right_code_db_slices.code_gr.clone();
-                        let left_masks = actor.left_mask_db_slices.code_gr.clone();
-                        let right_masks = actor.right_mask_db_slices.code_gr.clone();
-                        let page_lock_ts = Instant::now();
-                        for db in [&left_codes, &right_codes] {
-                            register_host_memory(
-                                actor.device_manager.clone(),
-                                db,
-                                config.max_db_size,
-                                IRIS_CODE_LENGTH,
-                            );
-                            tracing::info!("Page locking completed for code slice");
-                        }
-
-                        for db in [&left_masks, &right_masks] {
-                            register_host_memory(
-                                actor.device_manager.clone(),
-                                db,
-                                config.max_db_size,
-                                MASK_CODE_LENGTH,
-                            );
-                            tracing::info!("Page locking completed for mask slice");
-                        }
-                        tracing::info!("Page locking completed in {:?}", page_lock_ts.elapsed());
-
-                        tracing::info!("Preprocessing db");
-                        actor.preprocess_db();
-
-                        tracing::info!(
-                            "Loaded {} records from db into memory in {:?} [DB sizes: {:?}]",
-                            record_counter,
-                            total_load_time.elapsed(),
-                            actor.current_db_sizes()
-                        );
-
-                        eyre::Ok(())
+                        load_db(
+                            &mut actor,
+                            &store,
+                            store_len,
+                            parallelism,
+                            &config,
+                            db_chunks_s3_store,
+                            db_chunks_s3_client,
+                            s3_chunks_folder_name,
+                            s3_chunks_bucket_name,
+                            s3_load_parallelism,
+                            s3_load_max_retries,
+                            s3_load_initial_backoff_ms,
+                            download_shutdown_handler,
+                        )
+                        .await
                     })
                 };
 
                 match res {
                     Ok(_) => {
-                        tx.send(Ok((handle, sync_result, store))).unwrap();
+                        tx.send(Ok((handle, store))).unwrap();
                     }
                     Err(e) => {
                         tx.send(Err(e)).unwrap();
@@ -1506,7 +1333,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         Ok(())
     });
 
-    let (mut handle, sync_result, store) = rx.await??;
+    let (mut handle, store) = rx.await??;
 
     let mut skip_request_ids = sync_result.deleted_request_ids();
 
@@ -2037,4 +1864,158 @@ async fn process_identity_deletions(
     }
 
     Ok(())
+}
+
+async fn load_db(
+    actor: &mut impl InMemoryStore,
+    store: &Store,
+    store_len: usize,
+    store_load_parallelism: usize,
+    config: &Config,
+    db_chunks_s3_store: impl ObjectStore,
+    db_chunks_s3_client: S3Client,
+    s3_chunks_folder_name: String,
+    s3_chunks_bucket_name: String,
+    s3_load_parallelism: usize,
+    s3_load_max_retries: usize,
+    s3_load_initial_backoff_ms: u64,
+    download_shutdown_handler: Arc<ShutdownHandler>,
+) -> eyre::Result<()> {
+    let total_load_time = Instant::now();
+    let now = Instant::now();
+
+    let mut record_counter = 0;
+    let mut all_serial_ids: HashSet<i64> = HashSet::from_iter(1..=(store_len as i64));
+
+    if config.enable_s3_importer {
+        tracing::info!("S3 importer enabled. Fetching from s3 + db");
+
+        // First fetch last snapshot from S3
+        let last_snapshot_details =
+            last_snapshot_timestamp(&db_chunks_s3_store, s3_chunks_folder_name.clone()).await?;
+
+        let min_last_modified_at =
+            last_snapshot_details.timestamp - config.db_load_safety_overlap_seconds;
+        tracing::info!(
+            "Last snapshot timestamp: {}, min_last_modified_at: {}",
+            last_snapshot_details.timestamp,
+            min_last_modified_at
+        );
+
+        let s3_store = S3Store::new(db_chunks_s3_client, s3_chunks_bucket_name);
+        let s3_arc = Arc::new(s3_store);
+
+        let (tx, mut rx) = mpsc::channel::<S3StoredIris>(config.load_chunks_buffer_size);
+
+        tokio::spawn(async move {
+            fetch_and_parse_chunks(
+                s3_arc,
+                s3_load_parallelism,
+                s3_chunks_folder_name,
+                last_snapshot_details,
+                tx.clone(),
+                s3_load_max_retries,
+                s3_load_initial_backoff_ms,
+            )
+            .await
+            .expect("Couldn't fetch and parse chunks from s3");
+        });
+
+        let mut time_waiting_for_stream = Duration::from_secs(0);
+        let mut time_loading_into_memory = Duration::from_secs(0);
+        let mut load_summary_ts = Instant::now();
+        while let Some(iris) = rx.recv().await {
+            time_waiting_for_stream += load_summary_ts.elapsed();
+            load_summary_ts = Instant::now();
+            let index = iris.index();
+
+            if index == 0 {
+                tracing::error!("Invalid iris index {}", index);
+                return Err(eyre!("Invalid iris index {}", index));
+            } else if index > store_len {
+                tracing::warn!(
+                    "Skip loading rolled back item: index {} > store_len {}",
+                    index,
+                    store_len
+                );
+                continue;
+            } else if !all_serial_ids.contains(&(index as i64)) {
+                tracing::warn!("Skip loading s3 retried item: index {}", index);
+                continue;
+            }
+
+            actor.load_single_record_from_s3(
+                iris.index() - 1,
+                iris.left_code_odd(),
+                iris.left_code_even(),
+                iris.right_code_odd(),
+                iris.right_code_even(),
+                iris.left_mask_odd(),
+                iris.left_mask_even(),
+                iris.right_mask_odd(),
+                iris.right_mask_even(),
+            );
+            actor.increment_db_size(index - 1);
+
+            if record_counter % 100_000 == 0 {
+                let elapsed = now.elapsed();
+                tracing::info!(
+                    "Loaded {} records into memory in {:?} ({:.2} entries/s)",
+                    record_counter,
+                    elapsed,
+                    record_counter as f64 / elapsed.as_secs_f64()
+                );
+                if download_shutdown_handler.is_shutting_down() {
+                    tracing::warn!("Shutdown requested by shutdown_handler.");
+                    return Err(eyre::eyre!("Shutdown requested"));
+                }
+            }
+
+            time_loading_into_memory += load_summary_ts.elapsed();
+            load_summary_ts = Instant::now();
+
+            all_serial_ids.remove(&(index as i64));
+            record_counter += 1;
+        }
+        tracing::info!(
+            "S3 Loading summary => Loaded {:?} items. Waited for stream: {:?}, Loaded into \
+             memory: {:?}.",
+            record_counter,
+            time_waiting_for_stream,
+            time_loading_into_memory,
+        );
+
+        let stream_db = store
+            .stream_irises_par(Some(min_last_modified_at), store_load_parallelism)
+            .await
+            .boxed();
+        load_db_records(actor, record_counter, &mut all_serial_ids, stream_db).await;
+    } else {
+        tracing::info!("S3 importer disabled. Fetching only from db");
+        let stream_db = store
+            .stream_irises_par(None, store_load_parallelism)
+            .await
+            .boxed();
+        load_db_records(actor, record_counter, &mut all_serial_ids, stream_db).await;
+    }
+
+    if !all_serial_ids.is_empty() {
+        tracing::error!("Not all serial_ids were loaded: {:?}", all_serial_ids);
+        return Err(eyre!(
+            "Not all serial_ids were loaded: {:?}",
+            all_serial_ids
+        ));
+    }
+
+    tracing::info!("Preprocessing db");
+    actor.preprocess_db();
+
+    tracing::info!(
+        "Loaded {} records from db into memory in {:?} [DB sizes: {:?}]",
+        record_counter,
+        total_load_time.elapsed(),
+        actor.current_db_sizes()
+    );
+
+    eyre::Ok(())
 }

@@ -505,14 +505,6 @@ impl ServerActor {
         tracing::info!("Server Actor finished due to all job queues being closed");
     }
 
-    pub fn current_db_sizes(&self) -> Vec<usize> {
-        self.current_db_sizes.clone()
-    }
-
-    pub fn set_current_db_sizes(&mut self, sizes: Vec<usize>) {
-        self.current_db_sizes = sizes;
-    }
-
     pub fn load_full_db(
         &mut self,
         left: &IrisCodeDbSlice,
@@ -561,26 +553,20 @@ impl ServerActor {
         self.current_db_sizes = db_lens1;
     }
 
-    pub fn preprocess_db(&mut self) {
-        self.codes_engine
-            .preprocess_db(&mut self.left_code_db_slices, &self.current_db_sizes);
-        self.masks_engine
-            .preprocess_db(&mut self.left_mask_db_slices, &self.current_db_sizes);
-        self.codes_engine
-            .preprocess_db(&mut self.right_code_db_slices, &self.current_db_sizes);
-        self.masks_engine
-            .preprocess_db(&mut self.right_mask_db_slices, &self.current_db_sizes);
-    }
-
-    pub fn register_host_memory(&self) {
+    fn register_host_memory(&self) {
+        let page_lock_ts = Instant::now();
+        tracing::info!("Starting page lock");
         self.codes_engine
             .register_host_memory(&self.left_code_db_slices, self.max_db_size);
-        self.masks_engine
-            .register_host_memory(&self.left_mask_db_slices, self.max_db_size);
         self.codes_engine
             .register_host_memory(&self.right_code_db_slices, self.max_db_size);
+        tracing::info!("Page locking completed for code slice");
+        self.masks_engine
+            .register_host_memory(&self.left_mask_db_slices, self.max_db_size);
         self.masks_engine
             .register_host_memory(&self.right_mask_db_slices, self.max_db_size);
+        tracing::info!("Page locking completed for mask slice");
+        tracing::info!("Page locking completed in {:?}", page_lock_ts.elapsed());
     }
 
     fn process_batch_query(
@@ -2459,5 +2445,32 @@ impl InMemoryStore for ServerActor {
             self.device_manager.device_count(),
             MASK_CODE_LENGTH,
         );
+    }
+
+    fn preprocess_db(&mut self) {
+        // we also register the memory allocated, page-locking it for more performance
+        self.register_host_memory();
+
+        self.codes_engine
+            .preprocess_db(&mut self.left_code_db_slices, &self.current_db_sizes);
+        self.masks_engine
+            .preprocess_db(&mut self.left_mask_db_slices, &self.current_db_sizes);
+        self.codes_engine
+            .preprocess_db(&mut self.right_code_db_slices, &self.current_db_sizes);
+        self.masks_engine
+            .preprocess_db(&mut self.right_mask_db_slices, &self.current_db_sizes);
+    }
+
+    fn current_db_sizes(&self) -> impl std::fmt::Debug {
+        &self.current_db_sizes
+    }
+
+    fn fake_db(&mut self, fake_db_size: usize) {
+        tracing::warn!(
+            "Faking db with {} entries, returned results will be random.",
+            fake_db_size
+        );
+        self.current_db_sizes =
+            vec![fake_db_size / self.current_db_sizes.len(); self.current_db_sizes.len()];
     }
 }

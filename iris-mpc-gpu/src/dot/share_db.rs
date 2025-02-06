@@ -304,6 +304,7 @@ impl ShareDB {
                     CU_MEMHOSTALLOC_PORTABLE,
                 );
             }
+            self.device_manager.track_locked_db(db.code_gr.clone());
         }
     }
 
