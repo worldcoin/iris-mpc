@@ -38,10 +38,10 @@ use iris_mpc_common::{
         sync::{SyncResult, SyncState},
         task_monitor::TaskMonitor,
     },
+    iris_db::get_dummy_shares_for_deletion,
 };
 use iris_mpc_gpu::server::{
-    get_dummy_shares_for_deletion, BatchMetadata, BatchQuery, BatchQueryEntriesPreprocessed,
-    ServerActor, ServerJobResult,
+    BatchMetadata, BatchQuery, BatchQueryEntriesPreprocessed, ServerActor, ServerJobResult,
 };
 use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,

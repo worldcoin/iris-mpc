@@ -27,18 +27,16 @@ use cudarc::{
 use eyre::eyre;
 use futures::{Future, FutureExt};
 use iris_mpc_common::{
-    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
         inmemory_store::InMemoryStore,
         sha256::sha256_bytes,
         smpc_request::{REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
         statistics::BucketStatistics,
     },
-    iris_db::iris::{IrisCode, MATCH_THRESHOLD_RATIO},
+    iris_db::{get_dummy_shares_for_deletion, iris::MATCH_THRESHOLD_RATIO},
     IrisCodeDbSlice,
 };
 use itertools::{izip, Itertools};
-use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{collections::HashMap, mem, sync::Arc, time::Instant};
 use tokio::sync::{mpsc, oneshot};
@@ -2248,21 +2246,6 @@ fn write_db_at_index(
             );
         }
     }
-}
-
-pub fn get_dummy_shares_for_deletion(
-    party_id: usize,
-) -> (GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare) {
-    let mut rng: StdRng = StdRng::seed_from_u64(0);
-    let dummy: IrisCode = IrisCode::default();
-    let iris_share: GaloisRingIrisCodeShare =
-        GaloisRingIrisCodeShare::encode_iris_code(&dummy.code, &dummy.mask, &mut rng)[party_id]
-            .clone();
-    let mask_share: GaloisRingTrimmedMaskCodeShare =
-        GaloisRingIrisCodeShare::encode_mask_code(&dummy.mask, &mut rng)[party_id]
-            .clone()
-            .into();
-    (iris_share, mask_share)
 }
 
 fn sort_shares_by_indices(
