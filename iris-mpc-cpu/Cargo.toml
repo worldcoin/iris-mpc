@@ -46,6 +46,9 @@ criterion = { version = "0.5.1", features = ["async_tokio"] }
 [build-dependencies]
 tonic-build = "0.12.3"
 
+[features]
+db_dependent = []
+
 [[bench]]
 name = "hnsw"
 harness = false

@@ -284,6 +284,7 @@ pub mod test_utils {
 }
 
 #[cfg(test)]
+#[cfg(feature = "db_dependent")]
 mod tests {
     use super::{test_utils::TestGraphPg, *};
     use crate::{
