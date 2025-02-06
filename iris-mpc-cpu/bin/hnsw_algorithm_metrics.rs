@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .register_dynamic(param_openings, Operation::OpenNode)
         .init();
 
-    let file = File::create("forest.txt")?;
+    let file = File::create("searcher_time_tree.txt")?;
     let file_processor = PrettyPrinter::new().writer(std::sync::Mutex::new(file));
 
     tracing_subscriber::registry()
