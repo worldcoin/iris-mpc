@@ -1882,7 +1882,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             background_tasks.check_tasks_finished();
         }
     }
-
     Ok(())
 }
 
