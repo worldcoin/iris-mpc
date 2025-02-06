@@ -17,6 +17,7 @@ mod e2e_test {
         helpers::device_manager::DeviceManager,
         server::{BatchQuery, BatchQueryEntriesPreprocessed, ServerActor, ServerJobResult},
     };
+    use itertools::izip;
     use rand::{
         rngs::StdRng,
         seq::{IteratorRandom, SliceRandom},
@@ -301,24 +302,24 @@ mod e2e_test {
                 check_bucket_statistics(anonymized_bucket_statistics_right, num_devices)?;
 
                 for (
-                    (
-                        (
-                            ((((req_id, &was_match), &was_reauth_success), &idx), partial_left),
-                            partial_right,
-                        ),
-                        match_id,
-                    ),
+                    req_id,
+                    &was_match,
+                    &was_reauth_success,
+                    &idx,
+                    partial_left,
+                    partial_right,
+                    match_id,
                     matched_batch_req_ids,
-                ) in thread_request_ids
-                    .iter()
-                    .zip(matches.iter())
-                    .zip(successful_reauths.iter())
-                    .zip(merged_results.iter())
-                    .zip(partial_match_ids_left.iter())
-                    .zip(partial_match_ids_right.iter())
-                    .zip(match_ids.iter())
-                    .zip(matched_batch_request_ids.iter())
-                {
+                ) in izip!(
+                    thread_request_ids,
+                    matches,
+                    successful_reauths,
+                    merged_results,
+                    partial_match_ids_left,
+                    partial_match_ids_right,
+                    match_ids,
+                    matched_batch_request_ids
+                ) {
                     assert!(requests.contains_key(req_id));
 
                     resp_counters.insert(req_id, resp_counters.get(req_id).unwrap() + 1);
@@ -606,7 +607,7 @@ mod e2e_test {
         /// The rng that is used internally
         rng:                    StdRng,
 
-        /// info for current batch, will be cleared at the start of a new batch
+        // info for current batch, will be cleared at the start of a new batch
         /// New templates that have been inserted in the current batch.
         /// (position in batch, request_id, template)
         new_templates_in_batch:           Vec<(usize, String, IrisCode)>,
