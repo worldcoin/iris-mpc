@@ -1866,6 +1866,7 @@ async fn process_identity_deletions(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn load_db(
     actor: &mut impl InMemoryStore,
     store: &Store,
