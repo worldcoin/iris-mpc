@@ -193,4 +193,5 @@ pub fn register_host_memory(
             );
         }
     }
+    device_manager.track_locked_db(db.clone());
 }

@@ -304,6 +304,22 @@ async fn receive_batch(
                                 batch_size.clamp(1, max_batch_size);
                             tracing::info!("Updating batch size to {}", batch_size);
                         }
+                        if config.luc_enabled {
+                            if config.luc_lookback_records > 0 {
+                                batch_query.luc_lookback_records = config.luc_lookback_records;
+                            }
+                            if config.luc_serial_ids_from_smpc_request {
+                                if let Some(serial_ids) =
+                                    uniqueness_request.or_rule_serial_ids.clone()
+                                {
+                                    batch_query.or_rule_serial_ids.push(serial_ids);
+                                } else {
+                                    tracing::error!(
+                                        "Received a uniqueness request without serial_ids"
+                                    );
+                                }
+                            }
+                        }
 
                         batch_query
                             .request_ids
@@ -1132,10 +1148,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let s3_chunks_folder_name = config.db_chunks_folder_name.clone();
     let s3_load_max_retries = config.load_chunks_max_retries;
     let s3_load_initial_backoff_ms = config.load_chunks_initial_backoff_ms;
+    let device_manager_init = Arc::new(DeviceManager::init());
+    let device_manager = Arc::clone(&device_manager_init);
 
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
-        let device_manager = Arc::new(DeviceManager::init());
         let ids = device_manager.get_ids_from_magic(0);
 
         // --------------------------------------------------------------------------
@@ -1796,7 +1813,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             background_tasks.check_tasks_finished();
         }
     }
-
+    drop(device_manager_init);
     Ok(())
 }
 
