@@ -551,7 +551,7 @@ impl ServerActor {
         self.current_db_sizes = db_lens1;
     }
 
-    fn register_host_memory(&self) {
+    pub fn register_host_memory(&self) {
         let page_lock_ts = Instant::now();
         tracing::info!("Starting page lock");
         self.codes_engine
