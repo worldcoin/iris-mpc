@@ -28,7 +28,11 @@ use eyre::eyre;
 use futures::{Future, FutureExt};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
-    helpers::{sha256::sha256_bytes, statistics::BucketStatistics},
+    helpers::{
+        sha256::sha256_bytes,
+        smpc_request::{REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
+        statistics::BucketStatistics,
+    },
     iris_db::iris::{IrisCode, MATCH_THRESHOLD_RATIO},
     IrisCodeDbSlice,
 };
@@ -672,7 +676,17 @@ impl ServerActor {
         let now = Instant::now();
         let mut events: HashMap<&str, Vec<Vec<CUevent>>> = HashMap::new();
 
-        tracing::info!("Started processing batch");
+        let n_reauths = batch
+            .request_types
+            .iter()
+            .filter(|x| *x == REAUTH_MESSAGE_TYPE)
+            .count();
+        tracing::info!(
+            "Started processing batch: {} uniqueness, {} reauth, {} deletion requests",
+            batch.request_types.len() - n_reauths,
+            n_reauths,
+            batch.deletion_requests_indices.len(),
+        );
 
         let mut batch = batch;
         let mut batch_size = batch.store_left.code.len();
@@ -680,6 +694,7 @@ impl ServerActor {
         assert!(
             batch_size == batch.store_left.mask.len()
                 && batch_size == batch.request_ids.len()
+                && batch_size == batch.request_types.len()
                 && batch_size == batch.metadata.len()
                 && batch_size == batch.store_right.code.len()
                 && batch_size == batch.store_right.mask.len()
@@ -1044,12 +1059,13 @@ impl ServerActor {
         let mut merged_results =
             get_merged_results(&host_results, self.device_manager.device_count());
 
-        // List the indices of the queries that did not match.
-        let insertion_list = merged_results
+        // List the indices of the uniqueness requests that did not match.
+        let uniqueness_insertion_list = merged_results
             .iter()
             .enumerate()
             .filter(|&(idx, &num)| {
-                num == NON_MATCH_ID
+                batch.request_types[idx] == UNIQUENESS_MESSAGE_TYPE
+                    && num == NON_MATCH_ID
                     // Filter-out supermatchers on both sides (TODO: remove this in the future)
                     && partial_match_counters_left[idx] <= SUPERMATCH_THRESHOLD
                     && partial_match_counters_right[idx] <= SUPERMATCH_THRESHOLD
@@ -1058,12 +1074,13 @@ impl ServerActor {
             .collect::<Vec<_>>();
 
         // Spread the insertions across devices.
-        let insertion_list = distribute_insertions(&insertion_list, &self.current_db_sizes);
+        let uniqueness_insertion_list =
+            distribute_insertions(&uniqueness_insertion_list, &self.current_db_sizes);
 
-        // Calculate the new indices for the inserted queries
+        // Calculate the new indices for the inserted uniqueness queries
         let matches = calculate_insertion_indices(
             &mut merged_results,
-            &insertion_list,
+            &uniqueness_insertion_list,
             &self.current_db_sizes,
             batch_size,
         );
@@ -1088,9 +1105,34 @@ impl ServerActor {
             })
             .collect::<Vec<_>>();
 
+        let successful_reauths = match_ids_filtered
+            .iter()
+            .enumerate()
+            .map(|(idx, matches)| {
+                let reauth_id = batch.request_ids[idx].clone();
+                // expect exactly one match to the target reauth index
+                batch.request_types[idx] == REAUTH_MESSAGE_TYPE
+                    && matches.len() == 1
+                    && matches[0] == *batch.reauth_target_indices.get(&reauth_id).unwrap()
+            })
+            .collect::<Vec<bool>>();
+        let mut reauth_updates_per_device = vec![vec![]; self.device_manager.device_count()];
+        for (reauth_pos, success) in successful_reauths.clone().iter().enumerate() {
+            if !*success {
+                continue;
+            }
+            let reauth_id = batch.request_ids[reauth_pos].clone();
+            let reauth_index = *batch.reauth_target_indices.get(&reauth_id).unwrap();
+            let device_index = reauth_index % self.device_manager.device_count() as u32;
+            reauth_updates_per_device[device_index as usize].push(reauth_pos);
+        }
+
         // Write back to in-memory db
         let previous_total_db_size = self.current_db_sizes.iter().sum::<usize>();
-        let n_insertions = insertion_list.iter().map(|x| x.len()).sum::<usize>();
+        let n_insertions = uniqueness_insertion_list
+            .iter()
+            .map(|x| x.len())
+            .sum::<usize>();
 
         // Check if we actually have space left to write the new entries
         if previous_total_db_size + n_insertions > self.max_db_size {
@@ -1116,7 +1158,7 @@ impl ServerActor {
                 {
                     for i in 0..self.device_manager.device_count() {
                         self.device_manager.device(i).bind_to_thread().unwrap();
-                        for insertion_idx in insertion_list[i].clone() {
+                        for insertion_idx in uniqueness_insertion_list[i].clone() {
                             write_db_at_index(
                                 &self.left_code_db_slices,
                                 &self.left_mask_db_slices,
@@ -1139,6 +1181,42 @@ impl ServerActor {
                             i,
                             self.current_db_sizes[i]
                         );
+
+                        for reauth_pos in reauth_updates_per_device[i].clone() {
+                            let reauth_id = batch.request_ids[reauth_pos].clone();
+                            let reauth_index =
+                                *batch.reauth_target_indices.get(&reauth_id).unwrap();
+                            let device_db_index =
+                                reauth_index / self.device_manager.device_count() as u32;
+                            tracing::info!(
+                                "Writing succesful reauth index {} at device {} to {}",
+                                reauth_index,
+                                i,
+                                device_db_index
+                            );
+                            if device_db_index as usize >= self.current_db_sizes[i] {
+                                tracing::error!(
+                                    "Reauth index {} is out of bounds for device {}",
+                                    reauth_index,
+                                    i
+                                );
+                                continue;
+                            }
+                            write_db_at_index(
+                                &self.left_code_db_slices,
+                                &self.left_mask_db_slices,
+                                &self.right_code_db_slices,
+                                &self.right_mask_db_slices,
+                                &compact_device_queries_left,
+                                &compact_device_sums_left,
+                                &compact_device_queries_right,
+                                &compact_device_sums_right,
+                                reauth_pos,
+                                device_db_index as usize,
+                                i,
+                                &self.streams[0],
+                            );
+                        }
                     }
                 }
             );
@@ -1149,6 +1227,7 @@ impl ServerActor {
             .send(ServerJobResult {
                 merged_results,
                 request_ids: batch.request_ids,
+                request_types: batch.request_types,
                 metadata: batch.metadata,
                 matches,
                 match_ids: match_ids_filtered,
@@ -1160,6 +1239,8 @@ impl ServerActor {
                 matched_batch_request_ids,
                 anonymized_bucket_statistics_left: self.anonymized_bucket_statistics_left.clone(),
                 anonymized_bucket_statistics_right: self.anonymized_bucket_statistics_right.clone(),
+                successful_reauths,
+                reauth_target_indices: batch.reauth_target_indices,
             })
             .unwrap();
 

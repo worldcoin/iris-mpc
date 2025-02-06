@@ -30,9 +30,9 @@ use iris_mpc_common::{
             UNIQUENESS_MESSAGE_TYPE,
         },
         smpc_response::{
-            create_message_type_attribute_map, IdentityDeletionResult, UniquenessResult,
-            ERROR_FAILED_TO_PROCESS_IRIS_SHARES, ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
-            SMPC_MESSAGE_TYPE_ATTRIBUTE,
+            create_message_type_attribute_map, IdentityDeletionResult, ReAuthResult,
+            UniquenessResult, ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
+            ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH, SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
         sync::SyncState,
         task_monitor::TaskMonitor,
@@ -875,6 +875,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let chacha_seeds = initialize_chacha_seeds(config.clone()).await?;
 
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
+    let reauth_result_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
     let anonymized_statistics_attributes =
         create_message_type_attribute_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
@@ -1460,6 +1461,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         while let Some(ServerJobResult {
             merged_results,
             request_ids,
+            request_types,
             metadata,
             matches,
             match_ids,
@@ -1471,12 +1473,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             matched_batch_request_ids,
             anonymized_bucket_statistics_left,
             anonymized_bucket_statistics_right,
+            successful_reauths,
+            reauth_target_indices,
         }) = rx.recv().await
         {
             // returned serial_ids are 0 indexed, but we want them to be 1 indexed
             let uniqueness_results = merged_results
                 .iter()
                 .enumerate()
+                .filter(|(i, _)| request_types[*i] == UNIQUENESS_MESSAGE_TYPE)
                 .map(|(i, &idx_result)| {
                     let result_event = UniquenessResult::new(
                         party_id,
@@ -1515,7 +1520,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 })
                 .collect::<eyre::Result<Vec<_>>>()?;
 
-            // Insert non-matching queries into the persistent store.
+            // Insert non-matching uniqueness queries into the persistent store.
             let (memory_serial_ids, codes_and_masks): (Vec<i64>, Vec<StoredIrisRef>) = matches
                 .iter()
                 .enumerate()
@@ -1536,11 +1541,34 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 })
                 .unzip();
 
+            let reauth_results = request_types
+                .iter()
+                .enumerate()
+                .filter(|(_, request_type)| *request_type == REAUTH_MESSAGE_TYPE)
+                .map(|(i, _)| {
+                    let reauth_id = request_ids[i].clone();
+                    let result_event = ReAuthResult::new(
+                        reauth_id.clone(),
+                        party_id,
+                        reauth_target_indices.get(&reauth_id).unwrap() + 1,
+                        successful_reauths[i],
+                        match match_ids[i].is_empty() {
+                            false => Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
+                            true => None,
+                        },
+                    );
+                    serde_json::to_string(&result_event)
+                        .wrap_err("failed to serialize reauth result")
+                })
+                .collect::<eyre::Result<Vec<_>>>()?;
+
             let mut tx = store_bg.tx().await?;
 
             store_bg
                 .insert_results(&mut tx, &uniqueness_results)
                 .await?;
+
+            // TODO: update modifications table to store reauth and deletion results
 
             if !codes_and_masks.is_empty() && !config_bg.disable_persistence {
                 let db_serial_ids = store_bg.insert_irises(&mut tx, &codes_and_masks).await?;
@@ -1557,6 +1585,25 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         memory_serial_ids,
                         db_serial_ids
                     ));
+                }
+
+                for (i, success) in successful_reauths.iter().enumerate() {
+                    if !success {
+                        continue;
+                    }
+                    tracing::info!("Persisting reauth into postgres: {}", request_ids[i]);
+                    let reauth_id = request_ids[i].clone();
+                    let serial_id = *reauth_target_indices.get(&reauth_id).unwrap();
+                    store_bg
+                        .update_iris(
+                            Some(&mut tx),
+                            serial_id as i64,
+                            &store_left.code[i],
+                            &store_left.mask[i],
+                            &store_right.code[i],
+                            &store_right.mask[i],
+                        )
+                        .await?;
                 }
             }
 
@@ -1575,6 +1622,17 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 &config_bg,
                 &uniqueness_result_attributes,
                 UNIQUENESS_MESSAGE_TYPE,
+            )
+            .await?;
+
+            tracing::info!("Sending {} reauth results", reauth_results.len());
+            send_results_to_sns(
+                reauth_results,
+                &metadata,
+                &sns_client_bg,
+                &config_bg,
+                &reauth_result_attributes,
+                REAUTH_MESSAGE_TYPE,
             )
             .await?;
 
@@ -1891,6 +1949,7 @@ async fn process_identity_deletions(
         // note that both serial_id and postgres db are 1-indexed.
         store
             .update_iris(
+                None,
                 serial_id as i64,
                 dummy_iris_share,
                 dummy_mask_share,

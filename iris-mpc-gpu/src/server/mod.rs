@@ -184,6 +184,7 @@ pub struct ServerJob {
 pub struct ServerJobResult {
     pub merged_results: Vec<u32>,
     pub request_ids: Vec<String>,
+    pub request_types: Vec<String>,
     pub metadata: Vec<BatchMetadata>,
     pub matches: Vec<bool>,
     pub match_ids: Vec<Vec<u32>>,
@@ -195,6 +196,8 @@ pub struct ServerJobResult {
     pub matched_batch_request_ids: Vec<Vec<String>>,
     pub anonymized_bucket_statistics_left: BucketStatistics,
     pub anonymized_bucket_statistics_right: BucketStatistics,
+    pub successful_reauths: Vec<bool>, // true if request type is reauth and it's successful
+    pub reauth_target_indices: HashMap<String, u32>,
 }
 
 enum Eye {
