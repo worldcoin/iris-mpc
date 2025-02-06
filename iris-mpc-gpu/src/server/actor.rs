@@ -676,7 +676,17 @@ impl ServerActor {
         let now = Instant::now();
         let mut events: HashMap<&str, Vec<Vec<CUevent>>> = HashMap::new();
 
-        tracing::info!("Started processing batch");
+        let n_reauths = batch
+            .request_types
+            .iter()
+            .filter(|x| *x == REAUTH_MESSAGE_TYPE)
+            .count();
+        tracing::info!(
+            "Started processing batch: {} uniqueness, {} reauth, {} deletion requests",
+            batch.request_types.len() - n_reauths,
+            n_reauths,
+            batch.deletion_requests_indices.len(),
+        );
 
         let mut batch = batch;
         let mut batch_size = batch.store_left.code.len();
@@ -1178,7 +1188,7 @@ impl ServerActor {
                                 *batch.reauth_target_indices.get(&reauth_id).unwrap();
                             let device_db_index =
                                 reauth_index / self.device_manager.device_count() as u32;
-                            tracing::debug!(
+                            tracing::info!(
                                 "Writing succesful reauth index {} at device {} to {}",
                                 reauth_index,
                                 i,

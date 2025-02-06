@@ -4,7 +4,10 @@ mod e2e_test {
     use eyre::Result;
     use iris_mpc_common::{
         galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
-        helpers::{smpc_request::UNIQUENESS_MESSAGE_TYPE, statistics::BucketStatistics},
+        helpers::{
+            smpc_request::{REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
+            statistics::BucketStatistics,
+        },
         iris_db::{
             db::IrisDB,
             iris::{IrisCode, IrisCodeArray},
@@ -14,6 +17,7 @@ mod e2e_test {
         helpers::device_manager::DeviceManager,
         server::{BatchQuery, BatchQueryEntriesPreprocessed, ServerActor, ServerJobResult},
     };
+    use itertools::izip;
     use rand::{
         rngs::StdRng,
         seq::{IteratorRandom, SliceRandom},
@@ -290,6 +294,7 @@ mod e2e_test {
                     matched_batch_request_ids,
                     anonymized_bucket_statistics_left,
                     anonymized_bucket_statistics_right,
+                    successful_reauths,
                     ..
                 } = res;
 
@@ -297,17 +302,24 @@ mod e2e_test {
                 check_bucket_statistics(anonymized_bucket_statistics_right, num_devices)?;
 
                 for (
-                    (((((req_id, &was_match), &idx), partial_left), partial_right), match_id),
+                    req_id,
+                    &was_match,
+                    &was_reauth_success,
+                    &idx,
+                    partial_left,
+                    partial_right,
+                    match_id,
                     matched_batch_req_ids,
-                ) in thread_request_ids
-                    .iter()
-                    .zip(matches.iter())
-                    .zip(merged_results.iter())
-                    .zip(partial_match_ids_left.iter())
-                    .zip(partial_match_ids_right.iter())
-                    .zip(match_ids.iter())
-                    .zip(matched_batch_request_ids.iter())
-                {
+                ) in izip!(
+                    thread_request_ids,
+                    matches,
+                    successful_reauths,
+                    merged_results,
+                    partial_match_ids_left,
+                    partial_match_ids_right,
+                    match_ids,
+                    matched_batch_request_ids
+                ) {
                     assert!(requests.contains_key(req_id));
 
                     resp_counters.insert(req_id, resp_counters.get(req_id).unwrap() + 1);
@@ -325,6 +337,7 @@ mod e2e_test {
                         was_match,
                         matched_batch_req_ids,
                         &requests,
+                        was_reauth_success,
                     );
                 }
             }
@@ -354,13 +367,24 @@ mod e2e_test {
         batch_idx: usize,
         mut e2e_shared_template: E2ESharedTemplate,
         or_rule_serial_ids: Vec<u32>,
+        maybe_reauth_target_index: Option<&u32>,
     ) -> Result<()> {
         batch.metadata.push(Default::default());
         batch.valid_entries.push(is_valid);
-        batch.request_ids.push(request_id);
-        batch
-            .request_types
-            .push(UNIQUENESS_MESSAGE_TYPE.to_string());
+        batch.request_ids.push(request_id.clone());
+        match maybe_reauth_target_index {
+            Some(target_index) => {
+                batch.request_types.push(REAUTH_MESSAGE_TYPE.to_string());
+                batch
+                    .reauth_target_indices
+                    .insert(request_id.clone(), *target_index);
+            }
+            None => {
+                batch
+                    .request_types
+                    .push(UNIQUENESS_MESSAGE_TYPE.to_string());
+            }
+        }
 
         batch.or_rule_serial_ids.push(or_rule_serial_ids);
 
@@ -450,7 +474,7 @@ mod e2e_test {
             .iter()
             .map(|b| b.count)
             .sum::<usize>();
-        println!("Total count for bucket: {}", total_count);
+        tracing::info!("Total count for bucket: {}", total_count);
         assert_eq!(
             total_count,
             MATCH_DISTANCES_BUFFER_SIZE * num_gpus_per_party
@@ -528,6 +552,12 @@ mod e2e_test {
         PreviouslyDeleted,
         /// Send an iris code that uses the OR rule
         WithOrRuleSet,
+        /// Send a reauth request matching target serial id's iris code only
+        /// (successful reauth)
+        ReauthMatchingTarget,
+        /// Send a reauth request not matching target serial id's iris code
+        /// (failed reauth)
+        ReauthNonMatchingTarget,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -544,11 +574,14 @@ mod e2e_test {
         /// The returned index of the iris code in the database.
         /// It is None if the iris code is not in the database, and Some(idx) if
         /// there is a match at index idx
-        db_index:       Option<u32>,
+        db_index:             Option<u32>,
         /// Whether the iris code is expected to be in the batch match
         /// This flag indicates that the iris code is expected to match another
         /// iris code in the current batch
-        is_batch_match: bool,
+        is_batch_match:       bool,
+        /// Populated only if the request type is REAUTH.
+        /// Indicates whether the expected reauth result is successful.
+        is_reauth_successful: Option<bool>,
     }
 
     struct TestCaseGenerator {
@@ -556,6 +589,9 @@ mod e2e_test {
         initial_db_state:       IrisDB,
         /// expected results for all of the queries we send
         expected_results:       HashMap<String, ExpectedResult>,
+        /// mapping from request_id to the index of the target entry to be
+        /// matched in reauth
+        reauth_target_indices:  HashMap<String, u32>,
         /// responses received from the servers, where a new iris code was
         /// inserted. Maps position in the database to the E2ETemplate
         inserted_responses:     HashMap<u32, E2ETemplate>,
@@ -592,6 +628,7 @@ mod e2e_test {
             Self {
                 initial_db_state: db,
                 expected_results: HashMap::new(),
+                reauth_target_indices: HashMap::new(),
                 inserted_responses: HashMap::new(),
                 deleted_indices_buffer: Vec::new(),
                 deleted_indices: HashSet::new(),
@@ -622,13 +659,15 @@ mod e2e_test {
 
             for idx in 0..batch_size {
                 let (request_id, e2e_template, or_rule_serial_ids) = self.generate_query(idx);
+
                 // Invalidate 10% of the queries, but ignore the batch duplicates
                 let is_valid = self.rng.gen_bool(0.10) || self.skip_invalidate;
-
                 if is_valid {
                     requests.insert(request_id.to_string(), e2e_template.clone());
                 }
 
+                let maybe_reauth_target_index =
+                    self.reauth_target_indices.get(&request_id.to_string());
                 let shared_template = to_shared_template(is_valid, &e2e_template, &mut self.rng);
 
                 prepare_batch(
@@ -638,6 +677,7 @@ mod e2e_test {
                     0,
                     shared_template.clone(),
                     or_rule_serial_ids.clone(),
+                    maybe_reauth_target_index,
                 )?;
 
                 prepare_batch(
@@ -647,6 +687,7 @@ mod e2e_test {
                     1,
                     shared_template.clone(),
                     or_rule_serial_ids.clone(),
+                    maybe_reauth_target_index,
                 )?;
 
                 prepare_batch(
@@ -656,6 +697,7 @@ mod e2e_test {
                     2,
                     shared_template,
                     or_rule_serial_ids.clone(),
+                    maybe_reauth_target_index,
                 )?;
             }
 
@@ -674,7 +716,7 @@ mod e2e_test {
                 }
                 self.deleted_indices_buffer.push(idx as u32);
                 self.deleted_indices.insert(idx as u32);
-                println!("Deleting index {}", idx);
+                tracing::info!("Deleting index {}", idx);
 
                 batch0.deletion_requests_indices.push(idx as u32);
                 batch1.deletion_requests_indices.push(idx as u32);
@@ -721,6 +763,8 @@ mod e2e_test {
                 TestCases::NonMatch,
                 TestCases::CloseToThreshold,
                 TestCases::WithOrRuleSet,
+                TestCases::ReauthNonMatchingTarget,
+                TestCases::ReauthMatchingTarget,
             ];
             if !self.inserted_responses.is_empty() {
                 options.push(TestCases::PreviouslyInserted);
@@ -729,7 +773,7 @@ mod e2e_test {
                 options.push(TestCases::PreviouslyDeleted);
             };
 
-            let or_rule_serial_ids: Vec<u32>;
+            let mut or_rule_serial_ids: Vec<u32> = Vec::new();
 
             // with a 10% chance we pick a template from the batch, to test the batch
             // deduplication mechanism
@@ -740,14 +784,13 @@ mod e2e_test {
                     self.new_templates_in_batch[random_idx].clone();
                 self.expected_results
                     .insert(request_id.to_string(), ExpectedResult {
-                        db_index:       Some(batch_idx as u32),
-                        is_batch_match: true,
+                        db_index:             Some(batch_idx as u32),
+                        is_batch_match:       true,
+                        is_reauth_successful: None,
                     });
                 self.batch_duplicates
                     .insert(request_id.to_string(), duplicate_request_id);
                 self.skip_invalidate = true;
-                or_rule_serial_ids = Vec::new();
-
                 E2ETemplate {
                     left:  template.clone(),
                     right: template.clone(),
@@ -757,13 +800,15 @@ mod e2e_test {
                 let option = options
                     .choose(&mut self.rng)
                     .expect("we have at least one testcase option");
+                tracing::info!("Request {} has type {:?}", request_id, option);
                 match &option {
                     TestCases::NonMatch => {
-                        println!("Sending new iris code");
+                        tracing::info!("Sending new iris code");
                         self.expected_results
                             .insert(request_id.to_string(), ExpectedResult {
-                                db_index:       None,
-                                is_batch_match: false,
+                                db_index:             None,
+                                is_batch_match:       false,
+                                is_reauth_successful: None,
                             });
                         let template = IrisCode::random_rng(&mut self.rng);
                         self.new_templates_in_batch.push((
@@ -772,29 +817,28 @@ mod e2e_test {
                             template.clone(),
                         ));
                         self.skip_invalidate = true;
-                        or_rule_serial_ids = Vec::new();
                         E2ETemplate {
                             left:  template.clone(),
                             right: template.clone(),
                         }
                     }
                     TestCases::Match => {
-                        println!("Sending iris code from db");
+                        tracing::info!("Sending iris code from db");
                         let (db_index, template) = self.get_iris_code_in_db(DatabaseRange::Full);
                         self.db_indices_used_in_current_batch.insert(db_index);
                         self.expected_results
                             .insert(request_id.to_string(), ExpectedResult {
-                                db_index:       Some(db_index as u32),
-                                is_batch_match: false,
+                                db_index:             Some(db_index as u32),
+                                is_batch_match:       false,
+                                is_reauth_successful: None,
                             });
-                        or_rule_serial_ids = Vec::new();
                         E2ETemplate {
                             left:  template.clone(),
                             right: template,
                         }
                     }
                     TestCases::CloseToThreshold => {
-                        println!("Sending iris code on the threshold");
+                        tracing::info!("Sending iris code on the threshold");
                         let (db_index, mut template) =
                             self.get_iris_code_in_db(DatabaseRange::FullMaskOnly);
                         self.db_indices_used_in_current_batch.insert(db_index);
@@ -806,15 +850,17 @@ mod e2e_test {
                                 // however it would afterwards so we no longer pick it
                                 self.disallowed_queries.push(db_index as u32);
                                 ExpectedResult {
-                                    db_index:       None,
-                                    is_batch_match: false,
+                                    db_index:             None,
+                                    is_batch_match:       false,
+                                    is_reauth_successful: None,
                                 }
                             } else {
                                 // we flip less or equal to than the threshold so this should
                                 // match
                                 ExpectedResult {
-                                    db_index:       Some(db_index as u32),
-                                    is_batch_match: false,
+                                    db_index:             Some(db_index as u32),
+                                    is_batch_match:       false,
+                                    is_reauth_successful: None,
                                 }
                             },
                         );
@@ -822,14 +868,13 @@ mod e2e_test {
                         for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
                             template.code.flip_bit(i);
                         }
-                        or_rule_serial_ids = Vec::new();
                         E2ETemplate {
                             left:  template.clone(),
                             right: template,
                         }
                     }
                     TestCases::PreviouslyInserted => {
-                        println!("Sending freshly inserted iris code");
+                        tracing::info!("Sending freshly inserted iris code");
                         let (idx, e2e_template) = self
                             .inserted_responses
                             .iter()
@@ -837,35 +882,35 @@ mod e2e_test {
                             .expect("we have at least one response");
                         self.expected_results
                             .insert(request_id.to_string(), ExpectedResult {
-                                db_index:       Some(*idx),
-                                is_batch_match: false,
+                                db_index:             Some(*idx),
+                                is_batch_match:       false,
+                                is_reauth_successful: None,
                             });
                         self.db_indices_used_in_current_batch.insert(*idx as usize);
-                        or_rule_serial_ids = Vec::new();
                         E2ETemplate {
                             left:  e2e_template.left.clone(),
                             right: e2e_template.right.clone(),
                         }
                     }
                     TestCases::PreviouslyDeleted => {
-                        println!("Sending deleted iris code");
+                        tracing::info!("Sending deleted iris code");
                         let idx = self.rng.gen_range(0..self.deleted_indices_buffer.len());
                         let deleted_idx = self.deleted_indices_buffer[idx];
 
                         self.deleted_indices_buffer.remove(idx);
                         self.expected_results
                             .insert(request_id.to_string(), ExpectedResult {
-                                db_index:       None,
-                                is_batch_match: false,
+                                db_index:             None,
+                                is_batch_match:       false,
+                                is_reauth_successful: None,
                             });
-                        or_rule_serial_ids = Vec::new();
                         E2ETemplate {
                             right: self.initial_db_state.db[deleted_idx as usize].clone(),
                             left:  self.initial_db_state.db[deleted_idx as usize].clone(),
                         }
                     }
                     TestCases::WithOrRuleSet => {
-                        println!(
+                        tracing::info!(
                             "Sending iris codes that match on one side but not the other with the \
                              OR rule set"
                         );
@@ -896,8 +941,9 @@ mod e2e_test {
                         // Will always match under the OR rule
                         self.expected_results
                             .insert(request_id.to_string(), ExpectedResult {
-                                db_index:       Some(matching_db_index as u32),
-                                is_batch_match: false,
+                                db_index:             Some(matching_db_index as u32),
+                                is_batch_match:       false,
+                                is_reauth_successful: None,
                             });
 
                         let mut code_left = self.initial_db_state.db[matching_db_index].clone();
@@ -926,8 +972,9 @@ mod e2e_test {
                             }
                             self.expected_results
                                 .insert(request_id.to_string(), ExpectedResult {
-                                    db_index:       Some(matching_db_index as u32),
-                                    is_batch_match: false,
+                                    db_index:             Some(matching_db_index as u32),
+                                    is_batch_match:       false,
+                                    is_reauth_successful: None,
                                 });
                         } else {
                             // Flip both to above threshold - neither match
@@ -940,13 +987,49 @@ mod e2e_test {
                             self.disallowed_queries.push(matching_db_index as u32);
                             self.expected_results
                                 .insert(request_id.to_string(), ExpectedResult {
-                                    db_index:       None,
-                                    is_batch_match: false,
+                                    db_index:             None,
+                                    is_batch_match:       false,
+                                    is_reauth_successful: None,
                                 });
                         }
                         E2ETemplate {
                             left:  code_left,
                             right: code_right,
+                        }
+                    }
+                    TestCases::ReauthMatchingTarget => {
+                        tracing::info!("Sending reauth request matching the target index");
+                        let (db_index, template) = self.get_iris_code_in_db(DatabaseRange::Full);
+                        self.db_indices_used_in_current_batch.insert(db_index);
+                        self.reauth_target_indices
+                            .insert(request_id.to_string(), db_index as u32);
+                        self.expected_results
+                            .insert(request_id.to_string(), ExpectedResult {
+                                db_index:             Some(db_index as u32),
+                                is_batch_match:       false,
+                                is_reauth_successful: Some(true),
+                            });
+                        E2ETemplate {
+                            left:  template.clone(),
+                            right: template,
+                        }
+                    }
+                    TestCases::ReauthNonMatchingTarget => {
+                        tracing::info!("Sending reauth request non-matching the target index");
+                        let (db_index, _) = self.get_iris_code_in_db(DatabaseRange::Full);
+                        self.db_indices_used_in_current_batch.insert(db_index);
+                        self.reauth_target_indices
+                            .insert(request_id.to_string(), db_index as u32);
+                        let template = IrisCode::random_rng(&mut self.rng);
+                        self.expected_results
+                            .insert(request_id.to_string(), ExpectedResult {
+                                db_index:             None,
+                                is_batch_match:       false,
+                                is_reauth_successful: Some(false),
+                            });
+                        E2ETemplate {
+                            left:  template.clone(),
+                            right: template,
                         }
                     }
                 }
@@ -962,14 +1045,31 @@ mod e2e_test {
             was_match: bool,
             matched_batch_req_ids: &[String],
             requests: &HashMap<String, E2ETemplate>,
+            was_reauth_success: bool,
         ) {
+            tracing::info!(
+                "Checking result for request_id: {}, idx: {}, was_match: {}, \
+                 matched_batch_req_ids: {:?}, was_reauth_success: {}",
+                req_id,
+                idx,
+                was_match,
+                matched_batch_req_ids,
+                was_reauth_success
+            );
             let &ExpectedResult {
                 db_index: expected_idx,
                 is_batch_match,
+                is_reauth_successful,
             } = self
                 .expected_results
                 .get(req_id)
                 .expect("request id not found");
+
+            // if the request is a reauth, we only check the reauth success
+            if let Some(is_reauth_successful) = is_reauth_successful {
+                assert_eq!(is_reauth_successful, was_reauth_success);
+                return;
+            }
 
             if let Some(expected_idx) = expected_idx {
                 assert!(was_match);
