@@ -269,7 +269,7 @@ impl HnswSearcher {
     #[allow(non_snake_case)]
     #[instrument(
         level = "trace",
-        target = "cpu_time",
+        target = "searcher::cpu_time",
         skip(self, vector_store, graph_store, query)
     )]
     async fn search_init<V: VectorStore>(
@@ -296,7 +296,7 @@ impl HnswSearcher {
     /// vertices and their neighbors.
     #[instrument(
         level = "trace",
-        target = "cpu_time",
+        target = "searcher::cpu_time",
         skip(self, vector_store, graph_store, W)
     )]
     #[allow(non_snake_case)]
@@ -321,9 +321,10 @@ impl HnswSearcher {
         let (_, mut fq) = W.get_furthest().expect("W cannot be empty").clone();
 
         // These spans accumulate running time of multiple atomic operations
-        let eval_dist_span = trace_span!(target: "cpu_time", "eval_distance_batch");
-        let less_than_span = trace_span!(target: "cpu_time", "less_than");
-        let insert_span = trace_span!(target: "cpu_time", "insert_into_sorted_neighborhood");
+        let eval_dist_span = trace_span!(target: "searcher::cpu_time", "eval_distance_batch_aggr");
+        let less_than_span = trace_span!(target: "searcher::cpu_time", "less_than_aggr");
+        let insert_span =
+            trace_span!(target: "searcher::cpu_time", "insert_into_sorted_neighborhood_aggr");
 
         // Continue until all current entries in candidate nearest neighbors list have
         // been opened
@@ -415,7 +416,7 @@ impl HnswSearcher {
     #[instrument(
         level = "trace",
         skip(self, vector_store, graph_store, query, rng),
-        target = "cpu_time"
+        target = "searcher::cpu_time"
     )]
     pub async fn insert<V: VectorStore>(
         &self,
@@ -457,7 +458,7 @@ impl HnswSearcher {
     /// set `query` as the index entry point.
     #[instrument(
         level = "trace",
-        target = "cpu_time",
+        target = "searcher::cpu_time",
         skip(self, vector_store, graph_store, query)
     )]
     #[allow(non_snake_case)]
@@ -554,7 +555,7 @@ impl HnswSearcher {
     /// indicating whether the vector is to be inserted as the new entry point.
     #[instrument(
         level = "trace",
-        target = "cpu_time",
+        target = "searcher::cpu_time",
         skip(self, vector_store, graph_store, inserted_vector, links)
     )]
     pub async fn insert_from_search_results<V: VectorStore>(
