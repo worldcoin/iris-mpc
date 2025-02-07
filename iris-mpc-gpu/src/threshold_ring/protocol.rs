@@ -412,7 +412,7 @@ impl Circuits {
         input_size: usize, // per GPU
         alloc_size: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
-        device_manager: Arc<DeviceManager>,
+        device_manager: DeviceManager,
         comms: Vec<Arc<NcclComm>>,
     ) -> Self {
         // For the transpose, inputs should be multiple of 64 bits

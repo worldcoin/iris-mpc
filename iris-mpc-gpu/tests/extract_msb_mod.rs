@@ -251,9 +251,9 @@ mod extract_msb_mod_test {
         let mut device_managers = device_manager
             .split_into_n_chunks(3)
             .expect("have at least 3 devices");
-        let device_manager2 = Arc::new(device_managers.pop().unwrap());
-        let device_manager1 = Arc::new(device_managers.pop().unwrap());
-        let device_manager0 = Arc::new(device_managers.pop().unwrap());
+        let device_manager2 = device_managers.pop().unwrap();
+        let device_manager1 = device_managers.pop().unwrap();
+        let device_manager0 = device_managers.pop().unwrap();
         let n_devices = device_manager0.devices().len();
         let ids0 = (0..n_devices)
             .map(|_| Id::new().unwrap())
