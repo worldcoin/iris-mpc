@@ -1,5 +1,4 @@
 mod actor;
-pub mod sync_nccl;
 
 use crate::dot::{share_db::preprocess_query, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS};
 pub use actor::{

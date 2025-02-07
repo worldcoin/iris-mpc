@@ -154,6 +154,7 @@ impl ServerActor {
         disable_persistence: bool,
         enable_debug_timing: bool,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
+        tracing::info!("GPU Actor: Starting Device Manager");
         let device_manager = Arc::new(DeviceManager::init());
         Self::new_with_device_manager(
             party_id,
@@ -185,6 +186,7 @@ impl ServerActor {
         disable_persistence: bool,
         enable_debug_timing: bool,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
+        tracing::info!("GPU Actor: Initializing NCCL");
         let ids = device_manager.get_ids_from_magic(0);
         let comms = device_manager.instantiate_network_from_ids(party_id, &ids)?;
         Self::new_with_device_manager_and_comms(
@@ -271,7 +273,7 @@ impl ServerActor {
                 ))
             };
 
-        tracing::info!("Starting engines...");
+        tracing::info!("GPU actor: Starting engines...");
 
         // Phase 1 Setup
         let codes_engine = ShareDB::init(
@@ -301,7 +303,7 @@ impl ServerActor {
         let right_code_db_slices = codes_engine.alloc_db(max_db_size);
         let right_mask_db_slices = masks_engine.alloc_db(max_db_size);
 
-        tracing::info!("Allocated db in {:?}", now.elapsed());
+        tracing::info!("GPU actor: Allocated db in {:?}", now.elapsed());
 
         // Engines for inflight queries
         let batch_codes_engine = ShareDB::init(
@@ -435,6 +437,7 @@ impl ServerActor {
             party_id,
             iris_mpc_common::helpers::statistics::Eye::Right,
         );
+        tracing::info!("GPU actor: Initialized");
 
         Ok(Self {
             party_id,
