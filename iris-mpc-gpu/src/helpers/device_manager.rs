@@ -24,7 +24,7 @@ use std::{
 pub const NCCL_START_WAIT_TIME: Duration = Duration::from_secs(5);
 pub const NCCL_START_RETRIES: usize = 5;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DeviceManager {
     devices:    Vec<Arc<CudaDevice>>,
     locked_dbs: Arc<Mutex<Vec<CudaVec2DSlicerRawPointer>>>,
