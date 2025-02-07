@@ -13,7 +13,7 @@ use cudarc::{
     },
     nvrtc::compile_ptx,
 };
-use std::cmp::min;
+use std::{cmp::min, sync::Arc};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const OPEN_RESULTS_FUNCTION: &str = "openResults";
@@ -24,7 +24,7 @@ const MERGE_BATCH_RESULTS_WITH_OR_POLICY_BITMAP_FUNCTION: &str = "mergeDbResults
 const ALL_MATCHES_LEN: usize = 256;
 
 pub struct DistanceComparator {
-    pub device_manager:                  DeviceManager,
+    pub device_manager:                  Arc<DeviceManager>,
     pub open_kernels:                    Vec<CudaFunction>,
     pub open_batch_kernels:              Vec<CudaFunction>,
     pub merge_db_kernels:                Vec<CudaFunction>,
@@ -44,7 +44,7 @@ pub struct DistanceComparator {
 }
 
 impl DistanceComparator {
-    pub fn init(query_length: usize, device_manager: DeviceManager) -> Self {
+    pub fn init(query_length: usize, device_manager: Arc<DeviceManager>) -> Self {
         let ptx = compile_ptx(PTX_SRC).unwrap();
         let mut open_kernels: Vec<CudaFunction> = Vec::new();
         let mut open_batch_kernels: Vec<CudaFunction> = Vec::new();

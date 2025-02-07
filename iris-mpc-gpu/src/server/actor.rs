@@ -83,7 +83,7 @@ const SUPERMATCH_THRESHOLD: usize = 4_000;
 
 pub struct ServerActor {
     job_queue: mpsc::Receiver<ServerJob>,
-    device_manager: DeviceManager,
+    pub device_manager: Arc<DeviceManager>,
     party_id: usize,
     // engines
     codes_engine: ShareDB,
@@ -154,7 +154,7 @@ impl ServerActor {
         enable_debug_timing: bool,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         tracing::info!("GPU Actor: Starting Device Manager");
-        let device_manager = DeviceManager::init();
+        let device_manager = Arc::new(DeviceManager::init());
         Self::new_with_device_manager(
             party_id,
             chacha_seeds,
@@ -174,7 +174,7 @@ impl ServerActor {
     pub fn new_with_device_manager(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
-        device_manager: DeviceManager,
+        device_manager: Arc<DeviceManager>,
         job_queue_size: usize,
         max_db_size: usize,
         max_batch_size: usize,
@@ -209,7 +209,7 @@ impl ServerActor {
     pub fn new_with_device_manager_and_comms(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
-        device_manager: DeviceManager,
+        device_manager: Arc<DeviceManager>,
         comms: Vec<Arc<NcclComm>>,
         job_queue_size: usize,
         max_db_size: usize,
@@ -244,7 +244,7 @@ impl ServerActor {
     fn init(
         party_id: usize,
         chacha_seeds: ([u32; 8], [u32; 8]),
-        device_manager: DeviceManager,
+        device_manager: Arc<DeviceManager>,
         comms: Vec<Arc<NcclComm>>,
         job_queue: mpsc::Receiver<ServerJob>,
         max_db_size: usize,

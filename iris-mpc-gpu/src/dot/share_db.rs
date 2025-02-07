@@ -125,7 +125,7 @@ pub struct ShareDB {
     peer_id:               usize,
     is_remote:             bool,
     query_length:          usize,
-    device_manager:        DeviceManager,
+    device_manager:        Arc<DeviceManager>,
     kernels:               Vec<CudaFunction>,
     xor_assign_u8_kernels: Vec<CudaFunction>,
     rngs:                  Vec<(ChaChaCudaRng, ChaChaCudaRng)>,
@@ -142,7 +142,7 @@ impl ShareDB {
     #[allow(clippy::arc_with_non_send_sync)]
     pub fn init(
         peer_id: usize,
-        device_manager: DeviceManager,
+        device_manager: Arc<DeviceManager>,
         max_db_length: usize,
         query_length: usize,
         code_length: usize,
@@ -858,6 +858,7 @@ mod tests {
     use ndarray::Array2;
     use num_traits::FromPrimitive;
     use rand::{rngs::StdRng, Rng, SeedableRng};
+    use std::sync::Arc;
 
     const WIDTH: usize = 12_800;
     const QUERY_SIZE: usize = 32;
@@ -904,7 +905,7 @@ mod tests {
     fn check_matmul() {
         let db = random_vec(DB_SIZE, WIDTH, u16::MAX as u32);
         let query = random_vec(QUERY_SIZE, WIDTH, u16::MAX as u32);
-        let device_manager = DeviceManager::init();
+        let device_manager = Arc::new(DeviceManager::init());
         let n_devices = device_manager.device_count();
 
         let mut gpu_result = vec![0u16; DB_SIZE / n_devices * QUERY_SIZE];
@@ -973,7 +974,7 @@ mod tests {
     #[test]
     fn check_shared_matmul() {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
-        let device_manager = DeviceManager::init();
+        let device_manager = Arc::new(DeviceManager::init());
         let n_devices = device_manager.device_count();
 
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
@@ -985,7 +986,7 @@ mod tests {
         ];
 
         for i in 0..3 {
-            let device_manager = device_manager.clone();
+            let device_manager = Arc::clone(&device_manager);
 
             let codes_db = db
                 .db
@@ -1059,7 +1060,7 @@ mod tests {
     #[test]
     fn check_shared_distances() {
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
-        let device_manager = DeviceManager::init();
+        let device_manager = Arc::new(DeviceManager::init());
         let n_devices = device_manager.device_count();
 
         let db = IrisDB::new_random_par(DB_SIZE, &mut rng);
@@ -1124,7 +1125,7 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
 
-            let device_manager = DeviceManager::init();
+            let device_manager = Arc::new(DeviceManager::init());
 
             let mut codes_engine = ShareDB::init(
                 party_id,
