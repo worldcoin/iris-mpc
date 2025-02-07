@@ -68,11 +68,15 @@ impl DeviceManager {
         if chunk_size == 0 {
             return Err(self);
         }
+        assert!(
+            self.locked_dbs.lock().unwrap().is_empty(),
+            "Splitting into chunks only supported before pages are locked."
+        );
         let mut ret = vec![];
         for i in 0..n {
             ret.push(DeviceManager {
                 devices:    self.devices[i * chunk_size..(i + 1) * chunk_size].to_vec(),
-                locked_dbs: self.locked_dbs.clone(),
+                locked_dbs: Arc::new(Mutex::new(Vec::new())),
             });
         }
         Ok(ret)
