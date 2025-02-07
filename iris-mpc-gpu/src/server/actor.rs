@@ -554,15 +554,27 @@ impl ServerActor {
     pub fn register_host_memory(&self) {
         let page_lock_ts = Instant::now();
         tracing::info!("Starting page lock");
-        self.codes_engine
-            .register_host_memory(&self.left_code_db_slices, self.max_db_size);
-        self.codes_engine
-            .register_host_memory(&self.right_code_db_slices, self.max_db_size);
+        self.device_manager.register_host_memory(
+            &self.left_code_db_slices,
+            self.max_db_size,
+            IRIS_CODE_LENGTH,
+        );
+        self.device_manager.register_host_memory(
+            &self.right_code_db_slices,
+            self.max_db_size,
+            IRIS_CODE_LENGTH,
+        );
         tracing::info!("Page locking completed for code slice");
-        self.masks_engine
-            .register_host_memory(&self.left_mask_db_slices, self.max_db_size);
-        self.masks_engine
-            .register_host_memory(&self.right_mask_db_slices, self.max_db_size);
+        self.device_manager.register_host_memory(
+            &self.left_mask_db_slices,
+            self.max_db_size,
+            MASK_CODE_LENGTH,
+        );
+        self.device_manager.register_host_memory(
+            &self.right_mask_db_slices,
+            self.max_db_size,
+            MASK_CODE_LENGTH,
+        );
         tracing::info!("Page locking completed for mask slice");
         tracing::info!("Page locking completed in {:?}", page_lock_ts.elapsed());
     }
