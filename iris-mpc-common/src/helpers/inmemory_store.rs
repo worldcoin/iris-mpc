@@ -56,7 +56,38 @@ pub trait InMemoryStore {
         left_mask_even: &[u8],
         right_mask_odd: &[u8],
         right_mask_even: &[u8],
-    );
+    ) {
+        // this calculates the inverse mapping of the preprocessing done in share_db
+        // https://github.com/worldcoin/iris-mpc/blob/d92f3c394ace6ade8ddb8d574fccb2411b6a3ddd/iris-mpc-gpu/src/dot/share_db.rs#L299-L307
+        let map_back_to_u16 = |a0, a1| {
+            let mut a = [0u8; 2];
+            a[0] = ((a0 as i8 as i32) + 128) as u8;
+            a[1] = ((a1 as i8 as i32) + 128) as u8;
+            u16::from_le_bytes(a)
+        };
+
+        let left_code = left_code_odd
+            .iter()
+            .zip(left_code_even.iter())
+            .map(|(odd, even)| map_back_to_u16(*odd, *even))
+            .collect::<Vec<_>>();
+        let right_code = right_code_odd
+            .iter()
+            .zip(right_code_even.iter())
+            .map(|(odd, even)| map_back_to_u16(*odd, *even))
+            .collect::<Vec<_>>();
+        let left_mask = left_mask_odd
+            .iter()
+            .zip(left_mask_even.iter())
+            .map(|(odd, even)| map_back_to_u16(*odd, *even))
+            .collect::<Vec<_>>();
+        let right_mask = right_mask_odd
+            .iter()
+            .zip(right_mask_even.iter())
+            .map(|(odd, even)| map_back_to_u16(*odd, *even))
+            .collect::<Vec<_>>();
+        self.load_single_record_from_db(index, &left_code, &left_mask, &right_code, &right_mask);
+    }
 
     /// Executes any necessary preprocessing steps on the in-memory store.
     ///
