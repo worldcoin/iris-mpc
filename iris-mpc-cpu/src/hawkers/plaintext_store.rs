@@ -9,7 +9,12 @@ use iris_mpc_common::iris_db::{
 };
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
-use std::ops::{Index, IndexMut};
+use std::{
+    fmt::Display,
+    num::ParseIntError,
+    ops::{Index, IndexMut},
+    str::FromStr,
+};
 use tracing::info;
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -60,6 +65,20 @@ pub struct PlaintextPoint {
 
 #[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PointId(pub u32);
+
+impl Display for PointId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for PointId {
+    type Err = ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(PointId(FromStr::from_str(s)?))
+    }
+}
 
 impl<T> Index<PointId> for Vec<T> {
     type Output = T;

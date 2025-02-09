@@ -1,5 +1,9 @@
 use serde::Serialize;
-use std::{fmt::Debug, hash::Hash};
+use std::{
+    fmt::{Debug, Display},
+    hash::Hash,
+    str::FromStr,
+};
 
 pub trait TransientRef: Clone + Debug + PartialEq + Eq + Hash + Sync {}
 
@@ -27,7 +31,7 @@ pub trait VectorStore: Clone + Debug {
     /// Opaque reference to a stored vector.
     ///
     /// Example: a vector ID.
-    type VectorRef: Ref;
+    type VectorRef: Ref + Display + FromStr;
 
     /// Opaque reference to a distance metric.
     ///
