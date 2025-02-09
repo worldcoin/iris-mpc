@@ -20,6 +20,13 @@ const MAX_CONNECTIONS: u32 = 5;
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
+#[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
+pub struct RowLinks<V: VectorStore> {
+    source_ref: Text<V::VectorRef>,
+    links:      Json<SortedNeighborhoodV<V>>,
+    layer:      i32,
+}
+
 pub struct GraphPg<V: VectorStore> {
     pool:    sqlx::PgPool,
     phantom: PhantomData<V>,
@@ -81,7 +88,7 @@ impl<V: VectorStore> GraphPg<V> {
         self.set_links(q, plan.neighbors, lc).await;
     }
 
-    async fn get_entry_point(&self) -> Option<(V::VectorRef, usize)> {
+    pub async fn get_entry_point(&self) -> Option<(V::VectorRef, usize)> {
         sqlx::query(
             "
                 SELECT entry_point FROM hawk_graph_entry WHERE id = 0
@@ -110,8 +117,7 @@ impl<V: VectorStore> GraphPg<V> {
         .expect("Failed to set entry point");
     }
 
-    #[cfg(test)]
-    async fn get_links(
+    pub async fn get_links(
         &self,
         base: &<V as VectorStore>::VectorRef,
         lc: usize,
@@ -149,13 +155,6 @@ impl<V: VectorStore> GraphPg<V> {
         .await
         .expect("Failed to set links");
     }
-}
-
-#[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
-pub struct RowLinks<V: VectorStore> {
-    source_ref: Text<V::VectorRef>,
-    links:      Json<SortedNeighborhoodV<V>>,
-    layer:      i32,
 }
 
 impl<V: VectorStore> GraphPg<V>
@@ -320,6 +319,7 @@ mod tests {
         };
 
         let ep = graph.get_entry_point().await;
+        assert!(ep.is_none());
 
         let ep2 = EntryPoint {
             point: vectors[0],
