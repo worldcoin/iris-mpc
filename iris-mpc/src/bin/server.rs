@@ -279,15 +279,28 @@ async fn receive_batch(
                                 "Skipping request due to it being from synced deleted ids: {}",
                                 uniqueness_request.signup_id
                             );
+                            let message: UniquenessResult = UniquenessResult {
+                                node_id:                   config.party_id,
+                                serial_id:                 None,
+                                is_match:                  false,
+                                signup_id:                 uniqueness_request.signup_id,
+                                matched_serial_ids:        None,
+                                matched_serial_ids_left:   None,
+                                matched_serial_ids_right:  None,
+                                matched_batch_request_ids: None,
+                                error:                     Some(true),
+                                error_reason:              Some(
+                                    ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH.to_string(),
+                                ),
+                            };
                             // shares
                             send_error_results_to_sns(
-                                uniqueness_request.signup_id,
+                                serde_json::to_string(&message).unwrap(),
                                 &batch_metadata,
                                 sns_client,
                                 config,
                                 uniqueness_error_result_attributes,
                                 UNIQUENESS_MESSAGE_TYPE,
-                                ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
                             )
                             .await?;
                             continue;
@@ -370,6 +383,17 @@ async fn receive_batch(
                             .send()
                             .await
                             .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
+
+                        if reauth_request.use_or_rule
+                            && !(config.luc_enabled && config.luc_serial_ids_from_smpc_request)
+                        {
+                            tracing::error!(
+                                "Received a reauth request with use_or_rule set to true, but LUC \
+                                 is not enabled. Skipping request."
+                            );
+                            // TODO: send error message to signup-service
+                            continue;
+                        }
 
                         if config.enable_reauth {
                             msg_counter += 1;
@@ -466,19 +490,37 @@ async fn receive_batch(
                 tracing::error!("Failed to process iris shares: {:?}", e);
                 // Return error message back to the signup-service if failed to process iris
                 // shares
-                let result_attributes = match batch_query.request_types[index].as_str() {
-                    UNIQUENESS_MESSAGE_TYPE => uniqueness_error_result_attributes,
-                    REAUTH_MESSAGE_TYPE => reauth_error_result_attributes,
+                let request_id = batch_query.request_ids[index].clone();
+                let (result_attributes, message) = match batch_query.request_types[index].as_str() {
+                    UNIQUENESS_MESSAGE_TYPE => {
+                        let message = UniquenessResult::new_error_result(
+                            config.party_id,
+                            request_id,
+                            ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
+                        );
+                        let serialized = serde_json::to_string(&message).unwrap();
+                        (uniqueness_error_result_attributes, serialized)
+                    }
+                    REAUTH_MESSAGE_TYPE => {
+                        let message = ReAuthResult::new_error_result(
+                            request_id.clone(),
+                            config.party_id,
+                            *batch_query.reauth_target_indices.get(&request_id).unwrap(),
+                            ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
+                        );
+                        let serialized = serde_json::to_string(&message).unwrap();
+                        (reauth_error_result_attributes, serialized)
+                    }
                     _ => unreachable!(), // we don't push a handle for unknown message types
                 };
+
                 send_error_results_to_sns(
-                    batch_query.request_ids[index].clone(),
+                    message,
                     &batch_query.metadata[index],
                     sns_client,
                     config,
                     result_attributes,
                     batch_query.request_types[index].as_str(),
-                    ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
                 )
                 .await?;
                 // If we failed to process the iris shares, we include a dummy entry in the
@@ -726,34 +768,20 @@ async fn initialize_chacha_seeds(config: Config) -> eyre::Result<([u32; 8], [u32
 }
 
 async fn send_error_results_to_sns(
-    signup_id: String,
+    serialised_json_message: String,
     metadata: &BatchMetadata,
     sns_client: &SNSClient,
     config: &Config,
     base_message_attributes: &HashMap<String, MessageAttributeValue>,
     message_type: &str,
-    error_reason: &str,
 ) -> eyre::Result<()> {
-    let message: UniquenessResult = UniquenessResult {
-        node_id: config.party_id,
-        serial_id: None,
-        is_match: false,
-        signup_id,
-        matched_serial_ids: None,
-        matched_serial_ids_left: None,
-        matched_serial_ids_right: None,
-        matched_batch_request_ids: None,
-        error: Some(true),
-        error_reason: Some(String::from(error_reason)),
-    };
-    let message_serialised = serde_json::to_string(&message)?;
     let mut message_attributes = base_message_attributes.clone();
     let trace_attributes = construct_message_attributes(&metadata.trace_id, &metadata.span_id)?;
     message_attributes.extend(trace_attributes);
     sns_client
         .publish()
         .topic_arn(&config.results_topic_arn)
-        .message(message_serialised)
+        .message(serialised_json_message)
         .message_group_id(format!("party-id-{}", config.party_id))
         .set_message_attributes(Some(message_attributes))
         .send()
@@ -762,6 +790,7 @@ async fn send_error_results_to_sns(
 
     Ok(())
 }
+
 async fn send_results_to_sns(
     result_events: Vec<String>,
     metadata: &[BatchMetadata],
@@ -1615,10 +1644,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         party_id,
                         reauth_target_indices.get(&reauth_id).unwrap() + 1,
                         successful_reauths[i],
-                        match match_ids[i].is_empty() {
-                            false => Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
-                            true => None,
-                        },
+                        match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>(),
+                        false,
+                        None,
                     );
                     serde_json::to_string(&result_event)
                         .wrap_err("failed to serialize reauth result")
