@@ -65,6 +65,33 @@ impl IdentityDeletionResult {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ReAuthResult {
+    pub reauth_id:          String,
+    pub node_id:            usize,
+    pub serial_id:          u32,
+    pub success:            bool,
+    pub matched_serial_ids: Option<Vec<u32>>,
+}
+
+impl ReAuthResult {
+    pub fn new(
+        reauth_id: String,
+        node_id: usize,
+        serial_id: u32,
+        success: bool,
+        matched_serial_ids: Option<Vec<u32>>,
+    ) -> Self {
+        Self {
+            reauth_id,
+            node_id,
+            serial_id,
+            success,
+            matched_serial_ids,
+        }
+    }
+}
+
 pub fn create_message_type_attribute_map(
     message_type: &str,
 ) -> HashMap<String, MessageAttributeValue> {

@@ -30,20 +30,20 @@ use iris_mpc_common::{
             UNIQUENESS_MESSAGE_TYPE,
         },
         smpc_response::{
-            create_message_type_attribute_map, IdentityDeletionResult, UniquenessResult,
-            ERROR_FAILED_TO_PROCESS_IRIS_SHARES, ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
-            SMPC_MESSAGE_TYPE_ATTRIBUTE,
+            create_message_type_attribute_map, IdentityDeletionResult, ReAuthResult,
+            UniquenessResult, ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
+            ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH, SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
-        sync::SyncState,
+        sync::{SyncResult, SyncState},
         task_monitor::TaskMonitor,
     },
     IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use iris_mpc_gpu::{
-    helpers::{device_manager::DeviceManager, register_host_memory},
+    helpers::register_host_memory,
     server::{
-        get_dummy_shares_for_deletion, sync_nccl, BatchMetadata, BatchQuery,
-        BatchQueryEntriesPreprocessed, ServerActor, ServerJobResult,
+        get_dummy_shares_for_deletion, BatchMetadata, BatchQuery, BatchQueryEntriesPreprocessed,
+        ServerActor, ServerJobResult,
     },
 };
 use iris_mpc_store::{
@@ -826,7 +826,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
     let max_sync_lookback: usize = config.max_batch_size * 2;
     let max_rollback: usize = config.max_batch_size * 2;
-    assert!(max_sync_lookback <= sync_nccl::MAX_REQUESTS);
     tracing::info!("Set batch size to {}", config.max_batch_size);
 
     tracing::info!("Creating new storage from: {:?}", config);
@@ -875,6 +874,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let chacha_seeds = initialize_chacha_seeds(config.clone()).await?;
 
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
+    let reauth_result_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
     let anonymized_statistics_attributes =
         create_message_type_attribute_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
@@ -942,12 +942,17 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let mut background_tasks = TaskMonitor::new();
 
     // --------------------------------------------------------------------------
-    // ANCHOR: Starting Healthcheck and Readiness server
+    // ANCHOR: Starting Healthcheck, Readiness and Sync server
     // --------------------------------------------------------------------------
-    tracing::info!("⚓️ ANCHOR: Starting Healthcheck and Readiness server");
+    tracing::info!("⚓️ ANCHOR: Starting Healthcheck, Readiness and Sync server");
 
     let is_ready_flag = Arc::new(AtomicBool::new(false));
     let is_ready_flag_cloned = Arc::clone(&is_ready_flag);
+
+    let my_state = SyncState {
+        db_len:              store_len as u64,
+        deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
+    };
 
     #[derive(Debug, Serialize, Deserialize, Clone)]
     struct ReadyProbeResponse {
@@ -975,6 +980,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         let serialized_response_shutdown = serde_json::to_string(&ready_probe_response_shutdown)
             .expect("Serialization to JSON to probe response failed");
         tracing::info!("Healthcheck probe response: {}", serialized_response);
+        let my_state = my_state.clone();
         async move {
             // Generate a random UUID for each run.
             let app = Router::new()
@@ -1004,6 +1010,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             }
                         }
                     }),
+                )
+                .route(
+                    "/startup-sync",
+                    get(move || async move { serde_json::to_string(&my_state).unwrap() }),
                 );
             let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
                 .await
@@ -1018,6 +1028,48 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     background_tasks.check_tasks();
     tracing::info!("Healthcheck and Readiness server running on port 3000.");
+
+    tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
+    // Check other nodes and wait until all nodes are ready.
+    let all_nodes = config.node_hostnames.clone();
+    let unready_check = tokio::spawn(async move {
+        let next_node = &all_nodes[(config.party_id + 1) % 3];
+        let prev_node = &all_nodes[(config.party_id + 2) % 3];
+        let mut connected_but_unready = [false, false];
+
+        loop {
+            for (i, host) in [next_node, prev_node].iter().enumerate() {
+                let res = reqwest::get(format!("http://{}:3000/ready", host)).await;
+
+                if res.is_ok() && res.unwrap().status() == StatusCode::SERVICE_UNAVAILABLE {
+                    connected_but_unready[i] = true;
+                    // If all nodes are connected, notify the main thread.
+                    if connected_but_unready.iter().all(|&c| c) {
+                        return;
+                    }
+                }
+            }
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+
+    tracing::info!("Waiting for all nodes to be unready...");
+    match tokio::time::timeout(
+        Duration::from_secs(config.startup_sync_timeout_secs),
+        unready_check,
+    )
+    .await
+    {
+        Ok(res) => {
+            res?;
+        }
+        Err(_) => {
+            tracing::error!("Timeout waiting for all nodes to be unready.");
+            return Err(eyre!("Timeout waiting for all nodes to be unready."));
+        }
+    };
+    tracing::info!("All nodes are starting up.");
 
     let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
     let mut heartbeat_tx = Some(heartbeat_tx);
@@ -1128,11 +1180,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     background_tasks.check_tasks();
 
-    let my_state = SyncState {
-        db_len:              store_len as u64,
-        deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
-    };
-
     // Start the actor in separate task.
     // A bit convoluted, but we need to create the actor on the thread already,
     // since it blocks a lot and is `!Send`, we get back the handle via the oneshot
@@ -1148,67 +1195,80 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let s3_chunks_folder_name = config.db_chunks_folder_name.clone();
     let s3_load_max_retries = config.load_chunks_max_retries;
     let s3_load_initial_backoff_ms = config.load_chunks_initial_backoff_ms;
-    let device_manager_init = Arc::new(DeviceManager::init());
-    let device_manager = Arc::clone(&device_manager_init);
+
+    // --------------------------------------------------------------------------
+    // ANCHOR: Syncing latest node state
+    // --------------------------------------------------------------------------
+    tracing::info!("⚓️ ANCHOR: Syncing latest node state");
+    let all_nodes = config.node_hostnames.clone();
+    let next_node = &all_nodes[(config.party_id + 1) % 3];
+    let prev_node = &all_nodes[(config.party_id + 2) % 3];
+
+    tracing::info!("Database store length is: {}", store_len);
+    let mut states = vec![my_state.clone()];
+    for host in [next_node, prev_node].iter() {
+        let res = reqwest::get(format!("http://{}:3000/startup-sync", host)).await;
+        match res {
+            Ok(res) => {
+                let state: SyncState = match res.json().await {
+                    Ok(state) => state,
+                    Err(e) => {
+                        tracing::error!("Failed to parse sync state from party {}: {:?}", host, e);
+                        panic!(
+                            "could not get sync state from party {}, trying to restart",
+                            host
+                        );
+                    }
+                };
+                states.push(state);
+            }
+            Err(e) => {
+                tracing::error!("Failed to fetch sync state from party {}: {:?}", host, e);
+                panic!(
+                    "could not get sync state from party {}, trying to restart",
+                    host
+                );
+            }
+        }
+    }
+    let sync_result = SyncResult::new(my_state, states);
+
+    if let Some(db_len) = sync_result.must_rollback_storage() {
+        tracing::error!("Databases are out-of-sync: {:?}", sync_result);
+        if db_len + max_rollback < store_len {
+            return Err(eyre!(
+                "Refusing to rollback so much (from {} to {})",
+                store_len,
+                db_len,
+            ));
+        }
+        tracing::warn!(
+            "Rolling back from database length {} to other nodes length {}",
+            store_len,
+            db_len
+        );
+        store.rollback(db_len).await?;
+        metrics::counter!("db.sync.rollback").increment(1);
+    }
+
+    if download_shutdown_handler.is_shutting_down() {
+        tracing::warn!("Shutting down has been triggered");
+        return Ok(());
+    }
+
+    // refetch store_len in case we rolled back
+    let store_len = store.count_irises().await?;
+    tracing::info!("Database store length after sync: {}", store_len);
 
     let (tx, rx) = oneshot::channel();
     background_tasks.spawn_blocking(move || {
-        let ids = device_manager.get_ids_from_magic(0);
-
-        // --------------------------------------------------------------------------
-        // ANCHOR: Starting NCCL
-        // --------------------------------------------------------------------------
-        tracing::info!("⚓️ ANCHOR: Starting NCCL");
-        let comms = device_manager.instantiate_network_from_ids(config.party_id, &ids)?;
-        // FYI: If any of the nodes die after this, all connections are broken.
-
-        // --------------------------------------------------------------------------
-        // ANCHOR: Syncing latest node state
-        // --------------------------------------------------------------------------
-        tracing::info!("⚓️ ANCHOR: Syncing latest node state");
-        let sync_result = match sync_nccl::sync(&comms[0], &my_state) {
-            Ok(res) => res,
-            Err(e) => {
-                tx.send(Err(e)).unwrap();
-                return Ok(());
-            }
-        };
-        tracing::info!("Database store length is: {}", store_len);
-
-        if let Some(db_len) = sync_result.must_rollback_storage() {
-            tracing::error!("Databases are out-of-sync: {:?}", sync_result);
-            if db_len + max_rollback < store_len {
-                return Err(eyre!(
-                    "Refusing to rollback so much (from {} to {})",
-                    store_len,
-                    db_len,
-                ));
-            }
-            tracing::warn!(
-                "Rolling back from database length {} to other nodes length {}",
-                store_len,
-                db_len
-            );
-            tokio::runtime::Handle::current().block_on(async { store.rollback(db_len).await })?;
-            metrics::counter!("db.sync.rollback").increment(1);
-        }
-
-        if download_shutdown_handler.is_shutting_down() {
-            tracing::warn!("Shutting down has been triggered");
-            return Ok(());
-        }
-
         // --------------------------------------------------------------------------
         // ANCHOR: Load the database
         // --------------------------------------------------------------------------
-        tracing::info!("⚓️ ANCHOR: Load the database");
-
-        tracing::info!("Starting server actor");
-        match ServerActor::new_with_device_manager_and_comms(
+        tracing::info!("⚓️ ANCHOR: Starting server actor");
+        match ServerActor::new(
             config.party_id,
             chacha_seeds,
-            device_manager,
-            comms,
             8,
             config.max_db_size,
             config.max_batch_size,
@@ -1220,6 +1280,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             config.enable_debug_timing,
         ) {
             Ok((mut actor, handle)) => {
+                tracing::info!("⚓️ ANCHOR: Load the database");
                 let res = if config.fake_db_size > 0 {
                     tracing::warn!(
                         "Faking db with {} entries, returned results will be random.",
@@ -1460,6 +1521,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         while let Some(ServerJobResult {
             merged_results,
             request_ids,
+            request_types,
             metadata,
             matches,
             match_ids,
@@ -1471,12 +1533,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             matched_batch_request_ids,
             anonymized_bucket_statistics_left,
             anonymized_bucket_statistics_right,
+            successful_reauths,
+            reauth_target_indices,
         }) = rx.recv().await
         {
             // returned serial_ids are 0 indexed, but we want them to be 1 indexed
             let uniqueness_results = merged_results
                 .iter()
                 .enumerate()
+                .filter(|(i, _)| request_types[*i] == UNIQUENESS_MESSAGE_TYPE)
                 .map(|(i, &idx_result)| {
                     let result_event = UniquenessResult::new(
                         party_id,
@@ -1515,7 +1580,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 })
                 .collect::<eyre::Result<Vec<_>>>()?;
 
-            // Insert non-matching queries into the persistent store.
+            // Insert non-matching uniqueness queries into the persistent store.
             let (memory_serial_ids, codes_and_masks): (Vec<i64>, Vec<StoredIrisRef>) = matches
                 .iter()
                 .enumerate()
@@ -1536,11 +1601,34 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 })
                 .unzip();
 
+            let reauth_results = request_types
+                .iter()
+                .enumerate()
+                .filter(|(_, request_type)| *request_type == REAUTH_MESSAGE_TYPE)
+                .map(|(i, _)| {
+                    let reauth_id = request_ids[i].clone();
+                    let result_event = ReAuthResult::new(
+                        reauth_id.clone(),
+                        party_id,
+                        reauth_target_indices.get(&reauth_id).unwrap() + 1,
+                        successful_reauths[i],
+                        match match_ids[i].is_empty() {
+                            false => Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
+                            true => None,
+                        },
+                    );
+                    serde_json::to_string(&result_event)
+                        .wrap_err("failed to serialize reauth result")
+                })
+                .collect::<eyre::Result<Vec<_>>>()?;
+
             let mut tx = store_bg.tx().await?;
 
             store_bg
                 .insert_results(&mut tx, &uniqueness_results)
                 .await?;
+
+            // TODO: update modifications table to store reauth and deletion results
 
             if !codes_and_masks.is_empty() && !config_bg.disable_persistence {
                 let db_serial_ids = store_bg.insert_irises(&mut tx, &codes_and_masks).await?;
@@ -1557,6 +1645,25 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         memory_serial_ids,
                         db_serial_ids
                     ));
+                }
+
+                for (i, success) in successful_reauths.iter().enumerate() {
+                    if !success {
+                        continue;
+                    }
+                    tracing::info!("Persisting reauth into postgres: {}", request_ids[i]);
+                    let reauth_id = request_ids[i].clone();
+                    let serial_id = *reauth_target_indices.get(&reauth_id).unwrap();
+                    store_bg
+                        .update_iris(
+                            Some(&mut tx),
+                            serial_id as i64,
+                            &store_left.code[i],
+                            &store_left.mask[i],
+                            &store_right.code[i],
+                            &store_right.mask[i],
+                        )
+                        .await?;
                 }
             }
 
@@ -1575,6 +1682,17 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 &config_bg,
                 &uniqueness_result_attributes,
                 UNIQUENESS_MESSAGE_TYPE,
+            )
+            .await?;
+
+            tracing::info!("Sending {} reauth results", reauth_results.len());
+            send_results_to_sns(
+                reauth_results,
+                &metadata,
+                &sns_client_bg,
+                &config_bg,
+                &reauth_result_attributes,
+                REAUTH_MESSAGE_TYPE,
             )
             .await?;
 
@@ -1648,10 +1766,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     is_ready_flag_cloned.store(true, std::sync::atomic::Ordering::SeqCst);
 
     // Check other nodes and wait until all nodes are ready.
-    let (readiness_tx, readiness_rx) = oneshot::channel();
-    let mut readiness_tx = Some(readiness_tx);
     let all_nodes = config.node_hostnames.clone();
-    let _heartbeat = background_tasks.spawn(async move {
+    let ready_check = tokio::spawn(async move {
         let next_node = &all_nodes[(config.party_id + 1) % 3];
         let prev_node = &all_nodes[(config.party_id + 2) % 3];
         let mut connected = [false, false];
@@ -1664,9 +1780,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     connected[i] = true;
                     // If all nodes are connected, notify the main thread.
                     if connected.iter().all(|&c| c) {
-                        if let Some(tx) = readiness_tx.take() {
-                            tx.send(()).unwrap();
-                        }
+                        return;
                     }
                 }
             }
@@ -1676,7 +1790,20 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     });
 
     tracing::info!("Waiting for all nodes to be ready...");
-    readiness_rx.await?;
+    match tokio::time::timeout(
+        Duration::from_secs(config.startup_sync_timeout_secs),
+        ready_check,
+    )
+    .await
+    {
+        Ok(res) => {
+            res?;
+        }
+        Err(_) => {
+            tracing::error!("Timeout waiting for all nodes to be ready.");
+            return Err(eyre!("Timeout waiting for all nodes to be ready."));
+        }
+    }
     tracing::info!("All nodes are ready.");
     background_tasks.check_tasks();
 
@@ -1813,7 +1940,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             background_tasks.check_tasks_finished();
         }
     }
-    drop(device_manager_init);
     Ok(())
 }
 
@@ -1891,6 +2017,7 @@ async fn process_identity_deletions(
         // note that both serial_id and postgres db are 1-indexed.
         store
             .update_iris(
+                None,
                 serial_id as i64,
                 dummy_iris_share,
                 dummy_mask_share,
