@@ -1109,11 +1109,18 @@ impl ServerActor {
             .iter()
             .enumerate()
             .map(|(idx, matches)| {
+                if batch.request_types[idx] != REAUTH_MESSAGE_TYPE {
+                    return false;
+                }
                 let reauth_id = batch.request_ids[idx].clone();
-                // expect exactly one match to the target reauth index
-                batch.request_types[idx] == REAUTH_MESSAGE_TYPE
-                    && matches.len() == 1
-                    && matches[0] == *batch.reauth_target_indices.get(&reauth_id).unwrap()
+                if *batch.reauth_use_or_rule.get(&reauth_id).unwrap() {
+                    // OR rule used. Expect a match with target reauth index
+                    matches.contains(batch.reauth_target_indices.get(&reauth_id).unwrap())
+                } else {
+                    // AND rule used. Expect exactly one match to the target reauth index
+                    matches.len() == 1
+                        && matches[0] == *batch.reauth_target_indices.get(&reauth_id).unwrap()
+                }
             })
             .collect::<Vec<bool>>();
         let mut reauth_updates_per_device = vec![vec![]; self.device_manager.device_count()];
@@ -1241,6 +1248,7 @@ impl ServerActor {
                 anonymized_bucket_statistics_right: self.anonymized_bucket_statistics_right.clone(),
                 successful_reauths,
                 reauth_target_indices: batch.reauth_target_indices,
+                reauth_or_rule_used: batch.reauth_use_or_rule,
             })
             .unwrap();
 

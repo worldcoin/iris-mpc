@@ -422,6 +422,13 @@ async fn receive_batch(
                                 reauth_request.reauth_id.clone(),
                                 reauth_request.serial_id - 1,
                             );
+                            batch_query.reauth_use_or_rule.insert(
+                                reauth_request.reauth_id.clone(),
+                                reauth_request.use_or_rule,
+                            );
+                            batch_query
+                                .or_rule_serial_ids
+                                .push(vec![reauth_request.serial_id - 1]);
 
                             let semaphore = Arc::clone(&semaphore);
                             let s3_client_arc = Arc::clone(s3_client);
@@ -1567,6 +1574,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             anonymized_bucket_statistics_right,
             successful_reauths,
             reauth_target_indices,
+            reauth_or_rule_used,
         }) = rx.recv().await
         {
             // returned serial_ids are 0 indexed, but we want them to be 1 indexed
@@ -1639,14 +1647,20 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .filter(|(_, request_type)| *request_type == REAUTH_MESSAGE_TYPE)
                 .map(|(i, _)| {
                     let reauth_id = request_ids[i].clone();
+                    let or_rule_used = reauth_or_rule_used.get(&reauth_id).unwrap();
+                    let or_rule_matched = if *or_rule_used {
+                        Some(successful_reauths[i])
+                    } else {
+                        None
+                    };
                     let result_event = ReAuthResult::new(
                         reauth_id.clone(),
                         party_id,
                         reauth_target_indices.get(&reauth_id).unwrap() + 1,
                         successful_reauths[i],
                         match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>(),
-                        false,
-                        None,
+                        *reauth_or_rule_used.get(&reauth_id).unwrap(),
+                        or_rule_matched,
                     );
                     serde_json::to_string(&result_event)
                         .wrap_err("failed to serialize reauth result")
@@ -1682,9 +1696,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     if !success {
                         continue;
                     }
-                    tracing::info!("Persisting reauth into postgres: {}", request_ids[i]);
                     let reauth_id = request_ids[i].clone();
-                    let serial_id = *reauth_target_indices.get(&reauth_id).unwrap();
+                    // convert from memory index (0-based) to db index (1-based)
+                    let serial_id = *reauth_target_indices.get(&reauth_id).unwrap() + 1;
+                    tracing::info!(
+                        "Persisting successful reauth update {} into postgres on serial id {} ",
+                        reauth_id,
+                        serial_id
+                    );
                     store_bg
                         .update_iris(
                             Some(&mut tx),
