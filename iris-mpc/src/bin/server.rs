@@ -382,7 +382,6 @@ async fn receive_batch(
                                 "Received a reauth request with use_or_rule set to true, but LUC \
                                  is not enabled. Skipping request."
                             );
-                            // TODO: send error message to signup-service
                             continue;
                         }
 
@@ -417,9 +416,13 @@ async fn receive_batch(
                                 reauth_request.reauth_id.clone(),
                                 reauth_request.use_or_rule,
                             );
-                            batch_query
-                                .or_rule_serial_ids
-                                .push(vec![reauth_request.serial_id - 1]);
+
+                            let or_rule_indices = if reauth_request.use_or_rule {
+                                vec![reauth_request.serial_id - 1]
+                            } else {
+                                vec![]
+                            };
+                            batch_query.or_rule_serial_ids.push(or_rule_indices);
 
                             let semaphore = Arc::clone(&semaphore);
                             let s3_client_arc = Arc::clone(s3_client);
@@ -1640,6 +1643,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     let reauth_id = request_ids[i].clone();
                     let or_rule_used = reauth_or_rule_used.get(&reauth_id).unwrap();
                     let or_rule_matched = if *or_rule_used {
+                        // if or rule was used and reauth was successful, then or rule was matched
                         Some(successful_reauths[i])
                     } else {
                         None

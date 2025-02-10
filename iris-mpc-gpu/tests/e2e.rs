@@ -326,9 +326,6 @@ mod e2e_test {
 
                     if !test_case_generator.or_rule_matches.contains(req_id) {
                         assert_eq!(partial_left, partial_right);
-                    }
-
-                    if !test_case_generator.or_rule_matches.contains(req_id) {
                         assert_eq!(partial_left, match_id);
                     }
                     test_case_generator.check_result(
@@ -375,6 +372,9 @@ mod e2e_test {
         match maybe_reauth_target_index {
             Some(target_index) => {
                 batch.request_types.push(REAUTH_MESSAGE_TYPE.to_string());
+                batch
+                    .reauth_use_or_rule
+                    .insert(request_id.clone(), !or_rule_serial_ids.is_empty());
                 batch
                     .reauth_target_indices
                     .insert(request_id.clone(), *target_index);
@@ -1005,6 +1005,10 @@ mod e2e_test {
                         self.db_indices_used_in_current_batch.insert(db_index);
                         self.reauth_target_indices
                             .insert(request_id.to_string(), db_index as u32);
+
+                        // prepare a template that matches only on one side
+                        // it will end up with a failed reauth with AND rule
+                        self.or_rule_matches.push(request_id.to_string());
                         let will_match = true;
                         let flip_right = Some(self.rng.gen());
                         let template = self.prepare_flipped_codes(db_index, will_match, flip_right);
@@ -1023,14 +1027,16 @@ mod e2e_test {
                         let (db_index, _) = self.get_iris_code_in_db(DatabaseRange::FullMaskOnly);
                         self.db_indices_used_in_current_batch.insert(db_index);
                         self.disallowed_queries.push(db_index as u32);
+                        self.or_rule_matches.push(request_id.to_string());
                         self.reauth_target_indices
                             .insert(request_id.to_string(), db_index as u32);
+                        or_rule_serial_ids = vec![db_index as u32];
                         let will_match = true;
                         let flip_right = Some(self.rng.gen());
                         let template = self.prepare_flipped_codes(db_index, will_match, flip_right);
                         self.expected_results
                             .insert(request_id.to_string(), ExpectedResult {
-                                db_index:             Some(db_index as u32),
+                                db_index:             None,
                                 is_batch_match:       false,
                                 is_reauth_successful: Some(true),
                             });
@@ -1044,13 +1050,14 @@ mod e2e_test {
                         self.db_indices_used_in_current_batch.insert(db_index);
                         self.reauth_target_indices
                             .insert(request_id.to_string(), db_index as u32);
+                        or_rule_serial_ids = vec![db_index as u32];
                         let will_match = false;
                         let template = self.prepare_flipped_codes(db_index, will_match, None);
                         self.expected_results
                             .insert(request_id.to_string(), ExpectedResult {
-                                db_index:             Some(db_index as u32),
+                                db_index:             None,
                                 is_batch_match:       false,
-                                is_reauth_successful: Some(true),
+                                is_reauth_successful: Some(false),
                             });
                         template
                     }
