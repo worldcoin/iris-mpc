@@ -422,7 +422,7 @@ async fn receive_batch(
                             } else {
                                 vec![]
                             };
-                            batch_query.or_rule_serial_ids.push(or_rule_indices);
+                            batch_query.or_rule_indices.push(or_rule_indices);
 
                             let semaphore = Arc::clone(&semaphore);
                             let s3_client_arc = Arc::clone(s3_client);
