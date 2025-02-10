@@ -27,7 +27,9 @@ use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    fmt::Debug,
+    fmt::{Debug, Display},
+    num::ParseIntError,
+    str::FromStr,
     sync::{Arc, RwLock},
     vec,
 };
@@ -36,6 +38,22 @@ use tokio::task::JoinSet;
 #[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct VectorId {
     id: PointId,
+}
+
+impl Display for VectorId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.id, f)
+    }
+}
+
+impl FromStr for VectorId {
+    type Err = ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(VectorId {
+            id: FromStr::from_str(s)?,
+        })
+    }
 }
 
 impl From<PointId> for VectorId {

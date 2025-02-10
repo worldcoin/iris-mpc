@@ -79,7 +79,7 @@ pub struct BatchQuery {
     pub store_right:              BatchQueryEntries,
     pub query_right_preprocessed: BatchQueryEntriesPreprocessed,
     pub db_right_preprocessed:    BatchQueryEntriesPreprocessed,
-    pub or_rule_serial_ids:       Vec<Vec<u32>>,
+    pub or_rule_indices:          Vec<Vec<u32>>,
     pub luc_lookback_records:     usize,
     pub valid_entries:            Vec<bool>,
 
@@ -135,7 +135,7 @@ impl BatchQuery {
         filter_by_indices!(self.store_left.mask, indices_set);
         filter_by_indices!(self.store_right.code, indices_set);
         filter_by_indices!(self.store_right.mask, indices_set);
-        filter_by_indices!(self.or_rule_serial_ids, indices_set);
+        filter_by_indices!(self.or_rule_indices, indices_set);
         filter_by_indices_with_rotations!(self.query_left.code, indices_set);
         filter_by_indices_with_rotations!(self.query_left.mask, indices_set);
         filter_by_indices_with_rotations!(self.db_left.code, indices_set);

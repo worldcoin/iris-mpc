@@ -18,6 +18,7 @@ bytes = "1.7"
 bytemuck.workspace = true
 clap.workspace = true
 dashmap = "6.1.0"
+dotenvy.workspace = true
 eyre.workspace = true
 futures.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
@@ -30,6 +31,7 @@ rstest = "0.23.0"
 serde.workspace = true
 serde_json.workspace = true
 static_assertions.workspace = true
+sqlx.workspace = true
 tokio.workspace = true
 tokio-stream = "0.1"
 tonic = "0.12.3"
@@ -43,6 +45,9 @@ criterion = { version = "0.5.1", features = ["async_tokio"] }
 
 [build-dependencies]
 tonic-build = "0.12.3"
+
+[features]
+db_dependent = []
 
 [[bench]]
 name = "hnsw"
