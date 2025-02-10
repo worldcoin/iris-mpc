@@ -78,7 +78,7 @@ esac
 case $TARGET_PARTY_ID in
 0)
     OTHER_PARTY_ID=$([ "$LOCAL_PARTY_ID" -eq 1 ] && echo 2 || echo 1)
-    OTHER_KMS_KEY_ARN=$([ "$LOCAL_PARTY_ID" -eq 0 ] && echo ${KMS_P2} || echo ${KMS_P1})
+    OTHER_KMS_KEY_ARN=$([ "$LOCAL_PARTY_ID" -eq 1 ] && echo ${KMS_P2} || echo ${KMS_P1})
     ;;
 1)
     OTHER_PARTY_ID=$([ "$LOCAL_PARTY_ID" -eq 0 ] && echo 2 || echo 0)
