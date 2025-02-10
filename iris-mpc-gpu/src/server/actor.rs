@@ -715,13 +715,13 @@ impl ServerActor {
                 && batch_size * ROTATIONS == batch.db_right_preprocessed.len(),
             "Query batch sizes mismatch"
         );
-        if !batch.or_rule_serial_ids.is_empty() || batch.luc_lookback_records > 0 {
+        if !batch.or_rule_indices.is_empty() || batch.luc_lookback_records > 0 {
             assert!(
-                (batch.or_rule_serial_ids.len() == batch_size) || (batch.luc_lookback_records > 0)
+                (batch.or_rule_indices.len() == batch_size) || (batch.luc_lookback_records > 0)
             );
-            batch.or_rule_serial_ids = generate_luc_records(
+            batch.or_rule_indices = generate_luc_records(
                 (self.current_db_sizes.iter().sum::<usize>() - 1) as u32,
-                batch.or_rule_serial_ids.clone(),
+                batch.or_rule_indices.clone(),
                 batch.luc_lookback_records,
                 batch_size,
             );
@@ -890,20 +890,17 @@ impl ServerActor {
         // Format: host_results[device_index][query_index]
 
         // Initialize bitmap with OR rule, if exists
-        if !batch.or_rule_serial_ids.is_empty()
-            && !batch
-                .or_rule_serial_ids
-                .iter()
-                .all(|inner| inner.is_empty())
+        if !batch.or_rule_indices.is_empty()
+            && !batch.or_rule_indices.iter().all(|inner| inner.is_empty())
         {
-            assert_eq!(batch.or_rule_serial_ids.len(), batch_size);
+            assert_eq!(batch.or_rule_indices.len(), batch_size);
 
             let now = Instant::now();
             tracing::info!("Preparing and allocating OR policy bitmap");
             // Populate the pre-allocated OR policy bitmap with the serial ids
             let host_or_policy_bitmap = prepare_or_policy_bitmap(
                 self.max_db_size,
-                batch.or_rule_serial_ids.clone(),
+                batch.or_rule_indices.clone(),
                 self.max_batch_size,
             );
 
@@ -2409,7 +2406,7 @@ fn sort_shares_by_indices(
 
 pub fn prepare_or_policy_bitmap(
     max_db_size: usize,
-    or_rule_serial_ids: Vec<Vec<u32>>,
+    or_rule_indices: Vec<Vec<u32>>,
     batch_size: usize,
 ) -> Vec<u64> {
     let row_stride64 = (max_db_size + 63) / 64;
@@ -2418,7 +2415,7 @@ pub fn prepare_or_policy_bitmap(
     // Create the bitmap on the host
     let mut bitmap = vec![0u64; total_size];
 
-    for (query_idx, db_indices) in or_rule_serial_ids.iter().enumerate() {
+    for (query_idx, db_indices) in or_rule_indices.iter().enumerate() {
         for &db_idx in db_indices {
             let row_start = query_idx * row_stride64;
             let word_idx = row_start + (db_idx as usize / 64);
@@ -2431,13 +2428,13 @@ pub fn prepare_or_policy_bitmap(
 
 pub fn generate_luc_records(
     latest_luc_index: u32,
-    mut or_rule_serial_ids: Vec<Vec<u32>>,
+    mut or_rule_indices: Vec<Vec<u32>>,
     lookback_records: usize,
     batch_size: usize,
 ) -> Vec<Vec<u32>> {
-    // If lookback_records is 0, return the original or_rule_serial_ids
+    // If lookback_records is 0, return the original or_rule_indices
     if lookback_records == 0 {
-        return or_rule_serial_ids;
+        return or_rule_indices;
     }
     // Generate the lookback serial IDs: [current_db_size - luc_lookback_records,
     // current_db_size)
@@ -2446,17 +2443,17 @@ pub fn generate_luc_records(
     let lookback_records: Vec<Vec<u32>> = vec![lookback_ids; batch_size];
 
     // If there are no OR rules, return only the lookback records
-    if or_rule_serial_ids.is_empty() {
+    if or_rule_indices.is_empty() {
         return lookback_records;
     }
 
-    // Otherwise, merge them into each inner vector of or_rule_serial_ids
-    for (or_ids, luc_ids) in izip!(or_rule_serial_ids.iter_mut(), lookback_records.iter()) {
+    // Otherwise, merge them into each inner vector of or_rule_indices
+    for (or_ids, luc_ids) in izip!(or_rule_indices.iter_mut(), lookback_records.iter()) {
         // Add the lookback IDs
         or_ids.extend_from_slice(luc_ids);
         // Sort and remove duplicates
         or_ids.sort_unstable();
         or_ids.dedup();
     }
-    or_rule_serial_ids
+    or_rule_indices
 }

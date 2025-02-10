@@ -312,7 +312,10 @@ async fn receive_batch(
                                 if let Some(serial_ids) =
                                     uniqueness_request.or_rule_serial_ids.clone()
                                 {
-                                    batch_query.or_rule_serial_ids.push(serial_ids);
+                                    // convert from 1-based serial id to 0-based index in actor
+                                    batch_query
+                                        .or_rule_indices
+                                        .push(serial_ids.iter().map(|x| x - 1).collect());
                                 } else {
                                     tracing::error!(
                                         "Received a uniqueness request without serial_ids"
