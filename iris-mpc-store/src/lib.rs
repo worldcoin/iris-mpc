@@ -17,8 +17,12 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
 };
+use serde::{de::DeserializeOwned, Serialize};
 use sqlx::{
-    migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Row, Transaction,
+    migrate::Migrator,
+    postgres::{PgPoolOptions, PgRow},
+    types::Json,
+    Executor, PgPool, Postgres, Row, Transaction,
 };
 use std::ops::DerefMut;
 
@@ -438,6 +442,60 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
             .fetch_all(&self.pool)
             .await?;
         Ok(rows.into_iter().rev().map(|r| r.request_id).collect())
+    }
+
+    pub async fn wal_write<T: Serialize>(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        actions: &[T],
+    ) -> Result<()> {
+        let mut query = sqlx::QueryBuilder::new("INSERT INTO wal (action)");
+        query.push_values(actions, |mut query, action| {
+            query.push_bind(Json(action));
+        });
+        query.build().execute(tx.deref_mut()).await?;
+        Ok(())
+    }
+
+    pub async fn wal_get_state_id(&self) -> Result<u64> {
+        let id: (i64,) = sqlx::query_as("SELECT MAX(state_id) FROM wal")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(id.0 as u64)
+    }
+
+    pub async fn wal_rollback(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        state_id: u64,
+    ) -> Result<()> {
+        sqlx::query("DELETE FROM wal WHERE state_id > $1")
+            .bind(state_id as i64)
+            .execute(tx.deref_mut())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn wal_consume<T: DeserializeOwned + Send + Unpin + 'static>(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        state_id: u64,
+    ) -> Result<Vec<T>> {
+        let rows = sqlx::query("SELECT action FROM wal WHERE state_id <= $1 ORDER BY id")
+            .bind(state_id as i64)
+            .map(|row: PgRow| {
+                let x: Json<T> = row.get("action");
+                x.0
+            })
+            .fetch_all(tx.deref_mut())
+            .await?;
+
+        sqlx::query("DELETE FROM wal WHERE state_id <= $1")
+            .bind(state_id as i64)
+            .execute(tx.deref_mut())
+            .await?;
+
+        Ok(rows)
     }
 
     /// Initialize the database with random shares and masks. Cleans up the db
