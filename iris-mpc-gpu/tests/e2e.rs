@@ -366,7 +366,7 @@ mod e2e_test {
         request_id: String,
         batch_idx: usize,
         mut e2e_shared_template: E2ESharedTemplate,
-        or_rule_serial_ids: Vec<u32>,
+        or_rule_indices: Vec<u32>,
         maybe_reauth_target_index: Option<&u32>,
     ) -> Result<()> {
         batch.metadata.push(Default::default());
@@ -386,7 +386,7 @@ mod e2e_test {
             }
         }
 
-        batch.or_rule_serial_ids.push(or_rule_serial_ids);
+        batch.or_rule_indices.push(or_rule_indices);
 
         batch
             .store_left
@@ -658,7 +658,7 @@ mod e2e_test {
             self.or_rule_matches.clear();
 
             for idx in 0..batch_size {
-                let (request_id, e2e_template, or_rule_serial_ids) = self.generate_query(idx);
+                let (request_id, e2e_template, or_rule_indices) = self.generate_query(idx);
 
                 // Invalidate 10% of the queries, but ignore the batch duplicates
                 let is_valid = self.rng.gen_bool(0.10) || self.skip_invalidate;
@@ -676,7 +676,7 @@ mod e2e_test {
                     request_id.to_string(),
                     0,
                     shared_template.clone(),
-                    or_rule_serial_ids.clone(),
+                    or_rule_indices.clone(),
                     maybe_reauth_target_index,
                 )?;
 
@@ -686,7 +686,7 @@ mod e2e_test {
                     request_id.to_string(),
                     1,
                     shared_template.clone(),
-                    or_rule_serial_ids.clone(),
+                    or_rule_indices.clone(),
                     maybe_reauth_target_index,
                 )?;
 
@@ -696,7 +696,7 @@ mod e2e_test {
                     request_id.to_string(),
                     2,
                     shared_template,
-                    or_rule_serial_ids.clone(),
+                    or_rule_indices.clone(),
                     maybe_reauth_target_index,
                 )?;
             }
@@ -773,7 +773,7 @@ mod e2e_test {
                 options.push(TestCases::PreviouslyDeleted);
             };
 
-            let mut or_rule_serial_ids: Vec<u32> = Vec::new();
+            let mut or_rule_indices: Vec<u32> = Vec::new();
 
             // with a 10% chance we pick a template from the batch, to test the batch
             // deduplication mechanism
@@ -936,7 +936,7 @@ mod e2e_test {
                             db_indexes_copy[self.rng.gen_range(0..db_indexes_copy.len())];
 
                         // comparison against this item will use the OR rule
-                        or_rule_serial_ids = db_indexes_copy.iter().map(|&x| x as u32).collect();
+                        or_rule_indices = db_indexes_copy.iter().map(|&x| x as u32).collect();
 
                         // Will always match under the OR rule
                         self.expected_results
@@ -1034,7 +1034,7 @@ mod e2e_test {
                     }
                 }
             };
-            (request_id, e2e_template, or_rule_serial_ids)
+            (request_id, e2e_template, or_rule_indices)
         }
 
         // check a received result against the expected results
