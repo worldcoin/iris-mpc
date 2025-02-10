@@ -279,20 +279,11 @@ async fn receive_batch(
                                 "Skipping request due to it being from synced deleted ids: {}",
                                 uniqueness_request.signup_id
                             );
-                            let message: UniquenessResult = UniquenessResult {
-                                node_id:                   config.party_id,
-                                serial_id:                 None,
-                                is_match:                  false,
-                                signup_id:                 uniqueness_request.signup_id,
-                                matched_serial_ids:        None,
-                                matched_serial_ids_left:   None,
-                                matched_serial_ids_right:  None,
-                                matched_batch_request_ids: None,
-                                error:                     Some(true),
-                                error_reason:              Some(
-                                    ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH.to_string(),
-                                ),
-                            };
+                            let message = UniquenessResult::new_error_result(
+                                config.party_id,
+                                uniqueness_request.signup_id,
+                                ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
+                            );
                             // shares
                             send_error_results_to_sns(
                                 serde_json::to_string(&message).unwrap(),
