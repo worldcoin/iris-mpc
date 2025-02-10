@@ -2,11 +2,11 @@ name: Build and push image for reshare-protocol
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - Dockerfile.reshare-protocol
-      - iris-mpc-upgrade/**
+    # branches:
+    #   - main
+    # paths:
+    #   - Dockerfile.reshare-protocol
+    #   - iris-mpc-upgrade/**
   workflow_dispatch:
 
 concurrency:
