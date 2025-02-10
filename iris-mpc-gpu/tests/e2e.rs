@@ -1068,7 +1068,7 @@ mod e2e_test {
 
         /// Returns a template with flipped bits of given `db_index`.
         ///
-        /// If `will_match` is true, the template will be flipped to above
+        /// If `will_match` is false, the template will be flipped to above
         /// threshold on both sides If `flip_right` is true, the right
         /// side will be flipped to above threshold
         fn prepare_flipped_codes(
