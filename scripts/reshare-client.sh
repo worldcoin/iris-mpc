@@ -18,6 +18,11 @@ if [ -z "$DATABASE_URL" ]; then
     exit 1
 fi
 
+if [ -z "$ENVIRONMENT" ]; then
+    echo "Error: ENVIRONMENT environment variable is not set"
+    exit 1
+fi
+
 # Get arguments
 LOCAL_PARTY_ID=$1
 TARGET_PARTY_ID=$2
