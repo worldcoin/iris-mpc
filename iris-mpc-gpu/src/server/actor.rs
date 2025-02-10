@@ -39,7 +39,12 @@ use iris_mpc_common::{
 use itertools::{izip, Itertools};
 use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
-use std::{collections::HashMap, mem, sync::Arc, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    mem,
+    sync::Arc,
+    time::Instant,
+};
 use tokio::sync::{mpsc, oneshot};
 
 macro_rules! record_stream_time {
@@ -719,11 +724,19 @@ impl ServerActor {
             assert!(
                 (batch.or_rule_indices.len() == batch_size) || (batch.luc_lookback_records > 0)
             );
+            let skip_lookback_requests: HashSet<usize> = batch
+                .request_types
+                .iter()
+                .enumerate()
+                .filter(|(_, req_type)| req_type.as_str() == REAUTH_MESSAGE_TYPE)
+                .map(|(index, _)| index)
+                .collect();
             batch.or_rule_indices = generate_luc_records(
                 (self.current_db_sizes.iter().sum::<usize>() - 1) as u32,
                 batch.or_rule_indices.clone(),
                 batch.luc_lookback_records,
                 batch_size,
+                skip_lookback_requests,
             );
         }
 
@@ -2439,6 +2452,7 @@ pub fn generate_luc_records(
     mut or_rule_indices: Vec<Vec<u32>>,
     lookback_records: usize,
     batch_size: usize,
+    skip_lookback_requests: HashSet<usize>,
 ) -> Vec<Vec<u32>> {
     // If lookback_records is 0, return the original or_rule_indices
     if lookback_records == 0 {
@@ -2456,7 +2470,12 @@ pub fn generate_luc_records(
     }
 
     // Otherwise, merge them into each inner vector of or_rule_indices
-    for (or_ids, luc_ids) in izip!(or_rule_indices.iter_mut(), lookback_records.iter()) {
+    for (idx, (or_ids, luc_ids)) in
+        izip!(or_rule_indices.iter_mut(), lookback_records.iter()).enumerate()
+    {
+        if skip_lookback_requests.contains(&idx) {
+            continue;
+        }
         // Add the lookback IDs
         or_ids.extend_from_slice(luc_ids);
         // Sort and remove duplicates
