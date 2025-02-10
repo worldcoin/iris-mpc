@@ -1,11 +1,11 @@
-name: Build and push image for reshare-client
+name: Build and push image for reshare-protocol
 
 on:
   push:
     branches:
       - main
     paths:
-      - Dockerfile.reshare-client
+      - Dockerfile.reshare-protocol
       - iris-mpc-upgrade/**
   workflow_dispatch:
 
@@ -15,7 +15,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: "reshare-client"
+  IMAGE_NAME: "reshare-protocol"
 
 jobs:
   docker:
@@ -49,4 +49,4 @@ jobs:
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          file: Dockerfile.reshare-client
+          file: Dockerfile.reshare-protocol
