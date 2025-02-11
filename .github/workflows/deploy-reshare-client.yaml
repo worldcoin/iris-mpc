@@ -1,0 +1,99 @@
+name: Reshare Client Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_participant:
+        description: 'Target Participant (0, 1, or 2)'
+        required: true
+        type: choice
+        options:
+          - '0'
+          - '1'
+          - '2'
+      db_start:
+        description: 'Database Start Range'
+        required: true
+        type: string
+        default: '1'
+      db_end:
+        description: 'Database End Range'
+        required: true
+        type: string
+        default: '10001'
+
+jobs:
+  validate-input:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate Inputs
+        run: |
+          # Validate target_participant
+          if [[ ! "${{ inputs.target_participant }}" =~ ^[0-2]$ ]]; then
+            echo "Invalid target participant. Must be 0, 1, or 2."
+            exit 1
+          fi
+
+          # Validate db_start and db_end are numeric
+          if [[ ! "${{ inputs.db_start }}" =~ ^[0-9]+$ ]] ||
+             [[ ! "${{ inputs.db_end }}" =~ ^[0-9]+$ ]]; then
+            echo "DB start and end must be numeric values."
+            exit 1
+          fi
+
+          # Validate db_start is less than db_end
+          if [[ "${{ inputs.db_start }}" -ge "${{ inputs.db_end }}" ]]; then
+            echo "DB start must be less than DB end."
+            exit 1
+          fi
+
+  deploy-participants:
+    needs: validate-input
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - local_participant: 0
+            other_participant: 1
+          - local_participant: 1
+            other_participant: 0
+          - local_participant: 0
+            other_participant: 2
+          - local_participant: 2
+            other_participant: 0
+          - local_participant: 1
+            other_participant: 2
+          - local_participant: 2
+            other_participant: 1
+
+    steps:
+      - name: Determine Deployment Eligibility
+        id: deploy-check
+        run: |
+          # Check if current matrix configuration matches target
+          eligible_pairs=(
+            "0 1"
+            "1 0"
+            "0 2"
+            "2 0"
+            "1 2"
+            "2 1"
+          )
+
+          current_pair="${{ matrix.local_participant }} ${{ inputs.target_participant }}"
+
+          is_eligible=false
+          for pair in "${eligible_pairs[@]}"; do
+            if [[ "$pair" == "$current_pair" ]]; then
+              is_eligible=true
+              break
+            fi
+          done
+
+          echo "Eligible: $is_eligible"
+          echo "is_eligible=$is_eligible" >> $GITHUB_OUTPUT
+
+      - name: Deploy Reshare Client Job
+        if: steps.deploy-check.outputs.is_eligible == 'true'
+        run: |
+            echo "Deploy on: ${{ matrix.local_participant }}"
