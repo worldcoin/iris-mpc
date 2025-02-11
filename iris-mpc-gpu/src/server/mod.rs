@@ -1,10 +1,7 @@
 mod actor;
 
 use crate::dot::{share_db::preprocess_query, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS};
-pub use actor::{
-    generate_luc_records, get_dummy_shares_for_deletion, prepare_or_policy_bitmap, ServerActor,
-    ServerActorHandle,
-};
+pub use actor::{generate_luc_records, prepare_or_policy_bitmap, ServerActor, ServerActorHandle};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::statistics::BucketStatistics,
@@ -82,13 +79,14 @@ pub struct BatchQuery {
     pub store_right:              BatchQueryEntries,
     pub query_right_preprocessed: BatchQueryEntriesPreprocessed,
     pub db_right_preprocessed:    BatchQueryEntriesPreprocessed,
-    pub or_rule_serial_ids:       Vec<Vec<u32>>,
+    pub or_rule_indices:          Vec<Vec<u32>>,
     pub luc_lookback_records:     usize,
     pub valid_entries:            Vec<bool>,
 
     // Only reauth specific fields
     // Map from reauth request id to the index of the target entry to be matched
     pub reauth_target_indices: HashMap<String, u32>,
+    pub reauth_use_or_rule:    HashMap<String, bool>,
 
     // Only deletion specific fields
     pub deletion_requests_indices:  Vec<u32>, // 0-indexed indices of entries to be deleted
@@ -138,7 +136,7 @@ impl BatchQuery {
         filter_by_indices!(self.store_left.mask, indices_set);
         filter_by_indices!(self.store_right.code, indices_set);
         filter_by_indices!(self.store_right.mask, indices_set);
-        filter_by_indices!(self.or_rule_serial_ids, indices_set);
+        filter_by_indices!(self.or_rule_indices, indices_set);
         filter_by_indices_with_rotations!(self.query_left.code, indices_set);
         filter_by_indices_with_rotations!(self.query_left.mask, indices_set);
         filter_by_indices_with_rotations!(self.db_left.code, indices_set);
@@ -197,6 +195,7 @@ pub struct ServerJobResult {
     pub anonymized_bucket_statistics_right: BucketStatistics,
     pub successful_reauths: Vec<bool>, // true if request type is reauth and it's successful
     pub reauth_target_indices: HashMap<String, u32>,
+    pub reauth_or_rule_used: HashMap<String, bool>,
 }
 
 enum Eye {

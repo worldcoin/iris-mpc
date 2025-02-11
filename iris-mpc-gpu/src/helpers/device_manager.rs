@@ -2,7 +2,7 @@ use super::{
     comm::NcclComm,
     query_processor::{CudaVec2DSlicerRawPointer, CudaVec2DSlicerU8, StreamAwareCudaSlice},
 };
-use crate::dot::ROTATIONS;
+use crate::dot::{share_db::SlicedProcessedDatabase, ROTATIONS};
 use cudarc::{
     cublas::CudaBlas,
     driver::{
@@ -10,7 +10,7 @@ use cudarc::{
             self, event, malloc_async, memcpy_htod_async,
             stream::{synchronize, wait_event},
         },
-        sys::{CUevent, CUevent_flags},
+        sys::{CUevent, CUevent_flags, CU_MEMHOSTALLOC_PORTABLE},
         CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceRepr,
     },
     nccl::Id,
@@ -24,7 +24,7 @@ use std::{
 pub const NCCL_START_WAIT_TIME: Duration = Duration::from_secs(5);
 pub const NCCL_START_RETRIES: usize = 5;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DeviceManager {
     devices:    Vec<Arc<CudaDevice>>,
     locked_dbs: Arc<Mutex<Vec<CudaVec2DSlicerRawPointer>>>,
@@ -68,11 +68,15 @@ impl DeviceManager {
         if chunk_size == 0 {
             return Err(self);
         }
+        assert!(
+            self.locked_dbs.lock().unwrap().is_empty(),
+            "Splitting into chunks only supported before pages are locked."
+        );
         let mut ret = vec![];
         for i in 0..n {
             ret.push(DeviceManager {
                 devices:    self.devices[i * chunk_size..(i + 1) * chunk_size].to_vec(),
-                locked_dbs: self.locked_dbs.clone(),
+                locked_dbs: Arc::new(Mutex::new(Vec::new())),
             });
         }
         Ok(ret)
@@ -197,6 +201,32 @@ impl DeviceManager {
             limb_0: slices0,
             limb_1: slices1,
         })
+    }
+
+    pub fn register_host_memory(
+        &self,
+        db: &SlicedProcessedDatabase,
+        max_db_length: usize,
+        code_length: usize,
+    ) {
+        let max_size = max_db_length / self.device_count();
+        for (device_index, device) in self.devices().iter().enumerate() {
+            device.bind_to_thread().unwrap();
+            unsafe {
+                let _ = cudarc::driver::sys::lib().cuMemHostRegister_v2(
+                    db.code_gr.limb_0[device_index] as *mut _,
+                    max_size * code_length,
+                    CU_MEMHOSTALLOC_PORTABLE,
+                );
+
+                let _ = cudarc::driver::sys::lib().cuMemHostRegister_v2(
+                    db.code_gr.limb_1[device_index] as *mut _,
+                    max_size * code_length,
+                    CU_MEMHOSTALLOC_PORTABLE,
+                );
+            }
+            self.track_locked_db(db.code_gr.clone());
+        }
     }
 
     // Method to add a db to tracking
