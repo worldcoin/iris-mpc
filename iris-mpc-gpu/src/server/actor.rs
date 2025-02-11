@@ -27,17 +27,16 @@ use cudarc::{
 use eyre::eyre;
 use futures::{Future, FutureExt};
 use iris_mpc_common::{
-    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
+        inmemory_store::InMemoryStore,
         sha256::sha256_bytes,
         smpc_request::{REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
         statistics::BucketStatistics,
     },
-    iris_db::iris::{IrisCode, MATCH_THRESHOLD_RATIO},
+    iris_db::{get_dummy_shares_for_deletion, iris::MATCH_THRESHOLD_RATIO},
     IrisCodeDbSlice,
 };
 use itertools::{izip, Itertools};
-use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{
     collections::{HashMap, HashSet},
@@ -509,14 +508,6 @@ impl ServerActor {
         tracing::info!("Server Actor finished due to all job queues being closed");
     }
 
-    pub fn current_db_sizes(&self) -> Vec<usize> {
-        self.current_db_sizes.clone()
-    }
-
-    pub fn set_current_db_sizes(&mut self, sizes: Vec<usize>) {
-        self.current_db_sizes = sizes;
-    }
-
     pub fn load_full_db(
         &mut self,
         left: &IrisCodeDbSlice,
@@ -565,115 +556,32 @@ impl ServerActor {
         self.current_db_sizes = db_lens1;
     }
 
-    pub fn load_single_record_from_db(
-        &mut self,
-        index: usize,
-        left_code: &[u16],
-        left_mask: &[u16],
-        right_code: &[u16],
-        right_mask: &[u16],
-    ) {
-        ShareDB::load_single_record_from_db(
-            index,
-            &self.left_code_db_slices.code_gr,
-            left_code,
-            self.device_manager.device_count(),
-            IRIS_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_db(
-            index,
-            &self.left_mask_db_slices.code_gr,
-            left_mask,
-            self.device_manager.device_count(),
-            MASK_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_db(
-            index,
-            &self.right_code_db_slices.code_gr,
-            right_code,
-            self.device_manager.device_count(),
-            IRIS_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_db(
-            index,
-            &self.right_mask_db_slices.code_gr,
-            right_mask,
-            self.device_manager.device_count(),
-            MASK_CODE_LENGTH,
-        );
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn load_single_record_from_s3(
-        &mut self,
-        index: usize,
-        left_code_odd: &[u8],
-        left_code_even: &[u8],
-        right_code_odd: &[u8],
-        right_code_even: &[u8],
-        left_mask_odd: &[u8],
-        left_mask_even: &[u8],
-        right_mask_odd: &[u8],
-        right_mask_even: &[u8],
-    ) {
-        ShareDB::load_single_record_from_s3(
-            index,
-            &self.left_code_db_slices.code_gr,
-            left_code_odd,
-            left_code_even,
-            self.device_manager.device_count(),
-            IRIS_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_s3(
-            index,
-            &self.left_mask_db_slices.code_gr,
-            left_mask_odd,
-            left_mask_even,
-            self.device_manager.device_count(),
-            MASK_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_s3(
-            index,
-            &self.right_code_db_slices.code_gr,
-            right_code_odd,
-            right_code_even,
-            self.device_manager.device_count(),
-            IRIS_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_s3(
-            index,
-            &self.right_mask_db_slices.code_gr,
-            right_mask_odd,
-            right_mask_even,
-            self.device_manager.device_count(),
-            MASK_CODE_LENGTH,
-        );
-    }
-
-    pub fn increment_db_size(&mut self, index: usize) {
-        self.current_db_sizes[index % self.device_manager.device_count()] += 1;
-    }
-
-    pub fn preprocess_db(&mut self) {
-        self.codes_engine
-            .preprocess_db(&mut self.left_code_db_slices, &self.current_db_sizes);
-        self.masks_engine
-            .preprocess_db(&mut self.left_mask_db_slices, &self.current_db_sizes);
-        self.codes_engine
-            .preprocess_db(&mut self.right_code_db_slices, &self.current_db_sizes);
-        self.masks_engine
-            .preprocess_db(&mut self.right_mask_db_slices, &self.current_db_sizes);
-    }
-
     pub fn register_host_memory(&self) {
-        self.codes_engine
-            .register_host_memory(&self.left_code_db_slices, self.max_db_size);
-        self.masks_engine
-            .register_host_memory(&self.left_mask_db_slices, self.max_db_size);
-        self.codes_engine
-            .register_host_memory(&self.right_code_db_slices, self.max_db_size);
-        self.masks_engine
-            .register_host_memory(&self.right_mask_db_slices, self.max_db_size);
+        let page_lock_ts = Instant::now();
+        tracing::info!("Starting page lock");
+        self.device_manager.register_host_memory(
+            &self.left_code_db_slices,
+            self.max_db_size,
+            IRIS_CODE_LENGTH,
+        );
+        self.device_manager.register_host_memory(
+            &self.right_code_db_slices,
+            self.max_db_size,
+            IRIS_CODE_LENGTH,
+        );
+        tracing::info!("Page locking completed for code slice");
+        self.device_manager.register_host_memory(
+            &self.left_mask_db_slices,
+            self.max_db_size,
+            MASK_CODE_LENGTH,
+        );
+        self.device_manager.register_host_memory(
+            &self.right_mask_db_slices,
+            self.max_db_size,
+            MASK_CODE_LENGTH,
+        );
+        tracing::info!("Page locking completed for mask slice");
+        tracing::info!("Page locking completed in {:?}", page_lock_ts.elapsed());
     }
 
     fn process_batch_query(
@@ -2370,21 +2278,6 @@ fn write_db_at_index(
     }
 }
 
-pub fn get_dummy_shares_for_deletion(
-    party_id: usize,
-) -> (GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare) {
-    let mut rng: StdRng = StdRng::seed_from_u64(0);
-    let dummy: IrisCode = IrisCode::default();
-    let iris_share: GaloisRingIrisCodeShare =
-        GaloisRingIrisCodeShare::encode_iris_code(&dummy.code, &dummy.mask, &mut rng)[party_id]
-            .clone();
-    let mask_share: GaloisRingTrimmedMaskCodeShare =
-        GaloisRingIrisCodeShare::encode_mask_code(&dummy.mask, &mut rng)[party_id]
-            .clone()
-            .into();
-    (iris_share, mask_share)
-}
-
 fn sort_shares_by_indices(
     device_manager: &DeviceManager,
     resort_indices: &[Vec<usize>],
@@ -2483,4 +2376,120 @@ pub fn generate_luc_records(
         or_ids.dedup();
     }
     or_rule_indices
+}
+
+impl InMemoryStore for ServerActor {
+    fn load_single_record_from_db(
+        &mut self,
+        index: usize,
+        left_code: &[u16],
+        left_mask: &[u16],
+        right_code: &[u16],
+        right_mask: &[u16],
+    ) {
+        ShareDB::load_single_record_from_db(
+            index,
+            &self.left_code_db_slices.code_gr,
+            left_code,
+            self.device_manager.device_count(),
+            IRIS_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_db(
+            index,
+            &self.left_mask_db_slices.code_gr,
+            left_mask,
+            self.device_manager.device_count(),
+            MASK_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_db(
+            index,
+            &self.right_code_db_slices.code_gr,
+            right_code,
+            self.device_manager.device_count(),
+            IRIS_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_db(
+            index,
+            &self.right_mask_db_slices.code_gr,
+            right_mask,
+            self.device_manager.device_count(),
+            MASK_CODE_LENGTH,
+        );
+    }
+    fn increment_db_size(&mut self, index: usize) {
+        self.current_db_sizes[index % self.device_manager.device_count()] += 1;
+    }
+
+    fn load_single_record_from_s3(
+        &mut self,
+        index: usize,
+        left_code_odd: &[u8],
+        left_code_even: &[u8],
+        right_code_odd: &[u8],
+        right_code_even: &[u8],
+        left_mask_odd: &[u8],
+        left_mask_even: &[u8],
+        right_mask_odd: &[u8],
+        right_mask_even: &[u8],
+    ) {
+        ShareDB::load_single_record_from_s3(
+            index,
+            &self.left_code_db_slices.code_gr,
+            left_code_odd,
+            left_code_even,
+            self.device_manager.device_count(),
+            IRIS_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_s3(
+            index,
+            &self.left_mask_db_slices.code_gr,
+            left_mask_odd,
+            left_mask_even,
+            self.device_manager.device_count(),
+            MASK_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_s3(
+            index,
+            &self.right_code_db_slices.code_gr,
+            right_code_odd,
+            right_code_even,
+            self.device_manager.device_count(),
+            IRIS_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_s3(
+            index,
+            &self.right_mask_db_slices.code_gr,
+            right_mask_odd,
+            right_mask_even,
+            self.device_manager.device_count(),
+            MASK_CODE_LENGTH,
+        );
+    }
+
+    fn preprocess_db(&mut self) {
+        // we also register the memory allocated, page-locking it for more performance
+        self.register_host_memory();
+
+        self.codes_engine
+            .preprocess_db(&mut self.left_code_db_slices, &self.current_db_sizes);
+        self.masks_engine
+            .preprocess_db(&mut self.left_mask_db_slices, &self.current_db_sizes);
+        self.codes_engine
+            .preprocess_db(&mut self.right_code_db_slices, &self.current_db_sizes);
+        self.masks_engine
+            .preprocess_db(&mut self.right_mask_db_slices, &self.current_db_sizes);
+    }
+
+    fn current_db_sizes(&self) -> impl std::fmt::Debug {
+        &self.current_db_sizes
+    }
+
+    fn fake_db(&mut self, fake_db_size: usize) {
+        tracing::warn!(
+            "Faking db with {} entries, returned results will be random.",
+            fake_db_size
+        );
+        self.current_db_sizes =
+            vec![fake_db_size / self.current_db_sizes.len(); self.current_db_sizes.len()];
+    }
 }
