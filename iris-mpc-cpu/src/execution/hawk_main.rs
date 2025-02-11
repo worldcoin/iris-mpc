@@ -372,9 +372,12 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
         for (side, code, mask) in izip!(&mut self.irises, [left_code, right_code], [
             left_mask, right_mask
         ]) {
-            side.points.resize_with(index + 1, || {
-                GaloisRingSharedIris::default_for_party(self.party_id)
-            });
+            if index >= side.points.len() {
+                side.points.resize(
+                    index + 1,
+                    GaloisRingSharedIris::default_for_party(self.party_id),
+                );
+            }
             side.points[index].code.coefs = code.try_into().unwrap();
             side.points[index].mask.coefs = mask.try_into().unwrap();
         }
