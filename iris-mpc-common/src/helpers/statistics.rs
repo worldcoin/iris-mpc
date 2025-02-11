@@ -1,15 +1,10 @@
+use crate::job::Eye;
 use chrono::{
     serde::{ts_seconds, ts_seconds_option},
     DateTime, Utc,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Eye {
-    Left,
-    Right,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BucketResult {

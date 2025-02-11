@@ -6,10 +6,12 @@ pub mod galois_engine;
 pub mod helpers;
 pub mod id;
 pub mod iris_db;
+pub mod job;
 pub mod shamir;
 
 pub const IRIS_CODE_LENGTH: usize = 12_800;
 pub const MASK_CODE_LENGTH: usize = 6_400;
+pub const ROTATIONS: usize = 31;
 
 /// Iris code database type; .0 = iris code, .1 = mask
 pub type IrisCodeDb = (Vec<u16>, Vec<u16>);

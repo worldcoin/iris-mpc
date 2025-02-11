@@ -1,4 +1,4 @@
-use super::{BatchQuery, Eye, ServerJob, ServerJobResult};
+use super::BatchQuery;
 use crate::{
     dot::{
         distance_comparator::DistanceComparator,
@@ -14,6 +14,7 @@ use crate::{
             CompactQuery, CudaVec2DSlicerRawPointer, DeviceCompactQuery, DeviceCompactSums,
         },
     },
+    server::PreprocessedBatchQuery,
     threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
 };
 use cudarc::{
@@ -34,6 +35,7 @@ use iris_mpc_common::{
         statistics::BucketStatistics,
     },
     iris_db::{get_dummy_shares_for_deletion, iris::MATCH_THRESHOLD_RATIO},
+    job::{Eye, JobSubmissionHandle, ServerJobResult},
     IrisCodeDbSlice,
 };
 use itertools::{izip, Itertools};
@@ -62,13 +64,19 @@ macro_rules! record_stream_time {
     }};
 }
 
+#[derive(Debug)]
+struct ServerJob {
+    pub batch:          BatchQuery,
+    pub return_channel: oneshot::Sender<ServerJobResult>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ServerActorHandle {
     job_queue: mpsc::Sender<ServerJob>,
 }
 
-impl ServerActorHandle {
-    pub async fn submit_batch_query(
+impl JobSubmissionHandle for ServerActorHandle {
+    async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
     ) -> impl Future<Output = ServerJobResult> {
@@ -428,19 +436,11 @@ impl ServerActor {
             dev.synchronize().unwrap();
         }
 
-        let anonymized_bucket_statistics_left = BucketStatistics::new(
-            match_distances_buffer_size,
-            n_buckets,
-            party_id,
-            iris_mpc_common::helpers::statistics::Eye::Left,
-        );
+        let anonymized_bucket_statistics_left =
+            BucketStatistics::new(match_distances_buffer_size, n_buckets, party_id, Eye::Left);
 
-        let anonymized_bucket_statistics_right = BucketStatistics::new(
-            match_distances_buffer_size,
-            n_buckets,
-            party_id,
-            iris_mpc_common::helpers::statistics::Eye::Right,
-        );
+        let anonymized_bucket_statistics_right =
+            BucketStatistics::new(match_distances_buffer_size, n_buckets, party_id, Eye::Right);
         tracing::info!("GPU actor: Initialized");
 
         Ok(Self {
@@ -590,6 +590,10 @@ impl ServerActor {
         return_channel: oneshot::Sender<ServerJobResult>,
     ) -> eyre::Result<()> {
         let now = Instant::now();
+
+        // TODO: since we now moved this to the actor again, is this a performance
+        // bottleneck and should we parallelize this, etc?
+        let batch = PreprocessedBatchQuery::from(batch);
         let mut events: HashMap<&str, Vec<Vec<CUevent>>> = HashMap::new();
 
         let n_reauths = batch
