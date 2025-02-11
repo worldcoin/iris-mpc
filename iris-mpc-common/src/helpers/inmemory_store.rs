@@ -29,6 +29,10 @@ pub trait InMemoryStore {
     /// required.
     fn increment_db_size(&mut self, index: usize);
 
+    /// Reserves capacity for at least `additional` more elements to be
+    /// inserted, like Vec::reserve.
+    fn reserve(&mut self, _additional: usize) {}
+
     /// Adds a single record to the in-memory store.
     /// The position of the record in the in-memory store is identified by the
     /// given index, which is 0-based. This method does not directly increase

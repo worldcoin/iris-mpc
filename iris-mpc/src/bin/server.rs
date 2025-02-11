@@ -1932,6 +1932,7 @@ async fn load_db(
 
     let mut record_counter = 0;
     let mut all_serial_ids: HashSet<i64> = HashSet::from_iter(1..=(store_len as i64));
+    actor.reserve(store_len);
 
     if config.enable_s3_importer {
         tracing::info!("S3 importer enabled. Fetching from s3 + db");
