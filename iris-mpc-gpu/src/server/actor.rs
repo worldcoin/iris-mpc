@@ -27,15 +27,23 @@ use cudarc::{
 use eyre::eyre;
 use futures::{Future, FutureExt};
 use iris_mpc_common::{
-    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
-    helpers::sha256::sha256_bytes,
-    iris_db::iris::{IrisCode, MATCH_THRESHOLD_RATIO},
+    helpers::{
+        inmemory_store::InMemoryStore,
+        sha256::sha256_bytes,
+        smpc_request::{REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
+        statistics::BucketStatistics,
+    },
+    iris_db::{get_dummy_shares_for_deletion, iris::MATCH_THRESHOLD_RATIO},
     IrisCodeDbSlice,
 };
-use itertools::Itertools;
-use rand::{rngs::StdRng, SeedableRng};
+use itertools::{izip, Itertools};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
-use std::{collections::HashMap, mem, sync::Arc, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    mem,
+    sync::Arc,
+    time::Instant,
+};
 use tokio::sync::{mpsc, oneshot};
 
 macro_rules! record_stream_time {
@@ -111,6 +119,7 @@ pub struct ServerActor {
     max_batch_size: usize,
     max_db_size: usize,
     match_distances_buffer_size: usize,
+    match_distances_buffer_size_extra_percent: usize,
     n_buckets: usize,
     return_partial_results: bool,
     disable_persistence: bool,
@@ -128,6 +137,8 @@ pub struct ServerActor {
     match_distances_indices_left: Vec<CudaSlice<u32>>,
     match_distances_indices_right: Vec<CudaSlice<u32>>,
     buckets: ChunkShare<u32>,
+    anonymized_bucket_statistics_left: BucketStatistics,
+    anonymized_bucket_statistics_right: BucketStatistics,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -141,11 +152,13 @@ impl ServerActor {
         max_db_size: usize,
         max_batch_size: usize,
         match_distances_buffer_size: usize,
+        match_distances_buffer_size_extra_percent: usize,
         n_buckets: usize,
         return_partial_results: bool,
         disable_persistence: bool,
         enable_debug_timing: bool,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
+        tracing::info!("GPU Actor: Starting Device Manager");
         let device_manager = Arc::new(DeviceManager::init());
         Self::new_with_device_manager(
             party_id,
@@ -155,6 +168,7 @@ impl ServerActor {
             max_db_size,
             max_batch_size,
             match_distances_buffer_size,
+            match_distances_buffer_size_extra_percent,
             n_buckets,
             return_partial_results,
             disable_persistence,
@@ -170,11 +184,13 @@ impl ServerActor {
         max_db_size: usize,
         max_batch_size: usize,
         match_distances_buffer_size: usize,
+        match_distances_buffer_size_extra_percent: usize,
         n_buckets: usize,
         return_partial_results: bool,
         disable_persistence: bool,
         enable_debug_timing: bool,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
+        tracing::info!("GPU Actor: Initializing NCCL");
         let ids = device_manager.get_ids_from_magic(0);
         let comms = device_manager.instantiate_network_from_ids(party_id, &ids)?;
         Self::new_with_device_manager_and_comms(
@@ -186,6 +202,7 @@ impl ServerActor {
             max_db_size,
             max_batch_size,
             match_distances_buffer_size,
+            match_distances_buffer_size_extra_percent,
             n_buckets,
             return_partial_results,
             disable_persistence,
@@ -203,6 +220,7 @@ impl ServerActor {
         max_db_size: usize,
         max_batch_size: usize,
         match_distances_buffer_size: usize,
+        match_distances_buffer_size_extra_percent: usize,
         n_buckets: usize,
         return_partial_results: bool,
         disable_persistence: bool,
@@ -218,6 +236,7 @@ impl ServerActor {
             max_db_size,
             max_batch_size,
             match_distances_buffer_size,
+            match_distances_buffer_size_extra_percent,
             n_buckets,
             return_partial_results,
             disable_persistence,
@@ -236,6 +255,7 @@ impl ServerActor {
         max_db_size: usize,
         max_batch_size: usize,
         match_distances_buffer_size: usize,
+        match_distances_buffer_size_extra_percent: usize,
         n_buckets: usize,
         return_partial_results: bool,
         disable_persistence: bool,
@@ -257,7 +277,7 @@ impl ServerActor {
                 ))
             };
 
-        tracing::info!("Starting engines...");
+        tracing::info!("GPU actor: Starting engines...");
 
         // Phase 1 Setup
         let codes_engine = ShareDB::init(
@@ -287,7 +307,7 @@ impl ServerActor {
         let right_code_db_slices = codes_engine.alloc_db(max_db_size);
         let right_mask_db_slices = masks_engine.alloc_db(max_db_size);
 
-        tracing::info!("Allocated db in {:?}", now.elapsed());
+        tracing::info!("GPU actor: Allocated db in {:?}", now.elapsed());
 
         // Engines for inflight queries
         let batch_codes_engine = ShareDB::init(
@@ -386,25 +406,42 @@ impl ServerActor {
         let phase2_events = vec![device_manager.create_events(); 2];
 
         // Buffers and counters for match distribution
+        let distance_buffer_len =
+            match_distances_buffer_size * (100 + match_distances_buffer_size_extra_percent) / 100;
         let match_distances_buffer_codes_left =
-            distance_comparator.prepare_match_distances_buffer(match_distances_buffer_size);
+            distance_comparator.prepare_match_distances_buffer(distance_buffer_len);
         let match_distances_buffer_codes_right =
-            distance_comparator.prepare_match_distances_buffer(match_distances_buffer_size);
+            distance_comparator.prepare_match_distances_buffer(distance_buffer_len);
         let match_distances_buffer_masks_left =
-            distance_comparator.prepare_match_distances_buffer(match_distances_buffer_size);
+            distance_comparator.prepare_match_distances_buffer(distance_buffer_len);
         let match_distances_buffer_masks_right =
-            distance_comparator.prepare_match_distances_buffer(match_distances_buffer_size);
+            distance_comparator.prepare_match_distances_buffer(distance_buffer_len);
         let match_distances_counter_left = distance_comparator.prepare_match_distances_counter();
         let match_distances_counter_right = distance_comparator.prepare_match_distances_counter();
         let match_distances_indices_left =
-            distance_comparator.prepare_match_distances_index(match_distances_buffer_size);
+            distance_comparator.prepare_match_distances_index(distance_buffer_len);
         let match_distances_indices_right =
-            distance_comparator.prepare_match_distances_index(match_distances_buffer_size);
+            distance_comparator.prepare_match_distances_index(distance_buffer_len);
         let buckets = distance_comparator.prepare_match_distances_buckets(n_buckets);
 
         for dev in device_manager.devices() {
             dev.synchronize().unwrap();
         }
+
+        let anonymized_bucket_statistics_left = BucketStatistics::new(
+            match_distances_buffer_size,
+            n_buckets,
+            party_id,
+            iris_mpc_common::helpers::statistics::Eye::Left,
+        );
+
+        let anonymized_bucket_statistics_right = BucketStatistics::new(
+            match_distances_buffer_size,
+            n_buckets,
+            party_id,
+            iris_mpc_common::helpers::statistics::Eye::Right,
+        );
+        tracing::info!("GPU actor: Initialized");
 
         Ok(Self {
             party_id,
@@ -438,6 +475,7 @@ impl ServerActor {
             max_batch_size,
             max_db_size,
             match_distances_buffer_size,
+            match_distances_buffer_size_extra_percent,
             n_buckets,
             return_partial_results,
             disable_persistence,
@@ -454,6 +492,8 @@ impl ServerActor {
             match_distances_counter_right,
             match_distances_indices_left,
             match_distances_indices_right,
+            anonymized_bucket_statistics_left,
+            anonymized_bucket_statistics_right,
         })
     }
 
@@ -466,14 +506,6 @@ impl ServerActor {
             let _ = self.process_batch_query(batch, return_channel);
         }
         tracing::info!("Server Actor finished due to all job queues being closed");
-    }
-
-    pub fn current_db_sizes(&self) -> Vec<usize> {
-        self.current_db_sizes.clone()
-    }
-
-    pub fn set_current_db_sizes(&mut self, sizes: Vec<usize>) {
-        self.current_db_sizes = sizes;
     }
 
     pub fn load_full_db(
@@ -524,115 +556,32 @@ impl ServerActor {
         self.current_db_sizes = db_lens1;
     }
 
-    pub fn load_single_record_from_db(
-        &mut self,
-        index: usize,
-        left_code: &[u16],
-        left_mask: &[u16],
-        right_code: &[u16],
-        right_mask: &[u16],
-    ) {
-        ShareDB::load_single_record_from_db(
-            index,
-            &self.left_code_db_slices.code_gr,
-            left_code,
-            self.device_manager.device_count(),
-            IRIS_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_db(
-            index,
-            &self.left_mask_db_slices.code_gr,
-            left_mask,
-            self.device_manager.device_count(),
-            MASK_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_db(
-            index,
-            &self.right_code_db_slices.code_gr,
-            right_code,
-            self.device_manager.device_count(),
-            IRIS_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_db(
-            index,
-            &self.right_mask_db_slices.code_gr,
-            right_mask,
-            self.device_manager.device_count(),
-            MASK_CODE_LENGTH,
-        );
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn load_single_record_from_s3(
-        &mut self,
-        index: usize,
-        left_code_odd: &[u8],
-        left_code_even: &[u8],
-        right_code_odd: &[u8],
-        right_code_even: &[u8],
-        left_mask_odd: &[u8],
-        left_mask_even: &[u8],
-        right_mask_odd: &[u8],
-        right_mask_even: &[u8],
-    ) {
-        ShareDB::load_single_record_from_s3(
-            index,
-            &self.left_code_db_slices.code_gr,
-            left_code_odd,
-            left_code_even,
-            self.device_manager.device_count(),
-            IRIS_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_s3(
-            index,
-            &self.left_mask_db_slices.code_gr,
-            left_mask_odd,
-            left_mask_even,
-            self.device_manager.device_count(),
-            MASK_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_s3(
-            index,
-            &self.right_code_db_slices.code_gr,
-            right_code_odd,
-            right_code_even,
-            self.device_manager.device_count(),
-            IRIS_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_s3(
-            index,
-            &self.right_mask_db_slices.code_gr,
-            right_mask_odd,
-            right_mask_even,
-            self.device_manager.device_count(),
-            MASK_CODE_LENGTH,
-        );
-    }
-
-    pub fn increment_db_size(&mut self, index: usize) {
-        self.current_db_sizes[index % self.device_manager.device_count()] += 1;
-    }
-
-    pub fn preprocess_db(&mut self) {
-        self.codes_engine
-            .preprocess_db(&mut self.left_code_db_slices, &self.current_db_sizes);
-        self.masks_engine
-            .preprocess_db(&mut self.left_mask_db_slices, &self.current_db_sizes);
-        self.codes_engine
-            .preprocess_db(&mut self.right_code_db_slices, &self.current_db_sizes);
-        self.masks_engine
-            .preprocess_db(&mut self.right_mask_db_slices, &self.current_db_sizes);
-    }
-
     pub fn register_host_memory(&self) {
-        self.codes_engine
-            .register_host_memory(&self.left_code_db_slices, self.max_db_size);
-        self.masks_engine
-            .register_host_memory(&self.left_mask_db_slices, self.max_db_size);
-        self.codes_engine
-            .register_host_memory(&self.right_code_db_slices, self.max_db_size);
-        self.masks_engine
-            .register_host_memory(&self.right_mask_db_slices, self.max_db_size);
+        let page_lock_ts = Instant::now();
+        tracing::info!("Starting page lock");
+        self.device_manager.register_host_memory(
+            &self.left_code_db_slices,
+            self.max_db_size,
+            IRIS_CODE_LENGTH,
+        );
+        self.device_manager.register_host_memory(
+            &self.right_code_db_slices,
+            self.max_db_size,
+            IRIS_CODE_LENGTH,
+        );
+        tracing::info!("Page locking completed for code slice");
+        self.device_manager.register_host_memory(
+            &self.left_mask_db_slices,
+            self.max_db_size,
+            MASK_CODE_LENGTH,
+        );
+        self.device_manager.register_host_memory(
+            &self.right_mask_db_slices,
+            self.max_db_size,
+            MASK_CODE_LENGTH,
+        );
+        tracing::info!("Page locking completed for mask slice");
+        tracing::info!("Page locking completed in {:?}", page_lock_ts.elapsed());
     }
 
     fn process_batch_query(
@@ -643,7 +592,17 @@ impl ServerActor {
         let now = Instant::now();
         let mut events: HashMap<&str, Vec<Vec<CUevent>>> = HashMap::new();
 
-        tracing::info!("Started processing batch");
+        let n_reauths = batch
+            .request_types
+            .iter()
+            .filter(|x| *x == REAUTH_MESSAGE_TYPE)
+            .count();
+        tracing::info!(
+            "Started processing batch: {} uniqueness, {} reauth, {} deletion requests",
+            batch.request_types.len() - n_reauths,
+            n_reauths,
+            batch.deletion_requests_indices.len(),
+        );
 
         let mut batch = batch;
         let mut batch_size = batch.store_left.code.len();
@@ -651,6 +610,7 @@ impl ServerActor {
         assert!(
             batch_size == batch.store_left.mask.len()
                 && batch_size == batch.request_ids.len()
+                && batch_size == batch.request_types.len()
                 && batch_size == batch.metadata.len()
                 && batch_size == batch.store_right.code.len()
                 && batch_size == batch.store_right.mask.len()
@@ -668,6 +628,25 @@ impl ServerActor {
                 && batch_size * ROTATIONS == batch.db_right_preprocessed.len(),
             "Query batch sizes mismatch"
         );
+        if !batch.or_rule_indices.is_empty() || batch.luc_lookback_records > 0 {
+            assert!(
+                (batch.or_rule_indices.len() == batch_size) || (batch.luc_lookback_records > 0)
+            );
+            let skip_lookback_requests: HashSet<usize> = batch
+                .request_types
+                .iter()
+                .enumerate()
+                .filter(|(_, req_type)| req_type.as_str() == REAUTH_MESSAGE_TYPE)
+                .map(|(index, _)| index)
+                .collect();
+            batch.or_rule_indices = generate_luc_records(
+                (self.current_db_sizes.iter().sum::<usize>() - 1) as u32,
+                batch.or_rule_indices.clone(),
+                batch.luc_lookback_records,
+                batch_size,
+                skip_lookback_requests,
+            );
+        }
 
         ///////////////////////////////////////////////////////////////////
         // PERFORM DELETIONS (IF ANY)
@@ -826,16 +805,48 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // MERGE LEFT & RIGHT results
         ///////////////////////////////////////////////////////////////////
+
         tracing::info!("Joining both sides");
         // Merge results and fetch matching indices
         // Format: host_results[device_index][query_index]
-        self.distance_comparator.join_db_matches(
-            &self.db_match_list_left,
-            &self.db_match_list_right,
-            &self.final_results,
-            &self.current_db_sizes,
-            &self.streams[0],
-        );
+
+        // Initialize bitmap with OR rule, if exists
+        if !batch.or_rule_indices.is_empty()
+            && !batch.or_rule_indices.iter().all(|inner| inner.is_empty())
+        {
+            assert_eq!(batch.or_rule_indices.len(), batch_size);
+
+            let now = Instant::now();
+            tracing::info!("Preparing and allocating OR policy bitmap");
+            // Populate the pre-allocated OR policy bitmap with the serial ids
+            let host_or_policy_bitmap = prepare_or_policy_bitmap(
+                self.max_db_size,
+                batch.or_rule_indices.clone(),
+                self.max_batch_size,
+            );
+
+            let device_or_policy_bitmap =
+                self.allocate_or_policy_bitmap(host_or_policy_bitmap.clone());
+            tracing::info!("OR policy bitmap prepared in {:?}", now.elapsed());
+
+            self.distance_comparator.join_db_matches_with_bitmaps(
+                self.max_db_size,
+                &self.db_match_list_left,
+                &self.db_match_list_right,
+                &self.final_results,
+                &self.current_db_sizes,
+                &self.streams[0],
+                &device_or_policy_bitmap,
+            );
+        } else {
+            self.distance_comparator.join_db_matches(
+                &self.db_match_list_left,
+                &self.db_match_list_right,
+                &self.final_results,
+                &self.current_db_sizes,
+                &self.streams[0],
+            );
+        }
 
         self.distance_comparator.join_batch_matches(
             &self.batch_match_list_left,
@@ -969,12 +980,13 @@ impl ServerActor {
         let mut merged_results =
             get_merged_results(&host_results, self.device_manager.device_count());
 
-        // List the indices of the queries that did not match.
-        let insertion_list = merged_results
+        // List the indices of the uniqueness requests that did not match.
+        let uniqueness_insertion_list = merged_results
             .iter()
             .enumerate()
             .filter(|&(idx, &num)| {
-                num == NON_MATCH_ID
+                batch.request_types[idx] == UNIQUENESS_MESSAGE_TYPE
+                    && num == NON_MATCH_ID
                     // Filter-out supermatchers on both sides (TODO: remove this in the future)
                     && partial_match_counters_left[idx] <= SUPERMATCH_THRESHOLD
                     && partial_match_counters_right[idx] <= SUPERMATCH_THRESHOLD
@@ -983,12 +995,13 @@ impl ServerActor {
             .collect::<Vec<_>>();
 
         // Spread the insertions across devices.
-        let insertion_list = distribute_insertions(&insertion_list, &self.current_db_sizes);
+        let uniqueness_insertion_list =
+            distribute_insertions(&uniqueness_insertion_list, &self.current_db_sizes);
 
-        // Calculate the new indices for the inserted queries
+        // Calculate the new indices for the inserted uniqueness queries
         let matches = calculate_insertion_indices(
             &mut merged_results,
-            &insertion_list,
+            &uniqueness_insertion_list,
             &self.current_db_sizes,
             batch_size,
         );
@@ -1013,9 +1026,41 @@ impl ServerActor {
             })
             .collect::<Vec<_>>();
 
+        let successful_reauths = match_ids_filtered
+            .iter()
+            .enumerate()
+            .map(|(idx, matches)| {
+                if batch.request_types[idx] != REAUTH_MESSAGE_TYPE {
+                    return false;
+                }
+                let reauth_id = batch.request_ids[idx].clone();
+                if *batch.reauth_use_or_rule.get(&reauth_id).unwrap() {
+                    // OR rule used. Expect a match with target reauth index
+                    matches.contains(batch.reauth_target_indices.get(&reauth_id).unwrap())
+                } else {
+                    // AND rule used. Expect exactly one match to the target reauth index
+                    matches.len() == 1
+                        && matches[0] == *batch.reauth_target_indices.get(&reauth_id).unwrap()
+                }
+            })
+            .collect::<Vec<bool>>();
+        let mut reauth_updates_per_device = vec![vec![]; self.device_manager.device_count()];
+        for (reauth_pos, success) in successful_reauths.clone().iter().enumerate() {
+            if !*success {
+                continue;
+            }
+            let reauth_id = batch.request_ids[reauth_pos].clone();
+            let reauth_index = *batch.reauth_target_indices.get(&reauth_id).unwrap();
+            let device_index = reauth_index % self.device_manager.device_count() as u32;
+            reauth_updates_per_device[device_index as usize].push(reauth_pos);
+        }
+
         // Write back to in-memory db
         let previous_total_db_size = self.current_db_sizes.iter().sum::<usize>();
-        let n_insertions = insertion_list.iter().map(|x| x.len()).sum::<usize>();
+        let n_insertions = uniqueness_insertion_list
+            .iter()
+            .map(|x| x.len())
+            .sum::<usize>();
 
         // Check if we actually have space left to write the new entries
         if previous_total_db_size + n_insertions > self.max_db_size {
@@ -1041,7 +1086,7 @@ impl ServerActor {
                 {
                     for i in 0..self.device_manager.device_count() {
                         self.device_manager.device(i).bind_to_thread().unwrap();
-                        for insertion_idx in insertion_list[i].clone() {
+                        for insertion_idx in uniqueness_insertion_list[i].clone() {
                             write_db_at_index(
                                 &self.left_code_db_slices,
                                 &self.left_mask_db_slices,
@@ -1064,6 +1109,42 @@ impl ServerActor {
                             i,
                             self.current_db_sizes[i]
                         );
+
+                        for reauth_pos in reauth_updates_per_device[i].clone() {
+                            let reauth_id = batch.request_ids[reauth_pos].clone();
+                            let reauth_index =
+                                *batch.reauth_target_indices.get(&reauth_id).unwrap();
+                            let device_db_index =
+                                reauth_index / self.device_manager.device_count() as u32;
+                            tracing::info!(
+                                "Writing succesful reauth index {} at device {} to {}",
+                                reauth_index,
+                                i,
+                                device_db_index
+                            );
+                            if device_db_index as usize >= self.current_db_sizes[i] {
+                                tracing::error!(
+                                    "Reauth index {} is out of bounds for device {}",
+                                    reauth_index,
+                                    i
+                                );
+                                continue;
+                            }
+                            write_db_at_index(
+                                &self.left_code_db_slices,
+                                &self.left_mask_db_slices,
+                                &self.right_code_db_slices,
+                                &self.right_mask_db_slices,
+                                &compact_device_queries_left,
+                                &compact_device_sums_left,
+                                &compact_device_queries_right,
+                                &compact_device_sums_right,
+                                reauth_pos,
+                                device_db_index as usize,
+                                i,
+                                &self.streams[0],
+                            );
+                        }
                     }
                 }
             );
@@ -1074,6 +1155,7 @@ impl ServerActor {
             .send(ServerJobResult {
                 merged_results,
                 request_ids: batch.request_ids,
+                request_types: batch.request_types,
                 metadata: batch.metadata,
                 matches,
                 match_ids: match_ids_filtered,
@@ -1083,8 +1165,16 @@ impl ServerActor {
                 store_right: query_store_right,
                 deleted_ids: batch.deletion_requests_indices,
                 matched_batch_request_ids,
+                anonymized_bucket_statistics_left: self.anonymized_bucket_statistics_left.clone(),
+                anonymized_bucket_statistics_right: self.anonymized_bucket_statistics_right.clone(),
+                successful_reauths,
+                reauth_target_indices: batch.reauth_target_indices,
+                reauth_or_rule_used: batch.reauth_use_or_rule,
             })
             .unwrap();
+
+        self.anonymized_bucket_statistics_left.buckets.clear();
+        self.anonymized_bucket_statistics_right.buckets.clear();
 
         // Reset the results buffers for reuse
         for dst in [
@@ -1200,18 +1290,26 @@ impl ServerActor {
             ),
         };
 
-        let mut total_distance_counter = 0;
-        for (i, device) in self.device_manager.devices().iter().enumerate() {
-            let counter = device.dtoh_sync_copy(&match_distances_counters[i]).unwrap();
-            total_distance_counter += counter[0];
-        }
+        let bucket_distance_counters = self
+            .device_manager
+            .devices()
+            .iter()
+            .enumerate()
+            .map(|(i, device)| {
+                device.dtoh_sync_copy(&match_distances_counters[i]).unwrap()[0] as usize
+            })
+            .collect::<Vec<_>>();
 
-        tracing::info!("Matching distances collected: {}", total_distance_counter);
+        tracing::info!(
+            "Matching distances collected: {:?}",
+            bucket_distance_counters
+        );
 
-        if total_distance_counter
-            >= (self.match_distances_buffer_size * self.device_manager.devices().len()) as u32
+        if bucket_distance_counters
+            .iter()
+            .all(|&x| x >= self.match_distances_buffer_size)
         {
-            let now = std::time::Instant::now();
+            let now = Instant::now();
             tracing::info!(
                 "Collected enough match distances, starting bucket calculation: {} eye",
                 match eye_db {
@@ -1243,6 +1341,7 @@ impl ServerActor {
                 &self.device_manager,
                 &resort_indices,
                 match_distances_buffers_codes,
+                self.match_distances_buffer_size,
                 batch_streams,
             );
 
@@ -1253,6 +1352,7 @@ impl ServerActor {
                 &self.device_manager,
                 &resort_indices,
                 match_distances_buffers_masks,
+                self.match_distances_buffer_size,
                 batch_streams,
             );
 
@@ -1277,19 +1377,34 @@ impl ServerActor {
                 .phase2_buckets
                 .open_buckets(&self.buckets, batch_streams);
 
-            let mut results = String::new();
-            for i in 0..buckets.len() {
-                let step = MATCH_THRESHOLD_RATIO / (self.n_buckets as f64);
-                let previous_threshold = step * (i as f64);
-                let threshold = step * (i as f64 + 1.0);
-                let previous_count = if i == 0 { 0 } else { buckets[i - 1] };
-                let count = buckets[i] - previous_count;
-                results.push_str(&format!(
-                    "    {:.3}-{:.3}: {:?}\n",
-                    previous_threshold, threshold, count
-                ));
+            tracing::info!("Buckets: {:?}", buckets);
+
+            match eye_db {
+                Eye::Left => {
+                    self.anonymized_bucket_statistics_left.fill_buckets(
+                        &buckets,
+                        MATCH_THRESHOLD_RATIO,
+                        self.anonymized_bucket_statistics_left
+                            .next_start_time_utc_timestamp,
+                    );
+                    tracing::info!(
+                        "Bucket results:\n{}",
+                        self.anonymized_bucket_statistics_left
+                    );
+                }
+                Eye::Right => {
+                    self.anonymized_bucket_statistics_right.fill_buckets(
+                        &buckets,
+                        MATCH_THRESHOLD_RATIO,
+                        self.anonymized_bucket_statistics_right
+                            .next_start_time_utc_timestamp,
+                    );
+                    tracing::info!(
+                        "Bucket results:\n{}",
+                        self.anonymized_bucket_statistics_right
+                    );
+                }
             }
-            tracing::info!("Bucket results:\n{}", results);
 
             let reset_all_buffers =
                 |counter: &[CudaSlice<u32>],
@@ -1642,7 +1757,9 @@ impl ServerActor {
                             &code_dots,
                             &mask_dots,
                             batch_size,
-                            self.match_distances_buffer_size,
+                            self.match_distances_buffer_size
+                                * (100 + self.match_distances_buffer_size_extra_percent)
+                                / 100,
                             request_streams,
                         );
                         self.phase2.return_result_buffer(res);
@@ -1775,6 +1892,20 @@ impl ServerActor {
         )?;
 
         Ok((compact_device_queries, compact_device_sums))
+    }
+
+    fn allocate_or_policy_bitmap(&mut self, bitmap: Vec<u64>) -> Vec<CudaSlice<u64>> {
+        let devices = self.device_manager.devices();
+
+        let mut or_policy_bitmap = Vec::with_capacity(devices.len());
+
+        for (device_idx, dev) in devices.iter().enumerate() {
+            // Transfer the bitmap to the device. It will be the same for each of the
+            // devices
+            let _bitmap = htod_on_stream_sync(&bitmap, dev, &self.streams[0][device_idx]).unwrap();
+            or_policy_bitmap.push(_bitmap);
+        }
+        or_policy_bitmap
     }
 }
 
@@ -2147,25 +2278,11 @@ fn write_db_at_index(
     }
 }
 
-pub fn get_dummy_shares_for_deletion(
-    party_id: usize,
-) -> (GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare) {
-    let mut rng: StdRng = StdRng::seed_from_u64(0);
-    let dummy: IrisCode = IrisCode::default();
-    let iris_share: GaloisRingIrisCodeShare =
-        GaloisRingIrisCodeShare::encode_iris_code(&dummy.code, &dummy.mask, &mut rng)[party_id]
-            .clone();
-    let mask_share: GaloisRingTrimmedMaskCodeShare =
-        GaloisRingIrisCodeShare::encode_mask_code(&dummy.mask, &mut rng)[party_id]
-            .clone()
-            .into();
-    (iris_share, mask_share)
-}
-
 fn sort_shares_by_indices(
     device_manager: &DeviceManager,
     resort_indices: &[Vec<usize>],
     shares: &[ChunkShare<u16>],
+    length: usize,
     streams: &[CudaStream],
 ) -> Vec<ChunkShare<u16>> {
     let a = shares
@@ -2186,15 +2303,193 @@ fn sort_shares_by_indices(
                 .iter()
                 .map(|&j| a[i][j])
                 .collect::<Vec<_>>();
-            let a = htod_on_stream_sync(&new_a, &device_manager.device(i), &streams[i]).unwrap();
+            let a = htod_on_stream_sync(&new_a[..length], &device_manager.device(i), &streams[i])
+                .unwrap();
 
             let new_b = resort_indices[i]
                 .iter()
                 .map(|&j| b[i][j])
                 .collect::<Vec<_>>();
-            let b = htod_on_stream_sync(&new_b, &device_manager.device(i), &streams[i]).unwrap();
+            let b = htod_on_stream_sync(&new_b[..length], &device_manager.device(i), &streams[i])
+                .unwrap();
 
             ChunkShare::new(a, b)
         })
         .collect::<Vec<_>>()
+}
+
+pub fn prepare_or_policy_bitmap(
+    max_db_size: usize,
+    or_rule_indices: Vec<Vec<u32>>,
+    batch_size: usize,
+) -> Vec<u64> {
+    let row_stride64 = (max_db_size + 63) / 64;
+    let total_size = row_stride64 * batch_size;
+
+    // Create the bitmap on the host
+    let mut bitmap = vec![0u64; total_size];
+
+    for (query_idx, db_indices) in or_rule_indices.iter().enumerate() {
+        for &db_idx in db_indices {
+            let row_start = query_idx * row_stride64;
+            let word_idx = row_start + (db_idx as usize / 64);
+            let bit_offset = db_idx as usize % 64;
+            bitmap[word_idx] |= 1 << bit_offset;
+        }
+    }
+    bitmap
+}
+
+pub fn generate_luc_records(
+    latest_luc_index: u32,
+    mut or_rule_indices: Vec<Vec<u32>>,
+    lookback_records: usize,
+    batch_size: usize,
+    skip_lookback_requests: HashSet<usize>,
+) -> Vec<Vec<u32>> {
+    // If lookback_records is 0, return the original or_rule_indices
+    if lookback_records == 0 {
+        return or_rule_indices;
+    }
+    // Generate the lookback serial IDs: [current_db_size - luc_lookback_records,
+    // current_db_size)
+    let lookback_start = latest_luc_index.saturating_sub(lookback_records as u32); // ensure no underflow
+    let lookback_ids: Vec<u32> = (lookback_start..=latest_luc_index).collect();
+    let lookback_records: Vec<Vec<u32>> = vec![lookback_ids; batch_size];
+
+    // If there are no OR rules, return only the lookback records
+    if or_rule_indices.is_empty() {
+        return lookback_records;
+    }
+
+    // Otherwise, merge them into each inner vector of or_rule_indices
+    for (idx, (or_ids, luc_ids)) in
+        izip!(or_rule_indices.iter_mut(), lookback_records.iter()).enumerate()
+    {
+        if skip_lookback_requests.contains(&idx) {
+            continue;
+        }
+        // Add the lookback IDs
+        or_ids.extend_from_slice(luc_ids);
+        // Sort and remove duplicates
+        or_ids.sort_unstable();
+        or_ids.dedup();
+    }
+    or_rule_indices
+}
+
+impl InMemoryStore for ServerActor {
+    fn load_single_record_from_db(
+        &mut self,
+        index: usize,
+        left_code: &[u16],
+        left_mask: &[u16],
+        right_code: &[u16],
+        right_mask: &[u16],
+    ) {
+        ShareDB::load_single_record_from_db(
+            index,
+            &self.left_code_db_slices.code_gr,
+            left_code,
+            self.device_manager.device_count(),
+            IRIS_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_db(
+            index,
+            &self.left_mask_db_slices.code_gr,
+            left_mask,
+            self.device_manager.device_count(),
+            MASK_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_db(
+            index,
+            &self.right_code_db_slices.code_gr,
+            right_code,
+            self.device_manager.device_count(),
+            IRIS_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_db(
+            index,
+            &self.right_mask_db_slices.code_gr,
+            right_mask,
+            self.device_manager.device_count(),
+            MASK_CODE_LENGTH,
+        );
+    }
+    fn increment_db_size(&mut self, index: usize) {
+        self.current_db_sizes[index % self.device_manager.device_count()] += 1;
+    }
+
+    fn load_single_record_from_s3(
+        &mut self,
+        index: usize,
+        left_code_odd: &[u8],
+        left_code_even: &[u8],
+        right_code_odd: &[u8],
+        right_code_even: &[u8],
+        left_mask_odd: &[u8],
+        left_mask_even: &[u8],
+        right_mask_odd: &[u8],
+        right_mask_even: &[u8],
+    ) {
+        ShareDB::load_single_record_from_s3(
+            index,
+            &self.left_code_db_slices.code_gr,
+            left_code_odd,
+            left_code_even,
+            self.device_manager.device_count(),
+            IRIS_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_s3(
+            index,
+            &self.left_mask_db_slices.code_gr,
+            left_mask_odd,
+            left_mask_even,
+            self.device_manager.device_count(),
+            MASK_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_s3(
+            index,
+            &self.right_code_db_slices.code_gr,
+            right_code_odd,
+            right_code_even,
+            self.device_manager.device_count(),
+            IRIS_CODE_LENGTH,
+        );
+        ShareDB::load_single_record_from_s3(
+            index,
+            &self.right_mask_db_slices.code_gr,
+            right_mask_odd,
+            right_mask_even,
+            self.device_manager.device_count(),
+            MASK_CODE_LENGTH,
+        );
+    }
+
+    fn preprocess_db(&mut self) {
+        // we also register the memory allocated, page-locking it for more performance
+        self.register_host_memory();
+
+        self.codes_engine
+            .preprocess_db(&mut self.left_code_db_slices, &self.current_db_sizes);
+        self.masks_engine
+            .preprocess_db(&mut self.left_mask_db_slices, &self.current_db_sizes);
+        self.codes_engine
+            .preprocess_db(&mut self.right_code_db_slices, &self.current_db_sizes);
+        self.masks_engine
+            .preprocess_db(&mut self.right_mask_db_slices, &self.current_db_sizes);
+    }
+
+    fn current_db_sizes(&self) -> impl std::fmt::Debug {
+        &self.current_db_sizes
+    }
+
+    fn fake_db(&mut self, fake_db_size: usize) {
+        tracing::warn!(
+            "Faking db with {} entries, returned results will be random.",
+            fake_db_size
+        );
+        self.current_db_sizes =
+            vec![fake_db_size / self.current_db_sizes.len(); self.current_db_sizes.len()];
+    }
 }

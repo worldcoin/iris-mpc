@@ -89,6 +89,7 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
 
 extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *matchCounterLeft, unsigned int *matchCounterRight, unsigned int *partialResultsLeft, unsigned int *partialResultsRight)
 {
+
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
     {
@@ -128,6 +129,74 @@ extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, 
         }
     }
 }
+
+extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, size_t maxDbLength, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *matchCounterLeft, unsigned int *matchCounterRight, unsigned int *partialResultsLeft, unsigned int *partialResultsRight, const unsigned long long *orPolicyBitmap, size_t numDevices, size_t deviceId)
+{
+
+    size_t rowStride64 = (maxDbLength + 63) / 64;
+    size_t totalBits   = maxDbLength * queryLength;
+
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < numElements)
+    {
+        for (int i = 0; i < 64; i++)
+        {
+
+            size_t deviceBit = idx * 64 + i;
+
+            // Protect against any leftover bits if totalBits not multiple of 64
+            if (deviceBit >= totalBits) break;
+
+            unsigned int queryIdx = deviceBit / dbLength;
+            unsigned int dbIdx = deviceBit % dbLength;
+            bool matchLeft = (matchResultsLeft[idx] & (1ULL << i));
+            bool matchRight = (matchResultsRight[idx] & (1ULL << i));
+
+            // Check bounds
+            if (queryIdx >= queryLength || dbIdx >= dbLength)
+                continue;
+
+            // Check for partial results (only used for debugging)
+            if (matchLeft)
+            {
+                unsigned int qmcL = atomicAdd(&matchCounterLeft[queryIdx], 1);
+                if (qmcL < MAX_MATCHES_LEN)
+                    partialResultsLeft[MAX_MATCHES_LEN * queryIdx + qmcL] = dbIdx;
+            }
+            if (matchRight)
+            {
+                unsigned int qmcR = atomicAdd(&matchCounterRight[queryIdx], 1);
+                if (qmcR < MAX_MATCHES_LEN)
+                    partialResultsRight[MAX_MATCHES_LEN * queryIdx + qmcR] = dbIdx;
+            }
+
+            size_t rowIndex = queryIdx * rowStride64;
+
+            // Recalculate the original dbIdx from the device-specific dbIdx
+            size_t originalDbIdx = dbIdx * numDevices + deviceId;
+            size_t orPolicyBitmapIdx = rowIndex + (originalDbIdx / 64);
+
+            // orPolicyBitmap represents a 2D array of bits of size (max batch size x maxDbLength)
+            bool useOr = (orPolicyBitmap[orPolicyBitmapIdx]
+                          & (1ULL << (originalDbIdx % 64))) != 0ULL;
+
+
+            // If useOr is true => (matchLeft || matchRight),
+            // else => (matchLeft && matchRight).
+            bool finalMatch = useOr ? (matchLeft || matchRight)
+                                    : (matchLeft && matchRight);
+    
+            if (finalMatch)
+            {
+                atomicMin(&finalResults[queryIdx], dbIdx);
+                unsigned int qmc = atomicAdd(&matchCounter[queryIdx], 1);
+                if (qmc < MAX_MATCHES_LEN)
+                    allMatches[MAX_MATCHES_LEN * queryIdx + qmc] = dbIdx;
+            }
+        }
+    }
+}
+
 
 extern "C" __global__ void mergeBatchResults(unsigned long long *matchResultsSelfLeft, unsigned long long *matchResultsSelfRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *__matchCounterLeft, unsigned int *__matchCounterRight, unsigned int *__partialResultsLeft, unsigned int *__partialResultsRight)
 {

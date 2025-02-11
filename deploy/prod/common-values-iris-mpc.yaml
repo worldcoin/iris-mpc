@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:v0.13.25"
+image: "ghcr.io/worldcoin/iris-mpc:v0.14.3"
 
 environment: prod
 replicaCount: 1
@@ -91,4 +91,4 @@ preStop:
   sleepPeriod: 10
 
 # terminationGracePeriodSeconds specifies the grace time between SIGTERM and SIGKILL
-terminationGracePeriodSeconds: 120 # TODO: make it 3x SMPC__PROCESSING_TIMEOUT_SECS
+terminationGracePeriodSeconds: 240 # TODO: make it 3x SMPC__PROCESSING_TIMEOUT_SECS

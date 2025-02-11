@@ -27,8 +27,10 @@ use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    fmt::Debug,
-    sync::{Arc, RwLock},
+    fmt::{Debug, Display},
+    num::ParseIntError,
+    str::FromStr,
+    sync::{Arc, RwLock, RwLockWriteGuard},
     vec,
 };
 use tokio::task::JoinSet;
@@ -36,6 +38,22 @@ use tokio::task::JoinSet;
 #[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct VectorId {
     id: PointId,
+}
+
+impl Display for VectorId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.id, f)
+    }
+}
+
+impl FromStr for VectorId {
+    type Err = ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(VectorId {
+            id: FromStr::from_str(s)?,
+        })
+    }
 }
 
 impl From<PointId> for VectorId {
@@ -65,14 +83,16 @@ pub struct Query {
 type QueryRef = Arc<Query>;
 
 #[derive(Default, Clone, Serialize, Deserialize)]
-struct SharedIrises {
-    points: Vec<GaloisRingSharedIris>,
+pub struct SharedIrises {
+    pub points: Vec<GaloisRingSharedIris>,
 }
 
 #[derive(Clone)]
 pub struct SharedIrisesRef {
     body: Arc<RwLock<SharedIrises>>,
 }
+
+pub type SharedIrisesMut<'a> = RwLockWriteGuard<'a, SharedIrises>;
 
 impl std::fmt::Debug for SharedIrisesRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -99,6 +119,10 @@ impl SharedIrisesRef {
 }
 
 impl SharedIrisesRef {
+    pub fn write(&self) -> SharedIrisesMut {
+        self.body.write().unwrap()
+    }
+
     // TODO migrate this to a function of the `Query` type
     fn prepare_query(&mut self, raw_query: GaloisRingSharedIris) -> QueryRef {
         let mut preprocessed_query = raw_query.clone();
