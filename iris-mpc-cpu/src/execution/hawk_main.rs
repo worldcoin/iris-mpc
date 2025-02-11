@@ -6,7 +6,7 @@ use crate::{
         player::{Role, RoleAssignment},
         session::{BootSession, Session, SessionId},
     },
-    hawkers::aby3_store::{Aby3Store, SharedIrisesRef},
+    hawkers::aby3_store::{Aby3Store, SharedIrisesMut, SharedIrisesRef},
     hnsw::{
         graph::neighborhood::SortedNeighborhoodV, searcher::ConnectPlanV, GraphMem, HnswSearcher,
         VectorStore,
@@ -18,6 +18,7 @@ use crate::{
 use aes_prng::AesRng;
 use clap::Parser;
 use eyre::Result;
+use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use itertools::{izip, Itertools};
 use rand::{thread_rng, Rng, SeedableRng};
 use std::{collections::HashMap, ops::Deref, sync::Arc, time::Duration, vec};
@@ -49,12 +50,14 @@ pub struct HawkActor {
 
     // ---- My state ----
     // TODO: Persistence.
+    db_size:     usize,
     iris_store:  BothEyes<SharedIrisesRef>,
     graph_store: BothEyes<GraphRef>,
 
     // ---- My network setup ----
     networking:   GrpcNetworking,
     own_identity: Identity,
+    party_id:     usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -150,12 +153,14 @@ impl HawkActor {
 
         Ok(HawkActor {
             search_params,
+            db_size: 0,
             iris_store,
             graph_store,
             role_assignments: Arc::new(role_assignments),
             consensus: Consensus::default(),
             networking,
             own_identity: my_identity.clone(),
+            party_id: my_index,
         })
     }
 
@@ -337,6 +342,70 @@ impl HawkActor {
         graph_store.insert_apply(connect_plan.clone()).await;
 
         Ok(connect_plan)
+    }
+
+    /// Borrow the in-memory iris store to modify it.
+    pub async fn as_iris_loader(&mut self) -> IrisLoader {
+        IrisLoader {
+            party_id: self.party_id,
+            db_size:  &mut self.db_size,
+            irises:   [
+                self.iris_store[0].write().await,
+                self.iris_store[1].write().await,
+            ],
+        }
+    }
+}
+
+pub struct IrisLoader<'a> {
+    party_id: usize,
+    db_size:  &'a mut usize,
+    irises:   BothEyes<SharedIrisesMut<'a>>,
+}
+
+impl<'a> InMemoryStore for IrisLoader<'a> {
+    fn load_single_record_from_db(
+        &mut self,
+        index: usize,
+        left_code: &[u16],
+        left_mask: &[u16],
+        right_code: &[u16],
+        right_mask: &[u16],
+    ) {
+        for (side, code, mask) in izip!(&mut self.irises, [left_code, right_code], [
+            left_mask, right_mask
+        ]) {
+            if index >= side.points.len() {
+                side.points.resize(
+                    index + 1,
+                    GaloisRingSharedIris::default_for_party(self.party_id),
+                );
+            }
+            side.points[index].code.coefs = code.try_into().unwrap();
+            side.points[index].mask.coefs = mask.try_into().unwrap();
+        }
+    }
+
+    fn increment_db_size(&mut self, _index: usize) {
+        *self.db_size += 1;
+    }
+
+    fn reserve(&mut self, additional: usize) {
+        for side in &mut self.irises {
+            side.points.reserve(additional);
+        }
+    }
+
+    fn current_db_sizes(&self) -> impl std::fmt::Debug {
+        *self.db_size
+    }
+
+    fn fake_db(&mut self, size: usize) {
+        *self.db_size = size;
+        for side in &mut self.irises {
+            side.points
+                .resize(size, GaloisRingSharedIris::default_for_party(self.party_id));
+        }
     }
 }
 
