@@ -10,7 +10,7 @@ use iris_mpc_common::{
     helpers::{
         key_pair::download_public_key,
         sha256::sha256_as_hex_string,
-        smpc_request::{IrisCodesJSON, UniquenessRequest, UNIQUENESS_MESSAGE_TYPE},
+        smpc_request::{IrisCodeSharesJSON, UniquenessRequest, UNIQUENESS_MESSAGE_TYPE},
         smpc_response::create_message_type_attribute_map,
         sqs_s3_helper::upload_file_and_generate_presigned_url,
     },
@@ -324,7 +324,7 @@ async fn main() -> eyre::Result<()> {
                 let mut iris_codes_shares_base64: [String; 3] = Default::default();
 
                 for i in 0..3 {
-                    let iris_codes_json = IrisCodesJSON {
+                    let iris_code_shares_json = IrisCodeSharesJSON {
                         iris_version:           "1.0".to_string(),
                         iris_shares_version:    "1.3".to_string(),
                         right_iris_code_shares: shared_code[i].to_base64(),
@@ -332,7 +332,7 @@ async fn main() -> eyre::Result<()> {
                         left_iris_code_shares:  shared_code[i].to_base64(),
                         left_mask_code_shares:  shared_mask[i].to_base64(),
                     };
-                    let serialized_iris_codes_json = to_string(&iris_codes_json)
+                    let serialized_iris_codes_json = to_string(&iris_code_shares_json)
                         .expect("Serialization failed")
                         .clone();
 
@@ -368,10 +368,9 @@ async fn main() -> eyre::Result<()> {
                 };
 
                 let request_message = UniquenessRequest {
-                    batch_size: None,
-                    signup_id: request_id.to_string(),
-                    s3_key: presigned_url,
-                    iris_shares_file_hashes,
+                    batch_size:         None,
+                    signup_id:          request_id.to_string(),
+                    s3_key:             presigned_url,
                     or_rule_serial_ids: None,
                 };
 

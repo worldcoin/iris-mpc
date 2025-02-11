@@ -336,7 +336,6 @@ async fn receive_batch(
                         let s3_client_arc = s3_client.clone();
                         let bucket_name = config.shares_bucket_name.clone();
                         let s3_key = uniqueness_request.s3_key.clone();
-                        let iris_shares_file_hashes = uniqueness_request.iris_shares_file_hashes;
                         let handle = get_iris_shares_parse_task(
                             party_id,
                             shares_encryption_key_pairs,
@@ -344,7 +343,6 @@ async fn receive_batch(
                             s3_client_arc,
                             bucket_name,
                             s3_key,
-                            iris_shares_file_hashes,
                         )?;
 
                         handles.push(handle);
@@ -424,7 +422,6 @@ async fn receive_batch(
                             let s3_client_clone = s3_client.clone();
                             let bucket_name = config.shares_bucket_name.clone();
                             let s3_key = reauth_request.s3_key.clone();
-                            let iris_shares_file_hashes = reauth_request.iris_shares_file_hashes;
                             let handle = get_iris_shares_parse_task(
                                 party_id,
                                 shares_encryption_key_pairs,
@@ -432,7 +429,6 @@ async fn receive_batch(
                                 s3_client_clone,
                                 bucket_name,
                                 s3_key,
-                                iris_shares_file_hashes,
                             )?;
 
                             handles.push(handle);
@@ -584,13 +580,12 @@ fn get_iris_shares_parse_task(
     s3_client_arc: S3Client,
     bucket_name: String,
     s3_key: String,
-    iris_shares_file_hashes: [String; 3],
 ) -> Result<JoinHandle<ParseSharesTaskResult>, ReceiveRequestError> {
     let handle =
         tokio::spawn(async move {
             let _ = semaphore.acquire().await?;
 
-            let base_64_encoded_message_payload =
+            let (share_b64, hash) =
                 match get_iris_data_by_party_id(&s3_key, party_id, &bucket_name, &s3_client_arc)
                     .await
                 {
@@ -601,22 +596,16 @@ fn get_iris_shares_parse_task(
                     }
                 };
 
-            let iris_message_share = match decrypt_iris_share(
-                base_64_encoded_message_payload,
-                shares_encryption_key_pairs.clone(),
-            ) {
-                Ok(iris_data) => iris_data,
-                Err(e) => {
-                    tracing::error!("Failed to decrypt iris shares: {:?}", e);
-                    eyre::bail!("Failed to decrypt iris shares: {:?}", e);
-                }
-            };
+            let iris_message_share =
+                match decrypt_iris_share(share_b64, shares_encryption_key_pairs.clone()) {
+                    Ok(iris_data) => iris_data,
+                    Err(e) => {
+                        tracing::error!("Failed to decrypt iris shares: {:?}", e);
+                        eyre::bail!("Failed to decrypt iris shares: {:?}", e);
+                    }
+                };
 
-            match validate_iris_share(
-                iris_shares_file_hashes,
-                party_id,
-                iris_message_share.clone(),
-            ) {
+            match validate_iris_share(hash, iris_message_share.clone()) {
                 Ok(_) => {}
                 Err(e) => {
                     tracing::error!("Failed to validate iris shares: {:?}", e);
