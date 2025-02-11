@@ -36,14 +36,20 @@ async fn test_counter_subscriber() -> Result<()> {
 
     // Set up tracing Subscriber for counting operations
 
+    // counter from events
     let dist_evaluations = StaticCounter::new();
     let dist_evaluations_counter = dist_evaluations.get_counter();
+
+    // counter from new spans
+    let layer_searches = StaticCounter::new();
+    let layer_searches_counter = layer_searches.get_counter();
 
     let param_openings = ParamVertexOpeningsCounter::new();
     let (param_openings_map, _) = param_openings.get_counters();
 
     let counting_layer = OpCountersLayer::builder()
         .register_static(dist_evaluations, Operation::EvaluateDistance)
+        .register_static(layer_searches, Operation::LayerSearch)
         .register_dynamic(param_openings, Operation::OpenNode)
         .init();
 
@@ -51,8 +57,11 @@ async fn test_counter_subscriber() -> Result<()> {
 
     // Test consistency of static counters between serial and parallel operation
 
-    let seq_dist_evaluations = {
-        let start = dist_evaluations_counter.load(Ordering::Relaxed);
+    let seq_static_counters = {
+        let start = (
+            dist_evaluations_counter.load(Ordering::Relaxed),
+            layer_searches_counter.load(Ordering::Relaxed),
+        );
 
         let mut vector_store = vector_store.clone();
         let mut graph_store = graph_store.clone();
@@ -65,12 +74,19 @@ async fn test_counter_subscriber() -> Result<()> {
         )
         .await;
 
-        let end = dist_evaluations_counter.load(Ordering::Relaxed);
-        end - start
+        let end = (
+            dist_evaluations_counter.load(Ordering::Relaxed),
+            layer_searches_counter.load(Ordering::Relaxed),
+        );
+
+        (end.0 - start.0, end.1 - start.1)
     };
 
-    let par_dist_evaluations = {
-        let start = dist_evaluations_counter.load(Ordering::Relaxed);
+    let par_static_counters = {
+        let start = (
+            dist_evaluations_counter.load(Ordering::Relaxed),
+            layer_searches_counter.load(Ordering::Relaxed),
+        );
 
         let mut vector_store = vector_store.clone();
         let mut graph_store = graph_store.clone();
@@ -83,12 +99,17 @@ async fn test_counter_subscriber() -> Result<()> {
         )
         .await;
 
-        let end = dist_evaluations_counter.load(Ordering::Relaxed);
-        end - start
+        let end = (
+            dist_evaluations_counter.load(Ordering::Relaxed),
+            layer_searches_counter.load(Ordering::Relaxed),
+        );
+
+        (end.0 - start.0, end.1 - start.1)
     };
 
-    assert!(seq_dist_evaluations > 0);
-    assert_eq!(seq_dist_evaluations, par_dist_evaluations);
+    assert!(seq_static_counters.0 > 0);
+    assert!(seq_static_counters.1 > 0);
+    assert_eq!(seq_static_counters, par_static_counters);
 
     // Test consistency of dynamic counters between serial and parallel operation
 
