@@ -1,6 +1,6 @@
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::{fmt, fmt::Display, str::FromStr};
+use std::{collections::HashMap, fmt, fmt::Display, str::FromStr};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncState {
@@ -85,11 +85,108 @@ impl SyncResult {
             .dedup()
             .collect()
     }
+
+    /// Compare local `modifications` (my_state) to all other parties’
+    /// modifications (all_states), grouping by `id`. Returns: (to_update,
+    /// to_delete)
+    /// - `to_update`: modifications the local node should add (e.g., mark
+    ///   completed/persisted)
+    /// - `to_delete`: modifications the local node should remove from the DB
+    ///   (in-progress, never completed).
+    pub fn compare_modifications(&self) -> (Vec<Modification>, Vec<Modification>) {
+        // 1. Group all modifications by id => Vec<Modification> (from different nodes)
+        let mut grouped: HashMap<i64, Vec<Modification>> = HashMap::new();
+        for m in self.all_states.iter().flat_map(|s| s.modifications.clone()) {
+            grouped.entry(m.id).or_default().push(m);
+        }
+
+        // Store the results here
+        let mut to_update = Vec::new();
+        let mut to_delete = Vec::new();
+
+        // 2. Analyze each modification group
+        for (&id, group_mods) in &grouped {
+            assert_modifications_consistency(group_mods);
+
+            // Find local node's copy, if any
+            let local_copy = self.my_state.modifications.iter().find(|m| m.id == id);
+
+            // Evaluate the global state across all nodes:
+            let any_completed = group_mods
+                .iter()
+                .any(|m| m.status == ModificationStatus::Completed.to_string());
+            let all_in_progress = group_mods
+                .iter()
+                .all(|m| m.status == ModificationStatus::InProgress.to_string());
+            let any_persisted = group_mods.iter().any(|m| m.persisted);
+
+            // If they're all in-progress => ignore the modification by deleting it
+            if all_in_progress {
+                if let Some(local_m) = local_copy {
+                    to_delete.push(local_m.clone());
+                }
+            }
+            // If any node completed => unify to COMPLETED
+            else if any_completed {
+                match local_copy {
+                    None => {
+                        // If an item is completed for a party, it should at least exist in the
+                        // local state because it should have been added during receive_batch.
+                        // So, this case should not happen.
+                        panic!(
+                            "Completed modification could not be found in local state: {:?}",
+                            group_mods
+                        );
+                    }
+                    Some(local_m) => {
+                        // If local is not "completed" or doesn't match the final persisted
+                        if local_m.status != ModificationStatus::Completed.to_string()
+                            || local_m.persisted != any_persisted
+                        {
+                            // We'll roll forward local_m
+                            let mut roll_forward = local_m.clone();
+                            roll_forward.status = ModificationStatus::Completed.to_string();
+                            roll_forward.persisted = any_persisted;
+                            tracing::warn!(
+                                "Updating modification row from {:?} to {:?}",
+                                local_m,
+                                roll_forward
+                            );
+                            to_update.push(roll_forward);
+                        } else {
+                            tracing::debug!("Local modification is already in sync: {:?}", local_m);
+                        }
+                    }
+                }
+            } else {
+                panic!("Unexpected modification state: {:?}", group_mods);
+            }
+        }
+
+        (to_update, to_delete)
+    }
+}
+
+/// Assert that all modifications in the group have the same ID, serial ID,
+/// request type, and S3 URL. If the assert fails, it means the modifications
+/// are inconsistent across nodes. Such a case would need manual intervention.
+fn assert_modifications_consistency(modifications: &[Modification]) {
+    let first = modifications.first().expect("Empty modifications");
+    for m in modifications.iter().skip(1) {
+        assert_eq!(first.id, m.id, "Inconsistent modification IDs");
+        assert_eq!(first.serial_id, m.serial_id, "Inconsistent serial IDs");
+        assert_eq!(
+            first.request_type, m.request_type,
+            "Inconsistent request types"
+        );
+        assert_eq!(first.s3_url, m.s3_url, "Inconsistent S3 URLs");
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::helpers::smpc_request::{IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE};
 
     #[test]
     fn test_compare_states_sync() {
@@ -132,6 +229,294 @@ mod tests {
         };
         assert_eq!(sync_res.must_rollback_storage(), Some(123)); // most late.
         assert_eq!(sync_res.deleted_request_ids(), deleted_request_ids);
+    }
+
+    // Helper function to create a Modification.
+    fn create_modification(
+        id: i64,
+        serial_id: i64,
+        request_type: &str,
+        s3_url: Option<&str>,
+        status: ModificationStatus,
+        persisted: bool,
+    ) -> Modification {
+        Modification {
+            id,
+            serial_id,
+            request_type: request_type.to_string(),
+            s3_url: s3_url.map(|s| s.to_string()),
+            status: status.to_string(),
+            persisted,
+        }
+    }
+
+    // Create a SyncState with a given vector of modifications.
+    fn create_sync_state(modifications: Vec<Modification>) -> SyncState {
+        SyncState {
+            db_len: modifications.len() as u64,
+            deleted_request_ids: vec![],
+            modifications,
+        }
+    }
+
+    #[test]
+    fn test_compare_modifications_local_party_outdated() {
+        let mod1_local = create_modification(
+            1,
+            100,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+            None,
+            ModificationStatus::Completed,
+            true,
+        );
+        let mod2_local = create_modification(
+            2,
+            200,
+            REAUTH_MESSAGE_TYPE,
+            Some("http://example.com/200"),
+            ModificationStatus::Completed,
+            false,
+        );
+        let mod3_local = create_modification(
+            3,
+            300,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+            None,
+            ModificationStatus::InProgress,
+            false,
+        );
+        let mod4_local = create_modification(
+            4,
+            400,
+            REAUTH_MESSAGE_TYPE,
+            Some("http://example.com/400"),
+            ModificationStatus::InProgress,
+            false,
+        );
+        let my_state = create_sync_state(vec![
+            mod1_local.clone(),
+            mod2_local.clone(),
+            mod3_local.clone(),
+            mod4_local.clone(),
+        ]);
+
+        let mod1_other = create_modification(
+            1,
+            100,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+            None,
+            ModificationStatus::Completed,
+            true,
+        );
+        let mod2_other = create_modification(
+            2,
+            200,
+            REAUTH_MESSAGE_TYPE,
+            Some("http://example.com/200"),
+            ModificationStatus::Completed,
+            false,
+        );
+        let mod3_other = create_modification(
+            3,
+            300,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+            None,
+            ModificationStatus::Completed,
+            true,
+        );
+        let mod4_other = create_modification(
+            4,
+            400,
+            REAUTH_MESSAGE_TYPE,
+            Some("http://example.com/400"),
+            ModificationStatus::Completed,
+            false,
+        );
+
+        let other_state = create_sync_state(vec![
+            mod1_other,
+            mod2_other,
+            mod3_other.clone(),
+            mod4_other.clone(),
+        ]);
+        let all_states = vec![my_state.clone(), other_state.clone(), other_state.clone()];
+
+        let sync_result = SyncResult {
+            my_state,
+            all_states,
+        };
+
+        let (to_update, to_delete) = sync_result.compare_modifications();
+
+        // Expectations:
+        // For ID=1: Already in sync → no action.
+        // For ID=2: Already in sync → no action.
+        // For ID=3: Local is IN_PROGRESS, other nodes are COMPLETED → roll forward to
+        // COMPLETED. For ID=4: Local is IN_PROGRESS, other nodes are COMPLETED
+        // → roll forward to COMPLETED.
+        assert_eq!(to_update.len(), 2, "Expected two modifications to update");
+        assert_eq!(to_delete.len(), 0, "Expected zero modification to delete");
+
+        let update_mod3 = to_update.iter().find(|m| m.id == 3).unwrap();
+        assert_eq!(update_mod3.clone(), mod3_other);
+
+        let update_mod4 = to_update.iter().find(|m| m.id == 4).unwrap();
+        assert_eq!(update_mod4.clone(), mod4_other);
+    }
+
+    #[test]
+    fn test_compare_modifications_local_party_up_to_date() {
+        // Create local modifications that are already up-to-date.
+        let mod1_local = create_modification(
+            1,
+            100,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+            None,
+            ModificationStatus::Completed,
+            true,
+        );
+        let mod2_local = create_modification(
+            2,
+            200,
+            REAUTH_MESSAGE_TYPE,
+            Some("http://example.com/200"),
+            ModificationStatus::Completed,
+            false,
+        );
+        let mod3_local = create_modification(
+            3,
+            300,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+            None,
+            ModificationStatus::Completed,
+            true,
+        );
+        let mod4_local = create_modification(
+            4,
+            400,
+            REAUTH_MESSAGE_TYPE,
+            Some("http://example.com/400"),
+            ModificationStatus::Completed,
+            false,
+        );
+        let my_state = create_sync_state(vec![
+            mod1_local.clone(),
+            mod2_local.clone(),
+            mod3_local.clone(),
+            mod4_local.clone(),
+        ]);
+
+        // Create other states with in-progress modifications.
+        let mod1_other = create_modification(
+            1,
+            100,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+            None,
+            ModificationStatus::Completed,
+            true,
+        );
+        let mod2_other = create_modification(
+            2,
+            200,
+            REAUTH_MESSAGE_TYPE,
+            Some("http://example.com/200"),
+            ModificationStatus::Completed,
+            false,
+        );
+        let mod3_other = create_modification(
+            3,
+            300,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+            None,
+            ModificationStatus::InProgress,
+            false,
+        );
+        let mod4_other = create_modification(
+            4,
+            400,
+            REAUTH_MESSAGE_TYPE,
+            Some("http://example.com/400"),
+            ModificationStatus::InProgress,
+            false,
+        );
+        let other_state = create_sync_state(vec![mod1_other, mod2_other, mod3_other, mod4_other]);
+        let all_states = vec![my_state.clone(), other_state.clone(), other_state.clone()];
+
+        let sync_result = SyncResult {
+            my_state,
+            all_states,
+        };
+
+        // Compare modifications across nodes.
+        let (to_update, to_delete) = sync_result.compare_modifications();
+
+        // Since local is already the most advanced party, nothing should be updated or
+        // deleted.
+        assert!(to_update.is_empty(), "Expected no modifications to update");
+        assert!(to_delete.is_empty(), "Expected no modifications to delete");
+    }
+
+    #[test]
+    fn test_compare_modifications_remove_in_progress() {
+        // Create local modifications with some in-progress.
+        let mod1_local = create_modification(
+            1,
+            100,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+            None,
+            ModificationStatus::Completed,
+            true,
+        );
+        let mod2_local = create_modification(
+            2,
+            200,
+            REAUTH_MESSAGE_TYPE,
+            Some("http://example.com/200"),
+            ModificationStatus::Completed,
+            false,
+        );
+        let mod3_local = create_modification(
+            3,
+            300,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+            None,
+            ModificationStatus::InProgress,
+            false,
+        );
+        let mod4_local = create_modification(
+            4,
+            400,
+            REAUTH_MESSAGE_TYPE,
+            Some("http://example.com/400"),
+            ModificationStatus::InProgress,
+            false,
+        );
+        let my_state = create_sync_state(vec![
+            mod1_local.clone(),
+            mod2_local.clone(),
+            mod3_local.clone(),
+            mod4_local.clone(),
+        ]);
+
+        let all_states = vec![my_state.clone(), my_state.clone(), my_state.clone()];
+
+        let sync_result = SyncResult {
+            my_state,
+            all_states,
+        };
+
+        // Compare modifications across nodes.
+        let (to_update, to_delete) = sync_result.compare_modifications();
+
+        // None of the parties have a final res
+        assert!(to_update.is_empty(), "Expected no modifications to update");
+        assert_eq!(to_delete.len(), 2, "Expected no modifications to delete");
+
+        let delete_mod3 = to_delete.iter().find(|m| m.id == 3).unwrap();
+        assert_eq!(delete_mod3.clone(), mod3_local);
+
+        let delete_mod4 = to_delete.iter().find(|m| m.id == 4).unwrap();
+        assert_eq!(delete_mod4.clone(), mod4_local);
     }
 
     fn some_state() -> SyncState {
