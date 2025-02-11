@@ -326,9 +326,6 @@ mod e2e_test {
 
                     if !test_case_generator.or_rule_matches.contains(req_id) {
                         assert_eq!(partial_left, partial_right);
-                    }
-
-                    if !test_case_generator.or_rule_matches.contains(req_id) {
                         assert_eq!(partial_left, match_id);
                     }
                     test_case_generator.check_result(
@@ -375,6 +372,9 @@ mod e2e_test {
         match maybe_reauth_target_index {
             Some(target_index) => {
                 batch.request_types.push(REAUTH_MESSAGE_TYPE.to_string());
+                batch
+                    .reauth_use_or_rule
+                    .insert(request_id.clone(), !or_rule_indices.is_empty());
                 batch
                     .reauth_target_indices
                     .insert(request_id.clone(), *target_index);
@@ -558,6 +558,12 @@ mod e2e_test {
         /// Send a reauth request not matching target serial id's iris code
         /// (failed reauth)
         ReauthNonMatchingTarget,
+        /// Send a reauth request with OR rule matching one side of target
+        /// serial id's iris code (successful reauth)
+        ReauthOrRuleMatchingTarget,
+        /// Send a reauth request with OR rule not matching any sides of target
+        /// serial id's iris code (failed reauth)
+        ReauthOrRuleNonMatchingTarget,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -765,6 +771,8 @@ mod e2e_test {
                 TestCases::WithOrRuleSet,
                 TestCases::ReauthNonMatchingTarget,
                 TestCases::ReauthMatchingTarget,
+                TestCases::ReauthOrRuleNonMatchingTarget,
+                TestCases::ReauthOrRuleMatchingTarget,
             ];
             if !self.inserted_responses.is_empty() {
                 options.push(TestCases::PreviouslyInserted);
@@ -938,38 +946,19 @@ mod e2e_test {
                         // comparison against this item will use the OR rule
                         or_rule_indices = db_indexes_copy.iter().map(|&x| x as u32).collect();
 
-                        // Will always match under the OR rule
-                        self.expected_results
-                            .insert(request_id.to_string(), ExpectedResult {
-                                db_index:             Some(matching_db_index as u32),
-                                is_batch_match:       false,
-                                is_reauth_successful: None,
-                            });
-
-                        let mut code_left = self.initial_db_state.db[matching_db_index].clone();
-                        let mut code_right = self.initial_db_state.db[matching_db_index].clone();
-
-                        assert_eq!(code_left.mask, IrisCodeArray::ONES);
-                        assert_eq!(code_right.mask, IrisCodeArray::ONES);
-
                         // apply variation to either right of left code
                         let will_match: bool = self.rng.gen();
-                        let flip_right: bool = self.rng.gen();
-                        let variation = self.rng.gen_range(1..100);
+                        let flip_right = if will_match {
+                            Some(self.rng.gen())
+                        } else {
+                            None
+                        };
+
+                        let template =
+                            self.prepare_flipped_codes(matching_db_index, will_match, flip_right);
 
                         if will_match {
                             self.or_rule_matches.push(request_id.to_string());
-                            if flip_right {
-                                // Flip right bits to above threshold - (right) does not match
-                                for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
-                                    code_right.code.flip_bit(i);
-                                }
-                            } else {
-                                // Flip left bits to above threshold - (left) does not match
-                                for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
-                                    code_left.code.flip_bit(i);
-                                }
-                            }
                             self.expected_results
                                 .insert(request_id.to_string(), ExpectedResult {
                                     db_index:             Some(matching_db_index as u32),
@@ -977,11 +966,6 @@ mod e2e_test {
                                     is_reauth_successful: None,
                                 });
                         } else {
-                            // Flip both to above threshold - neither match
-                            for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
-                                code_left.code.flip_bit(i);
-                                code_right.code.flip_bit(i);
-                            }
                             self.db_indices_used_in_current_batch
                                 .insert(matching_db_index);
                             self.disallowed_queries.push(matching_db_index as u32);
@@ -992,13 +976,12 @@ mod e2e_test {
                                     is_reauth_successful: None,
                                 });
                         }
-                        E2ETemplate {
-                            left:  code_left,
-                            right: code_right,
-                        }
+                        template
                     }
                     TestCases::ReauthMatchingTarget => {
-                        tracing::info!("Sending reauth request matching the target index");
+                        tracing::info!(
+                            "Sending reauth request with AND rule matching the target index"
+                        );
                         let (db_index, template) = self.get_iris_code_in_db(DatabaseRange::Full);
                         self.db_indices_used_in_current_batch.insert(db_index);
                         self.reauth_target_indices
@@ -1015,26 +998,116 @@ mod e2e_test {
                         }
                     }
                     TestCases::ReauthNonMatchingTarget => {
-                        tracing::info!("Sending reauth request non-matching the target index");
-                        let (db_index, _) = self.get_iris_code_in_db(DatabaseRange::Full);
+                        tracing::info!(
+                            "Sending reauth request with AND rule non-matching the target index"
+                        );
+                        let (db_index, _) = self.get_iris_code_in_db(DatabaseRange::FullMaskOnly);
                         self.db_indices_used_in_current_batch.insert(db_index);
                         self.reauth_target_indices
                             .insert(request_id.to_string(), db_index as u32);
-                        let template = IrisCode::random_rng(&mut self.rng);
+
+                        // prepare a template that matches only on one side
+                        // it will end up with a failed reauth with AND rule
+                        self.or_rule_matches.push(request_id.to_string());
+                        let will_match = true;
+                        let flip_right = Some(self.rng.gen());
+                        let template = self.prepare_flipped_codes(db_index, will_match, flip_right);
                         self.expected_results
                             .insert(request_id.to_string(), ExpectedResult {
                                 db_index:             None,
                                 is_batch_match:       false,
                                 is_reauth_successful: Some(false),
                             });
-                        E2ETemplate {
-                            left:  template.clone(),
-                            right: template,
-                        }
+                        template
+                    }
+                    TestCases::ReauthOrRuleMatchingTarget => {
+                        tracing::info!(
+                            "Sending reauth request with OR rule matching the target index"
+                        );
+                        let (db_index, _) = self.get_iris_code_in_db(DatabaseRange::FullMaskOnly);
+                        self.db_indices_used_in_current_batch.insert(db_index);
+                        self.disallowed_queries.push(db_index as u32);
+                        self.or_rule_matches.push(request_id.to_string());
+                        self.reauth_target_indices
+                            .insert(request_id.to_string(), db_index as u32);
+                        or_rule_indices = vec![db_index as u32];
+                        let will_match = true;
+                        let flip_right = Some(self.rng.gen());
+                        let template = self.prepare_flipped_codes(db_index, will_match, flip_right);
+                        self.expected_results
+                            .insert(request_id.to_string(), ExpectedResult {
+                                db_index:             None,
+                                is_batch_match:       false,
+                                is_reauth_successful: Some(true),
+                            });
+                        template
+                    }
+                    TestCases::ReauthOrRuleNonMatchingTarget => {
+                        tracing::info!(
+                            "Sending reauth request with OR rule non-matching the target index"
+                        );
+                        let (db_index, _) = self.get_iris_code_in_db(DatabaseRange::FullMaskOnly);
+                        self.db_indices_used_in_current_batch.insert(db_index);
+                        self.reauth_target_indices
+                            .insert(request_id.to_string(), db_index as u32);
+                        or_rule_indices = vec![db_index as u32];
+                        let will_match = false;
+                        let template = self.prepare_flipped_codes(db_index, will_match, None);
+                        self.expected_results
+                            .insert(request_id.to_string(), ExpectedResult {
+                                db_index:             None,
+                                is_batch_match:       false,
+                                is_reauth_successful: Some(false),
+                            });
+                        template
                     }
                 }
             };
             (request_id, e2e_template, or_rule_indices)
+        }
+
+        /// Returns a template with flipped bits of given `db_index`.
+        ///
+        /// If `will_match` is false, the template will be flipped to above
+        /// threshold on both sides If `flip_right` is true, the right
+        /// side will be flipped to above threshold
+        fn prepare_flipped_codes(
+            &mut self,
+            db_index: usize,
+            will_match: bool,
+            flip_right: Option<bool>,
+        ) -> E2ETemplate {
+            let mut code_left = self.initial_db_state.db[db_index].clone();
+            let mut code_right = self.initial_db_state.db[db_index].clone();
+
+            assert_eq!(code_left.mask, IrisCodeArray::ONES);
+            assert_eq!(code_right.mask, IrisCodeArray::ONES);
+
+            let variation = self.rng.gen_range(1..100);
+            if will_match {
+                let flip_right = flip_right.unwrap_or(self.rng.gen());
+                if flip_right {
+                    // Flip right bits to above threshold - (right) does not match
+                    for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
+                        code_right.code.flip_bit(i);
+                    }
+                } else {
+                    // Flip left bits to above threshold - (left) does not match
+                    for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
+                        code_left.code.flip_bit(i);
+                    }
+                }
+            } else {
+                // Flip both to above threshold - neither match
+                for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
+                    code_left.code.flip_bit(i);
+                    code_right.code.flip_bit(i);
+                }
+            }
+            E2ETemplate {
+                left:  code_left,
+                right: code_right,
+            }
         }
 
         // check a received result against the expected results

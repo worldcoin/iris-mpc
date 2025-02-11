@@ -39,7 +39,12 @@ use iris_mpc_common::{
 use itertools::{izip, Itertools};
 use rand::{rngs::StdRng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
-use std::{collections::HashMap, mem, sync::Arc, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    mem,
+    sync::Arc,
+    time::Instant,
+};
 use tokio::sync::{mpsc, oneshot};
 
 macro_rules! record_stream_time {
@@ -719,11 +724,19 @@ impl ServerActor {
             assert!(
                 (batch.or_rule_indices.len() == batch_size) || (batch.luc_lookback_records > 0)
             );
+            let skip_lookback_requests: HashSet<usize> = batch
+                .request_types
+                .iter()
+                .enumerate()
+                .filter(|(_, req_type)| req_type.as_str() == REAUTH_MESSAGE_TYPE)
+                .map(|(index, _)| index)
+                .collect();
             batch.or_rule_indices = generate_luc_records(
                 (self.current_db_sizes.iter().sum::<usize>() - 1) as u32,
                 batch.or_rule_indices.clone(),
                 batch.luc_lookback_records,
                 batch_size,
+                skip_lookback_requests,
             );
         }
 
@@ -1109,11 +1122,18 @@ impl ServerActor {
             .iter()
             .enumerate()
             .map(|(idx, matches)| {
+                if batch.request_types[idx] != REAUTH_MESSAGE_TYPE {
+                    return false;
+                }
                 let reauth_id = batch.request_ids[idx].clone();
-                // expect exactly one match to the target reauth index
-                batch.request_types[idx] == REAUTH_MESSAGE_TYPE
-                    && matches.len() == 1
-                    && matches[0] == *batch.reauth_target_indices.get(&reauth_id).unwrap()
+                if *batch.reauth_use_or_rule.get(&reauth_id).unwrap() {
+                    // OR rule used. Expect a match with target reauth index
+                    matches.contains(batch.reauth_target_indices.get(&reauth_id).unwrap())
+                } else {
+                    // AND rule used. Expect exactly one match to the target reauth index
+                    matches.len() == 1
+                        && matches[0] == *batch.reauth_target_indices.get(&reauth_id).unwrap()
+                }
             })
             .collect::<Vec<bool>>();
         let mut reauth_updates_per_device = vec![vec![]; self.device_manager.device_count()];
@@ -1241,6 +1261,7 @@ impl ServerActor {
                 anonymized_bucket_statistics_right: self.anonymized_bucket_statistics_right.clone(),
                 successful_reauths,
                 reauth_target_indices: batch.reauth_target_indices,
+                reauth_or_rule_used: batch.reauth_use_or_rule,
             })
             .unwrap();
 
@@ -2431,6 +2452,7 @@ pub fn generate_luc_records(
     mut or_rule_indices: Vec<Vec<u32>>,
     lookback_records: usize,
     batch_size: usize,
+    skip_lookback_requests: HashSet<usize>,
 ) -> Vec<Vec<u32>> {
     // If lookback_records is 0, return the original or_rule_indices
     if lookback_records == 0 {
@@ -2448,7 +2470,12 @@ pub fn generate_luc_records(
     }
 
     // Otherwise, merge them into each inner vector of or_rule_indices
-    for (or_ids, luc_ids) in izip!(or_rule_indices.iter_mut(), lookback_records.iter()) {
+    for (idx, (or_ids, luc_ids)) in
+        izip!(or_rule_indices.iter_mut(), lookback_records.iter()).enumerate()
+    {
+        if skip_lookback_requests.contains(&idx) {
+            continue;
+        }
         // Add the lookback IDs
         or_ids.extend_from_slice(luc_ids);
         // Sort and remove duplicates

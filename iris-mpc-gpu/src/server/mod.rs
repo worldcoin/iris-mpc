@@ -89,6 +89,7 @@ pub struct BatchQuery {
     // Only reauth specific fields
     // Map from reauth request id to the index of the target entry to be matched
     pub reauth_target_indices: HashMap<String, u32>,
+    pub reauth_use_or_rule:    HashMap<String, bool>,
 
     // Only deletion specific fields
     pub deletion_requests_indices:  Vec<u32>, // 0-indexed indices of entries to be deleted
@@ -197,6 +198,7 @@ pub struct ServerJobResult {
     pub anonymized_bucket_statistics_right: BucketStatistics,
     pub successful_reauths: Vec<bool>, // true if request type is reauth and it's successful
     pub reauth_target_indices: HashMap<String, u32>,
+    pub reauth_or_rule_used: HashMap<String, bool>,
 }
 
 enum Eye {
