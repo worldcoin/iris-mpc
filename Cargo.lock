@@ -2637,6 +2637,7 @@ dependencies = [
  "eyre",
  "futures",
  "iris-mpc-common",
+ "iris-mpc-cpu",
  "iris-mpc-gpu",
  "iris-mpc-store",
  "metrics 0.22.3",

@@ -23,12 +23,18 @@ pub struct BatchQuery {
     pub request_ids:          Vec<String>,
     pub request_types:        Vec<String>,
     pub metadata:             Vec<BatchMetadata>,
+    
+    // Preprocessed (Lagrange) + rotations.
     pub query_left:           BatchQueryEntries,
+    // Query unprocessed for intra-batch comparison + rotations.
     pub db_left:              BatchQueryEntries,
+    // To be persisted.
     pub store_left:           BatchQueryEntries,
+
     pub query_right:          BatchQueryEntries,
     pub db_right:             BatchQueryEntries,
     pub store_right:          BatchQueryEntries,
+    
     pub or_rule_indices:      Vec<Vec<u32>>,
     pub luc_lookback_records: usize,
     pub valid_entries:        Vec<bool>,

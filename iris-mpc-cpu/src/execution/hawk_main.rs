@@ -31,13 +31,13 @@ use tonic::transport::Server;
 #[derive(Parser)]
 pub struct HawkArgs {
     #[clap(short, long)]
-    party_index: usize,
+    pub party_index: usize,
 
     #[clap(short, long, value_delimiter = ',')]
-    addresses: Vec<String>,
+    pub addresses: Vec<String>,
 
     #[clap(short, long, default_value_t = 2)]
-    request_parallelism: usize,
+    pub request_parallelism: usize,
 }
 
 /// HawkActor manages the state of the HNSW database and connections to other
