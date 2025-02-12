@@ -1282,7 +1282,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let hawk_args = HawkArgs {
         party_index:         config.party_id,
         addresses:           config.node_hostnames.clone(),
-        request_parallelism: 10, // TODO.
+        request_parallelism: config.hawk_load_parallelism,
     };
 
     let mut hawk_actor = HawkActor::from_cli(&hawk_args).await?;
@@ -1319,7 +1319,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 s3_load_initial_backoff_ms,
                 download_shutdown_handler,
             )
-            .await;
+            .await
+            .expect("Failed to load DB");
         }
     }
 
