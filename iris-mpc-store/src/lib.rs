@@ -444,21 +444,23 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         Ok(rows.into_iter().rev().map(|r| r.request_id).collect())
     }
 
-    pub async fn wal_write<T: Serialize>(
+    pub async fn wal_prepare<T: Serialize>(
         &self,
         tx: &mut Transaction<'_, Postgres>,
-        actions: &[T],
+        mutations: &[T],
     ) -> Result<()> {
-        let mut query = sqlx::QueryBuilder::new("INSERT INTO wal (action)");
-        query.push_values(actions, |mut query, action| {
-            query.push_bind(Json(action));
+        let mut query = sqlx::QueryBuilder::new("INSERT INTO wal (mutation)");
+        query.push_values(mutations, |mut query, mutation| {
+            query.push_bind(Json(mutation));
         });
         query.build().execute(tx.deref_mut()).await?;
         Ok(())
     }
 
-    pub async fn wal_get_state_id(&self) -> Result<u64> {
-        let id: (i64,) = sqlx::query_as("SELECT MAX(state_id) FROM wal")
+    pub async fn wal_get_mutation_id(&self) -> Result<u64> {
+        // TODO: Use a separate table to track the latest mutation_id even when this
+        // table is empty.
+        let id: (i64,) = sqlx::query_as("SELECT MAX(mutation_id) FROM wal")
             .fetch_one(&self.pool)
             .await?;
         Ok(id.0 as u64)
@@ -467,31 +469,32 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
     pub async fn wal_rollback(
         &self,
         tx: &mut Transaction<'_, Postgres>,
-        state_id: u64,
+        mutation_id: u64,
     ) -> Result<()> {
-        sqlx::query("DELETE FROM wal WHERE state_id > $1")
-            .bind(state_id as i64)
+        sqlx::query("DELETE FROM wal WHERE mutation_id > $1")
+            .bind(mutation_id as i64)
             .execute(tx.deref_mut())
             .await?;
         Ok(())
     }
 
-    pub async fn wal_consume<T: DeserializeOwned + Send + Unpin + 'static>(
+    pub async fn wal_commit<T: DeserializeOwned + Send + Unpin + 'static>(
         &self,
         tx: &mut Transaction<'_, Postgres>,
-        state_id: u64,
+        mutation_id: u64,
     ) -> Result<Vec<T>> {
-        let rows = sqlx::query("SELECT action FROM wal WHERE state_id <= $1 ORDER BY id")
-            .bind(state_id as i64)
-            .map(|row: PgRow| {
-                let x: Json<T> = row.get("action");
-                x.0
-            })
-            .fetch_all(tx.deref_mut())
-            .await?;
+        let rows =
+            sqlx::query("SELECT mutation FROM wal WHERE mutation_id <= $1 ORDER BY mutation_id")
+                .bind(mutation_id as i64)
+                .map(|row: PgRow| {
+                    let x: Json<T> = row.get("mutation");
+                    x.0
+                })
+                .fetch_all(tx.deref_mut())
+                .await?;
 
-        sqlx::query("DELETE FROM wal WHERE state_id <= $1")
-            .bind(state_id as i64)
+        sqlx::query("DELETE FROM wal WHERE mutation_id <= $1")
+            .bind(mutation_id as i64)
             .execute(tx.deref_mut())
             .await?;
 
