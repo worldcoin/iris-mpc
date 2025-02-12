@@ -18,13 +18,17 @@ use crate::{
 use aes_prng::AesRng;
 use clap::Parser;
 use eyre::Result;
-use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
+use iris_mpc_common::{
+    helpers::inmemory_store::InMemoryStore,
+    job::{BatchQuery, JobSubmissionHandle, ServerJobResult},
+};
 use itertools::{izip, Itertools};
 use rand::{thread_rng, Rng, SeedableRng};
 use std::{collections::HashMap, ops::Deref, sync::Arc, time::Duration, vec};
 use tokio::{
     sync::{mpsc, oneshot, RwLock},
     task::JoinSet,
+    time::sleep,
 };
 use tonic::transport::Server;
 
@@ -456,6 +460,35 @@ pub struct HawkResult {
 #[derive(Clone, Debug)]
 pub struct HawkHandle {
     job_queue: mpsc::Sender<HawkJob>,
+}
+
+impl JobSubmissionHandle for HawkHandle {
+    async fn submit_batch_query(
+        &mut self,
+        batch: BatchQuery,
+    ) -> impl std::future::Future<Output = ServerJobResult> {
+        async move {
+            ServerJobResult {
+                merged_results: todo!(),
+                request_ids: batch.request_ids,
+                request_types: batch.request_types,
+                metadata: batch.metadata,
+                matches: todo!(),
+                match_ids: todo!(),
+                partial_match_ids_left: todo!(),
+                partial_match_ids_right: todo!(),
+                store_left: batch.store_left,
+                store_right: batch.store_right,
+                deleted_ids: vec![], // TODO.
+                matched_batch_request_ids: todo!(),
+                anonymized_bucket_statistics_left: todo!(),
+                anonymized_bucket_statistics_right: todo!(),
+                successful_reauths: todo!(),
+                reauth_target_indices: todo!(),
+                reauth_or_rule_used: todo!(),
+            }
+        }
+    }
 }
 
 impl HawkHandle {

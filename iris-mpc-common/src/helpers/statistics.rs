@@ -12,7 +12,7 @@ pub struct BucketResult {
     pub hamming_distance_bucket: [f64; 2],
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BucketStatistics {
     pub buckets: Vec<BucketResult>,
     pub n_buckets: usize,

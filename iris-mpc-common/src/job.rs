@@ -49,7 +49,7 @@ pub struct BatchQuery {
     pub deletion_requests_metadata: Vec<BatchMetadata>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ServerJobResult {
     pub merged_results: Vec<u32>,
     pub request_ids: Vec<String>,
@@ -74,6 +74,12 @@ pub struct ServerJobResult {
 pub enum Eye {
     Left,
     Right,
+}
+
+impl Default for Eye {
+    fn default() -> Self {
+        Eye::Left
+    }
 }
 
 pub trait JobSubmissionHandle {

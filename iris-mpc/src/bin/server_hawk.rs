@@ -41,8 +41,7 @@ use iris_mpc_common::{
     iris_db::get_dummy_shares_for_deletion,
     job::{BatchMetadata, BatchQuery, JobSubmissionHandle, ServerJobResult},
 };
-use iris_mpc_cpu::execution::hawk_main::{HawkActor, HawkArgs};
-use iris_mpc_gpu::server::ServerActor;
+use iris_mpc_cpu::execution::hawk_main::{HawkActor, HawkArgs, HawkHandle};
 use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
@@ -1323,85 +1322,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             .await;
         }
     }
-    
-    // TODO: remove.
-    let (tx, rx) = oneshot::channel();
-    let config_clone = config.clone();
-    background_tasks.spawn_blocking(move || {
-        let config = config_clone;
-        // --------------------------------------------------------------------------
-        // ANCHOR: Load the database
-        // --------------------------------------------------------------------------
-        tracing::info!("⚓️ ANCHOR: Starting server actor");
-        match ServerActor::new(
-            config.party_id,
-            chacha_seeds,
-            8,
-            config.max_db_size,
-            config.max_batch_size,
-            config.match_distances_buffer_size,
-            config.match_distances_buffer_size_extra_percent,
-            config.n_buckets,
-            config.return_partial_results,
-            config.disable_persistence,
-            config.enable_debug_timing,
-        ) {
-            Ok((mut actor, handle)) => {
-                tracing::info!("⚓️ ANCHOR: Load the database");
-                let res = if config.fake_db_size > 0 {
-                    // TODO: does this even still work, since we do not page-lock the memory here?
-                    actor.fake_db(config.fake_db_size);
-                    Ok(())
-                } else {
-                    tracing::info!(
-                        "Initialize iris db: Loading from DB (parallelism: {})",
-                        parallelism
-                    );
-                    let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
-                    let db_chunks_s3_store =
-                        S3Store::new(db_chunks_s3_client.clone(), s3_chunks_bucket_name.clone());
 
-                    tokio::runtime::Handle::current().block_on(async {
-                        load_db(
-                            &mut actor,
-                            &store,
-                            store_len,
-                            parallelism,
-                            &config,
-                            db_chunks_s3_store,
-                            db_chunks_s3_client,
-                            s3_chunks_folder_name,
-                            s3_chunks_bucket_name,
-                            s3_load_parallelism,
-                            s3_load_max_retries,
-                            s3_load_initial_backoff_ms,
-                            download_shutdown_handler,
-                        )
-                        .await
-                    })
-                };
-
-                match res {
-                    Ok(_) => {
-                        tx.send(Ok((handle, store))).unwrap();
-                    }
-                    Err(e) => {
-                        tx.send(Err(e)).unwrap();
-                        return Ok(());
-                    }
-                }
-
-                actor.run(); // forever
-            }
-            Err(e) => {
-                tx.send(Err(e)).unwrap();
-                return Ok(());
-            }
-        };
-        Ok(())
-    });
-
-    let (mut handle, store) = rx.await??;
+    let mut hawk_handle = HawkHandle::new(hawk_actor, 10).await?;
 
     let mut skip_request_ids = sync_result.deleted_request_ids();
 
@@ -1797,7 +1719,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             background_tasks.check_tasks();
 
-            let result_future = handle.submit_batch_query(batch);
+            let result_future = hawk_handle.submit_batch_query(batch.clone());
 
             next_batch = receive_batch(
                 party_id,
@@ -1838,7 +1760,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         Err(e) => {
             tracing::error!("ServerActor processing error: {:?}", e);
             // drop actor handle to initiate shutdown
-            drop(handle);
+            drop(hawk_handle);
 
             // Clean up server tasks, then wait for them to finish
             background_tasks.abort_all();
