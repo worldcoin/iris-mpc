@@ -54,7 +54,7 @@ pub fn preprocess_query(query: &[u16]) -> Vec<Vec<u8>> {
         }
     }
 
-    result.to_vec()
+    result
 }
 
 #[allow(clippy::too_many_arguments)]
