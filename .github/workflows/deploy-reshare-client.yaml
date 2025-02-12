@@ -1,4 +1,4 @@
-name: Reshare Client Deployment
+name: Reshare Client Deployment on Stage env
 
 on:
   workflow_dispatch:
@@ -54,46 +54,82 @@ jobs:
       matrix:
         include:
           - local_participant: 0
-            other_participant: 1
+            account_id: 024848486749
           - local_participant: 1
-            other_participant: 0
-          - local_participant: 0
-            other_participant: 2
+            account_id: 024848486818
           - local_participant: 2
-            other_participant: 0
-          - local_participant: 1
-            other_participant: 2
-          - local_participant: 2
-            other_participant: 1
+            account_id: 024848486770
 
     steps:
-      - name: Determine Deployment Eligibility
-        id: deploy-check
+      - name: Determine Other Participants
+        id: other-participants
         run: |
-          # Check if current matrix configuration matches target
-          eligible_pairs=(
-            "0 1"
-            "1 0"
-            "0 2"
-            "2 0"
-            "1 2"
-            "2 1"
+          # Create an associative array mapping target participants to their allowed local participants
+          # Key: Target participant
+          # Value: Space-separated list of local participants allowed to deploy
+          declare -A participant_map=(
+            [0]="1 2"  # When target is 0, allowed local participants are 1 and 2
+            [1]="0 2"  # When target is 1, allowed local participants are 0 and 2
+            [2]="0 1"  # When target is 2, allowed local participants are 0 and 1
           )
 
-          current_pair="${{ matrix.local_participant }} ${{ inputs.target_participant }}"
+          # Retrieve the list of allowed participants for the current target participant
+          # Splits the space-separated string into an array of participants
+          other_participants=(${participant_map[${{ inputs.target_participant }}]})
 
-          is_eligible=false
-          for pair in "${eligible_pairs[@]}"; do
-            if [[ "$pair" == "$current_pair" ]]; then
-              is_eligible=true
+          is_allowed=false
+          for participant in "${other_participants[@]}"; do
+            if [[ "${{ matrix.local_participant }}" == "$participant" ]]; then
+              is_allowed=true
               break
             fi
           done
 
-          echo "Eligible: $is_eligible"
-          echo "is_eligible=$is_eligible" >> $GITHUB_OUTPUT
+          # Output the deployment eligibility status
+          # This will be used in subsequent steps to conditionally execute deployment
+          echo "is_allowed=$is_allowed" >> $GITHUB_OUTPUT
+
+      - name: Debug Participant Info
+        run: |
+          echo "Target Participant: ${{ inputs.target_participant }}"
+          echo "Local Participant: ${{ matrix.local_participant }}"
+          echo "Allowed for deployment: ${{ steps.other-participants.outputs.is_allowed }}"
+          echo "Aws account_id: ${{ matrix.account_id }}"
+
+      - name: Checkout repository
+        if: steps.other-participants.outputs.is_allowed == 'true'
+        uses: actions/checkout@v3
+
+
+      - name: Configure AWS Credentials
+        if: steps.other-participants.outputs.is_allowed == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ matrix.account_id }}:role/oidc/github-deploy
+          aws-region: eu-north-1
+          role-duration-seconds: 900
+
+      - name: Connect to EKS cluster
+        if: steps.other-participants.outputs.is_allowed == 'true'
+        run: aws eks update-kubeconfig --name smpcv2-${{ matrix.local_participant }}-stage
+
+      - name: Login to Amazon ECR
+        if: steps.other-participants.outputs.is_allowed == 'true'
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
 
       - name: Deploy Reshare Client Job
-        if: steps.deploy-check.outputs.is_eligible == 'true'
+        if: steps.other-participants.outputs.is_allowed == 'true'
         run: |
-            echo "Deploy on: ${{ matrix.local_participant }}"
+          helm upgrade --install reshare-client-${{ matrix.local_participant }} \
+          oci://${{ steps.login-ecr.outputs.registry }}/common-job \
+          --version 1.2.2 \
+          --namespace reshare-server \
+          --set common-job.image=
+          --set common-job.command='/sbin/reshare-client.sh'
+          --set common-job.args='{
+            "${{ matrix.local_participant }}",
+            "${{ inputs.target_participant }}",
+            "${{ inputs.db_start }}",
+            "${{ inputs.db_end }}"
+          }'
