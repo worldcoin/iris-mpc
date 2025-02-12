@@ -469,23 +469,23 @@ impl JobSubmissionHandle for HawkHandle {
     ) -> impl std::future::Future<Output = ServerJobResult> {
         async move {
             ServerJobResult {
-                merged_results: todo!(),
+                merged_results: vec![], // TODO.
                 request_ids: batch.request_ids,
                 request_types: batch.request_types,
                 metadata: batch.metadata,
-                matches: todo!(),
-                match_ids: todo!(),
-                partial_match_ids_left: todo!(),
-                partial_match_ids_right: todo!(),
+                matches: vec![],                 // TODO.
+                match_ids: vec![],               // TODO.
+                partial_match_ids_left: vec![],  // TODO.
+                partial_match_ids_right: vec![], // TODO.
                 store_left: batch.store_left,
                 store_right: batch.store_right,
-                deleted_ids: vec![], // TODO.
-                matched_batch_request_ids: todo!(),
-                anonymized_bucket_statistics_left: todo!(),
-                anonymized_bucket_statistics_right: todo!(),
-                successful_reauths: todo!(),
-                reauth_target_indices: todo!(),
-                reauth_or_rule_used: todo!(),
+                deleted_ids: vec![],                                    // TODO.
+                matched_batch_request_ids: vec![],                      // TODO.
+                anonymized_bucket_statistics_left: Default::default(),  // TODO.
+                anonymized_bucket_statistics_right: Default::default(), // TODO.
+                successful_reauths: vec![],                             // TODO.
+                reauth_target_indices: Default::default(),              // TODO.
+                reauth_or_rule_used: Default::default(),                // TODO.
             }
         }
     }
