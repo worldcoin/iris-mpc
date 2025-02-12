@@ -41,7 +41,6 @@ use iris_mpc_common::{
     iris_db::get_dummy_shares_for_deletion,
     job::{BatchMetadata, BatchQuery, JobSubmissionHandle, ServerJobResult},
 };
-use iris_mpc_cpu::execution::hawk_main::{HawkActor, HawkArgs};
 use iris_mpc_gpu::server::ServerActor;
 use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
@@ -1280,51 +1279,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let store_len = store.count_irises().await?;
     tracing::info!("Database store length after sync: {}", store_len);
 
-    let hawk_args = HawkArgs {
-        party_index:         config.party_id,
-        addresses:           config.node_hostnames.clone(),
-        request_parallelism: 10, // TODO.
-    };
-
-    let mut hawk_actor = HawkActor::from_cli(&hawk_args).await?;
-
-    {
-        // ANCHOR: Load the database
-        tracing::info!("⚓️ ANCHOR: Load the database");
-        let mut loader = hawk_actor.as_iris_loader().await;
-
-        if config.fake_db_size > 0 {
-            // TODO: not needed?
-            loader.fake_db(config.fake_db_size);
-        } else {
-            tracing::info!(
-                "Initialize iris db: Loading from DB (parallelism: {})",
-                parallelism
-            );
-            let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
-            let db_chunks_s3_store =
-                S3Store::new(db_chunks_s3_client.clone(), s3_chunks_bucket_name.clone());
-
-            load_db(
-                &mut loader,
-                &store,
-                store_len,
-                parallelism,
-                &config,
-                db_chunks_s3_store,
-                db_chunks_s3_client,
-                s3_chunks_folder_name,
-                s3_chunks_bucket_name,
-                s3_load_parallelism,
-                s3_load_max_retries,
-                s3_load_initial_backoff_ms,
-                download_shutdown_handler,
-            )
-            .await;
-        }
-    }
-    
-    // TODO: remove.
     let (tx, rx) = oneshot::channel();
     let config_clone = config.clone();
     background_tasks.spawn_blocking(move || {
