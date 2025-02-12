@@ -113,33 +113,52 @@ pub struct PreprocessedBatchQuery {
 
 impl From<BatchQuery> for PreprocessedBatchQuery {
     fn from(value: BatchQuery) -> Self {
-        let query_left_preprocessed = BatchQueryEntriesPreprocessed::from(value.query_left.clone());
-        let query_right_preprocessed =
-            BatchQueryEntriesPreprocessed::from(value.query_right.clone());
-        let db_left_preprocessed = BatchQueryEntriesPreprocessed::from(value.db_left.clone());
-        let db_right_preprocessed = BatchQueryEntriesPreprocessed::from(value.db_right.clone());
+        let mut query_left_preprocessed = None;
+        let mut query_right_preprocessed = None;
+        let mut db_left_preprocessed = None;
+        let mut db_right_preprocessed = None;
+        rayon::scope(|s| {
+            s.spawn(|_| {
+                query_left_preprocessed = Some(BatchQueryEntriesPreprocessed::from(
+                    value.query_left.clone(),
+                ));
+            });
+            s.spawn(|_| {
+                query_right_preprocessed = Some(BatchQueryEntriesPreprocessed::from(
+                    value.query_right.clone(),
+                ));
+            });
+            s.spawn(|_| {
+                db_left_preprocessed =
+                    Some(BatchQueryEntriesPreprocessed::from(value.db_left.clone()));
+            });
+            s.spawn(|_| {
+                db_right_preprocessed =
+                    Some(BatchQueryEntriesPreprocessed::from(value.db_right.clone()));
+            });
+        });
 
         Self {
-            request_ids: value.request_ids,
-            request_types: value.request_types,
-            metadata: value.metadata,
-            query_left: value.query_left,
-            db_left: value.db_left,
-            store_left: value.store_left,
-            query_right: value.query_right,
-            db_right: value.db_right,
-            store_right: value.store_right,
-            or_rule_indices: value.or_rule_indices,
-            luc_lookback_records: value.luc_lookback_records,
-            valid_entries: value.valid_entries,
-            reauth_target_indices: value.reauth_target_indices,
-            reauth_use_or_rule: value.reauth_use_or_rule,
+            request_ids:               value.request_ids,
+            request_types:             value.request_types,
+            metadata:                  value.metadata,
+            query_left:                value.query_left,
+            db_left:                   value.db_left,
+            store_left:                value.store_left,
+            query_right:               value.query_right,
+            db_right:                  value.db_right,
+            store_right:               value.store_right,
+            or_rule_indices:           value.or_rule_indices,
+            luc_lookback_records:      value.luc_lookback_records,
+            valid_entries:             value.valid_entries,
+            reauth_target_indices:     value.reauth_target_indices,
+            reauth_use_or_rule:        value.reauth_use_or_rule,
             deletion_requests_indices: value.deletion_requests_indices,
             // deletion_requests_metadata: value.deletion_requests_metadata,
-            query_left_preprocessed,
-            db_left_preprocessed,
-            query_right_preprocessed,
-            db_right_preprocessed,
+            query_left_preprocessed:   query_left_preprocessed.unwrap(),
+            db_left_preprocessed:      db_left_preprocessed.unwrap(),
+            query_right_preprocessed:  query_right_preprocessed.unwrap(),
+            db_right_preprocessed:     db_right_preprocessed.unwrap(),
         }
     }
 }
