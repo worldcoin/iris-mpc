@@ -12,11 +12,9 @@ mod e2e_test {
             db::IrisDB,
             iris::{IrisCode, IrisCodeArray},
         },
+        job::{BatchQuery, JobSubmissionHandle, ServerJobResult},
     };
-    use iris_mpc_gpu::{
-        helpers::device_manager::DeviceManager,
-        server::{BatchQuery, BatchQueryEntriesPreprocessed, ServerActor, ServerJobResult},
-    };
+    use iris_mpc_gpu::{helpers::device_manager::DeviceManager, server::ServerActor};
     use itertools::izip;
     use rand::{
         rngs::StdRng,
@@ -257,16 +255,11 @@ mod e2e_test {
 
         for _ in 0..NUM_BATCHES {
             // Skip empty batch
-            let ([mut batch0, mut batch1, mut batch2], requests) =
+            let ([batch0, batch1, batch2], requests) =
                 test_case_generator.generate_query_batch()?;
             if batch0.request_ids.is_empty() {
                 continue;
             }
-
-            // Preprocess the batches
-            preprocess_batch(&mut batch0)?;
-            preprocess_batch(&mut batch1)?;
-            preprocess_batch(&mut batch2)?;
 
             // send batches to servers
             let res0_fut = handle0.submit_batch_query(batch0).await;
@@ -524,15 +517,6 @@ mod e2e_test {
         (shared_code, shared_mask)
     }
 
-    fn preprocess_batch(batch: &mut BatchQuery) -> Result<()> {
-        batch.query_left_preprocessed =
-            BatchQueryEntriesPreprocessed::from(batch.query_left.clone());
-        batch.query_right_preprocessed =
-            BatchQueryEntriesPreprocessed::from(batch.query_right.clone());
-        batch.db_left_preprocessed = BatchQueryEntriesPreprocessed::from(batch.db_left.clone());
-        batch.db_right_preprocessed = BatchQueryEntriesPreprocessed::from(batch.db_right.clone());
-        Ok(())
-    }
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum TestCases {
         /// Send an iris code known to be in the database

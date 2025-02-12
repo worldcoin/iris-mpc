@@ -39,10 +39,9 @@ use iris_mpc_common::{
         task_monitor::TaskMonitor,
     },
     iris_db::get_dummy_shares_for_deletion,
+    job::{BatchMetadata, BatchQuery, JobSubmissionHandle, ServerJobResult},
 };
-use iris_mpc_gpu::server::{
-    BatchMetadata, BatchQuery, BatchQueryEntriesPreprocessed, ServerActor, ServerJobResult,
-};
+use iris_mpc_gpu::server::ServerActor;
 use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
@@ -574,16 +573,6 @@ async fn receive_batch(
             .zip(batch_query.request_types.iter())
             .collect::<Vec<_>>()
     );
-
-    // Preprocess query shares here already to avoid blocking the actor
-    batch_query.query_left_preprocessed =
-        BatchQueryEntriesPreprocessed::from(batch_query.query_left.clone());
-    batch_query.query_right_preprocessed =
-        BatchQueryEntriesPreprocessed::from(batch_query.query_right.clone());
-    batch_query.db_left_preprocessed =
-        BatchQueryEntriesPreprocessed::from(batch_query.db_left.clone());
-    batch_query.db_right_preprocessed =
-        BatchQueryEntriesPreprocessed::from(batch_query.db_right.clone());
 
     Ok(Some(batch_query))
 }

@@ -1,6 +1,9 @@
 mod tests {
     use chrono::{TimeZone, Utc};
-    use iris_mpc_common::helpers::statistics::{BucketResult, BucketStatistics, Eye};
+    use iris_mpc_common::{
+        helpers::statistics::{BucketResult, BucketStatistics},
+        job::Eye,
+    };
     use serde_json::{json, Value};
 
     #[test]
