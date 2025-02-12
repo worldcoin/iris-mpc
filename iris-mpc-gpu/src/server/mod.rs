@@ -6,7 +6,7 @@ use iris_mpc_common::job::{BatchMetadata, BatchQuery, BatchQueryEntries};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct BatchQueryEntriesPreprocessed {
+pub struct BatchQueryEntriesPreprocessed {
     pub code: Vec<Vec<u8>>,
     pub mask: Vec<Vec<u8>>,
 }
@@ -39,6 +39,9 @@ impl BatchQueryEntriesPreprocessed {
         } else {
             self.code[0].len() / IRIS_CODE_LENGTH
         }
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
@@ -75,7 +78,7 @@ macro_rules! filter_by_indices_with_rotations_and_code_length {
     };
 }
 
-pub(crate) struct PreprocessedBatchQuery {
+pub struct PreprocessedBatchQuery {
     // Enrollment and reauth specific fields
     pub request_ids:          Vec<String>,
     pub request_types:        Vec<String>,
