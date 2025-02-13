@@ -1282,7 +1282,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let hawk_args = HawkArgs {
         party_index:         config.party_id,
         addresses:           config.node_hostnames.clone(),
-        request_parallelism: config.hawk_load_parallelism,
+        request_parallelism: config.hawk_request_parallelism,
     };
 
     let mut hawk_actor = HawkActor::from_cli(&hawk_args).await?;

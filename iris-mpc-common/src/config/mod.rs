@@ -157,8 +157,8 @@ pub struct Config {
     #[serde(default)]
     pub enable_reauth: bool,
 
-    #[serde(default = "default_hawk_load_parallelism")]
-    pub hawk_load_parallelism: usize,
+    #[serde(default = "default_hawk_request_parallelism")]
+    pub hawk_request_parallelism: usize,
 }
 
 fn default_load_chunks_parallelism() -> usize {
@@ -222,7 +222,7 @@ fn default_n_buckets() -> usize {
     375
 }
 
-fn default_hawk_load_parallelism() -> usize {
+fn default_hawk_request_parallelism() -> usize {
     10
 }
 
