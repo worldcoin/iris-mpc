@@ -6,6 +6,7 @@
 use crate::hnsw::VectorStore;
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
+use tracing::instrument;
 
 pub type SortedNeighborhoodV<V> =
     SortedNeighborhood<<V as VectorStore>::VectorRef, <V as VectorStore>::DistanceRef>;
@@ -44,6 +45,11 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
     /// the ascending order.
     ///
     /// Call the VectorStore to come up with the insertion index.
+    #[instrument(
+        level = "trace",
+        target = "searcher::network",
+        skip(self, store, to, dist)
+    )]
     pub async fn insert<V>(&mut self, store: &mut V, to: Vector, dist: Distance)
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
@@ -87,6 +93,11 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
 
     /// Find the insertion index for a target distance in the current
     /// neighborhood list.
+    #[instrument(
+        level = "trace",
+        target = "searcher::network",
+        skip(store, distances, target)
+    )]
     async fn binary_search<V>(store: &mut V, distances: &[Distance], target: &Distance) -> usize
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,

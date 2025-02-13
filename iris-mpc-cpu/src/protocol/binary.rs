@@ -14,6 +14,7 @@ use itertools::Itertools;
 use num_traits::{One, Zero};
 use rand::{distributions::Standard, prelude::Distribution, Rng};
 use std::ops::SubAssign;
+use tracing::{instrument, trace, trace_span, Instrument};
 
 pub(crate) fn transposed_padded_len(len: usize) -> usize {
     let padded_len = (len + 63) / 64;
@@ -75,6 +76,8 @@ pub(crate) fn transposed_pack_xor<T: IntRing2k>(
     res
 }
 
+//#[instrument(level = "trace", target = "searcher::network", skip(session, a,
+//#[instrument(level b))]
 pub(crate) async fn and_many_send(
     session: &mut Session,
     a: SliceShare<'_, u64>,
@@ -103,9 +106,9 @@ where
     } else {
         NetworkValue::VecRing64(message)
     };
-    network
-        .send(message.to_network(), &next_party, &sid)
-        .await?;
+    let message_bytes = message.to_network();
+    trace!(target: "searcher::network", action = "send", party = ?next_party, bytes = message_bytes.len(), rounds = 1);
+    network.send(message_bytes, &next_party, &sid).await?;
     Ok(shares_a)
 }
 
@@ -118,6 +121,7 @@ pub(crate) async fn and_many_receive(
 
     let shares_b = {
         let serialized_other_share = network.receive(&prev_party, &sid).await;
+        // trace!(target: "searcher::network", action = "receive", party = ?prev_party);
         match NetworkValue::from_network(serialized_other_share) {
             Ok(NetworkValue::RingElement64(message)) => Ok(vec![message]),
             Ok(NetworkValue::VecRing64(message)) => Ok(message),
@@ -127,6 +131,8 @@ pub(crate) async fn and_many_receive(
     Ok(shares_b)
 }
 
+//#[instrument(level = "trace", target = "searcher::network", skip(session, a,
+//#[instrument(level b))]
 pub(crate) async fn and_many(
     session: &mut Session,
     a: SliceShare<'_, u64>,
@@ -141,6 +147,7 @@ where
     Ok(complete_shares)
 }
 
+#[instrument(level = "trace", target = "searcher::network", skip(session, x1, x2))]
 pub(crate) async fn transposed_pack_and(
     session: &mut Session,
     x1: Vec<VecShare<u64>>,
@@ -169,6 +176,11 @@ pub(crate) async fn transposed_pack_and(
     Ok(res)
 }
 
+#[instrument(
+    level = "trace",
+    target = "searcher::network",
+    skip(session, x1, x2, x3, truncate_len)
+)]
 async fn binary_add_3_get_two_carries(
     session: &mut Session,
     x1: Vec<VecShare<u64>>,
@@ -197,8 +209,12 @@ where
     let mut a = s;
     let mut b = c;
 
+    let and_many_span = trace_span!(target: "searcher::network", "and_many_calls", n = b.len());
+
     // First full adder (carry is 0)
-    let mut c = and_many(session, a[1].as_slice(), b[0].as_slice()).await?;
+    let mut c = and_many(session, a[1].as_slice(), b[0].as_slice())
+        .instrument(and_many_span.clone())
+        .await?;
 
     // For last round
     let mut b_msb = b.pop().expect("Enough elements present");
@@ -207,12 +223,16 @@ where
     for (a_, b_) in a.iter_mut().skip(2).zip(b.iter_mut().skip(1)) {
         *a_ ^= c.as_slice();
         *b_ ^= c.as_slice();
-        let tmp_c = and_many(session, a_.as_slice(), b_.as_slice()).await?;
+        let tmp_c = and_many(session, a_.as_slice(), b_.as_slice())
+            .instrument(and_many_span.clone())
+            .await?;
         c ^= tmp_c;
     }
 
     // Finally, last bit of a is 0
-    let res2 = and_many(session, b_msb.as_slice(), c.as_slice()).await?;
+    let res2 = and_many(session, b_msb.as_slice(), c.as_slice())
+        .instrument(and_many_span)
+        .await?;
     b_msb ^= c;
 
     // Extract bits for outputs
@@ -224,6 +244,7 @@ where
     Ok((res1, res2))
 }
 
+#[instrument(level = "trace", target = "searcher::network", skip(session, input))]
 async fn bit_inject_ot_2round_helper(
     session: &mut Session,
     input: VecShare<Bit>,
@@ -263,9 +284,9 @@ where
     let network = session.network().clone();
     let next_id = session.next_identity()?;
     let sid = session.session_id();
-    network
-        .send(NetworkValue::VecRing16(wc).to_network(), &next_id, &sid)
-        .await?;
+    let message_bytes = NetworkValue::VecRing16(wc).to_network();
+    trace!(target: "searcher::network", action = "send", party = ?next_id, bytes = message_bytes.len(), rounds = 2);
+    network.send(message_bytes, &next_id, &sid).await?;
 
     let network = session.network().clone();
     let next_id = session.next_identity()?;
@@ -285,6 +306,7 @@ where
     Ok(shares)
 }
 
+#[instrument(level = "trace", target = "searcher::network", skip(session, input))]
 async fn bit_inject_ot_2round_receiver(
     session: &mut Session,
     input: VecShare<Bit>,
@@ -347,13 +369,14 @@ async fn bit_inject_ot_2round_receiver(
     let prev_id = session.prev_identity()?;
     let sid = session.session_id();
     // Reshare to Helper
-    network
-        .send(NetworkValue::VecRing16(send).to_network(), &prev_id, &sid)
-        .await?;
+    let message_bytes = NetworkValue::VecRing16(send).to_network();
+    trace!(target: "searcher::network", action = "send", party = ?prev_id, bytes = message_bytes.len(), rounds = 2);
+    network.send(message_bytes, &prev_id, &sid).await?;
 
     Ok(shares)
 }
 
+#[instrument(level = "trace", target = "searcher::network", skip(session, input))]
 async fn bit_inject_ot_2round_sender(
     session: &mut Session,
     input: VecShare<Bit>,
@@ -383,16 +406,16 @@ async fn bit_inject_ot_2round_sender(
     let network = session.network().clone();
     let prev_id = session.prev_identity()?;
     let sid = session.session_id();
-    // TODO(Dragos) Note this can be compressed in a single round.
+
     let m0_and_m1: Vec<NetworkValue> = [m0, m1]
         .into_iter()
         .map(NetworkValue::VecRing16)
         .collect::<Vec<_>>();
+    let message_bytes = NetworkValue::vec_to_network(&m0_and_m1);
+    trace!(target: "searcher::network", action = "send", party = ?prev_id, bytes = message_bytes.len(), rounds = 2);
     // Reshare to Helper
     tokio::spawn(async move {
-        let _ = network
-            .send(NetworkValue::vec_to_network(&m0_and_m1), &prev_id, &sid)
-            .await;
+        let _ = network.send(message_bytes, &prev_id, &sid).await;
     })
     .await?;
     Ok(shares)
@@ -508,7 +531,6 @@ pub(crate) async fn binary_add_3_get_msb(
     x1: Vec<VecShare<u64>>,
     x2: Vec<VecShare<u64>>,
     mut x3: Vec<VecShare<u64>>,
-    // truncate_len: usize,
 ) -> Result<VecShare<u64>, Error> {
     let len = x1.len();
     debug_assert!(len == x2.len() && len == x3.len());
@@ -532,8 +554,12 @@ pub(crate) async fn binary_add_3_get_msb(
     let mut a = s;
     let mut b = c;
 
+    let and_many_span = trace_span!(target: "searcher::network", "and_many_calls", n = b.len() - 1);
+
     // First full adder (carry is 0)
-    let mut c = and_many(session, a[1].as_slice(), b[0].as_slice()).await?;
+    let mut c = and_many(session, a[1].as_slice(), b[0].as_slice())
+        .instrument(and_many_span.clone())
+        .await?;
 
     // For last round
     let mut a_msb = a.pop().expect("Enough elements present");
@@ -543,7 +569,9 @@ pub(crate) async fn binary_add_3_get_msb(
     for (a_, b_) in a.iter_mut().skip(2).zip(b.iter_mut().skip(1)) {
         *a_ ^= c.as_slice();
         *b_ ^= c.as_slice();
-        let tmp_c = and_many(session, a_.as_slice(), b_.as_slice()).await?;
+        let tmp_c = and_many(session, a_.as_slice(), b_.as_slice())
+            .instrument(and_many_span.clone())
+            .await?;
         c ^= tmp_c;
     }
 
@@ -599,6 +627,7 @@ pub async fn extract_msb_u32<const K: usize>(
 
 // TODO a dedicated bitextraction for just one element would be more
 // efficient
+#[instrument(level = "trace", target = "searcher::network", skip(session, x))]
 pub async fn single_extract_msb_u32<const K: usize>(
     session: &mut Session,
     x: Share<u32>,
@@ -611,19 +640,16 @@ pub async fn single_extract_msb_u32<const K: usize>(
     Ok(Share::new(a.get_bit_as_bit(0), b.get_bit_as_bit(0)))
 }
 
+#[instrument(level = "trace", target = "searcher::network", skip(session, share))]
 pub async fn open_bin(session: &mut Session, share: Share<Bit>) -> Result<Bit, Error> {
     // send to next_party
     let next_party = session.next_identity()?;
     let network = session.network().clone();
     let sid = session.session_id();
     let message = share.b;
-    network
-        .send(
-            NetworkValue::RingElementBit(message).to_network(),
-            &next_party,
-            &sid,
-        )
-        .await?;
+    let message_bytes = NetworkValue::RingElementBit(message).to_network();
+    trace!(target: "searcher::network", action = "send", party = ?next_party, bytes = message_bytes.len(), rounds = 1);
+    network.send(message_bytes, &next_party, &sid).await?;
 
     // receiving from previous party
     let network = session.network().clone();
@@ -633,7 +659,8 @@ pub async fn open_bin(session: &mut Session, share: Share<Bit>) -> Result<Bit, E
         let serialized_other_share = network.receive(&prev_party, &sid).await;
         match NetworkValue::from_network(serialized_other_share) {
             Ok(NetworkValue::RingElementBit(message)) => Ok(message),
-            _ => Err(eyre!("Error in receiving in open_bin operation")),
+            Err(e) => Err(eyre!("Error in receiving in open_bin operation: {}", e)),
+            _ => Err(eyre!("Wrong value type is received in open_bin operation")),
         }
     }?;
 

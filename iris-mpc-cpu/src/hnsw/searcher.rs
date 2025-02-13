@@ -297,7 +297,7 @@ impl HnswSearcher {
     #[instrument(
         level = "trace",
         target = "searcher::cpu_time",
-        skip(self, vector_store, graph_store, W)
+        skip(self, vector_store, graph_store, q, W)
     )]
     #[allow(non_snake_case)]
     async fn search_layer<V: VectorStore>(

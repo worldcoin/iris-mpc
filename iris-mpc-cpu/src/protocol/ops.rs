@@ -15,6 +15,7 @@ use crate::{
     },
 };
 use eyre::eyre;
+use tracing::{instrument, trace};
 
 pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
 pub(crate) const B_BITS: u64 = 16;
@@ -25,17 +26,17 @@ pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
 /// Each party sends to the next party a random seed.
 /// At the end, each party will hold two seeds which are the basis of the
 /// replicated protocols.
+#[instrument(level = "trace", target = "searcher::network", fields(party = ?session.own_identity), skip(session, my_seed))]
 pub async fn setup_replicated_prf(session: &BootSession, my_seed: PrfSeed) -> eyre::Result<Prf> {
     let next_role = session.own_role()?.next(3);
     let prev_role = session.own_role()?.prev(3);
     let network = session.network();
     // send my_seed to the next party
+    let message_bytes = NetworkValue::PrfKey(my_seed).to_network();
+    let next_party = session.identity(&next_role)?;
+    trace!(target: "searcher::network", action = "send", party = ?next_party, bytes = message_bytes.len(), rounds = 1);
     network
-        .send(
-            NetworkValue::PrfKey(my_seed).to_network(),
-            session.identity(&next_role)?,
-            &session.session_id,
-        )
+        .send(message_bytes, next_party, &session.session_id)
         .await?;
     // received other seed from the previous party
     let serialized_other_seed = network
@@ -120,6 +121,11 @@ pub async fn batch_signed_lift_vec(
 
 /// Computes D2 * T1 - T2 * D1
 /// Assumes that the input shares are originally 16-bit and lifted to u32.
+#[instrument(
+    level = "trace",
+    target = "searcher::network",
+    skip(session, d1, t1, d2, t2)
+)]
 pub(crate) async fn cross_mul(
     session: &mut Session,
     d1: Share<u32>,
@@ -133,12 +139,10 @@ pub(crate) async fn cross_mul(
     let next_role = session.identity(&session.own_role()?.next(3))?;
     let prev_role = session.identity(&session.own_role()?.prev(3))?;
 
+    let message_bytes = NetworkValue::RingElement32(res_a).to_network();
+    trace!(target: "searcher::network", action = "send", party = ?next_role, bytes = message_bytes.len(), rounds = 1);
     network
-        .send(
-            NetworkValue::RingElement32(res_a).to_network(),
-            next_role,
-            &session.session_id(),
-        )
+        .send(message_bytes, next_role, &session.session_id())
         .await?;
 
     let serialized_reply = network.receive(prev_role, &session.session_id()).await;
@@ -213,13 +217,9 @@ pub async fn galois_ring_to_rep3(
         .collect();
 
     // sending to the next party
-    network
-        .send(
-            NetworkValue::VecRing16(masked_items.clone()).to_network(),
-            &next_party,
-            &sid,
-        )
-        .await?;
+    let message_bytes = NetworkValue::VecRing16(masked_items.clone()).to_network();
+    trace!(target: "searcher::network", action = "send", party = ?next_party, bytes = message_bytes.len(), rounds = 1);
+    network.send(message_bytes, &next_party, &sid).await?;
 
     // receiving from previous party
     let network = session.network().clone();
@@ -289,16 +289,15 @@ mod tests {
     use std::collections::HashMap;
     use tokio::task::JoinSet;
 
+    #[instrument(level = "trace", target = "searcher::network", skip(session, x))]
     async fn open_single(session: &Session, x: Share<u32>) -> eyre::Result<RingElement<u32>> {
         let network = session.network();
         let next_role = session.identity(&session.own_role()?.next(3))?;
         let prev_role = session.identity(&session.own_role()?.prev(3))?;
+        let message_bytes = RingElement32(x.b).to_network();
+        trace!(target: "searcher::network", action = "send", party = ?next_role, bytes = message_bytes.len(), rounds = 1);
         network
-            .send(
-                RingElement32(x.b).to_network(),
-                next_role,
-                &session.session_id(),
-            )
+            .send(message_bytes, next_role, &session.session_id())
             .await?;
         let serialized_reply = network.receive(prev_role, &session.session_id()).await;
         let missing_share = match NetworkValue::from_network(serialized_reply) {
@@ -309,6 +308,7 @@ mod tests {
         Ok(a + b + missing_share)
     }
 
+    #[instrument(level = "trace", target = "searcher::network", skip(session, shares))]
     async fn open_t_many<T>(session: &Session, shares: Vec<Share<T>>) -> eyre::Result<Vec<T>>
     where
         T: IntRing2k,
@@ -321,9 +321,9 @@ mod tests {
 
         let shares_b: Vec<_> = shares.iter().map(|s| s.b).collect();
         let message = shares_b;
-        network
-            .send(NetworkValue::from(message).to_network(), &next_party, &sid)
-            .await?;
+        let message_bytes = NetworkValue::from(message).to_network();
+        trace!(target: "searcher::network", action = "send", party = ?next_party, bytes = message_bytes.len(), rounds = 1);
+        network.send(message_bytes, &next_party, &sid).await?;
 
         // receiving from previous party
         let network = session.network().clone();
@@ -498,23 +498,24 @@ mod tests {
         assert_eq!(t, RingElement(2));
     }
 
+    #[instrument(level = "trace", target = "searcher::network", skip(session, x))]
     async fn open_additive(session: &Session, x: Vec<RingElement<u16>>) -> eyre::Result<Vec<u16>> {
         let network = session.network();
         let next_role = session.identity(&session.own_role()?.next(3))?;
         let prev_role = session.identity(&session.own_role()?.prev(3))?;
+
+        let message_bytes = NetworkValue::VecRing16(x.clone()).to_network();
+        trace!(target: "searcher::network", action = "send", party = ?next_role, bytes = message_bytes.len(), rounds = 1);
+
         network
-            .send(
-                NetworkValue::VecRing16(x.clone()).to_network(),
-                next_role,
-                &session.session_id(),
-            )
+            .send(message_bytes, next_role, &session.session_id())
             .await?;
+
+        let message_bytes = NetworkValue::VecRing16(x.clone()).to_network();
+        trace!(target: "searcher::network", action = "send", party = ?prev_role, bytes = message_bytes.len(), rounds = 0);
+
         network
-            .send(
-                NetworkValue::VecRing16(x.clone()).to_network(),
-                prev_role,
-                &session.session_id(),
-            )
+            .send(message_bytes, prev_role, &session.session_id())
             .await?;
 
         let serialized_reply_0 = network.receive(prev_role, &session.session_id()).await;

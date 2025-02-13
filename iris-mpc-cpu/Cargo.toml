@@ -34,7 +34,7 @@ tokio.workspace = true
 tokio-stream = "0.1"
 tonic = "0.12.3"
 tracing.workspace = true
-tracing-forest = { version = "0.1.6", features = ["uuid", "chrono", "smallvec", "tokio", "serde", "env-filter"] }
+tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", features = ["uuid", "chrono", "smallvec", "tokio", "serde", "env-filter"] }
 tracing-subscriber.workspace = true
 tracing-test = "0.2.5"
 uuid.workspace = true
@@ -67,3 +67,7 @@ path = "bin/generate_benchmark_data.rs"
 [[bin]]
 name = "hawk_main"
 path = "bin/hawk_main.rs"
+
+[[bin]]
+name = "hnsw_network_stats_example"
+path = "bin/hnsw_network_stats_example.rs"
