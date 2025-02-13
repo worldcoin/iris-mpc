@@ -981,6 +981,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     }
 
     let health_shutdown_handler = Arc::clone(&shutdown_handler);
+    let health_check_port = config.hawk_server_healthcheck_port.clone();
 
     let _health_check_abort = background_tasks.spawn({
         let uuid = uuid::Uuid::new_v4().to_string();
@@ -1034,7 +1035,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     "/startup-sync",
                     get(move || async move { serde_json::to_string(&my_state).unwrap() }),
                 );
-            let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+            let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", health_check_port))
                 .await
                 .wrap_err("healthcheck listener bind error")?;
             axum::serve(listener, app)
@@ -1046,7 +1047,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     });
 
     background_tasks.check_tasks();
-    tracing::info!("Healthcheck and Readiness server running on port 3000.");
+    tracing::info!("Healthcheck and Readiness server running on port {}.");
 
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
     // Check other nodes and wait until all nodes are ready.
@@ -1058,7 +1059,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
         loop {
             for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(format!("http://{}:3000/ready", host)).await;
+                let res =
+                    reqwest::get(format!("http://{}:{}/ready", host, health_check_port)).await;
 
                 if res.is_ok() && res.unwrap().status() == StatusCode::SERVICE_UNAVAILABLE {
                     connected_but_unready[i] = true;
@@ -1104,7 +1106,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
         loop {
             for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(format!("http://{}:3000/health", host)).await;
+                let res =
+                    reqwest::get(format!("http://{}:{}/health", host, health_check_port)).await;
                 if res.is_err() || !res.as_ref().unwrap().status().is_success() {
                     // If it's the first time after startup, we allow a few retries to let the other
                     // nodes start up as well.
@@ -1226,7 +1229,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Database store length is: {}", store_len);
     let mut states = vec![my_state.clone()];
     for host in [next_node, prev_node].iter() {
-        let res = reqwest::get(format!("http://{}:3000/startup-sync", host)).await;
+        let res = reqwest::get(format!(
+            "http://{}:{}/startup-sync",
+            host, health_check_port
+        ))
+        .await;
         match res {
             Ok(res) => {
                 let state: SyncState = match res.json().await {
@@ -1279,10 +1286,17 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let store_len = store.count_irises().await?;
     tracing::info!("Database store length after sync: {}", store_len);
 
+    let node_addresses: Vec<String> = config
+        .node_hostnames
+        .iter()
+        .zip(config.service_ports.iter())
+        .map(|(host, port)| format!("{}:{}", host, port))
+        .collect();
+
     let hawk_args = HawkArgs {
         party_index:         config.party_id,
-        addresses:           config.node_hostnames.clone(),
-        request_parallelism: config.hawk_load_parallelism,
+        addresses:           node_addresses,
+        request_parallelism: config.hawk_request_parallelism,
     };
 
     let mut hawk_actor = HawkActor::from_cli(&hawk_args).await?;
@@ -1598,14 +1612,21 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     // Check other nodes and wait until all nodes are ready.
     let all_nodes = config.node_hostnames.clone();
+    let all_healthcheck_ports = config.healthcheck_ports.clone();
+    let all_healthcheck_addresses = all_nodes
+        .iter()
+        .zip(all_healthcheck_ports.iter())
+        .map(|(host, port)| format!("http://{}:{}/ready", host, port))
+        .collect::<Vec<String>>();
+
     let ready_check = tokio::spawn(async move {
-        let next_node = &all_nodes[(config.party_id + 1) % 3];
-        let prev_node = &all_nodes[(config.party_id + 2) % 3];
+        let next_node = &all_healthcheck_addresses[(config.party_id + 1) % 3];
+        let prev_node = &all_healthcheck_addresses[(config.party_id + 2) % 3];
         let mut connected = [false, false];
 
         loop {
             for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(format!("http://{}:3000/ready", host)).await;
+                let res = reqwest::get(host).await;
 
                 if res.is_ok() && res.as_ref().unwrap().status().is_success() {
                     connected[i] = true;

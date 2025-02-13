@@ -88,6 +88,18 @@ pub struct Config {
     #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
     pub node_hostnames: Vec<String>,
 
+    #[serde(
+        default = "default_service_ports",
+        deserialize_with = "deserialize_yaml_json_string"
+    )]
+    pub service_ports: Vec<String>,
+
+    #[serde(
+        default = "default_healthcheck_ports",
+        deserialize_with = "deserialize_yaml_json_string"
+    )]
+    pub healthcheck_ports: Vec<String>,
+
     #[serde(default = "default_shutdown_last_results_sync_timeout_secs")]
     pub shutdown_last_results_sync_timeout_secs: u64,
 
@@ -157,8 +169,11 @@ pub struct Config {
     #[serde(default)]
     pub enable_reauth: bool,
 
-    #[serde(default = "default_hawk_load_parallelism")]
-    pub hawk_load_parallelism: usize,
+    #[serde(default = "default_hawk_request_parallelism")]
+    pub hawk_request_parallelism: usize,
+
+    #[serde(default = "default_hawk_server_healthcheck_port")]
+    pub hawk_server_healthcheck_port: usize,
 }
 
 fn default_load_chunks_parallelism() -> usize {
@@ -222,8 +237,20 @@ fn default_n_buckets() -> usize {
     375
 }
 
-fn default_hawk_load_parallelism() -> usize {
+fn default_hawk_request_parallelism() -> usize {
     10
+}
+
+fn default_hawk_server_healthcheck_port() -> usize {
+    300
+}
+
+fn default_service_ports() -> Vec<String> {
+    vec!["4000".to_string(); 3]
+}
+
+fn default_healthcheck_ports() -> Vec<String> {
+    vec!["3000".to_string(); 3]
 }
 
 impl Config {
