@@ -1051,17 +1051,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
     // Check other nodes and wait until all nodes are ready.
-    let all_nodes = config.node_hostnames.clone();
-    let all_healthcheck_ports = config.healthcheck_ports.clone();
-    let all_healthcheck_addresses = all_nodes
-        .iter()
-        .zip(all_healthcheck_ports.iter())
-        .map(|(host, port)| format!("http://{}:{}/ready", host, port))
-        .collect::<Vec<String>>();
+    let all_readiness_addresses = get_check_addresses(
+        config.node_hostnames.clone(),
+        config.healthcheck_ports.clone(),
+        "ready",
+    );
 
     let unready_check = tokio::spawn(async move {
-        let next_node = &all_healthcheck_addresses[(config.party_id + 1) % 3];
-        let prev_node = &all_healthcheck_addresses[(config.party_id + 2) % 3];
+        let next_node = &all_readiness_addresses[(config.party_id + 1) % 3];
+        let prev_node = &all_readiness_addresses[(config.party_id + 2) % 3];
         let mut connected_but_unready = [false, false];
 
         loop {
@@ -1100,19 +1098,18 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
     let mut heartbeat_tx = Some(heartbeat_tx);
-    let all_nodes = config.node_hostnames.clone();
-    let all_healthcheck_ports = config.healthcheck_ports.clone();
-    let all_healthcheck_addresses = all_nodes
-        .iter()
-        .zip(all_healthcheck_ports.iter())
-        .map(|(host, port)| format!("http://{}:{}/health", host, port))
-        .collect::<Vec<String>>();
+
+    let all_health_addresses = get_check_addresses(
+        config.node_hostnames.clone(),
+        config.healthcheck_ports.clone(),
+        "health",
+    );
 
     let image_name = config.image_name.clone();
     let heartbeat_shutdown_handler = Arc::clone(&shutdown_handler);
     let _heartbeat = background_tasks.spawn(async move {
-        let next_node = &all_healthcheck_addresses[(config.party_id + 1) % 3];
-        let prev_node = &all_healthcheck_addresses[(config.party_id + 2) % 3];
+        let next_node = &all_health_addresses[(config.party_id + 1) % 3];
+        let prev_node = &all_health_addresses[(config.party_id + 2) % 3];
         let mut last_response = [String::default(), String::default()];
         let mut connected = [false, false];
         let mut retries = [0, 0];
@@ -1234,16 +1231,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     // ANCHOR: Syncing latest node state
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Syncing latest node state");
-    let all_nodes = config.node_hostnames.clone();
-    let all_healthcheck_ports = config.healthcheck_ports.clone();
-    let all_healthcheck_addresses = all_nodes
-        .iter()
-        .zip(all_healthcheck_ports.iter())
-        .map(|(host, port)| format!("http://{}:{}/startup-sync", host, port))
-        .collect::<Vec<String>>();
 
-    let next_node = &all_healthcheck_addresses[(config.party_id + 1) % 3];
-    let prev_node = &all_healthcheck_addresses[(config.party_id + 2) % 3];
+    let all_startup_sync_addresses = get_check_addresses(
+        config.node_hostnames.clone(),
+        config.healthcheck_ports.clone(),
+        "startup-sync",
+    );
+
+    let next_node = &all_startup_sync_addresses[(config.party_id + 1) % 3];
+    let prev_node = &all_startup_sync_addresses[(config.party_id + 2) % 3];
 
     tracing::info!("Database store length is: {}", store_len);
     let mut states = vec![my_state.clone()];
@@ -2059,4 +2055,12 @@ async fn load_db(
     );
 
     eyre::Ok(())
+}
+
+fn get_check_addresses(hostnames: Vec<String>, ports: Vec<String>, endpoint: &str) -> Vec<String> {
+    hostnames
+        .iter()
+        .zip(ports.iter())
+        .map(|(host, port)| format!("http://{}:{}/{}", host, port, endpoint))
+        .collect::<Vec<String>>()
 }
