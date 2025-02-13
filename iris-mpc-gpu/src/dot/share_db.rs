@@ -21,7 +21,7 @@ use cudarc::{
     },
     driver::{
         result::{self, malloc_async},
-        sys::{CUdeviceptr, CU_MEMHOSTALLOC_PORTABLE},
+        sys::CUdeviceptr,
         CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr, DeviceSlice, LaunchAsync,
     },
     nccl,
@@ -54,7 +54,7 @@ pub fn preprocess_query(query: &[u16]) -> Vec<Vec<u8>> {
         }
     }
 
-    result.to_vec()
+    result
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -284,26 +284,6 @@ impl ShareDB {
                 limb_0: db0_sums,
                 limb_1: db1_sums,
             },
-        }
-    }
-
-    pub fn register_host_memory(&self, db: &SlicedProcessedDatabase, max_db_length: usize) {
-        let max_size = max_db_length / self.device_manager.device_count();
-        for (device_index, device) in self.device_manager.devices().iter().enumerate() {
-            device.bind_to_thread().unwrap();
-            unsafe {
-                let _ = cudarc::driver::sys::lib().cuMemHostRegister_v2(
-                    db.code_gr.limb_0[device_index] as *mut _,
-                    max_size * self.code_length,
-                    CU_MEMHOSTALLOC_PORTABLE,
-                );
-
-                let _ = cudarc::driver::sys::lib().cuMemHostRegister_v2(
-                    db.code_gr.limb_1[device_index] as *mut _,
-                    max_size * self.code_length,
-                    CU_MEMHOSTALLOC_PORTABLE,
-                );
-            }
         }
     }
 
@@ -926,7 +906,7 @@ mod tests {
             .unwrap();
         let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
         let mut db_slices = engine.alloc_db(DB_SIZE);
-        engine.register_host_memory(&db_slices, DB_SIZE);
+        device_manager.register_host_memory(&db_slices, DB_SIZE, IRIS_CODE_LENGTH);
         let db_sizes = engine.load_full_db(&mut db_slices, &db);
 
         engine.dot(
@@ -1028,7 +1008,7 @@ mod tests {
                 .unwrap();
             let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
             let mut db_slices = engine.alloc_db(DB_SIZE);
-            engine.register_host_memory(&db_slices, DB_SIZE);
+            device_manager.register_host_memory(&db_slices, DB_SIZE, IRIS_CODE_LENGTH);
             let db_sizes = engine.load_full_db(&mut db_slices, &codes_db);
 
             engine.dot(
@@ -1162,8 +1142,8 @@ mod tests {
             let db_sizes = codes_engine.load_full_db(&mut code_db_slices, &codes_db);
             let mut mask_db_slices = masks_engine.alloc_db(DB_SIZE);
             let mask_db_sizes = masks_engine.load_full_db(&mut mask_db_slices, &masks_db);
-            codes_engine.register_host_memory(&code_db_slices, DB_SIZE);
-            masks_engine.register_host_memory(&mask_db_slices, DB_SIZE);
+            device_manager.register_host_memory(&code_db_slices, DB_SIZE, IRIS_CODE_LENGTH);
+            device_manager.register_host_memory(&mask_db_slices, DB_SIZE, MASK_CODE_LENGTH);
 
             assert_eq!(db_sizes, mask_db_sizes);
 

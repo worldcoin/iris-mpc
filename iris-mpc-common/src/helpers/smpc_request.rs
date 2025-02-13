@@ -10,7 +10,7 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use eyre::Report;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 use thiserror::Error;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -209,7 +209,7 @@ pub async fn get_iris_data_by_party_id(
     s3_key: &str,
     party_id: usize,
     bucket_name: &String,
-    s3_client: &Arc<S3Client>,
+    s3_client: &S3Client,
 ) -> Result<String, SharesDecodingError> {
     let response = s3_client
         .get_object()

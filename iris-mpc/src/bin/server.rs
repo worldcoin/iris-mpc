@@ -19,6 +19,7 @@ use iris_mpc_common::{
             construct_message_attributes, SPAN_ID_MESSAGE_ATTRIBUTE_NAME,
             TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
         },
+        inmemory_store::InMemoryStore,
         key_pair::SharesEncryptionKeyPairs,
         kms_dh::derive_shared_secret,
         shutdown_handler::ShutdownHandler,
@@ -30,25 +31,20 @@ use iris_mpc_common::{
             UNIQUENESS_MESSAGE_TYPE,
         },
         smpc_response::{
-            create_message_type_attribute_map, IdentityDeletionResult, UniquenessResult,
-            ERROR_FAILED_TO_PROCESS_IRIS_SHARES, ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
-            SMPC_MESSAGE_TYPE_ATTRIBUTE,
+            create_message_type_attribute_map, IdentityDeletionResult, ReAuthResult,
+            UniquenessResult, ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
+            ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH, SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
-        sync::SyncState,
+        sync::{SyncResult, SyncState},
         task_monitor::TaskMonitor,
     },
-    IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
+    iris_db::get_dummy_shares_for_deletion,
+    job::{BatchMetadata, BatchQuery, JobSubmissionHandle, ServerJobResult},
 };
-use iris_mpc_gpu::{
-    helpers::{device_manager::DeviceManager, register_host_memory},
-    server::{
-        get_dummy_shares_for_deletion, sync_nccl, BatchMetadata, BatchQuery,
-        BatchQueryEntriesPreprocessed, ServerActor, ServerJobResult,
-    },
-};
+use iris_mpc_gpu::server::ServerActor;
 use iris_mpc_store::{
-    fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, S3Store, S3StoredIris, Store,
-    StoredIrisRef,
+    fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
+    S3StoredIris, Store, StoredIrisRef,
 };
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
@@ -137,7 +133,7 @@ async fn receive_batch(
     party_id: usize,
     client: &Client,
     sns_client: &SNSClient,
-    s3_client: &Arc<S3Client>,
+    s3_client: &S3Client,
     config: &Config,
     store: &Store,
     skip_request_ids: &[String],
@@ -279,15 +275,19 @@ async fn receive_batch(
                                 "Skipping request due to it being from synced deleted ids: {}",
                                 uniqueness_request.signup_id
                             );
+                            let message = UniquenessResult::new_error_result(
+                                config.party_id,
+                                uniqueness_request.signup_id,
+                                ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
+                            );
                             // shares
                             send_error_results_to_sns(
-                                uniqueness_request.signup_id,
+                                serde_json::to_string(&message).unwrap(),
                                 &batch_metadata,
                                 sns_client,
                                 config,
                                 uniqueness_error_result_attributes,
                                 UNIQUENESS_MESSAGE_TYPE,
-                                ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
                             )
                             .await?;
                             continue;
@@ -312,7 +312,10 @@ async fn receive_batch(
                                 if let Some(serial_ids) =
                                     uniqueness_request.or_rule_serial_ids.clone()
                                 {
-                                    batch_query.or_rule_serial_ids.push(serial_ids);
+                                    // convert from 1-based serial id to 0-based index in actor
+                                    batch_query
+                                        .or_rule_indices
+                                        .push(serial_ids.iter().map(|x| x - 1).collect());
                                 } else {
                                     tracing::error!(
                                         "Received a uniqueness request without serial_ids"
@@ -330,7 +333,7 @@ async fn receive_batch(
                         batch_query.metadata.push(batch_metadata);
 
                         let semaphore = Arc::clone(&semaphore);
-                        let s3_client_arc = Arc::clone(s3_client);
+                        let s3_client_arc = s3_client.clone();
                         let bucket_name = config.shares_bucket_name.clone();
                         let s3_key = uniqueness_request.s3_key.clone();
                         let iris_shares_file_hashes = uniqueness_request.iris_shares_file_hashes;
@@ -368,6 +371,16 @@ async fn receive_batch(
                             .await
                             .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
 
+                        if reauth_request.use_or_rule
+                            && !(config.luc_enabled && config.luc_serial_ids_from_smpc_request)
+                        {
+                            tracing::error!(
+                                "Received a reauth request with use_or_rule set to true, but LUC \
+                                 is not enabled. Skipping request."
+                            );
+                            continue;
+                        }
+
                         if config.enable_reauth {
                             msg_counter += 1;
 
@@ -395,9 +408,20 @@ async fn receive_batch(
                                 reauth_request.reauth_id.clone(),
                                 reauth_request.serial_id - 1,
                             );
+                            batch_query.reauth_use_or_rule.insert(
+                                reauth_request.reauth_id.clone(),
+                                reauth_request.use_or_rule,
+                            );
+
+                            let or_rule_indices = if reauth_request.use_or_rule {
+                                vec![reauth_request.serial_id - 1]
+                            } else {
+                                vec![]
+                            };
+                            batch_query.or_rule_indices.push(or_rule_indices);
 
                             let semaphore = Arc::clone(&semaphore);
-                            let s3_client_arc = Arc::clone(s3_client);
+                            let s3_client_clone = s3_client.clone();
                             let bucket_name = config.shares_bucket_name.clone();
                             let s3_key = reauth_request.s3_key.clone();
                             let iris_shares_file_hashes = reauth_request.iris_shares_file_hashes;
@@ -405,7 +429,7 @@ async fn receive_batch(
                                 party_id,
                                 shares_encryption_key_pairs,
                                 semaphore,
-                                s3_client_arc,
+                                s3_client_clone,
                                 bucket_name,
                                 s3_key,
                                 iris_shares_file_hashes,
@@ -463,19 +487,37 @@ async fn receive_batch(
                 tracing::error!("Failed to process iris shares: {:?}", e);
                 // Return error message back to the signup-service if failed to process iris
                 // shares
-                let result_attributes = match batch_query.request_types[index].as_str() {
-                    UNIQUENESS_MESSAGE_TYPE => uniqueness_error_result_attributes,
-                    REAUTH_MESSAGE_TYPE => reauth_error_result_attributes,
+                let request_id = batch_query.request_ids[index].clone();
+                let (result_attributes, message) = match batch_query.request_types[index].as_str() {
+                    UNIQUENESS_MESSAGE_TYPE => {
+                        let message = UniquenessResult::new_error_result(
+                            config.party_id,
+                            request_id,
+                            ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
+                        );
+                        let serialized = serde_json::to_string(&message).unwrap();
+                        (uniqueness_error_result_attributes, serialized)
+                    }
+                    REAUTH_MESSAGE_TYPE => {
+                        let message = ReAuthResult::new_error_result(
+                            request_id.clone(),
+                            config.party_id,
+                            *batch_query.reauth_target_indices.get(&request_id).unwrap(),
+                            ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
+                        );
+                        let serialized = serde_json::to_string(&message).unwrap();
+                        (reauth_error_result_attributes, serialized)
+                    }
                     _ => unreachable!(), // we don't push a handle for unknown message types
                 };
+
                 send_error_results_to_sns(
-                    batch_query.request_ids[index].clone(),
+                    message,
                     &batch_query.metadata[index],
                     sns_client,
                     config,
                     result_attributes,
                     batch_query.request_types[index].as_str(),
-                    ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
                 )
                 .await?;
                 // If we failed to process the iris shares, we include a dummy entry in the
@@ -532,16 +574,6 @@ async fn receive_batch(
             .collect::<Vec<_>>()
     );
 
-    // Preprocess query shares here already to avoid blocking the actor
-    batch_query.query_left_preprocessed =
-        BatchQueryEntriesPreprocessed::from(batch_query.query_left.clone());
-    batch_query.query_right_preprocessed =
-        BatchQueryEntriesPreprocessed::from(batch_query.query_right.clone());
-    batch_query.db_left_preprocessed =
-        BatchQueryEntriesPreprocessed::from(batch_query.db_left.clone());
-    batch_query.db_right_preprocessed =
-        BatchQueryEntriesPreprocessed::from(batch_query.db_right.clone());
-
     Ok(Some(batch_query))
 }
 
@@ -549,7 +581,7 @@ fn get_iris_shares_parse_task(
     party_id: usize,
     shares_encryption_key_pairs: SharesEncryptionKeyPairs,
     semaphore: Arc<Semaphore>,
-    s3_client_arc: Arc<S3Client>,
+    s3_client_arc: S3Client,
     bucket_name: String,
     s3_key: String,
     iris_shares_file_hashes: [String; 3],
@@ -723,34 +755,20 @@ async fn initialize_chacha_seeds(config: Config) -> eyre::Result<([u32; 8], [u32
 }
 
 async fn send_error_results_to_sns(
-    signup_id: String,
+    serialised_json_message: String,
     metadata: &BatchMetadata,
     sns_client: &SNSClient,
     config: &Config,
     base_message_attributes: &HashMap<String, MessageAttributeValue>,
     message_type: &str,
-    error_reason: &str,
 ) -> eyre::Result<()> {
-    let message: UniquenessResult = UniquenessResult {
-        node_id: config.party_id,
-        serial_id: None,
-        is_match: false,
-        signup_id,
-        matched_serial_ids: None,
-        matched_serial_ids_left: None,
-        matched_serial_ids_right: None,
-        matched_batch_request_ids: None,
-        error: Some(true),
-        error_reason: Some(String::from(error_reason)),
-    };
-    let message_serialised = serde_json::to_string(&message)?;
     let mut message_attributes = base_message_attributes.clone();
     let trace_attributes = construct_message_attributes(&metadata.trace_id, &metadata.span_id)?;
     message_attributes.extend(trace_attributes);
     sns_client
         .publish()
         .topic_arn(&config.results_topic_arn)
-        .message(message_serialised)
+        .message(serialised_json_message)
         .message_group_id(format!("party-id-{}", config.party_id))
         .set_message_attributes(Some(message_attributes))
         .send()
@@ -759,6 +777,7 @@ async fn send_error_results_to_sns(
 
     Ok(())
 }
+
 async fn send_results_to_sns(
     result_events: Vec<String>,
     metadata: &[BatchMetadata],
@@ -826,7 +845,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
     let max_sync_lookback: usize = config.max_batch_size * 2;
     let max_rollback: usize = config.max_batch_size * 2;
-    assert!(max_sync_lookback <= sync_nccl::MAX_REQUESTS);
     tracing::info!("Set batch size to {}", config.max_batch_size);
 
     tracing::info!("Creating new storage from: {:?}", config);
@@ -859,8 +877,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         .timeout_config(timeout_config)
         .build();
 
-    let s3_client = Arc::new(S3Client::from_conf(s3_config));
-    let db_chunks_s3_client = Arc::new(S3Client::from_conf(db_chunks_s3_config));
+    let s3_client = S3Client::from_conf(s3_config);
+    let db_chunks_s3_client = S3Client::from_conf(db_chunks_s3_config);
     let shares_encryption_key_pair =
         match SharesEncryptionKeyPairs::from_storage(config.clone()).await {
             Ok(key_pair) => key_pair,
@@ -875,6 +893,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let chacha_seeds = initialize_chacha_seeds(config.clone()).await?;
 
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
+    let reauth_result_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
     let anonymized_statistics_attributes =
         create_message_type_attribute_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
@@ -942,12 +961,17 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let mut background_tasks = TaskMonitor::new();
 
     // --------------------------------------------------------------------------
-    // ANCHOR: Starting Healthcheck and Readiness server
+    // ANCHOR: Starting Healthcheck, Readiness and Sync server
     // --------------------------------------------------------------------------
-    tracing::info!("⚓️ ANCHOR: Starting Healthcheck and Readiness server");
+    tracing::info!("⚓️ ANCHOR: Starting Healthcheck, Readiness and Sync server");
 
     let is_ready_flag = Arc::new(AtomicBool::new(false));
     let is_ready_flag_cloned = Arc::clone(&is_ready_flag);
+
+    let my_state = SyncState {
+        db_len:              store_len as u64,
+        deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
+    };
 
     #[derive(Debug, Serialize, Deserialize, Clone)]
     struct ReadyProbeResponse {
@@ -975,6 +999,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         let serialized_response_shutdown = serde_json::to_string(&ready_probe_response_shutdown)
             .expect("Serialization to JSON to probe response failed");
         tracing::info!("Healthcheck probe response: {}", serialized_response);
+        let my_state = my_state.clone();
         async move {
             // Generate a random UUID for each run.
             let app = Router::new()
@@ -1004,6 +1029,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             }
                         }
                     }),
+                )
+                .route(
+                    "/startup-sync",
+                    get(move || async move { serde_json::to_string(&my_state).unwrap() }),
                 );
             let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
                 .await
@@ -1018,6 +1047,48 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     background_tasks.check_tasks();
     tracing::info!("Healthcheck and Readiness server running on port 3000.");
+
+    tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
+    // Check other nodes and wait until all nodes are ready.
+    let all_nodes = config.node_hostnames.clone();
+    let unready_check = tokio::spawn(async move {
+        let next_node = &all_nodes[(config.party_id + 1) % 3];
+        let prev_node = &all_nodes[(config.party_id + 2) % 3];
+        let mut connected_but_unready = [false, false];
+
+        loop {
+            for (i, host) in [next_node, prev_node].iter().enumerate() {
+                let res = reqwest::get(format!("http://{}:3000/ready", host)).await;
+
+                if res.is_ok() && res.unwrap().status() == StatusCode::SERVICE_UNAVAILABLE {
+                    connected_but_unready[i] = true;
+                    // If all nodes are connected, notify the main thread.
+                    if connected_but_unready.iter().all(|&c| c) {
+                        return;
+                    }
+                }
+            }
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+
+    tracing::info!("Waiting for all nodes to be unready...");
+    match tokio::time::timeout(
+        Duration::from_secs(config.startup_sync_timeout_secs),
+        unready_check,
+    )
+    .await
+    {
+        Ok(res) => {
+            res?;
+        }
+        Err(_) => {
+            tracing::error!("Timeout waiting for all nodes to be unready.");
+            return Err(eyre!("Timeout waiting for all nodes to be unready."));
+        }
+    };
+    tracing::info!("All nodes are starting up.");
 
     let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
     let mut heartbeat_tx = Some(heartbeat_tx);
@@ -1128,11 +1199,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     background_tasks.check_tasks();
 
-    let my_state = SyncState {
-        db_len:              store_len as u64,
-        deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
-    };
-
     // Start the actor in separate task.
     // A bit convoluted, but we need to create the actor on the thread already,
     // since it blocks a lot and is `!Send`, we get back the handle via the oneshot
@@ -1148,67 +1214,82 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let s3_chunks_folder_name = config.db_chunks_folder_name.clone();
     let s3_load_max_retries = config.load_chunks_max_retries;
     let s3_load_initial_backoff_ms = config.load_chunks_initial_backoff_ms;
-    let device_manager_init = Arc::new(DeviceManager::init());
-    let device_manager = Arc::clone(&device_manager_init);
+
+    // --------------------------------------------------------------------------
+    // ANCHOR: Syncing latest node state
+    // --------------------------------------------------------------------------
+    tracing::info!("⚓️ ANCHOR: Syncing latest node state");
+    let all_nodes = config.node_hostnames.clone();
+    let next_node = &all_nodes[(config.party_id + 1) % 3];
+    let prev_node = &all_nodes[(config.party_id + 2) % 3];
+
+    tracing::info!("Database store length is: {}", store_len);
+    let mut states = vec![my_state.clone()];
+    for host in [next_node, prev_node].iter() {
+        let res = reqwest::get(format!("http://{}:3000/startup-sync", host)).await;
+        match res {
+            Ok(res) => {
+                let state: SyncState = match res.json().await {
+                    Ok(state) => state,
+                    Err(e) => {
+                        tracing::error!("Failed to parse sync state from party {}: {:?}", host, e);
+                        panic!(
+                            "could not get sync state from party {}, trying to restart",
+                            host
+                        );
+                    }
+                };
+                states.push(state);
+            }
+            Err(e) => {
+                tracing::error!("Failed to fetch sync state from party {}: {:?}", host, e);
+                panic!(
+                    "could not get sync state from party {}, trying to restart",
+                    host
+                );
+            }
+        }
+    }
+    let sync_result = SyncResult::new(my_state, states);
+
+    if let Some(db_len) = sync_result.must_rollback_storage() {
+        tracing::error!("Databases are out-of-sync: {:?}", sync_result);
+        if db_len + max_rollback < store_len {
+            return Err(eyre!(
+                "Refusing to rollback so much (from {} to {})",
+                store_len,
+                db_len,
+            ));
+        }
+        tracing::warn!(
+            "Rolling back from database length {} to other nodes length {}",
+            store_len,
+            db_len
+        );
+        store.rollback(db_len).await?;
+        metrics::counter!("db.sync.rollback").increment(1);
+    }
+
+    if download_shutdown_handler.is_shutting_down() {
+        tracing::warn!("Shutting down has been triggered");
+        return Ok(());
+    }
+
+    // refetch store_len in case we rolled back
+    let store_len = store.count_irises().await?;
+    tracing::info!("Database store length after sync: {}", store_len);
 
     let (tx, rx) = oneshot::channel();
+    let config_clone = config.clone();
     background_tasks.spawn_blocking(move || {
-        let ids = device_manager.get_ids_from_magic(0);
-
-        // --------------------------------------------------------------------------
-        // ANCHOR: Starting NCCL
-        // --------------------------------------------------------------------------
-        tracing::info!("⚓️ ANCHOR: Starting NCCL");
-        let comms = device_manager.instantiate_network_from_ids(config.party_id, &ids)?;
-        // FYI: If any of the nodes die after this, all connections are broken.
-
-        // --------------------------------------------------------------------------
-        // ANCHOR: Syncing latest node state
-        // --------------------------------------------------------------------------
-        tracing::info!("⚓️ ANCHOR: Syncing latest node state");
-        let sync_result = match sync_nccl::sync(&comms[0], &my_state) {
-            Ok(res) => res,
-            Err(e) => {
-                tx.send(Err(e)).unwrap();
-                return Ok(());
-            }
-        };
-        tracing::info!("Database store length is: {}", store_len);
-
-        if let Some(db_len) = sync_result.must_rollback_storage() {
-            tracing::error!("Databases are out-of-sync: {:?}", sync_result);
-            if db_len + max_rollback < store_len {
-                return Err(eyre!(
-                    "Refusing to rollback so much (from {} to {})",
-                    store_len,
-                    db_len,
-                ));
-            }
-            tracing::warn!(
-                "Rolling back from database length {} to other nodes length {}",
-                store_len,
-                db_len
-            );
-            tokio::runtime::Handle::current().block_on(async { store.rollback(db_len).await })?;
-            metrics::counter!("db.sync.rollback").increment(1);
-        }
-
-        if download_shutdown_handler.is_shutting_down() {
-            tracing::warn!("Shutting down has been triggered");
-            return Ok(());
-        }
-
+        let config = config_clone;
         // --------------------------------------------------------------------------
         // ANCHOR: Load the database
         // --------------------------------------------------------------------------
-        tracing::info!("⚓️ ANCHOR: Load the database");
-
-        tracing::info!("Starting server actor");
-        match ServerActor::new_with_device_manager_and_comms(
+        tracing::info!("⚓️ ANCHOR: Starting server actor");
+        match ServerActor::new(
             config.party_id,
             chacha_seeds,
-            device_manager,
-            comms,
             8,
             config.max_db_size,
             config.max_batch_size,
@@ -1220,16 +1301,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             config.enable_debug_timing,
         ) {
             Ok((mut actor, handle)) => {
+                tracing::info!("⚓️ ANCHOR: Load the database");
                 let res = if config.fake_db_size > 0 {
-                    tracing::warn!(
-                        "Faking db with {} entries, returned results will be random.",
-                        config.fake_db_size
-                    );
-                    actor.set_current_db_sizes(vec![
-                        config.fake_db_size
-                            / actor.current_db_sizes().len();
-                        actor.current_db_sizes().len()
-                    ]);
+                    // TODO: does this even still work, since we do not page-lock the memory here?
+                    actor.fake_db(config.fake_db_size);
                     Ok(())
                 } else {
                     tracing::info!(
@@ -1241,192 +1316,28 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         S3Store::new(db_chunks_s3_client.clone(), s3_chunks_bucket_name.clone());
 
                     tokio::runtime::Handle::current().block_on(async {
-                        let total_load_time = Instant::now();
-                        let now = Instant::now();
-
-                        let mut record_counter = 0;
-                        let mut all_serial_ids: HashSet<i64> =
-                            HashSet::from_iter(1..=(store_len as i64));
-
-                        if config.enable_s3_importer {
-                            tracing::info!("S3 importer enabled. Fetching from s3 + db");
-
-                            // First fetch last snapshot from S3
-                            let last_snapshot_details = last_snapshot_timestamp(
-                                &db_chunks_s3_store,
-                                s3_chunks_folder_name.clone(),
-                            )
-                            .await?;
-
-                            let min_last_modified_at = last_snapshot_details.timestamp
-                                - config.db_load_safety_overlap_seconds;
-                            tracing::info!(
-                                "Last snapshot timestamp: {}, min_last_modified_at: {}",
-                                last_snapshot_details.timestamp,
-                                min_last_modified_at
-                            );
-
-                            let s3_store = S3Store::new(db_chunks_s3_client, s3_chunks_bucket_name);
-                            let s3_arc = Arc::new(s3_store);
-
-                            let (tx, mut rx) =
-                                mpsc::channel::<S3StoredIris>(config.load_chunks_buffer_size);
-
-                            tokio::spawn(async move {
-                                fetch_and_parse_chunks(
-                                    s3_arc,
-                                    s3_load_parallelism,
-                                    s3_chunks_folder_name,
-                                    last_snapshot_details,
-                                    tx.clone(),
-                                    s3_load_max_retries,
-                                    s3_load_initial_backoff_ms,
-                                )
-                                .await
-                                .expect("Couldn't fetch and parse chunks from s3");
-                            });
-
-                            let mut time_waiting_for_stream = Duration::from_secs(0);
-                            let mut time_loading_into_memory = Duration::from_secs(0);
-                            let mut load_summary_ts = Instant::now();
-                            while let Some(iris) = rx.recv().await {
-                                time_waiting_for_stream += load_summary_ts.elapsed();
-                                load_summary_ts = Instant::now();
-                                let index = iris.index();
-
-                                if index == 0 {
-                                    tracing::error!("Invalid iris index {}", index);
-                                    return Err(eyre!("Invalid iris index {}", index));
-                                } else if index > store_len {
-                                    tracing::warn!(
-                                        "Skip loading rolled back item: index {} > store_len {}",
-                                        index,
-                                        store_len
-                                    );
-                                    continue;
-                                } else if !all_serial_ids.contains(&(index as i64)) {
-                                    tracing::warn!("Skip loading s3 retried item: index {}", index);
-                                    continue;
-                                }
-
-                                actor.load_single_record_from_s3(
-                                    iris.index() - 1,
-                                    iris.left_code_odd(),
-                                    iris.left_code_even(),
-                                    iris.right_code_odd(),
-                                    iris.right_code_even(),
-                                    iris.left_mask_odd(),
-                                    iris.left_mask_even(),
-                                    iris.right_mask_odd(),
-                                    iris.right_mask_even(),
-                                );
-                                actor.increment_db_size(index - 1);
-
-                                if record_counter % 100_000 == 0 {
-                                    let elapsed = now.elapsed();
-                                    tracing::info!(
-                                        "Loaded {} records into memory in {:?} ({:.2} entries/s)",
-                                        record_counter,
-                                        elapsed,
-                                        record_counter as f64 / elapsed.as_secs_f64()
-                                    );
-                                    if download_shutdown_handler.is_shutting_down() {
-                                        tracing::warn!("Shutdown requested by shutdown_handler.");
-                                        return Err(eyre::eyre!("Shutdown requested"));
-                                    }
-                                }
-
-                                time_loading_into_memory += load_summary_ts.elapsed();
-                                load_summary_ts = Instant::now();
-
-                                all_serial_ids.remove(&(index as i64));
-                                record_counter += 1;
-                            }
-                            tracing::info!(
-                                "S3 Loading summary => Loaded {:?} items. Waited for stream: \
-                                 {:?}, Loaded into memory: {:?}.",
-                                record_counter,
-                                time_waiting_for_stream,
-                                time_loading_into_memory,
-                            );
-
-                            let stream_db = store
-                                .stream_irises_par(Some(min_last_modified_at), parallelism)
-                                .await
-                                .boxed();
-                            load_db_records(
-                                &mut actor,
-                                record_counter,
-                                &mut all_serial_ids,
-                                stream_db,
-                            )
-                            .await;
-                        } else {
-                            tracing::info!("S3 importer disabled. Fetching only from db");
-                            let stream_db =
-                                store.stream_irises_par(None, parallelism).await.boxed();
-                            load_db_records(
-                                &mut actor,
-                                record_counter,
-                                &mut all_serial_ids,
-                                stream_db,
-                            )
-                            .await;
-                        }
-
-                        if !all_serial_ids.is_empty() {
-                            tracing::error!("Not all serial_ids were loaded: {:?}", all_serial_ids);
-                            return Err(eyre!(
-                                "Not all serial_ids were loaded: {:?}",
-                                all_serial_ids
-                            ));
-                        }
-
-                        tracing::info!("Starting page lock");
-
-                        let left_codes = actor.left_code_db_slices.code_gr.clone();
-                        let right_codes = actor.right_code_db_slices.code_gr.clone();
-                        let left_masks = actor.left_mask_db_slices.code_gr.clone();
-                        let right_masks = actor.right_mask_db_slices.code_gr.clone();
-                        let page_lock_ts = Instant::now();
-                        for db in [&left_codes, &right_codes] {
-                            register_host_memory(
-                                actor.device_manager.clone(),
-                                db,
-                                config.max_db_size,
-                                IRIS_CODE_LENGTH,
-                            );
-                            tracing::info!("Page locking completed for code slice");
-                        }
-
-                        for db in [&left_masks, &right_masks] {
-                            register_host_memory(
-                                actor.device_manager.clone(),
-                                db,
-                                config.max_db_size,
-                                MASK_CODE_LENGTH,
-                            );
-                            tracing::info!("Page locking completed for mask slice");
-                        }
-                        tracing::info!("Page locking completed in {:?}", page_lock_ts.elapsed());
-
-                        tracing::info!("Preprocessing db");
-                        actor.preprocess_db();
-
-                        tracing::info!(
-                            "Loaded {} records from db into memory in {:?} [DB sizes: {:?}]",
-                            record_counter,
-                            total_load_time.elapsed(),
-                            actor.current_db_sizes()
-                        );
-
-                        eyre::Ok(())
+                        load_db(
+                            &mut actor,
+                            &store,
+                            store_len,
+                            parallelism,
+                            &config,
+                            db_chunks_s3_store,
+                            db_chunks_s3_client,
+                            s3_chunks_folder_name,
+                            s3_chunks_bucket_name,
+                            s3_load_parallelism,
+                            s3_load_max_retries,
+                            s3_load_initial_backoff_ms,
+                            download_shutdown_handler,
+                        )
+                        .await
                     })
                 };
 
                 match res {
                     Ok(_) => {
-                        tx.send(Ok((handle, sync_result, store))).unwrap();
+                        tx.send(Ok((handle, store))).unwrap();
                     }
                     Err(e) => {
                         tx.send(Err(e)).unwrap();
@@ -1444,7 +1355,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         Ok(())
     });
 
-    let (mut handle, sync_result, store) = rx.await??;
+    let (mut handle, store) = rx.await??;
 
     let mut skip_request_ids = sync_result.deleted_request_ids();
 
@@ -1460,6 +1371,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         while let Some(ServerJobResult {
             merged_results,
             request_ids,
+            request_types,
             metadata,
             matches,
             match_ids,
@@ -1471,12 +1383,16 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             matched_batch_request_ids,
             anonymized_bucket_statistics_left,
             anonymized_bucket_statistics_right,
+            successful_reauths,
+            reauth_target_indices,
+            reauth_or_rule_used,
         }) = rx.recv().await
         {
             // returned serial_ids are 0 indexed, but we want them to be 1 indexed
             let uniqueness_results = merged_results
                 .iter()
                 .enumerate()
+                .filter(|(i, _)| request_types[*i] == UNIQUENESS_MESSAGE_TYPE)
                 .map(|(i, &idx_result)| {
                     let result_event = UniquenessResult::new(
                         party_id,
@@ -1515,7 +1431,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 })
                 .collect::<eyre::Result<Vec<_>>>()?;
 
-            // Insert non-matching queries into the persistent store.
+            // Insert non-matching uniqueness queries into the persistent store.
             let (memory_serial_ids, codes_and_masks): (Vec<i64>, Vec<StoredIrisRef>) = matches
                 .iter()
                 .enumerate()
@@ -1536,11 +1452,40 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 })
                 .unzip();
 
+            let reauth_results = request_types
+                .iter()
+                .enumerate()
+                .filter(|(_, request_type)| *request_type == REAUTH_MESSAGE_TYPE)
+                .map(|(i, _)| {
+                    let reauth_id = request_ids[i].clone();
+                    let or_rule_used = reauth_or_rule_used.get(&reauth_id).unwrap();
+                    let or_rule_matched = if *or_rule_used {
+                        // if or rule was used and reauth was successful, then or rule was matched
+                        Some(successful_reauths[i])
+                    } else {
+                        None
+                    };
+                    let result_event = ReAuthResult::new(
+                        reauth_id.clone(),
+                        party_id,
+                        reauth_target_indices.get(&reauth_id).unwrap() + 1,
+                        successful_reauths[i],
+                        match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>(),
+                        *reauth_or_rule_used.get(&reauth_id).unwrap(),
+                        or_rule_matched,
+                    );
+                    serde_json::to_string(&result_event)
+                        .wrap_err("failed to serialize reauth result")
+                })
+                .collect::<eyre::Result<Vec<_>>>()?;
+
             let mut tx = store_bg.tx().await?;
 
             store_bg
                 .insert_results(&mut tx, &uniqueness_results)
                 .await?;
+
+            // TODO: update modifications table to store reauth and deletion results
 
             if !codes_and_masks.is_empty() && !config_bg.disable_persistence {
                 let db_serial_ids = store_bg.insert_irises(&mut tx, &codes_and_masks).await?;
@@ -1557,6 +1502,30 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         memory_serial_ids,
                         db_serial_ids
                     ));
+                }
+
+                for (i, success) in successful_reauths.iter().enumerate() {
+                    if !success {
+                        continue;
+                    }
+                    let reauth_id = request_ids[i].clone();
+                    // convert from memory index (0-based) to db index (1-based)
+                    let serial_id = *reauth_target_indices.get(&reauth_id).unwrap() + 1;
+                    tracing::info!(
+                        "Persisting successful reauth update {} into postgres on serial id {} ",
+                        reauth_id,
+                        serial_id
+                    );
+                    store_bg
+                        .update_iris(
+                            Some(&mut tx),
+                            serial_id as i64,
+                            &store_left.code[i],
+                            &store_left.mask[i],
+                            &store_right.code[i],
+                            &store_right.mask[i],
+                        )
+                        .await?;
                 }
             }
 
@@ -1575,6 +1544,17 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 &config_bg,
                 &uniqueness_result_attributes,
                 UNIQUENESS_MESSAGE_TYPE,
+            )
+            .await?;
+
+            tracing::info!("Sending {} reauth results", reauth_results.len());
+            send_results_to_sns(
+                reauth_results,
+                &metadata,
+                &sns_client_bg,
+                &config_bg,
+                &reauth_result_attributes,
+                REAUTH_MESSAGE_TYPE,
             )
             .await?;
 
@@ -1648,10 +1628,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     is_ready_flag_cloned.store(true, std::sync::atomic::Ordering::SeqCst);
 
     // Check other nodes and wait until all nodes are ready.
-    let (readiness_tx, readiness_rx) = oneshot::channel();
-    let mut readiness_tx = Some(readiness_tx);
     let all_nodes = config.node_hostnames.clone();
-    let _heartbeat = background_tasks.spawn(async move {
+    let ready_check = tokio::spawn(async move {
         let next_node = &all_nodes[(config.party_id + 1) % 3];
         let prev_node = &all_nodes[(config.party_id + 2) % 3];
         let mut connected = [false, false];
@@ -1664,9 +1642,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     connected[i] = true;
                     // If all nodes are connected, notify the main thread.
                     if connected.iter().all(|&c| c) {
-                        if let Some(tx) = readiness_tx.take() {
-                            tx.send(()).unwrap();
-                        }
+                        return;
                     }
                 }
             }
@@ -1676,7 +1652,20 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     });
 
     tracing::info!("Waiting for all nodes to be ready...");
-    readiness_rx.await?;
+    match tokio::time::timeout(
+        Duration::from_secs(config.startup_sync_timeout_secs),
+        ready_check,
+    )
+    .await
+    {
+        Ok(res) => {
+            res?;
+        }
+        Err(_) => {
+            tracing::error!("Timeout waiting for all nodes to be ready.");
+            return Err(eyre!("Timeout waiting for all nodes to be ready."));
+        }
+    }
     tracing::info!("All nodes are ready.");
     background_tasks.check_tasks();
 
@@ -1813,13 +1802,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             background_tasks.check_tasks_finished();
         }
     }
-    drop(device_manager_init);
     Ok(())
 }
 
 // Helper function to load Aurora db records from the stream into memory
 async fn load_db_records<'a>(
-    actor: &mut ServerActor,
+    actor: &mut impl InMemoryStore,
     mut record_counter: i32,
     all_serial_ids: &mut HashSet<i64>,
     mut stream_db: BoxStream<'a, eyre::Result<DbStoredIris>>,
@@ -1891,6 +1879,7 @@ async fn process_identity_deletions(
         // note that both serial_id and postgres db are 1-indexed.
         store
             .update_iris(
+                None,
                 serial_id as i64,
                 dummy_iris_share,
                 dummy_mask_share,
@@ -1909,4 +1898,160 @@ async fn process_identity_deletions(
     }
 
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn load_db(
+    actor: &mut impl InMemoryStore,
+    store: &Store,
+    store_len: usize,
+    store_load_parallelism: usize,
+    config: &Config,
+    db_chunks_s3_store: impl ObjectStore,
+    db_chunks_s3_client: S3Client,
+    s3_chunks_folder_name: String,
+    s3_chunks_bucket_name: String,
+    s3_load_parallelism: usize,
+    s3_load_max_retries: usize,
+    s3_load_initial_backoff_ms: u64,
+    download_shutdown_handler: Arc<ShutdownHandler>,
+) -> eyre::Result<()> {
+    let total_load_time = Instant::now();
+    let now = Instant::now();
+
+    let mut record_counter = 0;
+    let mut all_serial_ids: HashSet<i64> = HashSet::from_iter(1..=(store_len as i64));
+    actor.reserve(store_len);
+
+    if config.enable_s3_importer {
+        tracing::info!("S3 importer enabled. Fetching from s3 + db");
+
+        // First fetch last snapshot from S3
+        let last_snapshot_details =
+            last_snapshot_timestamp(&db_chunks_s3_store, s3_chunks_folder_name.clone()).await?;
+
+        let min_last_modified_at =
+            last_snapshot_details.timestamp - config.db_load_safety_overlap_seconds;
+        tracing::info!(
+            "Last snapshot timestamp: {}, min_last_modified_at: {}",
+            last_snapshot_details.timestamp,
+            min_last_modified_at
+        );
+
+        let s3_store = S3Store::new(db_chunks_s3_client, s3_chunks_bucket_name);
+        let s3_arc = Arc::new(s3_store);
+
+        let (tx, mut rx) = mpsc::channel::<S3StoredIris>(config.load_chunks_buffer_size);
+
+        tokio::spawn(async move {
+            fetch_and_parse_chunks(
+                s3_arc,
+                s3_load_parallelism,
+                s3_chunks_folder_name,
+                last_snapshot_details,
+                tx.clone(),
+                s3_load_max_retries,
+                s3_load_initial_backoff_ms,
+            )
+            .await
+            .expect("Couldn't fetch and parse chunks from s3");
+        });
+
+        let mut time_waiting_for_stream = Duration::from_secs(0);
+        let mut time_loading_into_memory = Duration::from_secs(0);
+        let mut load_summary_ts = Instant::now();
+        while let Some(iris) = rx.recv().await {
+            time_waiting_for_stream += load_summary_ts.elapsed();
+            load_summary_ts = Instant::now();
+            let index = iris.index();
+
+            if index == 0 {
+                tracing::error!("Invalid iris index {}", index);
+                return Err(eyre!("Invalid iris index {}", index));
+            } else if index > store_len {
+                tracing::warn!(
+                    "Skip loading rolled back item: index {} > store_len {}",
+                    index,
+                    store_len
+                );
+                continue;
+            } else if !all_serial_ids.contains(&(index as i64)) {
+                tracing::warn!("Skip loading s3 retried item: index {}", index);
+                continue;
+            }
+
+            actor.load_single_record_from_s3(
+                iris.index() - 1,
+                iris.left_code_odd(),
+                iris.left_code_even(),
+                iris.right_code_odd(),
+                iris.right_code_even(),
+                iris.left_mask_odd(),
+                iris.left_mask_even(),
+                iris.right_mask_odd(),
+                iris.right_mask_even(),
+            );
+            actor.increment_db_size(index - 1);
+
+            if record_counter % 100_000 == 0 {
+                let elapsed = now.elapsed();
+                tracing::info!(
+                    "Loaded {} records into memory in {:?} ({:.2} entries/s)",
+                    record_counter,
+                    elapsed,
+                    record_counter as f64 / elapsed.as_secs_f64()
+                );
+                if download_shutdown_handler.is_shutting_down() {
+                    tracing::warn!("Shutdown requested by shutdown_handler.");
+                    return Err(eyre::eyre!("Shutdown requested"));
+                }
+            }
+
+            time_loading_into_memory += load_summary_ts.elapsed();
+            load_summary_ts = Instant::now();
+
+            all_serial_ids.remove(&(index as i64));
+            record_counter += 1;
+        }
+        tracing::info!(
+            "S3 Loading summary => Loaded {:?} items. Waited for stream: {:?}, Loaded into \
+             memory: {:?}.",
+            record_counter,
+            time_waiting_for_stream,
+            time_loading_into_memory,
+        );
+
+        let stream_db = store
+            .stream_irises_par(Some(min_last_modified_at), store_load_parallelism)
+            .await
+            .boxed();
+        load_db_records(actor, record_counter, &mut all_serial_ids, stream_db).await;
+    } else {
+        tracing::info!("S3 importer disabled. Fetching only from db");
+        let stream_db = store
+            .stream_irises_par(None, store_load_parallelism)
+            .await
+            .boxed();
+        load_db_records(actor, record_counter, &mut all_serial_ids, stream_db).await;
+    }
+
+    if !all_serial_ids.is_empty() {
+        tracing::error!("Not all serial_ids were loaded: {:?}", all_serial_ids);
+        return Err(eyre!(
+            "Not all serial_ids were loaded: {:?}",
+            all_serial_ids
+        ));
+    }
+
+    tracing::info!("Preprocessing db");
+    actor.preprocess_db();
+
+    tracing::info!(
+        "Loaded {} records from db into memory in {:?} [DB sizes: {:?}]",
+        record_counter,
+        total_load_time.elapsed(),
+        actor.current_db_sizes()
+    );
+
+    eyre::Ok(())
 }

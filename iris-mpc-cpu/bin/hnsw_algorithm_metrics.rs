@@ -12,8 +12,9 @@ use iris_mpc_cpu::{
 };
 use rand::SeedableRng;
 use std::{error::Error, fs::File};
+use tracing::Level;
 use tracing_forest::{tag::NoTag, ForestLayer, PrettyPrinter};
-use tracing_subscriber::{prelude::*, EnvFilter};
+use tracing_subscriber::{filter::Targets, prelude::*, EnvFilter};
 
 #[derive(Parser)]
 #[allow(non_snake_case)]
@@ -48,6 +49,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let dist_comparisons = StaticCounter::new();
     let dist_comparisons_counter = dist_comparisons.get_counter();
 
+    let layer_searches = StaticCounter::new();
+    let layer_searches_counter = layer_searches.get_counter();
+
     let node_openings = StaticCounter::new();
     let node_openings_counter = node_openings.get_counter();
 
@@ -59,6 +63,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let counting_layer = OpCountersLayer::builder()
         .register_static(dist_evaluations, Operation::EvaluateDistance)
         .register_static(dist_comparisons, Operation::CompareDistance)
+        .register_static(layer_searches, Operation::LayerSearch)
         .register_static(node_openings, Operation::OpenNode)
         .register_dynamic(param_openings, Operation::OpenNode)
         .init();
@@ -66,8 +71,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let file = File::create("searcher_time_tree.txt")?;
     let file_processor = PrettyPrinter::new().writer(std::sync::Mutex::new(file));
 
+    let filter = Targets::new()
+        .with_target("iris_mpc_cpu::hnsw", Level::INFO)
+        .with_target("iris_mpc_cpu::hawkers", Level::INFO);
+
     tracing_subscriber::registry()
         .with(counting_layer)
+        .with(filter)
         .with(
             ForestLayer::new(file_processor, NoTag {})
                 .with_filter(EnvFilter::new("searcher::cpu_time")),
@@ -95,11 +105,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         if idx % 1000 == 999 {
             println!(
-                "insertions: {:?}, evaluations: {:?}, comparisons: {:?}, openings: {:?}",
+                "insertions: {:?}, evaluations: {:?}, comparisons: {:?}, openings: {:?}, \
+                 searches: {:?}",
                 idx + 1,
                 dist_evaluations_counter,
                 dist_comparisons_counter,
                 node_openings_counter,
+                layer_searches_counter,
             );
         }
     }
