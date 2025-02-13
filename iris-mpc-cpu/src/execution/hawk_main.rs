@@ -122,6 +122,7 @@ impl HawkActor {
 
         // Start server.
         {
+            tracing::info!("Starting Hawk server on {}", my_address);
             let player = networking.clone();
             let socket = my_address.parse().unwrap();
             tokio::spawn(async move {
@@ -141,7 +142,9 @@ impl HawkActor {
                 let identity = identity.clone();
                 let url = format!("http://{}", address);
                 async move {
+                    tracing::info!("Connecting to {}…", url);
                     player.connect_to_party(identity, &url).await?;
+                    tracing::info!("_connected to {}!", url);
                     Ok(())
                 }
             })
@@ -524,6 +527,7 @@ impl HawkHandle {
         // ---- Request Handler ----
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
+                tracing::debug!("Processing an Hawk job…");
                 let mut both_insert_plans = [vec![], vec![]];
 
                 // For both eyes.
@@ -574,11 +578,13 @@ impl HawkHandle {
         request_parallelism: usize,
         store_id: StoreId,
     ) -> Result<Vec<HawkSessionRef>> {
+        tracing::debug!("Creating {} MPC sessions…", request_parallelism);
         let mut sessions = vec![];
         for _ in 0..request_parallelism {
             let session = hawk_actor.new_session(store_id).await?;
             sessions.push(Arc::new(RwLock::new(session)));
         }
+        tracing::debug!("…created {} MPC sessions.", request_parallelism);
         Ok(sessions)
     }
 
