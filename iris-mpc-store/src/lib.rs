@@ -11,6 +11,7 @@ use futures::{
 use iris_mpc_common::{
     config::Config,
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    helpers::sync::Modification,
     iris_db::iris::IrisCode,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -104,6 +105,29 @@ pub struct StoredIrisRef<'a> {
 #[derive(sqlx::FromRow, Debug, Default)]
 struct StoredState {
     request_id: String,
+}
+
+#[derive(sqlx::FromRow, Debug, Default)]
+pub struct StoredModification {
+    pub id:           i64,
+    pub serial_id:    i64,
+    pub request_type: String,
+    pub s3_url:       Option<String>,
+    pub status:       String,
+    pub persisted:    bool,
+}
+
+impl From<StoredModification> for Modification {
+    fn from(stored: StoredModification) -> Self {
+        Self {
+            id:           stored.id,
+            serial_id:    stored.serial_id,
+            request_type: stored.request_type,
+            s3_url:       stored.s3_url,
+            status:       stored.status,
+            persisted:    stored.persisted,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -438,6 +462,61 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
             .fetch_all(&self.pool)
             .await?;
         Ok(rows.into_iter().rev().map(|r| r.request_id).collect())
+    }
+
+    pub async fn insert_modification(
+        &self,
+        serial_id: i64,
+        request_type: &str,
+        s3_url: Option<&str>,
+        status: &str,
+        persisted: bool,
+    ) -> Result<Modification> {
+        let inserted: StoredModification = sqlx::query_as::<_, StoredModification>(
+            r#"
+            INSERT INTO modifications (serial_id, request_type, s3_url, status, persisted)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING
+                id,
+                serial_id,
+                request_type,
+                s3_url,
+                status,
+                persisted
+            "#,
+        )
+        .bind(serial_id)
+        .bind(request_type)
+        .bind(s3_url)
+        .bind(status)
+        .bind(persisted)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(inserted.into())
+    }
+
+    pub async fn last_modifications(&self, count: usize) -> Result<Vec<Modification>> {
+        let rows = sqlx::query_as::<_, StoredModification>(
+            r#"
+        SELECT
+            id,
+            serial_id,
+            request_type,
+            s3_url,
+            status,
+            persisted
+        FROM modifications
+        ORDER BY id DESC
+        LIMIT $1
+        "#,
+        )
+        .bind(count as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let modifications = rows.into_iter().map(Into::into).collect();
+        Ok(modifications)
     }
 
     /// Initialize the database with random shares and masks. Cleans up the db

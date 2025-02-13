@@ -35,7 +35,7 @@ use iris_mpc_common::{
             UniquenessResult, ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
             ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH, SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
-        sync::{SyncResult, SyncState},
+        sync::{SyncResult, SyncState, STATUS_IN_PROGRESS},
         task_monitor::TaskMonitor,
     },
     iris_db::get_dummy_shares_for_deletion,
@@ -233,6 +233,15 @@ async fn receive_batch(
                             .deletion_requests_indices
                             .push(identity_deletion_request.serial_id - 1); // serial_id is 1-indexed
                         batch_query.deletion_requests_metadata.push(batch_metadata);
+                        let _modification = store
+                            .insert_modification(
+                                identity_deletion_request.serial_id as i64,
+                                IDENTITY_DELETION_MESSAGE_TYPE,
+                                None,
+                                STATUS_IN_PROGRESS,
+                                false,
+                            )
+                            .await?;
                         client
                             .delete_message()
                             .queue_url(queue_url)
@@ -361,7 +370,15 @@ async fn receive_batch(
 
                         tracing::debug!("Received reauth request: {:?}", reauth_request);
 
-                        // TODO: populate sync mechanism table (TBD: rollback or rollforward)
+                        let _modification = store
+                            .insert_modification(
+                                reauth_request.serial_id as i64,
+                                REAUTH_MESSAGE_TYPE,
+                                Some(reauth_request.s3_key.as_str()),
+                                STATUS_IN_PROGRESS,
+                                false,
+                            )
+                            .await?;
 
                         client
                             .delete_message()

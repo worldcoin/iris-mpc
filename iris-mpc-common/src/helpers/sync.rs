@@ -13,6 +13,19 @@ pub struct SyncResult {
     all_states: Vec<SyncState>,
 }
 
+pub const STATUS_IN_PROGRESS: &str = "IN_PROGRESS";
+pub const STATUS_COMPLETED: &str = "COMPLETED";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Modification {
+    pub id:           i64,
+    pub serial_id:    i64,
+    pub request_type: String,
+    pub s3_url:       Option<String>,
+    pub status:       String,
+    pub persisted:    bool,
+}
+
 impl SyncResult {
     pub fn new(my_state: SyncState, all_states: Vec<SyncState>) -> Self {
         Self {
