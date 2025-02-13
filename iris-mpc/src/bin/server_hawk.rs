@@ -981,7 +981,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     }
 
     let health_shutdown_handler = Arc::clone(&shutdown_handler);
-    let health_check_port = config.hawk_server_healthcheck_port.clone();
+    let health_check_port = config.hawk_server_healthcheck_port;
 
     let _health_check_abort = background_tasks.spawn({
         let uuid = uuid::Uuid::new_v4().to_string();
@@ -1047,7 +1047,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     });
 
     background_tasks.check_tasks();
-    tracing::info!("Healthcheck and Readiness server running on port {}.");
+    tracing::info!(
+        "Healthcheck and Readiness server running on port {}.",
+        health_check_port.clone()
+    );
 
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
     // Check other nodes and wait until all nodes are ready.
@@ -1064,7 +1067,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
         loop {
             for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(host).await;
+                let res = reqwest::get(host.as_str()).await;
 
                 if res.is_ok() && res.unwrap().status() == StatusCode::SERVICE_UNAVAILABLE {
                     connected_but_unready[i] = true;
@@ -1116,7 +1119,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
         loop {
             for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(host).await;
+                let res = reqwest::get(host.as_str()).await;
                 if res.is_err() || !res.as_ref().unwrap().status().is_success() {
                     // If it's the first time after startup, we allow a few retries to let the other
                     // nodes start up as well.
@@ -1244,7 +1247,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Database store length is: {}", store_len);
     let mut states = vec![my_state.clone()];
     for host in [next_node, prev_node].iter() {
-        let res = reqwest::get(host).await;
+        let res = reqwest::get(host.as_str()).await;
         match res {
             Ok(res) => {
                 let state: SyncState = match res.json().await {
@@ -1622,22 +1625,20 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     is_ready_flag_cloned.store(true, std::sync::atomic::Ordering::SeqCst);
 
     // Check other nodes and wait until all nodes are ready.
-    let all_nodes = config.node_hostnames.clone();
-    let all_healthcheck_ports = config.healthcheck_ports.clone();
-    let all_healthcheck_addresses = all_nodes
-        .iter()
-        .zip(all_healthcheck_ports.iter())
-        .map(|(host, port)| format!("http://{}:{}/ready", host, port))
-        .collect::<Vec<String>>();
+    let all_readiness_addresses = get_check_addresses(
+        config.node_hostnames.clone(),
+        config.healthcheck_ports.clone(),
+        "ready",
+    );
 
     let ready_check = tokio::spawn(async move {
-        let next_node = &all_healthcheck_addresses[(config.party_id + 1) % 3];
-        let prev_node = &all_healthcheck_addresses[(config.party_id + 2) % 3];
+        let next_node = &all_readiness_addresses[(config.party_id + 1) % 3];
+        let prev_node = &all_readiness_addresses[(config.party_id + 2) % 3];
         let mut connected = [false, false];
 
         loop {
             for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(host).await;
+                let res = reqwest::get(host.as_str()).await;
 
                 if res.is_ok() && res.as_ref().unwrap().status().is_success() {
                     connected[i] = true;
