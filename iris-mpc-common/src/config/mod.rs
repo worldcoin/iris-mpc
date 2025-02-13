@@ -226,6 +226,8 @@ fn default_hawk_request_parallelism() -> usize {
     10
 }
 
+const DEFAULT_HAWK_PORT: u16 = 3001;
+
 impl Config {
     pub fn load_config(prefix: &str) -> eyre::Result<Config> {
         let settings = config::Config::builder();
@@ -254,6 +256,19 @@ impl Config {
         if let Some(party_id) = opts.party_id {
             self.party_id = party_id;
         }
+    }
+
+    pub fn node_addresses(&self) -> Vec<String> {
+        self.node_hostnames
+            .iter()
+            .map(|hostname| {
+                if hostname.contains(":") {
+                    hostname.clone()
+                } else {
+                    format!("{}:{}", hostname, DEFAULT_HAWK_PORT)
+                }
+            })
+            .collect()
     }
 }
 

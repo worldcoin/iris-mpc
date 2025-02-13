@@ -1281,7 +1281,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let hawk_args = HawkArgs {
         party_index:         config.party_id,
-        addresses:           config.node_hostnames.clone(),
+        addresses:           config.node_addresses(),
         request_parallelism: config.hawk_request_parallelism,
     };
 
