@@ -420,6 +420,19 @@ pub struct HawkRequest {
     pub shares: BothEyes<Vec<GaloisRingSharedIris>>,
 }
 
+// TODO: Unify `BatchQuery` and `HawkRequest`.
+// TODO: Unify `BatchQueryEntries` and `Vec<GaloisRingSharedIris>`.
+impl From<&BatchQuery> for HawkRequest {
+    fn from(batch: &BatchQuery) -> Self {
+        Self {
+            shares: [
+                GaloisRingSharedIris::from_batch(batch.query_left.clone()),
+                GaloisRingSharedIris::from_batch(batch.query_right.clone()),
+            ],
+        }
+    }
+}
+
 impl HawkRequest {
     fn shares_to_search(&self) -> &BothEyes<Vec<GaloisRingSharedIris>> {
         // TODO: obtain rotated and mirrored versions.
@@ -455,6 +468,12 @@ pub struct HawkResult {
     is_insertion:  Vec<bool>,
 }
 
+impl HawkResult {
+    fn matches(&self) -> Vec<bool> {
+        self.is_insertion.iter().map(|&insert| !insert).collect()
+    }
+}
+
 /// HawkHandle is a handle to the HawkActor managing concurrency.
 #[derive(Clone, Debug)]
 pub struct HawkHandle {
@@ -466,13 +485,16 @@ impl JobSubmissionHandle for HawkHandle {
         &mut self,
         batch: BatchQuery,
     ) -> impl std::future::Future<Output = ServerJobResult> {
+        let request = HawkRequest::from(&batch);
+        let result = self.submit(request).await.unwrap();
+
         async move {
             ServerJobResult {
                 merged_results: vec![], // TODO.
                 request_ids: batch.request_ids,
                 request_types: batch.request_types,
                 metadata: batch.metadata,
-                matches: vec![],                 // TODO.
+                matches: result.matches(),
                 match_ids: vec![],               // TODO.
                 partial_match_ids_left: vec![],  // TODO.
                 partial_match_ids_right: vec![], // TODO.
@@ -672,19 +694,20 @@ mod tests {
             .collect_vec();
 
         let all_plans = izip!(irises, handles.clone())
-            .map(|(share, handle)| async move {
-                let plans = handle
-                    .submit(HawkRequest {
-                        shares: [share.clone(), share], // TODO: different eyes.
-                    })
-                    .await?;
-                Ok(plans)
+            .map(|(share, mut handle)| async move {
+                let batch = BatchQuery {
+                    query_left: GaloisRingSharedIris::to_batch(&share),
+                    query_right: GaloisRingSharedIris::to_batch(&share), // TODO: different eyes.
+                    ..BatchQuery::default()
+                };
+                let res = handle.submit_batch_query(batch).await.await;
+                Ok(res)
             })
             .collect::<JoinSet<_>>()
             .join_all()
             .await
             .into_iter()
-            .collect::<Result<Vec<HawkResult>>>()?;
+            .collect::<Result<Vec<ServerJobResult>>>()?;
 
         assert!(
             all_plans.iter().all_equal(),

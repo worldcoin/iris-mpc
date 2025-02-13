@@ -49,7 +49,7 @@ pub struct BatchQuery {
     pub deletion_requests_metadata: Vec<BatchMetadata>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ServerJobResult {
     pub merged_results: Vec<u32>,
     pub request_ids: Vec<String>,
@@ -70,7 +70,7 @@ pub struct ServerJobResult {
     pub reauth_or_rule_used: HashMap<String, bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Eye {
     #[default]
     Left,
