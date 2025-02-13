@@ -1052,15 +1052,21 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
     // Check other nodes and wait until all nodes are ready.
     let all_nodes = config.node_hostnames.clone();
+    let all_healthcheck_ports = config.healthcheck_ports.clone();
+    let all_healthcheck_addresses = all_nodes
+        .iter()
+        .zip(all_healthcheck_ports.iter())
+        .map(|(host, port)| format!("http://{}:{}/ready", host, port))
+        .collect::<Vec<String>>();
+
     let unready_check = tokio::spawn(async move {
-        let next_node = &all_nodes[(config.party_id + 1) % 3];
-        let prev_node = &all_nodes[(config.party_id + 2) % 3];
+        let next_node = &all_healthcheck_addresses[(config.party_id + 1) % 3];
+        let prev_node = &all_healthcheck_addresses[(config.party_id + 2) % 3];
         let mut connected_but_unready = [false, false];
 
         loop {
             for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res =
-                    reqwest::get(format!("http://{}:{}/ready", host, health_check_port)).await;
+                let res = reqwest::get(host).await;
 
                 if res.is_ok() && res.unwrap().status() == StatusCode::SERVICE_UNAVAILABLE {
                     connected_but_unready[i] = true;
@@ -1095,19 +1101,25 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
     let mut heartbeat_tx = Some(heartbeat_tx);
     let all_nodes = config.node_hostnames.clone();
+    let all_healthcheck_ports = config.healthcheck_ports.clone();
+    let all_healthcheck_addresses = all_nodes
+        .iter()
+        .zip(all_healthcheck_ports.iter())
+        .map(|(host, port)| format!("http://{}:{}/health", host, port))
+        .collect::<Vec<String>>();
+
     let image_name = config.image_name.clone();
     let heartbeat_shutdown_handler = Arc::clone(&shutdown_handler);
     let _heartbeat = background_tasks.spawn(async move {
-        let next_node = &all_nodes[(config.party_id + 1) % 3];
-        let prev_node = &all_nodes[(config.party_id + 2) % 3];
+        let next_node = &all_healthcheck_addresses[(config.party_id + 1) % 3];
+        let prev_node = &all_healthcheck_addresses[(config.party_id + 2) % 3];
         let mut last_response = [String::default(), String::default()];
         let mut connected = [false, false];
         let mut retries = [0, 0];
 
         loop {
             for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res =
-                    reqwest::get(format!("http://{}:{}/health", host, health_check_port)).await;
+                let res = reqwest::get(host).await;
                 if res.is_err() || !res.as_ref().unwrap().status().is_success() {
                     // If it's the first time after startup, we allow a few retries to let the other
                     // nodes start up as well.
@@ -1223,17 +1235,20 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Syncing latest node state");
     let all_nodes = config.node_hostnames.clone();
-    let next_node = &all_nodes[(config.party_id + 1) % 3];
-    let prev_node = &all_nodes[(config.party_id + 2) % 3];
+    let all_healthcheck_ports = config.healthcheck_ports.clone();
+    let all_healthcheck_addresses = all_nodes
+        .iter()
+        .zip(all_healthcheck_ports.iter())
+        .map(|(host, port)| format!("http://{}:{}/startup-sync", host, port))
+        .collect::<Vec<String>>();
+
+    let next_node = &all_healthcheck_addresses[(config.party_id + 1) % 3];
+    let prev_node = &all_healthcheck_addresses[(config.party_id + 2) % 3];
 
     tracing::info!("Database store length is: {}", store_len);
     let mut states = vec![my_state.clone()];
     for host in [next_node, prev_node].iter() {
-        let res = reqwest::get(format!(
-            "http://{}:{}/startup-sync",
-            host, health_check_port
-        ))
-        .await;
+        let res = reqwest::get(host).await;
         match res {
             Ok(res) => {
                 let state: SyncState = match res.json().await {
