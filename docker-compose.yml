@@ -1,4 +1,3 @@
-version: '3'
 services:
   dev_db:
     image: postgres
@@ -21,47 +20,48 @@ services:
       - AWS_SECRET_ACCESS_KEY=test
     volumes:
       - ./scripts/init-localstack.sh:/etc/localstack/init/ready.d/init-localstack.sh
-#  hawk_participant_0:
-#    build:
-#      context: .
-#      dockerfile: Dockerfile.hawk
-#    env_file:
-#      - .test.env
-#    environment:
-#      - SMPC__DATABASE__URL=postgres://postgres:postgres@dev_db:5432/SMPC_dev_0
-#      - SMPC__PARTY_ID=0
-#    depends_on:
-#      dev_db:
-#        condition: service_healthy
-#    ports:
-#      - "4000:4000"
-#
-#  hawk_participant_1:
-#    build:
-#      context: .
-#      dockerfile: Dockerfile.hawk
-#    env_file:
-#      - .test.env
-#    environment:
-#      - SMPC__DATABASE__URL=postgres://postgres:postgres@dev_db:5432/SMPC_dev_1
-#      - SMPC__PARTY_ID=1
-#    depends_on:
-#      dev_db:
-#        condition: service_healthy
-#    ports:
-#      - "4001:4000"
-#
-#  hawk_participant_2:
-#    build:
-#      context: .
-#      dockerfile: Dockerfile.hawk
-#    env_file:
-#      - .test.env
-#    environment:
-#      - SMPC__DATABASE__URL=postgres://postgres:postgres@dev_db:5432/SMPC_dev_2
-#      - SMPC__PARTY_ID=2
-#    depends_on:
-#      dev_db:
-#        condition: service_healthy
-#    ports:
-#      - "4002:4000"
+
+  hawk_participant_0:
+    build:
+      context: .
+      dockerfile: Dockerfile.hawk
+    env_file:
+      - .test.env
+    environment:
+      - SMPC__DATABASE__URL=postgres://postgres:postgres@dev_db:5432/SMPC_dev_0
+      - SMPC__PARTY_ID=0
+    depends_on:
+      dev_db:
+        condition: service_healthy
+    ports:
+      - "4000:4000"
+
+  hawk_participant_1:
+    build:
+      context: .
+      dockerfile: Dockerfile.hawk
+    env_file:
+      - .test.env
+    environment:
+      - SMPC__DATABASE__URL=postgres://postgres:postgres@dev_db:5432/SMPC_dev_1
+      - SMPC__PARTY_ID=1
+    depends_on:
+      dev_db:
+        condition: service_healthy
+    ports:
+      - "4001:4000"
+
+  hawk_participant_2:
+    build:
+      context: .
+      dockerfile: Dockerfile.hawk
+    env_file:
+      - .test.env
+    environment:
+      - SMPC__DATABASE__URL=postgres://postgres:postgres@dev_db:5432/SMPC_dev_2
+      - SMPC__PARTY_ID=2
+    depends_on:
+      dev_db:
+        condition: service_healthy
+    ports:
+      - "4002:4000"

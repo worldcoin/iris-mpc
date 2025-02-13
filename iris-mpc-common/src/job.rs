@@ -70,7 +70,7 @@ pub struct ServerJobResult {
     pub reauth_or_rule_used: HashMap<String, bool>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Eye {
     #[default]
     Left,
