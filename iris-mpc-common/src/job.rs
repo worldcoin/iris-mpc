@@ -70,16 +70,11 @@ pub struct ServerJobResult {
     pub reauth_or_rule_used: HashMap<String, bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum Eye {
+    #[default]
     Left,
     Right,
-}
-
-impl Default for Eye {
-    fn default() -> Self {
-        Eye::Left
-    }
 }
 
 pub trait JobSubmissionHandle {

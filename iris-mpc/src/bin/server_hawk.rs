@@ -890,7 +890,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let party_id = config.party_id;
     tracing::info!("Deriving shared secrets");
-    let chacha_seeds = initialize_chacha_seeds(config.clone()).await?;
+    let _chacha_seeds = initialize_chacha_seeds(config.clone()).await?;
 
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_result_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
