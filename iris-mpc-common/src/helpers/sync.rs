@@ -26,6 +26,13 @@ pub struct Modification {
     pub persisted:    bool,
 }
 
+impl Modification {
+    pub fn update(&mut self, status: &str, persisted: bool) {
+        self.status = status.to_string();
+        self.persisted = persisted;
+    }
+}
+
 impl SyncResult {
     pub fn new(my_state: SyncState, all_states: Vec<SyncState>) -> Self {
         Self {

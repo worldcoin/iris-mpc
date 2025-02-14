@@ -519,6 +519,34 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         Ok(modifications)
     }
 
+    /// Update the status and persisted flag of the modifications based on their
+    /// id.
+    pub async fn update_modifications(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        modifications: &Vec<&Modification>,
+    ) -> Result<(), sqlx::Error> {
+        if modifications.is_empty() {
+            return Ok(());
+        }
+
+        let mut query = sqlx::QueryBuilder::new(
+            "UPDATE modifications SET status = data.status, persisted = data.persisted FROM \
+             (VALUES ",
+        );
+
+        query.push_values(modifications, |mut b, m| {
+            b.push_bind(m.id);
+            b.push_bind(&m.status);
+            b.push_bind(m.persisted);
+        });
+
+        query.push(") AS data(id, status, persisted) WHERE data.id = modifications.id");
+        query.build().execute(tx.deref_mut()).await?;
+
+        Ok(())
+    }
+
     /// Initialize the database with random shares and masks. Cleans up the db
     /// before inserting new generated irises.
     pub async fn init_db_with_random_shares(
