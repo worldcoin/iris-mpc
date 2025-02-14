@@ -523,25 +523,35 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
     pub async fn update_modifications(
         &self,
         tx: &mut Transaction<'_, Postgres>,
-        modifications: &Vec<&Modification>,
+        modifications: &[&Modification],
     ) -> Result<(), sqlx::Error> {
         if modifications.is_empty() {
             return Ok(());
         }
 
-        let mut query = sqlx::QueryBuilder::new(
-            "UPDATE modifications SET status = data.status, persisted = data.persisted FROM \
-             (VALUES ",
-        );
+        let ids: Vec<i64> = modifications.iter().map(|m| m.id).collect();
+        let statuses: Vec<String> = modifications.iter().map(|m| m.status.clone()).collect();
+        let persisteds: Vec<bool> = modifications.iter().map(|m| m.persisted).collect();
 
-        query.push_values(modifications, |mut b, m| {
-            b.push_bind(m.id);
-            b.push_bind(&m.status);
-            b.push_bind(m.persisted);
-        });
-
-        query.push(") AS data(id, status, persisted) WHERE data.id = modifications.id");
-        query.build().execute(tx.deref_mut()).await?;
+        sqlx::query(
+            r#"
+            UPDATE modifications
+            SET status = data.status,
+                persisted = data.persisted
+            FROM (
+                SELECT
+                    unnest($1::bigint[])  as id,
+                    unnest($2::text[])    as status,
+                    unnest($3::bool[])    as persisted
+            ) as data
+            WHERE modifications.id = data.id
+            "#,
+        )
+        .bind(&ids)
+        .bind(&statuses)
+        .bind(&persisteds)
+        .execute(tx.deref_mut())
+        .await?;
 
         Ok(())
     }
