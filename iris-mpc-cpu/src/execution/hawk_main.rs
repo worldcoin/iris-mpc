@@ -18,7 +18,10 @@ use crate::{
 use aes_prng::AesRng;
 use clap::Parser;
 use eyre::Result;
-use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
+use iris_mpc_common::{
+    helpers::inmemory_store::InMemoryStore,
+    job::{BatchQuery, JobSubmissionHandle, ServerJobResult},
+};
 use itertools::{izip, Itertools};
 use rand::{thread_rng, Rng, SeedableRng};
 use std::{collections::HashMap, ops::Deref, sync::Arc, time::Duration, vec};
@@ -31,13 +34,13 @@ use tonic::transport::Server;
 #[derive(Parser)]
 pub struct HawkArgs {
     #[clap(short, long)]
-    party_index: usize,
+    pub party_index: usize,
 
     #[clap(short, long, value_delimiter = ',')]
-    addresses: Vec<String>,
+    pub addresses: Vec<String>,
 
     #[clap(short, long, default_value_t = 2)]
-    request_parallelism: usize,
+    pub request_parallelism: usize,
 }
 
 /// HawkActor manages the state of the HNSW database and connections to other
@@ -119,6 +122,7 @@ impl HawkActor {
 
         // Start server.
         {
+            tracing::info!("Starting Hawk server on {}", my_address);
             let player = networking.clone();
             let socket = my_address.parse().unwrap();
             tokio::spawn(async move {
@@ -138,7 +142,9 @@ impl HawkActor {
                 let identity = identity.clone();
                 let url = format!("http://{}", address);
                 async move {
+                    tracing::info!("Connecting to {}…", url);
                     player.connect_to_party(identity, &url).await?;
+                    tracing::info!("_connected to {}!", url);
                     Ok(())
                 }
             })
@@ -420,6 +426,19 @@ pub struct HawkRequest {
     pub shares: BothEyes<Vec<GaloisRingSharedIris>>,
 }
 
+// TODO: Unify `BatchQuery` and `HawkRequest`.
+// TODO: Unify `BatchQueryEntries` and `Vec<GaloisRingSharedIris>`.
+impl From<&BatchQuery> for HawkRequest {
+    fn from(batch: &BatchQuery) -> Self {
+        Self {
+            shares: [
+                GaloisRingSharedIris::from_batch(batch.query_left.clone()),
+                GaloisRingSharedIris::from_batch(batch.query_right.clone()),
+            ],
+        }
+    }
+}
+
 impl HawkRequest {
     fn shares_to_search(&self) -> &BothEyes<Vec<GaloisRingSharedIris>> {
         // TODO: obtain rotated and mirrored versions.
@@ -455,10 +474,50 @@ pub struct HawkResult {
     is_insertion:  Vec<bool>,
 }
 
+impl HawkResult {
+    fn matches(&self) -> Vec<bool> {
+        self.is_insertion.iter().map(|&insert| !insert).collect()
+    }
+}
+
 /// HawkHandle is a handle to the HawkActor managing concurrency.
 #[derive(Clone, Debug)]
 pub struct HawkHandle {
     job_queue: mpsc::Sender<HawkJob>,
+}
+
+impl JobSubmissionHandle for HawkHandle {
+    async fn submit_batch_query(
+        &mut self,
+        batch: BatchQuery,
+    ) -> impl std::future::Future<Output = ServerJobResult> {
+        let request = HawkRequest::from(&batch);
+        let result = self.submit(request).await.unwrap();
+
+        async move {
+            ServerJobResult {
+                merged_results: vec![], // TODO.
+                request_ids: batch.request_ids,
+                request_types: batch.request_types,
+                metadata: batch.metadata,
+                matches: result.matches(),
+                match_ids: vec![],                    // TODO.
+                partial_match_ids_left: vec![],       // TODO.
+                partial_match_ids_right: vec![],      // TODO.
+                partial_match_counters_left: vec![],  // TODO.
+                partial_match_counters_right: vec![], // TODO.
+                store_left: batch.store_left,
+                store_right: batch.store_right,
+                deleted_ids: vec![],                                    // TODO.
+                matched_batch_request_ids: vec![],                      // TODO.
+                anonymized_bucket_statistics_left: Default::default(),  // TODO.
+                anonymized_bucket_statistics_right: Default::default(), // TODO.
+                successful_reauths: vec![],                             // TODO.
+                reauth_target_indices: Default::default(),              // TODO.
+                reauth_or_rule_used: Default::default(),                // TODO.
+            }
+        }
+    }
 }
 
 impl HawkHandle {
@@ -473,6 +532,7 @@ impl HawkHandle {
         // ---- Request Handler ----
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
+                tracing::debug!("Processing an Hawk job…");
                 let mut both_insert_plans = [vec![], vec![]];
 
                 // For both eyes.
@@ -523,11 +583,13 @@ impl HawkHandle {
         request_parallelism: usize,
         store_id: StoreId,
     ) -> Result<Vec<HawkSessionRef>> {
+        tracing::debug!("Creating {} MPC sessions…", request_parallelism);
         let mut sessions = vec![];
         for _ in 0..request_parallelism {
             let session = hawk_actor.new_session(store_id).await?;
             sessions.push(Arc::new(RwLock::new(session)));
         }
+        tracing::debug!("…created {} MPC sessions.", request_parallelism);
         Ok(sessions)
     }
 
@@ -643,19 +705,20 @@ mod tests {
             .collect_vec();
 
         let all_plans = izip!(irises, handles.clone())
-            .map(|(share, handle)| async move {
-                let plans = handle
-                    .submit(HawkRequest {
-                        shares: [share.clone(), share], // TODO: different eyes.
-                    })
-                    .await?;
-                Ok(plans)
+            .map(|(share, mut handle)| async move {
+                let batch = BatchQuery {
+                    query_left: GaloisRingSharedIris::to_batch(&share),
+                    query_right: GaloisRingSharedIris::to_batch(&share), // TODO: different eyes.
+                    ..BatchQuery::default()
+                };
+                let res = handle.submit_batch_query(batch).await.await;
+                Ok(res)
             })
             .collect::<JoinSet<_>>()
             .join_all()
             .await
             .into_iter()
-            .collect::<Result<Vec<HawkResult>>>()?;
+            .collect::<Result<Vec<ServerJobResult>>>()?;
 
         assert!(
             all_plans.iter().all_equal(),

@@ -12,7 +12,16 @@ pub struct BucketResult {
     pub hamming_distance_bucket: [f64; 2],
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl Eq for BucketResult {}
+impl PartialEq for BucketResult {
+    fn eq(&self, other: &Self) -> bool {
+        self.count == other.count
+            && (self.hamming_distance_bucket[0] - other.hamming_distance_bucket[0]).abs() <= 1e-9
+            && (self.hamming_distance_bucket[1] - other.hamming_distance_bucket[1]).abs() <= 1e-9
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BucketStatistics {
     pub buckets: Vec<BucketResult>,
     pub n_buckets: usize,
