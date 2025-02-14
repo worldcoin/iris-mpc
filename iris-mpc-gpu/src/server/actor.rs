@@ -1165,6 +1165,8 @@ impl ServerActor {
                 match_ids: match_ids_filtered,
                 partial_match_ids_left,
                 partial_match_ids_right,
+                partial_match_counters_left,
+                partial_match_counters_right,
                 store_left: query_store_left,
                 store_right: query_store_right,
                 deleted_ids: batch.deletion_requests_indices,
