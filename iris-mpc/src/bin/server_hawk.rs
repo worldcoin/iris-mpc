@@ -39,9 +39,9 @@ use iris_mpc_common::{
         task_monitor::TaskMonitor,
     },
     iris_db::get_dummy_shares_for_deletion,
-    job::{BatchMetadata, BatchQuery, JobSubmissionHandle, ServerJobResult},
+    job::{BatchMetadata, BatchQuery, JobSubmissionHandle},
 };
-use iris_mpc_cpu::execution::hawk_main::{HawkActor, HawkArgs, HawkHandle};
+use iris_mpc_cpu::execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, ServerJobResult};
 use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
@@ -1385,6 +1385,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             successful_reauths,
             reauth_target_indices,
             reauth_or_rule_used,
+            actor_data: _hawk_mutation,
         }) = rx.recv().await
         {
             // returned serial_ids are 0 indexed, but we want them to be 1 indexed

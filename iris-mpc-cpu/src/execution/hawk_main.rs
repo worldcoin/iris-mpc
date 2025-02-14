@@ -20,7 +20,7 @@ use clap::Parser;
 use eyre::Result;
 use iris_mpc_common::{
     helpers::inmemory_store::InMemoryStore,
-    job::{BatchQuery, JobSubmissionHandle, ServerJobResult},
+    job::{BatchQuery, JobSubmissionHandle},
 };
 use itertools::{izip, Itertools};
 use rand::{thread_rng, Rng, SeedableRng};
@@ -69,7 +69,7 @@ pub enum StoreId {
     Right,
 }
 
-type BothEyes<T> = [T; 2];
+pub type BothEyes<T> = [T; 2];
 
 type GraphRef = Arc<RwLock<GraphMem<Aby3Store>>>;
 
@@ -470,7 +470,7 @@ impl HawkRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HawkResult {
-    connect_plans: BothEyes<Vec<ConnectPlan>>,
+    connect_plans: HawkMutation,
     is_insertion:  Vec<bool>,
 }
 
@@ -480,6 +480,9 @@ impl HawkResult {
     }
 }
 
+pub type HawkMutation = BothEyes<Vec<ConnectPlan>>;
+pub type ServerJobResult = iris_mpc_common::job::ServerJobResult<HawkMutation>;
+
 /// HawkHandle is a handle to the HawkActor managing concurrency.
 #[derive(Clone, Debug)]
 pub struct HawkHandle {
@@ -487,6 +490,8 @@ pub struct HawkHandle {
 }
 
 impl JobSubmissionHandle for HawkHandle {
+    type A = HawkMutation;
+
     async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
@@ -515,6 +520,7 @@ impl JobSubmissionHandle for HawkHandle {
                 successful_reauths: vec![],                             // TODO.
                 reauth_target_indices: Default::default(),              // TODO.
                 reauth_or_rule_used: Default::default(),                // TODO.
+                actor_data: result.connect_plans,
             }
         }
     }
