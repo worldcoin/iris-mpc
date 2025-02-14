@@ -2,15 +2,14 @@
 
 # Function to display help
 usage() {
-    echo "Usage: $0 <local-party-id> <target-party-id> <db-start> <db-end>"
-    echo "Example: $0 0 2 1 10001"
+    echo "Usage: $0 [local-party-id] [target-party-id] [db-start] [db-end]"
+    echo "If not provided, will use environment variables:"
+    echo "- LOCAL_PARTY_ID"
+    echo "- TARGET_PARTY_ID"
+    echo "- DB_START"
+    echo "- DB_END"
     exit 1
 }
-
-# Check if correct number of arguments is provided
-if [ $# -ne 4 ]; then
-    usage
-fi
 
 # Check required environment variables
 if [ -z "$DATABASE_URL" ]; then
@@ -24,10 +23,19 @@ if [ -z "$ENVIRONMENT" ]; then
 fi
 
 # Get arguments
-LOCAL_PARTY_ID=$1
-TARGET_PARTY_ID=$2
-DB_START=$3
-DB_END=$4
+LOCAL_PARTY_ID=${1:-$LOCAL_PARTY_ID}
+TARGET_PARTY_ID=${2:-$TARGET_PARTY_ID}
+DB_START=${3:-$DB_START}
+DB_END=${4:-$DB_END}
+
+# Dodatkowa walidacja, gdy nie podano argumentów
+if [ $# -eq 0 ]; then
+    if [ -z "$LOCAL_PARTY_ID" ] || [ -z "$TARGET_PARTY_ID" ] ||
+        [ -z "$DB_START" ] || [ -z "$DB_END" ]; then
+        echo "Error: When no arguments are provided, all environment variables must be set"
+        usage
+    fi
+fi
 
 # Validate local party ID
 if [[ ! "$LOCAL_PARTY_ID" =~ ^[0-2]$ ]]; then
