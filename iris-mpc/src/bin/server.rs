@@ -35,7 +35,7 @@ use iris_mpc_common::{
             UniquenessResult, ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
             ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH, SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
-        sync::{Modification, SyncResult, SyncState, STATUS_COMPLETED, STATUS_IN_PROGRESS},
+        sync::{Modification, SyncResult, SyncState},
         task_monitor::TaskMonitor,
     },
     iris_db::get_dummy_shares_for_deletion,
@@ -242,8 +242,6 @@ async fn receive_batch(
                                 identity_deletion_request.serial_id as i64,
                                 IDENTITY_DELETION_MESSAGE_TYPE,
                                 None,
-                                STATUS_IN_PROGRESS,
-                                false,
                             )
                             .await?;
                         modifications.insert(identity_deletion_request.serial_id, modification);
@@ -385,8 +383,6 @@ async fn receive_batch(
                                 reauth_request.serial_id as i64,
                                 REAUTH_MESSAGE_TYPE,
                                 Some(reauth_request.s3_key.as_str()),
-                                STATUS_IN_PROGRESS,
-                                false,
                             )
                             .await?;
                         if modifications.contains_key(&reauth_request.serial_id) {
@@ -1518,7 +1514,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     modifications
                         .get_mut(&serial_id)
                         .unwrap()
-                        .update(STATUS_COMPLETED, success);
+                        .mark_completed(success);
                     let result_event = ReAuthResult::new(
                         reauth_id.clone(),
                         party_id,
@@ -1541,7 +1537,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     modifications
                         .get_mut(&serial_id)
                         .unwrap()
-                        .update(STATUS_COMPLETED, true);
+                        .mark_completed(true);
                     let result_event = IdentityDeletionResult::new(party_id, serial_id, true);
                     serde_json::to_string(&result_event)
                         .wrap_err("failed to serialize identity deletion result")

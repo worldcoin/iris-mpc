@@ -11,7 +11,7 @@ use futures::{
 use iris_mpc_common::{
     config::Config,
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
-    helpers::sync::Modification,
+    helpers::sync::{Modification, STATUS_IN_PROGRESS},
     iris_db::iris::IrisCode,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -469,9 +469,8 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         serial_id: i64,
         request_type: &str,
         s3_url: Option<&str>,
-        status: &str,
-        persisted: bool,
     ) -> Result<Modification> {
+        let persisted = false;
         let inserted: StoredModification = sqlx::query_as::<_, StoredModification>(
             r#"
             INSERT INTO modifications (serial_id, request_type, s3_url, status, persisted)
@@ -488,7 +487,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         .bind(serial_id)
         .bind(request_type)
         .bind(s3_url)
-        .bind(status)
+        .bind(STATUS_IN_PROGRESS)
         .bind(persisted)
         .fetch_one(&self.pool)
         .await?;
@@ -499,17 +498,17 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
     pub async fn last_modifications(&self, count: usize) -> Result<Vec<Modification>> {
         let rows = sqlx::query_as::<_, StoredModification>(
             r#"
-        SELECT
-            id,
-            serial_id,
-            request_type,
-            s3_url,
-            status,
-            persisted
-        FROM modifications
-        ORDER BY id DESC
-        LIMIT $1
-        "#,
+            SELECT
+                id,
+                serial_id,
+                request_type,
+                s3_url,
+                status,
+                persisted
+            FROM modifications
+            ORDER BY id DESC
+            LIMIT $1
+            "#,
         )
         .bind(count as i64)
         .fetch_all(&self.pool)
@@ -643,7 +642,11 @@ mod tests {
 
     use super::*;
     use futures::TryStreamExt;
-    use iris_mpc_common::helpers::smpc_response::UniquenessResult;
+    use iris_mpc_common::helpers::{
+        smpc_request::{IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE},
+        smpc_response::UniquenessResult,
+        sync::{STATUS_COMPLETED, STATUS_IN_PROGRESS},
+    };
 
     #[tokio::test]
     async fn test_store() -> Result<()> {
@@ -1013,6 +1016,170 @@ mod tests {
         assert_eq!(cast_u8_to_u16(&got[1].left_mask), iris2.left_mask);
         assert_eq!(cast_u8_to_u16(&got[1].right_code), iris2.right_code);
         assert_eq!(cast_u8_to_u16(&got[1].right_mask), iris2.right_mask);
+
+        cleanup(&store, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_modification() -> Result<()> {
+        let schema_name = temporary_name();
+        let store = Store::new(&test_db_url()?, &schema_name).await?;
+
+        // 1. Insert a new modification
+        let inserted = store
+            .insert_modification(42, IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .await?;
+
+        // 2. Check that we got a valid result
+        assert_modification(
+            &inserted,
+            1,
+            42,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+            None,
+            STATUS_IN_PROGRESS,
+            false,
+        );
+
+        // 3. Insert another modification
+        let inserted = store
+            .insert_modification(43, REAUTH_MESSAGE_TYPE, Some("https://example.com"))
+            .await?;
+
+        // 4. Check that we got a valid result
+        assert_modification(
+            &inserted,
+            2,
+            43,
+            REAUTH_MESSAGE_TYPE,
+            Some("https://example.com".to_string()),
+            STATUS_IN_PROGRESS,
+            false,
+        );
+
+        // 5. Clean up
+        cleanup(&store, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_last_modifications() -> Result<()> {
+        let schema_name = temporary_name();
+        let store = Store::new(&test_db_url()?, &schema_name).await?;
+
+        // Insert a few modifications
+        for serial_id in 11..=15 {
+            store
+                .insert_modification(serial_id, IDENTITY_DELETION_MESSAGE_TYPE, None)
+                .await?;
+        }
+
+        // Retrieve the last 2 modifications
+        let last_two = store.last_modifications(2).await?;
+        assert_eq!(last_two.len(), 2);
+        let last = &last_two[0];
+        let second_last = &last_two[1];
+
+        // Assert results
+        assert_modification(
+            last,
+            5,
+            15,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+            None,
+            STATUS_IN_PROGRESS,
+            false,
+        );
+        assert_modification(
+            second_last,
+            4,
+            14,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+            None,
+            STATUS_IN_PROGRESS,
+            false,
+        );
+
+        cleanup(&store, &schema_name).await?;
+        Ok(())
+    }
+
+    fn assert_modification(
+        actual: &Modification,
+        expected_id: i64,
+        expected_serial_id: i64,
+        expected_request_type: &str,
+        expected_s3_url: Option<String>,
+        expected_status: &str,
+        expected_persisted: bool,
+    ) {
+        assert_eq!(actual.id, expected_id);
+        assert_eq!(actual.serial_id, expected_serial_id);
+        assert_eq!(actual.request_type, expected_request_type);
+        assert_eq!(actual.s3_url, expected_s3_url);
+        assert_eq!(actual.status, expected_status);
+        assert_eq!(actual.persisted, expected_persisted);
+    }
+
+    #[tokio::test]
+    async fn test_update_modifications() -> Result<()> {
+        let schema_name = temporary_name();
+        let store = Store::new(&test_db_url()?, &schema_name).await?;
+
+        // Insert three modifications
+        let mut m1 = store
+            .insert_modification(100, IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .await?;
+        let mut m2 = store
+            .insert_modification(50, REAUTH_MESSAGE_TYPE, Some("http://example.com/50"))
+            .await?;
+        let _m3 = store
+            .insert_modification(150, REAUTH_MESSAGE_TYPE, Some("http://example.com/150"))
+            .await?;
+
+        // Update the status & persisted fields for first two in a single transaction
+        let mut tx = store.tx().await?;
+        m1.mark_completed(true);
+        m2.mark_completed(false);
+
+        let modifications_to_update = vec![&m1, &m2];
+        store
+            .update_modifications(&mut tx, &modifications_to_update)
+            .await?;
+
+        tx.commit().await?;
+
+        // Check that the DB is updated
+        let last_three = store.last_modifications(3).await?;
+        assert_eq!(last_three.len(), 3);
+        assert_modification(
+            &last_three[0],
+            3,
+            150,
+            REAUTH_MESSAGE_TYPE,
+            Some("http://example.com/150".to_string()),
+            STATUS_IN_PROGRESS,
+            false,
+        );
+        assert_modification(
+            &last_three[1],
+            2,
+            50,
+            REAUTH_MESSAGE_TYPE,
+            Some("http://example.com/50".to_string()),
+            STATUS_COMPLETED,
+            false,
+        );
+        assert_modification(
+            &last_three[2],
+            1,
+            100,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+            None,
+            STATUS_COMPLETED,
+            true,
+        );
 
         cleanup(&store, &schema_name).await?;
         Ok(())

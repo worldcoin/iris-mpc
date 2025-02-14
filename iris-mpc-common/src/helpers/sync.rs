@@ -28,8 +28,8 @@ pub struct Modification {
 }
 
 impl Modification {
-    pub fn update(&mut self, status: &str, persisted: bool) {
-        self.status = status.to_string();
+    pub fn mark_completed(&mut self, persisted: bool) {
+        self.status = STATUS_COMPLETED.to_string();
         self.persisted = persisted;
     }
 }
