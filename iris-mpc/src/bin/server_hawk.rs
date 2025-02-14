@@ -41,7 +41,12 @@ use iris_mpc_common::{
     iris_db::get_dummy_shares_for_deletion,
     job::{BatchMetadata, BatchQuery, JobSubmissionHandle},
 };
-use iris_mpc_cpu::execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, ServerJobResult};
+use iris_mpc_cpu::{
+    execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, ServerJobResult},
+    hawkers::aby3_store::Aby3Store,
+    hnsw::graph::graph_store::GraphPg,
+};
+type GraphStore = GraphPg<Aby3Store>;
 use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
@@ -849,6 +854,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     tracing::info!("Creating new storage from: {:?}", config);
     let store = Store::new_from_config(&config).await?;
+    let mut graph_store = GraphStore::new_from_config(&config).await?;
 
     tracing::info!("Initialising AWS services");
 
@@ -1385,7 +1391,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             successful_reauths,
             reauth_target_indices,
             reauth_or_rule_used,
-            actor_data: _hawk_mutation,
+            actor_data: hawk_mutation,
         }) = rx.recv().await
         {
             // returned serial_ids are 0 indexed, but we want them to be 1 indexed
@@ -1538,6 +1544,18 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             }
 
             tx.commit().await?;
+
+            // Graph mutation.
+            {
+                // TODO: With tx.
+                // let mut tx = graph_store.tx().await?;
+
+                for side in hawk_mutation {
+                    for plan in side {
+                        graph_store.insert_apply(plan).await;
+                    }
+                }
+            }
 
             for memory_serial_id in memory_serial_ids {
                 tracing::info!("Inserted serial_id: {}", memory_serial_id);

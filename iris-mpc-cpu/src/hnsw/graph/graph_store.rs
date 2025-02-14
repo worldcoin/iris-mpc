@@ -6,16 +6,18 @@ use crate::hnsw::{
 };
 use eyre::{eyre, Result};
 use futures::{Stream, StreamExt, TryStreamExt};
+use iris_mpc_common::config::Config;
 use itertools::izip;
 use sqlx::{
     error::BoxDynError,
     migrate::Migrator,
     postgres::{PgPoolOptions, PgRow},
     types::{Json, Text},
-    Executor, Row,
+    Executor, Postgres, Row, Transaction,
 };
 use std::{marker::PhantomData, str::FromStr};
 
+const APP_NAME: &str = "SMPC";
 const MAX_CONNECTIONS: u32 = 5;
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
@@ -33,6 +35,18 @@ pub struct GraphPg<V: VectorStore> {
 }
 
 impl<V: VectorStore> GraphPg<V> {
+    /// Connect to a database based on Config URL, environment, and party_id.
+    // TODO: Consolidate with Store?
+    // TODO: Separate config?
+    pub async fn new_from_config(config: &Config) -> Result<Self> {
+        let db_config = config
+            .database
+            .as_ref()
+            .ok_or(eyre!("Missing database config"))?;
+        let schema_name = format!("{}_{}_{}", APP_NAME, config.environment, config.party_id);
+        Self::new(&db_config.url, &schema_name).await
+    }
+
     pub async fn new(url: &str, schema_name: &str) -> Result<Self> {
         let connect_sql = sql_switch_schema(schema_name)?;
 
@@ -58,6 +72,10 @@ impl<V: VectorStore> GraphPg<V> {
             pool,
             phantom: PhantomData,
         })
+    }
+
+    pub async fn tx(&self) -> Result<Transaction<'_, Postgres>> {
+        Ok(self.pool.begin().await?)
     }
 
     /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the
