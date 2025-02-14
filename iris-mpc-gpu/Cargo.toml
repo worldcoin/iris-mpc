@@ -9,10 +9,7 @@ repository.workspace = true
 
 [dependencies]
 bincode = "1.3.3"
-cudarc = { version = "0.13.4", features = [
-    "cuda-12020",
-    "nccl",
-] }
+cudarc = { version = "0.13.4", features = ["cuda-12020", "nccl"] }
 eyre.workspace = true
 tracing.workspace = true
 bytemuck.workspace = true
@@ -47,9 +44,9 @@ uuid.workspace = true
 default = []
 gpu_dependent = []
 
-#[[bench]]
-#name = "chacha"
-#harness = false
+[[bench]]
+name = "preprocessing"
+harness = false
 
 [[bench]]
 name = "matmul"

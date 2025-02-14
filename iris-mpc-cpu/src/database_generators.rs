@@ -15,6 +15,15 @@ pub struct GaloisRingSharedIris {
     pub mask: GaloisRingTrimmedMaskCodeShare,
 }
 
+impl GaloisRingSharedIris {
+    pub fn default_for_party(party_id: usize) -> Self {
+        GaloisRingSharedIris {
+            code: GaloisRingIrisCodeShare::default_for_party(party_id),
+            mask: GaloisRingTrimmedMaskCodeShare::default_for_party(party_id),
+        }
+    }
+}
+
 pub fn create_random_sharing<R: RngCore>(rng: &mut R, input: u16) -> Vec<Share<u16>> {
     let val = RingElement(input);
     let a = rng.gen::<ShareRingPlain>();

@@ -4,12 +4,16 @@
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
 use super::neighborhood::SortedNeighborhoodV;
-use crate::hnsw::{SortedNeighborhood, VectorStore};
+use crate::hnsw::{
+    searcher::{ConnectPlanLayerV, ConnectPlanV},
+    SortedNeighborhood, VectorStore,
+};
+use itertools::izip;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct EntryPoint<VectorRef> {
+pub struct EntryPoint<VectorRef> {
     pub point: VectorRef,
     pub layer: usize,
 }
@@ -43,6 +47,34 @@ impl<V: VectorStore> GraphMem<V> {
 
     pub fn get_layers(&self) -> Vec<Layer<V>> {
         self.layers.clone()
+    }
+
+    /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the
+    /// graph.
+    pub async fn insert_apply(&mut self, plan: ConnectPlanV<V>) {
+        // If required, set vector as new entry point
+        if plan.set_ep {
+            let insertion_layer = plan.layers.len() - 1;
+            self.set_entry_point(plan.inserted_vector.clone(), insertion_layer)
+                .await;
+        }
+
+        // Connect the new vector to its neighbors in each layer.
+        for (lc, layer_plan) in plan.layers.into_iter().enumerate() {
+            self.connect_apply(plan.inserted_vector.clone(), lc, layer_plan)
+                .await;
+        }
+    }
+
+    /// Apply the connections from `HnswSearcher::connect_prepare` to the graph.
+    async fn connect_apply(&mut self, q: V::VectorRef, lc: usize, plan: ConnectPlanLayerV<V>) {
+        // Connect all n -> q.
+        for ((n, _nq), links) in izip!(plan.neighbors.iter(), plan.n_links) {
+            self.set_links(n.clone(), links, lc).await;
+        }
+
+        // Connect q -> all n.
+        self.set_links(q, plan.neighbors, lc).await;
     }
 }
 
@@ -98,26 +130,6 @@ impl<V: VectorStore> GraphMem<V> {
 
     pub async fn num_layers(&self) -> usize {
         self.layers.len()
-    }
-
-    pub async fn connect_bidir(
-        &mut self,
-        vector_store: &mut V,
-        q: &V::VectorRef,
-        neighbors: SortedNeighborhoodV<V>,
-        max_links: usize,
-        lc: usize,
-    ) {
-        // Connect all n -> q.
-        for (n, nq) in neighbors.iter() {
-            let mut links = self.get_links(n, lc).await;
-            links.insert(vector_store, q.clone(), nq.clone()).await;
-            links.trim_to_k_nearest(max_links);
-            self.set_links(n.clone(), links, lc).await;
-        }
-
-        // Connect q -> all n.
-        self.set_links(q.clone(), neighbors, lc).await;
     }
 }
 
@@ -215,7 +227,6 @@ mod tests {
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
     use rand::{RngCore, SeedableRng};
-    use serde::{Deserialize, Serialize};
 
     #[derive(Default, Clone, Debug, PartialEq, Eq)]
     pub struct TestStore {
@@ -231,27 +242,21 @@ mod tests {
         is_persistent: bool,
     }
 
-    #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
-    pub struct TestPointId(pub usize);
-
-    impl TestPointId {
-        pub fn val(&self) -> usize {
-            self.0
-        }
-    }
-
     fn hamming_distance(a: u64, b: u64) -> u32 {
         (a ^ b).count_ones()
     }
 
     impl VectorStore for TestStore {
-        type QueryRef = TestPointId; // Vector ID, pending insertion.
-        type VectorRef = TestPointId; // Vector ID, inserted.
+        type QueryRef = PointId; // Vector ID, pending insertion.
+        type VectorRef = PointId; // Vector ID, inserted.
         type DistanceRef = u32; // Eager distance representation as fraction.
 
         async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
             // The query is now accepted in the store. It keeps the same ID.
-            self.points.get_mut(&query.val()).unwrap().is_persistent = true;
+            self.points
+                .get_mut(&(query.0 as usize))
+                .unwrap()
+                .is_persistent = true;
             *query
         }
 
@@ -261,8 +266,8 @@ mod tests {
             vector: &Self::VectorRef,
         ) -> Self::DistanceRef {
             // Hamming distance
-            let vector_0 = self.points[&query.val()].data;
-            let vector_1 = self.points[&vector.val()].data;
+            let vector_0 = self.points[&(query.0 as usize)].data;
+            let vector_1 = self.points[&(vector.0 as usize)].data;
             hamming_distance(vector_0, vector_1)
         }
 
@@ -322,7 +327,7 @@ mod tests {
         let searcher = HnswSearcher::default();
         let mut rng = AesRng::seed_from_u64(0_u64);
 
-        let mut point_ids_map: HashMap<<PlaintextStore as VectorStore>::VectorRef, TestPointId> =
+        let mut point_ids_map: HashMap<<PlaintextStore as VectorStore>::VectorRef, PointId> =
             HashMap::new();
         fn distance_map(d: <PlaintextStore as VectorStore>::DistanceRef) -> u32 {
             let (num, denom) = d;
@@ -346,7 +351,7 @@ mod tests {
                 )
                 .await;
 
-            point_ids_map.insert(query, TestPointId(rng.next_u64() as usize));
+            point_ids_map.insert(query, PointId(rng.next_u32()));
         }
 
         let new_graph_store: GraphMem<TestStore> =

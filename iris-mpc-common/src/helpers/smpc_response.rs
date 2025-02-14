@@ -46,6 +46,21 @@ impl UniquenessResult {
             error_reason: None,
         }
     }
+
+    pub fn new_error_result(node_id: usize, signup_id: String, error_reason: &str) -> Self {
+        Self {
+            node_id,
+            serial_id: None,
+            is_match: false,
+            signup_id,
+            matched_serial_ids: None,
+            matched_serial_ids_left: None,
+            matched_serial_ids_right: None,
+            matched_batch_request_ids: None,
+            error: Some(true),
+            error_reason: Some(error_reason.to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -61,6 +76,62 @@ impl IdentityDeletionResult {
             node_id,
             serial_id,
             success,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ReAuthResult {
+    pub reauth_id: String,
+    pub node_id: usize,
+    pub serial_id: u32,
+    pub success: bool,
+    pub and_rule_matched_serial_ids: Vec<u32>,
+    pub or_rule_used: bool,
+    pub or_rule_matched: Option<bool>,
+    pub error: Option<bool>,
+    pub error_reason: Option<String>,
+}
+
+impl ReAuthResult {
+    pub fn new(
+        reauth_id: String,
+        node_id: usize,
+        serial_id: u32,
+        success: bool,
+        and_rule_matched_serial_ids: Vec<u32>,
+        or_rule_used: bool,
+        or_rule_matched: Option<bool>,
+    ) -> Self {
+        Self {
+            reauth_id,
+            node_id,
+            serial_id,
+            success,
+            and_rule_matched_serial_ids,
+            or_rule_used,
+            or_rule_matched,
+            error: None,
+            error_reason: None,
+        }
+    }
+
+    pub fn new_error_result(
+        reauth_id: String,
+        node_id: usize,
+        serial_id: u32,
+        error_reason: &str,
+    ) -> Self {
+        Self {
+            reauth_id,
+            node_id,
+            serial_id,
+            success: false,
+            and_rule_matched_serial_ids: vec![],
+            or_rule_used: false,
+            or_rule_matched: None,
+            error: Some(true),
+            error_reason: Some(error_reason.to_string()),
         }
     }
 }

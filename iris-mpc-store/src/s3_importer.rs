@@ -118,12 +118,12 @@ pub trait ObjectStore: Send + Sync + 'static {
 }
 
 pub struct S3Store {
-    client: Arc<Client>,
+    client: Client,
     bucket: String,
 }
 
 impl S3Store {
-    pub fn new(client: Arc<Client>, bucket: String) -> Self {
+    pub fn new(client: Client, bucket: String) -> Self {
         Self { client, bucket }
     }
 }
