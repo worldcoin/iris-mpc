@@ -4,27 +4,69 @@ use std::{
 };
 use tracing_forest::{
     printer::Formatter,
-    tree::{Event, Field, Span, Tree},
+    tree::{Field, Tree},
 };
 
+/// Tree of network events and spans similar to `Tree` from `tracing_forest`.
+///
+/// Each internal node of this tree contains the sum of the bytes and rounds of
+/// its children. These values should be written in the fields "bytes" and
+/// "rounds" of the corresponding event calls.
+///
+/// A child node is considered unique if it has the same `NodeTag` (see below).
+/// The main difference with the tracing-forest `Tree` is that each internal
+/// node in this tree (aka Span) contains only unique children. In particular,
+/// if a child node is repeated, the `calls` field of the child node is
+/// incremented.
+///
+/// For example, tracing-forest returns the following tree
+///
+/// span1
+/// ├── event1 [bytes: 10, rounds: 1]
+/// ├── event1 [bytes: 10, rounds: 1]
+/// ├── event2 [bytes: 20, rounds: 2]
+/// ├── span2
+/// |    ├── event3 [bytes: 10, rounds: 1]
+/// |    └── event4 [bytes: 20, rounds: 2]
+/// └── span2
+///      ├── event3 [bytes: 10, rounds: 1]
+///      └── event4 [bytes: 20, rounds: 2]
+///
+/// Then, the corresponding `NetworkTree` will be
+///
+/// span1 [bytes: 100, rounds: 10]
+/// ├── event1 x 2 [bytes: 20, rounds: 2]
+/// ├── event2 [bytes: 20, rounds: 2]
+/// └── span2 x 2 [bytes: 60, rounds: 6]
+///      ├── event3 [bytes: 10, rounds: 1]
+///      └── event4 [bytes: 20, rounds: 2]
+///
+/// Note that this tree omits events when formatted.
+#[allow(clippy::large_enum_variant)] // See this bug https://github.com/rust-lang/rust-clippy/issues/9798
 enum NetworkTree {
-    Event(Box<NetworkEvent>),
-    Span(Box<NetworkSpan>),
+    Event(NetworkEvent),
+    Span(NetworkSpan),
 }
 
+/// Leaf node of the network tree
+///
+/// Note that these nodes are not formatted when printing the tree.
 struct NetworkEvent {
-    pub event:  Event,
-    pub bytes:  usize,
-    pub rounds: usize,
-    pub calls:  usize,
+    pub message: Option<String>,
+    pub fields:  Vec<Field>,
+    pub bytes:   usize, // bytes sent
+    pub rounds:  usize, // communication rounds
+    pub calls:   usize, // number of calls of this event in a parent span
 }
 
+/// Internal node of the network tree
 struct NetworkSpan {
-    pub span:   Span,
-    pub nodes:  Vec<NetworkTree>,
-    pub bytes:  usize,
-    pub rounds: usize,
-    pub calls:  usize,
+    pub name:   String,
+    pub fields: Vec<Field>,
+    pub nodes:  Vec<NetworkTree>, // unique children (span, events)
+    pub bytes:  usize,            // total bytes sent by all children
+    pub rounds: usize,            // total communication rounds of all children
+    pub calls:  usize,            // number of calls of this span in a parent span
 }
 
 impl NetworkTree {
@@ -42,17 +84,17 @@ impl NetworkTree {
         }
     }
 
-    fn name(&self) -> Option<&str> {
+    fn name(&self) -> Option<String> {
         match self {
-            NetworkTree::Event(event) => event.event.message(),
-            NetworkTree::Span(span) => Some(span.span.name()),
+            NetworkTree::Event(event) => event.message.clone(),
+            NetworkTree::Span(span) => Some(span.name.clone()),
         }
     }
 
     fn fields(&self) -> &[Field] {
         match self {
-            NetworkTree::Event(event) => event.event.fields(),
-            NetworkTree::Span(span) => span.span.fields(),
+            NetworkTree::Event(event) => &event.fields,
+            NetworkTree::Span(span) => &span.fields,
         }
     }
 
@@ -71,9 +113,10 @@ impl NetworkTree {
     }
 }
 
+/// Tag to identify unique nodes in the network tree
 #[derive(Eq, PartialEq, Hash, Clone)]
 struct NodeTag {
-    name:   Option<String>,
+    name:   Option<String>, // `message` for events, `name` for spans
     fields: Vec<Field>,
     bytes:  usize,
     rounds: usize,
@@ -97,6 +140,9 @@ impl NodeTag {
     }
 }
 
+/// Converts a tracing-forest `Tree` into a `NetworkTree` by propagating the
+/// bytes and rounds of the children to the parent and grouping unique node
+/// children.
 fn get_network_tree(tree: &Tree) -> NetworkTree {
     match tree {
         Tree::Event(event) => {
@@ -110,21 +156,25 @@ fn get_network_tree(tree: &Tree) -> NetworkTree {
                     rounds = field.value().to_string().parse().unwrap();
                 }
             }
-            NetworkTree::Event(Box::new(NetworkEvent {
-                event: event.clone(),
+            NetworkTree::Event(NetworkEvent {
+                message: event.message().map(|s| s.to_owned()),
+                fields: event.fields().to_vec(),
                 bytes,
                 rounds,
                 calls: 1,
-            }))
+            })
         }
         Tree::Span(span) => {
             let mut bytes = 0;
             let mut rounds = 0;
+            // Unique children
             let mut nodes_map = HashMap::new();
             for node in span.nodes().iter() {
+                // Trees are expected to be shallow, so this is not a performance issue
                 let network_node = get_network_tree(node);
                 bytes += network_node.bytes();
                 rounds += network_node.rounds();
+                // Check the current child for uniqueness and increment calls if repeated
                 let node_tag = NodeTag::from_tree(&network_node);
                 if let Entry::Vacant(e) = nodes_map.entry(node_tag.clone()) {
                     e.insert(network_node);
@@ -134,17 +184,20 @@ fn get_network_tree(tree: &Tree) -> NetworkTree {
                 }
             }
             let nodes = nodes_map.into_values().collect();
-            NetworkTree::Span(Box::new(NetworkSpan {
-                span: span.clone(),
+            NetworkTree::Span(NetworkSpan {
+                name: span.name().to_owned(),
+                fields: span.fields().to_vec(),
                 nodes,
                 bytes,
                 rounds,
                 calls: 1,
-            }))
+            })
         }
     }
 }
 
+/// Formatter for network trees similar to `PrettyPrinter` from
+/// `tracing_forest`.
 pub struct NetworkFormatter {}
 
 impl Formatter for NetworkFormatter {
@@ -197,31 +250,11 @@ impl NetworkFormatter {
         indent: &mut IndentVec,
         writer: &mut String,
     ) -> fmt::Result {
-        // let total_duration = span.span.total_duration().as_nanos() as f64;
-        // let inner_duration = span.span.inner_duration().as_nanos() as f64;
-        // let root_duration = duration_root.unwrap_or(total_duration);
-        // let percent_total_of_root_duration = 100.0 * total_duration / root_duration;
-        //
-        // write!(
-        // writer,
-        // "{} [ {} | ",
-        // span.span.name(),
-        // DurationDisplay(total_duration)
-        // )?;
-        //
-        // if inner_duration > 0.0 {
-        // let base_duration = span.span.base_duration().as_nanos() as f64;
-        // let percent_base_of_root_duration = 100.0 * base_duration / root_duration;
-        // write!(writer, "{:.2}% / ", percent_base_of_root_duration)?;
-        // }
-        //
-        // write!(writer, "{:.2}% ]", percent_total_of_root_duration)?;
-
         let total_bytes = (span.bytes * span.calls) as f64;
         let bytes_root = bytes_root.unwrap_or(total_bytes);
         let percent_total_of_root_bytes = 100.0 * total_bytes / bytes_root;
 
-        write!(writer, "{}", span.span.name())?;
+        write!(writer, "{}", span.name)?;
         if span.calls > 1 {
             write!(writer, " x {}", span.calls)?;
         }
@@ -235,7 +268,7 @@ impl NetworkFormatter {
         write!(writer, "[ {} rounds | ", total_rounds)?;
         write!(writer, "{:.2}% ]", percent_total_of_root_rounds)?;
 
-        for (n, field) in span.span.fields().iter().enumerate() {
+        for (n, field) in span.fields.iter().enumerate() {
             write!(
                 writer,
                 "{} {}: {}",

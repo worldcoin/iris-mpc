@@ -93,11 +93,6 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
 
     /// Find the insertion index for a target distance in the current
     /// neighborhood list.
-    #[instrument(
-        level = "trace",
-        target = "searcher::network",
-        skip(store, distances, target)
-    )]
     async fn binary_search<V>(store: &mut V, distances: &[Distance], target: &Distance) -> usize
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,

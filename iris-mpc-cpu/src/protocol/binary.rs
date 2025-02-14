@@ -76,8 +76,6 @@ pub(crate) fn transposed_pack_xor<T: IntRing2k>(
     res
 }
 
-//#[instrument(level = "trace", target = "searcher::network", skip(session, a,
-//#[instrument(level b))]
 pub(crate) async fn and_many_send(
     session: &mut Session,
     a: SliceShare<'_, u64>,
@@ -121,7 +119,6 @@ pub(crate) async fn and_many_receive(
 
     let shares_b = {
         let serialized_other_share = network.receive(&prev_party, &sid).await;
-        // trace!(target: "searcher::network", action = "receive", party = ?prev_party);
         match NetworkValue::from_network(serialized_other_share) {
             Ok(NetworkValue::RingElement64(message)) => Ok(vec![message]),
             Ok(NetworkValue::VecRing64(message)) => Ok(message),
