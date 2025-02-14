@@ -177,6 +177,8 @@ pub struct Config {
 
     #[serde(default = "default_max_modification_sync_lookback")]
     pub max_modification_sync_lookback: usize,
+    #[serde(default = "default_max_deletions_per_batch")]
+    pub max_deletions_per_batch: usize,
 }
 
 fn default_load_chunks_parallelism() -> usize {
@@ -258,6 +260,8 @@ fn default_healthcheck_ports() -> Vec<String> {
 
 fn default_max_modification_sync_lookback() -> usize {
     1000
+fn default_max_deletions_per_batch() -> usize {
+    100
 }
 
 impl Config {

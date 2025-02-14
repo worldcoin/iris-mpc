@@ -230,10 +230,13 @@ async fn receive_batch(
                             })?;
                         metrics::counter!("request.received", "type" => "identity_deletion")
                             .increment(1);
-                        batch_query
-                            .deletion_requests_indices
-                            .push(identity_deletion_request.serial_id - 1); // serial_id is 1-indexed
-                        batch_query.deletion_requests_metadata.push(batch_metadata);
+                        if modifications.contains_key(&identity_deletion_request.serial_id) {
+                            tracing::warn!(
+                                "Received another modification operation in batch: {}. Skipping",
+                                identity_deletion_request.serial_id
+                            );
+                            continue;
+                        }
                         let modification = store
                             .insert_modification(
                                 identity_deletion_request.serial_id as i64,
@@ -244,6 +247,11 @@ async fn receive_batch(
                             )
                             .await?;
                         modifications.insert(identity_deletion_request.serial_id, modification);
+
+                        batch_query
+                            .deletion_requests_indices
+                            .push(identity_deletion_request.serial_id - 1); // serial_id is 1-indexed
+                        batch_query.deletion_requests_metadata.push(batch_metadata);
                         client
                             .delete_message()
                             .queue_url(queue_url)
@@ -381,6 +389,13 @@ async fn receive_batch(
                                 false,
                             )
                             .await?;
+                        if modifications.contains_key(&reauth_request.serial_id) {
+                            tracing::warn!(
+                                "Received another modification operation in batch: {}. Skipping",
+                                reauth_request.serial_id
+                            );
+                            continue;
+                        }
                         modifications.insert(reauth_request.serial_id, modification);
 
                         client
@@ -864,7 +879,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     // Load batch_size config
     *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
     let max_sync_lookback: usize = config.max_batch_size * 2;
-    let max_modification_lookback = config.max_modification_sync_lookback;
+    let max_modification_lookback = (config.max_deletions_per_batch + config.max_batch_size) * 2;
     let max_rollback: usize = config.max_batch_size * 2;
     tracing::info!("Set batch size to {}", config.max_batch_size);
 
