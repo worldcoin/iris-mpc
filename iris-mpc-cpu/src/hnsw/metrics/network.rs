@@ -19,6 +19,9 @@ use tracing_forest::{
 /// if a child node is repeated, the `calls` field of the child node is
 /// incremented.
 ///
+/// Node children are sorted by the product of rounds and calls in descending
+/// order.
+///
 /// For example, tracing-forest returns the following tree
 ///
 /// span1
@@ -34,12 +37,12 @@ use tracing_forest::{
 ///
 /// Then, the corresponding `NetworkTree` will be
 ///
-/// span1 [bytes: 100, rounds: 10]
-/// ├── event1 x 2 [bytes: 20, rounds: 2]
-/// ├── event2 [bytes: 20, rounds: 2]
-/// └── span2 x 2 [bytes: 60, rounds: 6]
-///      ├── event3 [bytes: 10, rounds: 1]
-///      └── event4 [bytes: 20, rounds: 2]
+/// span1 [ 10 rounds | 100B per call, 100% rounds | 100% bytes of total ]
+/// ├── span2 x 2 [ 3 rounds | 30B per call, 60% rounds | 60% bytes of total ]
+/// |    ├── event4 [ 2 rounds | 20B per call, 20% rounds | 20% bytes of total ]
+/// |    └── event3 [ 1 rounds | 10B per call, 10% rounds | 10% bytes of total ]
+/// ├── event1 x 2 [ 1 rounds | 10B per call, 20% rounds | 20% bytes of total ]
+/// └── event2 [ 2 rounds | 20B per call, 20% rounds | 20% bytes of total ]
 ///
 /// Note that this tree omits events when formatted.
 #[allow(clippy::large_enum_variant)] // See this bug https://github.com/rust-lang/rust-clippy/issues/9798
@@ -183,7 +186,9 @@ fn get_network_tree(tree: &Tree) -> NetworkTree {
                     node.increment_calls();
                 }
             }
-            let nodes = nodes_map.into_values().collect();
+            let mut nodes: Vec<NetworkTree> = nodes_map.into_values().collect();
+            // Sort nodes by the product of rounds and calls in descending order
+            nodes.sort_by_key(|node| -(node.rounds() as i64 * node.calls() as i64));
             NetworkTree::Span(NetworkSpan {
                 name: span.name().to_owned(),
                 fields: span.fields().to_vec(),
@@ -258,15 +263,22 @@ impl NetworkFormatter {
         if span.calls > 1 {
             write!(writer, " x {}", span.calls)?;
         }
-        write!(writer, " [ {} | ", BytesDisplay(total_bytes))?;
-        write!(writer, "{:.2}% ]", percent_total_of_root_bytes)?;
 
         let total_rounds = (span.rounds * span.calls) as f64;
         let rounds_root = rounds_root.unwrap_or(total_rounds);
         let percent_total_of_root_rounds = 100.0 * total_rounds / rounds_root;
 
-        write!(writer, "[ {} rounds | ", total_rounds)?;
-        write!(writer, "{:.2}% ]", percent_total_of_root_rounds)?;
+        write!(
+            writer,
+            " [ {} rounds | {} per call, ",
+            span.rounds,
+            BytesDisplay(span.bytes as f64)
+        )?;
+        write!(
+            writer,
+            "{:.2}% rounds | {:.2}% bytes of total ] | ",
+            percent_total_of_root_bytes, percent_total_of_root_rounds
+        )?;
 
         for (n, field) in span.fields.iter().enumerate() {
             write!(
