@@ -175,8 +175,6 @@ pub struct Config {
     #[serde(default = "default_hawk_server_healthcheck_port")]
     pub hawk_server_healthcheck_port: usize,
 
-    #[serde(default = "default_max_modification_sync_lookback")]
-    pub max_modification_sync_lookback: usize,
     #[serde(default = "default_max_deletions_per_batch")]
     pub max_deletions_per_batch: usize,
 }
@@ -258,8 +256,6 @@ fn default_healthcheck_ports() -> Vec<String> {
     vec!["3000".to_string(); 3]
 }
 
-fn default_max_modification_sync_lookback() -> usize {
-    1000
 fn default_max_deletions_per_batch() -> usize {
     100
 }

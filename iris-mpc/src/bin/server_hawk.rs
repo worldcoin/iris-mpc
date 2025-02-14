@@ -971,6 +971,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let my_state = SyncState {
         db_len:              store_len as u64,
         deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
+        modifications:       store.last_modifications(max_sync_lookback).await?,
     };
 
     #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1385,8 +1386,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             successful_reauths,
             reauth_target_indices,
             reauth_or_rule_used,
+            modifications,
         }) = rx.recv().await
         {
+            let _modifications = modifications;
+
             // returned serial_ids are 0 indexed, but we want them to be 1 indexed
             let uniqueness_results = merged_results
                 .iter()
