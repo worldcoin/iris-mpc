@@ -1,4 +1,4 @@
-# gpu-iris-mpc
+# iris-mpc
 
 ## How to release
 
@@ -13,8 +13,11 @@ After release creation the build image is starting with tag with release number.
 
 ## Setup
 
-- Node PoC implementation in `src/bin/server.rs`
+- GPU-based node implementation in `iris-mpc/src/bin/server.rs`
+- CPU-based node PoC in `iris-mpc/src/bin/server_hawk.rs`
 - Example client in `src/bin/client.rs`
+
+## GPU Implementation 
 
 #### Running the E2E test binary (single machine)
 
@@ -103,18 +106,47 @@ Then copy `.envrc.example` to `.envrc` and setup `$PRE_CARGO_LD_LIBRARY_PATH` en
 
 The example file contains a sample WSL env var.
 
-## Testing
+## CPU Implementation
 
-To run the tests:
+#### Option 1: Locally run a single server without Docker (recommended for quick iteration)
 
-```sh
-docker-compose up -d
-cargo test --release
-# Requires a significant amount of GPU memory
-cargo bench
+**Step 1: run ancillary services**
+
+```
+docker-compose up localstack dev_db
 ```
 
-If you are using `cargo test` with non-standard library paths, you might need [a workaround](https://github.com/worldcoin/gpu-iris-mpc/issues/25).
+**Step 2: run service with the init script for Party 0**
+
+```
+./scripts/run-server.sh 0 --init-servers # change to 1 or 2 for other parties
+```
+
+The script must run with `--init-servers` flag at least once. It will create some AWS resources, but after that it can run without it.
+
+```
+./scripts/run-server.sh 1
+./scripts/run-server.sh 2 # in a separate shell
+```
+
+#### Option 2: Run everything with docker
+
+Just run
+
+```
+docker-compose up
+```
+
+It will bring up the 3 parties plus all the needed AWS/DB resources
+
+#### Testing
+
+```
+cargo test --release -- --test-threads=1
+cargo test --release --features db_dependent -- --test-threads=1 # require a runnning postgres instance
+```
+
+If you are using `cargo test` with non-standard library paths, you might need [a workaround](https://github.com/worldcoin/iris-mpc/issues/25).
 
 ## Architecture
 

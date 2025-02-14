@@ -1374,6 +1374,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             match_ids,
             partial_match_ids_left,
             partial_match_ids_right,
+            partial_match_counters_left,
+            partial_match_counters_right,
             store_left,
             store_right,
             deleted_ids,
@@ -1422,6 +1424,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             true => None,
                         },
                         Some(matched_batch_request_ids[i].clone()),
+                        match partial_match_counters_left.is_empty() {
+                            false => Some(partial_match_counters_left[i]),
+                            true => None,
+                        },
+                        match partial_match_counters_right.is_empty() {
+                            false => Some(partial_match_counters_right[i]),
+                            true => None,
+                        },
                     );
 
                     serde_json::to_string(&result_event).wrap_err("failed to serialize result")
