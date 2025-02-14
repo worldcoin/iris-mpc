@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub struct SyncState {
     pub db_len:              u64,
     pub deleted_request_ids: Vec<String>,
+    pub modifications:       Vec<Modification>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,7 +17,7 @@ pub struct SyncResult {
 pub const STATUS_IN_PROGRESS: &str = "IN_PROGRESS";
 pub const STATUS_COMPLETED: &str = "COMPLETED";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Modification {
     pub id:           i64,
     pub serial_id:    i64,
@@ -81,14 +82,17 @@ mod tests {
             SyncState {
                 db_len:              123,
                 deleted_request_ids: vec!["most late".to_string()],
+                modifications:       vec![],
             },
             SyncState {
                 db_len:              456,
                 deleted_request_ids: vec!["x".to_string(), "y".to_string()],
+                modifications:       vec![],
             },
             SyncState {
                 db_len:              789,
                 deleted_request_ids: vec!["most ahead".to_string()],
+                modifications:       vec![],
             },
         ];
         let deleted_request_ids = vec![
@@ -110,6 +114,7 @@ mod tests {
         SyncState {
             db_len:              123,
             deleted_request_ids: vec!["abc".to_string(), "def".to_string()],
+            modifications:       vec![],
         }
     }
 }

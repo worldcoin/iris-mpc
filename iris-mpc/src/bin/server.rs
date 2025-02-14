@@ -864,6 +864,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     // Load batch_size config
     *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
     let max_sync_lookback: usize = config.max_batch_size * 2;
+    let max_modification_lookback = config.max_modification_sync_lookback;
     let max_rollback: usize = config.max_batch_size * 2;
     tracing::info!("Set batch size to {}", config.max_batch_size);
 
@@ -991,6 +992,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let my_state = SyncState {
         db_len:              store_len as u64,
         deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
+        modifications:       store.last_modifications(max_modification_lookback).await?,
     };
 
     #[derive(Debug, Serialize, Deserialize, Clone)]
