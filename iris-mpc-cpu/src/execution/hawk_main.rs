@@ -355,7 +355,10 @@ impl HawkActor {
         IrisLoader {
             party_id: self.party_id,
             db_size:  &mut self.db_size,
-            irises:   [self.iris_store[0].write(), self.iris_store[1].write()],
+            irises:   [
+                self.iris_store[0].write().await,
+                self.iris_store[1].write().await,
+            ],
         }
     }
 }

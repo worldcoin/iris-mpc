@@ -9,16 +9,18 @@ pub const ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH: &str = "skipped_request_pre
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UniquenessResult {
-    pub node_id:                   usize,
-    pub serial_id:                 Option<u32>,
-    pub is_match:                  bool,
-    pub signup_id:                 String,
-    pub matched_serial_ids:        Option<Vec<u32>>,
-    pub matched_serial_ids_left:   Option<Vec<u32>>,
-    pub matched_serial_ids_right:  Option<Vec<u32>>,
+    pub node_id: usize,
+    pub serial_id: Option<u32>,
+    pub is_match: bool,
+    pub signup_id: String,
+    pub matched_serial_ids: Option<Vec<u32>>,
+    pub matched_serial_ids_left: Option<Vec<u32>>,
+    pub matched_serial_ids_right: Option<Vec<u32>>,
+    pub partial_matches_count_right: Option<usize>,
+    pub partial_matches_count_left: Option<usize>,
     pub matched_batch_request_ids: Option<Vec<String>>,
-    pub error:                     Option<bool>,
-    pub error_reason:              Option<String>,
+    pub error: Option<bool>,
+    pub error_reason: Option<String>,
 }
 
 impl UniquenessResult {
@@ -32,6 +34,8 @@ impl UniquenessResult {
         matched_serial_ids_left: Option<Vec<u32>>,
         matched_serial_ids_right: Option<Vec<u32>>,
         matched_batch_request_ids: Option<Vec<String>>,
+        partial_matches_count_right: Option<usize>,
+        partial_matches_count_left: Option<usize>,
     ) -> Self {
         Self {
             node_id,
@@ -42,6 +46,8 @@ impl UniquenessResult {
             matched_serial_ids_left,
             matched_serial_ids_right,
             matched_batch_request_ids,
+            partial_matches_count_right,
+            partial_matches_count_left,
             error: None,
             error_reason: None,
         }
@@ -57,6 +63,8 @@ impl UniquenessResult {
             matched_serial_ids_left: None,
             matched_serial_ids_right: None,
             matched_batch_request_ids: None,
+            partial_matches_count_right: None,
+            partial_matches_count_left: None,
             error: Some(true),
             error_reason: Some(error_reason.to_string()),
         }

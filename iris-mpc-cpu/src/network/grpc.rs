@@ -11,11 +11,11 @@ use crate::{
 use backoff::{future::retry, ExponentialBackoff};
 use dashmap::DashMap;
 use eyre::eyre;
-use std::{str::FromStr, sync::Arc, time::Duration};
+use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 use tokio::{
     sync::{
         mpsc::{self, UnboundedSender},
-        Mutex,
+        Mutex, RwLock,
     },
     time::{sleep, timeout},
 };
@@ -29,35 +29,38 @@ use tonic::{
 
 type TonicResult<T> = Result<T, Status>;
 
+type RwMap<K, V> = RwLock<HashMap<K, V>>;
+
 fn err_to_status(e: eyre::Error) -> Status {
     Status::internal(e.to_string())
 }
 
+#[derive(Default)]
 struct MessageQueueStore {
-    queues: DashMap<Identity, Mutex<Streaming<SendRequest>>>,
+    queues: RwMap<Identity, Mutex<Streaming<SendRequest>>>,
 }
 
 impl MessageQueueStore {
-    fn new() -> Self {
-        MessageQueueStore {
-            queues: DashMap::new(),
-        }
-    }
-
-    fn insert(&self, sender_id: Identity, stream: Streaming<SendRequest>) -> eyre::Result<()> {
-        if self.queues.contains_key(&sender_id) {
+    async fn insert(
+        &self,
+        sender_id: Identity,
+        stream: Streaming<SendRequest>,
+    ) -> eyre::Result<()> {
+        let mut queues = self.queues.write().await;
+        if queues.contains_key(&sender_id) {
             return Err(eyre!("Player {:?} already has a message queue", sender_id));
         }
-        self.queues.insert(sender_id, Mutex::new(stream));
+        queues.insert(sender_id, Mutex::new(stream));
         Ok(())
     }
 
-    fn count_senders(&self) -> usize {
-        self.queues.len()
+    async fn count_senders(&self) -> usize {
+        self.queues.read().await.len()
     }
 
     async fn pop(&self, sender_id: &Identity) -> eyre::Result<Vec<u8>> {
-        let queue = self.queues.get(sender_id).ok_or(eyre!(format!(
+        let queues = self.queues.read().await;
+        let queue = queues.get(sender_id).ok_or(eyre!(format!(
             "RECEIVE: Sender {sender_id:?} hasn't been found in the message queues"
         )))?;
 
@@ -69,44 +72,47 @@ impl MessageQueueStore {
     }
 }
 
+type Sender = UnboundedSender<SendRequest>;
+
+#[derive(Default)]
 struct OutgoingStreams {
-    streams: DashMap<(SessionId, Identity), Arc<UnboundedSender<SendRequest>>>,
+    streams: RwMap<(SessionId, Identity), Arc<Sender>>,
 }
 
 impl OutgoingStreams {
-    fn new() -> Self {
-        OutgoingStreams {
-            streams: DashMap::new(),
-        }
-    }
-
-    fn add_session_stream(
+    async fn add_session_stream(
         &self,
         session_id: SessionId,
         receiver_id: Identity,
-        stream: UnboundedSender<SendRequest>,
+        stream: Sender,
     ) {
         self.streams
+            .write()
+            .await
             .insert((session_id, receiver_id), Arc::new(stream));
     }
 
-    fn get_stream(
+    async fn get_stream(
         &self,
         session_id: SessionId,
         receiver_id: Identity,
-    ) -> eyre::Result<Arc<UnboundedSender<SendRequest>>> {
+    ) -> eyre::Result<Arc<Sender>> {
         self.streams
+            .read()
+            .await
             .get(&(session_id, receiver_id.clone()))
             .ok_or(eyre!(
                 "Streams for session {session_id:?} and receiver {receiver_id:?} not found"
             ))
-            .map(|s| s.value().clone())
+            .map(Arc::clone)
     }
 
-    fn count_receivers(&self, session_id: SessionId) -> usize {
+    async fn count_receivers(&self, session_id: SessionId) -> usize {
         self.streams
+            .read()
+            .await
             .iter()
-            .filter(|v| v.key().0 == session_id)
+            .filter(|((sid, _), _)| *sid == session_id)
             .count()
     }
 }
@@ -127,7 +133,7 @@ pub struct GrpcNetworking {
     // other party id -> outgoing streams to send messages to that party in different sessions
     outgoing_streams: Arc<OutgoingStreams>,
     // session id -> incoming message streams
-    message_queues:   Arc<DashMap<SessionId, MessageQueueStore>>,
+    message_queues:   Arc<RwMap<SessionId, MessageQueueStore>>,
 
     pub config: GrpcConfig,
 }
@@ -137,8 +143,8 @@ impl GrpcNetworking {
         GrpcNetworking {
             party_id,
             clients: Arc::new(DashMap::new()),
-            outgoing_streams: Arc::new(OutgoingStreams::new()),
-            message_queues: Arc::new(DashMap::new()),
+            outgoing_streams: Arc::new(OutgoingStreams::default()),
+            message_queues: Arc::new(RwLock::new(HashMap::new())),
             config,
         }
     }
@@ -163,7 +169,7 @@ impl GrpcNetworking {
     }
 
     pub async fn create_session(&self, session_id: SessionId) -> eyre::Result<()> {
-        if self.outgoing_streams.count_receivers(session_id) > 0 {
+        if self.outgoing_streams.count_receivers(session_id).await > 0 {
             return Err(eyre!(
                 "Player {:?} has already created session {session_id:?}",
                 self.party_id
@@ -173,7 +179,8 @@ impl GrpcNetworking {
         for mut client in self.clients.iter_mut() {
             let (tx, rx) = mpsc::unbounded_channel();
             self.outgoing_streams
-                .add_session_stream(session_id, client.key().clone(), tx);
+                .add_session_stream(session_id, client.key().clone(), tx)
+                .await;
             let receiving_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
             let mut request = Request::new(receiving_stream);
             request.metadata_mut().insert(
@@ -189,21 +196,21 @@ impl GrpcNetworking {
         Ok(())
     }
 
-    pub fn is_session_ready(&self, session_id: SessionId) -> bool {
-        let n_senders = self
-            .message_queues
-            .get(&session_id)
-            .map(|q| q.count_senders())
-            .unwrap_or(0);
+    pub async fn is_session_ready(&self, session_id: SessionId) -> bool {
+        let n_senders = match self.message_queues.read().await.get(&session_id) {
+            None => 0,
+            Some(q) => q.count_senders().await,
+        };
+
         if n_senders != self.clients.len() {
             return false;
         }
 
-        self.outgoing_streams.count_receivers(session_id) == self.clients.len()
+        self.outgoing_streams.count_receivers(session_id).await == self.clients.len()
     }
 
     pub async fn wait_for_session(&self, session_id: SessionId) {
-        while !self.is_session_ready(session_id) {
+        while !self.is_session_ready(session_id).await {
             sleep(Duration::from_millis(100)).await;
         }
     }
@@ -248,13 +255,15 @@ impl PartyNode for GrpcNetworking {
             session_id,
             sender_id
         );
-        let message_queue = self
-            .message_queues
+
+        let mut message_queues = self.message_queues.write().await;
+        let message_queue = message_queues
             .entry(session_id)
-            .or_insert(MessageQueueStore::new());
+            .or_insert(MessageQueueStore::default());
 
         message_queue
             .insert(sender_id, incoming_stream)
+            .await
             .map_err(err_to_status)?;
 
         Ok(Response::new(SendResponse {}))
@@ -272,7 +281,8 @@ impl Networking for GrpcNetworking {
     ) -> eyre::Result<()> {
         let outgoing_stream = self
             .outgoing_streams
-            .get_stream(*session_id, receiver.clone())?;
+            .get_stream(*session_id, receiver.clone())
+            .await?;
 
         // Send message via the outgoing stream
         let request = SendRequest { data: value };
@@ -301,7 +311,8 @@ impl Networking for GrpcNetworking {
 
     async fn receive(&self, sender: &Identity, session_id: &SessionId) -> eyre::Result<Vec<u8>> {
         // Just retrieve the first message from the corresponding queue
-        let queue = self.message_queues.get(session_id).ok_or(eyre!(format!(
+        let messages_queues = self.message_queues.read().await;
+        let queue = messages_queues.get(session_id).ok_or(eyre!(format!(
             "Session {session_id:?} hasn't been added to message queues"
         )))?;
 
@@ -635,7 +646,7 @@ mod tests {
                 let mut store = store.clone();
                 let mut graph = graph.clone();
                 let searcher = searcher.clone();
-                let q = store.prepare_query(store.storage.get_vector(&i.into()));
+                let q = store.prepare_query(store.storage.get_vector(&i.into()).await);
                 jobs.spawn(async move {
                     let secret_neighbors = searcher.search(&mut store, &mut graph, &q, 1).await;
                     searcher.is_match(&mut store, &[secret_neighbors]).await
