@@ -55,7 +55,7 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 10s
       retries: 10
-    entrypoint: ./run-server-docker.sh 0 --init-servers
+    entrypoint: ./run-server-docker.sh 0
 
   hawk_participant_1:
     image: iris-mpc-hawk:latest
