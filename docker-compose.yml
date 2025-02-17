@@ -39,7 +39,7 @@ services:
       - ./scripts/init-localstack.sh:/etc/localstack/init/ready.d/init-localstack.sh
 
   hawk_participant_0:
-    image: iris-mpc-hawk:latest
+    image: iris-mpc-hawk-server:latest
     env_file:
       - .test.env
       - .test.hawk0.env
@@ -58,7 +58,7 @@ services:
     entrypoint: ./run-server-docker.sh 0
 
   hawk_participant_1:
-    image: iris-mpc-hawk:latest
+    image: iris-mpc-hawk-server:latest
     env_file:
       - .test.env
       - .test.hawk1.env
@@ -78,7 +78,7 @@ services:
 #    entrypoint: tail -f /dev/null
 
   hawk_participant_2:
-    image: iris-mpc-hawk:latest
+    image: iris-mpc-hawk-server:latest
     env_file:
       - .test.env
       - .test.hawk2.env
@@ -97,7 +97,7 @@ services:
     entrypoint: ./run-server-docker.sh 2
 
   iris_mpc_client:
-    image: iris-mpc-hawk:latest
+    image: iris-mpc-hawk-server:latest
     entrypoint: tail -f /dev/null
     env_file:
       - .test.env
