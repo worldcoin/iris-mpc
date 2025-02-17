@@ -11,6 +11,16 @@ usage() {
     exit 1
 }
 
+# Function to strip quotes and whitespace
+strip_quotes() {
+    # Remove leading/trailing whitespace
+    local var="$1"
+    # Remove leading/trailing single or double quotes
+    var="${var#[\"\']}"
+    var="${var%[\"\']}"
+    echo "$var"
+}
+
 # Check required environment variables
 if [ -z "$DATABASE_URL" ]; then
     echo "Error: DATABASE_URL environment variable is not set"
@@ -23,10 +33,10 @@ if [ -z "$ENVIRONMENT" ]; then
 fi
 
 # Get arguments
-LOCAL_PARTY_ID=${1:-$LOCAL_PARTY_ID}
-TARGET_PARTY_ID=${2:-$TARGET_PARTY_ID}
-DB_START=${3:-$DB_START}
-DB_END=${4:-$DB_END}
+LOCAL_PARTY_ID=$(strip_quotes "${1:-$LOCAL_PARTY_ID}")
+TARGET_PARTY_ID=$(strip_quotes "${2:-$TARGET_PARTY_ID}")
+DB_START=$(strip_quotes "${3:-$DB_START}")
+DB_END=$(strip_quotes "${4:-$DB_END}")
 
 # Dodatkowa walidacja, gdy nie podano argumentów
 if [ $# -eq 0 ]; then
