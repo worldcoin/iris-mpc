@@ -35,7 +35,7 @@ use iris_mpc_common::{
             UniquenessResult, ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
             ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH, SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
-        sync::{SyncResult, SyncState},
+        sync::{Modification, SyncResult, SyncState},
         task_monitor::TaskMonitor,
     },
     iris_db::get_dummy_shares_for_deletion,
@@ -154,6 +154,7 @@ async fn receive_batch(
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
     let mut handles = vec![];
     let mut msg_counter = 0;
+    let mut modifications: HashMap<u32, Modification> = HashMap::new();
 
     while msg_counter < *CURRENT_BATCH_SIZE.lock().unwrap() {
         let rcv_message_output = client
@@ -227,12 +228,6 @@ async fn receive_batch(
                                     e,
                                 )
                             })?;
-                        metrics::counter!("request.received", "type" => "identity_deletion")
-                            .increment(1);
-                        batch_query
-                            .deletion_requests_indices
-                            .push(identity_deletion_request.serial_id - 1); // serial_id is 1-indexed
-                        batch_query.deletion_requests_metadata.push(batch_metadata);
                         client
                             .delete_message()
                             .queue_url(queue_url)
@@ -240,6 +235,28 @@ async fn receive_batch(
                             .send()
                             .await
                             .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
+                        metrics::counter!("request.received", "type" => "identity_deletion")
+                            .increment(1);
+                        if modifications.contains_key(&identity_deletion_request.serial_id) {
+                            tracing::warn!(
+                                "Received another modification operation in batch: {}. Skipping",
+                                identity_deletion_request.serial_id
+                            );
+                            continue;
+                        }
+                        let modification = store
+                            .insert_modification(
+                                identity_deletion_request.serial_id as i64,
+                                IDENTITY_DELETION_MESSAGE_TYPE,
+                                None,
+                            )
+                            .await?;
+                        modifications.insert(identity_deletion_request.serial_id, modification);
+
+                        batch_query
+                            .deletion_requests_indices
+                            .push(identity_deletion_request.serial_id - 1); // serial_id is 1-indexed
+                        batch_query.deletion_requests_metadata.push(batch_metadata);
                     }
 
                     UNIQUENESS_MESSAGE_TYPE => {
@@ -357,12 +374,6 @@ async fn receive_batch(
                             .map_err(|e| {
                                 ReceiveRequestError::json_parse_error("Reauth request", e)
                             })?;
-                        metrics::counter!("request.received", "type" => "reauth").increment(1);
-
-                        tracing::debug!("Received reauth request: {:?}", reauth_request);
-
-                        // TODO: populate sync mechanism table (TBD: rollback or rollforward)
-
                         client
                             .delete_message()
                             .queue_url(queue_url)
@@ -370,6 +381,26 @@ async fn receive_batch(
                             .send()
                             .await
                             .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
+
+                        metrics::counter!("request.received", "type" => "reauth").increment(1);
+
+                        tracing::debug!("Received reauth request: {:?}", reauth_request);
+
+                        let modification = store
+                            .insert_modification(
+                                reauth_request.serial_id as i64,
+                                REAUTH_MESSAGE_TYPE,
+                                Some(reauth_request.s3_key.as_str()),
+                            )
+                            .await?;
+                        if modifications.contains_key(&reauth_request.serial_id) {
+                            tracing::warn!(
+                                "Received another modification operation in batch: {}. Skipping",
+                                reauth_request.serial_id
+                            );
+                            continue;
+                        }
+                        modifications.insert(reauth_request.serial_id, modification);
 
                         if reauth_request.use_or_rule
                             && !(config.luc_enabled && config.luc_serial_ids_from_smpc_request)
@@ -844,6 +875,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     // Load batch_size config
     *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
     let max_sync_lookback: usize = config.max_batch_size * 2;
+    let max_modification_lookback = (config.max_deletions_per_batch + config.max_batch_size) * 2;
     let max_rollback: usize = config.max_batch_size * 2;
     tracing::info!("Set batch size to {}", config.max_batch_size);
 
@@ -971,6 +1003,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let my_state = SyncState {
         db_len:              store_len as u64,
         deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
+        modifications:       store.last_modifications(max_modification_lookback).await?,
     };
 
     #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1388,6 +1421,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             successful_reauths,
             reauth_target_indices,
             reauth_or_rule_used,
+            mut modifications,
         }) = rx.recv().await
         {
             // returned serial_ids are 0 indexed, but we want them to be 1 indexed
@@ -1475,11 +1509,17 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     } else {
                         None
                     };
+                    let serial_id = reauth_target_indices.get(&reauth_id).unwrap() + 1;
+                    let success = successful_reauths[i];
+                    modifications
+                        .get_mut(&serial_id)
+                        .unwrap()
+                        .mark_completed(success);
                     let result_event = ReAuthResult::new(
                         reauth_id.clone(),
                         party_id,
-                        reauth_target_indices.get(&reauth_id).unwrap() + 1,
-                        successful_reauths[i],
+                        serial_id,
+                        success,
                         match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>(),
                         *reauth_or_rule_used.get(&reauth_id).unwrap(),
                         or_rule_matched,
@@ -1489,13 +1529,30 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 })
                 .collect::<eyre::Result<Vec<_>>>()?;
 
+            // handling identity deletion results
+            let identity_deletion_results = deleted_ids
+                .iter()
+                .map(|&idx| {
+                    let serial_id = idx + 1;
+                    modifications
+                        .get_mut(&serial_id)
+                        .unwrap()
+                        .mark_completed(true);
+                    let result_event = IdentityDeletionResult::new(party_id, serial_id, true);
+                    serde_json::to_string(&result_event)
+                        .wrap_err("failed to serialize identity deletion result")
+                })
+                .collect::<eyre::Result<Vec<_>>>()?;
+
             let mut tx = store_bg.tx().await?;
 
             store_bg
                 .insert_results(&mut tx, &uniqueness_results)
                 .await?;
 
-            // TODO: update modifications table to store reauth and deletion results
+            store_bg
+                .update_modifications(&mut tx, &modifications.values().collect::<Vec<_>>())
+                .await?;
 
             if !codes_and_masks.is_empty() && !config_bg.disable_persistence {
                 let db_serial_ids = store_bg.insert_irises(&mut tx, &codes_and_masks).await?;
@@ -1567,16 +1624,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 REAUTH_MESSAGE_TYPE,
             )
             .await?;
-
-            // handling identity deletion results
-            let identity_deletion_results = deleted_ids
-                .iter()
-                .map(|&serial_id| {
-                    let result_event = IdentityDeletionResult::new(party_id, serial_id + 1, true);
-                    serde_json::to_string(&result_event)
-                        .wrap_err("failed to serialize identity deletion result")
-                })
-                .collect::<eyre::Result<Vec<_>>>()?;
 
             tracing::info!(
                 "Sending {} identity deletion results",

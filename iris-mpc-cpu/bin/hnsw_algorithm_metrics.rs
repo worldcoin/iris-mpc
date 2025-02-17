@@ -68,12 +68,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .register_dynamic(param_openings, Operation::OpenNode)
         .init();
 
-    let file = File::create("searcher_time_tree.txt")?;
-    let file_processor = PrettyPrinter::new().writer(std::sync::Mutex::new(file));
-
     let filter = Targets::new()
         .with_target("iris_mpc_cpu::hnsw", Level::INFO)
         .with_target("iris_mpc_cpu::hawkers", Level::INFO);
+    let file = File::create("searcher_time_tree.txt")?;
+    let file_processor = PrettyPrinter::new().writer(std::sync::Mutex::new(file));
 
     tracing_subscriber::registry()
         .with(counting_layer)

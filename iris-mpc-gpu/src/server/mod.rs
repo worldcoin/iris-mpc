@@ -2,7 +2,10 @@ mod actor;
 
 use crate::dot::{share_db::preprocess_query, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS};
 pub use actor::{generate_luc_records, prepare_or_policy_bitmap, ServerActor, ServerActorHandle};
-use iris_mpc_common::job::{BatchMetadata, BatchQuery, BatchQueryEntries};
+use iris_mpc_common::{
+    helpers::sync::Modification,
+    job::{BatchMetadata, BatchQuery, BatchQueryEntries},
+};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
@@ -109,6 +112,9 @@ pub struct PreprocessedBatchQuery {
     pub db_left_preprocessed:     BatchQueryEntriesPreprocessed,
     pub query_right_preprocessed: BatchQueryEntriesPreprocessed,
     pub db_right_preprocessed:    BatchQueryEntriesPreprocessed,
+
+    // Keeping track of updates & deletions for sync mechanism. Mapping: Serial id -> Modification
+    pub modifications: HashMap<u32, Modification>,
 }
 
 impl From<BatchQuery> for PreprocessedBatchQuery {
@@ -159,6 +165,7 @@ impl From<BatchQuery> for PreprocessedBatchQuery {
             db_left_preprocessed:      db_left_preprocessed.unwrap(),
             query_right_preprocessed:  query_right_preprocessed.unwrap(),
             db_right_preprocessed:     db_right_preprocessed.unwrap(),
+            modifications:             value.modifications,
         }
     }
 }
