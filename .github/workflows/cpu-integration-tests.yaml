@@ -1,18 +1,27 @@
 name: CPU Integration Tests
 on: [push]
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   integration-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and export to Docker
         uses: docker/build-push-action@v6
         with:
           load: true
-          tags: iris-mpc-hawk:latest
+          tags: ${{ env.IMAGE_NAME }}:hawk-latest
 
       - name: Run docker compose
         uses: hoverkraft-tech/compose-action@v2.0.1
