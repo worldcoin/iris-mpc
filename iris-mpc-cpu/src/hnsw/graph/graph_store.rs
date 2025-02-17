@@ -15,7 +15,11 @@ use sqlx::{
     types::{Json, Text},
     Executor, Postgres, Row, Transaction,
 };
-use std::{marker::PhantomData, str::FromStr};
+use std::{
+    marker::PhantomData,
+    ops::{Deref, DerefMut},
+    str::FromStr,
+};
 
 const APP_NAME: &str = "SMPC";
 const MAX_CONNECTIONS: u32 = 5;
@@ -31,6 +35,11 @@ pub struct RowLinks<V: VectorStore> {
 
 pub struct GraphPg<V: VectorStore> {
     pool:    sqlx::PgPool,
+    phantom: PhantomData<V>,
+}
+
+pub struct GraphTx<'a, V> {
+    pub tx:  Transaction<'a, Postgres>,
     phantom: PhantomData<V>,
 }
 
@@ -74,10 +83,15 @@ impl<V: VectorStore> GraphPg<V> {
         })
     }
 
-    pub async fn tx(&self) -> Result<Transaction<'_, Postgres>> {
-        Ok(self.pool.begin().await?)
+    pub async fn tx(&self) -> Result<GraphTx<'_, V>> {
+        Ok(GraphTx {
+            tx:      self.pool.begin().await?,
+            phantom: PhantomData,
+        })
     }
+}
 
+impl<V: VectorStore> GraphTx<'_, V> {
     /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the
     /// graph.
     pub async fn insert_apply(&mut self, plan: ConnectPlanV<V>) {
@@ -106,13 +120,13 @@ impl<V: VectorStore> GraphPg<V> {
         self.set_links(q, plan.neighbors, lc).await;
     }
 
-    pub async fn get_entry_point(&self) -> Option<(V::VectorRef, usize)> {
+    pub async fn get_entry_point(&mut self) -> Option<(V::VectorRef, usize)> {
         sqlx::query(
             "
                 SELECT entry_point FROM hawk_graph_entry WHERE id = 0
             ",
         )
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.tx.deref_mut())
         .await
         .expect("Failed to fetch entry point")
         .map(|row: PgRow| {
@@ -130,13 +144,13 @@ impl<V: VectorStore> GraphPg<V> {
         ",
         )
         .bind(Json(&EntryPoint { point, layer }))
-        .execute(&self.pool)
+        .execute(self.tx.deref_mut())
         .await
         .expect("Failed to set entry point");
     }
 
     pub async fn get_links(
-        &self,
+        &mut self,
         base: &<V as VectorStore>::VectorRef,
         lc: usize,
     ) -> SortedNeighborhoodV<V> {
@@ -147,7 +161,7 @@ impl<V: VectorStore> GraphPg<V> {
         )
         .bind(Text(base))
         .bind(lc as i32)
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.tx.deref_mut())
         .await
         .expect("Failed to fetch links")
         .map(|row: PgRow| {
@@ -169,29 +183,29 @@ impl<V: VectorStore> GraphPg<V> {
         .bind(Text(base))
         .bind(lc as i32)
         .bind(Json(&links))
-        .execute(&self.pool)
+        .execute(self.tx.deref_mut())
         .await
         .expect("Failed to set links");
     }
 }
 
-impl<V: VectorStore> GraphPg<V>
+impl<V: VectorStore> GraphTx<'_, V>
 where
     V::VectorRef: Send + Unpin + 'static,
     BoxDynError: From<<V::VectorRef as FromStr>::Err>,
     V::DistanceRef: Send + Unpin + 'static,
 {
-    fn stream_links(&self) -> impl Stream<Item = Result<RowLinks<V>>> + '_ {
+    fn stream_links(&mut self) -> impl Stream<Item = Result<RowLinks<V>>> + '_ {
         sqlx::query_as::<_, RowLinks<V>>(
             "
         SELECT source_ref, links, layer FROM hawk_graph_links
         ",
         )
-        .fetch(&self.pool)
+        .fetch(self.tx.deref_mut())
         .map_err(Into::into)
     }
 
-    pub async fn load_to_mem(&self) -> Result<GraphMem<V>> {
+    pub async fn load_to_mem(&mut self) -> Result<GraphMem<V>> {
         let mut graph_mem = GraphMem::new();
 
         let ep = self.get_entry_point().await;
@@ -336,7 +350,9 @@ mod tests {
             d
         };
 
-        let ep = graph.get_entry_point().await;
+        let mut tx = graph.tx().await.unwrap();
+
+        let ep = tx.get_entry_point().await;
         assert!(ep.is_none());
 
         let ep2 = EntryPoint {
@@ -344,9 +360,9 @@ mod tests {
             layer: ep.map(|e| e.1).unwrap_or_default() + 1,
         };
 
-        graph.set_entry_point(ep2.point, ep2.layer).await;
+        tx.set_entry_point(ep2.point, ep2.layer).await;
 
-        let (point3, layer3) = graph.get_entry_point().await.unwrap();
+        let (point3, layer3) = tx.get_entry_point().await.unwrap();
         let ep3 = EntryPoint {
             point: point3,
             layer: layer3,
@@ -363,12 +379,13 @@ mod tests {
                     .await;
             }
 
-            graph.set_links(vectors[i], links.clone(), 0).await;
+            tx.set_links(vectors[i], links.clone(), 0).await;
 
-            let links2 = graph.get_links(&vectors[i], 0).await;
+            let links2 = tx.get_links(&vectors[i], 0).await;
             assert_eq!(*links, *links2);
         }
 
+        tx.tx.commit().await.unwrap();
         graph.cleanup().await.unwrap();
     }
 
@@ -387,6 +404,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Insert the codes.
+        let mut tx = graph_pg.tx().await.unwrap();
         for query in queries1.iter() {
             let insertion_layer = db.select_layer(rng);
             let (neighbors, set_ep) = db
@@ -400,10 +418,10 @@ mod tests {
                 .await;
 
             graph_mem.insert_apply(plan.clone()).await;
-            graph_pg.insert_apply(plan).await;
+            tx.insert_apply(plan).await;
         }
 
-        let graph_mem2 = graph_pg.load_to_mem().await.unwrap();
+        let graph_mem2 = tx.load_to_mem().await.unwrap();
         assert_eq!(graph_mem, &graph_mem2);
 
         // Search for the same codes and find matches.
@@ -412,6 +430,7 @@ mod tests {
             assert!(db.is_match(vector_store, &[neighbors]).await);
         }
 
+        tx.tx.commit().await.unwrap();
         graph_pg.cleanup().await.unwrap();
     }
 }

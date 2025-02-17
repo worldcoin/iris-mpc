@@ -1547,14 +1547,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             // Graph mutation.
             {
-                // TODO: With tx.
-                // let mut tx = graph_store.tx().await?;
+                let mut graph_tx = graph_store.tx().await?;
 
                 for side in hawk_mutation {
                     for plan in side {
-                        graph_store.insert_apply(plan).await;
+                        graph_tx.insert_apply(plan).await;
                     }
                 }
+
+                graph_tx.tx.commit().await?;
             }
 
             for memory_serial_id in memory_serial_ids {
