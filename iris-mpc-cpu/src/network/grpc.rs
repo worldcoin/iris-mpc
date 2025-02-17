@@ -279,6 +279,7 @@ impl Networking for GrpcNetworking {
         receiver: &Identity,
         session_id: &SessionId,
     ) -> eyre::Result<()> {
+        tracing::trace!(target: "searcher::network", action = "send", party = ?receiver, bytes = value.len(), rounds = 1);
         let outgoing_stream = self
             .outgoing_streams
             .get_stream(*session_id, receiver.clone())

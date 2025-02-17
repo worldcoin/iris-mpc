@@ -45,11 +45,7 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
     /// the ascending order.
     ///
     /// Call the VectorStore to come up with the insertion index.
-    #[instrument(
-        level = "trace",
-        target = "searcher::network",
-        skip(self, store, to, dist)
-    )]
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     pub async fn insert<V>(&mut self, store: &mut V, to: Vector, dist: Distance)
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,

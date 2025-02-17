@@ -4,10 +4,10 @@ use iris_mpc_common::iris_db::db::IrisDB;
 use iris_mpc_cpu::{
     database_generators::generate_galois_iris_shares,
     hawkers::aby3_store::Aby3Store,
-    hnsw::{metrics::network::NetworkFormatter, GraphMem, HnswSearcher, VectorStore},
+    hnsw::{metrics::network::NetworkFormatter, HnswSearcher},
 };
-use rand::{RngCore, SeedableRng};
-use std::{error::Error, fs::File};
+use rand::SeedableRng;
+use std::error::Error;
 use tokio::task::JoinSet;
 use tracing::{trace_span, Instrument};
 use tracing_forest::{tag::NoTag, ForestLayer, PrettyPrinter};
@@ -19,25 +19,12 @@ struct Args {
     database_size: usize,
 }
 
-async fn insert<V: VectorStore>(
-    searcher: HnswSearcher,
-    vector_store: &mut V,
-    graph_store: &mut GraphMem<V>,
-    query: &V::QueryRef,
-    rng: &mut impl RngCore,
-) -> V::VectorRef {
-    searcher.insert(vector_store, graph_store, query, rng).await
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     let database_size = args.database_size;
 
-    let file = File::create("searcher_network_tree.txt")?;
-    let file_processor = PrettyPrinter::new()
-        .formatter(NetworkFormatter {})
-        .writer(std::sync::Mutex::new(file));
+    let file_processor = PrettyPrinter::new().formatter(NetworkFormatter {});
 
     tracing_subscriber::registry()
         .with(
@@ -49,9 +36,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut rng = AesRng::seed_from_u64(0_u64);
 
+    let crate_root = env!("CARGO_MANIFEST_DIR");
+    let data_dir = format!("{crate_root}/data");
     let (_, vectors_graphs) = Aby3Store::lazy_setup_from_files_with_grpc(
-        "./iris-mpc-cpu/data/store.ndjson",
-        &format!("./iris-mpc-cpu/data/graph_{}.dat", database_size),
+        &format!("{data_dir}/store.ndjson"),
+        &format!("{data_dir}/graph_{database_size}.dat"),
         &mut rng,
         database_size,
         false,
@@ -78,15 +67,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let party_span = trace_span!(target: "searcher", "party", party = ?party_id);
 
         jobs.spawn(async move {
-            insert(
-                searcher,
-                &mut vector_store,
-                &mut graph_store,
-                &query,
-                &mut rng,
-            )
-            .instrument(party_span)
-            .await;
+            searcher
+                .insert(&mut vector_store, &mut graph_store, &query, &mut rng)
+                .instrument(party_span)
+                .await;
         });
     }
     jobs.join_all().await;

@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
+ansi_term = "0.12.1"
 async-channel = "2.3.1"
 async-stream = "0.3.6"
 async-trait = "~0.1"
@@ -36,7 +37,7 @@ tokio.workspace = true
 tokio-stream = "0.1"
 tonic = "0.12.3"
 tracing.workspace = true
-tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", features = ["uuid", "chrono", "smallvec", "tokio", "serde", "env-filter"] }
+tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", rev = "5683eba", features = ["uuid", "chrono", "smallvec", "tokio", "serde", "env-filter"] }
 tracing-subscriber.workspace = true
 tracing-test = "0.2.5"
 uuid.workspace = true

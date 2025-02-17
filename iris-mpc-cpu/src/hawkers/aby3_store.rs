@@ -242,7 +242,7 @@ impl Aby3Store {
         self.storage.prepare_query(code)
     }
 
-    #[instrument(level = "trace", target = "searcher::network", skip(self, distances))]
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     pub async fn lift_distances(
         &mut self,
         distances: Vec<Share<u16>>,
@@ -260,7 +260,7 @@ impl Aby3Store {
     }
 
     /// Assumes that the first iris of each pair is preprocessed.
-    #[instrument(level = "trace", target = "searcher::network", skip(self, pairs))]
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn eval_pairwise_distances(
         &mut self,
         pairs: Vec<(GaloisRingSharedIris, GaloisRingSharedIris)>,
@@ -286,11 +286,7 @@ impl VectorStore for Aby3Store {
         self.storage.insert(query).await
     }
 
-    #[instrument(
-        level = "trace",
-        target = "searcher::network",
-        skip(self, query, vector)
-    )]
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn eval_distance(
         &mut self,
         query: &Self::QueryRef,
@@ -302,7 +298,7 @@ impl VectorStore for Aby3Store {
         self.lift_distances(dist).await.unwrap()[0].clone()
     }
 
-    #[instrument(level = "trace", target = "searcher::network", skip(self, query, vectors), fields(batch_size = vectors.len()))]
+    #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = vectors.len()))]
     async fn eval_distance_batch(
         &mut self,
         query: &Self::QueryRef,
@@ -328,11 +324,7 @@ impl VectorStore for Aby3Store {
             .unwrap()
     }
 
-    #[instrument(
-        level = "trace",
-        target = "searcher::network",
-        skip(self, distance1, distance2)
-    )]
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn less_than(
         &mut self,
         distance1: &Self::DistanceRef,
@@ -368,11 +360,7 @@ impl Aby3Store {
         }
     }
 
-    #[instrument(
-        level = "trace",
-        target = "searcher::network",
-        skip(self, vector1, vector2)
-    )]
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn eval_distance_vectors(
         &mut self,
         vector1: &<Aby3Store as VectorStore>::VectorRef,

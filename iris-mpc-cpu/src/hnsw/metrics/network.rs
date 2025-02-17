@@ -1,3 +1,4 @@
+use ansi_term::Colour::{Cyan, Green, Purple, Yellow};
 use std::{
     collections::{hash_map::Entry, HashMap},
     fmt::{self, Write},
@@ -116,7 +117,10 @@ impl NetworkTree {
     }
 }
 
-/// Tag to identify unique nodes in the network tree
+/// Tag to identify unique nodes in the network tree.
+/// When the tree is formatted, nodes having the same parent span and tag are
+/// collapsed into one and the resulting `calls` field is set to the number of
+/// these nodes. See `NetworkTree` for the context.
 #[derive(Eq, PartialEq, Hash, Clone)]
 struct NodeTag {
     name:   Option<String>, // `message` for events, `name` for spans
@@ -153,10 +157,10 @@ fn get_network_tree(tree: &Tree) -> NetworkTree {
             let mut rounds = 0;
             for field in event.fields().iter() {
                 if field.key() == "bytes" {
-                    bytes = field.value().to_string().parse().unwrap();
+                    bytes = field.value().parse().unwrap();
                 }
                 if field.key() == "rounds" {
-                    rounds = field.value().to_string().parse().unwrap();
+                    rounds = field.value().parse().unwrap();
                 }
             }
             NetworkTree::Event(NetworkEvent {
@@ -203,6 +207,8 @@ fn get_network_tree(tree: &Tree) -> NetworkTree {
 
 /// Formatter for network trees similar to `PrettyPrinter` from
 /// `tracing_forest`.
+///
+/// Trees are formatted with ANSI terminal symbols.
 pub struct NetworkFormatter {}
 
 impl Formatter for NetworkFormatter {
@@ -259,26 +265,22 @@ impl NetworkFormatter {
         let bytes_root = bytes_root.unwrap_or(total_bytes);
         let percent_total_of_root_bytes = 100.0 * total_bytes / bytes_root;
 
-        write!(writer, "{}", span.name)?;
+        write!(writer, "{}", Yellow.paint(span.name.clone()))?;
         if span.calls > 1 {
-            write!(writer, " x {}", span.calls)?;
+            let calls = format!(" x {}", span.calls);
+            write!(writer, "{}", Purple.paint(calls))?;
         }
 
         let total_rounds = (span.rounds * span.calls) as f64;
         let rounds_root = rounds_root.unwrap_or(total_rounds);
         let percent_total_of_root_rounds = 100.0 * total_rounds / rounds_root;
 
-        write!(
-            writer,
-            " [ {} rounds | {} per call, ",
-            span.rounds,
-            BytesDisplay(span.bytes as f64)
-        )?;
-        write!(
-            writer,
-            "{:.2}% rounds | {:.2}% bytes of total ] | ",
-            percent_total_of_root_bytes, percent_total_of_root_rounds
-        )?;
+        let rounds = Cyan.paint(format!("{} rounds", span.rounds));
+        let bytes = Green.paint(format!("{}", BytesDisplay(span.bytes as f64)));
+        write!(writer, " [ {rounds} | {bytes} per call, ",)?;
+        let rounds_share = Cyan.paint(format!("{:.2}% rounds", percent_total_of_root_bytes));
+        let bytes_share = Green.paint(format!("{:.2}% bytes", percent_total_of_root_rounds));
+        write!(writer, "{rounds_share} | {bytes_share} of total ] | ",)?;
 
         for (n, field) in span.fields.iter().enumerate() {
             write!(
