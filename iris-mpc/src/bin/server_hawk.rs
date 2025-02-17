@@ -1309,9 +1309,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let hawk_args = HawkArgs {
         party_index:         config.party_id,
-        addresses:           node_addresses,
+        addresses:           node_addresses.clone(),
         request_parallelism: config.hawk_request_parallelism,
     };
+
+    tracing::info!(
+        "Initializing HawkActor with args: party_index: {}, addresses: {:?}",
+        hawk_args.party_index,
+        node_addresses
+    );
 
     let mut hawk_actor = HawkActor::from_cli(&hawk_args).await?;
 

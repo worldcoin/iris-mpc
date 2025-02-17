@@ -152,8 +152,8 @@ impl GrpcNetworking {
     // TODO: from config?
     fn backoff(&self) -> ExponentialBackoff {
         ExponentialBackoff {
-            max_elapsed_time: Some(std::time::Duration::from_secs(2)),
-            max_interval: std::time::Duration::from_secs(1),
+            max_elapsed_time: Some(std::time::Duration::from_secs(60)),
+            max_interval: std::time::Duration::from_secs(5),
             multiplier: 1.1,
             ..Default::default()
         }

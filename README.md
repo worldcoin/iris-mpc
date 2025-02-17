@@ -108,6 +108,11 @@ The example file contains a sample WSL env var.
 
 ## CPU Implementation
 
+#### Requirements
+
+1. `direnv` installed on your machine
+2. Run `direnv allow` in the root of the project. This will enable you to load all required env variables from the .env.test and .envrc files 
+
 #### Option 1: Locally run a single server without Docker (recommended for quick iteration)
 
 **Step 1: run ancillary services**
