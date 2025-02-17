@@ -9,7 +9,7 @@ repository.workspace = true
 
 [dependencies]
 aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
-ansi_term = "0.12.1"
+ansiterm = "0.12.2"
 async-channel = "2.3.1"
 async-stream = "0.3.6"
 async-trait = "~0.1"

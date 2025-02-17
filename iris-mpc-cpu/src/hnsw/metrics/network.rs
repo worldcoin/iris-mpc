@@ -1,4 +1,4 @@
-use ansi_term::Colour::{Cyan, Green, Purple, Yellow};
+use ansiterm::Colour::{Cyan, Green, Purple, Yellow};
 use std::{
     collections::{hash_map::Entry, HashMap},
     fmt::{self, Write},
