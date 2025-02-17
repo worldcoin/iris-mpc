@@ -134,7 +134,7 @@ COMMAND="reshare-client \
     --my-kms-key-arn $MY_KMS_KEY_ARN \
     --other-kms-key-arn $OTHER_KMS_KEY_ARN \
     --reshare-run-session-id $RESHARE_RUN_SESSION_ID \
-    --client-tls-cert-path $CLIENT_TLS_CERT_PATH"
+    --ca-root-file-path $CLIENT_TLS_CERT_PATH"
 
 # Display or execute command
 echo "Generated command:"
