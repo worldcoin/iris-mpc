@@ -8,6 +8,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Build and export to Docker
+        uses: docker/build-push-action@v6
+        with:
+          load: true
+          tags: iris-mpc-hawk:latest
+
       - name: Run docker compose
         uses: hoverkraft-tech/compose-action@v2.0.1
         with:

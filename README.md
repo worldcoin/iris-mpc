@@ -133,7 +133,8 @@ The script must run with `--init-servers` flag at least once. It will create som
 
 Just run
 
-```
+```bash
+docker build -f Dockerfile.hawk -t iris-mpc-hawk:latest .
 docker-compose up
 ```
 
