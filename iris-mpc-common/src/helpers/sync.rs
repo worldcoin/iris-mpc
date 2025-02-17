@@ -1,5 +1,6 @@
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use std::{fmt, fmt::Display, str::FromStr};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncState {
@@ -14,8 +15,31 @@ pub struct SyncResult {
     all_states: Vec<SyncState>,
 }
 
-pub const STATUS_IN_PROGRESS: &str = "IN_PROGRESS";
-pub const STATUS_COMPLETED: &str = "COMPLETED";
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ModificationStatus {
+    InProgress,
+    Completed,
+}
+
+impl Display for ModificationStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ModificationStatus::InProgress => write!(f, "IN_PROGRESS"),
+            ModificationStatus::Completed => write!(f, "COMPLETED"),
+        }
+    }
+}
+
+impl FromStr for ModificationStatus {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "IN_PROGRESS" => Ok(ModificationStatus::InProgress),
+            "COMPLETED" => Ok(ModificationStatus::Completed),
+            _ => Err(()),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Modification {
@@ -29,7 +53,7 @@ pub struct Modification {
 
 impl Modification {
     pub fn mark_completed(&mut self, persisted: bool) {
-        self.status = STATUS_COMPLETED.to_string();
+        self.status = ModificationStatus::Completed.to_string();
         self.persisted = persisted;
     }
 }

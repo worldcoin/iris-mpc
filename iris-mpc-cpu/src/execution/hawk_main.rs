@@ -515,7 +515,7 @@ impl JobSubmissionHandle for HawkHandle {
                 successful_reauths: vec![],                             // TODO.
                 reauth_target_indices: Default::default(),              // TODO.
                 reauth_or_rule_used: Default::default(),                // TODO.
-                modifications: HashMap::new(),                          // TODO.
+                modifications: batch.modifications,
             }
         }
     }

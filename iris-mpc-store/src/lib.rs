@@ -11,7 +11,7 @@ use futures::{
 use iris_mpc_common::{
     config::Config,
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
-    helpers::sync::{Modification, STATUS_IN_PROGRESS},
+    helpers::sync::{Modification, ModificationStatus},
     iris_db::iris::IrisCode,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -487,7 +487,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         .bind(serial_id)
         .bind(request_type)
         .bind(s3_url)
-        .bind(STATUS_IN_PROGRESS)
+        .bind(ModificationStatus::InProgress.to_string())
         .bind(persisted)
         .fetch_one(&self.pool)
         .await?;
@@ -655,7 +655,6 @@ mod tests {
     use iris_mpc_common::helpers::{
         smpc_request::{IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE},
         smpc_response::UniquenessResult,
-        sync::{STATUS_COMPLETED, STATUS_IN_PROGRESS},
     };
 
     #[tokio::test]
@@ -1048,7 +1047,7 @@ mod tests {
             42,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
-            STATUS_IN_PROGRESS,
+            ModificationStatus::InProgress.to_string(),
             false,
         );
 
@@ -1064,7 +1063,7 @@ mod tests {
             43,
             REAUTH_MESSAGE_TYPE,
             Some("https://example.com".to_string()),
-            STATUS_IN_PROGRESS,
+            ModificationStatus::InProgress.to_string(),
             false,
         );
 
@@ -1098,7 +1097,7 @@ mod tests {
             15,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
-            STATUS_IN_PROGRESS,
+            ModificationStatus::InProgress.to_string(),
             false,
         );
         assert_modification(
@@ -1107,7 +1106,7 @@ mod tests {
             14,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
-            STATUS_IN_PROGRESS,
+            ModificationStatus::InProgress.to_string(),
             false,
         );
 
@@ -1121,7 +1120,7 @@ mod tests {
         expected_serial_id: i64,
         expected_request_type: &str,
         expected_s3_url: Option<String>,
-        expected_status: &str,
+        expected_status: String,
         expected_persisted: bool,
     ) {
         assert_eq!(actual.id, expected_id);
@@ -1169,7 +1168,7 @@ mod tests {
             150,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/150".to_string()),
-            STATUS_IN_PROGRESS,
+            ModificationStatus::InProgress.to_string(),
             false,
         );
         assert_modification(
@@ -1178,7 +1177,7 @@ mod tests {
             50,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/50".to_string()),
-            STATUS_COMPLETED,
+            ModificationStatus::Completed.to_string(),
             false,
         );
         assert_modification(
@@ -1187,7 +1186,7 @@ mod tests {
             100,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
-            STATUS_COMPLETED,
+            ModificationStatus::Completed.to_string(),
             true,
         );
 
