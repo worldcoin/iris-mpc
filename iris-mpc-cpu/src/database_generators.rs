@@ -2,7 +2,9 @@ use crate::shares::{ring_impl::RingElement, share::Share};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     iris_db::iris::IrisCode,
+    job::BatchQueryEntries,
 };
+use itertools::izip;
 use rand::{CryptoRng, Rng, RngCore};
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +22,19 @@ impl GaloisRingSharedIris {
         GaloisRingSharedIris {
             code: GaloisRingIrisCodeShare::default_for_party(party_id),
             mask: GaloisRingTrimmedMaskCodeShare::default_for_party(party_id),
+        }
+    }
+
+    pub fn from_batch(batch: BatchQueryEntries) -> Vec<Self> {
+        izip!(batch.code, batch.mask)
+            .map(|(code, mask)| GaloisRingSharedIris { code, mask })
+            .collect()
+    }
+
+    pub fn to_batch(shares: &[Self]) -> BatchQueryEntries {
+        BatchQueryEntries {
+            code: shares.iter().map(|s| s.code.clone()).collect(),
+            mask: shares.iter().map(|s| s.mask.clone()).collect(),
         }
     }
 }

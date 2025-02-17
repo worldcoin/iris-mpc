@@ -32,15 +32,16 @@ sodiumoxide = "0.2.7"
 iris-mpc-gpu = { path = "../iris-mpc-gpu" }
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
-sha2 = "0.10.8"
 metrics = "0.22.1"
 metrics-exporter-statsd = "0.7"
 serde = { version = "1.0.214", features = ["derive"] }
-bincode = "1.3.3"
+iris-mpc-cpu.workspace = true
 
 [dev-dependencies]
-criterion = "0.5"
-ndarray = "0.16.0"
 
 [features]
 default = []
+
+[[bin]]
+name = "server-hawk"
+path = "src/bin/server_hawk.rs"

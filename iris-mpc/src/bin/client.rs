@@ -1,7 +1,7 @@
 #![allow(clippy::needless_range_loop)]
 use aws_config::retry::RetryConfig;
 use aws_sdk_sns::{config::Region, Client};
-use aws_sdk_sqs::Client as SqsClient;
+// use aws_sdk_sqs::Client as SqsClient;
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use eyre::{Context, ContextCompat};
@@ -11,7 +11,7 @@ use iris_mpc_common::{
         key_pair::download_public_key,
         sha256::sha256_as_hex_string,
         smpc_request::{IrisCodesJSON, UniquenessRequest, UNIQUENESS_MESSAGE_TYPE},
-        smpc_response::{create_message_type_attribute_map, UniquenessResult},
+        smpc_response::create_message_type_attribute_map,
         sqs_s3_helper::upload_file_and_generate_presigned_url,
     },
     iris_db::{db::IrisDB, iris::IrisCode},
@@ -21,7 +21,7 @@ use serde_json::to_string;
 use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{
-    spawn,
+    // spawn,
     sync::{Mutex, Semaphore},
     time::sleep,
 };
@@ -30,7 +30,7 @@ use uuid::Uuid;
 const MAX_CONCURRENT_REQUESTS: usize = 16;
 const BATCH_SIZE: usize = 64;
 const N_BATCHES: usize = 100;
-const N_QUERIES: usize = BATCH_SIZE * N_BATCHES;
+// const N_QUERIES: usize = BATCH_SIZE * N_BATCHES;
 const WAIT_AFTER_BATCH: Duration = Duration::from_secs(2);
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;
@@ -44,12 +44,11 @@ struct Opt {
     #[arg(long, env, required = true)]
     request_topic_region: String,
 
-    #[arg(long, env, required = true)]
-    response_queue_url: String,
-
-    #[arg(long, env, required = true)]
-    response_queue_region: String,
-
+    // #[arg(long, env, required = true)]
+    // response_queue_url: String,
+    //
+    // #[arg(long, env, required = true)]
+    // response_queue_region: String,
     #[arg(long, env, required = true)]
     requests_bucket_name: String,
 
@@ -85,9 +84,8 @@ async fn main() -> eyre::Result<()> {
         request_topic_arn,
         request_topic_region,
 
-        response_queue_url,
-        response_queue_region,
-
+        // response_queue_url,
+        // response_queue_region,
         db_index,
         rng_seed,
         n_repeat,
@@ -127,91 +125,91 @@ async fn main() -> eyre::Result<()> {
     let responses: Arc<Mutex<HashMap<u32, IrisCode>>> = Arc::new(Mutex::new(HashMap::new()));
     let db: Arc<Mutex<IrisDB>> = Arc::new(Mutex::new(db));
     let requests_sns_client: Arc<Client> = Arc::new(requests_sns_client);
-
-    let thread_expected_results = expected_results.clone();
-    let thread_requests = requests.clone();
-    let thread_responses = responses.clone();
+    // let thread_expected_results = expected_results.clone();
+    // let thread_requests = requests.clone();
+    // let thread_responses = responses.clone();
 
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
 
-    let recv_thread = spawn(async move {
-        let region_provider = Region::new(response_queue_region);
-        let results_sqs_config = aws_config::from_env().region(region_provider).load().await;
-        let results_sqs_client = SqsClient::new(&results_sqs_config);
-        let mut counter = 0;
-        while counter < N_QUERIES * 3 {
-            // Receive responses
-            let msg = results_sqs_client
-                .receive_message()
-                .max_number_of_messages(1)
-                .queue_url(response_queue_url.clone())
-                .send()
-                .await
-                .context("Failed to receive message")?;
-
-            for msg in msg.messages.unwrap_or_default() {
-                counter += 1;
-
-                let result: UniquenessResult =
-                    serde_json::from_str(&msg.body.context("No body found")?)
-                        .context("Failed to parse message body")?;
-
-                println!("Received result: {:?}", result);
-
-                let expected_result_option = {
-                    let tmp = thread_expected_results.lock().await;
-                    tmp.get(&result.signup_id).cloned()
-                };
-                if expected_result_option.is_none() {
-                    eprintln!(
-                        "No expected result found for request_id: {}, the SQS message is likely \
-                         stale, clear the queue",
-                        result.signup_id
-                    );
-
-                    results_sqs_client
-                        .delete_message()
-                        .queue_url(response_queue_url.clone())
-                        .receipt_handle(msg.receipt_handle.unwrap())
-                        .send()
-                        .await
-                        .context("Failed to delete message")?;
-
-                    continue;
-                }
-                let expected_result = expected_result_option.unwrap();
-
-                if expected_result.is_none() {
-                    // New insertion
-                    assert!(!result.is_match);
-                    let request = {
-                        let tmp = thread_requests.lock().await;
-                        tmp.get(&result.signup_id).unwrap().clone()
-                    };
-                    {
-                        let mut tmp = thread_responses.lock().await;
-                        tmp.insert(result.serial_id.unwrap(), request);
-                    }
-                } else {
-                    // Existing entry
-                    assert!(result.is_match);
-                    assert!(result.matched_serial_ids.is_some());
-                    let matched_ids = result.matched_serial_ids.unwrap();
-                    assert!(matched_ids.len() == 1);
-                    assert_eq!(expected_result.unwrap(), matched_ids[0]);
-                }
-
-                results_sqs_client
-                    .delete_message()
-                    .queue_url(response_queue_url.clone())
-                    .receipt_handle(msg.receipt_handle.unwrap())
-                    .send()
-                    .await
-                    .context("Failed to delete message")?;
-            }
-        }
-        eyre::Ok(())
-    });
+    // let recv_thread = spawn(async move {
+    //     let region_provider = Region::new(response_queue_region);
+    //     let results_sqs_config =
+    // aws_config::from_env().region(region_provider).load().await;
+    //     let results_sqs_client = SqsClient::new(&results_sqs_config);
+    //     let mut counter = 0;
+    //     while counter < N_QUERIES * 3 {
+    //         // Receive responses
+    //         let msg = results_sqs_client
+    //             .receive_message()
+    //             .max_number_of_messages(1)
+    //             .queue_url(response_queue_url.clone())
+    //             .send()
+    //             .await
+    //             .context("Failed to receive message")?;
+    //
+    //         for msg in msg.messages.unwrap_or_default() {
+    //             counter += 1;
+    //
+    //             let result: UniquenessResult =
+    //                 serde_json::from_str(&msg.body.context("No body found")?)
+    //                     .context("Failed to parse message body")?;
+    //
+    //             println!("Received result: {:?}", result);
+    //
+    //             let expected_result_option = {
+    //                 let tmp = thread_expected_results.lock().await;
+    //                 tmp.get(&result.signup_id).cloned()
+    //             };
+    //             if expected_result_option.is_none() {
+    //                 eprintln!(
+    //                     "No expected result found for request_id: {}, the SQS
+    // message is likely \                      stale, clear the queue",
+    //                     result.signup_id
+    //                 );
+    //
+    //                 results_sqs_client
+    //                     .delete_message()
+    //                     .queue_url(response_queue_url.clone())
+    //                     .receipt_handle(msg.receipt_handle.unwrap())
+    //                     .send()
+    //                     .await
+    //                     .context("Failed to delete message")?;
+    //
+    //                 continue;
+    //             }
+    //             let expected_result = expected_result_option.unwrap();
+    //
+    //             if expected_result.is_none() {
+    //                 // New insertion
+    //                 assert!(!result.is_match);
+    //                 let request = {
+    //                     let tmp = thread_requests.lock().await;
+    //                     tmp.get(&result.signup_id).unwrap().clone()
+    //                 };
+    //                 {
+    //                     let mut tmp = thread_responses.lock().await;
+    //                     tmp.insert(result.serial_id.unwrap(), request);
+    //                 }
+    //             } else {
+    //                 // Existing entry
+    //                 assert!(result.is_match);
+    //                 assert!(result.matched_serial_ids.is_some());
+    //                 let matched_ids = result.matched_serial_ids.unwrap();
+    //                 assert!(matched_ids.len() == 1);
+    //                 assert_eq!(expected_result.unwrap(), matched_ids[0]);
+    //             }
+    //
+    //             results_sqs_client
+    //                 .delete_message()
+    //                 .queue_url(response_queue_url.clone())
+    //                 .receipt_handle(msg.receipt_handle.unwrap())
+    //                 .send()
+    //                 .await
+    //                 .context("Failed to delete message")?;
+    //         }
+    //     }
+    //     eyre::Ok(())
+    // });
 
     // Prepare query
     for batch_idx in 0..N_BATCHES {
@@ -405,7 +403,7 @@ async fn main() -> eyre::Result<()> {
     }
 
     // Receive all messages
-    recv_thread.await??;
+    // recv_thread.await??;
 
     Ok(())
 }

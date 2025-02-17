@@ -41,7 +41,7 @@ use iris_mpc_common::{
     iris_db::get_dummy_shares_for_deletion,
     job::{BatchMetadata, BatchQuery, JobSubmissionHandle, ServerJobResult},
 };
-use iris_mpc_gpu::server::ServerActor;
+use iris_mpc_cpu::execution::hawk_main::{HawkActor, HawkArgs, HawkHandle};
 use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
@@ -890,7 +890,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let party_id = config.party_id;
     tracing::info!("Deriving shared secrets");
-    let chacha_seeds = initialize_chacha_seeds(config.clone()).await?;
+    let _chacha_seeds = initialize_chacha_seeds(config.clone()).await?;
 
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_result_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
@@ -981,6 +981,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     }
 
     let health_shutdown_handler = Arc::clone(&shutdown_handler);
+    let health_check_port = config.hawk_server_healthcheck_port;
 
     let _health_check_abort = background_tasks.spawn({
         let uuid = uuid::Uuid::new_v4().to_string();
@@ -1034,7 +1035,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     "/startup-sync",
                     get(move || async move { serde_json::to_string(&my_state).unwrap() }),
                 );
-            let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+            let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", health_check_port))
                 .await
                 .wrap_err("healthcheck listener bind error")?;
             axum::serve(listener, app)
@@ -1046,19 +1047,27 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     });
 
     background_tasks.check_tasks();
-    tracing::info!("Healthcheck and Readiness server running on port 3000.");
+    tracing::info!(
+        "Healthcheck and Readiness server running on port {}.",
+        health_check_port.clone()
+    );
 
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
     // Check other nodes and wait until all nodes are ready.
-    let all_nodes = config.node_hostnames.clone();
+    let all_readiness_addresses = get_check_addresses(
+        config.node_hostnames.clone(),
+        config.healthcheck_ports.clone(),
+        "ready",
+    );
+
     let unready_check = tokio::spawn(async move {
-        let next_node = &all_nodes[(config.party_id + 1) % 3];
-        let prev_node = &all_nodes[(config.party_id + 2) % 3];
+        let next_node = &all_readiness_addresses[(config.party_id + 1) % 3];
+        let prev_node = &all_readiness_addresses[(config.party_id + 2) % 3];
         let mut connected_but_unready = [false, false];
 
         loop {
             for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(format!("http://{}:3000/ready", host)).await;
+                let res = reqwest::get(host.as_str()).await;
 
                 if res.is_ok() && res.unwrap().status() == StatusCode::SERVICE_UNAVAILABLE {
                     connected_but_unready[i] = true;
@@ -1092,19 +1101,25 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
     let mut heartbeat_tx = Some(heartbeat_tx);
-    let all_nodes = config.node_hostnames.clone();
+
+    let all_health_addresses = get_check_addresses(
+        config.node_hostnames.clone(),
+        config.healthcheck_ports.clone(),
+        "health",
+    );
+
     let image_name = config.image_name.clone();
     let heartbeat_shutdown_handler = Arc::clone(&shutdown_handler);
     let _heartbeat = background_tasks.spawn(async move {
-        let next_node = &all_nodes[(config.party_id + 1) % 3];
-        let prev_node = &all_nodes[(config.party_id + 2) % 3];
+        let next_node = &all_health_addresses[(config.party_id + 1) % 3];
+        let prev_node = &all_health_addresses[(config.party_id + 2) % 3];
         let mut last_response = [String::default(), String::default()];
         let mut connected = [false, false];
         let mut retries = [0, 0];
 
         loop {
             for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(format!("http://{}:3000/health", host)).await;
+                let res = reqwest::get(host.as_str()).await;
                 if res.is_err() || !res.as_ref().unwrap().status().is_success() {
                     // If it's the first time after startup, we allow a few retries to let the other
                     // nodes start up as well.
@@ -1219,14 +1234,20 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     // ANCHOR: Syncing latest node state
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Syncing latest node state");
-    let all_nodes = config.node_hostnames.clone();
-    let next_node = &all_nodes[(config.party_id + 1) % 3];
-    let prev_node = &all_nodes[(config.party_id + 2) % 3];
+
+    let all_startup_sync_addresses = get_check_addresses(
+        config.node_hostnames.clone(),
+        config.healthcheck_ports.clone(),
+        "startup-sync",
+    );
+
+    let next_node = &all_startup_sync_addresses[(config.party_id + 1) % 3];
+    let prev_node = &all_startup_sync_addresses[(config.party_id + 2) % 3];
 
     tracing::info!("Database store length is: {}", store_len);
     let mut states = vec![my_state.clone()];
     for host in [next_node, prev_node].iter() {
-        let res = reqwest::get(format!("http://{}:3000/startup-sync", host)).await;
+        let res = reqwest::get(host.as_str()).await;
         match res {
             Ok(res) => {
                 let state: SyncState = match res.json().await {
@@ -1279,83 +1300,59 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let store_len = store.count_irises().await?;
     tracing::info!("Database store length after sync: {}", store_len);
 
-    let (tx, rx) = oneshot::channel();
-    let config_clone = config.clone();
-    background_tasks.spawn_blocking(move || {
-        let config = config_clone;
-        // --------------------------------------------------------------------------
+    let node_addresses: Vec<String> = config
+        .node_hostnames
+        .iter()
+        .zip(config.service_ports.iter())
+        .map(|(host, port)| format!("{}:{}", host, port))
+        .collect();
+
+    let hawk_args = HawkArgs {
+        party_index:         config.party_id,
+        addresses:           node_addresses,
+        request_parallelism: config.hawk_request_parallelism,
+    };
+
+    let mut hawk_actor = HawkActor::from_cli(&hawk_args).await?;
+
+    {
         // ANCHOR: Load the database
-        // --------------------------------------------------------------------------
-        tracing::info!("⚓️ ANCHOR: Starting server actor");
-        match ServerActor::new(
-            config.party_id,
-            chacha_seeds,
-            8,
-            config.max_db_size,
-            config.max_batch_size,
-            config.match_distances_buffer_size,
-            config.match_distances_buffer_size_extra_percent,
-            config.n_buckets,
-            config.return_partial_results,
-            config.disable_persistence,
-            config.enable_debug_timing,
-        ) {
-            Ok((mut actor, handle)) => {
-                tracing::info!("⚓️ ANCHOR: Load the database");
-                let res = if config.fake_db_size > 0 {
-                    // TODO: does this even still work, since we do not page-lock the memory here?
-                    actor.fake_db(config.fake_db_size);
-                    Ok(())
-                } else {
-                    tracing::info!(
-                        "Initialize iris db: Loading from DB (parallelism: {})",
-                        parallelism
-                    );
-                    let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
-                    let db_chunks_s3_store =
-                        S3Store::new(db_chunks_s3_client.clone(), s3_chunks_bucket_name.clone());
+        tracing::info!("⚓️ ANCHOR: Load the database");
+        let mut loader = hawk_actor.as_iris_loader().await;
 
-                    tokio::runtime::Handle::current().block_on(async {
-                        load_db(
-                            &mut actor,
-                            &store,
-                            store_len,
-                            parallelism,
-                            &config,
-                            db_chunks_s3_store,
-                            db_chunks_s3_client,
-                            s3_chunks_folder_name,
-                            s3_chunks_bucket_name,
-                            s3_load_parallelism,
-                            s3_load_max_retries,
-                            s3_load_initial_backoff_ms,
-                            download_shutdown_handler,
-                        )
-                        .await
-                    })
-                };
+        if config.fake_db_size > 0 {
+            // TODO: not needed?
+            loader.fake_db(config.fake_db_size);
+        } else {
+            tracing::info!(
+                "Initialize iris db: Loading from DB (parallelism: {})",
+                parallelism
+            );
+            let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
+            let db_chunks_s3_store =
+                S3Store::new(db_chunks_s3_client.clone(), s3_chunks_bucket_name.clone());
 
-                match res {
-                    Ok(_) => {
-                        tx.send(Ok((handle, store))).unwrap();
-                    }
-                    Err(e) => {
-                        tx.send(Err(e)).unwrap();
-                        return Ok(());
-                    }
-                }
+            load_db(
+                &mut loader,
+                &store,
+                store_len,
+                parallelism,
+                &config,
+                db_chunks_s3_store,
+                db_chunks_s3_client,
+                s3_chunks_folder_name,
+                s3_chunks_bucket_name,
+                s3_load_parallelism,
+                s3_load_max_retries,
+                s3_load_initial_backoff_ms,
+                download_shutdown_handler,
+            )
+            .await
+            .expect("Failed to load DB");
+        }
+    }
 
-                actor.run(); // forever
-            }
-            Err(e) => {
-                tx.send(Err(e)).unwrap();
-                return Ok(());
-            }
-        };
-        Ok(())
-    });
-
-    let (mut handle, store) = rx.await??;
+    let mut hawk_handle = HawkHandle::new(hawk_actor, 10).await?;
 
     let mut skip_request_ids = sync_result.deleted_request_ids();
 
@@ -1638,15 +1635,20 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     is_ready_flag_cloned.store(true, std::sync::atomic::Ordering::SeqCst);
 
     // Check other nodes and wait until all nodes are ready.
-    let all_nodes = config.node_hostnames.clone();
+    let all_readiness_addresses = get_check_addresses(
+        config.node_hostnames.clone(),
+        config.healthcheck_ports.clone(),
+        "ready",
+    );
+
     let ready_check = tokio::spawn(async move {
-        let next_node = &all_nodes[(config.party_id + 1) % 3];
-        let prev_node = &all_nodes[(config.party_id + 2) % 3];
+        let next_node = &all_readiness_addresses[(config.party_id + 1) % 3];
+        let prev_node = &all_readiness_addresses[(config.party_id + 2) % 3];
         let mut connected = [false, false];
 
         loop {
             for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(format!("http://{}:3000/ready", host)).await;
+                let res = reqwest::get(host.as_str()).await;
 
                 if res.is_ok() && res.as_ref().unwrap().status().is_success() {
                     connected[i] = true;
@@ -1761,7 +1763,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             background_tasks.check_tasks();
 
-            let result_future = handle.submit_batch_query(batch);
+            let result_future = hawk_handle.submit_batch_query(batch.clone());
 
             next_batch = receive_batch(
                 party_id,
@@ -1802,7 +1804,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         Err(e) => {
             tracing::error!("ServerActor processing error: {:?}", e);
             // drop actor handle to initiate shutdown
-            drop(handle);
+            drop(hawk_handle);
 
             // Clean up server tasks, then wait for them to finish
             background_tasks.abort_all();
@@ -2064,4 +2066,12 @@ async fn load_db(
     );
 
     eyre::Ok(())
+}
+
+fn get_check_addresses(hostnames: Vec<String>, ports: Vec<String>, endpoint: &str) -> Vec<String> {
+    hostnames
+        .iter()
+        .zip(ports.iter())
+        .map(|(host, port)| format!("http://{}:{}/{}", host, port, endpoint))
+        .collect::<Vec<String>>()
 }
