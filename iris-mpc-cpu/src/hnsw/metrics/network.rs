@@ -360,17 +360,17 @@ impl fmt::Display for BytesDisplay {
         let mut t = self.0;
         for unit in ["B", "kB", "MB", "GB"] {
             if t < 1000.0 && unit == "B" {
-                return write!(f, "{:.0}{}", t, unit);
+                return write!(f, "{:.0} {}", t, unit);
             }
             if t < 10.0 {
-                return write!(f, "{:.2}{}", t, unit);
+                return write!(f, "{:.2} {}", t, unit);
             } else if t < 100.0 {
-                return write!(f, "{:.1}{}", t, unit);
+                return write!(f, "{:.1} {}", t, unit);
             } else if t < 1000.0 {
-                return write!(f, "{:.0}{}", t, unit);
+                return write!(f, "{:.0} {}", t, unit);
             }
             t /= 1000.0;
         }
-        write!(f, "{:.0}GB", t * 1000.0)
+        write!(f, "{:.0} GB", t * 1000.0)
     }
 }
