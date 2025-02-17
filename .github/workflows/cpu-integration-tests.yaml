@@ -3,7 +3,6 @@ on: [push]
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   integration-tests:
@@ -22,7 +21,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           load: true
-          tags: ${{ env.IMAGE_NAME }}:hawk-latest
+          tags: iris-mpc-hawk:latest
 
       - name: Run docker compose
         uses: hoverkraft-tech/compose-action@v2.0.1

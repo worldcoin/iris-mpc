@@ -97,9 +97,7 @@ services:
     entrypoint: ./run-server-docker.sh 2
 
   iris_mpc_client:
-    build:
-      context: .
-      dockerfile: Dockerfile.hawk
+    image: iris-mpc-hawk:latest
     entrypoint: tail -f /dev/null
     env_file:
       - .test.env
