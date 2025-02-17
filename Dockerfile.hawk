@@ -1,4 +1,4 @@
-FROM  ubuntu:22.04 as build-image
+FROM  ubuntu:22.04 AS build-image
 
 WORKDIR /src
 RUN apt-get update && apt-get install -y \
@@ -25,23 +25,25 @@ RUN rustup component add cargo
 RUN cargo install cargo-build-deps \
     && cargo install cargo-edit
 
-FROM build-image as build-app
+FROM build-image AS build-app
 WORKDIR /src/iris-mpc
 COPY . .
 
-RUN cargo build --release --bin server-hawk --bin key-manager
+RUN cargo build --release --bin server-hawk --bin key-manager --bin client
 
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y ca-certificates awscli
+RUN apt-get update && apt-get install -y ca-certificates awscli curl
 COPY certs /usr/local/share/ca-certificates/
 RUN update-ca-certificates
 
 COPY --from=build-app /src/iris-mpc/target/release/server-hawk /bin/server-hawk
-COPY --from=build-app /src/iris-mpc/target/release/key-manage /bin/key-manager
+COPY --from=build-app /src/iris-mpc/target/release/key-manager /bin/key-manager
+COPY --from=build-app /src/iris-mpc/target/release/client /bin/client
 
 COPY scripts/run-server-docker.sh .
+COPY scripts/run-client-docker.sh .
 
 USER 65534
 

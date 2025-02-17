@@ -8,6 +8,13 @@ services:
       POSTGRES_PASSWORD: "postgres"
     volumes:
       - ./scripts/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready", "-d", "db_prod"]
+      interval: 10s
+      timeout: 30s
+      retries: 5
+      start_period: 40s
+
   localstack:
     image: localstack/localstack
     ports:
@@ -37,6 +44,11 @@ services:
     ports:
       - "4000:4000"
       - "3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      retries: 10
+    entrypoint: ./run-server-docker.sh 0 --init-servers
 
   hawk_participant_1:
     build:
@@ -51,9 +63,16 @@ services:
     depends_on:
       dev_db:
         condition: service_healthy
+      hawk_participant_0:
+        condition: service_healthy
     ports:
       - "4001:4001"
       - "3001:3001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 10s
+      retries: 10
+    entrypoint: ./run-server-docker.sh 1
 
   hawk_participant_2:
     build:
@@ -68,6 +87,33 @@ services:
     depends_on:
       dev_db:
         condition: service_healthy
+      hawk_participant_0:
+        condition: service_healthy
     ports:
       - "4002:4002"
       - "3002:3002"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
+      interval: 10s
+      retries: 10
+    entrypoint: ./run-server-docker.sh 2
+
+  iris_mpc_client:
+    build:
+      context: .
+      dockerfile: Dockerfile.hawk
+    entrypoint: tail -f /dev/null
+    env_file:
+      - .test.env
+    environment:
+      - SMPC__DATABASE__URL=postgres://postgres:postgres@dev_db:5432/SMPC_dev_2
+      - SMPC__PARTY_ID=2
+      - SMPC__HAWK_SERVER_HEALTHCHECK_PORT=3002
+    command: tail -f /dev/null
+    depends_on:
+      hawk_participant_0:
+        condition: service_healthy
+      hawk_participant_1:
+        condition: service_healthy
+      hawk_participant_2:
+        condition: service_healthy
