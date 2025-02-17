@@ -34,7 +34,7 @@ struct KeyManagerCli {
     #[arg(short, long, env, default_value = "eu-north-1")]
     region: String,
 
-    #[arg(short, long, env, default_value = None)]
+    #[arg(long, env, default_value = None)]
     endpoint_url: Option<String>,
 }
 
