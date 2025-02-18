@@ -24,7 +24,14 @@ use iris_mpc_common::{
 };
 use itertools::{izip, Itertools};
 use rand::{thread_rng, Rng, SeedableRng};
-use std::{collections::HashMap, ops::Deref, sync::Arc, time::Duration, vec};
+use std::{
+    collections::HashMap,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    ops::Deref,
+    sync::Arc,
+    time::Duration,
+    vec,
+};
 use tokio::{
     sync::{mpsc, oneshot, RwLock},
     task::JoinSet,
@@ -122,9 +129,9 @@ impl HawkActor {
 
         // Start server.
         {
-            tracing::info!("Starting Hawk server on {}", my_address);
             let player = networking.clone();
-            let socket = my_address.parse().unwrap();
+            let socket = to_inaddr_any(my_address.parse().unwrap());
+            tracing::info!("Starting Hawk server on {}", socket);
             tokio::spawn(async move {
                 Server::builder()
                     .add_service(PartyNodeServer::new(player))
@@ -636,6 +643,15 @@ fn join_plans(mut plans: Vec<InsertPlan>) -> Vec<InsertPlan> {
         plans.swap(0, highest);
     }
     plans
+}
+
+fn to_inaddr_any(mut socket: SocketAddr) -> SocketAddr {
+    if socket.is_ipv4() {
+        socket.set_ip(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    } else {
+        socket.set_ip(IpAddr::V6(Ipv6Addr::UNSPECIFIED));
+    }
+    socket
 }
 
 pub async fn hawk_main(args: HawkArgs) -> Result<HawkHandle> {
