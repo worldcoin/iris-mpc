@@ -174,6 +174,9 @@ pub struct Config {
 
     #[serde(default = "default_hawk_server_healthcheck_port")]
     pub hawk_server_healthcheck_port: usize,
+
+    #[serde(default = "default_max_deletions_per_batch")]
+    pub max_deletions_per_batch: usize,
 }
 
 fn default_load_chunks_parallelism() -> usize {
@@ -251,6 +254,10 @@ fn default_service_ports() -> Vec<String> {
 
 fn default_healthcheck_ports() -> Vec<String> {
     vec!["3000".to_string(); 3]
+}
+
+fn default_max_deletions_per_batch() -> usize {
+    100
 }
 
 impl Config {

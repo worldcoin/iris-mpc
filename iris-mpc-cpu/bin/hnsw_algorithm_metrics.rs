@@ -11,21 +11,23 @@ use iris_mpc_cpu::{
     },
 };
 use rand::SeedableRng;
-use std::error::Error;
+use std::{error::Error, fs::File};
 use tracing::Level;
-use tracing_subscriber::{filter::Targets, prelude::*};
+use tracing_forest::{tag::NoTag, ForestLayer, PrettyPrinter};
+use tracing_subscriber::{filter::Targets, prelude::*, EnvFilter};
 
 #[derive(Parser)]
 #[allow(non_snake_case)]
 struct Args {
-    #[clap(default_value = "384")]
+    #[clap(short, default_value = "384")]
     M:                 usize,
-    #[clap(default_value = "512")]
+    #[clap(long("efc"), default_value = "512")]
     ef_constr:         usize,
-    #[clap(default_value = "512")]
+    #[clap(long("efs"), default_value = "512")]
     ef_search:         usize,
-    #[clap(default_value = "10000")]
+    #[clap(short, default_value = "10000")]
     database_size:     usize,
+    #[clap(short('p'))]
     layer_probability: Option<f64>,
 }
 
@@ -69,10 +71,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let filter = Targets::new()
         .with_target("iris_mpc_cpu::hnsw", Level::INFO)
         .with_target("iris_mpc_cpu::hawkers", Level::INFO);
+    let file = File::create("searcher_time_tree.txt")?;
+    let file_processor = PrettyPrinter::new().writer(std::sync::Mutex::new(file));
 
     tracing_subscriber::registry()
         .with(counting_layer)
         .with(filter)
+        .with(
+            ForestLayer::new(file_processor, NoTag {})
+                .with_filter(EnvFilter::new("searcher::cpu_time")),
+        )
         .init();
 
     // Run HNSW construction

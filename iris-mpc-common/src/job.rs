@@ -1,6 +1,6 @@
 use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
-    helpers::statistics::BucketStatistics,
+    helpers::{statistics::BucketStatistics, sync::Modification},
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, future::Future};
@@ -41,6 +41,9 @@ pub struct BatchQuery {
     // Only deletion specific fields
     pub deletion_requests_indices:  Vec<u32>, // 0-indexed indices of entries to be deleted
     pub deletion_requests_metadata: Vec<BatchMetadata>,
+
+    // Keeping track of updates & deletions for sync mechanism. Mapping: Serial id -> Modification
+    pub modifications: HashMap<u32, Modification>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -64,6 +67,7 @@ pub struct ServerJobResult<A = ()> {
     pub successful_reauths: Vec<bool>, // true if request type is reauth and it's successful
     pub reauth_target_indices: HashMap<String, u32>,
     pub reauth_or_rule_used: HashMap<String, bool>,
+    pub modifications: HashMap<u32, Modification>,
     /// Actor-specific data (e.g. graph mutations).
     pub actor_data: A,
 }

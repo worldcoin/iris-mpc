@@ -1178,6 +1178,7 @@ impl ServerActor {
                 successful_reauths,
                 reauth_target_indices: batch.reauth_target_indices,
                 reauth_or_rule_used: batch.reauth_use_or_rule,
+                modifications: batch.modifications,
                 actor_data: (),
             })
             .unwrap();

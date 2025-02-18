@@ -15,11 +15,7 @@ use sqlx::{
     types::{Json, Text},
     Executor, Postgres, Row, Transaction,
 };
-use std::{
-    marker::PhantomData,
-    ops::{Deref, DerefMut},
-    str::FromStr,
-};
+use std::{marker::PhantomData, ops::DerefMut, str::FromStr};
 
 const APP_NAME: &str = "SMPC";
 const MAX_CONNECTIONS: u32 = 5;

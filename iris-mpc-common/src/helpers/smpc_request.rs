@@ -109,11 +109,10 @@ pub const REAUTH_MESSAGE_TYPE: &str = "reauth";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct UniquenessRequest {
-    pub batch_size:              Option<usize>,
-    pub signup_id:               String,
-    pub s3_key:                  String,
-    pub iris_shares_file_hashes: [String; 3],
-    pub or_rule_serial_ids:      Option<Vec<u32>>,
+    pub batch_size:         Option<usize>,
+    pub signup_id:          String,
+    pub s3_key:             String,
+    pub or_rule_serial_ids: Option<Vec<u32>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -177,13 +176,16 @@ impl ReceiveRequestError {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SharesS3Object {
-    pub iris_share_0: String,
-    pub iris_share_1: String,
-    pub iris_share_2: String,
+    pub iris_share_0:  String,
+    pub iris_share_1:  String,
+    pub iris_share_2:  String,
+    pub iris_hashes_0: String,
+    pub iris_hashes_1: String,
+    pub iris_hashes_2: String,
 }
 
 #[derive(PartialEq, Serialize, Deserialize, Debug, Clone)]
-pub struct IrisCodesJSON {
+pub struct IrisCodeSharesJSON {
     #[serde(rename = "IRIS_version")]
     pub iris_version:           String,
     #[serde(rename = "IRIS_shares_version")]
@@ -195,11 +197,11 @@ pub struct IrisCodesJSON {
 }
 
 impl SharesS3Object {
-    pub fn get(&self, party_id: usize) -> Option<&String> {
+    pub fn get(&self, party_id: usize) -> Option<(&str, &str)> {
         match party_id {
-            0 => Some(&self.iris_share_0),
-            1 => Some(&self.iris_share_1),
-            2 => Some(&self.iris_share_2),
+            0 => Some((&self.iris_share_0, &self.iris_hashes_0)),
+            1 => Some((&self.iris_share_1, &self.iris_hashes_1)),
+            2 => Some((&self.iris_share_2, &self.iris_hashes_2)),
             _ => None,
         }
     }
@@ -210,7 +212,7 @@ pub async fn get_iris_data_by_party_id(
     party_id: usize,
     bucket_name: &String,
     s3_client: &S3Client,
-) -> Result<String, SharesDecodingError> {
+) -> Result<(String, String), SharesDecodingError> {
     let response = s3_client
         .get_object()
         .bucket(bucket_name)
@@ -239,16 +241,20 @@ pub async fn get_iris_data_by_party_id(
 
     let field_name = format!("iris_share_{}", party_id);
 
-    shares_file.get(party_id).cloned().ok_or_else(|| {
-        tracing::error!("Failed to find field: {}", field_name);
-        SharesDecodingError::SecretStringNotFound
-    })
+    let share_and_hash_opt = shares_file.get(party_id);
+    match share_and_hash_opt {
+        Some(share_and_hash) => Ok((share_and_hash.0.to_string(), share_and_hash.1.to_string())),
+        _ => {
+            tracing::error!("Failed to find field: {}", field_name);
+            Err(SharesDecodingError::SecretStringNotFound)
+        }
+    }
 }
 
 pub fn decrypt_iris_share(
     share: String,
     key_pairs: SharesEncryptionKeyPairs,
-) -> Result<IrisCodesJSON, SharesDecodingError> {
+) -> Result<IrisCodeSharesJSON, SharesDecodingError> {
     let share_bytes = STANDARD
         .decode(share.as_bytes())
         .map_err(|_| SharesDecodingError::Base64DecodeError)?;
@@ -277,7 +283,7 @@ pub fn decrypt_iris_share(
             let json_string = String::from_utf8(bytes)
                 .map_err(SharesDecodingError::DecodedShareParsingToUTF8Error)?;
 
-            let iris_share: IrisCodesJSON =
+            let iris_share: IrisCodeSharesJSON =
                 serde_json::from_str(&json_string).map_err(SharesDecodingError::SerdeError)?;
             iris_share
         }
@@ -288,13 +294,12 @@ pub fn decrypt_iris_share(
 }
 
 pub fn validate_iris_share(
-    iris_shares_file_hashes: [String; 3],
-    party_id: usize,
-    share: IrisCodesJSON,
+    hash: String,
+    share: IrisCodeSharesJSON,
 ) -> Result<bool, SharesDecodingError> {
     let stringified_share = serde_json::to_string(&share)
         .map_err(SharesDecodingError::SerdeError)?
         .into_bytes();
 
-    Ok(iris_shares_file_hashes[party_id] == sha256_as_hex_string(stringified_share))
+    Ok(hash == sha256_as_hex_string(stringified_share))
 }
