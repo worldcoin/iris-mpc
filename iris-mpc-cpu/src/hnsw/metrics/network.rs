@@ -275,7 +275,11 @@ impl NetworkFormatter {
         let rounds_root = rounds_root.unwrap_or(total_rounds);
         let percent_total_of_root_rounds = 100.0 * total_rounds / rounds_root;
 
-        let rounds = Cyan.paint(format!("{} rounds", span.rounds));
+        let rounds = Cyan.paint(if span.rounds == 1 {
+            format!("{} round", span.rounds)
+        } else {
+            format!("{} rounds", span.rounds)
+        });
         let bytes = Green.paint(format!("{}", BytesDisplay(span.bytes as f64)));
         write!(writer, " [ {rounds} | {bytes} per call, ",)?;
         let rounds_share = Cyan.paint(format!("{:.2}% rounds", percent_total_of_root_bytes));
