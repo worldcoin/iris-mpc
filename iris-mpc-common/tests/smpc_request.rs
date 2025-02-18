@@ -6,7 +6,7 @@ mod tests {
         key_pair::{SharesDecodingError, SharesEncryptionKeyPairs},
         sha256::sha256_as_hex_string,
         smpc_request::{
-            decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share, IrisCodesJSON,
+            decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share, IrisCodeSharesJSON,
             UniquenessRequest,
         },
     };
@@ -32,24 +32,14 @@ mod tests {
         .unwrap()
     }
 
-    fn mock_iris_codes_json() -> IrisCodesJSON {
-        IrisCodesJSON {
+    fn mock_iris_code_shares_json() -> IrisCodeSharesJSON {
+        IrisCodeSharesJSON {
             iris_version:           "1.0".to_string(),
             iris_shares_version:    "1.3".to_string(),
             left_iris_code_shares:  STANDARD.encode("left_iris_code_mock"),
             right_iris_code_shares: STANDARD.encode("right_iris_code_mock"),
             left_mask_code_shares:  STANDARD.encode("left_iris_mask_mock"),
             right_mask_code_shares: STANDARD.encode("right_iris_mask_mock"),
-        }
-    }
-
-    fn get_mock_smpc_request_with_hashes(hashes: [String; 3]) -> UniquenessRequest {
-        UniquenessRequest {
-            batch_size:              Some(1),
-            signup_id:               "signup_mock".to_string(),
-            s3_key:                  "mock".to_string(),
-            iris_shares_file_hashes: hashes,
-            or_rule_serial_ids:      None,
         }
     }
 
@@ -61,7 +51,10 @@ mod tests {
         let response_body = json!({
             "iris_share_0": "share_0_data",
             "iris_share_1": "share_1_data",
-            "iris_share_2": "share_2_data"
+            "iris_share_2": "share_2_data",
+            "iris_hashes_0": "hash_0",
+            "iris_hashes_1": "hash_1",
+            "iris_hashes_2": "hash_2"
         });
 
         let data = response_body.to_string();
@@ -93,15 +86,10 @@ mod tests {
         let s3_client = Arc::new(S3Client::from_conf(s3_config));
 
         let smpc_request = UniquenessRequest {
-            batch_size:              None,
-            signup_id:               "test_signup_id".to_string(),
-            s3_key:                  key.to_string(),
-            iris_shares_file_hashes: [
-                "hash_0".to_string(),
-                "hash_1".to_string(),
-                "hash_2".to_string(),
-            ],
-            or_rule_serial_ids:      None,
+            batch_size:         None,
+            signup_id:          "test_signup_id".to_string(),
+            s3_key:             key.to_string(),
+            or_rule_serial_ids: None,
         };
 
         let result = get_iris_data_by_party_id(
@@ -113,13 +101,15 @@ mod tests {
         .await;
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "share_0_data".to_string());
+        let (share, hash) = result.unwrap();
+        assert_eq!(share, "share_0_data".to_string());
+        assert_eq!(hash, "hash_0".to_string());
     }
 
     #[tokio::test]
     async fn test_decrypt_iris_share_success() {
         // Mocked base64 encoded JSON string
-        let iris_codes_json = IrisCodesJSON {
+        let iris_codes_json = IrisCodeSharesJSON {
             iris_version:           "1.0".to_string(),
             iris_shares_version:    "1.3".to_string(),
             left_iris_code_shares:  "left_code".to_string(),
@@ -150,14 +140,14 @@ mod tests {
     #[tokio::test]
     async fn test_decrypt_iris_share_using_previous_valid_key() {
         // Mocked base64 encoded JSON string
-        let iris_codes_json = mock_iris_codes_json();
+        let iris_code_shares_json = mock_iris_code_shares_json();
 
         // Use previous public key to encrypt the shares
         let decoded_public_key = STANDARD.decode(PREVIOUS_PUBLIC_KEY.as_bytes()).unwrap();
         let shares_encryption_public_key = PublicKey::from_slice(&decoded_public_key).unwrap();
 
         // convert iris code to JSON string, sealbox and encode as BASE64
-        let json_string = serde_json::to_string(&iris_codes_json).unwrap();
+        let json_string = serde_json::to_string(&iris_code_shares_json).unwrap();
         let sealed_box = sealedbox::seal(json_string.as_bytes(), &shares_encryption_public_key);
         let encoded_share = STANDARD.encode(sealed_box);
 
@@ -171,18 +161,18 @@ mod tests {
         let result = decrypt_iris_share(encoded_share, key_pair);
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), iris_codes_json);
+        assert_eq!(result.unwrap(), iris_code_shares_json);
     }
 
     #[tokio::test]
     async fn test_decrypt_iris_share_non_existent_previous_private_key() {
         // Mocked base64 encoded JSON string
-        let iris_codes_json = mock_iris_codes_json();
+        let iris_code_shares_json = mock_iris_code_shares_json();
 
         // Use previous public key to encrypt the shares
         let decoded_public_key = STANDARD.decode(PREVIOUS_PUBLIC_KEY.as_bytes()).unwrap();
         let shares_encryption_public_key = PublicKey::from_slice(&decoded_public_key).unwrap();
-        let json_string = serde_json::to_string(&iris_codes_json).unwrap();
+        let json_string = serde_json::to_string(&iris_code_shares_json).unwrap();
         let sealed_box = sealedbox::seal(json_string.as_bytes(), &shares_encryption_public_key);
         let encoded_share = STANDARD.encode(&sealed_box);
 
@@ -258,22 +248,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_iris_share() {
-        let mock_iris_codes_json = mock_iris_codes_json();
-        let mock_serialized_iris = serde_json::to_string(&mock_iris_codes_json).unwrap();
+        let mock_iris_code_shares_json = mock_iris_code_shares_json();
+        let mock_serialized_iris = serde_json::to_string(&mock_iris_code_shares_json).unwrap();
         let mock_hash = sha256_as_hex_string(mock_serialized_iris.into_bytes());
 
-        let smpc_request = get_mock_smpc_request_with_hashes([
-            mock_hash.clone(),
-            "dummy_hash_1".to_string(),
-            "dummy_hash_2".to_string(),
-        ]);
-
-        let is_valid = validate_iris_share(
-            smpc_request.iris_shares_file_hashes,
-            0,
-            mock_iris_codes_json,
-        )
-        .unwrap();
+        let is_valid = validate_iris_share(mock_hash, mock_iris_code_shares_json).unwrap();
 
         assert!(is_valid, "The iris share should be valid");
     }
@@ -281,22 +260,11 @@ mod tests {
     #[tokio::test]
     async fn test_validate_iris_share_invalid() {
         // Arrange
-        let mock_iris_codes_json = mock_iris_codes_json();
+        let mock_iris_code_shares_json = mock_iris_code_shares_json();
         let incorrect_hash = "incorrect_hash_value".to_string();
 
-        let smpc_request = get_mock_smpc_request_with_hashes([
-            incorrect_hash,
-            "dummy_hash_1".to_string(),
-            "dummy_hash_2".to_string(),
-        ]);
-
         // Act
-        let is_valid = validate_iris_share(
-            smpc_request.iris_shares_file_hashes,
-            0,
-            mock_iris_codes_json,
-        )
-        .unwrap();
+        let is_valid = validate_iris_share(incorrect_hash, mock_iris_code_shares_json).unwrap();
 
         // Assert
         assert!(!is_valid, "The iris share should be invalid");
