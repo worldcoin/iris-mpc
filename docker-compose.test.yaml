@@ -2,29 +2,6 @@ include:
   - docker-compose.dev.yaml
 
 services:
-  localstack:
-    image: localstack/localstack
-    ports:
-      - "127.0.0.1:4566:4566"
-      - "127.0.0.1:4571:4571"
-    environment:
-      - SERVICES=kms,s3,secretsmanager,sqs,sns
-      - DEFAULT_REGION=us-east-1
-      - AWS_ACCESS_KEY_ID=test
-      - AWS_SECRET_ACCESS_KEY=test
-    healthcheck:
-      test: >-
-        sleep 10 &&
-        awslocal sqs list-queues && 
-        awslocal s3 ls && 
-        awslocal kms list-keys
-      interval: 5s
-      timeout: 25s
-      retries: 10
-
-    volumes:
-      - ./scripts/init-localstack.sh:/etc/localstack/init/ready.d/init-localstack.sh
-
   hawk_participant_0:
     image: hawk-server-local-build:latest
     env_file:
