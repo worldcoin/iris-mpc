@@ -108,12 +108,17 @@ The example file contains a sample WSL env var.
 
 ## CPU Implementation
 
+#### Requirements
+
+1. `direnv` installed on your machine
+2. Run `direnv allow` in the root of the project. This will enable you to load all required env variables from the .env.test and .envrc files 
+
 #### Option 1: Locally run a single server without Docker (recommended for quick iteration)
 
 **Step 1: run ancillary services**
 
 ```
-docker-compose up localstack dev_db
+docker-compose -f docker-compose.dev.yaml up
 ```
 
 **Step 2: run service with the init script for Party 0**
@@ -133,8 +138,9 @@ The script must run with `--init-servers` flag at least once. It will create som
 
 Just run
 
-```
-docker-compose up
+```bash
+docker build -f Dockerfile.hawk -t hawk-server-local-build:latest .
+docker-compose -f docker-compose.test.yaml up
 ```
 
 It will bring up the 3 parties plus all the needed AWS/DB resources
