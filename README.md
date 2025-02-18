@@ -118,7 +118,7 @@ The example file contains a sample WSL env var.
 **Step 1: run ancillary services**
 
 ```
-docker-compose up localstack dev_db
+docker-compose -f docker-compose.dev.yaml up
 ```
 
 **Step 2: run service with the init script for Party 0**
@@ -139,8 +139,8 @@ The script must run with `--init-servers` flag at least once. It will create som
 Just run
 
 ```bash
-docker build -f Dockerfile.hawk -t iris-mpc-hawk:latest .
-docker-compose up
+docker build -f Dockerfile.hawk -t hawk-server-local-build:latest .
+docker-compose -f docker-compose.test.yaml up
 ```
 
 It will bring up the 3 parties plus all the needed AWS/DB resources

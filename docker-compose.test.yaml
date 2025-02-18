@@ -1,20 +1,7 @@
-services:
-  dev_db:
-    image: postgres
-    ports:
-      - "5432:5432"
-    environment:
-      POSTGRES_USER: "postgres"
-      POSTGRES_PASSWORD: "postgres"
-    volumes:
-      - ./scripts/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready", "-d", "db_prod"]
-      interval: 10s
-      timeout: 30s
-      retries: 5
-      start_period: 40s
+include:
+  - docker-compose.dev.yaml
 
+services:
   localstack:
     image: localstack/localstack
     ports:
@@ -39,7 +26,7 @@ services:
       - ./scripts/init-localstack.sh:/etc/localstack/init/ready.d/init-localstack.sh
 
   hawk_participant_0:
-    image: iris-mpc-hawk-server:latest
+    image: hawk-server-local-build:latest
     env_file:
       - .test.env
       - .test.hawk0.env
@@ -58,7 +45,7 @@ services:
     entrypoint: ./run-server-docker.sh 0
 
   hawk_participant_1:
-    image: iris-mpc-hawk-server:latest
+    image: hawk-server-local-build:latest
     env_file:
       - .test.env
       - .test.hawk1.env
@@ -75,10 +62,9 @@ services:
       interval: 10s
       retries: 10
     entrypoint: ./run-server-docker.sh 1
-#    entrypoint: tail -f /dev/null
 
   hawk_participant_2:
-    image: iris-mpc-hawk-server:latest
+    image: hawk-server-local-build:latest
     env_file:
       - .test.env
       - .test.hawk2.env
@@ -97,7 +83,7 @@ services:
     entrypoint: ./run-server-docker.sh 2
 
   iris_mpc_client:
-    image: iris-mpc-hawk-server:latest
+    image: hawk-server-local-build:latest
     entrypoint: tail -f /dev/null
     env_file:
       - .test.env

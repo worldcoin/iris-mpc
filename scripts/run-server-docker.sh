@@ -7,6 +7,7 @@ if [ -z "$NODE_ID" ]; then
   exit 1
 fi
 
+# needs to run twice to create the keys with both AWSCURRENT and AWSPREVIOUS states
 /bin/key-manager --region "$AWS_REGION" --endpoint-url "$AWS_ENDPOINT_URL" --node-id "$NODE_ID" --env dev rotate --public-key-bucket-name wf-dev-public-keys
 /bin/key-manager --region "$AWS_REGION" --endpoint-url "$AWS_ENDPOINT_URL" --node-id "$NODE_ID" --env dev rotate --public-key-bucket-name wf-dev-public-keys
 

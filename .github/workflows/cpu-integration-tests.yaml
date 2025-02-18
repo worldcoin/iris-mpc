@@ -21,9 +21,9 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile.hawk
+          file: Dockerfile.dev.hawk
           load: true
-          tags: iris-mpc-hawk-server:latest
+          tags: hawk-server-local-build:latest
 
       - name: Run docker compose
         uses: hoverkraft-tech/compose-action@v2.0.1
