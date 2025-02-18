@@ -556,6 +556,81 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         Ok(())
     }
 
+    /// Delete modifications based on their id.
+    pub async fn delete_modifications(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        modifications: &[Modification],
+    ) -> Result<()> {
+        if modifications.is_empty() {
+            return Ok(());
+        }
+
+        // Extract the IDs from the modifications.
+        let ids: Vec<i64> = modifications.iter().map(|m| m.id).collect();
+        tracing::info!(
+            "Deleting modifications {:?} with IDs: {:?}",
+            modifications,
+            ids
+        );
+
+        // Execute a bulk delete using the ANY clause.
+        sqlx::query(
+            r#"
+            DELETE FROM modifications
+            WHERE id = ANY($1::bigint[])
+            "#,
+        )
+        .bind(&ids)
+        .execute(tx.deref_mut())
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn reset_modifications_sequence(&self) -> Result<()> {
+        // Query the current maximum id from modifications
+        let max_id: Option<i64> = sqlx::query_scalar("SELECT MAX(id) FROM modifications")
+            .fetch_one(&self.pool)
+            .await?;
+
+        match max_id {
+            Some(max) => {
+                tracing::info!("Resetting modifications sequence to {}", max);
+                // Table is not empty: set sequence to max with is_called=true so that nextval()
+                // returns max+1.
+                sqlx::query(
+                    r#"
+                    SELECT setval(
+                        pg_get_serial_sequence('modifications', 'id'),
+                        $1,
+                        true
+                    )
+                    "#,
+                )
+                .bind(max)
+                .execute(&self.pool)
+                .await?;
+            }
+            None => {
+                // Table is empty: set sequence to 1 with is_called=false so that nextval()
+                // returns 1.
+                sqlx::query(
+                    r#"
+                    SELECT setval(
+                        pg_get_serial_sequence('modifications', 'id'),
+                        1,
+                        false
+                    )
+                    "#,
+                )
+                .execute(&self.pool)
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
     /// Initialize the database with random shares and masks. Cleans up the db
     /// before inserting new generated irises.
     pub async fn init_db_with_random_shares(
@@ -655,6 +730,7 @@ mod tests {
     use iris_mpc_common::helpers::{
         smpc_request::{IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE},
         smpc_response::UniquenessResult,
+        sync::ModificationStatus,
     };
 
     #[tokio::test]
@@ -1047,7 +1123,7 @@ mod tests {
             42,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
-            ModificationStatus::InProgress.to_string(),
+            ModificationStatus::InProgress,
             false,
         );
 
@@ -1063,7 +1139,7 @@ mod tests {
             43,
             REAUTH_MESSAGE_TYPE,
             Some("https://example.com".to_string()),
-            ModificationStatus::InProgress.to_string(),
+            ModificationStatus::InProgress,
             false,
         );
 
@@ -1097,7 +1173,7 @@ mod tests {
             15,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
-            ModificationStatus::InProgress.to_string(),
+            ModificationStatus::InProgress,
             false,
         );
         assert_modification(
@@ -1106,7 +1182,7 @@ mod tests {
             14,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
-            ModificationStatus::InProgress.to_string(),
+            ModificationStatus::InProgress,
             false,
         );
 
@@ -1120,14 +1196,14 @@ mod tests {
         expected_serial_id: i64,
         expected_request_type: &str,
         expected_s3_url: Option<String>,
-        expected_status: String,
+        expected_status: ModificationStatus,
         expected_persisted: bool,
     ) {
         assert_eq!(actual.id, expected_id);
         assert_eq!(actual.serial_id, expected_serial_id);
         assert_eq!(actual.request_type, expected_request_type);
         assert_eq!(actual.s3_url, expected_s3_url);
-        assert_eq!(actual.status, expected_status);
+        assert_eq!(actual.status, expected_status.to_string());
         assert_eq!(actual.persisted, expected_persisted);
     }
 
@@ -1168,7 +1244,7 @@ mod tests {
             150,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/150".to_string()),
-            ModificationStatus::InProgress.to_string(),
+            ModificationStatus::InProgress,
             false,
         );
         assert_modification(
@@ -1177,7 +1253,7 @@ mod tests {
             50,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/50".to_string()),
-            ModificationStatus::Completed.to_string(),
+            ModificationStatus::Completed,
             false,
         );
         assert_modification(
@@ -1186,10 +1262,82 @@ mod tests {
             100,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
-            ModificationStatus::Completed.to_string(),
+            ModificationStatus::Completed,
             true,
         );
 
+        cleanup(&store, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_modifications() -> Result<()> {
+        // Set up a temporary schema and a new store.
+        let schema_name = temporary_name();
+        let store = Store::new(&test_db_url()?, &schema_name).await?;
+
+        // Insert three modifications.
+        let mut m1 = store
+            .insert_modification(11, IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .await?;
+        let m2 = store
+            .insert_modification(12, REAUTH_MESSAGE_TYPE, Some("http://example.com/12"))
+            .await?;
+        let m3 = store
+            .insert_modification(13, IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .await?;
+
+        // mark m1 as completed
+        m1.mark_completed(true);
+        let mut tx = store.tx().await?;
+        store.update_modifications(&mut tx, &[&m1]).await?;
+        tx.commit().await?;
+
+        // Verify that all three modifications exist.
+        let all_mods = store.last_modifications(5).await?;
+        assert_eq!(all_mods.len(), 3);
+
+        // Begin a transaction and delete modifications m2 and m3.
+        let mut tx = store.tx().await?;
+        store
+            .delete_modifications(&mut tx, &[m2.clone(), m3.clone()])
+            .await?;
+        tx.commit().await?;
+
+        // Fetch the remaining modifications.
+        let remaining = store.last_modifications(5).await?;
+        // We expect only one modification to remain (m1).
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, m1.id);
+
+        // Reset the modifications sequence after deletion and insert a new one.
+        store.reset_modifications_sequence().await?;
+        let m4 = store
+            .insert_modification(15, IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .await?;
+        // The new modification should have id 2 after sequence reset.
+        assert_eq!(m4.id, 2);
+
+        // Clean up the temporary schema.
+        cleanup(&store, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_reset_modifications_sequence() -> Result<()> {
+        let schema_name = temporary_name();
+        let store = Store::new(&test_db_url()?, &schema_name).await?;
+
+        // Reset the sequence when the table is empty.
+        store.reset_modifications_sequence().await?;
+
+        // Expect the sequence to start at 1.
+        let m1 = store
+            .insert_modification(11, IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .await?;
+        assert_eq!(m1.id, 1);
+
+        // Clean up
         cleanup(&store, &schema_name).await?;
         Ok(())
     }
