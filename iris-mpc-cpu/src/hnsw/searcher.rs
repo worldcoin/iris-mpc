@@ -187,7 +187,9 @@ pub struct ConnectPlan<Vector, Distance> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConnectPlanLayer<Vector, Distance> {
+    /// The neighbors of the inserted vector, and their distances.
     pub neighbors: SortedNeighborhood<Vector, Distance>,
+    /// n_links[i] is the neighborhood of each neighbors[i] after the insertion.
     pub n_links:   Vec<SortedNeighborhood<Vector, Distance>>,
 }
 

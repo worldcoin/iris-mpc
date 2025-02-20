@@ -694,9 +694,16 @@ mod tests {
     use crate::{
         database_generators::generate_galois_iris_shares,
         execution::local::get_free_local_addresses,
+        hawkers::aby3_store::VectorId,
+        hnsw::{
+            graph::graph_store::test_utils::TestGraphPg, searcher::ConnectPlanLayerV,
+            SortedNeighborhood,
+        },
+        shares::share::DistanceShare,
     };
     use iris_mpc_common::iris_db::db::IrisDB;
     use tokio::time::sleep;
+    type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
 
     #[tokio::test]
     async fn test_hawk_main() -> Result<()> {
@@ -770,6 +777,70 @@ mod tests {
             "All parties must agree on the graph changes"
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_graph_load() -> Result<()> {
+        let graph_store = TestGraphPg::<Aby3Store>::new().await.unwrap();
+
+        // Test data. Execute a sequence of mutations on the SQL graph.
+        let vectors = (0..5).map(VectorId::from).collect_vec();
+        let distance = DistanceShare::new(Default::default(), Default::default());
+        {
+            let mut tx = graph_store.tx(StoreId::Left).await?;
+
+            for (i, vector) in vectors.iter().enumerate() {
+                let plan = ConnectPlan {
+                    inserted_vector: *vector,
+                    layers:          vec![ConnectPlanLayer {
+                        neighbors: SortedNeighborhood::from_ascending_vec(vec![(
+                            vectors[0],
+                            distance.clone(),
+                        )]),
+                        n_links:   vec![SortedNeighborhood::from_ascending_vec(vec![(
+                            *vector,
+                            distance.clone(),
+                        )])],
+                    }],
+                    set_ep:          i == 0,
+                };
+                tx.insert_apply(plan).await;
+            }
+
+            tx.tx.commit().await?;
+        }
+
+        // Start an actor and load the graph from SQL to memory.
+        let args = HawkArgs {
+            party_index:         0,
+            addresses:           vec!["0.0.0.0:1234".to_string()],
+            request_parallelism: 2,
+        };
+        let mut hawk_actor = HawkActor::from_cli(&args).await?;
+        let (_, graph_loader) = hawk_actor.as_iris_loader().await;
+        graph_loader.load_graph_store(&graph_store).await?;
+
+        // Check the loaded graph.
+        let ep = hawk_actor.graph_store[0]
+            .read()
+            .await
+            .get_entry_point()
+            .await;
+        assert_eq!(ep, Some((vectors[0], 0)), "Entry point is vec_0");
+
+        let links = hawk_actor.graph_store[0]
+            .read()
+            .await
+            .get_links(&vectors[1], 0)
+            .await;
+        assert_eq!(
+            links.deref(),
+            &[(vectors[0], distance.clone())],
+            "vec_1 connects to vec_0"
+        );
+
+        graph_store.cleanup().await.unwrap();
         Ok(())
     }
 }
