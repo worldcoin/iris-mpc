@@ -35,8 +35,9 @@ pub struct GraphPg<V: VectorStore> {
 }
 
 pub struct GraphTx<'a, V> {
-    pub tx:  Transaction<'a, Postgres>,
-    phantom: PhantomData<V>,
+    pub tx:   Transaction<'a, Postgres>,
+    graph_id: i32,
+    phantom:  PhantomData<V>,
 }
 
 impl<V: VectorStore> GraphPg<V> {
@@ -81,8 +82,9 @@ impl<V: VectorStore> GraphPg<V> {
 
     pub async fn tx(&self) -> Result<GraphTx<'_, V>> {
         Ok(GraphTx {
-            tx:      self.pool.begin().await?,
-            phantom: PhantomData,
+            tx:       self.pool.begin().await?,
+            graph_id: 0, // TODO: handle left/right.
+            phantom:  PhantomData,
         })
     }
 }
@@ -119,9 +121,10 @@ impl<V: VectorStore> GraphTx<'_, V> {
     pub async fn get_entry_point(&mut self) -> Option<(V::VectorRef, usize)> {
         sqlx::query(
             "
-                SELECT entry_point FROM hawk_graph_entry WHERE id = 0
+                SELECT entry_point FROM hawk_graph_entry WHERE graph_id = $1
             ",
         )
+        .bind(self.graph_id)
         .fetch_optional(self.tx.deref_mut())
         .await
         .expect("Failed to fetch entry point")
@@ -134,11 +137,12 @@ impl<V: VectorStore> GraphTx<'_, V> {
     async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) {
         sqlx::query(
             "
-            INSERT INTO hawk_graph_entry (entry_point, id)
-            VALUES ($1, 0) ON CONFLICT (id)
+            INSERT INTO hawk_graph_entry (graph_id, entry_point)
+            VALUES ($1, $2) ON CONFLICT (graph_id)
             DO UPDATE SET entry_point = EXCLUDED.entry_point
         ",
         )
+        .bind(self.graph_id)
         .bind(Json(&EntryPoint { point, layer }))
         .execute(self.tx.deref_mut())
         .await
@@ -152,9 +156,11 @@ impl<V: VectorStore> GraphTx<'_, V> {
     ) -> SortedNeighborhoodV<V> {
         sqlx::query(
             "
-            SELECT links FROM hawk_graph_links WHERE source_ref = $1 AND layer = $2
+            SELECT links FROM hawk_graph_links
+            WHERE graph_id = $1 AND source_ref = $2 AND layer = $3
         ",
         )
+        .bind(self.graph_id)
         .bind(Text(base))
         .bind(lc as i32)
         .fetch_optional(self.tx.deref_mut())
@@ -170,12 +176,13 @@ impl<V: VectorStore> GraphTx<'_, V> {
     async fn set_links(&mut self, base: V::VectorRef, links: SortedNeighborhoodV<V>, lc: usize) {
         sqlx::query(
             "
-            INSERT INTO hawk_graph_links (source_ref, layer, links)
-            VALUES ($1, $2, $3) ON CONFLICT (source_ref, layer)
+            INSERT INTO hawk_graph_links (graph_id, source_ref, layer, links)
+            VALUES ($1, $2, $3, $4) ON CONFLICT (graph_id, source_ref, layer)
             DO UPDATE SET
             links = EXCLUDED.links
         ",
         )
+        .bind(self.graph_id)
         .bind(Text(base))
         .bind(lc as i32)
         .bind(Json(&links))
@@ -324,8 +331,17 @@ mod tests {
     use tokio;
 
     #[tokio::test]
+    async fn test_graph_migrations() -> Result<()> {
+        let graph = TestGraphPg::<PlaintextStore>::new().await.unwrap();
+        MIGRATOR.undo(&graph.pool, 0).await?;
+        MIGRATOR.run(&graph.pool).await?;
+        graph.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_db() {
-        let mut graph = TestGraphPg::<PlaintextStore>::new().await.unwrap();
+        let graph = TestGraphPg::<PlaintextStore>::new().await.unwrap();
         let mut vector_store = PlaintextStore::new();
         let rng = &mut AesRng::seed_from_u64(0_u64);
 
@@ -387,7 +403,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_hnsw_db() {
-        let mut graph_pg = TestGraphPg::<PlaintextStore>::new().await.unwrap();
+        let graph_pg = TestGraphPg::<PlaintextStore>::new().await.unwrap();
         let graph_mem = &mut GraphMem::new();
         let vector_store = &mut PlaintextStore::default();
         let rng = &mut AesRng::seed_from_u64(0_u64);

@@ -843,7 +843,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     tracing::info!("Creating new storage from: {:?}", config);
     let store = Store::new_from_config(&config).await?;
-    let mut graph_store = GraphStore::new_from_config(&config).await?;
+    let graph_store = GraphStore::new_from_config(&config).await?;
 
     tracing::info!("Initialising AWS services");
 
