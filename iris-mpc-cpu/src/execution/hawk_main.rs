@@ -8,8 +8,9 @@ use crate::{
     },
     hawkers::aby3_store::{Aby3Store, SharedIrisesMut, SharedIrisesRef},
     hnsw::{
-        graph::neighborhood::SortedNeighborhoodV, searcher::ConnectPlanV, GraphMem, HnswSearcher,
-        VectorStore,
+        graph::{graph_store::GraphPg, neighborhood::SortedNeighborhoodV},
+        searcher::ConnectPlanV,
+        GraphMem, HnswSearcher, VectorStore,
     },
     network::grpc::{GrpcConfig, GrpcNetworking},
     proto_generated::party_node::party_node_server::PartyNodeServer,
@@ -33,10 +34,11 @@ use std::{
     vec,
 };
 use tokio::{
-    sync::{mpsc, oneshot, RwLock},
+    sync::{mpsc, oneshot, RwLock, RwLockWriteGuard},
     task::JoinSet,
 };
 use tonic::transport::Server;
+pub type GraphStore = GraphPg<Aby3Store>;
 
 #[derive(Parser)]
 pub struct HawkArgs {
@@ -76,9 +78,12 @@ pub enum StoreId {
     Right,
 }
 
+pub const STORE_IDS: BothEyes<StoreId> = [StoreId::Left, StoreId::Right];
+
 pub type BothEyes<T> = [T; 2];
 
 type GraphRef = Arc<RwLock<GraphMem<Aby3Store>>>;
+pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3Store>>;
 
 /// HawkSession is a unit of parallelism when operating on the HawkActor.
 pub struct HawkSession {
@@ -357,16 +362,22 @@ impl HawkActor {
         Ok(connect_plan)
     }
 
-    /// Borrow the in-memory iris store to modify it.
-    pub async fn as_iris_loader(&mut self) -> IrisLoader {
-        IrisLoader {
-            party_id: self.party_id,
-            db_size:  &mut self.db_size,
-            irises:   [
-                self.iris_store[0].write().await,
-                self.iris_store[1].write().await,
-            ],
-        }
+    /// Borrow the in-memory iris and graph stores to modify them.
+    pub async fn as_iris_loader(&mut self) -> (IrisLoader, GraphLoader) {
+        (
+            IrisLoader {
+                party_id: self.party_id,
+                db_size:  &mut self.db_size,
+                irises:   [
+                    self.iris_store[0].write().await,
+                    self.iris_store[1].write().await,
+                ],
+            },
+            GraphLoader([
+                self.graph_store[0].write().await,
+                self.graph_store[1].write().await,
+            ]),
+        )
     }
 }
 
@@ -419,6 +430,17 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
             side.points
                 .resize(size, GaloisRingSharedIris::default_for_party(self.party_id));
         }
+    }
+}
+
+pub struct GraphLoader<'a>(BothEyes<GraphMut<'a>>);
+
+impl<'a> GraphLoader<'a> {
+    pub async fn load_graph_store(self, graph_store: &GraphStore) -> Result<()> {
+        for (side, mut graph) in izip!(STORE_IDS, self.0) {
+            *graph = graph_store.tx(side).await?.load_to_mem().await?;
+        }
+        Ok(())
     }
 }
 

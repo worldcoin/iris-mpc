@@ -41,12 +41,9 @@ use iris_mpc_common::{
     iris_db::get_dummy_shares_for_deletion,
     job::{BatchMetadata, BatchQuery, JobSubmissionHandle},
 };
-use iris_mpc_cpu::{
-    execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, ServerJobResult, StoreId},
-    hawkers::aby3_store::Aby3Store,
-    hnsw::graph::graph_store::GraphPg,
+use iris_mpc_cpu::execution::hawk_main::{
+    GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult, STORE_IDS,
 };
-type GraphStore = GraphPg<Aby3Store>;
 use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
@@ -1321,11 +1318,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     {
         // ANCHOR: Load the database
         tracing::info!("⚓️ ANCHOR: Load the database");
-        let mut loader = hawk_actor.as_iris_loader().await;
+        let (mut iris_loader, graph_loader) = hawk_actor.as_iris_loader().await;
 
         if config.fake_db_size > 0 {
             // TODO: not needed?
-            loader.fake_db(config.fake_db_size);
+            iris_loader.fake_db(config.fake_db_size);
         } else {
             tracing::info!(
                 "Initialize iris db: Loading from DB (parallelism: {})",
@@ -1336,7 +1333,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 S3Store::new(db_chunks_s3_client.clone(), s3_chunks_bucket_name.clone());
 
             load_db(
-                &mut loader,
+                &mut iris_loader,
                 &store,
                 store_len,
                 parallelism,
@@ -1352,6 +1349,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             )
             .await
             .expect("Failed to load DB");
+
+            graph_loader.load_graph_store(&graph_store).await?;
         }
     }
 
@@ -1547,8 +1546,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             // Graph mutation.
             {
-                let sides = [StoreId::Left, StoreId::Right];
-                for (side, plans) in izip!(sides, hawk_mutation) {
+                for (side, plans) in izip!(STORE_IDS, hawk_mutation) {
                     let mut graph_tx = graph_store.tx(side).await?;
                     for plan in plans {
                         graph_tx.insert_apply(plan).await;
