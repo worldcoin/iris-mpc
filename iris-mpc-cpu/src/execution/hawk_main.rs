@@ -509,8 +509,24 @@ impl HawkResult {
     }
 }
 
-pub type HawkMutation = BothEyes<Vec<ConnectPlan>>;
 pub type ServerJobResult = iris_mpc_common::job::ServerJobResult<HawkMutation>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HawkMutation(BothEyes<Vec<ConnectPlan>>);
+
+impl HawkMutation {
+    pub async fn persist(self, graph_store: &GraphStore) -> Result<()> {
+        let mut graph_tx = graph_store.tx(StoreId::Left).await?;
+        for (side, plans) in izip!(STORE_IDS, self.0) {
+            graph_tx = graph_tx.select_graph(side);
+            for plan in plans {
+                graph_tx.insert_apply(plan).await;
+            }
+        }
+        graph_tx.tx.commit().await?;
+        Ok(())
+    }
+}
 
 /// HawkHandle is a handle to the HawkActor managing concurrency.
 #[derive(Clone, Debug)]
@@ -593,13 +609,13 @@ impl HawkHandle {
 
                 // Insert into the database.
                 let mut results = HawkResult {
-                    connect_plans: [vec![], vec![]],
+                    connect_plans: HawkMutation([vec![], vec![]]),
                     is_insertion,
                 };
 
                 // For both eyes.
                 for (sessions, insert_plans, connect_plans) in
-                    izip!(&sessions, both_insert_plans, &mut results.connect_plans)
+                    izip!(&sessions, both_insert_plans, &mut results.connect_plans.0)
                 {
                     // Insert in memory, and return the plans to update the persistent database.
                     *connect_plans = hawk_actor.insert(sessions, insert_plans).await.unwrap();
@@ -782,20 +798,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_graph_load() -> Result<()> {
-        let graph_store = TestGraphPg::<Aby3Store>::new().await.unwrap();
-
-        // Test data. Execute a sequence of mutations on the SQL graph.
+        // The test data is a sequence of mutations on the graph.
         let vectors = (0..5).map(VectorId::from).collect_vec();
         let distance = DistanceShare::new(Default::default(), Default::default());
-        {
-            let mut tx = graph_store.tx(StoreId::Left).await?;
 
-            for (i, vector) in vectors.iter().enumerate() {
-                let plan = ConnectPlan {
+        let make_plans = |side| {
+            let side = side as usize; // Make some difference between sides.
+
+            vectors
+                .iter()
+                .enumerate()
+                .map(|(i, vector)| ConnectPlan {
                     inserted_vector: *vector,
                     layers:          vec![ConnectPlanLayer {
                         neighbors: SortedNeighborhood::from_ascending_vec(vec![(
-                            vectors[0],
+                            vectors[side],
                             distance.clone(),
                         )]),
                         n_links:   vec![SortedNeighborhood::from_ascending_vec(vec![(
@@ -803,13 +820,15 @@ mod tests {
                             distance.clone(),
                         )])],
                     }],
-                    set_ep:          i == 0,
-                };
-                tx.insert_apply(plan).await;
-            }
+                    set_ep:          i == side,
+                })
+                .collect_vec()
+        };
 
-            tx.tx.commit().await?;
-        }
+        // Populate the SQL store with test data.
+        let graph_store = TestGraphPg::<Aby3Store>::new().await.unwrap();
+        let mutation = HawkMutation(STORE_IDS.map(make_plans));
+        mutation.persist(&graph_store).await?;
 
         // Start an actor and load the graph from SQL to memory.
         let args = HawkArgs {
@@ -822,23 +841,20 @@ mod tests {
         graph_loader.load_graph_store(&graph_store).await?;
 
         // Check the loaded graph.
-        let ep = hawk_actor.graph_store[0]
-            .read()
-            .await
-            .get_entry_point()
-            .await;
-        assert_eq!(ep, Some((vectors[0], 0)), "Entry point is vec_0");
+        for (side, graph) in izip!(STORE_IDS, &hawk_actor.graph_store) {
+            let side = side as usize; // Find some difference between sides.
 
-        let links = hawk_actor.graph_store[0]
-            .read()
-            .await
-            .get_links(&vectors[1], 0)
-            .await;
-        assert_eq!(
-            links.deref(),
-            &[(vectors[0], distance.clone())],
-            "vec_1 connects to vec_0"
-        );
+            let ep = graph.read().await.get_entry_point().await;
+            let expected_ep = vectors[side];
+            assert_eq!(ep, Some((expected_ep, 0)), "Entry point is set");
+
+            let links = graph.read().await.get_links(&vectors[2], 0).await;
+            assert_eq!(
+                links.deref(),
+                &[(expected_ep, distance.clone())],
+                "vec_2 connects to the entry point"
+            );
+        }
 
         graph_store.cleanup().await.unwrap();
         Ok(())

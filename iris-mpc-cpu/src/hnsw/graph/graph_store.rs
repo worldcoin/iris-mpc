@@ -93,6 +93,11 @@ impl<V: VectorStore> GraphPg<V> {
 }
 
 impl<V: VectorStore> GraphTx<'_, V> {
+    pub fn select_graph(mut self, graph_id: StoreId) -> Self {
+        self.graph_id = graph_id as usize as i32;
+        self
+    }
+
     /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the
     /// graph.
     pub async fn insert_apply(&mut self, plan: ConnectPlanV<V>) {
