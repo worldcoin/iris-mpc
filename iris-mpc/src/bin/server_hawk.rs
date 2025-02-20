@@ -42,7 +42,7 @@ use iris_mpc_common::{
     job::{BatchMetadata, BatchQuery, JobSubmissionHandle},
 };
 use iris_mpc_cpu::{
-    execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, ServerJobResult},
+    execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, ServerJobResult, StoreId},
     hawkers::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,
 };
@@ -51,6 +51,7 @@ use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
 };
+use itertools::izip;
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -1546,15 +1547,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             // Graph mutation.
             {
-                let mut graph_tx = graph_store.tx().await?;
-
-                for side in hawk_mutation {
-                    for plan in side {
+                let sides = [StoreId::Left, StoreId::Right];
+                for (side, plans) in izip!(sides, hawk_mutation) {
+                    let mut graph_tx = graph_store.tx(side).await?;
+                    for plan in plans {
                         graph_tx.insert_apply(plan).await;
                     }
+                    graph_tx.tx.commit().await?;
                 }
-
-                graph_tx.tx.commit().await?;
             }
 
             for memory_serial_id in memory_serial_ids {

@@ -32,6 +32,7 @@ sodiumoxide = "0.2.7"
 iris-mpc-gpu = { path = "../iris-mpc-gpu" }
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
+itertools.workspace = true
 metrics = "0.22.1"
 metrics-exporter-statsd = "0.7"
 serde = { version = "1.0.214", features = ["derive"] }

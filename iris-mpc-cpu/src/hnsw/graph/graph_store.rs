@@ -1,8 +1,11 @@
 use super::layered_graph::EntryPoint;
-use crate::hnsw::{
-    graph::neighborhood::SortedNeighborhoodV,
-    searcher::{ConnectPlanLayerV, ConnectPlanV},
-    GraphMem, VectorStore,
+use crate::{
+    execution::hawk_main::StoreId,
+    hnsw::{
+        graph::neighborhood::SortedNeighborhoodV,
+        searcher::{ConnectPlanLayerV, ConnectPlanV},
+        GraphMem, VectorStore,
+    },
 };
 use eyre::{eyre, Result};
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -80,10 +83,10 @@ impl<V: VectorStore> GraphPg<V> {
         })
     }
 
-    pub async fn tx(&self) -> Result<GraphTx<'_, V>> {
+    pub async fn tx(&self, graph_id: StoreId) -> Result<GraphTx<'_, V>> {
         Ok(GraphTx {
             tx:       self.pool.begin().await?,
-            graph_id: 0, // TODO: handle left/right.
+            graph_id: graph_id as usize as i32,
             phantom:  PhantomData,
         })
     }
@@ -202,8 +205,10 @@ where
         sqlx::query_as::<_, RowLinks<V>>(
             "
         SELECT source_ref, links, layer FROM hawk_graph_links
+        WHERE graph_id = $1
         ",
         )
+        .bind(self.graph_id)
         .fetch(self.tx.deref_mut())
         .map_err(Into::into)
     }
@@ -330,6 +335,8 @@ mod tests {
     use rand::SeedableRng;
     use tokio;
 
+    const TEST_GRAPH_ID: StoreId = StoreId::Left;
+
     #[tokio::test]
     async fn test_graph_migrations() -> Result<()> {
         let graph = TestGraphPg::<PlaintextStore>::new().await.unwrap();
@@ -362,7 +369,7 @@ mod tests {
             d
         };
 
-        let mut tx = graph.tx().await.unwrap();
+        let mut tx = graph.tx(TEST_GRAPH_ID).await.unwrap();
 
         let ep = tx.get_entry_point().await;
         assert!(ep.is_none());
@@ -416,7 +423,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Insert the codes.
-        let mut tx = graph_pg.tx().await.unwrap();
+        let mut tx = graph_pg.tx(TEST_GRAPH_ID).await.unwrap();
         for query in queries1.iter() {
             let insertion_layer = db.select_layer(rng);
             let (neighbors, set_ep) = db
