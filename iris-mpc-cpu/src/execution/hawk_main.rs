@@ -710,16 +710,9 @@ mod tests {
     use crate::{
         database_generators::generate_galois_iris_shares,
         execution::local::get_free_local_addresses,
-        hawkers::aby3_store::VectorId,
-        hnsw::{
-            graph::graph_store::test_utils::TestGraphPg, searcher::ConnectPlanLayerV,
-            SortedNeighborhood,
-        },
-        shares::share::DistanceShare,
     };
     use iris_mpc_common::iris_db::db::IrisDB;
     use tokio::time::sleep;
-    type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
 
     #[tokio::test]
     async fn test_hawk_main() -> Result<()> {
@@ -795,6 +788,21 @@ mod tests {
 
         Ok(())
     }
+}
+
+#[cfg(test)]
+#[cfg(feature = "db_dependent")]
+mod tests_db {
+    use super::*;
+    use crate::{
+        hawkers::aby3_store::VectorId,
+        hnsw::{
+            graph::graph_store::test_utils::TestGraphPg, searcher::ConnectPlanLayerV,
+            SortedNeighborhood,
+        },
+        shares::share::DistanceShare,
+    };
+    type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
 
     #[tokio::test]
     async fn test_graph_load() -> Result<()> {
