@@ -121,6 +121,8 @@ nginxSidecar:
           # Enable session resumption to improve performance
           ssl_session_cache shared:SSL:10m;
           ssl_session_timeout 1h;
+
+          client_max_body_size 100M;
       
           location / {
             # Forward gRPC traffic to the gRPC server on port 7000
