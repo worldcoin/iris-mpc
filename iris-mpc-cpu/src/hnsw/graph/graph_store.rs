@@ -82,13 +82,17 @@ impl<V: VectorStore> GraphPg<V> {
     }
 
     pub async fn tx(&self) -> Result<GraphTx<'_, V>> {
-        Ok(GraphTx {
-            tx:             self.pool.begin().await?,
-            schema_name:    self.schema_name.clone(),
-            graph_id:       StoreId::Left as usize as i32, // TODO: Find a better way.
+        Ok(self.tx_wrap(self.pool.begin().await?))
+    }
+
+    pub fn tx_wrap<'t>(&self, tx: Transaction<'t, Postgres>) -> GraphTx<'t, V> {
+        GraphTx {
+            tx,
+            schema_name: self.schema_name.clone(),
+            graph_id: StoreId::Left as usize as i32, // TODO: Find a better way.
             borrowable_sql: "".to_string(),
-            phantom:        PhantomData,
-        })
+            phantom: PhantomData,
+        }
     }
 }
 
