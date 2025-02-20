@@ -33,14 +33,18 @@ pub struct RowLinks<V: VectorStore> {
 }
 
 pub struct GraphPg<V: VectorStore> {
-    pool:    sqlx::PgPool,
-    phantom: PhantomData<V>,
+    pool:        sqlx::PgPool,
+    schema_name: String,
+    phantom:     PhantomData<V>,
 }
 
 pub struct GraphTx<'a, V> {
-    pub tx:   Transaction<'a, Postgres>,
-    graph_id: i32,
-    phantom:  PhantomData<V>,
+    pub tx:      Transaction<'a, Postgres>,
+    schema_name: String,
+    graph_id:    i32,
+
+    borrowable_sql: String,
+    phantom:        PhantomData<V>,
 }
 
 impl<V: VectorStore> GraphPg<V> {
@@ -57,37 +61,33 @@ impl<V: VectorStore> GraphPg<V> {
     }
 
     pub async fn new(url: &str, schema_name: &str) -> Result<Self> {
-        let connect_sql = sql_switch_schema(schema_name)?;
-
         let pool = PgPoolOptions::new()
             .max_connections(MAX_CONNECTIONS)
-            .after_connect(move |conn, _meta| {
-                // Switch to the given schema in every connection.
-                let connect_sql = connect_sql.clone();
-                Box::pin(async move {
-                    conn.execute(connect_sql.as_ref()).await.inspect_err(|e| {
-                        eprintln!("error in after_connect: {:?}", e);
-                    })?;
-                    Ok(())
-                })
-            })
             .connect(url)
             .await?;
 
         // Create the schema on the first startup.
-        MIGRATOR.run(&pool).await?;
+        {
+            let mut tx = pool.begin().await?;
+            tx.execute(sql_switch_schema(schema_name)?.as_ref()).await?;
+            MIGRATOR.run(&mut tx).await?;
+            tx.commit().await?;
+        }
 
         Ok(GraphPg {
             pool,
+            schema_name: schema_name.to_string(),
             phantom: PhantomData,
         })
     }
 
     pub async fn tx(&self, graph_id: StoreId) -> Result<GraphTx<'_, V>> {
         Ok(GraphTx {
-            tx:       self.pool.begin().await?,
-            graph_id: graph_id as usize as i32,
-            phantom:  PhantomData,
+            tx:             self.pool.begin().await?,
+            schema_name:    self.schema_name.clone(),
+            graph_id:       graph_id as usize as i32,
+            borrowable_sql: "".to_string(),
+            phantom:        PhantomData,
         })
     }
 }
@@ -96,6 +96,14 @@ impl<V: VectorStore> GraphTx<'_, V> {
     pub fn select_graph(mut self, graph_id: StoreId) -> Self {
         self.graph_id = graph_id as usize as i32;
         self
+    }
+
+    fn entry_table(&self) -> String {
+        format!("{}.hawk_graph_entry", self.schema_name)
+    }
+
+    fn links_table(&self) -> String {
+        format!("{}.hawk_graph_links", self.schema_name)
     }
 
     /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the
@@ -127,11 +135,10 @@ impl<V: VectorStore> GraphTx<'_, V> {
     }
 
     pub async fn get_entry_point(&mut self) -> Option<(V::VectorRef, usize)> {
-        sqlx::query(
-            "
-                SELECT entry_point FROM hawk_graph_entry WHERE graph_id = $1
-            ",
-        )
+        let table = self.entry_table();
+        sqlx::query(&format!(
+            "SELECT entry_point FROM {table} WHERE graph_id = $1"
+        ))
         .bind(self.graph_id)
         .fetch_optional(self.tx.deref_mut())
         .await
@@ -143,13 +150,13 @@ impl<V: VectorStore> GraphTx<'_, V> {
     }
 
     async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) {
-        sqlx::query(
+        let table = self.entry_table();
+        sqlx::query(&format!(
             "
-            INSERT INTO hawk_graph_entry (graph_id, entry_point)
+            INSERT INTO {table} (graph_id, entry_point)
             VALUES ($1, $2) ON CONFLICT (graph_id)
-            DO UPDATE SET entry_point = EXCLUDED.entry_point
-        ",
-        )
+            DO UPDATE SET entry_point = EXCLUDED.entry_point"
+        ))
         .bind(self.graph_id)
         .bind(Json(&EntryPoint { point, layer }))
         .execute(self.tx.deref_mut())
@@ -162,12 +169,13 @@ impl<V: VectorStore> GraphTx<'_, V> {
         base: &<V as VectorStore>::VectorRef,
         lc: usize,
     ) -> SortedNeighborhoodV<V> {
-        sqlx::query(
+        let table = self.links_table();
+        sqlx::query(&format!(
             "
-            SELECT links FROM hawk_graph_links
+            SELECT links FROM {table}
             WHERE graph_id = $1 AND source_ref = $2 AND layer = $3
-        ",
-        )
+        "
+        ))
         .bind(self.graph_id)
         .bind(Text(base))
         .bind(lc as i32)
@@ -182,14 +190,15 @@ impl<V: VectorStore> GraphTx<'_, V> {
     }
 
     async fn set_links(&mut self, base: V::VectorRef, links: SortedNeighborhoodV<V>, lc: usize) {
-        sqlx::query(
+        let table = self.links_table();
+        sqlx::query(&format!(
             "
-            INSERT INTO hawk_graph_links (graph_id, source_ref, layer, links)
+            INSERT INTO {table} (graph_id, source_ref, layer, links)
             VALUES ($1, $2, $3, $4) ON CONFLICT (graph_id, source_ref, layer)
             DO UPDATE SET
             links = EXCLUDED.links
-        ",
-        )
+        "
+        ))
         .bind(self.graph_id)
         .bind(Text(base))
         .bind(lc as i32)
@@ -207,15 +216,17 @@ where
     V::DistanceRef: Send + Unpin + 'static,
 {
     fn stream_links(&mut self) -> impl Stream<Item = Result<RowLinks<V>>> + '_ {
-        sqlx::query_as::<_, RowLinks<V>>(
+        let table = self.links_table();
+        self.borrowable_sql = format!(
             "
-        SELECT source_ref, links, layer FROM hawk_graph_links
-        WHERE graph_id = $1
-        ",
-        )
-        .bind(self.graph_id)
-        .fetch(self.tx.deref_mut())
-        .map_err(Into::into)
+            SELECT source_ref, links, layer FROM {table}
+            WHERE graph_id = $1
+        "
+        );
+        sqlx::query_as::<_, RowLinks<V>>(&self.borrowable_sql)
+            .bind(self.graph_id)
+            .fetch(self.tx.deref_mut())
+            .map_err(Into::into)
     }
 
     pub async fn load_to_mem(&mut self) -> Result<GraphMem<V>> {
@@ -273,25 +284,25 @@ pub mod test_utils {
     ///
     /// Access the database with `&graph` or `graph.owned()`.
     pub struct TestGraphPg<V: VectorStore> {
-        graph:       GraphPg<V>,
-        schema_name: String,
+        pub graph: GraphPg<V>,
     }
 
     impl<V: VectorStore> TestGraphPg<V> {
         pub async fn new() -> Result<Self> {
             let schema_name = temporary_name();
             let graph = GraphPg::new(&test_db_url()?, &schema_name).await?;
-            Ok(TestGraphPg { graph, schema_name })
+            Ok(TestGraphPg { graph })
         }
 
         pub async fn cleanup(&self) -> Result<()> {
-            cleanup(&self.graph.pool, &self.schema_name).await
+            cleanup(&self.graph.pool, &self.graph.schema_name).await
         }
 
         pub fn owned(&self) -> GraphPg<V> {
             GraphPg {
-                pool:    self.graph.pool.clone(),
-                phantom: PhantomData,
+                pool:        self.graph.pool.clone(),
+                schema_name: self.graph.schema_name.clone(),
+                phantom:     PhantomData,
             }
         }
     }
@@ -345,8 +356,14 @@ mod tests {
     #[tokio::test]
     async fn test_graph_migrations() -> Result<()> {
         let graph = TestGraphPg::<PlaintextStore>::new().await.unwrap();
-        MIGRATOR.undo(&graph.pool, 0).await?;
-        MIGRATOR.run(&graph.pool).await?;
+        let mut tx = graph.pool.begin().await?;
+        tx.execute(sql_switch_schema(&graph.graph.schema_name)?.as_ref())
+            .await?;
+
+        MIGRATOR.undo(&mut tx, 0).await?;
+        MIGRATOR.run(&mut tx).await?;
+
+        tx.commit().await?;
         graph.cleanup().await?;
         Ok(())
     }
