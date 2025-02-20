@@ -1544,7 +1544,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             tx.commit().await?;
 
             // Graph mutation.
-            hawk_mutation.persist(&graph_store).await?;
+            {
+                let mut graph_tx = graph_store.tx().await?;
+                hawk_mutation.persist(&mut graph_tx).await?;
+                graph_tx.tx.commit().await?;
+            }
 
             for memory_serial_id in memory_serial_ids {
                 tracing::info!("Inserted serial_id: {}", memory_serial_id);

@@ -81,11 +81,11 @@ impl<V: VectorStore> GraphPg<V> {
         })
     }
 
-    pub async fn tx(&self, graph_id: StoreId) -> Result<GraphTx<'_, V>> {
+    pub async fn tx(&self) -> Result<GraphTx<'_, V>> {
         Ok(GraphTx {
             tx:             self.pool.begin().await?,
             schema_name:    self.schema_name.clone(),
-            graph_id:       graph_id as usize as i32,
+            graph_id:       StoreId::Left as usize as i32, // TODO: Find a better way.
             borrowable_sql: "".to_string(),
             phantom:        PhantomData,
         })
@@ -93,9 +93,8 @@ impl<V: VectorStore> GraphPg<V> {
 }
 
 impl<V: VectorStore> GraphTx<'_, V> {
-    pub fn select_graph(mut self, graph_id: StoreId) -> Self {
+    pub fn select_graph(&mut self, graph_id: StoreId) {
         self.graph_id = graph_id as usize as i32;
-        self
     }
 
     fn entry_table(&self) -> String {
@@ -351,8 +350,6 @@ mod tests {
     use rand::SeedableRng;
     use tokio;
 
-    const TEST_GRAPH_ID: StoreId = StoreId::Left;
-
     #[tokio::test]
     async fn test_graph_migrations() -> Result<()> {
         let graph = TestGraphPg::<PlaintextStore>::new().await.unwrap();
@@ -391,7 +388,7 @@ mod tests {
             d
         };
 
-        let mut tx = graph.tx(TEST_GRAPH_ID).await.unwrap();
+        let mut tx = graph.tx().await.unwrap();
 
         let ep = tx.get_entry_point().await;
         assert!(ep.is_none());
@@ -445,7 +442,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Insert the codes.
-        let mut tx = graph_pg.tx(TEST_GRAPH_ID).await.unwrap();
+        let mut tx = graph_pg.tx().await.unwrap();
         for query in queries1.iter() {
             let insertion_layer = db.select_layer(rng);
             let (neighbors, set_ep) = db

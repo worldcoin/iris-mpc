@@ -8,7 +8,7 @@ use crate::{
     },
     hawkers::aby3_store::{Aby3Store, SharedIrisesMut, SharedIrisesRef},
     hnsw::{
-        graph::{graph_store::GraphPg, neighborhood::SortedNeighborhoodV},
+        graph::{graph_store, neighborhood::SortedNeighborhoodV},
         searcher::ConnectPlanV,
         GraphMem, HnswSearcher, VectorStore,
     },
@@ -38,7 +38,8 @@ use tokio::{
     task::JoinSet,
 };
 use tonic::transport::Server;
-pub type GraphStore = GraphPg<Aby3Store>;
+pub type GraphStore = graph_store::GraphPg<Aby3Store>;
+pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
 
 #[derive(Parser)]
 pub struct HawkArgs {
@@ -437,8 +438,10 @@ pub struct GraphLoader<'a>(BothEyes<GraphMut<'a>>);
 
 impl<'a> GraphLoader<'a> {
     pub async fn load_graph_store(self, graph_store: &GraphStore) -> Result<()> {
+        let mut graph_tx = graph_store.tx().await?;
         for (side, mut graph) in izip!(STORE_IDS, self.0) {
-            *graph = graph_store.tx(side).await?.load_to_mem().await?;
+            graph_tx.select_graph(side);
+            *graph = graph_tx.load_to_mem().await?;
         }
         Ok(())
     }
@@ -515,15 +518,13 @@ pub type ServerJobResult = iris_mpc_common::job::ServerJobResult<HawkMutation>;
 pub struct HawkMutation(BothEyes<Vec<ConnectPlan>>);
 
 impl HawkMutation {
-    pub async fn persist(self, graph_store: &GraphStore) -> Result<()> {
-        let mut graph_tx = graph_store.tx(StoreId::Left).await?;
+    pub async fn persist(self, graph_tx: &mut GraphTx<'_>) -> Result<()> {
         for (side, plans) in izip!(STORE_IDS, self.0) {
-            graph_tx = graph_tx.select_graph(side);
+            graph_tx.select_graph(side);
             for plan in plans {
                 graph_tx.insert_apply(plan).await;
             }
         }
-        graph_tx.tx.commit().await?;
         Ok(())
     }
 }
@@ -835,8 +836,12 @@ mod tests_db {
 
         // Populate the SQL store with test data.
         let graph_store = TestGraphPg::<Aby3Store>::new().await.unwrap();
-        let mutation = HawkMutation(STORE_IDS.map(make_plans));
-        mutation.persist(&graph_store).await?;
+        {
+            let mutation = HawkMutation(STORE_IDS.map(make_plans));
+            let mut graph_tx = graph_store.tx().await?;
+            mutation.persist(&mut graph_tx).await?;
+            graph_tx.tx.commit().await?;
+        }
 
         // Start an actor and load the graph from SQL to memory.
         let args = HawkArgs {
