@@ -984,6 +984,25 @@ impl ServerActor {
         let mut merged_results =
             get_merged_results(&host_results, self.device_manager.device_count());
 
+        merged_results
+            .iter()
+            .enumerate()
+            .filter(|&(idx, &num)| {
+                batch.request_types[idx] == UNIQUENESS_MESSAGE_TYPE
+            && num == NON_MATCH_ID
+            // Filter-out supermatchers on both sides
+            && partial_match_counters_left[idx] <= SUPERMATCH_THRESHOLD
+            && partial_match_counters_right[idx] <= SUPERMATCH_THRESHOLD
+            // Only log entries where skip_persistence is true
+            && batch.skip_persistence[idx]
+            })
+            .for_each(|(idx, _)| {
+                tracing::warn!(
+                    "Skipping persistence for unique request_id: {} due to skip_persistence flag",
+                    batch.request_ids[idx]
+                );
+            });
+
         // List the indices of the uniqueness requests that did not match.
         let uniqueness_insertion_list = merged_results
             .iter()
@@ -994,6 +1013,8 @@ impl ServerActor {
                     // Filter-out supermatchers on both sides (TODO: remove this in the future)
                     && partial_match_counters_left[idx] <= SUPERMATCH_THRESHOLD
                     && partial_match_counters_right[idx] <= SUPERMATCH_THRESHOLD
+                    // Filter out any requests that should not be persisted
+                    && !batch.skip_persistence[idx]
             })
             .map(|(idx, _num)| idx)
             .collect::<Vec<_>>();

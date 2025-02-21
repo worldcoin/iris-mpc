@@ -95,6 +95,7 @@ pub struct PreprocessedBatchQuery {
     pub or_rule_indices:      Vec<Vec<u32>>,
     pub luc_lookback_records: usize,
     pub valid_entries:        Vec<bool>,
+    pub skip_persistence:     Vec<bool>,
 
     // Only reauth specific fields
     // Map from reauth request id to the index of the target entry to be matched
@@ -166,6 +167,7 @@ impl From<BatchQuery> for PreprocessedBatchQuery {
             query_right_preprocessed:  query_right_preprocessed.unwrap(),
             db_right_preprocessed:     db_right_preprocessed.unwrap(),
             modifications:             value.modifications,
+            skip_persistence:          value.skip_persistence,
         }
     }
 }

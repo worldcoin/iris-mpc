@@ -32,6 +32,7 @@ pub struct BatchQuery {
     pub or_rule_indices:      Vec<Vec<u32>>,
     pub luc_lookback_records: usize,
     pub valid_entries:        Vec<bool>,
+    pub skip_persistence:     Vec<bool>,
 
     // Only reauth specific fields
     // Map from reauth request id to the index of the target entry to be matched

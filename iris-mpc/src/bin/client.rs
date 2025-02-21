@@ -372,6 +372,7 @@ async fn main() -> eyre::Result<()> {
                     signup_id:          request_id.to_string(),
                     s3_key:             presigned_url,
                     or_rule_serial_ids: None,
+                    skip_persistence:   None,
                 };
 
                 let message_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);

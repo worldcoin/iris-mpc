@@ -257,6 +257,7 @@ async fn receive_batch(
                             .deletion_requests_indices
                             .push(identity_deletion_request.serial_id - 1); // serial_id is 1-indexed
                         batch_query.deletion_requests_metadata.push(batch_metadata);
+                        batch_query.skip_persistence.push(false);
                     }
 
                     UNIQUENESS_MESSAGE_TYPE => {
@@ -320,6 +321,16 @@ async fn receive_batch(
                             *CURRENT_BATCH_SIZE.lock().unwrap() =
                                 batch_size.clamp(1, max_batch_size);
                             tracing::info!("Updating batch size to {}", batch_size);
+                        }
+                        if let Some(skip_persistence) = uniqueness_request.skip_persistence {
+                            batch_query.skip_persistence.push(skip_persistence);
+                            tracing::info!(
+                                "Setting skip_persistence to {} for requuest id {}",
+                                skip_persistence,
+                                uniqueness_request.signup_id
+                            );
+                        } else {
+                            batch_query.skip_persistence.push(false);
                         }
                         if config.luc_enabled {
                             if config.luc_lookback_records > 0 {
@@ -448,7 +459,7 @@ async fn receive_batch(
                                 vec![]
                             };
                             batch_query.or_rule_indices.push(or_rule_indices);
-
+                            batch_query.skip_persistence.push(false);
                             let semaphore = Arc::clone(&semaphore);
                             let s3_client_clone = s3_client.clone();
                             let bucket_name = config.shares_bucket_name.clone();
