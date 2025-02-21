@@ -137,7 +137,7 @@ COMMAND="reshare-client \
     --ca-root-file-path $CLIENT_TLS_CERT_PATH"
 
 # Display or execute command
-echo "Generated command:"
-echo "$COMMAND"
+#echo "Generated command:"
+#echo "$COMMAND"
 
 exec $COMMAND
