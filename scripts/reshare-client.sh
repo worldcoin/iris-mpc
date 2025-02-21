@@ -67,7 +67,7 @@ if [ "$LOCAL_PARTY_ID" -eq "$TARGET_PARTY_ID" ]; then
 fi
 
 # Dynamically generate server_url
-SERVER_URL="https://reshare-server.${TARGET_PARTY_ID}.stage.smpcv2.worldcoin.dev:6443"
+SERVER_URL="https://reshare-server.$((TARGET_PARTY_ID + 1)).stage.smpcv2.worldcoin.dev:6443"
 
 # Constant parameters
 BATCH_SIZE=100
