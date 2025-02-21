@@ -24,7 +24,7 @@ initContainer:
   name: "reshare-proto-dns-records-updater"
   env:
     - name: PARTY_ID
-      value: "1"
+      value: "2"
     - name: MY_POD_IP
       valueFrom:
         fieldRef:
