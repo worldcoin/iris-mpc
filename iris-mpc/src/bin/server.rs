@@ -148,6 +148,8 @@ async fn receive_batch(
         tracing::info!("Stopping batch receive due to shutdown signal...");
         return Ok(None);
     }
+    
+    tracing::info!("Receiving batch function alled");
 
     let mut batch_query = BatchQuery::default();
 
@@ -157,6 +159,9 @@ async fn receive_batch(
     let modifications = &mut batch_query.modifications;
 
     while msg_counter < *CURRENT_BATCH_SIZE.lock().unwrap() {
+        let msg = format!("Receiving messages from SQS queue: {}, msg_counter: {}", queue_url, msg_counter);
+        tracing::info!(msg);
+        
         let rcv_message_output = client
             .receive_message()
             .max_number_of_messages(1)
@@ -166,13 +171,17 @@ async fn receive_batch(
             .map_err(ReceiveRequestError::FailedToReadFromSQS)?;
 
         if let Some(messages) = rcv_message_output.messages {
+            let msg = format!("Received messages from SQS queue: {}", messages.len());
+            tracing::info!(msg);
+            
             for sqs_message in messages {
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
                     .map_err(|e| ReceiveRequestError::json_parse_error("SQS body", e))?;
-
                 // messages arrive to SQS through SNS. So, all the attributes set in SNS are
                 // moved into the SQS body.
                 let message_attributes = message.message_attributes;
+
+                tracing::info!("Message received: {}", message.message);
 
                 let mut batch_metadata = BatchMetadata::default();
 
@@ -191,6 +200,8 @@ async fn receive_batch(
                     .string_value()
                     .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?;
 
+                tracing::info!("Message received, request_type: {}", request_type);
+                
                 match request_type {
                     CIRCUIT_BREAKER_MESSAGE_TYPE => {
                         let circuit_breaker_request: CircuitBreakerRequest =
@@ -1206,7 +1217,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         );
                     }
                 } else {
-                    tracing::info!("Heartbeat: Node {} is healthy", host);
+                    tracing::debug!("Heartbeat: Node {} is healthy", host);
                 }
             }
 
@@ -1242,9 +1253,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Syncing latest node state");
     let all_nodes = config.node_hostnames.clone();
+    
     let next_node = &all_nodes[(config.party_id + 1) % 3];
     let prev_node = &all_nodes[(config.party_id + 2) % 3];
 
+    
+    
     tracing::info!("Database store length is: {}", store_len);
     let mut states = vec![my_state.clone()];
     for host in [next_node, prev_node].iter() {
