@@ -898,6 +898,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         .build();
 
     let s3_config = S3ConfigBuilder::from(&shared_config)
+        .force_path_style(true)
         .retry_config(retry_config.clone())
         .build();
 
