@@ -1189,7 +1189,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         );
                     }
                 } else {
-                    tracing::info!("Heartbeat: Node {} is healthy", host);
+                    tracing::debug!("Heartbeat: Node {} is healthy", host);
                 }
             }
 
