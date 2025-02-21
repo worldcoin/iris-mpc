@@ -1,11 +1,11 @@
 #![feature(test)]
 extern crate test;
-use iris_mpc::bin::client::{run_client, Opt};
-use test::Bencher;
-// adjust the import path as needed
+use criterion::{criterion_group, criterion_main, Criterion};
+use iris_mpc::client::{run_client, Opt};
 
 // Derive Clone on Opt (if not already) so we can reuse it in each iteration.
-fn bench_client(b: &mut Bencher) {
+fn client_performance_tests(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Client performance tests".to_string());
     // Build the options exactly as you would pass them on the CLI:
     let opts = Opt {
         request_topic_arn:      "arn:aws:sns:us-east-1:000000000000:iris-mpc-input.fifo"
@@ -25,12 +25,18 @@ fn bench_client(b: &mut Bencher) {
     // Create a single Tokio runtime outside the iteration to avoid re-creating it
     // each time.
     let rt = tokio::runtime::Runtime::new().unwrap();
-
-    b.iter(|| {
-        // For each iteration, run your client benchmark.
-        // If you need to shield the benchmark from any compiler optimizations,
-        // you might wrap the call in test::black_box.
-        let result = rt.block_on(run_client(opts.clone()));
-        assert!(result.is_ok());
+    group.bench_function("with copy to host", move |b| {
+        b.iter(|| {
+            let result = rt.block_on(run_client(opts.clone()));
+            assert!(result.is_ok());
+        })
     });
 }
+
+criterion_group!(
+    name = client_perf;
+    config = Criterion::default();
+    targets = client_performance_tests
+);
+
+criterion_main!(client_perf);

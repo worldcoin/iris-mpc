@@ -1,1 +1,1 @@
-pub mod bin;
+pub mod client;
