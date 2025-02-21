@@ -38,6 +38,7 @@ serde = { version = "1.0.214", features = ["derive"] }
 iris-mpc-cpu.workspace = true
 
 [dev-dependencies]
+criterion = "0.5"
 
 [features]
 default = []
@@ -45,3 +46,7 @@ default = []
 [[bin]]
 name = "server-hawk"
 path = "src/bin/server_hawk.rs"
+
+[[bench]]
+name = "client"
+harness = false

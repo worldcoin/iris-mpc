@@ -1,7 +1,7 @@
 #![allow(clippy::needless_range_loop)]
+
 use aws_config::retry::RetryConfig;
 use aws_sdk_sns::{config::Region, Client};
-// use aws_sdk_sqs::Client as SqsClient;
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use eyre::{Context, ContextCompat};
@@ -21,7 +21,6 @@ use serde_json::to_string;
 use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{
-    // spawn,
     sync::{Mutex, Semaphore},
     time::sleep,
 };
@@ -30,70 +29,60 @@ use uuid::Uuid;
 const MAX_CONCURRENT_REQUESTS: usize = 16;
 const BATCH_SIZE: usize = 64;
 const N_BATCHES: usize = 100;
-// const N_QUERIES: usize = BATCH_SIZE * N_BATCHES;
 const WAIT_AFTER_BATCH: Duration = Duration::from_secs(2);
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 
-#[derive(Debug, Parser)]
-struct Opt {
+#[derive(Debug, Parser, Clone)]
+pub struct Opt {
     #[arg(long, env, required = true)]
-    request_topic_arn: String,
+    pub request_topic_arn: String,
 
     #[arg(long, env, required = true)]
-    request_topic_region: String,
-
-    // #[arg(long, env, required = true)]
-    // response_queue_url: String,
-    //
-    // #[arg(long, env, required = true)]
-    // response_queue_region: String,
-    #[arg(long, env, required = true)]
-    requests_bucket_name: String,
+    pub request_topic_region: String,
 
     #[arg(long, env, required = true)]
-    public_key_base_url: String,
+    pub requests_bucket_name: String,
 
     #[arg(long, env, required = true)]
-    requests_bucket_region: String,
+    pub public_key_base_url: String,
+
+    #[arg(long, env, required = true)]
+    pub requests_bucket_region: String,
 
     #[arg(long, env)]
-    db_index: Option<usize>,
+    pub db_index: Option<usize>,
 
     #[arg(long, env)]
-    rng_seed: Option<u64>,
+    pub rng_seed: Option<u64>,
 
     #[arg(long, env)]
-    n_repeat: Option<usize>,
+    pub n_repeat: Option<usize>,
 
     #[arg(long, env)]
-    random: Option<bool>,
+    pub random: Option<bool>,
 }
 
-#[tokio::main]
-async fn main() -> eyre::Result<()> {
+/// The core client functionality is moved into an async function so it can be
+/// called from a benchmark harness without spawning a new process.
+pub async fn run_client(opts: Opt) -> eyre::Result<()> {
     tracing_subscriber::fmt::init();
 
     let Opt {
         public_key_base_url,
-
         requests_bucket_name,
         requests_bucket_region,
-
         request_topic_arn,
         request_topic_region,
-
-        // response_queue_url,
-        // response_queue_region,
         db_index,
         rng_seed,
         n_repeat,
         random,
-    } = Opt::parse();
+    } = opts;
 
-    let mut shares_encryption_public_keys: Vec<PublicKey> = vec![];
-
+    // Download public keys for each participant.
+    let mut shares_encryption_public_keys: Vec<PublicKey> = Vec::new();
     for i in 0..3 {
         let public_key_string =
             download_public_key(public_key_base_url.to_string(), i.to_string()).await?;
@@ -108,13 +97,11 @@ async fn main() -> eyre::Result<()> {
     let n_repeat = n_repeat.unwrap_or(0);
 
     let region_provider = Region::new(request_topic_region);
-
     let requests_sns_config = aws_config::from_env()
         .region(region_provider)
         .retry_config(RetryConfig::standard().with_max_attempts(5))
         .load()
         .await;
-
     let requests_sns_client = Client::new(&requests_sns_config);
 
     let db = IrisDB::new_random_par(DB_SIZE, &mut StdRng::seed_from_u64(RNG_SEED_SERVER));
@@ -125,93 +112,9 @@ async fn main() -> eyre::Result<()> {
     let responses: Arc<Mutex<HashMap<u32, IrisCode>>> = Arc::new(Mutex::new(HashMap::new()));
     let db: Arc<Mutex<IrisDB>> = Arc::new(Mutex::new(db));
     let requests_sns_client: Arc<Client> = Arc::new(requests_sns_client);
-    // let thread_expected_results = expected_results.clone();
-    // let thread_requests = requests.clone();
-    // let thread_responses = responses.clone();
 
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
 
-    // let recv_thread = spawn(async move {
-    //     let region_provider = Region::new(response_queue_region);
-    //     let results_sqs_config =
-    // aws_config::from_env().region(region_provider).load().await;
-    //     let results_sqs_client = SqsClient::new(&results_sqs_config);
-    //     let mut counter = 0;
-    //     while counter < N_QUERIES * 3 {
-    //         // Receive responses
-    //         let msg = results_sqs_client
-    //             .receive_message()
-    //             .max_number_of_messages(1)
-    //             .queue_url(response_queue_url.clone())
-    //             .send()
-    //             .await
-    //             .context("Failed to receive message")?;
-    //
-    //         for msg in msg.messages.unwrap_or_default() {
-    //             counter += 1;
-    //
-    //             let result: UniquenessResult =
-    //                 serde_json::from_str(&msg.body.context("No body found")?)
-    //                     .context("Failed to parse message body")?;
-    //
-    //             println!("Received result: {:?}", result);
-    //
-    //             let expected_result_option = {
-    //                 let tmp = thread_expected_results.lock().await;
-    //                 tmp.get(&result.signup_id).cloned()
-    //             };
-    //             if expected_result_option.is_none() {
-    //                 eprintln!(
-    //                     "No expected result found for request_id: {}, the SQS
-    // message is likely \                      stale, clear the queue",
-    //                     result.signup_id
-    //                 );
-    //
-    //                 results_sqs_client
-    //                     .delete_message()
-    //                     .queue_url(response_queue_url.clone())
-    //                     .receipt_handle(msg.receipt_handle.unwrap())
-    //                     .send()
-    //                     .await
-    //                     .context("Failed to delete message")?;
-    //
-    //                 continue;
-    //             }
-    //             let expected_result = expected_result_option.unwrap();
-    //
-    //             if expected_result.is_none() {
-    //                 // New insertion
-    //                 assert!(!result.is_match);
-    //                 let request = {
-    //                     let tmp = thread_requests.lock().await;
-    //                     tmp.get(&result.signup_id).unwrap().clone()
-    //                 };
-    //                 {
-    //                     let mut tmp = thread_responses.lock().await;
-    //                     tmp.insert(result.serial_id.unwrap(), request);
-    //                 }
-    //             } else {
-    //                 // Existing entry
-    //                 assert!(result.is_match);
-    //                 assert!(result.matched_serial_ids.is_some());
-    //                 let matched_ids = result.matched_serial_ids.unwrap();
-    //                 assert!(matched_ids.len() == 1);
-    //                 assert_eq!(expected_result.unwrap(), matched_ids[0]);
-    //             }
-    //
-    //             results_sqs_client
-    //                 .delete_message()
-    //                 .queue_url(response_queue_url.clone())
-    //                 .receipt_handle(msg.receipt_handle.unwrap())
-    //                 .send()
-    //                 .await
-    //                 .context("Failed to delete message")?;
-    //         }
-    //     }
-    //     eyre::Ok(())
-    // });
-
-    // Prepare query
     for batch_idx in 0..N_BATCHES {
         let mut handles = Vec::new();
         for batch_query_idx in 0..BATCH_SIZE {
@@ -237,9 +140,8 @@ async fn main() -> eyre::Result<()> {
 
                 let request_id = Uuid::new_v4();
 
-                let template = if random.is_some() {
+                let template = if random.unwrap_or(false) {
                     // Automatic random tests
-
                     let responses_len = {
                         let tmp = thread_responses2.lock().await;
                         tmp.len()
@@ -274,12 +176,11 @@ async fn main() -> eyre::Result<()> {
                         }
                         2 => {
                             println!("Sending freshly inserted iris code");
-                            let (keys_vec, keys_idx) = {
+                            let keys_vec = {
                                 let tmp = thread_responses2.lock().await;
-                                let keys = tmp.keys().cloned().collect::<Vec<_>>();
-                                let idx = rng.gen_range(0..keys.len());
-                                (keys, idx)
+                                tmp.keys().cloned().collect::<Vec<_>>()
                             };
+                            let keys_idx = rng.gen_range(0..keys_vec.len());
                             let iris_code = {
                                 let tmp = thread_responses2.lock().await;
                                 tmp.get(&keys_vec[keys_idx]).unwrap().clone()
@@ -293,7 +194,7 @@ async fn main() -> eyre::Result<()> {
                         _ => unreachable!(),
                     }
                 } else {
-                    // Manually passed cli arguments
+                    // Manually passed CLI arguments
                     if let Some(db_index) = db_index {
                         if batch_query_idx * batch_idx < n_repeat {
                             let tmp = thread_db2.lock().await;
@@ -302,7 +203,7 @@ async fn main() -> eyre::Result<()> {
                             IrisCode::random_rng(&mut rng)
                         }
                     } else {
-                        let mut rng = StdRng::seed_from_u64(1337); // TODO
+                        let mut rng = StdRng::seed_from_u64(1337);
                         IrisCode::random_rng(&mut rng)
                     }
                 };
@@ -336,10 +237,8 @@ async fn main() -> eyre::Result<()> {
                         .expect("Serialization failed")
                         .clone();
 
-                    // calculate hash of the object
                     let hash_string = sha256_as_hex_string(&serialized_iris_codes_json);
 
-                    // encrypt the object using sealed box and public key
                     let encrypted_bytes = sealedbox::seal(
                         serialized_iris_codes_json.as_bytes(),
                         &shares_encryption_public_keys2[i],
@@ -385,24 +284,25 @@ async fn main() -> eyre::Result<()> {
                     .send()
                     .await?;
 
-                eyre::Ok(())
+                Ok::<(), eyre::Error>(())
             });
             handles.push(handle);
         }
 
-        // Wait for all tasks to complete
+        // Wait for all tasks in this batch to complete.
         for handle in handles {
             handle.await??;
         }
 
         println!("Batch {} sent!", batch_idx);
-
-        // Give it some time to get back results
         sleep(WAIT_AFTER_BATCH).await;
     }
 
-    // Receive all messages
-    // recv_thread.await??;
-
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> eyre::Result<()> {
+    let opts = Opt::parse();
+    run_client(opts).await
 }
