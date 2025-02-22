@@ -1,6 +1,4 @@
-use itertools::Itertools;
-
-/// Sorting networks for batcher odd-even merge sort.
+/// Implementation of sorting networks  for batcher odd-even merge sort.
 ///
 /// Representation:
 /// - Sorting network is a list of lists of usize tuples
@@ -8,75 +6,95 @@ use itertools::Itertools;
 /// - Interior list represents the comparison pairs of the network in the
 ///   associated step.
 
-type SortingNetworkLayer = Vec<(usize, usize)>;
-type SortingNetwork = Vec<SortingNetworkLayer>;
+use itertools::Itertools;
 
-/// Apply a map to the indices of an input sorting network
-pub fn map_network<F>(n: SortingNetwork, map: F) -> SortingNetwork
-where
-    F: Fn(usize) -> usize,
-{
-    n.into_iter()
-        .map(|layer| {
-            layer
-                .into_iter()
-                .map(|(idx1, idx2)| (map(idx1), map(idx2)))
-                .collect()
-        })
-        .collect()
+pub type SortingNetworkLayer = Vec<(usize, usize)>;
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SortingNetwork {
+    pub layers: Vec<SortingNetworkLayer>,
 }
 
-/// Apply a filter to comparison pairs in a sorting network
-pub fn filter_network<F>(n: SortingNetwork, predicate: F) -> SortingNetwork
-where
-    F: Fn(&(usize, usize)) -> bool,
-{
-    n.into_iter()
-        .map(|layer| layer.into_iter().filter(&predicate).collect())
-        .filter(|layer: &Vec<_>| !layer.is_empty())
-        .collect()
-}
+impl SortingNetwork {
 
-/// Uniformly shift indices of an input sorting network
-pub fn shift_network(n: SortingNetwork, shift_amount: usize) -> SortingNetwork {
-    map_network(n, |x| x + shift_amount)
-}
-
-/// Combine two sorting networks in parallel
-pub fn combine_networks_parallel(n1: SortingNetwork, n2: SortingNetwork) -> SortingNetwork {
-    n1.into_iter()
-        .zip_longest(n2.into_iter())
-        .map(|layers| match layers {
-            itertools::EitherOrBoth::Left(l1) => l1,
-            itertools::EitherOrBoth::Right(l2) => l2,
-            itertools::EitherOrBoth::Both(l1, l2) => l1.into_iter().chain(l2.into_iter()).collect(),
-        })
-        .collect()
-}
-
-/// Combine two sorting networks in series
-pub fn combine_networks_series(n1: SortingNetwork, n2: SortingNetwork) -> SortingNetwork {
-    n1.into_iter().chain(n2).collect()
-}
-
-pub fn apply_network<F: Ord>(network: &SortingNetwork, list: &mut [F]) {
-    for layer in network {
-        apply_layer(layer, list)
+    pub fn new() -> Self {
+        Default::default()
     }
-}
 
-fn apply_layer<F: Ord>(layer: &SortingNetworkLayer, list: &mut [F]) {
-    for (idx1, idx2) in layer {
-        if let (Some(val1), Some(val2)) = (list.get(*idx1), list.get(*idx2)) {
-            if val1 > val2 {
-                list.swap(*idx1, *idx2);
-            }
+    /// Apply a map to the indices of the sorting network
+    pub fn map_indices<F>(&mut self, map: F) -> &mut Self
+    where
+        F: Fn(usize) -> usize,
+    {
+        self.layers.iter_mut()
+            .for_each(|layer| {
+                layer
+                    .iter_mut()
+                    .for_each(|wire| {
+                        let (idx1, idx2) = wire;
+                        *wire = (map(*idx1), map(*idx2))
+                    })
+            });
+        self
+    }
+
+    /// Uniformly shift indices of an input sorting network.  Panics if integer
+    /// overflow occurs during a shift operation.
+    pub fn shift(&mut self, shift_amount: isize) -> &mut Self {
+        self.map_indices(|x| { x.checked_add_signed(shift_amount).unwrap() })
+    }
+
+    /// Apply a filter to wires of the sorting network, optionally removing any
+    /// layers which are empty in the output
+    pub fn filter_wires<F>(&mut self, predicate: F, purge_empty: bool) -> &mut Self
+    where
+        F: Fn(&(usize, usize)) -> bool,
+    {
+        self.layers.iter_mut().for_each(|layer| layer.retain(&predicate));
+        if purge_empty {
+            self.layers.retain(|layer: &Vec<_>| !layer.is_empty());
         }
+        self
+    }
+
+    /// Apply this sorting network to an input array slice of ordered elements
+    pub fn apply<F: Ord>(&self, list: &mut [F]) {
+        self.layers.iter().for_each(|layer| SortingNetwork::apply_layer(layer, list));
+    }
+
+    pub fn apply_layer<F: Ord>(layer: &SortingNetworkLayer, list: &mut [F]) {
+        layer.iter().for_each(|(idx1, idx2)| {
+            if let (Some(val1), Some(val2)) = (list.get(*idx1), list.get(*idx2)) {
+                if val1 > val2 {
+                    list.swap(*idx1, *idx2);
+                }
+            }
+        })
+    }
+
+    pub fn merge_parallel(n1: SortingNetwork, n2: SortingNetwork) -> SortingNetwork {
+        let layers = n1.layers.into_iter()
+            .zip_longest(n2.layers.into_iter())
+            .map(|layers| match layers {
+                itertools::EitherOrBoth::Left(l1) => l1,
+                itertools::EitherOrBoth::Right(l2) => l2,
+                itertools::EitherOrBoth::Both(l1, l2) => l1.into_iter().chain(l2.into_iter()).collect(),
+            })
+            .collect();
+
+        SortingNetwork { layers }
+    }
+
+    /// Combine two sorting networks in series
+    pub fn merge_series(n1: SortingNetwork, n2: SortingNetwork) -> SortingNetwork {
+        let layers = n1.layers.into_iter().chain(n2.layers).collect();
+
+        SortingNetwork { layers }
     }
 }
 
 /// Generate sort tuples for specified stage of batcher merge network
-pub fn batcher_merge_step(deg: usize, stage: usize) -> Vec<(usize, usize)> {
+pub fn batcher_merge_step(deg: usize, stage: usize) -> SortingNetworkLayer {
     let (offset, scale) = (1 << deg - stage, 1 << stage - 1);
     let n_comps = if stage == 1 {
         offset
@@ -99,22 +117,24 @@ pub fn batcher_merge_step(deg: usize, stage: usize) -> Vec<(usize, usize)> {
 }
 
 pub fn batcher_merge_network(deg: usize) -> SortingNetwork {
-    (1..=deg)
+    let layers = (1..=deg)
         .map(|stage| batcher_merge_step(deg, stage))
-        .collect()
+        .collect();
+    SortingNetwork { layers }
 }
 
 /// Generate full Batcher odd-even merge sort sorting network for 2-power size
 pub fn batcher_full_network(deg: usize) -> SortingNetwork {
     match deg {
-        0 => vec![],
+        0 => Default::default(),
         1 => batcher_merge_network(1),
         _ => {
             let prefix_1 = batcher_full_network(deg - 1);
-            let prefix_2 = shift_network(prefix_1.clone(), 1 << (deg - 1));
-            let prefix = combine_networks_parallel(prefix_1, prefix_2);
+            let mut prefix_2 = prefix_1.clone();
+            prefix_2.shift(1 << (deg - 1));
+            let prefix = SortingNetwork::merge_parallel(prefix_1, prefix_2);
             let merger = batcher_merge_network(deg);
-            combine_networks_series(prefix, merger)
+            SortingNetwork::merge_series(prefix, merger)
         }
     }
 }
@@ -139,11 +159,11 @@ pub fn batcher_general(
     let end_idx = (offset + 1) * size; // exclusive
 
     if end_idx <= unsorted_idx || start_idx >= stable_idx || deg == 0 {
-        vec![]
+        Default::default()
     } else {
         let prefix_1 = batcher_general(deg - 1, 2 * offset, unsorted_idx, stable_idx);
         let prefix_2 = batcher_general(deg - 1, 2 * offset + 1, unsorted_idx, stable_idx);
-        let prefix = combine_networks_parallel(prefix_1, prefix_2);
+        let prefix = SortingNetwork::merge_parallel(prefix_1, prefix_2);
 
         let window_stable_suffix_size = end_idx.saturating_sub(stable_idx);
 
@@ -153,9 +173,10 @@ pub fn batcher_general(
         let total_stable_amount = window_stable_suffix_size + prefix_2_n_sorted;
 
         let mut merger = batcher_merge_network(deg);
-        merger = shift_network(merger, start_idx);
-        merger = filter_network(merger, |(_, idx2)| *idx2 < end_idx - total_stable_amount);
-        let network = combine_networks_series(prefix, merger);
+        merger.shift(start_idx as isize).filter_wires(|(_, idx2)| *idx2 < end_idx - total_stable_amount, true);
+        // merger = shift_network(merger, start_idx);
+        // merger = filter_network(merger, |(_, idx2)| *idx2 < end_idx - total_stable_amount);
+        let network = SortingNetwork::merge_series(prefix, merger);
 
         network
     }
@@ -183,7 +204,7 @@ mod tests {
         ];
 
         for deg in 0..hardcoded_batchers.len() {
-            assert_eq!(batcher_full_network(deg), hardcoded_batchers[deg]);
+            assert_eq!(batcher_full_network(deg).layers, hardcoded_batchers[deg]);
         }
     }
 
@@ -199,7 +220,7 @@ mod tests {
                 let mut vals1: Vec<u64> = (0..length).map(|_| rng.gen_range(0..100)).collect();
                 let mut vals2 = vals1.clone();
 
-                apply_network(&network, &mut vals1);
+                network.apply(&mut vals1);
                 vals2.sort();
 
                 assert_eq!(vals1, vals2);
@@ -219,7 +240,7 @@ mod tests {
                 let mut vals1: Vec<u64> = (0..length).map(|_| rng.gen_range(0..100)).collect();
                 let mut vals2 = vals1.clone();
 
-                apply_network(&network, &mut vals1);
+                network.apply(&mut vals1);
                 vals2.sort();
 
                 assert_eq!(vals1, vals2);
@@ -242,7 +263,7 @@ mod tests {
                 let mut vals2 = vals1.clone();
 
                 vals1.get_mut(0..sorted_length).unwrap().sort();
-                apply_network(&network, &mut vals1);
+                network.apply(&mut vals1);
                 vals2.sort();
 
                 assert_eq!(vals1, vals2);
