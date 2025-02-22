@@ -1,8 +1,8 @@
 use super::sorting_network::{SortingNetwork, SortingNetworkLayer};
 
 /// Generate sort tuples for specified stage of batcher merge network
-pub fn batcher_merge_step(deg: usize, stage: usize) -> SortingNetworkLayer {
-    let (offset, scale) = (1 << deg - stage, 1 << stage - 1);
+fn batcher_merge_step(deg: usize, stage: usize) -> SortingNetworkLayer {
+    let (offset, scale) = (1 << (deg - stage), 1 << (stage - 1));
     let n_comps = if stage == 1 {
         offset
     } else {
@@ -23,69 +23,127 @@ pub fn batcher_merge_step(deg: usize, stage: usize) -> SortingNetworkLayer {
     sort_tuples
 }
 
-pub fn batcher_merge_network(deg: usize) -> SortingNetwork {
+fn batcher_merger_network(deg: usize) -> SortingNetwork {
     let layers = (1..=deg)
         .map(|stage| batcher_merge_step(deg, stage))
         .collect();
     SortingNetwork { layers }
 }
 
-/// Generate full Batcher odd-even merge sort sorting network for 2-power size
-pub fn batcher_full_network(deg: usize) -> SortingNetwork {
-    match deg {
-        0 => Default::default(),
-        1 => batcher_merge_network(1),
-        _ => {
-            let prefix_1 = batcher_full_network(deg - 1);
-            let mut prefix_2 = prefix_1.clone();
-            prefix_2.shift(1 << (deg - 1));
-            let prefix = SortingNetwork::merge_parallel(prefix_1, prefix_2);
-            let merger = batcher_merge_network(deg);
-            SortingNetwork::merge_series(prefix, merger)
-        }
-    }
+/// Generate the pruned Batcher odd-even merge sort sorting network for an input
+/// list of a specified size.  A "pruned" network is the network obtained by
+///
+/// - starting with a full 2-power size batcher network of minimal size needed
+///   to sort the targeted potentially non-2-power size
+/// - removing any wires comparing an in-range index with a (larger)
+///   out-of-range index
+///
+/// Conceptually, the out-of-range indices can be thought of as indices with
+/// values initialized to "infinity", so any comparison with an element in the
+/// proper list acts as a no-op.
+///
+/// For 2-power sizes, the network produced by this function is the standard
+/// Batcher odd-even merge sort network.
+pub fn batcher_network(size: usize) -> SortingNetwork {
+    partial_batcher_network(0, size)
 }
 
-pub fn batcher_partial_network(sorted_prefix_size: usize, unsorted_size: usize) -> SortingNetwork {
+/// Generate a pruned Batcher odd-even merge sort network which sorts an input
+/// list where a prefix of the elements already appear in sorted order.
+///
+/// Two rules are applied to a basic 2-power size batcher network to eliminate
+/// unnecessary wires from the network:
+///
+/// - Prefix networks used to sort the input halves of the batcher merger
+///   network are omitted if the inputs are already in sorted order
+/// - Wires comparing with trailing indices that are "stable" -- meaning either
+///   the index is out of bounds, or belongs to a tail of elements already
+///   determined to be maximal and sorted -- are omitted from the network
+///
+/// For the latter rule, a somewhat nuanced observation is used to identify
+/// extra indices that are "stabilized early" coming from the assumption that
+/// some portion of the prefix is already sorted.  Recall that the batcher
+/// sorting network begins by sorting two halves of its input, then combining
+/// the results with an efficient "merger" network.  Using such an approach, if
+/// the first half is already sorted, and the second half begins with some
+/// additional number of sorted elements that are the "top part" of the sorted
+/// region of the input, then after sorting the second half, this number of
+/// previously sorted elements is known already to be larger than all elements
+/// of the first half, and so are sorted into their final positions prior to
+/// applying the merger network.  As a result, merger wires doing additional
+/// comparisons with these indices can be omitted from the final network.
+///
+/// Indices which fall into this category are identified during the recursive
+/// network construction provided by the `batcher_recursive` function call. See
+/// documentation there for more details.
+pub fn partial_batcher_network(sorted_prefix_size: usize, unsorted_size: usize) -> SortingNetwork {
+    println!("{sorted_prefix_size} {unsorted_size}");
     let total_list_size = sorted_prefix_size + unsorted_size;
-    let deg = (usize::ilog2(total_list_size - 1) + 1) as usize;
+    assert_ne!(total_list_size, 0);
+    let deg = match total_list_size {
+        1 => 0,
+        _ => (usize::ilog2(total_list_size - 1) + 1) as usize,
+    };
 
-    let network = batcher_general(deg, 0, sorted_prefix_size, total_list_size);
-    network
+    batcher_recursive(deg, 0, sorted_prefix_size, total_list_size)
 }
 
-pub fn batcher_general(
+/// Recursively construct the partial batcher sorting network for a list with a
+/// pre-sorted prefix of elements, where:
+///
+/// - The active window of indices is the half-open interval `[ offset*2^deg,
+///   (offset+1)*2^deg )`
+/// - `unsorted_idx` specifies the starting index of the unsorted region
+/// - `stable_idx` specifies the starting index of the stable region,
+///   representing elements which should not be considered by the final network
+///   (e.g. indices beyond the end of the list to be sorted)
+///
+/// For an active window that is entirely contained in either the sorted region
+/// or the stable region of the list, this returns an empty sorting network.
+/// Otherwise, networks are recursively generated for each half of the active
+/// window, and are merged using a suitably pruned Batcher merging network.
+///
+/// To identify elements which are "stable" for the purposes of this merging
+/// network, the function identifies the number of pre-sorted elements which
+/// are included in the second half's window, and adds to this the number of
+/// indices which are stable by way of falling after the specified `stable_idx`
+/// value. This total represents the number of indices at the end of the
+/// current active window which can be ignored (all connecting wires filtered
+/// out) in the merging network.
+pub fn batcher_recursive(
     deg: usize,
     offset: usize,
     unsorted_idx: usize,
     stable_idx: usize,
 ) -> SortingNetwork {
     assert!(unsorted_idx <= stable_idx);
-    let size = 1 << deg;
-    let start_idx = offset * size; // inclusive
-    let end_idx = (offset + 1) * size; // exclusive
+
+    // Parameters of active index window
+    let window_size = 1 << deg;
+    let start_idx = offset * window_size; // inclusive
+    let end_idx = (offset + 1) * window_size; // exclusive
 
     if end_idx <= unsorted_idx || start_idx >= stable_idx || deg == 0 {
+        // Cases where no sorting occurs.  Note that this frequently handles
+        // larger values of deg without requiring additional levels of recursion.
         Default::default()
     } else {
-        let prefix_1 = batcher_general(deg - 1, 2 * offset, unsorted_idx, stable_idx);
-        let prefix_2 = batcher_general(deg - 1, 2 * offset + 1, unsorted_idx, stable_idx);
+        let prefix_1 = batcher_recursive(deg - 1, 2 * offset, unsorted_idx, stable_idx);
+        let prefix_2 = batcher_recursive(deg - 1, 2 * offset + 1, unsorted_idx, stable_idx);
         let prefix = SortingNetwork::merge_parallel(prefix_1, prefix_2);
 
-        let window_stable_suffix_size = end_idx.saturating_sub(stable_idx);
-
+        // Compute how many trailing indices can be ignored in the merging network
+        let window_n_stable = end_idx.saturating_sub(stable_idx);
         let mid_idx = (start_idx + end_idx) / 2;
         let prefix_2_n_sorted = unsorted_idx.saturating_sub(mid_idx);
+        let total_stable_amount = window_n_stable + prefix_2_n_sorted;
 
-        let total_stable_amount = window_stable_suffix_size + prefix_2_n_sorted;
+        let mut merger = batcher_merger_network(deg);
+        merger
+            .shift(start_idx as isize)
+            .filter_wires(|(_, idx2)| *idx2 < end_idx - total_stable_amount, true);
 
-        let mut merger = batcher_merge_network(deg);
-        merger.shift(start_idx as isize).filter_wires(|(_, idx2)| *idx2 < end_idx - total_stable_amount, true);
-        // merger = shift_network(merger, start_idx);
-        // merger = filter_network(merger, |(_, idx2)| *idx2 < end_idx - total_stable_amount);
-        let network = SortingNetwork::merge_series(prefix, merger);
-
-        network
+        SortingNetwork::merge_series(prefix, merger)
     }
 }
 
@@ -96,7 +154,7 @@ mod tests {
 
     #[test]
     fn check_small_batcher_networks() {
-        let hardcoded_batchers = vec![
+        let hardcoded_batchers = [
             vec![],
             vec![vec![(0usize, 1usize)]],
             vec![vec![(0, 1), (2, 3)], vec![(0, 2), (1, 3)], vec![(1, 2)]],
@@ -110,8 +168,9 @@ mod tests {
             ],
         ];
 
-        for deg in 0..hardcoded_batchers.len() {
-            assert_eq!(batcher_full_network(deg).layers, hardcoded_batchers[deg]);
+        for (deg, hardcoded_network) in hardcoded_batchers.iter().enumerate() {
+            let size = 1usize << deg;
+            assert_eq!(batcher_network(size).layers, *hardcoded_network);
         }
     }
 
@@ -120,11 +179,11 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         for deg in 0..6 {
-            let network = batcher_full_network(deg);
-            let length = 1usize << deg;
+            let size = 1usize << deg;
+            let network = batcher_network(size);
 
             for _ in 0..50 {
-                let mut vals1: Vec<u64> = (0..length).map(|_| rng.gen_range(0..100)).collect();
+                let mut vals1: Vec<u64> = (0..size).map(|_| rng.gen_range(0..100)).collect();
                 let mut vals2 = vals1.clone();
 
                 network.apply(&mut vals1);
@@ -141,7 +200,7 @@ mod tests {
 
         for _ in 0..10 {
             let length = rng.gen_range(16..1024);
-            let network = batcher_partial_network(0, length);
+            let network = partial_batcher_network(0, length);
 
             for _ in 0..20 {
                 let mut vals1: Vec<u64> = (0..length).map(|_| rng.gen_range(0..100)).collect();
@@ -163,7 +222,7 @@ mod tests {
             let sorted_length = rng.gen_range(128..512);
             let unsorted_length = rng.gen_range(128..512);
             let length = sorted_length + unsorted_length;
-            let network = batcher_partial_network(sorted_length, unsorted_length);
+            let network = partial_batcher_network(sorted_length, unsorted_length);
 
             for _ in 0..20 {
                 let mut vals1: Vec<u64> = (0..length).map(|_| rng.gen_range(0..100)).collect();
