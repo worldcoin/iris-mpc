@@ -20,7 +20,7 @@ use sqlx::{
 };
 use std::{marker::PhantomData, ops::DerefMut, str::FromStr};
 
-const APP_NAME: &str = "SMPC";
+const APP_NAME: &str = "SMPC_GRAPH";
 const MAX_CONNECTIONS: u32 = 5;
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
