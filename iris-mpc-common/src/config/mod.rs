@@ -188,33 +188,23 @@ pub struct Config {
 }
 
 /// Enumeration over set of compute modes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub enum ModeOfCompute {
     /// Computation with standard CPUs (see HNSW graph).
     CPU,
     /// Computation with Cuda GPU(s).
+    #[default]
     GPU,
 }
 
 /// Enumeration over set of deployment modes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub enum ModeOfDeployment {
     // Shadow mode specifically an HNSW test deployment.
     SHADOW,
     // Standard mode for all other deployments.
+    #[default]
     STANDARD,
-}
-
-impl Default for ModeOfCompute {
-    fn default() -> Self {
-        ModeOfCompute::CPU
-    }
-}
-
-impl Default for ModeOfDeployment {
-    fn default() -> Self {
-        ModeOfDeployment::STANDARD
-    }
 }
 
 fn default_load_chunks_parallelism() -> usize {
