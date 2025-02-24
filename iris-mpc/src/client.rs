@@ -126,6 +126,86 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
 
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
 
+    // let recv_thread = spawn(async move {
+    //     let region_provider = Region::new(response_queue_region);
+    //     let results_sqs_config =
+    // aws_config::from_env().region(region_provider).load().await;
+    //     let results_sqs_client = SqsClient::new(&results_sqs_config);
+    //     let mut counter = 0;
+    //     while counter < N_QUERIES * 3 {
+    //         // Receive responses
+    //         let msg = results_sqs_client
+    //             .receive_message()
+    //             .max_number_of_messages(1)
+    //             .queue_url(response_queue_url.clone())
+    //             .send()
+    //             .await
+    //             .context("Failed to receive message")?;
+    //
+    //         for msg in msg.messages.unwrap_or_default() {
+    //             counter += 1;
+    //
+    //             let result: UniquenessResult =
+    //                 serde_json::from_str(&msg.body.context("No body found")?)
+    //                     .context("Failed to parse message body")?;
+    //
+    //             println!("Received result: {:?}", result);
+    //
+    //             let expected_result_option = {
+    //                 let tmp = thread_expected_results.lock().await;
+    //                 tmp.get(&result.signup_id).cloned()
+    //             };
+    //             if expected_result_option.is_none() {
+    //                 eprintln!(
+    //                     "No expected result found for request_id: {}, the SQS
+    // message is likely \                      stale, clear the queue",
+    //                     result.signup_id
+    //                 );
+    //
+    //                 results_sqs_client
+    //                     .delete_message()
+    //                     .queue_url(response_queue_url.clone())
+    //                     .receipt_handle(msg.receipt_handle.unwrap())
+    //                     .send()
+    //                     .await
+    //                     .context("Failed to delete message")?;
+    //
+    //                 continue;
+    //             }
+    //             let expected_result = expected_result_option.unwrap();
+    //
+    //             if expected_result.is_none() {
+    //                 // New insertion
+    //                 assert!(!result.is_match);
+    //                 let request = {
+    //                     let tmp = thread_requests.lock().await;
+    //                     tmp.get(&result.signup_id).unwrap().clone()
+    //                 };
+    //                 {
+    //                     let mut tmp = thread_responses.lock().await;
+    //                     tmp.insert(result.serial_id.unwrap(), request);
+    //                 }
+    //             } else {
+    //                 // Existing entry
+    //                 assert!(result.is_match);
+    //                 assert!(result.matched_serial_ids.is_some());
+    //                 let matched_ids = result.matched_serial_ids.unwrap();
+    //                 assert!(matched_ids.len() == 1);
+    //                 assert_eq!(expected_result.unwrap(), matched_ids[0]);
+    //             }
+    //
+    //             results_sqs_client
+    //                 .delete_message()
+    //                 .queue_url(response_queue_url.clone())
+    //                 .receipt_handle(msg.receipt_handle.unwrap())
+    //                 .send()
+    //                 .await
+    //                 .context("Failed to delete message")?;
+    //         }
+    //     }
+    //     eyre::Ok(())
+    // });
+
     for batch_idx in 0..N_BATCHES {
         let mut handles = Vec::new();
         for batch_query_idx in 0..BATCH_SIZE {
