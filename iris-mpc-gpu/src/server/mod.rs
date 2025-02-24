@@ -115,6 +115,9 @@ pub struct PreprocessedBatchQuery {
 
     // Keeping track of updates & deletions for sync mechanism. Mapping: Serial id -> Modification
     pub modifications: HashMap<u32, Modification>,
+
+    // SNS message ids to assert identical batch processing across parties
+    pub sns_message_ids: Vec<String>,
 }
 
 impl From<BatchQuery> for PreprocessedBatchQuery {
@@ -166,6 +169,7 @@ impl From<BatchQuery> for PreprocessedBatchQuery {
             query_right_preprocessed:  query_right_preprocessed.unwrap(),
             db_right_preprocessed:     db_right_preprocessed.unwrap(),
             modifications:             value.modifications,
+            sns_message_ids:           value.sns_message_ids,
         }
     }
 }

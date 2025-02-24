@@ -110,6 +110,12 @@ env:
   - name: SMPC__ENABLE_REAUTH
     value: "true"
 
+  - name: SMPC__LUC_ENABLED
+    value: "true"
+
+  - name: SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST
+    value: "true"
+
   - name: SMPC__SERVICE__METRICS__HOST
     valueFrom:
       fieldRef:
