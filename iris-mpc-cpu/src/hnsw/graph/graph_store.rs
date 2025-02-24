@@ -40,8 +40,6 @@ pub struct GraphPg<V: VectorStore> {
 
 impl<V: VectorStore> GraphPg<V> {
     /// Connect to a database based on Config URL, environment, and party_id.
-    // TODO: Consolidate with Store?
-    // TODO: Separate config?
     pub async fn new_from_config(config: &Config) -> Result<Self> {
         let db_config = config
             .database
