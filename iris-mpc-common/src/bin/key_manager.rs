@@ -28,7 +28,7 @@ struct KeyManagerCli {
     )]
     node_id: String,
 
-    #[arg(short, long, env, default_value = "stage")]
+    #[arg(long, env, default_value = "stage")]
     env: String,
 
     #[arg(short, long, env, default_value = "eu-north-1")]
