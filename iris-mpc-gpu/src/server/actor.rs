@@ -699,8 +699,8 @@ impl ServerActor {
         let tmp_now = Instant::now();
         tracing::info!("Syncing batch entries");
 
-        // Compute hash of the request ids concatenated
-        let batch_hash = sha256_bytes(batch.request_ids.join(""));
+        // Compute hash of the SNS message ids concatenated
+        let batch_hash = sha256_bytes(batch.sns_message_ids.join(""));
         tracing::info!("Current batch hash: {}", hex::encode(&batch_hash[0..4]));
 
         let valid_entries =
