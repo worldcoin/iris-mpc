@@ -665,6 +665,14 @@ impl ServerActor {
         let valid_entries =
             self.sync_batch_entries(&batch.valid_entries, self.max_batch_size, &batch_hash)?;
         let valid_entry_idxs = valid_entries.iter().positions(|&x| x).collect::<Vec<_>>();
+        if valid_entry_idxs.len() != batch_size {
+            tracing::warn!(
+                "Batch size reduced from {} to {} due to invalid entries. Valid entries: {:?}",
+                batch_size,
+                valid_entry_idxs.len(),
+                valid_entry_idxs,
+            );
+        }
         batch_size = valid_entry_idxs.len();
         batch.retain(&valid_entry_idxs);
         tracing::info!("Sync and filter done in {:?}", tmp_now.elapsed());
