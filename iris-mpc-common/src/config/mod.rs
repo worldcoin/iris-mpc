@@ -188,7 +188,7 @@ pub struct Config {
 }
 
 /// Enumeration over set of compute modes.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum ModeOfCompute {
     /// Computation with standard CPUs (see HNSW graph).
     CPU,
@@ -198,7 +198,7 @@ pub enum ModeOfCompute {
 }
 
 /// Enumeration over set of deployment modes.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum ModeOfDeployment {
     // Shadow mode specifically an HNSW test deployment.
     SHADOW,
