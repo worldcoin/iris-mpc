@@ -1,6 +1,7 @@
 #![allow(clippy::needless_range_loop)]
 
 use aws_config::retry::RetryConfig;
+use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::{config::Region, Client};
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
@@ -10,9 +11,11 @@ use iris_mpc_common::{
     helpers::{
         key_pair::download_public_key,
         sha256::sha256_as_hex_string,
-        smpc_request::{IrisCodeSharesJSON, UniquenessRequest, UNIQUENESS_MESSAGE_TYPE},
+        smpc_request::{
+            IrisCodeSharesJSON, SharesS3Object, UniquenessRequest, UNIQUENESS_MESSAGE_TYPE,
+        },
         smpc_response::create_message_type_attribute_map,
-        sqs_s3_helper::upload_file_and_generate_presigned_url,
+        sqs_s3_helper::upload_file_to_s3,
     },
     iris_db::{db::IrisDB, iris::IrisCode},
 };
@@ -27,8 +30,8 @@ use tokio::{
 use uuid::Uuid;
 
 const MAX_CONCURRENT_REQUESTS: usize = 16;
-const BATCH_SIZE: usize = 64;
-const N_BATCHES: usize = 100;
+const BATCH_SIZE: usize = 10;
+const N_BATCHES: usize = 1;
 const WAIT_AFTER_BATCH: Duration = Duration::from_secs(2);
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;
@@ -40,16 +43,13 @@ pub struct Opt {
     pub request_topic_arn: String,
 
     #[arg(long, env, required = true)]
-    pub request_topic_region: String,
-
-    #[arg(long, env, required = true)]
     pub requests_bucket_name: String,
 
     #[arg(long, env, required = true)]
     pub public_key_base_url: String,
 
     #[arg(long, env, required = true)]
-    pub requests_bucket_region: String,
+    pub region: String,
 
     #[arg(long, env)]
     pub db_index: Option<usize>,
@@ -62,23 +62,24 @@ pub struct Opt {
 
     #[arg(long, env)]
     pub random: Option<bool>,
+
+    #[arg(long, env)]
+    pub endpoint_url: Option<String>,
 }
 
 /// The core client functionality is moved into an async function so it can be
 /// called from a benchmark harness without spawning a new process.
 pub async fn run_client(opts: Opt) -> eyre::Result<()> {
-    tracing_subscriber::fmt::init();
-
     let Opt {
         public_key_base_url,
         requests_bucket_name,
-        requests_bucket_region,
+        region,
         request_topic_arn,
-        request_topic_region,
         db_index,
         rng_seed,
         n_repeat,
         random,
+        endpoint_url,
     } = opts;
 
     // Download public keys for each participant.
@@ -95,14 +96,24 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
     }
 
     let n_repeat = n_repeat.unwrap_or(0);
-
-    let region_provider = Region::new(request_topic_region);
-    let requests_sns_config = aws_config::from_env()
-        .region(region_provider)
+    let region = Region::new(region);
+    let shared_config = aws_config::from_env()
+        .region(region)
         .retry_config(RetryConfig::standard().with_max_attempts(5))
         .load()
         .await;
-    let requests_sns_client = Client::new(&requests_sns_config);
+
+    let mut s3_config_builder = aws_sdk_s3::config::Builder::from(&shared_config);
+    let mut sns_config_builder = aws_sdk_sns::config::Builder::from(&shared_config);
+
+    if let Some(endpoint_url) = endpoint_url.as_ref() {
+        s3_config_builder = s3_config_builder.endpoint_url(endpoint_url);
+        s3_config_builder = s3_config_builder.force_path_style(true);
+        sns_config_builder = sns_config_builder.endpoint_url(endpoint_url);
+    }
+
+    let s3_client = S3Client::from_conf(s3_config_builder.build());
+    let sns_client = Client::from_conf(sns_config_builder.build());
 
     let db = IrisDB::new_random_par(DB_SIZE, &mut StdRng::seed_from_u64(RNG_SEED_SERVER));
 
@@ -111,7 +122,7 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
     let requests: Arc<Mutex<HashMap<String, IrisCode>>> = Arc::new(Mutex::new(HashMap::new()));
     let responses: Arc<Mutex<HashMap<u32, IrisCode>>> = Arc::new(Mutex::new(HashMap::new()));
     let db: Arc<Mutex<IrisDB>> = Arc::new(Mutex::new(db));
-    let requests_sns_client: Arc<Client> = Arc::new(requests_sns_client);
+    let requests_sns_client: Arc<Client> = Arc::new(sns_client);
 
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
 
@@ -125,10 +136,9 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
             let thread_requests2 = requests.clone();
             let thread_responses2 = responses.clone();
             let request_topic_arn = request_topic_arn.clone();
-            let requests_bucket_region = requests_bucket_region.clone();
             let requests_bucket_name = requests_bucket_name.clone();
             let semaphore = Arc::clone(&semaphore);
-
+            let s3_client = s3_client.clone();
             let handle = tokio::spawn(async move {
                 let _permit = semaphore.acquire().await;
 
@@ -249,11 +259,20 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
                     iris_shares_file_hashes[i] = hash_string;
                 }
 
-                let contents = serde_json::to_vec(&iris_codes_shares_base64)?;
-                let presigned_url = match upload_file_and_generate_presigned_url(
+                let shares_s3_object = SharesS3Object {
+                    iris_share_0:  iris_codes_shares_base64[0].clone(),
+                    iris_share_1:  iris_codes_shares_base64[1].clone(),
+                    iris_share_2:  iris_codes_shares_base64[2].clone(),
+                    iris_hashes_0: iris_shares_file_hashes[0].clone(),
+                    iris_hashes_1: iris_shares_file_hashes[1].clone(),
+                    iris_hashes_2: iris_shares_file_hashes[2].clone(),
+                };
+
+                let contents = serde_json::to_vec(&shares_s3_object)?;
+                let bucket_key = match upload_file_to_s3(
                     &requests_bucket_name,
                     &request_id.to_string(),
-                    Box::leak(requests_bucket_region.clone().into_boxed_str()),
+                    s3_client.clone(),
                     &contents,
                 )
                 .await
@@ -269,7 +288,7 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
                 let request_message = UniquenessRequest {
                     batch_size:         None,
                     signup_id:          request_id.to_string(),
-                    s3_key:             presigned_url,
+                    s3_key:             bucket_key,
                     or_rule_serial_ids: None,
                 };
 
