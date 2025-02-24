@@ -20,7 +20,7 @@ use sqlx::{
 };
 use std::{marker::PhantomData, ops::DerefMut, str::FromStr};
 
-const APP_NAME: &str = "SMPC_GRAPH";
+const APP_NAME: &str = "SMPC";
 const MAX_CONNECTIONS: u32 = 5;
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
@@ -45,7 +45,10 @@ impl<V: VectorStore> GraphPg<V> {
             .database
             .as_ref()
             .ok_or(eyre!("Missing database config"))?;
-        let schema_name = format!("{}_{}_{}", APP_NAME, config.environment, config.party_id);
+        let schema_name = format!(
+            "{}_GRAPH_{}_{}",
+            APP_NAME, config.environment, config.party_id
+        );
         Self::new(&db_config.url, &schema_name).await
     }
 
@@ -287,12 +290,8 @@ fn sanitize_identifier(input: &str) -> Result<()> {
 
 pub mod test_utils {
     use super::*;
-    use std::{
-        env,
-        ops::{Deref, DerefMut},
-    };
+    use std::ops::{Deref, DerefMut};
     const DOTENV_TEST: &str = ".env.test";
-    const ENV_DB_URL: &str = "SMPC__DATABASE__URL";
     const SCHEMA_PREFIX: &str = "graph_store_test";
 
     /// A test database. It creates a unique schema for each test. Call
@@ -338,7 +337,10 @@ pub mod test_utils {
 
     fn test_db_url() -> Result<String> {
         dotenvy::from_filename(DOTENV_TEST)?;
-        Ok(env::var(ENV_DB_URL)?)
+        Ok(Config::load_config(APP_NAME)?
+            .database
+            .ok_or(eyre!("Missing database config"))?
+            .url)
     }
 
     fn temporary_name() -> String {
