@@ -10,6 +10,10 @@ on:
       - scripts/reshare-client.sh
       - .github/workflows/build-and-push-reshare-protocol.yaml
 
+  release:
+    types:
+      - 'published'
+
   workflow_dispatch:
 
 concurrency:
@@ -49,6 +53,7 @@ jobs:
           push: true
           tags: |
             ${{ env.REGISTRY }}/worldcoin/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ github.event_name == 'release' && format('{0}/worldcoin/{1}:{2}', env.REGISTRY, env.IMAGE_NAME, github.event.release.tag_name) || '' }}
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max

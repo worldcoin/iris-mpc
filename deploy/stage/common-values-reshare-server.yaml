@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:f44be82030f079b6355c4fb67f3b0154a98df924"
+image: "ghcr.io/worldcoin/reshare-protocol:e6f14a8a269d42a18c3ff9e89cee414156e8bfad"
 
 environment: stage
 replicaCount: 1
@@ -121,6 +121,8 @@ nginxSidecar:
           # Enable session resumption to improve performance
           ssl_session_cache shared:SSL:10m;
           ssl_session_timeout 1h;
+
+          client_max_body_size 100M;
       
           location / {
             # Forward gRPC traffic to the gRPC server on port 7000
