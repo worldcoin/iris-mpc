@@ -44,7 +44,7 @@ jobs:
         run: rustup default nightly-2024-07-10
 
       - name: Run benchmark
-        run: cargo +nightly bench --bench hawk | tee output.txt
+        run: cargo bench --bench hawk | tee output.txt
 
       - name: Load env vars
         uses: HatsuneMiku3939/direnv-action@v1
