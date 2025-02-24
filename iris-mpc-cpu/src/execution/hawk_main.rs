@@ -440,8 +440,7 @@ impl<'a> GraphLoader<'a> {
     pub async fn load_graph_store(self, graph_store: &GraphStore) -> Result<()> {
         let mut graph_tx = graph_store.tx().await?;
         for (side, mut graph) in izip!(STORE_IDS, self.0) {
-            graph_tx.select_graph(side);
-            *graph = graph_tx.load_to_mem().await?;
+            *graph = graph_tx.with_graph(side).load_to_mem().await?;
         }
         Ok(())
     }
@@ -520,9 +519,8 @@ pub struct HawkMutation(BothEyes<Vec<ConnectPlan>>);
 impl HawkMutation {
     pub async fn persist(self, graph_tx: &mut GraphTx<'_>) -> Result<()> {
         for (side, plans) in izip!(STORE_IDS, self.0) {
-            graph_tx.select_graph(side);
             for plan in plans {
-                graph_tx.insert_apply(plan).await;
+                graph_tx.with_graph(side).insert_apply(plan).await;
             }
         }
         Ok(())

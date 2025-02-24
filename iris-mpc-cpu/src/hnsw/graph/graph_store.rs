@@ -16,7 +16,7 @@ use sqlx::{
     migrate::Migrator,
     postgres::{PgPoolOptions, PgRow},
     types::{Json, Text},
-    Executor, Postgres, Row, Transaction,
+    Executor, PgConnection, Postgres, Row, Transaction,
 };
 use std::{marker::PhantomData, ops::DerefMut, str::FromStr};
 
@@ -36,15 +36,6 @@ pub struct GraphPg<V: VectorStore> {
     pool:        sqlx::PgPool,
     schema_name: String,
     phantom:     PhantomData<V>,
-}
-
-pub struct GraphTx<'a, V> {
-    pub tx:      Transaction<'a, Postgres>,
-    schema_name: String,
-    graph_id:    i32,
-
-    borrowable_sql: String,
-    phantom:        PhantomData<V>,
 }
 
 impl<V: VectorStore> GraphPg<V> {
@@ -89,24 +80,48 @@ impl<V: VectorStore> GraphPg<V> {
         GraphTx {
             tx,
             schema_name: self.schema_name.clone(),
-            graph_id: StoreId::Left as usize as i32, // TODO: Find a better way.
-            borrowable_sql: "".to_string(),
             phantom: PhantomData,
         }
     }
 }
 
-impl<V: VectorStore> GraphTx<'_, V> {
-    pub fn select_graph(&mut self, graph_id: StoreId) {
-        self.graph_id = graph_id as usize as i32;
-    }
+pub struct GraphTx<'a, V> {
+    pub tx:      Transaction<'a, Postgres>,
+    schema_name: String,
+    phantom:     PhantomData<V>,
+}
 
+impl<'b, V: VectorStore> GraphTx<'b, V> {
+    pub fn with_graph<'a>(&'a mut self, graph_id: StoreId) -> GraphOps<'a, 'b, V> {
+        GraphOps {
+            tx: self,
+            graph_id,
+            borrowable_sql: "".to_string(),
+        }
+    }
+}
+
+pub struct GraphOps<'a, 'b, V> {
+    tx:             &'a mut GraphTx<'b, V>,
+    graph_id:       StoreId,
+    borrowable_sql: String,
+}
+
+impl<V: VectorStore> GraphOps<'_, '_, V> {
     fn entry_table(&self) -> String {
-        format!("{}.hawk_graph_entry", self.schema_name)
+        format!("{}.hawk_graph_entry", self.tx.schema_name)
     }
 
     fn links_table(&self) -> String {
-        format!("{}.hawk_graph_links", self.schema_name)
+        format!("{}.hawk_graph_links", self.tx.schema_name)
+    }
+
+    fn graph_id(&self) -> i32 {
+        self.graph_id as i32
+    }
+
+    fn tx(&mut self) -> &mut PgConnection {
+        self.tx.tx.deref_mut()
     }
 
     /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the
@@ -142,8 +157,8 @@ impl<V: VectorStore> GraphTx<'_, V> {
         sqlx::query(&format!(
             "SELECT entry_point FROM {table} WHERE graph_id = $1"
         ))
-        .bind(self.graph_id)
-        .fetch_optional(self.tx.deref_mut())
+        .bind(self.graph_id())
+        .fetch_optional(self.tx())
         .await
         .expect("Failed to fetch entry point")
         .map(|row: PgRow| {
@@ -160,9 +175,9 @@ impl<V: VectorStore> GraphTx<'_, V> {
             VALUES ($1, $2) ON CONFLICT (graph_id)
             DO UPDATE SET entry_point = EXCLUDED.entry_point"
         ))
-        .bind(self.graph_id)
+        .bind(self.graph_id())
         .bind(Json(&EntryPoint { point, layer }))
-        .execute(self.tx.deref_mut())
+        .execute(self.tx())
         .await
         .expect("Failed to set entry point");
     }
@@ -179,10 +194,10 @@ impl<V: VectorStore> GraphTx<'_, V> {
             WHERE graph_id = $1 AND source_ref = $2 AND layer = $3
         "
         ))
-        .bind(self.graph_id)
+        .bind(self.graph_id())
         .bind(Text(base))
         .bind(lc as i32)
-        .fetch_optional(self.tx.deref_mut())
+        .fetch_optional(self.tx())
         .await
         .expect("Failed to fetch links")
         .map(|row: PgRow| {
@@ -202,17 +217,17 @@ impl<V: VectorStore> GraphTx<'_, V> {
             links = EXCLUDED.links
         "
         ))
-        .bind(self.graph_id)
+        .bind(self.graph_id())
         .bind(Text(base))
         .bind(lc as i32)
         .bind(Json(&links))
-        .execute(self.tx.deref_mut())
+        .execute(self.tx())
         .await
         .expect("Failed to set links");
     }
 }
 
-impl<V: VectorStore> GraphTx<'_, V>
+impl<V: VectorStore> GraphOps<'_, '_, V>
 where
     V::VectorRef: Send + Unpin + 'static,
     BoxDynError: From<<V::VectorRef as FromStr>::Err>,
@@ -227,8 +242,8 @@ where
         "
         );
         sqlx::query_as::<_, RowLinks<V>>(&self.borrowable_sql)
-            .bind(self.graph_id)
-            .fetch(self.tx.deref_mut())
+            .bind(self.graph_id())
+            .fetch(self.tx.tx.deref_mut())
             .map_err(Into::into)
     }
 
@@ -393,8 +408,9 @@ mod tests {
         };
 
         let mut tx = graph.tx().await.unwrap();
+        let mut graph_ops = tx.with_graph(StoreId::Left);
 
-        let ep = tx.get_entry_point().await;
+        let ep = graph_ops.get_entry_point().await;
         assert!(ep.is_none());
 
         let ep2 = EntryPoint {
@@ -402,9 +418,9 @@ mod tests {
             layer: ep.map(|e| e.1).unwrap_or_default() + 1,
         };
 
-        tx.set_entry_point(ep2.point, ep2.layer).await;
+        graph_ops.set_entry_point(ep2.point, ep2.layer).await;
 
-        let (point3, layer3) = tx.get_entry_point().await.unwrap();
+        let (point3, layer3) = graph_ops.get_entry_point().await.unwrap();
         let ep3 = EntryPoint {
             point: point3,
             layer: layer3,
@@ -421,9 +437,9 @@ mod tests {
                     .await;
             }
 
-            tx.set_links(vectors[i], links.clone(), 0).await;
+            graph_ops.set_links(vectors[i], links.clone(), 0).await;
 
-            let links2 = tx.get_links(&vectors[i], 0).await;
+            let links2 = graph_ops.get_links(&vectors[i], 0).await;
             assert_eq!(*links, *links2);
         }
 
@@ -460,10 +476,10 @@ mod tests {
                 .await;
 
             graph_mem.insert_apply(plan.clone()).await;
-            tx.insert_apply(plan).await;
+            tx.with_graph(StoreId::Left).insert_apply(plan).await;
         }
 
-        let graph_mem2 = tx.load_to_mem().await.unwrap();
+        let graph_mem2 = tx.with_graph(StoreId::Left).load_to_mem().await.unwrap();
         assert_eq!(graph_mem, &graph_mem2);
 
         // Search for the same codes and find matches.
