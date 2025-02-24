@@ -274,7 +274,7 @@ fn sql_switch_schema(schema_name: &str) -> Result<String> {
     Ok(format!(
         "
         CREATE SCHEMA IF NOT EXISTS \"{}\";
-        SET search_path TO \"{}\";
+        SET LOCAL search_path TO \"{}\";
         ",
         schema_name, schema_name
     ))
