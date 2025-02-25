@@ -93,8 +93,8 @@ impl<V: VectorStore> GraphMem<V> {
             );
         }
 
-        for _ in self.layers.len()..=layer {
-            self.layers.push(Layer::new());
+        if self.layers.len() < layer + 1 {
+            self.layers.resize(layer + 1, Layer::new());
         }
 
         self.entry_point = Some(EntryPoint { point, layer });
@@ -113,17 +113,16 @@ impl<V: VectorStore> GraphMem<V> {
         }
     }
 
-    /// Set the neighbors of vertex `base` at layer `lc` to `links`.  Requires
-    /// that the graph already has been extended to have layer `lc` using the
-    /// `set_entry_point` function for an entry point at at least this layer.
-    ///
-    /// Panics if `lc` is higher than the maximum initialized layer.
+    /// Set the neighbors of vertex `base` at layer `lc` to `links`.
     pub async fn set_links(
         &mut self,
         base: V::VectorRef,
         links: SortedNeighborhoodV<V>,
         lc: usize,
     ) {
+        if self.layers.len() < lc + 1 {
+            self.layers.resize(lc + 1, Layer::new());
+        }
         let layer = self.layers.get_mut(lc).unwrap();
         layer.set_links(base, links);
     }

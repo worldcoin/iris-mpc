@@ -100,7 +100,13 @@ pub type SearchResult = (
     <Aby3Store as VectorStore>::DistanceRef,
 );
 
+/// InsertPlan specifies where a query may be inserted into the HNSW graph.
+/// That is lists of neighbors for each layer.
 pub type InsertPlan = InsertPlanV<Aby3Store>;
+
+/// ConnectPlan specifies how to connect a new node to the HNSW graph.
+/// This includes the updates to the neighbors' own neighbor lists, including
+/// bilateral edges.
 pub type ConnectPlan = ConnectPlanV<Aby3Store>;
 
 #[derive(Debug)]
@@ -683,7 +689,6 @@ fn join_plans(mut plans: Vec<InsertPlan>) -> Vec<InsertPlan> {
             plan.set_ep = false;
         }
         plans[highest].set_ep = true;
-        plans.swap(0, highest);
     }
     plans
 }
