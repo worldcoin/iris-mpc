@@ -44,6 +44,11 @@ criterion = "0.5"
 default = []
 
 
+[[bench]]
+name = "hawk"
+harness = false
+
+
 [[bin]]
 name = "server-hawk"
 path = "bin/server_hawk.rs"
