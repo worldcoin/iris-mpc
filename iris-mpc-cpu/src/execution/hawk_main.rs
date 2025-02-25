@@ -41,7 +41,7 @@ use tonic::transport::Server;
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
 
-#[derive(Parser)]
+#[derive(Clone, Parser)]
 pub struct HawkArgs {
     #[clap(short, long)]
     pub party_index: usize,
@@ -51,11 +51,16 @@ pub struct HawkArgs {
 
     #[clap(short, long, default_value_t = 2)]
     pub request_parallelism: usize,
+
+    #[clap(long, default_value_t = false)]
+    pub disable_persistence: bool,
 }
 
 /// HawkActor manages the state of the HNSW database and connections to other
 /// MPC nodes.
 pub struct HawkActor {
+    args: HawkArgs,
+
     // ---- Shared setup ----
     search_params:    Arc<HnswSearcher>,
     role_assignments: Arc<HashMap<Role, Identity>>,
@@ -171,6 +176,7 @@ impl HawkActor {
         let graph_store = [(); 2].map(|_| Arc::new(RwLock::new(GraphMem::<Aby3Store>::new())));
 
         Ok(HawkActor {
+            args: args.clone(),
             search_params,
             db_size: 0,
             iris_store,
@@ -612,15 +618,15 @@ impl HawkHandle {
                     is_insertion,
                 };
 
-                // For both eyes.
-                for (sessions, insert_plans, connect_plans) in
-                    izip!(&sessions, both_insert_plans, &mut results.connect_plans.0)
-                {
-                    // Insert in memory, and return the plans to update the persistent database.
-                    *connect_plans = hawk_actor.insert(sessions, insert_plans).await.unwrap();
+                if !hawk_actor.args.disable_persistence {
+                    // For both eyes.
+                    for (sessions, insert_plans, connect_plans) in
+                        izip!(&sessions, both_insert_plans, &mut results.connect_plans.0)
+                    {
+                        // Insert in memory, and return the plans to update the persistent database.
+                        *connect_plans = hawk_actor.insert(sessions, insert_plans).await.unwrap();
+                    }
                 }
-
-                println!("🎉 Inserted items into the database");
 
                 let _ = job.return_channel.send(Ok(results));
             }
@@ -846,6 +852,7 @@ mod tests_db {
             party_index:         0,
             addresses:           vec!["0.0.0.0:1234".to_string()],
             request_parallelism: 2,
+            disable_persistence: false,
         };
         let mut hawk_actor = HawkActor::from_cli(&args).await?;
         let (_, graph_loader) = hawk_actor.as_iris_loader().await;

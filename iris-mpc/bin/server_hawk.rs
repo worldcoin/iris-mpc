@@ -1318,6 +1318,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         party_index:         config.party_id,
         addresses:           node_addresses.clone(),
         request_parallelism: config.hawk_request_parallelism,
+        disable_persistence: config.disable_persistence,
     };
 
     tracing::info!(
@@ -1557,7 +1558,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             // Graph mutation.
             let mut graph_tx = graph_store.tx_wrap(tx);
-            hawk_mutation.persist(&mut graph_tx).await?;
+            if !config_bg.disable_persistence {
+                hawk_mutation.persist(&mut graph_tx).await?;
+            }
             let tx = graph_tx.tx;
 
             tx.commit().await?;
