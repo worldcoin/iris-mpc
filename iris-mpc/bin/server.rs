@@ -12,7 +12,7 @@ use clap::Parser;
 use eyre::{eyre, Context, Report};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc_common::{
-    config::{Config, Opt},
+    config::{Config, ModeOfCompute, ModeOfDeployment, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
         aws::{
@@ -863,6 +863,19 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         config.shutdown_last_results_sync_timeout_secs,
     ));
     shutdown_handler.wait_for_shutdown_signal().await;
+
+    // Validate compute/deployment modes.
+    if config.mode_of_compute != ModeOfCompute::GPU
+        || config.mode_of_deployment != ModeOfDeployment::STANDARD
+    {
+        panic!(
+            "Invalid config: Compute/deployment mode combination.  Expected : ModeOfCompute::GPU \
+             :: ModeOfDeployment::STANDARD"
+        );
+    } else {
+        tracing::info!("Mode of compute: {:?}", config.mode_of_compute);
+        tracing::info!("Mode of deployment: {:?}", config.mode_of_deployment);
+    }
 
     // Load batch_size config
     *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;

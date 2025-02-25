@@ -177,6 +177,34 @@ pub struct Config {
 
     #[serde(default = "default_max_deletions_per_batch")]
     pub max_deletions_per_batch: usize,
+
+    /// Server process behaviour can be adjusted as per compute mode.
+    #[serde(default)]
+    pub mode_of_compute: ModeOfCompute,
+
+    /// Server process behaviour can be adjusted as per deployment mode.
+    #[serde(default)]
+    pub mode_of_deployment: ModeOfDeployment,
+}
+
+/// Enumeration over set of compute modes.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub enum ModeOfCompute {
+    /// Computation with standard CPUs (see HNSW graph).
+    CPU,
+    /// Computation with Cuda GPU(s).
+    #[default]
+    GPU,
+}
+
+/// Enumeration over set of deployment modes.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub enum ModeOfDeployment {
+    // Shadow mode specifically an HNSW test deployment.
+    SHADOW,
+    // Standard mode for all other deployments.
+    #[default]
+    STANDARD,
 }
 
 fn default_load_chunks_parallelism() -> usize {
