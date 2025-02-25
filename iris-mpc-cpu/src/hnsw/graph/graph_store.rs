@@ -7,23 +7,17 @@ use crate::{
         GraphMem, VectorStore,
     },
 };
-use eyre::{eyre, Result};
+use eyre::Result;
 use futures::{Stream, StreamExt, TryStreamExt};
-use iris_mpc_common::config::Config;
+use iris_mpc_store::Store;
 use itertools::izip;
 use sqlx::{
     error::BoxDynError,
-    migrate::Migrator,
-    postgres::{PgPoolOptions, PgRow},
+    postgres::PgRow,
     types::{Json, Text},
-    Executor, PgConnection, Postgres, Row, Transaction,
+    PgConnection, Postgres, Row, Transaction,
 };
 use std::{marker::PhantomData, ops::DerefMut, str::FromStr};
-
-const APP_NAME: &str = "SMPC";
-const MAX_CONNECTIONS: u32 = 5;
-
-static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
 pub struct RowLinks<V: VectorStore> {
@@ -39,38 +33,12 @@ pub struct GraphPg<V: VectorStore> {
 }
 
 impl<V: VectorStore> GraphPg<V> {
-    /// Connect to a database based on Config URL, environment, and party_id.
-    pub async fn new_from_config(config: &Config) -> Result<Self> {
-        let db_config = config
-            .database
-            .as_ref()
-            .ok_or(eyre!("Missing database config"))?;
-        let schema_name = format!(
-            "{}_GRAPH_{}_{}",
-            APP_NAME, config.environment, config.party_id
-        );
-        Self::new(&db_config.url, &schema_name).await
-    }
-
-    pub async fn new(url: &str, schema_name: &str) -> Result<Self> {
-        let pool = PgPoolOptions::new()
-            .max_connections(MAX_CONNECTIONS)
-            .connect(url)
-            .await?;
-
-        // Create the schema on the first startup.
-        {
-            let mut tx = pool.begin().await?;
-            tx.execute(sql_switch_schema(schema_name)?.as_ref()).await?;
-            MIGRATOR.run(&mut tx).await?;
-            tx.commit().await?;
+    pub fn from_iris_store(store: &Store) -> Self {
+        Self {
+            pool:        store.pool.clone(),
+            schema_name: store.schema_name.clone(),
+            phantom:     PhantomData,
         }
-
-        Ok(GraphPg {
-            pool,
-            schema_name: schema_name.to_string(),
-            phantom: PhantomData,
-        })
     }
 
     pub async fn tx(&self) -> Result<GraphTx<'_, V>> {
@@ -269,48 +237,30 @@ where
     }
 }
 
-fn sql_switch_schema(schema_name: &str) -> Result<String> {
-    sanitize_identifier(schema_name)?;
-    Ok(format!(
-        "
-        CREATE SCHEMA IF NOT EXISTS \"{}\";
-        SET LOCAL search_path TO \"{}\";
-        ",
-        schema_name, schema_name
-    ))
-}
-
-fn sanitize_identifier(input: &str) -> Result<()> {
-    if input.chars().all(|c| c.is_alphanumeric() || c == '_') {
-        Ok(())
-    } else {
-        Err(eyre!("Invalid SQL identifier"))
-    }
-}
-
 pub mod test_utils {
     use super::*;
+    use iris_mpc_store::test_utils::{cleanup, temporary_name, test_db_url};
     use std::ops::{Deref, DerefMut};
-    const DOTENV_TEST: &str = ".env.test";
-    const SCHEMA_PREFIX: &str = "graph_store_test";
 
     /// A test database. It creates a unique schema for each test. Call
     /// `cleanup` at the end of the test.
     ///
     /// Access the database with `&graph` or `graph.owned()`.
     pub struct TestGraphPg<V: VectorStore> {
+        store:     Store,
         pub graph: GraphPg<V>,
     }
 
     impl<V: VectorStore> TestGraphPg<V> {
         pub async fn new() -> Result<Self> {
             let schema_name = temporary_name();
-            let graph = GraphPg::new(&test_db_url()?, &schema_name).await?;
-            Ok(TestGraphPg { graph })
+            let store = Store::new(&test_db_url()?, &schema_name).await?;
+            let graph = GraphPg::from_iris_store(&store);
+            Ok(TestGraphPg { store, graph })
         }
 
         pub async fn cleanup(&self) -> Result<()> {
-            cleanup(&self.graph.pool, &self.graph.schema_name).await
+            cleanup(&self.store, &self.store.schema_name).await
         }
 
         pub fn owned(&self) -> GraphPg<V> {
@@ -334,26 +284,6 @@ pub mod test_utils {
             &mut self.graph
         }
     }
-
-    fn test_db_url() -> Result<String> {
-        dotenvy::from_filename(DOTENV_TEST)?;
-        Ok(Config::load_config(APP_NAME)?
-            .database
-            .ok_or(eyre!("Missing database config"))?
-            .url)
-    }
-
-    fn temporary_name() -> String {
-        format!("{}_{}", SCHEMA_PREFIX, rand::random::<u32>())
-    }
-
-    async fn cleanup(pool: &sqlx::PgPool, schema_name: &str) -> Result<()> {
-        assert!(schema_name.starts_with(SCHEMA_PREFIX));
-        sqlx::query(&format!("DROP SCHEMA \"{}\" CASCADE", schema_name))
-            .execute(pool)
-            .await?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -368,21 +298,6 @@ mod tests {
     use iris_mpc_common::iris_db::db::IrisDB;
     use rand::SeedableRng;
     use tokio;
-
-    #[tokio::test]
-    async fn test_graph_migrations() -> Result<()> {
-        let graph = TestGraphPg::<PlaintextStore>::new().await.unwrap();
-        let mut tx = graph.pool.begin().await?;
-        tx.execute(sql_switch_schema(&graph.graph.schema_name)?.as_ref())
-            .await?;
-
-        MIGRATOR.undo(&mut tx, 0).await?;
-        MIGRATOR.run(&mut tx).await?;
-
-        tx.commit().await?;
-        graph.cleanup().await?;
-        Ok(())
-    }
 
     #[tokio::test]
     async fn test_db() {

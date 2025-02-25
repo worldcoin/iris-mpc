@@ -2720,6 +2720,7 @@ dependencies = [
  "eyre",
  "futures",
  "iris-mpc-common",
+ "iris-mpc-store",
  "itertools 0.13.0",
  "num-traits",
  "prost",
