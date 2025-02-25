@@ -2631,6 +2631,7 @@ dependencies = [
  "base64 0.22.1",
  "bytemuck",
  "clap",
+ "criterion",
  "dotenvy",
  "eyre",
  "futures",
