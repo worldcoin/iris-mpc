@@ -3,7 +3,7 @@ use iris_mpc::client::{run_client, Opt};
 
 // Derive Clone on Opt (if not already) so we can reuse it in each iteration.
 fn bench_hawk_server(c: &mut Criterion) {
-    let mut group = c.benchmark_group("Client performance tests".to_string());
+    let mut group = c.benchmark_group("hsnw_e2e_performance_tests".to_string());
     group.sample_size(10);
     group.sampling_mode(SamplingMode::Flat);
     tracing_subscriber::fmt::init();
@@ -25,7 +25,7 @@ fn bench_hawk_server(c: &mut Criterion) {
     // Create a single Tokio runtime outside the iteration to avoid re-creating it
     // each time.
     let rt = tokio::runtime::Runtime::new().unwrap();
-    group.bench_function("e2e server batch processing", move |b| {
+    group.bench_function("e2e_server_batch_processing", move |b| {
         b.iter(|| {
             let result = rt.block_on(run_client(opts.clone()));
             assert!(result.is_ok());

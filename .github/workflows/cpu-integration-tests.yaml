@@ -52,7 +52,7 @@ jobs:
         run: cargo bench --bench hawk -- --output-format bencher | tee output.txt
       - name: Filter benchmark output
         run: |
-          grep '^bench:' output.txt > filtered.txt 
+          grep '^test ' output.txt > filtered.txt 
           mv filtered.txt output.txt
 
       - name: Store benchmark result
