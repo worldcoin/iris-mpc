@@ -1367,11 +1367,11 @@ pub mod test_utils {
     }
 
     pub fn temporary_name() -> String {
-        format!("smpc_test{}_0", rand::random::<u32>())
+        format!("SMPC_test{}_0", rand::random::<u32>())
     }
 
     pub async fn cleanup(store: &Store, schema_name: &str) -> Result<()> {
-        assert!(schema_name.starts_with("smpc_test"));
+        assert!(schema_name.starts_with("SMPC_test"));
         sqlx::query(&format!("DROP SCHEMA \"{}\" CASCADE", schema_name))
             .execute(&store.pool)
             .await?;

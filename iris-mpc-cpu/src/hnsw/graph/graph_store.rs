@@ -78,11 +78,11 @@ pub struct GraphOps<'a, 'b, V> {
 
 impl<V: VectorStore> GraphOps<'_, '_, V> {
     fn entry_table(&self) -> String {
-        format!("{}.hawk_graph_entry", self.tx.schema_name)
+        format!("\"{}\".hawk_graph_entry", self.tx.schema_name)
     }
 
     fn links_table(&self) -> String {
-        format!("{}.hawk_graph_links", self.tx.schema_name)
+        format!("\"{}\".hawk_graph_links", self.tx.schema_name)
     }
 
     fn graph_id(&self) -> i32 {
