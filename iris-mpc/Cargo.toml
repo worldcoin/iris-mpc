@@ -52,3 +52,8 @@ path = "bin/server_hawk.rs"
 [[bin]]
 name = "client"
 path = "bin/client.rs"
+
+
+[[bin]]
+name = "server"
+path = "bin/server.rs"
