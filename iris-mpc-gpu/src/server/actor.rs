@@ -76,6 +76,8 @@ pub struct ServerActorHandle {
 }
 
 impl JobSubmissionHandle for ServerActorHandle {
+    type A = ();
+
     async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
@@ -653,6 +655,31 @@ impl ServerActor {
         }
 
         ///////////////////////////////////////////////////////////////////
+        // SYNC BATCH CONTENTS AND FILTER OUT INVALID ENTRIES
+        ///////////////////////////////////////////////////////////////////
+        let tmp_now = Instant::now();
+        tracing::info!("Syncing batch entries");
+
+        // Compute hash of the SNS message ids concatenated
+        let batch_hash = sha256_bytes(batch.sns_message_ids.join(""));
+        tracing::info!("Current batch hash: {}", hex::encode(&batch_hash[0..4]));
+
+        let valid_entries =
+            self.sync_batch_entries(&batch.valid_entries, self.max_batch_size, &batch_hash)?;
+        let valid_entry_idxs = valid_entries.iter().positions(|&x| x).collect::<Vec<_>>();
+        if valid_entry_idxs.len() != batch_size {
+            tracing::warn!(
+                "Batch size reduced from {} to {} due to invalid entries. Valid entries: {:?}",
+                batch_size,
+                valid_entry_idxs.len(),
+                valid_entry_idxs,
+            );
+        }
+        batch_size = valid_entry_idxs.len();
+        batch.retain(&valid_entry_idxs);
+        tracing::info!("Sync and filter done in {:?}", tmp_now.elapsed());
+
+        ///////////////////////////////////////////////////////////////////
         // PERFORM DELETIONS (IF ANY)
         ///////////////////////////////////////////////////////////////////
         if !batch.deletion_requests_indices.is_empty() {
@@ -692,23 +719,6 @@ impl ServerActor {
                 );
             }
         }
-
-        ///////////////////////////////////////////////////////////////////
-        // SYNC BATCH CONTENTS AND FILTER OUT INVALID ENTRIES
-        ///////////////////////////////////////////////////////////////////
-        let tmp_now = Instant::now();
-        tracing::info!("Syncing batch entries");
-
-        // Compute hash of the request ids concatenated
-        let batch_hash = sha256_bytes(batch.request_ids.join(""));
-        tracing::info!("Current batch hash: {}", hex::encode(&batch_hash[0..4]));
-
-        let valid_entries =
-            self.sync_batch_entries(&batch.valid_entries, self.max_batch_size, &batch_hash)?;
-        let valid_entry_idxs = valid_entries.iter().positions(|&x| x).collect::<Vec<_>>();
-        batch_size = valid_entry_idxs.len();
-        batch.retain(&valid_entry_idxs);
-        tracing::info!("Sync and filter done in {:?}", tmp_now.elapsed());
 
         ///////////////////////////////////////////////////////////////////
         // COMPARE LEFT EYE QUERIES
@@ -1177,6 +1187,7 @@ impl ServerActor {
                 reauth_target_indices: batch.reauth_target_indices,
                 reauth_or_rule_used: batch.reauth_use_or_rule,
                 modifications: batch.modifications,
+                actor_data: (),
             })
             .unwrap();
 

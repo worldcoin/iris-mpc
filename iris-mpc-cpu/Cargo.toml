@@ -22,6 +22,7 @@ dotenvy.workspace = true
 eyre.workspace = true
 futures.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
+iris-mpc-store = { path = "../iris-mpc-store" }
 itertools.workspace = true
 num-traits.workspace = true
 prost = "0.13"

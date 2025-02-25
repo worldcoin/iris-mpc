@@ -12,7 +12,7 @@ use clap::Parser;
 use eyre::{eyre, Context, Report};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc_common::{
-    config::{Config, Opt},
+    config::{Config, ModeOfCompute, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
         aws::{
@@ -39,9 +39,11 @@ use iris_mpc_common::{
         task_monitor::TaskMonitor,
     },
     iris_db::get_dummy_shares_for_deletion,
-    job::{BatchMetadata, BatchQuery, JobSubmissionHandle, ServerJobResult},
+    job::{BatchMetadata, BatchQuery, JobSubmissionHandle},
 };
-use iris_mpc_cpu::execution::hawk_main::{HawkActor, HawkArgs, HawkHandle};
+use iris_mpc_cpu::execution::hawk_main::{
+    GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult,
+};
 use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
@@ -830,6 +832,17 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     ));
     shutdown_handler.wait_for_shutdown_signal().await;
 
+    // Validate modes of compute/deployment.
+    if config.mode_of_compute != ModeOfCompute::CPU {
+        panic!(
+            "Invalid config setting: compute_mode: actual: {:?} :: expected: ModeOfCompute::CPU",
+            config.mode_of_compute
+        );
+    } else {
+        tracing::info!("Mode of compute: {:?}", config.mode_of_compute);
+        tracing::info!("Mode of deployment: {:?}", config.mode_of_deployment);
+    }
+
     // Load batch_size config
     *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
     let max_sync_lookback: usize = config.max_batch_size * 2;
@@ -838,6 +851,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     tracing::info!("Creating new storage from: {:?}", config);
     let store = Store::new_from_config(&config).await?;
+    let graph_store = GraphStore::from_iris_store(&store);
 
     tracing::info!("Initialising AWS services");
 
@@ -855,7 +869,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         .connect_timeout(Duration::from_secs(10))
         .build();
 
+    let force_path_style = config.environment != "prod" && config.environment != "stage";
+
     let s3_config = S3ConfigBuilder::from(&shared_config)
+        .force_path_style(force_path_style)
         .retry_config(retry_config.clone())
         .build();
 
@@ -1314,11 +1331,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     {
         // ANCHOR: Load the database
         tracing::info!("⚓️ ANCHOR: Load the database");
-        let mut loader = hawk_actor.as_iris_loader().await;
+        let (mut iris_loader, graph_loader) = hawk_actor.as_iris_loader().await;
 
         if config.fake_db_size > 0 {
             // TODO: not needed?
-            loader.fake_db(config.fake_db_size);
+            iris_loader.fake_db(config.fake_db_size);
         } else {
             tracing::info!(
                 "Initialize iris db: Loading from DB (parallelism: {})",
@@ -1329,7 +1346,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 S3Store::new(db_chunks_s3_client.clone(), s3_chunks_bucket_name.clone());
 
             load_db(
-                &mut loader,
+                &mut iris_loader,
                 &store,
                 store_len,
                 parallelism,
@@ -1345,6 +1362,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             )
             .await
             .expect("Failed to load DB");
+
+            graph_loader.load_graph_store(&graph_store).await?;
         }
     }
 
@@ -1382,6 +1401,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             reauth_target_indices,
             reauth_or_rule_used,
             modifications,
+            actor_data: hawk_mutation,
         }) = rx.recv().await
         {
             let _modifications = modifications;
@@ -1534,6 +1554,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         .await?;
                 }
             }
+
+            // Graph mutation.
+            let mut graph_tx = graph_store.tx_wrap(tx);
+            hawk_mutation.persist(&mut graph_tx).await?;
+            let tx = graph_tx.tx;
 
             tx.commit().await?;
 

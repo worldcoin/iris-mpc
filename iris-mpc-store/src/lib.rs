@@ -132,7 +132,8 @@ impl From<StoredModification> for Modification {
 
 #[derive(Clone, Debug)]
 pub struct Store {
-    pool: PgPool,
+    pub pool:        PgPool,
+    pub schema_name: String,
 }
 
 impl Store {
@@ -168,7 +169,10 @@ impl Store {
         // Create the schema on the first startup.
         MIGRATOR.run(&pool).await?;
 
-        Ok(Store { pool })
+        Ok(Store {
+            pool,
+            schema_name: schema_name.to_string(),
+        })
     }
 
     pub async fn tx(&self) -> Result<Transaction<'_, Postgres>> {
@@ -722,10 +726,8 @@ fn cast_u8_to_u16(s: &[u8]) -> &[u16] {
 
 #[cfg(test)]
 #[cfg(feature = "db_dependent")]
-mod tests {
-    const DOTENV_TEST: &str = ".env.test";
-
-    use super::*;
+pub mod tests {
+    use super::{test_utils::*, *};
     use futures::TryStreamExt;
     use iris_mpc_common::helpers::{
         smpc_request::{IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE},
@@ -1342,18 +1344,6 @@ mod tests {
         Ok(())
     }
 
-    fn test_db_url() -> Result<String> {
-        dotenvy::from_filename(DOTENV_TEST)?;
-        Ok(Config::load_config(APP_NAME)?
-            .database
-            .ok_or(eyre!("Missing database config"))?
-            .url)
-    }
-
-    fn temporary_name() -> String {
-        format!("smpc_test{}_0", rand::random::<u32>())
-    }
-
     fn assert_contiguous_id(vec: &[DbStoredIris]) {
         assert!(
             vec.iter()
@@ -1362,9 +1352,26 @@ mod tests {
             "IDs must be contiguous and in order"
         );
     }
+}
 
-    async fn cleanup(store: &Store, schema_name: &str) -> Result<()> {
-        assert!(schema_name.starts_with("smpc_test"));
+pub mod test_utils {
+    use super::*;
+    const DOTENV_TEST: &str = ".env.test";
+
+    pub fn test_db_url() -> Result<String> {
+        dotenvy::from_filename(DOTENV_TEST)?;
+        Ok(Config::load_config(APP_NAME)?
+            .database
+            .ok_or(eyre!("Missing database config"))?
+            .url)
+    }
+
+    pub fn temporary_name() -> String {
+        format!("SMPC_test{}_0", rand::random::<u32>())
+    }
+
+    pub async fn cleanup(store: &Store, schema_name: &str) -> Result<()> {
+        assert!(schema_name.starts_with("SMPC_test"));
         sqlx::query(&format!("DROP SCHEMA \"{}\" CASCADE", schema_name))
             .execute(&store.pool)
             .await?;

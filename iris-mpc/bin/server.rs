@@ -1,4 +1,4 @@
-#![allow(clippy::needless_range_loop)]
+#![allow(clippy::needless_range_loop, unused)]
 
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig};
 use aws_sdk_s3::{
@@ -12,7 +12,7 @@ use clap::Parser;
 use eyre::{eyre, Context, Report};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc_common::{
-    config::{Config, Opt},
+    config::{Config, ModeOfCompute, ModeOfDeployment, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
         aws::{
@@ -164,11 +164,11 @@ async fn receive_batch(
             .send()
             .await
             .map_err(ReceiveRequestError::FailedToReadFromSQS)?;
-
         if let Some(messages) = rcv_message_output.messages {
             for sqs_message in messages {
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
                     .map_err(|e| ReceiveRequestError::json_parse_error("SQS body", e))?;
+                let sns_message_id = message.message_id;
 
                 // messages arrive to SQS through SNS. So, all the attributes set in SNS are
                 // moved into the SQS body.
@@ -257,6 +257,7 @@ async fn receive_batch(
                             .deletion_requests_indices
                             .push(identity_deletion_request.serial_id - 1); // serial_id is 1-indexed
                         batch_query.deletion_requests_metadata.push(batch_metadata);
+                        batch_query.sns_message_ids.push(sns_message_id);
                     }
 
                     UNIQUENESS_MESSAGE_TYPE => {
@@ -348,6 +349,7 @@ async fn receive_batch(
                             .request_types
                             .push(UNIQUENESS_MESSAGE_TYPE.to_string());
                         batch_query.metadata.push(batch_metadata);
+                        batch_query.sns_message_ids.push(sns_message_id);
 
                         let semaphore = Arc::clone(&semaphore);
                         let s3_client_arc = s3_client.clone();
@@ -384,22 +386,6 @@ async fn receive_batch(
 
                         tracing::debug!("Received reauth request: {:?}", reauth_request);
 
-                        let modification = store
-                            .insert_modification(
-                                reauth_request.serial_id as i64,
-                                REAUTH_MESSAGE_TYPE,
-                                Some(reauth_request.s3_key.as_str()),
-                            )
-                            .await?;
-                        if modifications.contains_key(&reauth_request.serial_id) {
-                            tracing::warn!(
-                                "Received another modification operation in batch: {}. Skipping",
-                                reauth_request.serial_id
-                            );
-                            continue;
-                        }
-                        modifications.insert(reauth_request.serial_id, modification);
-
                         if reauth_request.use_or_rule
                             && !(config.luc_enabled && config.luc_serial_ids_from_smpc_request)
                         {
@@ -409,6 +395,22 @@ async fn receive_batch(
                             );
                             continue;
                         }
+
+                        if modifications.contains_key(&reauth_request.serial_id) {
+                            tracing::warn!(
+                                "Received another modification operation in batch: {}. Skipping",
+                                reauth_request.serial_id
+                            );
+                            continue;
+                        }
+                        let modification = store
+                            .insert_modification(
+                                reauth_request.serial_id as i64,
+                                REAUTH_MESSAGE_TYPE,
+                                Some(reauth_request.s3_key.as_str()),
+                            )
+                            .await?;
+                        modifications.insert(reauth_request.serial_id, modification);
 
                         if config.enable_reauth {
                             msg_counter += 1;
@@ -441,6 +443,7 @@ async fn receive_batch(
                                 reauth_request.reauth_id.clone(),
                                 reauth_request.use_or_rule,
                             );
+                            batch_query.sns_message_ids.push(sns_message_id);
 
                             let or_rule_indices = if reauth_request.use_or_rule {
                                 vec![reauth_request.serial_id - 1]
@@ -860,6 +863,19 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         config.shutdown_last_results_sync_timeout_secs,
     ));
     shutdown_handler.wait_for_shutdown_signal().await;
+
+    // Validate compute/deployment modes.
+    if config.mode_of_compute != ModeOfCompute::GPU
+        || config.mode_of_deployment != ModeOfDeployment::STANDARD
+    {
+        panic!(
+            "Invalid config: Compute/deployment mode combination.  Expected : ModeOfCompute::GPU \
+             :: ModeOfDeployment::STANDARD"
+        );
+    } else {
+        tracing::info!("Mode of compute: {:?}", config.mode_of_compute);
+        tracing::info!("Mode of deployment: {:?}", config.mode_of_deployment);
+    }
 
     // Load batch_size config
     *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
@@ -1464,6 +1480,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             reauth_target_indices,
             reauth_or_rule_used,
             mut modifications,
+            actor_data: _,
         }) = rx.recv().await
         {
             // returned serial_ids are 0 indexed, but we want them to be 1 indexed
