@@ -44,6 +44,9 @@ pub struct BatchQuery {
 
     // Keeping track of updates & deletions for sync mechanism. Mapping: Serial id -> Modification
     pub modifications: HashMap<u32, Modification>,
+
+    // SNS message ids to assert identical batch processing across parties
+    pub sns_message_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
