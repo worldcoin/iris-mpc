@@ -25,12 +25,15 @@ impl PartialEq for BucketResult {
 pub struct BucketStatistics {
     pub buckets: Vec<BucketResult>,
     pub n_buckets: usize,
+    // The number of matches gathered before sending the statistics
     pub match_distances_buffer_size: usize,
     pub party_id: usize,
     pub eye: Eye,
     #[serde(with = "ts_seconds")]
+    // Start timestamp at which we start recording the statistics
     pub start_time_utc_timestamp: DateTime<Utc>,
     #[serde(with = "ts_seconds_option")]
+    // End timestamp at which we stop recording the statistics
     pub end_time_utc_timestamp: Option<DateTime<Utc>>,
     #[serde(skip_serializing)]
     #[serde(skip_deserializing)]
