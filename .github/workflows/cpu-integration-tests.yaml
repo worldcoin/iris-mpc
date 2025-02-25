@@ -33,3 +33,37 @@ jobs:
       - name: Execute tests in the running services
         run: |
           docker compose -f docker-compose.test.yaml exec iris_mpc_client "./run-client-docker.sh"
+
+      - name: Install Dependencies
+        run: sudo apt install protobuf-compiler
+
+      - name: Install Rust nightly
+        run: rustup toolchain install nightly-2024-07-10
+
+      - name: Set Rust nightly as default
+        run: rustup default nightly-2024-07-10
+
+      - name: Load env vars
+        uses: HatsuneMiku3939/direnv-action@v1
+        with:
+          direnvVersion: 2.32.1
+
+      - name: Run benchmark
+        run: cargo bench --bench hawk | tee output.txt
+      - name: Filter benchmark output
+        run: |
+          sed -n '/Client performance tests\/e2e server batch processing/,$p' output.txt > filtered.txt
+          mv filtered.txt output.txt
+
+      - name: Store benchmark result
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: Rust Benchmark
+          tool: 'cargo'
+          output-file-path: output.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          alert-threshold: '200%'
+          comment-on-alert: true
+          fail-on-alert: true
+

@@ -30,8 +30,8 @@ use tokio::{
 use uuid::Uuid;
 
 const MAX_CONCURRENT_REQUESTS: usize = 16;
-const BATCH_SIZE: usize = 64;
-const N_BATCHES: usize = 5;
+const BATCH_SIZE: usize = 10;
+const N_BATCHES: usize = 1;
 const WAIT_AFTER_BATCH: Duration = Duration::from_secs(2);
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;
