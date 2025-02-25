@@ -113,6 +113,7 @@ pub struct UniquenessRequest {
     pub signup_id:          String,
     pub s3_key:             String,
     pub or_rule_serial_ids: Option<Vec<u32>>,
+    pub skip_persistence:   Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
