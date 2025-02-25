@@ -12,7 +12,7 @@ use clap::Parser;
 use eyre::{eyre, Context, Report};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc_common::{
-    config::{Config, ModeOfCompute, ModeOfDeployment, Opt},
+    config::{Config, ModeOfCompute, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
         aws::{
@@ -35,13 +35,13 @@ use iris_mpc_common::{
             UniquenessResult, ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
             ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH, SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
-        sync::{Modification, SyncResult, SyncState},
+        sync::{SyncResult, SyncState},
         task_monitor::TaskMonitor,
     },
     iris_db::get_dummy_shares_for_deletion,
     job::{BatchMetadata, BatchQuery, JobSubmissionHandle, ServerJobResult},
 };
-use iris_mpc_gpu::server::ServerActor;
+use iris_mpc_cpu::execution::hawk_main::{HawkActor, HawkArgs, HawkHandle};
 use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
@@ -154,7 +154,6 @@ async fn receive_batch(
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
     let mut handles = vec![];
     let mut msg_counter = 0;
-    let modifications = &mut batch_query.modifications;
 
     while msg_counter < *CURRENT_BATCH_SIZE.lock().unwrap() {
         let rcv_message_output = client
@@ -164,11 +163,11 @@ async fn receive_batch(
             .send()
             .await
             .map_err(ReceiveRequestError::FailedToReadFromSQS)?;
+
         if let Some(messages) = rcv_message_output.messages {
             for sqs_message in messages {
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
                     .map_err(|e| ReceiveRequestError::json_parse_error("SQS body", e))?;
-                let sns_message_id = message.message_id;
 
                 // messages arrive to SQS through SNS. So, all the attributes set in SNS are
                 // moved into the SQS body.
@@ -228,6 +227,12 @@ async fn receive_batch(
                                     e,
                                 )
                             })?;
+                        metrics::counter!("request.received", "type" => "identity_deletion")
+                            .increment(1);
+                        batch_query
+                            .deletion_requests_indices
+                            .push(identity_deletion_request.serial_id - 1); // serial_id is 1-indexed
+                        batch_query.deletion_requests_metadata.push(batch_metadata);
                         client
                             .delete_message()
                             .queue_url(queue_url)
@@ -235,29 +240,6 @@ async fn receive_batch(
                             .send()
                             .await
                             .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
-                        metrics::counter!("request.received", "type" => "identity_deletion")
-                            .increment(1);
-                        if modifications.contains_key(&identity_deletion_request.serial_id) {
-                            tracing::warn!(
-                                "Received another modification operation in batch: {}. Skipping",
-                                identity_deletion_request.serial_id
-                            );
-                            continue;
-                        }
-                        let modification = store
-                            .insert_modification(
-                                identity_deletion_request.serial_id as i64,
-                                IDENTITY_DELETION_MESSAGE_TYPE,
-                                None,
-                            )
-                            .await?;
-                        modifications.insert(identity_deletion_request.serial_id, modification);
-
-                        batch_query
-                            .deletion_requests_indices
-                            .push(identity_deletion_request.serial_id - 1); // serial_id is 1-indexed
-                        batch_query.deletion_requests_metadata.push(batch_metadata);
-                        batch_query.sns_message_ids.push(sns_message_id);
                     }
 
                     UNIQUENESS_MESSAGE_TYPE => {
@@ -349,7 +331,6 @@ async fn receive_batch(
                             .request_types
                             .push(UNIQUENESS_MESSAGE_TYPE.to_string());
                         batch_query.metadata.push(batch_metadata);
-                        batch_query.sns_message_ids.push(sns_message_id);
 
                         let semaphore = Arc::clone(&semaphore);
                         let s3_client_arc = s3_client.clone();
@@ -374,6 +355,12 @@ async fn receive_batch(
                             .map_err(|e| {
                                 ReceiveRequestError::json_parse_error("Reauth request", e)
                             })?;
+                        metrics::counter!("request.received", "type" => "reauth").increment(1);
+
+                        tracing::debug!("Received reauth request: {:?}", reauth_request);
+
+                        // TODO: populate sync mechanism table (TBD: rollback or rollforward)
+
                         client
                             .delete_message()
                             .queue_url(queue_url)
@@ -381,10 +368,6 @@ async fn receive_batch(
                             .send()
                             .await
                             .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
-
-                        metrics::counter!("request.received", "type" => "reauth").increment(1);
-
-                        tracing::debug!("Received reauth request: {:?}", reauth_request);
 
                         if reauth_request.use_or_rule
                             && !(config.luc_enabled && config.luc_serial_ids_from_smpc_request)
@@ -395,22 +378,6 @@ async fn receive_batch(
                             );
                             continue;
                         }
-
-                        if modifications.contains_key(&reauth_request.serial_id) {
-                            tracing::warn!(
-                                "Received another modification operation in batch: {}. Skipping",
-                                reauth_request.serial_id
-                            );
-                            continue;
-                        }
-                        let modification = store
-                            .insert_modification(
-                                reauth_request.serial_id as i64,
-                                REAUTH_MESSAGE_TYPE,
-                                Some(reauth_request.s3_key.as_str()),
-                            )
-                            .await?;
-                        modifications.insert(reauth_request.serial_id, modification);
 
                         if config.enable_reauth {
                             msg_counter += 1;
@@ -443,7 +410,6 @@ async fn receive_batch(
                                 reauth_request.reauth_id.clone(),
                                 reauth_request.use_or_rule,
                             );
-                            batch_query.sns_message_ids.push(sns_message_id);
 
                             let or_rule_indices = if reauth_request.use_or_rule {
                                 vec![reauth_request.serial_id - 1]
@@ -864,13 +830,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     ));
     shutdown_handler.wait_for_shutdown_signal().await;
 
-    // Validate compute/deployment modes.
-    if config.mode_of_compute != ModeOfCompute::GPU
-        || config.mode_of_deployment != ModeOfDeployment::STANDARD
-    {
+    // Validate modes of compute/deployment.
+    if config.mode_of_compute != ModeOfCompute::CPU {
         panic!(
-            "Invalid config: Compute/deployment mode combination.  Expected : ModeOfCompute::GPU \
-             :: ModeOfDeployment::STANDARD"
+            "Invalid config setting: compute_mode: actual: {:?} :: expected: ModeOfCompute::CPU",
+            config.mode_of_compute
         );
     } else {
         tracing::info!("Mode of compute: {:?}", config.mode_of_compute);
@@ -880,7 +844,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     // Load batch_size config
     *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
     let max_sync_lookback: usize = config.max_batch_size * 2;
-    let max_modification_lookback = (config.max_deletions_per_batch + config.max_batch_size) * 2;
     let max_rollback: usize = config.max_batch_size * 2;
     tracing::info!("Set batch size to {}", config.max_batch_size);
 
@@ -903,7 +866,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         .connect_timeout(Duration::from_secs(10))
         .build();
 
+    let force_path_style = config.environment != "prod" && config.environment != "stage";
+
     let s3_config = S3ConfigBuilder::from(&shared_config)
+        .force_path_style(force_path_style)
         .retry_config(retry_config.clone())
         .build();
 
@@ -927,7 +893,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let party_id = config.party_id;
     tracing::info!("Deriving shared secrets");
-    let chacha_seeds = initialize_chacha_seeds(config.clone()).await?;
+    let _chacha_seeds = initialize_chacha_seeds(config.clone()).await?;
 
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_result_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
@@ -1008,7 +974,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let my_state = SyncState {
         db_len:              store_len as u64,
         deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
-        modifications:       store.last_modifications(max_modification_lookback).await?,
+        modifications:       store.last_modifications(max_sync_lookback).await?,
     };
 
     #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1019,6 +985,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     }
 
     let health_shutdown_handler = Arc::clone(&shutdown_handler);
+    let health_check_port = config.hawk_server_healthcheck_port;
 
     let _health_check_abort = background_tasks.spawn({
         let uuid = uuid::Uuid::new_v4().to_string();
@@ -1072,7 +1039,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     "/startup-sync",
                     get(move || async move { serde_json::to_string(&my_state).unwrap() }),
                 );
-            let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+            let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", health_check_port))
                 .await
                 .wrap_err("healthcheck listener bind error")?;
             axum::serve(listener, app)
@@ -1084,19 +1051,27 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     });
 
     background_tasks.check_tasks();
-    tracing::info!("Healthcheck and Readiness server running on port 3000.");
+    tracing::info!(
+        "Healthcheck and Readiness server running on port {}.",
+        health_check_port.clone()
+    );
 
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
     // Check other nodes and wait until all nodes are ready.
-    let all_nodes = config.node_hostnames.clone();
+    let all_readiness_addresses = get_check_addresses(
+        config.node_hostnames.clone(),
+        config.healthcheck_ports.clone(),
+        "ready",
+    );
+
     let unready_check = tokio::spawn(async move {
-        let next_node = &all_nodes[(config.party_id + 1) % 3];
-        let prev_node = &all_nodes[(config.party_id + 2) % 3];
+        let next_node = &all_readiness_addresses[(config.party_id + 1) % 3];
+        let prev_node = &all_readiness_addresses[(config.party_id + 2) % 3];
         let mut connected_but_unready = [false, false];
 
         loop {
             for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(format!("http://{}:3000/ready", host)).await;
+                let res = reqwest::get(host.as_str()).await;
 
                 if res.is_ok() && res.unwrap().status() == StatusCode::SERVICE_UNAVAILABLE {
                     connected_but_unready[i] = true;
@@ -1130,19 +1105,25 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
     let mut heartbeat_tx = Some(heartbeat_tx);
-    let all_nodes = config.node_hostnames.clone();
+
+    let all_health_addresses = get_check_addresses(
+        config.node_hostnames.clone(),
+        config.healthcheck_ports.clone(),
+        "health",
+    );
+
     let image_name = config.image_name.clone();
     let heartbeat_shutdown_handler = Arc::clone(&shutdown_handler);
     let _heartbeat = background_tasks.spawn(async move {
-        let next_node = &all_nodes[(config.party_id + 1) % 3];
-        let prev_node = &all_nodes[(config.party_id + 2) % 3];
+        let next_node = &all_health_addresses[(config.party_id + 1) % 3];
+        let prev_node = &all_health_addresses[(config.party_id + 2) % 3];
         let mut last_response = [String::default(), String::default()];
         let mut connected = [false, false];
         let mut retries = [0, 0];
 
         loop {
             for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(format!("http://{}:3000/health", host)).await;
+                let res = reqwest::get(host.as_str()).await;
                 if res.is_err() || !res.as_ref().unwrap().status().is_success() {
                     // If it's the first time after startup, we allow a few retries to let the other
                     // nodes start up as well.
@@ -1257,14 +1238,20 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     // ANCHOR: Syncing latest node state
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Syncing latest node state");
-    let all_nodes = config.node_hostnames.clone();
-    let next_node = &all_nodes[(config.party_id + 1) % 3];
-    let prev_node = &all_nodes[(config.party_id + 2) % 3];
+
+    let all_startup_sync_addresses = get_check_addresses(
+        config.node_hostnames.clone(),
+        config.healthcheck_ports.clone(),
+        "startup-sync",
+    );
+
+    let next_node = &all_startup_sync_addresses[(config.party_id + 1) % 3];
+    let prev_node = &all_startup_sync_addresses[(config.party_id + 2) % 3];
 
     tracing::info!("Database store length is: {}", store_len);
     let mut states = vec![my_state.clone()];
     for host in [next_node, prev_node].iter() {
-        let res = reqwest::get(format!("http://{}:3000/startup-sync", host)).await;
+        let res = reqwest::get(host.as_str()).await;
         match res {
             Ok(res) => {
                 let state: SyncState = match res.json().await {
@@ -1308,59 +1295,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         metrics::counter!("db.sync.rollback").increment(1);
     }
 
-    // Handle modifications sync (reauth & deletions)
-    let dummy_shares_for_deletions = get_dummy_shares_for_deletion(party_id);
-    let (to_update, to_delete) = sync_result.compare_modifications();
-    let to_update: Vec<&Modification> = to_update.iter().collect();
-    let mut tx = store.tx().await?;
-    store.update_modifications(&mut tx, &to_update).await?;
-    store.delete_modifications(&mut tx, &to_delete).await?;
-    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
-
-    // update irises table for persisted modifications which are missing in local
-    for modification in to_update {
-        if !modification.persisted {
-            tracing::debug!(
-                "Skip writing non-persisted modification to iris table: {:?}",
-                modification
-            );
-            continue;
-        }
-        tracing::info!("Applying modification to local node: {:?}", modification);
-        metrics::counter!("db.modifications.rollforward").increment(1);
-        let (lc, lm, rc, rm) = match modification.request_type.as_str() {
-            IDENTITY_DELETION_MESSAGE_TYPE => (
-                dummy_shares_for_deletions.clone().0,
-                dummy_shares_for_deletions.clone().1,
-                dummy_shares_for_deletions.clone().0,
-                dummy_shares_for_deletions.clone().1,
-            ),
-            REAUTH_MESSAGE_TYPE => {
-                let (left_shares, right_shares) = get_iris_shares_parse_task(
-                    party_id,
-                    shares_encryption_key_pair.clone(),
-                    Arc::clone(&semaphore),
-                    s3_client.clone(),
-                    config.shares_bucket_name.clone(),
-                    modification.clone().s3_url.unwrap(),
-                )?
-                .await?
-                .unwrap();
-                (left_shares.0, left_shares.1, right_shares.0, right_shares.1)
-            }
-            _ => {
-                panic!("Unknown modification type: {:?}", modification);
-            }
-        };
-        store
-            .update_iris(Some(&mut tx), modification.serial_id, &lc, &lm, &rc, &rm)
-            .await?;
-    }
-    tx.commit().await?;
-
-    // reset modifications table's postgres sequence in case we deleted some rows
-    store.reset_modifications_sequence().await?;
-
     if download_shutdown_handler.is_shutting_down() {
         tracing::warn!("Shutting down has been triggered");
         return Ok(());
@@ -1370,83 +1304,65 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let store_len = store.count_irises().await?;
     tracing::info!("Database store length after sync: {}", store_len);
 
-    let (tx, rx) = oneshot::channel();
-    let config_clone = config.clone();
-    background_tasks.spawn_blocking(move || {
-        let config = config_clone;
-        // --------------------------------------------------------------------------
+    let node_addresses: Vec<String> = config
+        .node_hostnames
+        .iter()
+        .zip(config.service_ports.iter())
+        .map(|(host, port)| format!("{}:{}", host, port))
+        .collect();
+
+    let hawk_args = HawkArgs {
+        party_index:         config.party_id,
+        addresses:           node_addresses.clone(),
+        request_parallelism: config.hawk_request_parallelism,
+    };
+
+    tracing::info!(
+        "Initializing HawkActor with args: party_index: {}, addresses: {:?}",
+        hawk_args.party_index,
+        node_addresses
+    );
+
+    let mut hawk_actor = HawkActor::from_cli(&hawk_args).await?;
+
+    {
         // ANCHOR: Load the database
-        // --------------------------------------------------------------------------
-        tracing::info!("⚓️ ANCHOR: Starting server actor");
-        match ServerActor::new(
-            config.party_id,
-            chacha_seeds,
-            8,
-            config.max_db_size,
-            config.max_batch_size,
-            config.match_distances_buffer_size,
-            config.match_distances_buffer_size_extra_percent,
-            config.n_buckets,
-            config.return_partial_results,
-            config.disable_persistence,
-            config.enable_debug_timing,
-        ) {
-            Ok((mut actor, handle)) => {
-                tracing::info!("⚓️ ANCHOR: Load the database");
-                let res = if config.fake_db_size > 0 {
-                    // TODO: does this even still work, since we do not page-lock the memory here?
-                    actor.fake_db(config.fake_db_size);
-                    Ok(())
-                } else {
-                    tracing::info!(
-                        "Initialize iris db: Loading from DB (parallelism: {})",
-                        parallelism
-                    );
-                    let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
-                    let db_chunks_s3_store =
-                        S3Store::new(db_chunks_s3_client.clone(), s3_chunks_bucket_name.clone());
+        tracing::info!("⚓️ ANCHOR: Load the database");
+        let mut loader = hawk_actor.as_iris_loader().await;
 
-                    tokio::runtime::Handle::current().block_on(async {
-                        load_db(
-                            &mut actor,
-                            &store,
-                            store_len,
-                            parallelism,
-                            &config,
-                            db_chunks_s3_store,
-                            db_chunks_s3_client,
-                            s3_chunks_folder_name,
-                            s3_chunks_bucket_name,
-                            s3_load_parallelism,
-                            s3_load_max_retries,
-                            s3_load_initial_backoff_ms,
-                            download_shutdown_handler,
-                        )
-                        .await
-                    })
-                };
+        if config.fake_db_size > 0 {
+            // TODO: not needed?
+            loader.fake_db(config.fake_db_size);
+        } else {
+            tracing::info!(
+                "Initialize iris db: Loading from DB (parallelism: {})",
+                parallelism
+            );
+            let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
+            let db_chunks_s3_store =
+                S3Store::new(db_chunks_s3_client.clone(), s3_chunks_bucket_name.clone());
 
-                match res {
-                    Ok(_) => {
-                        tx.send(Ok((handle, store))).unwrap();
-                    }
-                    Err(e) => {
-                        tx.send(Err(e)).unwrap();
-                        return Ok(());
-                    }
-                }
+            load_db(
+                &mut loader,
+                &store,
+                store_len,
+                parallelism,
+                &config,
+                db_chunks_s3_store,
+                db_chunks_s3_client,
+                s3_chunks_folder_name,
+                s3_chunks_bucket_name,
+                s3_load_parallelism,
+                s3_load_max_retries,
+                s3_load_initial_backoff_ms,
+                download_shutdown_handler,
+            )
+            .await
+            .expect("Failed to load DB");
+        }
+    }
 
-                actor.run(); // forever
-            }
-            Err(e) => {
-                tx.send(Err(e)).unwrap();
-                return Ok(());
-            }
-        };
-        Ok(())
-    });
-
-    let (mut handle, store) = rx.await??;
+    let mut hawk_handle = HawkHandle::new(hawk_actor, 10).await?;
 
     let mut skip_request_ids = sync_result.deleted_request_ids();
 
@@ -1479,9 +1395,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             successful_reauths,
             reauth_target_indices,
             reauth_or_rule_used,
-            mut modifications,
+            modifications,
         }) = rx.recv().await
         {
+            let _modifications = modifications;
+
             // returned serial_ids are 0 indexed, but we want them to be 1 indexed
             let uniqueness_results = merged_results
                 .iter()
@@ -1567,17 +1485,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     } else {
                         None
                     };
-                    let serial_id = reauth_target_indices.get(&reauth_id).unwrap() + 1;
-                    let success = successful_reauths[i];
-                    modifications
-                        .get_mut(&serial_id)
-                        .unwrap()
-                        .mark_completed(success);
                     let result_event = ReAuthResult::new(
                         reauth_id.clone(),
                         party_id,
-                        serial_id,
-                        success,
+                        reauth_target_indices.get(&reauth_id).unwrap() + 1,
+                        successful_reauths[i],
                         match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>(),
                         *reauth_or_rule_used.get(&reauth_id).unwrap(),
                         or_rule_matched,
@@ -1587,30 +1499,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 })
                 .collect::<eyre::Result<Vec<_>>>()?;
 
-            // handling identity deletion results
-            let identity_deletion_results = deleted_ids
-                .iter()
-                .map(|&idx| {
-                    let serial_id = idx + 1;
-                    modifications
-                        .get_mut(&serial_id)
-                        .unwrap()
-                        .mark_completed(true);
-                    let result_event = IdentityDeletionResult::new(party_id, serial_id, true);
-                    serde_json::to_string(&result_event)
-                        .wrap_err("failed to serialize identity deletion result")
-                })
-                .collect::<eyre::Result<Vec<_>>>()?;
-
             let mut tx = store_bg.tx().await?;
 
             store_bg
                 .insert_results(&mut tx, &uniqueness_results)
                 .await?;
 
-            store_bg
-                .update_modifications(&mut tx, &modifications.values().collect::<Vec<_>>())
-                .await?;
+            // TODO: update modifications table to store reauth and deletion results
 
             if !codes_and_masks.is_empty() && !config_bg.disable_persistence {
                 let db_serial_ids = store_bg.insert_irises(&mut tx, &codes_and_masks).await?;
@@ -1683,6 +1578,16 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             )
             .await?;
 
+            // handling identity deletion results
+            let identity_deletion_results = deleted_ids
+                .iter()
+                .map(|&serial_id| {
+                    let result_event = IdentityDeletionResult::new(party_id, serial_id + 1, true);
+                    serde_json::to_string(&result_event)
+                        .wrap_err("failed to serialize identity deletion result")
+                })
+                .collect::<eyre::Result<Vec<_>>>()?;
+
             tracing::info!(
                 "Sending {} identity deletion results",
                 identity_deletion_results.len()
@@ -1743,15 +1648,20 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     is_ready_flag_cloned.store(true, std::sync::atomic::Ordering::SeqCst);
 
     // Check other nodes and wait until all nodes are ready.
-    let all_nodes = config.node_hostnames.clone();
+    let all_readiness_addresses = get_check_addresses(
+        config.node_hostnames.clone(),
+        config.healthcheck_ports.clone(),
+        "ready",
+    );
+
     let ready_check = tokio::spawn(async move {
-        let next_node = &all_nodes[(config.party_id + 1) % 3];
-        let prev_node = &all_nodes[(config.party_id + 2) % 3];
+        let next_node = &all_readiness_addresses[(config.party_id + 1) % 3];
+        let prev_node = &all_readiness_addresses[(config.party_id + 2) % 3];
         let mut connected = [false, false];
 
         loop {
             for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(format!("http://{}:3000/ready", host)).await;
+                let res = reqwest::get(host.as_str()).await;
 
                 if res.is_ok() && res.as_ref().unwrap().status().is_success() {
                     connected[i] = true;
@@ -1827,6 +1737,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             &reauth_error_result_attribute,
         );
 
+        let dummy_shares_for_deletions = get_dummy_shares_for_deletion(party_id);
+
         loop {
             let now = Instant::now();
 
@@ -1864,7 +1776,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             background_tasks.check_tasks();
 
-            let result_future = handle.submit_batch_query(batch);
+            let result_future = hawk_handle.submit_batch_query(batch.clone());
 
             next_batch = receive_batch(
                 party_id,
@@ -1905,7 +1817,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         Err(e) => {
             tracing::error!("ServerActor processing error: {:?}", e);
             // drop actor handle to initiate shutdown
-            drop(handle);
+            drop(hawk_handle);
 
             // Clean up server tasks, then wait for them to finish
             background_tasks.abort_all();
@@ -2167,4 +2079,12 @@ async fn load_db(
     );
 
     eyre::Ok(())
+}
+
+fn get_check_addresses(hostnames: Vec<String>, ports: Vec<String>, endpoint: &str) -> Vec<String> {
+    hostnames
+        .iter()
+        .zip(ports.iter())
+        .map(|(host, port)| format!("http://{}:{}/{}", host, port, endpoint))
+        .collect::<Vec<String>>()
 }
