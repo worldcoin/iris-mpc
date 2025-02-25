@@ -322,6 +322,16 @@ async fn receive_batch(
                                 batch_size.clamp(1, max_batch_size);
                             tracing::info!("Updating batch size to {}", batch_size);
                         }
+                        if let Some(skip_persistence) = uniqueness_request.skip_persistence {
+                            batch_query.skip_persistence.push(skip_persistence);
+                            tracing::info!(
+                                "Setting skip_persistence to {} for requuest id {}",
+                                skip_persistence,
+                                uniqueness_request.signup_id
+                            );
+                        } else {
+                            batch_query.skip_persistence.push(false);
+                        }
                         if config.luc_enabled {
                             if config.luc_lookback_records > 0 {
                                 batch_query.luc_lookback_records = config.luc_lookback_records;
@@ -451,7 +461,7 @@ async fn receive_batch(
                                 vec![]
                             };
                             batch_query.or_rule_indices.push(or_rule_indices);
-
+                            batch_query.skip_persistence.push(false);
                             let semaphore = Arc::clone(&semaphore);
                             let s3_client_clone = s3_client.clone();
                             let bucket_name = config.shares_bucket_name.clone();
@@ -1465,6 +1475,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             request_types,
             metadata,
             matches,
+            matches_with_skip_persistence,
             match_ids,
             partial_match_ids_left,
             partial_match_ids_right,
@@ -1495,7 +1506,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             true => None,
                             false => Some(idx_result + 1),
                         },
-                        matches[i],
+                        matches_with_skip_persistence[i],
                         request_ids[i].clone(),
                         match matches[i] {
                             true => Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
