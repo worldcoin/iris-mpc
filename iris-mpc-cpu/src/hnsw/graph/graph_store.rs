@@ -1,24 +1,23 @@
 use super::layered_graph::EntryPoint;
-use crate::hnsw::{
-    graph::neighborhood::SortedNeighborhoodV,
-    searcher::{ConnectPlanLayerV, ConnectPlanV},
-    GraphMem, VectorStore,
+use crate::{
+    execution::hawk_main::StoreId,
+    hnsw::{
+        graph::neighborhood::SortedNeighborhoodV,
+        searcher::{ConnectPlanLayerV, ConnectPlanV},
+        GraphMem, VectorStore,
+    },
 };
-use eyre::{eyre, Result};
+use eyre::Result;
 use futures::{Stream, StreamExt, TryStreamExt};
+use iris_mpc_store::Store;
 use itertools::izip;
 use sqlx::{
     error::BoxDynError,
-    migrate::Migrator,
-    postgres::{PgPoolOptions, PgRow},
+    postgres::PgRow,
     types::{Json, Text},
-    Executor, Row,
+    PgConnection, Postgres, Row, Transaction,
 };
-use std::{marker::PhantomData, str::FromStr};
-
-const MAX_CONNECTIONS: u32 = 5;
-
-static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
+use std::{marker::PhantomData, ops::DerefMut, str::FromStr};
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
 pub struct RowLinks<V: VectorStore> {
@@ -28,36 +27,70 @@ pub struct RowLinks<V: VectorStore> {
 }
 
 pub struct GraphPg<V: VectorStore> {
-    pool:    sqlx::PgPool,
-    phantom: PhantomData<V>,
+    pool:        sqlx::PgPool,
+    schema_name: String,
+    phantom:     PhantomData<V>,
 }
 
 impl<V: VectorStore> GraphPg<V> {
-    pub async fn new(url: &str, schema_name: &str) -> Result<Self> {
-        let connect_sql = sql_switch_schema(schema_name)?;
+    pub fn from_iris_store(store: &Store) -> Self {
+        Self {
+            pool:        store.pool.clone(),
+            schema_name: store.schema_name.clone(),
+            phantom:     PhantomData,
+        }
+    }
 
-        let pool = PgPoolOptions::new()
-            .max_connections(MAX_CONNECTIONS)
-            .after_connect(move |conn, _meta| {
-                // Switch to the given schema in every connection.
-                let connect_sql = connect_sql.clone();
-                Box::pin(async move {
-                    conn.execute(connect_sql.as_ref()).await.inspect_err(|e| {
-                        eprintln!("error in after_connect: {:?}", e);
-                    })?;
-                    Ok(())
-                })
-            })
-            .connect(url)
-            .await?;
+    pub async fn tx(&self) -> Result<GraphTx<'_, V>> {
+        Ok(self.tx_wrap(self.pool.begin().await?))
+    }
 
-        // Create the schema on the first startup.
-        MIGRATOR.run(&pool).await?;
-
-        Ok(GraphPg {
-            pool,
+    pub fn tx_wrap<'t>(&self, tx: Transaction<'t, Postgres>) -> GraphTx<'t, V> {
+        GraphTx {
+            tx,
+            schema_name: self.schema_name.clone(),
             phantom: PhantomData,
-        })
+        }
+    }
+}
+
+pub struct GraphTx<'a, V> {
+    pub tx:      Transaction<'a, Postgres>,
+    schema_name: String,
+    phantom:     PhantomData<V>,
+}
+
+impl<'b, V: VectorStore> GraphTx<'b, V> {
+    pub fn with_graph<'a>(&'a mut self, graph_id: StoreId) -> GraphOps<'a, 'b, V> {
+        GraphOps {
+            tx: self,
+            graph_id,
+            borrowable_sql: "".to_string(),
+        }
+    }
+}
+
+pub struct GraphOps<'a, 'b, V> {
+    tx:             &'a mut GraphTx<'b, V>,
+    graph_id:       StoreId,
+    borrowable_sql: String,
+}
+
+impl<V: VectorStore> GraphOps<'_, '_, V> {
+    fn entry_table(&self) -> String {
+        format!("\"{}\".hawk_graph_entry", self.tx.schema_name)
+    }
+
+    fn links_table(&self) -> String {
+        format!("\"{}\".hawk_graph_links", self.tx.schema_name)
+    }
+
+    fn graph_id(&self) -> i32 {
+        self.graph_id as i32
+    }
+
+    fn tx(&mut self) -> &mut PgConnection {
+        self.tx.tx.deref_mut()
     }
 
     /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the
@@ -88,13 +121,13 @@ impl<V: VectorStore> GraphPg<V> {
         self.set_links(q, plan.neighbors, lc).await;
     }
 
-    pub async fn get_entry_point(&self) -> Option<(V::VectorRef, usize)> {
-        sqlx::query(
-            "
-                SELECT entry_point FROM hawk_graph_entry WHERE id = 0
-            ",
-        )
-        .fetch_optional(&self.pool)
+    pub async fn get_entry_point(&mut self) -> Option<(V::VectorRef, usize)> {
+        let table = self.entry_table();
+        sqlx::query(&format!(
+            "SELECT entry_point FROM {table} WHERE graph_id = $1"
+        ))
+        .bind(self.graph_id())
+        .fetch_optional(self.tx())
         .await
         .expect("Failed to fetch entry point")
         .map(|row: PgRow| {
@@ -104,32 +137,36 @@ impl<V: VectorStore> GraphPg<V> {
     }
 
     async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) {
-        sqlx::query(
+        let table = self.entry_table();
+        sqlx::query(&format!(
             "
-            INSERT INTO hawk_graph_entry (entry_point, id)
-            VALUES ($1, 0) ON CONFLICT (id)
-            DO UPDATE SET entry_point = EXCLUDED.entry_point
-        ",
-        )
+            INSERT INTO {table} (graph_id, entry_point)
+            VALUES ($1, $2) ON CONFLICT (graph_id)
+            DO UPDATE SET entry_point = EXCLUDED.entry_point"
+        ))
+        .bind(self.graph_id())
         .bind(Json(&EntryPoint { point, layer }))
-        .execute(&self.pool)
+        .execute(self.tx())
         .await
         .expect("Failed to set entry point");
     }
 
     pub async fn get_links(
-        &self,
+        &mut self,
         base: &<V as VectorStore>::VectorRef,
         lc: usize,
     ) -> SortedNeighborhoodV<V> {
-        sqlx::query(
+        let table = self.links_table();
+        sqlx::query(&format!(
             "
-            SELECT links FROM hawk_graph_links WHERE source_ref = $1 AND layer = $2
-        ",
-        )
+            SELECT links FROM {table}
+            WHERE graph_id = $1 AND source_ref = $2 AND layer = $3
+        "
+        ))
+        .bind(self.graph_id())
         .bind(Text(base))
         .bind(lc as i32)
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.tx())
         .await
         .expect("Failed to fetch links")
         .map(|row: PgRow| {
@@ -140,40 +177,46 @@ impl<V: VectorStore> GraphPg<V> {
     }
 
     async fn set_links(&mut self, base: V::VectorRef, links: SortedNeighborhoodV<V>, lc: usize) {
-        sqlx::query(
+        let table = self.links_table();
+        sqlx::query(&format!(
             "
-            INSERT INTO hawk_graph_links (source_ref, layer, links)
-            VALUES ($1, $2, $3) ON CONFLICT (source_ref, layer)
+            INSERT INTO {table} (graph_id, source_ref, layer, links)
+            VALUES ($1, $2, $3, $4) ON CONFLICT (graph_id, source_ref, layer)
             DO UPDATE SET
             links = EXCLUDED.links
-        ",
-        )
+        "
+        ))
+        .bind(self.graph_id())
         .bind(Text(base))
         .bind(lc as i32)
         .bind(Json(&links))
-        .execute(&self.pool)
+        .execute(self.tx())
         .await
         .expect("Failed to set links");
     }
 }
 
-impl<V: VectorStore> GraphPg<V>
+impl<V: VectorStore> GraphOps<'_, '_, V>
 where
     V::VectorRef: Send + Unpin + 'static,
     BoxDynError: From<<V::VectorRef as FromStr>::Err>,
     V::DistanceRef: Send + Unpin + 'static,
 {
-    fn stream_links(&self) -> impl Stream<Item = Result<RowLinks<V>>> + '_ {
-        sqlx::query_as::<_, RowLinks<V>>(
+    fn stream_links(&mut self) -> impl Stream<Item = Result<RowLinks<V>>> + '_ {
+        let table = self.links_table();
+        self.borrowable_sql = format!(
             "
-        SELECT source_ref, links, layer FROM hawk_graph_links
-        ",
-        )
-        .fetch(&self.pool)
-        .map_err(Into::into)
+            SELECT source_ref, links, layer FROM {table}
+            WHERE graph_id = $1
+        "
+        );
+        sqlx::query_as::<_, RowLinks<V>>(&self.borrowable_sql)
+            .bind(self.graph_id())
+            .fetch(self.tx.tx.deref_mut())
+            .map_err(Into::into)
     }
 
-    pub async fn load_to_mem(&self) -> Result<GraphMem<V>> {
+    pub async fn load_to_mem(&mut self) -> Result<GraphMem<V>> {
         let mut graph_mem = GraphMem::new();
 
         let ep = self.get_entry_point().await;
@@ -194,59 +237,37 @@ where
     }
 }
 
-fn sql_switch_schema(schema_name: &str) -> Result<String> {
-    sanitize_identifier(schema_name)?;
-    Ok(format!(
-        "
-        CREATE SCHEMA IF NOT EXISTS \"{}\";
-        SET search_path TO \"{}\";
-        ",
-        schema_name, schema_name
-    ))
-}
-
-fn sanitize_identifier(input: &str) -> Result<()> {
-    if input.chars().all(|c| c.is_alphanumeric() || c == '_') {
-        Ok(())
-    } else {
-        Err(eyre!("Invalid SQL identifier"))
-    }
-}
-
 pub mod test_utils {
     use super::*;
-    use std::{
-        env,
-        ops::{Deref, DerefMut},
-    };
-    const DOTENV_TEST: &str = ".env.test";
-    const ENV_DB_URL: &str = "SMPC__DATABASE__URL";
-    const SCHEMA_PREFIX: &str = "graph_store_test";
+    use iris_mpc_store::test_utils::{cleanup, temporary_name, test_db_url};
+    use std::ops::{Deref, DerefMut};
 
     /// A test database. It creates a unique schema for each test. Call
     /// `cleanup` at the end of the test.
     ///
     /// Access the database with `&graph` or `graph.owned()`.
     pub struct TestGraphPg<V: VectorStore> {
-        graph:       GraphPg<V>,
-        schema_name: String,
+        store:     Store,
+        pub graph: GraphPg<V>,
     }
 
     impl<V: VectorStore> TestGraphPg<V> {
         pub async fn new() -> Result<Self> {
             let schema_name = temporary_name();
-            let graph = GraphPg::new(&test_db_url()?, &schema_name).await?;
-            Ok(TestGraphPg { graph, schema_name })
+            let store = Store::new(&test_db_url()?, &schema_name).await?;
+            let graph = GraphPg::from_iris_store(&store);
+            Ok(TestGraphPg { store, graph })
         }
 
         pub async fn cleanup(&self) -> Result<()> {
-            cleanup(&self.graph.pool, &self.schema_name).await
+            cleanup(&self.store, &self.store.schema_name).await
         }
 
         pub fn owned(&self) -> GraphPg<V> {
             GraphPg {
-                pool:    self.graph.pool.clone(),
-                phantom: PhantomData,
+                pool:        self.graph.pool.clone(),
+                schema_name: self.graph.schema_name.clone(),
+                phantom:     PhantomData,
             }
         }
     }
@@ -262,23 +283,6 @@ pub mod test_utils {
         fn deref_mut(&mut self) -> &mut Self::Target {
             &mut self.graph
         }
-    }
-
-    fn test_db_url() -> Result<String> {
-        dotenvy::from_filename(DOTENV_TEST)?;
-        Ok(env::var(ENV_DB_URL)?)
-    }
-
-    fn temporary_name() -> String {
-        format!("{}_{}", SCHEMA_PREFIX, rand::random::<u32>())
-    }
-
-    async fn cleanup(pool: &sqlx::PgPool, schema_name: &str) -> Result<()> {
-        assert!(schema_name.starts_with(SCHEMA_PREFIX));
-        sqlx::query(&format!("DROP SCHEMA \"{}\" CASCADE", schema_name))
-            .execute(pool)
-            .await?;
-        Ok(())
     }
 }
 
@@ -297,7 +301,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_db() {
-        let mut graph = TestGraphPg::<PlaintextStore>::new().await.unwrap();
+        let graph = TestGraphPg::<PlaintextStore>::new().await.unwrap();
         let mut vector_store = PlaintextStore::new();
         let rng = &mut AesRng::seed_from_u64(0_u64);
 
@@ -318,7 +322,10 @@ mod tests {
             d
         };
 
-        let ep = graph.get_entry_point().await;
+        let mut tx = graph.tx().await.unwrap();
+        let mut graph_ops = tx.with_graph(StoreId::Left);
+
+        let ep = graph_ops.get_entry_point().await;
         assert!(ep.is_none());
 
         let ep2 = EntryPoint {
@@ -326,9 +333,9 @@ mod tests {
             layer: ep.map(|e| e.1).unwrap_or_default() + 1,
         };
 
-        graph.set_entry_point(ep2.point, ep2.layer).await;
+        graph_ops.set_entry_point(ep2.point, ep2.layer).await;
 
-        let (point3, layer3) = graph.get_entry_point().await.unwrap();
+        let (point3, layer3) = graph_ops.get_entry_point().await.unwrap();
         let ep3 = EntryPoint {
             point: point3,
             layer: layer3,
@@ -345,18 +352,19 @@ mod tests {
                     .await;
             }
 
-            graph.set_links(vectors[i], links.clone(), 0).await;
+            graph_ops.set_links(vectors[i], links.clone(), 0).await;
 
-            let links2 = graph.get_links(&vectors[i], 0).await;
+            let links2 = graph_ops.get_links(&vectors[i], 0).await;
             assert_eq!(*links, *links2);
         }
 
+        tx.tx.commit().await.unwrap();
         graph.cleanup().await.unwrap();
     }
 
     #[tokio::test]
     async fn test_hnsw_db() {
-        let mut graph_pg = TestGraphPg::<PlaintextStore>::new().await.unwrap();
+        let graph_pg = TestGraphPg::<PlaintextStore>::new().await.unwrap();
         let graph_mem = &mut GraphMem::new();
         let vector_store = &mut PlaintextStore::default();
         let rng = &mut AesRng::seed_from_u64(0_u64);
@@ -369,6 +377,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Insert the codes.
+        let mut tx = graph_pg.tx().await.unwrap();
         for query in queries1.iter() {
             let insertion_layer = db.select_layer(rng);
             let (neighbors, set_ep) = db
@@ -382,10 +391,10 @@ mod tests {
                 .await;
 
             graph_mem.insert_apply(plan.clone()).await;
-            graph_pg.insert_apply(plan).await;
+            tx.with_graph(StoreId::Left).insert_apply(plan).await;
         }
 
-        let graph_mem2 = graph_pg.load_to_mem().await.unwrap();
+        let graph_mem2 = tx.with_graph(StoreId::Left).load_to_mem().await.unwrap();
         assert_eq!(graph_mem, &graph_mem2);
 
         // Search for the same codes and find matches.
@@ -394,6 +403,7 @@ mod tests {
             assert!(db.is_match(vector_store, &[neighbors]).await);
         }
 
+        tx.tx.commit().await.unwrap();
         graph_pg.cleanup().await.unwrap();
     }
 }

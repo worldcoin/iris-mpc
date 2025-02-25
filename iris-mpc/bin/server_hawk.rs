@@ -39,9 +39,11 @@ use iris_mpc_common::{
         task_monitor::TaskMonitor,
     },
     iris_db::get_dummy_shares_for_deletion,
-    job::{BatchMetadata, BatchQuery, JobSubmissionHandle, ServerJobResult},
+    job::{BatchMetadata, BatchQuery, JobSubmissionHandle},
 };
-use iris_mpc_cpu::execution::hawk_main::{HawkActor, HawkArgs, HawkHandle};
+use iris_mpc_cpu::execution::hawk_main::{
+    GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult,
+};
 use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
@@ -849,6 +851,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     tracing::info!("Creating new storage from: {:?}", config);
     let store = Store::new_from_config(&config).await?;
+    let graph_store = GraphStore::from_iris_store(&store);
 
     tracing::info!("Initialising AWS services");
 
@@ -1328,11 +1331,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     {
         // ANCHOR: Load the database
         tracing::info!("⚓️ ANCHOR: Load the database");
-        let mut loader = hawk_actor.as_iris_loader().await;
+        let (mut iris_loader, graph_loader) = hawk_actor.as_iris_loader().await;
 
         if config.fake_db_size > 0 {
             // TODO: not needed?
-            loader.fake_db(config.fake_db_size);
+            iris_loader.fake_db(config.fake_db_size);
         } else {
             tracing::info!(
                 "Initialize iris db: Loading from DB (parallelism: {})",
@@ -1343,7 +1346,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 S3Store::new(db_chunks_s3_client.clone(), s3_chunks_bucket_name.clone());
 
             load_db(
-                &mut loader,
+                &mut iris_loader,
                 &store,
                 store_len,
                 parallelism,
@@ -1359,6 +1362,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             )
             .await
             .expect("Failed to load DB");
+
+            graph_loader.load_graph_store(&graph_store).await?;
         }
     }
 
@@ -1396,6 +1401,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             reauth_target_indices,
             reauth_or_rule_used,
             modifications,
+            actor_data: hawk_mutation,
         }) = rx.recv().await
         {
             let _modifications = modifications;
@@ -1548,6 +1554,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         .await?;
                 }
             }
+
+            // Graph mutation.
+            let mut graph_tx = graph_store.tx_wrap(tx);
+            hawk_mutation.persist(&mut graph_tx).await?;
+            let tx = graph_tx.tx;
 
             tx.commit().await?;
 

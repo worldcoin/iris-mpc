@@ -50,7 +50,7 @@ pub struct BatchQuery {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ServerJobResult {
+pub struct ServerJobResult<A = ()> {
     pub merged_results: Vec<u32>,
     pub request_ids: Vec<String>,
     pub request_types: Vec<String>,
@@ -71,6 +71,8 @@ pub struct ServerJobResult {
     pub reauth_target_indices: HashMap<String, u32>,
     pub reauth_or_rule_used: HashMap<String, bool>,
     pub modifications: HashMap<u32, Modification>,
+    /// Actor-specific data (e.g. graph mutations).
+    pub actor_data: A,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -81,9 +83,11 @@ pub enum Eye {
 }
 
 pub trait JobSubmissionHandle {
+    type A;
+
     #[allow(async_fn_in_trait)]
     async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
-    ) -> impl Future<Output = ServerJobResult>;
+    ) -> impl Future<Output = ServerJobResult<Self::A>>;
 }

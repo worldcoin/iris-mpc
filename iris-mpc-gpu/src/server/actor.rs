@@ -76,6 +76,8 @@ pub struct ServerActorHandle {
 }
 
 impl JobSubmissionHandle for ServerActorHandle {
+    type A = ();
+
     async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
@@ -1185,6 +1187,7 @@ impl ServerActor {
                 reauth_target_indices: batch.reauth_target_indices,
                 reauth_or_rule_used: batch.reauth_use_or_rule,
                 modifications: batch.modifications,
+                actor_data: (),
             })
             .unwrap();
 
