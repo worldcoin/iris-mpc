@@ -32,6 +32,7 @@ pub struct BatchQuery {
     pub or_rule_indices:      Vec<Vec<u32>>,
     pub luc_lookback_records: usize,
     pub valid_entries:        Vec<bool>,
+    pub skip_persistence:     Vec<bool>,
 
     // Only reauth specific fields
     // Map from reauth request id to the index of the target entry to be matched
@@ -56,6 +57,7 @@ pub struct ServerJobResult<A = ()> {
     pub request_types: Vec<String>,
     pub metadata: Vec<BatchMetadata>,
     pub matches: Vec<bool>,
+    pub matches_with_skip_persistence: Vec<bool>,
     pub match_ids: Vec<Vec<u32>>,
     pub partial_match_ids_left: Vec<Vec<u32>>,
     pub partial_match_ids_right: Vec<Vec<u32>>,

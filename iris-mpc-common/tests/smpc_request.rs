@@ -90,6 +90,7 @@ mod tests {
             signup_id:          "test_signup_id".to_string(),
             s3_key:             key.to_string(),
             or_rule_serial_ids: None,
+            skip_persistence:   None,
         };
 
         let result = get_iris_data_by_party_id(
