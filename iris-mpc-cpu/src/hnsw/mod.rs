@@ -11,6 +11,7 @@
 pub mod graph;
 pub mod metrics;
 pub mod searcher;
+pub mod sorting;
 pub mod vector_store;
 
 pub use graph::{layered_graph::GraphMem, neighborhood::SortedNeighborhood};
