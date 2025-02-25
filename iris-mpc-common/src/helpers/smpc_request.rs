@@ -127,12 +127,11 @@ pub struct IdentityDeletionRequest {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ReAuthRequest {
-    pub reauth_id:               String,
-    pub batch_size:              Option<usize>,
-    pub s3_key:                  String,
-    pub iris_shares_file_hashes: [String; 3],
-    pub serial_id:               u32,
-    pub use_or_rule:             bool,
+    pub reauth_id:   String,
+    pub batch_size:  Option<usize>,
+    pub s3_key:      String,
+    pub serial_id:   u32,
+    pub use_or_rule: bool,
 }
 
 #[derive(Error, Debug)]
