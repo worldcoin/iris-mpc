@@ -1318,6 +1318,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         party_index:         config.party_id,
         addresses:           node_addresses.clone(),
         request_parallelism: config.hawk_request_parallelism,
+        disable_persistence: config.disable_persistence,
     };
 
     tracing::info!(
