@@ -1,4 +1,4 @@
-#![allow(clippy::needless_range_loop)]
+#![allow(clippy::needless_range_loop, unused)]
 
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig};
 use aws_sdk_s3::{
