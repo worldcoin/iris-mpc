@@ -15,6 +15,7 @@ use crate::{
     },
 };
 use eyre::eyre;
+use tracing::instrument;
 
 pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
 pub(crate) const B_BITS: u64 = 16;
@@ -25,15 +26,17 @@ pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
 /// Each party sends to the next party a random seed.
 /// At the end, each party will hold two seeds which are the basis of the
 /// replicated protocols.
+#[instrument(level = "trace", target = "searcher::network", fields(party = ?session.own_identity), skip_all)]
 pub async fn setup_replicated_prf(session: &BootSession, my_seed: PrfSeed) -> eyre::Result<Prf> {
     let next_role = session.own_role()?.next(3);
     let prev_role = session.own_role()?.prev(3);
     let network = session.network();
     // send my_seed to the next party
+    let next_party = session.identity(&next_role)?;
     network
         .send(
             NetworkValue::PrfKey(my_seed).to_network(),
-            session.identity(&next_role)?,
+            next_party,
             &session.session_id,
         )
         .await?;
@@ -120,6 +123,7 @@ pub async fn batch_signed_lift_vec(
 
 /// Computes D2 * T1 - T2 * D1
 /// Assumes that the input shares are originally 16-bit and lifted to u32.
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
 pub(crate) async fn cross_mul(
     session: &mut Session,
     d1: Share<u32>,
@@ -288,7 +292,9 @@ mod tests {
     use rstest::rstest;
     use std::collections::HashMap;
     use tokio::task::JoinSet;
+    use tracing::trace;
 
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn open_single(session: &Session, x: Share<u32>) -> eyre::Result<RingElement<u32>> {
         let network = session.network();
         let next_role = session.identity(&session.own_role()?.next(3))?;
@@ -309,6 +315,7 @@ mod tests {
         Ok(a + b + missing_share)
     }
 
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn open_t_many<T>(session: &Session, shares: Vec<Share<T>>) -> eyre::Result<Vec<T>>
     where
         T: IntRing2k,
@@ -498,10 +505,12 @@ mod tests {
         assert_eq!(t, RingElement(2));
     }
 
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn open_additive(session: &Session, x: Vec<RingElement<u16>>) -> eyre::Result<Vec<u16>> {
         let network = session.network();
         let next_role = session.identity(&session.own_role()?.next(3))?;
         let prev_role = session.identity(&session.own_role()?.prev(3))?;
+
         network
             .send(
                 NetworkValue::VecRing16(x.clone()).to_network(),
@@ -509,12 +518,12 @@ mod tests {
                 &session.session_id(),
             )
             .await?;
+
+        let message_bytes = NetworkValue::VecRing16(x.clone()).to_network();
+        trace!(target: "searcher::network", action = "send", party = ?prev_role, bytes = message_bytes.len(), rounds = 0);
+
         network
-            .send(
-                NetworkValue::VecRing16(x.clone()).to_network(),
-                prev_role,
-                &session.session_id(),
-            )
+            .send(message_bytes, prev_role, &session.session_id())
             .await?;
 
         let serialized_reply_0 = network.receive(prev_role, &session.session_id()).await;

@@ -88,6 +88,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b46cbb362ab8752921c97e041f5e366ee6297bd428a31275b9fcf1e380f7299"
 
 [[package]]
+name = "ansiterm"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ab587f5395da16dd2e6939adf53dede583221b320cadfb94e02b5b7b9bf24cc"
+dependencies = [
+ "winapi",
+]
+
+[[package]]
 name = "anstream"
 version = "0.6.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2707,6 +2716,7 @@ name = "iris-mpc-cpu"
 version = "0.1.0"
 dependencies = [
  "aes-prng",
+ "ansiterm",
  "async-channel",
  "async-stream",
  "async-trait",
@@ -5767,8 +5777,7 @@ dependencies = [
 [[package]]
 name = "tracing-forest"
 version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee40835db14ddd1e3ba414292272eddde9dad04d3d4b65509656414d1c42592f"
+source = "git+https://github.com/QnnOkabayashi/tracing-forest.git?rev=5683eba#5683ebaf82ae0060334976fdd1011e8f0cdb08c2"
 dependencies = [
  "chrono",
  "serde",
