@@ -831,12 +831,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     shutdown_handler.wait_for_shutdown_signal().await;
 
     // Validate modes of compute/deployment.
-    if config.mode_of_compute == ModeOfCompute::GPU
-        && config.mode_of_deployment == ModeOfDeployment::SHADOW
-    {
+    if config.mode_of_compute != ModeOfCompute::CPU {
         panic!(
-            "Unsupported combination of compute/deployment modes: {:?} :: {:?}",
-            config.mode_of_compute, config.mode_of_deployment
+            "Invalid config setting: compute_mode: actual: {:?} :: expected: ModeOfCompute::CPU",
+            config.mode_of_compute
         );
     } else {
         tracing::info!("Mode of compute: {:?}", config.mode_of_compute);
