@@ -8,9 +8,10 @@ export AWS_REGION=us-east-1
 
 cargo run --bin client -- \
     --request-topic-arn arn:aws:sns:us-east-1:000000000000:iris-mpc-input.fifo \
-    --requestregion us-east-1 \
     --requests-bucket-name wf-smpcv2-dev-sns-requests \
     --public-key-base-url "http://wf-dev-public-keys.s3.us-east-1.localhost.localstack.cloud:4566" \
+    --region us-east-1 \
+    --n-repeat 1 \
     --random true
 
 # TODO: re-add these once ready to consume results
