@@ -1,7 +1,8 @@
 #![allow(clippy::needless_range_loop)]
+
 use aws_config::retry::RetryConfig;
+use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::{config::Region, Client};
-// use aws_sdk_sqs::Client as SqsClient;
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use eyre::{Context, ContextCompat};
@@ -10,9 +11,11 @@ use iris_mpc_common::{
     helpers::{
         key_pair::download_public_key,
         sha256::sha256_as_hex_string,
-        smpc_request::{IrisCodeSharesJSON, UniquenessRequest, UNIQUENESS_MESSAGE_TYPE},
+        smpc_request::{
+            IrisCodeSharesJSON, SharesS3Object, UniquenessRequest, UNIQUENESS_MESSAGE_TYPE,
+        },
         smpc_response::create_message_type_attribute_map,
-        sqs_s3_helper::upload_file_and_generate_presigned_url,
+        sqs_s3_helper::upload_file_to_s3,
     },
     iris_db::{db::IrisDB, iris::IrisCode},
 };
@@ -21,79 +24,80 @@ use serde_json::to_string;
 use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{
-    // spawn,
     sync::{Mutex, Semaphore},
     time::sleep,
 };
 use uuid::Uuid;
 
-const MAX_CONCURRENT_REQUESTS: usize = 16;
-const BATCH_SIZE: usize = 64;
-const N_BATCHES: usize = 100;
-// const N_QUERIES: usize = BATCH_SIZE * N_BATCHES;
+const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 16;
+const DEFAULT_BATCH_SIZE: usize = 64;
+const DEFAULT_N_BATCHES: usize = 5;
+const DEFAULT_N_REPEAT: usize = 0;
+
 const WAIT_AFTER_BATCH: Duration = Duration::from_secs(2);
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 
-#[derive(Debug, Parser)]
-struct Opt {
+#[derive(Debug, Parser, Clone)]
+pub struct Opt {
     #[arg(long, env, required = true)]
-    request_topic_arn: String,
+    pub request_topic_arn: String,
 
     #[arg(long, env, required = true)]
-    request_topic_region: String,
-
-    // #[arg(long, env, required = true)]
-    // response_queue_url: String,
-    //
-    // #[arg(long, env, required = true)]
-    // response_queue_region: String,
-    #[arg(long, env, required = true)]
-    requests_bucket_name: String,
+    pub requests_bucket_name: String,
 
     #[arg(long, env, required = true)]
-    public_key_base_url: String,
+    pub public_key_base_url: String,
 
     #[arg(long, env, required = true)]
-    requests_bucket_region: String,
+    pub region: String,
 
     #[arg(long, env)]
-    db_index: Option<usize>,
+    pub db_index: Option<usize>,
 
     #[arg(long, env)]
-    rng_seed: Option<u64>,
+    pub rng_seed: Option<u64>,
 
     #[arg(long, env)]
-    n_repeat: Option<usize>,
+    pub random: Option<bool>,
 
     #[arg(long, env)]
-    random: Option<bool>,
+    pub endpoint_url: Option<String>,
+
+    #[arg(long, env, default_value_t = DEFAULT_N_REPEAT)]
+    pub n_repeat: usize,
+
+    #[arg(long, env, default_value_t = DEFAULT_N_BATCHES)]
+    pub n_batches: usize,
+
+    #[arg(long, env, default_value_t = DEFAULT_BATCH_SIZE )]
+    pub batch_size: usize,
+
+    #[arg(long, env, default_value_t = DEFAULT_MAX_CONCURRENT_REQUESTS)]
+    pub max_concurrent_requests: usize,
 }
 
-#[tokio::main]
-async fn main() -> eyre::Result<()> {
-    tracing_subscriber::fmt::init();
-
+/// The core client functionality is moved into an async function so it can be
+/// called from a benchmark harness without spawning a new process.
+pub async fn run_client(opts: Opt) -> eyre::Result<()> {
     let Opt {
         public_key_base_url,
-
         requests_bucket_name,
-        requests_bucket_region,
-
+        region,
         request_topic_arn,
-        request_topic_region,
-
-        // response_queue_url,
-        // response_queue_region,
         db_index,
         rng_seed,
         n_repeat,
         random,
-    } = Opt::parse();
+        endpoint_url,
+        n_batches,
+        batch_size,
+        max_concurrent_requests,
+    } = opts;
 
-    let mut shares_encryption_public_keys: Vec<PublicKey> = vec![];
-
+    // Download public keys for each participant.
+    let mut shares_encryption_public_keys: Vec<PublicKey> = Vec::new();
     for i in 0..3 {
         let public_key_string =
             download_public_key(public_key_base_url.to_string(), i.to_string()).await?;
@@ -105,17 +109,24 @@ async fn main() -> eyre::Result<()> {
         shares_encryption_public_keys.push(public_key);
     }
 
-    let n_repeat = n_repeat.unwrap_or(0);
-
-    let region_provider = Region::new(request_topic_region);
-
-    let requests_sns_config = aws_config::from_env()
-        .region(region_provider)
+    let region = Region::new(region);
+    let shared_config = aws_config::from_env()
+        .region(region)
         .retry_config(RetryConfig::standard().with_max_attempts(5))
         .load()
         .await;
 
-    let requests_sns_client = Client::new(&requests_sns_config);
+    let mut s3_config_builder = aws_sdk_s3::config::Builder::from(&shared_config);
+    let mut sns_config_builder = aws_sdk_sns::config::Builder::from(&shared_config);
+
+    if let Some(endpoint_url) = endpoint_url.as_ref() {
+        s3_config_builder = s3_config_builder.endpoint_url(endpoint_url);
+        s3_config_builder = s3_config_builder.force_path_style(true);
+        sns_config_builder = sns_config_builder.endpoint_url(endpoint_url);
+    }
+
+    let s3_client = S3Client::from_conf(s3_config_builder.build());
+    let sns_client = Client::from_conf(sns_config_builder.build());
 
     let db = IrisDB::new_random_par(DB_SIZE, &mut StdRng::seed_from_u64(RNG_SEED_SERVER));
 
@@ -124,12 +135,9 @@ async fn main() -> eyre::Result<()> {
     let requests: Arc<Mutex<HashMap<String, IrisCode>>> = Arc::new(Mutex::new(HashMap::new()));
     let responses: Arc<Mutex<HashMap<u32, IrisCode>>> = Arc::new(Mutex::new(HashMap::new()));
     let db: Arc<Mutex<IrisDB>> = Arc::new(Mutex::new(db));
-    let requests_sns_client: Arc<Client> = Arc::new(requests_sns_client);
-    // let thread_expected_results = expected_results.clone();
-    // let thread_requests = requests.clone();
-    // let thread_responses = responses.clone();
+    let requests_sns_client: Arc<Client> = Arc::new(sns_client);
 
-    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
+    let semaphore = Arc::new(Semaphore::new(max_concurrent_requests));
 
     // let recv_thread = spawn(async move {
     //     let region_provider = Region::new(response_queue_region);
@@ -211,10 +219,9 @@ async fn main() -> eyre::Result<()> {
     //     eyre::Ok(())
     // });
 
-    // Prepare query
-    for batch_idx in 0..N_BATCHES {
+    for batch_idx in 0..n_batches {
         let mut handles = Vec::new();
-        for batch_query_idx in 0..BATCH_SIZE {
+        for batch_query_idx in 0..batch_size {
             let shares_encryption_public_keys2 = shares_encryption_public_keys.clone();
             let requests_sns_client2 = requests_sns_client.clone();
             let thread_db2 = db.clone();
@@ -222,10 +229,9 @@ async fn main() -> eyre::Result<()> {
             let thread_requests2 = requests.clone();
             let thread_responses2 = responses.clone();
             let request_topic_arn = request_topic_arn.clone();
-            let requests_bucket_region = requests_bucket_region.clone();
             let requests_bucket_name = requests_bucket_name.clone();
             let semaphore = Arc::clone(&semaphore);
-
+            let s3_client = s3_client.clone();
             let handle = tokio::spawn(async move {
                 let _permit = semaphore.acquire().await;
 
@@ -237,9 +243,8 @@ async fn main() -> eyre::Result<()> {
 
                 let request_id = Uuid::new_v4();
 
-                let template = if random.is_some() {
+                let template = if random.unwrap_or(false) {
                     // Automatic random tests
-
                     let responses_len = {
                         let tmp = thread_responses2.lock().await;
                         tmp.len()
@@ -274,12 +279,11 @@ async fn main() -> eyre::Result<()> {
                         }
                         2 => {
                             println!("Sending freshly inserted iris code");
-                            let (keys_vec, keys_idx) = {
+                            let keys_vec = {
                                 let tmp = thread_responses2.lock().await;
-                                let keys = tmp.keys().cloned().collect::<Vec<_>>();
-                                let idx = rng.gen_range(0..keys.len());
-                                (keys, idx)
+                                tmp.keys().cloned().collect::<Vec<_>>()
                             };
+                            let keys_idx = rng.gen_range(0..keys_vec.len());
                             let iris_code = {
                                 let tmp = thread_responses2.lock().await;
                                 tmp.get(&keys_vec[keys_idx]).unwrap().clone()
@@ -293,7 +297,7 @@ async fn main() -> eyre::Result<()> {
                         _ => unreachable!(),
                     }
                 } else {
-                    // Manually passed cli arguments
+                    // Manually passed CLI arguments
                     if let Some(db_index) = db_index {
                         if batch_query_idx * batch_idx < n_repeat {
                             let tmp = thread_db2.lock().await;
@@ -302,7 +306,7 @@ async fn main() -> eyre::Result<()> {
                             IrisCode::random_rng(&mut rng)
                         }
                     } else {
-                        let mut rng = StdRng::seed_from_u64(1337); // TODO
+                        let mut rng = StdRng::seed_from_u64(1337);
                         IrisCode::random_rng(&mut rng)
                     }
                 };
@@ -336,10 +340,8 @@ async fn main() -> eyre::Result<()> {
                         .expect("Serialization failed")
                         .clone();
 
-                    // calculate hash of the object
                     let hash_string = sha256_as_hex_string(&serialized_iris_codes_json);
 
-                    // encrypt the object using sealed box and public key
                     let encrypted_bytes = sealedbox::seal(
                         serialized_iris_codes_json.as_bytes(),
                         &shares_encryption_public_keys2[i],
@@ -350,11 +352,20 @@ async fn main() -> eyre::Result<()> {
                     iris_shares_file_hashes[i] = hash_string;
                 }
 
-                let contents = serde_json::to_vec(&iris_codes_shares_base64)?;
-                let presigned_url = match upload_file_and_generate_presigned_url(
+                let shares_s3_object = SharesS3Object {
+                    iris_share_0:  iris_codes_shares_base64[0].clone(),
+                    iris_share_1:  iris_codes_shares_base64[1].clone(),
+                    iris_share_2:  iris_codes_shares_base64[2].clone(),
+                    iris_hashes_0: iris_shares_file_hashes[0].clone(),
+                    iris_hashes_1: iris_shares_file_hashes[1].clone(),
+                    iris_hashes_2: iris_shares_file_hashes[2].clone(),
+                };
+
+                let contents = serde_json::to_vec(&shares_s3_object)?;
+                let bucket_key = match upload_file_to_s3(
                     &requests_bucket_name,
                     &request_id.to_string(),
-                    Box::leak(requests_bucket_region.clone().into_boxed_str()),
+                    s3_client.clone(),
                     &contents,
                 )
                 .await
@@ -370,8 +381,9 @@ async fn main() -> eyre::Result<()> {
                 let request_message = UniquenessRequest {
                     batch_size:         None,
                     signup_id:          request_id.to_string(),
-                    s3_key:             presigned_url,
+                    s3_key:             bucket_key,
                     or_rule_serial_ids: None,
+                    skip_persistence:   None,
                 };
 
                 let message_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
@@ -385,24 +397,19 @@ async fn main() -> eyre::Result<()> {
                     .send()
                     .await?;
 
-                eyre::Ok(())
+                Ok::<(), eyre::Error>(())
             });
             handles.push(handle);
         }
 
-        // Wait for all tasks to complete
+        // Wait for all tasks in this batch to complete.
         for handle in handles {
             handle.await??;
         }
 
         println!("Batch {} sent!", batch_idx);
-
-        // Give it some time to get back results
         sleep(WAIT_AFTER_BATCH).await;
     }
-
-    // Receive all messages
-    // recv_thread.await??;
 
     Ok(())
 }

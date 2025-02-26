@@ -20,10 +20,10 @@ echo "All endpoints are healthy."
 
 #/bin/client \
 #    --request-topic-arn arn:aws:sns:$AWS_REGION:000000000000:iris-mpc-input.fifo \
-#    --request-topic-region $AWS_REGION \
 #    --requests-bucket-name wf-smpcv2-dev-sns-requests \
 #    --public-key-base-url "http://wf-dev-public-keys.s3.$AWS_REGION.localhost.localstack.cloud:4566" \
-#    --requests-bucket-region $AWS_REGION \
+#    --region $AWS_REGION \
+#    --n-repeat 1 \
 #    --random true
 
 # TODO: re-add these once ready to consume results

@@ -108,7 +108,7 @@ The example file contains a sample WSL env var.
 
 ## CPU Implementation
 
-#### Requirements
+### Requirements
 
 1. `direnv` installed on your machine
 2. Run `direnv allow` in the root of the project. This will enable you to load all required env variables from the .env.test and .envrc files 
@@ -139,11 +139,24 @@ The script must run with `--init-servers` flag at least once. It will create som
 Just run
 
 ```bash
-docker build -f Dockerfile.hawk -t hawk-server-local-build:latest .
+docker build -f Dockerfile.dev.hawk -t hawk-server-local-build:latest .
 docker-compose -f docker-compose.test.yaml up
 ```
 
 It will bring up the 3 parties plus all the needed AWS/DB resources
+
+### Running Requests Against the Local Servers
+
+In either option you can send batches of requests to the SNS topics that will then be forwarded to the SQS
+queues from which the servers can read. This can be done with the `client` binary. We provide a bash script to 
+simplify its invocation:
+
+```bash
+./scripts/run-client.sh
+```
+
+This will send a batch of requests to the SNS topic. You can also run the client by itself with the `--help` flag to see all the available options.
+Check out also the [client.rs](iris-mpc/src/client.rs) file for more details.
 
 #### Testing
 

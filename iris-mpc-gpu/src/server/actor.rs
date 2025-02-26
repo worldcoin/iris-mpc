@@ -76,6 +76,8 @@ pub struct ServerActorHandle {
 }
 
 impl JobSubmissionHandle for ServerActorHandle {
+    type A = ();
+
     async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
@@ -609,27 +611,30 @@ impl ServerActor {
         );
 
         let mut batch = batch;
-        let mut batch_size = batch.store_left.code.len();
+        let mut batch_size = batch.left_iris_requests.code.len();
         assert!(batch_size > 0 && batch_size <= self.max_batch_size);
         assert!(
-            batch_size == batch.store_left.mask.len()
+            batch_size == batch.left_iris_requests.mask.len()
                 && batch_size == batch.request_ids.len()
                 && batch_size == batch.request_types.len()
                 && batch_size == batch.metadata.len()
-                && batch_size == batch.store_right.code.len()
-                && batch_size == batch.store_right.mask.len()
-                && batch_size * ROTATIONS == batch.query_left.code.len()
-                && batch_size * ROTATIONS == batch.query_left.mask.len()
-                && batch_size * ROTATIONS == batch.query_right.code.len()
-                && batch_size * ROTATIONS == batch.query_right.mask.len()
-                && batch_size * ROTATIONS == batch.db_left.code.len()
-                && batch_size * ROTATIONS == batch.db_left.mask.len()
-                && batch_size * ROTATIONS == batch.db_right.code.len()
-                && batch_size * ROTATIONS == batch.db_right.mask.len()
-                && batch_size * ROTATIONS == batch.query_left_preprocessed.len()
-                && batch_size * ROTATIONS == batch.query_right_preprocessed.len()
-                && batch_size * ROTATIONS == batch.db_left_preprocessed.len()
-                && batch_size * ROTATIONS == batch.db_right_preprocessed.len(),
+                && batch_size == batch.right_iris_requests.code.len()
+                && batch_size == batch.right_iris_requests.mask.len()
+                && batch_size * ROTATIONS == batch.left_iris_interpolated_requests.code.len()
+                && batch_size * ROTATIONS == batch.left_iris_interpolated_requests.mask.len()
+                && batch_size * ROTATIONS == batch.right_iris_interpolated_requests.code.len()
+                && batch_size * ROTATIONS == batch.right_iris_interpolated_requests.mask.len()
+                && batch_size * ROTATIONS == batch.left_iris_rotated_requests.code.len()
+                && batch_size * ROTATIONS == batch.left_iris_rotated_requests.mask.len()
+                && batch_size * ROTATIONS == batch.right_iris_rotated_requests.code.len()
+                && batch_size * ROTATIONS == batch.right_iris_rotated_requests.mask.len()
+                && batch_size * ROTATIONS
+                    == batch.left_iris_interpolated_requests_preprocessed.len()
+                && batch_size * ROTATIONS
+                    == batch.right_iris_interpolated_requests_preprocessed.len()
+                && batch_size * ROTATIONS == batch.left_iris_rotated_requests_preprocessed.len()
+                && batch_size * ROTATIONS == batch.right_iris_rotated_requests_preprocessed.len()
+                && batch_size == batch.skip_persistence.len(),
             "Query batch sizes mismatch"
         );
         if !batch.or_rule_indices.is_empty() || batch.luc_lookback_records > 0 {
@@ -651,6 +656,31 @@ impl ServerActor {
                 skip_lookback_requests,
             );
         }
+
+        ///////////////////////////////////////////////////////////////////
+        // SYNC BATCH CONTENTS AND FILTER OUT INVALID ENTRIES
+        ///////////////////////////////////////////////////////////////////
+        let tmp_now = Instant::now();
+        tracing::info!("Syncing batch entries");
+
+        // Compute hash of the SNS message ids concatenated
+        let batch_hash = sha256_bytes(batch.sns_message_ids.join(""));
+        tracing::info!("Current batch hash: {}", hex::encode(&batch_hash[0..4]));
+
+        let valid_entries =
+            self.sync_batch_entries(&batch.valid_entries, self.max_batch_size, &batch_hash)?;
+        let valid_entry_idxs = valid_entries.iter().positions(|&x| x).collect::<Vec<_>>();
+        if valid_entry_idxs.len() != batch_size {
+            tracing::warn!(
+                "Batch size reduced from {} to {} due to invalid entries. Valid entries: {:?}",
+                batch_size,
+                valid_entry_idxs.len(),
+                valid_entry_idxs,
+            );
+        }
+        batch_size = valid_entry_idxs.len();
+        batch.retain(&valid_entry_idxs);
+        tracing::info!("Sync and filter done in {:?}", tmp_now.elapsed());
 
         ///////////////////////////////////////////////////////////////////
         // PERFORM DELETIONS (IF ANY)
@@ -694,34 +724,22 @@ impl ServerActor {
         }
 
         ///////////////////////////////////////////////////////////////////
-        // SYNC BATCH CONTENTS AND FILTER OUT INVALID ENTRIES
-        ///////////////////////////////////////////////////////////////////
-        let tmp_now = Instant::now();
-        tracing::info!("Syncing batch entries");
-
-        // Compute hash of the request ids concatenated
-        let batch_hash = sha256_bytes(batch.request_ids.join(""));
-        tracing::info!("Current batch hash: {}", hex::encode(&batch_hash[0..4]));
-
-        let valid_entries =
-            self.sync_batch_entries(&batch.valid_entries, self.max_batch_size, &batch_hash)?;
-        let valid_entry_idxs = valid_entries.iter().positions(|&x| x).collect::<Vec<_>>();
-        batch_size = valid_entry_idxs.len();
-        batch.retain(&valid_entry_idxs);
-        tracing::info!("Sync and filter done in {:?}", tmp_now.elapsed());
-
-        ///////////////////////////////////////////////////////////////////
         // COMPARE LEFT EYE QUERIES
         ///////////////////////////////////////////////////////////////////
         tracing::info!("Comparing left eye queries");
         // *Query* variant including Lagrange interpolation.
         let compact_query_left = CompactQuery {
-            code_query:        batch.query_left_preprocessed.code.clone(),
-            mask_query:        batch.query_left_preprocessed.mask.clone(),
-            code_query_insert: batch.db_left_preprocessed.code.clone(),
-            mask_query_insert: batch.db_left_preprocessed.mask.clone(),
+            code_query:        batch
+                .left_iris_interpolated_requests_preprocessed
+                .code
+                .clone(),
+            mask_query:        batch
+                .left_iris_interpolated_requests_preprocessed
+                .mask
+                .clone(),
+            code_query_insert: batch.left_iris_rotated_requests_preprocessed.code.clone(),
+            mask_query_insert: batch.left_iris_rotated_requests_preprocessed.mask.clone(),
         };
-        let query_store_left = batch.store_left;
 
         let (compact_device_queries_left, compact_device_sums_left) = record_stream_time!(
             &self.device_manager,
@@ -764,12 +782,17 @@ impl ServerActor {
         tracing::info!("Comparing right eye queries");
         // *Query* variant including Lagrange interpolation.
         let compact_query_right = CompactQuery {
-            code_query:        batch.query_right_preprocessed.code.clone(),
-            mask_query:        batch.query_right_preprocessed.mask.clone(),
-            code_query_insert: batch.db_right_preprocessed.code.clone(),
-            mask_query_insert: batch.db_right_preprocessed.mask.clone(),
+            code_query:        batch
+                .right_iris_interpolated_requests_preprocessed
+                .code
+                .clone(),
+            mask_query:        batch
+                .right_iris_interpolated_requests_preprocessed
+                .mask
+                .clone(),
+            code_query_insert: batch.right_iris_rotated_requests_preprocessed.code.clone(),
+            mask_query_insert: batch.right_iris_rotated_requests_preprocessed.mask.clone(),
         };
-        let query_store_right = batch.store_right;
 
         let (compact_device_queries_right, compact_device_sums_right) = record_stream_time!(
             &self.device_manager,
@@ -983,20 +1006,21 @@ impl ServerActor {
         // Format: merged_results[query_index]
         let mut merged_results =
             get_merged_results(&host_results, self.device_manager.device_count());
-
-        // List the indices of the uniqueness requests that did not match.
-        let uniqueness_insertion_list = merged_results
-            .iter()
-            .enumerate()
-            .filter(|&(idx, &num)| {
-                batch.request_types[idx] == UNIQUENESS_MESSAGE_TYPE
-                    && num == NON_MATCH_ID
-                    // Filter-out supermatchers on both sides (TODO: remove this in the future)
-                    && partial_match_counters_left[idx] <= SUPERMATCH_THRESHOLD
-                    && partial_match_counters_right[idx] <= SUPERMATCH_THRESHOLD
-            })
-            .map(|(idx, _num)| idx)
-            .collect::<Vec<_>>();
+        // List the indices of the uniqueness requests that did not match as well as the
+        // skipped requests that did not match We do not insert the skipped
+        // requests into the DB
+        let (uniqueness_insertion_list, skipped_unique_insertions): (Vec<_>, Vec<_>) =
+            merged_results
+                .iter()
+                .enumerate()
+                .filter(|&(idx, &num)| {
+                    batch.request_types[idx] == UNIQUENESS_MESSAGE_TYPE
+                        && num == NON_MATCH_ID
+                        && partial_match_counters_left[idx] <= SUPERMATCH_THRESHOLD
+                        && partial_match_counters_right[idx] <= SUPERMATCH_THRESHOLD
+                })
+                .map(|(idx, _num)| idx)
+                .partition(|&idx| !batch.skip_persistence[idx]);
 
         // Spread the insertions across devices.
         let uniqueness_insertion_list =
@@ -1009,6 +1033,16 @@ impl ServerActor {
             &self.current_db_sizes,
             batch_size,
         );
+
+        // create a seperate matches list that includes the matches for skip persistence
+        let mut matches_with_skip_persistence = matches.clone();
+        skipped_unique_insertions.iter().for_each(|&idx| {
+            matches_with_skip_persistence[idx] = false;
+            tracing::info!(
+                "Matches with skip insertion request ID {}",
+                batch.request_ids[idx],
+            );
+        });
 
         // Check for batch matches
         let matched_batch_request_ids = match_ids
@@ -1162,13 +1196,14 @@ impl ServerActor {
                 request_types: batch.request_types,
                 metadata: batch.metadata,
                 matches,
+                matches_with_skip_persistence,
                 match_ids: match_ids_filtered,
                 partial_match_ids_left,
                 partial_match_ids_right,
                 partial_match_counters_left,
                 partial_match_counters_right,
-                store_left: query_store_left,
-                store_right: query_store_right,
+                left_iris_requests: batch.left_iris_requests,
+                right_iris_requests: batch.right_iris_requests,
                 deleted_ids: batch.deletion_requests_indices,
                 matched_batch_request_ids,
                 anonymized_bucket_statistics_left: self.anonymized_bucket_statistics_left.clone(),
@@ -1177,6 +1212,7 @@ impl ServerActor {
                 reauth_target_indices: batch.reauth_target_indices,
                 reauth_or_rule_used: batch.reauth_use_or_rule,
                 modifications: batch.modifications,
+                actor_data: (),
             })
             .unwrap();
 

@@ -8,8 +8,9 @@ use crate::{
     },
     hawkers::aby3_store::{Aby3Store, SharedIrisesMut, SharedIrisesRef},
     hnsw::{
-        graph::neighborhood::SortedNeighborhoodV, searcher::ConnectPlanV, GraphMem, HnswSearcher,
-        VectorStore,
+        graph::{graph_store, neighborhood::SortedNeighborhoodV},
+        searcher::ConnectPlanV,
+        GraphMem, HnswSearcher, VectorStore,
     },
     network::grpc::{GrpcConfig, GrpcNetworking},
     proto_generated::party_node::party_node_server::PartyNodeServer,
@@ -20,7 +21,7 @@ use clap::Parser;
 use eyre::Result;
 use iris_mpc_common::{
     helpers::inmemory_store::InMemoryStore,
-    job::{BatchQuery, JobSubmissionHandle, ServerJobResult},
+    job::{BatchQuery, JobSubmissionHandle},
 };
 use itertools::{izip, Itertools};
 use rand::{thread_rng, Rng, SeedableRng};
@@ -33,12 +34,14 @@ use std::{
     vec,
 };
 use tokio::{
-    sync::{mpsc, oneshot, RwLock},
+    sync::{mpsc, oneshot, RwLock, RwLockWriteGuard},
     task::JoinSet,
 };
 use tonic::transport::Server;
+pub type GraphStore = graph_store::GraphPg<Aby3Store>;
+pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
 
-#[derive(Parser)]
+#[derive(Clone, Parser)]
 pub struct HawkArgs {
     #[clap(short, long)]
     pub party_index: usize,
@@ -48,11 +51,16 @@ pub struct HawkArgs {
 
     #[clap(short, long, default_value_t = 2)]
     pub request_parallelism: usize,
+
+    #[clap(long, default_value_t = false)]
+    pub disable_persistence: bool,
 }
 
 /// HawkActor manages the state of the HNSW database and connections to other
 /// MPC nodes.
 pub struct HawkActor {
+    args: HawkArgs,
+
     // ---- Shared setup ----
     search_params:    Arc<HnswSearcher>,
     role_assignments: Arc<HashMap<Role, Identity>>,
@@ -76,9 +84,12 @@ pub enum StoreId {
     Right,
 }
 
-type BothEyes<T> = [T; 2];
+pub const STORE_IDS: BothEyes<StoreId> = [StoreId::Left, StoreId::Right];
+
+pub type BothEyes<T> = [T; 2];
 
 type GraphRef = Arc<RwLock<GraphMem<Aby3Store>>>;
+pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3Store>>;
 
 /// HawkSession is a unit of parallelism when operating on the HawkActor.
 pub struct HawkSession {
@@ -94,7 +105,13 @@ pub type SearchResult = (
     <Aby3Store as VectorStore>::DistanceRef,
 );
 
+/// InsertPlan specifies where a query may be inserted into the HNSW graph.
+/// That is lists of neighbors for each layer.
 pub type InsertPlan = InsertPlanV<Aby3Store>;
+
+/// ConnectPlan specifies how to connect a new node to the HNSW graph.
+/// This includes the updates to the neighbors' own neighbor lists, including
+/// bilateral edges.
 pub type ConnectPlan = ConnectPlanV<Aby3Store>;
 
 #[derive(Debug)]
@@ -165,6 +182,7 @@ impl HawkActor {
         let graph_store = [(); 2].map(|_| Arc::new(RwLock::new(GraphMem::<Aby3Store>::new())));
 
         Ok(HawkActor {
+            args: args.clone(),
             search_params,
             db_size: 0,
             iris_store,
@@ -357,16 +375,22 @@ impl HawkActor {
         Ok(connect_plan)
     }
 
-    /// Borrow the in-memory iris store to modify it.
-    pub async fn as_iris_loader(&mut self) -> IrisLoader {
-        IrisLoader {
-            party_id: self.party_id,
-            db_size:  &mut self.db_size,
-            irises:   [
-                self.iris_store[0].write().await,
-                self.iris_store[1].write().await,
-            ],
-        }
+    /// Borrow the in-memory iris and graph stores to modify them.
+    pub async fn as_iris_loader(&mut self) -> (IrisLoader, GraphLoader) {
+        (
+            IrisLoader {
+                party_id: self.party_id,
+                db_size:  &mut self.db_size,
+                irises:   [
+                    self.iris_store[0].write().await,
+                    self.iris_store[1].write().await,
+                ],
+            },
+            GraphLoader([
+                self.graph_store[0].write().await,
+                self.graph_store[1].write().await,
+            ]),
+        )
     }
 }
 
@@ -422,6 +446,18 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
     }
 }
 
+pub struct GraphLoader<'a>(BothEyes<GraphMut<'a>>);
+
+impl<'a> GraphLoader<'a> {
+    pub async fn load_graph_store(self, graph_store: &GraphStore) -> Result<()> {
+        let mut graph_tx = graph_store.tx().await?;
+        for (side, mut graph) in izip!(STORE_IDS, self.0) {
+            *graph = graph_tx.with_graph(side).load_to_mem().await?;
+        }
+        Ok(())
+    }
+}
+
 struct HawkJob {
     request:        HawkRequest,
     return_channel: oneshot::Sender<Result<HawkResult>>,
@@ -439,8 +475,8 @@ impl From<&BatchQuery> for HawkRequest {
     fn from(batch: &BatchQuery) -> Self {
         Self {
             shares: [
-                GaloisRingSharedIris::from_batch(batch.query_left.clone()),
-                GaloisRingSharedIris::from_batch(batch.query_right.clone()),
+                GaloisRingSharedIris::from_batch(batch.left_iris_interpolated_requests.clone()),
+                GaloisRingSharedIris::from_batch(batch.right_iris_interpolated_requests.clone()),
             ],
         }
     }
@@ -477,13 +513,29 @@ impl HawkRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HawkResult {
-    connect_plans: BothEyes<Vec<ConnectPlan>>,
+    connect_plans: HawkMutation,
     is_insertion:  Vec<bool>,
 }
 
 impl HawkResult {
     fn matches(&self) -> Vec<bool> {
         self.is_insertion.iter().map(|&insert| !insert).collect()
+    }
+}
+
+pub type ServerJobResult = iris_mpc_common::job::ServerJobResult<HawkMutation>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HawkMutation(BothEyes<Vec<ConnectPlan>>);
+
+impl HawkMutation {
+    pub async fn persist(self, graph_tx: &mut GraphTx<'_>) -> Result<()> {
+        for (side, plans) in izip!(STORE_IDS, self.0) {
+            for plan in plans {
+                graph_tx.with_graph(side).insert_apply(plan).await;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -494,6 +546,8 @@ pub struct HawkHandle {
 }
 
 impl JobSubmissionHandle for HawkHandle {
+    type A = HawkMutation;
+
     async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
@@ -508,13 +562,14 @@ impl JobSubmissionHandle for HawkHandle {
                 request_types: batch.request_types,
                 metadata: batch.metadata,
                 matches: result.matches(),
-                match_ids: vec![],                    // TODO.
-                partial_match_ids_left: vec![],       // TODO.
-                partial_match_ids_right: vec![],      // TODO.
-                partial_match_counters_left: vec![],  // TODO.
-                partial_match_counters_right: vec![], // TODO.
-                store_left: batch.store_left,
-                store_right: batch.store_right,
+                matches_with_skip_persistence: result.matches(), // TODO
+                match_ids: vec![],                               // TODO.
+                partial_match_ids_left: vec![],                  // TODO.
+                partial_match_ids_right: vec![],                 // TODO.
+                partial_match_counters_left: vec![],             // TODO.
+                partial_match_counters_right: vec![],            // TODO.
+                left_iris_requests: batch.left_iris_requests,
+                right_iris_requests: batch.right_iris_requests,
                 deleted_ids: vec![],                                    // TODO.
                 matched_batch_request_ids: vec![],                      // TODO.
                 anonymized_bucket_statistics_left: Default::default(),  // TODO.
@@ -523,6 +578,7 @@ impl JobSubmissionHandle for HawkHandle {
                 reauth_target_indices: Default::default(),              // TODO.
                 reauth_or_rule_used: Default::default(),                // TODO.
                 modifications: batch.modifications,
+                actor_data: result.connect_plans,
             }
         }
     }
@@ -565,19 +621,19 @@ impl HawkHandle {
 
                 // Insert into the database.
                 let mut results = HawkResult {
-                    connect_plans: [vec![], vec![]],
+                    connect_plans: HawkMutation([vec![], vec![]]),
                     is_insertion,
                 };
 
-                // For both eyes.
-                for (sessions, insert_plans, connect_plans) in
-                    izip!(&sessions, both_insert_plans, &mut results.connect_plans)
-                {
-                    // Insert in memory, and return the plans to update the persistent database.
-                    *connect_plans = hawk_actor.insert(sessions, insert_plans).await.unwrap();
+                if !hawk_actor.args.disable_persistence {
+                    // For both eyes.
+                    for (sessions, insert_plans, connect_plans) in
+                        izip!(&sessions, both_insert_plans, &mut results.connect_plans.0)
+                    {
+                        // Insert in memory, and return the plans to update the persistent database.
+                        *connect_plans = hawk_actor.insert(sessions, insert_plans).await.unwrap();
+                    }
                 }
-
-                println!("🎉 Inserted items into the database");
 
                 let _ = job.return_channel.send(Ok(results));
             }
@@ -640,7 +696,6 @@ fn join_plans(mut plans: Vec<InsertPlan>) -> Vec<InsertPlan> {
             plan.set_ep = false;
         }
         plans[highest].set_ep = true;
-        plans.swap(0, highest);
     }
     plans
 }
@@ -724,8 +779,8 @@ mod tests {
         let all_plans = izip!(irises, handles.clone())
             .map(|(share, mut handle)| async move {
                 let batch = BatchQuery {
-                    query_left: GaloisRingSharedIris::to_batch(&share),
-                    query_right: GaloisRingSharedIris::to_batch(&share), // TODO: different eyes.
+                    left_iris_interpolated_requests: GaloisRingSharedIris::to_batch(&share),
+                    right_iris_interpolated_requests: GaloisRingSharedIris::to_batch(&share), // TODO: different eyes.
                     ..BatchQuery::default()
                 };
                 let res = handle.submit_batch_query(batch).await.await;
@@ -742,6 +797,90 @@ mod tests {
             "All parties must agree on the graph changes"
         );
 
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "db_dependent")]
+mod tests_db {
+    use super::*;
+    use crate::{
+        hawkers::aby3_store::VectorId,
+        hnsw::{
+            graph::graph_store::test_utils::TestGraphPg, searcher::ConnectPlanLayerV,
+            SortedNeighborhood,
+        },
+        shares::share::DistanceShare,
+    };
+    type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
+
+    #[tokio::test]
+    async fn test_graph_load() -> Result<()> {
+        // The test data is a sequence of mutations on the graph.
+        let vectors = (0..5).map(VectorId::from).collect_vec();
+        let distance = DistanceShare::new(Default::default(), Default::default());
+
+        let make_plans = |side| {
+            let side = side as usize; // Make some difference between sides.
+
+            vectors
+                .iter()
+                .enumerate()
+                .map(|(i, vector)| ConnectPlan {
+                    inserted_vector: *vector,
+                    layers:          vec![ConnectPlanLayer {
+                        neighbors: SortedNeighborhood::from_ascending_vec(vec![(
+                            vectors[side],
+                            distance.clone(),
+                        )]),
+                        n_links:   vec![SortedNeighborhood::from_ascending_vec(vec![(
+                            *vector,
+                            distance.clone(),
+                        )])],
+                    }],
+                    set_ep:          i == side,
+                })
+                .collect_vec()
+        };
+
+        // Populate the SQL store with test data.
+        let graph_store = TestGraphPg::<Aby3Store>::new().await.unwrap();
+        {
+            let mutation = HawkMutation(STORE_IDS.map(make_plans));
+            let mut graph_tx = graph_store.tx().await?;
+            mutation.persist(&mut graph_tx).await?;
+            graph_tx.tx.commit().await?;
+        }
+
+        // Start an actor and load the graph from SQL to memory.
+        let args = HawkArgs {
+            party_index:         0,
+            addresses:           vec!["0.0.0.0:1234".to_string()],
+            request_parallelism: 2,
+            disable_persistence: false,
+        };
+        let mut hawk_actor = HawkActor::from_cli(&args).await?;
+        let (_, graph_loader) = hawk_actor.as_iris_loader().await;
+        graph_loader.load_graph_store(&graph_store).await?;
+
+        // Check the loaded graph.
+        for (side, graph) in izip!(STORE_IDS, &hawk_actor.graph_store) {
+            let side = side as usize; // Find some difference between sides.
+
+            let ep = graph.read().await.get_entry_point().await;
+            let expected_ep = vectors[side];
+            assert_eq!(ep, Some((expected_ep, 0)), "Entry point is set");
+
+            let links = graph.read().await.get_links(&vectors[2], 0).await;
+            assert_eq!(
+                links.deref(),
+                &[(expected_ep, distance.clone())],
+                "vec_2 connects to the entry point"
+            );
+        }
+
+        graph_store.cleanup().await.unwrap();
         Ok(())
     }
 }

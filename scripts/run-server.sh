@@ -18,6 +18,8 @@ export SMPC__AWS__ENDPOINT="http://127.0.0.1:4566"
 export SMPC__REQUESTS_QUEUE_URL="http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/smpcv2-${NODE_ID}-dev.fifo"
 export SMPC__NODE_HOSTNAMES='["127.0.0.1","127.0.0.1","127.0.0.1"]'
 export SMPC__HAWK_SERVER_HEALTHCHECK_PORT="300${NODE_ID}"
+export SMPC__MODE_OF_COMPUTE="CPU"
+export SMPC__MODE_OF_DEPLOYMENT="STANDARD"
 export AWS_ENDPOINT_URL="http://127.0.0.1:4566"
 
 if [ "$INIT_SERVERS" = true ]; then
