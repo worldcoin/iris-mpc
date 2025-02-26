@@ -500,14 +500,22 @@ impl HawkRequest {
         &self,
         both_insert_plans: BothEyes<Vec<InsertPlan>>,
         is_insertion: &[bool],
-    ) -> BothEyes<Vec<InsertPlan>> {
+    ) -> (Vec<usize>, BothEyes<Vec<InsertPlan>>) {
         // TODO: Report the insertions versus rejections.
 
-        both_insert_plans.map(|plans| {
+        let filtered = both_insert_plans.map(|plans| {
             izip!(plans, is_insertion)
                 .filter_map(|(plan, &is_insertion)| is_insertion.then_some(plan))
                 .collect_vec()
-        })
+        });
+
+        let indices = is_insertion
+            .iter()
+            .enumerate()
+            .filter_map(|(index, &insert)| insert.then_some(index))
+            .collect();
+
+        (indices, filtered)
     }
 }
 
@@ -526,12 +534,12 @@ impl HawkResult {
 pub type ServerJobResult = iris_mpc_common::job::ServerJobResult<HawkMutation>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HawkMutation(BothEyes<Vec<ConnectPlan>>);
+pub struct HawkMutation(BothEyes<Vec<Option<ConnectPlan>>>);
 
 impl HawkMutation {
     pub async fn persist(self, graph_tx: &mut GraphTx<'_>) -> Result<()> {
         for (side, plans) in izip!(STORE_IDS, self.0) {
-            for plan in plans {
+            for plan in plans.into_iter().flatten() {
                 graph_tx.with_graph(side).insert_apply(plan).await;
             }
         }
@@ -616,13 +624,14 @@ impl HawkHandle {
                 }
 
                 let is_insertion = HawkRequest::is_insertion(&both_insert_plans);
-                let both_insert_plans = job
+                let (insert_indices, both_insert_plans) = job
                     .request
                     .filter_for_insertion(both_insert_plans, &is_insertion);
 
                 // Insert into the database.
+                let n_requests = is_insertion.len();
                 let mut results = HawkResult {
-                    connect_plans: HawkMutation([vec![], vec![]]),
+                    connect_plans: HawkMutation([vec![None; n_requests], vec![None; n_requests]]),
                     is_insertion,
                 };
 
@@ -632,7 +641,12 @@ impl HawkHandle {
                         izip!(&sessions, both_insert_plans, &mut results.connect_plans.0)
                     {
                         // Insert in memory, and return the plans to update the persistent database.
-                        *connect_plans = hawk_actor.insert(sessions, insert_plans).await.unwrap();
+                        let plans = hawk_actor.insert(sessions, insert_plans).await.unwrap();
+
+                        // Convert to Vec<Option> matching the request order.
+                        for (i, plan) in izip!(&insert_indices, plans) {
+                            connect_plans[*i] = Some(plan);
+                        }
                     }
                 }
 
@@ -826,8 +840,8 @@ mod tests {
         assert!(result.reauth_target_indices.is_empty());
         assert!(result.reauth_or_rule_used.is_empty());
         assert!(result.modifications.is_empty());
-        // assert_eq!(batch_size, result.actor_data.0[0].len()); // TODO.
-        // assert_eq!(batch_size, result.actor_data.0[1].len()); // TODO.
+        assert_eq!(batch_size, result.actor_data.0[0].len());
+        assert_eq!(batch_size, result.actor_data.0[1].len());
 
         Ok(())
     }
@@ -886,6 +900,7 @@ mod tests_db {
                     }],
                     set_ep:          i == side,
                 })
+                .map(Some)
                 .collect_vec()
         };
 
