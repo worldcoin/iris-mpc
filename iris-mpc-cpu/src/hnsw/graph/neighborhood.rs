@@ -3,7 +3,10 @@
 //!
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
-use crate::hnsw::VectorStore;
+use crate::hnsw::{
+    sorting::{batcher::partial_batcher_network, sorting_network::SortingNetwork},
+    VectorStore,
+};
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 
@@ -61,6 +64,25 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
         self.edges.insert(index_asc, (to, dist));
     }
 
+    /// Insert a collection of (Vector, Distance) pairs into the list,
+    /// maintaining the ascending order, using an efficient sorting network on
+    /// input values.
+    ///
+    /// TODO: give heuristic for when batched insertion is more efficient than
+    /// iterated single insertion
+    pub async fn insert_batch<V>(&mut self, store: &mut V, vals: &[(Vector, Distance)])
+    where
+        V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
+    {
+        let sorted_prefix_size = self.edges.len();
+        let unsorted_size = vals.len();
+
+        self.edges.extend_from_slice(vals);
+        let sorting_network = partial_batcher_network(sorted_prefix_size, unsorted_size);
+
+        self.apply_sorting_network(store, &sorting_network).await;
+    }
+
     pub fn get_nearest(&self) -> Option<&(Vector, Distance)> {
         self.edges.first()
     }
@@ -83,6 +105,29 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
 
     pub fn as_vec_ref(&self) -> &[(Vector, Distance)] {
         &self.edges
+    }
+
+    async fn apply_sorting_network<V>(&mut self, store: &mut V, network: &SortingNetwork)
+    where
+        V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
+    {
+        for layer in network.layers.iter() {
+            let distances: Vec<_> = layer
+                .iter()
+                .filter_map(|(idx1, idx2): &(usize, usize)| {
+                    match (self.edges.get(*idx1), self.edges.get(*idx2)) {
+                        (Some((_, d1)), Some((_, d2))) => Some((d1.clone(), d2.clone())),
+                        _ => None,
+                    }
+                })
+                .collect();
+            let comp_results = store.less_than_batch(&distances).await;
+            for ((idx1, idx2), is_lt) in layer.iter().zip(comp_results) {
+                if is_lt {
+                    self.edges.swap(*idx1, *idx2)
+                }
+            }
+        }
     }
 
     /// Find the insertion index for a target distance in the current

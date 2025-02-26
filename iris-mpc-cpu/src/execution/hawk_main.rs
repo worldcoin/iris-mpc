@@ -475,8 +475,8 @@ impl From<&BatchQuery> for HawkRequest {
     fn from(batch: &BatchQuery) -> Self {
         Self {
             shares: [
-                GaloisRingSharedIris::from_batch(batch.store_left.clone()),
-                GaloisRingSharedIris::from_batch(batch.store_right.clone()),
+                GaloisRingSharedIris::from_batch(batch.left_iris_requests.clone()),
+                GaloisRingSharedIris::from_batch(batch.right_iris_requests.clone()),
             ],
         }
     }
@@ -587,8 +587,8 @@ impl JobSubmissionHandle for HawkHandle {
                 partial_match_ids_right: vec![vec![0]; n_requests], // TODO.
                 partial_match_counters_left: vec![0; n_requests], // TODO.
                 partial_match_counters_right: vec![0; n_requests], // TODO.
-                store_left: batch.store_left,
-                store_right: batch.store_right,
+                left_iris_requests: batch.left_iris_requests,
+                right_iris_requests: batch.right_iris_requests,
                 deleted_ids: vec![],                                    // TODO.
                 matched_batch_request_ids: vec![vec![]; n_requests],    // TODO.
                 anonymized_bucket_statistics_left: Default::default(),  // TODO.
@@ -807,8 +807,8 @@ mod tests {
         let all_results = izip!(irises, handles.clone())
             .map(|(share, mut handle)| async move {
                 let batch = BatchQuery {
-                    store_left: GaloisRingSharedIris::to_batch(&share),
-                    store_right: GaloisRingSharedIris::to_batch(&share),
+                    left_iris_requests: GaloisRingSharedIris::to_batch(&share),
+                    right_iris_requests: GaloisRingSharedIris::to_batch(&share),
                     // TODO: different test irises for each eye.
                     // TODO: Rotations in db_left / db_right.
                     // TODO: Lagrange interpolation in query_left / query_right.
@@ -853,8 +853,8 @@ mod tests {
         assert_eq!(batch_size, result.partial_match_ids_right.len());
         assert_eq!(batch_size, result.partial_match_counters_left.len());
         assert_eq!(batch_size, result.partial_match_counters_right.len());
-        assert_eq!(batch_size, result.store_left.code.len());
-        assert_eq!(batch_size, result.store_right.code.len());
+        assert_eq!(batch_size, result.left_iris_requests.code.len());
+        assert_eq!(batch_size, result.right_iris_requests.code.len());
         assert!(result.deleted_ids.is_empty());
         assert_eq!(batch_size, result.matched_batch_request_ids.len());
         assert!(result.anonymized_bucket_statistics_left.buckets.is_empty());
@@ -872,8 +872,8 @@ mod tests {
     fn assert_all_equal(mut all_results: Vec<ServerJobResult>) -> ServerJobResult {
         // Ignore the actual secret shares because they are different for each party.
         for i in 1..all_results.len() {
-            all_results[i].store_left = all_results[0].store_left.clone();
-            all_results[i].store_right = all_results[0].store_right.clone();
+            all_results[i].left_iris_requests = all_results[0].left_iris_requests.clone();
+            all_results[i].right_iris_requests = all_results[0].right_iris_requests.clone();
         }
         assert!(
             all_results.iter().all_equal(),
