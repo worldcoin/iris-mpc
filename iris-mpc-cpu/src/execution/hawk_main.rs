@@ -568,8 +568,8 @@ impl JobSubmissionHandle for HawkHandle {
                 partial_match_ids_right: vec![],                 // TODO.
                 partial_match_counters_left: vec![],             // TODO.
                 partial_match_counters_right: vec![],            // TODO.
-                store_left: batch.store_left,
-                store_right: batch.store_right,
+                left_iris_requests: batch.left_iris_requests,
+                right_iris_requests: batch.right_iris_requests,
                 deleted_ids: vec![],                                    // TODO.
                 matched_batch_request_ids: vec![],                      // TODO.
                 anonymized_bucket_statistics_left: Default::default(),  // TODO.

@@ -19,18 +19,18 @@ pub fn criterion_benchmark_preprocessing(c: &mut Criterion) {
             let iris = IrisCode::random_rng(&mut thread_rng());
             let [shares, _, _] =
                 FullGaloisRingIrisCodeShare::encode_iris_code(&iris, &mut thread_rng());
-            let code_shares_store = shares.code;
-            let mask_shares_store = shares.mask;
-            let mut code_shares_query = code_shares_store.clone();
-            let mut mask_shares_query = mask_shares_store.clone();
+            let code_shares_request = shares.code;
+            let mask_shares_request = shares.mask;
+            let mut code_shares_query = code_shares_request.clone();
+            let mut mask_shares_query = mask_shares_request.clone();
             GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_shares_query);
             GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(
                 &mut mask_shares_query,
             );
             let code_shares_query = code_shares_query.all_rotations();
             let mask_shares_query = mask_shares_query.all_rotations();
-            let code_shares_db = code_shares_store.all_rotations();
-            let mask_shares_db = mask_shares_store.all_rotations();
+            let code_shares_db = code_shares_request.all_rotations();
+            let mask_shares_db = mask_shares_request.all_rotations();
             batch_query.request_ids.push(Uuid::new_v4().to_string());
             batch_query
                 .request_types
@@ -46,15 +46,39 @@ pub fn criterion_benchmark_preprocessing(c: &mut Criterion) {
                 .extend(mask_shares_query.clone());
             batch_query.query_right.mask.extend(mask_shares_query);
 
-            batch_query.store_left.code.push(code_shares_store.clone());
-            batch_query.store_right.code.push(code_shares_store);
-            batch_query.store_left.mask.push(mask_shares_store.clone());
-            batch_query.store_right.mask.push(mask_shares_store);
+            batch_query
+                .left_iris_requests
+                .code
+                .push(code_shares_request.clone());
+            batch_query
+                .right_iris_requests
+                .code
+                .push(code_shares_request);
+            batch_query
+                .left_iris_requests
+                .mask
+                .push(mask_shares_request.clone());
+            batch_query
+                .right_iris_requests
+                .mask
+                .push(mask_shares_request);
 
-            batch_query.db_left.code.extend(code_shares_db.clone());
-            batch_query.db_right.code.extend(code_shares_db);
-            batch_query.db_left.mask.extend(mask_shares_db.clone());
-            batch_query.db_right.mask.extend(mask_shares_db);
+            batch_query
+                .left_iris_rotated_requests
+                .code
+                .extend(code_shares_db.clone());
+            batch_query
+                .right_iris_rotated_requests
+                .code
+                .extend(code_shares_db);
+            batch_query
+                .left_iris_rotated_requests
+                .mask
+                .extend(mask_shares_db.clone());
+            batch_query
+                .right_iris_rotated_requests
+                .mask
+                .extend(mask_shares_db);
         }
 
         group.bench_function(format!("batch_size={}", batch_size), |b| {
