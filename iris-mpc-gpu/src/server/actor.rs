@@ -631,7 +631,8 @@ impl ServerActor {
                 && batch_size * ROTATIONS == batch.query_left_preprocessed.len()
                 && batch_size * ROTATIONS == batch.query_right_preprocessed.len()
                 && batch_size * ROTATIONS == batch.db_left_preprocessed.len()
-                && batch_size * ROTATIONS == batch.db_right_preprocessed.len(),
+                && batch_size * ROTATIONS == batch.db_right_preprocessed.len()
+                && batch_size == batch.skip_persistence.len(),
             "Query batch sizes mismatch"
         );
         if !batch.or_rule_indices.is_empty() || batch.luc_lookback_records > 0 {
@@ -993,20 +994,21 @@ impl ServerActor {
         // Format: merged_results[query_index]
         let mut merged_results =
             get_merged_results(&host_results, self.device_manager.device_count());
-
-        // List the indices of the uniqueness requests that did not match.
-        let uniqueness_insertion_list = merged_results
-            .iter()
-            .enumerate()
-            .filter(|&(idx, &num)| {
-                batch.request_types[idx] == UNIQUENESS_MESSAGE_TYPE
-                    && num == NON_MATCH_ID
-                    // Filter-out supermatchers on both sides (TODO: remove this in the future)
-                    && partial_match_counters_left[idx] <= SUPERMATCH_THRESHOLD
-                    && partial_match_counters_right[idx] <= SUPERMATCH_THRESHOLD
-            })
-            .map(|(idx, _num)| idx)
-            .collect::<Vec<_>>();
+        // List the indices of the uniqueness requests that did not match as well as the
+        // skipped requests that did not match We do not insert the skipped
+        // requests into the DB
+        let (uniqueness_insertion_list, skipped_unique_insertions): (Vec<_>, Vec<_>) =
+            merged_results
+                .iter()
+                .enumerate()
+                .filter(|&(idx, &num)| {
+                    batch.request_types[idx] == UNIQUENESS_MESSAGE_TYPE
+                        && num == NON_MATCH_ID
+                        && partial_match_counters_left[idx] <= SUPERMATCH_THRESHOLD
+                        && partial_match_counters_right[idx] <= SUPERMATCH_THRESHOLD
+                })
+                .map(|(idx, _num)| idx)
+                .partition(|&idx| !batch.skip_persistence[idx]);
 
         // Spread the insertions across devices.
         let uniqueness_insertion_list =
@@ -1019,6 +1021,16 @@ impl ServerActor {
             &self.current_db_sizes,
             batch_size,
         );
+
+        // create a seperate matches list that includes the matches for skip persistence
+        let mut matches_with_skip_persistence = matches.clone();
+        skipped_unique_insertions.iter().for_each(|&idx| {
+            matches_with_skip_persistence[idx] = false;
+            tracing::info!(
+                "Matches with skip insertion request ID {}",
+                batch.request_ids[idx],
+            );
+        });
 
         // Check for batch matches
         let matched_batch_request_ids = match_ids
@@ -1172,6 +1184,7 @@ impl ServerActor {
                 request_types: batch.request_types,
                 metadata: batch.metadata,
                 matches,
+                matches_with_skip_persistence,
                 match_ids: match_ids_filtered,
                 partial_match_ids_left,
                 partial_match_ids_right,

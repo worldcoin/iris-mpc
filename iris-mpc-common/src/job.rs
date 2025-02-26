@@ -53,6 +53,11 @@ pub struct BatchQuery {
     // Also is synced to ensure each node has the same valid entries
     pub valid_entries: Vec<bool>,
 
+    // Skip persistence for not maintaining persistence
+    // This is used to skip the persistence of the iris shares in the database
+    // if it is not a match. This is for testing the flow
+    pub skip_persistence: Vec<bool>,
+
     // Only reauth specific fields
     // Map from reauth request id to the index of the target entry to be matched
     // These can be ignored on the first iterations of HNSW
@@ -83,6 +88,10 @@ pub struct ServerJobResult<A = ()> {
     pub metadata: Vec<BatchMetadata>,
     // Boolean array to indicate if the query was unique or not
     pub matches: Vec<bool>,
+    // Boolean array to indicate if the query was unique which includes the matches that were not
+    // entered into the DB
+    pub matches_with_skip_persistence: Vec<bool>,
+
     // For each query, the serial ids to which the query matched to
     pub match_ids: Vec<Vec<u32>>,
     // For each query, the serial ids to which the query partially matched to
