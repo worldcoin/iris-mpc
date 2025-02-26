@@ -29,9 +29,11 @@ use tokio::{
 };
 use uuid::Uuid;
 
-const MAX_CONCURRENT_REQUESTS: usize = 16;
-const BATCH_SIZE: usize = 64;
-const N_BATCHES: usize = 5;
+const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 16;
+const DEFAULT_BATCH_SIZE: usize = 64;
+const DEFAULT_N_BATCHES: usize = 5;
+const DEFAULT_N_REPEAT: usize = 0;
+
 const WAIT_AFTER_BATCH: Duration = Duration::from_secs(2);
 const RNG_SEED_SERVER: u64 = 42;
 const DB_SIZE: usize = 8 * 1_000;
@@ -58,13 +60,22 @@ pub struct Opt {
     pub rng_seed: Option<u64>,
 
     #[arg(long, env)]
-    pub n_repeat: Option<usize>,
-
-    #[arg(long, env)]
     pub random: Option<bool>,
 
     #[arg(long, env)]
     pub endpoint_url: Option<String>,
+
+    #[arg(long, env, default_value_t = DEFAULT_N_REPEAT)]
+    pub n_repeat: usize,
+
+    #[arg(long, env, default_value_t = DEFAULT_N_BATCHES)]
+    pub n_batches: usize,
+
+    #[arg(long, env, default_value_t = DEFAULT_BATCH_SIZE )]
+    pub batch_size: usize,
+
+    #[arg(long, env, default_value_t = DEFAULT_MAX_CONCURRENT_REQUESTS)]
+    pub max_concurrent_requests: usize,
 }
 
 /// The core client functionality is moved into an async function so it can be
@@ -80,6 +91,9 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
         n_repeat,
         random,
         endpoint_url,
+        n_batches,
+        batch_size,
+        max_concurrent_requests,
     } = opts;
 
     // Download public keys for each participant.
@@ -95,7 +109,6 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
         shares_encryption_public_keys.push(public_key);
     }
 
-    let n_repeat = n_repeat.unwrap_or(0);
     let region = Region::new(region);
     let shared_config = aws_config::from_env()
         .region(region)
@@ -124,7 +137,7 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
     let db: Arc<Mutex<IrisDB>> = Arc::new(Mutex::new(db));
     let requests_sns_client: Arc<Client> = Arc::new(sns_client);
 
-    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
+    let semaphore = Arc::new(Semaphore::new(max_concurrent_requests));
 
     // let recv_thread = spawn(async move {
     //     let region_provider = Region::new(response_queue_region);
@@ -206,9 +219,9 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
     //     eyre::Ok(())
     // });
 
-    for batch_idx in 0..N_BATCHES {
+    for batch_idx in 0..n_batches {
         let mut handles = Vec::new();
-        for batch_query_idx in 0..BATCH_SIZE {
+        for batch_query_idx in 0..batch_size {
             let shares_encryption_public_keys2 = shares_encryption_public_keys.clone();
             let requests_sns_client2 = requests_sns_client.clone();
             let thread_db2 = db.clone();
