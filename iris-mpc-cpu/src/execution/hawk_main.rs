@@ -475,8 +475,8 @@ impl From<&BatchQuery> for HawkRequest {
     fn from(batch: &BatchQuery) -> Self {
         Self {
             shares: [
-                GaloisRingSharedIris::from_batch(batch.query_left.clone()),
-                GaloisRingSharedIris::from_batch(batch.query_right.clone()),
+                GaloisRingSharedIris::from_batch(batch.store_left.clone()),
+                GaloisRingSharedIris::from_batch(batch.store_right.clone()),
             ],
         }
     }
@@ -554,27 +554,28 @@ impl JobSubmissionHandle for HawkHandle {
     ) -> impl std::future::Future<Output = ServerJobResult> {
         let request = HawkRequest::from(&batch);
         let result = self.submit(request).await.unwrap();
+        let n_requests = result.is_insertion.len();
 
         async move {
             ServerJobResult {
-                merged_results: vec![], // TODO.
+                merged_results: vec![0; n_requests], // TODO.
                 request_ids: batch.request_ids,
                 request_types: batch.request_types,
                 metadata: batch.metadata,
                 matches: result.matches(),
                 matches_with_skip_persistence: result.matches(), // TODO
-                match_ids: vec![],                               // TODO.
-                partial_match_ids_left: vec![],                  // TODO.
-                partial_match_ids_right: vec![],                 // TODO.
-                partial_match_counters_left: vec![],             // TODO.
-                partial_match_counters_right: vec![],            // TODO.
+                match_ids: vec![vec![0]; n_requests],            // TODO.
+                partial_match_ids_left: vec![vec![0]; n_requests], // TODO.
+                partial_match_ids_right: vec![vec![0]; n_requests], // TODO.
+                partial_match_counters_left: vec![0; n_requests], // TODO.
+                partial_match_counters_right: vec![0; n_requests], // TODO.
                 store_left: batch.store_left,
                 store_right: batch.store_right,
                 deleted_ids: vec![],                                    // TODO.
-                matched_batch_request_ids: vec![],                      // TODO.
+                matched_batch_request_ids: vec![vec![]; n_requests],    // TODO.
                 anonymized_bucket_statistics_left: Default::default(),  // TODO.
                 anonymized_bucket_statistics_right: Default::default(), // TODO.
-                successful_reauths: vec![],                             // TODO.
+                successful_reauths: vec![false; n_requests],            // TODO.
                 reauth_target_indices: Default::default(),              // TODO.
                 reauth_or_rule_used: Default::default(),                // TODO.
                 modifications: batch.modifications,
@@ -722,7 +723,9 @@ mod tests {
         database_generators::generate_galois_iris_shares,
         execution::local::get_free_local_addresses,
     };
-    use iris_mpc_common::iris_db::db::IrisDB;
+    use iris_mpc_common::{
+        helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE, iris_db::db::IrisDB, job::BatchMetadata,
+    };
     use tokio::time::sleep;
 
     #[tokio::test]
@@ -776,11 +779,19 @@ mod tests {
             })
             .collect_vec();
 
-        let all_plans = izip!(irises, handles.clone())
+        let all_results = izip!(irises, handles.clone())
             .map(|(share, mut handle)| async move {
                 let batch = BatchQuery {
-                    query_left: GaloisRingSharedIris::to_batch(&share),
-                    query_right: GaloisRingSharedIris::to_batch(&share), // TODO: different eyes.
+                    store_left: GaloisRingSharedIris::to_batch(&share),
+                    store_right: GaloisRingSharedIris::to_batch(&share),
+                    // TODO: different test irises for each eye.
+                    // TODO: Rotations in db_left / db_right.
+                    // TODO: Lagrange interpolation in query_left / query_right.
+
+                    // Batch details to be just copied to the result.
+                    request_ids: vec!["X".to_string(); batch_size],
+                    request_types: vec![UNIQUENESS_MESSAGE_TYPE.to_string(); batch_size],
+                    metadata: vec![BatchMetadata::default(); batch_size],
                     ..BatchQuery::default()
                 };
                 let res = handle.submit_batch_query(batch).await.await;
@@ -792,12 +803,46 @@ mod tests {
             .into_iter()
             .collect::<Result<Vec<ServerJobResult>>>()?;
 
-        assert!(
-            all_plans.iter().all_equal(),
-            "All parties must agree on the graph changes"
-        );
+        let result = assert_all_equal(all_results);
+
+        assert_eq!(batch_size, result.merged_results.len());
+        assert_eq!(batch_size, result.request_ids.len());
+        assert_eq!(batch_size, result.request_types.len());
+        assert_eq!(batch_size, result.metadata.len());
+        assert_eq!(batch_size, result.matches.len());
+        assert_eq!(batch_size, result.matches_with_skip_persistence.len());
+        assert_eq!(batch_size, result.match_ids.len()); // TODO: Also check non-empty.
+        assert_eq!(batch_size, result.partial_match_ids_left.len());
+        assert_eq!(batch_size, result.partial_match_ids_right.len());
+        assert_eq!(batch_size, result.partial_match_counters_left.len());
+        assert_eq!(batch_size, result.partial_match_counters_right.len());
+        assert_eq!(batch_size, result.store_left.code.len());
+        assert_eq!(batch_size, result.store_right.code.len());
+        assert!(result.deleted_ids.is_empty());
+        assert_eq!(batch_size, result.matched_batch_request_ids.len());
+        assert!(result.anonymized_bucket_statistics_left.buckets.is_empty());
+        assert!(result.anonymized_bucket_statistics_right.buckets.is_empty());
+        assert_eq!(batch_size, result.successful_reauths.len());
+        assert!(result.reauth_target_indices.is_empty());
+        assert!(result.reauth_or_rule_used.is_empty());
+        assert!(result.modifications.is_empty());
+        // assert_eq!(batch_size, result.actor_data.0[0].len()); // TODO.
+        // assert_eq!(batch_size, result.actor_data.0[1].len()); // TODO.
 
         Ok(())
+    }
+
+    fn assert_all_equal(mut all_results: Vec<ServerJobResult>) -> ServerJobResult {
+        // Ignore the actual secret shares because they are different for each party.
+        for i in 1..all_results.len() {
+            all_results[i].store_left = all_results[0].store_left.clone();
+            all_results[i].store_right = all_results[0].store_right.clone();
+        }
+        assert!(
+            all_results.iter().all_equal(),
+            "All parties must agree on the results"
+        );
+        all_results[0].clone()
     }
 }
 
