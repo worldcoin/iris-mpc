@@ -606,8 +606,14 @@ async fn receive_batch(
             .left_iris_rotated_requests
             .mask
             .extend(db_mask_shares_left);
-        batch_query.query_left.code.extend(iris_shares_left);
-        batch_query.query_left.mask.extend(mask_shares_left);
+        batch_query
+            .left_iris_interpolated_requests
+            .code
+            .extend(iris_shares_left);
+        batch_query
+            .left_iris_interpolated_requests
+            .mask
+            .extend(mask_shares_left);
 
         batch_query
             .right_iris_requests
@@ -625,8 +631,14 @@ async fn receive_batch(
             .right_iris_rotated_requests
             .mask
             .extend(db_mask_shares_right);
-        batch_query.query_right.code.extend(iris_shares_right);
-        batch_query.query_right.mask.extend(mask_shares_right);
+        batch_query
+            .right_iris_interpolated_requests
+            .code
+            .extend(iris_shares_right);
+        batch_query
+            .right_iris_interpolated_requests
+            .mask
+            .extend(mask_shares_right);
     }
 
     tracing::info!(

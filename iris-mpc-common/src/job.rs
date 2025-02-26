@@ -40,8 +40,8 @@ pub struct BatchQuery {
     pub right_iris_rotated_requests: IrisQueryBatchEntries,
 
     // Iris queries from the request with Lagrange interpolations
-    pub query_right: IrisQueryBatchEntries,
-    pub query_left:  IrisQueryBatchEntries,
+    pub left_iris_interpolated_requests:  IrisQueryBatchEntries,
+    pub right_iris_interpolated_requests: IrisQueryBatchEntries,
 
     // array of indexes at which to use OR rule comparison
     pub or_rule_indices:      Vec<Vec<u32>>,

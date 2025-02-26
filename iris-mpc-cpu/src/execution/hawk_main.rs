@@ -475,8 +475,8 @@ impl From<&BatchQuery> for HawkRequest {
     fn from(batch: &BatchQuery) -> Self {
         Self {
             shares: [
-                GaloisRingSharedIris::from_batch(batch.query_left.clone()),
-                GaloisRingSharedIris::from_batch(batch.query_right.clone()),
+                GaloisRingSharedIris::from_batch(batch.left_iris_interpolated_requests.clone()),
+                GaloisRingSharedIris::from_batch(batch.right_iris_interpolated_requests.clone()),
             ],
         }
     }
@@ -779,8 +779,8 @@ mod tests {
         let all_plans = izip!(irises, handles.clone())
             .map(|(share, mut handle)| async move {
                 let batch = BatchQuery {
-                    query_left: GaloisRingSharedIris::to_batch(&share),
-                    query_right: GaloisRingSharedIris::to_batch(&share), // TODO: different eyes.
+                    left_iris_interpolated_requests: GaloisRingSharedIris::to_batch(&share),
+                    right_iris_interpolated_requests: GaloisRingSharedIris::to_batch(&share), // TODO: different eyes.
                     ..BatchQuery::default()
                 };
                 let res = handle.submit_batch_query(batch).await.await;
