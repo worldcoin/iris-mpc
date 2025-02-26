@@ -87,13 +87,13 @@ pub struct PreprocessedBatchQuery {
     pub request_types: Vec<String>,
     pub metadata:      Vec<BatchMetadata>,
 
-    pub left_iris_requests:          IrisQueryBatchEntries,
-    pub right_iris_requests:         IrisQueryBatchEntries,
-    pub left_iris_rotated_requests:  IrisQueryBatchEntries,
-    pub right_iris_rotated_requests: IrisQueryBatchEntries,
+    pub left_iris_requests:               IrisQueryBatchEntries,
+    pub right_iris_requests:              IrisQueryBatchEntries,
+    pub left_iris_rotated_requests:       IrisQueryBatchEntries,
+    pub right_iris_rotated_requests:      IrisQueryBatchEntries,
+    pub left_iris_interpolated_requests:  IrisQueryBatchEntries,
+    pub right_iris_interpolated_requests: IrisQueryBatchEntries,
 
-    pub query_left:           IrisQueryBatchEntries,
-    pub query_right:          IrisQueryBatchEntries,
     pub or_rule_indices:      Vec<Vec<u32>>,
     pub luc_lookback_records: usize,
     pub valid_entries:        Vec<bool>,
@@ -111,10 +111,10 @@ pub struct PreprocessedBatchQuery {
     // pub deletion_requests_metadata: Vec<BatchMetadata>,
 
     // additional fields which are GPU specific
-    pub query_left_preprocessed:  BatchQueryEntriesPreprocessed,
-    pub db_left_preprocessed:     BatchQueryEntriesPreprocessed,
-    pub query_right_preprocessed: BatchQueryEntriesPreprocessed,
-    pub db_right_preprocessed:    BatchQueryEntriesPreprocessed,
+    pub left_iris_interpolated_requests_preprocessed:  BatchQueryEntriesPreprocessed,
+    pub right_iris_interpolated_requests_preprocessed: BatchQueryEntriesPreprocessed,
+    pub left_iris_rotated_requests_preprocessed:       BatchQueryEntriesPreprocessed,
+    pub right_iris_rotated_requests_preprocessed:      BatchQueryEntriesPreprocessed,
 
     // Keeping track of updates & deletions for sync mechanism. Mapping: Serial id -> Modification
     pub modifications: HashMap<u32, Modification>,
@@ -125,57 +125,63 @@ pub struct PreprocessedBatchQuery {
 
 impl From<BatchQuery> for PreprocessedBatchQuery {
     fn from(value: BatchQuery) -> Self {
-        let mut query_left_preprocessed = None;
-        let mut query_right_preprocessed = None;
-        let mut db_left_preprocessed = None;
-        let mut db_right_preprocessed = None;
+        let mut left_iris_interpolated_requests_preprocessed = None;
+        let mut right_iris_interpolated_requests_preprocessed = None;
+        let mut left_iris_rotated_requests_preprocessed = None;
+        let mut right_iris_rotated_requests_preprocessed = None;
         rayon::scope(|s| {
             s.spawn(|_| {
-                query_left_preprocessed = Some(BatchQueryEntriesPreprocessed::from(
-                    value.query_left.clone(),
-                ));
+                left_iris_interpolated_requests_preprocessed =
+                    Some(BatchQueryEntriesPreprocessed::from(
+                        value.left_iris_interpolated_requests.clone(),
+                    ));
             });
             s.spawn(|_| {
-                query_right_preprocessed = Some(BatchQueryEntriesPreprocessed::from(
-                    value.query_right.clone(),
-                ));
+                right_iris_interpolated_requests_preprocessed =
+                    Some(BatchQueryEntriesPreprocessed::from(
+                        value.right_iris_interpolated_requests.clone(),
+                    ));
             });
             s.spawn(|_| {
-                db_left_preprocessed = Some(BatchQueryEntriesPreprocessed::from(
-                    value.left_iris_rotated_requests.clone(),
-                ));
+                left_iris_rotated_requests_preprocessed = Some(
+                    BatchQueryEntriesPreprocessed::from(value.left_iris_rotated_requests.clone()),
+                );
             });
             s.spawn(|_| {
-                db_right_preprocessed = Some(BatchQueryEntriesPreprocessed::from(
-                    value.right_iris_rotated_requests.clone(),
-                ));
+                right_iris_rotated_requests_preprocessed = Some(
+                    BatchQueryEntriesPreprocessed::from(value.right_iris_rotated_requests.clone()),
+                );
             });
         });
 
         Self {
-            request_ids:                 value.request_ids,
-            request_types:               value.request_types,
-            metadata:                    value.metadata,
-            left_iris_requests:          value.left_iris_requests,
-            right_iris_requests:         value.right_iris_requests,
-            left_iris_rotated_requests:  value.left_iris_rotated_requests,
+            request_ids: value.request_ids,
+            request_types: value.request_types,
+            metadata: value.metadata,
+            left_iris_requests: value.left_iris_requests,
+            right_iris_requests: value.right_iris_requests,
+            left_iris_rotated_requests: value.left_iris_rotated_requests,
             right_iris_rotated_requests: value.right_iris_rotated_requests,
-            query_left:                  value.query_left,
-            query_right:                 value.query_right,
-            or_rule_indices:             value.or_rule_indices,
-            luc_lookback_records:        value.luc_lookback_records,
-            valid_entries:               value.valid_entries,
-            reauth_target_indices:       value.reauth_target_indices,
-            reauth_use_or_rule:          value.reauth_use_or_rule,
-            deletion_requests_indices:   value.deletion_requests_indices,
+            left_iris_interpolated_requests: value.left_iris_interpolated_requests,
+            right_iris_interpolated_requests: value.right_iris_interpolated_requests,
+            or_rule_indices: value.or_rule_indices,
+            luc_lookback_records: value.luc_lookback_records,
+            valid_entries: value.valid_entries,
+            reauth_target_indices: value.reauth_target_indices,
+            reauth_use_or_rule: value.reauth_use_or_rule,
+            deletion_requests_indices: value.deletion_requests_indices,
             // deletion_requests_metadata: value.deletion_requests_metadata,
-            query_left_preprocessed:     query_left_preprocessed.unwrap(),
-            db_left_preprocessed:        db_left_preprocessed.unwrap(),
-            query_right_preprocessed:    query_right_preprocessed.unwrap(),
-            db_right_preprocessed:       db_right_preprocessed.unwrap(),
-            modifications:               value.modifications,
-            sns_message_ids:             value.sns_message_ids,
-            skip_persistence:            value.skip_persistence,
+            left_iris_interpolated_requests_preprocessed:
+                left_iris_interpolated_requests_preprocessed.unwrap(),
+            left_iris_rotated_requests_preprocessed: left_iris_rotated_requests_preprocessed
+                .unwrap(),
+            right_iris_interpolated_requests_preprocessed:
+                right_iris_interpolated_requests_preprocessed.unwrap(),
+            right_iris_rotated_requests_preprocessed: right_iris_rotated_requests_preprocessed
+                .unwrap(),
+            modifications: value.modifications,
+            sns_message_ids: value.sns_message_ids,
+            skip_persistence: value.skip_persistence,
         }
     }
 }
@@ -192,18 +198,30 @@ impl PreprocessedBatchQuery {
         filter_by_indices!(self.right_iris_requests.mask, indices_set);
         filter_by_indices!(self.or_rule_indices, indices_set);
         filter_by_indices!(self.skip_persistence, indices_set);
-        filter_by_indices_with_rotations!(self.query_left.code, indices_set);
-        filter_by_indices_with_rotations!(self.query_left.mask, indices_set);
+        filter_by_indices_with_rotations!(self.left_iris_interpolated_requests.code, indices_set);
+        filter_by_indices_with_rotations!(self.left_iris_interpolated_requests.mask, indices_set);
         filter_by_indices_with_rotations!(self.left_iris_rotated_requests.code, indices_set);
         filter_by_indices_with_rotations!(self.left_iris_rotated_requests.mask, indices_set);
-        filter_by_indices_with_rotations!(self.query_right.code, indices_set);
-        filter_by_indices_with_rotations!(self.query_right.mask, indices_set);
+        filter_by_indices_with_rotations!(self.right_iris_interpolated_requests.code, indices_set);
+        filter_by_indices_with_rotations!(self.right_iris_interpolated_requests.mask, indices_set);
         filter_by_indices_with_rotations!(self.right_iris_rotated_requests.code, indices_set);
         filter_by_indices_with_rotations!(self.right_iris_rotated_requests.mask, indices_set);
-        Self::filter_preprocessed_entry(&mut self.query_left_preprocessed, &indices_set);
-        Self::filter_preprocessed_entry(&mut self.db_left_preprocessed, &indices_set);
-        Self::filter_preprocessed_entry(&mut self.query_right_preprocessed, &indices_set);
-        Self::filter_preprocessed_entry(&mut self.db_right_preprocessed, &indices_set);
+        Self::filter_preprocessed_entry(
+            &mut self.left_iris_interpolated_requests_preprocessed,
+            &indices_set,
+        );
+        Self::filter_preprocessed_entry(
+            &mut self.left_iris_rotated_requests_preprocessed,
+            &indices_set,
+        );
+        Self::filter_preprocessed_entry(
+            &mut self.right_iris_interpolated_requests_preprocessed,
+            &indices_set,
+        );
+        Self::filter_preprocessed_entry(
+            &mut self.right_iris_rotated_requests_preprocessed,
+            &indices_set,
+        );
         filter_by_indices!(self.valid_entries, indices_set);
     }
 

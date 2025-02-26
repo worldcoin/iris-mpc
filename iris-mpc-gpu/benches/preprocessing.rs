@@ -36,15 +36,21 @@ pub fn criterion_benchmark_preprocessing(c: &mut Criterion) {
                 .request_types
                 .push(UNIQUENESS_MESSAGE_TYPE.to_owned());
             batch_query
-                .query_left
+                .left_iris_interpolated_requests
                 .code
                 .extend(code_shares_query.clone());
-            batch_query.query_right.code.extend(code_shares_query);
             batch_query
-                .query_left
+                .right_iris_interpolated_requests
+                .code
+                .extend(code_shares_query);
+            batch_query
+                .left_iris_interpolated_requests
                 .mask
                 .extend(mask_shares_query.clone());
-            batch_query.query_right.mask.extend(mask_shares_query);
+            batch_query
+                .right_iris_interpolated_requests
+                .mask
+                .extend(mask_shares_query);
 
             batch_query
                 .left_iris_requests

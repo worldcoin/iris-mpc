@@ -435,20 +435,20 @@ mod e2e_test {
             &mut e2e_shared_template.right_shared_mask[batch_idx],
         );
         batch
-            .query_left
+            .left_iris_interpolated_requests
             .code
             .extend(e2e_shared_template.left_shared_code[batch_idx].all_rotations());
         batch
-            .query_left
+            .left_iris_interpolated_requests
             .mask
             .extend(e2e_shared_template.left_shared_mask[batch_idx].all_rotations());
 
         batch
-            .query_right
+            .right_iris_interpolated_requests
             .code
             .extend(e2e_shared_template.right_shared_code[batch_idx].all_rotations());
         batch
-            .query_right
+            .right_iris_interpolated_requests
             .mask
             .extend(e2e_shared_template.right_shared_mask[batch_idx].all_rotations());
 

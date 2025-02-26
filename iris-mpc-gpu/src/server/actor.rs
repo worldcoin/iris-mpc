@@ -620,18 +620,20 @@ impl ServerActor {
                 && batch_size == batch.metadata.len()
                 && batch_size == batch.right_iris_requests.code.len()
                 && batch_size == batch.right_iris_requests.mask.len()
-                && batch_size * ROTATIONS == batch.query_left.code.len()
-                && batch_size * ROTATIONS == batch.query_left.mask.len()
-                && batch_size * ROTATIONS == batch.query_right.code.len()
-                && batch_size * ROTATIONS == batch.query_right.mask.len()
+                && batch_size * ROTATIONS == batch.left_iris_interpolated_requests.code.len()
+                && batch_size * ROTATIONS == batch.left_iris_interpolated_requests.mask.len()
+                && batch_size * ROTATIONS == batch.right_iris_interpolated_requests.code.len()
+                && batch_size * ROTATIONS == batch.right_iris_interpolated_requests.mask.len()
                 && batch_size * ROTATIONS == batch.left_iris_rotated_requests.code.len()
                 && batch_size * ROTATIONS == batch.left_iris_rotated_requests.mask.len()
                 && batch_size * ROTATIONS == batch.right_iris_rotated_requests.code.len()
                 && batch_size * ROTATIONS == batch.right_iris_rotated_requests.mask.len()
-                && batch_size * ROTATIONS == batch.query_left_preprocessed.len()
-                && batch_size * ROTATIONS == batch.query_right_preprocessed.len()
-                && batch_size * ROTATIONS == batch.db_left_preprocessed.len()
-                && batch_size * ROTATIONS == batch.db_right_preprocessed.len()
+                && batch_size * ROTATIONS
+                    == batch.left_iris_interpolated_requests_preprocessed.len()
+                && batch_size * ROTATIONS
+                    == batch.right_iris_interpolated_requests_preprocessed.len()
+                && batch_size * ROTATIONS == batch.left_iris_rotated_requests_preprocessed.len()
+                && batch_size * ROTATIONS == batch.right_iris_rotated_requests_preprocessed.len()
                 && batch_size == batch.skip_persistence.len(),
             "Query batch sizes mismatch"
         );
@@ -727,10 +729,16 @@ impl ServerActor {
         tracing::info!("Comparing left eye queries");
         // *Query* variant including Lagrange interpolation.
         let compact_query_left = CompactQuery {
-            code_query:        batch.query_left_preprocessed.code.clone(),
-            mask_query:        batch.query_left_preprocessed.mask.clone(),
-            code_query_insert: batch.db_left_preprocessed.code.clone(),
-            mask_query_insert: batch.db_left_preprocessed.mask.clone(),
+            code_query:        batch
+                .left_iris_interpolated_requests_preprocessed
+                .code
+                .clone(),
+            mask_query:        batch
+                .left_iris_interpolated_requests_preprocessed
+                .mask
+                .clone(),
+            code_query_insert: batch.left_iris_rotated_requests_preprocessed.code.clone(),
+            mask_query_insert: batch.left_iris_rotated_requests_preprocessed.mask.clone(),
         };
 
         let (compact_device_queries_left, compact_device_sums_left) = record_stream_time!(
@@ -774,10 +782,16 @@ impl ServerActor {
         tracing::info!("Comparing right eye queries");
         // *Query* variant including Lagrange interpolation.
         let compact_query_right = CompactQuery {
-            code_query:        batch.query_right_preprocessed.code.clone(),
-            mask_query:        batch.query_right_preprocessed.mask.clone(),
-            code_query_insert: batch.db_right_preprocessed.code.clone(),
-            mask_query_insert: batch.db_right_preprocessed.mask.clone(),
+            code_query:        batch
+                .right_iris_interpolated_requests_preprocessed
+                .code
+                .clone(),
+            mask_query:        batch
+                .right_iris_interpolated_requests_preprocessed
+                .mask
+                .clone(),
+            code_query_insert: batch.right_iris_rotated_requests_preprocessed.code.clone(),
+            mask_query_insert: batch.right_iris_rotated_requests_preprocessed.mask.clone(),
         };
 
         let (compact_device_queries_right, compact_device_sums_right) = record_stream_time!(
