@@ -11,4 +11,7 @@ fi
 /bin/key-manager --region "$AWS_REGION" --endpoint-url "$AWS_ENDPOINT_URL" --node-id "$NODE_ID" --env dev rotate --public-key-bucket-name wf-dev-public-keys
 /bin/key-manager --region "$AWS_REGION" --endpoint-url "$AWS_ENDPOINT_URL" --node-id "$NODE_ID" --env dev rotate --public-key-bucket-name wf-dev-public-keys
 
+# Set the stack size to 100MB to receive large messages.
+export RUST_MIN_STACK=104857600
+
 /bin/server-hawk
