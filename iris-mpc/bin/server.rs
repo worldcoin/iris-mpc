@@ -47,6 +47,7 @@ use iris_mpc_store::{
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use std::ops::Deref;
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
@@ -162,7 +163,7 @@ async fn receive_batch(
             for sqs_message in messages {
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
                     .map_err(|e| ReceiveRequestError::json_parse_error("SQS body", e))?;
-                let sns_message_id = message.message_id.clone();
+                let sns_message_id = message.message_id;
 
                 // messages arrive to SQS through SNS. So, all the attributes set in SNS are
                 // moved into the SQS body.
@@ -214,7 +215,6 @@ async fn receive_batch(
                         }
                         let modification = store
                             .insert_modification(
-                                &sns_message_id,
                                 identity_deletion_request.serial_id as i64,
                                 IDENTITY_DELETION_MESSAGE_TYPE,
                                 None,
@@ -388,7 +388,6 @@ async fn receive_batch(
                         }
                         let modification = store
                             .insert_modification(
-                                &sns_message_id,
                                 reauth_request.serial_id as i64,
                                 REAUTH_MESSAGE_TYPE,
                                 Some(reauth_request.s3_key.as_str()),
@@ -693,6 +692,79 @@ fn get_iris_shares_parse_task(
             ))
         });
     Ok(handle)
+}
+
+async fn send_last_modifications_to_sns(
+    store: &Store,
+    sns_client: &SNSClient,
+    config: &Config,
+    reauth_message_attributes: &HashMap<String, MessageAttributeValue>,
+    deletion_message_attributes: &HashMap<String, MessageAttributeValue>,
+    lookback: usize,
+) -> eyre::Result<()> {
+    // Fetch the last modifications from the database
+    let last_modifications = store.last_modifications(lookback).await?;
+
+    if last_modifications.is_empty() {
+        tracing::info!("No last modifications found to send to SNS");
+        return Ok(());
+    }
+
+    // Collect messages by type
+    let mut deletion_messages = Vec::new();
+    let mut reauth_messages = Vec::new();
+    for modification in &last_modifications {
+        let body = modification
+            .sns_message_body
+            .as_ref()
+            .expect("Missing SNS message body")
+            .clone();
+
+        match modification.request_type.as_str() {
+            IDENTITY_DELETION_MESSAGE_TYPE => {
+                deletion_messages.push(body);
+            }
+            REAUTH_MESSAGE_TYPE => {
+                reauth_messages.push(body);
+            }
+            other => {
+                tracing::error!("Unknown message type: {}", other);
+            }
+        }
+    }
+
+    tracing::info!(
+        "Sending {} last modifications to SNS. {} deletion, {} reauth",
+        last_modifications.len(),
+        deletion_messages.len(),
+        reauth_messages.len(),
+    );
+
+    if !deletion_messages.is_empty() {
+        send_results_to_sns(
+            deletion_messages,
+            &Vec::new(), // Not sure what these "empty" messages represent
+            sns_client,
+            config,
+            deletion_message_attributes,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+        )
+        .await?;
+    }
+
+    if !reauth_messages.is_empty() {
+        send_results_to_sns(
+            reauth_messages,
+            &Vec::new(),
+            sns_client,
+            config,
+            reauth_message_attributes,
+            REAUTH_MESSAGE_TYPE,
+        )
+        .await?;
+    }
+
+    Ok(())
 }
 
 #[tokio::main]
@@ -1173,13 +1245,23 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     // Handle modifications sync (reauth & deletions)
     if config.enable_modifications_sync {
-        let (to_update, to_delete) = sync_result.compare_modifications();
+        let (mut to_update, to_delete) = sync_result.compare_modifications();
         tracing::info!(
             "Modifications to update: {:?}, to delete: {:?}",
             to_update,
             to_delete
         );
-        let to_update: Vec<&Modification> = to_update.iter().collect();
+        // Update node_id in each modification because they are coming more another more advanced node
+        let to_update: Vec<&Modification> = to_update
+            .iter_mut()
+            .map(|modification| {
+                modification
+                    .update_sns_message_node_id(party_id)
+                    .expect("Failed to update node_id");
+                &*modification
+            })
+            .collect();
+
         let mut tx = store.tx().await?;
         store.update_modifications(&mut tx, &to_update).await?;
         store.delete_modifications(&mut tx, &to_delete).await?;
@@ -1226,6 +1308,17 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         }
         tx.commit().await?;
     }
+
+    // replay last 2 x `max_modification_lookback` modifications to SNS
+    send_last_modifications_to_sns(
+        &store,
+        &aws_clients.sns_client,
+        &config,
+        &reauth_result_attributes,
+        &identity_deletion_result_attributes,
+        max_modification_lookback,
+    )
+    .await?;
 
     if download_shutdown_handler.is_shutting_down() {
         tracing::warn!("Shutting down has been triggered");
@@ -1436,10 +1529,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     let or_rule_used = reauth_or_rule_used.get(&reauth_id).unwrap();
                     let serial_id = reauth_target_indices.get(&reauth_id).unwrap() + 1;
                     let success = successful_reauths[i];
-                    modifications
-                        .get_mut(&serial_id)
-                        .unwrap()
-                        .mark_completed(success);
                     let result_event = ReAuthResult::new(
                         reauth_id.clone(),
                         party_id,
@@ -1448,25 +1537,32 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>(),
                         *reauth_or_rule_used.get(&reauth_id).unwrap(),
                     );
-                    serde_json::to_string(&result_event)
+                    let result_string = serde_json::to_string(&result_event)
                         .wrap_err("failed to serialize reauth result")
+                        .expect("failed to serialize reauth result");
+                    modifications
+                        .get_mut(&serial_id)
+                        .unwrap()
+                        .mark_completed(success, &result_string);
+                    result_string
                 })
-                .collect::<eyre::Result<Vec<_>>>()?;
+                .collect::<Vec<String>>();
 
             // handling identity deletion results
             let identity_deletion_results = deleted_ids
                 .iter()
                 .map(|&idx| {
                     let serial_id = idx + 1;
+                    let result_event = IdentityDeletionResult::new(party_id, serial_id, true);
+                    let result_string = serde_json::to_string(&result_event)
+                        .expect("failed to serialize identity deletion result");
                     modifications
                         .get_mut(&serial_id)
                         .unwrap()
-                        .mark_completed(true);
-                    let result_event = IdentityDeletionResult::new(party_id, serial_id, true);
-                    serde_json::to_string(&result_event)
-                        .wrap_err("failed to serialize identity deletion result")
+                        .mark_completed(true, &result_string);
+                    result_string
                 })
-                .collect::<eyre::Result<Vec<_>>>()?;
+                .collect::<Vec<String>>();
 
             let mut tx = store_bg.tx().await?;
 

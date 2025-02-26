@@ -44,18 +44,50 @@ impl FromStr for ModificationStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Modification {
-    pub id: String,
+    pub id: i64,
     pub serial_id: i64,
     pub request_type: String,
     pub s3_url: Option<String>,
     pub status: String,
     pub persisted: bool,
+    pub sns_message_body: Option<String>,
 }
 
 impl Modification {
-    pub fn mark_completed(&mut self, persisted: bool) {
+    pub fn mark_completed(&mut self, persisted: bool, sns_message_body: &str) {
         self.status = ModificationStatus::Completed.to_string();
+        self.sns_message_body = Some(sns_message_body.to_string());
         self.persisted = persisted;
+    }
+
+    /// Updates the node_id field in the SNS message JSON to specified one
+    pub fn update_sns_message_node_id(&mut self, party_id: usize) -> eyre::Result<()> {
+        if let Some(message) = &self.sns_message_body {
+            // Parse the JSON message
+            match serde_json::from_str::<serde_json::Value>(message) {
+                Ok(mut json_value) => {
+                    // Update the node_id field if it exists
+                    if let Some(obj) = json_value.as_object_mut() {
+                        // Try to update node_id in the main object
+                        if obj.contains_key("node_id") {
+                            obj.insert(
+                                "node_id".to_string(),
+                                serde_json::Value::Number(serde_json::Number::from(party_id)),
+                            );
+                            self.sns_message_body = Some(serde_json::to_string(&json_value)?);
+                        } else {
+                            return Err(eyre::eyre!("Message body does not contain node_id"));
+                        }
+                    }
+                }
+                Err(_) => {
+                    return Err(eyre::eyre!("Invalid JSON message"));
+                }
+            }
+        } else {
+            return Err(eyre::eyre!("SNS message body is None"));
+        }
+        Ok(())
     }
 }
 
@@ -104,9 +136,9 @@ impl SyncResult {
     ///   (in-progress, never completed).
     pub fn compare_modifications(&self) -> (Vec<Modification>, Vec<Modification>) {
         // 1. Group all modifications by id => Vec<Modification> (from different nodes)
-        let mut grouped: HashMap<String, Vec<Modification>> = HashMap::new();
+        let mut grouped: HashMap<i64, Vec<Modification>> = HashMap::new();
         for m in self.all_states.iter().flat_map(|s| s.modifications.clone()) {
-            grouped.entry(m.id.clone()).or_default().push(m);
+            grouped.entry(m.id).or_default().push(m);
         }
 
         tracing::info!("Grouped modifications: {:?}", grouped);
@@ -116,11 +148,11 @@ impl SyncResult {
         let mut to_delete = Vec::new();
 
         // 2. Analyze each modification group
-        for (id, group_mods) in &grouped {
+        for (&id, group_mods) in &grouped {
             assert_modifications_consistency(group_mods);
 
             // Find local node's copy, if any
-            let local_copy = self.my_state.modifications.iter().find(|m| &m.id == id);
+            let local_copy = self.my_state.modifications.iter().find(|m| m.id == id);
 
             // Evaluate the global state across all nodes:
             let any_completed = group_mods
@@ -196,7 +228,10 @@ fn assert_modifications_consistency(modifications: &[Modification]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::helpers::smpc_request::{IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE};
+    use crate::helpers::{
+        smpc_request::{IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE},
+        smpc_response::{IdentityDeletionResult, ReAuthResult},
+    };
 
     #[test]
     fn test_compare_states_sync() {
@@ -246,7 +281,7 @@ mod tests {
 
     // Helper function to create a Modification.
     fn create_modification(
-        id: &str,
+        id: i64,
         serial_id: i64,
         request_type: &str,
         s3_url: Option<&str>,
@@ -254,12 +289,13 @@ mod tests {
         persisted: bool,
     ) -> Modification {
         Modification {
-            id: id.to_string(),
+            id,
             serial_id,
             request_type: request_type.to_string(),
             s3_url: s3_url.map(|s| s.to_string()),
             status: status.to_string(),
             persisted,
+            sns_message_body: None,
         }
     }
 
@@ -276,7 +312,7 @@ mod tests {
     #[test]
     fn test_compare_modifications_local_party_outdated() {
         let mod1_local = create_modification(
-            "1",
+            1,
             100,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -284,7 +320,7 @@ mod tests {
             true,
         );
         let mod2_local = create_modification(
-            "2",
+            2,
             200,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/200"),
@@ -292,7 +328,7 @@ mod tests {
             false,
         );
         let mod3_local = create_modification(
-            "3",
+            3,
             300,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -300,7 +336,7 @@ mod tests {
             false,
         );
         let mod4_local = create_modification(
-            "4",
+            4,
             400,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/400"),
@@ -315,7 +351,7 @@ mod tests {
         ]);
 
         let mod1_other = create_modification(
-            "1",
+            1,
             100,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -323,7 +359,7 @@ mod tests {
             true,
         );
         let mod2_other = create_modification(
-            "2",
+            2,
             200,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/200"),
@@ -331,7 +367,7 @@ mod tests {
             false,
         );
         let mod3_other = create_modification(
-            "3",
+            3,
             300,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -339,7 +375,7 @@ mod tests {
             true,
         );
         let mod4_other = create_modification(
-            "4",
+            4,
             400,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/400"),
@@ -371,10 +407,10 @@ mod tests {
         assert_eq!(to_update.len(), 2, "Expected two modifications to update");
         assert_eq!(to_delete.len(), 0, "Expected zero modification to delete");
 
-        let update_mod3 = to_update.iter().find(|m| m.id == "3").unwrap();
+        let update_mod3 = to_update.iter().find(|m| m.id == 3).unwrap();
         assert_eq!(update_mod3.clone(), mod3_other);
 
-        let update_mod4 = to_update.iter().find(|m| m.id == "4").unwrap();
+        let update_mod4 = to_update.iter().find(|m| m.id == 4).unwrap();
         assert_eq!(update_mod4.clone(), mod4_other);
     }
 
@@ -382,7 +418,7 @@ mod tests {
     fn test_compare_modifications_local_party_up_to_date() {
         // Create local modifications that are already up-to-date.
         let mod1_local = create_modification(
-            "1",
+            1,
             100,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -390,7 +426,7 @@ mod tests {
             true,
         );
         let mod2_local = create_modification(
-            "2",
+            2,
             200,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/200"),
@@ -398,7 +434,7 @@ mod tests {
             false,
         );
         let mod3_local = create_modification(
-            "3",
+            3,
             300,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -406,7 +442,7 @@ mod tests {
             true,
         );
         let mod4_local = create_modification(
-            "4",
+            4,
             400,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/400"),
@@ -422,7 +458,7 @@ mod tests {
 
         // Create other states with in-progress modifications.
         let mod1_other = create_modification(
-            "1",
+            1,
             100,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -430,7 +466,7 @@ mod tests {
             true,
         );
         let mod2_other = create_modification(
-            "2",
+            2,
             200,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/200"),
@@ -438,7 +474,7 @@ mod tests {
             false,
         );
         let mod3_other = create_modification(
-            "3",
+            3,
             300,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -446,7 +482,7 @@ mod tests {
             false,
         );
         let mod4_other = create_modification(
-            "4",
+            4,
             400,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/400"),
@@ -474,7 +510,7 @@ mod tests {
     fn test_compare_modifications_remove_in_progress() {
         // Create local modifications with some in-progress.
         let mod1_local = create_modification(
-            "1",
+            1,
             100,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -482,7 +518,7 @@ mod tests {
             true,
         );
         let mod2_local = create_modification(
-            "2",
+            2,
             200,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/200"),
@@ -490,7 +526,7 @@ mod tests {
             false,
         );
         let mod3_local = create_modification(
-            "3",
+            3,
             300,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -498,7 +534,7 @@ mod tests {
             false,
         );
         let mod4_local = create_modification(
-            "4",
+            4,
             400,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/400"),
@@ -526,10 +562,10 @@ mod tests {
         assert!(to_update.is_empty(), "Expected no modifications to update");
         assert_eq!(to_delete.len(), 2, "Expected no modifications to delete");
 
-        let delete_mod3 = to_delete.iter().find(|m| m.id == "3").unwrap();
+        let delete_mod3 = to_delete.iter().find(|m| m.id == 3).unwrap();
         assert_eq!(delete_mod3.clone(), mod3_local);
 
-        let delete_mod4 = to_delete.iter().find(|m| m.id == "4").unwrap();
+        let delete_mod4 = to_delete.iter().find(|m| m.id == 4).unwrap();
         assert_eq!(delete_mod4.clone(), mod4_local);
     }
 
@@ -575,6 +611,98 @@ mod tests {
 
         let sync_result_none = SyncResult::new(state_with_none_sequence_num, all_states);
         assert_eq!(sync_result_none.max_sns_sequence_num(), None);
+    }
+
+    #[test]
+    fn test_update_sns_message_node_id() {
+        // Test 1: ReauthResult
+        let original_reauth_result = ReAuthResult {
+            reauth_id: "test-reauth-123".to_string(),
+            node_id: 1,
+            serial_id: 123,
+            success: true,
+            and_rule_matched_serial_ids: vec![123],
+            or_rule_used: false,
+            error: None,
+            error_reason: None,
+        };
+
+        // Serialize the original result
+        let serialized_reauth = serde_json::to_string(&original_reauth_result).unwrap();
+
+        // Create a modification with the serialized result
+        let mut modification = Modification {
+            id: 1,
+            serial_id: 123,
+            request_type: REAUTH_MESSAGE_TYPE.to_string(),
+            s3_url: "http://example.com/123".to_string().into(),
+            status: ModificationStatus::Completed.to_string(),
+            persisted: true,
+            sns_message_body: Some(serialized_reauth),
+        };
+
+        // Update the node_id in the serialized message
+        let new_party_id = 2;
+        modification
+            .update_sns_message_node_id(new_party_id)
+            .unwrap();
+
+        // Deserialize and check if node_id was updated
+        let updated_reauth_result: ReAuthResult =
+            serde_json::from_str(&modification.sns_message_body.unwrap()).unwrap();
+        assert_eq!(updated_reauth_result.node_id, new_party_id);
+        assert_eq!(
+            updated_reauth_result.reauth_id,
+            original_reauth_result.reauth_id
+        );
+        assert_eq!(
+            updated_reauth_result.serial_id,
+            original_reauth_result.serial_id
+        );
+        assert_eq!(
+            updated_reauth_result.success,
+            original_reauth_result.success
+        );
+
+        // Test 2: IdentityDeletionResult
+        let original_deletion_result = IdentityDeletionResult {
+            node_id: 2,
+            serial_id: 456,
+            success: true,
+        };
+
+        // Serialize the original result
+        let serialized_deletion = serde_json::to_string(&original_deletion_result).unwrap();
+
+        // Create a modification with the serialized result
+        let mut modification = Modification {
+            id: 2,
+            serial_id: 456,
+            request_type: IDENTITY_DELETION_MESSAGE_TYPE.to_string(),
+            s3_url: None,
+            status: ModificationStatus::Completed.to_string(),
+            persisted: true,
+            sns_message_body: Some(serialized_deletion),
+        };
+
+        // Update the node_id in the serialized message
+        let new_party_id = 0;
+        modification
+            .update_sns_message_node_id(new_party_id)
+            .unwrap();
+
+        // Deserialize and check if node_id was updated
+        let updated_deletion_result: IdentityDeletionResult =
+            serde_json::from_str(&modification.sns_message_body.unwrap()).unwrap();
+        assert_eq!(updated_deletion_result.node_id, new_party_id);
+        assert_eq!(
+            updated_deletion_result.serial_id,
+            original_deletion_result.serial_id
+        );
+        assert_eq!(
+            updated_deletion_result.success,
+            original_deletion_result.success
+        );
     }
 
     fn some_state() -> SyncState {
