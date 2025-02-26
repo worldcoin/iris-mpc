@@ -562,11 +562,12 @@ impl JobSubmissionHandle for HawkHandle {
                 request_types: batch.request_types,
                 metadata: batch.metadata,
                 matches: result.matches(),
-                match_ids: vec![],                    // TODO.
-                partial_match_ids_left: vec![],       // TODO.
-                partial_match_ids_right: vec![],      // TODO.
-                partial_match_counters_left: vec![],  // TODO.
-                partial_match_counters_right: vec![], // TODO.
+                matches_with_skip_persistence: result.matches(), // TODO
+                match_ids: vec![],                               // TODO.
+                partial_match_ids_left: vec![],                  // TODO.
+                partial_match_ids_right: vec![],                 // TODO.
+                partial_match_counters_left: vec![],             // TODO.
+                partial_match_counters_right: vec![],            // TODO.
                 store_left: batch.store_left,
                 store_right: batch.store_right,
                 deleted_ids: vec![],                                    // TODO.

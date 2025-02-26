@@ -1387,6 +1387,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             request_types,
             metadata,
             matches,
+            matches_with_skip_persistence,
             match_ids,
             partial_match_ids_left,
             partial_match_ids_right,
@@ -1419,7 +1420,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             true => None,
                             false => Some(idx_result + 1),
                         },
-                        matches[i],
+                        matches_with_skip_persistence[i],
                         request_ids[i].clone(),
                         match matches[i] {
                             true => Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
