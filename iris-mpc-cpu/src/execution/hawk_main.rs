@@ -529,6 +529,16 @@ impl HawkResult {
     fn matches(&self) -> Vec<bool> {
         self.is_insertion.iter().map(|&insert| !insert).collect()
     }
+
+    fn merged_results(&self) -> Vec<u32> {
+        self.connect_plans.0[0]
+            .iter()
+            .map(|plan| {
+                plan.as_ref()
+                    .map_or(0, |plan| plan.inserted_vector.to_serial_id())
+            })
+            .collect()
+    }
 }
 
 pub type ServerJobResult = iris_mpc_common::job::ServerJobResult<HawkMutation>;
@@ -566,7 +576,7 @@ impl JobSubmissionHandle for HawkHandle {
 
         async move {
             ServerJobResult {
-                merged_results: vec![0; n_requests], // TODO.
+                merged_results: result.merged_results(),
                 request_ids: batch.request_ids,
                 request_types: batch.request_types,
                 metadata: batch.metadata,
@@ -740,6 +750,7 @@ mod tests {
     use iris_mpc_common::{
         helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE, iris_db::db::IrisDB, job::BatchMetadata,
     };
+    use std::ops::Not;
     use tokio::time::sleep;
 
     #[tokio::test]
@@ -805,7 +816,14 @@ mod tests {
                     // Batch details to be just copied to the result.
                     request_ids: vec!["X".to_string(); batch_size],
                     request_types: vec![UNIQUENESS_MESSAGE_TYPE.to_string(); batch_size],
-                    metadata: vec![BatchMetadata::default(); batch_size],
+                    metadata: vec![
+                        BatchMetadata {
+                            node_id:  "X".to_string(),
+                            trace_id: "X".to_string(),
+                            span_id:  "X".to_string(),
+                        };
+                        batch_size
+                    ],
                     ..BatchQuery::default()
                 };
                 let res = handle.submit_batch_query(batch).await.await;
@@ -820,12 +838,17 @@ mod tests {
         let result = assert_all_equal(all_results);
 
         assert_eq!(batch_size, result.merged_results.len());
+        assert_eq!(result.merged_results, (0..batch_size as u32).collect_vec());
         assert_eq!(batch_size, result.request_ids.len());
         assert_eq!(batch_size, result.request_types.len());
         assert_eq!(batch_size, result.metadata.len());
         assert_eq!(batch_size, result.matches.len());
         assert_eq!(batch_size, result.matches_with_skip_persistence.len());
-        assert_eq!(batch_size, result.match_ids.len()); // TODO: Also check non-empty.
+        assert_eq!(batch_size, result.match_ids.len());
+        assert!(no_empty(&without_matches(
+            &result.matches,
+            &result.match_ids
+        )));
         assert_eq!(batch_size, result.partial_match_ids_left.len());
         assert_eq!(batch_size, result.partial_match_ids_right.len());
         assert_eq!(batch_size, result.partial_match_counters_left.len());
@@ -857,6 +880,16 @@ mod tests {
             "All parties must agree on the results"
         );
         all_results[0].clone()
+    }
+
+    fn without_matches<T: Clone>(matches: &[bool], things: &[T]) -> Vec<T> {
+        izip!(matches, things)
+            .filter_map(|(&match_, item)| match_.not().then_some(item.clone()))
+            .collect_vec()
+    }
+
+    fn no_empty<T>(items: &[Vec<T>]) -> bool {
+        items.iter().all(|item| !item.is_empty())
     }
 }
 

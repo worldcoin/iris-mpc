@@ -77,6 +77,12 @@ impl From<usize> for VectorId {
     }
 }
 
+impl VectorId {
+    pub fn to_serial_id(&self) -> u32 {
+        self.id.0
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Hash, Eq, PartialEq, Debug)]
 pub struct Query {
     pub query:           GaloisRingSharedIris,

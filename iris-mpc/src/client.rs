@@ -2,13 +2,17 @@
 
 use aws_config::retry::RetryConfig;
 use aws_sdk_s3::Client as S3Client;
-use aws_sdk_sns::{config::Region, Client};
+use aws_sdk_sns::{config::Region, types::MessageAttributeValue, Client};
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use eyre::{Context, ContextCompat};
 use iris_mpc_common::{
     galois_engine::degree4::GaloisRingIrisCodeShare,
     helpers::{
+        aws::{
+            NODE_ID_MESSAGE_ATTRIBUTE_NAME, SPAN_ID_MESSAGE_ATTRIBUTE_NAME,
+            TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
+        },
         key_pair::download_public_key,
         sha256::sha256_as_hex_string,
         smpc_request::{
@@ -373,7 +377,28 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
                     skip_persistence:   None,
                 };
 
-                let message_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
+                let message_attributes = {
+                    let mut attrs = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
+                    attrs.extend(
+                        [
+                            TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
+                            SPAN_ID_MESSAGE_ATTRIBUTE_NAME,
+                            NODE_ID_MESSAGE_ATTRIBUTE_NAME,
+                        ]
+                        .iter()
+                        .map(|key| {
+                            (
+                                key.to_string(),
+                                MessageAttributeValue::builder()
+                                    .data_type("String")
+                                    .string_value("TEST")
+                                    .build()
+                                    .unwrap(),
+                            )
+                        }),
+                    );
+                    attrs
+                };
 
                 requests_sns_client2
                     .publish()
