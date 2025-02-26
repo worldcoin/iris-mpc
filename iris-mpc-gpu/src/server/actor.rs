@@ -611,23 +611,23 @@ impl ServerActor {
         );
 
         let mut batch = batch;
-        let mut batch_size = batch.store_left.code.len();
+        let mut batch_size = batch.left_iris_requests.code.len();
         assert!(batch_size > 0 && batch_size <= self.max_batch_size);
         assert!(
-            batch_size == batch.store_left.mask.len()
+            batch_size == batch.left_iris_requests.mask.len()
                 && batch_size == batch.request_ids.len()
                 && batch_size == batch.request_types.len()
                 && batch_size == batch.metadata.len()
-                && batch_size == batch.store_right.code.len()
-                && batch_size == batch.store_right.mask.len()
+                && batch_size == batch.right_iris_requests.code.len()
+                && batch_size == batch.right_iris_requests.mask.len()
                 && batch_size * ROTATIONS == batch.query_left.code.len()
                 && batch_size * ROTATIONS == batch.query_left.mask.len()
                 && batch_size * ROTATIONS == batch.query_right.code.len()
                 && batch_size * ROTATIONS == batch.query_right.mask.len()
-                && batch_size * ROTATIONS == batch.db_left.code.len()
-                && batch_size * ROTATIONS == batch.db_left.mask.len()
-                && batch_size * ROTATIONS == batch.db_right.code.len()
-                && batch_size * ROTATIONS == batch.db_right.mask.len()
+                && batch_size * ROTATIONS == batch.left_iris_rotated_requests.code.len()
+                && batch_size * ROTATIONS == batch.left_iris_rotated_requests.mask.len()
+                && batch_size * ROTATIONS == batch.right_iris_rotated_requests.code.len()
+                && batch_size * ROTATIONS == batch.right_iris_rotated_requests.mask.len()
                 && batch_size * ROTATIONS == batch.query_left_preprocessed.len()
                 && batch_size * ROTATIONS == batch.query_right_preprocessed.len()
                 && batch_size * ROTATIONS == batch.db_left_preprocessed.len()
@@ -732,7 +732,6 @@ impl ServerActor {
             code_query_insert: batch.db_left_preprocessed.code.clone(),
             mask_query_insert: batch.db_left_preprocessed.mask.clone(),
         };
-        let query_store_left = batch.store_left;
 
         let (compact_device_queries_left, compact_device_sums_left) = record_stream_time!(
             &self.device_manager,
@@ -780,7 +779,6 @@ impl ServerActor {
             code_query_insert: batch.db_right_preprocessed.code.clone(),
             mask_query_insert: batch.db_right_preprocessed.mask.clone(),
         };
-        let query_store_right = batch.store_right;
 
         let (compact_device_queries_right, compact_device_sums_right) = record_stream_time!(
             &self.device_manager,
@@ -1190,8 +1188,8 @@ impl ServerActor {
                 partial_match_ids_right,
                 partial_match_counters_left,
                 partial_match_counters_right,
-                store_left: query_store_left,
-                store_right: query_store_right,
+                left_iris_requests: batch.left_iris_requests,
+                right_iris_requests: batch.right_iris_requests,
                 deleted_ids: batch.deletion_requests_indices,
                 matched_batch_request_ids,
                 anonymized_bucket_statistics_left: self.anonymized_bucket_statistics_left.clone(),

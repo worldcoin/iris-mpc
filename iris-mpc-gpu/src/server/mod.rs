@@ -4,7 +4,7 @@ use crate::dot::{share_db::preprocess_query, IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 pub use actor::{generate_luc_records, prepare_or_policy_bitmap, ServerActor, ServerActorHandle};
 use iris_mpc_common::{
     helpers::sync::Modification,
-    job::{BatchMetadata, BatchQuery, BatchQueryEntries},
+    job::{BatchMetadata, BatchQuery, IrisQueryBatchEntries},
 };
 use std::collections::{HashMap, HashSet};
 
@@ -14,8 +14,8 @@ pub struct BatchQueryEntriesPreprocessed {
     pub mask: Vec<Vec<u8>>,
 }
 
-impl From<BatchQueryEntries> for BatchQueryEntriesPreprocessed {
-    fn from(value: BatchQueryEntries) -> Self {
+impl From<IrisQueryBatchEntries> for BatchQueryEntriesPreprocessed {
+    fn from(value: IrisQueryBatchEntries) -> Self {
         let code_coefs = &value.code.iter().flat_map(|e| e.coefs).collect::<Vec<_>>();
         let mask_coefs = &value.mask.iter().flat_map(|e| e.coefs).collect::<Vec<_>>();
 
@@ -83,15 +83,17 @@ macro_rules! filter_by_indices_with_rotations_and_code_length {
 
 pub struct PreprocessedBatchQuery {
     // Enrollment and reauth specific fields
-    pub request_ids:          Vec<String>,
-    pub request_types:        Vec<String>,
-    pub metadata:             Vec<BatchMetadata>,
-    pub query_left:           BatchQueryEntries,
-    pub db_left:              BatchQueryEntries,
-    pub store_left:           BatchQueryEntries,
-    pub query_right:          BatchQueryEntries,
-    pub db_right:             BatchQueryEntries,
-    pub store_right:          BatchQueryEntries,
+    pub request_ids:   Vec<String>,
+    pub request_types: Vec<String>,
+    pub metadata:      Vec<BatchMetadata>,
+
+    pub left_iris_requests:          IrisQueryBatchEntries,
+    pub right_iris_requests:         IrisQueryBatchEntries,
+    pub left_iris_rotated_requests:  IrisQueryBatchEntries,
+    pub right_iris_rotated_requests: IrisQueryBatchEntries,
+
+    pub query_left:           IrisQueryBatchEntries,
+    pub query_right:          IrisQueryBatchEntries,
     pub or_rule_indices:      Vec<Vec<u32>>,
     pub luc_lookback_records: usize,
     pub valid_entries:        Vec<bool>,
@@ -139,39 +141,41 @@ impl From<BatchQuery> for PreprocessedBatchQuery {
                 ));
             });
             s.spawn(|_| {
-                db_left_preprocessed =
-                    Some(BatchQueryEntriesPreprocessed::from(value.db_left.clone()));
+                db_left_preprocessed = Some(BatchQueryEntriesPreprocessed::from(
+                    value.left_iris_rotated_requests.clone(),
+                ));
             });
             s.spawn(|_| {
-                db_right_preprocessed =
-                    Some(BatchQueryEntriesPreprocessed::from(value.db_right.clone()));
+                db_right_preprocessed = Some(BatchQueryEntriesPreprocessed::from(
+                    value.right_iris_rotated_requests.clone(),
+                ));
             });
         });
 
         Self {
-            request_ids:               value.request_ids,
-            request_types:             value.request_types,
-            metadata:                  value.metadata,
-            query_left:                value.query_left,
-            db_left:                   value.db_left,
-            store_left:                value.store_left,
-            query_right:               value.query_right,
-            db_right:                  value.db_right,
-            store_right:               value.store_right,
-            or_rule_indices:           value.or_rule_indices,
-            luc_lookback_records:      value.luc_lookback_records,
-            valid_entries:             value.valid_entries,
-            reauth_target_indices:     value.reauth_target_indices,
-            reauth_use_or_rule:        value.reauth_use_or_rule,
-            deletion_requests_indices: value.deletion_requests_indices,
+            request_ids:                 value.request_ids,
+            request_types:               value.request_types,
+            metadata:                    value.metadata,
+            left_iris_requests:          value.left_iris_requests,
+            right_iris_requests:         value.right_iris_requests,
+            left_iris_rotated_requests:  value.left_iris_rotated_requests,
+            right_iris_rotated_requests: value.right_iris_rotated_requests,
+            query_left:                  value.query_left,
+            query_right:                 value.query_right,
+            or_rule_indices:             value.or_rule_indices,
+            luc_lookback_records:        value.luc_lookback_records,
+            valid_entries:               value.valid_entries,
+            reauth_target_indices:       value.reauth_target_indices,
+            reauth_use_or_rule:          value.reauth_use_or_rule,
+            deletion_requests_indices:   value.deletion_requests_indices,
             // deletion_requests_metadata: value.deletion_requests_metadata,
-            query_left_preprocessed:   query_left_preprocessed.unwrap(),
-            db_left_preprocessed:      db_left_preprocessed.unwrap(),
-            query_right_preprocessed:  query_right_preprocessed.unwrap(),
-            db_right_preprocessed:     db_right_preprocessed.unwrap(),
-            modifications:             value.modifications,
-            sns_message_ids:           value.sns_message_ids,
-            skip_persistence:          value.skip_persistence,
+            query_left_preprocessed:     query_left_preprocessed.unwrap(),
+            db_left_preprocessed:        db_left_preprocessed.unwrap(),
+            query_right_preprocessed:    query_right_preprocessed.unwrap(),
+            db_right_preprocessed:       db_right_preprocessed.unwrap(),
+            modifications:               value.modifications,
+            sns_message_ids:             value.sns_message_ids,
+            skip_persistence:            value.skip_persistence,
         }
     }
 }
@@ -182,20 +186,20 @@ impl PreprocessedBatchQuery {
         filter_by_indices!(self.request_ids, indices_set);
         filter_by_indices!(self.request_types, indices_set);
         filter_by_indices!(self.metadata, indices_set);
-        filter_by_indices!(self.store_left.code, indices_set);
-        filter_by_indices!(self.store_left.mask, indices_set);
-        filter_by_indices!(self.store_right.code, indices_set);
-        filter_by_indices!(self.store_right.mask, indices_set);
+        filter_by_indices!(self.left_iris_requests.code, indices_set);
+        filter_by_indices!(self.left_iris_requests.mask, indices_set);
+        filter_by_indices!(self.right_iris_requests.code, indices_set);
+        filter_by_indices!(self.right_iris_requests.mask, indices_set);
         filter_by_indices!(self.or_rule_indices, indices_set);
         filter_by_indices!(self.skip_persistence, indices_set);
         filter_by_indices_with_rotations!(self.query_left.code, indices_set);
         filter_by_indices_with_rotations!(self.query_left.mask, indices_set);
-        filter_by_indices_with_rotations!(self.db_left.code, indices_set);
-        filter_by_indices_with_rotations!(self.db_left.mask, indices_set);
+        filter_by_indices_with_rotations!(self.left_iris_rotated_requests.code, indices_set);
+        filter_by_indices_with_rotations!(self.left_iris_rotated_requests.mask, indices_set);
         filter_by_indices_with_rotations!(self.query_right.code, indices_set);
         filter_by_indices_with_rotations!(self.query_right.mask, indices_set);
-        filter_by_indices_with_rotations!(self.db_right.code, indices_set);
-        filter_by_indices_with_rotations!(self.db_right.mask, indices_set);
+        filter_by_indices_with_rotations!(self.right_iris_rotated_requests.code, indices_set);
+        filter_by_indices_with_rotations!(self.right_iris_rotated_requests.mask, indices_set);
         Self::filter_preprocessed_entry(&mut self.query_left_preprocessed, &indices_set);
         Self::filter_preprocessed_entry(&mut self.db_left_preprocessed, &indices_set);
         Self::filter_preprocessed_entry(&mut self.query_right_preprocessed, &indices_set);

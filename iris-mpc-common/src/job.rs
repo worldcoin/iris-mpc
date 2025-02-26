@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, future::Future};
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct BatchQueryEntries {
+pub struct IrisQueryBatchEntries {
     pub code: Vec<GaloisRingIrisCodeShare>,
     pub mask: Vec<GaloisRingTrimmedMaskCodeShare>,
 }
@@ -31,17 +31,17 @@ pub struct BatchQuery {
     // This is used for logging and tracing purposes
     pub metadata:      Vec<BatchMetadata>,
 
-    // Original iris shares left for storage
-    pub store_left:  BatchQueryEntries,
-    pub store_right: BatchQueryEntries,
+    // Iris queries from the request for storage
+    pub left_iris_requests:  IrisQueryBatchEntries,
+    pub right_iris_requests: IrisQueryBatchEntries,
 
-    // Shares with rotations for in-memory database.
-    pub db_left:  BatchQueryEntries,
-    pub db_right: BatchQueryEntries,
+    // Iris queries from the request with rotations for in-memory database.
+    pub left_iris_rotated_requests:  IrisQueryBatchEntries,
+    pub right_iris_rotated_requests: IrisQueryBatchEntries,
 
-    // Shares with Lagrange interpolations
-    pub query_right: BatchQueryEntries,
-    pub query_left:  BatchQueryEntries,
+    // Iris queries from the request with Lagrange interpolations
+    pub query_right: IrisQueryBatchEntries,
+    pub query_left:  IrisQueryBatchEntries,
 
     // array of indexes at which to use OR rule comparison
     pub or_rule_indices:      Vec<Vec<u32>>,
@@ -108,8 +108,8 @@ pub struct ServerJobResult<A = ()> {
     // Same, but for the right side
     pub partial_match_counters_right: Vec<usize>,
     // Original iris shares left for storage
-    pub store_left: BatchQueryEntries,
-    pub store_right: BatchQueryEntries,
+    pub left_iris_requests: IrisQueryBatchEntries,
+    pub right_iris_requests: IrisQueryBatchEntries,
     // Deleted ids, this can be ignored on the first iterations of HNSW
     pub deleted_ids: Vec<u32>,
     // For each query, a set of serial ids that were matched *within* the same batch
