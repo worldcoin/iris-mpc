@@ -1,28 +1,40 @@
+//! Implementation of Batcher Odd-even Sorting Networks, including a custom
+//! extension supporting generation of optimized networks for non-2-power lists
+//! with a partially sorted prefix of elements, as required for batch insertion
+//! of new elements into a sorted list.  For more details on the standard
+//! Batcher sorting network, see references:
+//!
+//! - (<https://en.wikipedia.org/wiki/Batcher_odd%E2%80%93even_mergesort>)
+//! - (<https://math.mit.edu/~shor/18.310/batcher.pdf>)
+
 use super::sorting_network::{SortingNetwork, SortingNetworkLayer};
 
-/// Generate sort tuples for specified stage of batcher merge network
+/// Generate sorting network wire tuples for stage `stage` of the batcher merge
+/// network of degree `deg`.
 fn batcher_merge_step(deg: usize, stage: usize) -> SortingNetworkLayer {
-    let (offset, scale) = (1 << (deg - stage), 1 << (stage - 1));
-    let n_comps = if stage == 1 {
-        offset
-    } else {
-        offset * (scale - 1)
-    };
+    // Uniform distance between wire indices of this merge layer
+    let offset = 1 << (deg - stage);
 
-    let mut sort_tuples = Vec::with_capacity(n_comps);
-    for start in 0..offset {
-        if stage == 1 {
-            sort_tuples.push((start, start + offset));
-        } else {
+    if stage == 1 {
+        (0..offset).map(|start| (start, start + offset)).collect()
+    } else {
+        // Number of consecutive wire clusters of size `offset` in this merge layer
+        let scale = (1 << (stage - 1)) - 1;
+
+        let mut sort_tuples = Vec::with_capacity(offset * scale);
+        for start in 0..offset {
             sort_tuples.extend(
-                (1..=(scale - 1)).map(|k| (start + (2 * k - 1) * offset, start + (2 * k) * offset)),
+                (1..=scale).map(|k| (start + (2 * k - 1) * offset, start + (2 * k) * offset)),
             )
         }
+        sort_tuples
     }
-
-    sort_tuples
 }
 
+/// Generate the merging network for Batcher Odd-even Merge Sort of degree
+/// `deg`.  The merge network of degree `deg` consists of `deg` simple layers,
+/// and produces a sorted list of length `2^k` when applied to a list of this
+/// length whose first and second halves are already individually sorted.
 fn batcher_merger_network(deg: usize) -> SortingNetwork {
     let layers = (1..=deg)
         .map(|stage| batcher_merge_step(deg, stage))
@@ -141,7 +153,7 @@ pub fn batcher_recursive(
         let mut merger = batcher_merger_network(deg);
         merger
             .shift(start_idx as isize)
-            .filter_wires(|(_, idx2)| *idx2 < end_idx - total_stable_amount, true);
+            .filter_wires(|(_, idx2)| *idx2 < end_idx - total_stable_amount);
 
         SortingNetwork::merge_series(prefix, merger)
     }
