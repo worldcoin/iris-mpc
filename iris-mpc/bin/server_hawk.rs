@@ -1,34 +1,28 @@
 #![allow(clippy::needless_range_loop)]
 
-use aws_config::{retry::RetryConfig, timeout::TimeoutConfig};
-use aws_sdk_s3::{
-    config::{Builder as S3ConfigBuilder, StalledStreamProtectionConfig},
-    Client as S3Client,
-};
+use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
-use aws_sdk_sqs::{config::Region, Client};
+use aws_sdk_sqs::{config::Region, operation::delete_message::DeleteMessageOutput, Client};
 use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
-use eyre::{eyre, Context, Report};
+use eyre::{eyre, Context};
 use futures::{stream::BoxStream, StreamExt};
+use iris_mpc::{
+    aws::{s3, sns},
+    iris_processing::{get_iris_shares_parse_task, IrisShareProcessor},
+    utils::{handle_circuit_breaker_message, initialize_chacha_seeds, initialize_tracing},
+};
 use iris_mpc_common::{
     config::{Config, ModeOfCompute, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
-        aws::{
-            construct_message_attributes, SPAN_ID_MESSAGE_ATTRIBUTE_NAME,
-            TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
-        },
         inmemory_store::InMemoryStore,
         key_pair::SharesEncryptionKeyPairs,
-        kms_dh::derive_shared_secret,
         shutdown_handler::ShutdownHandler,
         smpc_request::{
-            decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share,
-            CircuitBreakerRequest, IdentityDeletionRequest, ReAuthRequest, ReceiveRequestError,
-            SQSMessage, UniquenessRequest, ANONYMIZED_STATISTICS_MESSAGE_TYPE,
-            CIRCUIT_BREAKER_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
-            UNIQUENESS_MESSAGE_TYPE,
+            IdentityDeletionRequest, ReAuthRequest, ReceiveRequestError, SQSMessage,
+            UniquenessRequest, ANONYMIZED_STATISTICS_MESSAGE_TYPE, CIRCUIT_BREAKER_MESSAGE_TYPE,
+            IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
         },
         smpc_response::{
             create_message_type_attribute_map, IdentityDeletionResult, ReAuthResult,
@@ -48,11 +42,9 @@ use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
 };
-use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::{
-    backtrace::Backtrace,
     collections::{HashMap, HashSet},
     fmt::Debug,
     mem, panic,
@@ -62,13 +54,10 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use telemetry_batteries::tracing::{datadog::DatadogBattery, TracingShutdownHandle};
 use tokio::{
     sync::{mpsc, oneshot, Semaphore},
-    task::{spawn_blocking, JoinHandle},
     time::timeout,
 };
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const REGION: &str = "eu-north-1";
 const RNG_SEED_INIT_DB: u64 = 42;
@@ -77,57 +66,115 @@ const MAX_CONCURRENT_REQUESTS: usize = 32;
 
 static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
 
-type GaloisShares = (
-    GaloisRingIrisCodeShare,
-    GaloisRingTrimmedMaskCodeShare,
-    Vec<GaloisRingIrisCodeShare>,
-    Vec<GaloisRingTrimmedMaskCodeShare>,
-    Vec<GaloisRingIrisCodeShare>,
-    Vec<GaloisRingTrimmedMaskCodeShare>,
-);
-type ParseSharesTaskResult = Result<(GaloisShares, GaloisShares), Report>;
-
-fn decode_iris_message_shares(
-    code_share: String,
-    mask_share: String,
-) -> eyre::Result<(GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare)> {
-    let iris_share = GaloisRingIrisCodeShare::from_base64(&code_share)
-        .context("Failed to base64 parse iris code")?;
-    let mask_share: GaloisRingTrimmedMaskCodeShare =
-        GaloisRingIrisCodeShare::from_base64(&mask_share)
-            .context("Failed to base64 parse iris mask")?
-            .into();
-
-    Ok((iris_share, mask_share))
+struct BatchQueryBuilder {
+    batch_query: BatchQuery,
 }
 
-fn preprocess_iris_message_shares(
-    code_share: GaloisRingIrisCodeShare,
-    mask_share: GaloisRingTrimmedMaskCodeShare,
-) -> eyre::Result<GaloisShares> {
-    let mut code_share = code_share;
-    let mut mask_share = mask_share;
+impl BatchQueryBuilder {
+    fn new() -> Self {
+        Self {
+            batch_query: BatchQuery::default(),
+        }
+    }
 
-    // Original for storage.
-    let store_iris_shares = code_share.clone();
-    let store_mask_shares = mask_share.clone();
+    fn add_deletion_request(&mut self, request: IdentityDeletionRequest, metadata: BatchMetadata) {
+        self.batch_query
+            .deletion_requests_indices
+            .push(request.serial_id - 1);
+        self.batch_query.deletion_requests_metadata.push(metadata);
+    }
 
-    // With rotations for in-memory database.
-    let db_iris_shares = code_share.all_rotations();
-    let db_mask_shares = mask_share.all_rotations();
+    fn add_uniqueness_request(
+        &mut self,
+        uniqueness_request: UniquenessRequest,
+        metadata: BatchMetadata,
+    ) {
+        self.batch_query
+            .request_ids
+            .push(uniqueness_request.signup_id.clone());
+        self.batch_query
+            .request_types
+            .push(UNIQUENESS_MESSAGE_TYPE.to_string());
+        self.batch_query.metadata.push(metadata);
+    }
 
-    // With Lagrange interpolation.
-    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_share);
-    GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share);
+    fn add_reauth_request(&mut self, reauth_request: ReAuthRequest, metadata: BatchMetadata) {
+        self.batch_query
+            .request_ids
+            .push(reauth_request.reauth_id.clone());
+        self.batch_query
+            .request_types
+            .push(REAUTH_MESSAGE_TYPE.to_string());
+        self.batch_query.metadata.push(metadata);
+        self.batch_query.reauth_target_indices.insert(
+            reauth_request.reauth_id.clone(),
+            reauth_request.serial_id - 1,
+        );
+        self.batch_query
+            .reauth_use_or_rule
+            .insert(reauth_request.reauth_id.clone(), reauth_request.use_or_rule);
 
-    Ok((
-        store_iris_shares,
-        store_mask_shares,
-        db_iris_shares,
-        db_mask_shares,
-        code_share.all_rotations(),
-        mask_share.all_rotations(),
-    ))
+        let or_rule_indices = if reauth_request.use_or_rule {
+            vec![reauth_request.serial_id - 1]
+        } else {
+            vec![]
+        };
+        self.batch_query.or_rule_indices.push(or_rule_indices);
+    }
+
+    fn build(self) -> BatchQuery {
+        self.batch_query
+    }
+}
+
+struct MessageReceiver<'a> {
+    client:       &'a Client,
+    queue_url:    String,
+    max_messages: i32,
+    wait_time:    Duration,
+}
+
+impl<'a> MessageReceiver<'a> {
+    fn new(client: &'a Client, queue_url: String) -> Self {
+        Self {
+            client,
+            queue_url,
+            max_messages: 1,
+            wait_time: SQS_POLLING_INTERVAL,
+        }
+    }
+
+    async fn receive_messages(
+        &self,
+    ) -> Result<Vec<aws_sdk_sqs::types::Message>, ReceiveRequestError> {
+        let rcv_message_output = self
+            .client
+            .receive_message()
+            .max_number_of_messages(self.max_messages)
+            .queue_url(&self.queue_url)
+            .send()
+            .await
+            .map_err(ReceiveRequestError::FailedToReadFromSQS)?;
+
+        if let Some(messages) = rcv_message_output.messages {
+            Ok(messages)
+        } else {
+            Ok(vec![])
+        }
+    }
+
+    async fn delete_message(
+        &self,
+        receipt_handle: String,
+    ) -> Result<DeleteMessageOutput, ReceiveRequestError> {
+        self.client
+            .delete_message()
+            .queue_url(&self.queue_url)
+            .receipt_handle(receipt_handle)
+            .send()
+            .await
+            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -144,317 +191,190 @@ async fn receive_batch(
     uniqueness_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     reauth_error_result_attributes: &HashMap<String, MessageAttributeValue>,
 ) -> eyre::Result<Option<BatchQuery>, ReceiveRequestError> {
-    let max_batch_size = config.clone().max_batch_size;
-    let queue_url = &config.clone().requests_queue_url;
     if shutdown_handler.is_shutting_down() {
         tracing::info!("Stopping batch receive due to shutdown signal...");
         return Ok(None);
     }
 
-    let mut batch_query = BatchQuery::default();
+    let message_receiver = MessageReceiver::new(client, config.clone().requests_queue_url);
 
-    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
+    let mut batch_builder = BatchQueryBuilder::new();
+    let iris_processor = IrisShareProcessor::new(
+        party_id,
+        shares_encryption_key_pairs,
+        s3_client.clone(),
+        config.shares_bucket_name.clone(),
+    );
+
     let mut handles = vec![];
     let mut msg_counter = 0;
+    let mut current_batch_size = *CURRENT_BATCH_SIZE.lock().unwrap();
+    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
 
-    while msg_counter < *CURRENT_BATCH_SIZE.lock().unwrap() {
-        let rcv_message_output = client
-            .receive_message()
-            .max_number_of_messages(1)
-            .queue_url(queue_url)
-            .send()
-            .await
-            .map_err(ReceiveRequestError::FailedToReadFromSQS)?;
+    // Main processing loop
+    while msg_counter < current_batch_size {
+        let messages = message_receiver.receive_messages().await?;
+        if messages.is_empty() {
+            tokio::time::sleep(message_receiver.wait_time).await;
+        }
+        for sqs_message in messages {
+            let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
+                .map_err(|e| ReceiveRequestError::json_parse_error("SQS body", e))?;
+            let metadata = BatchMetadata::default();
 
-        if let Some(messages) = rcv_message_output.messages {
-            for sqs_message in messages {
-                let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
-                    .map_err(|e| ReceiveRequestError::json_parse_error("SQS body", e))?;
-
-                // messages arrive to SQS through SNS. So, all the attributes set in SNS are
-                // moved into the SQS body.
-                let message_attributes = message.message_attributes;
-
-                let mut batch_metadata = BatchMetadata::default();
-
-                if let Some(trace_id) = message_attributes.get(TRACE_ID_MESSAGE_ATTRIBUTE_NAME) {
-                    let trace_id = trace_id.string_value().unwrap();
-                    batch_metadata.trace_id = trace_id.to_string();
+            match message
+                .message_attributes
+                .get(SMPC_MESSAGE_TYPE_ATTRIBUTE)
+                .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?
+                .string_value()
+                .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?
+            {
+                CIRCUIT_BREAKER_MESSAGE_TYPE => {
+                    handle_circuit_breaker_message(
+                        &message,
+                        &sqs_message,
+                        client,
+                        &config.requests_queue_url,
+                        &mut current_batch_size,
+                        config.max_batch_size,
+                    )
+                    .await?;
                 }
-                if let Some(span_id) = message_attributes.get(SPAN_ID_MESSAGE_ATTRIBUTE_NAME) {
-                    let span_id = span_id.string_value().unwrap();
-                    batch_metadata.span_id = span_id.to_string();
+                IDENTITY_DELETION_MESSAGE_TYPE => {
+                    let request: IdentityDeletionRequest = serde_json::from_str(&message.message)
+                        .map_err(|e| {
+                        ReceiveRequestError::json_parse_error("Identity deletion request", e)
+                    })?;
+                    batch_builder.add_deletion_request(request, metadata);
+                    message_receiver
+                        .delete_message(sqs_message.receipt_handle.unwrap())
+                        .await?;
                 }
+                UNIQUENESS_MESSAGE_TYPE => {
+                    msg_counter += 1;
 
-                let request_type = message_attributes
-                    .get(SMPC_MESSAGE_TYPE_ATTRIBUTE)
-                    .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?
-                    .string_value()
-                    .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?;
+                    let uniqueness_request: UniquenessRequest =
+                        serde_json::from_str(&message.message).map_err(|e| {
+                            ReceiveRequestError::json_parse_error("Uniqueness request", e)
+                        })?;
+                    metrics::counter!("request.received", "type" => "uniqueness_verification")
+                        .increment(1);
+                    store
+                        .mark_requests_deleted(&[uniqueness_request.signup_id.clone()])
+                        .await
+                        .map_err(ReceiveRequestError::FailedToMarkRequestAsDeleted)?;
 
-                match request_type {
-                    CIRCUIT_BREAKER_MESSAGE_TYPE => {
-                        let circuit_breaker_request: CircuitBreakerRequest =
-                            serde_json::from_str(&message.message).map_err(|e| {
-                                ReceiveRequestError::json_parse_error("circuit_breaker_request", e)
-                            })?;
-                        metrics::counter!("request.received", "type" => "circuit_breaker")
-                            .increment(1);
-                        client
-                            .delete_message()
-                            .queue_url(queue_url)
-                            .receipt_handle(sqs_message.receipt_handle.unwrap())
-                            .send()
-                            .await
-                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
-                        if let Some(batch_size) = circuit_breaker_request.batch_size {
-                            // Updating the batch size to ensure we process the messages in the next
-                            // loop
-                            *CURRENT_BATCH_SIZE.lock().unwrap() =
-                                batch_size.clamp(1, max_batch_size);
-                            tracing::info!(
-                                "Updating batch size to {} due to circuit breaker message",
-                                batch_size
-                            );
+                    message_receiver
+                        .delete_message(sqs_message.receipt_handle.unwrap())
+                        .await?;
+
+                    if skip_request_ids.contains(&uniqueness_request.signup_id) {
+                        msg_counter -= 1;
+                        metrics::counter!("skip.request.deleted.sqs.request").increment(1);
+                        tracing::warn!(
+                            "Skipping request due to it being from synced deleted ids: {}",
+                            uniqueness_request.signup_id
+                        );
+                        let message = UniquenessResult::new_error_result(
+                            config.party_id,
+                            uniqueness_request.signup_id,
+                            ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
+                        );
+                        sns::send_error_results_to_sns(
+                            serde_json::to_string(&message).unwrap(),
+                            &metadata,
+                            sns_client,
+                            config,
+                            uniqueness_error_result_attributes,
+                            UNIQUENESS_MESSAGE_TYPE,
+                        )
+                        .await?;
+                        continue;
+                    }
+
+                    if let Some(batch_size) = uniqueness_request.batch_size {
+                        *CURRENT_BATCH_SIZE.lock().unwrap() =
+                            batch_size.clamp(1, config.max_batch_size);
+                        tracing::info!("Updating batch size to {}", batch_size);
+                    }
+                    if config.luc_enabled {
+                        if config.luc_lookback_records > 0 {
+                            batch_builder.batch_query.luc_lookback_records =
+                                config.luc_lookback_records;
+                        }
+                        if config.luc_serial_ids_from_smpc_request {
+                            if let Some(serial_ids) = uniqueness_request.or_rule_serial_ids.clone()
+                            {
+                                batch_builder
+                                    .batch_query
+                                    .or_rule_indices
+                                    .push(serial_ids.iter().map(|x| x - 1).collect());
+                            } else {
+                                tracing::error!("Received a uniqueness request without serial_ids");
+                            }
                         }
                     }
+                    batch_builder.add_uniqueness_request(uniqueness_request.clone(), metadata);
+                    let semaphore = Arc::clone(&semaphore);
+                    let handle = get_iris_shares_parse_task(
+                        semaphore,
+                        uniqueness_request.s3_key.clone(),
+                        iris_processor.clone(),
+                    )?;
+                    handles.push(handle);
+                }
+                REAUTH_MESSAGE_TYPE => {
+                    let reauth_request: ReAuthRequest = serde_json::from_str(&message.message)
+                        .map_err(|e| ReceiveRequestError::json_parse_error("Reauth request", e))?;
+                    metrics::counter!("request.received", "type" => "reauth").increment(1);
 
-                    IDENTITY_DELETION_MESSAGE_TYPE => {
-                        // If it's a deletion request, we just store the serial_id and continue.
-                        // Deletion will take place when batch process starts.
-                        let identity_deletion_request: IdentityDeletionRequest =
-                            serde_json::from_str(&message.message).map_err(|e| {
-                                ReceiveRequestError::json_parse_error(
-                                    "Identity deletion request",
-                                    e,
-                                )
-                            })?;
-                        metrics::counter!("request.received", "type" => "identity_deletion")
-                            .increment(1);
-                        batch_query
-                            .deletion_requests_indices
-                            .push(identity_deletion_request.serial_id - 1); // serial_id is 1-indexed
-                        batch_query.deletion_requests_metadata.push(batch_metadata);
-                        client
-                            .delete_message()
-                            .queue_url(queue_url)
-                            .receipt_handle(sqs_message.receipt_handle.unwrap())
-                            .send()
-                            .await
-                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
+                    tracing::debug!("Received reauth request: {:?}", reauth_request);
+
+                    message_receiver
+                        .delete_message(sqs_message.receipt_handle.unwrap())
+                        .await?;
+
+                    if reauth_request.use_or_rule
+                        && !(config.luc_enabled && config.luc_serial_ids_from_smpc_request)
+                    {
+                        tracing::error!(
+                            "Received a reauth request with use_or_rule set to true, but LUC is \
+                             not enabled. Skipping request."
+                        );
+                        continue;
                     }
 
-                    UNIQUENESS_MESSAGE_TYPE => {
+                    if config.enable_reauth {
                         msg_counter += 1;
 
-                        let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
-
-                        let uniqueness_request: UniquenessRequest =
-                            serde_json::from_str(&message.message).map_err(|e| {
-                                ReceiveRequestError::json_parse_error("Uniqueness request", e)
-                            })?;
-                        metrics::counter!("request.received", "type" => "uniqueness_verification")
-                            .increment(1);
-                        store
-                            .mark_requests_deleted(&[uniqueness_request.signup_id.clone()])
-                            .await
-                            .map_err(ReceiveRequestError::FailedToMarkRequestAsDeleted)?;
-
-                        client
-                            .delete_message()
-                            .queue_url(queue_url)
-                            .receipt_handle(sqs_message.receipt_handle.unwrap())
-                            .send()
-                            .await
-                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
-
-                        if skip_request_ids.contains(&uniqueness_request.signup_id) {
-                            // Some party (maybe us) already meant to delete this request, so we
-                            // skip it. Ignore this message when calculating the batch size.
-                            msg_counter -= 1;
-                            metrics::counter!("skip.request.deleted.sqs.request").increment(1);
-                            tracing::warn!(
-                                "Skipping request due to it being from synced deleted ids: {}",
-                                uniqueness_request.signup_id
-                            );
-                            let message = UniquenessResult::new_error_result(
-                                config.party_id,
-                                uniqueness_request.signup_id,
-                                ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
-                            );
-                            // shares
-                            send_error_results_to_sns(
-                                serde_json::to_string(&message).unwrap(),
-                                &batch_metadata,
-                                sns_client,
-                                config,
-                                uniqueness_error_result_attributes,
-                                UNIQUENESS_MESSAGE_TYPE,
-                            )
-                            .await?;
-                            continue;
-                        }
-
-                        if let Some(batch_size) = uniqueness_request.batch_size {
-                            // Updating the batch size instantly makes it a bit unpredictable, since
-                            // if we're already above the new limit, we'll still process the current
-                            // batch at the higher limit. On the other
-                            // hand, updating it after the batch is
-                            // processed would not let us "unblock" the protocol if we're stuck with
-                            // low throughput.
+                        if let Some(batch_size) = reauth_request.batch_size {
                             *CURRENT_BATCH_SIZE.lock().unwrap() =
-                                batch_size.clamp(1, max_batch_size);
+                                batch_size.clamp(1, config.max_batch_size);
                             tracing::info!("Updating batch size to {}", batch_size);
                         }
-                        if config.luc_enabled {
-                            if config.luc_lookback_records > 0 {
-                                batch_query.luc_lookback_records = config.luc_lookback_records;
-                            }
-                            if config.luc_serial_ids_from_smpc_request {
-                                if let Some(serial_ids) =
-                                    uniqueness_request.or_rule_serial_ids.clone()
-                                {
-                                    // convert from 1-based serial id to 0-based index in actor
-                                    batch_query
-                                        .or_rule_indices
-                                        .push(serial_ids.iter().map(|x| x - 1).collect());
-                                } else {
-                                    tracing::error!(
-                                        "Received a uniqueness request without serial_ids"
-                                    );
-                                }
-                            }
-                        }
 
-                        batch_query
-                            .request_ids
-                            .push(uniqueness_request.signup_id.clone());
-                        batch_query
-                            .request_types
-                            .push(UNIQUENESS_MESSAGE_TYPE.to_string());
-                        batch_query.metadata.push(batch_metadata);
-
+                        batch_builder.add_reauth_request(reauth_request.clone(), metadata);
                         let semaphore = Arc::clone(&semaphore);
-                        let s3_client_arc = s3_client.clone();
-                        let bucket_name = config.shares_bucket_name.clone();
-                        let s3_key = uniqueness_request.s3_key.clone();
                         let handle = get_iris_shares_parse_task(
-                            party_id,
-                            shares_encryption_key_pairs,
                             semaphore,
-                            s3_client_arc,
-                            bucket_name,
-                            s3_key,
+                            reauth_request.s3_key.clone(),
+                            iris_processor.clone(),
                         )?;
-
                         handles.push(handle);
-                    }
-
-                    REAUTH_MESSAGE_TYPE => {
-                        let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
-
-                        let reauth_request: ReAuthRequest = serde_json::from_str(&message.message)
-                            .map_err(|e| {
-                                ReceiveRequestError::json_parse_error("Reauth request", e)
-                            })?;
-                        metrics::counter!("request.received", "type" => "reauth").increment(1);
-
-                        tracing::debug!("Received reauth request: {:?}", reauth_request);
-
-                        // TODO: populate sync mechanism table (TBD: rollback or rollforward)
-
-                        client
-                            .delete_message()
-                            .queue_url(queue_url)
-                            .receipt_handle(sqs_message.receipt_handle.unwrap())
-                            .send()
-                            .await
-                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
-
-                        if reauth_request.use_or_rule
-                            && !(config.luc_enabled && config.luc_serial_ids_from_smpc_request)
-                        {
-                            tracing::error!(
-                                "Received a reauth request with use_or_rule set to true, but LUC \
-                                 is not enabled. Skipping request."
-                            );
-                            continue;
-                        }
-
-                        if config.enable_reauth {
-                            msg_counter += 1;
-
-                            if let Some(batch_size) = reauth_request.batch_size {
-                                // Updating the batch size instantly makes it a bit unpredictable,
-                                // since if we're already above the
-                                // new limit, we'll still process the current
-                                // batch at the higher limit. On the other
-                                // hand, updating it after the batch is
-                                // processed would not let us "unblock" the protocol if we're stuck
-                                // with low throughput.
-                                *CURRENT_BATCH_SIZE.lock().unwrap() =
-                                    batch_size.clamp(1, max_batch_size);
-                                tracing::info!("Updating batch size to {}", batch_size);
-                            }
-
-                            batch_query
-                                .request_ids
-                                .push(reauth_request.reauth_id.clone());
-                            batch_query
-                                .request_types
-                                .push(REAUTH_MESSAGE_TYPE.to_string());
-                            batch_query.metadata.push(batch_metadata);
-                            batch_query.reauth_target_indices.insert(
-                                reauth_request.reauth_id.clone(),
-                                reauth_request.serial_id - 1,
-                            );
-                            batch_query.reauth_use_or_rule.insert(
-                                reauth_request.reauth_id.clone(),
-                                reauth_request.use_or_rule,
-                            );
-
-                            let or_rule_indices = if reauth_request.use_or_rule {
-                                vec![reauth_request.serial_id - 1]
-                            } else {
-                                vec![]
-                            };
-                            batch_query.or_rule_indices.push(or_rule_indices);
-
-                            let semaphore = Arc::clone(&semaphore);
-                            let s3_client_clone = s3_client.clone();
-                            let bucket_name = config.shares_bucket_name.clone();
-                            let s3_key = reauth_request.s3_key.clone();
-                            let handle = get_iris_shares_parse_task(
-                                party_id,
-                                shares_encryption_key_pairs,
-                                semaphore,
-                                s3_client_clone,
-                                bucket_name,
-                                s3_key,
-                            )?;
-
-                            handles.push(handle);
-                        } else {
-                            tracing::warn!("Reauth is disabled, skipping reauth request");
-                        }
-                    }
-
-                    _ => {
-                        client
-                            .delete_message()
-                            .queue_url(queue_url)
-                            .receipt_handle(sqs_message.receipt_handle.unwrap())
-                            .send()
-                            .await
-                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
-                        tracing::error!("Error: {}", ReceiveRequestError::InvalidMessageType);
+                    } else {
+                        tracing::warn!("Reauth is disabled, skipping reauth request");
                     }
                 }
+                _ => {
+                    message_receiver
+                        .delete_message(sqs_message.receipt_handle.unwrap())
+                        .await?;
+                    tracing::error!("Error: {}", ReceiveRequestError::InvalidMessageType);
+                }
             }
-        } else {
-            tokio::time::sleep(SQS_POLLING_INTERVAL).await;
         }
     }
+
     for (index, handle) in handles.into_iter().enumerate() {
         let (
             (
@@ -483,39 +403,42 @@ async fn receive_batch(
             Ok(res) => (res, true),
             Err(e) => {
                 tracing::error!("Failed to process iris shares: {:?}", e);
-                // Return error message back to the signup-service if failed to process iris
-                // shares
-                let request_id = batch_query.request_ids[index].clone();
-                let (result_attributes, message) = match batch_query.request_types[index].as_str() {
-                    UNIQUENESS_MESSAGE_TYPE => {
-                        let message = UniquenessResult::new_error_result(
-                            config.party_id,
-                            request_id,
-                            ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
-                        );
-                        let serialized = serde_json::to_string(&message).unwrap();
-                        (uniqueness_error_result_attributes, serialized)
-                    }
-                    REAUTH_MESSAGE_TYPE => {
-                        let message = ReAuthResult::new_error_result(
-                            request_id.clone(),
-                            config.party_id,
-                            *batch_query.reauth_target_indices.get(&request_id).unwrap(),
-                            ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
-                        );
-                        let serialized = serde_json::to_string(&message).unwrap();
-                        (reauth_error_result_attributes, serialized)
-                    }
-                    _ => unreachable!(), // we don't push a handle for unknown message types
-                };
+                let request_id = batch_builder.batch_query.request_ids[index].clone();
+                let (result_attributes, message) =
+                    match batch_builder.batch_query.request_types[index].as_str() {
+                        UNIQUENESS_MESSAGE_TYPE => {
+                            let message = UniquenessResult::new_error_result(
+                                config.party_id,
+                                request_id,
+                                ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
+                            );
+                            let serialized = serde_json::to_string(&message).unwrap();
+                            (uniqueness_error_result_attributes, serialized)
+                        }
+                        REAUTH_MESSAGE_TYPE => {
+                            let message = ReAuthResult::new_error_result(
+                                request_id.clone(),
+                                config.party_id,
+                                *batch_builder
+                                    .batch_query
+                                    .reauth_target_indices
+                                    .get(&request_id)
+                                    .unwrap(),
+                                ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
+                            );
+                            let serialized = serde_json::to_string(&message).unwrap();
+                            (reauth_error_result_attributes, serialized)
+                        }
+                        _ => unreachable!(),
+                    };
 
-                send_error_results_to_sns(
+                sns::send_error_results_to_sns(
                     message,
-                    &batch_query.metadata[index],
+                    &batch_builder.batch_query.metadata[index],
                     sns_client,
                     config,
                     result_attributes,
-                    batch_query.request_types[index].as_str(),
+                    batch_builder.batch_query.request_types[index].as_str(),
                 )
                 .await?;
                 // If we failed to process the iris shares, we include a dummy entry in the
@@ -546,54 +469,66 @@ async fn receive_batch(
             }
         };
 
-        batch_query.valid_entries.push(valid_entry);
+        batch_builder.batch_query.valid_entries.push(valid_entry);
 
-        batch_query
+        batch_builder
+            .batch_query
             .left_iris_requests
             .code
             .push(store_iris_shares_left);
-        batch_query
+        batch_builder
+            .batch_query
             .left_iris_requests
             .mask
             .push(store_mask_shares_left);
-        batch_query
+        batch_builder
+            .batch_query
             .left_iris_rotated_requests
             .code
             .extend(db_iris_shares_left);
-        batch_query
+        batch_builder
+            .batch_query
             .right_iris_rotated_requests
             .mask
             .extend(db_mask_shares_left);
-        batch_query
+        batch_builder
+            .batch_query
             .left_iris_interpolated_requests
             .code
             .extend(iris_shares_left);
-        batch_query
+        batch_builder
+            .batch_query
             .left_iris_interpolated_requests
             .mask
             .extend(mask_shares_left);
 
-        batch_query
+        batch_builder
+            .batch_query
             .right_iris_requests
             .code
             .push(store_iris_shares_right);
-        batch_query
+        batch_builder
+            .batch_query
             .right_iris_requests
             .mask
             .push(store_mask_shares_right);
-        batch_query
+        batch_builder
+            .batch_query
             .right_iris_rotated_requests
             .code
             .extend(db_iris_shares_right);
-        batch_query
+        batch_builder
+            .batch_query
             .right_iris_rotated_requests
             .mask
             .extend(db_mask_shares_right);
-        batch_query
+        batch_builder
+            .batch_query
             .right_iris_interpolated_requests
             .code
             .extend(iris_shares_right);
-        batch_query
+        batch_builder
+            .batch_query
             .right_iris_interpolated_requests
             .mask
             .extend(mask_shares_right);
@@ -601,236 +536,15 @@ async fn receive_batch(
 
     tracing::info!(
         "Batch requests: {:?}",
-        batch_query
+        batch_builder
+            .batch_query
             .request_ids
             .iter()
-            .zip(batch_query.request_types.iter())
+            .zip(batch_builder.batch_query.request_types.iter())
             .collect::<Vec<_>>()
     );
 
-    Ok(Some(batch_query))
-}
-
-fn get_iris_shares_parse_task(
-    party_id: usize,
-    shares_encryption_key_pairs: SharesEncryptionKeyPairs,
-    semaphore: Arc<Semaphore>,
-    s3_client_arc: S3Client,
-    bucket_name: String,
-    s3_key: String,
-) -> Result<JoinHandle<ParseSharesTaskResult>, ReceiveRequestError> {
-    let handle =
-        tokio::spawn(async move {
-            let _ = semaphore.acquire().await?;
-
-            let (share_b64, hash) =
-                match get_iris_data_by_party_id(&s3_key, party_id, &bucket_name, &s3_client_arc)
-                    .await
-                {
-                    Ok(iris_message_share) => iris_message_share,
-                    Err(e) => {
-                        tracing::error!("Failed to get iris shares: {:?}", e);
-                        eyre::bail!("Failed to get iris shares: {:?}", e);
-                    }
-                };
-
-            let iris_message_share =
-                match decrypt_iris_share(share_b64, shares_encryption_key_pairs.clone()) {
-                    Ok(iris_data) => iris_data,
-                    Err(e) => {
-                        tracing::error!("Failed to decrypt iris shares: {:?}", e);
-                        eyre::bail!("Failed to decrypt iris shares: {:?}", e);
-                    }
-                };
-
-            match validate_iris_share(hash, iris_message_share.clone()) {
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::error!("Failed to validate iris shares: {:?}", e);
-                    eyre::bail!("Failed to validate iris shares: {:?}", e);
-                }
-            }
-
-            let (left_code, left_mask) = decode_iris_message_shares(
-                iris_message_share.left_iris_code_shares,
-                iris_message_share.left_mask_code_shares,
-            )?;
-
-            let (right_code, right_mask) = decode_iris_message_shares(
-                iris_message_share.right_iris_code_shares,
-                iris_message_share.right_mask_code_shares,
-            )?;
-
-            // Preprocess shares for left eye.
-            let left_future =
-                spawn_blocking(move || preprocess_iris_message_shares(left_code, left_mask));
-
-            // Preprocess shares for right eye.
-            let right_future =
-                spawn_blocking(move || preprocess_iris_message_shares(right_code, right_mask));
-
-            let (left_result, right_result) = tokio::join!(left_future, right_future);
-
-            Ok((
-                left_result.context("while processing left iris shares")??,
-                right_result.context("while processing right iris shares")??,
-            ))
-        });
-    Ok(handle)
-}
-
-fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
-    if let Some(service) = &config.service {
-        let tracing_shutdown_handle = DatadogBattery::init(
-            service.traces_endpoint.as_deref(),
-            &service.service_name,
-            None,
-            true,
-        );
-
-        if let Some(metrics_config) = &service.metrics {
-            let recorder = StatsdBuilder::from(&metrics_config.host, metrics_config.port)
-                .with_queue_size(metrics_config.queue_size)
-                .with_buffer_size(metrics_config.buffer_size)
-                .histogram_is_distribution()
-                .build(Some(&metrics_config.prefix))?;
-            metrics::set_global_recorder(recorder)?;
-        }
-
-        // Set a custom panic hook to print backtraces on one line
-        panic::set_hook(Box::new(|panic_info| {
-            let message = match panic_info.payload().downcast_ref::<&str>() {
-                Some(s) => *s,
-                None => match panic_info.payload().downcast_ref::<String>() {
-                    Some(s) => s.as_str(),
-                    None => "Unknown panic message",
-                },
-            };
-            let location = if let Some(location) = panic_info.location() {
-                format!(
-                    "{}:{}:{}",
-                    location.file(),
-                    location.line(),
-                    location.column()
-                )
-            } else {
-                "Unknown location".to_string()
-            };
-
-            let backtrace = Backtrace::capture();
-            let backtrace_string = format!("{:?}", backtrace);
-
-            let backtrace_single_line = backtrace_string.replace('\n', " | ");
-
-            tracing::error!(
-                { backtrace = %backtrace_single_line, location = %location},
-                "Panic occurred with message: {}",
-                message
-            );
-        }));
-        Ok(tracing_shutdown_handle)
-    } else {
-        tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer().pretty().compact())
-            .with(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "info".into()),
-            )
-            .init();
-
-        Ok(TracingShutdownHandle {})
-    }
-}
-
-async fn initialize_chacha_seeds(config: Config) -> eyre::Result<([u32; 8], [u32; 8])> {
-    // Init RNGs
-    let own_key_arn = config
-        .kms_key_arns
-        .0
-        .get(config.party_id)
-        .expect("Expected value not found in kms_key_arns");
-    let dh_pairs = match config.party_id {
-        0 => (1usize, 2usize),
-        1 => (2usize, 0usize),
-        2 => (0usize, 1usize),
-        _ => unimplemented!(),
-    };
-
-    let dh_pair_0: &str = config
-        .kms_key_arns
-        .0
-        .get(dh_pairs.0)
-        .expect("Expected value not found in kms_key_arns");
-    let dh_pair_1: &str = config
-        .kms_key_arns
-        .0
-        .get(dh_pairs.1)
-        .expect("Expected value not found in kms_key_arns");
-
-    // To be used only for e2e testing where we use localstack. There's a bug in
-    // localstack's implementation of `derive_shared_secret`. See: https://github.com/localstack/localstack/pull/12071
-    let chacha_seeds: ([u32; 8], [u32; 8]) = if config.fixed_shared_secrets {
-        ([0u32; 8], [0u32; 8])
-    } else {
-        (
-            bytemuck::cast(derive_shared_secret(own_key_arn, dh_pair_0).await?),
-            bytemuck::cast(derive_shared_secret(own_key_arn, dh_pair_1).await?),
-        )
-    };
-
-    Ok(chacha_seeds)
-}
-
-async fn send_error_results_to_sns(
-    serialised_json_message: String,
-    metadata: &BatchMetadata,
-    sns_client: &SNSClient,
-    config: &Config,
-    base_message_attributes: &HashMap<String, MessageAttributeValue>,
-    message_type: &str,
-) -> eyre::Result<()> {
-    let mut message_attributes = base_message_attributes.clone();
-    let trace_attributes = construct_message_attributes(&metadata.trace_id, &metadata.span_id)?;
-    message_attributes.extend(trace_attributes);
-    sns_client
-        .publish()
-        .topic_arn(&config.results_topic_arn)
-        .message(serialised_json_message)
-        .message_group_id(format!("party-id-{}", config.party_id))
-        .set_message_attributes(Some(message_attributes))
-        .send()
-        .await?;
-    metrics::counter!("result.sent", "type" => message_type.to_owned()+"_error").increment(1);
-
-    Ok(())
-}
-
-async fn send_results_to_sns(
-    result_events: Vec<String>,
-    metadata: &[BatchMetadata],
-    sns_client: &SNSClient,
-    config: &Config,
-    base_message_attributes: &HashMap<String, MessageAttributeValue>,
-    message_type: &str,
-) -> eyre::Result<()> {
-    for (i, result_event) in result_events.iter().enumerate() {
-        let mut message_attributes = base_message_attributes.clone();
-        if metadata.len() > i {
-            let trace_attributes =
-                construct_message_attributes(&metadata[i].trace_id, &metadata[i].span_id)?;
-            message_attributes.extend(trace_attributes);
-        }
-        sns_client
-            .publish()
-            .topic_arn(&config.results_topic_arn)
-            .message(result_event)
-            .message_group_id(format!("party-id-{}", config.party_id))
-            .set_message_attributes(Some(message_attributes))
-            .send()
-            .await?;
-        metrics::counter!("result.sent", "type" => message_type.to_owned()).increment(1);
-    }
-    Ok(())
+    Ok(Some(batch_builder.build()))
 }
 
 #[tokio::main]
@@ -903,30 +617,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);
 
-    // Increase S3 retries to 5
-    let retry_config = RetryConfig::standard().with_max_attempts(5);
-
-    // Increase S3 connect timeouts to 10s
-    let timeout_config = TimeoutConfig::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .build();
-
     let force_path_style = config.environment != "prod" && config.environment != "stage";
 
-    let s3_config = S3ConfigBuilder::from(&shared_config)
-        .force_path_style(force_path_style)
-        .retry_config(retry_config.clone())
-        .build();
+    let s3_client = s3::create_s3_client(&shared_config, force_path_style);
+    let db_chunks_s3_client = s3::create_db_chunks_s3_client(&shared_config, force_path_style);
 
-    let db_chunks_s3_config = S3ConfigBuilder::from(&shared_config)
-        // disable stalled stream protection to avoid panics during s3 import
-        .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
-        .retry_config(retry_config)
-        .timeout_config(timeout_config)
-        .build();
-
-    let s3_client = S3Client::from_conf(s3_config);
-    let db_chunks_s3_client = S3Client::from_conf(db_chunks_s3_config);
     let shares_encryption_key_pair =
         match SharesEncryptionKeyPairs::from_storage(config.clone()).await {
             Ok(key_pair) => key_pair,
@@ -940,14 +635,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Deriving shared secrets");
     let _chacha_seeds = initialize_chacha_seeds(config.clone()).await?;
 
-    let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
-    let reauth_result_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
+    let uniqueness_result_attributes = sns::create_message_attributes_map(UNIQUENESS_MESSAGE_TYPE);
+    let reauth_result_attributes = sns::create_message_attributes_map(REAUTH_MESSAGE_TYPE);
     let anonymized_statistics_attributes =
-        create_message_type_attribute_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
+        sns::create_message_attributes_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
-        create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
+        sns::create_message_attributes_map(IDENTITY_DELETION_MESSAGE_TYPE);
     tracing::info!("Replaying results");
-    send_results_to_sns(
+    sns::send_results_to_sns(
         store.last_results(max_sync_lookback).await?,
         &Vec::new(),
         &sns_client,
@@ -1614,7 +1309,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             }
 
             tracing::info!("Sending {} uniqueness results", uniqueness_results.len());
-            send_results_to_sns(
+            sns::send_results_to_sns(
                 uniqueness_results,
                 &metadata,
                 &sns_client_bg,
@@ -1625,7 +1320,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             .await?;
 
             tracing::info!("Sending {} reauth results", reauth_results.len());
-            send_results_to_sns(
+            sns::send_results_to_sns(
                 reauth_results,
                 &metadata,
                 &sns_client_bg,
@@ -1649,7 +1344,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 "Sending {} identity deletion results",
                 identity_deletion_results.len()
             );
-            send_results_to_sns(
+            sns::send_results_to_sns(
                 identity_deletion_results,
                 &metadata,
                 &sns_client_bg,
@@ -1668,7 +1363,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     anonymized_bucket_statistics_left,
                     anonymized_bucket_statistics_right,
                 ];
-                // transform to vector of string ands remove None values
                 let anonymized_statistics_results = anonymized_statistics_results
                     .iter()
                     .map(|anonymized_bucket_statistics| {
@@ -1677,7 +1371,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     })
                     .collect::<eyre::Result<Vec<_>>>()?;
 
-                send_results_to_sns(
+                sns::send_results_to_sns(
                     anonymized_statistics_results,
                     &metadata,
                     &sns_client_bg,
