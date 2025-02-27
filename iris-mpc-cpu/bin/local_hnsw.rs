@@ -2,7 +2,9 @@ use aes_prng::AesRng;
 use clap::Parser;
 use iris_mpc_cpu::hawkers::aby3_store::Aby3Store;
 use rand::SeedableRng;
-use std::error::Error;
+use std::{error::Error, fs::File};
+use tracing_forest::{tag::NoTag, ForestLayer, PrettyPrinter};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
 #[derive(Parser)]
 struct Args {
@@ -14,6 +16,16 @@ struct Args {
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     let database_size = args.database_size;
+
+    let file = File::create("searcher_network_tree.txt")?;
+    let file_processor = PrettyPrinter::new().writer(std::sync::Mutex::new(file));
+
+    tracing_subscriber::registry()
+        .with(
+            ForestLayer::new(file_processor, NoTag {})
+                .with_filter(EnvFilter::new("searcher::network")),
+        )
+        .init();
 
     println!("Starting Local HNSW with {} vectors", database_size);
     let mut rng = AesRng::seed_from_u64(0_u64);
