@@ -892,7 +892,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Initialising AWS services");
 
     // TODO: probably move into separate function
-    let region_provider = Region::new(REGION);
+    let region = config
+        .clone()
+        .aws
+        .and_then(|aws| aws.region)
+        .unwrap_or_else(|| REGION.to_owned());
+
+    let region_provider = Region::new(region);
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);

@@ -27,8 +27,8 @@ create_bucket "wf-smpcv2-dev-sns-requests"
 SNS_IRIS_MPC_INPUTS_TOPIC_NAME=iris-mpc-input.fifo
 SNS_IRIS_MPC_INPUTS_TOPIC_ARN=arn:aws:sns:us-east-1:000000000000:$SNS_IRIS_MPC_INPUTS_TOPIC_NAME
 
-#SNS_IRIS_MPC_RESULTS_TOPIC_NAME=iris-mpc-results.fifo
-#SNS_IRIS_MPC_RESULTS_TOPIC_ARN=arn:aws:sns:us-east-1:000000000000:$SNS_IRIS_MPC_INPUTS_TOPIC_NAME
+SNS_IRIS_MPC_RESULTS_TOPIC_NAME=iris-mpc-results.fifo
+SNS_IRIS_MPC_RESULTS_TOPIC_ARN=arn:aws:sns:us-east-1:000000000000:$SNS_IRIS_MPC_RESULTS_TOPIC_NAME
 
 SQS_IRIS_MPC_INPUTS_PARTICIPANT_0_QUEUE_NAME=smpcv2-0-dev.fifo
 SQS_IRIS_MPC_INPUTS_PARTICIPANT_0_QUEUE_ARN=arn:aws:sqs:us-east-1:000000000000:$SQS_IRIS_MPC_INPUTS_PARTICIPANT_0_QUEUE_NAME
@@ -37,8 +37,9 @@ SQS_IRIS_MPC_INPUTS_PARTICIPANT_1_QUEUE_ARN=arn:aws:sqs:us-east-1:000000000000:$
 SQS_IRIS_MPC_INPUTS_PARTICIPANT_2_QUEUE_NAME=smpcv2-2-dev.fifo
 SQS_IRIS_MPC_INPUTS_PARTICIPANT_2_QUEUE_ARN=arn:aws:sqs:us-east-1:000000000000:$SQS_IRIS_MPC_INPUTS_PARTICIPANT_2_QUEUE_NAME
 
-#SQS_IRIS_MPC_RESULTS_QUEUE_NAME=iris-mpc-results-us-east-1.fifo
-#SQS_IRIS_MPC_RESULTS_QUEUE_ARN=arn:aws:sqs:us-east-1:000000000000:$SQS_IRIS_MPC_RESULTS_QUEUE_NAME
+SQS_IRIS_MPC_RESULTS_QUEUE_NAME=iris-mpc-results-us-east-1.fifo
+SQS_IRIS_MPC_RESULTS_QUEUE_ARN=arn:aws:sqs:us-east-1:000000000000:$SQS_IRIS_MPC_RESULTS_QUEUE_NAME
+
 #SQS_IRIS_MPC_DELETION_RESULTS_QUEUE_NAME=iris-mpc-identity-deletion-results-us-east-1.fifo
 #SQS_IRIS_MPC_DELETION_QUEUE_ARN=arn:aws:sqs:us-east-1:000000000000:$SQS_IRIS_MPC_DELETION_RESULTS_QUEUE_NAME
 
@@ -51,13 +52,17 @@ awslocal kms create-key --region us-east-1 --key-spec ECC_NIST_P256 --key-usage 
 awslocal kms create-key --region us-east-1 --key-spec ECC_NIST_P256 --key-usage KEY_AGREEMENT --tags "[{\"TagKey\":\"_custom_id_\",\"TagValue\":\"00000000-0000-0000-0000-000000000002\"}]"
 
 create_sns $SNS_IRIS_MPC_INPUTS_TOPIC_NAME
+create_sns $SNS_IRIS_MPC_RESULTS_TOPIC_NAME
 
 create_fifo_queue $SQS_IRIS_MPC_INPUTS_PARTICIPANT_0_QUEUE_NAME
 create_fifo_queue $SQS_IRIS_MPC_INPUTS_PARTICIPANT_1_QUEUE_NAME
 create_fifo_queue $SQS_IRIS_MPC_INPUTS_PARTICIPANT_2_QUEUE_NAME
+create_fifo_queue $SQS_IRIS_MPC_RESULTS_QUEUE_NAME
+
 
 awslocal sns subscribe --topic-arn "$SNS_IRIS_MPC_INPUTS_TOPIC_ARN" --protocol sqs --notification-endpoint $SQS_IRIS_MPC_INPUTS_PARTICIPANT_0_QUEUE_ARN --region $AWS_REGION
 awslocal sns subscribe --topic-arn "$SNS_IRIS_MPC_INPUTS_TOPIC_ARN" --protocol sqs --notification-endpoint $SQS_IRIS_MPC_INPUTS_PARTICIPANT_1_QUEUE_ARN --region $AWS_REGION
 awslocal sns subscribe --topic-arn "$SNS_IRIS_MPC_INPUTS_TOPIC_ARN" --protocol sqs --notification-endpoint $SQS_IRIS_MPC_INPUTS_PARTICIPANT_2_QUEUE_ARN --region $AWS_REGION
+awslocal sns subscribe --topic-arn "$SNS_IRIS_MPC_RESULTS_TOPIC_ARN" --protocol sqs --notification-endpoint $SQS_IRIS_MPC_RESULTS_QUEUE_ARN --region $AWS_REGION
 
 echo "LocalStack initialization complete"

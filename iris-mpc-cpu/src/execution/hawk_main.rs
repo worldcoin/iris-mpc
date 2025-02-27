@@ -475,8 +475,8 @@ impl From<&BatchQuery> for HawkRequest {
     fn from(batch: &BatchQuery) -> Self {
         Self {
             shares: [
-                GaloisRingSharedIris::from_batch(batch.left_iris_interpolated_requests.clone()),
-                GaloisRingSharedIris::from_batch(batch.right_iris_interpolated_requests.clone()),
+                GaloisRingSharedIris::from_batch(batch.left_iris_requests.clone()),
+                GaloisRingSharedIris::from_batch(batch.right_iris_requests.clone()),
             ],
         }
     }
@@ -500,14 +500,22 @@ impl HawkRequest {
         &self,
         both_insert_plans: BothEyes<Vec<InsertPlan>>,
         is_insertion: &[bool],
-    ) -> BothEyes<Vec<InsertPlan>> {
+    ) -> (Vec<usize>, BothEyes<Vec<InsertPlan>>) {
         // TODO: Report the insertions versus rejections.
 
-        both_insert_plans.map(|plans| {
+        let filtered = both_insert_plans.map(|plans| {
             izip!(plans, is_insertion)
                 .filter_map(|(plan, &is_insertion)| is_insertion.then_some(plan))
                 .collect_vec()
-        })
+        });
+
+        let indices = is_insertion
+            .iter()
+            .enumerate()
+            .filter_map(|(index, &insert)| insert.then_some(index))
+            .collect();
+
+        (indices, filtered)
     }
 }
 
@@ -521,17 +529,27 @@ impl HawkResult {
     fn matches(&self) -> Vec<bool> {
         self.is_insertion.iter().map(|&insert| !insert).collect()
     }
+
+    fn merged_results(&self) -> Vec<u32> {
+        self.connect_plans.0[0]
+            .iter()
+            .map(|plan| {
+                plan.as_ref()
+                    .map_or(0, |plan| plan.inserted_vector.to_serial_id())
+            })
+            .collect()
+    }
 }
 
 pub type ServerJobResult = iris_mpc_common::job::ServerJobResult<HawkMutation>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HawkMutation(BothEyes<Vec<ConnectPlan>>);
+pub struct HawkMutation(BothEyes<Vec<Option<ConnectPlan>>>);
 
 impl HawkMutation {
     pub async fn persist(self, graph_tx: &mut GraphTx<'_>) -> Result<()> {
         for (side, plans) in izip!(STORE_IDS, self.0) {
-            for plan in plans {
+            for plan in plans.into_iter().flatten() {
                 graph_tx.with_graph(side).insert_apply(plan).await;
             }
         }
@@ -554,27 +572,28 @@ impl JobSubmissionHandle for HawkHandle {
     ) -> impl std::future::Future<Output = ServerJobResult> {
         let request = HawkRequest::from(&batch);
         let result = self.submit(request).await.unwrap();
+        let n_requests = result.is_insertion.len();
 
         async move {
             ServerJobResult {
-                merged_results: vec![], // TODO.
+                merged_results: result.merged_results(),
                 request_ids: batch.request_ids,
                 request_types: batch.request_types,
                 metadata: batch.metadata,
                 matches: result.matches(),
                 matches_with_skip_persistence: result.matches(), // TODO
-                match_ids: vec![],                               // TODO.
-                partial_match_ids_left: vec![],                  // TODO.
-                partial_match_ids_right: vec![],                 // TODO.
-                partial_match_counters_left: vec![],             // TODO.
-                partial_match_counters_right: vec![],            // TODO.
+                match_ids: vec![vec![0]; n_requests],            // TODO.
+                partial_match_ids_left: vec![vec![0]; n_requests], // TODO.
+                partial_match_ids_right: vec![vec![0]; n_requests], // TODO.
+                partial_match_counters_left: vec![0; n_requests], // TODO.
+                partial_match_counters_right: vec![0; n_requests], // TODO.
                 left_iris_requests: batch.left_iris_requests,
                 right_iris_requests: batch.right_iris_requests,
                 deleted_ids: vec![],                                    // TODO.
-                matched_batch_request_ids: vec![],                      // TODO.
+                matched_batch_request_ids: vec![vec![]; n_requests],    // TODO.
                 anonymized_bucket_statistics_left: Default::default(),  // TODO.
                 anonymized_bucket_statistics_right: Default::default(), // TODO.
-                successful_reauths: vec![],                             // TODO.
+                successful_reauths: vec![false; n_requests],            // TODO.
                 reauth_target_indices: Default::default(),              // TODO.
                 reauth_or_rule_used: Default::default(),                // TODO.
                 modifications: batch.modifications,
@@ -615,13 +634,14 @@ impl HawkHandle {
                 }
 
                 let is_insertion = HawkRequest::is_insertion(&both_insert_plans);
-                let both_insert_plans = job
+                let (insert_indices, both_insert_plans) = job
                     .request
                     .filter_for_insertion(both_insert_plans, &is_insertion);
 
                 // Insert into the database.
+                let n_requests = is_insertion.len();
                 let mut results = HawkResult {
-                    connect_plans: HawkMutation([vec![], vec![]]),
+                    connect_plans: HawkMutation([vec![None; n_requests], vec![None; n_requests]]),
                     is_insertion,
                 };
 
@@ -631,7 +651,12 @@ impl HawkHandle {
                         izip!(&sessions, both_insert_plans, &mut results.connect_plans.0)
                     {
                         // Insert in memory, and return the plans to update the persistent database.
-                        *connect_plans = hawk_actor.insert(sessions, insert_plans).await.unwrap();
+                        let plans = hawk_actor.insert(sessions, insert_plans).await.unwrap();
+
+                        // Convert to Vec<Option> matching the request order.
+                        for (i, plan) in izip!(&insert_indices, plans) {
+                            connect_plans[*i] = Some(plan);
+                        }
                     }
                 }
 
@@ -722,7 +747,10 @@ mod tests {
         database_generators::generate_galois_iris_shares,
         execution::local::get_free_local_addresses,
     };
-    use iris_mpc_common::iris_db::db::IrisDB;
+    use iris_mpc_common::{
+        helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE, iris_db::db::IrisDB, job::BatchMetadata,
+    };
+    use std::ops::Not;
     use tokio::time::sleep;
 
     #[tokio::test]
@@ -776,11 +804,26 @@ mod tests {
             })
             .collect_vec();
 
-        let all_plans = izip!(irises, handles.clone())
+        let all_results = izip!(irises, handles.clone())
             .map(|(share, mut handle)| async move {
                 let batch = BatchQuery {
-                    left_iris_interpolated_requests: GaloisRingSharedIris::to_batch(&share),
-                    right_iris_interpolated_requests: GaloisRingSharedIris::to_batch(&share), // TODO: different eyes.
+                    left_iris_requests: GaloisRingSharedIris::to_batch(&share),
+                    right_iris_requests: GaloisRingSharedIris::to_batch(&share),
+                    // TODO: different test irises for each eye.
+                    // TODO: Rotations in db_left / db_right.
+                    // TODO: Lagrange interpolation in query_left / query_right.
+
+                    // Batch details to be just copied to the result.
+                    request_ids: vec!["X".to_string(); batch_size],
+                    request_types: vec![UNIQUENESS_MESSAGE_TYPE.to_string(); batch_size],
+                    metadata: vec![
+                        BatchMetadata {
+                            node_id:  "X".to_string(),
+                            trace_id: "X".to_string(),
+                            span_id:  "X".to_string(),
+                        };
+                        batch_size
+                    ],
                     ..BatchQuery::default()
                 };
                 let res = handle.submit_batch_query(batch).await.await;
@@ -792,12 +835,61 @@ mod tests {
             .into_iter()
             .collect::<Result<Vec<ServerJobResult>>>()?;
 
-        assert!(
-            all_plans.iter().all_equal(),
-            "All parties must agree on the graph changes"
-        );
+        let result = assert_all_equal(all_results);
+
+        assert_eq!(batch_size, result.merged_results.len());
+        assert_eq!(result.merged_results, (0..batch_size as u32).collect_vec());
+        assert_eq!(batch_size, result.request_ids.len());
+        assert_eq!(batch_size, result.request_types.len());
+        assert_eq!(batch_size, result.metadata.len());
+        assert_eq!(batch_size, result.matches.len());
+        assert_eq!(batch_size, result.matches_with_skip_persistence.len());
+        assert_eq!(batch_size, result.match_ids.len());
+        assert!(no_empty(&without_matches(
+            &result.matches,
+            &result.match_ids
+        )));
+        assert_eq!(batch_size, result.partial_match_ids_left.len());
+        assert_eq!(batch_size, result.partial_match_ids_right.len());
+        assert_eq!(batch_size, result.partial_match_counters_left.len());
+        assert_eq!(batch_size, result.partial_match_counters_right.len());
+        assert_eq!(batch_size, result.left_iris_requests.code.len());
+        assert_eq!(batch_size, result.right_iris_requests.code.len());
+        assert!(result.deleted_ids.is_empty());
+        assert_eq!(batch_size, result.matched_batch_request_ids.len());
+        assert!(result.anonymized_bucket_statistics_left.buckets.is_empty());
+        assert!(result.anonymized_bucket_statistics_right.buckets.is_empty());
+        assert_eq!(batch_size, result.successful_reauths.len());
+        assert!(result.reauth_target_indices.is_empty());
+        assert!(result.reauth_or_rule_used.is_empty());
+        assert!(result.modifications.is_empty());
+        assert_eq!(batch_size, result.actor_data.0[0].len());
+        assert_eq!(batch_size, result.actor_data.0[1].len());
 
         Ok(())
+    }
+
+    fn assert_all_equal(mut all_results: Vec<ServerJobResult>) -> ServerJobResult {
+        // Ignore the actual secret shares because they are different for each party.
+        for i in 1..all_results.len() {
+            all_results[i].left_iris_requests = all_results[0].left_iris_requests.clone();
+            all_results[i].right_iris_requests = all_results[0].right_iris_requests.clone();
+        }
+        assert!(
+            all_results.iter().all_equal(),
+            "All parties must agree on the results"
+        );
+        all_results[0].clone()
+    }
+
+    fn without_matches<T: Clone>(matches: &[bool], things: &[T]) -> Vec<T> {
+        izip!(matches, things)
+            .filter_map(|(&match_, item)| match_.not().then_some(item.clone()))
+            .collect_vec()
+    }
+
+    fn no_empty<T>(items: &[Vec<T>]) -> bool {
+        items.iter().all(|item| !item.is_empty())
     }
 }
 
@@ -841,6 +933,7 @@ mod tests_db {
                     }],
                     set_ep:          i == side,
                 })
+                .map(Some)
                 .collect_vec()
         };
 
