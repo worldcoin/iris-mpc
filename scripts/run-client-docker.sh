@@ -20,10 +20,10 @@ echo "All endpoints are healthy."
 
 # Prepare the results queue.
 SQS_IRIS_MPC_RESULTS_QUEUE_NAME=iris-mpc-results-us-east-1.fifo
-SQS_IRIS_MPC_RESULTS_QUEUE_URL=$(aws sqs get-queue-url --queue-name "$SQS_IRIS_MPC_RESULTS_QUEUE_NAME" --query 'QueueUrl' --output text)
+SQS_IRIS_MPC_RESULTS_QUEUE_URL=$(aws sqs get-queue-url --region $AWS_REGION --queue-name "$SQS_IRIS_MPC_RESULTS_QUEUE_NAME" --query 'QueueUrl' --output text)
 
 echo "Clearing the results queue..."
-aws sqs purge-queue --queue-url "$SQS_IRIS_MPC_RESULTS_QUEUE_URL"
+aws sqs purge-queue --region $AWS_REGION --queue-url "$SQS_IRIS_MPC_RESULTS_QUEUE_URL"
 
 
 echo "Sending requests..."
@@ -51,7 +51,7 @@ while true; do
   COUNTER=$((COUNTER + 1))
 
   # Receive a message from the SQS queue
-  MESSAGE=$(aws sqs receive-message --queue-url "$SQS_IRIS_MPC_RESULTS_QUEUE_URL" --max-number-of-messages 1 --wait-time-seconds "$WAIT_TIME_SECONDS" --query 'Messages[0].Body' --output text)
+  MESSAGE=$(aws sqs receive-message --region $AWS_REGION --queue-url "$SQS_IRIS_MPC_RESULTS_QUEUE_URL" --max-number-of-messages 1 --wait-time-seconds "$WAIT_TIME_SECONDS" --query 'Messages[0].Body' --output text)
 
   # Check if a message was received
   if [ "$MESSAGE" != "None" ]; then
