@@ -21,7 +21,7 @@ echo "All endpoints are healthy."
 #/bin/client \
 #    --request-topic-arn arn:aws:sns:$AWS_REGION:000000000000:iris-mpc-input.fifo \
 #    --requests-bucket-name wf-smpcv2-dev-sns-requests \
-#    --public-key-base-url "http://wf-dev-public-keys.s3.$AWS_REGION.localhost.localstack.cloud:4566" \
+#    --public-key-base-url "http://localhost:4566/wf-dev-public-keys" \
 #    --region $AWS_REGION \
 #    --n-repeat 1 \
 #    --random true
