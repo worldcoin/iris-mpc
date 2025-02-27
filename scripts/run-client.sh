@@ -13,4 +13,4 @@ cargo run --bin client -- \
     --region us-east-1 \
     --n-repeat 1 \
     --random true \
-    --response-queue-url ttp://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/iris-mpc-results-us-east-1.fifo
+    --response-queue-url http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/iris-mpc-results-us-east-1.fifo
