@@ -103,17 +103,8 @@ iris-mpc-1:
   terminationGracePeriodSeconds: 180 # 3x SMPC__PROCESSING_TIMEOUT_SECS
 
   env:
-    - name: NCCL_DEBUG_FILE
-      value: "/dev/stdout"
-
-    - name: NCCL_DEBUG_SUBSYS
-      value: "ALL"
-
     - name: NCCL_SOCKET_IFNAME
       value: "eth0"
-
-    - name: NCCL_DEBUG
-      value: "TRACE"
 
     - name: NCCL_IB_DISABLE
       value: "1"
