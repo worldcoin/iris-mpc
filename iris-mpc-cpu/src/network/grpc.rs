@@ -524,7 +524,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
-    async fn test_grpc_comms_fail() -> eyre::Result<()> {
+    async fn test_send_to_wrong_party() -> eyre::Result<()> {
         let parties = generate_local_identities();
 
         let players = setup_local_grpc_networking(parties.clone()).await?;
@@ -532,95 +532,155 @@ mod tests {
         let mut jobs = JoinSet::new();
 
         // Send to a non-existing party
-        {
-            let players = players.clone();
-            jobs.spawn(async move {
-                let session_id = SessionId::from(0);
-                create_session_helper(session_id, &players).await.unwrap();
+        let players = players.clone();
+        jobs.spawn(async move {
+            let session_id = SessionId::from(0);
+            create_session_helper(session_id, &players).await.unwrap();
 
-                let alice = players[0].clone();
-                let message = b"Hey, Eve. I'm Alice. Do you copy?".to_vec();
-                let res = alice
-                    .send(message.clone(), &Identity::from("eve"), &session_id)
-                    .await;
-                assert!(res.is_err());
-            });
-        }
+            let alice = players[0].clone();
+            let message = b"Hey, Eve. I'm Alice. Do you copy?".to_vec();
+            let res = alice
+                .send(message.clone(), &Identity::from("eve"), &session_id)
+                .await;
+            assert!(res.is_err());
+        });
+
+        jobs.join_all().await;
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
+    async fn test_receive_from_wrong_party() -> eyre::Result<()> {
+        let parties = generate_local_identities();
+
+        let players = setup_local_grpc_networking(parties.clone()).await?;
+
+        let mut jobs = JoinSet::new();
 
         // Receive from a wrong party
-        {
-            let players = players.clone();
-            jobs.spawn(async move {
-                let session_id = SessionId::from(1);
-                create_session_helper(session_id, &players).await.unwrap();
 
-                let alice = players[0].clone();
+        let players = players.clone();
+        jobs.spawn(async move {
+            let session_id = SessionId::from(1);
+            create_session_helper(session_id, &players).await.unwrap();
 
-                let res = alice.receive(&Identity::from("eve"), &session_id).await;
-                assert!(res.is_err());
-            });
-        }
+            let alice = players[0].clone();
+
+            let res = alice.receive(&Identity::from("eve"), &session_id).await;
+            assert!(res.is_err());
+        });
+
+        jobs.join_all().await;
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
+    async fn test_send_to_itself() -> eyre::Result<()> {
+        let parties = generate_local_identities();
+
+        let players = setup_local_grpc_networking(parties.clone()).await?;
+
+        let mut jobs = JoinSet::new();
 
         // Send to itself
-        {
-            let players = players.clone();
-            jobs.spawn(async move {
-                let session_id = SessionId::from(2);
-                create_session_helper(session_id, &players).await.unwrap();
 
-                let alice = players[0].clone();
+        let players = players.clone();
+        jobs.spawn(async move {
+            let session_id = SessionId::from(2);
+            create_session_helper(session_id, &players).await.unwrap();
 
-                let message = b"Hey, Alice. I'm Alice. Do you copy?".to_vec();
-                let res = alice
-                    .send(message.clone(), &Identity::from("alice"), &session_id)
-                    .await;
-                assert!(res.is_err());
-            });
-        }
+            let alice = players[0].clone();
 
+            let message = b"Hey, Alice. I'm Alice. Do you copy?".to_vec();
+            let res = alice
+                .send(message.clone(), &Identity::from("alice"), &session_id)
+                .await;
+            assert!(res.is_err());
+        });
+
+        jobs.join_all().await;
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
+    async fn test_add_same_session() -> eyre::Result<()> {
+        let parties = generate_local_identities();
+
+        let players = setup_local_grpc_networking(parties.clone()).await?;
+
+        let mut jobs = JoinSet::new();
         // Add the same session
-        {
-            let players = players.clone();
-            jobs.spawn(async move {
-                let session_id = SessionId::from(3);
-                create_session_helper(session_id, &players).await.unwrap();
 
-                let alice = players[0].clone();
+        let players = players.clone();
+        jobs.spawn(async move {
+            let session_id = SessionId::from(3);
+            create_session_helper(session_id, &players).await.unwrap();
 
-                let res = alice.create_session(session_id).await;
+            let alice = players[0].clone();
 
-                assert!(res.is_err());
-            });
-        }
+            let res = alice.create_session(session_id).await;
 
+            assert!(res.is_err());
+        });
+
+        jobs.join_all().await;
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
+    async fn test_wrong_session() -> eyre::Result<()> {
+        let parties = generate_local_identities();
+
+        let players = setup_local_grpc_networking(parties.clone()).await?;
+
+        let mut jobs = JoinSet::new();
         // Send and retrieve from a non-existing session
-        {
-            let alice = players[0].clone();
-            jobs.spawn(async move {
-                let session_id = SessionId::from(50);
 
-                let message = b"Hey, Bob. I'm Alice. Do you copy?".to_vec();
-                let res = alice
-                    .send(message.clone(), &Identity::from("bob"), &session_id)
-                    .await;
-                assert!(res.is_err());
-                let res = alice.receive(&Identity::from("bob"), &session_id).await;
-                assert!(res.is_err());
-            });
-        }
+        let alice = players[0].clone();
+        jobs.spawn(async move {
+            let session_id = SessionId::from(50);
 
+            let message = b"Hey, Bob. I'm Alice. Do you copy?".to_vec();
+            let res = alice
+                .send(message.clone(), &Identity::from("bob"), &session_id)
+                .await;
+            assert!(res.is_err());
+            let res = alice.receive(&Identity::from("bob"), &session_id).await;
+            assert!(res.is_err());
+        });
+
+        jobs.join_all().await;
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
+    async fn test_delay() -> eyre::Result<()> {
+        let parties = generate_local_identities();
+
+        let players = setup_local_grpc_networking(parties.clone()).await?;
+
+        let mut jobs = JoinSet::new();
         // Receive from a party that didn't send a message
-        {
-            let alice = players[0].clone();
-            let players = players.clone();
-            jobs.spawn(async move {
-                let session_id = SessionId::from(4);
-                create_session_helper(session_id, &players).await.unwrap();
 
-                let res = alice.receive(&Identity::from("bob"), &session_id).await;
-                assert!(res.is_err());
-            });
-        }
+        let alice = players[0].clone();
+        let players = players.clone();
+        jobs.spawn(async move {
+            let session_id = SessionId::from(4);
+            create_session_helper(session_id, &players).await.unwrap();
+
+            let res = alice.receive(&Identity::from("bob"), &session_id).await;
+            assert!(res.is_err());
+        });
 
         jobs.join_all().await;
 
