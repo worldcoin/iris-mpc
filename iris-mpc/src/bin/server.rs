@@ -894,8 +894,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         .connect_timeout(Duration::from_secs(10))
         .build();
 
+    let force_path_style = config.environment != "prod" && config.environment != "stage";
     let s3_config = S3ConfigBuilder::from(&shared_config)
-        .force_path_style(true)
+        .force_path_style(force_path_style)
         .retry_config(retry_config.clone())
         .build();
 
