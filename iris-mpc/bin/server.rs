@@ -322,6 +322,16 @@ async fn receive_batch(
                                 batch_size.clamp(1, max_batch_size);
                             tracing::info!("Updating batch size to {}", batch_size);
                         }
+                        if let Some(skip_persistence) = uniqueness_request.skip_persistence {
+                            batch_query.skip_persistence.push(skip_persistence);
+                            tracing::info!(
+                                "Setting skip_persistence to {} for requuest id {}",
+                                skip_persistence,
+                                uniqueness_request.signup_id
+                            );
+                        } else {
+                            batch_query.skip_persistence.push(false);
+                        }
                         if config.luc_enabled {
                             if config.luc_lookback_records > 0 {
                                 batch_query.luc_lookback_records = config.luc_lookback_records;
@@ -451,7 +461,7 @@ async fn receive_batch(
                                 vec![]
                             };
                             batch_query.or_rule_indices.push(or_rule_indices);
-
+                            batch_query.skip_persistence.push(false);
                             let semaphore = Arc::clone(&semaphore);
                             let s3_client_clone = s3_client.clone();
                             let bucket_name = config.shares_bucket_name.clone();
@@ -580,19 +590,55 @@ async fn receive_batch(
 
         batch_query.valid_entries.push(valid_entry);
 
-        batch_query.store_left.code.push(store_iris_shares_left);
-        batch_query.store_left.mask.push(store_mask_shares_left);
-        batch_query.db_left.code.extend(db_iris_shares_left);
-        batch_query.db_left.mask.extend(db_mask_shares_left);
-        batch_query.query_left.code.extend(iris_shares_left);
-        batch_query.query_left.mask.extend(mask_shares_left);
+        batch_query
+            .left_iris_requests
+            .code
+            .push(store_iris_shares_left);
+        batch_query
+            .left_iris_requests
+            .mask
+            .push(store_mask_shares_left);
+        batch_query
+            .left_iris_rotated_requests
+            .code
+            .extend(db_iris_shares_left);
+        batch_query
+            .left_iris_rotated_requests
+            .mask
+            .extend(db_mask_shares_left);
+        batch_query
+            .left_iris_interpolated_requests
+            .code
+            .extend(iris_shares_left);
+        batch_query
+            .left_iris_interpolated_requests
+            .mask
+            .extend(mask_shares_left);
 
-        batch_query.store_right.code.push(store_iris_shares_right);
-        batch_query.store_right.mask.push(store_mask_shares_right);
-        batch_query.db_right.code.extend(db_iris_shares_right);
-        batch_query.db_right.mask.extend(db_mask_shares_right);
-        batch_query.query_right.code.extend(iris_shares_right);
-        batch_query.query_right.mask.extend(mask_shares_right);
+        batch_query
+            .right_iris_requests
+            .code
+            .push(store_iris_shares_right);
+        batch_query
+            .right_iris_requests
+            .mask
+            .push(store_mask_shares_right);
+        batch_query
+            .right_iris_rotated_requests
+            .code
+            .extend(db_iris_shares_right);
+        batch_query
+            .right_iris_rotated_requests
+            .mask
+            .extend(db_mask_shares_right);
+        batch_query
+            .right_iris_interpolated_requests
+            .code
+            .extend(iris_shares_right);
+        batch_query
+            .right_iris_interpolated_requests
+            .mask
+            .extend(mask_shares_right);
     }
 
     tracing::info!(
@@ -1465,13 +1511,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             request_types,
             metadata,
             matches,
+            matches_with_skip_persistence,
             match_ids,
             partial_match_ids_left,
             partial_match_ids_right,
             partial_match_counters_left,
             partial_match_counters_right,
-            store_left,
-            store_right,
+            left_iris_requests,
+            right_iris_requests,
             deleted_ids,
             matched_batch_request_ids,
             anonymized_bucket_statistics_left,
@@ -1495,7 +1542,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             true => None,
                             false => Some(idx_result + 1),
                         },
-                        matches[i],
+                        matches_with_skip_persistence[i],
                         request_ids[i].clone(),
                         match matches[i] {
                             true => Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
@@ -1547,10 +1594,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     // Get the original vectors from `receive_batch`.
                     (serial_id, StoredIrisRef {
                         id:         serial_id,
-                        left_code:  &store_left.code[query_idx].coefs[..],
-                        left_mask:  &store_left.mask[query_idx].coefs[..],
-                        right_code: &store_right.code[query_idx].coefs[..],
-                        right_mask: &store_right.mask[query_idx].coefs[..],
+                        left_code:  &left_iris_requests.code[query_idx].coefs[..],
+                        left_mask:  &left_iris_requests.mask[query_idx].coefs[..],
+                        right_code: &right_iris_requests.code[query_idx].coefs[..],
+                        right_mask: &right_iris_requests.mask[query_idx].coefs[..],
                     })
                 })
                 .unzip();
@@ -1646,10 +1693,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         .update_iris(
                             Some(&mut tx),
                             serial_id as i64,
-                            &store_left.code[i],
-                            &store_left.mask[i],
-                            &store_right.code[i],
-                            &store_right.mask[i],
+                            &left_iris_requests.code[i],
+                            &left_iris_requests.mask[i],
+                            &right_iris_requests.code[i],
+                            &right_iris_requests.mask[i],
                         )
                         .await?;
                 }

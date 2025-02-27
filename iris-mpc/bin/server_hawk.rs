@@ -548,19 +548,55 @@ async fn receive_batch(
 
         batch_query.valid_entries.push(valid_entry);
 
-        batch_query.store_left.code.push(store_iris_shares_left);
-        batch_query.store_left.mask.push(store_mask_shares_left);
-        batch_query.db_left.code.extend(db_iris_shares_left);
-        batch_query.db_left.mask.extend(db_mask_shares_left);
-        batch_query.query_left.code.extend(iris_shares_left);
-        batch_query.query_left.mask.extend(mask_shares_left);
+        batch_query
+            .left_iris_requests
+            .code
+            .push(store_iris_shares_left);
+        batch_query
+            .left_iris_requests
+            .mask
+            .push(store_mask_shares_left);
+        batch_query
+            .left_iris_rotated_requests
+            .code
+            .extend(db_iris_shares_left);
+        batch_query
+            .right_iris_rotated_requests
+            .mask
+            .extend(db_mask_shares_left);
+        batch_query
+            .left_iris_interpolated_requests
+            .code
+            .extend(iris_shares_left);
+        batch_query
+            .left_iris_interpolated_requests
+            .mask
+            .extend(mask_shares_left);
 
-        batch_query.store_right.code.push(store_iris_shares_right);
-        batch_query.store_right.mask.push(store_mask_shares_right);
-        batch_query.db_right.code.extend(db_iris_shares_right);
-        batch_query.db_right.mask.extend(db_mask_shares_right);
-        batch_query.query_right.code.extend(iris_shares_right);
-        batch_query.query_right.mask.extend(mask_shares_right);
+        batch_query
+            .right_iris_requests
+            .code
+            .push(store_iris_shares_right);
+        batch_query
+            .right_iris_requests
+            .mask
+            .push(store_mask_shares_right);
+        batch_query
+            .right_iris_rotated_requests
+            .code
+            .extend(db_iris_shares_right);
+        batch_query
+            .right_iris_rotated_requests
+            .mask
+            .extend(db_mask_shares_right);
+        batch_query
+            .right_iris_interpolated_requests
+            .code
+            .extend(iris_shares_right);
+        batch_query
+            .right_iris_interpolated_requests
+            .mask
+            .extend(mask_shares_right);
     }
 
     tracing::info!(
@@ -856,7 +892,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Initialising AWS services");
 
     // TODO: probably move into separate function
-    let region_provider = Region::new(REGION);
+    let region = config
+        .clone()
+        .aws
+        .and_then(|aws| aws.region)
+        .unwrap_or_else(|| REGION.to_owned());
+
+    let region_provider = Region::new(region);
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);
@@ -1322,6 +1364,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         party_index:         config.party_id,
         addresses:           node_addresses.clone(),
         request_parallelism: config.hawk_request_parallelism,
+        disable_persistence: config.disable_persistence,
     };
 
     tracing::info!(
@@ -1390,13 +1433,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             request_types,
             metadata,
             matches,
+            matches_with_skip_persistence,
             match_ids,
             partial_match_ids_left,
             partial_match_ids_right,
             partial_match_counters_left,
             partial_match_counters_right,
-            store_left,
-            store_right,
+            left_iris_requests,
+            right_iris_requests,
             deleted_ids,
             matched_batch_request_ids,
             anonymized_bucket_statistics_left,
@@ -1422,7 +1466,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             true => None,
                             false => Some(idx_result + 1),
                         },
-                        matches[i],
+                        matches_with_skip_persistence[i],
                         request_ids[i].clone(),
                         match matches[i] {
                             true => Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
@@ -1474,10 +1518,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     // Get the original vectors from `receive_batch`.
                     (serial_id, StoredIrisRef {
                         id:         serial_id,
-                        left_code:  &store_left.code[query_idx].coefs[..],
-                        left_mask:  &store_left.mask[query_idx].coefs[..],
-                        right_code: &store_right.code[query_idx].coefs[..],
-                        right_mask: &store_right.mask[query_idx].coefs[..],
+                        left_code:  &left_iris_requests.code[query_idx].coefs[..],
+                        left_mask:  &left_iris_requests.mask[query_idx].coefs[..],
+                        right_code: &right_iris_requests.code[query_idx].coefs[..],
+                        right_mask: &right_iris_requests.mask[query_idx].coefs[..],
                     })
                 })
                 .unzip();
@@ -1519,10 +1563,53 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     .insert_results(&mut tx, &uniqueness_results)
                     .await?;
 
+<<<<<<< HEAD
                 // Insert unmatched unique irises.
                 if !codes_and_masks.is_empty() && !config_bg.disable_persistence {
                     let db_serial_ids = iris_pgres_store_bg
                         .insert_irises(&mut tx, &codes_and_masks)
+=======
+            // TODO: update modifications table to store reauth and deletion results
+
+            if !codes_and_masks.is_empty() && !config_bg.disable_persistence {
+                let db_serial_ids = store_bg.insert_irises(&mut tx, &codes_and_masks).await?;
+
+                // Check if the serial_ids match between memory and db.
+                if memory_serial_ids != db_serial_ids {
+                    tracing::error!(
+                        "Serial IDs do not match between memory and db: {:?} != {:?}",
+                        memory_serial_ids,
+                        db_serial_ids
+                    );
+                    return Err(eyre!(
+                        "Serial IDs do not match between memory and db: {:?} != {:?}",
+                        memory_serial_ids,
+                        db_serial_ids
+                    ));
+                }
+
+                for (i, success) in successful_reauths.iter().enumerate() {
+                    if !success {
+                        continue;
+                    }
+                    let reauth_id = request_ids[i].clone();
+                    // convert from memory index (0-based) to db index (1-based)
+                    let serial_id = *reauth_target_indices.get(&reauth_id).unwrap() + 1;
+                    tracing::info!(
+                        "Persisting successful reauth update {} into postgres on serial id {} ",
+                        reauth_id,
+                        serial_id
+                    );
+                    store_bg
+                        .update_iris(
+                            Some(&mut tx),
+                            serial_id as i64,
+                            &left_iris_requests.code[i],
+                            &left_iris_requests.mask[i],
+                            &right_iris_requests.code[i],
+                            &right_iris_requests.mask[i],
+                        )
+>>>>>>> main
                         .await?;
 
                     // Check if the serial_ids match between memory and db.
@@ -1567,7 +1654,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             // Persist Graph postgres store state changes.
             let mut graph_tx = graph_store.tx_wrap(tx);
-            hawk_mutation.persist(&mut graph_tx).await?;
+            if !config_bg.disable_persistence {
+                hawk_mutation.persist(&mut graph_tx).await?;
+            }
             let tx = graph_tx.tx;
 
             // Commit postgres transaction -> i.e. flush store state changes.

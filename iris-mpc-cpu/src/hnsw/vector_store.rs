@@ -93,12 +93,11 @@ pub trait VectorStore: Clone + Debug {
     /// Override for more efficient batch comparisons.
     async fn less_than_batch(
         &mut self,
-        distance: &Self::DistanceRef,
-        distances: &[Self::DistanceRef],
+        distances: &[(Self::DistanceRef, Self::DistanceRef)],
     ) -> Vec<bool> {
-        let mut results = Vec::with_capacity(distances.len());
-        for other_distance in distances {
-            results.push(self.less_than(distance, other_distance).await);
+        let mut results: Vec<bool> = Vec::with_capacity(distances.len());
+        for (d1, d2) in distances {
+            results.push(self.less_than(d1, d2).await);
         }
         results
     }
