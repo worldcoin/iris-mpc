@@ -884,10 +884,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     // TODO: probably move into separate function
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let sqs_client = Client::new(&shared_config);
-    println!("SQS client config:{:?}", sqs_client.config());
-
     let sns_client = SNSClient::new(&shared_config);
-    println!("SNS client config: {:?}", sns_client.config());
 
     // Increase S3 retries to 5
     let retry_config = RetryConfig::standard().with_max_attempts(5);
@@ -910,7 +907,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         .build();
 
     let s3_client = S3Client::from_conf(s3_config);
-    println!("S3 client config: {:?}", s3_client.config());
     let db_chunks_s3_client = S3Client::from_conf(db_chunks_s3_config);
     let shares_encryption_key_pair =
         match SharesEncryptionKeyPairs::from_storage(config.clone()).await {
