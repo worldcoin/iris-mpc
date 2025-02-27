@@ -251,11 +251,7 @@ impl HnswSearcher {
     ///
     /// If no entry point is initialized, returns an empty list and layer 0.
     #[allow(non_snake_case)]
-    #[instrument(
-        level = "trace",
-        target = "searcher::cpu_time",
-        skip(self, vector_store, graph_store, query)
-    )]
+    #[instrument(level = "trace", target = "searcher::cpu_time", skip_all)]
     async fn search_init<V: VectorStore>(
         &self,
         vector_store: &mut V,
@@ -278,8 +274,8 @@ impl HnswSearcher {
     /// given layer using depth-first graph traversal,  Terminates when `W`
     /// contains vectors which are the nearest to `q` among all traversed
     /// vertices and their neighbors.
-    #[instrument(level = "trace",
-    target = "searcher::cpu_time",fields(event_type = Operation::LayerSearch.id()), skip(self, vector_store, graph_store, W))]
+    #[instrument(        level = "trace",
+    target = "searcher::cpu_time", fields(event_type = Operation::LayerSearch.id()), skip(self, vector_store, graph_store, q, W))]
     #[allow(non_snake_case)]
     async fn search_layer<V: VectorStore>(
         &self,
@@ -392,11 +388,7 @@ impl HnswSearcher {
     /// Insert `query` into HNSW index represented by `vector_store` and
     /// `graph_store`.  Return a `V::VectorRef` representing the inserted
     /// vector.
-    #[instrument(
-        level = "trace",
-        skip(self, vector_store, graph_store, query, rng),
-        target = "searcher::cpu_time"
-    )]
+    #[instrument(level = "trace", skip_all, target = "searcher::cpu_time")]
     pub async fn insert<V: VectorStore>(
         &self,
         vector_store: &mut V,
