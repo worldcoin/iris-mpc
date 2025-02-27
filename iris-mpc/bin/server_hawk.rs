@@ -1563,55 +1563,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     .insert_results(&mut tx, &uniqueness_results)
                     .await?;
 
-<<<<<<< HEAD
-                // Insert unmatched unique irises.
-                if !codes_and_masks.is_empty() && !config_bg.disable_persistence {
-                    let db_serial_ids = iris_pgres_store_bg
-                        .insert_irises(&mut tx, &codes_and_masks)
-=======
-            // TODO: update modifications table to store reauth and deletion results
-
-            if !codes_and_masks.is_empty() && !config_bg.disable_persistence {
-                let db_serial_ids = store_bg.insert_irises(&mut tx, &codes_and_masks).await?;
-
-                // Check if the serial_ids match between memory and db.
-                if memory_serial_ids != db_serial_ids {
-                    tracing::error!(
-                        "Serial IDs do not match between memory and db: {:?} != {:?}",
-                        memory_serial_ids,
-                        db_serial_ids
-                    );
-                    return Err(eyre!(
-                        "Serial IDs do not match between memory and db: {:?} != {:?}",
-                        memory_serial_ids,
-                        db_serial_ids
-                    ));
-                }
-
-                for (i, success) in successful_reauths.iter().enumerate() {
-                    if !success {
-                        continue;
-                    }
-                    let reauth_id = request_ids[i].clone();
-                    // convert from memory index (0-based) to db index (1-based)
-                    let serial_id = *reauth_target_indices.get(&reauth_id).unwrap() + 1;
-                    tracing::info!(
-                        "Persisting successful reauth update {} into postgres on serial id {} ",
-                        reauth_id,
-                        serial_id
-                    );
-                    store_bg
-                        .update_iris(
-                            Some(&mut tx),
-                            serial_id as i64,
-                            &left_iris_requests.code[i],
-                            &left_iris_requests.mask[i],
-                            &right_iris_requests.code[i],
-                            &right_iris_requests.mask[i],
-                        )
->>>>>>> main
-                        .await?;
-
                     // Check if the serial_ids match between memory and db.
                     if memory_serial_ids != db_serial_ids {
                         tracing::error!(
