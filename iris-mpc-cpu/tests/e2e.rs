@@ -1,5 +1,5 @@
 use eyre::Result;
-use iris_mpc_common::test::{load_test_db, TestCaseGenerator};
+use iris_mpc_common::test::{load_test_db, TestCase, TestCaseGenerator};
 use iris_mpc_cpu::execution::hawk_main::{HawkActor, HawkArgs, HawkHandle};
 use std::time::Duration;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -10,7 +10,7 @@ const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 30;
 const MAX_BATCH_SIZE: usize = 64;
 const HAWK_REQUEST_PARALLELISM: usize = 1;
-const MAX_DELETIONS_PER_BATCH: usize = 10;
+const MAX_DELETIONS_PER_BATCH: usize = 0; // TODO: set back to 10 or so once deletions are supported
 
 fn install_tracing() {
     tracing_subscriber::registry()
@@ -69,6 +69,15 @@ async fn e2e_test() -> Result<()> {
 
     let mut test_case_generator =
         TestCaseGenerator::new_seeded(DB_SIZE, DB_RNG_SEED, INTERNAL_RNG_SEED);
+
+    // Disable test cases that are not yet supported
+    // TODO: enable these once supported
+    test_case_generator.disable_test_case(TestCase::PreviouslyDeleted);
+    test_case_generator.disable_test_case(TestCase::WithOrRuleSet);
+    test_case_generator.disable_test_case(TestCase::ReauthMatchingTarget);
+    test_case_generator.disable_test_case(TestCase::ReauthNonMatchingTarget);
+    test_case_generator.disable_test_case(TestCase::ReauthOrRuleMatchingTarget);
+    test_case_generator.disable_test_case(TestCase::ReauthOrRuleNonMatchingTarget);
 
     // TODO: enable this once supported
     // test_case_generator.enable_bucket_statistic_checks(

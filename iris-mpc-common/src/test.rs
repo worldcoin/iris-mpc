@@ -82,7 +82,7 @@ pub struct E2ESharedTemplate {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TestCases {
+pub enum TestCase {
     /// Send an iris code known to be in the database
     Match,
     /// Send an iris code known to be in the database
@@ -120,6 +120,28 @@ enum TestCases {
     ReauthOrRuleNonMatchingTarget,
 }
 
+impl TestCase {
+    /// Returns the default set of allowed test cases, which is used to filter
+    /// the later selection. Should usually be the exhaustive set of all
+    /// variants.
+    fn default_test_set() -> Vec<TestCase> {
+        vec![
+            TestCase::Match,
+            TestCase::MatchSkipPersistence,
+            TestCase::NonMatch,
+            TestCase::NonMatchSkipPersistence,
+            TestCase::CloseToThreshold,
+            TestCase::PreviouslyInserted,
+            TestCase::PreviouslyDeleted,
+            TestCase::WithOrRuleSet,
+            TestCase::ReauthNonMatchingTarget,
+            TestCase::ReauthMatchingTarget,
+            TestCase::ReauthOrRuleNonMatchingTarget,
+            TestCase::ReauthOrRuleMatchingTarget,
+        ]
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DatabaseRange {
     /// Use the full database range
@@ -153,6 +175,8 @@ struct BucketStatisticParameters {
 }
 
 pub struct TestCaseGenerator {
+    /// enabled TestCases
+    enabled_test_cases: Vec<TestCase>,
     /// initial state of the Iris Database
     initial_db_state: IrisDB,
     /// full_mask_range
@@ -206,6 +230,7 @@ impl TestCaseGenerator {
         }
         let rng = StdRng::seed_from_u64(internal_rng_seed);
         Self {
+            enabled_test_cases: TestCase::default_test_set(),
             initial_db_state: db,
             full_mask_range: 0..db_size / 10,
             expected_results: HashMap::new(),
@@ -222,6 +247,15 @@ impl TestCaseGenerator {
             db_indices_used_in_current_batch: HashSet::new(),
             or_rule_matches: Vec::new(),
         }
+    }
+    pub fn enable_test_case(&mut self, test_case: TestCase) {
+        if self.enabled_test_cases.contains(&test_case) {
+            return;
+        }
+        self.enabled_test_cases.push(test_case);
+    }
+    pub fn disable_test_case(&mut self, test_case: TestCase) {
+        self.enabled_test_cases.retain(|x| x != &test_case);
     }
 
     pub fn enable_bucket_statistic_checks(
@@ -360,23 +394,25 @@ impl TestCaseGenerator {
         let mut skip_persistence = false;
         // Automatic random tests
         let mut options = vec![
-            TestCases::Match,
-            TestCases::NonMatch,
-            TestCases::CloseToThreshold,
-            TestCases::WithOrRuleSet,
-            TestCases::ReauthNonMatchingTarget,
-            TestCases::ReauthMatchingTarget,
-            TestCases::ReauthOrRuleNonMatchingTarget,
-            TestCases::ReauthOrRuleMatchingTarget,
-            TestCases::MatchSkipPersistence,
-            TestCases::NonMatchSkipPersistence,
+            TestCase::Match,
+            TestCase::NonMatch,
+            TestCase::CloseToThreshold,
+            TestCase::WithOrRuleSet,
+            TestCase::ReauthNonMatchingTarget,
+            TestCase::ReauthMatchingTarget,
+            TestCase::ReauthOrRuleNonMatchingTarget,
+            TestCase::ReauthOrRuleMatchingTarget,
+            TestCase::MatchSkipPersistence,
+            TestCase::NonMatchSkipPersistence,
         ];
         if !self.inserted_responses.is_empty() {
-            options.push(TestCases::PreviouslyInserted);
+            options.push(TestCase::PreviouslyInserted);
         }
         if !self.deleted_indices_buffer.is_empty() {
-            options.push(TestCases::PreviouslyDeleted);
+            options.push(TestCase::PreviouslyDeleted);
         };
+
+        options.retain(|x| self.enabled_test_cases.contains(x));
 
         let mut or_rule_indices: Vec<u32> = Vec::new();
 
@@ -408,7 +444,7 @@ impl TestCaseGenerator {
                 .expect("we have at least one testcase option");
             tracing::info!("Request {} has type {:?}", request_id, option);
             match &option {
-                TestCases::NonMatch => {
+                TestCase::NonMatch => {
                     tracing::info!("Sending new iris code");
                     self.expected_results
                         .insert(request_id.to_string(), ExpectedResult {
@@ -429,7 +465,7 @@ impl TestCaseGenerator {
                         right: template.clone(),
                     }
                 }
-                TestCases::NonMatchSkipPersistence => {
+                TestCase::NonMatchSkipPersistence => {
                     tracing::info!("Sending new iris code with skip persistence");
                     skip_persistence = true;
                     self.expected_results
@@ -445,7 +481,7 @@ impl TestCaseGenerator {
                         right: template.clone(),
                     }
                 }
-                TestCases::Match => {
+                TestCase::Match => {
                     tracing::info!("Sending iris code from db");
                     let (db_index, template) = self.get_iris_code_in_db(DatabaseRange::Full);
                     self.db_indices_used_in_current_batch.insert(db_index);
@@ -461,7 +497,7 @@ impl TestCaseGenerator {
                         right: template,
                     }
                 }
-                TestCases::MatchSkipPersistence => {
+                TestCase::MatchSkipPersistence => {
                     tracing::info!("Sending iris code from db with skip persistence");
                     let (db_index, template) = self.get_iris_code_in_db(DatabaseRange::Full);
                     self.db_indices_used_in_current_batch.insert(db_index);
@@ -479,7 +515,7 @@ impl TestCaseGenerator {
                         right: template,
                     }
                 }
-                TestCases::CloseToThreshold => {
+                TestCase::CloseToThreshold => {
                     tracing::info!("Sending iris code on the threshold");
                     let (db_index, mut template) =
                         self.get_iris_code_in_db(DatabaseRange::FullMaskOnly);
@@ -517,7 +553,7 @@ impl TestCaseGenerator {
                         right: template,
                     }
                 }
-                TestCases::PreviouslyInserted => {
+                TestCase::PreviouslyInserted => {
                     tracing::info!("Sending freshly inserted iris code");
                     let (idx, e2e_template) = self
                         .inserted_responses
@@ -537,7 +573,7 @@ impl TestCaseGenerator {
                         right: e2e_template.right.clone(),
                     }
                 }
-                TestCases::PreviouslyDeleted => {
+                TestCase::PreviouslyDeleted => {
                     tracing::info!("Sending deleted iris code");
                     let idx = self.rng.gen_range(0..self.deleted_indices_buffer.len());
                     let deleted_idx = self.deleted_indices_buffer[idx];
@@ -555,7 +591,7 @@ impl TestCaseGenerator {
                         left:  self.initial_db_state.db[deleted_idx as usize].clone(),
                     }
                 }
-                TestCases::WithOrRuleSet => {
+                TestCase::WithOrRuleSet => {
                     tracing::info!(
                         "Sending iris codes that match on one side but not the other with the OR \
                          rule set"
@@ -618,7 +654,7 @@ impl TestCaseGenerator {
                     }
                     template
                 }
-                TestCases::ReauthMatchingTarget => {
+                TestCase::ReauthMatchingTarget => {
                     tracing::info!(
                         "Sending reauth request with AND rule matching the target index"
                     );
@@ -638,7 +674,7 @@ impl TestCaseGenerator {
                         right: template,
                     }
                 }
-                TestCases::ReauthNonMatchingTarget => {
+                TestCase::ReauthNonMatchingTarget => {
                     tracing::info!(
                         "Sending reauth request with AND rule non-matching the target index"
                     );
@@ -663,7 +699,7 @@ impl TestCaseGenerator {
                         });
                     template
                 }
-                TestCases::ReauthOrRuleMatchingTarget => {
+                TestCase::ReauthOrRuleMatchingTarget => {
                     tracing::info!("Sending reauth request with OR rule matching the target index");
                     let (db_index, _) = self.get_iris_code_in_db(DatabaseRange::FullMaskOnly);
                     self.db_indices_used_in_current_batch.insert(db_index);
@@ -684,7 +720,7 @@ impl TestCaseGenerator {
                         });
                     template
                 }
-                TestCases::ReauthOrRuleNonMatchingTarget => {
+                TestCase::ReauthOrRuleNonMatchingTarget => {
                     tracing::info!(
                         "Sending reauth request with OR rule non-matching the target index"
                     );
