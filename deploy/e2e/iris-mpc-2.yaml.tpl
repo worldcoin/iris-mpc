@@ -233,7 +233,7 @@ iris-mpc-2:
 
   initContainer:
     enabled: true
-    image: "ghcr.io/worldcoin/iris-mpc:4913ef30024615c5dca0132a22c2971158e1cc0e" # no-cuda image
+    image: "ghcr.io/worldcoin/iris-mpc:$IRIS_MPC_KEY_MANAGER_IMAGE_TAG" # no-cuda image
     name: "iris-mpc-2-copy-cuda-libs"
     env:
       - name: AWS_REGION
