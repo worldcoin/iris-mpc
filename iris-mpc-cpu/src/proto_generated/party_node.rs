@@ -97,7 +97,7 @@ pub mod party_node_client {
             self.inner = self.inner.max_encoding_message_size(limit);
             self
         }
-        pub async fn send_message(
+        pub async fn start_message_stream(
             &mut self,
             request: impl tonic::IntoStreamingRequest<Message = super::SendRequest>,
         ) -> std::result::Result<tonic::Response<super::SendResponse>, tonic::Status> {
@@ -111,11 +111,11 @@ pub mod party_node_client {
                 })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/party_node.PartyNode/SendMessage",
+                "/party_node.PartyNode/StartMessageStream",
             );
             let mut req = request.into_streaming_request();
             req.extensions_mut()
-                .insert(GrpcMethod::new("party_node.PartyNode", "SendMessage"));
+                .insert(GrpcMethod::new("party_node.PartyNode", "StartMessageStream"));
             self.inner.client_streaming(req, path, codec).await
         }
     }
@@ -133,7 +133,7 @@ pub mod party_node_server {
     /// Generated trait containing gRPC methods that should be implemented for use with PartyNodeServer.
     #[async_trait]
     pub trait PartyNode: std::marker::Send + std::marker::Sync + 'static {
-        async fn send_message(
+        async fn start_message_stream(
             &self,
             request: tonic::Request<tonic::Streaming<super::SendRequest>>,
         ) -> std::result::Result<tonic::Response<super::SendResponse>, tonic::Status>;
@@ -214,13 +214,13 @@ pub mod party_node_server {
         }
         fn call(&mut self, req: http::Request<B>) -> Self::Future {
             match req.uri().path() {
-                "/party_node.PartyNode/SendMessage" => {
+                "/party_node.PartyNode/StartMessageStream" => {
                     #[allow(non_camel_case_types)]
-                    struct SendMessageSvc<T: PartyNode>(pub Arc<T>);
+                    struct StartMessageStreamSvc<T: PartyNode>(pub Arc<T>);
                     impl<
                         T: PartyNode,
                     > tonic::server::ClientStreamingService<super::SendRequest>
-                    for SendMessageSvc<T> {
+                    for StartMessageStreamSvc<T> {
                         type Response = super::SendResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
@@ -232,7 +232,8 @@ pub mod party_node_server {
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as PartyNode>::send_message(&inner, request).await
+                                <T as PartyNode>::start_message_stream(&inner, request)
+                                    .await
                             };
                             Box::pin(fut)
                         }
@@ -243,7 +244,7 @@ pub mod party_node_server {
                     let max_encoding_message_size = self.max_encoding_message_size;
                     let inner = self.inner.clone();
                     let fut = async move {
-                        let method = SendMessageSvc(inner);
+                        let method = StartMessageStreamSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
