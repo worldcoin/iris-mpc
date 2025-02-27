@@ -170,10 +170,10 @@ iris-mpc-0:
       value: "8"
 
     - name: SMPC__REQUESTS_QUEUE_URL
-      value: "http://sqs.eu-central-1.localhost.localstack.cloud:4566/000000000000/smpcv2-0-e2e.fifo"
+      value: "http://sqs.$AWS_REGION.localhost.localstack.cloud:4566/000000000000/smpcv2-0-e2e.fifo"
 
     - name: SMPC__RESULTS_TOPIC_ARN
-      value: "arn:aws:sns:eu-central-1:000000000000:iris-mpc-results.fifo"
+      value: "arn:aws:sns:$AWS_REGION:000000000000:iris-mpc-results.fifo"
 
     - name: SMPC__PROCESSING_TIMEOUT_SECS
       value: "600"
@@ -268,7 +268,7 @@ iris-mpc-0:
         key-manager --node-id 0 --env $ENV --region $AWS_REGION --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-public-keys
 
         # Use the actual Route53 in org-stage account (https://github.com/worldcoin/infrastructure/pull/12574)
-        HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --region eu-central-1 --dns-name orb.e2e.test --query "HostedZones[].Id" --output text)
+        HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --region $AWS_REGION --dns-name orb.e2e.test --query "HostedZones[].Id" --output text)
 
         # Generate the JSON content in memory
         BATCH_JSON=$(cat <<EOF
@@ -292,4 +292,4 @@ iris-mpc-0:
         )
 
         # Execute AWS CLI command with the generated JSON
-        aws route53 change-resource-record-sets --region eu-central-1 --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch "$BATCH_JSON"
+        aws route53 change-resource-record-sets --region $AWS_REGION --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch "$BATCH_JSON"

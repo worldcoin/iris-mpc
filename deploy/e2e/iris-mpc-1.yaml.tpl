@@ -173,10 +173,10 @@ iris-mpc-1:
       value: "8"
 
     - name: SMPC__REQUESTS_QUEUE_URL
-      value: "http://sqs.eu-central-1.localhost.localstack.cloud:4566/000000000000/smpcv2-1-e2e.fifo"
+      value: "http://sqs.$AWS_REGION.localhost.localstack.cloud:4566/000000000000/smpcv2-1-e2e.fifo"
 
     - name: SMPC__RESULTS_TOPIC_ARN
-      value: "arn:aws:sns:eu-central-1:000000000000:iris-mpc-results.fifo"
+      value: "arn:aws:sns:$AWS_REGION:000000000000:iris-mpc-results.fifo"
 
     - name: SMPC__PROCESSING_TIMEOUT_SECS
       value: "600"
