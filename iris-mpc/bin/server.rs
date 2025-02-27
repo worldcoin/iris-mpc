@@ -936,7 +936,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Initialising AWS services");
 
     // TODO: probably move into separate function
-    let region_provider = Region::new(REGION);
+    let region = config
+        .clone()
+        .aws
+        .and_then(|aws| aws.region)
+        .unwrap_or_else(|| REGION.to_owned());
+    let region_provider = Region::new(region);
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);
@@ -949,7 +954,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         .connect_timeout(Duration::from_secs(10))
         .build();
 
+    let force_path_style = config.environment != "prod" && config.environment != "stage";
     let s3_config = S3ConfigBuilder::from(&shared_config)
+        .force_path_style(force_path_style)
         .retry_config(retry_config.clone())
         .build();
 
