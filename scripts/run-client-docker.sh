@@ -18,13 +18,13 @@ done
 echo "All endpoints are healthy."
 
 
-#/bin/client \
-#    --request-topic-arn arn:aws:sns:$AWS_REGION:000000000000:iris-mpc-input.fifo \
-#    --requests-bucket-name wf-smpcv2-dev-sns-requests \
-#    --public-key-base-url "http://wf-dev-public-keys.s3.$AWS_REGION.localhost.localstack.cloud:4566" \
-#    --region $AWS_REGION \
-#    --n-repeat 1 \
-#    --random true
+/bin/client \
+    --request-topic-arn arn:aws:sns:$AWS_REGION:000000000000:iris-mpc-input.fifo \
+    --requests-bucket-name wf-smpcv2-dev-sns-requests \
+    --public-key-base-url "http://wf-dev-public-keys.s3.$AWS_REGION.localhost.localstack.cloud:4566" \
+    --region $AWS_REGION \
+    --n-repeat 1 \
+    --random true
 
 # TODO: re-add these once ready to consume results
 # --response-queue-region $AWS_REGION \
