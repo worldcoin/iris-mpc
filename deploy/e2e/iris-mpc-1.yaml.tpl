@@ -139,9 +139,6 @@ iris-mpc-1:
     - name: AWS_ENDPOINT_URL
       value: "http://localstack:4566"
 
-    - name: SMPC__AWS__ENDPOINT
-      value: "http://localstack:4566"
-
     - name: RUST_BACKTRACE
       value: "full"
 
