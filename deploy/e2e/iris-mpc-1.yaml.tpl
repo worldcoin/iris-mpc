@@ -109,14 +109,20 @@ iris-mpc-1:
     - name: NCCL_DEBUG_SUBSYS
       value: "ALL"
 
-    - name: NCCL_SOCKET_FAMILY
-      value: "AF_INET"
-
     - name: NCCL_SOCKET_IFNAME
       value: "eth0"
 
     - name: NCCL_DEBUG
       value: "TRACE"
+
+    - name: NCCL_IB_DISABLE
+      value: "1"
+
+    - name: NCCL_IBEXT_DISABLE
+      value: "1"
+
+    - name: NCCL_NET
+      value: "Socket"
 
     - name: RUST_LOG
       value: "info"
@@ -131,6 +137,9 @@ iris-mpc-1:
       value: "secret_key"
 
     - name: AWS_ENDPOINT_URL
+      value: "http://localstack:4566"
+
+    - name: SMPC__AWS__ENDPOINT
       value: "http://localstack:4566"
 
     - name: RUST_BACKTRACE
@@ -170,7 +179,7 @@ iris-mpc-1:
       value: "arn:aws:sns:eu-central-1:000000000000:iris-mpc-results.fifo"
 
     - name: SMPC__PROCESSING_TIMEOUT_SECS
-      value: "60"
+      value: "600"
 
     - name: SMPC__PATH
       value: "/data/"
@@ -197,7 +206,7 @@ iris-mpc-1:
       value: "5000"
 
     - name: SMPC__MAX_DB_SIZE
-      value: "110000"
+      value: "10000"
 
     - name: SMPC__MAX_BATCH_SIZE
       value: "64"
