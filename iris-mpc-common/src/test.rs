@@ -1,6 +1,7 @@
 use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
+        inmemory_store::InMemoryStore,
         smpc_request::{REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
         statistics::BucketStatistics,
     },
@@ -9,6 +10,7 @@ use crate::{
         iris::{IrisCode, IrisCodeArray},
     },
     job::{BatchQuery, JobSubmissionHandle, ServerJobResult},
+    IRIS_CODE_LENGTH,
 };
 use eyre::Result;
 use itertools::izip;
@@ -23,7 +25,7 @@ use std::{
 };
 use uuid::Uuid;
 
-const THRESHOLD_ABSOLUTE: usize = 4800; // 0.375 * 12800
+const THRESHOLD_ABSOLUTE: usize = IRIS_CODE_LENGTH * 375 / 1000; // 0.375 * 12800
 
 #[derive(Clone)]
 pub struct E2ETemplate {
@@ -1050,11 +1052,12 @@ fn check_bucket_statistics(
     Ok(())
 }
 
-pub fn generate_test_db(
+pub fn load_test_db(
     party_id: usize,
     db_size: usize,
     db_rng_seed: u64,
-) -> Result<(Vec<u16>, Vec<u16>)> {
+    loader: &mut impl InMemoryStore,
+) -> Result<()> {
     let mut rng = StdRng::seed_from_u64(db_rng_seed);
     let mut db = IrisDB::new_random_par(db_size, &mut rng);
 
@@ -1065,27 +1068,19 @@ pub fn generate_test_db(
 
     let mut share_rng = StdRng::from_rng(rng).unwrap();
 
-    let codes_db = db
-        .db
-        .iter()
-        .flat_map(|iris| {
+    for (idx, iris) in db.db.into_iter().enumerate() {
+        let code =
             GaloisRingIrisCodeShare::encode_iris_code(&iris.code, &iris.mask, &mut share_rng)
                 [party_id]
-                .coefs
-        })
-        .collect::<Vec<_>>();
+                .coefs;
+        let mask: GaloisRingTrimmedMaskCodeShare =
+            GaloisRingIrisCodeShare::encode_mask_code(&iris.mask, &mut share_rng)[party_id]
+                .clone()
+                .into();
+        let mask = mask.coefs;
+        loader.load_single_record_from_db(idx, &code, &mask, &code, &mask);
+        loader.increment_db_size(idx);
+    }
 
-    let masks_db = db
-        .db
-        .iter()
-        .flat_map(|iris| {
-            let mask: GaloisRingTrimmedMaskCodeShare =
-                GaloisRingIrisCodeShare::encode_mask_code(&iris.mask, &mut share_rng)[party_id]
-                    .clone()
-                    .into();
-            mask.coefs
-        })
-        .collect::<Vec<_>>();
-
-    Ok((codes_db, masks_db))
+    Ok(())
 }

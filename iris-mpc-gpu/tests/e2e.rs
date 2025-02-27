@@ -1,7 +1,11 @@
+#[cfg(feature = "gpu_dependent")]
 mod e2e_test {
     use cudarc::nccl::Id;
     use eyre::Result;
-    use iris_mpc_common::test::{generate_test_db, TestCaseGenerator};
+    use iris_mpc_common::{
+        helpers::inmemory_store::InMemoryStore,
+        test::{load_test_db, TestCaseGenerator},
+    };
     use iris_mpc_gpu::{helpers::device_manager::DeviceManager, server::ServerActor};
     use std::{env, sync::Arc};
     use tokio::sync::oneshot;
@@ -33,10 +37,6 @@ mod e2e_test {
         install_tracing();
         env::set_var("NCCL_P2P_LEVEL", "LOC");
         env::set_var("NCCL_NET", "Socket");
-
-        let db0: (Vec<u16>, Vec<u16>) = generate_test_db(0, DB_SIZE, DB_RNG_SEED)?;
-        let db1 = generate_test_db(1, DB_SIZE, DB_RNG_SEED)?;
-        let db2 = generate_test_db(2, DB_SIZE, DB_RNG_SEED)?;
 
         let chacha_seeds0 = ([0u32; 8], [2u32; 8]);
         let chacha_seeds1 = ([1u32; 8], [0u32; 8]);
@@ -83,8 +83,8 @@ mod e2e_test {
                 false,
             ) {
                 Ok((mut actor, handle)) => {
-                    actor.load_full_db(&(&db0.0, &db0.1), &(&db0.0, &db0.1), DB_SIZE);
-                    actor.register_host_memory();
+                    load_test_db(0, DB_SIZE, DB_RNG_SEED, &mut actor).unwrap();
+                    actor.preprocess_db();
                     tx0.send(Ok(handle)).unwrap();
                     actor
                 }
@@ -115,8 +115,8 @@ mod e2e_test {
                 false,
             ) {
                 Ok((mut actor, handle)) => {
-                    actor.load_full_db(&(&db1.0, &db1.1), &(&db1.0, &db1.1), DB_SIZE);
-                    actor.register_host_memory();
+                    load_test_db(1, DB_SIZE, DB_RNG_SEED, &mut actor).unwrap();
+                    actor.preprocess_db();
                     tx1.send(Ok(handle)).unwrap();
                     actor
                 }
@@ -147,8 +147,8 @@ mod e2e_test {
                 false,
             ) {
                 Ok((mut actor, handle)) => {
-                    actor.load_full_db(&(&db2.0, &db2.1), &(&db2.0, &db2.1), DB_SIZE);
-                    actor.register_host_memory();
+                    load_test_db(2, DB_SIZE, DB_RNG_SEED, &mut actor).unwrap();
+                    actor.preprocess_db();
                     tx2.send(Ok(handle)).unwrap();
                     actor
                 }
