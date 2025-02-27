@@ -12,8 +12,5 @@ cargo run --bin client -- \
     --public-key-base-url "http://localhost:4566/wf-dev-public-keys" \
     --region us-east-1 \
     --n-repeat 1 \
-    --random true
-
-# TODO: re-add these once ready to consume results
-# --response-queue-region us-east-1 \
-# --response-queue-url https://sqs.eu-north-1.amazonaws.com/654654380399/temporal-results.fifo \
+    --random true \
+    --response-queue-url ttp://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/iris-mpc-results-us-east-1.fifo
