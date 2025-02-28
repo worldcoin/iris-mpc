@@ -13,7 +13,7 @@ use crate::{
     },
     network::grpc::{GrpcConfig, GrpcNetworking},
     proto_generated::party_node::party_node_server::PartyNodeServer,
-    protocol::{gr_shared_iris::GaloisRingSharedIris, ops::setup_replicated_prf},
+    protocol::{ops::setup_replicated_prf, shared_iris::GaloisRingSharedIris},
 };
 use aes_prng::AesRng;
 use clap::Parser;
@@ -743,7 +743,7 @@ pub async fn hawk_main(args: HawkArgs) -> Result<HawkHandle> {
 mod tests {
     use super::*;
     use crate::{
-        execution::local::get_free_local_addresses, protocol::gr_shared_iris::GaloisRingSharedIris,
+        execution::local::get_free_local_addresses, protocol::shared_iris::GaloisRingSharedIris,
     };
     use iris_mpc_common::{
         helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE, iris_db::db::IrisDB, job::BatchMetadata,
@@ -790,7 +790,7 @@ mod tests {
         let irises = IrisDB::new_random_rng(batch_size, iris_rng)
             .db
             .into_iter()
-            .map(|iris| GaloisRingSharedIris::generate_galois_iris_shares(iris_rng, iris))
+            .map(|iris| GaloisRingSharedIris::generate_shares_locally(iris_rng, iris))
             .collect_vec();
         // Unzip: party -> iris_id -> share
         let irises = (0..n_parties)

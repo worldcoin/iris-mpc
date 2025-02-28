@@ -34,7 +34,8 @@ impl GaloisRingSharedIris {
         }
     }
 
-    pub fn generate_galois_iris_shares<R: Rng + CryptoRng>(
+    /// Generate iris code shares of an input iris code using local randomness
+    pub fn generate_shares_locally<R: Rng + CryptoRng>(
         rng: &mut R,
         iris: IrisCode,
     ) -> Vec<GaloisRingSharedIris> {
