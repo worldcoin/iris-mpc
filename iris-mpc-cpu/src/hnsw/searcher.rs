@@ -535,6 +535,17 @@ impl HnswSearcher {
             Some((_, smallest_distance)) => vector_store.is_match(smallest_distance).await,
         }
     }
+
+    pub async fn match_count<V: VectorStore>(
+        &self,
+        vector_store: &mut V,
+        neighbors: &[SortedNeighborhoodV<V>],
+    ) -> usize {
+        match neighbors.first() {
+            None => 0, // Empty database.
+            Some(bottom_layer) => bottom_layer.match_count(vector_store).await,
+        }
+    }
 }
 
 #[cfg(test)]
