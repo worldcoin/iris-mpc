@@ -41,6 +41,8 @@ use tonic::transport::Server;
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
 
+mod matching;
+
 #[derive(Clone, Parser)]
 pub struct HawkArgs {
     #[clap(short, long)]
@@ -116,10 +118,16 @@ pub type ConnectPlan = ConnectPlanV<Aby3Store>;
 
 #[derive(Debug)]
 pub struct InsertPlanV<V: VectorStore> {
-    query:    V::QueryRef,
-    links:    Vec<SortedNeighborhoodV<V>>,
-    set_ep:   bool,
-    is_match: bool,
+    query:       V::QueryRef,
+    links:       Vec<SortedNeighborhoodV<V>>,
+    match_count: usize,
+    set_ep:      bool,
+}
+
+impl<V: VectorStore> InsertPlanV<V> {
+    pub fn is_match(&self) -> bool {
+        self.match_count > 0
+    }
 }
 
 impl HawkActor {
@@ -321,15 +329,15 @@ impl HawkActor {
             )
             .await;
 
-        let is_match = search_params
-            .is_match(&mut session.aby3_store, &links)
+        let match_count = search_params
+            .match_count(&mut session.aby3_store, &links)
             .await;
 
         InsertPlan {
             query,
             links,
+            match_count,
             set_ep,
-            is_match,
         }
     }
 
@@ -492,7 +500,7 @@ impl HawkRequest {
     // TODO: Account for rotated and mirrored versions.
     fn is_insertion(both_insert_plans: &BothEyes<Vec<InsertPlan>>) -> Vec<bool> {
         izip!(&both_insert_plans[0], &both_insert_plans[1])
-            .map(|(left, right)| !(left.is_match && right.is_match))
+            .map(|(left, right)| !(left.is_match() && right.is_match()))
             .collect_vec()
     }
 
