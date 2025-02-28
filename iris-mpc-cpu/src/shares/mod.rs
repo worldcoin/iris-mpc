@@ -4,3 +4,7 @@ pub(crate) mod ring_impl;
 pub(crate) mod share;
 pub(crate) mod vecshare;
 pub(crate) mod vecshare_bittranspose;
+
+pub use int_ring::IntRing2k;
+pub use ring_impl::RingElement;
+pub use share::Share;

@@ -1,5 +1,4 @@
 use crate::{
-    database_generators::{generate_galois_iris_shares, GaloisRingSharedIris},
     execution::{
         local::{generate_local_identities, LocalRuntime},
         player::Identity,
@@ -11,9 +10,12 @@ use crate::{
         HnswSearcher, SortedNeighborhood, VectorStore,
     },
     network::NetworkType,
-    protocol::ops::{
-        batch_signed_lift_vec, compare_threshold_and_open, cross_compare,
-        galois_ring_pairwise_distance, galois_ring_to_rep3,
+    protocol::{
+        ops::{
+            batch_signed_lift_vec, compare_threshold_and_open, cross_compare,
+            galois_ring_pairwise_distance, galois_ring_to_rep3,
+        },
+        shared_iris::GaloisRingSharedIris,
     },
     py_bindings::{io::read_bin, plaintext_store::from_ndjson_file},
     shares::{
@@ -184,7 +186,7 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
     let mut shared_irises = vec![vec![]; identities.len()];
 
     for iris in plain_store.points.iter() {
-        let all_shares = generate_galois_iris_shares(rng, iris.data.0.clone());
+        let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, iris.data.0.clone());
         for (i, shares) in all_shares.iter().enumerate() {
             shared_irises[i].push(shares.clone());
         }
@@ -596,7 +598,9 @@ impl Aby3Store {
         let rng_searcher = AesRng::from_rng(rng.clone())?;
         let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
         let shared_irises: Vec<_> = (0..database_size)
-            .map(|id| generate_galois_iris_shares(rng, cleartext_database[id].clone()))
+            .map(|id| {
+                GaloisRingSharedIris::generate_shares_locally(rng, cleartext_database[id].clone())
+            })
             .collect();
 
         let mut local_stores = setup_local_store_aby3_players(network_t).await?;
@@ -652,8 +656,8 @@ impl Aby3Store {
 mod tests {
     use super::*;
     use crate::{
-        database_generators::generate_galois_iris_shares,
         hnsw::{GraphMem, HnswSearcher},
+        protocol::shared_iris::GaloisRingSharedIris,
     };
     use aes_prng::AesRng;
     use itertools::Itertools;
@@ -667,7 +671,7 @@ mod tests {
         let cleartext_database = IrisDB::new_random_rng(database_size, &mut rng).db;
         let shared_irises: Vec<_> = cleartext_database
             .iter()
-            .map(|iris| generate_galois_iris_shares(&mut rng, iris.clone()))
+            .map(|iris| GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone()))
             .collect();
 
         let mut stores = setup_local_store_aby3_players(NetworkType::LocalChannel)
@@ -797,7 +801,7 @@ mod tests {
         let cleartext_database = IrisDB::new_random_rng(db_dim, &mut rng).db;
         let shared_irises: Vec<_> = cleartext_database
             .iter()
-            .map(|iris| generate_galois_iris_shares(&mut rng, iris.clone()))
+            .map(|iris| GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone()))
             .collect();
         let mut local_stores = setup_local_store_aby3_players(NetworkType::LocalChannel)
             .await
