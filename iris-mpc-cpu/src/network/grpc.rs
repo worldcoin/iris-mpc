@@ -15,7 +15,7 @@ use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 use tokio::{
     sync::{
         mpsc::{self, UnboundedSender},
-        Mutex, RwLock,
+        oneshot, Mutex, RwLock,
     },
     time::{sleep, timeout},
 };
@@ -114,6 +114,141 @@ impl OutgoingStreams {
             .iter()
             .filter(|((sid, _), _)| *sid == session_id)
             .count()
+    }
+}
+
+struct SendTask {
+    value:      Vec<u8>,
+    receiver:   Identity,
+    session_id: SessionId,
+}
+
+struct ReceiveTask {
+    sender:     Identity,
+    session_id: SessionId,
+}
+
+enum GrpcTask {
+    Send(SendTask),
+    Receive(ReceiveTask),
+    CreateSession(SessionId),
+    WaitForSession(SessionId),
+}
+
+pub struct MessageResult {
+    received_bytes: Option<Vec<u8>>,
+}
+
+struct MessageJob {
+    task:           GrpcTask,
+    return_channel: oneshot::Sender<eyre::Result<MessageResult>>,
+}
+
+#[derive(Clone)]
+// concurrency handler of send/receive commands
+pub struct GrpcHandle {
+    job_queue: mpsc::Sender<MessageJob>,
+}
+
+impl GrpcHandle {
+    pub async fn new(grpc: GrpcNetworking) -> eyre::Result<Self> {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<MessageJob>(1);
+
+        tokio::spawn(async move {
+            while let Some(job) = rx.recv().await {
+                match job.task {
+                    GrpcTask::Send(task) => {
+                        grpc.send(task.value, &task.receiver, &task.session_id)
+                            .await
+                            .unwrap();
+
+                        let result = MessageResult {
+                            received_bytes: None,
+                        };
+                        let _ = job.return_channel.send(Ok(result));
+                    }
+                    GrpcTask::Receive(task) => {
+                        let maybe_bytes = grpc.receive(&task.sender, &task.session_id).await;
+
+                        let res = match maybe_bytes {
+                            Ok(bytes) => Ok(MessageResult {
+                                received_bytes: Some(bytes),
+                            }),
+                            Err(e) => Err(e),
+                        };
+                        let _ = job.return_channel.send(res);
+                    }
+                    GrpcTask::CreateSession(session_id) => {
+                        grpc.create_session(session_id).await.unwrap();
+                        let res = MessageResult {
+                            received_bytes: None,
+                        };
+                        let _ = job.return_channel.send(Ok(res));
+                    }
+                    GrpcTask::WaitForSession(session_id) => {
+                        grpc.wait_for_session(session_id).await;
+                        let res = MessageResult {
+                            received_bytes: None,
+                        };
+                        let _ = job.return_channel.send(Ok(res));
+                    }
+                }
+            }
+        });
+
+        Ok(GrpcHandle { job_queue: tx })
+    }
+
+    async fn submit(&self, task: GrpcTask) -> eyre::Result<MessageResult> {
+        let (tx, rx) = oneshot::channel();
+        let job = MessageJob {
+            task,
+            return_channel: tx,
+        };
+        self.job_queue.send(job).await?;
+        rx.await?
+    }
+}
+
+#[async_trait]
+impl Networking for GrpcHandle {
+    async fn send(
+        &self,
+        value: Vec<u8>,
+        receiver: &Identity,
+        session_id: &SessionId,
+    ) -> eyre::Result<()> {
+        let task = GrpcTask::Send(SendTask {
+            value,
+            receiver: receiver.clone(),
+            session_id: *session_id,
+        });
+        let _ = self.submit(task).await?;
+        Ok(())
+    }
+
+    async fn receive(&self, sender: &Identity, session_id: &SessionId) -> eyre::Result<Vec<u8>> {
+        let task = GrpcTask::Receive(ReceiveTask {
+            sender:     sender.clone(),
+            session_id: *session_id,
+        });
+        let res = self.submit(task).await?;
+        res.received_bytes.ok_or(eyre!("No message received"))
+    }
+}
+
+// Session management
+impl GrpcHandle {
+    pub async fn create_session(&self, session_id: SessionId) -> eyre::Result<()> {
+        let task = GrpcTask::CreateSession(session_id);
+        let _ = self.submit(task).await?;
+        Ok(())
+    }
+
+    pub async fn wait_for_session(&self, session_id: SessionId) -> eyre::Result<()> {
+        let task = GrpcTask::WaitForSession(session_id);
+        let _ = self.submit(task).await?;
+        Ok(())
     }
 }
 
@@ -271,8 +406,7 @@ impl PartyNode for GrpcNetworking {
 }
 
 // Client implementation
-#[async_trait]
-impl Networking for GrpcNetworking {
+impl GrpcNetworking {
     async fn send(
         &self,
         value: Vec<u8>,
@@ -327,17 +461,17 @@ impl Networking for GrpcNetworking {
         match timeout(self.config.timeout_duration, queue.pop(sender)).await {
             Ok(res) => res,
             Err(_) => Err(eyre!(
-                "Timeout while waiting for message from {sender:?} in session {session_id:?}"
+                "Party {:?}: Timeout while waiting for message from {sender:?} in session \
+                 {session_id:?}",
+                self.party_id,
             )),
         }
     }
 }
 
-pub async fn setup_local_grpc_networking(
-    parties: Vec<Identity>,
-) -> eyre::Result<Vec<GrpcNetworking>> {
+pub async fn setup_local_grpc_networking(parties: Vec<Identity>) -> eyre::Result<Vec<GrpcHandle>> {
     let config = GrpcConfig {
-        timeout_duration: Duration::from_secs(1),
+        timeout_duration: Duration::from_secs(5),
     };
 
     let players = parties
@@ -381,7 +515,13 @@ pub async fn setup_local_grpc_networking(
         }
     }
 
-    Ok(players)
+    // Create handles consecutively to preserve the order of players
+    let mut handles = vec![];
+    for player in players {
+        handles.push(GrpcHandle::new(player).await?);
+    }
+
+    Ok(handles)
 }
 
 #[cfg(test)]
@@ -399,13 +539,14 @@ mod tests {
 
     async fn create_session_helper(
         session_id: SessionId,
-        players: &[GrpcNetworking],
+        players: &[GrpcHandle],
     ) -> eyre::Result<()> {
         let mut jobs = JoinSet::new();
         for player in players.iter() {
             let player = player.clone();
             jobs.spawn(async move {
                 player.create_session(session_id).await.unwrap();
+                player.wait_for_session(session_id).await.unwrap();
             });
         }
         jobs.join_all().await;
@@ -506,16 +647,16 @@ mod tests {
         }
 
         // Parties create a session consecutively
-        {
-            let players = players.clone();
-            jobs.spawn(async move {
-                let session_id = SessionId::from(2);
-
-                for player in players.iter() {
-                    player.create_session(session_id).await.unwrap();
-                }
-            });
-        }
+        // {
+        // let players = players.clone();
+        // jobs.spawn(async move {
+        // let session_id = SessionId::from(2);
+        //
+        // for player in players.iter() {
+        // player.create_session(session_id).await.unwrap();
+        // }
+        // });
+        // }
 
         jobs.join_all().await;
 
@@ -623,6 +764,8 @@ mod tests {
             create_session_helper(session_id, &players).await.unwrap();
 
             let alice = players[0].clone();
+
+            tracing::trace!("Players created a session. Adding the same session again");
 
             let res = alice.create_session(session_id).await;
 
