@@ -1,4 +1,5 @@
 use super::player::Identity;
+pub use crate::hawkers::aby3_store::VectorId;
 use crate::{
     database_generators::GaloisRingSharedIris,
     execution::{
@@ -24,6 +25,7 @@ use iris_mpc_common::{
     job::{BatchQuery, JobSubmissionHandle},
 };
 use itertools::{izip, Itertools};
+use matching::BatchStep1;
 use rand::{thread_rng, Rng, SeedableRng};
 use std::{
     collections::HashMap,
@@ -125,8 +127,19 @@ pub struct InsertPlanV<V: VectorStore> {
 }
 
 impl<V: VectorStore> InsertPlanV<V> {
+    pub fn match_count(&self) -> usize {
+        self.match_count
+    }
+
     pub fn is_match(&self) -> bool {
         self.match_count > 0
+    }
+
+    pub fn nearest_neighbors(&self) -> Vec<V::VectorRef> {
+        self.links
+            .first()
+            .map(|layer| layer.iter().map(|(id, _)| id.clone()).collect())
+            .unwrap_or_default()
     }
 }
 
@@ -496,14 +509,6 @@ impl HawkRequest {
         &self.shares
     }
 
-    /// *AND* policy: only match, if both eyes match (like `mergeDbResults`).
-    // TODO: Account for rotated and mirrored versions.
-    fn is_insertion(both_insert_plans: &BothEyes<Vec<InsertPlan>>) -> Vec<bool> {
-        izip!(&both_insert_plans[0], &both_insert_plans[1])
-            .map(|(left, right)| !(left.is_match() && right.is_match()))
-            .collect_vec()
-    }
-
     fn filter_for_insertion(
         &self,
         both_insert_plans: BothEyes<Vec<InsertPlan>>,
@@ -641,7 +646,9 @@ impl HawkHandle {
                     // TODO: Optimize for pure searches (rotations).
                 }
 
-                let is_insertion = HawkRequest::is_insertion(&both_insert_plans);
+                let match_result = BatchStep1::new(&both_insert_plans);
+
+                let is_insertion = match_result.is_insertion();
                 let (insert_indices, both_insert_plans) = job
                     .request
                     .filter_for_insertion(both_insert_plans, &is_insertion);
