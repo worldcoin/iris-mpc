@@ -111,7 +111,7 @@ env:
     value: "true"
 
   - name: SMPC__LUC_LOOKBACK_RECORDS
-    value: "50"
+    value: "1"
 
   - name: SMPC__LUC_ENABLED
     value: "true"
