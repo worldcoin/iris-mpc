@@ -25,6 +25,8 @@ futures.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 itertools.workspace = true
+metrics = "0.22.1"
+metrics-exporter-statsd = "0.7"
 num-traits.workspace = true
 prost = "0.13"
 rand.workspace = true
@@ -34,11 +36,19 @@ serde.workspace = true
 serde_json.workspace = true
 static_assertions.workspace = true
 sqlx.workspace = true
+telemetry-batteries.workspace = true
 tokio.workspace = true
 tokio-stream = "0.1"
 tonic = "0.12.3"
 tracing.workspace = true
-tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", rev = "5683eba", features = ["uuid", "chrono", "smallvec", "tokio", "serde", "env-filter"] }
+tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", rev = "5683eba", features = [
+    "uuid",
+    "chrono",
+    "smallvec",
+    "tokio",
+    "serde",
+    "env-filter",
+] }
 tracing-subscriber.workspace = true
 tracing-test = "0.2.5"
 uuid.workspace = true
@@ -76,5 +86,17 @@ name = "hawk_main"
 path = "bin/hawk_main.rs"
 
 [[bin]]
+name = "hawk-genesis-indexer"
+path = "bin/hawk_genesis_indexer.rs"
+
+[[bin]]
 name = "hnsw_network_stats_example"
 path = "bin/hnsw_network_stats_example.rs"
+
+# Abort on panics rather than unwinding: improves performance and panic propagation reliability.
+[profile.release]
+panic = 'abort'
+debug = 1
+
+[profile.dev]
+panic = 'abort'
