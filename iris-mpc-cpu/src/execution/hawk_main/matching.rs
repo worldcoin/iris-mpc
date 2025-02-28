@@ -44,18 +44,14 @@ impl Step1 {
     pub fn step2(&self) -> Step2 {
         let mut full_join: HashMap<VectorId, BothEyes<Option<bool>>> = HashMap::new();
 
-        let left_match = repeat(true)
-            .take(self.match_counts[LEFT])
-            .chain(repeat(false));
-        for (left, left_match) in izip!(&self.neighbors[LEFT], left_match) {
-            full_join.insert(*left, [Some(left_match), None]);
-        }
+        for side in [LEFT, RIGHT] {
+            let is_match = repeat(true)
+                .take(self.match_counts[side])
+                .chain(repeat(false));
 
-        let right_match = repeat(true)
-            .take(self.match_counts[RIGHT])
-            .chain(repeat(false));
-        for (right, right_match) in izip!(&self.neighbors[RIGHT], right_match) {
-            full_join.entry(*right).or_default()[RIGHT] = Some(right_match);
+            for (vector_id, is_match) in izip!(&self.neighbors[side], is_match) {
+                full_join.entry(*vector_id).or_default()[side] = Some(is_match);
+            }
         }
 
         let mut step2 = Step2::default();
