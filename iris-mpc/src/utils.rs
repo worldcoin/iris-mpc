@@ -1,47 +1,8 @@
-use aws_sdk_sqs::Client;
-use iris_mpc_common::{
-    config::Config,
-    helpers::{
-        kms_dh::derive_shared_secret,
-        smpc_request::{CircuitBreakerRequest, ReceiveRequestError, SQSMessage},
-    },
-};
+use iris_mpc_common::{config::Config, helpers::kms_dh::derive_shared_secret};
 use metrics_exporter_statsd::StatsdBuilder;
 use std::{backtrace::Backtrace, panic};
 use telemetry_batteries::tracing::{datadog::DatadogBattery, TracingShutdownHandle};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
-pub async fn handle_circuit_breaker_message(
-    message: &SQSMessage,
-    sqs_message: &aws_sdk_sqs::types::Message,
-    client: &Client,
-    queue_url: &str,
-    batch_size: &mut usize,
-    max_batch_size: usize,
-) -> eyre::Result<(), ReceiveRequestError> {
-    let circuit_breaker_request: CircuitBreakerRequest = serde_json::from_str(&message.message)
-        .map_err(|e| ReceiveRequestError::json_parse_error("circuit_breaker_request", e))?;
-
-    metrics::counter!("request.received", "type" => "circuit_breaker").increment(1);
-
-    client
-        .delete_message()
-        .queue_url(queue_url)
-        .receipt_handle(sqs_message.receipt_handle.clone().unwrap())
-        .send()
-        .await
-        .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
-
-    if let Some(new_batch_size) = circuit_breaker_request.batch_size {
-        *batch_size = new_batch_size.clamp(1, max_batch_size);
-        tracing::info!(
-            "Updating batch size to {} due to circuit breaker message",
-            new_batch_size
-        );
-    }
-
-    Ok(())
-}
 
 pub fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
     if let Some(service) = &config.service {
