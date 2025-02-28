@@ -38,10 +38,10 @@ impl GaloisRingSharedIris {
     pub fn generate_shares_locally<R: Rng + CryptoRng>(
         rng: &mut R,
         iris: IrisCode,
-    ) -> Vec<GaloisRingSharedIris> {
+    ) -> [GaloisRingSharedIris; 3] {
         let code_shares = GaloisRingIrisCodeShare::encode_iris_code(&iris.code, &iris.mask, rng);
         let mask_shares = GaloisRingIrisCodeShare::encode_mask_code(&iris.mask, rng);
-        vec![
+        [
             GaloisRingSharedIris {
                 code: code_shares[0].clone(),
                 mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares[0]),
