@@ -1,4 +1,3 @@
-// use crate::shares::{ring_impl::RingElement};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     iris_db::iris::IrisCode,
@@ -7,9 +6,6 @@ use iris_mpc_common::{
 use itertools::izip;
 use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
-
-// type ShareRing = u16;
-// type ShareRingPlain = RingElement<ShareRing>;
 
 #[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize, Hash)]
 pub struct GaloisRingSharedIris {

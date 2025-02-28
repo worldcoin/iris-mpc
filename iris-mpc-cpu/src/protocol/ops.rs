@@ -4,8 +4,8 @@ use crate::{
     network::value::NetworkValue::{self},
     protocol::{
         binary::{lift, open_bin},
-        prf::{Prf, PrfSeed},
         gr_shared_iris::GaloisRingSharedIris,
+        prf::{Prf, PrfSeed},
     },
     shares::{
         bit::Bit,
@@ -282,10 +282,7 @@ mod tests {
             player::Identity,
         },
         hawkers::plaintext_store::PlaintextIris,
-        protocol::{
-            ops::NetworkValue::RingElement32,
-            gr_shared_iris::GaloisRingSharedIris,
-        },
+        protocol::{gr_shared_iris::GaloisRingSharedIris, ops::NetworkValue::RingElement32},
         shares::{int_ring::IntRing2k, ring_impl::RingElement},
     };
     use aes_prng::AesRng;
@@ -558,8 +555,10 @@ mod tests {
 
         let iris_db = IrisDB::new_random_rng(2, &mut rng).db;
 
-        let first_entry = GaloisRingSharedIris::generate_galois_iris_shares(&mut rng, iris_db[0].clone());
-        let second_entry = GaloisRingSharedIris::generate_galois_iris_shares(&mut rng, iris_db[1].clone());
+        let first_entry =
+            GaloisRingSharedIris::generate_galois_iris_shares(&mut rng, iris_db[0].clone());
+        let second_entry =
+            GaloisRingSharedIris::generate_galois_iris_shares(&mut rng, iris_db[1].clone());
 
         let mut jobs = JoinSet::new();
         for (index, player) in runtime.get_identities().iter().cloned().enumerate() {

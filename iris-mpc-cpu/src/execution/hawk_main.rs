@@ -13,10 +13,7 @@ use crate::{
     },
     network::grpc::{GrpcConfig, GrpcNetworking},
     proto_generated::party_node::party_node_server::PartyNodeServer,
-    protocol::{
-        ops::setup_replicated_prf,
-        gr_shared_iris::GaloisRingSharedIris,
-    }
+    protocol::{gr_shared_iris::GaloisRingSharedIris, ops::setup_replicated_prf},
 };
 use aes_prng::AesRng;
 use clap::Parser;
@@ -746,8 +743,7 @@ pub async fn hawk_main(args: HawkArgs) -> Result<HawkHandle> {
 mod tests {
     use super::*;
     use crate::{
-        execution::local::get_free_local_addresses,
-        protocol::gr_shared_iris::GaloisRingSharedIris,
+        execution::local::get_free_local_addresses, protocol::gr_shared_iris::GaloisRingSharedIris,
     };
     use iris_mpc_common::{
         helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE, iris_db::db::IrisDB, job::BatchMetadata,

@@ -11,11 +11,11 @@ use crate::{
     },
     network::NetworkType,
     protocol::{
+        gr_shared_iris::GaloisRingSharedIris,
         ops::{
             batch_signed_lift_vec, compare_threshold_and_open, cross_compare,
             galois_ring_pairwise_distance, galois_ring_to_rep3,
         },
-        gr_shared_iris::GaloisRingSharedIris,
     },
     py_bindings::{io::read_bin, plaintext_store::from_ndjson_file},
     shares::{
@@ -186,7 +186,8 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
     let mut shared_irises = vec![vec![]; identities.len()];
 
     for iris in plain_store.points.iter() {
-        let all_shares = GaloisRingSharedIris::generate_galois_iris_shares(rng, iris.data.0.clone());
+        let all_shares =
+            GaloisRingSharedIris::generate_galois_iris_shares(rng, iris.data.0.clone());
         for (i, shares) in all_shares.iter().enumerate() {
             shared_irises[i].push(shares.clone());
         }
@@ -598,7 +599,12 @@ impl Aby3Store {
         let rng_searcher = AesRng::from_rng(rng.clone())?;
         let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
         let shared_irises: Vec<_> = (0..database_size)
-            .map(|id| GaloisRingSharedIris::generate_galois_iris_shares(rng, cleartext_database[id].clone()))
+            .map(|id| {
+                GaloisRingSharedIris::generate_galois_iris_shares(
+                    rng,
+                    cleartext_database[id].clone(),
+                )
+            })
             .collect();
 
         let mut local_stores = setup_local_store_aby3_players(network_t).await?;
