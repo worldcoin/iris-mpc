@@ -8,6 +8,7 @@ pub mod id;
 pub mod iris_db;
 pub mod job;
 pub mod shamir;
+pub mod test;
 
 pub const IRIS_CODE_LENGTH: usize = 12_800;
 pub const MASK_CODE_LENGTH: usize = 6_400;

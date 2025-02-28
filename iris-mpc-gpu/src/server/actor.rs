@@ -36,7 +36,6 @@ use iris_mpc_common::{
     },
     iris_db::{get_dummy_shares_for_deletion, iris::MATCH_THRESHOLD_RATIO},
     job::{Eye, JobSubmissionHandle, ServerJobResult},
-    IrisCodeDbSlice,
 };
 use itertools::{izip, Itertools};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
@@ -510,55 +509,7 @@ impl ServerActor {
         tracing::info!("Server Actor finished due to all job queues being closed");
     }
 
-    pub fn load_full_db(
-        &mut self,
-        left: &IrisCodeDbSlice,
-        right: &IrisCodeDbSlice,
-        db_size: usize,
-    ) {
-        assert!(
-            [left.0.len(), right.0.len(),]
-                .iter()
-                .all(|&x| x == db_size * IRIS_CODE_LENGTH),
-            "Internal DB mismatch, left and right iris code db sizes differ, expected {}, left \
-             has {}, while right has {}",
-            db_size * IRIS_CODE_LENGTH,
-            left.0.len(),
-            right.0.len()
-        );
-
-        assert!(
-            [left.1.len(), right.1.len()]
-                .iter()
-                .all(|&x| x == db_size * MASK_CODE_LENGTH),
-            "Internal DB mismatch, left and right mask code db sizes differ, expected {}, left \
-             has {}, while right has {}",
-            db_size * MASK_CODE_LENGTH,
-            left.1.len(),
-            right.1.len()
-        );
-
-        let db_lens1 = self
-            .codes_engine
-            .load_full_db(&mut self.left_code_db_slices, left.0);
-        let db_lens2 = self
-            .masks_engine
-            .load_full_db(&mut self.left_mask_db_slices, left.1);
-        let db_lens3 = self
-            .codes_engine
-            .load_full_db(&mut self.right_code_db_slices, right.0);
-        let db_lens4 = self
-            .masks_engine
-            .load_full_db(&mut self.right_mask_db_slices, right.1);
-
-        assert_eq!(db_lens1, db_lens2);
-        assert_eq!(db_lens1, db_lens3);
-        assert_eq!(db_lens1, db_lens4);
-
-        self.current_db_sizes = db_lens1;
-    }
-
-    pub fn register_host_memory(&self) {
+    fn register_host_memory(&self) {
         let page_lock_ts = Instant::now();
         tracing::info!("Starting page lock");
         self.device_manager.register_host_memory(
@@ -593,8 +544,6 @@ impl ServerActor {
     ) -> eyre::Result<()> {
         let now = Instant::now();
 
-        // TODO: since we now moved this to the actor again, is this a performance
-        // bottleneck and should we parallelize this, etc?
         let batch = PreprocessedBatchQuery::from(batch);
         let mut events: HashMap<&str, Vec<Vec<CUevent>>> = HashMap::new();
 
