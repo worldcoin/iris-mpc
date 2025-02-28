@@ -15,16 +15,16 @@ do
   curl -f hawk_participant_${i}:300${i}/health
 done
 
-echo "All endpoints are healthy."
+echo "All endpoints are healthy. Running now the client..."
 
 
-#/bin/client \
-#    --request-topic-arn arn:aws:sns:$AWS_REGION:000000000000:iris-mpc-input.fifo \
-#    --requests-bucket-name wf-smpcv2-dev-sns-requests \
-#    --public-key-base-url "http://localhost:4566/wf-dev-public-keys" \
-#    --region $AWS_REGION \
-#    --n-repeat 1 \
-#    --random true
+/bin/client \
+    --request-topic-arn arn:aws:sns:us-east-1:000000000000:iris-mpc-input.fifo \
+    --requests-bucket-name wf-smpcv2-dev-sns-requests \
+    --public-key-base-url "http://localstack:4566/wf-dev-public-keys" \
+    --region us-east-1 \
+    --n-repeat 1 \
+    --random true
 
 # TODO: re-add these once ready to consume results
 # --response-queue-region $AWS_REGION \
