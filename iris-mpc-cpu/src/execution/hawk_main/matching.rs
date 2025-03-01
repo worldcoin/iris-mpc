@@ -80,6 +80,6 @@ impl Step2 {
     /// So insert if either eye has no matches.
     /// TODO: Account for rotated and mirrored versions.
     pub fn is_insertion(&self) -> bool {
-        self.inner_join.is_empty()
+        self.inner_join.iter().all(|(_, [l, r])| !l || !r)
     }
 }
