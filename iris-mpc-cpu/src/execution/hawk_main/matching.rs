@@ -67,10 +67,10 @@ impl Step1 {
 
         for (vector_id, is_match_lr) in full_join {
             match is_match_lr {
-                [Some(l), Some(r)] => step1.inner_join.push((vector_id, [l, r])),
-                [Some(l), None] => step1.anti_join[LEFT].push((vector_id, l)),
-                [None, Some(r)] => step1.anti_join[RIGHT].push((vector_id, r)),
-                _ => unreachable!(),
+                [Some(l), Some(r)] if l || r => step1.inner_join.push((vector_id, [l, r])),
+                [Some(l), None] if l => step1.anti_join[LEFT].push((vector_id, l)),
+                [None, Some(r)] if r => step1.anti_join[RIGHT].push((vector_id, r)),
+                _ => {}
             }
         }
 
@@ -81,25 +81,24 @@ impl Step1 {
         let other_side = 1 - side;
         self.anti_join[other_side]
             .iter()
-            .filter(|(_, is_match)| *is_match)
             .map(|(id, _)| *id)
             .collect_vec()
     }
 
     fn step2(self, missing_is_match: &BothEyes<MapEdges<bool>>) -> Step2 {
         let mut step2 = Step2 {
-            inner_join: self.inner_join,
+            full_join: self.inner_join,
         };
 
         for (id, left) in &self.anti_join[LEFT] {
             if let Some(right) = missing_is_match[RIGHT].get(id) {
-                step2.inner_join.push((*id, [*left, *right]));
+                step2.full_join.push((*id, [*left, *right]));
             }
         }
 
         for (id, right) in &self.anti_join[RIGHT] {
             if let Some(left) = missing_is_match[LEFT].get(id) {
-                step2.inner_join.push((*id, [*left, *right]));
+                step2.full_join.push((*id, [*left, *right]));
             }
         }
 
@@ -116,13 +115,13 @@ impl BatchStep2 {
 }
 
 struct Step2 {
-    inner_join: VecEdges<(VectorId, BothEyes<bool>)>,
+    full_join: VecEdges<(VectorId, BothEyes<bool>)>,
 }
 
 impl Step2 {
     /// *AND* policy: only match, if both eyes match (like `mergeDbResults`).
     /// TODO: Account for rotated and mirrored versions.
     fn is_match(&self) -> bool {
-        self.inner_join.iter().any(|(_, [l, r])| *l && *r)
+        self.full_join.iter().any(|(_, [l, r])| *l && *r)
     }
 }
