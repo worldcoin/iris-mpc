@@ -76,11 +76,12 @@ type Sender = UnboundedSender<SendRequest>;
 
 #[derive(Default)]
 struct OutgoingStreams {
-    streams: RwMap<(SessionId, Identity), Arc<Sender>>,
+    streams: RwMap<(SessionId, Identity), Sender>,
 }
 
 impl OutgoingStreams {
-    async fn add_session_stream(
+    async fn 
+    add_session_stream(
         &self,
         session_id: SessionId,
         receiver_id: Identity,
@@ -89,14 +90,14 @@ impl OutgoingStreams {
         self.streams
             .write()
             .await
-            .insert((session_id, receiver_id), Arc::new(stream));
+            .insert((session_id, receiver_id), stream);
     }
 
     async fn get_stream(
         &self,
         session_id: SessionId,
         receiver_id: Identity,
-    ) -> eyre::Result<Arc<Sender>> {
+    ) -> eyre::Result<Sender> {
         self.streams
             .read()
             .await
@@ -104,7 +105,7 @@ impl OutgoingStreams {
             .ok_or(eyre!(
                 "Streams for session {session_id:?} and receiver {receiver_id:?} not found"
             ))
-            .map(Arc::clone)
+            .map(|s| s.clone())
     }
 
     async fn count_receivers(&self, session_id: SessionId) -> usize {
@@ -135,8 +136,9 @@ enum GrpcTask {
     WaitForSession(SessionId),
 }
 
-pub struct MessageResult {
-    received_bytes: Option<Vec<u8>>,
+enum MessageResult {
+    Empty,
+    ReceivedBytes(Vec<u8>),
 }
 
 struct MessageJob {
@@ -151,48 +153,37 @@ pub struct GrpcHandle {
 }
 
 impl GrpcHandle {
-    pub async fn new(grpc: GrpcNetworking) -> eyre::Result<Self> {
+    pub async fn new(mut grpc: GrpcNetworking) -> eyre::Result<Self> {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<MessageJob>(1);
 
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
-                match job.task {
+                let job_result = match job.task {
                     GrpcTask::Send(task) => {
                         grpc.send(task.value, &task.receiver, &task.session_id)
                             .await
                             .unwrap();
 
-                        let result = MessageResult {
-                            received_bytes: None,
-                        };
-                        let _ = job.return_channel.send(Ok(result));
+                        Ok(MessageResult::Empty)
                     }
                     GrpcTask::Receive(task) => {
                         let maybe_bytes = grpc.receive(&task.sender, &task.session_id).await;
 
-                        let res = match maybe_bytes {
-                            Ok(bytes) => Ok(MessageResult {
-                                received_bytes: Some(bytes),
-                            }),
+                        match maybe_bytes {
+                            Ok(bytes) => Ok(MessageResult::ReceivedBytes(bytes)),
                             Err(e) => Err(e),
-                        };
-                        let _ = job.return_channel.send(res);
+                        }
                     }
                     GrpcTask::CreateSession(session_id) => {
                         grpc.create_session(session_id).await.unwrap();
-                        let res = MessageResult {
-                            received_bytes: None,
-                        };
-                        let _ = job.return_channel.send(Ok(res));
+                        Ok(MessageResult::Empty)
                     }
                     GrpcTask::WaitForSession(session_id) => {
                         grpc.wait_for_session(session_id).await;
-                        let res = MessageResult {
-                            received_bytes: None,
-                        };
-                        let _ = job.return_channel.send(Ok(res));
+                        Ok(MessageResult::Empty)
                     }
-                }
+                };
+                let _ = job.return_channel.send(job_result);
             }
         });
 
@@ -233,7 +224,10 @@ impl Networking for GrpcHandle {
             session_id: *session_id,
         });
         let res = self.submit(task).await?;
-        res.received_bytes.ok_or(eyre!("No message received"))
+        match res {
+            MessageResult::Empty => Err(eyre!("No message received")),
+            MessageResult::ReceivedBytes(bytes) => Ok(bytes),
+        }
     }
 }
 
