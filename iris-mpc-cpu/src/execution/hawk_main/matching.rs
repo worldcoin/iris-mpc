@@ -52,23 +52,18 @@ struct Step1 {
 
 impl Step1 {
     fn new(plans: BothEyes<&InsertPlan>) -> Step1 {
-        let neighbors = [
-            plans[LEFT].nearest_neighbors(),
-            plans[RIGHT].nearest_neighbors(),
-        ];
-        let match_counts = [plans[LEFT].match_count(), plans[RIGHT].match_count()];
-
         let mut full_join: MapEdges<BothEyes<Option<bool>>> = HashMap::new();
 
-        for side in [LEFT, RIGHT] {
-            let is_match = repeat(true).take(match_counts[side]).chain(repeat(false));
+        for (side, plan) in izip!([LEFT, RIGHT], plans) {
+            let is_match = repeat(true).take(plan.match_count()).chain(repeat(false));
 
-            for (vector_id, is_match) in izip!(&neighbors[side], is_match) {
-                full_join.entry(*vector_id).or_default()[side] = Some(is_match);
+            for (vector_id, is_match) in izip!(plan.nearest_neighbors(), is_match) {
+                full_join.entry(vector_id).or_default()[side] = Some(is_match);
             }
         }
 
         let mut step1 = Step1::default();
+        step1.inner_join.reserve(full_join.len());
 
         for (vector_id, is_match_lr) in full_join {
             match is_match_lr {

@@ -138,10 +138,6 @@ impl<V: VectorStore> InsertPlanV<V> {
         self.match_count
     }
 
-    pub fn is_match(&self) -> bool {
-        self.match_count > 0
-    }
-
     pub fn nearest_neighbors(&self) -> Vec<V::VectorRef> {
         self.links
             .first()
