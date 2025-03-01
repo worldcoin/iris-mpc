@@ -90,7 +90,14 @@ pub enum StoreId {
 
 pub const STORE_IDS: BothEyes<StoreId> = [StoreId::Left, StoreId::Right];
 
+/// BothEyes is an alias for types that apply to both left and right eyes.
 pub type BothEyes<T> = [T; 2];
+/// VecRequests are lists of things for each request of a batch.
+type VecRequests<T> = Vec<T>;
+/// VecEdges are lists of things for each neighbor of a vector (graph edges).
+type VecEdges<T> = Vec<T>;
+/// MapEdges are maps from neighbor IDs to something.
+type MapEdges<T> = HashMap<VectorId, T>;
 
 type GraphRef = Arc<RwLock<GraphMem<Aby3Store>>>;
 pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3Store>>;
@@ -717,15 +724,17 @@ impl HawkHandle {
 }
 
 fn compare_missing(
-    missing_vector_ids: Vec<BothEyes<Vec<VectorId>>>,
-    shares_to_search: &BothEyes<Vec<GaloisRingSharedIris>>,
-    hawk_actor: &mut HawkActor,
-) -> Vec<BothEyes<HashMap<VectorId, bool>>> {
-    missing_vector_ids
-        .into_iter()
-        .enumerate()
-        .map(|(request_idx, [left_ids, right_ids])| [HashMap::new(), HashMap::new()])
-        .collect_vec()
+    missing_vector_ids: VecRequests<BothEyes<VecEdges<VectorId>>>,
+    shares_to_search: &BothEyes<VecRequests<GaloisRingSharedIris>>,
+    _hawk_actor: &mut HawkActor,
+) -> VecRequests<BothEyes<MapEdges<bool>>> {
+    izip!(
+        missing_vector_ids,
+        &shares_to_search[0],
+        &shares_to_search[1],
+    )
+    .map(|([_left_ids, _right_ids], _left_query, _right_query)| [HashMap::new(), HashMap::new()])
+    .collect_vec()
 }
 
 #[derive(Default)]

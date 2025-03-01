@@ -1,14 +1,14 @@
-use super::{BothEyes, InsertPlan, VectorId};
+use super::{BothEyes, InsertPlan, MapEdges, VecEdges, VecRequests, VectorId};
 use itertools::{izip, Itertools};
 use std::{collections::HashMap, iter::repeat};
 
 const LEFT: usize = 0;
 const RIGHT: usize = 1;
 
-pub struct BatchStep1(Vec<Step1>);
+pub struct BatchStep1(VecRequests<Step1>);
 
 impl BatchStep1 {
-    pub fn new(plans: &BothEyes<Vec<InsertPlan>>) -> Self {
+    pub fn new(plans: &BothEyes<VecRequests<InsertPlan>>) -> Self {
         // Join the results of both eyes into results per eye pair.
         Self(
             izip!(&plans[LEFT], &plans[RIGHT])
@@ -17,25 +17,18 @@ impl BatchStep1 {
         )
     }
 
-    pub fn is_matches(&self) -> Vec<bool> {
-        self.0
-            .iter()
-            .map(|step1| step1.step2().is_match())
-            .collect_vec()
-    }
-
     pub fn step2(&self) -> BatchStep2 {
         BatchStep2(self.0.iter().map(Step1::step2).collect_vec())
     }
 }
 
-pub struct Step1 {
-    neighbors:    BothEyes<Vec<VectorId>>,
+struct Step1 {
+    neighbors:    BothEyes<VecEdges<VectorId>>,
     match_counts: BothEyes<usize>,
 }
 
 impl Step1 {
-    pub fn new(plans: BothEyes<&InsertPlan>) -> Self {
+    fn new(plans: BothEyes<&InsertPlan>) -> Self {
         Self {
             neighbors:    [
                 plans[LEFT].nearest_neighbors(),
@@ -45,8 +38,8 @@ impl Step1 {
         }
     }
 
-    pub fn step2(&self) -> Step2 {
-        let mut full_join: HashMap<VectorId, BothEyes<Option<bool>>> = HashMap::new();
+    fn step2(&self) -> Step2 {
+        let mut full_join: MapEdges<BothEyes<Option<bool>>> = HashMap::new();
 
         for side in [LEFT, RIGHT] {
             let is_match = repeat(true)
@@ -73,17 +66,17 @@ impl Step1 {
     }
 }
 
-pub struct BatchStep2(Vec<Step2>);
+pub struct BatchStep2(VecRequests<Step2>);
 
 impl BatchStep2 {
-    pub fn missing_vector_ids(&self) -> Vec<BothEyes<Vec<VectorId>>> {
+    pub fn missing_vector_ids(&self) -> VecRequests<BothEyes<VecEdges<VectorId>>> {
         self.0
             .iter()
             .map(|step2| [LEFT, RIGHT].map(|side| step2.missing_vector_ids(side).collect_vec()))
             .collect_vec()
     }
 
-    pub fn step3(&self, other_is_match: &[BothEyes<HashMap<VectorId, bool>>]) -> BatchStep3 {
+    pub fn step3(&self, other_is_match: &VecRequests<BothEyes<MapEdges<bool>>>) -> BatchStep3 {
         assert_eq!(self.0.len(), other_is_match.len());
         BatchStep3(
             izip!(&self.0, other_is_match)
@@ -95,17 +88,11 @@ impl BatchStep2 {
 
 #[derive(Default)]
 pub struct Step2 {
-    inner_join: Vec<(VectorId, BothEyes<bool>)>,
-    anti_join:  BothEyes<Vec<(VectorId, bool)>>,
+    inner_join: VecEdges<(VectorId, BothEyes<bool>)>,
+    anti_join:  BothEyes<VecEdges<(VectorId, bool)>>,
 }
 
 impl Step2 {
-    /// *AND* policy: only match, if both eyes match (like `mergeDbResults`).
-    /// TODO: Account for rotated and mirrored versions.
-    pub fn is_match(&self) -> bool {
-        self.inner_join.iter().any(|(_, [l, r])| *l && *r)
-    }
-
     fn missing_vector_ids(&self, side: usize) -> impl Iterator<Item = VectorId> + '_ {
         let other_side = 1 - side;
         self.anti_join[other_side]
@@ -114,7 +101,7 @@ impl Step2 {
             .map(|(id, _)| *id)
     }
 
-    fn step3(&self, other_is_match: &BothEyes<HashMap<VectorId, bool>>) -> Step3 {
+    fn step3(&self, other_is_match: &BothEyes<MapEdges<bool>>) -> Step3 {
         let mut step3 = Step3 {
             inner_join: self.inner_join.clone(), // TODO: without clone.
         };
@@ -135,16 +122,16 @@ impl Step2 {
     }
 }
 
-pub struct BatchStep3(Vec<Step3>);
+pub struct BatchStep3(VecRequests<Step3>);
 
 impl BatchStep3 {
-    pub fn is_matches(&self) -> Vec<bool> {
+    pub fn is_matches(&self) -> VecRequests<bool> {
         self.0.iter().map(Step3::is_match).collect_vec()
     }
 }
 
 struct Step3 {
-    inner_join: Vec<(VectorId, BothEyes<bool>)>,
+    inner_join: VecEdges<(VectorId, BothEyes<bool>)>,
 }
 
 impl Step3 {
