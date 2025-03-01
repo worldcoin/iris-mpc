@@ -644,7 +644,17 @@ impl HawkHandle {
                     // TODO: Optimize for pure searches (rotations).
                 }
 
-                let match_result = BatchStep1::new(&both_insert_plans);
+                let match_result = {
+                    let step1 = BatchStep1::new(&both_insert_plans);
+                    let step2 = step1.step2();
+                    // TODO: Go fetch the missing vector IDs and calculate their is_match.
+                    let other_is_match = compare_missing(
+                        step2.missing_vector_ids(),
+                        job.request.shares_to_search(),
+                        &mut hawk_actor,
+                    );
+                    step2.step3(&other_is_match)
+                };
 
                 let is_matches = match_result.is_matches();
                 let (insert_indices, both_insert_plans) = job
@@ -704,6 +714,18 @@ impl HawkHandle {
         self.job_queue.send(job).await?;
         rx.await?
     }
+}
+
+fn compare_missing(
+    missing_vector_ids: Vec<BothEyes<Vec<VectorId>>>,
+    shares_to_search: &BothEyes<Vec<GaloisRingSharedIris>>,
+    hawk_actor: &mut HawkActor,
+) -> Vec<BothEyes<HashMap<VectorId, bool>>> {
+    missing_vector_ids
+        .into_iter()
+        .enumerate()
+        .map(|(request_idx, [left_ids, right_ids])| [HashMap::new(), HashMap::new()])
+        .collect_vec()
 }
 
 #[derive(Default)]

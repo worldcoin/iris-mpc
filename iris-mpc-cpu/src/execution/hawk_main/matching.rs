@@ -23,6 +23,10 @@ impl BatchStep1 {
             .map(|step1| step1.step2().is_match())
             .collect_vec()
     }
+
+    pub fn step2(&self) -> BatchStep2 {
+        BatchStep2(self.0.iter().map(Step1::step2).collect_vec())
+    }
 }
 
 pub struct Step1 {
@@ -69,6 +73,26 @@ impl Step1 {
     }
 }
 
+pub struct BatchStep2(Vec<Step2>);
+
+impl BatchStep2 {
+    pub fn missing_vector_ids(&self) -> Vec<BothEyes<Vec<VectorId>>> {
+        self.0
+            .iter()
+            .map(|step2| [LEFT, RIGHT].map(|side| step2.missing_vector_ids(side).collect_vec()))
+            .collect_vec()
+    }
+
+    pub fn step3(&self, other_is_match: &[BothEyes<HashMap<VectorId, bool>>]) -> BatchStep3 {
+        assert_eq!(self.0.len(), other_is_match.len());
+        BatchStep3(
+            izip!(&self.0, other_is_match)
+                .map(|(step2, other_is_match)| step2.step3(other_is_match))
+                .collect_vec(),
+        )
+    }
+}
+
 #[derive(Default)]
 pub struct Step2 {
     inner_join: Vec<(VectorId, BothEyes<bool>)>,
@@ -79,6 +103,54 @@ impl Step2 {
     /// *AND* policy: only match, if both eyes match (like `mergeDbResults`).
     /// TODO: Account for rotated and mirrored versions.
     pub fn is_match(&self) -> bool {
+        self.inner_join.iter().any(|(_, [l, r])| *l && *r)
+    }
+
+    fn missing_vector_ids(&self, side: usize) -> impl Iterator<Item = VectorId> + '_ {
+        let other_side = 1 - side;
+        self.anti_join[other_side]
+            .iter()
+            .filter(|(_, is_match)| *is_match)
+            .map(|(id, _)| *id)
+    }
+
+    fn step3(&self, other_is_match: &BothEyes<HashMap<VectorId, bool>>) -> Step3 {
+        let mut step3 = Step3 {
+            inner_join: self.inner_join.clone(), // TODO: without clone.
+        };
+
+        for (id, left) in &self.anti_join[LEFT] {
+            if let Some(right) = other_is_match[RIGHT].get(id) {
+                step3.inner_join.push((*id, [*left, *right]));
+            }
+        }
+
+        for (id, right) in &self.anti_join[RIGHT] {
+            if let Some(left) = other_is_match[LEFT].get(id) {
+                step3.inner_join.push((*id, [*left, *right]));
+            }
+        }
+
+        step3
+    }
+}
+
+pub struct BatchStep3(Vec<Step3>);
+
+impl BatchStep3 {
+    pub fn is_matches(&self) -> Vec<bool> {
+        self.0.iter().map(Step3::is_match).collect_vec()
+    }
+}
+
+struct Step3 {
+    inner_join: Vec<(VectorId, BothEyes<bool>)>,
+}
+
+impl Step3 {
+    /// *AND* policy: only match, if both eyes match (like `mergeDbResults`).
+    /// TODO: Account for rotated and mirrored versions.
+    fn is_match(&self) -> bool {
         self.inner_join.iter().any(|(_, [l, r])| *l && *r)
     }
 }
