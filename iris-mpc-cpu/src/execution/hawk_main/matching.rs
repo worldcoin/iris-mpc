@@ -1,9 +1,6 @@
-use super::{BothEyes, InsertPlan, MapEdges, VecEdges, VecRequests, VectorId};
+use super::{BothEyes, InsertPlan, MapEdges, VecEdges, VecRequests, VectorId, LEFT, RIGHT};
 use itertools::{izip, Itertools};
 use std::{collections::HashMap, iter::repeat};
-
-const LEFT: usize = 0;
-const RIGHT: usize = 1;
 
 /// The matching algorithm follows these steps:
 ///

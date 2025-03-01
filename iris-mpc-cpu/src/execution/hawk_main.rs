@@ -87,7 +87,8 @@ pub enum StoreId {
     Left,
     Right,
 }
-
+const LEFT: usize = 0;
+const RIGHT: usize = 1;
 pub const STORE_IDS: BothEyes<StoreId> = [StoreId::Left, StoreId::Right];
 
 /// BothEyes is an alias for types that apply to both left and right eyes.
@@ -654,6 +655,7 @@ impl HawkHandle {
                         step1.missing_vector_ids(),
                         job.request.shares_to_search(),
                         &mut hawk_actor,
+                        &sessions,
                     )
                     .await;
                     step1.step2(&missing_is_match)
@@ -722,15 +724,54 @@ impl HawkHandle {
 async fn calculate_missing_is_match(
     missing_vector_ids: VecRequests<BothEyes<VecEdges<VectorId>>>,
     shares_to_search: &BothEyes<VecRequests<GaloisRingSharedIris>>,
-    _hawk_actor: &mut HawkActor,
+    hawk_actor: &mut HawkActor,
+    sessions: &BothEyes<Vec<HawkSessionRef>>,
 ) -> VecRequests<BothEyes<MapEdges<bool>>> {
-    izip!(
+    let mut out = vec![];
+
+    // TODO: Parallelize over multiple sessions.
+    let mut sessions = [
+        sessions[LEFT][0].write().await,
+        sessions[RIGHT][0].write().await,
+    ];
+
+    for ([left_ids, right_ids], left_query, right_query) in izip!(
         missing_vector_ids,
-        &shares_to_search[0],
-        &shares_to_search[1],
-    )
-    .map(|([_left_ids, _right_ids], _left_query, _right_query)| [HashMap::new(), HashMap::new()])
-    .collect_vec()
+        &shares_to_search[LEFT],
+        &shares_to_search[RIGHT],
+    ) {
+        out.push([
+            calculate_missing_is_match_one(
+                LEFT,
+                left_ids,
+                left_query,
+                hawk_actor,
+                &mut sessions[LEFT],
+            )
+            .await,
+            calculate_missing_is_match_one(
+                RIGHT,
+                right_ids,
+                right_query,
+                hawk_actor,
+                &mut sessions[RIGHT],
+            )
+            .await,
+        ]);
+    }
+    out
+}
+
+async fn calculate_missing_is_match_one(
+    side: usize,
+    missing_vector_ids: VecEdges<VectorId>,
+    shares_to_search: &GaloisRingSharedIris,
+    hawk_actor: &mut HawkActor,
+    session: &mut HawkSession,
+) -> MapEdges<bool> {
+    let mut out = HashMap::new();
+
+    out
 }
 
 #[derive(Default)]
