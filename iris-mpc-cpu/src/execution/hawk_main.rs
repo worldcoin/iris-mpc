@@ -653,14 +653,14 @@ impl HawkHandle {
 
                 let match_result = {
                     let step1 = BatchStep1::new(&both_insert_plans);
-                    let step2 = step1.step2();
                     // TODO: Go fetch the missing vector IDs and calculate their is_match.
-                    let other_is_match = compare_missing(
-                        step2.missing_vector_ids(),
+                    let missing_is_match = calculate_missing_is_match(
+                        step1.missing_vector_ids(),
                         job.request.shares_to_search(),
                         &mut hawk_actor,
-                    );
-                    step2.step3(&other_is_match)
+                    )
+                    .await;
+                    step1.step2(&missing_is_match)
                 };
 
                 let is_matches = match_result.is_matches();
@@ -723,7 +723,7 @@ impl HawkHandle {
     }
 }
 
-fn compare_missing(
+async fn calculate_missing_is_match(
     missing_vector_ids: VecRequests<BothEyes<VecEdges<VectorId>>>,
     shares_to_search: &BothEyes<VecRequests<GaloisRingSharedIris>>,
     _hawk_actor: &mut HawkActor,
