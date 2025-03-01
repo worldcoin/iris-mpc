@@ -30,7 +30,7 @@ use rand::{thread_rng, Rng, SeedableRng};
 use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    ops::Deref,
+    ops::{Deref, Not},
     sync::Arc,
     time::Duration,
     vec,
@@ -512,20 +512,18 @@ impl HawkRequest {
     fn filter_for_insertion(
         &self,
         both_insert_plans: BothEyes<Vec<InsertPlan>>,
-        is_insertion: &[bool],
+        is_matches: &[bool],
     ) -> (Vec<usize>, BothEyes<Vec<InsertPlan>>) {
-        // TODO: Report the insertions versus rejections.
-
         let filtered = both_insert_plans.map(|plans| {
-            izip!(plans, is_insertion)
-                .filter_map(|(plan, &is_insertion)| is_insertion.then_some(plan))
+            izip!(plans, is_matches)
+                .filter_map(|(plan, &is_match)| is_match.not().then_some(plan))
                 .collect_vec()
         });
 
-        let indices = is_insertion
+        let indices = is_matches
             .iter()
             .enumerate()
-            .filter_map(|(index, &insert)| insert.then_some(index))
+            .filter_map(|(index, &is_match)| is_match.not().then_some(index))
             .collect();
 
         (indices, filtered)
@@ -535,12 +533,12 @@ impl HawkRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HawkResult {
     connect_plans: HawkMutation,
-    is_insertion:  Vec<bool>,
+    is_matches:    Vec<bool>,
 }
 
 impl HawkResult {
     fn matches(&self) -> Vec<bool> {
-        self.is_insertion.iter().map(|&insert| !insert).collect()
+        self.is_matches.clone()
     }
 
     fn merged_results(&self) -> Vec<u32> {
@@ -585,7 +583,7 @@ impl JobSubmissionHandle for HawkHandle {
     ) -> impl std::future::Future<Output = ServerJobResult> {
         let request = HawkRequest::from(&batch);
         let result = self.submit(request).await.unwrap();
-        let n_requests = result.is_insertion.len();
+        let n_requests = result.is_matches.len();
 
         async move {
             ServerJobResult {
@@ -648,16 +646,16 @@ impl HawkHandle {
 
                 let match_result = BatchStep1::new(&both_insert_plans);
 
-                let is_insertion = match_result.is_insertion();
+                let is_matches = match_result.is_matches();
                 let (insert_indices, both_insert_plans) = job
                     .request
-                    .filter_for_insertion(both_insert_plans, &is_insertion);
+                    .filter_for_insertion(both_insert_plans, &is_matches);
 
                 // Insert into the database.
-                let n_requests = is_insertion.len();
+                let n_requests = is_matches.len();
                 let mut results = HawkResult {
                     connect_plans: HawkMutation([vec![None; n_requests], vec![None; n_requests]]),
-                    is_insertion,
+                    is_matches,
                 };
 
                 if !hawk_actor.args.disable_persistence {

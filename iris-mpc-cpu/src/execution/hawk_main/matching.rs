@@ -17,10 +17,10 @@ impl BatchStep1 {
         )
     }
 
-    pub fn is_insertion(&self) -> Vec<bool> {
+    pub fn is_matches(&self) -> Vec<bool> {
         self.0
             .iter()
-            .map(|step1| step1.step2().is_insertion())
+            .map(|step1| step1.step2().is_match())
             .collect_vec()
     }
 }
@@ -77,9 +77,8 @@ pub struct Step2 {
 
 impl Step2 {
     /// *AND* policy: only match, if both eyes match (like `mergeDbResults`).
-    /// So insert if either eye has no matches.
     /// TODO: Account for rotated and mirrored versions.
-    pub fn is_insertion(&self) -> bool {
-        self.inner_join.iter().all(|(_, [l, r])| !l || !r)
+    pub fn is_match(&self) -> bool {
+        self.inner_join.iter().any(|(_, [l, r])| *l && *r)
     }
 }
