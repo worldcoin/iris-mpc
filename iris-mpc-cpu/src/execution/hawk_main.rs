@@ -7,7 +7,7 @@ use crate::{
         player::{Role, RoleAssignment},
         session::{BootSession, Session, SessionId},
     },
-    hawkers::aby3_store::{Aby3Store, SharedIrisesMut, SharedIrisesRef},
+    hawkers::aby3_store::{Aby3Store, QueryRef, SharedIrisesMut, SharedIrisesRef},
     hnsw::{
         graph::{graph_store, neighborhood::SortedNeighborhoodV},
         searcher::ConnectPlanV,
@@ -651,10 +651,9 @@ impl HawkHandle {
                 let match_result = {
                     let step1 = BatchStep1::new(&both_insert_plans);
                     // TODO: Go fetch the missing vector IDs and calculate their is_match.
-                    let missing_is_match = calculate_missing_is_match(
+                    let missing_is_match = calculate_is_match(
+                        &both_insert_plans,
                         step1.missing_vector_ids(),
-                        job.request.shares_to_search(),
-                        &mut hawk_actor,
                         &sessions,
                     )
                     .await;
@@ -721,57 +720,42 @@ impl HawkHandle {
     }
 }
 
-async fn calculate_missing_is_match(
-    missing_vector_ids: VecRequests<BothEyes<VecEdges<VectorId>>>,
-    shares_to_search: &BothEyes<VecRequests<GaloisRingSharedIris>>,
-    hawk_actor: &mut HawkActor,
+async fn calculate_is_match(
+    plans: &BothEyes<VecRequests<InsertPlan>>,
+    vector_ids: VecRequests<BothEyes<VecEdges<VectorId>>>,
     sessions: &BothEyes<Vec<HawkSessionRef>>,
 ) -> VecRequests<BothEyes<MapEdges<bool>>> {
-    let mut out = vec![];
-
     // TODO: Parallelize over multiple sessions.
     let mut sessions = [
         sessions[LEFT][0].write().await,
         sessions[RIGHT][0].write().await,
     ];
 
-    for ([left_ids, right_ids], left_query, right_query) in izip!(
-        missing_vector_ids,
-        &shares_to_search[LEFT],
-        &shares_to_search[RIGHT],
-    ) {
+    let mut out = vec![];
+    for (left_plan, right_plan, [left_ids, right_ids]) in
+        izip!(&plans[LEFT], &plans[RIGHT], vector_ids)
+    {
         out.push([
-            calculate_missing_is_match_one(
-                LEFT,
-                left_ids,
-                left_query,
-                hawk_actor,
-                &mut sessions[LEFT],
-            )
-            .await,
-            calculate_missing_is_match_one(
-                RIGHT,
-                right_ids,
-                right_query,
-                hawk_actor,
-                &mut sessions[RIGHT],
-            )
-            .await,
+            calculate_is_match_one(&left_plan.query, left_ids, &mut sessions[LEFT]).await,
+            calculate_is_match_one(&right_plan.query, right_ids, &mut sessions[RIGHT]).await,
         ]);
     }
     out
 }
 
-async fn calculate_missing_is_match_one(
-    side: usize,
-    missing_vector_ids: VecEdges<VectorId>,
-    shares_to_search: &GaloisRingSharedIris,
-    hawk_actor: &mut HawkActor,
+async fn calculate_is_match_one(
+    query: &QueryRef,
+    vector_ids: VecEdges<VectorId>,
     session: &mut HawkSession,
 ) -> MapEdges<bool> {
-    let mut out = HashMap::new();
+    let distances = session
+        .aby3_store
+        .eval_distance_batch(query, &vector_ids)
+        .await;
 
-    out
+    let is_matches = session.aby3_store.is_match_batch(&distances).await;
+
+    izip!(vector_ids, is_matches).collect()
 }
 
 #[derive(Default)]
