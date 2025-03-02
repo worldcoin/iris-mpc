@@ -20,6 +20,7 @@ use crate::{
 use aes_prng::AesRng;
 use clap::Parser;
 use eyre::Result;
+use futures::future::JoinAll;
 use iris_mpc_common::{
     helpers::inmemory_store::InMemoryStore,
     job::{BatchQuery, JobSubmissionHandle},
@@ -30,7 +31,7 @@ use rand::{thread_rng, Rng, SeedableRng};
 use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    ops::{Deref, Not},
+    ops::{Deref, Not, Range},
     sync::Arc,
     time::Duration,
     vec,
@@ -725,19 +726,36 @@ async fn calculate_is_match(
     vector_ids: VecRequests<BothEyes<VecEdges<VectorId>>>,
     sessions: &BothEyes<Vec<HawkSessionRef>>,
 ) -> VecRequests<BothEyes<MapEdges<bool>>> {
-    // TODO: Parallelize over multiple sessions.
-    let mut sessions = [
-        sessions[LEFT][0].write().await,
-        sessions[RIGHT][0].write().await,
-    ];
+    // Parallelize with a chunk of requests per session.
+    let n_per_session = vector_ids.len().div_ceil(sessions.len());
+    let chunks = (0..vector_ids.len())
+        .step_by(n_per_session)
+        .map(|start| start..(start + n_per_session).min(vector_ids.len()));
 
-    let mut out = vec![];
-    for (left_plan, right_plan, [left_ids, right_ids]) in
-        izip!(&plans[LEFT], &plans[RIGHT], vector_ids)
-    {
+    // TODO: Parallelize computation with JoinSet instead of JoinAll.
+    let res = izip!(chunks, &sessions[LEFT], &sessions[RIGHT])
+        .map(|(chunk, sl, sr)| calculate_is_match_session(plans, &vector_ids, [sl, sr], chunk))
+        .collect::<JoinAll<_>>()
+        .await;
+
+    res.into_iter().flatten().collect()
+}
+
+async fn calculate_is_match_session(
+    plans: &BothEyes<VecRequests<InsertPlan>>,
+    vector_ids: &VecRequests<BothEyes<VecEdges<VectorId>>>,
+    session: BothEyes<&HawkSessionRef>,
+    chunk: Range<usize>,
+) -> VecRequests<BothEyes<MapEdges<bool>>> {
+    let mut sl = session[LEFT].write().await;
+    let mut sr = session[RIGHT].write().await;
+
+    let mut out = Vec::with_capacity(chunk.len());
+    for i in chunk {
+        // TODO: Parallelize left/right.
         out.push([
-            calculate_is_match_one(&left_plan.query, left_ids, &mut sessions[LEFT]).await,
-            calculate_is_match_one(&right_plan.query, right_ids, &mut sessions[RIGHT]).await,
+            calculate_is_match_one(&plans[LEFT][i].query, &vector_ids[i][LEFT], &mut sl).await,
+            calculate_is_match_one(&plans[RIGHT][i].query, &vector_ids[i][RIGHT], &mut sr).await,
         ]);
     }
     out
@@ -745,17 +763,19 @@ async fn calculate_is_match(
 
 async fn calculate_is_match_one(
     query: &QueryRef,
-    vector_ids: VecEdges<VectorId>,
+    vector_ids: &[VectorId],
     session: &mut HawkSession,
 ) -> MapEdges<bool> {
     let distances = session
         .aby3_store
-        .eval_distance_batch(query, &vector_ids)
+        .eval_distance_batch(query, vector_ids)
         .await;
 
     let is_matches = session.aby3_store.is_match_batch(&distances).await;
 
-    izip!(vector_ids, is_matches).collect()
+    izip!(vector_ids, is_matches)
+        .map(|(v, m)| (*v, m))
+        .collect()
 }
 
 #[derive(Default)]
