@@ -7,7 +7,7 @@ use crate::{
         player::{Role, RoleAssignment},
         session::{BootSession, Session, SessionId},
     },
-    hawkers::aby3_store::{Aby3Store, QueryRef, SharedIrisesMut, SharedIrisesRef},
+    hawkers::aby3_store::{Aby3Store, SharedIrisesMut, SharedIrisesRef},
     hnsw::{
         graph::{graph_store, neighborhood::SortedNeighborhoodV},
         searcher::ConnectPlanV,
@@ -20,7 +20,6 @@ use crate::{
 use aes_prng::AesRng;
 use clap::Parser;
 use eyre::Result;
-use futures::future::JoinAll;
 use iris_mpc_common::{
     helpers::inmemory_store::InMemoryStore,
     job::{BatchQuery, JobSubmissionHandle},
@@ -31,7 +30,7 @@ use rand::{thread_rng, Rng, SeedableRng};
 use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    ops::{Deref, Not, Range},
+    ops::{Deref, Not},
     sync::Arc,
     time::Duration,
     vec,
@@ -44,7 +43,9 @@ use tonic::transport::Server;
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
 
+mod is_match_batch;
 mod matching;
+use is_match_batch::calculate_is_match;
 
 #[derive(Clone, Parser)]
 pub struct HawkArgs {
@@ -651,7 +652,7 @@ impl HawkHandle {
 
                 let match_result = {
                     let step1 = BatchStep1::new(&both_insert_plans);
-                    // TODO: Go fetch the missing vector IDs and calculate their is_match.
+                    // Go fetch the missing vector IDs and calculate their is_match.
                     let missing_is_match = calculate_is_match(
                         &both_insert_plans,
                         step1.missing_vector_ids(),
@@ -719,63 +720,6 @@ impl HawkHandle {
         self.job_queue.send(job).await?;
         rx.await?
     }
-}
-
-async fn calculate_is_match(
-    plans: &BothEyes<VecRequests<InsertPlan>>,
-    vector_ids: VecRequests<BothEyes<VecEdges<VectorId>>>,
-    sessions: &BothEyes<Vec<HawkSessionRef>>,
-) -> VecRequests<BothEyes<MapEdges<bool>>> {
-    // Parallelize with a chunk of requests per session.
-    let n_per_session = vector_ids.len().div_ceil(sessions.len());
-    let chunks = (0..vector_ids.len())
-        .step_by(n_per_session)
-        .map(|start| start..(start + n_per_session).min(vector_ids.len()));
-
-    // TODO: Parallelize computation with JoinSet instead of JoinAll.
-    let res = izip!(chunks, &sessions[LEFT], &sessions[RIGHT])
-        .map(|(chunk, sl, sr)| calculate_is_match_session(plans, &vector_ids, [sl, sr], chunk))
-        .collect::<JoinAll<_>>()
-        .await;
-
-    res.into_iter().flatten().collect()
-}
-
-async fn calculate_is_match_session(
-    plans: &BothEyes<VecRequests<InsertPlan>>,
-    vector_ids: &VecRequests<BothEyes<VecEdges<VectorId>>>,
-    session: BothEyes<&HawkSessionRef>,
-    chunk: Range<usize>,
-) -> VecRequests<BothEyes<MapEdges<bool>>> {
-    let mut sl = session[LEFT].write().await;
-    let mut sr = session[RIGHT].write().await;
-
-    let mut out = Vec::with_capacity(chunk.len());
-    for i in chunk {
-        // TODO: Parallelize left/right.
-        out.push([
-            calculate_is_match_one(&plans[LEFT][i].query, &vector_ids[i][LEFT], &mut sl).await,
-            calculate_is_match_one(&plans[RIGHT][i].query, &vector_ids[i][RIGHT], &mut sr).await,
-        ]);
-    }
-    out
-}
-
-async fn calculate_is_match_one(
-    query: &QueryRef,
-    vector_ids: &[VectorId],
-    session: &mut HawkSession,
-) -> MapEdges<bool> {
-    let distances = session
-        .aby3_store
-        .eval_distance_batch(query, vector_ids)
-        .await;
-
-    let is_matches = session.aby3_store.is_match_batch(&distances).await;
-
-    izip!(vector_ids, is_matches)
-        .map(|(v, m)| (*v, m))
-        .collect()
 }
 
 #[derive(Default)]
