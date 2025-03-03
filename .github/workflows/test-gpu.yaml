@@ -83,11 +83,11 @@ jobs:
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: find /usr -name "libnvrtc*" && find /usr -name libcuda.so
 
-      - name: Install Rust
+      - name: Install Rust nightly
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.80.0
+          toolchain: nightly
 
       - name: GPU Dependent Tests
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
