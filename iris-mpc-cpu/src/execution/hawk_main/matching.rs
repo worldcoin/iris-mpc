@@ -41,7 +41,6 @@ impl BatchStep1 {
     }
 }
 
-#[derive(Default)]
 struct Step1 {
     inner_join: VecEdges<(VectorId, BothEyes<bool>)>,
     anti_join:  BothEyes<VecEdges<(VectorId, bool)>>,
@@ -59,8 +58,7 @@ impl Step1 {
             }
         }
 
-        let mut step1 = Step1::default();
-        step1.inner_join.reserve(full_join.len());
+        let mut step1 = Step1::with_capacity(full_join.len());
 
         for (vector_id, is_match_lr) in full_join {
             match is_match_lr {
@@ -72,6 +70,16 @@ impl Step1 {
         }
 
         step1
+    }
+
+    fn with_capacity(capacity: usize) -> Self {
+        Step1 {
+            inner_join: Vec::with_capacity(capacity),
+            anti_join:  [
+                Vec::with_capacity(capacity / 2),
+                Vec::with_capacity(capacity / 2),
+            ],
+        }
     }
 
     fn missing_vector_ids(&self, side: usize) -> VecEdges<VectorId> {
