@@ -58,9 +58,9 @@ impl StoredIris {
 #[derive(sqlx::FromRow, Debug, Default, PartialEq, Eq)]
 pub struct DbStoredIris {
     #[allow(dead_code)]
-    id:         i64, // BIGSERIAL
-    left_code:  Vec<u8>, // BYTEA
-    left_mask:  Vec<u8>, // BYTEA
+    id: i64, // BIGSERIAL
+    left_code: Vec<u8>,  // BYTEA
+    left_mask: Vec<u8>,  // BYTEA
     right_code: Vec<u8>, // BYTEA
     right_mask: Vec<u8>, // BYTEA
 }
@@ -93,9 +93,9 @@ impl DbStoredIris {
 
 #[derive(Clone)]
 pub struct StoredIrisRef<'a> {
-    pub id:         i64,
-    pub left_code:  &'a [u16],
-    pub left_mask:  &'a [u16],
+    pub id: i64,
+    pub left_code: &'a [u16],
+    pub left_mask: &'a [u16],
     pub right_code: &'a [u16],
     pub right_mask: &'a [u16],
 }
@@ -107,30 +107,30 @@ struct StoredState {
 
 #[derive(sqlx::FromRow, Debug, Default)]
 pub struct StoredModification {
-    pub id:           i64,
-    pub serial_id:    i64,
+    pub id: i64,
+    pub serial_id: i64,
     pub request_type: String,
-    pub s3_url:       Option<String>,
-    pub status:       String,
-    pub persisted:    bool,
+    pub s3_url: Option<String>,
+    pub status: String,
+    pub persisted: bool,
 }
 
 impl From<StoredModification> for Modification {
     fn from(stored: StoredModification) -> Self {
         Self {
-            id:           stored.id,
-            serial_id:    stored.serial_id,
+            id: stored.id,
+            serial_id: stored.serial_id,
             request_type: stored.request_type,
-            s3_url:       stored.s3_url,
-            status:       stored.status,
-            persisted:    stored.persisted,
+            s3_url: stored.s3_url,
+            status: stored.status,
+            persisted: stored.persisted,
         }
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct Store {
-    pub pool:        PgPool,
+    pub pool: PgPool,
     pub schema_name: String,
 }
 
@@ -680,13 +680,16 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
 
             // inserting shares and masks in the db. Reusing the same share and mask for
             // left and right
-            self.insert_irises(&mut tx, &[StoredIrisRef {
-                id:         (i + 1) as i64,
-                left_code:  &share.coefs,
-                left_mask:  &mask.coefs,
-                right_code: &share.coefs,
-                right_mask: &mask.coefs,
-            }])
+            self.insert_irises(
+                &mut tx,
+                &[StoredIrisRef {
+                    id: (i + 1) as i64,
+                    left_code: &share.coefs,
+                    left_mask: &mask.coefs,
+                    right_code: &share.coefs,
+                    right_mask: &mask.coefs,
+                }],
+            )
             .await?;
 
             if (i % 1000) == 0 {
@@ -751,23 +754,23 @@ pub mod tests {
 
         let codes_and_masks = &[
             StoredIrisRef {
-                id:         1,
-                left_code:  &[1, 2, 3, 4],
-                left_mask:  &[5, 6, 7, 8],
+                id: 1,
+                left_code: &[1, 2, 3, 4],
+                left_mask: &[5, 6, 7, 8],
                 right_code: &[9, 10, 11, 12],
                 right_mask: &[13, 14, 15, 16],
             },
             StoredIrisRef {
-                id:         2,
-                left_code:  &[1117, 18, 19, 20],
-                left_mask:  &[21, 1122, 23, 24],
+                id: 2,
+                left_code: &[1117, 18, 19, 20],
+                left_mask: &[21, 1122, 23, 24],
                 right_code: &[25, 26, 1127, 28],
                 right_mask: &[29, 30, 31, 1132],
             },
             StoredIrisRef {
-                id:         3,
-                left_code:  &[17, 18, 19, 20],
-                left_mask:  &[21, 22, 23, 24],
+                id: 3,
+                left_code: &[17, 18, 19, 20],
+                left_mask: &[21, 22, 23, 24],
                 // Empty is allowed until stereo is implemented.
                 right_code: &[],
                 right_mask: &[],
@@ -830,9 +833,9 @@ pub mod tests {
 
         for i in 0..count {
             let iris = StoredIrisRef {
-                id:         (i + 1) as i64,
-                left_code:  &[123_u16; 12800],
-                left_mask:  &[456_u16; 12800],
+                id: (i + 1) as i64,
+                left_code: &[123_u16; 12800],
+                left_mask: &[456_u16; 12800],
                 right_code: &[789_u16; 12800],
                 right_mask: &[101_u16; 12800],
             };
@@ -904,9 +907,9 @@ pub mod tests {
         let mut irises = vec![];
         for i in 0..10 {
             let iris = StoredIrisRef {
-                id:         (i + 1) as i64,
-                left_code:  &[123_u16; 12800],
-                left_mask:  &[456_u16; 12800],
+                id: (i + 1) as i64,
+                left_code: &[123_u16; 12800],
+                left_mask: &[456_u16; 12800],
                 right_code: &[789_u16; 12800],
                 right_mask: &[101_u16; 12800],
             };
@@ -1008,30 +1011,22 @@ pub mod tests {
 
         for i in 0..10u16 {
             assert_eq!(got[i as usize].id, (i + 1) as i64);
-            assert_eq!(got[i as usize].left_code(), &[
-                i * 100 + 1,
-                i * 100 + 2,
-                i * 100 + 3,
-                i * 100 + 4
-            ]);
-            assert_eq!(got[i as usize].left_mask(), &[
-                i * 100 + 5,
-                i * 100 + 6,
-                i * 100 + 7,
-                i * 100 + 8
-            ]);
-            assert_eq!(got[i as usize].right_code(), &[
-                i * 100 + 9,
-                i * 100 + 10,
-                i * 100 + 11,
-                i * 100 + 12
-            ]);
-            assert_eq!(got[i as usize].right_mask(), &[
-                i * 100 + 13,
-                i * 100 + 14,
-                i * 100 + 15,
-                i * 100 + 16
-            ]);
+            assert_eq!(
+                got[i as usize].left_code(),
+                &[i * 100 + 1, i * 100 + 2, i * 100 + 3, i * 100 + 4]
+            );
+            assert_eq!(
+                got[i as usize].left_mask(),
+                &[i * 100 + 5, i * 100 + 6, i * 100 + 7, i * 100 + 8]
+            );
+            assert_eq!(
+                got[i as usize].right_code(),
+                &[i * 100 + 9, i * 100 + 10, i * 100 + 11, i * 100 + 12]
+            );
+            assert_eq!(
+                got[i as usize].right_mask(),
+                &[i * 100 + 13, i * 100 + 14, i * 100 + 15, i * 100 + 16]
+            );
         }
 
         cleanup(&store, &schema_name).await?;
@@ -1045,9 +1040,9 @@ pub mod tests {
 
         // insert two irises into db
         let iris1 = StoredIrisRef {
-            id:         1,
-            left_code:  &[123_u16; 12800],
-            left_mask:  &[456_u16; 6400],
+            id: 1,
+            left_code: &[123_u16; 12800],
+            left_mask: &[456_u16; 6400],
             right_code: &[789_u16; 12800],
             right_mask: &[101_u16; 6400],
         };
@@ -1062,19 +1057,19 @@ pub mod tests {
 
         // update iris with id 1 in db
         let updated_left_code = GaloisRingIrisCodeShare {
-            id:    1,
+            id: 1,
             coefs: [666_u16; 12800],
         };
         let updated_left_mask = GaloisRingTrimmedMaskCodeShare {
-            id:    1,
+            id: 1,
             coefs: [777_u16; 6400],
         };
         let updated_right_code = GaloisRingIrisCodeShare {
-            id:    1,
+            id: 1,
             coefs: [888_u16; 12800],
         };
         let updated_right_mask = GaloisRingTrimmedMaskCodeShare {
-            id:    1,
+            id: 1,
             coefs: [999_u16; 6400],
         };
         store

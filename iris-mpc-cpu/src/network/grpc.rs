@@ -127,13 +127,13 @@ pub struct GrpcConfig {
 // to the same player in parallel within the same session. Use batching instead.
 #[derive(Clone)]
 pub struct GrpcNetworking {
-    party_id:         Identity,
+    party_id: Identity,
     // other party id -> client to call that party
-    clients:          Arc<DashMap<Identity, PartyNodeClient<Channel>>>,
+    clients: Arc<DashMap<Identity, PartyNodeClient<Channel>>>,
     // other party id -> outgoing streams to send messages to that party in different sessions
     outgoing_streams: Arc<OutgoingStreams>,
     // session id -> incoming message streams
-    message_queues:   Arc<RwMap<SessionId, MessageQueueStore>>,
+    message_queues: Arc<RwMap<SessionId, MessageQueueStore>>,
 
     pub config: GrpcConfig,
 }

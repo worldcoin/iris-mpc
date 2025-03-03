@@ -16,10 +16,10 @@ pub fn get_size_of_reshare_iris_code_share_batch(batch_size: usize) -> usize {
         id_range_end_non_inclusive: batch_size as i64,
         iris_code_re_shares: vec![
             IrisCodeReShare {
-                left_iris_code_share:  vec![1u8; IRIS_CODE_LENGTH * size_of::<u16>()],
-                left_mask_share:       vec![2u8; MASK_CODE_LENGTH * size_of::<u16>()],
+                left_iris_code_share: vec![1u8; IRIS_CODE_LENGTH * size_of::<u16>()],
+                left_mask_share: vec![2u8; MASK_CODE_LENGTH * size_of::<u16>()],
                 right_iris_code_share: vec![3u8; IRIS_CODE_LENGTH * size_of::<u16>()],
-                right_mask_share:      vec![4u8; MASK_CODE_LENGTH * size_of::<u16>()],
+                right_mask_share: vec![4u8; MASK_CODE_LENGTH * size_of::<u16>()],
             };
             batch_size
         ],

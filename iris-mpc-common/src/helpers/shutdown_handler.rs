@@ -9,19 +9,17 @@ use tokio::signal;
 
 #[derive(Clone, Debug)]
 pub struct ShutdownHandler {
-    shutdown_received:            Arc<AtomicBool>,
+    shutdown_received: Arc<AtomicBool>,
     n_batches_pending_completion: Arc<AtomicUsize>,
-    last_results_sync_timeout:    Duration,
+    last_results_sync_timeout: Duration,
 }
 
 impl ShutdownHandler {
     pub fn new(shutdown_last_results_sync_timeout_secs: u64) -> Self {
         Self {
-            shutdown_received:            Arc::new(AtomicBool::new(false)),
+            shutdown_received: Arc::new(AtomicBool::new(false)),
             n_batches_pending_completion: Arc::new(AtomicUsize::new(0)),
-            last_results_sync_timeout:    Duration::from_secs(
-                shutdown_last_results_sync_timeout_secs,
-            ),
+            last_results_sync_timeout: Duration::from_secs(shutdown_last_results_sync_timeout_secs),
         }
     }
 

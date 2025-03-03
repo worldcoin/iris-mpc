@@ -23,7 +23,7 @@ impl PyPlaintextStore {
     pub fn insert(&mut self, iris: PyIrisCode) -> u32 {
         let new_id = self.0.points.len() as u32;
         self.0.points.push(PlaintextPoint {
-            data:          PlaintextIris(iris.0),
+            data: PlaintextIris(iris.0),
             is_persistent: true,
         });
         new_id

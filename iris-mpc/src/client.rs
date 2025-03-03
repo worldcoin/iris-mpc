@@ -344,12 +344,12 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
 
                 for i in 0..3 {
                     let iris_code_shares_json = IrisCodeSharesJSON {
-                        iris_version:           "1.0".to_string(),
-                        iris_shares_version:    "1.3".to_string(),
+                        iris_version: "1.0".to_string(),
+                        iris_shares_version: "1.3".to_string(),
                         right_iris_code_shares: shared_code[i].to_base64(),
                         right_mask_code_shares: shared_mask[i].to_base64(),
-                        left_iris_code_shares:  shared_code[i].to_base64(),
-                        left_mask_code_shares:  shared_mask[i].to_base64(),
+                        left_iris_code_shares: shared_code[i].to_base64(),
+                        left_mask_code_shares: shared_mask[i].to_base64(),
                     };
                     let serialized_iris_codes_json = to_string(&iris_code_shares_json)
                         .expect("Serialization failed")
@@ -368,9 +368,9 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
                 }
 
                 let shares_s3_object = SharesS3Object {
-                    iris_share_0:  iris_codes_shares_base64[0].clone(),
-                    iris_share_1:  iris_codes_shares_base64[1].clone(),
-                    iris_share_2:  iris_codes_shares_base64[2].clone(),
+                    iris_share_0: iris_codes_shares_base64[0].clone(),
+                    iris_share_1: iris_codes_shares_base64[1].clone(),
+                    iris_share_2: iris_codes_shares_base64[2].clone(),
                     iris_hashes_0: iris_shares_file_hashes[0].clone(),
                     iris_hashes_1: iris_shares_file_hashes[1].clone(),
                     iris_hashes_2: iris_shares_file_hashes[2].clone(),
@@ -394,11 +394,11 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
                 };
 
                 let request_message = UniquenessRequest {
-                    batch_size:         None,
-                    signup_id:          request_id.to_string(),
-                    s3_key:             bucket_key,
+                    batch_size: None,
+                    signup_id: request_id.to_string(),
+                    s3_key: bucket_key,
                     or_rule_serial_ids: None,
-                    skip_persistence:   None,
+                    skip_persistence: None,
                 };
 
                 let message_attributes = {
