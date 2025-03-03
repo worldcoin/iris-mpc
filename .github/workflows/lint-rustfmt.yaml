@@ -21,6 +21,6 @@ jobs:
       - name: Set Rust as default
         run: rustup default nightly-2024-07-19
       - name: Install Rustfmt for formatting
-        run: rustup component add rustfmt
+        run: rustup component add rustfmt --toolchain nightly-2024-07-19
       - name: Run Rustfmt
         run: cargo +nightly fmt -- --check
