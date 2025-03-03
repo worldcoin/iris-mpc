@@ -7,11 +7,11 @@
 //! - (<https://en.wikipedia.org/wiki/Batcher_odd%E2%80%93even_mergesort>)
 //! - (<https://math.mit.edu/~shor/18.310/batcher.pdf>)
 
-use super::sorting_network::{SortingNetwork, SortingNetworkLayer};
+use super::swap_network::{SwapNetwork, SwapNetworkLayer};
 
-/// Generate sorting network wire tuples for stage `stage` of the batcher merge
+/// Generate swap network wire tuples for stage `stage` of the batcher merge
 /// network of degree `deg`.
-fn batcher_merge_step(deg: usize, stage: usize) -> SortingNetworkLayer {
+fn batcher_merge_step(deg: usize, stage: usize) -> SwapNetworkLayer {
     // Uniform distance between wire indices of this merge layer
     let offset = 1 << (deg - stage);
 
@@ -35,11 +35,11 @@ fn batcher_merge_step(deg: usize, stage: usize) -> SortingNetworkLayer {
 /// `deg`.  The merge network of degree `deg` consists of `deg` simple layers,
 /// and produces a sorted list of length `2^k` when applied to a list of this
 /// length whose first and second halves are already individually sorted.
-fn batcher_merger_network(deg: usize) -> SortingNetwork {
+fn batcher_merger_network(deg: usize) -> SwapNetwork {
     let layers = (1..=deg)
         .map(|stage| batcher_merge_step(deg, stage))
         .collect();
-    SortingNetwork { layers }
+    SwapNetwork { layers }
 }
 
 /// Generate the pruned Batcher odd-even merge sort sorting network for an input
@@ -56,7 +56,7 @@ fn batcher_merger_network(deg: usize) -> SortingNetwork {
 ///
 /// For 2-power sizes, the network produced by this function is the standard
 /// Batcher odd-even merge sort network.
-pub fn batcher_network(size: usize) -> SortingNetwork {
+pub fn batcher_network(size: usize) -> SwapNetwork {
     partial_batcher_network(0, size)
 }
 
@@ -88,7 +88,7 @@ pub fn batcher_network(size: usize) -> SortingNetwork {
 /// Indices which fall into this category are identified during the recursive
 /// network construction provided by the `batcher_recursive` function call. See
 /// documentation there for more details.
-pub fn partial_batcher_network(sorted_prefix_size: usize, unsorted_size: usize) -> SortingNetwork {
+pub fn partial_batcher_network(sorted_prefix_size: usize, unsorted_size: usize) -> SwapNetwork {
     let total_list_size = sorted_prefix_size + unsorted_size;
     assert_ne!(total_list_size, 0);
     let deg = match total_list_size {
@@ -126,7 +126,7 @@ pub fn batcher_recursive(
     offset: usize,
     unsorted_idx: usize,
     stable_idx: usize,
-) -> SortingNetwork {
+) -> SwapNetwork {
     assert!(unsorted_idx <= stable_idx);
 
     // Parameters of active index window
@@ -141,7 +141,7 @@ pub fn batcher_recursive(
     } else {
         let prefix_1 = batcher_recursive(deg - 1, 2 * offset, unsorted_idx, stable_idx);
         let prefix_2 = batcher_recursive(deg - 1, 2 * offset + 1, unsorted_idx, stable_idx);
-        let prefix = SortingNetwork::merge_parallel(prefix_1, prefix_2);
+        let prefix = SwapNetwork::merge_parallel(prefix_1, prefix_2);
 
         // Compute how many trailing indices can be ignored in the merging network
         let window_n_stable = end_idx.saturating_sub(stable_idx);
@@ -154,7 +154,7 @@ pub fn batcher_recursive(
             .shift(start_idx as isize)
             .filter_wires(|(_, idx2)| *idx2 < end_idx - total_stable_amount);
 
-        SortingNetwork::merge_series(prefix, merger)
+        SwapNetwork::merge_series(prefix, merger)
     }
 }
 

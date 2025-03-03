@@ -4,7 +4,7 @@
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
 use crate::hnsw::{
-    sorting::{batcher::partial_batcher_network, sorting_network::apply_sorting_network},
+    sorting::{batcher::partial_batcher_network, swap_network::apply_swap_network},
     VectorStore,
 };
 use serde::{Deserialize, Serialize};
@@ -132,11 +132,11 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
         // println!("insert {unsorted_size} into list of size {sorted_prefix_size}");
 
         self.edges.extend_from_slice(vals);
-        let sorting_network = partial_batcher_network(sorted_prefix_size, unsorted_size);
+        let network = partial_batcher_network(sorted_prefix_size, unsorted_size);
 
         // println!("network size: {}", sorting_network.num_comparisons());
 
-        apply_sorting_network(store, &mut self.edges, &sorting_network).await;
+        apply_swap_network(store, &mut self.edges, &network).await;
     }
 
     /// Find the insertion index for a target distance in the current

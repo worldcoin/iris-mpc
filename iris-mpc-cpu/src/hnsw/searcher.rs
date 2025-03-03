@@ -6,7 +6,7 @@
 
 use super::{
     graph::neighborhood::SortedNeighborhoodV,
-    sorting::{sorting_network::apply_sorting_network, tree_min::tree_min},
+    sorting::{swap_network::apply_swap_network, tree_min::tree_min},
 };
 use crate::hnsw::{metrics::ops_counter::Operation, GraphMem, SortedNeighborhood, VectorStore};
 use rand::RngCore;
@@ -615,7 +615,7 @@ impl HnswSearcher {
             c_links.push((c_vec.clone(), c_dist.clone()));
 
             let network = tree_min(c_links.len());
-            apply_sorting_network(store, &mut c_links, &network)
+            apply_swap_network(store, &mut c_links, &network)
                 .instrument(less_than_span.clone())
                 .await;
 

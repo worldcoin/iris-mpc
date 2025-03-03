@@ -1,15 +1,15 @@
-//! Implements a sorting network which identifies the minimum element of an
+//! Implements a swap network which identifies the minimum element of an
 //! unsorted list in logarithmically many rounds of parallel comparisons using
 //! a binary tree design.
 
-use super::sorting_network::{SortingNetwork, SortingNetworkLayer};
+use super::swap_network::{SwapNetwork, SwapNetworkLayer};
 
-/// Generates a sorting network which moves the minimum element of an unsorted
-/// list of size `length` to the starting index in logarithmically many rounds
-/// using a binary tree of comparison operations.
-pub fn tree_min(length: usize) -> SortingNetwork {
+/// Generates a swap network which moves the minimum element of an unsorted list
+/// of size `length` to the starting index in logarithmically many rounds using
+/// a binary tree of comparison operations.
+pub fn tree_min(length: usize) -> SwapNetwork {
     match length {
-        0 | 1 => SortingNetwork::new(),
+        0 | 1 => SwapNetwork::new(),
         _ => {
             let deg = (usize::ilog2(length - 1) + 1) as usize;
             let mut network = tree_min_base(deg);
@@ -19,16 +19,16 @@ pub fn tree_min(length: usize) -> SortingNetwork {
     }
 }
 
-/// Generates a `min` sorting network for a list of length `2^deg`.
-fn tree_min_base(deg: usize) -> SortingNetwork {
-    SortingNetwork {
+/// Generates a `min` swap network for a list of length `2^deg`.
+fn tree_min_base(deg: usize) -> SwapNetwork {
+    SwapNetwork {
         layers: (0..deg).map(|stage| tree_min_layer(deg, stage)).collect(),
     }
 }
 
-/// Generates a sorting network layer with wires between every other multiple of
+/// Generates a swap network layer with wires between every other multiple of
 /// `2^stage` indices, for indices up to `2^deg` exclusive.
-fn tree_min_layer(deg: usize, stage: usize) -> SortingNetworkLayer {
+fn tree_min_layer(deg: usize, stage: usize) -> SwapNetworkLayer {
     if stage >= deg {
         return Default::default();
     }
