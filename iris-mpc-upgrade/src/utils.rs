@@ -1,9 +1,6 @@
 use axum::{routing::get, Router};
 use eyre::Context;
-use std::{
-    convert::TryFrom,
-    io::{Error as IoError, ErrorKind},
-};
+use std::io::{Error as IoError, ErrorKind};
 
 pub fn install_tracing() {
     use tracing_subscriber::{fmt, prelude::*, EnvFilter};

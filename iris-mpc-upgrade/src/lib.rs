@@ -1,16 +1,13 @@
 use eyre::{bail, Error, Result};
-use futures::Stream;
 use iris_mpc_common::{id::PartyID, IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use itertools::izip;
 use packets::{MaskShareMessage, TwoToThreeIrisCodeMessage};
 use std::{
     fs::File,
-    future::Future,
     io::{BufWriter, Write},
 };
 
 pub mod config;
-pub mod db;
 pub mod packets;
 pub mod proto;
 pub mod reshare;
@@ -67,7 +64,7 @@ impl NewIrisShareSink for IrisShareTestFileSink {
 
 #[derive(Clone)]
 pub struct IrisCodeUpgrader<S> {
-    party_id: PartyID,
+    party_id:  PartyID,
     iris_sink: S,
 }
 
