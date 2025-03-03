@@ -451,7 +451,9 @@ impl HnswSearcher {
                 let batch: Vec<_> = c_links.drain(0..n_insert).collect();
 
                 // println!("neighborhood not full; inserting {:?}", n_insert);
-                W.insert_batch(store, &batch).await;
+                W.insert_batch(store, &batch)
+                    .instrument(insert_span.clone())
+                    .await;
             }
 
             // Now W has size ef; compare neighbors to max distance elt of W in batches,
@@ -555,7 +557,9 @@ impl HnswSearcher {
 
                 // Check 2: any closer elements need to be inserted?
                 for chunk in insertion_queue.chunks(insertion_batch_size) {
-                    W.insert_batch(store, chunk).await;
+                    W.insert_batch(store, chunk)
+                        .instrument(insert_span.clone())
+                        .await;
                     W.trim_to_k_nearest(ef);
                 }
                 insertion_queue.clear();
@@ -601,7 +605,8 @@ impl HnswSearcher {
 
         // These spans accumulate running time of multiple atomic operations
         let eval_dist_span = trace_span!(target: "searcher::cpu_time", "eval_distance_batch_aggr");
-        let less_than_span = trace_span!(target: "searcher::cpu_time", "less_than_aggr");
+        let insert_span =
+            trace_span!(target: "searcher::cpu_time", "insert_into_sorted_neighborhood_aggr");
 
         loop {
             // Open the candidate node and visit its unvisited neighbors, computing
@@ -616,7 +621,7 @@ impl HnswSearcher {
 
             let network = tree_min(c_links.len());
             apply_swap_network(store, &mut c_links, &network)
-                .instrument(less_than_span.clone())
+                .instrument(insert_span.clone())
                 .await;
 
             // New closest node from greedy search of neighborhood
