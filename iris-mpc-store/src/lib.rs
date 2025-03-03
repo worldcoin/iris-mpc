@@ -1,5 +1,3 @@
-#![feature(int_roundings)]
-
 mod s3_importer;
 
 use bytemuck::cast_slice;
