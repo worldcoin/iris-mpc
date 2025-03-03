@@ -1,3 +1,4 @@
+use crate::hnsw::VectorStore;
 use itertools::Itertools;
 
 /// Type of a single layer in a non-adaptive sorting network represented by the
@@ -18,6 +19,14 @@ impl SortingNetwork {
     /// Create a new empty sorting network.
     pub fn new() -> Self {
         Default::default()
+    }
+
+    pub fn num_layers(&self) -> usize {
+        self.layers.len()
+    }
+
+    pub fn num_comparisons(&self) -> usize {
+        self.layers.iter().map(|l| l.len()).sum()
     }
 
     /// Apply a map to the indices of the sorting network.
@@ -94,5 +103,33 @@ impl SortingNetwork {
         let layers = n1.layers.into_iter().chain(n2.layers).collect();
 
         SortingNetwork { layers }
+    }
+}
+
+/// Function applies the supplied sorting network `network` to the list of
+/// tuples `(VectorRef, DistanceRef)` using a given `VectorStore` object to
+/// execute comparisons for each layer in batches.
+pub async fn apply_sorting_network<V: VectorStore>(
+    store: &mut V,
+    list: &mut [(V::VectorRef, V::DistanceRef)],
+    network: &SortingNetwork,
+) {
+    for layer in network.layers.iter() {
+        let distances: Vec<_> = layer
+            .iter()
+            .filter_map(
+                |(idx1, idx2): &(usize, usize)| match (list.get(*idx1), list.get(*idx2)) {
+                    // swap order to check for strict inequality d1 > d2
+                    (Some((_, d1)), Some((_, d2))) => Some((d2.clone(), d1.clone())),
+                    _ => None,
+                },
+            )
+            .collect();
+        let comp_results = store.less_than_batch(&distances).await;
+        for ((idx1, idx2), is_gt) in layer.iter().zip(comp_results) {
+            if is_gt {
+                list.swap(*idx1, *idx2)
+            }
+        }
     }
 }

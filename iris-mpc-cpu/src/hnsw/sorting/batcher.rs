@@ -89,7 +89,6 @@ pub fn batcher_network(size: usize) -> SortingNetwork {
 /// network construction provided by the `batcher_recursive` function call. See
 /// documentation there for more details.
 pub fn partial_batcher_network(sorted_prefix_size: usize, unsorted_size: usize) -> SortingNetwork {
-    println!("{sorted_prefix_size} {unsorted_size}");
     let total_list_size = sorted_prefix_size + unsorted_size;
     assert_ne!(total_list_size, 0);
     let deg = match total_list_size {

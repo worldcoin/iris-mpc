@@ -4,7 +4,7 @@
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
 use crate::hnsw::{
-    sorting::{batcher::partial_batcher_network, sorting_network::SortingNetwork},
+    sorting::{batcher::partial_batcher_network, sorting_network::apply_sorting_network},
     VectorStore,
 };
 use serde::{Deserialize, Serialize};
@@ -56,7 +56,6 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
         let index_asc = Self::binary_search(
             store,
             &self
-                .edges
                 .iter()
                 .map(|(_, dist)| dist.clone())
                 .collect::<Vec<Distance>>(),
@@ -76,13 +75,27 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
     {
-        let sorted_prefix_size = self.edges.len();
-        let unsorted_size = vals.len();
+        if vals.is_empty() {
+            return;
+        }
 
-        self.edges.extend_from_slice(vals);
-        let sorting_network = partial_batcher_network(sorted_prefix_size, unsorted_size);
+        // TODO better selection criteria
+        if vals.len() > 5 {
+            self.batcher_insert(store, vals).await;
+        } else {
+            // println!("SHORT batch insertion");
+            for (e, eq) in vals.iter() {
+                self.insert(store, e.clone(), eq.clone()).await;
+            }
+        }
+    }
 
-        self.apply_sorting_network(store, &sorting_network).await;
+    pub fn clone_vectors(&self) -> Vec<Vector> {
+        self.edges.iter().map(|(v, _)| v.clone()).collect()
+    }
+
+    pub fn clone_distances(&self) -> Vec<Distance> {
+        self.edges.iter().map(|(_, d)| d.clone()).collect()
     }
 
     pub fn get_nearest(&self) -> Option<&(Vector, Distance)> {
@@ -109,27 +122,21 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
         &self.edges
     }
 
-    async fn apply_sorting_network<V>(&mut self, store: &mut V, network: &SortingNetwork)
+    async fn batcher_insert<V>(&mut self, store: &mut V, vals: &[(Vector, Distance)])
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
     {
-        for layer in network.layers.iter() {
-            let distances: Vec<_> = layer
-                .iter()
-                .filter_map(|(idx1, idx2): &(usize, usize)| {
-                    match (self.edges.get(*idx1), self.edges.get(*idx2)) {
-                        (Some((_, d1)), Some((_, d2))) => Some((d1.clone(), d2.clone())),
-                        _ => None,
-                    }
-                })
-                .collect();
-            let comp_results = store.less_than_batch(&distances).await;
-            for ((idx1, idx2), is_lt) in layer.iter().zip(comp_results) {
-                if is_lt {
-                    self.edges.swap(*idx1, *idx2)
-                }
-            }
-        }
+        let sorted_prefix_size = self.edges.len();
+        let unsorted_size = vals.len();
+
+        // println!("insert {unsorted_size} into list of size {sorted_prefix_size}");
+
+        self.edges.extend_from_slice(vals);
+        let sorting_network = partial_batcher_network(sorted_prefix_size, unsorted_size);
+
+        // println!("network size: {}", sorting_network.num_comparisons());
+
+        apply_sorting_network(store, &mut self.edges, &sorting_network).await;
     }
 
     /// Find the insertion index for a target distance in the current
@@ -138,6 +145,9 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
     {
+        // if distances.len() > 0 {
+        //     println!("binary_search with size: {:?}", distances.len().ilog2());
+        // }
         let mut left = 0;
         let mut right = distances.len();
 

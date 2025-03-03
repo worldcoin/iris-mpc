@@ -4,7 +4,10 @@
 //!
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
-use super::graph::neighborhood::SortedNeighborhoodV;
+use super::{
+    graph::neighborhood::SortedNeighborhoodV,
+    sorting::{sorting_network::apply_sorting_network, tree_min::tree_min},
+};
 use crate::hnsw::{metrics::ops_counter::Operation, GraphMem, SortedNeighborhood, VectorStore};
 use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
@@ -274,11 +277,13 @@ impl HnswSearcher {
     /// given layer using depth-first graph traversal,  Terminates when `W`
     /// contains vectors which are the nearest to `q` among all traversed
     /// vertices and their neighbors.
-    #[instrument(        level = "trace",
-    target = "searcher::cpu_time", fields(event_type = Operation::LayerSearch.id()), skip(self, vector_store, graph_store, q, W))]
+    #[instrument(
+        level = "trace",
+        target = "searcher::cpu_time",
+        fields(event_type = Operation::LayerSearch.id()),
+        skip(vector_store, graph_store, q, W))]
     #[allow(non_snake_case)]
     async fn search_layer<V: VectorStore>(
-        &self,
         vector_store: &mut V,
         graph_store: &GraphMem<V>,
         q: &V::QueryRef,
@@ -286,6 +291,37 @@ impl HnswSearcher {
         ef: usize,
         lc: usize,
     ) {
+        match ef {
+            0 => {
+                panic!("ef cannot be 0");
+            }
+            1 => {
+                let start = W.get_nearest().expect("W cannot be empty");
+                let nearest =
+                    Self::layer_search_greedy(vector_store, graph_store, q, start, lc).await;
+
+                W.edges.clear();
+                W.edges.push(nearest);
+            }
+            2..32 => {
+                Self::layer_search_std(vector_store, graph_store, q, W, ef, lc).await;
+            }
+            _ => {
+                Self::layer_search_batched(vector_store, graph_store, q, W, ef, lc).await;
+            }
+        }
+    }
+
+    async fn layer_search_std<V: VectorStore>(
+        store: &mut V,
+        graph: &GraphMem<V>,
+        q: &V::QueryRef,
+        W: &mut SortedNeighborhoodV<V>,
+        ef: usize,
+        lc: usize,
+    ) {
+        // println!("layer_search_std");
+
         // The set of vectors which have been considered as potential neighbors
         let mut visited = HashSet::<V::VectorRef>::from_iter(W.iter().map(|(e, _eq)| e.clone()));
 
@@ -309,38 +345,18 @@ impl HnswSearcher {
             .map(|(c, _)| c)
             .find(|&c| !opened.contains(c))
         {
-            // Open the candidate node and visit its neighbors
+            // Open the candidate node and visit its unvisited neighbors, computing
+            // distances between the query and neighbors as a batch
+            let c_links = HnswSearcher::open_node(store, graph, c, lc, q, &mut visited)
+                .instrument(eval_dist_span.clone())
+                .await;
             opened.insert(c.clone());
             info!(event_type = Operation::OpenNode.id(), ef, lc);
-
-            // Visit all neighbors of c
-            let c_links = graph_store.get_links(c, lc).await;
-            // Evaluate the distances of the neighbors to the query, as a batch.
-            let c_links = {
-                let e_batch = c_links
-                    .iter()
-                    .map(|(e, _ec)| e.clone())
-                    .filter(|e| {
-                        // Visit any node at most once
-                        visited.insert(e.clone())
-                    })
-                    .collect::<Vec<_>>();
-
-                let distances = vector_store
-                    .eval_distance_batch(q, &e_batch)
-                    .instrument(eval_dist_span.clone())
-                    .await;
-
-                e_batch
-                    .into_iter()
-                    .zip(distances.into_iter())
-                    .collect::<Vec<_>>()
-            };
 
             for (e, eq) in c_links.into_iter() {
                 if W.len() == ef {
                     // When W is full, we decide whether to replace the furthest element.
-                    if vector_store
+                    if store
                         .less_than(&eq, &fq)
                         .instrument(less_than_span.clone())
                         .await
@@ -354,14 +370,295 @@ impl HnswSearcher {
                 }
 
                 // Track the new candidate as a potential k-nearest.
-                W.insert(vector_store, e, eq)
-                    .instrument(insert_span.clone())
-                    .await;
+                W.insert(store, e, eq).instrument(insert_span.clone()).await;
 
                 // fq stays the furthest distance in W.
                 (_, fq) = W.get_furthest().expect("W cannot be empty").clone();
             }
         }
+    }
+
+    /// Mutate `W` into the `ef` nearest neighbors of query vector `q` in the
+    /// given layer using depth-first graph traversal,  Terminates when `W`
+    /// contains vectors which are the nearest to `q` among all traversed
+    /// vertices and their neighbors.
+    async fn layer_search_batched<V: VectorStore>(
+        store: &mut V,
+        graph: &GraphMem<V>,
+        q: &V::QueryRef,
+        W: &mut SortedNeighborhoodV<V>,
+        ef: usize,
+        lc: usize,
+    ) {
+        // println!("\nlayer_search_batched");
+        // println!(
+        //     "layer_size: {:?}",
+        //     graph_store
+        //         .get_layers()
+        //         .get(lc)
+        //         .unwrap()
+        //         .get_links_map()
+        //         .len()
+        // );
+
+        // The set of vectors which have been considered as potential neighbors
+        let mut visited = HashSet::<V::VectorRef>::from_iter(W.iter().map(|(e, _eq)| e.clone()));
+
+        // The set of visited vectors for which we have inspected their neighborhood
+        let mut opened = HashSet::<V::VectorRef>::new();
+
+        // c: the current candidate to be opened, initialized to first entry of W
+        let (mut c, _cq) = W.get_nearest().expect("W cannot be empty").clone();
+
+        // These spans accumulate running time of multiple atomic operations
+        let eval_dist_span = trace_span!(target: "searcher::cpu_time", "eval_distance_batch_aggr");
+        let less_than_span = trace_span!(target: "searcher::cpu_time", "less_than_aggr");
+        let insert_span =
+            trace_span!(target: "searcher::cpu_time", "insert_into_sorted_neighborhood_aggr");
+
+        // TODO optimize batch size selection
+        let insertion_batch_size = ef / 6;
+        let mut insertion_queue: Vec<(V::VectorRef, V::DistanceRef)> =
+            Vec::with_capacity(4 * insertion_batch_size);
+
+        let mut comparison_queue: Vec<(V::VectorRef, V::DistanceRef)> = Vec::new();
+
+        // batch_rate: Fibonacci sequence values (F_k, F_{k+1}) used to scale the number
+        // of neighbors filtered as a batch against the current element of W
+        // farthest away from the query, to reflect the fact that the rate of
+        // new insertions into W decreases as the layer search progresses.  The
+        // maximum number of neighbors compared as a batch is `F_
+        // {k+1} * batch_size`, and when a batch with `n` positive insertion results is
+        // returned, if `F_k * n < batch_size`, then batch_rate is incremented
+        // to the next Fibonacci values.
+        let mut batch_rate = (1usize, 2usize);
+
+        // Continue until all current entries in candidate nearest neighbors list have
+        // been opened
+        loop {
+            // Open the candidate node and visit its unvisited neighbors, computing
+            // distances between the query and neighbors as a batch
+            let mut c_links = HnswSearcher::open_node(store, graph, &c, lc, q, &mut visited)
+                .instrument(eval_dist_span.clone())
+                .await;
+            opened.insert(c.clone());
+            info!(event_type = Operation::OpenNode.id(), ef, lc);
+
+            // If W is not filled to size ef, insert neighbors in batches until it is
+            if W.len() < ef && !c_links.is_empty() {
+                // Number of elements from this list to insert to initially populate the list
+                let n_insert = c_links.len().min(ef - W.len());
+                let batch: Vec<_> = c_links.drain(0..n_insert).collect();
+
+                // println!("neighborhood not full; inserting {:?}", n_insert);
+                W.insert_batch(store, &batch).await;
+            }
+
+            // Now W has size ef; compare neighbors to max distance elt of W in batches,
+            // then insert in batches.
+            while !c_links.is_empty() {
+                // choose number of distances to batch filter
+                let target_batch_size = batch_rate.1 * insertion_batch_size;
+                let n_inspect = c_links
+                    .len()
+                    .min(target_batch_size.saturating_sub(comparison_queue.len()));
+                // append to queue
+                comparison_queue.extend(c_links.drain(0..n_inspect));
+
+                // process queue if full
+                if comparison_queue.len() >= target_batch_size {
+                    // println!("queue is full: {} / {}", comparison_queue.len(),
+                    // target_batch_size); compare elements against current
+                    // farthest element of W
+                    let fq = W.get_furthest().unwrap().1.clone();
+                    let batch_cmps: Vec<_> = comparison_queue
+                        .iter()
+                        .map(|(_c, cq)| (cq.clone(), fq.clone()))
+                        .collect();
+                    let batch_cmp_results = store
+                        .less_than_batch(&batch_cmps)
+                        .instrument(less_than_span.clone())
+                        .await;
+
+                    let cmp_batch_size = batch_cmps.len();
+                    // println!("batch comparisons against fq: {cmp_batch_size}");
+                    let n_insertions: usize = batch_cmp_results.iter().map(|r| *r as usize).sum();
+                    // println!("n_insertions: {n_insertions}");
+
+                    // enqueue strictly closer elements for insertion
+                    let new_insertions = batch_cmp_results
+                        .into_iter()
+                        .zip(comparison_queue.drain(..))
+                        .filter_map(|(res, link)| if res { Some(link) } else { None });
+                    insertion_queue.extend(new_insertions);
+
+                    // let rate = (n_insertions as f64) / (cmp_batch_size as f64);
+                    // println!("insertions rate: {rate:.3}");
+
+                    // update size of comparison batches if insertion rate is too low
+                    if (batch_rate.0 + batch_rate.1) * n_insertions < 2 * cmp_batch_size
+                        && batch_rate.1 < 100
+                    {
+                        // update to next Fibonacci pair
+                        batch_rate = (batch_rate.1, batch_rate.1 + batch_rate.0);
+                        // println!("update batch_rate: {:?}", (batch_rate.0,
+                        // batch_rate.1));
+                    }
+                }
+
+                while insertion_queue.len() >= insertion_batch_size {
+                    let insertion_batch: Vec<_> =
+                        insertion_queue.drain(0..insertion_batch_size).collect();
+                    // println!("insertion_batch.len(): {:?}", insertion_batch.len());
+                    W.insert_batch(store, &insertion_batch)
+                        .instrument(insert_span.clone())
+                        .await;
+                    W.trim_to_k_nearest(ef);
+                }
+            }
+
+            // Select next nearest neighbor candidate to open
+            let mut c_next = W
+                .iter()
+                .map(|(c, _)| c)
+                .find(|&c| !opened.contains(c))
+                .cloned();
+
+            // If all current nearest neighbors have been opened, but there are
+            // items left in the insertion queue to insert, do so, and see if
+            // any of the inserted elements need to be opened
+            if c_next.is_none() && !insertion_queue.is_empty() {
+                // println!("wrap-up procedure");
+
+                // Check 1: any potential neighbors need to be inspected?
+                if !comparison_queue.is_empty() {
+                    // compare elements against current farthest element of W
+                    let fq = W.get_furthest().unwrap().1.clone();
+                    let batch_cmps: Vec<_> = comparison_queue
+                        .iter()
+                        .map(|(_c, cq)| (cq.clone(), fq.clone()))
+                        .collect();
+                    let batch_cmp_results = store
+                        .less_than_batch(&batch_cmps)
+                        .instrument(less_than_span.clone())
+                        .await;
+
+                    // println!("batch comparisons against fq: {}", batch_cmps.len());
+
+                    // enqueue strictly closer elements for insertion
+                    let new_insertions = batch_cmp_results
+                        .into_iter()
+                        .zip(comparison_queue.drain(..))
+                        .filter_map(|(res, link)| if res { Some(link) } else { None });
+                    insertion_queue.extend(new_insertions);
+                }
+
+                // Check 2: any closer elements need to be inserted?
+                for chunk in insertion_queue.chunks(insertion_batch_size) {
+                    W.insert_batch(store, chunk).await;
+                    W.trim_to_k_nearest(ef);
+                }
+                insertion_queue.clear();
+
+                // Try again to select next unopened candidate, if any
+                c_next = W
+                    .iter()
+                    .map(|(c, _)| c)
+                    .find(|&c| !opened.contains(c))
+                    .cloned();
+            }
+
+            match c_next {
+                Some(val) => {
+                    c = val;
+                }
+                // All candidates in W have been opened, and all elements pending
+                // insertion have been inserted, so layer search is complete.
+                None => {
+                    break;
+                }
+            }
+        }
+        // println!("end batch_rate: {batch_rate:?}");
+        // println!("end layer_search_batched");
+    }
+
+    /// Variant of layer search using ef parameter of 1, which conducts a greedy
+    /// search for the node with minimum distance from the query.
+    async fn layer_search_greedy<V: VectorStore>(
+        store: &mut V,
+        graph: &GraphMem<V>,
+        q: &V::QueryRef,
+        start: &(V::VectorRef, V::DistanceRef),
+        lc: usize,
+    ) -> (V::VectorRef, V::DistanceRef) {
+        // Current node of graph traversal
+        let (mut c_vec, mut c_dist) = start.clone();
+
+        // The set of vectors which have been considered as potential neighbors
+        let mut visited = HashSet::<V::VectorRef>::new();
+        visited.insert(c_vec.clone());
+
+        // These spans accumulate running time of multiple atomic operations
+        let eval_dist_span = trace_span!(target: "searcher::cpu_time", "eval_distance_batch_aggr");
+        let less_than_span = trace_span!(target: "searcher::cpu_time", "less_than_aggr");
+
+        loop {
+            // Open the candidate node and visit its unvisited neighbors, computing
+            // distances between the query and neighbors as a batch
+            let mut c_links = HnswSearcher::open_node(store, graph, &c_vec, lc, q, &mut visited)
+                .instrument(eval_dist_span.clone())
+                .await;
+            info!(event_type = Operation::OpenNode.id(), ef = 1u64, lc);
+
+            // Find minimum distance node also including current node
+            c_links.push((c_vec.clone(), c_dist.clone()));
+
+            let network = tree_min(c_links.len());
+            apply_sorting_network(store, &mut c_links, &network)
+                .instrument(less_than_span.clone())
+                .await;
+
+            // New closest node from greedy search of neighborhood
+            let (n_vec, n_dist) = c_links.first().unwrap().clone();
+
+            // If no neighbors are nearer, return current node; otherwise continue
+            if n_vec == c_vec {
+                return (c_vec, c_dist);
+            } else {
+                (c_vec, c_dist) = (n_vec, n_dist);
+            }
+        }
+    }
+
+    /// Evaluate as a batch the distances between the unvisited neighbors of a
+    /// given node at a given graph level with the query, marking unvisited
+    /// neighbors as visited in the supplied hashset.
+    async fn open_node<V: VectorStore>(
+        store: &mut V,
+        graph: &GraphMem<V>,
+        node: &V::VectorRef,
+        lc: usize,
+        query: &V::QueryRef,
+        visited: &mut HashSet<V::VectorRef>,
+    ) -> Vec<(V::VectorRef, V::DistanceRef)> {
+        let neighbors = graph.get_links(node, lc).await;
+
+        let unvisited_neighbors: Vec<_> = neighbors
+            .clone_vectors()
+            .into_iter()
+            .filter(|e| visited.insert(e.clone()))
+            .collect();
+
+        // println!("neighbors: total({:?}), unvisited({:?})", neighbors.len(),
+        // unvisited_neighbors.len());
+
+        let distances = store.eval_distance_batch(query, &unvisited_neighbors).await;
+
+        unvisited_neighbors
+            .into_iter()
+            .zip(distances.into_iter())
+            .collect()
     }
 
     #[allow(non_snake_case)]
@@ -377,8 +674,7 @@ impl HnswSearcher {
         // Search from the top layer down to layer 0
         for lc in (0..layer_count).rev() {
             let ef = self.params.get_ef_search(lc);
-            self.search_layer(vector_store, graph_store, query, &mut W, ef, lc)
-                .await;
+            Self::search_layer(vector_store, graph_store, query, &mut W, ef, lc).await;
         }
 
         W.trim_to_k_nearest(k);
@@ -451,8 +747,7 @@ impl HnswSearcher {
             } else {
                 self.params.get_ef_constr_insert(lc)
             };
-            self.search_layer(vector_store, graph_store, query, &mut W, ef, lc)
-                .await;
+            Self::search_layer(vector_store, graph_store, query, &mut W, ef, lc).await;
 
             // Save links in output only for layers in which query is inserted
             if lc <= insertion_layer {
@@ -586,6 +881,8 @@ mod tests {
         // Search for the same codes and find matches.
         for query in queries1.iter().chain(queries2.iter()) {
             let neighbors = db.search(vector_store, graph_store, query, 1).await;
+            println!("query: {query:?}");
+            println!("neighbors: {neighbors:?}");
             assert!(db.is_match(vector_store, &[neighbors]).await);
         }
     }
