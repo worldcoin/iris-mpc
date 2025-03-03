@@ -23,4 +23,4 @@ jobs:
       - name: Install Rustfmt for formatting
         run: rustup component add rustfmt
       - name: Run Rustfmt
-        run: cargo fmt -- --check
+        run: cargo +nightly fmt -- --check
