@@ -17,9 +17,9 @@ jobs:
       - name: Show errors inline
         uses: r7kamura/rust-problem-matchers@v1
       - name: Install Rust
-        run: rustup toolchain install 1.81.0-nightly-2024-06-09
+        run: rustup toolchain install nightly-2024-07-19
       - name: Set Rust as default
-        run: rustup default 1.81.0-nightly-2024-06-09
+        run: rustup default nightly-2024-07-19
       - name: Install Rustfmt for formatting
         run: rustup component add rustfmt
       - name: Run Rustfmt
