@@ -6,9 +6,9 @@ use std::{mem::MaybeUninit, ptr, sync::Arc};
 
 #[derive(Debug)]
 pub struct NcclComm {
-    comm:       sys::ncclComm_t,
-    device:     Arc<CudaDevice>,
-    rank:       usize,
+    comm: sys::ncclComm_t,
+    device: Arc<CudaDevice>,
+    rank: usize,
     world_size: usize,
 }
 

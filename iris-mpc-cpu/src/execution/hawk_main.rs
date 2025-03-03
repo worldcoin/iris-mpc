@@ -62,20 +62,20 @@ pub struct HawkActor {
     args: HawkArgs,
 
     // ---- Shared setup ----
-    search_params:    Arc<HnswSearcher>,
+    search_params: Arc<HnswSearcher>,
     role_assignments: Arc<HashMap<Role, Identity>>,
-    consensus:        Consensus,
+    consensus: Consensus,
 
     // ---- My state ----
     // TODO: Persistence.
-    db_size:     usize,
-    iris_store:  BothEyes<SharedIrisesRef>,
+    db_size: usize,
+    iris_store: BothEyes<SharedIrisesRef>,
     graph_store: BothEyes<GraphRef>,
 
     // ---- My network setup ----
-    networking:   GrpcNetworking,
+    networking: GrpcNetworking,
     own_identity: Identity,
-    party_id:     usize,
+    party_id: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -93,9 +93,9 @@ pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3Store>>;
 
 /// HawkSession is a unit of parallelism when operating on the HawkActor.
 pub struct HawkSession {
-    aby3_store:  Aby3Store,
+    aby3_store: Aby3Store,
     graph_store: GraphRef,
-    shared_rng:  AesRng,
+    shared_rng: AesRng,
 }
 
 type HawkSessionRef = Arc<RwLock<HawkSession>>;
@@ -116,9 +116,9 @@ pub type ConnectPlan = ConnectPlanV<Aby3Store>;
 
 #[derive(Debug)]
 pub struct InsertPlanV<V: VectorStore> {
-    query:    V::QueryRef,
-    links:    Vec<SortedNeighborhoodV<V>>,
-    set_ep:   bool,
+    query: V::QueryRef,
+    links: Vec<SortedNeighborhoodV<V>>,
+    set_ep: bool,
     is_match: bool,
 }
 
@@ -380,8 +380,8 @@ impl HawkActor {
         (
             IrisLoader {
                 party_id: self.party_id,
-                db_size:  &mut self.db_size,
-                irises:   [
+                db_size: &mut self.db_size,
+                irises: [
                     self.iris_store[0].write().await,
                     self.iris_store[1].write().await,
                 ],
@@ -396,8 +396,8 @@ impl HawkActor {
 
 pub struct IrisLoader<'a> {
     party_id: usize,
-    db_size:  &'a mut usize,
-    irises:   BothEyes<SharedIrisesMut<'a>>,
+    db_size: &'a mut usize,
+    irises: BothEyes<SharedIrisesMut<'a>>,
 }
 
 impl<'a> InMemoryStore for IrisLoader<'a> {
@@ -409,9 +409,11 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
         right_code: &[u16],
         right_mask: &[u16],
     ) {
-        for (side, code, mask) in izip!(&mut self.irises, [left_code, right_code], [
-            left_mask, right_mask
-        ]) {
+        for (side, code, mask) in izip!(
+            &mut self.irises,
+            [left_code, right_code],
+            [left_mask, right_mask]
+        ) {
             if index >= side.points.len() {
                 side.points.resize(
                     index + 1,
@@ -459,7 +461,7 @@ impl<'a> GraphLoader<'a> {
 }
 
 struct HawkJob {
-    request:        HawkRequest,
+    request: HawkRequest,
     return_channel: oneshot::Sender<Result<HawkResult>>,
 }
 
@@ -522,7 +524,7 @@ impl HawkRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HawkResult {
     connect_plans: HawkMutation,
-    is_insertion:  Vec<bool>,
+    is_insertion: Vec<bool>,
 }
 
 impl HawkResult {
@@ -818,9 +820,9 @@ mod tests {
                     request_types: vec![UNIQUENESS_MESSAGE_TYPE.to_string(); batch_size],
                     metadata: vec![
                         BatchMetadata {
-                            node_id:  "X".to_string(),
+                            node_id: "X".to_string(),
                             trace_id: "X".to_string(),
-                            span_id:  "X".to_string(),
+                            span_id: "X".to_string(),
                         };
                         batch_size
                     ],
@@ -921,17 +923,17 @@ mod tests_db {
                 .enumerate()
                 .map(|(i, vector)| ConnectPlan {
                     inserted_vector: *vector,
-                    layers:          vec![ConnectPlanLayer {
+                    layers: vec![ConnectPlanLayer {
                         neighbors: SortedNeighborhood::from_ascending_vec(vec![(
                             vectors[side],
                             distance.clone(),
                         )]),
-                        n_links:   vec![SortedNeighborhood::from_ascending_vec(vec![(
+                        n_links: vec![SortedNeighborhood::from_ascending_vec(vec![(
                             *vector,
                             distance.clone(),
                         )])],
                     }],
-                    set_ep:          i == side,
+                    set_ep: i == side,
                 })
                 .map(Some)
                 .collect_vec()
@@ -948,8 +950,8 @@ mod tests_db {
 
         // Start an actor and load the graph from SQL to memory.
         let args = HawkArgs {
-            party_index:         0,
-            addresses:           vec!["0.0.0.0:1234".to_string()],
+            party_index: 0,
+            addresses: vec!["0.0.0.0:1234".to_string()],
             request_parallelism: 2,
             disable_persistence: false,
         };

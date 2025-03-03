@@ -126,19 +126,19 @@ async fn main() -> eyre::Result<()> {
             iris_reshare_helper.add_reshare_iris_to_batch(
                 iris_code.id(),
                 GaloisRingIrisCodeShare {
-                    id:    config.party_id as usize + 1,
+                    id: config.party_id as usize + 1,
                     coefs: iris_code.left_code().try_into().unwrap(),
                 },
                 GaloisRingTrimmedMaskCodeShare {
-                    id:    config.party_id as usize + 1,
+                    id: config.party_id as usize + 1,
                     coefs: iris_code.left_mask().try_into().unwrap(),
                 },
                 GaloisRingIrisCodeShare {
-                    id:    config.party_id as usize + 1,
+                    id: config.party_id as usize + 1,
                     coefs: iris_code.right_code().try_into().unwrap(),
                 },
                 GaloisRingTrimmedMaskCodeShare {
-                    id:    config.party_id as usize + 1,
+                    id: config.party_id as usize + 1,
                     coefs: iris_code.right_mask().try_into().unwrap(),
                 },
             );

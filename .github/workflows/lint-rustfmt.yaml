@@ -17,10 +17,10 @@ jobs:
       - name: Show errors inline
         uses: r7kamura/rust-problem-matchers@v1
       - name: Install Rust
-        run: rustup toolchain install nightly-2024-07-19
+        run: rustup toolchain install 1.81.0
       - name: Set Rust as default
-        run: rustup default nightly-2024-07-19
+        run: rustup default 1.81.0
       - name: Install Rustfmt for formatting
-        run: rustup component add rustfmt --toolchain nightly-2024-07-19
+        run: rustup component add rustfmt
       - name: Run Rustfmt
         run: cargo fmt -- --check

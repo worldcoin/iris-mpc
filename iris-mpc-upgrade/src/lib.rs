@@ -64,7 +64,7 @@ impl NewIrisShareSink for IrisShareTestFileSink {
 
 #[derive(Clone)]
 pub struct IrisCodeUpgrader<S> {
-    party_id:  PartyID,
+    party_id: PartyID,
     iris_sink: S,
 }
 

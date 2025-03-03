@@ -26,7 +26,7 @@ pub const NCCL_START_RETRIES: usize = 5;
 
 #[derive(Debug)]
 pub struct DeviceManager {
-    devices:    Vec<Arc<CudaDevice>>,
+    devices: Vec<Arc<CudaDevice>>,
     locked_dbs: Arc<Mutex<Vec<CudaVec2DSlicerRawPointer>>>,
 }
 
@@ -75,7 +75,7 @@ impl DeviceManager {
         let mut ret = vec![];
         for i in 0..n {
             ret.push(DeviceManager {
-                devices:    self.devices[i * chunk_size..(i + 1) * chunk_size].to_vec(),
+                devices: self.devices[i * chunk_size..(i + 1) * chunk_size].to_vec(),
                 locked_dbs: Arc::new(Mutex::new(Vec::new())),
             });
         }

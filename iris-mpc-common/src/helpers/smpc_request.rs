@@ -16,19 +16,19 @@ use thiserror::Error;
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SQSMessage {
     #[serde(rename = "Type")]
-    pub notification_type:  String,
+    pub notification_type: String,
     #[serde(rename = "MessageId")]
-    pub message_id:         String,
+    pub message_id: String,
     #[serde(rename = "SequenceNumber")]
-    pub sequence_number:    String,
+    pub sequence_number: String,
     #[serde(rename = "TopicArn")]
-    pub topic_arn:          String,
+    pub topic_arn: String,
     #[serde(rename = "Message")]
-    pub message:            String,
+    pub message: String,
     #[serde(rename = "Timestamp")]
-    pub timestamp:          String,
+    pub timestamp: String,
     #[serde(rename = "UnsubscribeURL")]
-    pub unsubscribe_url:    String,
+    pub unsubscribe_url: String,
     #[serde(
         rename = "MessageAttributes",
         serialize_with = "serialize_message_attributes",
@@ -109,11 +109,11 @@ pub const REAUTH_MESSAGE_TYPE: &str = "reauth";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct UniquenessRequest {
-    pub batch_size:         Option<usize>,
-    pub signup_id:          String,
-    pub s3_key:             String,
+    pub batch_size: Option<usize>,
+    pub signup_id: String,
+    pub s3_key: String,
     pub or_rule_serial_ids: Option<Vec<u32>>,
-    pub skip_persistence:   Option<bool>,
+    pub skip_persistence: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -128,10 +128,10 @@ pub struct IdentityDeletionRequest {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ReAuthRequest {
-    pub reauth_id:   String,
-    pub batch_size:  Option<usize>,
-    pub s3_key:      String,
-    pub serial_id:   u32,
+    pub reauth_id: String,
+    pub batch_size: Option<usize>,
+    pub s3_key: String,
+    pub serial_id: u32,
     pub use_or_rule: bool,
 }
 
@@ -149,7 +149,7 @@ pub enum ReceiveRequestError {
     #[error("Failed to parse {json_name} JSON: {err}")]
     JsonParseError {
         json_name: String,
-        err:       serde_json::Error,
+        err: serde_json::Error,
     },
 
     #[error("Request does not contain a message type attribute")]
@@ -176,9 +176,9 @@ impl ReceiveRequestError {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SharesS3Object {
-    pub iris_share_0:  String,
-    pub iris_share_1:  String,
-    pub iris_share_2:  String,
+    pub iris_share_0: String,
+    pub iris_share_1: String,
+    pub iris_share_2: String,
     pub iris_hashes_0: String,
     pub iris_hashes_1: String,
     pub iris_hashes_2: String,
@@ -187,12 +187,12 @@ pub struct SharesS3Object {
 #[derive(PartialEq, Serialize, Deserialize, Debug, Clone)]
 pub struct IrisCodeSharesJSON {
     #[serde(rename = "IRIS_version")]
-    pub iris_version:           String,
+    pub iris_version: String,
     #[serde(rename = "IRIS_shares_version")]
-    pub iris_shares_version:    String,
-    pub left_iris_code_shares:  String, // these are base64 encoded strings
+    pub iris_shares_version: String,
+    pub left_iris_code_shares: String, // these are base64 encoded strings
     pub right_iris_code_shares: String, // these are base64 encoded strings
-    pub left_mask_code_shares:  String, // these are base64 encoded strings
+    pub left_mask_code_shares: String, // these are base64 encoded strings
     pub right_mask_code_shares: String, // these are base64 encoded strings
 }
 
@@ -222,7 +222,7 @@ pub async fn get_iris_data_by_party_id(
         .map_err(|err| {
             tracing::error!("Failed to download file: {}", err);
             SharesDecodingError::S3ResponseContent {
-                key:     s3_key.to_string(),
+                key: s3_key.to_string(),
                 message: err.to_string(),
             }
         })?;
@@ -230,7 +230,7 @@ pub async fn get_iris_data_by_party_id(
     let object_body = response.body.collect().await.map_err(|e| {
         tracing::error!("Failed to get object body: {}", e);
         SharesDecodingError::S3ResponseContent {
-            key:     s3_key.to_string(),
+            key: s3_key.to_string(),
             message: e.to_string(),
         }
     })?;

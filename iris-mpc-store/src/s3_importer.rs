@@ -13,15 +13,15 @@ const MAX_RANGE_SIZE: usize = 200; // Download chunks in sub-chunks of 200 eleme
 
 pub struct S3StoredIris {
     #[allow(dead_code)]
-    id:              i64,
-    left_code_even:  Vec<u8>,
-    left_code_odd:   Vec<u8>,
-    left_mask_even:  Vec<u8>,
-    left_mask_odd:   Vec<u8>,
+    id: i64,
+    left_code_even: Vec<u8>,
+    left_code_odd: Vec<u8>,
+    left_mask_even: Vec<u8>,
+    left_mask_odd: Vec<u8>,
     right_code_even: Vec<u8>,
-    right_code_odd:  Vec<u8>,
+    right_code_odd: Vec<u8>,
     right_mask_even: Vec<u8>,
-    right_mask_odd:  Vec<u8>,
+    right_mask_odd: Vec<u8>,
 }
 
 impl S3StoredIris {
@@ -179,9 +179,9 @@ impl ObjectStore for S3Store {
 
 #[derive(Debug, Clone)]
 pub struct LastSnapshotDetails {
-    pub timestamp:      i64,
+    pub timestamp: i64,
     pub last_serial_id: i64,
-    pub chunk_size:     i64,
+    pub chunk_size: i64,
 }
 
 impl LastSnapshotDetails {
@@ -191,8 +191,8 @@ impl LastSnapshotDetails {
         let parts: Vec<&str> = last_snapshot_str.split('_').collect();
         match parts.len() {
             3 => Some(Self {
-                timestamp:      parts[0].parse().unwrap(),
-                chunk_size:     parts[1].parse().unwrap(),
+                timestamp: parts[0].parse().unwrap(),
+                chunk_size: parts[1].parse().unwrap(),
                 last_serial_id: parts[2].parse().unwrap(),
             }),
             _ => {
@@ -412,9 +412,9 @@ mod tests {
 
     #[derive(Clone)]
     pub struct IntentionalFailureStore {
-        inner:              MockStore,
+        inner: MockStore,
         remaining_failures: Arc<Mutex<HashMap<String, i8>>>,
-        n_failures:         i8,
+        n_failures: i8,
     }
 
     impl IntentionalFailureStore {
@@ -458,9 +458,9 @@ mod tests {
 
     fn dummy_entry(id: usize) -> DbStoredIris {
         DbStoredIris {
-            id:         id as i64,
-            left_code:  random_bytes(IRIS_CODE_LENGTH * mem::size_of::<u16>()),
-            left_mask:  random_bytes(MASK_CODE_LENGTH * mem::size_of::<u16>()),
+            id: id as i64,
+            left_code: random_bytes(IRIS_CODE_LENGTH * mem::size_of::<u16>()),
+            left_mask: random_bytes(MASK_CODE_LENGTH * mem::size_of::<u16>()),
             right_code: random_bytes(IRIS_CODE_LENGTH * mem::size_of::<u16>()),
             right_mask: random_bytes(MASK_CODE_LENGTH * mem::size_of::<u16>()),
         }
@@ -498,9 +498,9 @@ mod tests {
 
         assert_eq!(store.list_objects("").await.unwrap().len(), n_chunks);
         let last_snapshot_details = LastSnapshotDetails {
-            timestamp:      0,
+            timestamp: 0,
             last_serial_id: MOCK_ENTRIES as i64,
-            chunk_size:     MOCK_CHUNK_SIZE as i64,
+            chunk_size: MOCK_CHUNK_SIZE as i64,
         };
         let (tx, mut rx) = mpsc::channel::<S3StoredIris>(1024);
         let store_arc = Arc::new(store);
@@ -546,9 +546,9 @@ mod tests {
         let store = IntentionalFailureStore::new(mock_store, n_failures);
 
         let last_snapshot_details = LastSnapshotDetails {
-            timestamp:      0,
+            timestamp: 0,
             last_serial_id: MOCK_ENTRIES as i64,
-            chunk_size:     MOCK_CHUNK_SIZE as i64,
+            chunk_size: MOCK_CHUNK_SIZE as i64,
         };
 
         let (tx, mut rx) = mpsc::channel::<S3StoredIris>(1024);
