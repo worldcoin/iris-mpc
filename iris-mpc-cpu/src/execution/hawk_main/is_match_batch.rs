@@ -20,13 +20,13 @@ pub async fn calculate_is_match(
 
     // Organize as: request -> eye -> (query and its related vectors).
     let requests = izip!(&plans[LEFT], &plans[RIGHT], vector_ids).map(|(pl, pr, vector_ids)| {
-        let [vl, vr] = vector_ids;
-        [(pl.query.clone(), vl), (pr.query.clone(), vr)]
+        let [vectors_l, vectors_r] = vector_ids;
+        [(pl.query.clone(), vectors_l), (pr.query.clone(), vectors_r)]
     });
     // Prepare the requests into one chunk per session.
     let per_session = chunk_vecs(requests, n_per_session);
 
-    // Process the chunks in parallel.
+    // Process the chunks in parallel (CPU and IO).
     let results = izip!(per_session, &sessions[LEFT], &sessions[RIGHT])
         .map(|(chunk, sl, sr)| calculate_is_match_session(chunk, [sl.clone(), sr.clone()]))
         .map(tokio::spawn)
@@ -43,16 +43,18 @@ async fn calculate_is_match_session(
     requests: VecRequests<BothEyes<(QueryRef, VecEdges<VectorId>)>>,
     session: BothEyes<HawkSessionRef>,
 ) -> VecRequests<BothEyes<MapEdges<bool>>> {
-    let mut sl = session[LEFT].write().await;
-    let mut sr = session[RIGHT].write().await;
+    let mut session_l = session[LEFT].write().await;
+    let mut session_r = session[RIGHT].write().await;
 
     let mut out = Vec::with_capacity(requests.len());
     for request in requests {
-        // TODO: Parallelize left/right.
-        out.push([
-            calculate_is_match_one(&request[LEFT].0, &request[LEFT].1, &mut sl).await,
-            calculate_is_match_one(&request[RIGHT].0, &request[RIGHT].1, &mut sr).await,
-        ]);
+        let [(query_l, vectors_l), (query_r, vectors_r)] = &request;
+        // Parallelize left and right sessions (IO only).
+        let (out_l, out_r) = futures::join!(
+            calculate_is_match_one(query_l, vectors_l, &mut session_l),
+            calculate_is_match_one(query_r, vectors_r, &mut session_r),
+        );
+        out.push([out_l, out_r]);
     }
     out
 }
