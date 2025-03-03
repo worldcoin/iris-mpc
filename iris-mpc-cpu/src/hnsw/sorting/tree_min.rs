@@ -34,7 +34,7 @@ fn tree_min_layer(deg: usize, stage: usize) -> SortingNetworkLayer {
     }
 
     // Here 0 <= stage < deg
-    let (increment, count) = (1 << stage, 1 << (deg - stage));
+    let (increment, count) = (1 << stage, 1 << (deg - stage - 1));
     (0..count)
         .map(|n_wire| (2 * n_wire * increment, (2 * n_wire + 1) * increment))
         .collect()
