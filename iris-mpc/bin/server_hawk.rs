@@ -9,7 +9,7 @@ use eyre::{eyre, Context};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc::{
     aws::{s3, sns},
-    batch::receive_batch,
+    batch_processing::receive_batch,
     utils::{get_check_addresses, initialize_chacha_seeds, initialize_tracing},
 };
 use iris_mpc_common::{

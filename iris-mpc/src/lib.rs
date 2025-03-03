@@ -1,5 +1,5 @@
 pub mod aws;
-pub mod batch;
+pub mod batch_processing;
 pub mod client;
 pub mod iris_processing;
 pub mod message_receiver;
