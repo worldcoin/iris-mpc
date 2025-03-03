@@ -1,14 +1,12 @@
 #![allow(clippy::needless_range_loop)]
 
 use aws_sdk_s3::Client as S3Client;
-use aws_sdk_sns::Client as SNSClient;
-use aws_sdk_sqs::{config::Region, Client};
 use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
 use eyre::{eyre, Context};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc::{
-    aws::{s3, sns},
+    aws::{clients::AwsClients, sns},
     batch_processing::receive_batch,
     utils::{get_check_addresses, initialize_chacha_seeds, initialize_tracing},
 };
@@ -57,7 +55,6 @@ use tokio::{
     time::timeout,
 };
 
-const REGION: &str = "eu-north-1";
 const RNG_SEED_INIT_DB: u64 = 42;
 static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
 
@@ -119,31 +116,21 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     tracing::info!("Initialising AWS services");
 
-    // TODO: probably move into separate function
-    let region = config
-        .clone()
-        .aws
-        .and_then(|aws| aws.region)
-        .unwrap_or_else(|| REGION.to_owned());
+    let aws_clients = AwsClients::new(&config.clone()).await?;
 
-    let region_provider = Region::new(region);
-    let shared_config = aws_config::from_env().region(region_provider).load().await;
-    let sqs_client = Client::new(&shared_config);
-    let sns_client = SNSClient::new(&shared_config);
-
-    let force_path_style = config.environment != "prod" && config.environment != "stage";
-
-    let s3_client = s3::create_s3_client(&shared_config, force_path_style);
-    let db_chunks_s3_client = s3::create_db_chunks_s3_client(&shared_config, force_path_style);
-
-    let shares_encryption_key_pair =
-        match SharesEncryptionKeyPairs::from_storage(config.clone()).await {
-            Ok(key_pair) => key_pair,
-            Err(e) => {
-                tracing::error!("Failed to initialize shares encryption key pairs: {:?}", e);
-                return Ok(());
-            }
-        };
+    let shares_encryption_key_pair = match SharesEncryptionKeyPairs::from_storage(
+        aws_clients.secrets_manager_client,
+        &config.environment,
+        &config.party_id,
+    )
+    .await
+    {
+        Ok(key_pair) => key_pair,
+        Err(e) => {
+            tracing::error!("Failed to initialize shares encryption key pairs: {:?}", e);
+            return Ok(());
+        }
+    };
 
     let party_id = config.party_id;
     tracing::info!("Deriving shared secrets");
@@ -159,7 +146,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     sns::send_results_to_sns(
         store.last_results(max_sync_lookback).await?,
         &Vec::new(),
-        &sns_client,
+        &aws_clients.sns_client,
         &config,
         &uniqueness_result_attributes,
         UNIQUENESS_MESSAGE_TYPE,
@@ -594,8 +581,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 parallelism
             );
             let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
-            let db_chunks_s3_store =
-                S3Store::new(db_chunks_s3_client.clone(), s3_chunks_bucket_name.clone());
+            let db_chunks_s3_store = S3Store::new(
+                aws_clients.db_chunks_s3_client.clone(),
+                s3_chunks_bucket_name.clone(),
+            );
 
             load_db(
                 &mut iris_loader,
@@ -604,7 +593,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 parallelism,
                 &config,
                 db_chunks_s3_store,
-                db_chunks_s3_client,
+                aws_clients.db_chunks_s3_client,
                 s3_chunks_folder_name,
                 s3_chunks_bucket_name,
                 s3_load_parallelism,
@@ -627,7 +616,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
-    let sns_client_bg = sns_client.clone();
+    let sns_client_bg = aws_clients.sns_client.clone();
     let config_bg = config.clone();
     let store_bg = store.clone();
     let shutdown_handler_bg = Arc::clone(&shutdown_handler);
@@ -990,9 +979,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         // It also includes a vector of request ids, mapping to the sets above
         let mut next_batch = receive_batch(
             party_id,
-            &sqs_client,
-            &sns_client,
-            &s3_client,
+            &aws_clients.sqs_client,
+            &aws_clients.sns_client,
+            &aws_clients.s3_client,
             &config,
             &store,
             &skip_request_ids,
@@ -1045,9 +1034,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             next_batch = receive_batch(
                 party_id,
-                &sqs_client,
-                &sns_client,
-                &s3_client,
+                &aws_clients.sqs_client,
+                &aws_clients.sns_client,
+                &aws_clients.s3_client,
                 &config,
                 &store,
                 &skip_request_ids,

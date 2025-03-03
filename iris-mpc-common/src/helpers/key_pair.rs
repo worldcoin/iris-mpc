@@ -1,5 +1,3 @@
-use crate::config::Config;
-use aws_config::Region;
 use aws_sdk_secretsmanager::{
     error::SdkError, operation::get_secret_value::GetSecretValueError,
     Client as SecretsManagerClient,
@@ -13,7 +11,6 @@ use std::string::FromUtf8Error;
 use thiserror::Error;
 use zeroize::Zeroize;
 
-const REGION: &str = "eu-north-1";
 const CURRENT_SECRET_LABEL: &str = "AWSCURRENT";
 const PREVIOUS_SECRET_LABEL: &str = "AWSPREVIOUS";
 
@@ -82,21 +79,15 @@ impl Drop for SharesEncryptionKeyPairs {
 }
 
 impl SharesEncryptionKeyPairs {
-    pub async fn from_storage(config: Config) -> Result<Self, SharesDecodingError> {
-        // use the configured region, fallback to the hardcoded value
-        let region = config
-            .aws
-            .and_then(|aws| aws.region)
-            .unwrap_or_else(|| REGION.to_owned());
-        tracing::info!("Using region: {} for key pair download", region);
-        let region_provider = Region::new(region);
-        let shared_config = aws_config::from_env().region(region_provider).load().await;
-        let client = SecretsManagerClient::new(&shared_config);
-
+    pub async fn from_storage(
+        client: SecretsManagerClient,
+        environment: &str,
+        party_id: &usize,
+    ) -> Result<Self, SharesDecodingError> {
         let current_sk_b64_string = match download_private_key_from_asm(
             &client,
-            &config.environment,
-            &config.party_id.to_string(),
+            environment,
+            &party_id.to_string(),
             CURRENT_SECRET_LABEL,
         )
         .await
@@ -107,8 +98,8 @@ impl SharesEncryptionKeyPairs {
 
         let previous_sk_b64_string = match download_private_key_from_asm(
             &client,
-            &config.environment,
-            &config.party_id.to_string(),
+            environment,
+            &party_id.to_string(),
             PREVIOUS_SECRET_LABEL,
         )
         .await

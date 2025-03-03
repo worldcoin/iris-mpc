@@ -5,6 +5,7 @@ use aws_sdk_s3::{
     config::{Builder as S3ConfigBuilder, StalledStreamProtectionConfig},
     Client as S3Client,
 };
+use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::{config::Region, Client};
 use axum::{response::IntoResponse, routing::get, Router};
@@ -945,6 +946,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let sqs_client = Client::new(&shared_config);
     let sns_client = SNSClient::new(&shared_config);
+    let secrets_manager_client = SecretsManagerClient::new(&shared_config);
 
     // Increase S3 retries to 5
     let retry_config = RetryConfig::standard().with_max_attempts(5);
@@ -969,14 +971,19 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let s3_client = S3Client::from_conf(s3_config);
     let db_chunks_s3_client = S3Client::from_conf(db_chunks_s3_config);
-    let shares_encryption_key_pair =
-        match SharesEncryptionKeyPairs::from_storage(config.clone()).await {
-            Ok(key_pair) => key_pair,
-            Err(e) => {
-                tracing::error!("Failed to initialize shares encryption key pairs: {:?}", e);
-                return Ok(());
-            }
-        };
+    let shares_encryption_key_pair = match SharesEncryptionKeyPairs::from_storage(
+        secrets_manager_client,
+        &config.environment,
+        &config.party_id,
+    )
+    .await
+    {
+        Ok(key_pair) => key_pair,
+        Err(e) => {
+            tracing::error!("Failed to initialize shares encryption key pairs: {:?}", e);
+            return Ok(());
+        }
+    };
 
     let party_id = config.party_id;
     tracing::info!("Deriving shared secrets");
